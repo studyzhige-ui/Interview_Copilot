@@ -1,0 +1,33 @@
+# Core Web Framework
+fastapi>=0.100.0
+uvicorn>=0.28.0
+python-multipart>=0.0.9
+
+# Database & ORM
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
+
+# Config & Environment
+python-dotenv>=1.0.0
+
+# RAG & LLM Engine (LlamaIndex Ecosystem)
+llama-index-core>=0.10.0
+llama-index-llms-openai>=0.1.5
+llama-index-llms-deepseek>=0.1.0
+llama-index-embeddings-huggingface>=0.2.0
+llama-index-vector-stores-chroma>=0.1.6
+llama-index-readers-file>=0.1.20
+
+# Vector Database
+chromadb>=0.4.22
+
+# Document Parsers
+pypdf>=4.0.0
+pymupdf>=1.23.0
+
+# Audio Transcription (Offline)
+faster-whisper>=1.0.0
+
+# Testing
+pytest>=7.4.0
+httpx>=0.25.0

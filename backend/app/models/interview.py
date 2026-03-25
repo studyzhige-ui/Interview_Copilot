@@ -1,0 +1,35 @@
+from datetime import datetime
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Float
+from sqlalchemy.orm import relationship
+from app.db.database import Base
+
+class Interview(Base):
+    __tablename__ = "interviews"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    transcripts = relationship("Transcript", back_populates="interview")
+    analysis = relationship("AnalysisResult", back_populates="interview", uselist=False)
+
+class Transcript(Base):
+    __tablename__ = "transcripts"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    interview_id = Column(Integer, ForeignKey("interviews.id"))
+    content = Column(Text)
+    raw_text = Column(Text)
+    
+    interview = relationship("Interview", back_populates="transcripts")
+
+class AnalysisResult(Base):
+    __tablename__ = "analysis_results"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    interview_id = Column(Integer, ForeignKey("interviews.id"))
+    score = Column(Float)
+    feedback = Column(Text)
+    improved_answer = Column(Text)
+    
+    interview = relationship("Interview", back_populates="analysis")
