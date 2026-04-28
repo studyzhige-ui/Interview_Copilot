@@ -1,33 +1,70 @@
+--extra-index-url https://download.pytorch.org/whl/cu129
+
 # Core Web Framework
-fastapi>=0.100.0
-uvicorn>=0.28.0
-python-multipart>=0.0.9
+fastapi==0.135.2
+uvicorn==0.42.0
+python-multipart==0.0.22
+websockets==15.0.1
 
 # Database & ORM
-sqlalchemy>=2.0.0
-psycopg2-binary>=2.9.9
+sqlalchemy==2.0.48
+psycopg2-binary==2.9.11
+
+# Security & Auth
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Redis & Async Task Queue
+redis==5.2.1
+celery==5.4.0
+
+# Cloud Storage
+boto3==1.38.0
 
 # Config & Environment
-python-dotenv>=1.0.0
+python-dotenv==1.2.2
+pydantic==2.12.5
+pydantic-settings==2.13.1
+nest_asyncio==1.6.0
 
-# RAG & LLM Engine (LlamaIndex Ecosystem)
-llama-index-core>=0.10.0
-llama-index-llms-openai>=0.1.5
-llama-index-llms-deepseek>=0.1.0
-llama-index-embeddings-huggingface>=0.2.0
-llama-index-vector-stores-chroma>=0.1.6
-llama-index-readers-file>=0.1.20
-
-# Vector Database
-chromadb>=0.4.22
+# LLM / RAG
+openai==2.30.0
+tiktoken==0.12.0
+pymilvus>=2.5.0
+huggingface-hub==0.28.1
+sentence-transformers==5.1.2
+transformers==4.48.0
+llama-index-core==0.14.19
+llama-index-llms-openai==0.6.26
+llama-index-llms-openai-like==0.5.3
+llama-index-llms-deepseek==0.3.0
+llama-index-embeddings-huggingface==0.7.0
+llama-index-vector-stores-milvus>=0.6.0
+llama-index-readers-file==0.6.0
+llama-index-retrievers-bm25==0.7.1
+llama-index-postprocessor-sbert-rerank==0.5.0
+llama-index-storage-docstore-postgres>=0.1.0
 
 # Document Parsers
-pypdf>=4.0.0
-pymupdf>=1.23.0
+pypdf==6.9.2
+pymupdf==1.27.2.2
+llama-parse==0.6.94
 
-# Audio Transcription (Offline)
-faster-whisper>=1.0.0
+# Audio Transcription
+faster-whisper==1.2.1
+whisperx==3.8.4
+
+# Evaluation
+datasets==4.8.4
+ragas==0.4.3
+langchain-openai==1.1.12
+
+# PyTorch CUDA 12.9
+torch==2.8.0+cu129
+torchvision==0.23.0+cu129
+torchaudio==2.8.0+cu129
 
 # Testing
-pytest>=7.4.0
-httpx>=0.25.0
+pytest==8.4.2
+pytest-asyncio==1.1.0
+httpx==0.28.1

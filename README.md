@@ -1,46 +1,100 @@
-# Interview Copilot (Agent + RAG Backend)
+# Interview Copilot
 
-This is the backend service for **Interview Copilot**, a powerful AI-driven interview assistant powered by **FastAPI**, **DeepSeek**, **LlamaIndex**, **Faster-Whisper**, and **ChromaDB**.
+Interview Copilot is a FastAPI backend for interview practice and analysis. It combines authenticated chat, interview audio transcription, RAG retrieval, model routing, personal memory, and analytics.
 
-## 🌟 核心特性 (Features)
+## Stack
 
-- **Audio Transcription**: 搭载工业级开源引擎 `Faster-Whisper`，实现离线、高精度的音频转录。
-- **RAG Knowledge Base**: 利用 `ChromaDB` 与高维嵌入模型 `BAAI/bge-small-zh-v1.5` 构建本地记忆库。支持通过 `source_type` 元数据进行数据隔离（技术题库、个人回忆严格解耦）。
-- **Agent System**: 搭载了具有动态思考及函数调用能力的 `LlamaIndex ReAct Agent`。它能智能分析对话意图，自动请求并整合知识库片段，给你无可挑剔的回答。
-- **Memory Ingestion**: 支持热插拔式的记忆写入！无论是 PDF 简历导入，还是面试失败后的痛点总结，一键持久化为 Agent 长线神经记忆。
+- FastAPI + SQLAlchemy for the API and persistence layer
+- Postgres for application data and LlamaIndex docstore metadata
+- Redis + Celery for background transcription and ingestion jobs
+- MinIO for local S3-compatible upload storage
+- Milvus for vector search
+- DeepSeek/OpenAI-compatible model clients through LlamaIndex and OpenAI SDK
+- Faster-Whisper/WhisperX and optional diarization models for audio processing
 
-## 📦 环境安装 (Installation)
+## Repository Layout
 
-1. 克隆代码仓库：
-   ```bash
-   git clone <repo-url>
-   cd Interview_Copilot
-   ```
+```text
+backend/app/        FastAPI app, services, models, RAG, worker tasks
+backend/tests/      Unit and API tests
+evaluation/         RAG and agent evaluation scripts
+scripts/            Developer utilities
+nginx/              Local reverse proxy configuration
+docs/               Project and interview documentation
+```
 
-2. 推荐使用 Anaconda 或 Python 内置虚拟环境隔离依赖：
-   ```bash
-   python -m venv venv
-   source venv/Scripts/activate  # Windows 下
-   pip install -r requirements.txt
-   ```
+## Local Setup
 
-3. 环境变量配置：
-   请复制仓库提供的模板，并填写您必要的秘钥信息：
-   ```bash
-   cp .env.example .env
-   ```
-   *确保您在 `.env` 中正确填写了 `DEEPSEEK_API_KEY`。*
+1. Create a virtual environment.
 
-## 🚀 启动与测试 (Running the Server)
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
 
-进入后端目录，通过 Uvicorn 启动热重载：
+Linux/macOS:
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+2. Create environment files.
+
+```powershell
+Copy-Item .env.example .env
+Copy-Item .env.docker.example .env.docker
+```
+
+Set at least `DEEPSEEK_API_KEY` in `.env`. Optional providers such as LlamaCloud and NVIDIA can stay as placeholders until you use those code paths. Do not commit `.env` or `.env.docker`.
+
+3. Start local infrastructure.
+
+```powershell
+docker compose up -d db redis minio minio-create-bucket milvus-etcd milvus-minio milvus-standalone nginx
+```
+
+This compose file intentionally runs infrastructure only. The API and worker run on the host during development. Ports are bound to `127.0.0.1` for local use.
+
+4. Optionally pre-download local models.
+
+```powershell
+python scripts/init_models.py
+```
+
+5. Start the API.
+
+```powershell
 cd backend
 uvicorn app.main:app --reload --port 8080
 ```
 
-服务启动后，系统将依次回显 DB 建表、LLM 配置加载 和 Whisper 引擎显存挂载情况。
-成功后，请直接访问由 FastAPI 自动生成的交互式接口与测试文档：
+Open [http://127.0.0.1:8080/docs](http://127.0.0.1:8080/docs) for Swagger UI, or [http://127.0.0.1/docs](http://127.0.0.1/docs) through Nginx.
 
-> **Swagger UI Docs:** [http://127.0.0.1:8080/docs](http://127.0.0.1:8080/docs)
+6. Start the Celery worker in another terminal.
+
+```powershell
+cd backend
+celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=solo
+```
+
+On Linux/macOS you can omit `--pool=solo` if your environment supports the default worker pool.
+
+## Useful Commands
+
+```powershell
+python -m compileall -q backend/app backend/tests
+pytest backend/tests
+python scripts/test_ws.py <JWT_TOKEN> <SESSION_ID>
+.\scripts\run_eval_profiles.ps1
+```
+
+## Data And Secrets
+
+Runtime data is written under `data/` by default, including model caches, uploads, vector-store files, docstore JSON, logs, and evaluation outputs. These files are ignored by git and should not be committed.
+
+The repository provides `.env.example` and `.env.docker.example` as templates only. Rotate any key that has ever been committed or shared. Production deployments should replace all local defaults, keep MinIO buckets private, restrict exposed ports, and use a non-default `SECRET_KEY`.

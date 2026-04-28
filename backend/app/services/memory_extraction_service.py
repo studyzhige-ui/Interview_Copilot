@@ -1,0 +1,521 @@
+import json
+import logging
+import re
+from datetime import datetime, timedelta
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from app.db.database import SessionLocal
+from app.models.memory import MemoryItem
+from app.rag.embeddings import agent_fast_llm
+from app.services.context_service import count_tokens
+from app.services.interview_state_service import interview_state_service
+from app.services.state_utils import (
+    default_interview_state_payload,
+    default_working_state_payload,
+    dump_state_blob,
+    parse_state_blob,
+)
+from app.services.transcript_service import transcript_service
+
+logger = logging.getLogger(__name__)
+
+
+def _extract_json_payload(raw_text: str) -> Any:
+    raw_text = str(raw_text or "").strip()
+    if not raw_text:
+        raise json.JSONDecodeError("empty", raw_text, 0)
+
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError:
+        match = re.search(r"(\{.*\}|\[.*\])", raw_text, re.DOTALL)
+        if not match:
+            raise
+        return json.loads(match.group(1))
+
+
+def _normalize_key(text: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+    return normalized[:100] or "memory"
+
+
+class CompactionService:
+    COMPACTION_THRESHOLD_TOKENS = 5000
+    KEEP_LAST_MESSAGES = 6
+    WORKING_STATE_MAX_TOKENS = 1000
+    WORKING_STATE_PROMPT = """You maintain structured working state for a multi-turn interview copilot.
+
+Return a JSON object with exactly these keys:
+- goal
+- current_phase
+- covered_topics
+- pending_topics
+- candidate_claims_to_verify
+- observed_gaps
+- next_best_question
+- constraints
+- summary
+
+Rules:
+- Keep only current-session working state.
+- Do not store generic technical knowledge.
+- Do not copy long transcript text verbatim.
+- Lists must stay short and concrete.
+- summary must be under 120 Chinese characters or 220 ASCII chars.
+
+Previous working state:
+{old_working_state}
+
+Conversation to compact:
+{new_conversation}
+"""
+
+    async def compact_if_needed(self, session_id: str) -> bool:
+        meta = transcript_service.get_session_meta(session_id)
+        if meta is None:
+            return False
+
+        recent = transcript_service.get_recent_turns(
+            session_id=session_id,
+            max_turns=100,
+            after_seq=meta["compaction_cursor"],
+        )
+        if not recent:
+            return False
+
+        working_state = parse_state_blob(
+            meta["working_state"],
+            default_working_state_payload,
+        )
+        total_tokens = (
+            count_tokens(dump_state_blob(working_state))
+            + sum(count_tokens(item["content"]) for item in recent)
+        )
+        if total_tokens <= self.COMPACTION_THRESHOLD_TOKENS:
+            return False
+
+        compress_messages = recent[:-self.KEEP_LAST_MESSAGES]
+        if not compress_messages:
+            return False
+
+        prompt = self.WORKING_STATE_PROMPT.format(
+            old_working_state=json.dumps(working_state, ensure_ascii=False, indent=2),
+            new_conversation="\n".join(
+                f"{item['role']}: {item['content']}" for item in compress_messages
+            ),
+        )
+        try:
+            response = await agent_fast_llm.acomplete(
+                prompt,
+                response_format={"type": "json_object"},
+            )
+            payload = parse_state_blob(
+                json.dumps(_extract_json_payload(str(response.text))),
+                default_working_state_payload,
+            )
+            serialized = dump_state_blob(payload)
+            if count_tokens(serialized) > self.WORKING_STATE_MAX_TOKENS:
+                payload["summary"] = str(payload.get("summary") or "")[:220]
+                serialized = dump_state_blob(payload)
+            transcript_service.update_session_fields(
+                session_id,
+                working_state=serialized,
+                compaction_cursor=compress_messages[-1]["seq"],
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Compaction failed for session %s: %s", session_id, exc)
+            return False
+
+
+class InterviewStateUpdateService:
+    INTERVIEW_STATE_PROMPT = """You maintain structured interview state for one session.
+
+Return a JSON object with exactly these keys:
+- goal
+- phase
+- covered_topics
+- pending_topics
+- observed_gaps
+- evidence
+- candidate_claims
+- next_question
+- constraints
+
+Rules:
+- observed_gaps should only contain evidence-backed weaknesses or uncertainty.
+- evidence must be a short list of objects with topic, observation, and confidence when possible.
+- Keep the state concise and current-session only.
+
+Previous interview state:
+{old_state}
+
+New conversation:
+{conversation}
+"""
+
+    async def update_from_messages(
+        self,
+        session_id: str,
+        user_id: str,
+        new_messages: list[dict],
+    ) -> dict:
+        current_state = interview_state_service.get_state(session_id, user_id)
+        if not new_messages:
+            return current_state
+
+        prompt = self.INTERVIEW_STATE_PROMPT.format(
+            old_state=json.dumps(current_state, ensure_ascii=False, indent=2),
+            conversation="\n".join(
+                f"{item['role']}: {item['content']}" for item in new_messages
+            ),
+        )
+        try:
+            response = await agent_fast_llm.acomplete(
+                prompt,
+                response_format={"type": "json_object"},
+            )
+            payload = parse_state_blob(
+                json.dumps(_extract_json_payload(str(response.text))),
+                default_interview_state_payload,
+            )
+            interview_state_service.update_state(session_id, user_id, payload)
+            return payload
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Interview state update failed for session %s: %s",
+                session_id,
+                exc,
+            )
+            return current_state
+
+
+class MemoryExtractionService:
+    MIN_CONFIDENCE = 0.65
+    EXTRACTION_PROMPT = """Review the conversation and extract only cross-session durable memories.
+
+Allowed memory types:
+- user_profile
+- interaction_preference
+- feedback_rule
+- project_reference
+
+Never extract:
+- temporary session progress
+- short-lived weaknesses or scoring
+- technical knowledge already derivable from code or docs
+- anything you are not confident should survive across sessions
+
+Return a JSON array. Each item must contain:
+- type
+- description
+- normalized_key
+- content
+- confidence
+
+Conversation:
+{conversation}
+"""
+
+    async def extract_and_merge(
+        self,
+        session_id: str,
+        user_id: str,
+        new_messages: list[dict],
+    ) -> list[dict] | None:
+        if not new_messages:
+            return []
+
+        conversation = "\n".join(
+            f"{item['role']}: {item['content']}" for item in new_messages
+        )
+        try:
+            response = await agent_fast_llm.acomplete(
+                self.EXTRACTION_PROMPT.format(conversation=conversation),
+            )
+            raw_payload = _extract_json_payload(str(response.text))
+            if isinstance(raw_payload, dict):
+                candidates = raw_payload.get("items", raw_payload.get("memories", []))
+            else:
+                candidates = raw_payload
+            if not isinstance(candidates, list):
+                candidates = []
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Memory extraction failed for session %s: %s", session_id, exc)
+            return None
+
+        max_seq = max((item.get("seq", 0) for item in new_messages), default=0)
+        persisted: list[dict] = []
+        db: Session = SessionLocal()
+        try:
+            for candidate in candidates:
+                mem_type = str(candidate.get("type") or "").strip()
+                if mem_type not in MemoryItem.VALID_TYPES:
+                    continue
+
+                confidence = float(candidate.get("confidence") or 0.0)
+                if confidence < self.MIN_CONFIDENCE:
+                    continue
+
+                description = str(candidate.get("description") or "").strip()[:200]
+                content = str(candidate.get("content") or "").strip()
+                normalized_key = _normalize_key(
+                    str(candidate.get("normalized_key") or description)
+                )
+                if not description or not content:
+                    continue
+                if len(content.encode("utf-8")) > MemoryItem.MAX_CONTENT_BYTES:
+                    content = content[: MemoryItem.MAX_CONTENT_BYTES // 3]
+
+                existing = (
+                    db.query(MemoryItem)
+                    .filter(
+                        MemoryItem.user_id == user_id,
+                        MemoryItem.type == mem_type,
+                        MemoryItem.normalized_key == normalized_key,
+                    )
+                    .first()
+                )
+                if existing is None:
+                    existing = MemoryItem(
+                        user_id=user_id,
+                        type=mem_type,
+                        description=description,
+                        normalized_key=normalized_key,
+                        content=content,
+                        confidence=confidence,
+                        source_session_id=session_id,
+                        last_evidence_seq=max_seq,
+                    )
+                    db.add(existing)
+                else:
+                    existing.description = description
+                    existing.content = content
+                    existing.confidence = confidence
+                    existing.source_session_id = session_id
+                    existing.last_evidence_seq = max_seq
+                    existing.updated_at = datetime.utcnow()
+
+                persisted.append(
+                    {
+                        "type": mem_type,
+                        "description": description,
+                        "normalized_key": normalized_key,
+                        "confidence": confidence,
+                    }
+                )
+
+            db.commit()
+            return persisted
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            logger.error("Memory merge failed for session %s: %s", session_id, exc)
+            return None
+        finally:
+            db.close()
+
+
+class MemoryRetrievalService:
+    MAX_RECALL_ITEMS = 3
+    PREFILTER_LIMIT = 12
+    STALENESS_THRESHOLD_DAYS = 2
+    SELECT_PROMPT = """Choose the memory ids most relevant to the current query.
+
+Return a JSON array of ids. Choose at most {max_items}. If none matter, return [].
+
+Memory catalog:
+{memory_catalog}
+
+Query:
+{query}
+"""
+
+    async def recall_relevant(
+        self,
+        user_id: str,
+        query: str,
+        max_items: int | None = None,
+    ) -> list[dict]:
+        max_items = max_items or self.MAX_RECALL_ITEMS
+        db: Session = SessionLocal()
+        try:
+            candidates = (
+                db.query(MemoryItem)
+                .filter(MemoryItem.user_id == user_id)
+                .order_by(MemoryItem.recall_count.desc(), MemoryItem.updated_at.desc())
+                .limit(self.PREFILTER_LIMIT)
+                .all()
+            )
+        finally:
+            db.close()
+
+        if not candidates:
+            return []
+
+        if len(candidates) <= max_items:
+            return self._inject_memories(candidates)
+
+        catalog = "\n".join(
+            f"- id={item.id} type={item.type} key={item.normalized_key} desc={item.description}"
+            for item in candidates
+        )
+        try:
+            response = await agent_fast_llm.acomplete(
+                self.SELECT_PROMPT.format(
+                    memory_catalog=catalog,
+                    query=query,
+                    max_items=max_items,
+                ),
+            )
+            payload = _extract_json_payload(str(response.text))
+            selected_ids = payload if isinstance(payload, list) else payload.get("ids", [])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Memory selection failed: %s", exc)
+            return []
+
+        selected_ids = [
+            item_id
+            for item_id in selected_ids[:max_items]
+            if isinstance(item_id, str)
+        ]
+        if not selected_ids:
+            return []
+
+        db = SessionLocal()
+        try:
+            selected = (
+                db.query(MemoryItem)
+                .filter(
+                    MemoryItem.user_id == user_id,
+                    MemoryItem.id.in_(selected_ids),
+                )
+                .all()
+            )
+            for memory in selected:
+                memory.recall_count = (memory.recall_count or 0) + 1
+            db.commit()
+            return self._inject_memories(selected)
+        finally:
+            db.close()
+
+    def _inject_memories(self, memories: list[MemoryItem]) -> list[dict]:
+        now = datetime.utcnow()
+        injected: list[dict] = []
+        for memory in memories[: self.MAX_RECALL_ITEMS]:
+            content = memory.content.strip()
+            if len(content) > 500:
+                content = content[:500].rstrip() + "..."
+            age = now - (memory.updated_at or memory.created_at)
+            staleness_note = ""
+            if age > timedelta(days=self.STALENESS_THRESHOLD_DAYS):
+                staleness_note = f"{age.days} days old"
+            injected.append(
+                {
+                    "id": memory.id,
+                    "type": memory.type,
+                    "description": memory.description,
+                    "content": content,
+                    "staleness_note": staleness_note,
+                    "normalized_key": memory.normalized_key,
+                    "recall_count": memory.recall_count or 0,
+                }
+            )
+        return injected
+
+    async def get_memory_index(self, user_id: str) -> list[dict]:
+        db: Session = SessionLocal()
+        try:
+            rows = (
+                db.query(MemoryItem)
+                .filter(MemoryItem.user_id == user_id)
+                .order_by(MemoryItem.updated_at.desc())
+                .all()
+            )
+            return [
+                {
+                    "id": row.id,
+                    "type": row.type,
+                    "description": row.description,
+                    "normalized_key": row.normalized_key,
+                    "confidence": row.confidence or 0.0,
+                    "recall_count": row.recall_count or 0,
+                    "last_evidence_seq": row.last_evidence_seq,
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in rows
+            ]
+        finally:
+            db.close()
+
+    def delete_memory(self, memory_id: str, user_id: str) -> bool:
+        db: Session = SessionLocal()
+        try:
+            row = (
+                db.query(MemoryItem)
+                .filter(MemoryItem.id == memory_id, MemoryItem.user_id == user_id)
+                .first()
+            )
+            if row is None:
+                return False
+            db.delete(row)
+            db.commit()
+            return True
+        finally:
+            db.close()
+
+
+class PostTurnMaintenanceService:
+    def __init__(
+        self,
+        compaction: CompactionService,
+        interview_updates: InterviewStateUpdateService,
+        memory_extraction: MemoryExtractionService,
+    ):
+        self.compaction = compaction
+        self.interview_updates = interview_updates
+        self.memory_extraction = memory_extraction
+
+    async def run(self, session_id: str, user_id: str) -> None:
+        await self.compaction.compact_if_needed(session_id)
+
+        meta = transcript_service.get_session_meta(session_id)
+        if meta is None:
+            return
+
+        pending_messages = transcript_service.get_recent_turns(
+            session_id=session_id,
+            max_turns=100,
+            after_seq=meta["memory_cursor"],
+        )
+        if not pending_messages:
+            return
+
+        await self.interview_updates.update_from_messages(
+            session_id=session_id,
+            user_id=user_id,
+            new_messages=pending_messages,
+        )
+        extracted = await self.memory_extraction.extract_and_merge(
+            session_id=session_id,
+            user_id=user_id,
+            new_messages=pending_messages,
+        )
+        if extracted is not None:
+            transcript_service.update_session_fields(
+                session_id,
+                memory_cursor=max(item["seq"] for item in pending_messages),
+            )
+
+
+compaction_service = CompactionService()
+interview_state_update_service = InterviewStateUpdateService()
+memory_extraction_service = MemoryExtractionService()
+memory_retrieval_service = MemoryRetrievalService()
+post_turn_maintenance_service = PostTurnMaintenanceService(
+    compaction=compaction_service,
+    interview_updates=interview_state_update_service,
+    memory_extraction=memory_extraction_service,
+)

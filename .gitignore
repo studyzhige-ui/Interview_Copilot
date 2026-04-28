@@ -1,5 +1,8 @@
 # Environments
 .env
+.env.*
+!.env.example
+!.env.docker.example
 .venv
 env/
 venv/
@@ -31,15 +34,24 @@ share/python-wheels/
 MANIFEST
 
 # Project specific
+data/
+backend/data/
 backend/data/chroma_db/
 backend/data/uploads/
+nvidia_models_results_async.txt
 *.db
 *.sqlite3
+*.sqlite3-journal
+*.safetensors
+*.bin
+*.npz
+*.incomplete
 
 # Pytest & Coverage
 .pytest_cache/
 .coverage
 htmlcov/
+__pycache__/
 
 # IDEs and OS
 .idea/

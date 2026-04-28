@@ -1,0 +1,453 @@
+# 多轮对话 & 记忆系统重构方案
+
+## 一、问题诊断：现有设计的 7 个致命缺陷
+
+通过源码审查，当前 `memory_service.py` 的设计本质上是 **"一个大摘要 + 最近 N 条消息"** 的扁平模型，对比 OpenClaw / Claude Code 的分层架构，存在以下根本性问题：
+
+| # | 缺陷 | 现状代码位置 | 后果 |
+|---|------|-------------|------|
+| 1 | **摘要与原始记录混为一体** | `memory_service.py:220-234` 压缩时直接丢弃前 80% 原始消息 | 一旦摘要出错，原始语义被永久污染，无法回溯 debug |
+| 2 | **无独立 Raw Transcript 层** | 虽然 PostgreSQL 有 `ChatMessage` 表，但压缩后 Redis 里的消息被截断，冷库回充只取最近 40 条 | 冷启动后丢失完整上下文；无法做离线审计和记忆提取 |
+| 3 | **上下文拼接 = 简单 concat** | `memory_service.py:167-179` 直接 `"\n".join()` 拼接摘要+近期消息 | 没有 sanitize、结构校验、工具链修复任何一个步骤 |
+| 4 | **无长期记忆系统** | 完全不存在跨会话的离散记忆条目 | 用户的偏好、技术弱点、长期约束每次新会话都从零开始 |
+| 5 | **摘要只保留事实，不保留 working state** | `memory_service.py:223-234` 压缩 prompt 只要求保留"技术薄弱点"和"核心实体" | Agent 压缩后不知道 "自己做到哪一步了"、"当前目标是什么" |
+| 6 | **每轮都走压缩，没有增量提取** | Token 超限时一次性压缩前 80% | 没有 "这轮是否值得写入长期记忆" 的判断逻辑 |
+| 7 | **Redis 热缓存与 PostgreSQL 冷库的数据模型完全相同** | 都是 `{summary, recent_messages}` | 无法支撑分层架构需要的 transcript / context / memory 三层分离 |
+
+## 二、目标架构：四层分离设计
+
+借鉴 OpenClaw 的四层分离 + Claude Code 的离散记忆条目设计，适配我们的面试场景：
+
+```mermaid
+graph TB
+    subgraph "Layer 1: Raw Transcript (事实源)"
+        L1[PostgreSQL chat_messages<br/>append-only 原始记录]
+    end
+
+    subgraph "Layer 2: Context Assembly Pipeline (运行态)"
+        L2A[Sanitize: 清洗格式] --> L2B[Truncate: 按 token 截断]
+        L2B --> L2C[Repair: 修复对话配对]
+        L2C --> L2D[Assemble: 组装最终上下文]
+    end
+
+    subgraph "Layer 3: Session Compaction (会话压缩)"
+        L3[Working State Summary<br/>保留目标/进度/决策/未完成/约束]
+    end
+
+    subgraph "Layer 4: Long-term Memory (跨会话记忆)"
+        L4A[Memory Index<br/>id/type/description/updated_at]
+        L4B[Memory Items<br/>离散记忆正文]
+        L4C[Memory Retrieval<br/>按需召回 top-K]
+    end
+
+    L1 -->|"截断窗口"| L2A
+    L1 -->|"超限触发"| L3
+    L3 -->|"注入 prefix"| L2D
+    L4C -->|"注入相关条目"| L2D
+    L1 -->|"异步提取"| L4B
+```
+
+## 三、Proposed Changes
+
+### Component 1: 数据模型层 (Models & Schemas)
+
+> 新增长期记忆的 ORM 模型和 Pydantic Schema；扩展现有 `ChatSession` 增加 compaction 游标。
+
+---
+
+#### [MODIFY] [chat.py](file:///d:/Projects/Python/Interview_Copilot/backend/app/models/chat.py)
+
+- `ChatSession` 新增字段：
+  - `compaction_cursor: int` — 标记已压缩到第几条消息的 seq，压缩只处理 cursor 之前的部分
+  - `working_state: Text` — 替代原来的 `summary`，保留结构化的 working state（当前目标/进度/决策/约束）
+  - `turn_count: int` — 当前会话总轮次计数
+
+#### [NEW] [memory.py](file:///d:/Projects/Python/Interview_Copilot/backend/app/models/memory.py)
+
+新建长期记忆 ORM 模型：
+
+```python
+class MemoryItem(Base):
+    """跨会话的离散长期记忆条目 (Claude Code 式设计)"""
+    __tablename__ = "memory_items"
+
+    id = Column(String, primary_key=True)        # "mem_xxxx"
+    user_id = Column(String, index=True)
+    type = Column(String, index=True)             # user / feedback / weakness / reference
+    description = Column(String)                  # 简短描述，用于索引粗筛
+    content = Column(Text)                        # 完整记忆正文
+    source_session_id = Column(String, nullable=True)  # 来源会话 ID
+    recall_count = Column(Integer, default=0)     # 被召回次数 (OpenClaw promotion signal)
+    created_at = Column(DateTime)
+    updated_at = Column(DateTime)
+```
+
+**长期记忆的 4 种类型**（适配面试场景）：
+
+| type | 含义 | 示例 |
+|------|------|------|
+| `user` | 用户背景、能力画像 | "候选人擅长 Java 后端，3 年经验，目标是大厂 P6" |
+| `feedback` | 用户对交互方式的反馈偏好 | "用户偏好简洁的反馈，不要过长的复盘" |
+| `weakness` | 面试中暴露的持续性技术短板 | "Redis 分布式锁的 Redlock 原理多次回答不清晰" |
+| `reference` | 外部知识/资源引用指针 | "用户提到的项目 X 的架构决策背景" |
+
+> [!IMPORTANT]
+> **明确禁止存入长期记忆的内容**：
+> - 已经存在于 RAG 知识库（interview_qa / official_docs）中的技术知识
+> - 单次会话的临时任务细节
+> - 当前会话的 working state（那属于 L3 层）
+
+---
+
+### Component 2: 核心记忆服务重构
+
+> 现有的 `HierarchicalMemoryManager` 拆分为 3 个独立服务，各司其职。
+
+---
+
+#### [MODIFY → 重写] [memory_service.py](file:///d:/Projects/Python/Interview_Copilot/backend/app/services/memory_service.py)
+
+**拆分为以下 3 个新文件：**
+
+#### [NEW] [transcript_service.py](file:///d:/Projects/Python/Interview_Copilot/backend/app/services/transcript_service.py)
+
+**Layer 1: 原始 Transcript 服务** — 只负责 append-only 写入和读取
+
+```python
+class TranscriptService:
+    """
+    原始对话 Transcript 服务 (OpenClaw Layer 1)
+    职责：append-only 写入 PostgreSQL，提供按游标读取、按窗口截取。
+    绝不摘要、绝不修改历史记录。
+    """
+
+    async def append_turn(self, session_id: str, user_msg: str, ai_msg: str,
+                          rewritten_query: str = None) -> int:
+        """追加一轮对话，返回新的 seq。额外存储重写后的 query 用于审计。"""
+
+    async def get_recent_turns(self, session_id: str, max_turns: int = 10,
+                                after_seq: int = 0) -> list[dict]:
+        """获取最近 N 轮对话（从 after_seq 之后开始），用于上下文拼接。"""
+
+    async def get_full_transcript(self, session_id: str) -> list[dict]:
+        """获取完整 transcript，用于离线分析/审计/记忆提取。"""
+
+    async def count_turns(self, session_id: str) -> int:
+        """获取当前会话的总轮次数。"""
+```
+
+#### [NEW] [context_service.py](file:///d:/Projects/Python/Interview_Copilot/backend/app/services/context_service.py)
+
+**Layer 2: 上下文装配管线 (Pipeline, not concat)**
+
+```python
+class ContextAssemblyPipeline:
+    """
+    上下文装配管线 (OpenClaw Layer 2)
+    职责：从 transcript 和 memory 中组装当前轮要送给模型的上下文。
+    实现 sanitize → truncate → repair → assemble 四步流水线。
+    """
+
+    async def assemble_context(self, session_id: str, user_id: str,
+                                current_query: str) -> AssembledContext:
+        """
+        核心方法：组装当前轮的完整上下文。
+
+        返回 AssembledContext:
+          - working_state: str         # 压缩态的历史工作状态
+          - recent_turns: list[dict]   # 经过截断和修复的近期对话
+          - relevant_memories: list    # 按需召回的长期记忆条目
+          - context_text: str          # 最终拼装好的上下文字符串
+        """
+
+    def _sanitize(self, messages: list[dict]) -> list[dict]:
+        """清洗：过滤系统内部标记、heartbeat、空消息"""
+
+    def _truncate(self, messages: list[dict], max_tokens: int) -> list[dict]:
+        """截断：按 token 预算从旧到新截断，保证最新消息优先"""
+
+    def _repair_pairs(self, messages: list[dict]) -> list[dict]:
+        """修复：确保 User/Agent 消息成对出现，截断不会产生孤立消息"""
+
+    def _assemble(self, working_state: str, recent_turns: list[dict],
+                   relevant_memories: list, current_query: str) -> str:
+        """
+        最终拼装，顺序固定（稳定前缀，动态后缀 — prompt cache friendly）:
+        1. [STABLE PREFIX] System Instructions
+        2. [STABLE PREFIX] Working State Summary
+        3. [DYNAMIC SUFFIX] Relevant Long-term Memories
+        4. [DYNAMIC SUFFIX] Recent Conversation Turns
+        5. [DYNAMIC SUFFIX] Current Query
+        """
+```
+
+#### [NEW] [memory_extraction_service.py](file:///d:/Projects/Python/Interview_Copilot/backend/app/services/memory_extraction_service.py)
+
+**Layer 3+4: 压缩 + 长期记忆提取服务**
+
+```python
+class CompactionService:
+    """
+    会话压缩服务 (OpenClaw Layer 3)
+    当上下文超限时，将旧对话压缩为 Working State Summary。
+    """
+
+    async def compact_if_needed(self, session_id: str) -> bool:
+        """
+        检查是否需要压缩。如果需要：
+        1. 取 compaction_cursor 之前到窗口边界的消息
+        2. 生成 Working State Summary（保留 5 类关键信息）
+        3. 更新 compaction_cursor
+        4. 更新 working_state 字段
+        """
+
+    COMPACTION_PROMPT = """
+    你是一个精准的工作状态压缩器。请将以下旧的工作状态和新对话合并为结构化的工作状态摘要。
+
+    【必须保留的 5 类信息】（按优先级排序）：
+    1. 当前目标：用户当前正在准备什么、想解决什么
+    2. 当前进度：最近讨论到了哪个知识点、哪一步
+    3. 已决定方案：用户确认的学习路径、偏好的回答风格
+    4. 未完成事项：提出但未深入的追问、待解决的疑惑
+    5. 关键约束：用户的技术栈背景、目标公司/岗位、时间限制
+
+    【绝对禁令】：
+    - 不要保留具体的技术知识点原文（那些在 RAG 知识库里已经有了）
+    - 不要保留闲聊内容
+    - 只输出压缩后的结构化摘要正文
+    """
+
+
+class MemoryExtractionService:
+    """
+    长期记忆提取服务 (Claude Code 式异步子 Agent)
+    在一轮对话结束后，异步判断是否有值得沉淀为长期记忆的信息。
+    """
+
+    async def extract_if_worthy(self, session_id: str, user_id: str,
+                                 new_messages: list[dict]) -> list[MemoryItem]:
+        """
+        异步后台运行：
+        1. 分析本轮新消息
+        2. 判断是否出现了长期有价值的信息（偏好/短板/背景/反馈）
+        3. 如果有，创建或更新 MemoryItem
+        4. 如果没有，静默返回空列表
+
+        保护机制（借鉴 Claude Code）：
+        - 只读对话记录，不修改任何会话数据
+        - 只往 memory_items 表写入
+        - 有节流：不是每轮都强跑，可配置间隔
+        - 成功才推进游标，失败不推进
+        """
+
+    EXTRACTION_PROMPT = """
+    你是一个记忆提取分析器。请审视以下最新的对话片段，判断是否出现了值得跨会话长期保存的信息。
+
+    【只有以下 4 种类型的信息值得提取】：
+    - user: 用户背景、能力水平、技术栈偏好
+    - feedback: 用户对交互方式的明确反馈（如"请简洁一些"、"多给追问"）
+    - weakness: 多次暴露的技术短板（如"又答错了 Redis cluster 的迁移"）
+    - reference: 外部资源或项目背景信息
+
+    【绝对不要提取】：
+    - 已在 RAG 知识库中的技术知识
+    - 临时的单次问答细节
+    - 当前会话的任务进度（那属于 working state）
+
+    如果本轮没有值得长期保存的信息，直接输出空 JSON 数组 []。
+    """
+
+
+class MemoryRetrievalService:
+    """
+    长期记忆检索服务 (Claude Code 式 index-based selective recall)
+    根据当前 query 从 memory index 中召回最相关的少量条目。
+    """
+
+    async def recall_relevant(self, user_id: str, query: str,
+                               max_items: int = 5) -> list[MemoryItem]:
+        """
+        四步流水线召回 (Claude Code Active Recall 机制)：
+
+        Step 1 - 扫描(Scan)：从 DB 加载用户所有记忆的元数据
+                 (id/type/description/updated_at)，零模型调用
+        Step 2 - 摘要(Summarize)：将元数据拼成 "目录清单" 文本
+        Step 3 - 选择(Select)：用快速模型从目录清单中精选 ≤5 条，
+                 明确要求 "只选确定有用的"（宁缺毋滥原则）
+        Step 4 - 注入(Inject)：只读被选中条目的正文，
+                 单条限制 4KB，超过截断
+
+        额外机制：
+        - 过期警告：超过 2 天的记忆自动附加 "这是 X 天前的快照" 提示
+        - 更新被召回条目的 recall_count（OpenClaw promotion signal）
+
+        成本控制：
+        - 第一阶段元数据粗筛（零模型调用）
+        - 第二阶段便宜模型精选
+        - 总注入量从 "全文几十万字节" 降至 "<3万字节"
+        """
+
+    async def get_memory_index(self, user_id: str) -> list[dict]:
+        """获取用户的所有记忆条目索引（只含 id/type/description/updated_at）"""
+```
+
+---
+
+### Component 3: Agent 执行器适配
+
+> 修改 `agent_executor.py`，接入新的三层服务。
+
+---
+
+#### [MODIFY] [agent_executor.py](file:///d:/Projects/Python/Interview_Copilot/backend/app/agent/agent_executor.py)
+
+核心改动：
+
+```python
+# 旧流程：
+#   1. memory_manager.get_context()  ← 简单 concat
+#   2. rewrite_query()
+#   3. router + retrieval
+#   4. generate
+#   5. memory_manager.add_message_and_compress()  ← 追加 + 可能压缩
+
+# 新流程：
+#   1. context_pipeline.assemble_context()  ← 四步管线
+#      ├── 读取 working_state
+#      ├── 读取 recent turns (sanitize → truncate → repair)
+#      └── recall relevant memories (index-based selective)
+#   2. rewrite_query(user_message, assembled_context)
+#   3. router + retrieval  (不变)
+#   4. generate  (不变)
+#   5. transcript_service.append_turn()  ← append-only 写入原始记录
+#   6. asyncio.create_task(compaction_service.compact_if_needed())  ← 异步压缩
+#   7. asyncio.create_task(memory_extraction.extract_if_worthy())  ← 异步提取
+```
+
+关键改进点：
+- 步骤 5-7 全部异步化，不阻塞主响应流
+- 写入原始 transcript 是唯一的同步写入（保证数据不丢失）
+- 压缩和记忆提取都是后台任务
+
+---
+
+### Component 4: 数据库 Migration
+
+#### [NEW] [add_memory_tables.py](file:///d:/Projects/Python/Interview_Copilot/backend/app/db/add_memory_tables.py)
+
+- 新增 `memory_items` 表
+- `chat_sessions` 扩展字段：`compaction_cursor`, `working_state`, `turn_count`
+- `chat_messages` 扩展字段：`rewritten_query` (可选，存储重写后的查询用于审计)
+
+---
+
+### Component 5: API 层适配
+
+#### [MODIFY] [chat.py (API)](file:///d:/Projects/Python/Interview_Copilot/backend/app/api/chat.py)
+
+新增端点：
+
+```python
+# 获取用户的所有长期记忆条目（前端展示 / 管理页面）
+GET /api/v1/memory/items
+
+# 手动删除某条长期记忆
+DELETE /api/v1/memory/items/{memory_id}
+
+# 查看某个会话的完整 transcript（调试/审计用）
+GET /api/v1/chat/transcript?session_id=xxx
+```
+
+---
+
+## 四、新旧数据流对比
+
+### 旧流程 (现状)
+
+```
+User Question → get_context() [concat summary + recent] → rewrite → router → RAG → generate → add_and_compress() [append + maybe compress]
+```
+
+### 新流程 (目标)
+
+```
+User Question
+  → [Context Assembly Pipeline]
+      ├── get_working_state()     ← 结构化的历史工作状态
+      ├── get_recent_turns()      ← sanitize → truncate → repair
+      └── recall_relevant()       ← index scan → LLM rank → top-3
+  → rewrite_query()
+  → router + RAG                  ← 不变
+  → generate
+  → transcript.append_turn()      ← 同步写入原始记录（唯一事实源）
+  → async compact_if_needed()     ← 后台：working state 更新
+  → async extract_if_worthy()     ← 后台：长期记忆提取
+```
+
+## 五、Redis 策略调整
+
+> [!WARNING]
+> 现有设计中 Redis 存储了 `{summary, recent_messages}` 这种扁平结构。重构后 Redis 的角色需要调整。
+
+**新的 Redis 缓存策略**：
+
+| Redis Key | 内容 | TTL | 说明 |
+|-----------|------|-----|------|
+| `session:{id}:working_state` | 压缩后的工作状态文本 | 7d | 避免每次都查 PostgreSQL |
+| `session:{id}:recent_turns` | 最近 10 轮消息的 JSON | 7d | 热路径加速 |
+| `memory:index:{user_id}` | 用户的记忆索引 JSON | 1d | 避免每次全表扫描 |
+
+不再在 Redis 中存储"唯一数据"。Redis 纯粹作为缓存层，任何数据丢失都能从 PostgreSQL 回充。
+
+## 六、User Review Required
+
+> [!IMPORTANT]
+> **关于长期记忆的存储方式**：方案采用 PostgreSQL 存储离散记忆条目。另一种选择是将记忆条目也索引进 ChromaDB/Milvus 做向量检索。目前方案选择 **PostgreSQL + LLM 精排**，理由是：
+> - 面试场景下单用户的记忆条目数量不会太多（几十到一两百条），全量粗筛成本可控
+> - 避免引入新的向量索引维护逻辑
+> - LLM 精排的准确率远高于纯向量相似度
+>
+> 如果未来记忆条目量级增长到千级以上，可以再引入向量索引。
+
+> [!IMPORTANT]
+> **关于现有 `memory_service.py` 的处理**：直接删除 `memory_service.py`。ReAct Agent 路径 (`/agent/react/chat`) 不使用该服务，不受影响。
+
+> [!WARNING]
+> **数据库处理**：全部删除重新迁移，无需保留存量数据。
+
+## 七、决策记录
+
+1. **记忆提取频率**：每 3 轮提取一次（面试场景为日常对话性质，无需像 Claude Code 工程场景那样频繁）
+2. **Working State 最大 token 数**：1000 tokens
+3. **前端**：先只做 API 层，后续再加 UI
+4. **memory_service.py**：直接删除，不保留
+5. **数据库**：全部删除重新迁移
+
+## 八、Verification Plan
+
+### Automated Tests
+
+```bash
+# 1. 数据模型测试
+pytest tests/test_models/test_memory.py -v
+
+# 2. Transcript 服务测试：append、读取、游标
+pytest tests/test_services/test_transcript_service.py -v
+
+# 3. Context Assembly Pipeline 测试：sanitize/truncate/repair/assemble
+pytest tests/test_services/test_context_service.py -v
+
+# 4. 长期记忆 CRUD + 召回测试
+pytest tests/test_services/test_memory_retrieval.py -v
+
+# 5. 集成测试：完整多轮对话流程
+pytest tests/test_integration/test_multi_turn_flow.py -v
+```
+
+### Manual Verification
+
+1. 启动服务后，通过 WebSocket 进行 10+ 轮连续对话
+2. 验证 working state 的压缩质量（是否保留了目标/进度/决策）
+3. 新开一个会话，验证长期记忆是否被正确召回
+4. 检查 PostgreSQL 中的 raw transcript 是否完整保留
+5. 通过 `/api/v1/memory/items` 查看提取出的长期记忆条目是否合理

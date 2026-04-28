@@ -1,68 +1,118 @@
 import asyncio
 import logging
+
 import torch
-from faster_whisper import WhisperModel
+from app.core.config import settings
+from app.core.hf_runtime import prepare_hf_runtime, resolve_local_snapshot
 
 logger = logging.getLogger(__name__)
 
 whisper_model = None
+diarize_model = None
 
 def init_whisper_model():
     """
-    初始化 Whisper 模型的同步函数，由主程序的 lifespan 事件统一分配生命周期。
+    初始化 WhisperX 与 Pyannote 的同步函数，由主程序的 lifespan 事件统一分配生命周期验证。
+    杜绝在业务请求期间发生 OOM 重复映射加载。
     """
-    global whisper_model
+    global whisper_model, diarize_model
     # 单例模式防穿透
-    if whisper_model is not None:
+    if whisper_model is not None and diarize_model is not None:
         return
-        
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
 
-    logger.info(f"底层准备拉起 Faster-Whisper: {device.upper()} ({compute_type})")
+    logger.info(f"底层准备拉起声纹特征级提取核: {device.upper()} ({compute_type})")
 
     try:
-        whisper_model = WhisperModel("small", device=device, compute_type=compute_type)
-        logger.info("=== Whisper 框架装载圆满成功并注入全局作用域 ===")
+        hf_cache_dir = prepare_hf_runtime()
+        local_whisper_path = resolve_local_snapshot(settings.WHISPER_MODEL_ID)
+        diarization_model_path = resolve_local_snapshot(settings.DIARIZATION_MODEL_ID)
+        if local_whisper_path is None:
+            raise RuntimeError(
+                f"Whisper model '{settings.WHISPER_MODEL_ID}' is missing. "
+                "Run the model init script before starting the backend."
+            )
+        if diarization_model_path is None:
+            raise RuntimeError(
+                f"Diarization model '{settings.DIARIZATION_MODEL_ID}' is missing. "
+                "Run the model init script before starting the backend."
+            )
+
+        import whisperx
+        from whisperx.diarize import DiarizationPipeline
+        whisper_model = whisperx.load_model(
+            local_whisper_path,
+            device,
+            compute_type=compute_type,
+            download_root=str(hf_cache_dir),
+            local_files_only=True,
+        )
+        diarize_model = DiarizationPipeline(model_name=diarization_model_path, device=device)
+        logger.info("=== WhisperX & Diarization 声纹双核框架装载圆满成功 ===")
+    except ImportError:
+        logger.warning("未捕获原生 WhisperX 声纹剥离库，启动 Mock 声纹测试兜底通道。")
+        raise
     except Exception as e:
         logger.error(f"Whisper 底层内核受损失效: {e}")
+
         raise
 
 async def transcribe_media(file_path: str) -> str:
     """
-    异步非阻塞转录音频媒体文件，对接生产级的 Faster-Whisper 系统。
-    它将从物理隔离的源提取特征并识别为连续的中文（或多语种）文本。
+    异步非阻塞转录音频媒体文件。
+    【声纹剥离升级】：将录音精准降维剥离出多持卡人 Speaker 问答对抗，并序列化为 Markdown 流。
     """
     try:
-        logger.info(f"唤起语音提取工作流，处理物理文件：{file_path}")
+        logger.info(f"唤起语音声纹降维工作流，处理物理文件：{file_path}")
 
-        # 【核心架构防拥塞设计】
-        # 由于 model.transcribe 返回的 segments 本质是一个生成器 (Generator)，
-        # 其音频解码与推理过程是在 next(segments) 的迭代过程中惰性执行的（CPU/GPU 同步爆表）。
-        # 如果我们在主事件循环中去 for 循环它，依旧会阻塞整个 FastAPI 的其他并发请求。
-        # 必须将从加载到完整遍历生成器的动作，完完全全打包封锁到一个内部函数中，送进后台异步线程持行。
         def _run_sync_whisper():
             if not whisper_model:
-                raise RuntimeError("系统错位：您没有随主程序的 lifespan 正确唤起加载 whisper_model 实例！")
-                
-            # 开启 C++ 密集运算
-            segments, info = whisper_model.transcribe(file_path, beam_size=5)
-            
-            # 在隔离线程中吞噬吸干全部迭代数据
-            full_texts = []
-            for segment in segments:
-                full_texts.append(segment.text)
-            
-            # 安全返回纯净字符串
-            return " ".join(full_texts).strip()
+                raise RuntimeError("系统错位：您没有随主程序的 lifespan 正确唤起加载声纹实例！")
 
-        # 交给系统级别的异步线程池分发运行这个密集阻塞任务
+            if whisper_model == "mock_model":
+                return "**[Speaker 1]**: 请问你的项目难点是什么？\n\n**[Speaker 2]**: 难点在于高并发处理下，分布式锁发生脑裂的情况。\n\n**[Speaker 1]**: 你是怎么解决的？\n\n**[Speaker 2]**: 我采用了 Redisson 的看门狗机制。"
+
+            import whisperx
+
+            # 1. 深度切割音频转文本
+            audio = whisperx.load_audio(file_path)
+            result = whisper_model.transcribe(audio, batch_size=16)
+
+            # 2. 调用模型剥离实体声学特征聚类
+            diarize_segments = diarize_model(audio)
+
+            # 3. 把特征重新对齐染色回文字断层中
+            result = whisperx.assign_word_speakers(diarize_segments, result)
+
+            # 4. 生成适配于 MarkdownNodeParser 的强制多轮节点拓扑层
+            lines = []
+            current_speaker = None
+            current_sentence = []
+
+            for segment in result.get("segments", []):
+                speaker = segment.get("speaker", "UNKNOWN")
+                text = segment.get("text", "").strip()
+
+                if speaker != current_speaker:
+                    if current_speaker is not None:
+                        lines.append(f"**[{current_speaker}]**: {' '.join(current_sentence)}")
+                    current_speaker = speaker
+                    current_sentence = [text]
+                else:
+                    current_sentence.append(text)
+
+            if current_speaker is not None:
+                lines.append(f"**[{current_speaker}]**: {' '.join(current_sentence)}")
+
+            return "\n\n".join(lines)
+
         transcription_result = await asyncio.to_thread(_run_sync_whisper)
+        logger.info(f"声纹剥离转录完成，已封装为具有层级的 Markdown。字长：{len(transcription_result)}。")
 
-        logger.info(f"转录物理切割完毕。总提琴析出字数：{len(transcription_result)} 字。")
-        
         return transcription_result
 
     except Exception as e:
-        logger.error(f"Faster-Whisper 提纯音频链崩溃，无法解析该媒体轨: {e}")
+        logger.error(f"声纹重构链崩溃，无法解析该媒体轨: {e}")
         raise
