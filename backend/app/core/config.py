@@ -77,6 +77,20 @@ class Settings:
     FUSION_TOP_K: int = int(os.getenv("FUSION_TOP_K", "6"))
     RERANK_TOP_N: int = int(os.getenv("RERANK_TOP_N", "5"))
     RAG_MIN_SCORE: float = float(os.getenv("RAG_MIN_SCORE", "0.5"))
+    RAG_FALLBACK_MIN_SCORE: float = float(os.getenv("RAG_FALLBACK_MIN_SCORE", "0.02"))
+    RAG_LEXICAL_FALLBACK_MIN_OVERLAP: float = float(
+        os.getenv("RAG_LEXICAL_FALLBACK_MIN_OVERLAP", "0.35")
+    )
+    MEMORY_MILVUS_COLLECTION: str = os.getenv(
+        "MEMORY_MILVUS_COLLECTION",
+        "interview_copilot_memory",
+    )
+    MEMORY_VECTOR_TOP_K: int = int(os.getenv("MEMORY_VECTOR_TOP_K", "8"))
+    MEMORY_LEXICAL_TOP_K: int = int(os.getenv("MEMORY_LEXICAL_TOP_K", "12"))
+    MEMORY_FINAL_TOP_K: int = int(os.getenv("MEMORY_FINAL_TOP_K", "3"))
+    MEMORY_BACKFILL_ON_STARTUP: bool = (
+        os.getenv("MEMORY_BACKFILL_ON_STARTUP", "true").lower() == "true"
+    )
     ANALYSIS_CHUNK_TOKEN_LIMIT: int = int(os.getenv("ANALYSIS_CHUNK_TOKEN_LIMIT", "12000"))
     LEVER_API_BASE: str = os.getenv("LEVER_API_BASE", "https://api.lever.co/v0")
     LEVER_SITES: str = os.getenv("LEVER_SITES", "openai")

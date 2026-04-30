@@ -21,6 +21,7 @@ evaluation/         RAG and agent evaluation scripts
 scripts/            Developer utilities
 nginx/              Local reverse proxy configuration
 docs/               Project and interview documentation
+frontend/           Vue 3 web workspace
 ```
 
 ## Local Setup
@@ -52,21 +53,34 @@ Copy-Item .env.docker.example .env.docker
 
 Set at least `DEEPSEEK_API_KEY` in `.env`. Optional providers such as LlamaCloud and NVIDIA can stay as placeholders until you use those code paths. Do not commit `.env` or `.env.docker`.
 
+The default model routing uses `deepseek-v4-flash` for normal chat and fast internal tasks, and `deepseek-v4-pro` for agent/tool workflows. You can override runtime selections from the frontend model panel; persisted legacy DeepSeek selections fall back to these V4 defaults.
+
+RAG search is strictly user-private. Uploaded knowledge documents, interview audio, memories, and retrieval metadata are all scoped by `current_user.username`; each user must upload their own documents before they can search them.
+
 3. Start local infrastructure.
 
 ```powershell
+docker compose down -v
 docker compose up -d db redis minio minio-create-bucket milvus-etcd milvus-minio milvus-standalone nginx
 ```
 
-This compose file intentionally runs infrastructure only. The API and worker run on the host during development. Ports are bound to `127.0.0.1` for local use.
+This compose file intentionally runs infrastructure only. The API and worker run on the host during development. Ports are bound to `127.0.0.1` for local use. `docker compose down -v` resets local development data; omit it if you intentionally want to keep existing volumes.
 
-4. Optionally pre-download local models.
+4. Migrate the development database.
+
+```powershell
+alembic upgrade head
+```
+
+This project now uses Alembic for schema management. `Base.metadata.create_all()` and `schema_compat` are no longer part of the normal startup path.
+
+5. Optionally pre-download local models.
 
 ```powershell
 python scripts/init_models.py
 ```
 
-5. Start the API.
+6. Start the API.
 
 ```powershell
 cd backend
@@ -75,7 +89,7 @@ uvicorn app.main:app --reload --port 8080
 
 Open [http://127.0.0.1:8080/docs](http://127.0.0.1:8080/docs) for Swagger UI, or [http://127.0.0.1/docs](http://127.0.0.1/docs) through Nginx.
 
-6. Start the Celery worker in another terminal.
+7. Start the Celery worker in another terminal.
 
 ```powershell
 cd backend
@@ -83,6 +97,16 @@ celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=solo
 ```
 
 On Linux/macOS you can omit `--pool=solo` if your environment supports the default worker pool.
+
+8. Start the Vue frontend in another terminal.
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Vite proxies `/api` requests to `http://127.0.0.1:8080`.
 
 ## Useful Commands
 

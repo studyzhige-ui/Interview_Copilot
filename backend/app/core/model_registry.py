@@ -28,13 +28,39 @@ class ModelProfile:
 
 
 ROLE_DEFAULTS: dict[str, str] = {
-    "primary": "deepseek-reasoner",
-    "fast": "deepseek-chat",
-    "agent": "deepseek-chat",
+    "primary": "deepseek-v4-flash",
+    "fast": "deepseek-v4-flash",
+    "agent": "deepseek-v4-pro",
 }
 
 
 MODEL_PROFILES: dict[str, ModelProfile] = {
+    "deepseek-v4-flash": ModelProfile(
+        id="deepseek-v4-flash",
+        provider="deepseek",
+        display_name="DeepSeek V4 Flash",
+        model="deepseek-v4-flash",
+        api_base="https://api.deepseek.com",
+        api_key_env="DEEPSEEK_API_KEY",
+        supports_function_calling=True,
+        description=(
+            "Default fast DeepSeek V4 model for normal chat, rewrite, router, "
+            "memory, and economical generation."
+        ),
+    ),
+    "deepseek-v4-pro": ModelProfile(
+        id="deepseek-v4-pro",
+        provider="deepseek",
+        display_name="DeepSeek V4 Pro",
+        model="deepseek-v4-pro",
+        api_base="https://api.deepseek.com",
+        api_key_env="DEEPSEEK_API_KEY",
+        supports_function_calling=True,
+        description=(
+            "Stronger DeepSeek V4 model for tool-using agent flows and harder "
+            "reasoning tasks."
+        ),
+    ),
     "deepseek-chat": ModelProfile(
         id="deepseek-chat",
         provider="deepseek",
@@ -43,7 +69,10 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
         api_base="https://api.deepseek.com",
         api_key_env="DEEPSEEK_API_KEY",
         supports_function_calling=True,
-        description="Fast general-purpose chat model for rewrite, router, memory, and tool use.",
+        description=(
+            "Legacy DeepSeek alias. DeepSeek currently routes this to V4 Flash, "
+            "but it is scheduled for retirement."
+        ),
     ),
     "deepseek-reasoner": ModelProfile(
         id="deepseek-reasoner",
@@ -53,7 +82,10 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
         api_base="https://api.deepseek.com",
         api_key_env="DEEPSEEK_API_KEY",
         supports_function_calling=False,
-        description="Stronger reasoning model for primary answer generation and analysis tasks.",
+        description=(
+            "Legacy DeepSeek reasoning alias. DeepSeek currently routes this to "
+            "V4 Flash thinking mode, but it is scheduled for retirement."
+        ),
     ),
     "nvidia-meta-llama-3.1-8b": ModelProfile(
         id="nvidia-meta-llama-3.1-8b",
@@ -156,6 +188,8 @@ def _normalize_selection(raw: dict[str, str]) -> dict[str, str]:
     selection = dict(ROLE_DEFAULTS)
     for role in ROLE_DEFAULTS:
         candidate = raw.get(role)
+        if candidate in {"deepseek-chat", "deepseek-reasoner"}:
+            continue
         if candidate in MODEL_PROFILES:
             selection[role] = candidate
     agent_profile = MODEL_PROFILES[selection["agent"]]

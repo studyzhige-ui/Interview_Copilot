@@ -106,7 +106,15 @@ def _get_storage_context(vector_store: MilvusVectorStore) -> StorageContext:
     )
 
 
-async def ingest_document(file_path: str, source_type: str, user_id: str):
+async def ingest_document(
+    file_path: str,
+    source_type: str,
+    user_id: str,
+    *,
+    document_id: str | None = None,
+    upload_id: str | None = None,
+    category: str | None = None,
+):
     """
     文档摄取入口：解析文件 → 自适应切块 → 写入 Milvus + Docstore。
     P0 安全：强制绑定 user_id 执行多租户物理隔离。
@@ -156,9 +164,16 @@ async def ingest_document(file_path: str, source_type: str, user_id: str):
             return False
 
         # 挂载元数据
-        for doc in documents:
+        for index, doc in enumerate(documents):
             doc.metadata["source_type"] = source_type
             doc.metadata["user_id"] = user_id
+            if document_id:
+                doc.metadata["document_id"] = document_id
+                doc.id_ = document_id if len(documents) == 1 else f"{document_id}:{index}"
+            if upload_id:
+                doc.metadata["upload_id"] = upload_id
+            if category:
+                doc.metadata["category"] = category
 
             if _has_llama_cloud and doc.metadata.get("file_name", "").endswith((".pdf", ".pptx", ".docx")):
                 doc.metadata["is_markdown_parsed"] = True
@@ -168,6 +183,14 @@ async def ingest_document(file_path: str, source_type: str, user_id: str):
         for doc in documents:
             nodes = get_optimal_nodes(doc)
             all_nodes.extend(nodes)
+
+        for node in all_nodes:
+            if document_id:
+                node.metadata["document_id"] = document_id
+            if upload_id:
+                node.metadata["upload_id"] = upload_id
+            if category:
+                node.metadata["category"] = category
 
         # 连接 Milvus（追加模式，不清空现有数据）
         vector_store = _get_milvus_vector_store(overwrite=False)
@@ -182,7 +205,12 @@ async def ingest_document(file_path: str, source_type: str, user_id: str):
         )
 
         logger.info(f">>> 摄取完成: '{file_path}' (source_type={source_type}, user_id={user_id})")
-        return True
+        return {
+            "success": True,
+            "chunk_count": len(all_nodes),
+            "node_ids": [node.node_id for node in all_nodes],
+            "ref_doc_ids": list({node.ref_doc_id for node in all_nodes if node.ref_doc_id}),
+        }
 
     except Exception as e:
         logger.error(f"文档摄取失败: {e}")
@@ -213,7 +241,12 @@ async def ingest_text(text: str, source_type: str, user_id: str, metadata: dict 
         )
 
         logger.info(f"文本摄取完成 (source_type='{source_type}')。")
-        return True
+        return {
+            "success": True,
+            "chunk_count": len(all_nodes),
+            "node_ids": [node.node_id for node in all_nodes],
+            "ref_doc_ids": list({node.ref_doc_id for node in all_nodes if node.ref_doc_id}),
+        }
     except Exception as e:
         logger.error(f"文本摄取失败: {e}")
         raise

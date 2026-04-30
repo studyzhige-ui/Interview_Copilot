@@ -1,16 +1,20 @@
 import json
 import logging
 import re
+import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.database import SessionLocal
 from app.models.memory import MemoryItem
 from app.rag.embeddings import agent_fast_llm
+from app.rag.hybrid import HybridRetriever, RetrievalChunk, lexical_overlap
 from app.services.context_service import count_tokens
 from app.services.interview_state_service import interview_state_service
+from app.services.memory_vector_service import memory_vector_service
 from app.services.state_utils import (
     default_interview_state_payload,
     default_working_state_payload,
@@ -282,10 +286,13 @@ Conversation:
                     existing = MemoryItem(
                         user_id=user_id,
                         type=mem_type,
+                        scope="user",
                         description=description,
                         normalized_key=normalized_key,
                         content=content,
                         confidence=confidence,
+                        importance=confidence,
+                        embedding_status="pending",
                         source_session_id=session_id,
                         last_evidence_seq=max_seq,
                     )
@@ -294,9 +301,18 @@ Conversation:
                     existing.description = description
                     existing.content = content
                     existing.confidence = confidence
+                    existing.importance = max(existing.importance or 0.5, confidence)
+                    existing.embedding_status = "pending"
                     existing.source_session_id = session_id
                     existing.last_evidence_seq = max_seq
                     existing.updated_at = datetime.utcnow()
+
+                db.flush()
+                try:
+                    memory_vector_service.upsert_memory(existing, db=db)
+                except Exception as exc:  # noqa: BLE001
+                    existing.embedding_status = "failed"
+                    logger.warning("Memory vector upsert failed for %s: %s", existing.id, exc)
 
                 persisted.append(
                     {
@@ -332,60 +348,105 @@ Query:
 {query}
 """
 
+    def __init__(
+        self,
+        hybrid_retriever: HybridRetriever | None = None,
+    ):
+        self.hybrid_retriever = hybrid_retriever or HybridRetriever()
+
     async def recall_relevant(
         self,
         user_id: str,
         query: str,
         max_items: int | None = None,
+        memory_types: list[str] | None = None,
     ) -> list[dict]:
         max_items = max_items or self.MAX_RECALL_ITEMS
+        memory_types = [
+            item
+            for item in (memory_types or list(MemoryItem.VALID_TYPES))
+            if item in MemoryItem.VALID_TYPES
+        ]
+
+        async def vector_fetch() -> list[RetrievalChunk]:
+            return await memory_vector_service.retrieve_vector(
+                user_id=user_id,
+                query=query,
+                memory_types=memory_types,
+                top_k=max(max_items, 1) * 3,
+            )
+
+        async def lexical_fetch() -> list[RetrievalChunk]:
+            return self._lexical_candidates(user_id, query, memory_types)
+
+        result = await self.hybrid_retriever.retrieve(
+            query=query,
+            vector_fetch=vector_fetch,
+            lexical_fetch=lexical_fetch,
+            final_top_k=max(settings.MEMORY_FINAL_TOP_K, max_items),
+        )
+        selected_ids = [chunk.id for chunk in result.chunks[:max_items]]
+        if selected_ids:
+            return self._load_and_mark_selected(user_id, selected_ids, max_items)
+        return []
+
+    def _lexical_candidates(
+        self,
+        user_id: str,
+        query: str,
+        memory_types: list[str],
+    ) -> list[RetrievalChunk]:
         db: Session = SessionLocal()
         try:
-            candidates = (
+            rows = (
                 db.query(MemoryItem)
-                .filter(MemoryItem.user_id == user_id)
-                .order_by(MemoryItem.recall_count.desc(), MemoryItem.updated_at.desc())
-                .limit(self.PREFILTER_LIMIT)
+                .filter(
+                    MemoryItem.user_id == user_id,
+                    MemoryItem.type.in_(memory_types),
+                )
+                .order_by(
+                    MemoryItem.importance.desc(),
+                    MemoryItem.recall_count.desc(),
+                    MemoryItem.updated_at.desc(),
+                )
+                .limit(max(self.PREFILTER_LIMIT, settings.MEMORY_LEXICAL_TOP_K))
                 .all()
             )
         finally:
             db.close()
 
-        if not candidates:
-            return []
-
-        if len(candidates) <= max_items:
-            return self._inject_memories(candidates)
-
-        catalog = "\n".join(
-            f"- id={item.id} type={item.type} key={item.normalized_key} desc={item.description}"
-            for item in candidates
-        )
-        try:
-            response = await agent_fast_llm.acomplete(
-                self.SELECT_PROMPT.format(
-                    memory_catalog=catalog,
-                    query=query,
-                    max_items=max_items,
-                ),
+        chunks: list[RetrievalChunk] = []
+        for row in rows:
+            text = f"{row.description}\n{row.content}"
+            score = lexical_overlap(query, text)
+            if score <= 0 and row.recall_count <= 0:
+                continue
+            chunks.append(
+                RetrievalChunk(
+                    id=row.id,
+                    text=text,
+                    lexical_score=score,
+                    metadata={
+                        "type": row.type,
+                        "scope": row.scope or "user",
+                        "normalized_key": row.normalized_key,
+                        "importance": float(row.importance or 0.0),
+                        "updated_at": row.updated_at,
+                        "created_at": row.created_at,
+                    },
+                )
             )
-            payload = _extract_json_payload(str(response.text))
-            selected_ids = payload if isinstance(payload, list) else payload.get("ids", [])
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Memory selection failed: %s", exc)
-            return []
+        return chunks[: settings.MEMORY_LEXICAL_TOP_K]
 
-        selected_ids = [
-            item_id
-            for item_id in selected_ids[:max_items]
-            if isinstance(item_id, str)
-        ]
-        if not selected_ids:
-            return []
-
+    def _load_and_mark_selected(
+        self,
+        user_id: str,
+        selected_ids: list[str],
+        max_items: int,
+    ) -> list[dict]:
         db = SessionLocal()
         try:
-            selected = (
+            rows = (
                 db.query(MemoryItem)
                 .filter(
                     MemoryItem.user_id == user_id,
@@ -393,10 +454,14 @@ Query:
                 )
                 .all()
             )
+            by_id = {memory.id: memory for memory in rows}
+            selected = [by_id[item_id] for item_id in selected_ids if item_id in by_id]
+            now = datetime.utcnow()
             for memory in selected:
                 memory.recall_count = (memory.recall_count or 0) + 1
+                memory.last_accessed_at = now
             db.commit()
-            return self._inject_memories(selected)
+            return self._inject_memories(selected[:max_items])
         finally:
             db.close()
 
@@ -437,11 +502,15 @@ Query:
                 {
                     "id": row.id,
                     "type": row.type,
+                    "scope": row.scope or "user",
                     "description": row.description,
                     "normalized_key": row.normalized_key,
                     "confidence": row.confidence or 0.0,
+                    "importance": row.importance or 0.0,
                     "recall_count": row.recall_count or 0,
                     "last_evidence_seq": row.last_evidence_seq,
+                    "embedding_status": row.embedding_status,
+                    "embedded_at": row.embedded_at.isoformat() if row.embedded_at else None,
                     "updated_at": row.updated_at.isoformat() if row.updated_at else None,
                     "created_at": row.created_at.isoformat() if row.created_at else None,
                 }
@@ -477,8 +546,36 @@ class PostTurnMaintenanceService:
         self.compaction = compaction
         self.interview_updates = interview_updates
         self.memory_extraction = memory_extraction
+        self._locks: dict[str, asyncio.Lock] = {}
 
-    async def run(self, session_id: str, user_id: str) -> None:
+    def _lock_for(self, session_id: str) -> asyncio.Lock:
+        lock = self._locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[session_id] = lock
+        return lock
+
+    async def run(
+        self,
+        session_id: str,
+        user_id: str,
+        *,
+        allow_memory_write: bool = True,
+    ) -> None:
+        async with self._lock_for(session_id):
+            await self._run_locked(
+                session_id=session_id,
+                user_id=user_id,
+                allow_memory_write=allow_memory_write,
+            )
+
+    async def _run_locked(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        allow_memory_write: bool,
+    ) -> None:
         await self.compaction.compact_if_needed(session_id)
 
         meta = transcript_service.get_session_meta(session_id)
@@ -498,11 +595,13 @@ class PostTurnMaintenanceService:
             user_id=user_id,
             new_messages=pending_messages,
         )
-        extracted = await self.memory_extraction.extract_and_merge(
-            session_id=session_id,
-            user_id=user_id,
-            new_messages=pending_messages,
-        )
+        extracted = []
+        if allow_memory_write:
+            extracted = await self.memory_extraction.extract_and_merge(
+                session_id=session_id,
+                user_id=user_id,
+                new_messages=pending_messages,
+            )
         if extracted is not None:
             transcript_service.update_session_fields(
                 session_id,

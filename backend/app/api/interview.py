@@ -11,7 +11,8 @@ from app.db.database import get_db
 from app.models.interview import Interview
 from app.models.user import User
 from app.services.analytics_service import generate_comprehensive_report
-from app.services.storage_service import generate_presigned_upload_url, upload_file_to_s3
+from app.services.storage_service import upload_file_to_owned_key
+from app.services.upload_service import create_owned_upload, get_owned_upload, mark_upload_consumed
 from app.worker.tasks import process_interview_analysis
 
 try:
@@ -25,10 +26,12 @@ router = APIRouter()
 
 class PresignedUrlRequest(BaseModel):
     filename: str
+    content_type: Optional[str] = None
+    size_bytes: Optional[int] = None
 
 
 class AnalyzeRequest(BaseModel):
-    file_path: str
+    upload_id: str
 
 
 class MemorySaveRequest(BaseModel):
@@ -41,22 +44,49 @@ class MemorySaveRequest(BaseModel):
 @router.post("/upload/audio/direct")
 async def upload_audio(
     file: UploadFile = File(...),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    file_path = upload_file_to_s3(file.file, file.filename)
-    return {"status": "success", "file_path": file_path}
+    upload, _ = create_owned_upload(
+        db,
+        user_id=current_user.username,
+        filename=file.filename,
+        purpose="interview_audio",
+        content_type=file.content_type,
+    )
+    storage_uri = upload_file_to_owned_key(file.file, upload.object_key, file.content_type)
+    upload.storage_uri = storage_uri
+    upload.status = "uploaded"
+    db.add(upload)
+    db.commit()
+    return {
+        "status": "success",
+        "upload_id": upload.id,
+        "storage_uri": upload.storage_uri,
+        "filename": upload.original_filename,
+    }
 
 
 @router.post("/upload/audio")
 async def get_upload_presigned_url(
     request: PresignedUrlRequest,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    url_info = generate_presigned_upload_url(request.filename)
+    upload, url_info = create_owned_upload(
+        db=db,
+        user_id=current_user.username,
+        filename=request.filename,
+        purpose="interview_audio",
+        content_type=request.content_type,
+        size_bytes=request.size_bytes,
+    )
     return {
         "status": "success",
+        "upload_id": upload.id,
         "upload_url": url_info["upload_url"],
-        "file_path": url_info["file_path"],
+        "storage_uri": upload.storage_uri,
+        "filename": upload.original_filename,
     }
 
 
@@ -67,16 +97,29 @@ async def analyze_interview_endpoint(
     current_user: User = Depends(get_current_user),
 ):
     try:
+        upload = get_owned_upload(
+            db,
+            upload_id=request.upload_id,
+            user_id=current_user.username,
+            purpose="interview_audio",
+        )
+        if upload is None:
+            raise HTTPException(status_code=404, detail="Upload not found")
+        if upload.status not in {"pending_upload", "uploaded"}:
+            raise HTTPException(status_code=409, detail="Upload has already been consumed")
+
         interview = Interview(
             user_id=current_user.username,
             status="PENDING",
-            file_url=request.file_path,
+            upload_id=upload.id,
+            file_url=upload.storage_uri,
         )
         db.add(interview)
+        mark_upload_consumed(db, upload)
         db.commit()
         db.refresh(interview)
 
-        task = process_interview_analysis.delay(interview.id, request.file_path)
+        task = process_interview_analysis.delay(interview.id)
         interview.task_id = task.id
         db.commit()
         return {
@@ -85,6 +128,8 @@ async def analyze_interview_endpoint(
             "interview_id": interview.id,
             "task_id": task.id,
         }
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         db.rollback()
         raise HTTPException(status_code=500, detail=str(exc)) from exc

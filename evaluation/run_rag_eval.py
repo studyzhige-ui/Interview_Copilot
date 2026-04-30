@@ -27,11 +27,12 @@ sys.path.append(str(PROJECT_ROOT / "backend"))
 from app.core.hf_runtime import prepare_hf_runtime
 from app.core.config import settings
 from app.rag.ingestion import ingest_document
-from app.rag.retriever import query_knowledge_base
+from app.rag.retriever import init_reranker, query_knowledge_base
 from ragas.metrics import _Faithfulness, _LLMContextPrecisionWithReference, _LLMContextRecall
 
 
 prepare_hf_runtime()
+init_reranker()
 
 
 # 所有的路径现在都基于 settings.EVAL_DIR

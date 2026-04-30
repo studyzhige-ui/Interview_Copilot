@@ -1,6 +1,8 @@
 import logging
 import os
+import re
 import uuid
+from pathlib import Path
 
 import boto3
 from botocore.exceptions import ClientError
@@ -18,47 +20,78 @@ s3_client = boto3.client(
 )
 
 
-def generate_presigned_upload_url(filename: str, expiration=3600) -> dict:
-    """Generate a presigned URL for direct client uploads."""
-    _, ext = os.path.splitext(filename)
-    if not ext:
-        ext = ".bin"
+def sanitize_filename(filename: str) -> str:
+    """Return a path-safe display filename while keeping a useful extension."""
+    name = Path(filename or "upload.bin").name
+    stem, ext = os.path.splitext(name)
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._") or "upload"
+    ext = re.sub(r"[^A-Za-z0-9.]+", "", ext)[:16]
+    return f"{stem[:80]}{ext or '.bin'}"
 
-    unique_filename = f"uploads/{uuid.uuid4().hex}{ext}"
 
+def build_owned_object_key(user_id: str, upload_id: str, filename: str) -> str:
+    safe_user = re.sub(r"[^A-Za-z0-9._-]+", "_", user_id).strip("._")
+    if not safe_user:
+        raise ValueError("Invalid user id for storage key")
+    return f"uploads/{safe_user}/{upload_id}/{sanitize_filename(filename)}"
+
+
+def parse_s3_uri(s3_uri: str) -> tuple[str, str]:
+    if not s3_uri.startswith("s3://"):
+        raise ValueError(f"Invalid s3 URI: {s3_uri}")
+    parts = s3_uri.replace("s3://", "").split("/", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError(f"Unable to parse S3 URI: {s3_uri}")
+    return parts[0], parts[1]
+
+
+def storage_uri_for_key(object_key: str) -> str:
+    return f"s3://{settings.S3_BUCKET_NAME}/{object_key}"
+
+
+def generate_presigned_upload_url_for_key(
+    object_key: str,
+    content_type: str = "application/octet-stream",
+    expiration: int = 3600,
+) -> dict:
+    """Generate a presigned URL for an already-owned object key."""
     try:
         response = s3_client.generate_presigned_url(
             "put_object",
             Params={
                 "Bucket": settings.S3_BUCKET_NAME,
-                "Key": unique_filename,
-                "ContentType": "application/octet-stream",
+                "Key": object_key,
+                "ContentType": content_type or "application/octet-stream",
             },
             ExpiresIn=expiration,
         )
 
-        file_url = f"s3://{settings.S3_BUCKET_NAME}/{unique_filename}"
+        file_url = storage_uri_for_key(object_key)
         logger.info("Generated presigned upload URL for %s", file_url)
 
         return {
             "upload_url": response,
             "file_path": file_url,
+            "storage_uri": file_url,
+            "object_key": object_key,
         }
     except ClientError as exc:
         logger.error("Failed to generate S3 presigned upload URL: %s", exc)
         raise
 
 
+def generate_presigned_upload_url(filename: str, expiration=3600) -> dict:
+    """Deprecated compatibility helper. Prefer generate_presigned_upload_url_for_key."""
+    _, ext = os.path.splitext(filename)
+    if not ext:
+        ext = ".bin"
+    object_key = f"uploads/legacy/{uuid.uuid4().hex}{ext}"
+    return generate_presigned_upload_url_for_key(object_key, expiration=expiration)
+
+
 def download_file_from_s3(s3_uri: str, local_path: str):
     """Download an S3 URI to a local worker path."""
-    if not s3_uri.startswith("s3://"):
-        raise ValueError(f"Invalid s3 URI: {s3_uri}")
-
-    parts = s3_uri.replace("s3://", "").split("/", 1)
-    if len(parts) != 2:
-        raise ValueError(f"Unable to parse S3 URI: {s3_uri}")
-
-    bucket, key = parts
+    bucket, key = parse_s3_uri(s3_uri)
     try:
         logger.info("[Worker] Downloading %s to %s", s3_uri, local_path)
         s3_client.download_file(bucket, key, local_path)
@@ -66,6 +99,13 @@ def download_file_from_s3(s3_uri: str, local_path: str):
     except ClientError as exc:
         logger.error("[Worker] S3 download failed: %s", exc)
         raise
+
+
+def delete_s3_object(storage_uri: str) -> None:
+    bucket, key = parse_s3_uri(storage_uri)
+    if bucket != settings.S3_BUCKET_NAME:
+        raise ValueError("Refusing to delete object outside configured bucket")
+    s3_client.delete_object(Bucket=bucket, Key=key)
 
 
 def upload_file_to_s3(file_obj, filename: str) -> str:
@@ -92,6 +132,24 @@ def upload_file_to_s3(file_obj, filename: str) -> str:
     except Exception as exc:  # noqa: BLE001
         logger.warning("S3 client unavailable, falling back to local storage: %s", exc)
         return _fallback_local_save(file_obj, unique_filename)
+
+
+def upload_file_to_owned_key(file_obj, object_key: str, content_type: str | None = None) -> str:
+    """Upload a file object to a pre-created owned object key."""
+    try:
+        s3_client.upload_fileobj(
+            file_obj,
+            settings.S3_BUCKET_NAME,
+            object_key,
+            ExtraArgs={"ContentType": content_type or "application/octet-stream"},
+        )
+        return storage_uri_for_key(object_key)
+    except ClientError as exc:
+        logger.error("S3 upload failed, falling back to local storage: %s", exc)
+        return _fallback_local_save(file_obj, object_key)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("S3 client unavailable, falling back to local storage: %s", exc)
+        return _fallback_local_save(file_obj, object_key)
 
 
 def _fallback_local_save(file_obj, relative_path: str):

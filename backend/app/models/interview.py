@@ -10,9 +10,11 @@ class Interview(Base):
     user_id = Column(String, index=True)
     status = Column(String, default="PENDING", index=True)
     task_id = Column(String, nullable=True)
+    upload_id = Column(String, ForeignKey("user_uploads.id"), nullable=True, index=True)
     file_url = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    upload = relationship("UserUpload")
     transcripts = relationship("Transcript", back_populates="interview")
     analysis = relationship("AnalysisResult", back_populates="interview", uselist=False)
 

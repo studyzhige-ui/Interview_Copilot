@@ -9,6 +9,7 @@ websockets==15.0.1
 # Database & ORM
 sqlalchemy==2.0.48
 psycopg2-binary==2.9.11
+alembic==1.17.2
 
 # Security & Auth
 python-jose[cryptography]==3.3.0

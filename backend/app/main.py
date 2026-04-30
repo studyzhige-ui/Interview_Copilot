@@ -1,6 +1,7 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,17 +9,22 @@ from fastapi.middleware.cors import CORSMiddleware
 # Set a default Hugging Face mirror without overriding the user's .env value.
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
-from app.db.database import Base, engine
+from app.db.database import engine
 import app.models.agent_trace
 import app.models.chat
 import app.models.interview  # Ensure models are registered before table creation.
 import app.models.interview_state
+import app.models.knowledge
 import app.models.memory
+import app.models.upload
 import app.models.user
 from app.rag.embeddings import init_rag_settings
 from app.rag.retriever import init_reranker
+from app.services.memory_vector_service import memory_vector_service
+from app.core.config import settings
 
 logger = logging.getLogger("interview.copilot.main")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @asynccontextmanager
@@ -26,16 +32,42 @@ async def lifespan(app: FastAPI):
     """Initialize shared resources once during the FastAPI lifecycle."""
     logger.info("====== Interview Copilot startup sequence begins ======")
 
-    logger.info(">>> [1/4] Verifying database schema...")
-    Base.metadata.create_all(bind=engine)
+    logger.info(">>> [1/5] Verifying database schema migration state...")
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import inspect, text
 
-    logger.info(">>> [2/4] Initializing LlamaIndex LLM and embedding settings...")
+    inspector = inspect(engine)
+    if "alembic_version" not in inspector.get_table_names():
+        raise RuntimeError(
+            "Database is not migrated. Run `alembic upgrade head` before starting the API."
+        )
+    with engine.connect() as connection:
+        current_version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+    script = ScriptDirectory.from_config(Config(str(PROJECT_ROOT / "alembic.ini")))
+    head_version = script.get_current_head()
+    if current_version != head_version:
+        raise RuntimeError(
+            f"Database migration is out of date ({current_version} != {head_version}). "
+            "Run `alembic upgrade head` before starting the API."
+        )
+
+    logger.info(">>> [2/5] Initializing LlamaIndex LLM and embedding settings...")
     init_rag_settings()
 
-    logger.info(">>> [3/4] Initializing reranker...")
+    if settings.MEMORY_BACKFILL_ON_STARTUP:
+        logger.info(">>> [3/5] Backfilling memory embeddings...")
+        try:
+            memory_vector_service.backfill_pending()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Memory embedding backfill degraded: %s", exc)
+    else:
+        logger.info(">>> [3/5] Memory embedding backfill disabled.")
+
+    logger.info(">>> [4/5] Initializing reranker...")
     init_reranker()
 
-    logger.info(">>> [4/4] Whisper and diarization models are loaded by Celery workers.")
+    logger.info(">>> [5/5] Whisper and diarization models are loaded by Celery workers.")
     logger.info("====== Interview Copilot startup sequence complete ======")
     yield
 

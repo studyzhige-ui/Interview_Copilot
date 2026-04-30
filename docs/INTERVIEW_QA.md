@@ -1,538 +1,427 @@
-# Interview Copilot 面试问答手册
+# Interview Copilot 超详细面试问答手册
 
-> 本文档基于当前项目代码重写，面向简历答辩、技术追问和系统设计问答。
-> 校对范围覆盖 `backend/app/`、`backend/tests/` 与当前 API/服务实现。
-> 当前自动化测试结果：`51 passed, 1 warning`。
+本文覆盖 Interview Copilot 项目在面试中可能被问到的问题。回答尽量贴合当前代码实现，适合用于简历答辩、系统设计追问和项目深挖。
 
 ---
 
-## 1. 一句话介绍项目
+## 1. 业务与产品定位
 
-### Q1：一句话介绍一下这个项目。
+### Q1：这个项目解决什么问题？
 
-**A：** 这是一个面向求职场景的 AI 面试辅助系统，覆盖面试录音上传与转写分析、知识增强问答、错题沉淀、多轮复盘、岗位选择与准备等核心环节，目标是提升候选人的面试准备效率与回答质量。
+A：它解决技术面试准备中的三个核心问题：第一，面试录音难以复盘；第二，知识点和错题难以沉淀；第三，多轮练习缺少个性化上下文。Interview Copilot 把录音转写、面试分析、知识库问答、长期记忆和岗位准备串成闭环。
 
-### Q2：它和普通聊天机器人有什么本质区别？
+### Q2：它和普通聊天机器人有什么区别？
 
-**A：** 它不是单轮聊天，而是一个带有双链路 Agent、分层记忆、混合检索和异步音频分析的后端系统。
+A：普通 ChatBot 主要是单轮或多轮生成。本项目有 RAG（Retrieval-Augmented Generation，检索增强生成）、Memory（长期记忆）、Interview State（面试状态）、ReAct Agent（工具智能体）、Celery Worker（异步任务）和 Evaluation（评测）体系，更像一个 AI 面试后端平台。
 
-- 普通问答走确定性工作流主链路
-- 复杂任务走独立 ReAct Agent 链路
-- 会话历史不是简单拼接，而是经过 transcript、context pipeline、working state、long-term memory 四层管理
-- 音频分析和文档摄取不阻塞主请求，而是通过 Celery Worker 离线执行
+### Q3：核心业务链路有哪些？
 
-### Q3：这个项目最核心的业务价值是什么？
+A：三条。第一是 Chat QA（聊天问答）：用户提问，系统结合上下文、记忆和知识库回答。第二是 Interview Analysis（面试分析）：上传录音，异步转写和分析。第三是 Job Preparation（岗位准备）：ReAct Agent 调工具查岗位、拉详情、结合用户画像生成准备建议。
 
-**A：** 它把原本零散的面试准备动作串成了闭环。
+### Q4：项目的用户价值是什么？
 
-- 录音后可以自动转写、拆问答对、评分和生成反馈
-- 错题和改进答案可以沉淀回知识库
-- 后续问答能结合知识库、长期记忆和当前会话状态继续追问
-- 岗位选择与准备可以通过工具调用拿到更具体的岗位信息和准备建议
+A：它让面试准备从“零散练习”变成“持续改进”。用户可以得到即时问答、录音复盘、错题沉淀、长期偏好记忆和岗位准备建议，系统会把历史信息用于后续回答。
+
+### Q5：项目最核心的工程难点是什么？
+
+A：不是调用 LLM，而是如何把多轮上下文、知识库检索、长期记忆、异步转写、工具调用和数据隔离组织成稳定链路。难点在于边界设计、检索质量、状态管理和可观测性。
 
 ---
 
 ## 2. 整体架构
 
-### Q4：整体架构怎么拆？
+### Q6：整体架构怎么分层？
 
-**A：** 我把系统拆成六层。
+A：API 层、普通问答工作流层、ReAct Agent 层、RAG 层、服务层、数据与 Worker 层。API 用 FastAPI；普通问答在 `backend/app/agent/`；ReAct 在 `backend/app/agent_runtime/`；RAG 在 `backend/app/rag/`；服务在 `backend/app/services/`；数据层是 PostgreSQL、Milvus、Redis、MinIO/S3。
 
-1. API 层：FastAPI 路由，承接 Auth、Chat、Interview、RAG、Agent、Model Runtime。
-2. 主问答链路：`app/agent/` 下的确定性工作流，负责多轮问答、记忆召回、RAG、流式回复。
-3. 复杂任务链路：`app/agent_runtime/` 下的 ReAct Agent，负责 Function Calling 工具规划与执行。
-4. 服务层：`app/services/`，包括 transcript、context、memory extraction、interview state、transcription、analysis、analytics、telemetry、storage。
-5. RAG 引擎层：`app/rag/`，负责文档摄取、自适应切分、向量检索、BM25、rerank 和阈值拦截。
-6. 数据层：PostgreSQL、Milvus、MinIO/S3、Redis。
+### Q7：为什么要做双链路？
 
-### Q5：为什么要做双链路 Agent，而不是一个大 Agent 全包？
+A：普通问答和复杂任务的优化目标不同。普通问答需要稳定、低延迟、可控，所以走确定性 pipeline；复杂任务需要工具调用和多步推理，所以走 ReAct Agent。这样避免所有请求都被 Agent 的不确定性拖慢。
 
-**A：** 因为两类任务的优化目标完全不同。
+### Q8：普通问答为什么不用自由式 Agent？
 
-- 主问答链路重稳定性、低波动、低延迟，适合显式阶段化工作流
-- 岗位准备、岗位检索这种复合任务需要工具调用和中间推理，更适合 ReAct Agent
+A：因为普通面试问答通常不需要模型自己探索工具路径。自由式 Agent 会增加延迟、成本和不确定性，还不利于排查问题。显式 pipeline 每一步职责清楚，更容易优化和测试。
 
-如果把所有问题都交给自由式 Agent，会出现：
+### Q9：ReAct Agent 为什么还要保留？
 
-- 延迟波动大
-- 工具调用成本高
-- 排查困难
-- 多步推理在简单问答场景里是浪费
+A：因为岗位检索、岗位详情、结合用户画像生成准备建议这类任务需要多步工具调用。ReAct Agent 适合让模型决定是否调用工具、调用哪个工具、如何基于 observation 继续推理。
+
+### Q10：系统有哪些主要存储？
+
+A：PostgreSQL 保存业务数据、聊天记录、面试分析、长期记忆和 Agent trace；Milvus 保存 RAG 知识向量和长期记忆向量；Redis 作为 Celery broker/result backend；MinIO/S3 保存音频和文档对象。
 
 ---
 
-## 3. 为什么选这些技术
+## 3. API 与鉴权
 
-### Q6：为什么选 FastAPI，而不是 Flask 或 Django？
+### Q11：认证怎么做？
 
-**A：**
+A：使用 JWT（JSON Web Token，令牌鉴权）。登录成功后返回 Bearer token，普通 HTTP 接口通过 `get_current_user()` 依赖校验，WebSocket 通过 query token 解码校验用户。
 
-- 这个项目大量使用异步 I/O 和流式响应，FastAPI 原生适配 `async/await`
-- 它对 HTTP 和 WebSocket 都很友好，当前 `chat` 同时支持 `/chat/ws/{session_id}` 和 `/chat/sse/{session_id}`
-- 依赖注入机制适合统一处理 JWT 鉴权和数据库会话
-- Pydantic 在 API 请求校验和 Agent 工具参数校验里都很好用
+### Q12：Chat API 支持哪些能力？
 
-### Q7：为什么选 LlamaIndex，而不是 LangChain？
+A：支持创建会话、列出会话、获取历史、改标题、查询完整 transcript、WebSocket 流式聊天、SSE 流式聊天、列出长期记忆、查看单条记忆和删除记忆。
 
-**A：** 因为当前项目的核心能力是文档摄取、节点切分、索引和检索，不是把所有能力堆成通用链式编排。
+### Q13：为什么同时支持 WebSocket 和 SSE？
 
-当前真正落地的能力主要是：
+A：WebSocket 适合双向实时通信，SSE 适合服务端单向流式返回，前端实现更简单。两者都能承载流式回答，方便不同客户端选择。
 
-- `SimpleDirectoryReader`
-- `MarkdownNodeParser / JSONNodeParser / CodeSplitter / SentenceSplitter`
-- `VectorStoreIndex`
-- `MilvusVectorStore`
-- `PostgresDocumentStore`
-- `QueryFusionRetriever`
+### Q14：RAG 和知识库 API 做什么？
 
-也就是说，我更看重 LlamaIndex 在 RAG 底层抽象上的适配度，而不是它的 Agent 层。
+A：`/knowledge/upload/url` 生成当前用户私有文档的预签名上传地址，`/knowledge/documents` 负责创建、查询、更新、删除用户自己的知识库文档，`/rag/query` 只在当前用户自己的知识库中执行检索查询。
 
-### Q8：为什么选 Milvus，而不是 pgvector / FAISS / Chroma？
+### Q15：Model Runtime API 做什么？
 
-**A：**
-
-- 这是一个服务化后端，不是单机脚本实验
-- Milvus 更适合作为独立向量检索层
-- 索引配置和检索参数比较清晰，当前用的是 `HNSW + IP`
-- 业务数据和高维向量检索分层后，更容易分别调优和扩展
-
-### Q9：为什么还保留 PostgreSQL，而不是让 Milvus 全包？
-
-**A：** 因为 PostgreSQL 在这里承担的是关系型业务数据和节点元数据持久化，不只是聊天记录。
-
-PostgreSQL 当前保存的核心数据包括：
-
-- 用户、会话、消息 transcript
-- working state / memory cursor / compaction cursor
-- memory items
-- interview / transcript / analysis result
-- interview state
-- agent run / agent step trace
-- PostgresDocumentStore 节点持久化
-
-Milvus 负责的是高维向量相似检索，两者职责不同。
-
-### Q10：为什么音频分析要用 WhisperX + Pyannote？
-
-**A：**
-
-- WhisperX 相比基础 Whisper，更适合做带时间戳对齐的转写
-- Pyannote 负责 speaker diarization，区分候选人与面试官
-- 面试分析场景必须先把说话人区分清楚，否则后续问答对抽取和评分会很不稳定
-
-### Q11：为什么音频分析和文档摄取都要走 Celery？
-
-**A：**
-
-- 两者都属于重计算任务
-- 音频分析会占用较多 CPU/GPU 和较长时间
-- 文档摄取涉及对象存储拉取、解析、切分、嵌入、入库
-- 如果放在主请求里，会直接拖垮 API 响应时间
-
-所以当前实现是：
-
-- 文件先上传到 MinIO/S3
-- API 只负责接收路径并投递任务
-- Worker 独立下载、处理、更新状态
+A：它允许查看和更新不同角色的模型选择。项目把模型分成 `primary`、`fast`、`agent` 三个角色，分别服务普通 RAG 回答、轻量规划/抽取、ReAct function calling。
 
 ---
 
-## 4. 文档摄取与索引构建
+## 4. 普通多轮问答 Pipeline
 
-### Q12：你简历里写“完成多类知识源摄取”，具体指什么？
+### Q16：主问答链路怎么执行？
 
-**A：** 指的是把题库、官方资料、个人错题等不同来源的内容统一走一条导入链路：
+A：`stream_chat_with_agent()` 先确保 session 和 interview_state 存在；然后 assemble rewrite context；调用 `plan_query()` 生成 QueryPlan；按计划并发召回长期记忆和知识库；组装 answer context；根据是否需要知识检索选择 direct prompt 或 RAG prompt；流式生成；写入 transcript；异步触发 compaction、interview_state update、memory extraction 和 telemetry。
 
-1. 解析文档
-2. 根据内容类型做自适应切分
-3. 生成 nodes
-4. 写入 Milvus 向量库
-5. 同步写入 PostgreSQL 版 Docstore
+### Q17：为什么要先 assemble rewrite context？
 
-### Q13：自适应解析与切分怎么做？
+A：用户当前问题可能有代词和省略，比如“那这个怎么答”。改写需要知道近期对话、working state 和 interview state，但不需要完整 RAG 结果。所以先加载轻量上下文用于规划。
 
-**A：** 入口在 `backend/app/rag/ingestion.py` 的 `get_optimal_nodes()`。
+### Q18：QueryPlan 包含什么？
 
-- Markdown 或 `interview_qa / official_docs`：`MarkdownNodeParser`
-- JSON：`JSONNodeParser`
-- Python：`CodeSplitter(language="python")`
-- Java：`CodeSplitter(language="java")`
-- C / C++：`CodeSplitter(language="cpp")`
-- 其他文本：`SentenceSplitter(chunk_size=1024, chunk_overlap=100)`
+A：包含 standalone_query（上下文消解后的独立问题）、dense_query（语义检索查询）、sparse_query（关键词检索查询）、needs_memory_retrieval（是否召回记忆）、memory_types（记忆类型）、needs_knowledge_retrieval（是否查知识库）、knowledge_sources（知识源）、answer_mode（回答模式）、reasoning（审计说明）。
 
-另外，如果配置了 `LLAMA_CLOUD_API_KEY`：
+### Q19：为什么区分 dense_query 和 sparse_query？
 
-- PDF / PPTX / DOCX 会优先走 `LlamaParse`
-- 结果按 Markdown 继续进入 Markdown 切分链路
+A：dense_query 面向向量检索，需要保留自然语言语义；sparse_query 面向 BM25/关键词检索，需要更短、更聚焦的术语。两者混用会损失召回质量。
 
-否则 PDF 走 `PyMuPDFReader` 兜底。
+### Q20：知识库和记忆为什么可以并发召回？
 
-### Q14：为什么不能所有文档统一固定长度切块？
+A：planner 已经先确定是否需要 memory 和 knowledge。之后两者互不依赖，可以用 `asyncio.create_task` 并发执行，减少整体等待时间。
 
-**A：** 因为不同文档结构差异太大。
+### Q21：direct chat 和 RAG chat 怎么区分？
 
-- Markdown 更适合按标题边界切
-- JSON 更适合按结构切
-- 代码更适合按函数 / 类边界切
-- 普通长文本再退回句子滑窗
+A：由 `QueryPlan.needs_knowledge_retrieval` 决定。不需要知识库时用 fast LLM 和直接回答提示词；需要知识库时用 primary LLM 和 RAG 提示词，强调基于检索知识回答。
 
-统一固定长度切块虽然简单，但会更容易破坏语义边界，影响检索质量。
+### Q22：回答后为什么异步做维护？
 
-### Q15：多用户隔离在摄取阶段怎么保证？
-
-**A：** 切分完成后会强制把 `user_id` 和 `source_type` 回填到每个 node 的 metadata 上。
-
-这是一个很重要的安全动作，因为 parser 过程中可能丢原始 metadata，不重新写回的话，后面的隔离过滤会失效。
+A：维护包括 compaction、interview_state 更新、长期记忆抽取，耗时且不应该阻塞用户看到答案。因此主回答完成后异步执行。
 
 ---
 
-## 5. 混合检索链路
+## 5. 上下文 Pipeline 与状态管理
 
-### Q16：你为什么不是纯向量检索？
+### Q23：Raw Transcript 是什么？
 
-**A：** 因为面试场景里有很多关键词强依赖问题。
+A：Raw Transcript（原始转录/原始对话记录）是事实源。每轮用户和 AI 消息按 `seq` 写入 `chat_messages`，后续 working state、memory、trace 和审计都可以从它重建。
 
-- 向量检索擅长语义相似
-- BM25 擅长关键词精确命中
-- 两者互补后再做 rerank，会比单一路径稳定
+### Q24：Context Pipeline 做什么？
 
-### Q17：当前检索链路具体怎么跑？
+A：它把数据库历史转成模型可消费上下文。流程是 sanitize（清洗非法角色和系统调试消息）、truncate（按 token budget 保留最近消息）、repair（修复开头 Agent 或结尾 User 造成的断裂对话）、assemble（组装 working_state、interview_state、memory、knowledge、recent_turns、current_query）。
 
-**A：**
+### Q25：ContextBundle 是什么？
 
-1. 先在 Milvus 上做向量检索
-2. 再从 PostgresDocumentStore 里读取节点，按 `user_id/source_type` 过滤后构建 BM25
-3. 用 `QueryFusionRetriever(mode="reciprocal_rerank")` 做 RRF 融合
-4. 用 `BGE Reranker` 做交叉重排
-5. 用 `RAG_MIN_SCORE` 做绝对阈值拦截
+A：`ContextBundle` 是结构化上下文包，包含 working_state、interview_state、recent_turns、relevant_memories、knowledge_chunks 和 current_query。它让系统先结构化上下文，再由 PromptRenderer 渲染成字符串。
 
-### Q18：为什么 BM25 不是直接在数据库里做？
+### Q26：为什么不直接拼字符串？
 
-**A：** 当前实现里 BM25 不是依赖外部搜索引擎，而是直接基于 docstore 中过滤后的节点构建 `BM25Retriever`。
-这样做的好处是：
+A：过早拼字符串会让预算控制、排序、来源标注、去重和测试都很困难。结构化后再渲染，可以明确每类上下文的位置和 token 预算。
 
-- 检索逻辑都在 Python 和 LlamaIndex 这一层可控
-- 可以精确配合 `user_id/source_type` 过滤
-- 工程复杂度更低
+### Q27：PromptRenderer 的区块顺序是什么？
 
-代价是：如果数据规模继续扩大，BM25 这层未来可能要独立演化。
+A：顺序是 System rules、Working State、Interview State、Long-term Memories、Retrieved Knowledge、Recent Turns、Current Query。当前问题放最后，保证本轮意图最靠近模型回答位置。
 
-### Q19：为什么要加 reranker？
+### Q28：Working State 是什么？
 
-**A：** 因为前面的 dense retrieval 和 BM25 都是粗召回，目标是“别漏”。
-最终真正决定喂给模型的上下文质量的，是候选结果谁更相关，所以用交叉编码器做二阶段重排。
+A：Working State（工作状态）是结构化 JSON，字段包括 goal、current_phase、covered_topics、pending_topics、candidate_claims_to_verify、observed_gaps、next_best_question、constraints、summary。它用于压缩当前会话的协作状态。
 
-### Q20：绝对阈值拦截解决什么问题？
+### Q29：Compaction 什么时候触发？
 
-**A：** 它是用来抑制幻觉的。
+A：当 working_state 加上 compaction_cursor 之后的 recent transcript 超过 5000 tokens 时触发。系统保留最近 6 条消息不压缩，把更早消息折叠进新的 working_state，并推进 compaction_cursor。
 
-如果所有候选节点重排后得分都低于阈值，系统就返回 `[SYSTEM_EMPTY_WARNING]`，提示当前知识库没有足够可靠的依据，而不是硬让模型编答案。
+### Q30：Interview State 是什么？
 
-这一步是在检索侧做的，而不是把责任推给生成模型自己判断。
+A：Interview State（面试状态）是独立表 `interview_states` 中的结构化状态，字段包括 goal、phase、covered_topics、pending_topics、observed_gaps、evidence、candidate_claims、next_question、constraints。它更像面试进度状态机。
 
-### Q21：多用户多知识域隔离在检索侧怎么做？
+### Q31：为什么要同时有 Working State 和 Interview State？
 
-**A：**
+A：Working State 面向 prompt 组织和协作状态，Interview State 面向面试过程管理。拆开后职责清楚，减少状态漂移，也方便后续 UI 展示和评测。
 
-- 向量检索侧：`MetadataFilters`
-- BM25 侧：先在 Python 层过滤 node，再建 retriever
+### Q32：post-turn maintenance 做什么？
 
-也就是说，隔离不是只做一层，而是 dense 和 sparse 两层都做。
+A：它执行 compaction、interview state update 和 memory extraction。现在还有 session 级串行保护，避免连续消息导致 cursor 竞争或重复抽取。
 
 ---
 
-## 6. 主问答链路
-
-### Q22：主问答链路为什么叫“确定性工作流”？
-
-**A：** 因为它不是自由循环的 Agent，而是一条固定阶段的显式流水线。
-
-当前 `stream_chat_with_agent()` 大致分成：
-
-1. ensure session
-2. 长期记忆召回
-3. 上下文拼装
-4. query rewrite
-5. intent router
-6. 多源并发检索
-7. 汇总上下文
-8. 最终生成
-9. 同步写 raw transcript
-10. 异步做 post-turn maintenance
-
-### Q23：为什么要做 query rewrite？
-
-**A：** 因为多轮对话里大量存在代词、省略和不完整问题。
-如果不重写，检索器拿到的 query 往往不够明确，召回会漂。
-
-### Q24：为什么要做 intent router？
-
-**A：** 因为不是所有问题都值得走同一套检索链路。
-
-路由的职责是：
-
-- 判断需不需要检索
-- 判断查哪些知识源
-- 抽取更适合检索的关键词
-
-### Q25：多源检索为什么要并发？
-
-**A：** 因为一个问题可能同时依赖题库、官方资料、个人错题等多个来源。
-并发检索能减少总等待时间，当前实现里确实是用异步并发调度完成的。
-
----
-
-## 7. 分层记忆系统
-
-### Q26：你们的记忆为什么是分层的？
-
-**A：** 因为“原始事实”“当前会话状态”“跨会话稳定信息”不是一回事，不能混在一起管。
-
-当前可以拆成四层：
-
-1. Raw Transcript
-2. Context Assembly Pipeline
-3. Working State / Compaction
-4. Long-term Memory
-
-### Q27：Layer 1 Raw Transcript 是做什么的？
-
-**A：** 它是 append-only 的原始事实源。
-
-- 用户和 Agent 每轮消息都会顺序写入 `chat_messages`
-- 记录 `seq`
-- 用户消息可额外保存 `rewritten_query`
-
-所有后续的 compaction、memory extraction、审计和回放，都是从这层出发。
-
-### Q28：Layer 2 Context Pipeline 不是简单拼接吗？
-
-**A：** 不是，它是四步流水线：
-
-1. `sanitize`
-2. `truncate`
-3. `repair`
-4. `assemble`
-
-它的目标是把近期上下文整理成适合模型消费的格式，而不是盲目把历史消息全拼进去。
-
-### Q29：Working State 现在是什么结构？
-
-**A：** 它不再是自由文本摘要，而是结构化 JSON，字段包括：
-
-- `goal`
-- `current_phase`
-- `covered_topics`
-- `pending_topics`
-- `candidate_claims_to_verify`
-- `observed_gaps`
-- `next_best_question`
-- `constraints`
-- `summary`
-
-这意味着 working state 已经从“随意摘要”进化成“可约束的会话状态对象”。
-
-### Q30：Compaction 什么时候触发？
-
-**A：** 当前阈值是：
-
-- `working_state` token
-- 加上 `compaction_cursor` 之后的 recent transcript token
-- 总和超过 `5000`
-
-才会触发压缩。
-
-### Q31：压缩时保留什么？
-
-**A：** 当前实现会保留最近 6 条消息不压，把更老的消息压进新的 `working_state`。
-这是一种“保留近端细节，折叠远端状态”的设计。
-
-### Q32：除了 working state，为什么还单独有 interview state？
-
-**A：** 因为这两个状态关注点不一样。
-
-- `working_state`：会话协作状态，更偏 prompt 组织和近期任务推进
-- `interview_state`：面试评估状态，更偏 topic coverage、evidence、candidate claims、next question
-
-`interview_state` 也是结构化 JSON，并在 post-turn maintenance 时增量更新。
+## 6. 长期记忆系统
 
 ### Q33：长期记忆存什么？
 
-**A：** 当前允许四类长期记忆：
-
-- `user_profile`
-- `interaction_preference`
-- `feedback_rule`
-- `project_reference`
-
-它明确不存：
-
-- 当前会话临时状态
-- 短期弱项打分
-- 已经属于知识库的技术知识
+A：只存跨会话稳定信息，包括 user_profile（用户画像）、interaction_preference（交互偏好）、feedback_rule（反馈规则）、project_reference（项目背景）。不存临时弱点、当前轮进度或通用技术知识。
 
 ### Q34：长期记忆怎么写入？
 
-**A：**
+A：Post-turn maintenance 读取 `memory_cursor` 之后的增量消息，先更新 interview_state，再调用 LLM 抽取 durable memories（持久记忆）。系统过滤非法 type 和低于 0.65 confidence（置信度）的条目，用 `user_id + type + normalized_key` 合并，写入 confidence、importance、source_session_id、last_evidence_seq，并尝试写入 memory vector collection。
 
-1. 每轮对话结束后，后台维护服务会取 `memory_cursor` 之后的增量消息
-2. 先更新 `interview_state`
-3. 再调用 LLM 做 memory extraction
-4. 只保留置信度不低于 `0.65` 的条目
-5. 用 `user_id + type + normalized_key` 合并，而不是旧版的 description 精确匹配
-6. 写入 `confidence / last_evidence_seq / source_session_id`
-7. 成功后推进 `memory_cursor`
+### Q35：为什么引入 normalized_key？
 
-### Q35：为什么引入 `normalized_key`？
+A：description 是自然语言字段，容易因为措辞变化导致重复记忆。normalized_key 是归一化合并键，可以把同类记忆合并到同一条记录。
 
-**A：** 因为单纯按 `description` 精确匹配太脆弱。
-现在改成用 `normalized_key` 做同类记忆归并，更适合长期维护和更新。
+### Q36：长期记忆为什么要向量化？
 
-### Q36：长期记忆怎么召回？
+A：只按更新时间或召回次数筛选，相关但冷门的记忆可能永远进不了候选。向量化后可以按语义相似度找到相关记忆，再结合词法匹配、重要性和新近程度排序。
 
-**A：** 不是全量注入，而是：
+### Q37：为什么记忆使用独立 Milvus collection？
 
-1. 先按 `recall_count desc, updated_at desc` 取候选
-2. 先做 prefilter，默认最多看 12 条
-3. 再让快模型从 catalog 里选出最相关的最多 3 条
-4. 注入时会截断过长内容，并对老记忆附加过期提示
+A：长期记忆和知识库 chunk 的语义、生命周期、metadata 和清理策略不同。独立 collection 可以避免污染知识库检索，也方便单独调参和回填。
 
-这就是典型的 Active Recall 思路，而不是“记忆全贴进 prompt”。
+### Q38：长期记忆怎么召回？
+
+A：MemoryRetrievalService 同时走 memory_vector_service 的向量召回和 lexical_candidates 的词法召回，再用 HybridRetriever 融合。最终最多注入 3 条，注入前截断过长内容，并对太旧的记忆加 staleness_note（陈旧提示）。
+
+### Q39：HybridRetriever 怎么打分？
+
+A：分数由 `0.6 × vector_score + 0.35 × lexical_score + 0.15 × importance + 0.05 × recency_score` 组成。这样同时考虑语义相关、关键词覆盖、记忆重要性和新近程度。
+
+### Q40：记忆召回后会产生什么副作用？
+
+A：被选中的记忆会增加 recall_count，更新 last_accessed_at，然后以截断后的正文注入 prompt。
+
+### Q41：记忆写入失败会不会影响回答？
+
+A：不会。记忆向量 upsert 失败会把 embedding_status 标为 failed 并记录 warning；回答主链路已经完成，后续还能降级到词法召回。
+
+---
+
+## 7. RAG 摄取与检索
+
+### Q42：RAG 摄取流程是什么？
+
+A：文件上传到 MinIO/S3 后，API 投递 Celery 任务。Worker 下载文件，`ingest_document()` 用 LlamaIndex 解析文档，根据类型切块，给 node 写入 `user_id/source_type`，再写入 Milvus 向量库和 PostgreSQL docstore。
+
+### Q43：为什么要自适应切块？
+
+A：不同内容结构不同。Markdown 按标题结构切，JSON 按结构切，代码按语言语法切，普通文本按句子窗口切。统一固定长度切块会破坏语义边界，降低召回质量。
+
+### Q44：支持哪些切块策略？
+
+A：Markdown 或面试题/官方文档使用 MarkdownNodeParser；JSON 使用 JSONNodeParser；Python、Java、C、C++ 使用 CodeSplitter；其他文本使用 SentenceSplitter。
+
+### Q45：检索链路是什么？
+
+A：先用 Milvus 做 dense retrieval（稠密向量检索），再用 Postgres docstore 构建 BM25（词法检索），通过 QueryFusionRetriever 做 RRF（Reciprocal Rank Fusion，倒数排序融合），再用 BGE reranker（重排模型）重排，最后用 score gate（分数闸门）过滤低置信结果。
+
+### Q46：为什么不是纯向量检索？
+
+A：面试题里有很多关键词强依赖内容，比如框架名、函数名、算法名、协议名。向量检索擅长语义相似，BM25 擅长精确词面命中，二者融合更稳。
+
+### Q47：BM25 为什么在应用层构建？
+
+A：当前规模下，从 PostgresDocumentStore 取出经过 user_id/source_type 过滤的 nodes 后构建 BM25，工程复杂度低且边界清楚。未来数据量变大可以升级到独立 sparse index。
+
+### Q48：为什么要加 Reranker？
+
+A：向量检索和 BM25 都是粗召回，目标是尽量别漏。Reranker 是二阶段排序，用交叉编码模型判断 query 和候选片段的相关性，提升最终上下文质量。
+
+### Q49：RAG 怎么降低幻觉？
+
+A：如果重排后没有节点超过 `RAG_MIN_SCORE`，返回 `[SYSTEM_EMPTY_WARNING]`，告诉模型知识库没有足够可靠依据。另有 lexical fallback（词面覆盖兜底）避免 reranker 分数尺度导致误杀。
+
+### Q50：多租户隔离怎么做？
+
+A：上传、文档记录、摄取 metadata、面试记录、长期记忆和检索请求都绑定 `current_user.username`。检索时 Milvus 用 `user_id == 当前用户` 的 MetadataFilters，BM25 在 Python 层也只使用当前用户的 node 池；项目不再设计公共库或共享题库。
 
 ---
 
 ## 8. ReAct Agent 链路
 
-### Q37：ReAct Agent 主要做什么？
+### Q51：ReAct Agent 用在哪里？
 
-**A：** 当前主要承接岗位选择与准备类复合任务，特点是：
+A：用于岗位检索、岗位详情、结合用户画像做准备建议、搜索面试题库等多步任务。普通问答不默认走 ReAct。
 
-- 要查岗位
-- 要拉岗位详情
-- 要结合用户画像和面试历史
-- 要多步执行
+### Q52：当前有哪些工具？
 
-所以不适合走主问答链路的一次性 RAG。
+A：`search_jobs` 搜索 Lever 岗位；`fetch_job_detail` 获取岗位详情；`get_user_profile` 读取用户画像、最近会话、面试统计；`search_interview_qa` 搜索面试题库。
 
-### Q38：当前注册了哪些工具？
+### Q53：工具安全怎么做？
 
-**A：**
+A：每个工具都有 Pydantic 参数模型；工具参数 JSON 长度受 `AGENT_MAX_TOOL_ARG_CHARS` 限制；站点有 allowlist（白名单）；上下文中的 user_id/session_id 由系统注入；工具执行有 timeout；未知工具、参数错误、超时都会写成 observation 返回。
 
-- `search_jobs`
-- `fetch_job_detail`
-- `get_user_profile`
-- `search_interview_qa`
+### Q54：预算熔断有哪些？
 
-### Q39：工具调用怎么保证安全和稳定？
+A：最大步数 `AGENT_MAX_STEPS`，最大工具调用数 `AGENT_MAX_TOOL_CALLS`，单工具最大调用数 `AGENT_MAX_CALLS_PER_TOOL`，总 token 上限 `AGENT_MAX_TOTAL_TOKENS`，总运行时间 `AGENT_MAX_RUNTIME_SECONDS`。超限后写 budget_stop trace 并返回停止原因。
 
-**A：**
+### Q55：为什么记录 Agent Trace？
 
-- 每个工具有独立的 Pydantic 参数模型
-- 工具参数长度受 `AGENT_MAX_TOOL_ARG_CHARS` 限制
-- 工具调用上下文不是模型自己传的，而是系统注入 `user_id/session_id`
-- 可以限制单工具调用次数和总工具调用次数
-- 每个工具调用有超时
+A：Agent 最怕黑盒。系统把 AgentRun 和 AgentStep 落库，记录工具名、参数、observation、错误、延迟、token 和 final answer。这样能做回放、debug、成本分析、trajectory evaluation（轨迹评测）。
 
-### Q40：预算熔断具体有哪些维度？
+### Q56：ReAct 会不会污染长期记忆？
 
-**A：**
-
-- 最大步数 `AGENT_MAX_STEPS`
-- 最大工具调用数 `AGENT_MAX_TOOL_CALLS`
-- 单工具最大调用次数 `AGENT_MAX_CALLS_PER_TOOL`
-- 总 token 上限 `AGENT_MAX_TOTAL_TOKENS`
-- 总运行时长 `AGENT_MAX_RUNTIME_SECONDS`
-
-任一条件触发，就停止 Agent 执行。
-
-### Q41：为什么要记录 Agent Trace？
-
-**A：** 因为工具链路比普通问答更难 debug。
-当前系统会持久化：
-
-- run
-- step
-- tool args
-- observation
-- error
-- latency
-
-这样能做：
-
-- 运行轨迹回放
-- 成本分析
-- 失败定位
-- 工具路径优化
+A：默认不会。ReAct 会读取相关记忆辅助执行，但只有 planner 判断任务属于 interview_learning、review、preference_update 时，才允许写长期记忆。
 
 ---
 
-## 9. 音频分析与岗位报告
+## 9. 音频分析与异步任务
 
-### Q42：面试录音分析链路怎么走？
+### Q57：为什么音频分析必须异步？
 
-**A：**
+A：音频转写、说话人分离、LLM 分析耗时长且可能占 GPU/CPU。如果放在 HTTP 请求里，会导致超时和服务阻塞。因此 `/analyze` 只创建 Interview 并投递 Celery 任务。
 
-1. 前端拿 presigned URL
-2. 音频传 MinIO/S3
-3. `/analyze` 创建 `Interview(status=PENDING)`
-4. Celery Worker 拉取文件
-5. `transcribe_media()` 转写
-6. `analyze_interview()` 做问答拆解与评分
-7. 保存 `Transcript` 与 `AnalysisResult`
-8. Interview 状态推进到 `COMPLETED`
+### Q58：音频链路怎么跑？
 
-### Q43：个人错题是怎么回流到知识库的？
+A：前端拿 presigned URL 上传到 MinIO/S3；调用 `/analyze`；Celery task 把状态从 PENDING 改为 TRANSCRIBING，下载文件，调用 `transcribe_media()`，再改为 ANALYZING，调用 `analyze_interview()`，写 Transcript 和 AnalysisResult，最后 COMPLETED。失败则 FAILED。
 
-**A：** `/memory/save` 接口会把：
+### Q59：WhisperX 输出为什么转 Markdown？
 
-- 问题
-- 改进答案
-- 原始分数
-- 标签
+A：因为后续分析和切分更容易处理结构化文本。转写结果以 speaker 段落形式输出，便于区分面试官问题和候选人回答。
 
-拼成文本，再通过 `ingest_text()` 写回 `personal_memory` 知识源。
+### Q60：面试分析怎么抽取问答对？
 
-这相当于把复盘结果再次纳入 RAG。
+A：系统解析 speaker turn，默认第一个 speaker 是面试官，然后按“面试官连续提问 + 候选人连续回答”构造 QA pairs。如果格式不可用，就按段落 fallback。
 
-### Q44：analytics/report 是做什么的？
+### Q61：长转录怎么处理？
 
-**A：** 它是一个全局诊断通道，会综合用户的历史面试与记忆数据，生成更宏观的能力分析报告，不属于主问答链路。
+A：根据 `ANALYSIS_CHUNK_TOKEN_LIMIT` 分块，并尽量保持完整 QA pair。每个 chunk 单独分析，多 chunk 时再汇总 overall score 和 overall feedback。
 
 ---
 
-## 10. 测试、稳定性与当前边界
+## 10. 模型与配置
 
-### Q45：当前测试情况怎么样？
+### Q62：模型路由怎么做？
 
-**A：** 当前本地在项目专用环境下跑 `pytest -q`，结果是：
+A：`model_registry.py` 定义 ModelProfile 和 role defaults。primary 和 fast 默认 DeepSeek V4 Flash，agent 默认 DeepSeek V4 Pro。RuntimeLLMProxy 每次按 role 取当前选择，方便前端或运行时切换。
 
-- `51 passed`
-- `1 warning`
+### Q63：为什么分 primary、fast、agent？
 
-说明这轮重构后的 API、核心服务和模型层已经有比较完整的回归覆盖。
+A：不同任务对模型要求不同。primary 负责质量更高的主回答；fast 负责规划、记忆抽取、状态更新等轻量任务；agent 需要支持 function calling。
 
-### Q46：你觉得这个项目最有工程含量的点是什么？
+### Q64：启动时初始化什么？
 
-**A：** 我会优先讲四个：
+A：FastAPI lifespan 会创建表、执行 schema compatibility、初始化 LlamaIndex LLM 和 embedding、回填 memory embedding、初始化 reranker。Whisper 和 diarization 模型由 Celery worker 加载。
 
-1. 主问答链路做成了确定性并发工作流，而不是黑盒式自由 Agent
-2. 分层记忆从 transcript、context、working state 到 long-term memory 有明确边界
-3. RAG 链路不是纯向量，而是 dense + BM25 + rerank + score gate 的组合
-4. 复杂任务单独走 ReAct Agent，并加了预算熔断、工具参数校验和 trace
+### Q65：为什么不用 Alembic？
 
-### Q47：当前实现还有哪些边界或下一步优化点？
-
-**A：**
-
-- BM25 目前仍在应用层构建，规模继续变大后可能需要独立稀疏检索层
-- working state 和 interview state 已经结构化，但还可以进一步减少 LLM 漂移
-- long-term memory 现在已经有 `normalized_key` 和 `confidence`，下一步可以继续做 promotion / decay
-- 主问答链路和 Agent 链路都在增长，未来可以补更细的 benchmark 和回归集
+A：当前项目仍是本地开发阶段，使用 `create_all + schema_compat` 保持已有本地数据库可用。生产化后应迁移到 Alembic 管理数据库版本。
 
 ---
 
-## 11. 最后收口
+## 11. 安全与隔离
 
-### Q48：如果最后让你总结这个项目最能体现你什么能力，你怎么答？
+### Q66：数据隔离有哪些层？
 
-**A：** 我不会把它描述成“我接了几个模型接口”，而会说这是一个围绕真实求职场景搭起来的 AI 后端系统。我做的重点是把 RAG、记忆、异步音频分析、工具型 Agent、多用户隔离和效果评测串成一套稳定、可解释、可持续优化的工程链路。
+A：业务表按 user_id 查；RAG 摄取和检索按 user_id/source_type 限制；memory vector collection 也按 user_id 过滤；Agent trace 查询必须匹配当前 user_id。
+
+### Q67：有哪些安全风险和改进方向？
+
+A：本地 docker compose 的 MinIO bucket 示例适合开发不适合生产；CORS 当前允许所有来源，生产要收紧；默认 SECRET_KEY 只能本地使用；LLM prompt injection 仍需加强，例如对检索内容做更严格的来源标注和工具调用策略约束。
+
+### Q68：工具调用如何防止越权？
+
+A：工具上下文由系统注入 user_id 和 session_id，模型不能自己伪造；外部站点有 allowlist；参数经过 Pydantic 校验；trace 查询按当前用户过滤。
+
+---
+
+## 12. 评测与测试
+
+### Q69：当前测试情况怎么样？
+
+A：后端测试覆盖 API、核心配置、安全、模型注册、ORM、RAG scope、context pipeline、memory pipeline、agent runtime、agent tools、agent trace、storage 和 telemetry。最近一次执行 `pytest backend/tests -q` 通过 `60 passed`。
+
+### Q70：RAG 评测有哪些指标？
+
+A：`run_rag_eval.py` 统计 Hit Rate@3（前三命中率）、MRR@3（平均倒数排名）、Precision@3（前三精确率）、Recall@3（前三召回率）、nDCG@3（排序质量）、RAGAS faithfulness（忠实度）、context precision（上下文精确度）、context recall（上下文召回率）、延迟、token、失败率和超时率。
+
+### Q71：Agent 怎么评测？
+
+A：`run_agent_trajectory_eval.py` 基于 AgentRun/AgentStep 统计 run_count、completion_rate、avg_steps、avg_tool_calls、invalid_tool_call_rate、avg_latency_ms。如果提供标注数据，还能算 tool_selection_accuracy（工具选择准确率）。
+
+### Q72：为什么评测要分 RAG 和 Agent？
+
+A：RAG 评测关注“检索到的上下文是否相关、答案是否忠实”；Agent 评测关注“有没有完成任务、工具是否选对、工具调用是否有效、轨迹是否稳定”。二者评价对象不同。
+
+---
+
+## 13. 部署与运维
+
+### Q73：部署依赖有哪些？
+
+A：FastAPI 应用和 Celery worker 跑在主机；docker compose 提供 PostgreSQL、Redis、MinIO、Milvus、Nginx。启动时 FastAPI lifespan 创建表、检查 schema、初始化 LlamaIndex、回填 memory embedding、加载 reranker。
+
+### Q74：为什么 API 和 Worker 不全放 compose？
+
+A：当前 compose 定位为本地基础设施，API 和 worker 由开发者在主机启动，便于热重载、调试 GPU/模型缓存和本地 Python 环境。
+
+### Q75：生产化还需要补什么？
+
+A：收紧 CORS、替换 SECRET_KEY、私有化 MinIO bucket、引入 Alembic、API/Worker 容器化、加 Prometheus/Grafana 监控、为模型和向量库加健康检查、完善日志脱敏和数据删除策略。
+
+---
+
+## 14. 技术选型追问
+
+### Q76：为什么选 FastAPI？
+
+A：FastAPI 支持 async/await、WebSocket、SSE、Pydantic 校验和 OpenAPI 文档，适合流式聊天和异步 I/O。Flask 更轻但异步和类型校验弱；Django 更重，当前项目不需要完整全家桶。
+
+### Q77：为什么选 LlamaIndex？
+
+A：项目核心是文档摄取、节点切分、docstore、向量索引和检索融合，LlamaIndex 更贴近 RAG 数据层。LangChain 更偏通用链式编排和 Agent 生态，但普通问答链路不希望过度 Agent 化。
+
+### Q78：为什么选 Milvus？
+
+A：Milvus 是服务化向量数据库，适合独立部署和扩展；HNSW 参数清晰；能把向量检索和业务数据库解耦。FAISS 更适合本地实验，Chroma 更轻，pgvector 部署简单但和业务库耦合更高。
+
+### Q79：为什么选 Celery？
+
+A：音频转写、文档摄取、embedding、LLM 分析都是重任务。Celery 有独立 worker、broker、result backend 和失败状态，比 FastAPI BackgroundTasks 更适合长任务。
+
+### Q80：为什么选 WhisperX？
+
+A：WhisperX 比基础 Whisper 更适合带时间戳对齐和说话人分离的面试录音，后续可以更稳定地区分面试官问题和候选人回答。
+
+---
+
+## 15. 优化方向
+
+### Q81：RAG 还能怎么优化？
+
+A：BM25 可以从应用层构建演进为独立 sparse index；加入 query expansion；对 source_type 做更细粒度 routing；引入 learning-to-rank；做 chunk-level citation。
+
+### Q82：记忆还能怎么优化？
+
+A：可以加入 memory decay（记忆衰减）、promotion（晋升规则）、conflict resolution（冲突解决）、用户可编辑记忆、敏感记忆删除策略，以及基于评测的 memory usefulness（记忆有效性）指标。
+
+### Q83：Agent 还能怎么优化？
+
+A：可以加入 tool policy（工具策略）、planner/executor 分离、并行工具调用、失败重试、工具结果缓存、trajectory replay UI、自动生成工具选择评测集。
+
+### Q84：音频分析还能怎么优化？
+
+A：可以加入更精细的说话人角色识别、题目边界检测、面试官追问识别、答案结构评分维度、语速和停顿分析，以及对每道题生成可练习的 follow-up question。
+
+### Q85：上下文 pipeline 还能怎么优化？
+
+A：可以加入冲突检测、来源优先级仲裁、prompt cache 稳定性优化、上下文命中率指标、不同 answer_mode 的模板评测，以及长期记忆和 knowledge chunk 的引用标注。
+
+---
+
+## 16. 总结类问题
+
+### Q86：这个项目最亮的点是什么？
+
+A：它不是只接入大模型，而是把 RAG、长期记忆、多轮上下文压缩、异步音频分析、工具型 Agent、安全隔离和评测闭环组合成一套工程化系统。
+
+### Q87：如果让你讲最大收获，你怎么说？
+
+A：最大收获是理解了大模型应用真正难的不是调用接口，而是上下文工程、检索工程、状态管理、异步任务和可观测性。模型只是核心能力之一，系统边界才决定项目能不能稳定运行。
+
+### Q88：如果面试官质疑这是套壳项目，怎么回答？
+
+A：可以说：如果只是套壳，核心就是一次 prompt 调用。但这个项目有文档摄取、混合检索、长期记忆向量化、query planner、ContextBundle、ReAct 工具治理、音频转写后台任务、Agent trace、模型运行时选择和评测脚本。工程复杂度主要在模型调用之外。
+
+### Q89：如果让你重做一版，会先改哪里？
+
+A：我会优先把数据库迁移改成 Alembic，把 RAG BM25 演进到独立 sparse index，把 memory usefulness 做成可评测指标，并补充生产级监控和 prompt injection 防护。
+
+### Q90：最后怎么概括项目？
+
+A：Interview Copilot 是一个围绕技术面试准备构建的 AI 后端系统。它用确定性多轮 RAG pipeline 保证普通问答稳定，用长期记忆实现个性化，用 Celery 承载音频和摄取重任务，用 ReAct Agent 处理工具型复合任务，并通过 trace、测试和评测保证系统可解释、可追踪、可持续优化。

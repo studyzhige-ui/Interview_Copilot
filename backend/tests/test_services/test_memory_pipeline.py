@@ -28,6 +28,11 @@ def test_memory_merge_uses_normalized_key(monkeypatch, db_session):
 
     monkeypatch.setattr(module, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(module, "agent_fast_llm", FakeLLM())
+    monkeypatch.setattr(
+        module.memory_vector_service,
+        "upsert_memory",
+        lambda *args, **kwargs: True,
+    )
 
     service = module.MemoryExtractionService()
     first = asyncio.run(
@@ -49,6 +54,53 @@ def test_memory_merge_uses_normalized_key(monkeypatch, db_session):
     assert len(rows) == 1
     assert rows[0].normalized_key == "concise_answers"
     assert first[0]["normalized_key"] == second[0]["normalized_key"]
+
+
+def test_memory_retrieval_uses_user_scope_and_lexical_fusion(monkeypatch, db_session):
+    from app.models.memory import MemoryItem
+    from app.services import memory_extraction_service as module
+
+    db_session.add(
+        MemoryItem(
+            id="mem_alice",
+            user_id="alice",
+            type="interaction_preference",
+            description="Chinese answers",
+            normalized_key="chinese_answers",
+            content="User prefers Chinese answers with English terms explained.",
+            importance=0.9,
+        )
+    )
+    db_session.add(
+        MemoryItem(
+            id="mem_bob",
+            user_id="bob",
+            type="interaction_preference",
+            description="Chinese answers",
+            normalized_key="chinese_answers",
+            content="Bob prefers Chinese answers.",
+            importance=0.9,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: db_session)
+
+    async def fake_vector(**kwargs):
+        return []
+
+    monkeypatch.setattr(module.memory_vector_service, "retrieve_vector", fake_vector)
+    service = module.MemoryRetrievalService()
+
+    result = asyncio.run(
+        service.recall_relevant(
+            user_id="alice",
+            query="Chinese answers English terms",
+            memory_types=["interaction_preference"],
+        )
+    )
+
+    assert [item["id"] for item in result] == ["mem_alice"]
 
 
 def test_post_turn_maintenance_does_not_advance_cursor_on_failed_extraction(monkeypatch):

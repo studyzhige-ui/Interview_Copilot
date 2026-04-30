@@ -8,11 +8,10 @@ import tiktoken
 from llama_index.core import Settings
 from llama_index.core.callbacks import CallbackManager, TokenCountingHandler
 
-from app.agent.rewriter import rewrite_query
-from app.agent.router import analyze_intent
+from app.agent.planner import plan_query
 from app.rag.embeddings import agent_fast_llm
-from app.rag.retriever import query_knowledge_base
-from app.services.context_service import context_pipeline
+from app.rag.knowledge_retriever import knowledge_retriever
+from app.services.context_service import ContextBundle, context_pipeline, prompt_renderer
 from app.services.interview_state_service import interview_state_service
 from app.services.memory_extraction_service import (
     memory_retrieval_service,
@@ -28,6 +27,12 @@ token_counter = TokenCountingHandler(
 )
 Settings.callback_manager = CallbackManager([token_counter])
 
+DIRECT_SYSTEM_RULES = """You are Interview Copilot, a concise technical interview assistant.
+Use the provided session state and memories only when relevant. If context is insufficient, say what is missing."""
+
+RAG_SYSTEM_RULES = """You are Interview Copilot, a concise technical interview assistant.
+Use retrieved knowledge as evidence, prefer current interview_state over long-term memory when discussing current candidate performance, and avoid inventing sources."""
+
 
 async def stream_chat_with_agent(
     user_message: str,
@@ -40,64 +45,71 @@ async def stream_chat_with_agent(
     retrieval_hit = False
 
     try:
+        yield "[status] 正在准备对话上下文...\n"
         transcript_service.ensure_session(session_id, user_id)
         interview_state_service.ensure_state(session_id, user_id)
 
+        yield "[status] 正在分析问题并规划上下文...\n"
         rewrite_context = context_pipeline.assemble_rewrite_context(
             session_id=session_id,
             user_id=user_id,
             current_query=user_message,
         )
-        standalone_query = await rewrite_query(
+        query_plan = await plan_query(
             user_message=user_message,
-            chat_context=rewrite_context.context_text,
+            rewrite_context=rewrite_context.context_text,
         )
+        standalone_query = query_plan.standalone_query
 
-        relevant_memories = await memory_retrieval_service.recall_relevant(
-            user_id=user_id,
-            query=standalone_query,
-        )
-        decision = await analyze_intent(standalone_query)
-        retrieval_attempted = decision.needs_retrieval
-
-        retrieved_context = ""
-        if decision.needs_retrieval and decision.target_sources:
-            results = await asyncio.gather(
-                *[
-                    query_knowledge_base(
-                        query_str=decision.search_keywords,
-                        source_type=source,
-                        user_id=user_id,
-                    )
-                    for source in decision.target_sources
-                ]
+        yield "[status] 正在并发召回记忆和知识库...\n"
+        memory_task = asyncio.create_task(
+            memory_retrieval_service.recall_relevant(
+                user_id=user_id,
+                query=query_plan.dense_query or standalone_query,
+                memory_types=query_plan.memory_types,
             )
-            pieces = []
-            for source, result in zip(decision.target_sources, results):
-                body = result.get("answer", "[SYSTEM_EMPTY_WARNING]")
-                pieces.append(f"=== [{source.upper()}] ===\n{body}")
-            retrieved_context = "\n".join(pieces)
-            retrieval_hit = "[SYSTEM_EMPTY_WARNING]" not in retrieved_context
+        ) if query_plan.needs_memory_retrieval else None
+        knowledge_task = asyncio.create_task(
+            knowledge_retriever.retrieve(
+                dense_query=query_plan.dense_query or standalone_query,
+                sparse_query=query_plan.sparse_query,
+                source_types=query_plan.knowledge_sources,
+                user_id=user_id,
+            )
+        ) if query_plan.needs_knowledge_retrieval else None
 
+        relevant_memories = await memory_task if memory_task else []
+        knowledge_result = await knowledge_task if knowledge_task else None
+        retrieval_attempted = bool(knowledge_task)
+        retrieval_hit = bool(knowledge_result and knowledge_result.retrieval_hit)
+
+        yield "[status] 正在生成回答...\n\n"
         answer_context = context_pipeline.assemble_answer_context(
             session_id=session_id,
             user_id=user_id,
             current_query=standalone_query,
             relevant_memories=relevant_memories,
-            retrieved_documents=retrieved_context,
+            knowledge_chunks=knowledge_result.chunks if knowledge_result else [],
+        )
+        bundle = ContextBundle(
+            working_state=answer_context.working_state,
+            interview_state=answer_context.interview_state,
+            recent_turns=answer_context.recent_turns,
+            relevant_memories=answer_context.relevant_memories,
+            knowledge_chunks=answer_context.knowledge_chunks,
+            current_query=answer_context.current_query,
         )
 
-        if not decision.needs_retrieval:
-            prompt = (
-                "You are Interview Copilot, a concise technical interview assistant.\n\n"
-                f"{answer_context.context_text}"
+        if not query_plan.needs_knowledge_retrieval:
+            prompt = prompt_renderer.render_answer_prompt(
+                bundle,
+                system_rules=DIRECT_SYSTEM_RULES,
             )
             response_generator = await agent_fast_llm.astream_complete(prompt)
         else:
-            prompt = (
-                "You are Interview Copilot, a concise technical interview assistant.\n"
-                "Prefer interview_state over long-term memory when discussing current candidate performance.\n\n"
-                f"{answer_context.context_text}"
+            prompt = prompt_renderer.render_answer_prompt(
+                bundle,
+                system_rules=RAG_SYSTEM_RULES,
             )
             response_generator = await Settings.llm.astream_complete(prompt)
 

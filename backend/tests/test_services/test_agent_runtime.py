@@ -72,11 +72,26 @@ def test_function_calling_agent_runtime_shared_session(monkeypatch):
             self.calls.append((session_id, user_id))
 
     class FakeContextPipeline:
+        def assemble_rewrite_context(self, **kwargs):
+            from dataclasses import dataclass
+
+            @dataclass
+            class FakeCtx:
+                context_text: str = "rewrite ctx"
+
+            return FakeCtx()
+
         def assemble_answer_context(self, **kwargs):
             from dataclasses import dataclass
 
             @dataclass
             class FakeCtx:
+                working_state: dict = None
+                interview_state: dict = None
+                recent_turns: list = None
+                relevant_memories: list = None
+                knowledge_chunks: list = None
+                current_query: str = "help me"
                 context_text: str = "ctx"
 
             return FakeCtx()
@@ -89,8 +104,8 @@ def test_function_calling_agent_runtime_shared_session(monkeypatch):
         def __init__(self):
             self.calls = []
 
-        async def run(self, session_id, user_id):
-            self.calls.append((session_id, user_id))
+        async def run(self, session_id, user_id, **kwargs):
+            self.calls.append((session_id, user_id, kwargs))
 
     created_runs = []
     steps = []
@@ -108,13 +123,31 @@ def test_function_calling_agent_runtime_shared_session(monkeypatch):
     async def fake_finish_run(**kwargs):
         finished_runs.append(kwargs)
 
-    async def fake_recall_relevant(user_id: str, query: str):
+    async def fake_recall_relevant(user_id: str, query: str, **kwargs):
         return [{"id": "m1", "type": "user_profile", "description": "senior", "content": "senior backend"}]
+
+    async def fake_plan_query(user_message: str, rewrite_context: str):
+        return type(
+            "Plan",
+            (),
+            {
+                "dense_query": user_message,
+                "standalone_query": user_message,
+                "memory_types": ["user_profile"],
+                "answer_mode": "direct_chat",
+            },
+        )()
 
     monkeypatch.setattr(runtime, "build_async_openai_client_for_role", lambda role: (FakeClient(), type("Profile", (), {"model": "fake-model"})()))
     monkeypatch.setattr(runtime, "transcript_service", transcript)
     monkeypatch.setattr(runtime, "interview_state_service", FakeInterviewStateService())
     monkeypatch.setattr(runtime, "context_pipeline", FakeContextPipeline())
+    monkeypatch.setattr(
+        runtime.prompt_renderer,
+        "render_answer_prompt",
+        lambda *args, **kwargs: "rendered ctx",
+    )
+    monkeypatch.setattr(runtime, "plan_query", fake_plan_query)
     monkeypatch.setattr(runtime, "memory_retrieval_service", type("MemorySvc", (), {"recall_relevant": staticmethod(fake_recall_relevant)})())
     monkeypatch.setattr(runtime, "build_default_tool_registry", lambda: {"echo": FakeTool()})
     monkeypatch.setattr(runtime, "build_openai_tool_schemas", lambda registry: [{"type": "function", "function": {"name": "echo", "parameters": {"type": "object"}}}])
@@ -152,11 +185,26 @@ def test_agent_budget_stop(monkeypatch):
             return None
 
     class FakeContextPipeline:
+        def assemble_rewrite_context(self, **kwargs):
+            from dataclasses import dataclass
+
+            @dataclass
+            class FakeCtx:
+                context_text: str = ""
+
+            return FakeCtx()
+
         def assemble_answer_context(self, **kwargs):
             from dataclasses import dataclass
 
             @dataclass
             class FakeCtx:
+                working_state: dict = None
+                interview_state: dict = None
+                recent_turns: list = None
+                relevant_memories: list = None
+                knowledge_chunks: list = None
+                current_query: str = "goal"
                 context_text: str = ""
 
             return FakeCtx()
@@ -173,12 +221,30 @@ def test_agent_budget_stop(monkeypatch):
     async def fake_finish_run(**kwargs):
         finished.append(kwargs)
 
-    async def fake_recall_relevant(user_id: str, query: str):
+    async def fake_recall_relevant(user_id: str, query: str, **kwargs):
         return []
+
+    async def fake_plan_query(user_message: str, rewrite_context: str):
+        return type(
+            "Plan",
+            (),
+            {
+                "dense_query": user_message,
+                "standalone_query": user_message,
+                "memory_types": [],
+                "answer_mode": "direct_chat",
+            },
+        )()
 
     monkeypatch.setattr(runtime, "transcript_service", FakeTranscriptService())
     monkeypatch.setattr(runtime, "interview_state_service", FakeInterviewStateService())
     monkeypatch.setattr(runtime, "context_pipeline", FakeContextPipeline())
+    monkeypatch.setattr(
+        runtime.prompt_renderer,
+        "render_answer_prompt",
+        lambda *args, **kwargs: "",
+    )
+    monkeypatch.setattr(runtime, "plan_query", fake_plan_query)
     monkeypatch.setattr(runtime, "memory_retrieval_service", type("MemorySvc", (), {"recall_relevant": staticmethod(fake_recall_relevant)})())
     monkeypatch.setattr(runtime, "create_run", fake_create_run)
     monkeypatch.setattr(runtime, "append_step", fake_append_step)

@@ -21,14 +21,26 @@ def _build_client():
 def test_model_catalog_endpoint(monkeypatch):
     client, model_api = _build_client()
 
-    monkeypatch.setattr(model_api, "get_runtime_selection", lambda: {"primary": "deepseek-reasoner", "fast": "deepseek-chat", "agent": "deepseek-chat"})
-    monkeypatch.setattr(model_api, "list_profiles", lambda: [{"id": "deepseek-chat", "ready": True}])
+    monkeypatch.setattr(
+        model_api,
+        "get_runtime_selection",
+        lambda: {
+            "primary": "deepseek-v4-flash",
+            "fast": "deepseek-v4-flash",
+            "agent": "deepseek-v4-pro",
+        },
+    )
+    monkeypatch.setattr(
+        model_api,
+        "list_profiles",
+        lambda: [{"id": "deepseek-v4-flash", "ready": True}],
+    )
 
     resp = client.get("/api/v1/models/catalog", headers={"Authorization": "Bearer fake"})
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["selection"]["agent"] == "deepseek-chat"
-    assert payload["profiles"][0]["id"] == "deepseek-chat"
+    assert payload["selection"]["agent"] == "deepseek-v4-pro"
+    assert payload["profiles"][0]["id"] == "deepseek-v4-flash"
 
 
 def test_update_model_runtime_endpoint(monkeypatch):
@@ -40,9 +52,17 @@ def test_update_model_runtime_endpoint(monkeypatch):
     monkeypatch.setattr(
         model_api,
         "update_runtime_selection",
-        lambda updates: {"primary": "deepseek-reasoner", "fast": updates["fast"], "agent": "deepseek-chat"},
+        lambda updates: {
+            "primary": "deepseek-v4-flash",
+            "fast": updates["fast"],
+            "agent": "deepseek-v4-pro",
+        },
     )
-    monkeypatch.setattr(model_api, "refresh_primary_llm", lambda: refreshed.__setitem__("called", True))
+    monkeypatch.setattr(
+        model_api,
+        "refresh_primary_llm",
+        lambda: refreshed.__setitem__("called", True),
+    )
 
     resp = client.put(
         "/api/v1/models/runtime",

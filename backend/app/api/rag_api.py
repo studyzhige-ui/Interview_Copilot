@@ -4,11 +4,16 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func
+from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
+from app.db.database import get_db
+from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
 from app.rag.retriever import query_knowledge_base
-from app.services.storage_service import generate_presigned_upload_url
+from app.services.knowledge_service import default_title, hard_delete_knowledge_document
+from app.services.upload_service import create_owned_upload, get_owned_upload, mark_upload_consumed
 from app.worker.tasks import process_document_ingestion
 
 logger = logging.getLogger(__name__)
@@ -22,9 +27,22 @@ class SourceTypeEnum(str, Enum):
     personal_memory = "personal_memory"
 
 
-class IngestRequest(BaseModel):
-    file_path: str = Field(..., description="S3 URI pointer to the cloud document (e.g. s3://...)")
-    source_type: SourceTypeEnum = Field(..., description="Category metadata for RAG routing")
+class KnowledgeUploadRequest(BaseModel):
+    filename: str
+    content_type: Optional[str] = "application/octet-stream"
+    size_bytes: Optional[int] = None
+
+
+class KnowledgeDocumentCreateRequest(BaseModel):
+    upload_id: str
+    source_type: SourceTypeEnum = SourceTypeEnum.interview_qa
+    title: Optional[str] = None
+    category: str = "默认"
+
+
+class KnowledgeDocumentUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    category: Optional[str] = None
 
 
 class QueryRequest(BaseModel):
@@ -56,48 +74,194 @@ async def api_query_knowledge_base(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-class RAGPresignedUrlRequest(BaseModel):
-    filename: str
-
-
-@router.post("/rag/upload/url")
-async def get_rag_upload_presigned_url(
-    request: RAGPresignedUrlRequest,
-    current_user: User = Depends(get_current_user),
-):
-    """Generate a presigned URL for direct document upload."""
-    url_info = generate_presigned_upload_url(request.filename)
+def _document_payload(document: KnowledgeDocument) -> dict:
     return {
-        "status": "success",
-        "upload_url": url_info["upload_url"],
-        "file_path": url_info["file_path"],
+        "id": document.id,
+        "upload_id": document.upload_id,
+        "title": document.title,
+        "category": document.category,
+        "source_type": document.source_type,
+        "status": document.status,
+        "task_id": document.task_id,
+        "chunk_count": document.chunk_count,
+        "error_message": document.error_message,
+        "created_at": document.created_at.isoformat() if document.created_at else None,
+        "updated_at": document.updated_at.isoformat() if document.updated_at else None,
     }
 
 
-@router.post("/rag/ingest")
-async def api_ingest_document(
-    request: IngestRequest,
+@router.post("/knowledge/upload/url")
+async def create_knowledge_upload_url(
+    request: KnowledgeUploadRequest,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Dispatch a document ingestion job to the RAG backend workers."""
+    """Create an owned knowledge upload and return a presigned upload URL."""
+    upload, url_info = create_owned_upload(
+        db,
+        user_id=current_user.username,
+        filename=request.filename,
+        purpose="knowledge_document",
+        content_type=request.content_type,
+        size_bytes=request.size_bytes,
+    )
+    return {
+        "status": "success",
+        "upload_id": upload.id,
+        "upload_url": url_info["upload_url"],
+        "filename": upload.original_filename,
+    }
+
+
+@router.post("/knowledge/documents")
+async def create_knowledge_document(
+    request: KnowledgeDocumentCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     try:
-        task = process_document_ingestion.delay(
-            file_path_or_url=request.file_path,
-            source_type=request.source_type.value,
+        upload = get_owned_upload(
+            db,
+            upload_id=request.upload_id,
             user_id=current_user.username,
+            purpose="knowledge_document",
         )
+        if upload is None:
+            raise HTTPException(status_code=404, detail="Upload not found")
+        if upload.status not in {"pending_upload", "uploaded"}:
+            raise HTTPException(status_code=409, detail="Upload has already been consumed")
+
+        document = KnowledgeDocument(
+            user_id=current_user.username,
+            upload_id=upload.id,
+            title=request.title or default_title(upload),
+            category=request.category.strip() or "默认",
+            source_type=request.source_type.value,
+            storage_uri=upload.storage_uri,
+            object_key=upload.object_key,
+            status="processing",
+        )
+        db.add(document)
+        mark_upload_consumed(db, upload)
+        db.commit()
+        db.refresh(document)
+
+        task = process_document_ingestion.delay(document.id)
+        document.task_id = task.id
+        db.add(document)
+        db.commit()
+        db.refresh(document)
 
         return {
-            "status": "processing",
-            "message": "Document ingestion dispatched successfully to the RAG backend workers.",
-            "file_path": request.file_path,
-            "source_type": request.source_type.value,
+            "status": document.status,
+            "document": _document_payload(document),
             "task_id": task.id,
         }
-
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
+        db.rollback()
         logger.error("Ingestion API dispatch error: %s", exc)
         raise HTTPException(
             status_code=500,
             detail=f"Internal error dispatching ingestion: {exc}",
         ) from exc
+
+
+@router.get("/knowledge/documents")
+async def list_knowledge_documents(
+    category: Optional[str] = None,
+    status: Optional[str] = None,
+    source_type: Optional[SourceTypeEnum] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = db.query(KnowledgeDocument).filter(KnowledgeDocument.user_id == current_user.username)
+    if category:
+        query = query.filter(KnowledgeDocument.category == category)
+    if status:
+        query = query.filter(KnowledgeDocument.status == status)
+    if source_type:
+        query = query.filter(KnowledgeDocument.source_type == source_type.value)
+    documents = query.order_by(KnowledgeDocument.updated_at.desc()).all()
+    return {"status": "success", "documents": [_document_payload(doc) for doc in documents]}
+
+
+@router.get("/knowledge/documents/{document_id}")
+async def get_knowledge_document(
+    document_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    document = (
+        db.query(KnowledgeDocument)
+        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == current_user.username)
+        .first()
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Knowledge document not found")
+    return {"status": "success", "document": _document_payload(document)}
+
+
+@router.patch("/knowledge/documents/{document_id}")
+async def update_knowledge_document(
+    document_id: str,
+    request: KnowledgeDocumentUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    document = (
+        db.query(KnowledgeDocument)
+        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == current_user.username)
+        .first()
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Knowledge document not found")
+    if request.title is not None:
+        document.title = request.title.strip() or document.title
+    if request.category is not None:
+        document.category = request.category.strip() or "默认"
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+    return {"status": "success", "document": _document_payload(document)}
+
+
+@router.delete("/knowledge/documents/{document_id}")
+async def delete_knowledge_document(
+    document_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    document = (
+        db.query(KnowledgeDocument)
+        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == current_user.username)
+        .first()
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Knowledge document not found")
+    try:
+        hard_delete_knowledge_document(db, document)
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.error("Knowledge document deletion failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {exc}") from exc
+    return {"status": "success"}
+
+
+@router.get("/knowledge/categories")
+async def list_knowledge_categories(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rows = (
+        db.query(KnowledgeDocument.category, func.count(KnowledgeDocument.id))
+        .filter(KnowledgeDocument.user_id == current_user.username)
+        .group_by(KnowledgeDocument.category)
+        .order_by(KnowledgeDocument.category.asc())
+        .all()
+    )
+    return {
+        "status": "success",
+        "categories": [{"category": category, "count": count} for category, count in rows],
+    }

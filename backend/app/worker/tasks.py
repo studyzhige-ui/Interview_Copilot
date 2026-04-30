@@ -4,6 +4,7 @@ import logging
 
 from app.db.database import SessionLocal
 from app.models.interview import AnalysisResult, Interview, Transcript
+from app.models.knowledge import KnowledgeDocument
 from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -15,7 +16,7 @@ def run_async(coro):
 
 
 @celery_app.task(bind=True, name="tasks.process_interview_analysis")
-def process_interview_analysis(self, interview_id: int, file_path_or_url: str):
+def process_interview_analysis(self, interview_id: int):
     """Transcribe an interview recording, analyze it, and persist the results."""
     from app.services.analysis_service import analyze_interview
     from app.services.transcription_service import transcribe_media
@@ -30,6 +31,16 @@ def process_interview_analysis(self, interview_id: int, file_path_or_url: str):
         db.commit()
 
         import os
+
+        file_path_or_url = interview.file_url
+        if not file_path_or_url:
+            raise ValueError(f"Interview {interview_id} has no file_url")
+        if interview.upload and interview.upload.user_id != interview.user_id:
+            raise ValueError("Interview upload owner does not match interview owner")
+        if interview.upload and not interview.upload.object_key.startswith(
+            f"uploads/{interview.user_id}/{interview.upload_id}/"
+        ):
+            raise ValueError("Interview upload object key does not match owner prefix")
 
         local_file_path = file_path_or_url
         is_temp_file = False
@@ -94,25 +105,45 @@ def process_interview_analysis(self, interview_id: int, file_path_or_url: str):
 
 
 @celery_app.task(bind=True, name="tasks.process_document_ingestion")
-def process_document_ingestion(self, file_path_or_url: str, source_type: str, user_id: str):
+def process_document_ingestion(self, document_id: str):
     """Download an uploaded document if needed and ingest it into Milvus/Docstore."""
     import os
     import tempfile
 
     from app.rag.ingestion import ingest_document
+    from app.services.knowledge_service import dump_json_list
     from app.services.storage_service import download_file_from_s3
 
-    local_file_path = file_path_or_url
+    db = SessionLocal()
+    document = None
+    local_file_path = None
     is_temp_file = False
 
-    if file_path_or_url.startswith("s3://"):
+    try:
+        document = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+        if document is None:
+            return {"status": "failed", "error": f"Knowledge document not found: {document_id}"}
+        if not document.upload or document.upload.user_id != document.user_id:
+            raise ValueError("Knowledge upload owner does not match document owner")
+        if document.upload.purpose != "knowledge_document":
+            raise ValueError("Knowledge document upload has invalid purpose")
+        if document.status not in {"processing", "failed"}:
+            return {"status": "skipped", "document_id": document_id, "status": document.status}
+
+        if not document.storage_uri.startswith("s3://"):
+            raise ValueError("Knowledge ingestion only accepts owned S3 uploads")
+
+        expected_prefix = f"uploads/{document.user_id}/{document.upload_id}/"
+        if not document.object_key.startswith(expected_prefix):
+            raise ValueError("Knowledge upload object key does not match owner prefix")
+
         logger.info("[Task %s] Downloading S3 document for RAG ingestion.", self.request.id)
-        _, ext = os.path.splitext(file_path_or_url)
+        _, ext = os.path.splitext(document.object_key)
         tmp_fd, local_file_path = tempfile.mkstemp(suffix=ext)
         os.close(tmp_fd)
 
         try:
-            download_file_from_s3(file_path_or_url, local_file_path)
+            download_file_from_s3(document.storage_uri, local_file_path)
             is_temp_file = True
             logger.info("[Task %s] Document downloaded to %s", self.request.id, local_file_path)
         except Exception:
@@ -120,18 +151,42 @@ def process_document_ingestion(self, file_path_or_url: str, source_type: str, us
                 os.unlink(local_file_path)
             raise
 
-    try:
         logger.info("[Task %s] Starting RAG ingestion into Milvus/Docstore.", self.request.id)
-        success = run_async(ingest_document(local_file_path, source_type, user_id))
+        result = run_async(
+            ingest_document(
+                local_file_path,
+                document.source_type,
+                document.user_id,
+                document_id=document.id,
+                upload_id=document.upload_id,
+                category=document.category,
+            )
+        )
 
-        if success:
+        if result and result.get("success"):
+            document.status = "ready"
+            document.chunk_count = int(result.get("chunk_count") or 0)
+            document.node_ids = dump_json_list(result.get("node_ids") or [])
+            document.ref_doc_ids = dump_json_list(result.get("ref_doc_ids") or [])
+            document.error_message = None
+            db.add(document)
+            db.commit()
             logger.info("[Task %s] Document ingestion completed.", self.request.id)
-            return {"status": "success", "file_url": file_path_or_url}
+            return {"status": "success", "document_id": document_id}
 
+        document.status = "failed"
+        document.error_message = "Empty or unparseable document"
+        db.add(document)
+        db.commit()
         logger.warning("[Task %s] Document was empty or unparseable.", self.request.id)
         return {"status": "failed", "error": "Empty or unparseable document"}
 
     except Exception as exc:
+        if document is not None:
+            document.status = "failed"
+            document.error_message = str(exc)
+            db.add(document)
+            db.commit()
         logger.error("[Task %s] RAG ingestion task failed: %s", self.request.id, exc)
         raise
 
@@ -139,3 +194,4 @@ def process_document_ingestion(self, file_path_or_url: str, source_type: str, us
         if is_temp_file and os.path.exists(local_file_path):
             os.unlink(local_file_path)
             logger.info("[Task %s] Removed temporary document: %s", self.request.id, local_file_path)
+        db.close()

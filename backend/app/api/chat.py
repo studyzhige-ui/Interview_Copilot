@@ -163,19 +163,27 @@ def get_memory_item(
         raise HTTPException(status_code=404, detail="Memory item not found")
     return {
         "status": "success",
-        "item": {
-            "id": row.id,
-            "type": row.type,
-            "description": row.description,
-            "normalized_key": row.normalized_key,
-            "content": row.content,
-            "confidence": row.confidence or 0.0,
-            "source_session_id": row.source_session_id,
-            "last_evidence_seq": row.last_evidence_seq,
-            "recall_count": row.recall_count or 0,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
-        },
+            "item": {
+                "id": row.id,
+                "type": row.type,
+                "scope": row.scope,
+                "description": row.description,
+                "normalized_key": row.normalized_key,
+                "content": row.content,
+                "confidence": row.confidence or 0.0,
+                "importance": row.importance or 0.0,
+                "source_session_id": row.source_session_id,
+                "last_evidence_seq": row.last_evidence_seq,
+                "recall_count": row.recall_count or 0,
+                "last_accessed_at": (
+                    row.last_accessed_at.isoformat() if row.last_accessed_at else None
+                ),
+                "embedding_status": row.embedding_status,
+                "embedding_model": row.embedding_model,
+                "embedded_at": row.embedded_at.isoformat() if row.embedded_at else None,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            },
     }
 
 
@@ -299,4 +307,11 @@ async def sse_chat_endpoint(
             yield f"data: {json.dumps({'type': 'chunk', 'content': f'[system]: {exc}'}, ensure_ascii=False)}\n\n"
             yield "data: {\"type\": \"done\"}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

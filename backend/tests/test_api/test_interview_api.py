@@ -16,18 +16,20 @@ def _make_user(username="interviewuser"):
 
 @pytest.mark.asyncio
 async def test_upload_audio_calls_s3(db_session):
-    """upload_audio 应调用 upload_file_to_s3 并返回文件路径。"""
+    """upload_audio 应创建用户归属上传记录并写入 owned key。"""
     from app.api.interview import upload_audio
 
     mock_file = MagicMock()
     mock_file.file = MagicMock()
     mock_file.filename = "interview.wav"
+    mock_file.content_type = "audio/wav"
 
-    with patch("app.api.interview.upload_file_to_s3", return_value="s3://bucket/interview.wav") as mock_s3:
-        result = await upload_audio(file=mock_file, current_user=_make_user())
+    with patch("app.api.interview.upload_file_to_owned_key", return_value="s3://bucket/uploads/interviewuser/upl_x/interview.wav") as mock_s3:
+        result = await upload_audio(file=mock_file, db=db_session, current_user=_make_user())
 
     assert result["status"] == "success"
-    assert "s3://" in result["file_path"]
+    assert result["upload_id"].startswith("upl_")
+    assert "s3://" in result["storage_uri"]
     mock_s3.assert_called_once()
 
 
@@ -42,7 +44,20 @@ async def test_analyze_dispatches_celery_task(db_session):
     with patch("app.api.interview.process_interview_analysis") as mock_process:
         mock_process.delay.return_value = mock_task
 
-        request = AnalyzeRequest(file_path="s3://bucket/test.wav")
+        from app.models.upload import UserUpload
+
+        upload = UserUpload(
+            user_id="interviewuser",
+            purpose="interview_audio",
+            original_filename="test.wav",
+            storage_uri="s3://bucket/uploads/interviewuser/upl_test/test.wav",
+            object_key="uploads/interviewuser/upl_test/test.wav",
+            status="uploaded",
+        )
+        db_session.add(upload)
+        db_session.flush()
+
+        request = AnalyzeRequest(upload_id=upload.id)
         result = await analyze_interview_endpoint(
             request=request, db=db_session, current_user=_make_user()
         )
@@ -50,7 +65,7 @@ async def test_analyze_dispatches_celery_task(db_session):
     assert result["status"] == "processing"
     assert result["task_id"] == "celery-task-abc"
     assert "interview_id" in result
-    mock_process.delay.assert_called_once()
+    mock_process.delay.assert_called_once_with(result["interview_id"])
 
 
 @pytest.mark.asyncio

@@ -52,7 +52,7 @@ TEST_QUERIES = {
     ],
 }
 
-# 使用匿名测试用户
+# Local reload test user. Production knowledge documents are always user-private.
 TEST_USER_ID = "test_user_reload"
 
 

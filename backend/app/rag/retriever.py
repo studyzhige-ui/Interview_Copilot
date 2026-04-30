@@ -1,5 +1,5 @@
-import os
 import logging
+import re
 from typing import Optional, Dict, Any
 
 from llama_index.core import VectorStoreIndex
@@ -17,7 +17,10 @@ if not hasattr(llama_index.core.vector_stores.utils, "build_metadata_filter_fn")
 from llama_index.retrievers.bm25 import BM25Retriever
 from llama_index.core.retrievers import QueryFusionRetriever
 from llama_index.postprocessor.sbert_rerank import SentenceTransformerRerank
-from llama_index.storage.docstore.postgres import PostgresDocumentStore
+try:
+    from llama_index.storage.docstore.postgres import PostgresDocumentStore
+except ModuleNotFoundError:  # pragma: no cover - optional runtime dependency
+    PostgresDocumentStore = None
 
 from app.core.config import settings
 from app.core.hf_runtime import prepare_hf_runtime, resolve_local_snapshot
@@ -35,6 +38,100 @@ MILVUS_COLLECTION = settings.MILVUS_COLLECTION
 EMBEDDING_DIM = 512
 
 reranker = None
+
+
+def _split_csv(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _allowed_user_ids(user_id: str, source_type: Optional[str]) -> list[str]:
+    return [user_id] if user_id else []
+
+
+def _metadata_matches_scope(
+    metadata: dict[str, Any],
+    allowed_user_ids: list[str],
+    source_type: Optional[str],
+) -> bool:
+    if allowed_user_ids and metadata.get("user_id") not in allowed_user_ids:
+        return False
+    if source_type and metadata.get("source_type") != source_type:
+        return False
+    return True
+
+
+def _build_metadata_filters(
+    allowed_user_ids: list[str],
+    source_type: Optional[str],
+) -> MetadataFilters:
+    filter_list = []
+    if len(allowed_user_ids) == 1:
+        filter_list.append(
+            MetadataFilter(
+                key="user_id",
+                value=allowed_user_ids[0],
+                operator=FilterOperator.EQ,
+            )
+        )
+    elif len(allowed_user_ids) > 1:
+        filter_list.append(
+            MetadataFilter(
+                key="user_id",
+                value=allowed_user_ids,
+                operator=FilterOperator.IN,
+            )
+        )
+    if source_type:
+        filter_list.append(
+            MetadataFilter(
+                key="source_type",
+                value=source_type,
+                operator=FilterOperator.EQ,
+            )
+        )
+    return MetadataFilters(filters=filter_list, condition="and")
+
+
+def _query_terms(text: str) -> list[str]:
+    normalized = text.lower()
+    terms = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]{2,}", normalized)
+    return list(dict.fromkeys(terms))
+
+
+def _lexical_overlap(query: str, content: str) -> float:
+    terms = _query_terms(query)
+    if not terms:
+        return 0.0
+    normalized = content.lower()
+    hits = sum(1 for term in terms if term in normalized)
+    return hits / len(terms)
+
+
+def _score_passes(score: Optional[float], min_score: float, used_reranker: bool) -> bool:
+    if score is None:
+        return False
+    if used_reranker:
+        return score >= min_score
+    return score >= min(min_score, settings.RAG_FALLBACK_MIN_SCORE)
+
+
+def _log_top_nodes(label: str, nodes: list[Any], limit: int = 5) -> None:
+    if not nodes:
+        logger.info("%s: no candidates", label)
+        return
+    for idx, node in enumerate(nodes[:limit], start=1):
+        metadata = node.node.metadata if getattr(node, "node", None) else {}
+        snippet = node.node.get_content().replace("\n", " ")[:100]
+        logger.info(
+            "%s #%s score=%s user_id=%s source_type=%s file=%s text=%s",
+            label,
+            idx,
+            f"{float(node.score):.4f}" if node.score is not None else "None",
+            metadata.get("user_id"),
+            metadata.get("source_type"),
+            metadata.get("file_name"),
+            snippet,
+        )
 
 
 def _milvus_dense_index_config() -> dict:
@@ -114,38 +211,52 @@ async def query_knowledge_base(
         index = VectorStoreIndex.from_vector_store(vector_store)
 
         # ===== [2] 构建多租户隔离过滤器 (Milvus MetadataFilter) =====
-        filter_list = [
-            MetadataFilter(key="user_id", value=user_id, operator=FilterOperator.EQ)
-        ]
-        if source_type:
-            filter_list.append(
-                MetadataFilter(key="source_type", value=source_type, operator=FilterOperator.EQ)
-            )
-
-        filters = MetadataFilters(filters=filter_list, condition="and")
-        logger.info(f"元数据过滤器已激活: user_id={user_id}, source_type={source_type}")
-
-        # 向量检索器
-        vector_retriever = VectorIndexRetriever(
-            index=index,
-            similarity_top_k=settings.VECTOR_TOP_K,
-            filters=filters
+        allowed_user_ids = _allowed_user_ids(user_id, source_type)
+        logger.info(
+            "元数据过滤器已激活: requested_user_id=%s, allowed_user_ids=%s, source_type=%s",
+            user_id,
+            allowed_user_ids,
+            source_type,
         )
 
+        # 向量检索器。每个 user_id 单独建 EQ filter，避免部分向量库不支持 IN。
+        vector_retrievers = []
+        filter_scopes = [[uid] for uid in allowed_user_ids] or [[]]
+        for scope_user_ids in filter_scopes:
+            vector_retrievers.append(
+                VectorIndexRetriever(
+                    index=index,
+                    similarity_top_k=settings.VECTOR_TOP_K,
+                    filters=_build_metadata_filters(scope_user_ids, source_type),
+                )
+            )
+
         # ===== [3] BM25 检索器构建 =====
-        final_retriever = vector_retriever
+        if len(vector_retrievers) == 1:
+            final_retriever = vector_retrievers[0]
+        else:
+            final_retriever = QueryFusionRetriever(
+                retrievers=vector_retrievers,
+                similarity_top_k=settings.FUSION_TOP_K,
+                num_queries=1,
+                mode="reciprocal_rerank",
+            )
 
         try:
+            if PostgresDocumentStore is None:
+                raise RuntimeError("PostgresDocumentStore is unavailable")
             docstore = PostgresDocumentStore.from_uri(uri=settings.DATABASE_URL)
             # docstore.docs 内部结构返回是一个包含 Document/Node 的字典
             all_nodes = list(docstore.docs.values())
+            logger.info("Postgres Docstore 节点总数: %s", len(all_nodes))
 
             if all_nodes:
                 # Python 层面精确过滤（BM25 不支持原生 metadata 过滤）
-                filtered_nodes = [n for n in all_nodes if n.metadata.get("user_id") == user_id]
-
-                if source_type:
-                    filtered_nodes = [n for n in filtered_nodes if n.metadata.get("source_type") == source_type]
+                filtered_nodes = [
+                    n
+                    for n in all_nodes
+                    if _metadata_matches_scope(n.metadata, allowed_user_ids, source_type)
+                ]
 
                 if len(filtered_nodes) > 0:
                     bm25_retriever = BM25Retriever.from_defaults(
@@ -155,14 +266,18 @@ async def query_knowledge_base(
 
                     # RRF 融合检索
                     final_retriever = QueryFusionRetriever(
-                        retrievers=[vector_retriever, bm25_retriever],
+                        retrievers=[*vector_retrievers, bm25_retriever],
                         similarity_top_k=settings.FUSION_TOP_K,
                         num_queries=1,
                         mode="reciprocal_rerank"
                     )
                     logger.info(f"BM25 + 向量混合检索启动，节点池: {len(filtered_nodes)} 个")
                 else:
-                    logger.warning("目标隔离区域下节点为空，仅使用向量检索。")
+                    logger.warning(
+                        "目标隔离区域下节点为空，仅使用向量检索。allowed_user_ids=%s source_type=%s",
+                        allowed_user_ids,
+                        source_type,
+                    )
             else:
                 logger.warning("Postgres Docstore 无节点记录，仅使用向量检索。")
         except Exception as e_bm25:
@@ -175,27 +290,52 @@ async def query_knowledge_base(
             from llama_index.core import QueryBundle
             query_bundle = QueryBundle(query_str)
             raw_nodes = await final_retriever.aretrieve(query_str)
+            raw_nodes = [
+                node
+                for node in raw_nodes
+                if _metadata_matches_scope(node.node.metadata, allowed_user_ids, source_type)
+            ]
+            _log_top_nodes("RAG raw candidates", raw_nodes)
         except Exception as ret_e:
             logger.error(f"节点召回失败: {ret_e}")
             raw_nodes = []
 
         # Reranker 交叉注意力重排序
-        if reranker and raw_nodes:
+        used_reranker = bool(reranker and raw_nodes)
+        if used_reranker:
             processed_nodes = reranker.postprocess_nodes(raw_nodes, query_bundle)
         else:
             processed_nodes = raw_nodes
+        _log_top_nodes("RAG processed candidates", processed_nodes)
 
-        # 绝对分数阈值拦截
+        # 绝对分数阈值拦截。RRF/向量分数和 reranker 分数尺度不同，不能共用 0.5。
         valid_nodes = [
             node for node in processed_nodes
-            if node.score is not None and node.score >= min_score
+            if _score_passes(node.score, min_score, used_reranker)
         ]
         valid_nodes = valid_nodes[:settings.RERANK_TOP_N]
+
+        if not valid_nodes and processed_nodes:
+            lexical_nodes = [
+                node
+                for node in processed_nodes
+                if _lexical_overlap(query_str, node.node.get_content())
+                >= settings.RAG_LEXICAL_FALLBACK_MIN_OVERLAP
+            ]
+            if lexical_nodes:
+                logger.warning(
+                    "RAG 阈值未命中，但词面覆盖通过 fallback: query=%s overlap_threshold=%.2f",
+                    query_str,
+                    settings.RAG_LEXICAL_FALLBACK_MIN_OVERLAP,
+                )
+                valid_nodes = lexical_nodes[:settings.RERANK_TOP_N]
 
         if not valid_nodes:
             logger.warning(f"防幻觉拦截触发：所有节点得分低于阈值 ({min_score})")
             return {
                 "answer": "[SYSTEM_EMPTY_WARNING] 知识库中未检索到与该问题高度相关的参考信息。",
+                "context_text": "[SYSTEM_EMPTY_WARNING] 知识库中未检索到与该问题高度相关的参考信息。",
+                "chunks": [],
                 "sources": []
             }
 
@@ -204,18 +344,32 @@ async def query_knowledge_base(
         # ===== [5] 封装结果 =====
         sources = []
         texts = []
+        chunks = []
         for n in valid_nodes:
             score = float(n.score) if n.score is not None else 0.0
             content = n.node.get_content().strip()
-            texts.append(f"[Reranker Score: {score:.3f}] {content}")
+            overlap = _lexical_overlap(query_str, content)
+            texts.append(f"[RAG Score: {score:.3f} | Lexical Overlap: {overlap:.2f}] {content}")
+            chunks.append({
+                "id": n.node.node_id,
+                "text": content,
+                "score": score,
+                "lexical_overlap": overlap,
+                "source_type": n.node.metadata.get("source_type"),
+                "metadata": n.node.metadata,
+            })
             sources.append({
                 "score": score,
+                "lexical_overlap": overlap,
+                "score_source": "reranker" if used_reranker else "retriever",
                 "text": content,
                 "metadata": n.node.metadata
             })
 
         return {
             "answer": "\n\n".join(texts),
+            "context_text": "\n\n".join(texts),
+            "chunks": chunks,
             "sources": sources
         }
 

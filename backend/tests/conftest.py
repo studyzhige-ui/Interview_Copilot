@@ -34,7 +34,9 @@ def test_engine():
     import app.models.chat  # noqa: F401
     import app.models.interview  # noqa: F401
     import app.models.interview_state  # noqa: F401
+    import app.models.knowledge  # noqa: F401
     import app.models.memory  # noqa: F401
+    import app.models.upload  # noqa: F401
     import app.models.user  # noqa: F401
 
     Base.metadata.create_all(bind=engine)

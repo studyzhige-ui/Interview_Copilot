@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.agent.planner import plan_query
 from app.agent_runtime.tools import (
     AgentToolContext,
     build_default_tool_registry,
@@ -19,7 +20,7 @@ from app.agent_runtime.tools import (
 from app.core.config import settings
 from app.core.model_registry import build_async_openai_client_for_role
 from app.services.agent_trace_service import append_step, create_run, finish_run
-from app.services.context_service import context_pipeline
+from app.services.context_service import ContextBundle, context_pipeline, prompt_renderer
 from app.services.interview_state_service import interview_state_service
 from app.services.memory_extraction_service import (
     memory_retrieval_service,
@@ -40,6 +41,8 @@ Rules:
 - If data is missing, say what is missing and ask for concrete next info.
 - Treat working state and interview state as the source of truth for current session progress.
 """
+
+REACT_MEMORY_WRITE_MODES = {"interview_learning", "review", "preference_update"}
 
 
 @dataclass
@@ -108,15 +111,37 @@ async def run_react_agent(
     transcript_service.ensure_session(session_id, user_id)
     interview_state_service.ensure_state(session_id, user_id)
 
+    rewrite_context = context_pipeline.assemble_rewrite_context(
+        session_id=session_id,
+        user_id=user_id,
+        current_query=user_message,
+    )
+    query_plan = await plan_query(
+        user_message=user_message,
+        rewrite_context=rewrite_context.context_text,
+    )
     relevant_memories = await memory_retrieval_service.recall_relevant(
         user_id=user_id,
-        query=user_message,
+        query=query_plan.dense_query or query_plan.standalone_query,
+        memory_types=query_plan.memory_types,
     )
     assembled = context_pipeline.assemble_answer_context(
         session_id=session_id,
         user_id=user_id,
-        current_query=user_message,
+        current_query=query_plan.standalone_query,
         relevant_memories=relevant_memories,
+    )
+    bundle = ContextBundle(
+        working_state=assembled.working_state,
+        interview_state=assembled.interview_state,
+        recent_turns=assembled.recent_turns,
+        relevant_memories=assembled.relevant_memories,
+        knowledge_chunks=assembled.knowledge_chunks,
+        current_query=assembled.current_query,
+    )
+    rendered_context = prompt_renderer.render_answer_prompt(
+        bundle,
+        system_rules="Use this context for the agent run. Do not treat memories as tool output.",
     )
 
     registry = build_default_tool_registry()
@@ -144,7 +169,7 @@ async def run_react_agent(
             "role": "system",
             "content": (
                 f"Available tools:\n{tool_manifest}\n\n"
-                f"Conversation context:\n{assembled.context_text or 'No context.'}"
+                f"Conversation context:\n{rendered_context or 'No context.'}"
             ),
         },
         {"role": "user", "content": user_message},
@@ -345,7 +370,14 @@ async def run_react_agent(
         user_msg=user_message,
         ai_msg=final_answer,
     )
-    asyncio.create_task(post_turn_maintenance_service.run(session_id, user_id))
+    allow_memory_write = query_plan.answer_mode in REACT_MEMORY_WRITE_MODES
+    asyncio.create_task(
+        post_turn_maintenance_service.run(
+            session_id,
+            user_id,
+            allow_memory_write=allow_memory_write,
+        )
+    )
     return {
         "run_id": run_id,
         "reply": final_answer,
