@@ -16,7 +16,7 @@ def test_memory_merge_uses_normalized_key(monkeypatch, db_session):
                 json.dumps(
                     [
                         {
-                            "type": "interaction_preference",
+                            "type": "user_profile",
                             "description": "Prefer concise answers",
                             "normalized_key": "concise_answers",
                             "content": "User prefers concise answers.",
@@ -64,7 +64,7 @@ def test_memory_retrieval_uses_user_scope_and_lexical_fusion(monkeypatch, db_ses
         MemoryItem(
             id="mem_alice",
             user_id="alice",
-            type="interaction_preference",
+            type="user_profile",
             description="Chinese answers",
             normalized_key="chinese_answers",
             content="User prefers Chinese answers with English terms explained.",
@@ -75,7 +75,7 @@ def test_memory_retrieval_uses_user_scope_and_lexical_fusion(monkeypatch, db_ses
         MemoryItem(
             id="mem_bob",
             user_id="bob",
-            type="interaction_preference",
+            type="user_profile",
             description="Chinese answers",
             normalized_key="chinese_answers",
             content="Bob prefers Chinese answers.",
@@ -96,7 +96,7 @@ def test_memory_retrieval_uses_user_scope_and_lexical_fusion(monkeypatch, db_ses
         service.recall_relevant(
             user_id="alice",
             query="Chinese answers English terms",
-            memory_types=["interaction_preference"],
+            memory_types=["user_profile"],
         )
     )
 
@@ -111,9 +111,9 @@ def test_post_turn_maintenance_does_not_advance_cursor_on_failed_extraction(monk
     class FakeTranscriptService:
         def get_session_meta(self, session_id):
             return {
-                "memory_cursor": 2,
                 "compaction_cursor": 0,
-                "working_state": "{}",
+                "session_state": "{}",
+                "session_type": "general",
                 "turn_count": 1,
             }
 
@@ -127,17 +127,12 @@ def test_post_turn_maintenance_does_not_advance_cursor_on_failed_extraction(monk
         async def compact_if_needed(self, session_id):
             return False
 
-    class FakeInterviewUpdates:
-        async def update_from_messages(self, session_id, user_id, new_messages):
-            return {}
-
     class FakeMemoryExtraction:
         async def extract_and_merge(self, session_id, user_id, new_messages):
             return None
 
     service = module.PostTurnMaintenanceService(
         compaction=FakeCompaction(),
-        interview_updates=FakeInterviewUpdates(),
         memory_extraction=FakeMemoryExtraction(),
     )
 

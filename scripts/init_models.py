@@ -69,7 +69,7 @@ def main() -> None:
     load_dotenv()
     parser = argparse.ArgumentParser(description="Initialize local model files for Interview Copilot.")
     parser.add_argument("--hf-endpoint", default=os.getenv("HF_ENDPOINT", DEFAULT_HF_ENDPOINT))
-    parser.add_argument("--embedding-model", default=os.getenv("EMBEDDING_MODEL_ID", "BAAI/bge-small-zh-v1.5"))
+    parser.add_argument("--embedding-model", default=os.getenv("EMBEDDING_MODEL_ID", "BAAI/bge-m3"))
     parser.add_argument("--reranker-model", default=os.getenv("RERANKER_MODEL_ID", "BAAI/bge-reranker-base"))
     parser.add_argument("--whisper-model", default=os.getenv("WHISPER_MODEL_ID", "Systran/faster-whisper-large-v2"))
     parser.add_argument(

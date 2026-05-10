@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.knowledge import KnowledgeDocument
 from app.models.upload import UserUpload
-from app.rag.ingestion import EMBEDDING_DIM, _milvus_dense_index_config, _milvus_search_config
+from app.rag.retriever import _milvus_dense_index_config, _milvus_search_config
 from app.services.storage_service import delete_s3_object, parse_s3_uri
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ def delete_document_vectors_and_docstore(document: KnowledgeDocument) -> None:
     vector_store = MilvusVectorStore(
         uri=settings.MILVUS_URI,
         collection_name=settings.MILVUS_COLLECTION,
-        dim=EMBEDDING_DIM,
+        dim=settings.EMBEDDING_DIM,
         overwrite=False,
         similarity_metric=settings.MILVUS_SIMILARITY_METRIC,
         index_config=_milvus_dense_index_config(),

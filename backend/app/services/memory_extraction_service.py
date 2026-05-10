@@ -13,13 +13,10 @@ from app.models.memory import MemoryItem
 from app.rag.embeddings import agent_fast_llm
 from app.rag.hybrid import HybridRetriever, RetrievalChunk, lexical_overlap
 from app.services.context_service import count_tokens
-from app.services.interview_state_service import interview_state_service
 from app.services.memory_vector_service import memory_vector_service
 from app.services.state_utils import (
-    default_interview_state_payload,
-    default_working_state_payload,
-    dump_state_blob,
-    parse_state_blob,
+    dump_session_state,
+    parse_session_state,
 )
 from app.services.transcript_service import transcript_service
 
@@ -45,40 +42,46 @@ def _normalize_key(text: str) -> str:
     return normalized[:100] or "memory"
 
 
+# ── Session State Compaction ─────────────────────────────────────────────
+
 class CompactionService:
-    COMPACTION_THRESHOLD_TOKENS = 5000
-    KEEP_LAST_MESSAGES = 6
-    WORKING_STATE_MAX_TOKENS = 1000
-    WORKING_STATE_PROMPT = """You maintain structured working state for a multi-turn interview copilot.
+    """Compresses old conversation turns into a session_state summary.
 
-Return a JSON object with exactly these keys:
-- goal
-- current_phase
-- covered_topics
-- pending_topics
-- candidate_claims_to_verify
-- observed_gaps
-- next_best_question
-- constraints
-- summary
+    Unlike the old design, this does NOT maintain a structured working_state
+    with rigid keys. Instead it produces a free-form conversation summary
+    that the LLM can reference for context continuity.
 
-Rules:
-- Keep only current-session working state.
-- Do not store generic technical knowledge.
-- Do not copy long transcript text verbatim.
-- Lists must stay short and concrete.
-- summary must be under 120 Chinese characters or 220 ASCII chars.
+    Triggers every COMPACT_EVERY_N_TURNS turns (default 20).
+    """
 
-Previous working state:
-{old_working_state}
+    COMPACT_EVERY_N_TURNS = 20
+    SESSION_STATE_MAX_TOKENS = 1500
 
-Conversation to compact:
+    COMPACTION_PROMPT = """你是一个对话摘要助手。请将下面的对话历史压缩成一段简洁的摘要。
+
+规则：
+- 保留对话中讨论过的核心主题和关键结论
+- 不要复制原文，用自己的话概括
+- 摘要控制在 300 字以内
+- 如果已有旧摘要，将新对话内容合并进去
+- 输出纯 JSON 格式：{{"summary": "..."}}
+
+旧摘要：
+{old_summary}
+
+新对话：
 {new_conversation}
 """
 
     async def compact_if_needed(self, session_id: str) -> bool:
         meta = transcript_service.get_session_meta(session_id)
         if meta is None:
+            return False
+
+        turn_count = meta["turn_count"]
+        if turn_count < self.COMPACT_EVERY_N_TURNS:
+            return False
+        if turn_count % self.COMPACT_EVERY_N_TURNS != 0:
             return False
 
         recent = transcript_service.get_recent_turns(
@@ -89,25 +92,16 @@ Conversation to compact:
         if not recent:
             return False
 
-        working_state = parse_state_blob(
-            meta["working_state"],
-            default_working_state_payload,
+        session_state = parse_session_state(
+            meta["session_state"],
+            meta.get("session_type", "general"),
         )
-        total_tokens = (
-            count_tokens(dump_state_blob(working_state))
-            + sum(count_tokens(item["content"]) for item in recent)
-        )
-        if total_tokens <= self.COMPACTION_THRESHOLD_TOKENS:
-            return False
+        old_summary = session_state.get("summary", "")
 
-        compress_messages = recent[:-self.KEEP_LAST_MESSAGES]
-        if not compress_messages:
-            return False
-
-        prompt = self.WORKING_STATE_PROMPT.format(
-            old_working_state=json.dumps(working_state, ensure_ascii=False, indent=2),
+        prompt = self.COMPACTION_PROMPT.format(
+            old_summary=old_summary or "(无)",
             new_conversation="\n".join(
-                f"{item['role']}: {item['content']}" for item in compress_messages
+                f"{item['role']}: {item['content']}" for item in recent
             ),
         )
         try:
@@ -115,18 +109,17 @@ Conversation to compact:
                 prompt,
                 response_format={"type": "json_object"},
             )
-            payload = parse_state_blob(
-                json.dumps(_extract_json_payload(str(response.text))),
-                default_working_state_payload,
-            )
-            serialized = dump_state_blob(payload)
-            if count_tokens(serialized) > self.WORKING_STATE_MAX_TOKENS:
-                payload["summary"] = str(payload.get("summary") or "")[:220]
-                serialized = dump_state_blob(payload)
+            payload = _extract_json_payload(str(response.text))
+            new_summary = str(payload.get("summary", "")).strip()
+
+            if count_tokens(new_summary) > self.SESSION_STATE_MAX_TOKENS:
+                new_summary = new_summary[:600]
+
+            session_state["summary"] = new_summary
             transcript_service.update_session_fields(
                 session_id,
-                working_state=serialized,
-                compaction_cursor=compress_messages[-1]["seq"],
+                session_state=dump_session_state(session_state),
+                compaction_cursor=recent[-1]["seq"],
             )
             return True
         except Exception as exc:  # noqa: BLE001
@@ -134,90 +127,48 @@ Conversation to compact:
             return False
 
 
-class InterviewStateUpdateService:
-    INTERVIEW_STATE_PROMPT = """You maintain structured interview state for one session.
-
-Return a JSON object with exactly these keys:
-- goal
-- phase
-- covered_topics
-- pending_topics
-- observed_gaps
-- evidence
-- candidate_claims
-- next_question
-- constraints
-
-Rules:
-- observed_gaps should only contain evidence-backed weaknesses or uncertainty.
-- evidence must be a short list of objects with topic, observation, and confidence when possible.
-- Keep the state concise and current-session only.
-
-Previous interview state:
-{old_state}
-
-New conversation:
-{conversation}
-"""
-
-    async def update_from_messages(
-        self,
-        session_id: str,
-        user_id: str,
-        new_messages: list[dict],
-    ) -> dict:
-        current_state = interview_state_service.get_state(session_id, user_id)
-        if not new_messages:
-            return current_state
-
-        prompt = self.INTERVIEW_STATE_PROMPT.format(
-            old_state=json.dumps(current_state, ensure_ascii=False, indent=2),
-            conversation="\n".join(
-                f"{item['role']}: {item['content']}" for item in new_messages
-            ),
-        )
-        try:
-            response = await agent_fast_llm.acomplete(
-                prompt,
-                response_format={"type": "json_object"},
-            )
-            payload = parse_state_blob(
-                json.dumps(_extract_json_payload(str(response.text))),
-                default_interview_state_payload,
-            )
-            interview_state_service.update_state(session_id, user_id, payload)
-            return payload
-        except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "Interview state update failed for session %s: %s",
-                session_id,
-                exc,
-            )
-            return current_state
-
+# ── Memory Extraction ─────────────────────────────────────────────────────
 
 class MemoryExtractionService:
+    """Extracts two types of memories from conversation turns.
+
+    - user_profile:    durable personal facts (name, tech stack, career goals)
+    - interview_fact:  specific interview discussion points and learnings,
+                       enriched during debrief conversations as the user
+                       reviews and corrects their understanding.
+    """
+
     MIN_CONFIDENCE = 0.65
-    EXTRACTION_PROMPT = """Review the conversation and extract only cross-session durable memories.
+    EXTRACTION_PROMPT = """Review the conversation and extract durable memories.
 
 Allowed memory types:
-- user_profile
-- interaction_preference
-- feedback_rule
-- project_reference
+
+1. user_profile — personal facts about the user
+   Examples: name, target role, tech stack, years of experience, career goals.
+   normalized_key format: snake_case identifier (e.g. "target_role", "tech_stack")
+
+2. interview_fact — specific interview discussion points and learnings
+   These capture WHAT was discussed in an interview and WHAT the user learned.
+   Content format: "[date if known] [interview title]: [topic], [what happened / was learned], [score if available]"
+   normalized_key format: "ivf_[topic_snake_case]" (e.g. "ivf_redis_persistence", "ivf_tcp_handshake")
+   Rules for interview_fact:
+   - Extract when the conversation discusses a specific interview question or technical topic from an interview
+   - Include both what was discussed AND the conclusion or learning
+   - If the user corrected a misunderstanding during review, note the updated understanding
+   - If a score or evaluation is mentioned, include it
 
 Never extract:
-- temporary session progress
-- short-lived weaknesses or scoring
-- technical knowledge already derivable from code or docs
-- anything you are not confident should survive across sessions
+- Generic technical knowledge unrelated to a specific interview
+- Temporary session state or UI preferences
 
-Return a JSON array. Each item must contain:
-- type
-- description
-- normalized_key
-- content
-- confidence
+Return a JSON array. Each item:
+- type: "user_profile" or "interview_fact"
+- description: short label (max 50 chars)
+- normalized_key: snake_case identifier for dedup
+- content: the fact (1-2 sentences)
+- confidence: 0.0-1.0
+
+If nothing qualifies, return [].
 
 Conversation:
 {conversation}
@@ -333,26 +284,48 @@ Conversation:
             db.close()
 
 
+# ── Memory Retrieval ─────────────────────────────────────────────────────
+
 class MemoryRetrievalService:
     MAX_RECALL_ITEMS = 3
     PREFILTER_LIMIT = 12
     STALENESS_THRESHOLD_DAYS = 2
-    SELECT_PROMPT = """Choose the memory ids most relevant to the current query.
-
-Return a JSON array of ids. Choose at most {max_items}. If none matter, return [].
-
-Memory catalog:
-{memory_catalog}
-
-Query:
-{query}
-"""
 
     def __init__(
         self,
         hybrid_retriever: HybridRetriever | None = None,
     ):
         self.hybrid_retriever = hybrid_retriever or HybridRetriever()
+
+    def load_user_profile(self, user_id: str) -> list[dict]:
+        """Load all user_profile memories directly from DB (no vector search).
+
+        user_profile items are always injected into the system prompt,
+        similar to hermes USER.md — small, always present.
+        """
+        db: Session = SessionLocal()
+        try:
+            rows = (
+                db.query(MemoryItem)
+                .filter(
+                    MemoryItem.user_id == user_id,
+                    MemoryItem.type == "user_profile",
+                )
+                .order_by(MemoryItem.updated_at.desc())
+                .all()
+            )
+            return [
+                {
+                    "id": row.id,
+                    "type": row.type,
+                    "description": row.description,
+                    "content": row.content.strip()[:500],
+                    "normalized_key": row.normalized_key,
+                }
+                for row in rows
+            ]
+        finally:
+            db.close()
 
     async def recall_relevant(
         self,
@@ -536,21 +509,32 @@ Query:
             db.close()
 
 
+# ── Post-Turn Maintenance ────────────────────────────────────────────────
+
 class PostTurnMaintenanceService:
+    """Runs after each conversation turn as a background task.
+
+    Responsibilities (in order):
+    1. Compact session_state if turn threshold is reached
+    2. Extract user_profile memories from new messages
+    """
+
     def __init__(
         self,
         compaction: CompactionService,
-        interview_updates: InterviewStateUpdateService,
         memory_extraction: MemoryExtractionService,
     ):
         self.compaction = compaction
-        self.interview_updates = interview_updates
         self.memory_extraction = memory_extraction
         self._locks: dict[str, asyncio.Lock] = {}
+        self._locks_maxsize = 128
 
     def _lock_for(self, session_id: str) -> asyncio.Lock:
         lock = self._locks.get(session_id)
         if lock is None:
+            if len(self._locks) >= self._locks_maxsize:
+                oldest_key = next(iter(self._locks))
+                del self._locks[oldest_key]
             lock = asyncio.Lock()
             self._locks[session_id] = lock
         return lock
@@ -578,43 +562,33 @@ class PostTurnMaintenanceService:
     ) -> None:
         await self.compaction.compact_if_needed(session_id)
 
+        if not allow_memory_write:
+            return
+
         meta = transcript_service.get_session_meta(session_id)
         if meta is None:
             return
 
+        # Use compaction_cursor as the memory extraction watermark too
         pending_messages = transcript_service.get_recent_turns(
             session_id=session_id,
-            max_turns=100,
-            after_seq=meta["memory_cursor"],
+            max_turns=20,
+            after_seq=meta["compaction_cursor"],
         )
         if not pending_messages:
             return
 
-        await self.interview_updates.update_from_messages(
+        await self.memory_extraction.extract_and_merge(
             session_id=session_id,
             user_id=user_id,
             new_messages=pending_messages,
         )
-        extracted = []
-        if allow_memory_write:
-            extracted = await self.memory_extraction.extract_and_merge(
-                session_id=session_id,
-                user_id=user_id,
-                new_messages=pending_messages,
-            )
-        if extracted is not None:
-            transcript_service.update_session_fields(
-                session_id,
-                memory_cursor=max(item["seq"] for item in pending_messages),
-            )
 
 
 compaction_service = CompactionService()
-interview_state_update_service = InterviewStateUpdateService()
 memory_extraction_service = MemoryExtractionService()
 memory_retrieval_service = MemoryRetrievalService()
 post_turn_maintenance_service = PostTurnMaintenanceService(
     compaction=compaction_service,
-    interview_updates=interview_state_update_service,
     memory_extraction=memory_extraction_service,
 )

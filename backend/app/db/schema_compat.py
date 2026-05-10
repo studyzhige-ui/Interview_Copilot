@@ -8,9 +8,10 @@ logger = logging.getLogger(__name__)
 
 COMPAT_COLUMNS: dict[str, dict[str, str]] = {
     "chat_sessions": {
-        "working_state": "TEXT",
+        "session_type": "VARCHAR DEFAULT 'general' NOT NULL",
+        "interview_id": "VARCHAR",
+        "session_state": "TEXT",
         "compaction_cursor": "INTEGER DEFAULT 0",
-        "memory_cursor": "INTEGER DEFAULT 0",
         "turn_count": "INTEGER DEFAULT 0",
     },
     "chat_messages": {

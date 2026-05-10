@@ -54,7 +54,6 @@ services:
       /bin/sh -c "
       /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin;
       /usr/bin/mc mb myminio/interview-copilot-bucket --ignore-existing;
-      /usr/bin/mc anonymous set public myminio/interview-copilot-bucket;
       exit 0;
       "
     networks:
@@ -124,6 +123,53 @@ services:
       milvus-etcd:
         condition: service_started
       milvus-minio:
+        condition: service_started
+    networks:
+      - copilot_net
+
+  # ── Optional: full-stack containerized API + Worker ──────────────────
+  # Activate with: docker compose --profile full up -d
+  api:
+    profiles: [full]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: interview_copilot_api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/interview_copilot
+      REDIS_URL: redis://redis:6379/0
+      MILVUS_URI: http://milvus-standalone:19530
+      AWS_ENDPOINT_URL: http://minio:9000
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+      milvus-standalone:
+        condition: service_healthy
+    networks:
+      - copilot_net
+
+  worker:
+    profiles: [full]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: interview_copilot_worker
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/interview_copilot
+      REDIS_URL: redis://redis:6379/0
+      MILVUS_URI: http://milvus-standalone:19530
+      AWS_ENDPOINT_URL: http://minio:9000
+    command: ["celery", "-A", "app.worker.celery_app.celery_app", "worker", "--loglevel=info", "--pool=solo"]
+    depends_on:
+      db:
+        condition: service_started
+      redis:
         condition: service_started
     networks:
       - copilot_net

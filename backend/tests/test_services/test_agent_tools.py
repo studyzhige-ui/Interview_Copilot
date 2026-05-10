@@ -1,45 +1,57 @@
+"""Tests for the new ToolRegistry-based agent tools."""
+
 import asyncio
 
 import pytest
-from pydantic import ValidationError
 
 
-def test_tool_permission_blocks_unknown_site():
-    from app.agent_runtime.tools import AgentToolContext, build_default_tool_registry
+def test_tool_registry_has_expected_tools():
+    from app.agent_runtime.tool_registry import registry
 
-    registry = build_default_tool_registry()
-    tool = registry["search_jobs"]
+    expected = {
+        "web_search", "read_url", "read_file", "write_file",
+        "recall_memory", "save_memory", "search_knowledge",
+        "read_resume", "read_interview_history", "search_jobs",
+    }
+    assert expected == set(registry.tool_names)
+
+
+def test_openai_schemas_generated():
+    from app.agent_runtime.tool_registry import registry
+
+    schemas = registry.get_openai_schemas()
+    assert len(schemas) >= 9  # web_search excluded when TAVILY_API_KEY is not set
+    for schema in schemas:
+        assert schema["type"] == "function"
+        assert "name" in schema["function"]
+        assert "parameters" in schema["function"]
+
+
+def test_dispatch_unknown_tool():
+    from app.agent_runtime.tool_registry import AgentToolContext, registry
+
     ctx = AgentToolContext(user_id="alice", session_id="s1")
-
-    result = asyncio.run(
-        tool.execute(
-            {
-                "keywords": "python backend",
-                "sites": ["unauthorized-site"],
-            },
-            ctx,
-        )
-    )
-    assert result["error"] == "unauthorized site requested"
+    result = asyncio.run(registry.dispatch("nonexistent_tool", {}, ctx))
+    assert result["error"] == "unknown_tool"
 
 
-def test_tool_args_validation_error():
-    from app.agent_runtime.tools import AgentToolContext, build_default_tool_registry
+def test_parse_tool_arguments_valid():
+    from app.agent_runtime.tool_registry import parse_tool_arguments
 
-    registry = build_default_tool_registry()
-    tool = registry["search_interview_qa"]
-    ctx = AgentToolContext(user_id="alice", session_id="s1")
-
-    with pytest.raises(ValidationError):
-        asyncio.run(tool.execute({"query": ""}, ctx))
+    result = parse_tool_arguments('{"query": "test"}')
+    assert result == {"query": "test"}
 
 
-def test_openai_schema_contains_strict_flag():
-    from app.agent_runtime.tools import build_default_tool_registry
-    from app.core.config import settings
+def test_parse_tool_arguments_invalid():
+    from app.agent_runtime.tool_registry import parse_tool_arguments
 
-    registry = build_default_tool_registry()
-    schema = registry["search_jobs"].to_openai_tool()
+    with pytest.raises(ValueError):
+        parse_tool_arguments("not json")
 
-    if settings.AGENT_TOOL_SCHEMA_STRICT:
-        assert schema["function"]["strict"] is True
+
+def test_format_manifest():
+    from app.agent_runtime.tool_registry import registry
+
+    manifest = registry.format_manifest()
+    assert "web_search" in manifest
+    assert "read_resume" in manifest

@@ -32,10 +32,5 @@ class MemoryItem(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    VALID_TYPES = {
-        "user_profile",
-        "interaction_preference",
-        "feedback_rule",
-        "project_reference",
-    }
+    VALID_TYPES = {"user_profile", "interview_fact"}
     MAX_CONTENT_BYTES = 4096

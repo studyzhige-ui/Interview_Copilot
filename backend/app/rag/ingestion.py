@@ -5,19 +5,14 @@ from llama_index.vector_stores.milvus import MilvusVectorStore
 from llama_index.readers.file import PyMuPDFReader
 from llama_index.storage.docstore.postgres import PostgresDocumentStore
 from llama_index.core.node_parser import MarkdownNodeParser, SentenceSplitter, JSONNodeParser, CodeSplitter
-from app.rag.embeddings import init_rag_settings
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# 确保底层大模型设定生效
-init_rag_settings()
-
 MILVUS_URI = settings.MILVUS_URI
 MILVUS_COLLECTION = settings.MILVUS_COLLECTION
 
-# bge-small-zh-v1.5 输出维度 = 512
-EMBEDDING_DIM = 512
+
 
 
 def _milvus_dense_index_config() -> dict:
@@ -41,7 +36,15 @@ def _milvus_search_config() -> dict:
 def get_optimal_nodes(document: Document) -> list:
     """
     自适应切块引擎：基于文档类型和内容结构智能选择切分策略。
+
+    对于 Markdown/JSON 等结构化文档，先按语义结构切分，再用 SentenceSplitter
+    做二次兜底，防止单个 chunk 超过 Embedding 模型的最大 token 限制。
     """
+    # BGE-M3 最大支持 8192 tokens，但推荐 chunk 在 512 tokens 以内
+    # 以获得最佳的 embedding 语义密度。
+    CHUNK_SIZE = 512
+    CHUNK_OVERLAP = 64
+
     source_type = document.metadata.get("source_type", "")
     file_name = document.metadata.get("file_name", "").lower()
 
@@ -52,24 +55,39 @@ def get_optimal_nodes(document: Document) -> list:
     elif file_name.endswith(".json"):
         parser = JSONNodeParser()
     elif file_name.endswith(".py"):
-        parser = CodeSplitter(language="python")
+        parser = CodeSplitter(language="python", chunk_lines=40, chunk_lines_overlap=5)
     elif file_name.endswith(".java"):
-        parser = CodeSplitter(language="java")
+        parser = CodeSplitter(language="java", chunk_lines=40, chunk_lines_overlap=5)
     elif file_name.endswith(".cpp") or file_name.endswith(".c"):
-        parser = CodeSplitter(language="cpp")
+        parser = CodeSplitter(language="cpp", chunk_lines=40, chunk_lines_overlap=5)
     else:
-        parser = SentenceSplitter(chunk_size=1024, chunk_overlap=100)
+        parser = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
 
     nodes = parser.get_nodes_from_documents([document])
 
+    # 二次兜底：对超长 chunk 做再切分，确保不超过 embedding 模型 max_seq_length
+    secondary_splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+    final_nodes = []
+    for node in nodes:
+        text = node.get_content()
+        # 粗略估算：1 个中文字符 ≈ 1.5 tokens，1 英文单词 ≈ 1.3 tokens
+        estimated_tokens = len(text)  # 按字符数做保守估计
+        if estimated_tokens > CHUNK_SIZE * 2:
+            sub_nodes = secondary_splitter.get_nodes_from_documents(
+                [Document(text=text, metadata=node.metadata)]
+            )
+            final_nodes.extend(sub_nodes)
+        else:
+            final_nodes.append(node)
+
     # P0 级红线：阻止 NodeParser 洗掉原文档的 Metadata
     user_id = document.metadata.get("user_id", "")
-    for node in nodes:
+    for node in final_nodes:
         node.metadata["source_type"] = source_type
         if user_id:
             node.metadata["user_id"] = user_id
 
-    return nodes
+    return final_nodes
 
 
 def _get_milvus_vector_store(overwrite: bool = False) -> MilvusVectorStore:
@@ -80,7 +98,7 @@ def _get_milvus_vector_store(overwrite: bool = False) -> MilvusVectorStore:
     return MilvusVectorStore(
         uri=MILVUS_URI,
         collection_name=MILVUS_COLLECTION,
-        dim=EMBEDDING_DIM,
+        dim=settings.EMBEDDING_DIM,
         overwrite=overwrite,
         similarity_metric=settings.MILVUS_SIMILARITY_METRIC,
         index_config=_milvus_dense_index_config(),
@@ -205,6 +223,11 @@ async def ingest_document(
         )
 
         logger.info(f">>> 摄取完成: '{file_path}' (source_type={source_type}, user_id={user_id})")
+
+        # Invalidate BM25 cache so next retrieval picks up new content.
+        from app.rag.retriever import invalidate_bm25_cache
+        invalidate_bm25_cache(user_id)
+
         return {
             "success": True,
             "chunk_count": len(all_nodes),
@@ -241,6 +264,10 @@ async def ingest_text(text: str, source_type: str, user_id: str, metadata: dict 
         )
 
         logger.info(f"文本摄取完成 (source_type='{source_type}')。")
+
+        from app.rag.retriever import invalidate_bm25_cache
+        invalidate_bm25_cache(user_id)
+
         return {
             "success": True,
             "chunk_count": len(all_nodes),

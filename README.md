@@ -1,6 +1,10 @@
 # Interview Copilot
 
-Interview Copilot is a FastAPI backend for interview practice and analysis. It combines authenticated chat, interview audio transcription, RAG retrieval, model routing, personal memory, and analytics.
+Interview Copilot is a full-stack AI interview practice and analysis workspace. It combines authenticated chat, voice mock interviews, interview audio transcription, RAG retrieval, model routing, personal memory, resume context, analytics, and a modular Agent Harness for complex multi-step tasks.
+
+The system uses a dual-link architecture:
+- **Traditional RAG link**: deterministic knowledge Q&A routed by a query planner
+- **Agent link**: user-initiated, tool-calling execution engine with web search, file I/O, memory management, and structured event streaming
 
 ## Stack
 
@@ -9,19 +13,21 @@ Interview Copilot is a FastAPI backend for interview practice and analysis. It c
 - Redis + Celery for background transcription and ingestion jobs
 - MinIO for local S3-compatible upload storage
 - Milvus for vector search
-- DeepSeek/OpenAI-compatible model clients through LlamaIndex and OpenAI SDK
+- DeepSeek/OpenAI-compatible model clients through LlamaIndex and the OpenAI SDK
 - Faster-Whisper/WhisperX and optional diarization models for audio processing
+- Vue 3 + Vite for the browser UI
+- Tavily API for agent web search (optional, requires `TAVILY_API_KEY`)
 
 ## Repository Layout
 
 ```text
-backend/app/        FastAPI app, services, models, RAG, worker tasks
+backend/app/        FastAPI app, services, models, RAG, agent runtime, worker tasks
 backend/tests/      Unit and API tests
-evaluation/         RAG and agent evaluation scripts
-scripts/            Developer utilities
-nginx/              Local reverse proxy configuration
-docs/               Project and interview documentation
 frontend/           Vue 3 web workspace
+evaluation/         RAG, generation, and agent evaluation harness
+scripts/            Developer utilities
+docs/               Project and interview documentation
+nginx/              Local reverse proxy configuration
 ```
 
 ## Local Setup
@@ -53,7 +59,7 @@ Copy-Item .env.docker.example .env.docker
 
 Set at least `DEEPSEEK_API_KEY` in `.env`. Optional providers such as LlamaCloud and NVIDIA can stay as placeholders until you use those code paths. Do not commit `.env` or `.env.docker`.
 
-The default model routing uses `deepseek-v4-flash` for normal chat and fast internal tasks, and `deepseek-v4-pro` for agent/tool workflows. You can override runtime selections from the frontend model panel; persisted legacy DeepSeek selections fall back to these V4 defaults.
+The default model routing uses `deepseek-v4-flash` for normal chat and fast internal tasks, and `deepseek-v4-pro` for agent/tool workflows. Local retrieval defaults to `BAAI/bge-m3` embeddings and `BAAI/bge-reranker-base`. You can override runtime selections from the frontend model panel; persisted legacy DeepSeek selections fall back to these V4 defaults.
 
 RAG search is strictly user-private. Uploaded knowledge documents, interview audio, memories, and retrieval metadata are all scoped by `current_user.username`; each user must upload their own documents before they can search them.
 
@@ -114,7 +120,8 @@ Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Vite proxies `/api` request
 python -m compileall -q backend/app backend/tests
 pytest backend/tests
 python scripts/test_ws.py <JWT_TOKEN> <SESSION_ID>
-.\scripts\run_eval_profiles.ps1
+python -m evaluation.eval_runner --all --report
+cd frontend; npm run build
 ```
 
 ## Data And Secrets

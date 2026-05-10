@@ -203,3 +203,82 @@ async def get_analytics_report(
         return await generate_comprehensive_report(limit, user_id=current_user.username)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Failed to generate report: {exc}") from exc
+
+
+# ── InterviewRecord endpoints ─────────────────────────────────────────
+
+class InterviewRecordListItem(BaseModel):
+    id: str
+    source: str
+    title: str
+    status: str
+    created_at: str
+
+
+@router.get("/interview-records", response_model=List[InterviewRecordListItem])
+def list_interview_records(
+    current_user: User = Depends(get_current_user),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+):
+    from app.services.interview_record_service import interview_record_service
+
+    records = interview_record_service.list_by_user(
+        current_user.username, offset=offset, limit=limit,
+    )
+    return [
+        InterviewRecordListItem(
+            id=r.id,
+            source=r.source,
+            title=r.title or "",
+            status=r.status,
+            created_at=r.created_at.isoformat() if r.created_at else "",
+        )
+        for r in records
+    ]
+
+
+@router.get("/interview-records/{record_id}")
+def get_interview_record(
+    record_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    from app.services.interview_record_service import interview_record_service
+
+    record = interview_record_service.get(record_id, current_user.username)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Interview record not found")
+    analysis = None
+    if record.analysis_json:
+        try:
+            analysis = json.loads(record.analysis_json)
+        except json.JSONDecodeError:
+            analysis = None
+    return {
+        "id": record.id,
+        "source": record.source,
+        "title": record.title,
+        "status": record.status,
+        "audio_upload_id": record.audio_upload_id,
+        "resume_upload_id": record.resume_upload_id,
+        "jd_upload_id": record.jd_upload_id,
+        "transcript": record.transcript,
+        "analysis": analysis,
+        "created_at": record.created_at.isoformat() if record.created_at else "",
+        "updated_at": record.updated_at.isoformat() if record.updated_at else "",
+    }
+
+
+@router.get("/interview-records/{record_id}/summary")
+def get_interview_record_summary(
+    record_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Short analysis summary for context injection (slot 2)."""
+    from app.services.interview_record_service import interview_record_service
+
+    summary = interview_record_service.get_analysis_summary(record_id, current_user.username)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Interview record or analysis not found")
+    return {"summary": summary}
+

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import threading
 
 from app.db.database import SessionLocal
 from app.models.interview import AnalysisResult, Interview, Transcript
@@ -10,12 +11,38 @@ from app.worker.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Reusable event loop for Celery workers
+# ---------------------------------------------------------------------------
+# Each Celery worker thread gets its own persistent event loop, avoiding the
+# overhead of creating/destroying a loop on every task invocation.
+
+_loop_local = threading.local()
+
+
+def _get_worker_loop() -> asyncio.AbstractEventLoop:
+    """Return a persistent event loop for the current worker thread."""
+    loop = getattr(_loop_local, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        _loop_local.loop = loop
+    return loop
+
+
 def run_async(coro):
     """Run an async coroutine inside a synchronous Celery task."""
-    return asyncio.run(coro)
+    loop = _get_worker_loop()
+    return loop.run_until_complete(coro)
 
 
-@celery_app.task(bind=True, name="tasks.process_interview_analysis")
+@celery_app.task(
+    bind=True,
+    name="tasks.process_interview_analysis",
+    autoretry_for=(ConnectionError, TimeoutError, OSError),
+    retry_backoff=True,
+    retry_backoff_max=120,
+    max_retries=3,
+)
 def process_interview_analysis(self, interview_id: int):
     """Transcribe an interview recording, analyze it, and persist the results."""
     from app.services.analysis_service import analyze_interview
@@ -83,6 +110,19 @@ def process_interview_analysis(self, interview_id: int):
             )
             db.add(new_analysis)
 
+            # Create InterviewRecord for debrief chat sessions
+            from app.services.interview_record_service import interview_record_service
+
+            analysis_json_str = json.dumps(analysis_data, ensure_ascii=False)
+            interview_record_service.create_from_upload(
+                user_id=interview.user_id,
+                title=f"面试录音 #{interview.id}",
+                audio_upload_id=str(interview.upload_id) if interview.upload_id else None,
+                transcript=transcript_text,
+                analysis_json=analysis_json_str,
+                db=db,
+            )
+
             interview.status = "COMPLETED"
             db.commit()
 
@@ -104,7 +144,14 @@ def process_interview_analysis(self, interview_id: int):
         db.close()
 
 
-@celery_app.task(bind=True, name="tasks.process_document_ingestion")
+@celery_app.task(
+    bind=True,
+    name="tasks.process_document_ingestion",
+    autoretry_for=(ConnectionError, TimeoutError, OSError),
+    retry_backoff=True,
+    retry_backoff_max=120,
+    max_retries=3,
+)
 def process_document_ingestion(self, document_id: str):
     """Download an uploaded document if needed and ingest it into Milvus/Docstore."""
     import os
@@ -128,7 +175,7 @@ def process_document_ingestion(self, document_id: str):
         if document.upload.purpose != "knowledge_document":
             raise ValueError("Knowledge document upload has invalid purpose")
         if document.status not in {"processing", "failed"}:
-            return {"status": "skipped", "document_id": document_id, "status": document.status}
+            return {"status": "skipped", "document_id": document_id, "current_status": document.status}
 
         if not document.storage_uri.startswith("s3://"):
             raise ValueError("Knowledge ingestion only accepts owned S3 uploads")

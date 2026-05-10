@@ -12,19 +12,9 @@ def generate_uuid() -> str:
     return str(uuid.uuid4())
 
 
-def default_working_state() -> str:
+def default_session_state() -> str:
     return json.dumps(
-        {
-            "goal": "",
-            "current_phase": "",
-            "covered_topics": [],
-            "pending_topics": [],
-            "candidate_claims_to_verify": [],
-            "observed_gaps": [],
-            "next_best_question": "",
-            "constraints": [],
-            "summary": "",
-        },
+        {"mode": "general", "summary": ""},
         ensure_ascii=False,
     )
 
@@ -36,9 +26,12 @@ class ChatSession(Base):
     user_id = Column(String, index=True, nullable=False)
     title = Column(String, default="新的面试对话")
     summary = Column(Text, default="")
-    working_state = Column(Text, default=default_working_state)
+    session_type = Column(String, index=True, default="general", nullable=False)
+    interview_id = Column(
+        String, ForeignKey("interview_records.id"), index=True, nullable=True,
+    )
+    session_state = Column(Text, default=default_session_state)
     compaction_cursor = Column(Integer, default=0)
-    memory_cursor = Column(Integer, default=0)
     turn_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

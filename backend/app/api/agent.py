@@ -1,9 +1,11 @@
+import json
 import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.agent_runtime import run_react_agent
+from app.agent_runtime import run_react_agent, run_react_agent_stream
 from app.core.security import get_current_user
 from app.models.user import User
 from app.services.agent_trace_service import (
@@ -86,6 +88,37 @@ async def api_react_agent_chat(
     except Exception as e:
         logger.error("ReAct agent invocation failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/agent/react/stream")
+async def api_react_agent_stream(
+    request: ReactAgentRequest,
+    current_user: User = Depends(get_current_user),
+    x_session_id: str = Header("default_session", description="Session id"),
+):
+    """
+    SSE streaming endpoint for the ReAct agent.
+    Yields HarnessEvents as Server-Sent Events for real-time tool
+    call visualization in the frontend.
+    """
+    async def event_generator():
+        try:
+            async for event in run_react_agent_stream(
+                user_message=request.message,
+                user_id=current_user.username,
+                session_id=x_session_id,
+            ):
+                yield f"data: {event.to_json()}\n\n"
+        except Exception as exc:
+            logger.error("SSE agent stream failed: %s", exc)
+            error_payload = json.dumps({"type": "error", "data": {"error": str(exc)}}, ensure_ascii=False)
+            yield f"data: {error_payload}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/agent/runs")

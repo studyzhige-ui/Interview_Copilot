@@ -6,6 +6,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.background_tasks import cancel_and_wait_all
+
 # Set a default Hugging Face mirror without overriding the user's .env value.
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
@@ -13,7 +15,8 @@ from app.db.database import engine
 import app.models.agent_trace
 import app.models.chat
 import app.models.interview  # Ensure models are registered before table creation.
-import app.models.interview_state
+import app.models.interview_record
+import app.models.resume_section
 import app.models.knowledge
 import app.models.memory
 import app.models.upload
@@ -22,6 +25,19 @@ from app.rag.embeddings import init_rag_settings
 from app.rag.retriever import init_reranker
 from app.services.memory_vector_service import memory_vector_service
 from app.core.config import settings
+
+# ─── Structured logging ──────────────────────────────────────────────────
+_LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s %(message)s"
+_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+logging.basicConfig(
+    level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
+    format=_LOG_FORMAT,
+    datefmt=_LOG_DATEFMT,
+)
+# Quiet noisy third-party loggers
+for _quiet in ("httpx", "httpcore", "urllib3", "openai", "milvus"):
+    logging.getLogger(_quiet).setLevel(logging.WARNING)
 
 logger = logging.getLogger("interview.copilot.main")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -71,6 +87,8 @@ async def lifespan(app: FastAPI):
     logger.info("====== Interview Copilot startup sequence complete ======")
     yield
 
+    logger.info("Draining background tasks before shutdown...")
+    await cancel_and_wait_all(timeout=10.0)
     logger.info("====== Interview Copilot shutdown sequence complete ======")
 
 
@@ -81,10 +99,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS Configuration
+# CORS Configuration — read allowed origins from settings (comma-separated).
+_cors_origins = [
+    origin.strip()
+    for origin in settings.CORS_ORIGINS.split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

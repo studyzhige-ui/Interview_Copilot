@@ -4,6 +4,8 @@ import time
 import traceback
 from typing import AsyncGenerator
 
+from app.core.background_tasks import safe_background_task
+
 import tiktoken
 from llama_index.core import Settings
 from llama_index.core.callbacks import CallbackManager, TokenCountingHandler
@@ -11,8 +13,7 @@ from llama_index.core.callbacks import CallbackManager, TokenCountingHandler
 from app.agent.planner import plan_query
 from app.rag.embeddings import agent_fast_llm
 from app.rag.knowledge_retriever import knowledge_retriever
-from app.services.context_service import ContextBundle, context_pipeline, prompt_renderer
-from app.services.interview_state_service import interview_state_service
+from app.services.context_service import AssembledContext, context_pipeline, prompt_renderer
 from app.services.memory_extraction_service import (
     memory_retrieval_service,
     post_turn_maintenance_service,
@@ -31,7 +32,7 @@ DIRECT_SYSTEM_RULES = """You are Interview Copilot, a concise technical intervie
 Use the provided session state and memories only when relevant. If context is insufficient, say what is missing."""
 
 RAG_SYSTEM_RULES = """You are Interview Copilot, a concise technical interview assistant.
-Use retrieved knowledge as evidence, prefer current interview_state over long-term memory when discussing current candidate performance, and avoid inventing sources."""
+Use retrieved knowledge as evidence and avoid inventing sources."""
 
 
 async def stream_chat_with_agent(
@@ -47,12 +48,10 @@ async def stream_chat_with_agent(
     try:
         yield "[status] 正在准备对话上下文...\n"
         transcript_service.ensure_session(session_id, user_id)
-        interview_state_service.ensure_state(session_id, user_id)
 
         yield "[status] 正在分析问题并规划上下文...\n"
         rewrite_context = context_pipeline.assemble_rewrite_context(
             session_id=session_id,
-            user_id=user_id,
             current_query=user_message,
         )
         query_plan = await plan_query(
@@ -62,11 +61,15 @@ async def stream_chat_with_agent(
         standalone_query = query_plan.standalone_query
 
         yield "[status] 正在并发召回记忆和知识库...\n"
+        # user_profile: always loaded directly from DB (like hermes USER.md)
+        user_profile = memory_retrieval_service.load_user_profile(user_id)
+
+        # interview_fact: vector-searched only when relevant
         memory_task = asyncio.create_task(
             memory_retrieval_service.recall_relevant(
                 user_id=user_id,
                 query=query_plan.dense_query or standalone_query,
-                memory_types=query_plan.memory_types,
+                memory_types=["interview_fact"],
             )
         ) if query_plan.needs_memory_retrieval else None
         knowledge_task = asyncio.create_task(
@@ -86,29 +89,21 @@ async def stream_chat_with_agent(
         yield "[status] 正在生成回答...\n\n"
         answer_context = context_pipeline.assemble_answer_context(
             session_id=session_id,
-            user_id=user_id,
             current_query=standalone_query,
+            user_profile=user_profile,
             relevant_memories=relevant_memories,
             knowledge_chunks=knowledge_result.chunks if knowledge_result else [],
-        )
-        bundle = ContextBundle(
-            working_state=answer_context.working_state,
-            interview_state=answer_context.interview_state,
-            recent_turns=answer_context.recent_turns,
-            relevant_memories=answer_context.relevant_memories,
-            knowledge_chunks=answer_context.knowledge_chunks,
-            current_query=answer_context.current_query,
         )
 
         if not query_plan.needs_knowledge_retrieval:
             prompt = prompt_renderer.render_answer_prompt(
-                bundle,
+                answer_context,
                 system_rules=DIRECT_SYSTEM_RULES,
             )
             response_generator = await agent_fast_llm.astream_complete(prompt)
         else:
             prompt = prompt_renderer.render_answer_prompt(
-                bundle,
+                answer_context,
                 system_rules=RAG_SYSTEM_RULES,
             )
             response_generator = await Settings.llm.astream_complete(prompt)
@@ -125,13 +120,13 @@ async def stream_chat_with_agent(
             ai_msg=final_answer,
             rewritten_query=standalone_query if standalone_query != user_message else None,
         )
-        asyncio.create_task(post_turn_maintenance_service.run(session_id, user_id))
+        safe_background_task(post_turn_maintenance_service.run(session_id, user_id))
 
     except Exception as exc:  # noqa: BLE001
         logger.error("Agent execution failed: %s\n%s", exc, traceback.format_exc())
         yield f"系统异常: {exc}"
     finally:
-        asyncio.create_task(
+        safe_background_task(
             log_interaction_metrics(
                 session_id=session_id,
                 user_id=user_id,

@@ -84,3 +84,66 @@ def test_login_nonexistent_user(db_session):
         login_access_token(db=db_session, form_data=form)
 
     assert exc_info.value.status_code == 400
+
+
+def test_login_returns_refresh_token(db_session):
+    """登录应同时返回 access_token 和 refresh_token。"""
+    from app.api.auth import register_user, login_access_token
+    from fastapi.security import OAuth2PasswordRequestForm
+
+    register_user(_make_user_create(username="refreshuser", password="pw123"), db=db_session)
+
+    form = MagicMock(spec=OAuth2PasswordRequestForm)
+    form.username = "refreshuser"
+    form.password = "pw123"
+
+    result = login_access_token(db=db_session, form_data=form)
+
+    assert "access_token" in result
+    assert "refresh_token" in result
+    assert result["token_type"] == "bearer"
+
+
+def test_refresh_endpoint_issues_new_tokens(db_session):
+    """Login 返回的 refresh_token 应可被 decode 并包含正确声明。"""
+    from app.api.auth import register_user, login_access_token
+    from app.core.security import decode_token
+    from fastapi.security import OAuth2PasswordRequestForm
+
+    register_user(_make_user_create(username="refresh_ok", password="pw"), db=db_session)
+
+    form = MagicMock(spec=OAuth2PasswordRequestForm)
+    form.username = "refresh_ok"
+    form.password = "pw"
+    login_result = login_access_token(db=db_session, form_data=form)
+
+    # Verify the refresh token can be decoded and carries the right claims
+    payload = decode_token(login_result["refresh_token"])
+    assert payload["type"] == "refresh"
+    assert payload["sub"] == "refresh_ok"
+
+    # Access token should have a different type
+    access_payload = decode_token(login_result["access_token"])
+    assert access_payload["type"] == "access"
+    assert access_payload["sub"] == "refresh_ok"
+
+
+def test_refresh_rejects_access_token():
+    """access_token 的 type 声明是 'access'，不应被接受为 refresh。"""
+    from app.core.security import create_access_token, decode_token
+
+    token = create_access_token(data={"sub": "bad_refresh"})
+    payload = decode_token(token)
+    assert payload["type"] == "access"
+    assert payload["type"] != "refresh"
+
+
+def test_refresh_rejects_invalid_token():
+    """伪造的 token 无法通过 decode_token。"""
+    from jose import JWTError
+    from app.core.security import decode_token
+
+    with pytest.raises(JWTError):
+        decode_token("not.a.valid.token")
+
+

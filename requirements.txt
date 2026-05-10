@@ -69,3 +69,6 @@ torchaudio==2.8.0+cu129
 pytest==8.4.2
 pytest-asyncio==1.1.0
 httpx==0.28.1
+
+# Agent Web Tools
+markdownify==1.1.0

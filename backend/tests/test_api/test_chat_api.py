@@ -46,8 +46,8 @@ def test_transcript_endpoint_returns_structured_state(monkeypatch):
                     lambda session_id: {
                         "turn_count": 2,
                         "compaction_cursor": 4,
-                        "memory_cursor": 4,
-                        "working_state": json.dumps({"goal": "redis", "summary": "focus on redis"}),
+                        "session_state": json.dumps({"mode": "debrief", "summary": "focus on redis"}),
+                        "session_type": "debrief",
                     }
                 ),
                 "get_full_transcript": staticmethod(
@@ -58,17 +58,12 @@ def test_transcript_endpoint_returns_structured_state(monkeypatch):
             },
         )(),
     )
-    monkeypatch.setattr(
-        chat_api,
-        "interview_state_service",
-        type("InterviewSvc", (), {"get_state": staticmethod(lambda session_id, user_id: {"phase": "probing"})})(),
-    )
 
     client.app.dependency_overrides[get_db] = lambda: FakeDB()
 
     response = client.get("/api/v1/chat/transcript", params={"session_id": "s1"})
     assert response.status_code == 200
     payload = response.json()
-    assert payload["working_state"]["goal"] == "redis"
-    assert payload["interview_state"]["phase"] == "probing"
-    assert payload["memory_cursor"] == 4
+    assert payload["session_state"]["summary"] == "focus on redis"
+    assert payload["session_type"] == "debrief"
+    assert payload["compaction_cursor"] == 4

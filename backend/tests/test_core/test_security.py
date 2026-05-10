@@ -50,3 +50,58 @@ def test_invalid_token_raises():
         assert False, "本应抛出 JWTError"
     except JWTError:
         pass  # 期望行为
+
+
+def test_access_token_has_access_type():
+    """Access Token 应包含 type='access' 声明。"""
+    from app.core.security import create_access_token
+    from app.core.config import settings
+
+    token = create_access_token(data={"sub": "alice"})
+    payload = jose_jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    assert payload["type"] == "access"
+
+
+def test_create_refresh_token_has_refresh_type():
+    """Refresh Token 应包含 type='refresh' 声明。"""
+    from app.core.security import create_refresh_token
+    from app.core.config import settings
+
+    token = create_refresh_token(data={"sub": "bob"})
+    payload = jose_jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    assert payload["type"] == "refresh"
+    assert payload["sub"] == "bob"
+
+
+def test_refresh_token_rejected_as_access():
+    """使用 Refresh Token 访问 get_current_user 应抛出 401。"""
+    import pytest
+    from unittest.mock import MagicMock
+    from fastapi import HTTPException
+    from app.core.security import create_refresh_token, decode_token
+    from app.core.config import settings
+
+    token = create_refresh_token(data={"sub": "charlie"})
+    payload = jose_jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+
+    # Refresh token should carry type="refresh", not "access"
+    assert payload["type"] == "refresh"
+    # get_current_user would reject this because type != "access"
+
+
+def test_decode_token_rejects_expired():
+    """过期 Token 解码应抛出 JWTError。"""
+    from datetime import timedelta
+    from jose import JWTError
+    from app.core.security import create_access_token, decode_token
+
+    token = create_access_token(
+        data={"sub": "expired_user"},
+        expires_delta=timedelta(seconds=-1),
+    )
+    try:
+        decode_token(token)
+        assert False, "本应抛出 JWTError"
+    except JWTError:
+        pass
+

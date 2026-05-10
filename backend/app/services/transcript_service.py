@@ -5,7 +5,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
-from app.models.chat import ChatMessage, ChatSession, default_working_state, generate_uuid
+from app.models.chat import ChatMessage, ChatSession, default_session_state, generate_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ class TranscriptService:
                 row = ChatSession(
                     id=session_id or generate_uuid(),
                     user_id=user_id,
-                    working_state=default_working_state(),
+                    session_state=default_session_state(),
                 )
                 db.add(row)
                 db.commit()
@@ -42,7 +42,7 @@ class TranscriptService:
                 session_row = ChatSession(
                     id=session_id,
                     user_id=user_id,
-                    working_state=default_working_state(),
+                    session_state=default_session_state(),
                 )
                 db.add(session_row)
                 db.flush()
@@ -149,10 +149,11 @@ class TranscriptService:
             return {
                 "session_id": row.id,
                 "user_id": row.user_id,
+                "session_type": row.session_type or "general",
+                "interview_id": row.interview_id,
                 "turn_count": row.turn_count or 0,
                 "compaction_cursor": row.compaction_cursor or 0,
-                "memory_cursor": row.memory_cursor or 0,
-                "working_state": row.working_state or default_working_state(),
+                "session_state": row.session_state or default_session_state(),
             }
         finally:
             db.close()
