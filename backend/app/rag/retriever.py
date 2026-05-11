@@ -1,7 +1,6 @@
 import logging
 import re
 import time
-import weakref
 from threading import Lock
 from typing import Optional, Dict, Any
 

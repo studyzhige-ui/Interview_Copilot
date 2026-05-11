@@ -4,7 +4,6 @@ web_search — Internet search via Tavily API.
 read_url   — Extract page content as Markdown via httpx.
 """
 
-import json
 import logging
 import os
 from typing import Any

@@ -13,7 +13,7 @@ from llama_index.core.callbacks import CallbackManager, TokenCountingHandler
 from app.agent.planner import plan_query
 from app.rag.embeddings import agent_fast_llm
 from app.rag.knowledge_retriever import knowledge_retriever
-from app.services.context_service import AssembledContext, context_pipeline, prompt_renderer
+from app.services.context_service import context_pipeline, prompt_renderer
 from app.services.memory_extraction_service import (
     memory_retrieval_service,
     post_turn_maintenance_service,

@@ -8,10 +8,8 @@ Covers:
   - retry_utils: error classification and backoff
 """
 
-import asyncio
 import time
 
-import pytest
 
 
 # ── AgentBudget ──────────────────────────────────────────────────────────
