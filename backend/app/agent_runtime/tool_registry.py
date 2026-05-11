@@ -185,16 +185,6 @@ class ToolRegistry:
         # Execute
         result = await entry.handler(validated, ctx)
 
-        # Per-tool output truncation
-        result_json = json.dumps(result, ensure_ascii=False)
-        if len(result_json) > entry.max_result_chars:
-            result["_truncated"] = True
-            result_json = result_json[: entry.max_result_chars]
-            try:
-                result = json.loads(result_json + "}")
-            except json.JSONDecodeError:
-                result = {"_truncated_preview": result_json[:1000], "_truncated": True}
-
         return result
 
     @property

@@ -4,9 +4,12 @@ Complete rewrite of the agent loop with:
   - ToolRegistry integration (replacing hardcoded tool list)
   - Domain-specific system prompt
   - Error retry with jittered backoff (Hermes pattern)
-  - Context compaction for long tool chains (Hermes pattern)
+  - 3-layer context pipeline (Hermes/Claude Code pattern):
+      Layer 1: per-result persistence + per-turn aggregate budget
+      Layer 2: old tool result summarization (pre-LLM)
+      Layer 3: reactive compact on context_too_long + refund
   - Structured HarnessEvent emission for frontend visualization
-  - Budget refund on tool failures
+  - Correct refund semantics (compression-retry only, NOT tool failure)
 """
 
 import asyncio
@@ -17,14 +20,18 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator
 
 from app.core.background_tasks import safe_background_task
-from app.agent_runtime.context_compactor import AgentContextCompactor
+from app.agent_runtime.context_compactor import ContextPipeline
 from app.agent_runtime.harness_events import HarnessEvent
-from app.agent_runtime.retry_utils import ErrorCategory, call_with_retry, classify_api_error
+from app.agent_runtime.retry_utils import call_with_retry
 from app.agent_runtime.tool_registry import (
     AgentToolContext,
     parse_tool_arguments,
     registry,
     safe_json_dumps,
+)
+from app.agent_runtime.tool_result_storage import (
+    enforce_turn_budget,
+    maybe_persist_result,
 )
 from app.core.config import settings
 from app.core.model_registry import build_async_openai_client_for_role
@@ -60,8 +67,6 @@ SYSTEM_PROMPT = """你是 Interview Copilot 的执行 Agent。你的职责是帮
 """
 
 
-
-
 @dataclass
 class AgentBudget:
     """Lightweight iteration budget — Hermes-style.
@@ -69,7 +74,7 @@ class AgentBudget:
     Design: only two hard limits (steps + wall-clock timeout), both of
     which are essential for a Web-served agent.  Token usage and tool
     call counts are *tracked* for observability but do NOT trigger
-    early stops — the ContextCompactor handles context window pressure
+    early stops — the ContextPipeline handles context window pressure
     adaptively, which is far superior to a hard token cap.
 
     Per-tool call limits are the sole loop-prevention safety valve.
@@ -96,7 +101,7 @@ class AgentBudget:
 
         Token usage and total tool calls are tracked for observability
         but never trigger stops. Context window pressure is handled by
-        AgentContextCompactor adaptively.
+        ContextPipeline adaptively.
         """
         if self.steps >= settings.AGENT_MAX_STEPS:
             return "max_steps_exceeded"
@@ -112,7 +117,14 @@ class AgentBudget:
         self.tool_usage[tool_name] += 1
 
     def refund_step(self) -> None:
-        """Refund a step on tool failure (Hermes pattern)."""
+        """Refund a step on compression-retry (Hermes L12974 pattern).
+
+        Called when the system retries after context compaction — the
+        retry is a system-level action, not agent reasoning.
+
+        NOT called on tool failure — LLM already made a reasoning
+        decision that should count toward the step budget.
+        """
         if self.steps > 0:
             self.steps -= 1
 
@@ -139,11 +151,6 @@ def _tool_call_payload(tool_call: Any) -> dict[str, Any]:
             "arguments": tool_call.function.arguments,
         },
     }
-
-
-def _observation_for_llm(observation: Any, max_chars: int = 6000) -> str:
-    text = safe_json_dumps(observation)
-    return text if len(text) <= max_chars else text[:max_chars] + "...(truncated)"
 
 
 def _args_summary(raw_args: str) -> str:
@@ -214,7 +221,7 @@ async def run_react_agent_stream(
     )
 
     budget = AgentBudget(started_at=time.perf_counter())
-    compactor = AgentContextCompactor()
+    ctx_pipeline = ContextPipeline()
     trace: list[dict[str, Any]] = []
     final_answer = ""
     status = "completed"
@@ -248,6 +255,9 @@ async def run_react_agent_stream(
 
             budget.consume_step()
 
+            # ── Layer 2: pre-LLM compaction ──────────────────────
+            messages = ctx_pipeline.pre_llm_compact(messages, budget.prompt_tokens)
+
             # LLM call with retry
             async def _make_llm_call():
                 return await client.chat.completions.create(
@@ -259,10 +269,13 @@ async def run_react_agent_stream(
                     max_tokens=settings.AGENT_MAX_RESPONSE_TOKENS,
                 )
 
+            # ── Layer 3: reactive compact on context_too_long ────
             async def _on_context_too_long():
                 nonlocal messages
-                messages = compactor.prune_old_tool_results(messages)
-                return True
+                messages, should_retry = ctx_pipeline.on_context_too_long(messages)
+                if should_retry:
+                    budget.refund_step()  # Hermes L12974: compression-retry is not reasoning
+                return should_retry
 
             started = time.perf_counter()
             try:
@@ -294,6 +307,9 @@ async def run_react_agent_stream(
                     "content": message.content or "",
                     "tool_calls": [_tool_call_payload(c) for c in tool_calls],
                 })
+
+                # Collect tool results for this turn (for Layer 1 budget)
+                turn_tool_messages: list[dict] = []
 
                 for tc in tool_calls:
                     tool_name = tc.function.name
@@ -334,15 +350,24 @@ async def run_react_agent_stream(
                     budget.consume_tool_call(tool_name)
                     tool_latency_ms = round((time.perf_counter() - tool_started) * 1000, 2)
 
-                    # Refund step on tool failure (Hermes pattern)
-                    if tool_error:
-                        budget.refund_step()
+                    # ── Layer 1: per-result persistence ──────────
+                    # Serialize and apply persistence BEFORE adding to messages.
+                    # This replaces the old crude _observation_for_llm() truncation.
+                    result_text = safe_json_dumps(observation)
+                    result_text = maybe_persist_result(
+                        content=result_text,
+                        tool_name=tool_name,
+                        tool_call_id=tc.id,
+                        session_id=session_id,
+                    )
 
-                    messages.append({
+                    tool_msg = {
                         "role": "tool",
                         "tool_call_id": tc.id,
-                        "content": _observation_for_llm(observation),
-                    })
+                        "content": result_text,
+                    }
+                    messages.append(tool_msg)
+                    turn_tool_messages.append(tool_msg)
 
                     trace.append({
                         "step": budget.steps, "tool": tool_name,
@@ -367,9 +392,10 @@ async def run_react_agent_stream(
                         tool_latency_ms=tool_latency_ms, is_error=tool_error,
                     )
 
-                # Context compaction check after tool batch
-                if compactor.should_compact(budget.prompt_tokens):
-                    messages = compactor.prune_old_tool_results(messages)
+                # ── Layer 1: per-turn aggregate budget ───────────
+                # After all tools in this turn, enforce aggregate limit.
+                if turn_tool_messages:
+                    enforce_turn_budget(turn_tool_messages, session_id)
 
                 continue
 
@@ -453,7 +479,6 @@ async def run_react_agent(
     events: list[HarnessEvent] = []
     final_answer = ""
     budget_info: dict[str, Any] = {}
-    run_id = ""
 
     async for event in run_react_agent_stream(user_message, user_id, session_id):
         events.append(event)

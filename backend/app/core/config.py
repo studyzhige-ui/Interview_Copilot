@@ -71,7 +71,6 @@ class Settings(BaseSettings):
     DIARIZATION_MODEL_ID: str = "pyannote-community/speaker-diarization-community-1"
     AGENT_MAX_STEPS: int = 25
     AGENT_TOOL_TIMEOUT_SECONDS: int = 30
-    AGENT_OBSERVATION_CHAR_LIMIT: int = 6000
     AGENT_TEMPERATURE: float = 0.2
     AGENT_MAX_RUNTIME_SECONDS: int = 180
     AGENT_MAX_TOTAL_TOKENS: int = 200000  # observability only, not a hard stop
@@ -80,6 +79,10 @@ class Settings(BaseSettings):
     AGENT_MAX_CALLS_PER_TOOL: int = 8
     AGENT_TOOL_SCHEMA_STRICT: bool = True
     AGENT_MAX_TOOL_ARG_CHARS: int = 4000
+    # Tool result persistence thresholds (Hermes/Claude Code pattern)
+    AGENT_PERSIST_THRESHOLD: int = 30_000      # per-result: persist if > 30K chars
+    AGENT_TURN_BUDGET_CHARS: int = 100_000     # per-turn aggregate: spill largest until < 100K
+    AGENT_PERSIST_PREVIEW_SIZE: int = 1_500    # preview size in persisted-output block
     VECTOR_TOP_K: int = 8
     BM25_TOP_K: int = 8
     FUSION_TOP_K: int = 6

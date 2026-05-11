@@ -144,12 +144,18 @@ async def _write_file_handler(args: WriteFileArgs, ctx: AgentToolContext) -> dic
 
 # ── Registration ─────────────────────────────────────────────────────────
 
+# read_file: max_result_chars is set high intentionally — read_file output
+# must NEVER be persisted by the tool_result_storage layer.  This prevents
+# the persist→read→persist infinite loop.
+# (Claude Code: FileReadTool.maxResultSizeChars = Infinity)
+# The tool_result_storage module also has read_file in _NEVER_PERSIST_TOOLS
+# as a second layer of protection.
 registry.register(ToolEntry(
     name="read_file",
     description="Read content of a user-uploaded file (resume, JD, notes). Specify upload_id for a specific file, or purpose ('resume', 'jd') to read the latest file of that type.",
     args_model=ReadFileArgs,
     handler=_read_file_handler,
-    max_result_chars=20000,
+    max_result_chars=200_000,  # Never trigger persistence (Claude Code pattern)
     emoji="📂",
 ))
 
@@ -161,3 +167,4 @@ registry.register(ToolEntry(
     max_result_chars=2000,
     emoji="💾",
 ))
+
