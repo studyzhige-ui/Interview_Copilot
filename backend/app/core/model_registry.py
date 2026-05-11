@@ -25,6 +25,8 @@ class ModelProfile:
     api_key_env: str
     supports_function_calling: bool = False
     description: str = ""
+    context_window: int = 128_000
+    max_output_tokens: int = 4_096
 
 
 ROLE_DEFAULTS: dict[str, str] = {
@@ -47,6 +49,8 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
             "Default fast DeepSeek V4 model for normal chat, rewrite, router, "
             "memory, and economical generation."
         ),
+        context_window=1_000_000,
+        max_output_tokens=16_384,
     ),
     "deepseek-v4-pro": ModelProfile(
         id="deepseek-v4-pro",
@@ -60,6 +64,8 @@ MODEL_PROFILES: dict[str, ModelProfile] = {
             "Stronger DeepSeek V4 model for tool-using agent flows and harder "
             "reasoning tasks."
         ),
+        context_window=1_000_000,
+        max_output_tokens=16_384,
     ),
     "deepseek-chat": ModelProfile(
         id="deepseek-chat",

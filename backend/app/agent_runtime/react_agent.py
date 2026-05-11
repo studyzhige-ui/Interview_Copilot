@@ -1,70 +1,27 @@
-"""Agent Harness — unified ReAct execution engine.
+"""Agent Harness — public API and shared types.
 
-Complete rewrite of the agent loop with:
-  - ToolRegistry integration (replacing hardcoded tool list)
-  - Domain-specific system prompt
-  - Error retry with jittered backoff (Hermes pattern)
-  - 3-layer context pipeline (Hermes/Claude Code pattern):
-      Layer 1: per-result persistence + per-turn aggregate budget
-      Layer 2: old tool result summarization (pre-LLM)
-      Layer 3: reactive compact on context_too_long + refund
-  - Structured HarnessEvent emission for frontend visualization
-  - Correct refund semantics (compression-retry only, NOT tool failure)
+The heavy lifting has been extracted to ``QueryEngine`` (Phase A).
+This module retains:
+
+  - ``AgentBudget`` — iteration budget dataclass (used by tests + QueryEngine)
+  - Helper functions — ``_tool_call_payload``, ``_args_summary``, ``_result_summary``
+  - ``run_react_agent_stream()`` — streaming public API (delegates to QueryEngine)
+  - ``run_react_agent()`` — batch public API (wraps streaming variant)
+
+Design: keeps the public API surface identical so ``__init__.py``
+and all callers work without any import changes.
 """
 
-import asyncio
-import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator
 
-from app.core.background_tasks import safe_background_task
-from app.agent_runtime.context_compactor import ContextPipeline
 from app.agent_runtime.harness_events import HarnessEvent
-from app.agent_runtime.retry_utils import call_with_retry
-from app.agent_runtime.tool_registry import (
-    AgentToolContext,
-    parse_tool_arguments,
-    registry,
-    safe_json_dumps,
-)
-from app.agent_runtime.tool_result_storage import (
-    enforce_turn_budget,
-    maybe_persist_result,
-)
 from app.core.config import settings
-from app.core.model_registry import build_async_openai_client_for_role
-from app.services.agent_trace_service import append_step, create_run, finish_run
-from app.services.context_service import context_pipeline, prompt_renderer
-from app.services.memory_extraction_service import (
-    memory_retrieval_service,
-    post_turn_maintenance_service,
-)
-from app.services.transcript_service import transcript_service
 
-# Trigger tool self-registration on first import
-import app.agent_runtime.tools  # noqa: F401
 
-logger = logging.getLogger(__name__)
-
-SYSTEM_PROMPT = """你是 Interview Copilot 的执行 Agent。你的职责是帮助用户完成面试准备的复杂任务。
-
-你了解用户的背景（简历、面试历史、记忆），能够：
-- 分析岗位要求（JD）与用户能力的差距
-- 基于面试历史识别薄弱环节并制定学习计划
-- 搜索互联网获取面经、公司信息、技术资料
-- 从知识库检索八股文和技术文档
-- 将重要发现存入用户记忆供未来参考
-- 导出结构化的分析报告和学习笔记为文件
-
-规则：
-- 先了解用户当前状态（简历、面试历史），再给建议
-- 使用工具获取真实数据，不要编造
-- 输出结构化的、可执行的建议
-- 如果信息不足，明确告诉用户缺什么
-- 将重要结论和发现用 save_memory 存储
-"""
+# ── AgentBudget ──────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -74,7 +31,7 @@ class AgentBudget:
     Design: only two hard limits (steps + wall-clock timeout), both of
     which are essential for a Web-served agent.  Token usage and tool
     call counts are *tracked* for observability but do NOT trigger
-    early stops — the ContextPipeline handles context window pressure
+    early stops — the QueryLoopCompactor handles context window pressure
     adaptively, which is far superior to a hard token cap.
 
     Per-tool call limits are the sole loop-prevention safety valve.
@@ -101,7 +58,7 @@ class AgentBudget:
 
         Token usage and total tool calls are tracked for observability
         but never trigger stops. Context window pressure is handled by
-        ContextPipeline adaptively.
+        QueryLoopCompactor adaptively.
         """
         if self.steps >= settings.AGENT_MAX_STEPS:
             return "max_steps_exceeded"
@@ -136,6 +93,10 @@ class AgentBudget:
             "completion_tokens": self.completion_tokens,
             "elapsed_s": round(self.elapsed_seconds, 2),
         }
+
+
+# ── Helper Functions ─────────────────────────────────────────────────────
+# These are used by QueryEngine for event formatting.
 
 
 def _elapsed_ms(budget: AgentBudget) -> float:
@@ -183,289 +144,27 @@ def _result_summary(observation: dict[str, Any]) -> str:
     return f"✅ 完成 ({len(str(observation))} chars)"
 
 
-# ── Streaming variant ────────────────────────────────────────────────────
+# ── Streaming Public API ─────────────────────────────────────────────────
+
 
 async def run_react_agent_stream(
     user_message: str,
     user_id: str,
     session_id: str,
 ) -> AsyncGenerator[HarnessEvent, None]:
-    """Run the agent loop, yielding HarnessEvents for SSE streaming."""
+    """Run the agent loop, yielding HarnessEvents for SSE streaming.
 
-    yield HarnessEvent.status("正在准备执行上下文...", step=0, elapsed_ms=0)
+    Delegates all logic to ``QueryEngine.submit_message()``.
+    """
+    from app.agent_runtime.query_engine import QueryEngine
 
-    transcript_service.ensure_session(session_id, user_id)
-
-    # Agent link is user-initiated — no planner routing needed.
-    # Directly recall memories using the raw user message.
-    relevant_memories = await memory_retrieval_service.recall_relevant(
-        user_id=user_id,
-        query=user_message,
-    )
-    assembled = context_pipeline.assemble_answer_context(
-        session_id=session_id,
-        current_query=user_message,
-        relevant_memories=relevant_memories,
-    )
-    rendered_context = prompt_renderer.render_answer_prompt(
-        assembled,
-        system_rules="Use this context for the agent run. Do not treat memories as tool output.",
-    )
-
-    tool_schemas = registry.get_openai_schemas()
-    tool_manifest = registry.format_manifest()
-
-    run_id = await create_run(
-        user_id=user_id, session_id=session_id,
-        goal=user_message, mode="function_calling",
-    )
-
-    budget = AgentBudget(started_at=time.perf_counter())
-    ctx_pipeline = ContextPipeline()
-    trace: list[dict[str, Any]] = []
-    final_answer = ""
-    status = "completed"
-    error_message: str | None = None
-
-    client, agent_profile = build_async_openai_client_for_role("agent")
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": (
-            f"Available tools:\n{tool_manifest}\n\n"
-            f"Conversation context:\n{rendered_context or 'No context.'}"
-        )},
-        {"role": "user", "content": user_message},
-    ]
-
-    yield HarnessEvent.status("开始执行...", step=0, elapsed_ms=_elapsed_ms(budget))
-
-    try:
-        while True:
-            stop_reason = budget.check()
-            if stop_reason:
-                budget.stop_reason = stop_reason
-                status = "stopped"
-                await append_step(
-                    run_id=run_id, step_index=budget.steps + 1,
-                    action_type="budget_stop",
-                    observation={"error": stop_reason},
-                    assistant_content="", is_error=True, latency_ms=0.0,
-                )
-                break
-
-            budget.consume_step()
-
-            # ── Layer 2: pre-LLM compaction ──────────────────────
-            messages = ctx_pipeline.pre_llm_compact(messages, budget.prompt_tokens)
-
-            # LLM call with retry
-            async def _make_llm_call():
-                return await client.chat.completions.create(
-                    model=agent_profile.model,
-                    messages=messages,
-                    tools=tool_schemas if tool_schemas else None,
-                    tool_choice="auto" if tool_schemas else None,
-                    temperature=settings.AGENT_TEMPERATURE,
-                    max_tokens=settings.AGENT_MAX_RESPONSE_TOKENS,
-                )
-
-            # ── Layer 3: reactive compact on context_too_long ────
-            async def _on_context_too_long():
-                nonlocal messages
-                messages, should_retry = ctx_pipeline.on_context_too_long(messages)
-                if should_retry:
-                    budget.refund_step()  # Hermes L12974: compression-retry is not reasoning
-                return should_retry
-
-            started = time.perf_counter()
-            try:
-                response = await call_with_retry(
-                    _make_llm_call,
-                    max_retries=3,
-                    on_context_too_long=_on_context_too_long,
-                )
-            except Exception as exc:
-                yield HarnessEvent.error(str(exc), step=budget.steps, elapsed_ms=_elapsed_ms(budget))
-                raise
-
-            latency_ms = round((time.perf_counter() - started) * 1000, 2)
-
-            usage = response.usage
-            if usage:
-                budget.prompt_tokens += int(getattr(usage, "prompt_tokens", 0) or 0)
-                budget.completion_tokens += int(getattr(usage, "completion_tokens", 0) or 0)
-
-            choice = response.choices[0]
-            message = choice.message
-            assistant_content = (message.content or "").strip()
-            tool_calls = list(message.tool_calls or [])
-
-            # ── Tool execution ───────────────────────────────────
-            if tool_calls:
-                messages.append({
-                    "role": "assistant",
-                    "content": message.content or "",
-                    "tool_calls": [_tool_call_payload(c) for c in tool_calls],
-                })
-
-                # Collect tool results for this turn (for Layer 1 budget)
-                turn_tool_messages: list[dict] = []
-
-                for tc in tool_calls:
-                    tool_name = tc.function.name
-                    tool_error = False
-                    tool_started = time.perf_counter()
-
-                    yield HarnessEvent.tool_start(
-                        tool_name, _args_summary(tc.function.arguments),
-                        step=budget.steps, elapsed_ms=_elapsed_ms(budget),
-                    )
-
-                    if budget.tool_usage[tool_name] >= settings.AGENT_MAX_CALLS_PER_TOOL:
-                        observation = {"error": "tool_call_limit_exceeded", "tool_name": tool_name}
-                        tool_error = True
-                    elif tool_name not in registry:
-                        observation = {"error": "unknown_tool", "tool_name": tool_name}
-                        tool_error = True
-                    else:
-                        try:
-                            raw_args = parse_tool_arguments(tc.function.arguments)
-                            ctx = AgentToolContext(user_id=user_id, session_id=session_id)
-                            observation = await asyncio.wait_for(
-                                registry.dispatch(tool_name, raw_args, ctx),
-                                timeout=settings.AGENT_TOOL_TIMEOUT_SECONDS,
-                            )
-                            if "error" in observation:
-                                tool_error = True
-                        except asyncio.TimeoutError:
-                            observation = {"error": "tool_timeout", "tool_name": tool_name}
-                            tool_error = True
-                        except ValueError as exc:
-                            observation = {"error": str(exc)}
-                            tool_error = True
-                        except Exception as exc:
-                            observation = {"error": "tool_execution_failed", "detail": str(exc)}
-                            tool_error = True
-
-                    budget.consume_tool_call(tool_name)
-                    tool_latency_ms = round((time.perf_counter() - tool_started) * 1000, 2)
-
-                    # ── Layer 1: per-result persistence ──────────
-                    # Serialize and apply persistence BEFORE adding to messages.
-                    # This replaces the old crude _observation_for_llm() truncation.
-                    result_text = safe_json_dumps(observation)
-                    result_text = maybe_persist_result(
-                        content=result_text,
-                        tool_name=tool_name,
-                        tool_call_id=tc.id,
-                        session_id=session_id,
-                    )
-
-                    tool_msg = {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": result_text,
-                    }
-                    messages.append(tool_msg)
-                    turn_tool_messages.append(tool_msg)
-
-                    trace.append({
-                        "step": budget.steps, "tool": tool_name,
-                        "args": raw_args if not tool_error else {},
-                        "observation": observation,
-                        "latency_ms": tool_latency_ms, "is_error": tool_error,
-                    })
-
-                    await append_step(
-                        run_id=run_id, step_index=budget.steps,
-                        action_type="tool_call", tool_name=tool_name,
-                        tool_call_id=tc.id,
-                        tool_args=raw_args if not tool_error else {},
-                        observation=observation,
-                        assistant_content=assistant_content,
-                        is_error=tool_error, latency_ms=tool_latency_ms,
-                    )
-
-                    yield HarnessEvent.tool_done(
-                        tool_name, _result_summary(observation),
-                        step=budget.steps, elapsed_ms=_elapsed_ms(budget),
-                        tool_latency_ms=tool_latency_ms, is_error=tool_error,
-                    )
-
-                # ── Layer 1: per-turn aggregate budget ───────────
-                # After all tools in this turn, enforce aggregate limit.
-                if turn_tool_messages:
-                    enforce_turn_budget(turn_tool_messages, session_id)
-
-                continue
-
-            # ── Final answer ─────────────────────────────────────
-            if assistant_content:
-                final_answer = assistant_content
-                trace.append({
-                    "step": budget.steps, "tool": None, "args": {},
-                    "observation": {}, "latency_ms": latency_ms, "is_error": False,
-                })
-                await append_step(
-                    run_id=run_id, step_index=budget.steps,
-                    action_type="final_answer",
-                    assistant_content=assistant_content,
-                    observation={}, is_error=False, latency_ms=latency_ms,
-                )
-                yield HarnessEvent.text(assistant_content, step=budget.steps, elapsed_ms=_elapsed_ms(budget))
-                break
-
-            # Empty response — nudge
-            messages.append({
-                "role": "user",
-                "content": "Please provide a final answer now based on gathered tool outputs.",
-            })
-
-        if not final_answer:
-            if budget.stop_reason:
-                final_answer = (
-                    f"Agent 执行因预算策略停止: {budget.stop_reason}. "
-                    "请缩小目标范围后重试。"
-                )
-            else:
-                final_answer = "Agent 无法生成最终回答。"
-
-    except Exception as exc:
-        status = "failed"
-        error_message = str(exc)
-        final_answer = "Agent 执行失败，请稍后重试。"
-        logger.error("Agent execution failed: %s", exc)
-        await append_step(
-            run_id=run_id, step_index=budget.steps + 1,
-            action_type="error", observation={"error": str(exc)},
-            assistant_content="", is_error=True, latency_ms=0.0,
-        )
-    finally:
-        await finish_run(
-            run_id=run_id, status=status, final_answer=final_answer,
-            steps_used=budget.steps, tool_calls=budget.tool_calls,
-            prompt_tokens=budget.prompt_tokens,
-            completion_tokens=budget.completion_tokens,
-            total_latency_ms=round(budget.elapsed_seconds * 1000, 2),
-            error_message=error_message,
-            budget_stop_reason=budget.stop_reason,
-        )
-
-    transcript_service.append_turn(
-        session_id=session_id, user_id=user_id,
-        user_msg=user_message, ai_msg=final_answer,
-    )
-    # Agent mode always allows memory write — the agent actively manages
-    # user knowledge through save_memory tool calls.
-    safe_background_task(
-        post_turn_maintenance_service.run(session_id, user_id, allow_memory_write=True)
-    )
-
-    yield HarnessEvent.budget(budget.to_dict(), step=budget.steps, elapsed_ms=_elapsed_ms(budget))
-    yield HarnessEvent.done(step=budget.steps, elapsed_ms=_elapsed_ms(budget))
+    engine = QueryEngine(user_message, user_id, session_id)
+    async for event in engine.submit_message():
+        yield event
 
 
-# ── Batch variant (API compatible with old run_react_agent) ──────────────
+# ── Batch Public API ─────────────────────────────────────────────────────
+
 
 async def run_react_agent(
     user_message: str,
@@ -487,14 +186,13 @@ async def run_react_agent(
         elif event.type.value == "budget":
             budget_info = event.data
 
-    # Extract run_id from trace service (it's set inside the stream)
     trace = [
         e.to_dict() for e in events
         if e.type.value in ("tool_start", "tool_done", "error")
     ]
 
     return {
-        "run_id": "",  # run_id is managed internally by the stream
+        "run_id": "",  # run_id is managed internally by the engine
         "reply": final_answer,
         "trace": trace,
         "steps_used": budget_info.get("steps", 0),

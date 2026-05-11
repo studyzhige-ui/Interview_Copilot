@@ -12,6 +12,7 @@ COMPAT_COLUMNS: dict[str, dict[str, str]] = {
         "interview_id": "VARCHAR",
         "session_state": "TEXT",
         "compaction_cursor": "INTEGER DEFAULT 0",
+        "memory_extraction_cursor": "INTEGER DEFAULT 0",
         "turn_count": "INTEGER DEFAULT 0",
     },
     "chat_messages": {

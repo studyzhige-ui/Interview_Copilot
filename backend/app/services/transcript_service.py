@@ -153,6 +153,7 @@ class TranscriptService:
                 "interview_id": row.interview_id,
                 "turn_count": row.turn_count or 0,
                 "compaction_cursor": row.compaction_cursor or 0,
+                "memory_extraction_cursor": row.memory_extraction_cursor or 0,
                 "session_state": row.session_state or default_session_state(),
             }
         finally:

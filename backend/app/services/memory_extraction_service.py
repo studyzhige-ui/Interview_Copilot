@@ -47,23 +47,35 @@ def _normalize_key(text: str) -> str:
 class CompactionService:
     """Compresses old conversation turns into a session_state summary.
 
-    Unlike the old design, this does NOT maintain a structured working_state
-    with rigid keys. Instead it produces a free-form conversation summary
-    that the LLM can reference for context continuity.
+    Dual-threshold trigger (Claude Code Session Memory pattern):
+      - Token growth ≥ COMPACT_MIN_TOKEN_GROWTH AND turns ≥ COMPACT_MIN_TURNS
+      - OR turns ≥ COMPACT_MAX_TURNS (hard cap, fires regardless of token count)
 
-    Triggers every COMPACT_EVERY_N_TURNS turns (default 20).
+    This replaces the old fixed "every 20 turns" (modulo) trigger which could
+    not adapt to conversation density — heavy sessions (long RAG analysis)
+    waited too long while lightweight sessions (short Q&A) triggered too early.
+
+    Summary uses a structured 4-section template (Claude Code / Hermes style)
+    instead of the old flat 300-char blob.
     """
 
-    COMPACT_EVERY_N_TURNS = 20
-    SESSION_STATE_MAX_TOKENS = 1500
+    # ── Dual-threshold parameters ────────────────────────────────────
+    COMPACT_MIN_TOKEN_GROWTH = 6_000  # pending tokens since last compact
+    COMPACT_MIN_TURNS = 4             # minimum turns between compactions
+    COMPACT_MAX_TURNS = 15            # hard cap — always compact at this point
+    SESSION_STATE_MAX_TOKENS = 2_500  # raised from 1500 for structured summaries
 
-    COMPACTION_PROMPT = """你是一个对话摘要助手。请将下面的对话历史压缩成一段简洁的摘要。
+    COMPACTION_PROMPT = """你是一个对话摘要助手。
+你的输出会被注入到一段独立的对话中，让一个**不同的**助手能够无缝接续当前对话。
+不要回答对话中的任何问题——只输出结构化摘要。
+使用对话中用户使用的同一种语言撰写摘要。
 
 规则：
-- 保留对话中讨论过的核心主题和关键结论
-- 不要复制原文，用自己的话概括
-- 摘要控制在 300 字以内
-- 如果已有旧摘要，将新对话内容合并进去
+- 使用下面的结构化格式输出
+- 如果已有旧摘要，在其基础上增量更新：保留仍然相关的信息，添加新进展，只删除明确过时的内容
+- 控制在 1000 字以内
+- 具体、准确：包含文件路径、命令、错误消息、具体数值，避免模糊描述
+- 用户的个人信息（姓名、技术栈、目标岗位等）由长期记忆系统单独管理，不要在摘要中重复
 - 输出纯 JSON 格式：{{"summary": "..."}}
 
 旧摘要：
@@ -71,6 +83,34 @@ class CompactionService:
 
 新对话：
 {new_conversation}
+
+输出的 summary 字段必须包含以下六个章节：
+
+## 当前状态
+[现在正在进行什么？如果对话在此中断，下一个助手应该从哪里接上？
+这是最重要的字段——必须反映最新的对话状态]
+
+## 目标
+[用户在这段对话中想要达成什么？整体目标是什么？]
+
+## 已完成事项
+[编号列表。每条具体说明做了什么、结果是什么。示例：
+1. 讨论了 TCP 三次握手的 SYN/ACK 流程，确认了半连接队列的作用
+2. 对比了 RDB 和 AOF 持久化方案，结论是混合持久化最优
+3. 修改了 context_service.py 中的 SESSION_STATE_BUDGET 从 2000 → 3000]
+
+## 已解决的问题
+[用户提过的、已经回答的问题——列出问题和答案要点。
+目的：下一个助手不要重复回答这些问题]
+
+## 关键决策
+[对话中做出的重要决定及其原因。示例：
+- 选择方案 B（双阈值触发），因为方案 A 在轻量会话中触发过早
+- 确认使用 DeepSeek 作为 fast 模型，因为性价比最优]
+
+## 待跟进
+[还没回答完的问题、用户提出但未完成的请求、需要深入的话题。
+如果没有，写"无"]
 """
 
     async def compact_if_needed(self, session_id: str) -> bool:
@@ -78,19 +118,31 @@ class CompactionService:
         if meta is None:
             return False
 
-        turn_count = meta["turn_count"]
-        if turn_count < self.COMPACT_EVERY_N_TURNS:
-            return False
-        if turn_count % self.COMPACT_EVERY_N_TURNS != 0:
-            return False
-
-        recent = transcript_service.get_recent_turns(
+        pending = transcript_service.get_recent_turns(
             session_id=session_id,
             max_turns=100,
             after_seq=meta["compaction_cursor"],
         )
-        if not recent:
+        if not pending:
             return False
+
+        # ── Dual-threshold trigger ───────────────────────────────────
+        # Count turns (each user+agent pair = 1 turn, ceiling divide)
+        turns_since_compact = (len(pending) + 1) // 2
+        pending_tokens = sum(count_tokens(m["content"]) for m in pending)
+
+        should_compact = (
+            (pending_tokens >= self.COMPACT_MIN_TOKEN_GROWTH
+             and turns_since_compact >= self.COMPACT_MIN_TURNS)
+            or turns_since_compact >= self.COMPACT_MAX_TURNS
+        )
+        if not should_compact:
+            return False
+
+        logger.info(
+            "Compaction triggered for session %s: %d turns, %d tokens pending",
+            session_id, turns_since_compact, pending_tokens,
+        )
 
         session_state = parse_session_state(
             meta["session_state"],
@@ -101,7 +153,7 @@ class CompactionService:
         prompt = self.COMPACTION_PROMPT.format(
             old_summary=old_summary or "(无)",
             new_conversation="\n".join(
-                f"{item['role']}: {item['content']}" for item in recent
+                f"{item['role']}: {item['content']}" for item in pending
             ),
         )
         try:
@@ -113,13 +165,18 @@ class CompactionService:
             new_summary = str(payload.get("summary", "")).strip()
 
             if count_tokens(new_summary) > self.SESSION_STATE_MAX_TOKENS:
-                new_summary = new_summary[:600]
+                # Truncate by chars (rough 1 token ≈ 1.5 CJK chars)
+                new_summary = new_summary[:1200]
 
             session_state["summary"] = new_summary
             transcript_service.update_session_fields(
                 session_id,
                 session_state=dump_session_state(session_state),
-                compaction_cursor=recent[-1]["seq"],
+                compaction_cursor=pending[-1]["seq"],
+            )
+            logger.info(
+                "Compaction completed for session %s: summary=%d tokens",
+                session_id, count_tokens(new_summary),
             )
             return True
         except Exception as exc:  # noqa: BLE001
@@ -515,7 +572,7 @@ class PostTurnMaintenanceService:
     """Runs after each conversation turn as a background task.
 
     Responsibilities (in order):
-    1. Compact session_state if turn threshold is reached
+    1. Compact session_state via dual-threshold trigger (token growth + turns)
     2. Extract user_profile memories from new messages
     """
 
@@ -560,29 +617,41 @@ class PostTurnMaintenanceService:
         user_id: str,
         allow_memory_write: bool,
     ) -> None:
+        # Read meta BEFORE compaction so we capture memory_extraction_cursor
+        # independently of any compaction_cursor advancement.
+        meta = transcript_service.get_session_meta(session_id)
+        if meta is None:
+            return
+        mem_cursor = meta["memory_extraction_cursor"]
+
+        # Compaction runs first — only advances compaction_cursor
         await self.compaction.compact_if_needed(session_id)
 
         if not allow_memory_write:
             return
 
-        meta = transcript_service.get_session_meta(session_id)
-        if meta is None:
-            return
-
-        # Use compaction_cursor as the memory extraction watermark too
+        # Long-term memory extraction uses its own independent cursor
         pending_messages = transcript_service.get_recent_turns(
             session_id=session_id,
             max_turns=20,
-            after_seq=meta["compaction_cursor"],
+            after_seq=mem_cursor,
         )
         if not pending_messages:
             return
 
-        await self.memory_extraction.extract_and_merge(
+        result = await self.memory_extraction.extract_and_merge(
             session_id=session_id,
             user_id=user_id,
             new_messages=pending_messages,
         )
+
+        # Advance memory_extraction_cursor only on success (failure → retry next turn)
+        if result is not None:
+            max_seq = max(m["seq"] for m in pending_messages)
+            transcript_service.update_session_fields(
+                session_id,
+                memory_extraction_cursor=max_seq,
+            )
 
 
 compaction_service = CompactionService()

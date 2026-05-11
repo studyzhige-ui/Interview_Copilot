@@ -32,6 +32,7 @@ class ChatSession(Base):
     )
     session_state = Column(Text, default=default_session_state)
     compaction_cursor = Column(Integer, default=0)
+    memory_extraction_cursor = Column(Integer, default=0)
     turn_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

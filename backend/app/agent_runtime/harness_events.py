@@ -16,6 +16,7 @@ class HarnessEventType(str, Enum):
     TOOL_START = "tool_start"
     TOOL_DONE = "tool_done"
     TEXT = "text"
+    TEXT_DELTA = "text_delta"
     BUDGET = "budget"
     ERROR = "error"
     DONE = "done"
@@ -70,6 +71,11 @@ class HarnessEvent:
     @classmethod
     def text(cls, content: str, *, step: int, elapsed_ms: float) -> "HarnessEvent":
         return cls(type=HarnessEventType.TEXT, data={"content": content}, step=step, elapsed_ms=elapsed_ms)
+
+    @classmethod
+    def text_delta(cls, delta: str, *, step: int, elapsed_ms: float) -> "HarnessEvent":
+        """Incremental text chunk from streaming LLM response."""
+        return cls(type=HarnessEventType.TEXT_DELTA, data={"delta": delta}, step=step, elapsed_ms=elapsed_ms)
 
     @classmethod
     def budget(cls, info: dict[str, Any], *, step: int, elapsed_ms: float) -> "HarnessEvent":
