@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # Threshold ratio — compact when prompt_tokens exceed this fraction of the
 # model context window.
 _COMPACT_THRESHOLD_RATIO = 0.65
-_MODEL_CONTEXT_WINDOW = 128_000  # conservative estimate
+_MODEL_CONTEXT_WINDOW = 1_000_000  # DeepSeek V4 Pro/Flash: 1M tokens
 
 # Number of most-recent tool-result messages to protect from pruning.
 _PROTECT_TAIL_TOOL_RESULTS = 4

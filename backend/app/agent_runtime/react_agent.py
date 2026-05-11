@@ -64,6 +64,17 @@ SYSTEM_PROMPT = """你是 Interview Copilot 的执行 Agent。你的职责是帮
 
 @dataclass
 class AgentBudget:
+    """Lightweight iteration budget — Hermes-style.
+
+    Design: only two hard limits (steps + wall-clock timeout), both of
+    which are essential for a Web-served agent.  Token usage and tool
+    call counts are *tracked* for observability but do NOT trigger
+    early stops — the ContextCompactor handles context window pressure
+    adaptively, which is far superior to a hard token cap.
+
+    Per-tool call limits are the sole loop-prevention safety valve.
+    """
+
     started_at: float
     steps: int = 0
     tool_calls: int = 0
@@ -81,12 +92,14 @@ class AgentBudget:
         return time.perf_counter() - self.started_at
 
     def check(self) -> str | None:
+        """Check budget — only steps and wall-clock timeout.
+
+        Token usage and total tool calls are tracked for observability
+        but never trigger stops. Context window pressure is handled by
+        AgentContextCompactor adaptively.
+        """
         if self.steps >= settings.AGENT_MAX_STEPS:
             return "max_steps_exceeded"
-        if self.tool_calls >= settings.AGENT_MAX_TOOL_CALLS:
-            return "max_tool_calls_exceeded"
-        if self.total_tokens >= settings.AGENT_MAX_TOTAL_TOKENS:
-            return "token_budget_exceeded"
         if self.elapsed_seconds >= settings.AGENT_MAX_RUNTIME_SECONDS:
             return "runtime_timeout"
         return None
