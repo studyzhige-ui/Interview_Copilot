@@ -1,6 +1,6 @@
-"""interview_analysis_v2: add resume and JD context to interviews table
+"""add resume and JD context columns to interviews table
 
-Revision ID: 0003_interview_analysis_v2
+Revision ID: 0003_add_resume_and_jd_to_interviews
 Revises: 0002_context_memory_refactor
 Create Date: 2026-05-12
 """
@@ -9,7 +9,7 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-revision: str = "0003_interview_analysis_v2"
+revision: str = "0003_add_resume_and_jd_to_interviews"
 down_revision: Union[str, None] = "0002_context_memory_refactor"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
