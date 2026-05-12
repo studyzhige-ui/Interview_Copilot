@@ -2,7 +2,7 @@
 
 Covers:
   - AgentBudget: Hermes-style steps+timeout limits, correct refund semantics
-  - ContextPipeline: 3-layer context management
+  - AgentLoopContext: 3-layer context management
   - tool_result_storage: 3-layer persistence
   - HarnessEvent: SSE event serialization
   - retry_utils: error classification and backoff
@@ -124,13 +124,13 @@ def test_retry_utils_jittered_backoff():
     assert delay <= 30.0
 
 
-# ── ContextPipeline ──────────────────────────────────────────────────────
+# ── AgentLoopContext ──────────────────────────────────────────────────────
 
 def test_context_pipeline_prune():
-    """ContextPipeline prunes old tool results (Pass 2: summarize)."""
-    from app.agent_runtime.context_compactor import ContextPipeline
+    """AgentLoopContext prunes old tool results (Pass 2: summarize)."""
+    from app.agent_runtime.context_compactor import AgentLoopContext
 
-    pipeline = ContextPipeline(protect_tail=2)
+    pipeline = AgentLoopContext(protect_tail=2)
 
     messages = [
         {"role": "system", "content": "system prompt"},
@@ -165,9 +165,9 @@ def test_context_pipeline_prune():
 
 def test_context_pipeline_pre_llm_compact():
     """pre_llm_compact only triggers when prompt_tokens exceed threshold."""
-    from app.agent_runtime.context_compactor import ContextPipeline
+    from app.agent_runtime.context_compactor import AgentLoopContext
 
-    pipeline = ContextPipeline(
+    pipeline = AgentLoopContext(
         threshold_ratio=0.5,
         context_window=100,  # threshold = 50 tokens
         protect_tail=1,
@@ -200,9 +200,9 @@ def test_context_pipeline_pre_llm_compact():
 
 def test_context_pipeline_reactive_compact_prevents_loop():
     """Reactive compact refuses retry on second attempt (Claude Code pattern)."""
-    from app.agent_runtime.context_compactor import ContextPipeline
+    from app.agent_runtime.context_compactor import AgentLoopContext
 
-    pipeline = ContextPipeline(protect_tail=1)
+    pipeline = AgentLoopContext(protect_tail=1)
     messages = [
         {"role": "system", "content": "sys"},
         {"role": "tool", "tool_call_id": "c1", "content": "X" * 500},
@@ -222,9 +222,9 @@ def test_context_pipeline_reactive_compact_prevents_loop():
 
 def test_token_warning_blocks_at_limit():
     """is_at_blocking_limit blocks when prompt_tokens approach context window."""
-    from app.agent_runtime.context_compactor import ContextPipeline
+    from app.agent_runtime.context_compactor import AgentLoopContext
 
-    pipeline = ContextPipeline(context_window=100_000)
+    pipeline = AgentLoopContext(context_window=100_000)
 
     # Well below limit → no block
     assert pipeline.is_at_blocking_limit(50_000) is False
@@ -241,9 +241,9 @@ def test_token_warning_blocks_at_limit():
 
 def test_token_warning_default_1m_window():
     """Default 1M context window: blocking at 997K tokens."""
-    from app.agent_runtime.context_compactor import ContextPipeline
+    from app.agent_runtime.context_compactor import AgentLoopContext
 
-    pipeline = ContextPipeline()  # default 1M window
+    pipeline = AgentLoopContext()  # default 1M window
 
     assert pipeline.is_at_blocking_limit(996_999) is False
     assert pipeline.is_at_blocking_limit(997_000) is True
@@ -253,9 +253,9 @@ def test_token_warning_default_1m_window():
 
 def test_circuit_breaker_blocks_after_max_failures():
     """Circuit breaker blocks after 3 consecutive compact failures."""
-    from app.agent_runtime.context_compactor import ContextPipeline
+    from app.agent_runtime.context_compactor import AgentLoopContext
 
-    pipeline = ContextPipeline(protect_tail=1)
+    pipeline = AgentLoopContext(protect_tail=1)
     messages = [
         {"role": "system", "content": "sys"},
         {"role": "tool", "tool_call_id": "c1", "content": "X" * 500},
@@ -272,9 +272,9 @@ def test_circuit_breaker_blocks_after_max_failures():
 
 def test_circuit_breaker_increments_on_compact():
     """Each reactive compact increments the failure counter."""
-    from app.agent_runtime.context_compactor import ContextPipeline
+    from app.agent_runtime.context_compactor import AgentLoopContext
 
-    pipeline = ContextPipeline(protect_tail=1)
+    pipeline = AgentLoopContext(protect_tail=1)
     messages = [
         {"role": "system", "content": "sys"},
         {"role": "tool", "tool_call_id": "c1", "content": "X" * 500},
@@ -287,9 +287,9 @@ def test_circuit_breaker_increments_on_compact():
 
 def test_circuit_breaker_resets_on_success():
     """reset_circuit_breaker clears the failure counter."""
-    from app.agent_runtime.context_compactor import ContextPipeline
+    from app.agent_runtime.context_compactor import AgentLoopContext
 
-    pipeline = ContextPipeline()
+    pipeline = AgentLoopContext()
     pipeline._consecutive_compact_failures = 2
 
     pipeline.reset_circuit_breaker()
@@ -300,9 +300,9 @@ def test_circuit_breaker_resets_on_success():
 
 def test_prune_does_not_modify_original():
     """Pruning operations must not modify the original messages list."""
-    from app.agent_runtime.context_compactor import ContextPipeline
+    from app.agent_runtime.context_compactor import AgentLoopContext
 
-    pipeline = ContextPipeline(protect_tail=1)
+    pipeline = AgentLoopContext(protect_tail=1)
 
     original_content = "A" * 500
     messages = [
@@ -333,9 +333,9 @@ def test_prune_does_not_modify_original():
 
 def test_pass1_dedup_removes_duplicates():
     """Pass 1 removes duplicate tool results, keeping the last occurrence."""
-    from app.agent_runtime.context_compactor import ContextPipeline
+    from app.agent_runtime.context_compactor import AgentLoopContext
 
-    pipeline = ContextPipeline(protect_tail=1)
+    pipeline = AgentLoopContext(protect_tail=1)
 
     # Same tool, same content → duplicate
     messages = [
@@ -363,9 +363,9 @@ def test_pass1_dedup_removes_duplicates():
 
 def test_pass1_dedup_different_content_not_removed():
     """Pass 1 does NOT remove results with different content."""
-    from app.agent_runtime.context_compactor import ContextPipeline
+    from app.agent_runtime.context_compactor import AgentLoopContext
 
-    pipeline = ContextPipeline(protect_tail=1)
+    pipeline = AgentLoopContext(protect_tail=1)
 
     messages = [
         {"role": "system", "content": "sys"},
@@ -390,9 +390,9 @@ def test_pass1_dedup_different_content_not_removed():
 
 def test_pass3_truncate_args():
     """Pass 3 truncates old assistant tool_call arguments."""
-    from app.agent_runtime.context_compactor import ContextPipeline
+    from app.agent_runtime.context_compactor import AgentLoopContext
 
-    pipeline = ContextPipeline(protect_tail=1)
+    pipeline = AgentLoopContext(protect_tail=1)
 
     large_args = '{"content": "' + "X" * 1000 + '"}'
     messages = [
@@ -423,9 +423,9 @@ def test_pass3_truncate_args():
 
 def test_full_3pass_pipeline():
     """Full 3-pass pipeline: dedup + summarize + truncate args."""
-    from app.agent_runtime.context_compactor import ContextPipeline
+    from app.agent_runtime.context_compactor import AgentLoopContext
 
-    pipeline = ContextPipeline(protect_tail=1)
+    pipeline = AgentLoopContext(protect_tail=1)
 
     large_args = '{"content": "' + "Y" * 1000 + '"}'
     messages = [

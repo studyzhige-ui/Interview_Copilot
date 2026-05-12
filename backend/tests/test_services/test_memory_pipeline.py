@@ -4,7 +4,7 @@ import json
 
 def test_memory_merge_uses_normalized_key(monkeypatch, db_session):
     from app.models.memory import MemoryItem
-    from app.services import memory_extraction_service as module
+    from app.services.memory import extraction_service as module
 
     class FakeResponse:
         def __init__(self, text: str):
@@ -58,7 +58,7 @@ def test_memory_merge_uses_normalized_key(monkeypatch, db_session):
 
 def test_memory_retrieval_uses_user_scope_and_lexical_fusion(monkeypatch, db_session):
     from app.models.memory import MemoryItem
-    from app.services import memory_extraction_service as module
+    from app.services.memory import retrieval_service as module
 
     db_session.add(
         MemoryItem(
@@ -104,7 +104,7 @@ def test_memory_retrieval_uses_user_scope_and_lexical_fusion(monkeypatch, db_ses
 
 
 def test_post_turn_maintenance_does_not_advance_cursor_on_failed_extraction(monkeypatch):
-    from app.services import memory_extraction_service as module
+    from app.services.memory import post_turn_maintenance as module
 
     updates = []
 
@@ -148,7 +148,7 @@ def test_memory_extraction_cursor_independent_of_compaction(monkeypatch):
 
     Memory extraction should still see messages that compaction already processed.
     """
-    from app.services import memory_extraction_service as module
+    from app.services.memory import post_turn_maintenance as module
 
     updates = []
     extracted_seqs = []
@@ -204,7 +204,7 @@ def test_memory_extraction_cursor_independent_of_compaction(monkeypatch):
 
 def test_memory_extraction_cursor_advances_on_success(monkeypatch):
     """On successful extraction, memory_extraction_cursor advances to max seq."""
-    from app.services import memory_extraction_service as module
+    from app.services.memory import post_turn_maintenance as module
 
     updates = []
 
@@ -246,4 +246,3 @@ def test_memory_extraction_cursor_advances_on_success(monkeypatch):
     asyncio.run(service.run("s1", "alice"))
 
     assert updates == [{"memory_extraction_cursor": 4}]
-

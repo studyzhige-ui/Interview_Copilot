@@ -23,7 +23,7 @@ import app.models.upload
 import app.models.user
 from app.rag.embeddings import init_rag_settings
 from app.rag.retriever import init_reranker
-from app.services.memory_vector_service import memory_vector_service
+from app.services.memory.vector_service import memory_vector_service
 from app.core.config import settings
 
 # ─── Structured logging ──────────────────────────────────────────────────
@@ -113,12 +113,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from app.api import agent, auth, chat, interview, model_runtime, rag_api
+from app.api import agent, auth, chat, interview, model_runtime, rag
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(chat.router, prefix="/api/v1")
 app.include_router(interview.router, prefix="/api/v1")
-app.include_router(rag_api.router, prefix="/api/v1")
+app.include_router(rag.router, prefix="/api/v1")
 app.include_router(agent.router, prefix="/api/v1")
 app.include_router(model_runtime.router, prefix="/api/v1")
 

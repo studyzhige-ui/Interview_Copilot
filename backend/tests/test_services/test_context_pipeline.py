@@ -1,4 +1,4 @@
-from app.services.context_service import AssembledContext, PromptRenderer
+from app.services.chat.context_assembly_pipeline import AssembledContext, PromptRenderer
 
 
 def test_prompt_renderer_keeps_expected_context_order():

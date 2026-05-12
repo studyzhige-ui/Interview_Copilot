@@ -33,7 +33,8 @@ def test_react_agent_chat_endpoint(monkeypatch):
             "trace": [{"step": 1}],
         }
 
-    monkeypatch.setattr(agent_api, "run_react_agent", fake_run)
+    from app.api.agent import react_agent as react_agent_mod
+    monkeypatch.setattr(react_agent_mod, "run_react_agent", fake_run)
 
     resp = client.post(
         "/api/v1/agent/react/chat",
@@ -58,9 +59,10 @@ def test_agent_trace_query_endpoints(monkeypatch):
     async def fake_metrics(user_id: str, session_id: str | None):
         return {"run_count": 1, "avg_steps": 2.0}
 
-    monkeypatch.setattr(agent_api, "list_runs", fake_list_runs)
-    monkeypatch.setattr(agent_api, "get_run_with_steps", fake_get_run_with_steps)
-    monkeypatch.setattr(agent_api, "aggregate_trajectory_metrics", fake_metrics)
+    from app.api.agent import runs as runs_mod
+    monkeypatch.setattr(runs_mod, "list_runs", fake_list_runs)
+    monkeypatch.setattr(runs_mod, "get_run_with_steps", fake_get_run_with_steps)
+    monkeypatch.setattr(runs_mod, "aggregate_trajectory_metrics", fake_metrics)
 
     runs_resp = client.get(
         "/api/v1/agent/runs",

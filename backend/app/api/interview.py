@@ -10,7 +10,7 @@ from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.interview import Interview
 from app.models.user import User
-from app.services.analytics_service import generate_comprehensive_report
+from app.services.diagnostics_report_service import generate_comprehensive_report
 from app.services.storage_service import upload_file_to_owned_key
 from app.services.upload_service import create_owned_upload, get_owned_upload, mark_upload_consumed
 from app.worker.tasks import process_interview_analysis

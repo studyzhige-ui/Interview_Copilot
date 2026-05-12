@@ -1,6 +1,5 @@
 import logging
 import re
-import time
 from threading import Lock
 from typing import Optional, Dict, Any
 
@@ -16,16 +15,21 @@ if not hasattr(llama_index.core.vector_stores.utils, "build_metadata_filter_fn")
         return lambda x: True
     llama_index.core.vector_stores.utils.build_metadata_filter_fn = _mock_build_metadata_filter_fn
 
-from llama_index.retrievers.bm25 import BM25Retriever
 from llama_index.core.retrievers import QueryFusionRetriever
 from llama_index.postprocessor.sbert_rerank import SentenceTransformerRerank
-try:
-    from llama_index.storage.docstore.postgres import PostgresDocumentStore
-except ModuleNotFoundError:  # pragma: no cover - optional runtime dependency
-    PostgresDocumentStore = None
 
 from app.core.config import settings
 from app.core.hf_runtime import prepare_hf_runtime, resolve_local_snapshot
+from app.rag.bm25_cache import (
+    _BM25_CACHE_TTL,
+    _BM25CacheEntry,
+    _bm25_cache,
+    _bm25_cache_key,
+    _bm25_cache_lock,
+    _build_and_cache_bm25 as _build_and_cache_bm25_impl,
+    _get_cached_bm25,
+    invalidate_bm25_cache,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -117,101 +121,22 @@ def init_reranker():
 
 
 # ---------------------------------------------------------------------------
-# Per-user BM25 Index Cache
+# BM25 cache adapter — see ``app.rag.bm25_cache`` for the implementation.
 # ---------------------------------------------------------------------------
-
-_BM25_CACHE_TTL = 300  # seconds — rebuild index if older than 5 minutes
-
-class _BM25CacheEntry:
-    __slots__ = ("retriever", "node_count", "created_at")
-
-    def __init__(self, retriever: BM25Retriever, node_count: int):
-        self.retriever = retriever
-        self.node_count = node_count
-        self.created_at = time.monotonic()
-
-    @property
-    def expired(self) -> bool:
-        return (time.monotonic() - self.created_at) > _BM25_CACHE_TTL
-
-
-_bm25_cache: dict[str, _BM25CacheEntry] = {}
-_bm25_cache_lock = Lock()
-
-
-def _bm25_cache_key(user_id: str, source_type: Optional[str]) -> str:
-    return f"{user_id}|{source_type or '*'}"
-
-
-def invalidate_bm25_cache(user_id: str) -> None:
-    """Invalidate all cached BM25 indexes for a given user.
-
-    Call this after document ingestion to ensure fresh retrieval.
-    """
-    with _bm25_cache_lock:
-        keys_to_remove = [k for k in _bm25_cache if k.startswith(f"{user_id}|")]
-        for key in keys_to_remove:
-            del _bm25_cache[key]
-        if keys_to_remove:
-            logger.info("BM25 cache invalidated for user_id=%s (%d entries)", user_id, len(keys_to_remove))
-
-
-def _get_cached_bm25(
-    user_id: str,
-    source_type: Optional[str],
-    allowed_user_ids: list[str],
-) -> Optional[BM25Retriever]:
-    """Return a cached BM25 retriever if available and not expired."""
-    cache_key = _bm25_cache_key(user_id, source_type)
-    with _bm25_cache_lock:
-        entry = _bm25_cache.get(cache_key)
-        if entry is not None and not entry.expired:
-            logger.info("BM25 cache hit: key=%s nodes=%d", cache_key, entry.node_count)
-            return entry.retriever
-    return None
 
 
 def _build_and_cache_bm25(
     user_id: str,
     source_type: Optional[str],
     allowed_user_ids: list[str],
-) -> Optional[BM25Retriever]:
-    """Build a BM25 retriever from the docstore, cache it, and return it."""
-    if PostgresDocumentStore is None:
-        return None
-    try:
-        docstore = PostgresDocumentStore.from_uri(uri=settings.DATABASE_URL)
-        all_nodes = list(docstore.docs.values())
-        logger.info("Postgres Docstore 节点总数: %s", len(all_nodes))
-
-        if not all_nodes:
-            return None
-
-        filtered_nodes = [
-            n for n in all_nodes
-            if _metadata_matches_scope(n.metadata, allowed_user_ids, source_type)
-        ]
-        if not filtered_nodes:
-            logger.warning(
-                "BM25: 目标隔离区域下节点为空。allowed_user_ids=%s source_type=%s",
-                allowed_user_ids, source_type,
-            )
-            return None
-
-        retriever = BM25Retriever.from_defaults(
-            nodes=filtered_nodes,
-            similarity_top_k=settings.BM25_TOP_K,
-        )
-
-        cache_key = _bm25_cache_key(user_id, source_type)
-        with _bm25_cache_lock:
-            _bm25_cache[cache_key] = _BM25CacheEntry(retriever, len(filtered_nodes))
-        logger.info("BM25 index built and cached: key=%s nodes=%d", cache_key, len(filtered_nodes))
-        return retriever
-
-    except Exception as e:
-        logger.warning("BM25 构建失败: %s", e)
-        return None
+):
+    """Compatibility wrapper — injects ``_metadata_matches_scope`` from this module."""
+    return _build_and_cache_bm25_impl(
+        user_id=user_id,
+        source_type=source_type,
+        allowed_user_ids=allowed_user_ids,
+        metadata_matches_scope=_metadata_matches_scope,
+    )
 
 
 # ---------------------------------------------------------------------------

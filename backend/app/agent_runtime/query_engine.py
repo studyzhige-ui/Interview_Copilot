@@ -27,14 +27,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
 from typing import Any, AsyncGenerator
 
 from app.agent_runtime.agent_progress_hooks import PostSamplingHookRunner
 from app.agent_runtime.agent_stop_hooks import AgentRunContext, StopHookRunner
+from app.agent_runtime.context_compactor import QueryLoopCompactor
 from app.agent_runtime.harness_events import HarnessEvent
-from app.agent_runtime.query_loop_compactor import QueryLoopCompactor
 from app.agent_runtime.retry_utils import call_with_retry
+from app.agent_runtime.tool_call_streaming import (
+    _ToolCallAccumulator,
+    _ToolCallFunction,
+)
 from app.agent_runtime.tool_registry import (
     AgentToolContext,
     parse_tool_arguments,
@@ -48,9 +51,9 @@ from app.agent_runtime.tool_result_storage import (
 from app.core.config import settings
 from app.core.model_registry import build_async_openai_client_for_role
 from app.services.agent_trace_service import append_step, create_run, finish_run
-from app.services.context_service import context_pipeline, prompt_renderer
-from app.services.memory_extraction_service import memory_retrieval_service
-from app.services.transcript_service import transcript_service
+from app.services.chat.chat_history_service import transcript_service
+from app.services.chat.context_assembly_pipeline import context_pipeline, prompt_renderer
+from app.services.memory.retrieval_service import memory_retrieval_service
 
 # Trigger tool self-registration on first import
 import app.agent_runtime.tools  # noqa: F401
@@ -77,30 +80,6 @@ SYSTEM_PROMPT = """你是 Interview Copilot 的执行 Agent。你的职责是帮
 - 如果信息不足，明确告诉用户缺什么
 - 将重要结论和发现用 save_memory 存储
 """
-
-
-@dataclass
-class _ToolCallFunction:
-    """Duck-typed function attribute for _ToolCallAccumulator."""
-    name: str = ""
-    arguments: str = ""
-
-
-@dataclass
-class _ToolCallAccumulator:
-    """Accumulates tool call deltas from streaming chunks.
-
-    Duck-typed to match the OpenAI ``ChoiceMessage.tool_calls[i]``
-    interface so ``_tool_call_payload()`` and ``_args_summary()`` work
-    without changes.
-    """
-    id: str = ""
-    name: str = ""
-    arguments: str = ""
-
-    @property
-    def function(self) -> _ToolCallFunction:
-        return _ToolCallFunction(name=self.name, arguments=self.arguments)
 
 
 class QueryEngine:

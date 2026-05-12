@@ -101,7 +101,7 @@ class TranscriptPersistenceHook(StopHook):
         return True
 
     async def run(self, ctx: AgentRunContext) -> None:
-        from app.services.transcript_service import transcript_service
+        from app.services.chat.chat_history_service import transcript_service
 
         transcript_service.append_turn(
             session_id=ctx.session_id,
@@ -129,7 +129,7 @@ class MemoryExtractionHook(StopHook):
         return "MemoryExtraction"
 
     async def run(self, ctx: AgentRunContext) -> None:
-        from app.services.memory_extraction_service import (
+        from app.services.memory.post_turn_maintenance import (
             post_turn_maintenance_service,
         )
 

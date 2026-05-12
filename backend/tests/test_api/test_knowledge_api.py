@@ -12,7 +12,7 @@ def _make_user(username="alice"):
 
 @pytest.mark.asyncio
 async def test_create_knowledge_upload_url_uses_owned_path(db_session):
-    from app.api.rag_api import KnowledgeUploadRequest, create_knowledge_upload_url
+    from app.api.rag import KnowledgeUploadRequest, create_knowledge_upload_url
 
     with patch("app.services.upload_service.generate_presigned_upload_url_for_key") as mock_url:
         mock_url.return_value = {"upload_url": "https://upload", "storage_uri": "s3://bucket/key"}
@@ -34,7 +34,7 @@ async def test_create_knowledge_upload_url_uses_owned_path(db_session):
 
 @pytest.mark.asyncio
 async def test_create_knowledge_document_rejects_other_user_upload(db_session):
-    from app.api.rag_api import KnowledgeDocumentCreateRequest, create_knowledge_document
+    from app.api.rag import KnowledgeDocumentCreateRequest, create_knowledge_document
     from app.models.upload import UserUpload
 
     upload = UserUpload(
@@ -59,7 +59,7 @@ async def test_create_knowledge_document_rejects_other_user_upload(db_session):
 
 @pytest.mark.asyncio
 async def test_create_knowledge_document_dispatches_internal_document_id(db_session):
-    from app.api.rag_api import KnowledgeDocumentCreateRequest, create_knowledge_document
+    from app.api.rag import KnowledgeDocumentCreateRequest, create_knowledge_document
     from app.models.upload import UserUpload
 
     upload = UserUpload(
@@ -75,7 +75,7 @@ async def test_create_knowledge_document_dispatches_internal_document_id(db_sess
 
     task = MagicMock()
     task.id = "task-1"
-    with patch("app.api.rag_api.process_document_ingestion") as mock_task:
+    with patch("app.api.rag.process_document_ingestion") as mock_task:
         mock_task.delay.return_value = task
         result = await create_knowledge_document(
             KnowledgeDocumentCreateRequest(
@@ -94,7 +94,7 @@ async def test_create_knowledge_document_dispatches_internal_document_id(db_sess
 
 @pytest.mark.asyncio
 async def test_list_documents_is_user_scoped(db_session):
-    from app.api.rag_api import list_knowledge_documents
+    from app.api.rag import list_knowledge_documents
     from app.models.knowledge import KnowledgeDocument
     from app.models.upload import UserUpload
 

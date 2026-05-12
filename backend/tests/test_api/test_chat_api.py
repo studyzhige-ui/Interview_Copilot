@@ -35,8 +35,10 @@ def test_transcript_endpoint_returns_structured_state(monkeypatch):
         def query(self, model):
             return FakeQuery()
 
+    from app.api.chat import sessions as chat_sessions
+
     monkeypatch.setattr(
-        chat_api,
+        chat_sessions,
         "transcript_service",
         type(
             "TranscriptSvc",

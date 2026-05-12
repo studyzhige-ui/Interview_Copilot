@@ -30,7 +30,7 @@ def init_worker_models(**kwargs):
     logger.info(">>> Celery worker started; warming LLM, RAG, and audio models...")
 
     from app.rag.embeddings import init_rag_settings
-    from app.services.transcription_service import init_whisper_model
+    from app.services.voice.audio_transcription_service import init_whisper_model
 
     init_rag_settings()
     init_whisper_model()

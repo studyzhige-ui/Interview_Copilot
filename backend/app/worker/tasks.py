@@ -45,8 +45,8 @@ def run_async(coro):
 )
 def process_interview_analysis(self, interview_id: int):
     """Transcribe an interview recording, analyze it, and persist the results."""
-    from app.services.analysis_service import analyze_interview
-    from app.services.transcription_service import transcribe_media
+    from app.services.voice.audio_transcription_service import transcribe_media
+    from app.services.voice.interview_analysis_service import analyze_interview
 
     db = SessionLocal()
     try:

@@ -3,7 +3,7 @@ import json
 
 
 def test_query_planner_parses_dense_sparse_and_retrieval_plan(monkeypatch):
-    from app.agent import planner
+    from app.qa_pipeline import planner
 
     class FakeResponse:
         text = json.dumps(

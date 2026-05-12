@@ -27,7 +27,7 @@ class RecallMemoryArgs(BaseModel):
 
 
 async def _recall_memory_handler(args: RecallMemoryArgs, ctx: AgentToolContext) -> dict[str, Any]:
-    from app.services.memory_extraction_service import memory_retrieval_service
+    from app.services.memory.retrieval_service import memory_retrieval_service
 
     # Also load user profile (always available, like Hermes USER.md)
     profile_items = memory_retrieval_service.load_user_profile(ctx.user_id)
@@ -67,7 +67,7 @@ async def _save_memory_handler(args: SaveMemoryArgs, ctx: AgentToolContext) -> d
 
     from app.db.database import SessionLocal
     from app.models.memory import MemoryItem
-    from app.services.memory_vector_service import memory_vector_service
+    from app.services.memory.vector_service import memory_vector_service
 
     _VALID_MEMORY_TYPES = {"user_profile", "interview_fact", "interaction_preference", "feedback_rule", "project_reference"}
     if args.memory_type not in _VALID_MEMORY_TYPES:

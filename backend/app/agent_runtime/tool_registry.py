@@ -102,6 +102,26 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._entries: dict[str, ToolEntry] = {}
+        self._default_tools_loaded = False
+        self._loading_default_tools = False
+
+    def _ensure_default_tools_loaded(self) -> None:
+        """Import built-in tool modules once so self-registration runs.
+
+        Tool modules register themselves as an import side effect.  Keeping
+        this lazy avoids import-order coupling: callers can safely import the
+        registry directly and still see the default tool set on first use.
+        """
+        if self._default_tools_loaded or self._loading_default_tools:
+            return
+
+        self._loading_default_tools = True
+        try:
+            import app.agent_runtime.tools  # noqa: F401
+
+            self._default_tools_loaded = True
+        finally:
+            self._loading_default_tools = False
 
     def register(self, entry: ToolEntry) -> None:
         if entry.name in self._entries:
@@ -110,6 +130,7 @@ class ToolRegistry:
         logger.debug("Registered tool: %s [toolset=%s]", entry.name, entry.toolset)
 
     def get(self, name: str) -> ToolEntry | None:
+        self._ensure_default_tools_loaded()
         return self._entries.get(name)
 
     def available_tools(self, toolset: str = "default") -> list[ToolEntry]:
@@ -117,6 +138,7 @@ class ToolRegistry:
 
         Tools whose ``check_fn`` returns ``False`` are excluded.
         """
+        self._ensure_default_tools_loaded()
         entries = []
         for entry in self._entries.values():
             if toolset != "*" and entry.toolset != toolset and entry.toolset != "default":
@@ -130,6 +152,7 @@ class ToolRegistry:
 
     def get_openai_schemas(self, toolset: str = "default") -> list[dict[str, Any]]:
         """Build OpenAI function-calling schemas for the specified toolset."""
+        self._ensure_default_tools_loaded()
         schemas = []
         for entry in self._entries.values():
             if entry.check_fn is not None and not entry.check_fn():
@@ -141,6 +164,7 @@ class ToolRegistry:
 
     def format_manifest(self) -> str:
         """Human-readable tool manifest for the system prompt."""
+        self._ensure_default_tools_loaded()
         manifest = []
         for entry in self._entries.values():
             if entry.check_fn is not None and not entry.check_fn():
@@ -164,6 +188,7 @@ class ToolRegistry:
         Returns the tool result dict.  On validation error, returns an
         error dict instead of raising.
         """
+        self._ensure_default_tools_loaded()
         entry = self._entries.get(name)
         if entry is None:
             return {"error": "unknown_tool", "tool_name": name}
@@ -189,9 +214,11 @@ class ToolRegistry:
 
     @property
     def tool_names(self) -> list[str]:
+        self._ensure_default_tools_loaded()
         return list(self._entries.keys())
 
     def __contains__(self, name: str) -> bool:
+        self._ensure_default_tools_loaded()
         return name in self._entries
 
 
