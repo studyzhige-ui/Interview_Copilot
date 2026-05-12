@@ -97,7 +97,6 @@ class Settings(BaseSettings):
     MEMORY_BACKFILL_ON_STARTUP: bool = True
     RESUME_MILVUS_COLLECTION: str = "interview_copilot_resume"
     TTS_DEFAULT_VOICE: str = "zh-CN-YunxiNeural"
-    ANALYSIS_CHUNK_TOKEN_LIMIT: int = 12000
     LEVER_API_BASE: str = "https://api.lever.co/v0"
     LEVER_SITES: str = "openai"
     LEVER_DEFAULT_LIMIT: int = 30
