@@ -4,7 +4,7 @@ Interview Copilot is an AI-powered interview practice and analysis platform. It 
 
 ## Architecture
 
-The system uses a dual-link architecture:
+The system uses a **dual-link architecture**:
 
 - **Traditional RAG link**: deterministic knowledge Q&A routed by a query planner
 - **Agent link**: user-initiated, tool-calling execution engine with web search, file I/O, memory management, and structured event streaming
@@ -40,22 +40,22 @@ nginx/                  Local reverse proxy configuration
 .github/workflows/      CI pipeline (lint + test)
 ```
 
-## Local Setup
+## Prerequisites
 
-### 1. Create a virtual environment
+- Python 3.12+
+- Docker & Docker Compose (for Postgres, Redis, MinIO, Milvus)
+- NVIDIA GPU with CUDA (recommended for Whisper and embeddings; CPU works but is slow)
+- At least one LLM API key (DeepSeek recommended)
+
+## Quick Start
+
+### 1. Clone and create virtual environment
 
 ```powershell
+git clone https://github.com/studyzhige-ui/Interview_Copilot.git
+cd Interview_Copilot
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-Linux/macOS:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
@@ -67,28 +67,69 @@ Copy-Item .env.example .env
 Copy-Item .env.docker.example .env.docker
 ```
 
-Set at least `DEEPSEEK_API_KEY` in `.env`. Optional providers (LlamaCloud, NVIDIA, Tavily) can stay as placeholders. Never commit `.env` or `.env.docker`.
+Open `.env` and configure:
 
-Default model routing uses `deepseek-v4-flash` for chat/fast tasks and `deepseek-v4-pro` for agent workflows. Local retrieval defaults to `BAAI/bge-m3` embeddings and `BAAI/bge-reranker-base`.
+#### Required: LLM API Key
 
-### 3. Start local infrastructure
+You need at least **one** LLM provider. DeepSeek is the default:
+
+```ini
+# Get your key at: https://platform.deepseek.com/api_keys
+DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+#### Optional API Keys
+
+| Service | Purpose | Get Key |
+|---------|---------|---------|
+| LlamaCloud | High-quality PDF/DOCX parsing | [cloud.llamaindex.ai](https://cloud.llamaindex.ai/api-key) |
+| NVIDIA API | Additional LLM models | [build.nvidia.com](https://build.nvidia.com/) |
+| Tavily | Agent web search tool | [tavily.com](https://tavily.com/) |
+
+#### Local Model Selection
+
+The system downloads several models locally for embedding, reranking, transcription, and speaker diarization. Default models are pre-configured, but you can change them in `.env`:
+
+| Role | Default Model | Alternatives | VRAM |
+|------|--------------|-------------|------|
+| **Embedding** | `BAAI/bge-m3` (1024d) | `BAAI/bge-large-zh-v1.5`, `BAAI/bge-small-en-v1.5` | ~2GB |
+| **Reranker** | `BAAI/bge-reranker-base` | `BAAI/bge-reranker-large`, `BAAI/bge-reranker-v2-m3` | ~1GB |
+| **Whisper** | `Systran/faster-whisper-large-v2` | `Systran/faster-whisper-medium`, `Systran/faster-whisper-small` | ~3GB |
+| **Diarization** | `pyannote-community/speaker-diarization-community-1` | `pyannote/speaker-diarization-3.1` (needs HF token) | ~100MB |
+
+> **Note**: If you change `EMBEDDING_MODEL_ID`, you must also update `EMBEDDING_DIM` to match the model's output dimension.
+
+See `.env.example` for the full list of options and detailed comments.
+
+### 3. Download local models
+
+```powershell
+# Download all configured models (reads from .env)
+python scripts/init_models.py
+
+# Or download selectively
+python scripts/init_models.py --only embedding
+python scripts/init_models.py --only whisper
+
+# Preview what will be downloaded
+python scripts/init_models.py --dry-run
+
+# Use official HuggingFace (if outside China)
+python scripts/init_models.py --hf-endpoint https://huggingface.co
+```
+
+### 4. Start local infrastructure
 
 ```powershell
 docker compose up -d
 ```
 
-This runs Postgres, Redis, MinIO, Milvus, and Nginx. The API and Celery worker run on the host during development.
+This starts Postgres, Redis, MinIO, Milvus, and Nginx. The API and Celery worker run on the host during development.
 
-### 4. Run database migrations
+### 5. Run database migrations
 
 ```powershell
 alembic upgrade head
-```
-
-### 5. (Optional) Pre-download local models
-
-```powershell
-python scripts/init_models.py
 ```
 
 ### 6. Start the API server
@@ -109,28 +150,12 @@ celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=solo
 
 On Linux/macOS, omit `--pool=solo` if your environment supports the default prefork pool.
 
-## Useful Commands
-
-```powershell
-# Syntax check
-python -m compileall -q backend/app backend/tests
-
-# Run tests
-pytest backend/tests
-
-# WebSocket debug
-python scripts/test_ws.py <JWT_TOKEN> <SESSION_ID>
-
-# Evaluation suite
-python -m evaluation.eval_runner --all --report
-```
-
 ## Interview Analysis Flow
 
 The recording analysis pipeline requires:
 
-| Input | Required | Format |
-|-------|----------|--------|
+| Input | Required | Supported Formats |
+|-------|----------|-------------------|
 | Audio/Video | ✅ Yes | mp3, wav, m4a, flac, ogg, wma, aac, mp4, mkv, avi, mov, webm |
 | Resume | ✅ Yes | pdf, docx, txt, md |
 | JD (Job Description) | Optional | Plain text |
@@ -140,6 +165,34 @@ The pipeline outputs a structured report with:
 - Per-question analysis: original Q&A, score, critique, improved answer, tags
 - Phase-level summaries (self-intro, project deep-dive, technical, behavioral)
 - Skill radar chart data
+
+## Useful Commands
+
+```powershell
+# Syntax check
+python -m compileall -q backend/app backend/tests
+
+# Run tests
+pytest
+
+# WebSocket debug
+python scripts/test_ws.py <JWT_TOKEN> <SESSION_ID>
+
+# Evaluation suite
+python -m evaluation.eval_runner --all --report
+```
+
+## LLM Model Routing
+
+The system uses role-based model routing with three roles:
+
+| Role | Purpose | Default Model |
+|------|---------|---------------|
+| `primary` | Main chat and RAG responses | deepseek-v4-flash |
+| `fast` | Internal tasks (routing, rewriting, annotation) | deepseek-v4-flash |
+| `agent` | Tool-calling agent workflows | deepseek-v4-pro |
+
+You can change model assignments at runtime from the frontend model panel, or by editing `data/runtime/model_selection.json`. The `agent` role requires a model that supports function calling.
 
 ## Data and Secrets
 
