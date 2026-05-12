@@ -6,7 +6,7 @@ Interview Copilot is an AI-powered interview practice and analysis platform. It 
 
 The system uses a **dual-link architecture**:
 
-- **Traditional RAG link**: deterministic knowledge Q&A routed by a query planner
+- **Chat link**: conversational knowledge Q&A with RAG retrieval, routed by a query planner
 - **Agent link**: user-initiated, tool-calling execution engine with web search, file I/O, memory management, and structured event streaming
 
 Interview recording analysis uses a **three-stage MapReduce pipeline**:
@@ -90,12 +90,12 @@ DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 
 The system downloads several models locally for embedding, reranking, transcription, and speaker diarization. Default models are pre-configured, but you can change them in `.env`:
 
-| Role | Default Model | Alternatives | VRAM |
+| Role | Default Model | Alternatives | Download Size |
 |------|--------------|-------------|------|
-| **Embedding** | `BAAI/bge-m3` (1024d) | `BAAI/bge-large-zh-v1.5`, `BAAI/bge-small-en-v1.5` | ~2GB |
-| **Reranker** | `BAAI/bge-reranker-base` | `BAAI/bge-reranker-large`, `BAAI/bge-reranker-v2-m3` | ~1GB |
-| **Whisper** | `Systran/faster-whisper-large-v2` | `Systran/faster-whisper-medium`, `Systran/faster-whisper-small` | ~3GB |
-| **Diarization** | `pyannote-community/speaker-diarization-community-1` | `pyannote/speaker-diarization-3.1` (needs HF token) | ~100MB |
+| **Embedding** | `BAAI/bge-m3` (1024d) | `BAAI/bge-large-zh-v1.5` (620 MB), `BAAI/bge-small-en-v1.5` (64 MB) | 1.06 GB |
+| **Reranker** | `BAAI/bge-reranker-base` | `BAAI/bge-reranker-large` (1.06 GB), `BAAI/bge-reranker-v2-m3` (1.08 GB) | 530 MB |
+| **Whisper** | `Systran/faster-whisper-large-v2` | `Systran/faster-whisper-medium` (1.5 GB), `Systran/faster-whisper-small` (486 MB) | 3.09 GB |
+| **Diarization** | `pyannote-community/speaker-diarization-community-1` | `pyannote/speaker-diarization-3.1` (needs HF token) | ~17 MB |
 
 > **Note**: If you change `EMBEDDING_MODEL_ID`, you must also update `EMBEDDING_DIM` to match the model's output dimension.
 

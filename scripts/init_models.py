@@ -48,22 +48,26 @@ MODEL_DEFAULTS = {
 
 SIZE_ESTIMATES = {
     "embedding": {
-        "BAAI/bge-m3": "~2.2 GB",
-        "BAAI/bge-large-zh-v1.5": "~1.3 GB",
-        "BAAI/bge-small-en-v1.5": "~130 MB",
+        "BAAI/bge-m3": "~1.06 GB",
+        "BAAI/bge-large-zh-v1.5": "~620 MB",
+        "BAAI/bge-small-en-v1.5": "~64 MB",
+        "sentence-transformers/all-MiniLM-L6-v2": "~86 MB",
+        "intfloat/multilingual-e5-large": "~1.06 GB",
     },
     "reranker": {
-        "BAAI/bge-reranker-base": "~440 MB",
-        "BAAI/bge-reranker-large": "~1.3 GB",
-        "BAAI/bge-reranker-v2-m3": "~2.2 GB",
+        "BAAI/bge-reranker-base": "~530 MB",
+        "BAAI/bge-reranker-large": "~1.06 GB",
+        "BAAI/bge-reranker-v2-m3": "~1.08 GB",
     },
     "whisper": {
-        "Systran/faster-whisper-large-v2": "~3.1 GB",
+        "Systran/faster-whisper-large-v2": "~3.09 GB",
         "Systran/faster-whisper-medium": "~1.5 GB",
-        "Systran/faster-whisper-small": "~460 MB",
+        "Systran/faster-whisper-small": "~486 MB",
+        "Systran/faster-whisper-base": "~148 MB",
     },
     "diarization": {
-        "pyannote-community/speaker-diarization-community-1": "~60 MB",
+        "pyannote-community/speaker-diarization-community-1": "~17 MB",
+        "pyannote/speaker-diarization-3.1": "~17 MB",
     },
 }
 
