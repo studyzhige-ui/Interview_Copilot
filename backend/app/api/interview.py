@@ -32,6 +32,8 @@ class PresignedUrlRequest(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     upload_id: str
+    resume_upload_id: str
+    jd_text: Optional[str] = None
 
 
 class MemorySaveRequest(BaseModel):
@@ -47,11 +49,54 @@ async def upload_audio(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    from app.services.voice.file_parser import validate_media_format
+
+    if not validate_media_format(file.filename or ""):
+        raise HTTPException(
+            status_code=400,
+            detail="不支持的音视频格式。支持: mp3, wav, m4a, flac, ogg, wma, aac, mp4, mkv, avi, mov, webm",
+        )
+
     upload, _ = create_owned_upload(
         db,
         user_id=current_user.username,
         filename=file.filename,
         purpose="interview_audio",
+        content_type=file.content_type,
+    )
+    storage_uri = upload_file_to_owned_key(file.file, upload.object_key, file.content_type)
+    upload.storage_uri = storage_uri
+    upload.status = "uploaded"
+    db.add(upload)
+    db.commit()
+    return {
+        "status": "success",
+        "upload_id": upload.id,
+        "storage_uri": upload.storage_uri,
+        "filename": upload.original_filename,
+    }
+
+
+@router.post("/upload/resume/direct")
+async def upload_resume(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Upload a resume file for interview analysis context."""
+    from app.services.voice.file_parser import validate_resume_format
+
+    if not validate_resume_format(file.filename or ""):
+        raise HTTPException(
+            status_code=400,
+            detail="不支持的简历格式。支持: pdf, docx, txt, md",
+        )
+
+    upload, _ = create_owned_upload(
+        db,
+        user_id=current_user.username,
+        filename=file.filename,
+        purpose="interview_resume",
         content_type=file.content_type,
     )
     storage_uri = upload_file_to_owned_key(file.file, upload.object_key, file.content_type)
@@ -73,6 +118,14 @@ async def get_upload_presigned_url(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    from app.services.voice.file_parser import validate_media_format
+
+    if not validate_media_format(request.filename):
+        raise HTTPException(
+            status_code=400,
+            detail="不支持的音视频格式。支持: mp3, wav, m4a, flac, ogg, wma, aac, mp4, mkv, avi, mov, webm",
+        )
+
     upload, url_info = create_owned_upload(
         db=db,
         user_id=current_user.username,
@@ -97,6 +150,7 @@ async def analyze_interview_endpoint(
     current_user: User = Depends(get_current_user),
 ):
     try:
+        # Validate audio upload
         upload = get_owned_upload(
             db,
             upload_id=request.upload_id,
@@ -104,14 +158,26 @@ async def analyze_interview_endpoint(
             purpose="interview_audio",
         )
         if upload is None:
-            raise HTTPException(status_code=404, detail="Upload not found")
+            raise HTTPException(status_code=404, detail="Audio upload not found")
         if upload.status not in {"pending_upload", "uploaded"}:
-            raise HTTPException(status_code=409, detail="Upload has already been consumed")
+            raise HTTPException(status_code=409, detail="Audio upload has already been consumed")
+
+        # Validate resume upload
+        resume_upload = get_owned_upload(
+            db,
+            upload_id=request.resume_upload_id,
+            user_id=current_user.username,
+            purpose="interview_resume",
+        )
+        if resume_upload is None:
+            raise HTTPException(status_code=404, detail="Resume upload not found")
 
         interview = Interview(
             user_id=current_user.username,
             status="PENDING",
             upload_id=upload.id,
+            resume_upload_id=resume_upload.id,
+            jd_text=request.jd_text or None,
             file_url=upload.storage_uri,
         )
         db.add(interview)
@@ -153,7 +219,7 @@ async def check_analysis_status(
         payload["analysis"] = {
             "score": interview.analysis.score,
             "feedback": interview.analysis.feedback,
-            "improved_answer": json.loads(interview.analysis.improved_answer),
+            "per_question": json.loads(interview.analysis.improved_answer),
         }
     return payload
 

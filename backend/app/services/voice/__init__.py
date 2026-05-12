@@ -2,7 +2,8 @@
 
 Submodules:
   - audio_transcription_service: WhisperX + Pyannote diarization
-  - interview_analysis_service:  LLM scoring of diarized transcripts
+  - interview_analysis_service:  Three-stage MapReduce analysis pipeline
+  - file_parser:                 Resume/media file parsing utilities
   - tts_service:                 edge-tts wrapper
 
 Submodules are imported lazily (no eager re-exports) so that optional

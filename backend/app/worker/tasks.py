@@ -85,6 +85,22 @@ def process_interview_analysis(self, interview_id: int):
             download_file_from_s3(file_path_or_url, local_file_path)
             is_temp_file = True
 
+        # ── Extract resume context (if resume was uploaded) ──────────
+        resume_context = ""
+        resume_temp_path = None
+        if interview.resume_upload_id:
+            try:
+                resume_context = _extract_resume_for_analysis(
+                    db, interview.user_id, interview.resume_upload_id
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[Task %s] Resume extraction failed, continuing without: %s",
+                    self.request.id, exc,
+                )
+
+        jd_context = interview.jd_text or ""
+
         try:
             logger.info("[Task %s] Transcribing media: %s", self.request.id, local_file_path)
             transcript_text = run_async(transcribe_media(local_file_path))
@@ -93,7 +109,13 @@ def process_interview_analysis(self, interview_id: int):
             db.commit()
 
             logger.info("[Task %s] Analyzing transcript.", self.request.id)
-            analysis_data = run_async(analyze_interview(transcript_text))
+            analysis_data = run_async(
+                analyze_interview(
+                    transcript_text,
+                    resume_context=resume_context,
+                    jd_context=jd_context,
+                )
+            )
 
             new_transcript = Transcript(
                 interview_id=interview.id,
@@ -102,11 +124,15 @@ def process_interview_analysis(self, interview_id: int):
             )
             db.add(new_transcript)
 
+            # Persist analysis result (use v2 overall.score / overall.feedback)
+            overall = analysis_data.get("overall", {})
             new_analysis = AnalysisResult(
                 interview_id=interview.id,
-                score=analysis_data.get("overall_score", 0),
-                feedback=analysis_data.get("overall_feedback", ""),
-                improved_answer=json.dumps(analysis_data.get("qa_list", []), ensure_ascii=False),
+                score=overall.get("score", 0),
+                feedback=overall.get("feedback", ""),
+                improved_answer=json.dumps(
+                    analysis_data.get("per_question", []), ensure_ascii=False
+                ),
             )
             db.add(new_analysis)
 
@@ -118,6 +144,7 @@ def process_interview_analysis(self, interview_id: int):
                 user_id=interview.user_id,
                 title=f"面试录音 #{interview.id}",
                 audio_upload_id=str(interview.upload_id) if interview.upload_id else None,
+                resume_upload_id=str(interview.resume_upload_id) if interview.resume_upload_id else None,
                 transcript=transcript_text,
                 analysis_json=analysis_json_str,
                 db=db,
@@ -142,6 +169,41 @@ def process_interview_analysis(self, interview_id: int):
         raise
     finally:
         db.close()
+
+
+def _extract_resume_for_analysis(db, user_id: str, resume_upload_id: str) -> str:
+    """Download and extract resume text for analysis context."""
+    import os
+    import tempfile
+
+    from app.models.upload import UserUpload
+    from app.services.voice.file_parser import extract_resume_text
+
+    upload = (
+        db.query(UserUpload)
+        .filter(UserUpload.id == resume_upload_id, UserUpload.user_id == user_id)
+        .first()
+    )
+    if upload is None:
+        logger.warning("Resume upload not found: %s", resume_upload_id)
+        return ""
+
+    if not upload.storage_uri or not upload.storage_uri.startswith("s3://"):
+        logger.warning("Resume upload has no valid S3 URI: %s", resume_upload_id)
+        return ""
+
+    from app.services.storage_service import download_file_from_s3
+
+    _, ext = os.path.splitext(upload.object_key)
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=ext)
+    os.close(tmp_fd)
+
+    try:
+        download_file_from_s3(upload.storage_uri, tmp_path)
+        return extract_resume_text(tmp_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 @celery_app.task(

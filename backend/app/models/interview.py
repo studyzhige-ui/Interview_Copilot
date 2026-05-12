@@ -11,10 +11,13 @@ class Interview(Base):
     status = Column(String, default="PENDING", index=True)
     task_id = Column(String, nullable=True)
     upload_id = Column(String, ForeignKey("user_uploads.id"), nullable=True, index=True)
+    resume_upload_id = Column(String, ForeignKey("user_uploads.id"), nullable=True, index=True)
+    jd_text = Column(Text, nullable=True)
     file_url = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    upload = relationship("UserUpload")
+    upload = relationship("UserUpload", foreign_keys=[upload_id])
+    resume_upload = relationship("UserUpload", foreign_keys=[resume_upload_id])
     transcripts = relationship("Transcript", back_populates="interview")
     analysis = relationship("AnalysisResult", back_populates="interview", uselist=False)
 
@@ -38,3 +41,4 @@ class AnalysisResult(Base):
     improved_answer = Column(Text)
 
     interview = relationship("Interview", back_populates="analysis")
+

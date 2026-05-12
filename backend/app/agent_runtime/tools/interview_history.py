@@ -31,17 +31,20 @@ async def _read_interview_history_handler(
                 analysis = json.loads(record.analysis_json)
             except json.JSONDecodeError:
                 pass
+        overall = analysis.get("overall", {})
         return {
             "record_id": record.id,
             "source": record.source,
             "title": record.title,
             "status": record.status,
             "created_at": record.created_at.isoformat() if record.created_at else "",
-            "overall_score": analysis.get("overall_score"),
-            "overall_feedback": analysis.get("overall_feedback", ""),
-            "strengths": analysis.get("strengths", []),
-            "weaknesses": analysis.get("weaknesses", []),
-            "improvement_suggestions": analysis.get("improvement_suggestions", []),
+            "overall_score": overall.get("score"),
+            "grade": overall.get("grade", ""),
+            "verdict": overall.get("verdict", ""),
+            "overall_feedback": overall.get("feedback", ""),
+            "strengths": overall.get("strengths", []),
+            "weaknesses": overall.get("weaknesses", []),
+            "improvement_plan": overall.get("improvement_plan", []),
         }
 
     records = interview_record_service.list_by_user(ctx.user_id, limit=args.limit)
@@ -56,12 +59,13 @@ async def _read_interview_history_handler(
                 a = json.loads(r.analysis_json)
             except json.JSONDecodeError:
                 pass
+        overall = a.get("overall", {})
         items.append({
             "record_id": r.id, "source": r.source, "title": r.title,
             "status": r.status,
             "created_at": r.created_at.isoformat() if r.created_at else "",
-            "overall_score": a.get("overall_score"),
-            "overall_feedback": str(a.get("overall_feedback", ""))[:200],
+            "overall_score": overall.get("score"),
+            "overall_feedback": str(overall.get("feedback", ""))[:200],
         })
     return {"count": len(items), "records": items}
 

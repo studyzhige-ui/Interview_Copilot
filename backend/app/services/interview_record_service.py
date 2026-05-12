@@ -164,16 +164,18 @@ class InterviewRecordService:
         except json.JSONDecodeError:
             return ""
 
-        qa_list = report.get("qa_list", [])
+        overall = report.get("overall", {})
+        per_question = report.get("per_question", [])
         lines = [
-            f"综合评分: {report.get('overall_score', 'N/A')}/10",
-            f"总体评价: {report.get('overall_feedback', '')}",
+            f"综合评分: {overall.get('score', 'N/A')}/10",
+            f"等级: {overall.get('grade', 'N/A')}",
+            f"总体评价: {overall.get('feedback', '')}",
             "",
             "题目列表:",
         ]
-        for i, qa in enumerate(qa_list, 1):
-            q = str(qa.get("question", ""))[:60]
-            score = qa.get("score", "?")
+        for i, pq in enumerate(per_question, 1):
+            q = str(pq.get("question", ""))[:60]
+            score = pq.get("score", "?")
             lines.append(f"  Q{i}: {q}... (评分:{score})")
 
         return "\n".join(lines)
