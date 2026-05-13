@@ -2,16 +2,38 @@
 .SYNOPSIS
     Interview Copilot — 一键开发环境启动脚本
 .DESCRIPTION
-    单条命令完成：Docker 基础设施 → 数据库迁移 → Backend API → Celery Worker
+    单条命令完成：
+      Docker 基础设施 → 数据库迁移（含 0007/0008 unified schema 演练）→
+      Backend API → Celery Worker → Frontend Vite dev server
     按 Ctrl+C 统一关停所有服务。
+.PARAMETER ApiPort
+    Backend uvicorn 端口（默认 8080）
+.PARAMETER FrontendPort
+    Frontend vite 端口（默认 5173）
+.PARAMETER SkipDocker
+    跳过 docker compose up（已经在跑就用这个）
+.PARAMETER SkipMigration
+    跳过 alembic upgrade head（已经迁移过用这个）
+.PARAMETER SkipFrontend
+    不启动前端（只跑后端 + worker 时用）
+.PARAMETER ValidateMigration
+    跑前先用沙盒 SQLite 演练 0007/0008 迁移，验证脚本没问题再动真库
+.PARAMETER OpenBrowser
+    所有服务起好后自动打开浏览器到 http://localhost:<FrontendPort>
 .EXAMPLE
     pwsh scripts/dev.ps1
+    pwsh scripts/dev.ps1 -ValidateMigration -OpenBrowser
+    pwsh scripts/dev.ps1 -SkipFrontend     # 只跑后端
 #>
 [CmdletBinding()]
 param(
     [int]$ApiPort = 8080,
+    [int]$FrontendPort = 5173,
     [switch]$SkipDocker,
-    [switch]$SkipMigration
+    [switch]$SkipMigration,
+    [switch]$SkipFrontend,
+    [switch]$ValidateMigration,
+    [switch]$OpenBrowser
 )
 
 Set-StrictMode -Version Latest
@@ -21,6 +43,7 @@ $ErrorActionPreference = 'Stop'
 $condaEnv = 'Interview_Copilot'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $backendDir = Join-Path $projectRoot 'backend'
+$frontendDir = Join-Path $projectRoot 'frontend'
 
 function Write-Status {
     param([string]$Component, [string]$Message, [ConsoleColor]$Color = 'Cyan')
@@ -38,6 +61,24 @@ if (-not (Get-Command 'conda' -ErrorAction SilentlyContinue)) {
 }
 if (-not $SkipDocker -and -not (Get-Command 'docker' -ErrorAction SilentlyContinue)) {
     Write-Error 'docker is not available. Install Docker Desktop or use -SkipDocker.'
+}
+if (-not $SkipFrontend) {
+    if (-not (Get-Command 'npm' -ErrorAction SilentlyContinue)) {
+        Write-Error 'npm is not available. Install Node.js or use -SkipFrontend.'
+    }
+    if (-not (Test-Path (Join-Path $frontendDir 'node_modules'))) {
+        Write-Status 'Init' 'frontend/node_modules missing — running npm install (first run only)...' Yellow
+        Push-Location $frontendDir
+        try {
+            npm install 2>&1 | ForEach-Object { Write-Status 'npm-install' $_ DarkGray }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error 'npm install failed; cannot start frontend.'
+            }
+        }
+        finally {
+            Pop-Location
+        }
+    }
 }
 
 # Activate conda environment
@@ -90,9 +131,29 @@ else {
     Write-Status 'Docker' 'Skipped (--SkipDocker).' DarkYellow
 }
 
+# ─── Optional: dry-run migration on a sandbox SQLite first ───────────────
+# Runs 0006 → 0007 → 0008 against a temp DB with fixture data; aborts the
+# whole script if migration assertions fail. Use this when you've just
+# pulled new migrations and want a safety net before touching the real DB.
+if ($ValidateMigration) {
+    Write-Status 'Alembic' 'Validating 0007 + 0008 on sandbox SQLite first...' Blue
+    Push-Location $backendDir
+    try {
+        $env:PYTHONIOENCODING = 'utf-8'
+        & python scripts/validate_migration.py 2>&1 | ForEach-Object { Write-Status 'Validate' $_ DarkGray }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error 'Migration validation failed — aborting startup. See output above.'
+        }
+        Write-Status 'Validate' 'Sandbox migration assertions passed.' Green
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 # ─── Database migration ──────────────────────────────────────────────────
 if (-not $SkipMigration) {
-    Write-Status 'Alembic' 'Running database migrations...' Blue
+    Write-Status 'Alembic' 'Running database migrations on live DB...' Blue
     Push-Location $projectRoot
     try {
         alembic upgrade head 2>&1 | ForEach-Object { Write-Status 'Alembic' $_ DarkGray }
@@ -132,6 +193,23 @@ $celeryJob = Start-Job -Name 'celery' -ScriptBlock {
     & celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=solo 2>&1
 } -ArgumentList $backendDir, $condaBase, $condaEnv
 
+# ─── Frontend (Vite dev server) ──────────────────────────────────────────
+$frontendJob = $null
+if (-not $SkipFrontend) {
+    Write-Status 'Vite' "Starting frontend dev server on port $FrontendPort..." Cyan
+    $frontendJob = Start-Job -Name 'vite' -ScriptBlock {
+        param($dir, $port)
+        Set-Location $dir
+        $env:PORT = $port
+        # --strictPort so we fail loudly instead of silently picking a different
+        # port if 5173 is taken; the user can pass -FrontendPort to retry.
+        & npm run dev -- --port $port --strictPort 2>&1
+    } -ArgumentList $frontendDir, $FrontendPort
+}
+else {
+    Write-Status 'Vite' 'Skipped (--SkipFrontend).' DarkYellow
+}
+
 # ─── Log streaming + graceful shutdown ────────────────────────────────────
 $logDir = Join-Path $projectRoot 'logs'
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
@@ -139,14 +217,28 @@ $logFile = Join-Path $logDir ("dev-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmms
 
 Write-Host ''
 Write-Status 'Ready' '=== All services started ===' Green
-Write-Status 'Ready' "API:    http://localhost:$ApiPort" Green
-Write-Status 'Ready' "Docs:   http://localhost:$ApiPort/docs" Green
-Write-Status 'Ready' "Log:    $logFile" Green
+Write-Status 'Ready' "API:       http://localhost:$ApiPort" Green
+Write-Status 'Ready' "API docs:  http://localhost:$ApiPort/docs" Green
+if (-not $SkipFrontend) {
+    Write-Status 'Ready' "Frontend:  http://localhost:$FrontendPort" Green
+    Write-Status 'Ready' "  /mock    新模拟面试（含 style + voice 选择）" Green
+    Write-Status 'Ready' "  /review  复盘页（mock + upload 共用）" Green
+}
+Write-Status 'Ready' "Log:       $logFile" Green
 Write-Status 'Ready' 'Press Ctrl+C to stop all services.' White
 Write-Host ''
 
+if ($OpenBrowser -and -not $SkipFrontend) {
+    # Vite needs ~2-4s to bind; give it a moment so the first hit doesn't 404.
+    Start-Sleep -Seconds 4
+    Start-Process "http://localhost:$FrontendPort"
+}
+
 $jobs = @($uvicornJob, $celeryJob)
-$colors = @{ 'uvicorn' = 'Green'; 'celery' = 'Yellow' }
+$colors = @{ 'uvicorn' = 'Green'; 'celery' = 'Yellow'; 'vite' = 'Cyan' }
+if ($frontendJob) {
+    $jobs += $frontendJob
+}
 
 # Patterns we silently drop from the live console (still written to the log
 # file so nothing is lost). Reduces the noise the user complained about.
