@@ -69,7 +69,7 @@ def upgrade() -> None:
         sa.Column("question", sa.Text(), nullable=False),
         sa.Column("answer", sa.Text(), nullable=False, server_default=""),
         sa.Column("question_summary", sa.String(), nullable=True),
-        sa.Column("is_follow_up", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("is_follow_up", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("parent_qa_id", sa.String(), nullable=True),
         sa.Column("grounding_refs_json", sa.Text(), nullable=True),
         sa.Column("follow_up_depth", sa.Integer(), nullable=False, server_default="0"),

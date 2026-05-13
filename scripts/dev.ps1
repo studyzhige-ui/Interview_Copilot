@@ -196,14 +196,35 @@ $celeryJob = Start-Job -Name 'celery' -ScriptBlock {
 # ─── Frontend (Vite dev server) ──────────────────────────────────────────
 $frontendJob = $null
 if (-not $SkipFrontend) {
+    # Probe the requested port; if already bound we walk forward until we find a
+    # free one rather than crash-looping the job 50 times in the log stream.
+    function Test-PortFree([int]$p) {
+        try {
+            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $p)
+            $listener.Start(); $listener.Stop()
+            return $true
+        } catch { return $false }
+    }
+    $chosenPort = $FrontendPort
+    if (-not (Test-PortFree $chosenPort)) {
+        Write-Status 'Vite' "Port $FrontendPort already in use — probing next..." DarkYellow
+        for ($p = $FrontendPort + 1; $p -lt $FrontendPort + 20; $p++) {
+            if (Test-PortFree $p) { $chosenPort = $p; break }
+        }
+        if ($chosenPort -eq $FrontendPort) {
+            Write-Warning "Could not find a free port near $FrontendPort. Either kill the old Vite or pass -FrontendPort <other>."
+        }
+        else {
+            Write-Status 'Vite' "Falling back to port $chosenPort." DarkYellow
+            $FrontendPort = $chosenPort
+        }
+    }
     Write-Status 'Vite' "Starting frontend dev server on port $FrontendPort..." Cyan
     $frontendJob = Start-Job -Name 'vite' -ScriptBlock {
         param($dir, $port)
         Set-Location $dir
         $env:PORT = $port
-        # --strictPort so we fail loudly instead of silently picking a different
-        # port if 5173 is taken; the user can pass -FrontendPort to retry.
-        & npm run dev -- --port $port --strictPort 2>&1
+        & npm run dev -- --port $port 2>&1
     } -ArgumentList $frontendDir, $FrontendPort
 }
 else {
@@ -280,6 +301,8 @@ function Format-LogLine {
                   -replace '^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+', '')
 }
 
+$reportedDead = @{}
+
 try {
     while ($true) {
         foreach ($job in $jobs) {
@@ -294,14 +317,15 @@ try {
                     Write-Status $job.Name (Format-LogLine $text) $color
                 }
             }
-            if ($job.State -eq 'Completed' -or $job.State -eq 'Failed') {
-                Write-Status $job.Name "Process exited unexpectedly (state: $($job.State))" Red
+            if (($job.State -eq 'Completed' -or $job.State -eq 'Failed') -and -not $reportedDead[$job.Name]) {
+                Write-Status $job.Name "Process exited (state: $($job.State)). Other services keep running; Ctrl+C to stop them too." Red
                 $remaining = Receive-Job -Job $job -ErrorAction SilentlyContinue
                 if ($remaining) {
                     foreach ($line in $remaining) {
                         Write-Status $job.Name "$line" Red
                     }
                 }
+                $reportedDead[$job.Name] = $true
             }
         }
         Start-Sleep -Milliseconds 500

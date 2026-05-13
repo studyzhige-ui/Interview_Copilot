@@ -14,11 +14,12 @@ os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 from app.db.database import engine
 import app.models.agent_trace
 import app.models.chat
-import app.models.interview  # Ensure models are registered before table creation.
+import app.models.interview_qa  # Ensure models are registered before table creation.
 import app.models.interview_record
-import app.models.resume_section
 import app.models.knowledge
 import app.models.memory
+import app.models.mock_interview_session
+import app.models.resume_section
 import app.models.upload
 import app.models.user
 from app.rag.embeddings import init_rag_settings
