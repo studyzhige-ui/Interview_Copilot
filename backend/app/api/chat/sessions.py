@@ -15,6 +15,7 @@ from app.schemas.chat import (
     SessionCreateRequest,
     SessionCreateResponse,
     SessionListItem,
+    SessionRenameRequest,
 )
 from app.services.chat.chat_history_service import transcript_service
 from app.services.chat.session_state import (
@@ -55,23 +56,36 @@ def create_chat_session(
     }
     title = req.title or default_titles.get(session_type, "新的面试对话")
 
-    state = default_session_state_for_type(session_type, req.interview_id or "")
-    new_session = ChatSession(
-        id=generate_uuid(),
-        user_id=current_user.username,
-        title=title,
-        session_type=session_type,
-        interview_id=req.interview_id,
-        session_state=dump_session_state(state),
-    )
-    db.add(new_session)
-    db.commit()
-    db.refresh(new_session)
-    return SessionCreateResponse(
-        session_id=new_session.id,
-        title=new_session.title,
-        session_type=new_session.session_type,
-    )
+    try:
+        state = default_session_state_for_type(session_type, req.interview_id or "")
+        new_session = ChatSession(
+            id=generate_uuid(),
+            user_id=current_user.username,
+            title=title,
+            session_type=session_type,
+            interview_id=req.interview_id,
+            session_state=dump_session_state(state),
+        )
+        db.add(new_session)
+        db.commit()
+        db.refresh(new_session)
+        return SessionCreateResponse(
+            session_id=new_session.id,
+            title=new_session.title,
+            session_type=new_session.session_type,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.exception(
+            "create_chat_session failed (user=%s, type=%s, interview_id=%s): %s",
+            current_user.username, session_type, req.interview_id, exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"创建对话失败: {type(exc).__name__}: {exc}",
+        ) from exc
 
 
 @router.get("/chat/sessions", response_model=List[SessionListItem])
@@ -80,11 +94,16 @@ def list_chat_sessions(
     db: Session = Depends(get_db),
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
+    session_type: str | None = Query(None, description="Filter: general/debrief/mock_interview"),
+    interview_id: str | None = Query(None, description="Filter: tie to a specific interview record"),
 ):
+    q = db.query(ChatSession).filter(ChatSession.user_id == current_user.username)
+    if session_type:
+        q = q.filter(ChatSession.session_type == session_type)
+    if interview_id:
+        q = q.filter(ChatSession.interview_id == interview_id)
     rows = (
-        db.query(ChatSession)
-        .filter(ChatSession.user_id == current_user.username)
-        .order_by(ChatSession.updated_at.desc())
+        q.order_by(ChatSession.updated_at.desc())
         .offset(offset)
         .limit(limit)
         .all()
@@ -139,16 +158,51 @@ def get_chat_history(
 @router.patch("/chat/sessions/{session_id}/title")
 def update_session_title(
     session_id: str,
-    title: str = Query(...),
+    payload: SessionRenameRequest | None = None,
+    title: str | None = Query(default=None, description="Legacy: title via query param"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Prefer JSON body, fall back to query param for backward compatibility.
+    new_title = (payload.title if payload and payload.title else title) or ""
+    new_title = new_title.strip()
+    if not new_title:
+        raise HTTPException(status_code=400, detail="title 不能为空")
+    row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not row or row.user_id != current_user.username:
+        raise HTTPException(status_code=404, detail="Session not found or access denied")
+    row.title = new_title
+    db.commit()
+    return {"status": "success", "session_id": session_id, "new_title": new_title}
+
+
+@router.delete("/chat/sessions/{session_id}")
+def delete_chat_session(
+    session_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if not row or row.user_id != current_user.username:
         raise HTTPException(status_code=404, detail="Session not found or access denied")
-    row.title = title
-    db.commit()
-    return {"status": "success", "session_id": session_id, "new_title": title}
+    try:
+        # ChatMessage has no ON DELETE CASCADE on its FK; remove children explicitly.
+        db.query(ChatMessage).filter(
+            ChatMessage.session_id == session_id
+        ).delete(synchronize_session=False)
+        db.delete(row)
+        db.commit()
+        return {"status": "success", "id": session_id}
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.exception(
+            "delete_chat_session failed (id=%s user=%s): %s",
+            session_id, current_user.username, exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"删除对话失败: {type(exc).__name__}: {exc}",
+        ) from exc
 
 
 @router.get("/chat/transcript")

@@ -2,8 +2,10 @@
 
 import json
 import logging
+import os
+import tempfile
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -46,8 +48,14 @@ async def start_mock_interview(
         )
         resume_context = resume_service.format_for_context(sections)
 
+    # Load JD context if a knowledge-document upload was provided.
+    from app.services.knowledge_text_service import load_knowledge_text
+    jd_context = ""
+    if request.jd_upload_id:
+        jd_context = load_knowledge_text(db, request.jd_upload_id, current_user.username)
+
     # Generate plan
-    plan = await mock_interview_service.generate_plan(resume_context)
+    plan = await mock_interview_service.generate_plan(resume_context, jd_context=jd_context)
 
     # Initialize session state
     state = parse_session_state(session.session_state, "mock_interview")
@@ -56,6 +64,7 @@ async def start_mock_interview(
     state["current_question_idx"] = 0
     state["qa_history"] = []
     state["resume_context"] = resume_context[:2000]
+    state["jd_context"] = jd_context[:2000]
     session.session_state = dump_session_state(state)
     db.commit()
 
@@ -238,6 +247,71 @@ async def finish_mock_interview(
         "debrief_session_id": debrief_session.id,
         "summary": analysis,
     }
+
+
+# ── Short-clip transcription (frontend MediaRecorder → text) ─────────────
+
+
+@router.post("/chat/mock-interview/transcribe")
+async def transcribe_short_clip(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Transcribe a short audio clip (webm/opus/mp3/wav) to text.
+
+    Reuses the WhisperX model loaded by the Celery worker's warmup. Skips
+    diarization (single speaker) and language alignment to keep latency low.
+
+    Returns ``{ "text": "...", "language": "zh" }``.
+    """
+    if file.size is not None and file.size > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="音频过大（限制 25MB）")
+
+    # Persist upload to a temp file so whisperx can mmap it.
+    suffix = os.path.splitext(file.filename or "")[1] or ".webm"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
+        local_path = tf.name
+        contents = await file.read()
+        tf.write(contents)
+    if not contents:
+        try:
+            os.unlink(local_path)
+        except OSError:
+            pass
+        raise HTTPException(status_code=400, detail="音频内容为空")
+
+    try:
+        from app.services.voice import audio_transcription_service as ats
+
+        # Lazy-load if API process has its own WhisperX instance disabled.
+        if ats.whisper_model is None:
+            try:
+                ats.init_whisper_model()
+            except Exception as exc:  # noqa: BLE001
+                logger.error("WhisperX init failed in transcribe endpoint: %s", exc)
+                raise HTTPException(
+                    status_code=503,
+                    detail="转写模型未就绪，请稍后重试",
+                ) from exc
+
+        import whisperx  # type: ignore
+
+        audio = whisperx.load_audio(local_path)
+        result = ats.whisper_model.transcribe(audio, batch_size=8)
+        segments = result.get("segments", []) if isinstance(result, dict) else []
+        text = " ".join((seg.get("text", "") or "").strip() for seg in segments).strip()
+        language = result.get("language", "") if isinstance(result, dict) else ""
+        return {"text": text, "language": language}
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Short-clip transcription failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"转写失败: {exc}") from exc
+    finally:
+        try:
+            os.unlink(local_path)
+        except OSError:
+            pass
 
 
 @router.post("/chat/mock-interview/tts")

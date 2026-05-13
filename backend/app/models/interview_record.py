@@ -19,6 +19,7 @@ class InterviewRecord(Base):
     user_id = Column(String, index=True, nullable=False)
     source = Column(String, nullable=False)  # "upload" | "mock"
     title = Column(String, default="未命名面试")
+    tag = Column(String(32), nullable=True)
     audio_upload_id = Column(String, nullable=True)
     resume_upload_id = Column(String, nullable=True)
     jd_upload_id = Column(String, nullable=True)

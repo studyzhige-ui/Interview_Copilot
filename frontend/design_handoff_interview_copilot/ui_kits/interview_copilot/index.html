@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Interview Copilot · UI Kit</title>
+<link rel="stylesheet" href="../../colors_and_type.css">
+<style>
+  html, body, #root { height: 100%; margin: 0; }
+  body { background: var(--color-cream-50); }
+  * { box-sizing: border-box; }
+  button { font-family: var(--font-sans); }
+  input, textarea { font-family: var(--font-sans); }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: var(--color-stone-200); border-radius: 999px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--color-stone-300); }
+  .fade-in { animation: fi .26s var(--ease-soft); }
+  @keyframes fi { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .pulse-ring { position: relative; }
+  .pulse-ring::before, .pulse-ring::after {
+    content: ""; position: absolute; inset: 0; border-radius: 50%;
+    background: var(--color-primary-500); opacity: .35; animation: pr 1.6s var(--ease-out) infinite;
+  }
+  .pulse-ring::after { animation-delay: .8s; }
+  @keyframes pr { 0% { transform: scale(1); opacity: .35; } 100% { transform: scale(1.8); opacity: 0; } }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" src="ui.jsx"></script>
+<script type="text/babel" src="screens.jsx"></script>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { NavRail } = window.UIKit;
+const { Auth, Review, Mock, Ability, Library, Models, Me } = window.Screens;
+
+function App() {
+  const [authed, setAuthed] = useState(false);
+  const [page, setPage] = useState("review");
+  const [collapsed, setCollapsed] = useState(false);
+
+  if (!authed) return <Auth onLogin={() => setAuthed(true)} />;
+
+  const Page = { review: Review, mock: Mock, ability: Ability, lib: Library, models: Models, me: Me }[page];
+  return (
+    <div data-screen-label="App Shell" style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
+      <NavRail current={page} onNav={setPage} collapsed={collapsed} onToggle={() => setCollapsed(c => !c)}/>
+      <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+        <Page key={page} onLogout={() => setAuthed(false)}/>
+      </main>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

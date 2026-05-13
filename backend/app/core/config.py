@@ -115,6 +115,17 @@ class Settings(BaseSettings):
     # Redis and Celery
     REDIS_URL: str = "redis://localhost:6379/0"
 
+    # SMTP — email verification codes. Leave SMTP_HOST empty to log codes to stdout
+    # (dev fallback). Set all four to enable real email delivery.
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = "Interview Copilot <noreply@interview-copilot.local>"
+    SMTP_USE_TLS: bool = True
+    EMAIL_CODE_TTL_SECONDS: int = 600     # 10 minutes
+    EMAIL_CODE_RESEND_COOLDOWN: int = 60  # min seconds between resend
+
     # S3-compatible object storage. Defaults are for local MinIO development.
     AWS_ACCESS_KEY_ID: str = "minioadmin"
     AWS_SECRET_ACCESS_KEY: str = "minioadmin"

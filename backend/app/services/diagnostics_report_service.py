@@ -90,16 +90,92 @@ async def generate_comprehensive_report(limit: int = 20, user_id: str | None = N
         raw_text = _clean_json_text(str(response.text))
         try:
             parsed = json.loads(raw_text)
-            return {"status": "success", "report": parsed}
         except json.JSONDecodeError:
             return {
                 "status": "fallback",
                 "message": "模型输出非标准 JSON，已返回原文。",
                 "raw_text": raw_text,
             }
+
+        # Normalize to the canonical analytics contract.
+        return _normalize_report(parsed, source_count=len(records))
     except Exception as exc:  # noqa: BLE001
         logger.error("生成全维诊断报告期间发生了毁灭性灾难: %s", exc)
         return {"status": "error", "message": f"诊断中断: {exc}"}
+
+
+# Six fixed dimensions for the radar chart. We always emit all six so the
+# frontend never has to handle a "missing axis" branch — if the LLM didn't
+# score one, it defaults to 0.
+FIXED_AXES: list[str] = [
+    "算法与数据结构",
+    "系统设计",
+    "工程落地与并发",
+    "源码与底层",
+    "沟通与表达",
+    "抗压与节奏",
+]
+
+
+def _normalize_report(parsed: dict, source_count: int = 0) -> dict:
+    """Convert the LLM raw report into the canonical analytics contract."""
+    skill_radar = parsed.get("skill_radar")
+    if not isinstance(skill_radar, dict):
+        skill_radar = {}
+
+    # Build axes array — always include the six fixed dims, falling back to 0.
+    # Also keep any extra dims the LLM produced so callers can see the raw.
+    axes: list[dict] = []
+    for name in FIXED_AXES:
+        raw_v = skill_radar.get(name, 0)
+        try:
+            v_010 = float(raw_v)
+        except (TypeError, ValueError):
+            v_010 = 0.0
+        # Rescale 0-10 → 0-100 if it looks like a 0-10 score, otherwise pass through.
+        v = v_010 * 10 if v_010 <= 10 else v_010
+        axes.append({"k": name, "v": round(max(0.0, min(100.0, v)), 1)})
+
+    overall = round(sum(a["v"] for a in axes) / len(axes), 1) if axes else 0
+    strongest = max(axes, key=lambda a: a["v"])["k"] if axes else ""
+
+    weaknesses_raw = parsed.get("weaknesses") if isinstance(parsed.get("weaknesses"), list) else []
+    weaknesses: list[dict] = []
+    for w in weaknesses_raw:
+        if not isinstance(w, dict):
+            continue
+        weaknesses.append({
+            "k": str(w.get("topic", "") or w.get("k", "")),
+            "v": float(w.get("v", 0) or 0),
+            "why": str(w.get("flaw", "") or w.get("why", "")),
+            "plan": str(w.get("plan", "")),
+            "docs": w.get("docs", []) if isinstance(w.get("docs"), list) else [],
+            "practice": w.get("practice", []) if isinstance(w.get("practice"), list) else [],
+        })
+
+    strengths_raw = parsed.get("strengths") if isinstance(parsed.get("strengths"), list) else []
+    strengths: list[dict] = []
+    for s in strengths_raw:
+        if not isinstance(s, dict):
+            continue
+        strengths.append({
+            "topic": str(s.get("topic", "")),
+            "evidence": str(s.get("evidence", "")),
+        })
+
+    return {
+        "status": "success",
+        "overall": overall,
+        "axes": axes,
+        "totals": {
+            "sessions": source_count,
+            "strongest_axis": strongest,
+        },
+        "strengths": strengths,
+        "weaknesses": weaknesses,
+        "overall_evaluation": str(parsed.get("overall_evaluation", "")),
+        "_raw": parsed,
+    }
 
 
 __all__ = ["generate_comprehensive_report"]

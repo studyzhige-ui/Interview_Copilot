@@ -1,0 +1,239 @@
+/* Interview Copilot Design System — colors, type, radii, shadows
+   Warm clay-terracotta palette • rounded • elegant
+   Derived from studyzhige-ui/InterReview (re-toned from blue to warm).
+*/
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+
+@font-face { font-family: "Inter"; src: url("fonts/Inter-var-2.ttf") format("truetype-variations"); font-weight: 100 900; font-style: normal; font-display: swap; }
+@font-face { font-family: "Inter"; src: url("fonts/Inter-Regular-9.otf") format("opentype");   font-weight: 400; font-display: swap; }
+@font-face { font-family: "Inter"; src: url("fonts/Inter-Medium-8.otf") format("opentype");    font-weight: 500; font-display: swap; }
+@font-face { font-family: "Inter"; src: url("fonts/Inter-SemiBold-10.otf") format("opentype"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "Inter"; src: url("fonts/Inter-Bold-4.otf") format("opentype");      font-weight: 700; font-display: swap; }
+
+:root {
+  /* ---------- Type ---------- */
+  --font-sans: "Inter", "PingFang SC", "Noto Sans SC", "Hiragino Sans GB",
+               "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --font-display: var(--font-sans);
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+               Consolas, "Liberation Mono", "Courier New", monospace;
+
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 16px;
+  --text-lg: 18px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 30px;
+  --text-4xl: 36px;
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.625;
+  --tracking-tight: -0.01em;
+  --tracking-wider: 0.05em;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  /* ---------- Primary — Warm Sky ---------- */
+  --color-primary-50:  #EEF6FC;
+  --color-primary-100: #DAEBF7;
+  --color-primary-200: #BCDCF0;
+  --color-primary-300: #95C7E6;
+  --color-primary-400: #6FB1D9;
+  --color-primary-500: #5BA8D6;   /* PRIMARY · 蓝天 */
+  --color-primary-600: #4592C2;
+  --color-primary-700: #357AA6;
+  --color-primary-800: #285F84;
+  --color-primary-900: #1A4159;
+
+  /* ---------- Accent — Amber Glow ---------- */
+  /* ---------- Accent — Macaron Mint (primary button) ---------- */
+  --color-accent-50:  #E8F5EF;
+  --color-accent-100: #D0EBDE;
+  --color-accent-300: #B0DEC8;
+  --color-accent-500: #8FCFB8;
+  --color-accent-600: #6FBCA0;
+  --color-accent-700: #4F9A7E;
+
+  /* ---------- Macaron palette (categorical) ---------- */
+  --color-macaron-peach:    #F8B79A;
+  --color-macaron-peach-50: #FCEAE0;
+  --color-macaron-mint:     #A8DCC8;
+  --color-macaron-mint-50:  #E2F3EC;
+  --color-macaron-butter:   #FAD980;
+  --color-macaron-butter-50:#FDF1CA;
+  --color-macaron-lavender: #C9B8E6;
+  --color-macaron-lavender-50:#EDE5F7;
+  --color-macaron-sky:      #A6CDEC;
+  --color-macaron-sky-50:   #E2EDF7;
+
+  /* ---------- Sand (secondary chip fill) ---------- */
+  --color-sand-50:  #FBF6EF;
+  --color-sand-100: #F5ECDD;
+  --color-sand-200: #F1E6D8;
+  --color-sand-300: #E4D3BA;
+
+  /* ---------- Cloud (canvas) ---------- */
+  --color-cream-50:  #E9F1F8;
+  --color-cream-100: #DCE7F2;
+
+  /* ---------- Cool Cloud neutrals ---------- */
+  --color-stone-50:  #EEF3F9;
+  --color-stone-100: #E4EBF3;
+  --color-stone-200: #D2DCE8;
+  --color-stone-300: #C1CCDA;
+  --color-stone-400: #94A2B4;
+  --color-stone-500: #6A7689;
+  --color-stone-600: #4D5868;
+  --color-stone-700: #364050;
+  --color-stone-800: #1F2937;
+  --color-stone-900: #111827;
+
+  /* ---------- Semantic ---------- */
+  --color-success-50:  #ECF3EB;
+  --color-success-500: #5C8C5A;
+  --color-success-700: #3F6A3E;
+
+  --color-warning-50:  #FBF1DC;
+  --color-warning-500: #D7A04A;
+  --color-warning-700: #9A6F25;
+
+  --color-danger-50:   #F8E6E1;
+  --color-danger-500:  #B7503B;
+  --color-danger-700:  #8B3826;
+
+  --color-info-50:     #E8EEF6;
+  --color-info-500:    #5B7FA8;
+  --color-info-700:    #3F5C7F;
+
+  /* ---------- Surface tokens (shadcn-style aliases) ---------- */
+  --background: var(--color-cream-50);
+  --foreground: var(--color-stone-800);
+  --card: #FFFFFF;
+  --card-foreground: var(--color-stone-800);
+  --popover: #FFFFFF;
+  --popover-foreground: var(--color-stone-800);
+  --primary: var(--color-primary-500);
+  --primary-foreground: #FFFFFF;
+  --secondary: var(--color-sand-200);
+  --secondary-foreground: var(--color-stone-800);
+  --muted: var(--color-stone-100);
+  --muted-foreground: var(--color-stone-500);
+  --accent: var(--color-accent-500);
+  --accent-foreground: #FFFFFF;
+  --destructive: var(--color-danger-500);
+  --destructive-foreground: #FFFFFF;
+  --border: var(--color-stone-200);
+  --input: var(--color-stone-50);
+  --ring: var(--color-primary-300);
+  --sidebar: #FFFFFF;
+  --sidebar-foreground: var(--color-stone-800);
+  --sidebar-border: var(--color-stone-200);
+
+  /* ---------- Spacing ---------- */
+  --space-0:  0;
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ---------- Radii ---------- */
+  --radius-sm:   6px;
+  --radius-md:   10px;   /* default — matches original */
+  --radius-lg:   14px;
+  --radius-xl:   16px;
+  --radius-2xl:  20px;
+  --radius-3xl:  24px;
+  --radius-full: 9999px;
+
+  /* ---------- Shadows (warm-tinted) ---------- */
+  --shadow-xs: 0 1px 2px 0 rgba(120, 80, 40, 0.04);
+  --shadow-sm: 0 1px 3px 0 rgba(120, 80, 40, 0.06),
+               0 1px 2px -1px rgba(120, 80, 40, 0.06);
+  --shadow-md: 0 4px 12px -2px rgba(120, 80, 40, 0.08);
+  --shadow-lg: 0 10px 25px -5px rgba(120, 80, 40, 0.10),
+               0 6px 10px -6px rgba(120, 80, 40, 0.08);
+  --shadow-xl: 0 20px 35px -8px rgba(120, 80, 40, 0.12);
+  --shadow-primary-glow: 0 8px 20px -4px rgba(194, 106, 74, 0.30);
+
+  /* ---------- Motion ---------- */
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --ease-soft: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 320ms;
+}
+
+/* ---------- Base element styles ---------- */
+html, body {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--foreground);
+  background: var(--background);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, .h1 {
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+  color: var(--color-stone-800);
+}
+h2, .h2 {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+  color: var(--color-stone-800);
+}
+h3, .h3 {
+  font-size: var(--text-lg);
+  font-weight: var(--fw-medium);
+  line-height: var(--leading-tight);
+  color: var(--color-stone-800);
+}
+h4, .h4 {
+  font-size: var(--text-md);
+  font-weight: var(--fw-medium);
+  line-height: var(--leading-normal);
+  color: var(--color-stone-800);
+}
+p, .body {
+  font-size: var(--text-base);
+  font-weight: var(--fw-regular);
+  line-height: var(--leading-normal);
+  color: var(--color-stone-700);
+}
+.caption {
+  font-size: var(--text-xs);
+  color: var(--color-stone-500);
+  line-height: var(--leading-normal);
+}
+.eyebrow {
+  font-size: var(--text-xs);
+  font-weight: var(--fw-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wider);
+  color: var(--color-stone-500);
+}
+code, .mono {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}

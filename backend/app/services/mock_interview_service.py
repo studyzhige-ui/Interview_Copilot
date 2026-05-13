@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # ── Plan generation ──────────────────────────────────────────────────────
 
-PLAN_PROMPT = """你是一名资深技术面试官。根据下面的简历信息，生成一份结构化面试计划。
+PLAN_PROMPT = """你是一名资深技术面试官。根据下面的简历信息{jd_section_hint}，生成一份结构化面试计划。
 
 要求：
 1. 包含以下阶段（按顺序）：
@@ -43,6 +43,7 @@ PLAN_PROMPT = """你是一名资深技术面试官。根据下面的简历信息
 2. 每个问题要具体、有针对性，不要空泛。
 3. resume_deep_dive 的问题要紧密围绕简历内容。
 4. technical 的问题要与简历中提到的技术栈相关。
+5. 如果提供了职位描述（JD），优先考察 JD 中的核心要求与简历的匹配点。
 
 输出纯 JSON：
 {{
@@ -60,7 +61,7 @@ PLAN_PROMPT = """你是一名资深技术面试官。根据下面的简历信息
 
 简历信息：
 {resume_context}
-"""
+{jd_section}"""
 
 NO_RESUME_PLAN_PROMPT = """你是一名资深技术面试官。候选人没有提供简历，请生成一份通用技术面试计划。
 
@@ -128,10 +129,21 @@ class MockInterviewService:
 
     # ── Plan Generation ───────────────────────────────────────────────
 
-    async def generate_plan(self, resume_context: str = "") -> dict[str, Any]:
-        """Generate a structured interview plan from resume context."""
+    async def generate_plan(
+        self,
+        resume_context: str = "",
+        jd_context: str = "",
+    ) -> dict[str, Any]:
+        """Generate a structured interview plan from resume + optional JD context."""
         if resume_context.strip():
-            prompt = PLAN_PROMPT.format(resume_context=resume_context)
+            jd_clean = (jd_context or "").strip()
+            jd_section = f"\n\n职位描述（JD）：\n{jd_clean}\n" if jd_clean else ""
+            jd_hint = "和职位描述（JD）" if jd_clean else ""
+            prompt = PLAN_PROMPT.format(
+                resume_context=resume_context,
+                jd_section=jd_section,
+                jd_section_hint=jd_hint,
+            )
         else:
             prompt = NO_RESUME_PLAN_PROMPT
 

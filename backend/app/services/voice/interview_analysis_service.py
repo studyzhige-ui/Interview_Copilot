@@ -2,13 +2,14 @@
 
 Architecture:
   Stage 0: WhisperX transcription (handled by audio_transcription_service)
-  Stage 1: Deterministic QA extraction + LLM metadata annotation
+  Stage 1: LLM-powered QA extraction with turn index back-referencing
   Stage 2: Per-question deep analysis (Map) with sliding context window
   Stage 3: Global synthesis report (Reduce)
 
 Design principles:
-  - QA text is extracted deterministically (zero fidelity loss)
-  - LLM only annotates metadata (phase tags, follow-up chains)
+  - Regex parses speaker turns for structure (preserves original text)
+  - LLM identifies speaker roles, pairs QA, tags phases & follow-ups
+  - LLM outputs turn indices only; text is reconstructed from originals
   - Each question is analyzed with a 3-question sliding context window
   - Resume and JD context are injected into every analysis stage
 """
@@ -54,12 +55,16 @@ def _clean_json_response(raw_text: str) -> dict[str, Any]:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Stage 1a: Deterministic QA Extraction (zero fidelity loss)
+# Stage 1: LLM-Powered QA Extraction with Turn Index Back-Referencing
 # ══════════════════════════════════════════════════════════════════════════
 
 
 def _parse_speaker_turns(transcript: str) -> list[dict[str, str]]:
-    """Parse WhisperX Markdown output into speaker turns."""
+    """Parse WhisperX Markdown output into indexed speaker turns.
+
+    Preserves original text verbatim. Returns:
+        [{"speaker": "Speaker 1", "text": "原文..."}, ...]
+    """
     turns: list[dict[str, str]] = []
     current_speaker: str | None = None
     current_parts: list[str] = []
@@ -92,106 +97,77 @@ def _parse_speaker_turns(transcript: str) -> list[dict[str, str]]:
     return turns
 
 
-def _build_qa_pairs(turns: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Pair consecutive interviewer/candidate turns into QA pairs."""
-    if len(turns) < 2:
-        return []
+_LLM_EXTRACTION_PROMPT = """\
+你是一名专业的面试对话分析器。下面是一场面试录音的转录文本，已按说话者分段编号。
 
-    interviewer = turns[0]["speaker"]
-    qa_pairs: list[dict[str, str]] = []
-    i = 0
+转录内容：
+{turns_text}
 
-    while i < len(turns):
-        question_parts: list[str] = []
-        answer_parts: list[str] = []
+你的任务：
+1. 判断哪个 Speaker 是面试官（提问方），哪个是候选人（回答方）
+2. 将对话组织为结构化的 QA 对
 
-        while i < len(turns) and turns[i]["speaker"] == interviewer:
-            question_parts.append(turns[i]["text"])
-            i += 1
-
-        while i < len(turns) and turns[i]["speaker"] != interviewer:
-            answer_parts.append(turns[i]["text"])
-            i += 1
-
-        question = "\n".join(part for part in question_parts if part).strip()
-        answer = "\n".join(part for part in answer_parts if part).strip()
-        if question and answer:
-            qa_pairs.append({"question": question, "answer": answer})
-
-    return qa_pairs
-
-
-def _fallback_pairs_from_paragraphs(transcript: str) -> list[dict[str, str]]:
-    """Fallback: split by double newlines, alternate as Q&A."""
-    parts = [part.strip() for part in transcript.split("\n\n") if part.strip()]
-    qa_pairs: list[dict[str, str]] = []
-    for idx in range(0, len(parts) - 1, 2):
-        qa_pairs.append({"question": parts[idx], "answer": parts[idx + 1]})
-    return qa_pairs
-
-
-def extract_qa_pairs(transcript: str) -> list[dict[str, Any]]:
-    """Stage 1a: Deterministic QA extraction from transcript.
-
-    Returns indexed QA pairs with original text preserved verbatim.
-    """
-    turns = _parse_speaker_turns(transcript)
-    qa_pairs = _build_qa_pairs(turns)
-    if not qa_pairs:
-        qa_pairs = _fallback_pairs_from_paragraphs(transcript)
-
-    return [
-        {"index": i + 1, "question": pair["question"], "answer": pair["answer"]}
-        for i, pair in enumerate(qa_pairs)
-    ]
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# Stage 1b: LLM Metadata Annotation (only tags, never modifies text)
-# ══════════════════════════════════════════════════════════════════════════
-
-_ANNOTATION_PROMPT = """\
-你是一名资深面试官助手。下面是一场面试中提取的问题列表（仅问题，不含回答）。
-请为每个问题标注：
-1. phase: 面试阶段，可选值: self_intro, resume_deep_dive, technical, behavioral, reverse_qa, general
-2. is_follow_up: 是否为追问（即面试官针对前一个问题的回答继续追问）
-3. parent_index: 如果是追问，指向被追问的原始问题编号；否则为 null
+规则：
+- 每个 QA 对包含面试官的一个问题和候选人的对应回答
+- question_turns: 组成该问题的 turn 编号列表（从 0 开始）
+- answer_turns: 组成该回答的 turn 编号列表（从 0 开始）
+- question_summary: 用一句话概括面试官这道题问的核心问题（15字以内）
+- phase: 面试阶段，可选: self_intro, resume_deep_dive, technical, behavioral, reverse_qa, general
+- is_follow_up: 是否为追问
+- parent_qa_index: 如果是追问，指向被追问的 QA 编号（从 1 开始）；否则为 null
+- 忽略与面试无关的内容（寒暄闲聊、系统提示音、无意义噪音转录）
+- 如果面试官连续说了多段（含闲聊/过渡），只把实际提问部分归入 question_turns
+- 如果候选人的回答被打断后继续，将所有回答部分合并为同一个 answer_turns
 
 {resume_hint}
 
-问题列表：
-{questions_json}
-
-输出纯 JSON，不要输出解释：
+输出纯 JSON，不要任何解释：
 {{
-  "annotations": [
-    {{"index": 1, "phase": "...", "is_follow_up": false, "parent_index": null}},
-    ...
+  "interviewer_speaker": "面试官的 Speaker 标识",
+  "candidate_speaker": "候选人的 Speaker 标识",
+  "qa_pairs": [
+    {{
+      "question_turns": [0, 1],
+      "answer_turns": [2, 3],
+      "question_summary": "简短问题概括",
+      "phase": "technical",
+      "is_follow_up": false,
+      "parent_qa_index": null
+    }}
   ]
 }}"""
 
 
-async def _annotate_qa_metadata(
-    qa_pairs: list[dict[str, Any]],
+async def extract_qa_pairs_with_llm(
+    transcript: str,
     resume_context: str = "",
 ) -> list[dict[str, Any]]:
-    """Stage 1b: Use LLM to annotate phase and follow-up metadata.
+    """Stage 1: LLM-powered QA extraction with turn index back-referencing.
 
-    On failure, gracefully degrades to all-general with no follow-up chains.
-    Original QA text is NEVER modified.
+    1. Parse turns with regex (preserve original text)
+    2. Send turns to LLM for intelligent QA pairing (outputs turn indices only)
+    3. Back-reference indices to reconstruct QA pairs from original text
+
+    On LLM failure, falls back to naive alternating-speaker pairing.
     """
-    questions_for_llm = [
-        {"index": p["index"], "question": p["question"][:200]}
-        for p in qa_pairs
-    ]
+    turns = _parse_speaker_turns(transcript)
+    if not turns:
+        logger.warning("No speaker turns found in transcript.")
+        return []
+
+    # Build turns text for LLM (full text, no truncation)
+    turns_lines = []
+    for i, t in enumerate(turns):
+        turns_lines.append(f"[T{i}] {t['speaker']}: {t['text']}")
+    turns_text = "\n".join(turns_lines)
 
     resume_hint = ""
     if resume_context:
-        resume_hint = f"简历摘要（用于判断 resume_deep_dive 阶段）：\n{resume_context[:800]}"
+        resume_hint = f"候选人简历背景（辅助判断 resume_deep_dive 阶段）：\n{resume_context[:1000]}"
 
-    prompt = _ANNOTATION_PROMPT.format(
+    prompt = _LLM_EXTRACTION_PROMPT.format(
+        turns_text=turns_text,
         resume_hint=resume_hint,
-        questions_json=json.dumps(questions_for_llm, ensure_ascii=False),
     )
 
     try:
@@ -202,34 +178,97 @@ async def _annotate_qa_metadata(
             response_format={"type": "json_object"},
         )
         result = _clean_json_response(response.text)
-        annotations = result.get("annotations", [])
+        raw_pairs = result.get("qa_pairs", [])
 
-        # Build lookup: index -> annotation
-        anno_map: dict[int, dict] = {}
-        for a in annotations:
-            idx = a.get("index")
-            if isinstance(idx, int):
-                anno_map[idx] = a
+        if not raw_pairs:
+            logger.warning("LLM returned empty qa_pairs, falling back.")
+            return _fallback_extract(turns)
 
-        # Merge annotations into QA pairs (never touch question/answer text)
-        for pair in qa_pairs:
-            anno = anno_map.get(pair["index"], {})
-            pair["phase"] = str(anno.get("phase", "general")).strip()
-            pair["is_follow_up"] = bool(anno.get("is_follow_up", False))
-            pair["parent_index"] = anno.get("parent_index")
+        # Back-reference: reconstruct QA text from original turns
+        qa_pairs: list[dict[str, Any]] = []
+        for qi, rp in enumerate(raw_pairs, start=1):
+            q_indices = rp.get("question_turns", [])
+            a_indices = rp.get("answer_turns", [])
 
-        logger.info("QA metadata annotation completed for %d pairs.", len(qa_pairs))
+            # Validate indices are within range
+            q_indices = [i for i in q_indices if isinstance(i, int) and 0 <= i < len(turns)]
+            a_indices = [i for i in a_indices if isinstance(i, int) and 0 <= i < len(turns)]
+
+            if not q_indices or not a_indices:
+                continue
+
+            question_text = "\n".join(turns[i]["text"] for i in q_indices)
+            answer_text = "\n".join(turns[i]["text"] for i in a_indices)
+
+            if not question_text.strip() or not answer_text.strip():
+                continue
+
+            qa_pairs.append({
+                "index": qi,
+                "question": question_text.strip(),
+                "answer": answer_text.strip(),
+                "question_summary": str(rp.get("question_summary", "")).strip(),
+                "phase": str(rp.get("phase", "general")).strip(),
+                "is_follow_up": bool(rp.get("is_follow_up", False)),
+                "parent_index": rp.get("parent_qa_index"),
+            })
+
+        # Re-number indices sequentially
+        for i, pair in enumerate(qa_pairs, start=1):
+            pair["index"] = i
+
+        logger.info(
+            "Stage 1 complete: LLM extracted %d QA pairs from %d turns "
+            "(interviewer=%s, candidate=%s).",
+            len(qa_pairs),
+            len(turns),
+            result.get("interviewer_speaker", "?"),
+            result.get("candidate_speaker", "?"),
+        )
         return qa_pairs
 
     except Exception as exc:
-        logger.warning(
-            "LLM metadata annotation failed, degrading gracefully: %s", exc
-        )
-        for pair in qa_pairs:
-            pair["phase"] = "general"
-            pair["is_follow_up"] = False
-            pair["parent_index"] = None
-        return qa_pairs
+        logger.warning("LLM QA extraction failed (%s), falling back to naive pairing.", exc)
+        return _fallback_extract(turns)
+
+
+def _fallback_extract(turns: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """Fallback: naive alternating-speaker QA pairing when LLM fails."""
+    if len(turns) < 2:
+        return []
+
+    # Guess: first speaker is interviewer
+    interviewer = turns[0]["speaker"]
+    qa_pairs: list[dict[str, Any]] = []
+    i = 0
+    qi = 1
+
+    while i < len(turns):
+        question_parts: list[str] = []
+        answer_parts: list[str] = []
+
+        while i < len(turns) and turns[i]["speaker"] == interviewer:
+            question_parts.append(turns[i]["text"])
+            i += 1
+        while i < len(turns) and turns[i]["speaker"] != interviewer:
+            answer_parts.append(turns[i]["text"])
+            i += 1
+
+        question = "\n".join(p for p in question_parts if p).strip()
+        answer = "\n".join(p for p in answer_parts if p).strip()
+        if question and answer:
+            qa_pairs.append({
+                "index": qi,
+                "question": question,
+                "answer": answer,
+                "question_summary": "",
+                "phase": "general",
+                "is_follow_up": False,
+                "parent_index": None,
+            })
+            qi += 1
+
+    return qa_pairs
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -513,8 +552,8 @@ async def analyze_interview(
         Complete analysis report dict matching the v2 report schema.
     """
     try:
-        # ── Stage 1a: Deterministic QA extraction ────────────────────
-        qa_pairs = extract_qa_pairs(transcript)
+        # ── Stage 1: LLM-powered QA extraction ──────────────────────
+        qa_pairs = await extract_qa_pairs_with_llm(transcript, resume_context)
 
         if not qa_pairs:
             logger.warning("No QA pairs extracted; returning empty report.")
@@ -531,15 +570,10 @@ async def analyze_interview(
             }
 
         logger.info(
-            "Stage 1a complete: extracted %d QA pairs from transcript (%d tokens).",
+            "Stage 1 complete: extracted %d QA pairs (%d tokens in transcript).",
             len(qa_pairs),
             _count_tokens(transcript),
         )
-
-        # ── Stage 1b: LLM metadata annotation ───────────────────────
-        qa_pairs = await _annotate_qa_metadata(qa_pairs, resume_context)
-
-        logger.info("Stage 1b complete: metadata annotated for %d pairs.", len(qa_pairs))
 
         # ── Stage 2: Per-question analysis (Map, concurrent) ─────────
         tasks: list[asyncio.Task] = []
@@ -581,4 +615,4 @@ async def analyze_interview(
         raise
 
 
-__all__ = ["analyze_interview", "extract_qa_pairs"]
+__all__ = ["analyze_interview", "extract_qa_pairs_with_llm"]

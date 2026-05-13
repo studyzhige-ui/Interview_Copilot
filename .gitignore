@@ -25,6 +25,9 @@ backend/data/
 *.sqlite3
 *.sqlite3-journal
 
+# dev.ps1 captured logs
+logs/
+
 # ML model artifacts (large binary files)
 *.safetensors
 *.bin

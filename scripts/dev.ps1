@@ -93,7 +93,7 @@ else {
 # ─── Database migration ──────────────────────────────────────────────────
 if (-not $SkipMigration) {
     Write-Status 'Alembic' 'Running database migrations...' Blue
-    Push-Location $backendDir
+    Push-Location $projectRoot
     try {
         alembic upgrade head 2>&1 | ForEach-Object { Write-Status 'Alembic' $_ DarkGray }
         if ($LASTEXITCODE -ne 0) {
@@ -133,15 +133,60 @@ $celeryJob = Start-Job -Name 'celery' -ScriptBlock {
 } -ArgumentList $backendDir, $condaBase, $condaEnv
 
 # ─── Log streaming + graceful shutdown ────────────────────────────────────
+$logDir = Join-Path $projectRoot 'logs'
+if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
+$logFile = Join-Path $logDir ("dev-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+
 Write-Host ''
 Write-Status 'Ready' '=== All services started ===' Green
 Write-Status 'Ready' "API:    http://localhost:$ApiPort" Green
 Write-Status 'Ready' "Docs:   http://localhost:$ApiPort/docs" Green
+Write-Status 'Ready' "Log:    $logFile" Green
 Write-Status 'Ready' 'Press Ctrl+C to stop all services.' White
 Write-Host ''
 
 $jobs = @($uvicornJob, $celeryJob)
 $colors = @{ 'uvicorn' = 'Green'; 'celery' = 'Yellow' }
+
+# Patterns we silently drop from the live console (still written to the log
+# file so nothing is lost). Reduces the noise the user complained about.
+$dropPatterns = @(
+    'TF32',
+    'TensorFloat-32',
+    'pyannote.audio.utils.reproducibility',
+    'pyannote/audio/utils/reproducibility',
+    'reproducibility.py',
+    'It can be re-enabled by calling',
+    '>>> import torch',
+    '>>> torch.backends',
+    'See https://github.com/pyannote/pyannote-audio/issues/1370',
+    'warnings.warn',
+    'UserWarning: std',
+    'pyannote/audio/models/blocks/pooling',
+    'pooling.py:',
+    'std = sequences.std',
+    'Lightning automatically upgraded',
+    'lightning.pytorch.utilities.upgrade_checkpoint',
+    'ReproducibilityWarning'
+)
+
+function Test-ShouldDrop {
+    param([string]$Line)
+    if ([string]::IsNullOrWhiteSpace($Line)) { return $true }   # collapse blank lines
+    foreach ($p in $dropPatterns) {
+        if ($Line -match [regex]::Escape($p)) { return $true }
+    }
+    return $false
+}
+
+function Format-LogLine {
+    param([string]$Line)
+    # Strip the leading "YYYY-MM-DD HH:MM:SS,fff: " timestamp that loguru/std
+    # logging adds — dev.ps1 already prepends its own [HH:mm:ss] timestamp so
+    # the duplicate is wasted horizontal space.
+    return ($Line -replace '^\[?\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}[,.]\d+\]?\s*', '' `
+                  -replace '^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+', '')
+}
 
 try {
     while ($true) {
@@ -150,10 +195,13 @@ try {
             if ($output) {
                 $color = $colors[$job.Name]
                 foreach ($line in $output) {
-                    Write-Status $job.Name "$line" $color
+                    $text = [string]$line
+                    # Always persist the raw line to the log file.
+                    Add-Content -LiteralPath $logFile -Value ("[{0}] [{1}] {2}" -f (Get-Date -Format 'HH:mm:ss'), $job.Name, $text)
+                    if (Test-ShouldDrop $text) { continue }
+                    Write-Status $job.Name (Format-LogLine $text) $color
                 }
             }
-            # Check if job unexpectedly stopped
             if ($job.State -eq 'Completed' -or $job.State -eq 'Failed') {
                 Write-Status $job.Name "Process exited unexpectedly (state: $($job.State))" Red
                 $remaining = Receive-Job -Job $job -ErrorAction SilentlyContinue
@@ -177,5 +225,5 @@ finally {
         Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
     }
 
-    Write-Status 'Shutdown' 'All services stopped.' Red
+    Write-Status 'Shutdown' "All services stopped. Full log: $logFile" Red
 }

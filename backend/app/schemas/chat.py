@@ -38,6 +38,11 @@ class SSEChatRequest(BaseModel):
 class MockStartRequest(BaseModel):
     session_id: str
     resume_upload_id: str | None = None
+    jd_upload_id: str | None = None
+
+
+class SessionRenameRequest(BaseModel):
+    title: str
 
 
 class MockAnswerRequest(BaseModel):
@@ -58,5 +63,6 @@ __all__ = [
     "SSEChatRequest",
     "MockStartRequest",
     "MockAnswerRequest",
+    "SessionRenameRequest",
     "TTSRequest",
 ]

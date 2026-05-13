@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">
+  <rect width="40" height="40" rx="10" fill="#C26A4A"></rect>
+  <text x="20" y="26" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600" font-size="16" fill="#FFFFFF" letter-spacing="-0.02em">IR</text>
+</svg>

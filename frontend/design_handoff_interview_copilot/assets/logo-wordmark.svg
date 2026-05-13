@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 40" width="160" height="40">
+  <rect width="40" height="40" rx="10" fill="#C26A4A"></rect>
+  <text x="20" y="26" text-anchor="middle" font-family="Inter, system-ui, sans-serif" font-weight="600" font-size="16" fill="#FFFFFF" letter-spacing="-0.02em">IC</text>
+  <text x="52" y="20" font-family="Inter, system-ui, sans-serif" font-weight="600" font-size="16" fill="#2C2820">Interview Copilot</text>
+  <text x="52" y="33" font-family="Inter, system-ui, sans-serif" font-weight="400" font-size="10" fill="#7E7666" letter-spacing="0.04em">让面试成为阶梯</text>
+</svg>
