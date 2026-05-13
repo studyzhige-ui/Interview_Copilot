@@ -149,7 +149,7 @@ def upgrade() -> None:
                         " answer_input_mode, score, critique, improved_answer, "
                         " analyzed_at, created_at) "
                         "VALUES "
-                        "(:id, :record_id, :order_idx, :phase, :q, :a, :qs, 0, 0, "
+                        "(:id, :record_id, :order_idx, :phase, :q, :a, :qs, FALSE, 0, "
                         " 'text', :score, :critique, :improved, :analyzed_at, :created_at)"
                     ),
                     {
