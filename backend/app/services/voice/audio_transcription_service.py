@@ -86,7 +86,9 @@ async def transcribe_media(file_path: str) -> str:
             audio = whisperx.load_audio(file_path)
             result = whisper_model.transcribe(audio, batch_size=16)
 
-            diarize_segments = diarize_model(audio)
+            diarize_segments = diarize_model(
+                audio, min_speakers=2, max_speakers=2
+            )
 
             result = whisperx.assign_word_speakers(diarize_segments, result)
 
