@@ -2,14 +2,14 @@
 
 Architecture:
   Stage 0: WhisperX transcription (handled by audio_transcription_service)
-  Stage 1: LLM-powered QA extraction with turn index back-referencing
+  Stage 1: Full LLM QA extraction (role identification, pairing, tagging)
   Stage 2: Per-question deep analysis (Map) with sliding context window
   Stage 3: Global synthesis report (Reduce)
 
 Design principles:
-  - Regex parses speaker turns for structure (preserves original text)
-  - LLM identifies speaker roles, pairs QA, tags phases & follow-ups
-  - LLM outputs turn indices only; text is reconstructed from originals
+  - LLM reads raw transcript and extracts QA pairs directly
+  - Handles speaker diarization failures, mixed turns, short/long exchanges
+  - Long transcripts are chunked with overlap and deduplicated
   - Each question is analyzed with a 3-question sliding context window
   - Resume and JD context are injected into every analysis stage
 """
@@ -26,8 +26,6 @@ from llama_index.core import Settings
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
-
-SPEAKER_LINE_RE = re.compile(r"^\s*\*\*\[(?P<speaker>[^\]]+)\]\*\*:\s*(?P<text>.*)$")
 
 try:
     _tokenizer = tiktoken.get_encoding("cl100k_base")
@@ -55,118 +53,87 @@ def _clean_json_response(raw_text: str) -> dict[str, Any]:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Stage 1: LLM-Powered QA Extraction with Turn Index Back-Referencing
+# Stage 1: Full LLM QA Extraction
 # ══════════════════════════════════════════════════════════════════════════
 
-
-def _parse_speaker_turns(transcript: str) -> list[dict[str, str]]:
-    """Parse WhisperX Markdown output into indexed speaker turns.
-
-    Preserves original text verbatim. Returns:
-        [{"speaker": "Speaker 1", "text": "原文..."}, ...]
-    """
-    turns: list[dict[str, str]] = []
-    current_speaker: str | None = None
-    current_parts: list[str] = []
-
-    for raw_line in transcript.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        match = SPEAKER_LINE_RE.match(line)
-        if match:
-            if current_speaker is not None and current_parts:
-                turns.append(
-                    {
-                        "speaker": current_speaker,
-                        "text": " ".join(current_parts).strip(),
-                    }
-                )
-            current_speaker = match.group("speaker").strip()
-            current_parts = [match.group("text").strip()]
-        elif current_speaker is not None:
-            current_parts.append(line)
-
-    if current_speaker is not None and current_parts:
-        turns.append(
-            {
-                "speaker": current_speaker,
-                "text": " ".join(current_parts).strip(),
-            }
-        )
-    return turns
-
+# Maximum tokens to send in a single LLM extraction call.
+# DeepSeek V4 Flash supports 1M context; we stay well within limits.
+_EXTRACTION_MAX_TOKENS = 120_000
 
 _LLM_EXTRACTION_PROMPT = """\
-你是一名专业的面试对话分析器。下面是一场面试录音的转录文本，已按说话者分段编号。
+你是一名专业的面试对话分析专家。下面是一场面试录音的语音转录文本（ASR 输出，可能有错别字和口语化表达）。
 
-转录内容：
-{turns_text}
-
-你的任务：
-1. 判断哪个 Speaker 是面试官（提问方），哪个是候选人（回答方）
-2. 将对话组织为结构化的 QA 对
-
-规则：
-- 每个 QA 对包含面试官的一个问题和候选人的对应回答
-- question_turns: 组成该问题的 turn 编号列表（从 0 开始）
-- answer_turns: 组成该回答的 turn 编号列表（从 0 开始）
-- question_summary: 用一句话概括面试官这道题问的核心问题（15字以内）
-- phase: 面试阶段，可选: self_intro, resume_deep_dive, technical, behavioral, reverse_qa, general
-- is_follow_up: 是否为追问
-- parent_qa_index: 如果是追问，指向被追问的 QA 编号（从 1 开始）；否则为 null
-- 忽略与面试无关的内容（寒暄闲聊、系统提示音、无意义噪音转录）
-- 如果面试官连续说了多段（含闲聊/过渡），只把实际提问部分归入 question_turns
-- 如果候选人的回答被打断后继续，将所有回答部分合并为同一个 answer_turns
+转录文本：
+---
+{transcript}
+---
 
 {resume_hint}
 
-输出纯 JSON，不要任何解释：
+你的任务：仔细阅读整段对话，从中提取面试官与候选人之间的所有问答对（QA pairs）。
+
+提取规则：
+1. **角色识别**：根据对话内容判断谁是面试官（提问方）、谁是候选人（回答方）。面试官通常会提出技术问题、追问细节、引导话题；候选人会介绍自己的项目、回答技术问题。
+2. **问题提取**：提取面试官提出的每一个独立问题。如果面试官在一段话中说了很多（包含寒暄、评论、过渡），只提取其中的核心提问部分。
+3. **回答提取**：提取候选人针对该问题的完整回答。如果候选人的回答被面试官打断后继续，应合并为完整回答。
+4. **追问识别**：如果面试官针对候选人的某个回答继续追问，标记为追问并关联到原始问题。
+5. **过滤噪音**：忽略开场寒暄、无关闲聊、系统提示音、ASR 噪音（如乱码、外语碎片）。
+6. **忠实原文**：question 和 answer 应尽可能使用转录原文，可以适当整理去除明显的 ASR 错误和重复，但不要改写语义。
+7. **问题概括**：question_summary 用一句简短的话概括这道题考察的核心内容（15字以内）。
+
+输出纯 JSON，不要任何解释文字：
 {{
-  "interviewer_speaker": "面试官的 Speaker 标识",
-  "candidate_speaker": "候选人的 Speaker 标识",
   "qa_pairs": [
     {{
-      "question_turns": [0, 1],
-      "answer_turns": [2, 3],
-      "question_summary": "简短问题概括",
-      "phase": "technical",
+      "question": "面试官的提问原文（整理后）",
+      "answer": "候选人的回答原文（整理后）",
+      "question_summary": "简短概括",
+      "phase": "self_intro 或 resume_deep_dive 或 technical 或 behavioral 或 reverse_qa 或 general",
       "is_follow_up": false,
       "parent_qa_index": null
     }}
   ]
-}}"""
+}}
+
+注意：parent_qa_index 从 1 开始计数，指向本次输出中被追问的 QA 编号。"""
 
 
 async def extract_qa_pairs_with_llm(
     transcript: str,
     resume_context: str = "",
 ) -> list[dict[str, Any]]:
-    """Stage 1: LLM-powered QA extraction with turn index back-referencing.
+    """Stage 1: Full LLM-powered QA extraction.
 
-    1. Parse turns with regex (preserve original text)
-    2. Send turns to LLM for intelligent QA pairing (outputs turn indices only)
-    3. Back-reference indices to reconstruct QA pairs from original text
+    Sends the raw transcript to LLM and lets it identify speaker roles,
+    extract QA pairs, tag phases, and detect follow-up chains.
 
-    On LLM failure, falls back to naive alternating-speaker pairing.
+    For very long transcripts, splits into overlapping chunks and merges.
     """
-    turns = _parse_speaker_turns(transcript)
-    if not turns:
-        logger.warning("No speaker turns found in transcript.")
+    if not transcript or not transcript.strip():
+        logger.warning("Empty transcript provided.")
         return []
 
-    # Build turns text for LLM (full text, no truncation)
-    turns_lines = []
-    for i, t in enumerate(turns):
-        turns_lines.append(f"[T{i}] {t['speaker']}: {t['text']}")
-    turns_text = "\n".join(turns_lines)
+    token_count = _count_tokens(transcript)
+    logger.info("Stage 1: transcript has %d tokens.", token_count)
 
+    if token_count <= _EXTRACTION_MAX_TOKENS:
+        return await _extract_single_pass(transcript, resume_context)
+
+    # Chunked extraction for very long transcripts
+    return await _extract_chunked(transcript, resume_context, token_count)
+
+
+async def _extract_single_pass(
+    transcript: str,
+    resume_context: str = "",
+) -> list[dict[str, Any]]:
+    """Extract QA pairs in a single LLM call."""
     resume_hint = ""
     if resume_context:
-        resume_hint = f"候选人简历背景（辅助判断 resume_deep_dive 阶段）：\n{resume_context[:1000]}"
+        resume_hint = f"候选人简历背景（辅助判断阶段和评估）：\n{resume_context[:1500]}"
 
     prompt = _LLM_EXTRACTION_PROMPT.format(
-        turns_text=turns_text,
+        transcript=transcript,
         resume_hint=resume_hint,
     )
 
@@ -181,94 +148,142 @@ async def extract_qa_pairs_with_llm(
         raw_pairs = result.get("qa_pairs", [])
 
         if not raw_pairs:
-            logger.warning("LLM returned empty qa_pairs, falling back.")
-            return _fallback_extract(turns)
+            logger.warning("LLM returned empty qa_pairs.")
+            return []
 
-        # Back-reference: reconstruct QA text from original turns
-        qa_pairs: list[dict[str, Any]] = []
-        for qi, rp in enumerate(raw_pairs, start=1):
-            q_indices = rp.get("question_turns", [])
-            a_indices = rp.get("answer_turns", [])
-
-            # Validate indices are within range
-            q_indices = [i for i in q_indices if isinstance(i, int) and 0 <= i < len(turns)]
-            a_indices = [i for i in a_indices if isinstance(i, int) and 0 <= i < len(turns)]
-
-            if not q_indices or not a_indices:
-                continue
-
-            question_text = "\n".join(turns[i]["text"] for i in q_indices)
-            answer_text = "\n".join(turns[i]["text"] for i in a_indices)
-
-            if not question_text.strip() or not answer_text.strip():
-                continue
-
-            qa_pairs.append({
-                "index": qi,
-                "question": question_text.strip(),
-                "answer": answer_text.strip(),
-                "question_summary": str(rp.get("question_summary", "")).strip(),
-                "phase": str(rp.get("phase", "general")).strip(),
-                "is_follow_up": bool(rp.get("is_follow_up", False)),
-                "parent_index": rp.get("parent_qa_index"),
-            })
-
-        # Re-number indices sequentially
-        for i, pair in enumerate(qa_pairs, start=1):
-            pair["index"] = i
-
-        logger.info(
-            "Stage 1 complete: LLM extracted %d QA pairs from %d turns "
-            "(interviewer=%s, candidate=%s).",
-            len(qa_pairs),
-            len(turns),
-            result.get("interviewer_speaker", "?"),
-            result.get("candidate_speaker", "?"),
-        )
+        qa_pairs = _normalize_qa_pairs(raw_pairs)
+        logger.info("Stage 1 complete: extracted %d QA pairs.", len(qa_pairs))
         return qa_pairs
 
     except Exception as exc:
-        logger.warning("LLM QA extraction failed (%s), falling back to naive pairing.", exc)
-        return _fallback_extract(turns)
-
-
-def _fallback_extract(turns: list[dict[str, str]]) -> list[dict[str, Any]]:
-    """Fallback: naive alternating-speaker QA pairing when LLM fails."""
-    if len(turns) < 2:
+        logger.error("LLM QA extraction failed: %s", exc)
         return []
 
-    # Guess: first speaker is interviewer
-    interviewer = turns[0]["speaker"]
+
+async def _extract_chunked(
+    transcript: str,
+    resume_context: str,
+    total_tokens: int,
+) -> list[dict[str, Any]]:
+    """Extract QA pairs from a long transcript by splitting into chunks.
+
+    Uses sentence-level splitting with overlap to avoid cutting mid-question.
+    """
+    # Split by sentences (Chinese periods, question marks, or newlines)
+    sentences = re.split(r'(?<=[。？！\n])', transcript)
+    sentences = [s for s in sentences if s.strip()]
+
+    chunks: list[str] = []
+    current_chunk: list[str] = []
+    current_tokens = 0
+    chunk_limit = _EXTRACTION_MAX_TOKENS - 5000  # reserve space for prompt
+
+    for sent in sentences:
+        sent_tokens = _count_tokens(sent)
+        if current_tokens + sent_tokens > chunk_limit and current_chunk:
+            chunks.append("".join(current_chunk))
+            # Keep last ~20% of sentences as overlap
+            overlap_count = max(1, len(current_chunk) // 5)
+            current_chunk = current_chunk[-overlap_count:]
+            current_tokens = sum(_count_tokens(s) for s in current_chunk)
+        current_chunk.append(sent)
+        current_tokens += sent_tokens
+
+    if current_chunk:
+        chunks.append("".join(current_chunk))
+
+    logger.info(
+        "Stage 1: splitting %d-token transcript into %d chunks.",
+        total_tokens, len(chunks),
+    )
+
+    # Extract from each chunk
+    all_pairs: list[dict[str, Any]] = []
+    for ci, chunk in enumerate(chunks):
+        chunk_pairs = await _extract_single_pass(chunk, resume_context)
+        logger.info("Stage 1 chunk %d/%d: extracted %d pairs.", ci + 1, len(chunks), len(chunk_pairs))
+        all_pairs.extend(chunk_pairs)
+
+    # Deduplicate overlapping QA pairs (by question_summary similarity)
+    deduped = _deduplicate_qa_pairs(all_pairs)
+
+    # Re-number
+    for i, pair in enumerate(deduped, start=1):
+        pair["index"] = i
+
+    logger.info("Stage 1 complete: %d QA pairs after dedup (from %d raw).", len(deduped), len(all_pairs))
+    return deduped
+
+
+def _normalize_qa_pairs(raw_pairs: list[dict]) -> list[dict[str, Any]]:
+    """Normalize and validate raw QA pairs from LLM output."""
     qa_pairs: list[dict[str, Any]] = []
-    i = 0
-    qi = 1
 
-    while i < len(turns):
-        question_parts: list[str] = []
-        answer_parts: list[str] = []
+    for qi, rp in enumerate(raw_pairs, start=1):
+        question = str(rp.get("question", "")).strip()
+        answer = str(rp.get("answer", "")).strip()
 
-        while i < len(turns) and turns[i]["speaker"] == interviewer:
-            question_parts.append(turns[i]["text"])
-            i += 1
-        while i < len(turns) and turns[i]["speaker"] != interviewer:
-            answer_parts.append(turns[i]["text"])
-            i += 1
+        if not question or not answer:
+            continue
 
-        question = "\n".join(p for p in question_parts if p).strip()
-        answer = "\n".join(p for p in answer_parts if p).strip()
-        if question and answer:
-            qa_pairs.append({
-                "index": qi,
-                "question": question,
-                "answer": answer,
-                "question_summary": "",
-                "phase": "general",
-                "is_follow_up": False,
-                "parent_index": None,
-            })
-            qi += 1
+        # Skip very short pairs that are likely noise
+        if len(question) < 5 and len(answer) < 5:
+            continue
+
+        qa_pairs.append({
+            "index": qi,
+            "question": question,
+            "answer": answer,
+            "question_summary": str(rp.get("question_summary", "")).strip(),
+            "phase": str(rp.get("phase", "general")).strip(),
+            "is_follow_up": bool(rp.get("is_follow_up", False)),
+            "parent_index": rp.get("parent_qa_index"),
+        })
+
+    # Re-number sequentially
+    for i, pair in enumerate(qa_pairs, start=1):
+        pair["index"] = i
 
     return qa_pairs
+
+
+def _deduplicate_qa_pairs(pairs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove duplicate QA pairs from chunked extraction.
+
+    Uses question text overlap ratio to detect duplicates.
+    """
+    if not pairs:
+        return []
+
+    deduped: list[dict[str, Any]] = [pairs[0]]
+
+    for pair in pairs[1:]:
+        is_dup = False
+        q = pair["question"]
+        for existing in deduped[-3:]:  # Only check last 3 to avoid O(n^2)
+            eq = existing["question"]
+            # Check character overlap
+            shorter = min(len(q), len(eq))
+            if shorter == 0:
+                continue
+            # Simple: check if one is a substring of the other
+            if q in eq or eq in q:
+                is_dup = True
+                break
+            # Check prefix overlap (common when chunks split mid-question)
+            overlap = 0
+            for c1, c2 in zip(q, eq):
+                if c1 == c2:
+                    overlap += 1
+                else:
+                    break
+            if overlap > shorter * 0.6:
+                is_dup = True
+                break
+        if not is_dup:
+            deduped.append(pair)
+
+    return deduped
 
 
 # ══════════════════════════════════════════════════════════════════════════
