@@ -10,7 +10,7 @@ import type {
   InterviewRecordDetail,
 } from '@/types/api';
 
-type Tab = 'report' | 'qa';
+type Tab = 'report' | 'qa' | 'transcript';
 
 interface Props {
   detail: InterviewRecordDetail | null;
@@ -93,11 +93,13 @@ export function QAPanel({ detail, loading }: Props) {
           </div>
         </div>
 
-        <ReportTabs tab={tab} onChange={setTab} />
+        <ReportTabs tab={tab} onChange={setTab} hasTranscript={!!detail.transcript} />
 
-        {tab === 'report'
-          ? <ReportView analysis={analysis} transcript={detail.transcript} />
-          : qa.length === 0
+        {tab === 'report' && (
+          <ReportView analysis={analysis} transcript={detail.transcript} />
+        )}
+        {tab === 'qa' && (
+          qa.length === 0
           ? <EmptyState icon={<FileText size={24} />} title="这条记录还没有结构化 QA" description="模型可能还在分析，或这条记录不输出 per_question 字段。" />
           : <div className="flex flex-col gap-4">
               {qa.map((q, i) => (
@@ -108,17 +110,27 @@ export function QAPanel({ detail, loading }: Props) {
                 />
               ))}
             </div>
-        }
+        )}
+        {tab === 'transcript' && (
+          detail.transcript
+            ? <TranscriptView transcript={detail.transcript} />
+            : <EmptyState icon={<FileText size={24} />} title="暂无转录文本" description="该面试尚未完成语音转录。" />
+        )}
       </div>
     </div>
   );
 }
 
-function ReportTabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
+function ReportTabs({ tab, onChange, hasTranscript }: { tab: Tab; onChange: (t: Tab) => void; hasTranscript: boolean }) {
   const tabs: Array<{ k: Tab; l: string }> = [
     { k: 'report', l: '分析报告' },
     { k: 'qa', l: 'QA 对' },
   ];
+  if (hasTranscript) tabs.push({ k: 'transcript', l: '原始转录' });
+
+  const activeIdx = tabs.findIndex((t) => t.k === tab);
+  const pct = 100 / tabs.length;
+
   return (
     <div
       className="relative inline-flex p-1 mb-5 rounded-full border border-stone-200 shadow-xs"
@@ -131,8 +143,8 @@ function ReportTabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void })
       <div
         className="absolute top-1 bottom-1 bg-white rounded-full shadow-xs transition-[left] duration-[280ms]"
         style={{
-          left: tab === 'report' ? 4 : 'calc(50% + 0px)',
-          width: 'calc(50% - 4px)',
+          left: `calc(${activeIdx * pct}% + 4px)`,
+          width: `calc(${pct}% - 4px)`,
           transitionTimingFunction: 'var(--ease-soft)',
         }}
       />
@@ -148,6 +160,48 @@ function ReportTabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void })
           {t.l}
         </button>
       ))}
+    </div>
+  );
+}
+
+// ── Raw transcript view ─────────────────────────────────────────────────
+
+function TranscriptView({ transcript }: { transcript: string }) {
+  // Parse speaker labels and render with color-coded badges
+  const lines = transcript.split('\n').filter((l) => l.trim());
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="text-xs text-stone-500 mb-1">
+        WhisperX + Pyannote 声纹分离原始输出 · 用于验证说话者识别准确性
+      </div>
+      {lines.map((line, i) => {
+        const m = line.match(/^\*\*\[([^\]]+)\]\*\*:\s*(.*)$/);
+        if (m) {
+          const speaker = m[1];
+          const text = m[2];
+          const isS1 = speaker.includes('1') || speaker.includes('SPEAKER_00');
+          return (
+            <div key={i} className="bg-white rounded-xl border border-stone-200 p-4 shadow-xs">
+              <span
+                className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full mr-2 ${
+                  isS1
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'bg-emerald-100 text-emerald-700'
+                }`}
+              >
+                {speaker}
+              </span>
+              <span className="text-sm text-stone-700 leading-[1.7]">{text}</span>
+            </div>
+          );
+        }
+        return (
+          <div key={i} className="text-sm text-stone-500 leading-[1.7] px-1">
+            {line}
+          </div>
+        );
+      })}
     </div>
   );
 }
