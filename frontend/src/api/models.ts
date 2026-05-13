@@ -26,3 +26,15 @@ export async function updateModelsRuntime(
   const res = await apiClient.put('/models/runtime', patch);
   return res.data?.selection ?? {};
 }
+
+export interface ModelPingResult {
+  profile_id: string;
+  ok: boolean;
+  latency_ms: number;
+  error?: string;
+}
+
+export async function pingAllModels(): Promise<ModelPingResult[]> {
+  const res = await apiClient.post('/models/ping', null, { timeout: 60_000 });
+  return res.data?.results ?? [];
+}

@@ -192,6 +192,7 @@ class ContextAssemblyPipeline:
         return self._assemble(
             session_id=session_id,
             current_query=current_query,
+            user_profile=[],
             relevant_memories=[],
             knowledge_chunks=[],
             reference_material="",
@@ -222,11 +223,16 @@ class ContextAssemblyPipeline:
         self,
         session_id: str,
         current_query: str,
-        user_profile: list[dict],
-        relevant_memories: list[dict],
-        knowledge_chunks: list[dict],
-        reference_material: str,
+        user_profile: list[dict] | None = None,
+        relevant_memories: list[dict] | None = None,
+        knowledge_chunks: list[dict] | None = None,
+        reference_material: str = "",
     ) -> AssembledContext:
+        # Defensive defaults — first-time users with no profile/memory/knowledge
+        # must not crash downstream callers.
+        user_profile = user_profile or []
+        relevant_memories = relevant_memories or []
+        knowledge_chunks = knowledge_chunks or []
         meta = transcript_service.get_session_meta(session_id)
         if meta is None:
             session_state = default_session_state_for_type("general")
@@ -245,6 +251,18 @@ class ContextAssemblyPipeline:
         cleaned = self._repair_pairs(
             trim_messages(self._sanitize(recent_turns), self.budget.RECENT_TURNS_BUDGET)
         )
+
+        # Auto-inject the bound interview's reference manifest for debrief
+        # sessions when no explicit reference_material was passed by the caller.
+        # See app/services/chat/interview_reference.py for the design notes.
+        if not reference_material:
+            mode = session_state.get("mode")
+            interview_id = session_state.get("interview_id")
+            if mode == "debrief" and interview_id and meta is not None:
+                from app.services.chat.interview_reference import build_interview_reference
+                ref = build_interview_reference(interview_id, meta["user_id"])
+                if ref:
+                    reference_material = ref
 
         # Build retrieved_context from memories + knowledge
         retrieved_parts: list[str] = []

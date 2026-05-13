@@ -630,4 +630,219 @@ async def analyze_interview(
         raise
 
 
-__all__ = ["analyze_interview", "extract_qa_pairs_with_llm"]
+# ══════════════════════════════════════════════════════════════════════════
+# Mock-specific batched analyzer
+# ══════════════════════════════════════════════════════════════════════════
+# When the QA pairs come from a mock interview (already structured, no ASR
+# noise, grounding_refs known), we can do better than the upload pipeline:
+#   - batch_size questions per LLM call (token-efficient)
+#   - explicit prev / next sliding window so each question sees neighbours
+# The output shape matches `_analyze_single_question`, so `_synthesize_report`
+# can consume it unchanged.
+
+_BATCH_PROMPT = """你是一名资深面试官。下面是一段面试的连续片段。
+请对【本批待评分】中的每道题打分并点评，**只评本批的题**，前后窗口仅作上下文参考。
+
+{resume_section}
+{jd_section}
+
+【前置上下文（只读，不评分）】
+{prev_ctx}
+
+【本批待评分】
+{batch_block}
+
+【后置上下文（只读，不评分）】
+{next_ctx}
+
+输出严格 JSON，键名必须是 results 且是数组（不要包成对象），每个元素对应本批一道题，按本批的顺序排列：
+{{
+  "results": [
+    {{
+      "index": 本批中的题目序号（用 index 字段原样回传）,
+      "score": 0-10,
+      "critique": "200 字以内的点评，指出技术缺陷、遗漏点",
+      "improved_answer": "更完整、更严谨的参考答案",
+      "tags": ["知识点1", "标签2"]
+    }}
+  ]
+}}"""
+
+
+def _render_qa_block(qa: dict[str, Any], label: str) -> str:
+    return (
+        f"{label} [index={qa['index']}, phase={qa.get('phase', 'general')}]\n"
+        f"  问: {qa['question'][:600]}\n"
+        f"  答: {qa['answer'][:1200]}"
+    )
+
+
+async def _analyze_batch(
+    batch: list[dict[str, Any]],
+    prev_window: list[dict[str, Any]],
+    next_window: list[dict[str, Any]],
+    *,
+    resume_context: str,
+    jd_context: str,
+) -> list[dict[str, Any]]:
+    resume_section = f"候选人简历背景：\n{resume_context[:1000]}" if resume_context else ""
+    jd_section = f"目标岗位 JD：\n{jd_context[:600]}" if jd_context else ""
+
+    prev_ctx = "\n\n".join(_render_qa_block(q, "[前]") for q in prev_window) or "（无）"
+    next_ctx = "\n\n".join(_render_qa_block(q, "[后]") for q in next_window) or "（无）"
+    batch_block = "\n\n".join(_render_qa_block(q, "[本批]") for q in batch)
+
+    prompt = _BATCH_PROMPT.format(
+        resume_section=resume_section,
+        jd_section=jd_section,
+        prev_ctx=prev_ctx,
+        next_ctx=next_ctx,
+        batch_block=batch_block,
+    )
+
+    # Default fallback: 0-score entries for each QA in the batch.
+    def _fallback() -> list[dict[str, Any]]:
+        return [
+            {
+                "index": q["index"],
+                "phase": q.get("phase", "general"),
+                "question": q["question"],
+                "answer": q["answer"],
+                "score": 0,
+                "critique": "分析失败",
+                "improved_answer": "",
+                "tags": [],
+            }
+            for q in batch
+        ]
+
+    try:
+        response = await Settings.llm.acomplete(prompt)
+        parsed = _clean_json_response(response.text)
+        items_in = parsed.get("results") if isinstance(parsed, dict) else None
+        if not isinstance(items_in, list):
+            logger.warning("Batched analyzer returned non-list results; falling back")
+            return _fallback()
+
+        by_index: dict[int, dict[str, Any]] = {}
+        for item in items_in:
+            if not isinstance(item, dict):
+                continue
+            try:
+                idx = int(item.get("index"))
+            except (TypeError, ValueError):
+                continue
+            by_index[idx] = item
+
+        out: list[dict[str, Any]] = []
+        for q in batch:
+            item = by_index.get(int(q["index"]))
+            if item is None:
+                # LLM dropped this one — single-shot retry inline.
+                logger.warning("Batched analyzer skipped Q%s; falling back to per-question", q["index"])
+                out.append(
+                    await _analyze_single_question(
+                        q,
+                        context_text="",
+                        total_questions=len(batch),
+                        resume_context=resume_context,
+                        jd_context=jd_context,
+                    )
+                )
+                continue
+            out.append({
+                "index": q["index"],
+                "phase": q.get("phase", "general"),
+                "question": q["question"],
+                "answer": q["answer"],
+                "score": float(item.get("score", 0) or 0),
+                "critique": str(item.get("critique", "")).strip(),
+                "improved_answer": str(item.get("improved_answer", "")).strip(),
+                "tags": item.get("tags", []) if isinstance(item.get("tags"), list) else [],
+            })
+        return out
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Batched analyzer failed; falling back: %s", exc)
+        return _fallback()
+
+
+async def analyze_mock_qa_batched(
+    qa_pairs: list[dict[str, Any]],
+    *,
+    resume_context: str = "",
+    jd_context: str = "",
+    batch_size: int = 2,
+    ctx_prev: int = 3,
+    ctx_next: int = 2,
+) -> dict[str, Any]:
+    """Run the full mock-source pipeline: batched per-question scoring with a
+    sliding window, then global synthesis. Returns the same v2 report shape as
+    `analyze_interview`."""
+    # Normalize incoming entries to the {index, question, answer, phase} shape
+    # the rest of this module expects (1-based index, ordered by appearance).
+    normalized: list[dict[str, Any]] = []
+    for i, pair in enumerate(qa_pairs, start=1):
+        if not isinstance(pair, dict):
+            continue
+        normalized.append({
+            "index": i,
+            "phase": pair.get("phase") or "general",
+            "question": str(pair.get("question") or ""),
+            "answer": str(pair.get("answer") or ""),
+            "is_follow_up": bool(pair.get("is_follow_up", False)),
+            "grounding_refs": pair.get("grounding_refs") or [],
+        })
+
+    if not normalized:
+        return {
+            "interview_metadata": {"total_questions": 0, "phases": []},
+            "overall": {
+                "score": 0, "grade": "", "verdict": "",
+                "feedback": "面试无问答记录。",
+                "strengths": [], "weaknesses": [], "improvement_plan": [],
+            },
+            "phase_summary": [],
+            "per_question": [],
+            "skill_radar": {},
+        }
+
+    # Walk in batch_size strides, schedule batches concurrently.
+    tasks: list[asyncio.Task] = []
+    for start in range(0, len(normalized), batch_size):
+        end = min(start + batch_size, len(normalized))
+        batch = normalized[start:end]
+        prev_window = normalized[max(0, start - ctx_prev):start]
+        next_window = normalized[end:end + ctx_next]
+        tasks.append(
+            asyncio.create_task(
+                _analyze_batch(
+                    batch,
+                    prev_window,
+                    next_window,
+                    resume_context=resume_context,
+                    jd_context=jd_context,
+                )
+            )
+        )
+
+    batched_results = await asyncio.gather(*tasks)
+    per_question_results: list[dict[str, Any]] = [r for chunk in batched_results for r in chunk]
+
+    logger.info(
+        "Mock batched analysis complete: %d questions across %d batches (size=%d, prev=%d, next=%d)",
+        len(per_question_results),
+        len(tasks),
+        batch_size,
+        ctx_prev,
+        ctx_next,
+    )
+
+    report = await _synthesize_report(
+        per_question_results,
+        resume_context=resume_context,
+        jd_context=jd_context,
+    )
+    return report
+
+
+__all__ = ["analyze_interview", "analyze_mock_qa_batched", "extract_qa_pairs_with_llm"]

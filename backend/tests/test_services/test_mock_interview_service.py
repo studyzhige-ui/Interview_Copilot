@@ -245,48 +245,5 @@ def test_generate_interviewer_response_mocked():
     assert result["follow_up_question"] != ""
 
 
-def test_batch_evaluate_mocked():
-    """Test batch_evaluate with a mocked LLM."""
-    from unittest.mock import AsyncMock, MagicMock, patch
-    from app.services.mock_interview_service import MockInterviewService
-
-    service = MockInterviewService()
-    mock_response = MagicMock()
-    mock_response.text = json.dumps({
-        "overall_score": 7.5,
-        "overall_feedback": "整体表现不错",
-        "strengths": ["项目经验丰富"],
-        "weaknesses": ["基础知识有待加强"],
-        "improvement_suggestions": ["多练习八股"],
-        "per_question": [
-            {"question": "q1", "answer_summary": "...", "score": 8, "feedback": "好"},
-            {"question": "q2", "answer_summary": "...", "score": 7, "feedback": "一般"},
-        ],
-    })
-
-    with patch("app.services.mock_interview_service.agent_fast_llm") as mock_llm:
-        mock_llm.acomplete = AsyncMock(return_value=mock_response)
-        result = asyncio.run(
-            service.batch_evaluate(
-                qa_history=[
-                    {"question": "q1", "answer": "a1"},
-                    {"question": "q2", "answer": "a2"},
-                ],
-            )
-        )
-
-    assert result["overall_score"] == 7.5
-    assert len(result["per_question"]) == 2
-    assert result["strengths"] == ["项目经验丰富"]
-
-
-def test_batch_evaluate_empty():
-    """Test batch_evaluate with no Q&A history."""
-    from app.services.mock_interview_service import MockInterviewService
-
-    service = MockInterviewService()
-    result = asyncio.run(
-        service.batch_evaluate(qa_history=[])
-    )
-    assert result["overall_score"] == 0
-    assert result["per_question"] == []
+# batch_evaluate removed — analysis now happens asynchronously via
+# InterviewAnalysisOrchestrator (see test_analysis_orchestrator.py).

@@ -1,8 +1,8 @@
 import { apiClient } from './client';
 import type {
-  InterviewRecordListItem,
+  AnalyzeDispatchResp,
   InterviewRecordDetail,
-  AnalyzeStatus,
+  InterviewRecordListItem,
 } from '@/types/api';
 
 export async function listInterviewRecords(
@@ -41,19 +41,20 @@ export async function uploadResume(file: File): Promise<{ upload_id: string; fil
   return res.data;
 }
 
+/** Dispatch a unified analysis on an uploaded audio file. Returns the new
+ *  `record_id` of the InterviewRecord — subscribe to SSE to follow progress. */
 export async function startAnalyze(payload: {
   upload_id: string;
   resume_upload_id: string;
   jd_text?: string;
   jd_upload_id?: string;
-}): Promise<{ interview_id: number; task_id: string }> {
+}): Promise<AnalyzeDispatchResp> {
   const res = await apiClient.post('/analyze', payload);
   return res.data;
 }
 
-export async function getAnalyzeStatus(interviewId: number): Promise<AnalyzeStatus> {
-  const res = await apiClient.get(`/analyze/${interviewId}/status`);
-  return res.data;
+export async function cancelAnalyze(recordId: string): Promise<void> {
+  await apiClient.post(`/analyze/${encodeURIComponent(recordId)}/cancel`);
 }
 
 export async function getAnalyticsReport(): Promise<unknown> {
@@ -83,11 +84,11 @@ export async function deleteInterviewRecord(
 
 export async function editInterviewQA(
   recordId: string,
-  qaIndex: number,
-  patch: { question?: string; answer?: string; suggestion?: string },
+  qaId: string,
+  patch: { question?: string; answer?: string; critique?: string; improved_answer?: string },
 ): Promise<void> {
   await apiClient.patch(
-    `/interview-records/${encodeURIComponent(recordId)}/qa/${qaIndex}`,
+    `/interview-records/${encodeURIComponent(recordId)}/qa/${encodeURIComponent(qaId)}`,
     patch,
   );
 }

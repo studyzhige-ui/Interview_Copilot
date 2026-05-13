@@ -4,14 +4,35 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Bump the base type scale ~14% so dense reading surfaces (review page,
+   chat bubbles, QA cards) feel comfortable on 1440-wide laptop screens.
+   This overrides the values from colors_and_type.css. */
+:root {
+  --text-xs:   13px;
+  --text-sm:   14px;
+  --text-base: 15px;
+  --text-md:   16px;
+  --text-lg:   18px;
+  --text-xl:   22px;
+  --text-2xl:  26px;
+  --text-3xl:  32px;
+  --text-4xl:  40px;
+}
+
 @layer base {
   html, body, #root {
     height: 100%;
+  }
+  html {
+    /* 1rem = 17px → all tailwind text-{xs,sm,base,…} that derive from rem
+       are scaled in lockstep. Tailwind text-sm = 0.875rem ≈ 14.9px etc. */
+    font-size: 17px;
   }
   body {
     background: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans);
+    font-size: var(--text-base);
   }
   *, *::before, *::after { box-sizing: border-box; }
   button { font-family: inherit; }

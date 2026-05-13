@@ -10,9 +10,15 @@ from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
 from app.db.database import get_db
-from app.models.interview import Interview
+from app.models.interview_qa import InterviewQA
+from app.models.interview_record import InterviewRecord
 from app.models.user import User
 from app.services.diagnostics_report_service import generate_comprehensive_report
+from app.services.interview_record_service import (
+    STATUS_COMPLETED,
+    STATUS_FAILED,
+    interview_record_service,
+)
 from app.services.storage_service import upload_file_to_owned_key
 from app.services.upload_service import create_owned_upload, get_owned_upload, mark_upload_consumed
 from app.worker.tasks import process_interview_analysis
@@ -152,8 +158,9 @@ async def analyze_interview_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Create an InterviewRecord from an uploaded audio file and dispatch the
+    unified analysis orchestrator."""
     try:
-        # Validate audio upload
         upload = get_owned_upload(
             db,
             upload_id=request.upload_id,
@@ -165,7 +172,6 @@ async def analyze_interview_endpoint(
         if upload.status not in {"pending_upload", "uploaded"}:
             raise HTTPException(status_code=409, detail="Audio upload has already been consumed")
 
-        # Validate resume upload
         resume_upload = get_owned_upload(
             db,
             upload_id=request.resume_upload_id,
@@ -175,33 +181,42 @@ async def analyze_interview_endpoint(
         if resume_upload is None:
             raise HTTPException(status_code=404, detail="Resume upload not found")
 
-        # Resolve JD text — prefer explicit jd_text, otherwise load from KnowledgeDocument.
-        jd_text = request.jd_text or None
+        jd_text = (request.jd_text or "").strip()
         if not jd_text and request.jd_upload_id:
             from app.services.knowledge_text_service import load_knowledge_text
-            loaded = load_knowledge_text(db, request.jd_upload_id, current_user.username)
-            jd_text = loaded or None
+            try:
+                jd_text = load_knowledge_text(db, request.jd_upload_id, current_user.username) or ""
+            except Exception:  # noqa: BLE001
+                jd_text = ""
 
-        interview = Interview(
+        # Extract resume text for the snapshot. Failures are non-fatal —
+        # orchestrator falls back to empty context.
+        resume_text = ""
+        try:
+            resume_text = _extract_resume_snapshot(db, resume_upload.id, current_user.username)
+        except Exception as exc:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).warning("Resume snapshot extraction failed: %s", exc)
+
+        record = interview_record_service.create_for_upload(
             user_id=current_user.username,
-            status="PENDING",
-            upload_id=upload.id,
+            title=f"面试录音 {upload.original_filename or upload.id}",
+            audio_upload_id=upload.id,
             resume_upload_id=resume_upload.id,
-            jd_text=jd_text,
-            file_url=upload.storage_uri,
+            resume_text_snapshot=resume_text,
+            jd_text_snapshot=jd_text,
+            db=db,
         )
-        db.add(interview)
         mark_upload_consumed(db, upload)
         db.commit()
-        db.refresh(interview)
 
-        task = process_interview_analysis.delay(interview.id)
-        interview.task_id = task.id
-        db.commit()
+        task = process_interview_analysis.delay(record.id)
+        interview_record_service.set_status(record.id, "pending", celery_task_id=task.id)
+
         return {
             "status": "processing",
             "message": "Task dispatched to background workers successfully.",
-            "interview_id": interview.id,
+            "record_id": record.id,
             "task_id": task.id,
         }
     except HTTPException:
@@ -211,27 +226,67 @@ async def analyze_interview_endpoint(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.get("/analyze/{interview_id}/status")
-async def check_analysis_status(
-    interview_id: int,
+@router.post("/analyze/{record_id}/cancel")
+async def cancel_analysis(
+    record_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    interview = db.query(Interview).filter(Interview.id == interview_id).first()
-    if not interview or interview.user_id != current_user.username:
-        raise HTTPException(status_code=404, detail="Interview not found")
+    """Revoke a running analysis task. Used when the user discards the draft
+    or deletes the in-flight record before completion."""
+    record = (
+        db.query(InterviewRecord)
+        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == current_user.username)
+        .first()
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="Interview record not found")
+    revoked = False
+    if record.celery_task_id:
+        try:
+            from app.worker.celery_app import celery_app
+            celery_app.control.revoke(record.celery_task_id, terminate=True, signal="SIGTERM")
+            revoked = True
+        except Exception as exc:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to revoke celery task %s: %s", record.celery_task_id, exc,
+            )
+    record.status = STATUS_FAILED
+    record.error_message = "cancelled"
+    db.add(record)
+    db.commit()
+    return {"status": "cancelled", "revoked": revoked, "record_id": record_id}
 
-    payload = {
-        "interview_id": interview.id,
-        "status": interview.status,
-    }
-    if interview.status == "COMPLETED" and interview.analysis:
-        payload["analysis"] = {
-            "score": interview.analysis.score,
-            "feedback": interview.analysis.feedback,
-            "per_question": json.loads(interview.analysis.improved_answer),
-        }
-    return payload
+
+def _extract_resume_snapshot(db: Session, resume_upload_id: str, user_id: str) -> str:
+    """Download the resume file and return its plain text (truncated)."""
+    import os
+    import tempfile
+
+    from app.models.upload import UserUpload
+    from app.services.storage_service import download_file_from_s3
+    from app.services.voice.file_parser import extract_resume_text
+
+    upload = (
+        db.query(UserUpload)
+        .filter(UserUpload.id == resume_upload_id, UserUpload.user_id == user_id)
+        .first()
+    )
+    if upload is None or not upload.storage_uri:
+        return ""
+    if not upload.storage_uri.startswith("s3://"):
+        return ""
+
+    _, ext = os.path.splitext(upload.object_key or "")
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=ext or ".pdf")
+    os.close(tmp_fd)
+    try:
+        download_file_from_s3(upload.storage_uri, tmp_path)
+        return (extract_resume_text(tmp_path) or "")[:12000]
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 @router.post("/memory/save")
@@ -321,8 +376,6 @@ def get_interview_record(
     record_id: str,
     current_user: User = Depends(get_current_user),
 ):
-    from app.services.interview_record_service import interview_record_service
-
     record = interview_record_service.get(record_id, current_user.username)
     if record is None:
         raise HTTPException(status_code=404, detail="Interview record not found")
@@ -332,19 +385,60 @@ def get_interview_record(
             analysis = json.loads(record.analysis_json)
         except json.JSONDecodeError:
             analysis = None
+    qa_rows = interview_record_service.list_qa(record_id)
     return {
         "id": record.id,
         "source": record.source,
         "title": record.title,
         "tag": record.tag,
         "status": record.status,
+        "analyzed_qa_count": record.analyzed_qa_count,
         "audio_upload_id": record.audio_upload_id,
         "resume_upload_id": record.resume_upload_id,
         "jd_upload_id": record.jd_upload_id,
         "transcript": record.transcript,
+        "transcript_segments": _safe_json_loads(record.transcript_segments_json),
+        "interview_plan": _safe_json_loads(record.interview_plan),
         "analysis": analysis,
+        "qa": [_serialize_qa(qa) for qa in qa_rows],
+        "error_message": record.error_message,
         "created_at": record.created_at.isoformat() if record.created_at else "",
         "updated_at": record.updated_at.isoformat() if record.updated_at else "",
+        "completed_at": record.completed_at.isoformat() if record.completed_at else None,
+    }
+
+
+def _safe_json_loads(value: Optional[str]) -> Optional[object]:
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
+
+
+def _serialize_qa(qa: InterviewQA) -> dict:
+    return {
+        "id": qa.id,
+        "order_idx": qa.order_idx,
+        "phase": qa.phase,
+        "phase_label": qa.phase_label,
+        "question": qa.question,
+        "answer": qa.answer,
+        "question_summary": qa.question_summary,
+        "is_follow_up": qa.is_follow_up,
+        "follow_up_depth": qa.follow_up_depth,
+        "grounding_refs": _safe_json_loads(qa.grounding_refs_json) or [],
+        "score": qa.score,
+        "critique": qa.critique,
+        "improved_answer": qa.improved_answer,
+        "key_points": _safe_json_loads(qa.key_points_json) or [],
+        "answer_input_mode": qa.answer_input_mode,
+        "question_audio_url": qa.question_audio_url,
+        "answer_audio_url": qa.answer_audio_url,
+        "source_segment_start": qa.source_segment_start,
+        "source_segment_end": qa.source_segment_end,
+        "analyzed_at": qa.analyzed_at.isoformat() if qa.analyzed_at else None,
     }
 
 
@@ -471,131 +565,130 @@ def delete_interview_record(
 class QAEditRequest(BaseModel):
     question: Optional[str] = None
     answer: Optional[str] = None
-    suggestion: Optional[str] = None
+    critique: Optional[str] = None
+    improved_answer: Optional[str] = None
 
 
-@router.patch("/interview-records/{record_id}/qa/{qa_index}")
+@router.patch("/interview-records/{record_id}/qa/{qa_id}")
 def edit_interview_qa(
     record_id: str,
-    qa_index: int,
+    qa_id: str,
     payload: QAEditRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Edit a single Q/A entry inside the record's analysis_json.
-
-    The analysis JSON is expected to contain a ``per_question`` array. Falls
-    back to ``qa_history`` if present (mock-interview shape).
-    """
-    from app.models.interview_record import InterviewRecord
-
-    record = (
-        db.query(InterviewRecord)
-        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == current_user.username)
+    """Edit a single InterviewQA row by id."""
+    qa = (
+        db.query(InterviewQA)
+        .join(InterviewRecord, InterviewQA.record_id == InterviewRecord.id)
+        .filter(
+            InterviewQA.id == qa_id,
+            InterviewQA.record_id == record_id,
+            InterviewRecord.user_id == current_user.username,
+        )
         .first()
     )
-    if record is None:
-        raise HTTPException(status_code=404, detail="Interview record not found")
-    if not record.analysis_json:
-        raise HTTPException(status_code=400, detail="该记录尚无结构化 QA")
+    if qa is None:
+        raise HTTPException(status_code=404, detail="QA row not found")
 
-    try:
-        analysis = json.loads(record.analysis_json)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=500, detail="analysis_json 解析失败") from exc
-
-    key = "per_question" if isinstance(analysis.get("per_question"), list) else (
-        "qa_history" if isinstance(analysis.get("qa_history"), list) else None
-    )
-    if key is None:
-        raise HTTPException(status_code=400, detail="该记录格式不含 per_question / qa_history 数组")
-
-    arr = analysis[key]
-    if qa_index < 0 or qa_index >= len(arr):
-        raise HTTPException(status_code=400, detail="qa_index 越界")
-
-    item = dict(arr[qa_index]) if isinstance(arr[qa_index], dict) else {}
     if payload.question is not None:
-        item["question"] = payload.question
+        qa.question = payload.question
     if payload.answer is not None:
-        item["answer"] = payload.answer
-    if payload.suggestion is not None:
-        item["suggestion"] = payload.suggestion
-    arr[qa_index] = item
-    analysis[key] = arr
-
-    record.analysis_json = json.dumps(analysis, ensure_ascii=False)
-    record.updated_at = datetime.utcnow()
-    db.add(record)
+        qa.answer = payload.answer
+    if payload.critique is not None:
+        qa.critique = payload.critique
+    if payload.improved_answer is not None:
+        qa.improved_answer = payload.improved_answer
+    db.add(qa)
     db.commit()
-    db.refresh(record)
-    return {"status": "success", "qa": item}
+    db.refresh(qa)
+    return {"status": "success", "qa": _serialize_qa(qa)}
 
 
-@router.get("/analyze/{interview_id}/events")
-async def analyze_events_stream(
-    interview_id: int,
+# ── Status → progress mapping for SSE (record.status is lower-case ENUM) ──
+_PROGRESS_TICK_REFERENCE = 80  # ~120s expected wall-clock for upload pipeline
+_TERMINAL_STATUSES = {STATUS_COMPLETED, STATUS_FAILED}
+
+
+@router.get("/interview-records/{record_id}/events")
+async def interview_record_events_stream(
+    record_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """SSE progress stream for an interview analysis task.
+    """SSE progress stream for the unified analysis pipeline.
 
-    Emits ``progress`` events on each poll and a single terminal ``done``
-    event once the worker marks the row COMPLETED (or ``error`` on failure).
-
-    Internally still backed by the existing Interview.status column updated by
-    Celery; we just translate the poll loop into a push stream so the client
-    can drop its own setInterval.
+    Polls InterviewRecord.status and analyzed_qa_count. Mock-source records
+    skip the transcribing/extracting prefix and go straight to analyzing.
     """
-    # Authorize once up front
-    initial = db.query(Interview).filter(Interview.id == interview_id).first()
-    if not initial or initial.user_id != current_user.username:
-        raise HTTPException(status_code=404, detail="Interview not found")
+    initial = (
+        db.query(InterviewRecord)
+        .filter(
+            InterviewRecord.id == record_id,
+            InterviewRecord.user_id == current_user.username,
+        )
+        .first()
+    )
+    if not initial:
+        raise HTTPException(status_code=404, detail="Interview record not found")
 
-    # Whisper + 3-stage analysis on a multi-minute clip can take 2-4 minutes.
-    # Budget = MAX_TICKS * POLL_INTERVAL. Whole-pipeline expected ~120s, so we
-    # cap at 8 minutes to leave generous headroom.
-    POLL_INTERVAL = 1.5  # seconds
+    POLL_INTERVAL = 1.5
     MAX_TICKS = 320
-    PERCENT_REFERENCE_TICKS = 80  # ~120s wall-clock for the "expected" full run
 
     async def event_generator():
         try:
             for tick in range(MAX_TICKS):
-                # CRITICAL: drop the identity-map cache so we observe the
-                # COMPLETED transition written by the Celery worker. Without
-                # this, the API session returns the stale row forever.
                 db.expire_all()
                 row = (
-                    db.query(Interview).filter(Interview.id == interview_id).first()
+                    db.query(InterviewRecord)
+                    .filter(InterviewRecord.id == record_id)
+                    .first()
                 )
                 if row is None:
                     yield f"data: {json.dumps({'type': 'error', 'message': 'record disappeared'})}\n\n"
                     return
-                status = (row.status or "").upper()
-                percent = min(95, int(tick * 100 / PERCENT_REFERENCE_TICKS))
-                payload: dict = {
-                    "type": "progress",
-                    "status": status,
-                    "percent": percent,
-                }
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                if status == "COMPLETED":
-                    done: dict = {
-                        "type": "done",
-                        "interview_id": row.id,
+                status = (row.status or "").lower()
+                percent = min(95, int(tick * 100 / _PROGRESS_TICK_REFERENCE))
+                yield "data: " + json.dumps(
+                    {
+                        "type": "progress",
                         "status": status,
-                        "percent": 100,
-                    }
-                    if row.analysis:
-                        done["analysis"] = {
-                            "score": row.analysis.score,
-                            "feedback": row.analysis.feedback,
-                        }
-                    yield f"data: {json.dumps(done, ensure_ascii=False)}\n\n"
+                        "percent": percent,
+                        "analyzed_qa_count": row.analyzed_qa_count or 0,
+                    },
+                    ensure_ascii=False,
+                ) + "\n\n"
+
+                if status == STATUS_COMPLETED:
+                    overall = {}
+                    if row.analysis_json:
+                        try:
+                            overall = (json.loads(row.analysis_json) or {}).get("overall", {})
+                        except json.JSONDecodeError:
+                            overall = {}
+                    yield "data: " + json.dumps(
+                        {
+                            "type": "done",
+                            "record_id": row.id,
+                            "status": status,
+                            "percent": 100,
+                            "analysis": {
+                                "score": overall.get("score"),
+                                "summary": overall.get("summary") or overall.get("feedback") or "",
+                            },
+                        },
+                        ensure_ascii=False,
+                    ) + "\n\n"
                     return
-                if status in {"FAILED", "ERROR"}:
-                    yield f"data: {json.dumps({'type': 'error', 'status': status})}\n\n"
+                if status == STATUS_FAILED:
+                    yield "data: " + json.dumps(
+                        {
+                            "type": "error",
+                            "status": status,
+                            "message": row.error_message or "分析失败",
+                        },
+                        ensure_ascii=False,
+                    ) + "\n\n"
                     return
                 await asyncio.sleep(POLL_INTERVAL)
             yield f"data: {json.dumps({'type': 'error', 'message': 'timeout'})}\n\n"

@@ -45,29 +45,29 @@ export function TopBar({ pageTitle }: { pageTitle?: string }) {
   const colorCls = pickColor(username ?? '');
 
   return (
-    <header className="h-14 bg-white border-b border-stone-200 flex items-center px-5 shrink-0">
-      <div className="text-sm font-medium text-stone-800">{pageTitle ?? ''}</div>
+    <header className="h-16 bg-white border-b border-stone-200 flex items-center px-6 shrink-0">
+      <div className="text-base font-medium text-stone-800">{pageTitle ?? ''}</div>
       <div className="ml-auto relative" ref={ref}>
         <button
           onClick={() => setOpen((v) => !v)}
-          className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-stone-50"
+          className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md hover:bg-stone-50"
         >
           {avatarUrl ? (
             <img
               src={avatarUrl}
               alt=""
-              className="w-7 h-7 rounded-full object-cover border border-stone-200"
+              className="w-8 h-8 rounded-full object-cover border border-stone-200"
               onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
             />
           ) : (
             <span
-              className={`w-7 h-7 rounded-full ${colorCls} text-white text-xs font-semibold flex items-center justify-center`}
+              className={`w-8 h-8 rounded-full ${colorCls} text-white text-sm font-semibold flex items-center justify-center`}
             >
               {initial}
             </span>
           )}
           <span className="text-sm text-stone-700">{displayName}</span>
-          <ChevronDown size={14} className="text-stone-400" />
+          <ChevronDown size={16} className="text-stone-400" />
         </button>
         {open && (
           <div className="absolute right-0 top-full mt-1 w-44 bg-white rounded-lg shadow-lg border border-stone-200 overflow-hidden z-30">

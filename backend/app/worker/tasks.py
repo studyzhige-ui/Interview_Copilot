@@ -1,10 +1,8 @@
 import asyncio
-import json
 import logging
 import threading
 
 from app.db.database import SessionLocal
-from app.models.interview import AnalysisResult, Interview, Transcript
 from app.models.knowledge import KnowledgeDocument
 from app.worker.celery_app import celery_app
 
@@ -43,167 +41,30 @@ def run_async(coro):
     retry_backoff_max=120,
     max_retries=3,
 )
-def process_interview_analysis(self, interview_id: int):
-    """Transcribe an interview recording, analyze it, and persist the results."""
-    from app.services.voice.audio_transcription_service import transcribe_media
-    from app.services.voice.interview_analysis_service import analyze_interview
+def process_interview_analysis(self, record_id: str):
+    """Run the unified analysis pipeline for an InterviewRecord.
 
-    db = SessionLocal()
+    The orchestrator handles both source='upload' (audio → ASR → analysis)
+    and source='mock' (composed transcript from QA buffer → analysis).
+    """
+    from app.services.interview.analysis_orchestrator import analysis_orchestrator
+    from app.services.interview_record_service import interview_record_service
+
+    # Stash the celery task id so the cancel endpoint can revoke us.
     try:
-        interview = db.query(Interview).filter(Interview.id == interview_id).first()
-        if not interview:
-            return {"error": f"Interview not found: {interview_id}"}
+        interview_record_service.set_status(
+            record_id,
+            "pending",
+            celery_task_id=self.request.id,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to stash celery_task_id on %s", record_id)
 
-        interview.status = "TRANSCRIBING"
-        db.commit()
-
-        import os
-
-        file_path_or_url = interview.file_url
-        if not file_path_or_url:
-            raise ValueError(f"Interview {interview_id} has no file_url")
-        if interview.upload and interview.upload.user_id != interview.user_id:
-            raise ValueError("Interview upload owner does not match interview owner")
-        if interview.upload and not interview.upload.object_key.startswith(
-            f"uploads/{interview.user_id}/{interview.upload_id}/"
-        ):
-            raise ValueError("Interview upload object key does not match owner prefix")
-
-        local_file_path = file_path_or_url
-        is_temp_file = False
-
-        if file_path_or_url.startswith("s3://"):
-            import tempfile
-
-            from app.services.storage_service import download_file_from_s3
-
-            logger.info("[Task %s] Downloading S3 object for transcription.", self.request.id)
-            _, ext = os.path.splitext(file_path_or_url)
-            tmp_fd, local_file_path = tempfile.mkstemp(suffix=ext)
-            os.close(tmp_fd)
-
-            download_file_from_s3(file_path_or_url, local_file_path)
-            is_temp_file = True
-
-        # ── Extract resume context (if resume was uploaded) ──────────
-        resume_context = ""
-        resume_temp_path = None
-        if interview.resume_upload_id:
-            try:
-                resume_context = _extract_resume_for_analysis(
-                    db, interview.user_id, interview.resume_upload_id
-                )
-            except Exception as exc:
-                logger.warning(
-                    "[Task %s] Resume extraction failed, continuing without: %s",
-                    self.request.id, exc,
-                )
-
-        jd_context = interview.jd_text or ""
-
-        try:
-            logger.info("[Task %s] Transcribing media: %s", self.request.id, local_file_path)
-            transcript_text = run_async(transcribe_media(local_file_path))
-
-            interview.status = "ANALYZING"
-            db.commit()
-
-            logger.info("[Task %s] Analyzing transcript.", self.request.id)
-            analysis_data = run_async(
-                analyze_interview(
-                    transcript_text,
-                    resume_context=resume_context,
-                    jd_context=jd_context,
-                )
-            )
-
-            new_transcript = Transcript(
-                interview_id=interview.id,
-                content=transcript_text,
-                raw_text=transcript_text,
-            )
-            db.add(new_transcript)
-
-            # Persist analysis result (use v2 overall.score / overall.feedback)
-            overall = analysis_data.get("overall", {})
-            new_analysis = AnalysisResult(
-                interview_id=interview.id,
-                score=overall.get("score", 0),
-                feedback=overall.get("feedback", ""),
-                improved_answer=json.dumps(
-                    analysis_data.get("per_question", []), ensure_ascii=False
-                ),
-            )
-            db.add(new_analysis)
-
-            # Create InterviewRecord for debrief chat sessions
-            from app.services.interview_record_service import interview_record_service
-
-            analysis_json_str = json.dumps(analysis_data, ensure_ascii=False)
-            interview_record_service.create_from_upload(
-                user_id=interview.user_id,
-                title=f"面试录音 #{interview.id}",
-                audio_upload_id=str(interview.upload_id) if interview.upload_id else None,
-                resume_upload_id=str(interview.resume_upload_id) if interview.resume_upload_id else None,
-                transcript=transcript_text,
-                analysis_json=analysis_json_str,
-                db=db,
-            )
-
-            interview.status = "COMPLETED"
-            db.commit()
-
-            return {"status": "success", "interview_id": interview_id}
-        finally:
-            if is_temp_file and os.path.exists(local_file_path):
-                os.unlink(local_file_path)
-                logger.info("[Task %s] Removed temporary file: %s", self.request.id, local_file_path)
-
-    except Exception as exc:
-        db.rollback()
-        interview = db.query(Interview).filter(Interview.id == interview_id).first()
-        if interview:
-            interview.status = "FAILED"
-            db.commit()
-        logger.error("Interview analysis task failed: %s", exc)
+    try:
+        return analysis_orchestrator.run(record_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Interview analysis task failed for %s: %s", record_id, exc)
         raise
-    finally:
-        db.close()
-
-
-def _extract_resume_for_analysis(db, user_id: str, resume_upload_id: str) -> str:
-    """Download and extract resume text for analysis context."""
-    import os
-    import tempfile
-
-    from app.models.upload import UserUpload
-    from app.services.voice.file_parser import extract_resume_text
-
-    upload = (
-        db.query(UserUpload)
-        .filter(UserUpload.id == resume_upload_id, UserUpload.user_id == user_id)
-        .first()
-    )
-    if upload is None:
-        logger.warning("Resume upload not found: %s", resume_upload_id)
-        return ""
-
-    if not upload.storage_uri or not upload.storage_uri.startswith("s3://"):
-        logger.warning("Resume upload has no valid S3 URI: %s", resume_upload_id)
-        return ""
-
-    from app.services.storage_service import download_file_from_s3
-
-    _, ext = os.path.splitext(upload.object_key)
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=ext)
-    os.close(tmp_fd)
-
-    try:
-        download_file_from_s3(upload.storage_uri, tmp_path)
-        return extract_resume_text(tmp_path)
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
 
 
 @celery_app.task(

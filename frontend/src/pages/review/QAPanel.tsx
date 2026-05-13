@@ -23,31 +23,6 @@ function asAnalysis(detail: InterviewRecordDetail | null): InterviewAnalysis | n
   return a && typeof a === 'object' ? a : null;
 }
 
-function extractQA(analysis: InterviewAnalysis | null): InterviewQA[] {
-  if (!analysis) return [];
-  if (Array.isArray(analysis.per_question) && analysis.per_question.length > 0) {
-    return analysis.per_question.map((q, i) => ({
-      index: typeof q.index === 'number' ? q.index : i + 1,
-      phase: q.phase,
-      question: q.question ?? '',
-      answer: q.answer ?? '',
-      score: typeof q.score === 'number' ? q.score : undefined,
-      critique: q.critique,
-      improved_answer: q.improved_answer,
-      tags: Array.isArray(q.tags) ? q.tags : undefined,
-    }));
-  }
-  if (Array.isArray(analysis.qa_history)) {
-    return analysis.qa_history.map((h, i) => ({
-      index: i + 1,
-      phase: h.phase_id,
-      question: h.question ?? '',
-      answer: h.answer ?? '',
-    }));
-  }
-  return [];
-}
-
 export function QAPanel({ detail, loading }: Props) {
   // Default to the report tab when content first lands; flip to QA only if the
   // user explicitly switches. This matches the design spec.
@@ -76,7 +51,7 @@ export function QAPanel({ detail, loading }: Props) {
   }
 
   const analysis = asAnalysis(detail);
-  const qa = extractQA(analysis);
+  const qa = detail.qa ?? [];
 
   return (
     <div className="flex-1 min-w-0 overflow-y-auto p-6">
@@ -96,15 +71,15 @@ export function QAPanel({ detail, loading }: Props) {
         <ReportTabs tab={tab} onChange={setTab} hasTranscript={!!detail.transcript} />
 
         {tab === 'report' && (
-          <ReportView analysis={analysis} transcript={detail.transcript} />
+          <ReportView analysis={analysis} transcript={detail.transcript} qaCount={qa.length} />
         )}
         {tab === 'qa' && (
           qa.length === 0
           ? <EmptyState icon={<FileText size={24} />} title="这条记录还没有结构化 QA" description="模型可能还在分析，或这条记录不输出 per_question 字段。" />
           : <div className="flex flex-col gap-4">
-              {qa.map((q, i) => (
+              {qa.map((q) => (
                 <QAItem
-                  key={i}
+                  key={q.id}
                   qa={q}
                   recordId={detail.id}
                 />
@@ -166,33 +141,64 @@ function ReportTabs({ tab, onChange, hasTranscript }: { tab: Tab; onChange: (t: 
 
 // ── Raw transcript view ─────────────────────────────────────────────────
 
+interface SpeakerLine {
+  speaker: string;
+  text: string;
+  side: 'interviewer' | 'candidate' | 'unknown';
+}
+
+function parseLine(line: string): SpeakerLine | null {
+  // WhisperX/Pyannote ASR: `**[SPEAKER_01]**: text`
+  const asrMatch = line.match(/^\*\*\[([^\]]+)\]\*\*:\s*(.*)$/);
+  if (asrMatch) {
+    const speaker = asrMatch[1];
+    const isInterviewer =
+      speaker.includes('00') || speaker.toLowerCase().includes('interviewer');
+    return {
+      speaker,
+      text: asrMatch[2],
+      side: isInterviewer ? 'interviewer' : 'candidate',
+    };
+  }
+  // Mock composed transcript: `面试官: text` / `候选人: text`
+  const mockMatch = line.match(/^(面试官|候选人|Interviewer|Candidate)\s*[:：]\s*(.*)$/i);
+  if (mockMatch) {
+    const role = mockMatch[1];
+    const isInterviewer = role === '面试官' || role.toLowerCase() === 'interviewer';
+    return {
+      speaker: role,
+      text: mockMatch[2],
+      side: isInterviewer ? 'interviewer' : 'candidate',
+    };
+  }
+  return null;
+}
+
 function TranscriptView({ transcript }: { transcript: string }) {
-  // Parse speaker labels and render with color-coded badges
   const lines = transcript.split('\n').filter((l) => l.trim());
 
   return (
     <div className="flex flex-col gap-3">
       <div className="text-xs text-stone-500 mb-1">
-        WhisperX + Pyannote 声纹分离原始输出 · 用于验证说话者识别准确性
+        原始对话文稿（mock 来源为结构化 Q&A 拼接；upload 来源为 ASR + 声纹分离输出）
       </div>
       {lines.map((line, i) => {
-        const m = line.match(/^\*\*\[([^\]]+)\]\*\*:\s*(.*)$/);
-        if (m) {
-          const speaker = m[1];
-          const text = m[2];
-          const isS1 = speaker.includes('1') || speaker.includes('SPEAKER_00');
+        const parsed = parseLine(line);
+        if (parsed) {
+          const colorCls =
+            parsed.side === 'interviewer'
+              ? 'bg-blue-100 text-blue-700'
+              : parsed.side === 'candidate'
+              ? 'bg-emerald-100 text-emerald-700'
+              : 'bg-stone-100 text-stone-600';
           return (
             <div key={i} className="bg-white rounded-xl border border-stone-200 p-4 shadow-xs">
               <span
-                className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full mr-2 ${
-                  isS1
-                    ? 'bg-blue-100 text-blue-700'
-                    : 'bg-emerald-100 text-emerald-700'
-                }`}
+                className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full mr-2 ${colorCls}`}
               >
-                {speaker}
+                {parsed.speaker}
               </span>
-              <span className="text-sm text-stone-700 leading-[1.7]">{text}</span>
+              <span className="text-sm text-stone-700 leading-[1.7]">{parsed.text}</span>
             </div>
           );
         }
@@ -206,17 +212,19 @@ function TranscriptView({ transcript }: { transcript: string }) {
   );
 }
 
-// ── Report view (overall score + strengths/weaknesses + feedback) ────────
+// ── Report view (overall score + strengths/weaknesses + summary) ────────
 
 function ReportView({
   analysis,
   transcript,
+  qaCount,
 }: {
   analysis: InterviewAnalysis | null;
   transcript: string | null;
+  qaCount: number;
 }) {
   const overall = analysis?.overall;
-  const has = analysis && (overall || (analysis.per_question && analysis.per_question.length > 0));
+  const has = analysis && (overall || qaCount > 0);
   if (!has) {
     if (transcript) {
       return (
@@ -237,12 +245,19 @@ function ReportView({
     );
   }
 
+  // overall.score is on a 0-10 scale in the v2 schema; we render as /100.
   const score10 = typeof overall?.score === 'number' ? overall.score : 0;
   const score100 = Math.round(score10 * 10);
-  const feedback = overall?.feedback ?? '';
+  const summary = overall?.summary || '';
   const strengths = overall?.strengths ?? [];
   const weaknesses = overall?.weaknesses ?? [];
-  const plan = overall?.improvement_plan ?? [];
+  const planRaw = overall?.improvement_plan ?? [];
+  const plan: string[] = planRaw.map((p) => {
+    if (typeof p === 'string') return p;
+    const area = p.area ?? '';
+    const actions = (p.actions ?? []).join('；');
+    return area && actions ? `${area}：${actions}` : area || actions;
+  }).filter(Boolean);
 
   // We're a study companion, not a gatekeeper: do NOT render verdict / grade /
   // any pass-fail framing. Score is kept as a self-benchmark only.
@@ -257,8 +272,8 @@ function ReportView({
           <div className="text-xs text-stone-500 mt-1">/ 100 · 进步基准线</div>
         </div>
         <div className="flex flex-col gap-3 justify-center">
-          {feedback && (
-            <div className="text-sm text-stone-600 leading-[1.7]">{feedback}</div>
+          {summary && (
+            <div className="text-sm text-stone-600 leading-[1.7]">{summary}</div>
           )}
         </div>
       </div>
@@ -336,7 +351,7 @@ function QAItem({ qa, recordId }: { qa: InterviewQA; recordId: string }) {
     setEditingQ(false);
     if (question === qa.question) return;
     try {
-      await editInterviewQA(recordId, qa.index - 1, { question });
+      await editInterviewQA(recordId, qa.id, { question });
       toast.success('问题已保存');
     } catch { toast.error('保存失败'); setQuestion(qa.question); }
   };
@@ -344,24 +359,24 @@ function QAItem({ qa, recordId }: { qa: InterviewQA; recordId: string }) {
     setEditingA(false);
     if (answer === qa.answer) return;
     try {
-      await editInterviewQA(recordId, qa.index - 1, { answer });
+      await editInterviewQA(recordId, qa.id, { answer });
       toast.success('答案已保存');
     } catch { toast.error('保存失败'); setAnswer(qa.answer); }
   };
 
   const hasImproved = !!qa.improved_answer && qa.improved_answer.trim().length > 0;
+  const score = qa.score ?? undefined;
+  const phaseLabel = qa.phase_label || qa.phase;
 
   return (
     <article className="bg-white rounded-2xl p-5 border border-stone-200 shadow-xs">
       {/* Q-row */}
       <div className="flex items-center gap-2 mb-2">
-        <Pill tone="primary">Q{qa.index}</Pill>
-        <span className="text-xs text-stone-500">面试官</span>
-        {qa.tags && qa.tags.slice(0, 3).map((t, i) => (
-          <Pill key={i} tone="sand">{t}</Pill>
-        ))}
-        <span className={`ml-auto text-sm font-mono font-semibold ${scoreColor(qa.score)}`}>
-          {typeof qa.score === 'number' ? `${Math.round(qa.score * 10)}分` : ''}
+        <Pill tone="primary">Q{qa.order_idx + 1}</Pill>
+        {qa.is_follow_up && <Pill tone="sand">追问</Pill>}
+        <span className="text-xs text-stone-500">{phaseLabel}</span>
+        <span className={`ml-auto text-sm font-mono font-semibold ${scoreColor(score)}`}>
+          {typeof score === 'number' ? `${Math.round(score * 10)}分` : ''}
         </span>
         <button
           onClick={() => setEditingQ((v) => !v)}

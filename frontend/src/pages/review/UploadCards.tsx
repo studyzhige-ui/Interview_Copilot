@@ -5,7 +5,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { toast } from '@/store/uiStore';
 import { startAnalyze, updateInterviewRecord, uploadAudio, uploadResume } from '@/api/interview';
 import { uploadKnowledgeFile } from '@/api/knowledge';
-import { useAnalysisStream } from '@/hooks/useAnalysisStream';
+import type { AnalysisProgress } from './AnalysisRunner';
 
 interface SlotState {
   filename?: string;
@@ -19,13 +19,18 @@ const TAGS = ['Backend', 'Frontend', 'Algorithm', 'System', 'HR'] as const;
 type TagOpt = typeof TAGS[number];
 
 interface Props {
-  /** Optional initial title from the draft record. */
   initialTitle?: string;
-  /** Called when analysis completes; payload includes the new record id we should switch to. */
-  onAnalyzed: (recordTitle: string, recordTag?: string) => void;
+  /** Externally-managed analysis state for THIS card's session. */
+  analysis: AnalysisProgress | null;
+  /** Caller hooks up the SSE runner; we just notify when /analyze succeeds. */
+  onStart: (payload: {
+    record_id: string;
+    title: string;
+    tag?: string;
+  }) => void;
 }
 
-export function UploadCards({ initialTitle, onAnalyzed }: Props) {
+export function UploadCards({ initialTitle, analysis, onStart }: Props) {
   const [slots, setSlots] = useState<Record<SlotKey, SlotState>>({
     audio: {},
     resume: {},
@@ -33,7 +38,6 @@ export function UploadCards({ initialTitle, onAnalyzed }: Props) {
   });
   const [title, setTitle] = useState(initialTitle ?? '');
   const [tag, setTag] = useState<TagOpt | ''>('');
-  const [interviewId, setInterviewId] = useState<number | null>(null);
   const [starting, setStarting] = useState(false);
 
   const audioRef = useRef<HTMLInputElement | null>(null);
@@ -42,19 +46,6 @@ export function UploadCards({ initialTitle, onAnalyzed }: Props) {
 
   const update = (k: SlotKey, patch: Partial<SlotState>) =>
     setSlots((s) => ({ ...s, [k]: { ...s[k], ...patch } }));
-
-  const stream = useAnalysisStream(
-    interviewId,
-    async (_analysis) => {
-      // After backend signals "done", optionally PATCH the newly-created
-      // InterviewRecord with the chosen title/tag, then bubble up.
-      // We don't know the record_id here yet — the parent will refetch
-      // /interview-records and pick the newest. We pass title+tag back so
-      // the parent can apply them.
-      onAnalyzed(title.trim() || '面试录音复盘', tag || undefined);
-    },
-    (msg) => toast.error(`分析失败：${msg}`),
-  );
 
   const onPick = async (k: SlotKey, f: File) => {
     update(k, { filename: f.name, uploading: true });
@@ -71,9 +62,9 @@ export function UploadCards({ initialTitle, onAnalyzed }: Props) {
   };
 
   const canStart =
-    !!slots.audio.uploadId && !!slots.resume.uploadId && !starting && interviewId === null;
+    !!slots.audio.uploadId && !!slots.resume.uploadId && !starting && analysis === null;
 
-  const onStart = async () => {
+  const onStartClick = async () => {
     setStarting(true);
     try {
       const r = await startAnalyze({
@@ -81,7 +72,11 @@ export function UploadCards({ initialTitle, onAnalyzed }: Props) {
         resume_upload_id: slots.resume.uploadId!,
         jd_upload_id: slots.jd.uploadId,
       });
-      setInterviewId(r.interview_id);
+      onStart({
+        record_id: r.record_id,
+        title: title.trim() || '面试录音复盘',
+        tag: tag || undefined,
+      });
     } catch {
       toast.error('启动分析失败');
     } finally {
@@ -90,30 +85,33 @@ export function UploadCards({ initialTitle, onAnalyzed }: Props) {
   };
 
   // ── While analyzing ──────────────────────────────────────────────────
-  if (interviewId !== null) {
+  if (analysis !== null) {
     return (
       <div className="max-w-3xl mx-auto p-10">
         <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-10">
           <div className="flex items-center gap-3 mb-4">
             <Loader2 size={20} className="text-primary-500 animate-spin" />
             <div className="text-sm text-primary-700 font-mono">
-              ● 正在转录与分析… {stream.percent}%
+              ● 正在转录与分析… {analysis.percent}%
             </div>
           </div>
           <div className="w-full h-2 bg-stone-100 rounded-full overflow-hidden mb-3">
             <div
               className="h-full bg-primary-500 transition-all duration-300 ease-out"
-              style={{ width: `${stream.percent}%` }}
+              style={{ width: `${analysis.percent}%` }}
             />
           </div>
           <div className="text-xs text-stone-500">
-            {stream.phase === 'progress'
-              ? `阶段：${stream.status ?? '处理中'}`
-              : stream.phase === 'connecting'
+            {analysis.phase === 'progress'
+              ? `阶段：${analysis.status ?? '处理中'}`
+              : analysis.phase === 'connecting'
               ? '建立 SSE 连接中…'
-              : stream.phase === 'error'
-              ? `连接错误：${stream.message ?? ''}`
+              : analysis.phase === 'error'
+              ? `连接错误：${analysis.message ?? ''}`
               : '等待后端推送进度'}
+          </div>
+          <div className="text-[11px] text-stone-400 mt-3">
+            可以切换到其他面试 / 对话页面，分析任务会继续在后台运行；左侧列表会显示「分析中」状态。
           </div>
         </div>
       </div>
@@ -123,7 +121,6 @@ export function UploadCards({ initialTitle, onAnalyzed }: Props) {
   // ── Upload state ─────────────────────────────────────────────────────
   return (
     <div className="max-w-3xl mx-auto p-8">
-      {/* Title + tag bar */}
       <div className="flex items-center gap-3 mb-5">
         <input
           value={title}
@@ -140,9 +137,7 @@ export function UploadCards({ initialTitle, onAnalyzed }: Props) {
           >
             <option value="">选标签（可选）</option>
             {TAGS.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
+              <option key={t} value={t}>{t}</option>
             ))}
           </select>
         </div>
@@ -191,7 +186,7 @@ export function UploadCards({ initialTitle, onAnalyzed }: Props) {
           icon={<Play size={16} />}
           disabled={!canStart}
           loading={starting}
-          onClick={onStart}
+          onClick={onStartClick}
         >
           {canStart ? '开始分析' : slots.audio.uploadId && slots.resume.uploadId ? '处理中…' : '请先完成必填上传'}
         </Btn>
@@ -200,7 +195,6 @@ export function UploadCards({ initialTitle, onAnalyzed }: Props) {
   );
 }
 
-// Helper used by parent: after onAnalyzed resolves a new record id, apply tag.
 export async function applyDraftMetadata(
   recordId: string,
   patch: { title?: string; tag?: string },
@@ -209,7 +203,7 @@ export async function applyDraftMetadata(
   try {
     await updateInterviewRecord(recordId, patch);
   } catch {
-    // non-fatal — record is still usable, tag/title just won't apply.
+    // non-fatal
   }
 }
 

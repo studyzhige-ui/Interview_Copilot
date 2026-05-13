@@ -4,11 +4,9 @@
 """
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
-from fastapi import HTTPException
 
 
 def _make_user(username="interviewuser"):
-    """构造一个 Mock User 对象。"""
     user = MagicMock()
     user.username = username
     return user
@@ -24,7 +22,10 @@ async def test_upload_audio_calls_s3(db_session):
     mock_file.filename = "interview.wav"
     mock_file.content_type = "audio/wav"
 
-    with patch("app.api.interview.upload_file_to_owned_key", return_value="s3://bucket/uploads/interviewuser/upl_x/interview.wav") as mock_s3:
+    with patch(
+        "app.api.interview.upload_file_to_owned_key",
+        return_value="s3://bucket/uploads/interviewuser/upl_x/interview.wav",
+    ) as mock_s3:
         result = await upload_audio(file=mock_file, db=db_session, current_user=_make_user())
 
     assert result["status"] == "success"
@@ -34,67 +35,49 @@ async def test_upload_audio_calls_s3(db_session):
 
 
 @pytest.mark.asyncio
-async def test_analyze_dispatches_celery_task(db_session):
-    """analyze_interview_endpoint 应创建 Interview 记录并下发 Celery 任务。"""
+async def test_analyze_dispatches_orchestrator(db_session):
+    """analyze_interview_endpoint 应创建 InterviewRecord 并 dispatch Celery orchestrator."""
     from app.api.interview import analyze_interview_endpoint, AnalyzeRequest
+    from app.models.upload import UserUpload
 
     mock_task = MagicMock()
     mock_task.id = "celery-task-abc"
 
-    with patch("app.api.interview.process_interview_analysis") as mock_process:
+    resume_upload = UserUpload(
+        user_id="interviewuser",
+        purpose="interview_resume",
+        original_filename="resume.pdf",
+        storage_uri="s3://bucket/uploads/interviewuser/upl_resume/resume.pdf",
+        object_key="uploads/interviewuser/upl_resume/resume.pdf",
+        status="uploaded",
+    )
+    audio_upload = UserUpload(
+        user_id="interviewuser",
+        purpose="interview_audio",
+        original_filename="test.wav",
+        storage_uri="s3://bucket/uploads/interviewuser/upl_test/test.wav",
+        object_key="uploads/interviewuser/upl_test/test.wav",
+        status="uploaded",
+    )
+    db_session.add_all([resume_upload, audio_upload])
+    db_session.flush()
+
+    with patch("app.api.interview.process_interview_analysis") as mock_process, \
+         patch("app.api.interview._extract_resume_snapshot", return_value="resume text"):
         mock_process.delay.return_value = mock_task
 
-        from app.models.upload import UserUpload
-
-        upload = UserUpload(
-            user_id="interviewuser",
-            purpose="interview_audio",
-            original_filename="test.wav",
-            storage_uri="s3://bucket/uploads/interviewuser/upl_test/test.wav",
-            object_key="uploads/interviewuser/upl_test/test.wav",
-            status="uploaded",
+        request = AnalyzeRequest(
+            upload_id=audio_upload.id,
+            resume_upload_id=resume_upload.id,
         )
-        db_session.add(upload)
-        db_session.flush()
-
-        request = AnalyzeRequest(upload_id=upload.id)
         result = await analyze_interview_endpoint(
             request=request, db=db_session, current_user=_make_user()
         )
 
     assert result["status"] == "processing"
     assert result["task_id"] == "celery-task-abc"
-    assert "interview_id" in result
-    mock_process.delay.assert_called_once_with(result["interview_id"])
-
-
-@pytest.mark.asyncio
-async def test_check_status_not_found(db_session):
-    """查询不存在的 interview_id 应返回 404。"""
-    from app.api.interview import check_analysis_status
-
-    with pytest.raises(HTTPException) as exc_info:
-        await check_analysis_status(
-            interview_id=99999, db=db_session, current_user=_make_user()
-        )
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_check_status_returns_pending(db_session):
-    """对刚创建的 Interview，应返回 PENDING 状态。"""
-    from app.api.interview import check_analysis_status
-    from app.models.interview import Interview
-
-    interview = Interview(user_id="interviewuser", status="PENDING")
-    db_session.add(interview)
-    db_session.flush()
-
-    result = await check_analysis_status(
-        interview_id=interview.id, db=db_session, current_user=_make_user()
-    )
-    assert result["status"] == "PENDING"
-    assert result["interview_id"] == interview.id
+    assert result["record_id"].startswith("ir_")
+    mock_process.delay.assert_called_once_with(result["record_id"])
 
 
 @pytest.mark.asyncio
@@ -104,8 +87,11 @@ async def test_analytics_report_delegates_to_service(db_session):
 
     mock_report = {"status": "success", "report": {"overall_evaluation": "good"}}
 
-    with patch("app.api.interview.generate_comprehensive_report",
-               new_callable=AsyncMock, return_value=mock_report):
+    with patch(
+        "app.api.interview.generate_comprehensive_report",
+        new_callable=AsyncMock,
+        return_value=mock_report,
+    ):
         result = await get_analytics_report(limit=20, current_user=_make_user())
 
     assert result["status"] == "success"
@@ -120,7 +106,7 @@ async def test_save_personal_memory(db_session):
         question="什么是分布式锁？",
         improved_answer="Redisson watch dog 机制",
         original_score=4.0,
-        tags=["Redis", "分布式"]
+        tags=["Redis", "分布式"],
     )
 
     with patch("app.api.interview.ingest_text", new_callable=AsyncMock) as mock_ingest:

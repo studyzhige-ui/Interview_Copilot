@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { tokenStore } from '@/lib/token';
 
-// SSE event shapes (per backend/app/api/interview.py:analyze_events_stream)
+// SSE event shapes (per backend/app/api/interview.py:interview_record_events_stream)
 export type AnalysisEvent =
-  | { type: 'progress'; status: string; percent: number }
-  | { type: 'done'; interview_id: number; status: string; percent: number; analysis?: unknown }
+  | { type: 'progress'; status: string; percent: number; analyzed_qa_count?: number }
+  | { type: 'done'; record_id: string; status: string; percent: number; analysis?: unknown }
   | { type: 'error'; status?: string; message?: string };
 
 export interface AnalysisState {
@@ -18,7 +18,7 @@ export interface AnalysisState {
 // minimal SSE consumer over fetch + ReadableStream. We parse text/event-stream
 // frames split by blank line and surface "data: {...}" payloads only.
 export function useAnalysisStream(
-  interviewId: number | null,
+  recordId: string | null,
   onDone?: (analysis: unknown) => void,
   onError?: (msg: string) => void,
 ): AnalysisState {
@@ -26,7 +26,7 @@ export function useAnalysisStream(
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (interviewId === null) return;
+    if (!recordId) return;
     const controller = new AbortController();
     abortRef.current = controller;
     setState({ phase: 'connecting', percent: 0 });
@@ -34,7 +34,7 @@ export function useAnalysisStream(
     (async () => {
       try {
         const token = tokenStore.getAccess() ?? '';
-        const res = await fetch(`/api/v1/analyze/${interviewId}/events`, {
+        const res = await fetch(`/api/v1/interview-records/${encodeURIComponent(recordId)}/events`, {
           headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
           signal: controller.signal,
         });
@@ -89,7 +89,7 @@ export function useAnalysisStream(
 
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [interviewId]);
+  }, [recordId]);
 
   return state;
 }

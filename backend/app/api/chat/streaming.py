@@ -58,7 +58,17 @@ async def websocket_chat_endpoint(
             if not message:
                 continue
             async for chunk in stream_chat_with_agent(message, user.username, session_id):
-                if chunk:
+                if not chunk:
+                    continue
+                # Separate transport: pipeline-internal status hints go on a
+                # different event type so the client can display them as
+                # progress indicators rather than concatenating them into the
+                # final assistant message.
+                stripped = chunk.lstrip()
+                if stripped.startswith("[status]"):
+                    content = stripped[len("[status]"):].strip().rstrip("\n")
+                    await websocket.send_json({"type": "status", "content": content})
+                else:
                     await websocket.send_json({"type": "chunk", "content": chunk})
             await websocket.send_json({"type": "done"})
     except WebSocketDisconnect:

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, String, Text
+from sqlalchemy import Column, DateTime, Integer, String, Text
 
 from app.db.database import Base
 
@@ -11,21 +11,54 @@ def _generate_record_id() -> str:
 
 
 class InterviewRecord(Base):
-    """A complete record of one interview (real upload or mock simulation)."""
+    """A complete record of one interview (real upload or mock simulation).
+
+    Unified data model that covers both:
+      - source='upload': user-uploaded audio/video that goes through ASR +
+        diarization + LLM analysis.
+      - source='mock'  : AI-driven mock interview with structured Q&A. Skips
+        ASR; the QA is composed from the session buffer.
+
+    Per-question rows live in InterviewQA. analysis_json holds only the
+    top-level summary (overall + phase_summary).
+    """
 
     __tablename__ = "interview_records"
 
     id = Column(String, primary_key=True, default=_generate_record_id, index=True)
     user_id = Column(String, index=True, nullable=False)
     source = Column(String, nullable=False)  # "upload" | "mock"
+
     title = Column(String, default="未命名面试")
     tag = Column(String(32), nullable=True)
+
+    # Upload references
     audio_upload_id = Column(String, nullable=True)
     resume_upload_id = Column(String, nullable=True)
+    resume_doc_id = Column(String, nullable=True)       # if resume was picked from library
     jd_upload_id = Column(String, nullable=True)
+
+    # Snapshots (immutable; survive source file deletion)
+    resume_text_snapshot = Column(Text, nullable=True)
+    jd_text_snapshot = Column(Text, nullable=True)
+    resume_structured_json = Column(Text, nullable=True)  # ResumeEvidence with ref_ids
+    jd_structured_json = Column(Text, nullable=True)      # JDRequirements with ref_ids
+
+    # Raw material
     transcript = Column(Text, nullable=True)
+    transcript_segments_json = Column(Text, nullable=True)  # WhisperX timestamped segments
+    interview_plan = Column(Text, nullable=True)            # generate_plan() output (mock only)
+
+    # Top-level analysis result (per-question rows in interview_qa)
     analysis_json = Column(Text, nullable=True)
-    interview_plan = Column(Text, nullable=True)
-    status = Column(String, index=True, default="processing", nullable=False)
+    analysis_schema_version = Column(Integer, nullable=False, default=2)
+
+    # Status & progress
+    status = Column(String, index=True, default="pending", nullable=False)
+    analyzed_qa_count = Column(Integer, nullable=False, default=0)
+    celery_task_id = Column(String, nullable=True)
+    error_message = Column(Text, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime, nullable=True)

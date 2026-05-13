@@ -5,49 +5,78 @@
 //   backend/app/api/model_runtime.py
 // Do NOT introduce fields the backend does not return.
 
+// status values written by backend (lower-case in v2 schema)
+export type InterviewRecordStatus =
+  | 'pending'
+  | 'transcribing'
+  | 'extracting'
+  | 'analyzing'
+  | 'completed'
+  | 'failed';
+
 export interface InterviewRecordListItem {
   id: string;
-  source: string;
+  // backend writes 'upload' | 'mock'; frontend may also synthesize 'draft' for
+  // local-only entries that haven't been persisted yet.
+  source: 'upload' | 'mock' | 'draft';
   title: string;
   tag?: string | null;
-  status: string;
+  status: InterviewRecordStatus | string;
   created_at: string;
 }
 
+export interface InterviewQA {
+  id: string;
+  order_idx: number;
+  phase: string;
+  phase_label?: string | null;
+  question: string;
+  answer: string;
+  question_summary?: string | null;
+  is_follow_up: boolean;
+  follow_up_depth: number;
+  grounding_refs: string[];
+  score?: number | null;
+  critique?: string | null;
+  improved_answer?: string | null;
+  key_points: string[];
+  answer_input_mode: 'text' | 'voice' | 'voice_transcribed';
+  question_audio_url?: string | null;
+  answer_audio_url?: string | null;
+  source_segment_start?: number | null;
+  source_segment_end?: number | null;
+  analyzed_at?: string | null;
+}
+
+export interface InterviewAnalysis {
+  schema_version?: number;
+  overall?: {
+    score?: number;
+    grade?: string;
+    summary?: string;
+    feedback?: string;          // legacy alias retained by backend renderer
+    verdict?: string;
+    strengths?: string[];
+    weaknesses?: string[];
+    improvement_plan?: Array<string | { area?: string; actions?: string[]; resources?: string[] }>;
+  };
+  phase_summary?: Record<string, { score?: number; feedback?: string }>;
+  meta?: { model?: string; analyzed_at?: string; qa_count?: number; duration_sec?: number };
+}
+
 export interface InterviewRecordDetail extends InterviewRecordListItem {
+  analyzed_qa_count: number;
   audio_upload_id: string | null;
   resume_upload_id: string | null;
   jd_upload_id: string | null;
   transcript: string | null;
-  analysis: unknown;
+  transcript_segments: unknown;
+  interview_plan: unknown;
+  analysis: InterviewAnalysis | null;
+  qa: InterviewQA[];
+  error_message: string | null;
   updated_at: string;
-}
-
-export interface InterviewQA {
-  index: number;
-  phase?: string;
-  question: string;
-  answer: string;
-  score?: number;             // 0-10 from per-question stage
-  critique?: string;
-  improved_answer?: string;   // LLM "优化回答" content
-  tags?: string[];
-}
-
-export interface InterviewAnalysis {
-  interview_metadata?: { total_questions?: number; phases?: string[] };
-  overall?: {
-    score?: number;
-    grade?: string;
-    verdict?: string;
-    feedback?: string;
-    strengths?: string[];
-    weaknesses?: string[];
-    improvement_plan?: string[];
-  };
-  per_question?: InterviewQA[];
-  // mock-interview shape
-  qa_history?: Array<{ question?: string; answer?: string; phase_id?: string }>;
+  completed_at: string | null;
 }
 
 export interface ChatSessionListItem {
@@ -74,6 +103,7 @@ export interface ChatMessageItem {
 
 export type WSEvent =
   | { type: 'chunk'; content: string }
+  | { type: 'status'; content: string }
   | { type: 'done' };
 
 export interface MockPlanPhase {
@@ -105,10 +135,10 @@ export interface MockAnswerResp {
 }
 
 export interface MockFinishResp {
-  status: string;
+  status: 'analyzing';
   record_id: string;
   debrief_session_id: string;
-  summary: unknown;
+  task_id: string;
 }
 
 export interface KnowledgeDoc {
@@ -155,12 +185,9 @@ export interface ModelRuntime {
   >;
 }
 
-export interface AnalyzeStatus {
-  interview_id: number;
-  status: string;
-  analysis?: {
-    score?: number;
-    feedback?: string;
-    per_question?: unknown;
-  };
+export interface AnalyzeDispatchResp {
+  status: 'processing';
+  message: string;
+  record_id: string;
+  task_id: string;
 }

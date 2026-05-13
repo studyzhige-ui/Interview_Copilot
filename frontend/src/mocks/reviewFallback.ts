@@ -9,9 +9,9 @@ export const USE_FALLBACK = false;
 export const FALLBACK_RECORDS: InterviewRecordListItem[] = [
   {
     id: 'mock-1',
-    source: 'mock_interview',
+    source: 'mock',
     title: '示例 · 字节后端二面',
-    status: 'COMPLETED',
+    status: 'completed',
     created_at: new Date().toISOString(),
   },
 ];

@@ -55,47 +55,61 @@ def test_chat_session_with_messages(db_session):
     assert loaded.messages[1].content == "你好！有什么问题？"
 
 
-def test_interview_with_transcript_and_analysis(db_session):
-    """Interview + Transcript + AnalysisResult：完整数据链路。"""
-    from app.models.interview import Interview, Transcript, AnalysisResult
+def test_interview_record_with_qa(db_session):
+    """InterviewRecord + InterviewQA：unified schema 替换了旧的三表模型。"""
+    from app.models.interview_qa import InterviewQA
+    from app.models.interview_record import InterviewRecord
 
-    interview = Interview(user_id="user1", status="PENDING", file_url="s3://bucket/test.wav")
-    db_session.add(interview)
-    db_session.flush()
-
-    transcript = Transcript(
-        interview_id=interview.id,
-        content="面试官：你好\n候选人：你好",
-        raw_text="raw text content"
+    record = InterviewRecord(
+        user_id="user1",
+        source="upload",
+        title="t",
+        status="completed",
+        transcript="面试官：你好\n候选人：你好",
+        analysis_json='{"schema_version": 2, "overall": {"score": 8.5}}',
     )
-    db_session.add(transcript)
+    db_session.add(record)
+    db_session.flush()
 
-    analysis = AnalysisResult(
-        interview_id=interview.id,
-        score=8.5,
-        feedback="回答不错",
-        improved_answer='[{"question": "test"}]'
+    qa1 = InterviewQA(
+        record_id=record.id,
+        order_idx=0,
+        phase="technical",
+        question="Q1",
+        answer="A1",
+        score=9,
     )
-    db_session.add(analysis)
+    qa2 = InterviewQA(
+        record_id=record.id,
+        order_idx=1,
+        phase="technical",
+        question="Q2",
+        answer="A2",
+        score=8,
+    )
+    db_session.add_all([qa1, qa2])
     db_session.flush()
 
-    # 验证关联
-    loaded = db_session.query(Interview).filter(Interview.id == interview.id).first()
-    assert len(loaded.transcripts) == 1
-    assert loaded.analysis is not None
-    assert loaded.analysis.score == 8.5
+    rows = (
+        db_session.query(InterviewQA)
+        .filter(InterviewQA.record_id == record.id)
+        .order_by(InterviewQA.order_idx)
+        .all()
+    )
+    assert len(rows) == 2
+    assert rows[0].question == "Q1"
 
 
-def test_interview_status_update(db_session):
-    """Interview 状态机应支持更新。"""
-    from app.models.interview import Interview
+def test_interview_record_status_update(db_session):
+    """InterviewRecord 状态机应支持更新。"""
+    from app.models.interview_record import InterviewRecord
 
-    interview = Interview(user_id="u1", status="PENDING")
-    db_session.add(interview)
+    record = InterviewRecord(user_id="u1", source="upload", status="pending")
+    db_session.add(record)
     db_session.flush()
 
-    interview.status = "TRANSCRIBING"
+    record.status = "transcribing"
     db_session.flush()
 
-    loaded = db_session.query(Interview).filter(Interview.id == interview.id).first()
-    assert loaded.status == "TRANSCRIBING"
+    loaded = db_session.query(InterviewRecord).filter(InterviewRecord.id == record.id).first()
+    assert loaded.status == "transcribing"

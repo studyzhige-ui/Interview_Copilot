@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Plus, MoreHorizontal, Pencil, Trash2, Search, Check, X, Tag } from 'lucide-react';
+import { Plus, MoreHorizontal, Pencil, Trash2, Search, Check, Tag, Loader2 } from 'lucide-react';
 import { Pill } from '@/components/ui/Pill';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { toast } from '@/store/uiStore';
@@ -15,6 +15,7 @@ interface Props {
   onChanged: () => void;
   onDraftMutate: (id: string, patch: Partial<InterviewRecordListItem>) => void;
   onDraftDelete: (id: string) => void;
+  analyzingIds?: Set<string>;
   width?: number;
 }
 
@@ -58,21 +59,23 @@ export function SessionList({
   onChanged,
   onDraftMutate,
   onDraftDelete,
-  width = 260,
+  analyzingIds,
+  width = 280,
 }: Props) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [tagMenu, setTagMenu] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ id: string; title: string } | null>(null);
   const [deleting, setDeleting] = useState<InterviewRecordListItem | null>(null);
   const [query, setQuery] = useState('');
-  const listRef = useRef<HTMLDivElement | null>(null);
-
-  // Close any open inline-rename / ⋯ menu / tag submenu when the user clicks
-  // outside the session list. Pressing Escape also closes everything.
+  const popupRef = useRef<HTMLDivElement | null>(null);
+  // Editing state DOES NOT auto-close on outside click. Rename commits on
+  // Enter / input blur, cancels on Escape. (Previously we killed editing on
+  // any mousedown, which fired BEFORE the ✓/✕ button click handlers and
+  // silently dropped the user's edit before commitRename could read it.)
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
-      if (listRef.current && !listRef.current.contains(e.target as Node)) {
-        setEditing(null);
+      const t = e.target as Node;
+      if (openMenu && !popupRef.current?.contains(t)) {
         setOpenMenu(null);
         setTagMenu(null);
       }
@@ -90,7 +93,7 @@ export function SessionList({
       document.removeEventListener('mousedown', onDoc);
       document.removeEventListener('keydown', onKey);
     };
-  }, []);
+  }, [openMenu]);
 
   const filtered = query.trim()
     ? records.filter((r) => r.title.toLowerCase().includes(query.toLowerCase()))
@@ -153,7 +156,6 @@ export function SessionList({
 
   return (
     <aside
-      ref={listRef}
       style={{ width }}
       className="shrink-0 bg-white border-r border-stone-200 flex flex-col"
     >
@@ -201,32 +203,25 @@ export function SessionList({
             >
               <div className="flex items-center gap-2">
                 {isEditing ? (
-                  <>
-                    <input
-                      autoFocus
-                      value={editing.title}
-                      onChange={(e) => setEditing({ id: r.id, title: e.target.value })}
-                      onClick={(e) => e.stopPropagation()}
-                      onKeyDown={(e) => {
-                        e.stopPropagation();
-                        if (e.key === 'Enter') commitRename();
-                        if (e.key === 'Escape') setEditing(null);
-                      }}
-                      className="flex-1 min-w-0 text-[13px] px-1 py-0.5 border border-primary-300 rounded outline-none"
-                    />
-                    <button
-                      onClick={(e) => { e.stopPropagation(); commitRename(); }}
-                      className="p-0.5 text-success-500 hover:bg-success-50 rounded"
-                    >
-                      <Check size={14} />
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setEditing(null); }}
-                      className="p-0.5 text-stone-400 hover:bg-stone-100 rounded"
-                    >
-                      <X size={14} />
-                    </button>
-                  </>
+                  <input
+                    autoFocus
+                    value={editing.title}
+                    onChange={(e) => setEditing({ id: r.id, title: e.target.value })}
+                    onClick={(e) => e.stopPropagation()}
+                    onBlur={() => { void commitRename(); }}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void commitRename();
+                      } else if (e.key === 'Escape') {
+                        e.preventDefault();
+                        setEditing(null);
+                      }
+                    }}
+                    placeholder="按 Enter 保存，Esc 取消"
+                    className="flex-1 min-w-0 text-sm px-2 py-1 border border-primary-300 rounded outline-none focus:ring-2 focus:ring-primary-200"
+                  />
                 ) : (
                   <>
                     <div
@@ -254,9 +249,16 @@ export function SessionList({
                   {formatDate(r.created_at)}
                 </span>
                 <Pill tone={pill.tone}>{pill.label}</Pill>
+                {analyzingIds?.has(r.id) && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-full bg-warning-50 text-warning-700">
+                    <Loader2 size={10} className="animate-spin" />
+                    分析中
+                  </span>
+                )}
               </div>
               {openMenu === r.id && !isEditing && (
                 <div
+                  ref={popupRef}
                   onClick={(e) => e.stopPropagation()}
                   className="absolute right-2 top-9 w-44 p-1 bg-white border border-stone-200 rounded-lg shadow-lg z-20"
                 >

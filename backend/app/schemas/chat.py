@@ -39,6 +39,12 @@ class MockStartRequest(BaseModel):
     session_id: str
     resume_upload_id: str | None = None
     jd_upload_id: str | None = None
+    # User-pasted JD text. Wins over jd_upload_id if both present.
+    jd_text: str | None = None
+    # Interviewer persona for tone. Depth is inferred from JD seniority.
+    interviewer_style: str = "professional"   # friendly|professional|rigorous|pressure
+    # Interaction mode. 'hybrid' = AI TTS + user types or speaks freely.
+    voice_mode: str = "hybrid"                # text|voice|hybrid
 
 
 class SessionRenameRequest(BaseModel):
