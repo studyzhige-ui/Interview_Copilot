@@ -115,7 +115,10 @@ export interface MockPlanPhase {
 export interface MockQuestion {
   question?: string;
   phase_id?: string;
+  phase_name?: string;
   done?: boolean;
+  // v6 director may attach the cached spoken_response from the previous turn
+  spoken_response?: string;
 }
 
 export interface MockStartResp {
@@ -124,13 +127,33 @@ export interface MockStartResp {
   current_question: MockQuestion;
 }
 
+export type MockDirectorAction =
+  | 'follow_up'
+  | 'new_question'
+  | 'transition'
+  | 'hint'
+  | 'clarify'
+  | 'reverse_answer'
+  | 'finish';
+
 export interface MockAnswerResp {
+  // Concatenated spoken_response + next_question for the TTS layer and any
+  // existing single-bubble UI. New code should prefer the split fields below.
   interviewer_response: string;
+  // v6 Runtime Director output. Optional so a stale frontend stays happy.
+  spoken_response?: string;
+  next_question?: string;
+  action?: MockDirectorAction;
+  display_intent?: string;
   is_finished: boolean;
   phase_progress: {
     current_phase: string;
-    question_idx: number;
-    total_answered: number;
+    // v6 renamed: turn_count + max_turns + follow_up_depth. Old keys
+    // (question_idx / total_answered) are gone — see Mock UI for the new
+    // progress chip.
+    turn_count?: number;
+    max_turns?: number;
+    follow_up_depth?: number;
   };
 }
 
@@ -150,6 +173,8 @@ export interface KnowledgeDoc {
   status: string;
   task_id: string | null;
   chunk_count: number | null;
+  content_type: string | null;
+  size_bytes: number | null;
   error_message: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -175,7 +200,7 @@ export interface ModelProfile {
   selected_for: string[];
 }
 
-export type ModelRole = 'primary' | 'fast' | 'agent';
+export type ModelRole = 'primary' | 'fast' | 'agent' | 'mock_interview';
 
 export interface ModelRuntime {
   selection: Record<ModelRole, string>;

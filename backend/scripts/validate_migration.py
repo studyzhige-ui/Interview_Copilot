@@ -175,7 +175,11 @@ def _run_migrations(db_url: str) -> None:
     cfg = Config(str(REPO_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     cfg.set_main_option("sqlalchemy.url", db_url)
-    command.upgrade(cfg, "head")
+    # Stop at 0008. The downstream revisions (user_api_keys, avatar, and the
+    # Runtime Director field add on interview_qa) need baseline tables this
+    # sandbox doesn't fabricate (`users`, etc.) and they're not what this
+    # script is here to validate. The unified-schema migration is.
+    command.upgrade(cfg, "0008_drop_legacy")
 
 
 def _assert(cond: bool, msg: str, errors: list[str]) -> None:

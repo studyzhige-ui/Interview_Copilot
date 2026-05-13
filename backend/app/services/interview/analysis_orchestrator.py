@@ -184,8 +184,10 @@ class InterviewAnalysisOrchestrator:
 
     def _load_mock_qa(self, record_id: str) -> list[dict[str, Any]]:
         """Read the mock interview's qa_buffer and normalize entries for the
-        downstream pipeline. Carries grounding_refs / phase / is_follow_up
-        forward so QA rows are richer than the upload path's QA pairs."""
+        downstream pipeline. Carries the Runtime Director metadata
+        (action / topic / answer_quality) forward so QA rows are richer than
+        the upload path's bare Q/A pairs and so the finish-time analyzer can
+        use answer_quality as a scoring prior."""
         db = SessionLocal()
         try:
             mis = (
@@ -205,11 +207,16 @@ class InterviewAnalysisOrchestrator:
             for entry in buf:
                 if not isinstance(entry, dict):
                     continue
+                aq = entry.get("answer_quality")
                 normalized.append({
                     "question": str(entry.get("question") or ""),
                     "answer": str(entry.get("answer") or ""),
                     "phase": str(entry.get("phase_id") or entry.get("phase") or "technical"),
-                    "is_follow_up": bool(entry.get("is_follow_up", False)),
+                    "is_follow_up": bool(entry.get("is_follow_up") or entry.get("action") == "follow_up"),
+                    "topic": str(entry.get("topic") or "") or None,
+                    "action": str(entry.get("action") or "") or None,
+                    "answer_quality": aq if isinstance(aq, dict) else None,
+                    # Legacy grounding_refs left for back-compat (always empty for v6 mock)
                     "grounding_refs": list(entry.get("grounding_refs") or []),
                 })
             return normalized

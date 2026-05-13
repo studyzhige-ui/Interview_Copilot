@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     DateTime,
@@ -58,6 +59,16 @@ class InterviewQA(Base):
     question_audio_url = Column(String, nullable=True)
     answer_audio_url = Column(String, nullable=True)
     answer_input_mode = Column(String, nullable=False, default="text")
+
+    # Runtime Director metadata (filled live each turn during mock interview)
+    # — `action`: which of the 7 director actions classified this turn
+    # — `topic`:  snake_case topic tag for coverage tracking / review dedup
+    # — `answer_quality_json`: { level, reason } as prior for finish analyzer
+    # Index on topic is declared in alembic 0009; don't redeclare with index=True
+    # here or autogenerate will produce a duplicate ix.
+    action = Column(String(32), nullable=True)
+    topic = Column(String(80), nullable=True)
+    answer_quality_json = Column(JSON, nullable=True)
 
     # Analysis result (filled by orchestrator)
     score = Column(Integer, nullable=True)

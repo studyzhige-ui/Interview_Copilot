@@ -39,12 +39,10 @@ async def _read_interview_history_handler(
             "status": record.status,
             "created_at": record.created_at.isoformat() if record.created_at else "",
             "overall_score": overall.get("score"),
-            "grade": overall.get("grade", ""),
-            "verdict": overall.get("verdict", ""),
-            "overall_feedback": overall.get("feedback", ""),
+            "overall_summary": overall.get("summary") or overall.get("feedback", ""),
             "strengths": overall.get("strengths", []),
             "weaknesses": overall.get("weaknesses", []),
-            "improvement_plan": overall.get("improvement_plan", []),
+            "key_growth_areas": overall.get("key_growth_areas", []),
         }
 
     records = interview_record_service.list_by_user(ctx.user_id, limit=args.limit)
@@ -65,7 +63,7 @@ async def _read_interview_history_handler(
             "status": r.status,
             "created_at": r.created_at.isoformat() if r.created_at else "",
             "overall_score": overall.get("score"),
-            "overall_feedback": str(overall.get("feedback", ""))[:200],
+            "overall_summary": str(overall.get("summary") or overall.get("feedback", ""))[:200],
         })
     return {"count": len(items), "records": items}
 

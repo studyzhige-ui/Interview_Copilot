@@ -1,4 +1,11 @@
-"""Mock-interview control endpoints + TTS."""
+"""Mock-interview control endpoints + TTS.
+
+v6 chain (Runtime Director):
+  start    -> generate_brief (LLM #1) builds the cacheable prefix + map + opening
+  answer   -> run_director  (LLM #2) decides this turn (with up to MAX_DIRECTOR_RETRIES)
+              -> every SUMMARY_EVERY_N_TURNS the older history is summarised (LLM #3)
+  finish   -> snapshot state -> dispatch InterviewAnalysisOrchestrator (Celery)
+"""
 
 import json
 import logging
@@ -21,14 +28,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 
 
+# ── /start ─────────────────────────────────────────────────────────────
+
+
 @router.post("/chat/mock-interview/start")
 async def start_mock_interview(
     request: MockStartRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Generate interview plan and initialize mock interview session."""
-    from app.services.mock_interview_service import mock_interview_service
+    """Initialise the Runtime Director session: load resume+JD, ask the LLM
+    to build a thin interview map + opening line, freeze the cacheable prefix
+    into state, and return the opening to the frontend."""
+    from app.services.mock_interview_service import (
+        DEFAULT_TURN_BUDGETS,
+        VALID_PHASES,
+        build_prefix,
+        generate_brief,
+        prefix_hash,
+    )
     from app.services.resume_service import resume_service
 
     session = db.query(ChatSession).filter(
@@ -41,14 +59,15 @@ async def start_mock_interview(
         raise HTTPException(status_code=400, detail="Session is not a mock interview")
 
     logger.info(
-        "mock_start: user=%s session=%s resume=%s jd_upload=%s jd_text_len=%d",
+        "mock_start: user=%s session=%s resume=%s jd_upload=%s jd_text_len=%d style=%s voice=%s",
         current_user.username, request.session_id,
         request.resume_upload_id, request.jd_upload_id,
         len(request.jd_text or ""),
+        request.interviewer_style, request.voice_mode,
     )
 
-    # Load resume context if available. The /upload/resume/direct endpoint
-    # only stores the file in S3 — we extract text on demand here.
+    # Load resume text. /upload/resume/direct only stores the file; we extract
+    # on demand here.
     resume_context = ""
     if request.resume_upload_id:
         try:
@@ -66,7 +85,6 @@ async def start_mock_interview(
             resume_context = ""
     logger.info("mock_start: resume_context_chars=%d", len(resume_context))
 
-    # Load JD context. Explicit jd_text wins; otherwise resolve from upload id.
     jd_context = (request.jd_text or "").strip()
     if not jd_context and request.jd_upload_id:
         from app.services.knowledge_text_service import load_knowledge_text
@@ -77,64 +95,100 @@ async def start_mock_interview(
             jd_context = ""
     logger.info("mock_start: jd_context_chars=%d", len(jd_context))
 
-    # Structured extraction (one LLM call each). Failures degrade gracefully —
-    # the plan generator falls back to a generic, no-grounding prompt.
-    resume_evidence: dict = {}
-    jd_requirements: dict = {}
-    try:
-        from app.services.interview.structured_extraction import (
-            extract_jd_requirements,
-            extract_resume_evidence,
-        )
-        if resume_context.strip():
-            resume_evidence = await extract_resume_evidence(resume_context)
-        if jd_context.strip():
-            jd_requirements = await extract_jd_requirements(jd_context)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("mock_start: structured extraction failed (non-fatal): %s", exc)
+    # Build the cacheable prefix *once* and stash it in session_state. Every
+    # subsequent LLM call this session reuses it verbatim so DeepSeek's
+    # prompt cache can hit on it.
+    cacheable_prefix = build_prefix(resume_context, jd_context, request.interviewer_style)
 
-    # Generate plan (LLM call — can take 5-15s on cold model)
+    # LLM #1: interview brief + opening
     try:
-        plan = await mock_interview_service.generate_plan(
-            resume_context,
+        brief = await generate_brief(
+            resume_context=resume_context,
             jd_context=jd_context,
-            resume_evidence=resume_evidence,
-            jd_requirements=jd_requirements,
             interviewer_style=request.interviewer_style,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.exception("mock_start: plan generation failed: %s", exc)
+        logger.exception("mock_start: brief generation failed: %s", exc)
         raise HTTPException(
             status_code=500,
-            detail=f"生成面试计划失败: {type(exc).__name__}: {exc}",
+            detail=f"生成面试地图失败: {type(exc).__name__}: {exc}",
         ) from exc
 
-    # Initialize session state
+    # Initial state machine
     state = parse_session_state(session.session_state, "mock_interview")
-    state["interview_plan"] = plan
-    state["current_phase"] = plan["phases"][0]["phase_id"] if plan.get("phases") else ""
-    state["current_question_idx"] = 0
-    state["qa_history"] = []
-    state["resume_context"] = resume_context[:2000]
-    state["jd_context"] = jd_context[:2000]
-    state["resume_structured"] = resume_evidence
-    state["jd_structured"] = jd_requirements
-    state["interviewer_style"] = request.interviewer_style
-    state["voice_mode"] = request.voice_mode
+    state.update({
+        "schema_version": 2,
+        "resume_context": resume_context,
+        "jd_context": jd_context,
+        "interviewer_style": request.interviewer_style,
+        "voice_mode": request.voice_mode,
+
+        "cacheable_prefix": cacheable_prefix,
+        "prefix_hash": prefix_hash(cacheable_prefix),
+
+        "interview_plan": brief.interview_plan,
+        "current_phase": "self_intro",
+        "current_topic": "self_intro",
+        "phase_progress": {p: 0 for p in VALID_PHASES},
+        "follow_up_depth": 0,
+
+        "pending_response": brief.opening_spoken,
+        "pending_question": brief.opening_question,
+
+        "qa_history": [],
+        "qa_history_summary": "",
+
+        "covered_topics": [],
+        "weak_topics": [],
+        "strong_topics": [],
+
+        "min_turns": brief.min_turns,
+        "target_turns": brief.target_turns,
+        "max_turns": brief.max_turns,
+        "turn_count": 0,
+        "reverse_qa_prompted": False,
+        "is_finished": False,
+    })
     session.session_state = dump_session_state(state)
     db.commit()
 
-    # Get first question
-    question_info = mock_interview_service.get_current_question(state, plan)
+    plan_phases = [
+        {
+            "phase_id": ph["phase"],
+            "phase_name": _PHASE_NAME_MAP.get(ph["phase"], ph["phase"]),
+            "question_count": int(ph.get("budget") or 1),
+        }
+        for ph in brief.interview_plan.get("phases", [])
+    ]
 
     return {
         "status": "started",
-        "plan_phases": [
-            {"phase_id": p["phase_id"], "phase_name": p["phase_name"], "question_count": len(p.get("questions", []))}
-            for p in plan.get("phases", [])
-        ],
-        "current_question": question_info,
+        "plan_phases": plan_phases,
+        "current_question": {
+            "done": False,
+            "phase_id": "self_intro",
+            "phase_name": _PHASE_NAME_MAP.get("self_intro", "self_intro"),
+            "question_idx": 0,
+            "total_questions_in_phase": next(
+                (p.get("budget") for p in brief.interview_plan.get("phases", []) if p.get("phase") == "self_intro"),
+                1,
+            ),
+            "question": brief.opening_question,
+            "spoken_response": brief.opening_spoken,
+        },
     }
+
+
+_PHASE_NAME_MAP = {
+    "self_intro": "自我介绍",
+    "resume_deep_dive": "项目深挖",
+    "technical": "技术深度",
+    "behavioral": "行为面试",
+    "reverse_qa": "反问环节",
+}
+
+
+# ── /in-progress + /abandon ────────────────────────────────────────────
 
 
 @router.get("/chat/mock-interview/in-progress")
@@ -142,12 +196,6 @@ async def get_in_progress_mock(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Return any mock-interview ChatSession that the user has not finished.
-
-    Used by the MockSetup page to offer a "resume your previous interview"
-    option instead of silently starting a fresh one. Returns ``null``-shaped
-    payload when there's nothing in flight.
-    """
     session = (
         db.query(ChatSession)
         .filter(
@@ -174,7 +222,7 @@ async def get_in_progress_mock(
         "session_id": session.id,
         "title": session.title,
         "current_phase": state.get("current_phase"),
-        "current_question_idx": state.get("current_question_idx", 0),
+        "current_question_idx": int(state.get("turn_count", len(qa_history)) or 0),
         "qa_count": len(qa_history),
         "last_activity_at": session.updated_at.isoformat() if session.updated_at else None,
     }
@@ -186,9 +234,10 @@ async def abandon_mock_interview(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Soft-archive an in-progress mock session so it stops showing up under
-    /mock-interview/in-progress. No InterviewRecord is created."""
-    from datetime import datetime as _dt
+    """Hard-delete an in-progress mock session (+ any draft record / chat
+    messages). Per user spec, abandon means "this never happened"."""
+    from app.models.chat import ChatMessage
+    from app.models.interview_record import InterviewRecord
 
     session = (
         db.query(ChatSession)
@@ -201,10 +250,37 @@ async def abandon_mock_interview(
     )
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    session.archived_at = _dt.utcnow()
-    db.add(session)
-    db.commit()
-    return {"status": "abandoned", "session_id": session.id}
+
+    try:
+        state = parse_session_state(session.session_state, "mock_interview")
+        record_id = state.get("interview_record_id") or session.interview_id
+        if record_id:
+            (
+                db.query(InterviewRecord)
+                .filter(
+                    InterviewRecord.id == record_id,
+                    InterviewRecord.user_id == current_user.username,
+                )
+                .delete(synchronize_session=False)
+            )
+
+        db.query(ChatMessage).filter(
+            ChatMessage.session_id == session_id
+        ).delete(synchronize_session=False)
+
+        db.delete(session)
+        db.commit()
+        return {"status": "deleted", "session_id": session_id}
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.exception("abandon_mock_interview failed for %s: %s", session_id, exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"放弃失败: {type(exc).__name__}: {exc}",
+        ) from exc
+
+
+# ── /question ──────────────────────────────────────────────────────────
 
 
 @router.get("/chat/mock-interview/question")
@@ -213,9 +289,8 @@ async def get_current_question(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Get the current question for the mock interview."""
-    from app.services.mock_interview_service import mock_interview_service
-
+    """Return what the interviewer is currently waiting on. Backed by
+    ``state.pending_question`` + ``state.pending_response`` — no LLM call."""
     session = db.query(ChatSession).filter(
         ChatSession.id == session_id,
         ChatSession.user_id == current_user.username,
@@ -224,8 +299,22 @@ async def get_current_question(
         raise HTTPException(status_code=404, detail="Session not found")
 
     state = parse_session_state(session.session_state, "mock_interview")
-    plan = state.get("interview_plan", {})
-    return mock_interview_service.get_current_question(state, plan)
+    _require_v2_schema(state)
+    if state.get("is_finished"):
+        return {"done": True, "message": "面试已完成"}
+
+    return {
+        "done": False,
+        "phase_id": state.get("current_phase", "self_intro"),
+        "phase_name": _PHASE_NAME_MAP.get(state.get("current_phase", ""), ""),
+        "question_idx": int(state.get("turn_count", 0)),
+        "total_questions_in_phase": _phase_budget(state, state.get("current_phase", "")),
+        "question": state.get("pending_question") or "",
+        "spoken_response": state.get("pending_response") or "",
+    }
+
+
+# ── /answer ────────────────────────────────────────────────────────────
 
 
 @router.post("/chat/mock-interview/answer")
@@ -234,8 +323,25 @@ async def submit_mock_answer(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Submit an answer, get the interviewer's natural response (no scoring)."""
-    from app.services.mock_interview_service import mock_interview_service
+    """Drive one turn through the Runtime Director.
+
+    State-machine write order is critical (v6 fix):
+      1. Snapshot `answered_phase` / `answered_topic` from CURRENT state.
+      2. Append the freshly-finished QA to qa_history under THOSE labels.
+      3. Increment `phase_progress[answered_phase]` (the phase that was just
+         answered — NOT the LLM's `result.phase`, which is the NEXT phase).
+      4. Only AFTER that, swap pending_* / current_* to the next turn.
+    """
+    from app.services.mock_interview_service import (
+        DISPLAY_INTENT,
+        MAX_FOLLOW_UP_DEPTH,
+        SUMMARY_EVERY_N_TURNS,
+        DirectorRetryExhausted,
+        apply_state_update,
+        normalize_topic,
+        run_director,
+        summarize_history,
+    )
 
     session = db.query(ChatSession).filter(
         ChatSession.id == request.session_id,
@@ -245,63 +351,110 @@ async def submit_mock_answer(
         raise HTTPException(status_code=404, detail="Session not found")
 
     state = parse_session_state(session.session_state, "mock_interview")
-    plan = state.get("interview_plan", {})
+    _require_v2_schema(state)
 
     if state.get("is_finished"):
         raise HTTPException(status_code=400, detail="Interview already finished")
 
-    # Get current question
-    question_info = mock_interview_service.get_current_question(state, plan)
-    if question_info.get("done"):
-        raise HTTPException(status_code=400, detail="No more questions")
+    # turn_count tracks the answer we just received. Increment *before*
+    # calling director so V4 (max_turns guard) sees the correct count.
+    state["turn_count"] = int(state.get("turn_count", 0)) + 1
 
-    # Generate interviewer response (natural, no scoring)
-    qa_history = list(state.get("qa_history", []))
-    interviewer_result = await mock_interview_service.generate_interviewer_response(
-        question=question_info["question"],
-        answer=request.answer,
-        phase_id=question_info["phase_id"],
-        resume_context=state.get("resume_context", ""),
-        qa_history=qa_history,
-        interviewer_style=state.get("interviewer_style", "professional"),
-    )
+    # LLM #2 (Runtime Director, with retry)
+    try:
+        result = await run_director(state, request.answer)
+    except DirectorRetryExhausted as exc:
+        logger.warning(
+            "Director retries exhausted for session %s: %s",
+            request.session_id, exc.last_violation,
+        )
+        # Roll the turn counter back so the user can retry without it being
+        # counted twice toward max_turns.
+        state["turn_count"] = max(0, int(state.get("turn_count", 1)) - 1)
+        session.session_state = dump_session_state(state)
+        db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail="面试官暂时无法回应，请重试。",
+        ) from exc
 
-    # Record Q&A in history, carrying along any grounding_refs the plan
-    # attached so we can persist them onto the InterviewQA row at finish time.
-    plan_question = _lookup_plan_question(plan, question_info["phase_id"], question_info["question_idx"])
-    qa_history.append({
-        "phase_id": question_info["phase_id"],
-        "question": question_info["question"],
+    # ── State machine writes (strict order) ────────────────────────────
+    answered_phase = state.get("current_phase") or "self_intro"
+    answered_topic = state.get("current_topic") or normalize_topic(answered_phase)
+
+    qa_entry = {
+        "spoken_response": state.get("pending_response") or "",
+        "question": state.get("pending_question") or "",
         "answer": request.answer,
-        "grounding_refs": list(plan_question.get("grounding_refs") or []) if plan_question else [],
-        "is_follow_up": bool(plan_question.get("is_follow_up")) if plan_question else False,
-    })
+        "phase": answered_phase,
+        "topic": answered_topic,
+        "action": result.action,
+        "answer_quality": {
+            "level": result.answer_quality.level,
+            "reason": result.answer_quality.reason,
+        },
+    }
+    qa_history = list(state.get("qa_history") or [])
+    qa_history.append(qa_entry)
     state["qa_history"] = qa_history
 
-    # Advance state
-    state = mock_interview_service.advance_state(state, plan, interviewer_result)
+    progress = dict(state.get("phase_progress") or {})
+    progress[answered_phase] = int(progress.get(answered_phase, 0)) + 1
+    state["phase_progress"] = progress
+
+    # Switch to next turn
+    state["pending_response"] = result.spoken_response
+    state["pending_question"] = result.next_question
+    state["current_phase"] = result.phase
+    state["current_topic"] = normalize_topic(result.topic) or normalize_topic(result.phase)
+    state["follow_up_depth"] = (
+        int(state.get("follow_up_depth", 0)) + 1
+        if result.action == "follow_up"
+        else 0
+    )
+
+    apply_state_update(state, result.state_update)
+    if result.phase == "reverse_qa":
+        state["reverse_qa_prompted"] = True
+    if result.should_finish:
+        state["is_finished"] = True
+
+    # LLM #3 (rolling summary, every N turns; non-fatal on failure)
+    turn_count = state["turn_count"]
+    if turn_count > 0 and turn_count % SUMMARY_EVERY_N_TURNS == 0:
+        try:
+            state["qa_history_summary"] = await summarize_history(state)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Rolling summary failed (non-fatal): %s", exc)
+
     session.session_state = dump_session_state(state)
     db.commit()
 
-    is_finished = state.get("is_finished", False)
-
-    # Build response text (what the interviewer says)
-    response_text = interviewer_result["response"]
-    if not is_finished:
-        # Append next question to the response
-        next_q = mock_interview_service.get_current_question(state, plan)
-        if not next_q.get("done") and next_q.get("question"):
-            response_text += f"\n\n{next_q['question']}"
+    # The frontend ``interviewer_response`` field stays as one string for
+    # backward compat (TTS reads it). The new fields let the UI eventually
+    # render the承接 / next-question split distinctly.
+    speech_chunks = [result.spoken_response]
+    if result.next_question:
+        speech_chunks.append(result.next_question)
+    interviewer_response = "\n\n".join(s for s in speech_chunks if s).strip()
 
     return {
-        "interviewer_response": response_text,
-        "is_finished": is_finished,
+        "interviewer_response": interviewer_response,
+        "spoken_response": result.spoken_response,
+        "next_question": result.next_question,
+        "action": result.action,
+        "display_intent": DISPLAY_INTENT.get(result.action, result.action),
+        "is_finished": state["is_finished"],
         "phase_progress": {
-            "current_phase": state.get("current_phase", ""),
-            "question_idx": state.get("current_question_idx", 0),
-            "total_answered": len(qa_history),
+            "current_phase": state["current_phase"],
+            "turn_count": state["turn_count"],
+            "max_turns": int(state.get("max_turns", 14)),
+            "follow_up_depth": int(state.get("follow_up_depth", 0)),
         },
     }
+
+
+# ── /finish ────────────────────────────────────────────────────────────
 
 
 @router.post("/chat/mock-interview/finish")
@@ -310,10 +463,8 @@ async def finish_mock_interview(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """End the mock interview: snapshot the Q&A buffer, create the InterviewRecord
-    and a MockInterviewSession archive row, then hand off to the async analysis
-    orchestrator. Returns immediately with the new ``record_id`` so the frontend
-    can navigate to the review page and watch progress over SSE."""
+    """Snapshot the in-flight state, create the InterviewRecord +
+    MockInterviewSession, then dispatch the unified analysis orchestrator."""
     from datetime import datetime as _dt
 
     from app.models.mock_interview_session import MockInterviewSession
@@ -333,6 +484,7 @@ async def finish_mock_interview(
         raise HTTPException(status_code=400, detail="Session is not a mock interview")
 
     state = parse_session_state(session.session_state, "mock_interview")
+    _require_v2_schema(state)
     qa_history = state.get("qa_history", []) or []
     if not qa_history:
         raise HTTPException(status_code=400, detail="No Q&A to finish")
@@ -341,7 +493,6 @@ async def finish_mock_interview(
     resume_snapshot = state.get("resume_context", "") or ""
     jd_snapshot = state.get("jd_context", "") or ""
 
-    # Persist the canonical InterviewRecord (analysis runs async after this).
     record = interview_record_service.create_for_mock(
         user_id=current_user.username,
         title=session.title or "模拟面试",
@@ -350,29 +501,14 @@ async def finish_mock_interview(
         interview_plan=plan_json,
         db=db,
     )
-    # Carry the structured pools onto the record so the orchestrator can reach
-    # them via DB without re-extracting.
-    resume_structured = state.get("resume_structured") or {}
-    jd_structured = state.get("jd_structured") or {}
-    if resume_structured or jd_structured:
-        from app.models.interview_record import InterviewRecord as _IR
-        row = db.query(_IR).filter(_IR.id == record.id).first()
-        if row is not None:
-            if resume_structured:
-                row.resume_structured_json = json.dumps(resume_structured, ensure_ascii=False)
-            if jd_structured:
-                row.jd_structured_json = json.dumps(jd_structured, ensure_ascii=False)
-            db.add(row)
 
-    # Archive the in-progress mock state. The orchestrator reads
-    # qa_buffer_json from this row.
     now = _dt.utcnow()
     mis = MockInterviewSession(
         user_id=current_user.username,
         interview_record_id=record.id,
         status="finished",
         current_phase=state.get("current_phase"),
-        current_question_idx=int(state.get("current_question_idx", 0) or 0),
+        current_question_idx=int(state.get("turn_count", 0) or 0),
         qa_buffer_json=json.dumps(qa_history, ensure_ascii=False),
         plan_snapshot_json=plan_json,
         interviewer_style=state.get("interviewer_style", "professional"),
@@ -382,12 +518,10 @@ async def finish_mock_interview(
     )
     db.add(mis)
 
-    # Mark the chat session as finished + archived (soft-delete).
     state["is_finished"] = True
     session.session_state = dump_session_state(state)
     session.archived_at = now
 
-    # Create the debrief chat session so the user can talk to AI about results.
     debrief_session = ChatSession(
         id=generate_uuid(),
         user_id=current_user.username,
@@ -402,9 +536,6 @@ async def finish_mock_interview(
     db.add(debrief_session)
     db.commit()
 
-    # Hand off to the unified analysis orchestrator. The same Celery task that
-    # processes uploaded audio handles mock records too — it just skips the
-    # transcribe/extract stages.
     task = process_interview_analysis.delay(record.id)
     interview_record_service.set_status(
         record.id, STATUS_ANALYZING, celery_task_id=task.id,
@@ -418,30 +549,35 @@ async def finish_mock_interview(
     }
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────
 
 
-def _lookup_plan_question(plan: dict, phase_id: str, question_idx: int) -> dict | None:
-    """Return the plan-question dict (with grounding_refs) for the given location."""
-    for phase in plan.get("phases", []) or []:
-        if phase.get("phase_id") == phase_id:
-            questions = phase.get("questions") or []
-            if 0 <= question_idx < len(questions):
-                q = questions[question_idx]
-                return q if isinstance(q, dict) else None
-            break
-    return None
+def _require_v2_schema(state: dict) -> None:
+    """Reject sessions whose state was produced by the pre-v6 plan-based
+    pipeline. Old shapes have ``interview_plan`` keyed phases but no
+    ``cacheable_prefix`` / ``pending_question``. The cleanest UX is to make
+    the user re-start instead of patching a broken state on the fly."""
+    if int(state.get("schema_version", 0) or 0) >= 2:
+        return
+    raise HTTPException(
+        status_code=410,
+        detail="此模拟面试由旧版本创建，无法继续。请放弃后重新开始。",
+    )
+
+
+def _phase_budget(state: dict, phase: str) -> int:
+    for ph in (state.get("interview_plan") or {}).get("phases", []):
+        if isinstance(ph, dict) and ph.get("phase") == phase:
+            try:
+                return int(ph.get("budget") or 1)
+            except (TypeError, ValueError):
+                return 1
+    return 1
 
 
 async def _parse_resume_on_demand(db: Session, upload_id: str, user_id: str) -> str:
-    """Download the resume file and return its raw text.
-
-    Earlier this also called ``resume_service.extract_and_store`` to LLM-split
-    sections + vectorize, but that added 5–30 s to /start and could make the
-    whole mock-interview entry time out. The interview plan prompt works fine
-    with raw resume text, so we skip the LLM parse here. ResumeSection rows
-    can still be populated later by a dedicated background job.
-    """
+    """Download a resume upload (or knowledge_document) and return its plain
+    text, truncated."""
     import os
     import tempfile
 
@@ -454,7 +590,7 @@ async def _parse_resume_on_demand(db: Session, upload_id: str, user_id: str) -> 
         .filter(
             UserUpload.id == upload_id,
             UserUpload.user_id == user_id,
-            UserUpload.purpose == "interview_resume",
+            UserUpload.purpose.in_(("interview_resume", "knowledge_document")),
         )
         .first()
     )
@@ -473,13 +609,10 @@ async def _parse_resume_on_demand(db: Session, upload_id: str, user_id: str) -> 
         except OSError:
             pass
 
-    # Truncate to a reasonable size for the plan prompt (the PLAN_PROMPT uses
-    # the whole string verbatim; 6k chars ~ 11k tokens for Chinese is plenty
-    # for a 1M-context model).
-    return resume_text[:6000]
+    return resume_text[:8000]
 
 
-# ── Stateless JD parsing (no library pollution) ─────────────────────────
+# ── Stateless JD parsing ───────────────────────────────────────────────
 
 
 @router.post("/chat/mock-interview/parse-jd")
@@ -487,19 +620,7 @@ async def parse_jd_for_mock(
     file: UploadFile = File(...),
     _current_user: User = Depends(get_current_user),
 ):
-    """Parse a JD file inline and return its plain text.
-
-    The mock-interview flow needs JD text but should NOT pollute the user's
-    personal knowledge library. This endpoint accepts a file, extracts the
-    text via the same parser used for resumes, and returns it. Nothing is
-    persisted; the temp file is removed on the way out.
-
-    The caller stores the returned text locally and passes it as
-    ``MockStartRequest.jd_text``.
-    """
-    import os
-    import tempfile
-
+    """Parse a JD file inline and return its plain text. Does NOT persist."""
     from app.services.voice.file_parser import extract_resume_text
 
     if file.size is not None and file.size > 10 * 1024 * 1024:
@@ -526,7 +647,7 @@ async def parse_jd_for_mock(
         except OSError: pass
 
 
-# ── Short-clip transcription (frontend MediaRecorder → text) ─────────────
+# ── Short-clip transcription (MediaRecorder → text) ────────────────────
 
 
 @router.post("/chat/mock-interview/transcribe")
@@ -535,17 +656,10 @@ async def transcribe_short_clip(
     language: str = Query("zh", description="Force decode language; 'auto' to detect"),
     current_user: User = Depends(get_current_user),
 ):
-    """Transcribe a short audio clip (webm/opus/mp3/wav) to text.
-
-    Reuses the WhisperX model loaded by the Celery worker's warmup. Skips
-    diarization (single speaker) and language alignment to keep latency low.
-
-    Returns ``{ "text": "...", "language": "zh" }``.
-    """
+    """Transcribe a short audio clip (webm/opus/mp3/wav) to text."""
     if file.size is not None and file.size > 25 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="音频过大（限制 25MB）")
 
-    # Persist upload to a temp file so whisperx can mmap it.
     suffix = os.path.splitext(file.filename or "")[1] or ".webm"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
         local_path = tf.name
@@ -561,7 +675,6 @@ async def transcribe_short_clip(
     try:
         from app.services.voice import audio_transcription_service as ats
 
-        # Lazy-load if API process has its own WhisperX instance disabled.
         if ats.whisper_model is None:
             try:
                 ats.init_whisper_model()
@@ -577,9 +690,6 @@ async def transcribe_short_clip(
         audio = whisperx.load_audio(local_path)
         kwargs: dict = {"batch_size": 8}
         if language and language.lower() != "auto":
-            # Pin the decode language. Without this, WhisperX often misdetects
-            # short/quiet Chinese clips as "nn" (Norwegian) and returns empty
-            # text — visible in earlier logs as "Detected language: nn (0.62)".
             kwargs["language"] = language
         result = ats.whisper_model.transcribe(audio, **kwargs)
         segments = result.get("segments", []) if isinstance(result, dict) else []
@@ -601,6 +711,9 @@ async def transcribe_short_clip(
             os.unlink(local_path)
         except OSError:
             pass
+
+
+# ── TTS ────────────────────────────────────────────────────────────────
 
 
 @router.post("/chat/mock-interview/tts")

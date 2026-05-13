@@ -236,7 +236,8 @@ class InterviewRecordService:
         """Insert per-question rows for a record. Each input dict supports:
         question, answer, phase, phase_label, question_summary,
         is_follow_up, parent_qa_id, grounding_refs, follow_up_depth,
-        source_segment_start, source_segment_end, answer_input_mode.
+        source_segment_start, source_segment_end, answer_input_mode,
+        action, topic, answer_quality (Runtime Director metadata).
         """
         own_db = db is None
         if own_db:
@@ -250,6 +251,7 @@ class InterviewRecordService:
             )
             for offset, payload in enumerate(qa_inputs):
                 refs = payload.get("grounding_refs")
+                aq = payload.get("answer_quality")
                 row = InterviewQA(
                     id=_generate_qa_id(),
                     record_id=record_id,
@@ -268,6 +270,10 @@ class InterviewRecordService:
                     source_segment_start=payload.get("source_segment_start"),
                     source_segment_end=payload.get("source_segment_end"),
                     answer_input_mode=str(payload.get("answer_input_mode") or "text"),
+                    # Runtime Director metadata (mock-source only; upload leaves null)
+                    action=payload.get("action"),
+                    topic=payload.get("topic"),
+                    answer_quality_json=aq if isinstance(aq, dict) else None,
                 )
                 db.add(row)
                 inserted.append(row)
