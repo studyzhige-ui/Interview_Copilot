@@ -11,16 +11,19 @@ Adds three columns produced by the v6 Runtime Director per turn:
 
 A regular index on topic for "find all QAs about X" queries.
 
-Revision ID: 0011_interview_qa_director_fields
+Revision ID: 0011_qa_director_fields
 Revises: 0010_avatar_text
 Create Date: 2026-05-13
+
+(revision id kept ≤ 32 chars because alembic_version is VARCHAR(32) and the
+write at the end of upgrade() will otherwise be truncated/rejected.)
 """
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
 
-revision: str = "0011_interview_qa_director_fields"
+revision: str = "0011_qa_director_fields"
 down_revision: Union[str, None] = "0010_avatar_text"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
