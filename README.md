@@ -1,31 +1,42 @@
 # Interview Copilot
 
+<p align="center">
+  <a href="./README.md"><img alt="English" src="https://img.shields.io/badge/Lang-English-3b82f6?style=for-the-badge"></a>
+  <a href="./docs/zh/README.md"><img alt="简体中文" src="https://img.shields.io/badge/语言-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-9ca3af?style=for-the-badge"></a>
+</p>
+
 > AI interview practice and analysis. Real-time voice mock interviews, recording
 > analysis with WhisperX + Pyannote diarization, RAG over your resume and JD, and
 > a tool-calling Agent — wired through a per-user model registry that works
 > against any OpenAI-compatible provider (DeepSeek, OpenAI, Anthropic, Qwen,
 > Moonshot, Zhipu, Xiaomi MiMo, NVIDIA Catalog, …).
 
-🇨🇳 [docs/zh/README.md](docs/zh/README.md)   ·   📖 [Getting started](docs/getting-started.md)
+📖 [Getting started](docs/getting-started.md) · 🛠 [Provider catalog](docs/providers.md) · 🩹 [Troubleshooting](docs/troubleshooting.md)
 
 ## Screenshots
 
 <table>
   <tr>
-    <td><img src="docs/screenshots/review.png" alt="Chat panel with interview record" /></td>
-    <td><img src="docs/screenshots/mock-interview.png" alt="Mock interview setup" /></td>
+    <td width="50%"><img src="docs/screenshots/mock-interview.png" alt="Mock interview setup" /></td>
+    <td width="50%"><img src="docs/screenshots/review.png" alt="Chat panel with interview record" /></td>
   </tr>
   <tr>
-    <td align="center"><sub>Review chat — per-interview retrieval scope</sub></td>
-    <td align="center"><sub>Mock interview — resume + JD + interviewer persona</sub></td>
+    <td align="center"><sub><b>Mock interview</b> — resume + JD upload, four interviewer personas</sub></td>
+    <td align="center"><sub><b>Review chat</b> — per-record session list, model swap mid-conversation</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/models.png" alt="Models configuration page" /></td>
-    <td><img src="docs/screenshots/knowledge.png" alt="Knowledge library" /></td>
+    <td width="50%"><img src="docs/screenshots/models.png" alt="Models configuration page" /></td>
+    <td width="50%"><img src="docs/screenshots/knowledge.png" alt="Knowledge library" /></td>
   </tr>
   <tr>
-    <td align="center"><sub>Per-user model routing (primary / agent / mock interview)</sub></td>
-    <td align="center"><sub>Knowledge library — resume, interview question banks, official docs</sub></td>
+    <td align="center"><sub><b>Models</b> — per-user routing across 9 providers (primary / agent / mock)</sub></td>
+    <td align="center"><sub><b>Knowledge library</b> — resume / interview question banks / official docs</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="docs/screenshots/auth.png" alt="Registration with email verification" width="50%" /></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><sub><b>Sign-up</b> — email-verification flow (codes printed to backend stdout when SMTP isn't configured)</sub></td>
   </tr>
 </table>
 
@@ -154,7 +165,7 @@ backend/
 frontend/
   src/                React SPA (Vite + TS + Tailwind + zustand)
   public/             nginx config / _headers / _redirects
-alembic/versions/     Database migrations (0001 → 0014)
+alembic/versions/     Database migrations (0001 → 0019)
 nginx/conf.d/         Reverse proxy configs (dev + production)
 scripts/              setup / start / stop · init_models / refresh_models · wipe_non_admin / migrate_avatars
 docs/                 ← you are here

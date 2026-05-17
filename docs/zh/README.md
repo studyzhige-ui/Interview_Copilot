@@ -1,31 +1,42 @@
 # Interview Copilot
 
+<p align="center">
+  <a href="../../README.md"><img alt="English" src="https://img.shields.io/badge/Lang-English-9ca3af?style=for-the-badge"></a>
+  <a href="./README.md"><img alt="简体中文" src="https://img.shields.io/badge/语言-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-3b82f6?style=for-the-badge"></a>
+</p>
+
 > AI 面试练习与分析平台。实时语音模拟面试、录音深度分析（WhisperX +
 > Pyannote 说话人分离）、基于简历和 JD 的 RAG 检索，以及工具调用 Agent
 > 运行时 —— 全部通过用户级模型注册表打通，可用任意 OpenAI 兼容厂商
 > （DeepSeek、OpenAI、Anthropic、阿里 Qwen、月之暗面、智谱、小米 MiMo、
 > NVIDIA Catalog ……）。
 
-🇬🇧 [English README](../../README.md)   ·   📖 [新手上路](getting-started.md)
+📖 [新手上路](getting-started.md) · 🛠 [Provider 目录](providers.md) · 🩹 [排错](troubleshooting.md)
 
 ## 截图
 
 <table>
   <tr>
-    <td><img src="../screenshots/review.png" alt="复盘对话面板" /></td>
-    <td><img src="../screenshots/mock-interview.png" alt="模拟面试" /></td>
+    <td width="50%"><img src="../screenshots/mock-interview.png" alt="模拟面试" /></td>
+    <td width="50%"><img src="../screenshots/review.png" alt="复盘对话面板" /></td>
   </tr>
   <tr>
-    <td align="center"><sub>复盘聊天 —— 每场面试的检索作用域</sub></td>
-    <td align="center"><sub>模拟面试 —— 简历 + JD + 面试官风格</sub></td>
+    <td align="center"><sub><b>模拟面试</b> —— 上传简历 + JD，四种面试官风格</sub></td>
+    <td align="center"><sub><b>复盘对话</b> —— 每条记录下多会话切换，对话中可换模型</sub></td>
   </tr>
   <tr>
-    <td><img src="../screenshots/models.png" alt="模型配置页" /></td>
-    <td><img src="../screenshots/knowledge.png" alt="资料库" /></td>
+    <td width="50%"><img src="../screenshots/models.png" alt="模型配置页" /></td>
+    <td width="50%"><img src="../screenshots/knowledge.png" alt="资料库" /></td>
   </tr>
   <tr>
-    <td align="center"><sub>用户级模型路由（主对话 / Agent / 模拟面试）</sub></td>
-    <td align="center"><sub>个人资料库 —— 简历、面试题库、官方文档</sub></td>
+    <td align="center"><sub><b>模型</b> —— 9 家厂商的用户级路由（主对话 / Agent / 模拟面试）</sub></td>
+    <td align="center"><sub><b>资料库</b> —— 简历 / 面试题库 / 官方文档</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="../screenshots/auth.png" alt="邮箱验证注册" width="50%" /></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><sub><b>注册</b> —— 邮箱验证码流程（没配 SMTP 时验证码直接打在后端 stdout）</sub></td>
   </tr>
 </table>
 
@@ -154,7 +165,7 @@ backend/
 frontend/
   src/                React SPA（Vite + TS + Tailwind + zustand）
   public/             nginx 配置 / _headers / _redirects
-alembic/versions/     数据库迁移（0001 → 0014）
+alembic/versions/     数据库迁移（0001 → 0019）
 nginx/conf.d/         反向代理配置（dev + production）
 scripts/              setup / start / stop · init_models / refresh_models · wipe_non_admin / migrate_avatars
 docs/                 ← 你在这里
