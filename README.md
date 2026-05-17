@@ -17,28 +17,37 @@
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/mock-interview.png" alt="Mock interview setup" /></td>
-    <td width="50%"><img src="docs/screenshots/review.png" alt="Chat panel with interview record" /></td>
-  </tr>
-  <tr>
-    <td align="center"><sub><b>Mock interview</b> — resume + JD upload, four interviewer personas</sub></td>
-    <td align="center"><sub><b>Review chat</b> — per-record session list, model swap mid-conversation</sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/models.png" alt="Models configuration page" /></td>
-    <td width="50%"><img src="docs/screenshots/knowledge.png" alt="Knowledge library" /></td>
-  </tr>
-  <tr>
-    <td align="center"><sub><b>Models</b> — per-user routing across 9 providers (primary / agent / mock)</sub></td>
-    <td align="center"><sub><b>Knowledge library</b> — resume / interview question banks / official docs</sub></td>
+    <td colspan="2" align="center"><sub><b>① Enter the app — sign in or register</b></sub></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/screenshots/login.png" alt="Sign in" /></td>
     <td width="50%"><img src="docs/screenshots/auth.png" alt="Registration with email verification" /></td>
   </tr>
   <tr>
-    <td align="center"><sub><b>Sign-in</b> — JWT access + refresh, jti revocation list in Redis</sub></td>
-    <td align="center"><sub><b>Sign-up</b> — email-verification flow (codes printed to backend stdout when SMTP isn't configured)</sub></td>
+    <td align="center"><sub>Sign-in — JWT access + refresh, jti revocation list in Redis</sub></td>
+    <td align="center"><sub>Sign-up — email-verification flow (codes printed to backend stdout when SMTP isn't configured)</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><sub><b>② Set up — pick models, upload knowledge</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/models.png" alt="Models configuration page" /></td>
+    <td width="50%"><img src="docs/screenshots/knowledge.png" alt="Knowledge library" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Models — per-user routing across 9 providers (primary / agent / mock)</sub></td>
+    <td align="center"><sub>Knowledge library — resume / interview question banks / official docs</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><sub><b>③ Run — mock interview or review a real recording</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/mock-interview.png" alt="Mock interview setup" /></td>
+    <td width="50%"><img src="docs/screenshots/review.png" alt="Chat panel with interview record" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Mock interview — resume + JD upload, four interviewer personas</sub></td>
+    <td align="center"><sub>Review chat — per-record session list, model swap mid-conversation</sub></td>
   </tr>
 </table>
 

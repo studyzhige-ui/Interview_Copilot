@@ -17,28 +17,37 @@
 
 <table>
   <tr>
-    <td width="50%"><img src="../screenshots/mock-interview.png" alt="模拟面试" /></td>
-    <td width="50%"><img src="../screenshots/review.png" alt="复盘对话面板" /></td>
-  </tr>
-  <tr>
-    <td align="center"><sub><b>模拟面试</b> —— 上传简历 + JD，四种面试官风格</sub></td>
-    <td align="center"><sub><b>复盘对话</b> —— 每条记录下多会话切换，对话中可换模型</sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="../screenshots/models.png" alt="模型配置页" /></td>
-    <td width="50%"><img src="../screenshots/knowledge.png" alt="资料库" /></td>
-  </tr>
-  <tr>
-    <td align="center"><sub><b>模型</b> —— 9 家厂商的用户级路由（主对话 / Agent / 模拟面试）</sub></td>
-    <td align="center"><sub><b>资料库</b> —— 简历 / 面试题库 / 官方文档</sub></td>
+    <td colspan="2" align="center"><sub><b>① 进入应用 —— 登录或注册</b></sub></td>
   </tr>
   <tr>
     <td width="50%"><img src="../screenshots/login.png" alt="登录页" /></td>
     <td width="50%"><img src="../screenshots/auth.png" alt="邮箱验证注册" /></td>
   </tr>
   <tr>
-    <td align="center"><sub><b>登录</b> —— JWT access + refresh，jti 撤销名单在 Redis</sub></td>
-    <td align="center"><sub><b>注册</b> —— 邮箱验证码流程（没配 SMTP 时验证码直接打在后端 stdout）</sub></td>
+    <td align="center"><sub>登录 —— JWT access + refresh，jti 撤销名单在 Redis</sub></td>
+    <td align="center"><sub>注册 —— 邮箱验证码流程（没配 SMTP 时验证码直接打在后端 stdout）</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><sub><b>② 配置 —— 挑模型、上传资料</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="../screenshots/models.png" alt="模型配置页" /></td>
+    <td width="50%"><img src="../screenshots/knowledge.png" alt="资料库" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>模型 —— 9 家厂商的用户级路由（主对话 / Agent / 模拟面试）</sub></td>
+    <td align="center"><sub>资料库 —— 简历 / 面试题库 / 官方文档</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><sub><b>③ 使用 —— 模拟面试 或 复盘真实录音</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="../screenshots/mock-interview.png" alt="模拟面试" /></td>
+    <td width="50%"><img src="../screenshots/review.png" alt="复盘对话面板" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>模拟面试 —— 上传简历 + JD，四种面试官风格</sub></td>
+    <td align="center"><sub>复盘对话 —— 每条记录下多会话切换，对话中可换模型</sub></td>
   </tr>
 </table>
 
