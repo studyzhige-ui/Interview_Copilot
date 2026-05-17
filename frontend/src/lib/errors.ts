@@ -7,6 +7,12 @@ const LOGIN_MAP: Record<string, string> = {
 };
 
 const REGISTER_MAP: Record<string, string> = {
+  // Backend now collapses username-taken / email-taken / wrong-code into a
+  // single generic 400 (anti-enumeration). Map it to a hint that nudges
+  // the user toward login without revealing which field actually failed.
+  '注册失败，请检查输入或重试': '注册失败 — 检查输入；如果该邮箱已注册请改用登录或重置密码',
+  // Legacy backends may still emit these specific strings — keep the map
+  // entries so older deployments degrade gracefully.
   'The user with this username already exists in the system': '该用户名已被占用',
   '该用户名已被占用': '该用户名已被占用',
   '该邮箱已注册': '该邮箱已注册',

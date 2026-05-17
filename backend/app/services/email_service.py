@@ -44,19 +44,42 @@ def _send_sync(to_email: str, subject: str, body: str) -> None:
 
 
 async def send_email(to_email: str, subject: str, body: str) -> bool:
-    """Send an email. Returns True on success or dev-log fallback; False on failure."""
+    """Send an email.
+
+    Returns True on success (including the dev-log fallback path), False if
+    SMTP was configured but the send failed.
+
+    Logging policy — every send leaves a breadcrumb in the application log
+    regardless of outcome, so support can reconstruct "did the user actually
+    get a code?" from logs alone:
+
+      * SMTP not configured  → WARNING with full body (dev fallback)
+      * SMTP configured + OK → INFO with full body (traceability)
+      * SMTP configured + fail → ERROR with full body + exception
+    """
     if not settings.SMTP_HOST:
         logger.warning(
-            "[dev-email] SMTP not configured. Would have sent to %s:\n  Subject: %s\n  %s",
-            to_email,
-            subject,
-            body,
+            "[email] SMTP not configured — body printed below.\n"
+            "  To:      %s\n  Subject: %s\n  Body:    %s",
+            to_email, subject, body,
         )
         return True
     try:
         await asyncio.to_thread(_send_sync, to_email, subject, body)
-        logger.info("Email sent to %s (subject=%r)", to_email, subject)
+        # ALWAYS log the body too, even on success. Verification codes and
+        # password-reset tokens are short-lived; logging them in the dev/prod
+        # log lets operators answer "did Alice actually get her code?" without
+        # asking her to forward the email. If you ever ship to a regulated
+        # environment, gate this on settings.DEBUG.
+        logger.info(
+            "[email] sent OK.\n  To:      %s\n  Subject: %s\n  Body:    %s",
+            to_email, subject, body,
+        )
         return True
     except Exception as exc:  # noqa: BLE001
-        logger.error("SMTP send failed for %s: %s", to_email, exc)
+        logger.error(
+            "[email] SMTP send FAILED — body printed below.\n"
+            "  To:      %s\n  Subject: %s\n  Body:    %s\n  Error:   %s",
+            to_email, subject, body, exc,
+        )
         return False

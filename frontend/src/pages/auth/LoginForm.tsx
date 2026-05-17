@@ -10,7 +10,12 @@ import { toast } from '@/store/uiStore';
 
 const MIN_PWD = 6;
 
-export function LoginForm() {
+interface Props {
+  /** Hop over to the register tab. */
+  onSwitchToRegister?: () => void;
+}
+
+export function LoginForm({ onSwitchToRegister }: Props = {}) {
   const setSession = useAuthStore((s) => s.setSession);
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
@@ -68,6 +73,18 @@ export function LoginForm() {
       <Btn type="submit" full loading={loading} disabled={!canSubmit}>
         登录
       </Btn>
+      {onSwitchToRegister && (
+        <div className="mt-4 text-center text-xs text-stone-500">
+          还没账号？
+          <button
+            type="button"
+            onClick={onSwitchToRegister}
+            className="ml-1 text-primary-600 hover:text-primary-800 underline underline-offset-2 font-medium"
+          >
+            去注册
+          </button>
+        </div>
+      )}
     </form>
   );
 }

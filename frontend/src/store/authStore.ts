@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { tokenStore, decodeJwtPayload } from '@/lib/token';
-import { getMe, type MeResponse } from '@/api/auth';
+import { getMe, logout as apiLogout, type MeResponse } from '@/api/auth';
 
 interface AuthState {
   username: string | null;
@@ -9,7 +9,8 @@ interface AuthState {
   loadingMe: boolean;
   hydrate: () => void;
   setSession: (access: string, refresh: string) => void;
-  logout: () => void;
+  /** Server-side revoke + local clear. Always resolves. */
+  logout: () => Promise<void>;
   fetchMe: (force?: boolean) => Promise<MeResponse | null>;
   setMe: (m: MeResponse) => void;
 }
@@ -37,7 +38,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const p = decodeJwtPayload<{ sub?: string }>(access);
     set({ username: p?.sub ?? null, isAuthed: true, me: null });
   },
-  logout: () => {
+  logout: async () => {
+    // Best-effort server-side revocation before wiping local state. We don't
+    // await before clearing because the API call uses the token we're about
+    // to revoke; clearing too early would 401 the request.
+    await apiLogout();
     tokenStore.clear();
     set({ username: null, isAuthed: false, me: null });
   },

@@ -36,9 +36,19 @@ huggingface-hub==0.28.1
 sentence-transformers==5.1.2
 transformers==4.48.0
 llama-index-core==0.14.19
+# LLM provider adapter. Every provider in MODEL_PROFILES is reached through
+# the SAME OpenAILike client — each profile just plugs a different api_base:
+#   - DeepSeek  → https://api.deepseek.com
+#   - OpenAI    → https://api.openai.com/v1
+#   - Anthropic → https://api.anthropic.com/v1   (OpenAI-compat shim)
+#   - NVIDIA    → https://integrate.api.nvidia.com/v1
+#   - Google    → https://generativelanguage.googleapis.com/v1beta/openai
+#   - DashScope / Moonshot / Zhipu / SiliconFlow / modelscope / …
+# Adding a new provider = one MODEL_PROFILES entry, no code change.
+# (We previously had per-vendor wrappers + litellm; both were redundant and
+# litellm's version pins also fought the rest of this stack.)
 llama-index-llms-openai==0.6.26
 llama-index-llms-openai-like==0.5.3
-llama-index-llms-deepseek==0.3.0
 llama-index-embeddings-huggingface==0.7.0
 llama-index-vector-stores-milvus>=0.6.0
 llama-index-readers-file==0.6.0
@@ -73,3 +83,10 @@ httpx==0.28.1
 
 # Agent Web Tools
 markdownify==1.1.0
+
+# Rate limiting (Redis-backed, shared across uvicorn workers)
+slowapi==0.1.9
+
+# Observability — error + light-tracing reporting. Empty SENTRY_DSN
+# disables it entirely, so the dependency is safe to ship enabled.
+sentry-sdk[fastapi,celery]==2.18.0

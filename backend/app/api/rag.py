@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.security import get_current_user
 from app.db.database import get_db
@@ -75,6 +75,11 @@ async def api_query_knowledge_base(
 
 
 def _document_payload(document: KnowledgeDocument) -> dict:
+    # Pull file metadata off the related UserUpload row if it loaded with the
+    # document (SQLAlchemy lazy-loads when accessed).
+    upload = document.upload
+    content_type = upload.content_type if upload else None
+    size_bytes = upload.size_bytes if upload else None
     return {
         "id": document.id,
         "upload_id": document.upload_id,
@@ -84,6 +89,8 @@ def _document_payload(document: KnowledgeDocument) -> dict:
         "status": document.status,
         "task_id": document.task_id,
         "chunk_count": document.chunk_count,
+        "content_type": content_type,
+        "size_bytes": size_bytes,
         "error_message": document.error_message,
         "created_at": document.created_at.isoformat() if document.created_at else None,
         "updated_at": document.updated_at.isoformat() if document.updated_at else None,
@@ -143,12 +150,31 @@ async def create_knowledge_document(
         )
         db.add(document)
         mark_upload_consumed(db, upload)
-        db.commit()
-        db.refresh(document)
+        # Flush so document.id is assigned and the row is visible to the
+        # Celery worker when it queries (commit happens below, BEFORE we
+        # dispatch — otherwise the worker can race ahead of our commit and
+        # see no row). We don't dispatch yet because Celery.delay() can fail
+        # (Redis broker outage) and we want the option to mark the document
+        # as failed in the same DB session.
+        db.flush()
+        document_id = document.id
 
-        task = process_document_ingestion.delay(document.id)
+        try:
+            task = process_document_ingestion.delay(document_id)
+        except Exception as exc:  # noqa: BLE001
+            # Dispatch failed — record it on the document so the UI surfaces
+            # a real error instead of a forever-processing row, then commit
+            # everything in one transaction.
+            logger.error("Celery dispatch failed for document %s: %s", document_id, exc)
+            document.status = "failed"
+            document.error_message = f"task dispatch failed: {exc}"[:500]
+            db.commit()
+            raise HTTPException(
+                status_code=503,
+                detail="后台处理队列暂时不可用，请稍后重试",
+            ) from exc
+
         document.task_id = task.id
-        db.add(document)
         db.commit()
         db.refresh(document)
 
@@ -176,7 +202,13 @@ async def list_knowledge_documents(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(KnowledgeDocument).filter(KnowledgeDocument.user_id == current_user.username)
+    # selectinload(.upload) avoids an N+1 in ``_document_payload`` — the
+    # template reads ``document.upload.content_type`` + ``size_bytes`` per row.
+    query = (
+        db.query(KnowledgeDocument)
+        .options(selectinload(KnowledgeDocument.upload))
+        .filter(KnowledgeDocument.user_id == current_user.username)
+    )
     if category:
         query = query.filter(KnowledgeDocument.category == category)
     if status:

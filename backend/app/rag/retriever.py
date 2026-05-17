@@ -15,11 +15,11 @@ if not hasattr(llama_index.core.vector_stores.utils, "build_metadata_filter_fn")
         return lambda x: True
     llama_index.core.vector_stores.utils.build_metadata_filter_fn = _mock_build_metadata_filter_fn
 
+from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.retrievers import QueryFusionRetriever
-from llama_index.postprocessor.sbert_rerank import SentenceTransformerRerank
 
 from app.core.config import settings
-from app.core.hf_runtime import prepare_hf_runtime, resolve_local_snapshot
+from app.rag.reranker_registry import build_reranker, resolve_reranker
 from app.rag.bm25_cache import (
     _BM25_CACHE_TTL,
     _BM25CacheEntry,
@@ -41,7 +41,7 @@ MILVUS_COLLECTION = settings.MILVUS_COLLECTION
 # Module-level singletons with thread-safe lazy initialization
 # ---------------------------------------------------------------------------
 
-_reranker: Optional[SentenceTransformerRerank] = None
+_reranker: Optional[BaseNodePostprocessor] = None
 _reranker_lock = Lock()
 
 _milvus_store: Optional[MilvusVectorStore] = None
@@ -95,7 +95,13 @@ def _get_milvus_index() -> VectorStoreIndex:
 
 
 def init_reranker():
-    """Initialize the reranker model. Safe to call multiple times (idempotent)."""
+    """Initialize the reranker. Safe to call multiple times (idempotent).
+
+    Provider + model are picked from ``RERANKER_PROVIDER`` + ``RERANKER_MODEL``
+    env vars. Default keeps the previous behaviour (local BGE-Reranker
+    v2 M3 from HF cache); switching ``RERANKER_PROVIDER=siliconflow`` etc
+    skips the local download entirely.
+    """
     global _reranker
     if _reranker is not None:
         return
@@ -103,20 +109,18 @@ def init_reranker():
         if _reranker is not None:
             return
         try:
-            prepare_hf_runtime()
-            reranker_model = resolve_local_snapshot(settings.RERANKER_MODEL_ID)
-            if reranker_model is None:
-                raise RuntimeError(
-                    f"Reranker model '{settings.RERANKER_MODEL_ID}' is missing. "
-                    "Run the model init script before starting the backend."
-                )
-            _reranker = SentenceTransformerRerank(
-                model=reranker_model,
-                top_n=settings.RERANK_TOP_N,
+            cfg = resolve_reranker()
+            _reranker = build_reranker(top_n=settings.RERANK_TOP_N)
+            logger.info(
+                "Reranker ready: provider=%s model=%s",
+                cfg.provider_id, cfg.model,
             )
-            logger.info("BGE-Reranker 交叉注意力模型加载完成。")
         except Exception as e:
-            logger.error(f"BGE-Reranker 启动失败: {e}")
+            # Reranker is part of the configured stack — if it can't load,
+            # fail loud at startup so the operator notices and fixes the
+            # config / downloads the model. Silently degrading to vector-only
+            # makes RAG quality regressions easy to miss.
+            logger.error("Reranker init failed: %s", e)
             raise
 
 

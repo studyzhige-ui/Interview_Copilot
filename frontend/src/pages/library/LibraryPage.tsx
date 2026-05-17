@@ -37,6 +37,32 @@ function statusTone(s: string): { tone: 'success' | 'warn' | 'danger' | 'neutral
   }
 }
 
+// Compact short label for the "类型" column. Falls back to the file extension
+// from the title if MIME is unknown, then to "—".
+function shortFileType(d: { title: string; content_type: string | null }): string {
+  const ct = (d.content_type ?? '').toLowerCase();
+  if (ct.includes('pdf')) return 'PDF';
+  if (ct.includes('wordprocessingml') || ct.includes('msword') || ct.includes('docx')) return 'DOCX';
+  if (ct.includes('text/plain')) return 'TXT';
+  if (ct.includes('markdown')) return 'MD';
+  if (ct.includes('html')) return 'HTML';
+  if (ct.startsWith('image/')) return ct.split('/')[1]?.toUpperCase() ?? 'IMG';
+  if (ct.startsWith('audio/')) return 'AUDIO';
+  if (ct.startsWith('video/')) return 'VIDEO';
+  // Fallback: title extension
+  const m = d.title.match(/\.([a-z0-9]{1,5})$/i);
+  if (m) return m[1].toUpperCase();
+  return '—';
+}
+
+function humanSize(n: number | null): string {
+  if (n == null || n < 0) return '—';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
 export function LibraryPage() {
   const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
   const [cats, setCats] = useState<KnowledgeCategory[]>([]);
@@ -251,9 +277,11 @@ export function LibraryPage() {
               <thead className="text-xs text-stone-500 uppercase tracking-wider">
                 <tr className="border-b border-stone-200">
                   <th className="text-left font-medium px-4 py-3">文件名</th>
+                  <th className="text-left font-medium px-4 py-3 w-24">类型</th>
+                  <th className="text-left font-medium px-4 py-3 w-24">大小</th>
                   <th className="text-left font-medium px-4 py-3 w-28">分类</th>
                   <th className="text-left font-medium px-4 py-3 w-24">状态</th>
-                  <th className="text-left font-medium px-4 py-3 w-48">
+                  <th className="text-left font-medium px-4 py-3 w-44">
                     <button
                       onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
                       className="inline-flex items-center gap-1 hover:text-stone-700"
@@ -293,6 +321,17 @@ export function LibraryPage() {
                         ) : (
                           <div className="text-stone-800 truncate max-w-md">{d.title}</div>
                         )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className="inline-block px-2 py-0.5 rounded-md bg-stone-100 text-stone-600 text-[11px] font-mono font-medium"
+                          title={d.content_type ?? ''}
+                        >
+                          {shortFileType(d)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-stone-600 text-xs font-mono">
+                        {humanSize(d.size_bytes)}
                       </td>
                       <td className="px-4 py-3 text-stone-600">{d.category}</td>
                       <td className="px-4 py-3">

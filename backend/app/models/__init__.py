@@ -8,6 +8,7 @@ from app.models.mock_interview_session import MockInterviewSession
 from app.models.resume_section import ResumeSection
 from app.models.upload import UserUpload
 from app.models.user import User
+from app.models.user_api_key import UserAPIKey
 
 __all__ = [
     "AgentRun",
@@ -22,4 +23,5 @@ __all__ = [
     "ResumeSection",
     "UserUpload",
     "User",
+    "UserAPIKey",
 ]

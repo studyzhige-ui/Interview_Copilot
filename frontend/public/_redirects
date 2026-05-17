@@ -1,0 +1,11 @@
+# Cloudflare Pages SPA fallback.
+# Any URL that doesn't match a real file gets the SPA shell at status 200,
+# so React Router can resolve it client-side. Without this, /review on hard
+# refresh would 404.
+#
+# Order matters — put more specific rules ABOVE the catch-all if you ever
+# need exceptions (e.g. proxying /api/v1/* to a separate backend host
+# you'd add a `/api/v1/*  https://api.your-domain.com/api/v1/:splat  200`
+# rule above this catch-all).
+
+/*    /index.html   200

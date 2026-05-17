@@ -1,107 +1,151 @@
-"""测试 app.core.security 的密码哈希与 JWT 生成/解析。"""
+"""Tests for app.core.security — password hashing, JWT issuance/decode, blacklist guard."""
+from __future__ import annotations
+
 from datetime import timedelta
-from jose import jwt as jose_jwt
+from unittest.mock import patch
+
+import pytest
+from jose import JWTError, jwt as jose_jwt
+
+from app.core.config import settings
+from app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+    get_password_hash,
+    verify_password,
+)
 
 
-def test_password_hash_and_verify():
-    """哈希后的密码应能被 verify_password 正确验证。"""
-    from app.core.security import get_password_hash, verify_password
-
+# ── bcrypt password hashing ──────────────────────────────────────────────
+def test_password_hash_round_trip():
     plain = "my_secure_password_123"
     hashed = get_password_hash(plain)
 
-    assert hashed != plain, "哈希值不应等于原文"
-    assert verify_password(plain, hashed), "正确密码应验证通过"
-    assert not verify_password("wrong_password", hashed), "错误密码应验证失败"
+    assert hashed != plain
+    assert verify_password(plain, hashed)
+    assert not verify_password("wrong_password", hashed)
 
 
-def test_create_access_token_contains_subject():
-    """生成的 JWT 应包含 sub 字段。"""
-    from app.core.security import create_access_token
-    from app.core.config import settings
-
-    token = create_access_token(data={"sub": "testuser"})
-    payload = jose_jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-
-    assert payload["sub"] == "testuser"
-    assert "exp" in payload
+def test_password_hash_is_salted_each_time():
+    """Two hashes of the same password must differ because of fresh salts."""
+    pw = "the-same-password"
+    h1 = get_password_hash(pw)
+    h2 = get_password_hash(pw)
+    assert h1 != h2
+    assert verify_password(pw, h1)
+    assert verify_password(pw, h2)
 
 
-def test_create_access_token_custom_expiry():
-    """自定义过期时间应正确写入 JWT。"""
-    from app.core.security import create_access_token
-    from app.core.config import settings
-
-    token = create_access_token(
-        data={"sub": "alice"},
-        expires_delta=timedelta(minutes=5)
-    )
-    payload = jose_jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-    assert payload["sub"] == "alice"
+def test_verify_password_handles_malformed_hash_without_raising():
+    assert verify_password("anything", "not-a-real-bcrypt-hash") is False
+    assert verify_password("anything", "") is False
 
 
-def test_invalid_token_raises():
-    """伪造/损坏的 Token 解码应抛异常。"""
-    from app.core.config import settings
-    from jose import JWTError
-
-    try:
-        jose_jwt.decode("not.a.real.token", settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        assert False, "本应抛出 JWTError"
-    except JWTError:
-        pass  # 期望行为
+def test_verify_password_accepts_bytes_hash():
+    pw = "bytes-input"
+    hashed = get_password_hash(pw)
+    assert verify_password(pw, hashed.encode("utf-8"))
 
 
-def test_access_token_has_access_type():
-    """Access Token 应包含 type='access' 声明。"""
-    from app.core.security import create_access_token
-    from app.core.config import settings
-
+# ── JWT round trips ──────────────────────────────────────────────────────
+def test_access_token_round_trip_carries_expected_claims():
     token = create_access_token(data={"sub": "alice"})
-    payload = jose_jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    payload = decode_token(token)
+    assert payload["sub"] == "alice"
     assert payload["type"] == "access"
+    assert "exp" in payload
+    assert "iat" in payload
+    assert payload.get("jti") and isinstance(payload["jti"], str)
 
 
-def test_create_refresh_token_has_refresh_type():
-    """Refresh Token 应包含 type='refresh' 声明。"""
-    from app.core.security import create_refresh_token
-    from app.core.config import settings
-
+def test_refresh_token_has_refresh_type_and_jti():
     token = create_refresh_token(data={"sub": "bob"})
-    payload = jose_jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-    assert payload["type"] == "refresh"
+    payload = decode_token(token)
     assert payload["sub"] == "bob"
-
-
-def test_refresh_token_rejected_as_access():
-    """使用 Refresh Token 访问 get_current_user 应抛出 401。"""
-    import pytest
-    from unittest.mock import MagicMock
-    from fastapi import HTTPException
-    from app.core.security import create_refresh_token, decode_token
-    from app.core.config import settings
-
-    token = create_refresh_token(data={"sub": "charlie"})
-    payload = jose_jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-
-    # Refresh token should carry type="refresh", not "access"
     assert payload["type"] == "refresh"
-    # get_current_user would reject this because type != "access"
+    assert payload.get("jti")
 
 
-def test_decode_token_rejects_expired():
-    """过期 Token 解码应抛出 JWTError。"""
-    from datetime import timedelta
-    from jose import JWTError
-    from app.core.security import create_access_token, decode_token
+def test_each_token_has_unique_jti():
+    t1 = create_access_token(data={"sub": "u1"})
+    t2 = create_access_token(data={"sub": "u1"})
+    assert decode_token(t1)["jti"] != decode_token(t2)["jti"]
 
+
+def test_create_access_token_respects_custom_expiry():
     token = create_access_token(
-        data={"sub": "expired_user"},
-        expires_delta=timedelta(seconds=-1),
+        data={"sub": "alice"}, expires_delta=timedelta(minutes=5),
     )
-    try:
-        decode_token(token)
-        assert False, "本应抛出 JWTError"
-    except JWTError:
-        pass
+    payload = decode_token(token)
+    # exp - iat ≈ 300 seconds, allow a couple seconds of slop.
+    delta = payload["exp"] - payload["iat"]
+    assert 295 <= delta <= 305
 
+
+# ── JWT rejection paths ──────────────────────────────────────────────────
+def test_decode_token_rejects_garbage():
+    with pytest.raises(JWTError):
+        decode_token("not.a.real.token")
+
+
+def test_decode_token_rejects_expired_token():
+    token = create_access_token(
+        data={"sub": "ghost"}, expires_delta=timedelta(seconds=-1),
+    )
+    with pytest.raises(JWTError):
+        decode_token(token)
+
+
+def test_decode_token_rejects_wrong_signature():
+    """A token signed with a different secret must not decode under ours."""
+    payload = {"sub": "intruder", "type": "access", "jti": "abc"}
+    forged = jose_jwt.encode(payload, "completely-different-secret", algorithm=settings.ALGORITHM)
+    with pytest.raises(JWTError):
+        decode_token(forged)
+
+
+# ── get_current_user / blacklist integration ─────────────────────────────
+async def test_get_current_user_rejects_refresh_token():
+    """A refresh token must not satisfy the access-token dependency."""
+    from fastapi import HTTPException
+
+    from app.core.security import get_current_user
+
+    refresh = create_refresh_token(data={"sub": "user-x"})
+    with patch("app.core.security.is_revoked", return_value=False):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(token=refresh, db=object())
+    assert exc_info.value.status_code == 401
+
+
+async def test_get_current_user_rejects_revoked_jti():
+    """A token whose jti is in the blacklist must be rejected."""
+    from fastapi import HTTPException
+
+    from app.core.security import get_current_user
+
+    token = create_access_token(data={"sub": "user-y"})
+
+    async def _revoked(_jti):
+        return True
+
+    with patch("app.core.security.is_revoked", side_effect=_revoked):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(token=token, db=object())
+    assert exc_info.value.status_code == 401
+
+
+async def test_get_current_user_rejects_token_without_jti():
+    """Pre-jti-rollout tokens must be rejected even with a valid signature."""
+    from fastapi import HTTPException
+
+    from app.core.security import get_current_user
+
+    # Hand-craft a valid-signature access token that lacks jti.
+    payload = {"sub": "legacy", "type": "access"}
+    token = jose_jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    with patch("app.core.security.is_revoked", return_value=False):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(token=token, db=object())
+    assert exc_info.value.status_code == 401

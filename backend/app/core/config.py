@@ -64,10 +64,41 @@ class Settings(BaseSettings):
     STORAGE_DIR: str = ""
 
     EMBEDDING_DEVICE: str = "auto"
-    EMBEDDING_MODEL_ID: str = "BAAI/bge-m3"
+    # ── Model selection: provider + free-form model name ───────────────────
+    # Two axes per role:
+    #   *_PROVIDER  — picks an entry from the small PROVIDERS dict in the
+    #                 corresponding registry module (5-10 stable choices).
+    #   *_MODEL     — any model name that provider exposes. Adding new model
+    #                 variants needs ZERO code change; just edit this var.
+    # See docs/providers.md for recommended combinations.
+    #
+    # ⚠ EMBEDDING_DIM must match the model's actual output dimension.
+    #   Switching to a different-dim model after data is indexed requires
+    #   dropping the Milvus collection and re-ingesting.
+
+    # Embedding (RAG vector store)
+    EMBEDDING_PROVIDER: str = "local"            # local | openai | siliconflow | jina | dashscope | zhipu
+    EMBEDDING_MODEL: str = "BAAI/bge-m3"
     EMBEDDING_DIM: int = 1024
-    RERANKER_MODEL_ID: str = "BAAI/bge-reranker-base"
-    WHISPER_MODEL_ID: str = "Systran/faster-whisper-large-v2"
+
+    # Reranker (RAG cross-encoder)
+    RERANKER_PROVIDER: str = "local"             # local | siliconflow | jina | cohere | dashscope
+    RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"
+
+    # ASR (audio transcription)
+    TRANSCRIPTION_PROVIDER: str = "local_whisperx"   # local_whisperx | openai | siliconflow | dashscope
+    TRANSCRIPTION_MODEL: str = "Systran/faster-whisper-large-v3"
+
+    # Speaker diarization (separates "who said what"). Three modes:
+    #   "auto"     — bundled when TRANSCRIPTION_PROVIDER=local_whisperx;
+    #                off otherwise.
+    #   "pyannote" — force local Pyannote even when ASR is remote (hybrid:
+    #                remote ASR returns word timestamps → Pyannote labels
+    #                speakers → we align). Needs the ~1GB Pyannote download
+    #                AND a remote ASR provider that supports word-level
+    #                timestamps (e.g. openai/whisper-1).
+    #   "none"     — never diarize; transcripts come back single-speaker.
+    DIARIZATION_MODE: str = "auto"
     DIARIZATION_MODEL_ID: str = "pyannote-community/speaker-diarization-community-1"
     AGENT_MAX_STEPS: int = 25
     AGENT_TOOL_TIMEOUT_SECONDS: int = 30
@@ -103,8 +134,27 @@ class Settings(BaseSettings):
     NVIDIA_API_BASE: str = "https://integrate.api.nvidia.com/v1"
     NVIDIA_CHAT_MODEL: str = "meta/llama-3.1-70b-instruct"
 
-    # Security and JWT
-    SECRET_KEY: str = "change-me-for-local-development"
+    # ── Observability (Sentry) ──────────────────────────────────────────
+    # Empty DSN disables Sentry entirely (default for local dev). For prod
+    # set the DSN from your Sentry project settings; sample rate controls
+    # what fraction of transactions get traced (0.0–1.0). Errors are always
+    # captured regardless of the sample rate.
+    SENTRY_DSN: str = ""
+    SENTRY_ENVIRONMENT: str = "local"          # "local" / "staging" / "prod"
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.1     # 10% of transactions
+    SENTRY_RELEASE: str = ""                   # optional: git SHA / app version
+
+    # Security and JWT.
+    # No in-code default — keys must come from .env (or environment). An empty
+    # value is caught by _validate_secret_key() below and logged loudly so the
+    # operator notices instead of silently inheriting a placeholder.
+    SECRET_KEY: str = ""
+    # Comma-separated list of OLD secrets retained during a key-rotation grace
+    # period. Encrypted user_api_keys ciphertexts encrypted under any of these
+    # can still be decrypted (MultiFernet); new writes always use SECRET_KEY.
+    # Move keys here when rotating, then drop them once all stored payloads
+    # have been lazily re-encrypted (or after a hard cutoff).
+    SECRET_KEYS_OLD: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
@@ -133,10 +183,28 @@ class Settings(BaseSettings):
     AWS_ENDPOINT_URL: str = "http://localhost:9000"
     S3_BUCKET_NAME: str = "interview-copilot-bucket"
 
-    # Database connection pool
-    DB_POOL_SIZE: int = 5
-    DB_MAX_OVERFLOW: int = 10
+    # Database connection pool — PER-WORKER limits.
+    #
+    # Hard math when running multi-worker:
+    #
+    #     uvicorn_workers * (DB_POOL_SIZE + DB_MAX_OVERFLOW)
+    #     + celery_concurrency
+    #     + headroom (replication / vacuum / psql)
+    #     <= postgresql.conf max_connections
+    #
+    # Default Postgres `max_connections` is 100. With these values
+    # (20 + 20 = 40 per process) you can safely run 2 uvicorn workers
+    # plus a few Celery slots; for 4+ workers either bump
+    # max_connections to 300+ or run pgbouncer in front.
+    DB_POOL_SIZE: int = 20
+    DB_MAX_OVERFLOW: int = 20
     DB_POOL_RECYCLE: int = 1800  # seconds
+
+    # Redis connection pool — shared across verification codes, celery
+    # broker/result, rate limiter, and ad-hoc app cache. Same per-worker
+    # multiplication applies; Redis default maxclients is 10000 so this is
+    # rarely the bottleneck.
+    REDIS_POOL_SIZE: int = 50
 
     @field_validator(
         "DB_DIR", "CHROMA_DB_DIR", "DOCSTORE_DIR",
@@ -163,22 +231,84 @@ class Settings(BaseSettings):
         return str(Path(app_data) / subdir)
 
 
-def _validate_secret_key(key: str) -> None:
-    """Warn loudly if the SECRET_KEY is a well-known placeholder."""
-    insecure_defaults = {
-        "change-me-for-local-development",
-        "super-secret-key-for-interview-copilot-dev",
-        "your-secret-key",
-        "",
-    }
-    if key in insecure_defaults:
+_INSECURE_SECRET_KEYS = {
+    "change-me-for-local-development",
+    "super-secret-key-for-interview-copilot-dev",
+    "your-secret-key",
+    "",
+}
+
+
+def _validate_production_safety(s: "Settings") -> None:
+    """Audit settings for known-insecure defaults.
+
+    Behaviour by ``SENTRY_ENVIRONMENT``:
+      * ``local`` (default) — single concise INFO line listing the
+        bundled creds still in use. Dev convenience wins; we don't spam
+        a WARNING per finding on every reload.
+      * ``staging`` / ``prod`` / ``production`` — one WARNING per finding
+        with a fix hint, so on-call notices in the startup log.
+
+    Either way, the SECRET_KEY check always escalates to WARNING because
+    a placeholder SECRET_KEY breaks JWT signing and Fernet decryption
+    even in dev.
+    """
+    is_prodlike = (s.SENTRY_ENVIRONMENT or "local").strip().lower() in {"staging", "prod", "production"}
+    findings: list[tuple[str, str]] = []
+    secret_finding: tuple[str, str] | None = None
+
+    if (s.SECRET_KEY or "").strip() in _INSECURE_SECRET_KEYS:
+        secret_finding = (
+            "SECRET_KEY",
+            "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(48))\"",
+        )
+
+    # Bundled-Postgres / MinIO well-known credentials. These are baked into
+    # docker-compose's defaults; rotating them in production prevents anyone
+    # who reads the public README from logging into your DB / object store.
+    if "postgres:postgres@" in (s.DATABASE_URL or ""):
+        findings.append((
+            "DATABASE_URL still uses bundled postgres/postgres",
+            "Set POSTGRES_USER/POSTGRES_PASSWORD in .env.docker AND DATABASE_URL"
+            " (or DATABASE_URL_DOCKER) in .env to match.",
+        ))
+    if (s.AWS_ACCESS_KEY_ID or "").strip() == "minioadmin":
+        findings.append((
+            "AWS_ACCESS_KEY_ID is bundled 'minioadmin'",
+            "Rotate MINIO_ROOT_USER in .env.docker and AWS_ACCESS_KEY_ID in .env.",
+        ))
+    if (s.AWS_SECRET_ACCESS_KEY or "").strip() == "minioadmin":
+        findings.append((
+            "AWS_SECRET_ACCESS_KEY is bundled 'minioadmin'",
+            "Rotate MINIO_ROOT_PASSWORD in .env.docker and AWS_SECRET_ACCESS_KEY in .env.",
+        ))
+
+    # SECRET_KEY is always WARNING — it's not a "dev convenience" issue.
+    if secret_finding is not None:
+        name, hint = secret_finding
         logger.warning(
-            "⚠️  SECRET_KEY is set to an insecure default ('%s'). "
-            "This is acceptable for local development but MUST be changed "
-            "before any production deployment.",
-            key[:20] + "..." if len(key) > 20 else key,
+            "[security] %s is set to an insecure default. %s",
+            name, hint,
+        )
+
+    if not findings:
+        return
+
+    if is_prodlike:
+        for name, hint in findings:
+            logger.warning(
+                "[PRODUCTION BLOCKER] Insecure default: %s. Hint: %s",
+                name, hint,
+            )
+    else:
+        # Single info line in dev — keeps reload logs readable.
+        items = "; ".join(name for name, _ in findings)
+        logger.info(
+            "[security] Using bundled dev credentials (%s). "
+            "Safe for local-only; rotate before any non-local deploy.",
+            items,
         )
 
 
 settings = Settings()
-_validate_secret_key(settings.SECRET_KEY)
+_validate_production_safety(settings)

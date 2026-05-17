@@ -24,7 +24,9 @@ export function AuthPage() {
           <TabBtn active={tab === 'register'} onClick={() => setTab('register')}>注册</TabBtn>
         </div>
 
-        {tab === 'login' ? <LoginForm /> : <RegisterForm />}
+        {tab === 'login'
+          ? <LoginForm onSwitchToRegister={() => setTab('register')} />
+          : <RegisterForm onSwitchToLogin={() => setTab('login')} />}
       </div>
     </div>
   );

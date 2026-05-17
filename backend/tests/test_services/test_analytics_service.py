@@ -63,7 +63,10 @@ async def test_generate_report_successful_json_parse():
         result = await generate_comprehensive_report(limit=20, user_id="u1")
 
         assert result["status"] == "success"
-        assert "overall_evaluation" in result["report"]
+        # _normalize_report flattens overall_evaluation to the top level.
+        assert result["overall_evaluation"] == "技术薄弱"
+        # weaknesses are normalized — topic → k, flaw → why
+        assert any(w["k"] == "Redis" for w in result["weaknesses"])
 
 
 @pytest.mark.asyncio

@@ -38,3 +38,38 @@ export async function pingAllModels(): Promise<ModelPingResult[]> {
   const res = await apiClient.post('/models/ping', null, { timeout: 60_000 });
   return res.data?.results ?? [];
 }
+
+export interface RefreshCatalogResult {
+  status: string;
+  discovery_cache_dropped: number;
+  profiles_total: number;
+  profiles_auto_discovered: number;
+  profiles: ModelProfile[];
+}
+
+/** Force the backend to re-discover models from each vendor's /v1/models endpoint. */
+export async function refreshModelCatalog(): Promise<RefreshCatalogResult> {
+  const res = await apiClient.post('/models/refresh-catalog', null, { timeout: 60_000 });
+  return res.data;
+}
+
+export interface UserApiKeyStatus {
+  [provider: string]: { set: boolean; masked: string };
+}
+
+export async function listMyApiKeys(): Promise<UserApiKeyStatus> {
+  const res = await apiClient.get('/models/api-keys');
+  return res.data?.keys ?? {};
+}
+
+export async function saveMyApiKey(provider: string, apiKey: string): Promise<{ masked: string }> {
+  const res = await apiClient.put(
+    `/models/api-keys/${encodeURIComponent(provider)}`,
+    { api_key: apiKey },
+  );
+  return { masked: res.data?.masked ?? '' };
+}
+
+export async function deleteMyApiKey(provider: string): Promise<void> {
+  await apiClient.delete(`/models/api-keys/${encodeURIComponent(provider)}`);
+}

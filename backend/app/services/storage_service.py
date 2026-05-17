@@ -101,6 +101,23 @@ def download_file_from_s3(s3_uri: str, local_path: str):
         raise
 
 
+def generate_presigned_get_url(s3_uri: str, expiration: int = 600) -> str:
+    """Build a short-lived presigned GET URL for ``s3_uri``.
+
+    Used by endpoints that 307-redirect the browser straight to S3/MinIO
+    (avatar render, etc) so the byte stream never traverses the FastAPI
+    process. Default 10 min — long enough that the browser can also reuse
+    the cached image without us re-signing on every page nav, short enough
+    that a leaked URL goes stale fast.
+    """
+    bucket, key = parse_s3_uri(s3_uri)
+    return s3_client.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=expiration,
+    )
+
+
 def delete_s3_object(storage_uri: str) -> None:
     bucket, key = parse_s3_uri(storage_uri)
     if bucket != settings.S3_BUCKET_NAME:
@@ -153,13 +170,111 @@ def upload_file_to_owned_key(file_obj, object_key: str, content_type: str | None
 
 
 def _fallback_local_save(file_obj, relative_path: str):
+    """Write the upload to local disk when S3 isn't reachable.
+
+    Hardened against path traversal: even though ``relative_path`` is
+    constructed internally by ``build_owned_object_key`` (which sanitises
+    inputs), a future caller could pass an attacker-influenced key. We
+    resolve the final destination and assert it stays under STORAGE_DIR.
+    """
     import shutil
     from pathlib import Path
 
-    base_dir = Path(settings.STORAGE_DIR)
-    full_path = base_dir / relative_path
+    base_dir = Path(settings.STORAGE_DIR).resolve()
+    # Reject absolute paths up-front; ``base / abs`` silently discards
+    # ``base`` on POSIX, which is exactly the traversal we want to block.
+    candidate = Path(relative_path)
+    if candidate.is_absolute() or any(part == ".." for part in candidate.parts):
+        raise ValueError(f"Refusing unsafe object key for local save: {relative_path!r}")
+
+    full_path = (base_dir / candidate).resolve()
+    try:
+        full_path.relative_to(base_dir)
+    except ValueError as exc:
+        raise ValueError(
+            f"Refusing object key that resolves outside STORAGE_DIR: {relative_path!r}"
+        ) from exc
+
     full_path.parent.mkdir(parents=True, exist_ok=True)
     file_obj.seek(0)
     with open(full_path, "wb") as f:
         shutil.copyfileobj(file_obj, f)
     return str(full_path)
+
+
+# ── local:// URI scheme ─────────────────────────────────────────────────
+# When S3 is unreachable we still want a graceful-degradation path so an
+# upload doesn't error out completely. The bytes land on local disk and
+# we record a ``local://<rel_path>`` URI in DB instead of ``s3://...``.
+# Downstream consumers that understand ``local://`` (the avatar serializer
+# + the /static/avatars file mount) can serve the bytes without ever
+# talking to S3.
+
+LOCAL_URI_PREFIX = "local://"
+
+
+def is_local_uri(uri: str | None) -> bool:
+    return bool(uri) and uri.startswith(LOCAL_URI_PREFIX)
+
+
+def _safe_relative(rel_path: str) -> Path:
+    """Reject absolute paths, .. segments, and any input that would escape
+    STORAGE_DIR. Returns the validated relative ``Path``.
+    """
+    if not rel_path:
+        raise ValueError("Empty relative path")
+    candidate = Path(rel_path)
+    if candidate.is_absolute() or any(part == ".." for part in candidate.parts):
+        raise ValueError(f"Unsafe relative path: {rel_path!r}")
+    return candidate
+
+
+def parse_local_uri(uri: str) -> Path:
+    """``local://avatars/u/x.png`` → absolute ``Path`` under STORAGE_DIR.
+
+    Raises ``ValueError`` if the URI is malformed or attempts to escape the
+    storage root.
+    """
+    if not is_local_uri(uri):
+        raise ValueError(f"Not a local URI: {uri!r}")
+    rel = uri[len(LOCAL_URI_PREFIX):].lstrip("/")
+    candidate = _safe_relative(rel)
+    base = Path(settings.STORAGE_DIR).resolve()
+    full = (base / candidate).resolve()
+    try:
+        full.relative_to(base)
+    except ValueError as exc:
+        raise ValueError(f"local URI escapes STORAGE_DIR: {uri!r}") from exc
+    return full
+
+
+def save_blob_to_local(data: bytes, rel_path: str) -> str:
+    """Write ``data`` to STORAGE_DIR/<rel_path>; return its ``local://`` URI.
+
+    Used as the S3-fallback target for avatar uploads. Path-traversal
+    guarded by :func:`_safe_relative`.
+    """
+    candidate = _safe_relative(rel_path)
+    base = Path(settings.STORAGE_DIR).resolve()
+    full = (base / candidate).resolve()
+    full.relative_to(base)  # belt-and-braces; raises on escape
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_bytes(data)
+    # Normalise separators so the URI is portable across Win/POSIX.
+    normalised = str(candidate).replace(os.sep, "/")
+    return f"{LOCAL_URI_PREFIX}{normalised}"
+
+
+def delete_local_uri(uri: str) -> None:
+    """Best-effort unlink of a ``local://`` URI. Missing files are a no-op."""
+    if not is_local_uri(uri):
+        return
+    try:
+        full = parse_local_uri(uri)
+    except ValueError:
+        return
+    try:
+        if full.is_file():
+            full.unlink()
+    except OSError as exc:
+        logger.warning("Failed to delete local upload %s: %s", uri, exc)

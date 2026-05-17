@@ -1,0 +1,32 @@
+# Cloudflare Pages headers — applied at the edge before the response
+# leaves the CDN. Format: path matcher on its own line, headers indented.
+#
+# All hashed asset bundles (Vite emits them with content hashes in the
+# filename, so a content change → new filename) are safe to cache forever.
+# The HTML shell must NEVER be long-cached or users will pin themselves
+# to a stale build that 404s on every chunk request after a deploy.
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Fonts under /assets too — same hashed-filename guarantee
+/assets/Inter-*
+  Cache-Control: public, max-age=31536000, immutable
+
+/index.html
+  Cache-Control: no-cache, no-store, must-revalidate
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+
+/
+  Cache-Control: no-cache, no-store, must-revalidate
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+
+/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), microphone=(self), camera=()

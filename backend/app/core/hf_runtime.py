@@ -55,3 +55,68 @@ def resolve_local_snapshot(model_id: str) -> str | None:
             return str(snapshot_dir)
 
     return None
+
+
+def list_cached_models(filter_substring: str = "") -> list[str]:
+    """Return human-readable HF model ids that are present locally.
+
+    Used by error messages so "model X not found" can list what IS available
+    instead of just telling the operator to download.
+
+    Scans both lookup roots ``resolve_local_snapshot`` checks. ``filter_substring``
+    narrows the result to ids containing that text (case-insensitive); pass
+    e.g. ``"reranker"`` from the reranker error path to filter cleanly.
+    """
+    seen: set[str] = set()
+
+    if LOCAL_MODELS_DIR.exists():
+        for entry in LOCAL_MODELS_DIR.iterdir():
+            if entry.is_dir() and any(entry.iterdir()):
+                seen.add(entry.name.replace("--", "/"))
+
+    if HF_CACHE_DIR.exists():
+        for entry in HF_CACHE_DIR.iterdir():
+            if entry.is_dir() and entry.name.startswith("models--"):
+                name = entry.name.removeprefix("models--").replace("--", "/")
+                # Only count it as "available" if there's an actual snapshot
+                # with content; an empty cache dir is misleading.
+                snap = entry / "snapshots"
+                if snap.exists() and any(
+                    s.is_dir() and any(c.is_file() for c in s.iterdir())
+                    for s in snap.iterdir()
+                ):
+                    seen.add(name)
+
+    needle = filter_substring.lower()
+    return sorted(s for s in seen if not needle or needle in s.lower())
+
+
+def format_missing_model_error(
+    model_id: str,
+    role: str,
+    filter_substring: str = "",
+    fix_hint: str = "",
+) -> str:
+    """Build a multi-line error message for a missing local model.
+
+    Lists everything that IS in the cache (filtered to the same role family),
+    so the operator can immediately see "oh I have bge-reranker-base but .env
+    asked for v2-m3 — either change the env var or download v2-m3".
+    """
+    available = list_cached_models(filter_substring)
+    lines = [
+        f"{role} model '{model_id}' is not in the local cache.",
+        f"  Looked in: {LOCAL_MODELS_DIR}",
+        f"             {HF_CACHE_DIR}",
+    ]
+    if available:
+        lines.append(f"  Available {role.lower()} models in cache:")
+        for m in available:
+            lines.append(f"    - {m}")
+        lines.append("  → Either edit .env to point to one of the above,")
+        lines.append("    or download the requested model.")
+    else:
+        lines.append(f"  (No {role.lower()} models cached at all.)")
+    if fix_hint:
+        lines.append(f"  Download: {fix_hint}")
+    return "\n".join(lines)

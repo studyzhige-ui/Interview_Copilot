@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { User, Lock, Mail, KeyRound } from 'lucide-react';
+import { User, Lock, Mail, KeyRound, Info } from 'lucide-react';
 import { Btn } from '@/components/ui/Btn';
 import { Field } from '@/components/ui/Field';
 import { login, register, sendVerificationCode } from '@/api/auth';
@@ -11,7 +11,12 @@ import { toast } from '@/store/uiStore';
 const MIN_PWD = 6;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export function RegisterForm() {
+interface Props {
+  /** Hop back to the login tab. Used by the inline "已注册？登录" hint. */
+  onSwitchToLogin?: () => void;
+}
+
+export function RegisterForm({ onSwitchToLogin }: Props = {}) {
   const setSession = useAuthStore((s) => s.setSession);
   const navigate = useNavigate();
 
@@ -101,6 +106,30 @@ export function RegisterForm() {
 
   return (
     <form onSubmit={onSubmit}>
+      {/* Anti-enumeration UX hint: /send-code silently ignores already-
+        * registered emails (no code is mailed). Tell the user up-front so
+        * they don't waste 10 min wondering "为什么没收到验证码".
+        *
+        * Layout: 13px copy, generous padding, no inline punctuation that
+        * could orphan onto its own line. The "请直接登录" link sits at the
+        * end of the sentence so wrap point falls naturally before it. */}
+      <div className="flex items-start gap-2.5 px-3.5 py-3 mb-5 rounded-lg bg-primary-50/70 border border-primary-100 text-[13px] leading-6 text-primary-800">
+        <Info size={15} className="mt-0.5 shrink-0 text-primary-500" />
+        <div className="flex-1">
+          <span>已完成注册的邮箱不会再收到验证码，已有账号 </span>
+          {onSwitchToLogin ? (
+            <button
+              type="button"
+              onClick={onSwitchToLogin}
+              className="underline underline-offset-2 font-medium text-primary-700 hover:text-primary-900"
+            >
+              直接登录 →
+            </button>
+          ) : (
+            <span className="font-medium">直接登录</span>
+          )}
+        </div>
+      </div>
       <Field
         label="邮箱"
         type="email"

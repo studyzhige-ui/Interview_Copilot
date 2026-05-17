@@ -1,9 +1,24 @@
 import { apiClient } from './client';
+import { tokenStore } from '@/lib/token';
 
 export interface TokenPair {
   access_token: string;
   refresh_token: string;
   token_type: string;
+}
+
+/**
+ * Best-effort server-side revocation of the current token pair.
+ * Always resolves (failures are logged + swallowed) so the UI logout flow
+ * never blocks on network. Pair this with `tokenStore.clear()` on the FE.
+ */
+export async function logout(): Promise<void> {
+  const refresh = tokenStore.getRefresh();
+  try {
+    await apiClient.post('/auth/logout', refresh ? { refresh_token: refresh } : {});
+  } catch {
+    // Backend may already have revoked / be down — local clear still happens.
+  }
 }
 
 export type CodePurpose = 'register' | 'reset_password' | 'change_email';
@@ -45,6 +60,10 @@ export interface MeResponse {
   email_verified: boolean;
   created_at: string;
   updated_at: string;
+  /** Whether memory recall (vector lookup over past interview_fact items)
+   *  should run by default for this user. Per-session toggle in the chat
+   *  header overrides this. Opt-in by design — default false. */
+  memory_recall_default: boolean;
 }
 
 export async function getMe(): Promise<MeResponse> {
@@ -56,7 +75,17 @@ export async function updateMe(patch: {
   nickname?: string;
   avatar_url?: string;
   bio?: string;
+  memory_recall_default?: boolean;
 }): Promise<MeResponse> {
   const res = await apiClient.patch('/auth/me', patch);
+  return res.data;
+}
+
+export async function uploadAvatar(file: File): Promise<MeResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await apiClient.post('/auth/me/avatar', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
   return res.data;
 }

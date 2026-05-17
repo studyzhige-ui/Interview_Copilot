@@ -1,64 +1,82 @@
-"""测试 app.core.config.Settings 的路径计算逻辑。"""
+"""Tests for app.core.config — Settings shape, path derivation, prod-safety check."""
+from __future__ import annotations
+
+import logging
 import os
 from pathlib import Path
 
+import pytest
 
+from app.core.config import (
+    Settings,
+    _default_app_data_dir,
+    _validate_production_safety,
+    settings,
+)
+
+
+# ── Settings shape ───────────────────────────────────────────────────────
 def test_settings_has_required_attributes():
-    """Settings 单例应包含所有必需的配置属性。"""
-    from app.core.config import settings
-
     required = [
         "DATABASE_URL", "APP_DATA_DIR", "DB_DIR", "CHROMA_DB_DIR",
         "DOCSTORE_DIR", "CACHE_DIR", "LOG_DIR", "EVAL_DIR", "STORAGE_DIR",
-        "EMBEDDING_MODEL_ID", "RERANKER_MODEL_ID", "SECRET_KEY",
-        "REDIS_URL", "S3_BUCKET_NAME",
+        "EMBEDDING_MODEL", "RERANKER_MODEL", "SECRET_KEY",
+        "REDIS_URL", "S3_BUCKET_NAME", "ALGORITHM",
+        "ACCESS_TOKEN_EXPIRE_MINUTES", "REFRESH_TOKEN_EXPIRE_MINUTES",
     ]
     for attr in required:
-        assert hasattr(settings, attr), f"Settings 缺少属性: {attr}"
+        assert hasattr(settings, attr), f"Settings missing: {attr}"
 
 
-def test_default_app_data_dir_points_to_project_root():
-    """默认 APP_DATA_DIR 应指向项目根目录下的 data/ 文件夹。"""
-    from app.core.config import _default_app_data_dir
-
-    # 清除环境变量覆盖，让函数走默认路径
-    old = os.environ.pop("APP_DATA_DIR", None)
-    try:
-        result = _default_app_data_dir()
-        assert result.endswith("data"), f"期望以 'data' 结尾，实际: {result}"
-        assert Path(result).is_absolute(), "路径应为绝对路径"
-    finally:
-        if old is not None:
-            os.environ["APP_DATA_DIR"] = old
+def test_embedding_model_field_name_not_legacy():
+    """Guard against a regression of the EMBEDDING_MODEL → EMBEDDING_MODEL_ID rename."""
+    s = Settings()
+    assert hasattr(s, "EMBEDDING_MODEL")
+    assert not hasattr(s, "EMBEDDING_MODEL_ID"), \
+        "Settings still exposes the legacy EMBEDDING_MODEL_ID name"
+    assert isinstance(s.EMBEDDING_MODEL, str) and s.EMBEDDING_MODEL
 
 
-def test_app_data_dir_respects_env_override():
-    """APP_DATA_DIR 应优先使用环境变量。"""
-    from app.core.config import _default_app_data_dir
+# ── Path derivation ──────────────────────────────────────────────────────
+def test_default_app_data_dir_points_to_project_root(monkeypatch):
+    monkeypatch.delenv("APP_DATA_DIR", raising=False)
+    result = _default_app_data_dir()
+    assert Path(result).is_absolute()
+    assert result.endswith("data")
 
-    os.environ["APP_DATA_DIR"] = "/custom/test/path"
-    try:
-        assert _default_app_data_dir() == "/custom/test/path"
-    finally:
-        del os.environ["APP_DATA_DIR"]
+
+def test_app_data_dir_respects_env_override(monkeypatch):
+    monkeypatch.setenv("APP_DATA_DIR", "/custom/test/path")
+    assert _default_app_data_dir() == "/custom/test/path"
 
 
 def test_sub_dirs_are_children_of_app_data_dir():
-    """所有子目录（DB_DIR, CACHE_DIR 等）都应是 APP_DATA_DIR 的子路径。"""
-    from app.core.config import settings
-
     base = Path(settings.APP_DATA_DIR)
     for attr in ["DB_DIR", "CACHE_DIR", "LOG_DIR", "EVAL_DIR", "STORAGE_DIR"]:
         child = Path(getattr(settings, attr))
-        # 检查子路径关系（兼容不同 OS 的路径分隔符）
         assert str(child).startswith(str(base)), \
-            f"{attr}={child} 不是 APP_DATA_DIR={base} 的子路径"
+            f"{attr}={child} is not under APP_DATA_DIR={base}"
 
 
+def test_subdir_field_validator_picks_named_subfolders(monkeypatch):
+    """The _fill_data_subdirs validator should map fields to specific subdir names."""
+    monkeypatch.setenv("APP_DATA_DIR", str(Path("/tmp/icp-test")))
+    # Explicitly clear so the validator uses the default.
+    for v in ["DB_DIR", "CHROMA_DB_DIR", "DOCSTORE_DIR",
+              "CACHE_DIR", "LOG_DIR", "EVAL_DIR", "STORAGE_DIR"]:
+        monkeypatch.delenv(v, raising=False)
+    s = Settings()
+    assert s.DB_DIR.endswith("databases")
+    assert "chroma" in s.CHROMA_DB_DIR
+    assert s.DOCSTORE_DIR.endswith("docstore")
+    assert s.CACHE_DIR.endswith("cache")
+    assert s.LOG_DIR.endswith("logs")
+    assert s.EVAL_DIR.endswith("evaluation")
+    assert s.STORAGE_DIR.endswith("storage")
+
+
+# ── RAG numeric sanity ───────────────────────────────────────────────────
 def test_rag_score_thresholds_are_valid():
-    """RAG 相关的数值配置应为合理值。"""
-    from app.core.config import settings
-
     assert 0 < settings.RAG_MIN_SCORE <= 1.0
     assert 0 < settings.RAG_FALLBACK_MIN_SCORE <= settings.RAG_MIN_SCORE
     assert 0 < settings.RAG_LEXICAL_FALLBACK_MIN_OVERLAP <= 1.0
@@ -66,3 +84,95 @@ def test_rag_score_thresholds_are_valid():
     assert settings.BM25_TOP_K > 0
     assert settings.FUSION_TOP_K > 0
     assert settings.RERANK_TOP_N > 0
+
+
+# ── _validate_production_safety ──────────────────────────────────────────
+def _make_settings(**overrides) -> Settings:
+    """Build a Settings without re-reading .env by handing values directly."""
+    return Settings(**overrides)
+
+
+def test_validate_production_safety_dev_uses_info_for_bundled_creds(caplog):
+    s = _make_settings(
+        SECRET_KEY="a-real-key-not-on-blocklist-xyz",
+        DATABASE_URL="postgresql://postgres:postgres@localhost:5432/x",
+        AWS_ACCESS_KEY_ID="minioadmin",
+        AWS_SECRET_ACCESS_KEY="minioadmin",
+        SENTRY_ENVIRONMENT="local",
+    )
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="app.core.config"):
+        _validate_production_safety(s)
+    # One INFO line, no per-finding WARNINGs.
+    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    warn_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert info_records, "expected an INFO line about bundled dev credentials"
+    assert any("bundled dev credentials" in r.getMessage() for r in info_records)
+    assert not warn_records, f"unexpected warnings: {[r.getMessage() for r in warn_records]}"
+
+
+def test_validate_production_safety_prod_emits_warning_per_finding(caplog):
+    s = _make_settings(
+        SECRET_KEY="a-real-key-not-on-blocklist-xyz",
+        DATABASE_URL="postgresql://postgres:postgres@localhost:5432/x",
+        AWS_ACCESS_KEY_ID="minioadmin",
+        AWS_SECRET_ACCESS_KEY="minioadmin",
+        SENTRY_ENVIRONMENT="prod",
+    )
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="app.core.config"):
+        _validate_production_safety(s)
+    warn_msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    # Three findings → three warnings (DB, MinIO user, MinIO pass).
+    blocker_msgs = [m for m in warn_msgs if "PRODUCTION BLOCKER" in m]
+    assert len(blocker_msgs) == 3, f"expected 3 blockers, got: {blocker_msgs}"
+    assert any("DATABASE_URL" in m for m in blocker_msgs)
+    assert any("AWS_ACCESS_KEY_ID" in m for m in blocker_msgs)
+    assert any("AWS_SECRET_ACCESS_KEY" in m for m in blocker_msgs)
+
+
+def test_validate_production_safety_secret_key_always_warns(caplog):
+    """A placeholder SECRET_KEY is WARNING-level even in dev."""
+    s = _make_settings(
+        SECRET_KEY="change-me-for-local-development",
+        DATABASE_URL="postgresql://prod_user:strong_pw@db:5432/x",
+        AWS_ACCESS_KEY_ID="rotated_id",
+        AWS_SECRET_ACCESS_KEY="rotated_secret",
+        SENTRY_ENVIRONMENT="local",
+    )
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="app.core.config"):
+        _validate_production_safety(s)
+    warn_msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("SECRET_KEY" in m and "insecure default" in m for m in warn_msgs), warn_msgs
+
+
+def test_validate_production_safety_clean_settings_emit_nothing(caplog):
+    s = _make_settings(
+        SECRET_KEY="random-strong-secret-12345xyz",
+        DATABASE_URL="postgresql://prod_user:strong_pw@db:5432/x",
+        AWS_ACCESS_KEY_ID="AKIA_ROTATED",
+        AWS_SECRET_ACCESS_KEY="rotated_secret_xyz",
+        SENTRY_ENVIRONMENT="prod",
+    )
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="app.core.config"):
+        _validate_production_safety(s)
+    msgs = [r.getMessage() for r in caplog.records]
+    assert not msgs, f"expected silence, got {msgs}"
+
+
+@pytest.mark.parametrize("env", ["staging", "prod", "production", "PROD", "  Production  "])
+def test_validate_production_safety_treats_prod_aliases_as_prodlike(caplog, env):
+    s = _make_settings(
+        SECRET_KEY="a-real-key-not-on-blocklist-xyz",
+        DATABASE_URL="postgresql://postgres:postgres@db:5432/x",
+        AWS_ACCESS_KEY_ID="rotated",
+        AWS_SECRET_ACCESS_KEY="rotated",
+        SENTRY_ENVIRONMENT=env,
+    )
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="app.core.config"):
+        _validate_production_safety(s)
+    assert any("PRODUCTION BLOCKER" in r.getMessage()
+               for r in caplog.records if r.levelno == logging.WARNING)

@@ -19,6 +19,36 @@
   --text-4xl:  40px;
 }
 
+/* Saturated, vivid button palette — bumps the design tokens away from the
+   pastel/macaron defaults so primary CTAs stand out against the cream BG. */
+:root {
+  --color-primary-50:  #E8F2FF;
+  --color-primary-100: #CFE4FF;
+  --color-primary-200: #A8CEFF;
+  --color-primary-300: #7AB3FF;
+  --color-primary-400: #4D95FF;
+  --color-primary-500: #2A7BF5;   /* PRIMARY · 饱和度高的鲜蓝 */
+  --color-primary-600: #1862D9;
+  --color-primary-700: #114CAE;
+  --color-primary-800: #0C397F;
+  --color-primary-900: #082A5C;
+
+  --color-accent-50:   #E1F8EE;
+  --color-accent-100:  #BDF0D9;
+  --color-accent-300:  #6CDFAE;
+  --color-accent-500:  #16C083;   /* ACCENT · 鲜绿 */
+  --color-accent-600:  #0EA46E;
+  --color-accent-700:  #097A52;
+
+  --color-danger-50:  #FEECEC;
+  --color-danger-500: #E53935;
+  --color-danger-700: #B71C1C;
+
+  --color-warning-50:  #FFF4D6;
+  --color-warning-500: #F5A623;
+  --color-warning-700: #B47200;
+}
+
 @layer base {
   html, body, #root {
     height: 100%;

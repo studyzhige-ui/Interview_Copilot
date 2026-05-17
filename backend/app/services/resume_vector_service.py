@@ -35,7 +35,7 @@ from app.rag.hybrid import RetrievalChunk
 logger = logging.getLogger(__name__)
 
 # Use the same embedding dimension as the project's embedding model.
-EMBEDDING_DIM = 512
+EMBEDDING_DIM = settings.EMBEDDING_DIM
 RESUME_COLLECTION = settings.RESUME_MILVUS_COLLECTION
 
 

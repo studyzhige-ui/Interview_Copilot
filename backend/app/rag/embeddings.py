@@ -1,24 +1,18 @@
 import logging
 
-from app.core.hf_runtime import prepare_hf_runtime, resolve_local_snapshot
-
-HF_CACHE_DIR = prepare_hf_runtime()
-
-import torch
 from llama_index.core import Settings
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
-from app.core.config import settings
 from app.core.model_registry import RuntimeLLMProxy, get_llm_for_role, get_profile_for_role
+from app.rag.embedding_registry import build_embedding, resolve_embedding
 
 logger = logging.getLogger(__name__)
 
 
-def _prepare_hf_runtime() -> None:
-    prepare_hf_runtime()
-
-
 agent_fast_llm = RuntimeLLMProxy(role="fast")
+# Dedicated proxy for mock-interview LLM calls (plan generation, interviewer
+# responses, batch evaluation). Separate from `agent_fast_llm` so the user can
+# pick a different model for mock from the Models page.
+mock_interview_llm = RuntimeLLMProxy(role="mock_interview")
 
 
 def refresh_primary_llm() -> None:
@@ -32,32 +26,21 @@ def refresh_primary_llm() -> None:
 
 
 def init_rag_settings():
-    """
-    Initialize global LlamaIndex Settings.
+    """Initialize global LlamaIndex Settings: embedding + primary LLM.
+
+    Embedding provider is selected via ``EMBEDDING_PROVIDER`` + ``EMBEDDING_MODEL``
+    + ``EMBEDDING_DIM`` env vars. Default ``local`` preserves the original
+    full-mode behaviour (downloads from HuggingFace, runs on local GPU/CPU);
+    set ``EMBEDDING_PROVIDER`` to ``siliconflow`` / ``openai`` / etc for lite
+    mode where no local model download / GPU is required.
     """
     try:
-        hf_cache_dir = prepare_hf_runtime()
-        if settings.EMBEDDING_DEVICE != "auto":
-            device = settings.EMBEDDING_DEVICE
-        else:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.info("Detecting hardware: Using %s for embeddings.", device.upper())
-
-        embedding_model_name = (
-            resolve_local_snapshot(settings.EMBEDDING_MODEL_ID) or settings.EMBEDDING_MODEL_ID
-        )
-        embed_model = HuggingFaceEmbedding(
-            model_name=embedding_model_name,
-            device=device,
-            cache_folder=str(hf_cache_dir),
-        )
-
-        Settings.embed_model = embed_model
+        cfg = resolve_embedding()
+        Settings.embed_model = build_embedding()
         refresh_primary_llm()
-
         logger.info(
-            "RAG settings initialized with embedding model '%s'.",
-            settings.EMBEDDING_MODEL_ID,
+            "RAG embedding ready: provider=%s model=%s dim=%d",
+            cfg.provider_id, cfg.model, cfg.dim,
         )
     except Exception as e:
         logger.error(f"Failed to initialize RAG settings: {e}")

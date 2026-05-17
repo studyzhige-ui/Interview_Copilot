@@ -2,8 +2,14 @@ import axios, { AxiosError, AxiosRequestConfig, InternalAxiosRequestConfig } fro
 import { tokenStore } from '@/lib/token';
 import { toast } from '@/store/uiStore';
 
+// API base URL — baked in at build time so the same image runs anywhere.
+// Default '/api/v1' works for same-origin (SPA + API behind one nginx).
+// For split deployments, build with VITE_API_BASE=https://api.example.com/api/v1.
+const API_BASE =
+  (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
+
 export const apiClient = axios.create({
-  baseURL: '/api/v1',
+  baseURL: API_BASE,
   timeout: 30_000,
 });
 

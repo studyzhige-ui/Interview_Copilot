@@ -12,17 +12,19 @@ interface BtnProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'type'>
   type?: 'button' | 'submit' | 'reset';
 }
 
+// Disabled keeps the bright hue (just lighter + un-clickable), instead of
+// the default fade-to-gray that washes out the saturated palette.
 const kindCls: Record<Kind, string> = {
   primary:
-    'bg-accent-500 text-white hover:bg-accent-600 shadow-xs disabled:opacity-50',
+    'bg-primary-500 text-white hover:bg-primary-600 shadow-sm disabled:bg-primary-300 disabled:hover:bg-primary-300 disabled:shadow-none',
   secondary:
-    'bg-sand-200 text-stone-800 hover:bg-sand-300 disabled:opacity-50',
+    'bg-accent-500 text-white hover:bg-accent-600 shadow-sm disabled:bg-accent-300 disabled:hover:bg-accent-300 disabled:shadow-none',
   ghost:
-    'bg-transparent text-stone-700 hover:bg-stone-100 disabled:opacity-50',
+    'bg-stone-100 text-stone-800 hover:bg-stone-200 disabled:opacity-50',
   outline:
-    'bg-white text-stone-700 border border-stone-200 hover:bg-stone-50 disabled:opacity-50',
+    'bg-white text-primary-700 border border-primary-300 hover:bg-primary-50 disabled:text-primary-300 disabled:border-primary-100',
   danger:
-    'bg-transparent text-danger-500 hover:bg-danger-50 disabled:opacity-50',
+    'bg-danger-500 text-white hover:bg-danger-700 shadow-sm disabled:bg-danger-50 disabled:text-danger-500 disabled:shadow-none',
 };
 
 const sizeCls: Record<Size, string> = {
