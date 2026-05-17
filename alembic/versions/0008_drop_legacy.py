@@ -33,7 +33,7 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-revision: str = "0008_drop_legacy_interview_tables"
+revision: str = "0008_drop_legacy"
 down_revision: Union[str, None] = "0007_unified_interview_schema"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -207,7 +207,7 @@ def upgrade() -> None:
                     " answer_input_mode, score, critique, improved_answer, "
                     " analyzed_at, created_at) "
                     "VALUES "
-                    "(:id, :record_id, :order_idx, :phase, :q, :a, :qs, 0, 0, "
+                    "(:id, :record_id, :order_idx, :phase, :q, :a, :qs, FALSE, 0, "
                     " 'text', :score, :critique, :improved, :analyzed_at, :created_at)"
                 ),
                 {

@@ -23,9 +23,21 @@ import app.models.upload  # noqa: F401
 import app.models.user  # noqa: F401
 
 config = context.config
-database_url = config.get_main_option("sqlalchemy.url") or settings.DATABASE_URL
-if database_url == "postgresql://postgres:postgres@localhost:5432/interview_copilot":
-    database_url = settings.DATABASE_URL
+
+# Single source of truth for the DB URL: app.core.config.settings reads
+# DATABASE_URL from the environment (.env in dev, real env vars in prod).
+# alembic.ini intentionally has an empty sqlalchemy.url so nothing leaks
+# into git. The CLI override `alembic -x url=...` still wins because we
+# only fall back to settings when -x wasn't passed.
+override = context.get_x_argument(as_dictionary=True).get("url")
+database_url = override or settings.DATABASE_URL
+if not database_url:
+    raise RuntimeError(
+        "DATABASE_URL is not configured. Set it in .env (or pass "
+        "`alembic -x url=...` for one-off overrides)."
+    )
+# Escape % so ConfigParser doesn't interpret it as interpolation syntax —
+# DATABASE_URLs commonly contain URL-encoded passwords with %xx escapes.
 config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
