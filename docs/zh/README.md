@@ -33,10 +33,12 @@
     <td align="center"><sub><b>资料库</b> —— 简历 / 面试题库 / 官方文档</sub></td>
   </tr>
   <tr>
-    <td colspan="2" align="center"><img src="../screenshots/auth.png" alt="邮箱验证注册" width="50%" /></td>
+    <td width="50%"><img src="../screenshots/login.png" alt="登录页" /></td>
+    <td width="50%"><img src="../screenshots/auth.png" alt="邮箱验证注册" /></td>
   </tr>
   <tr>
-    <td colspan="2" align="center"><sub><b>注册</b> —— 邮箱验证码流程（没配 SMTP 时验证码直接打在后端 stdout）</sub></td>
+    <td align="center"><sub><b>登录</b> —— JWT access + refresh，jti 撤销名单在 Redis</sub></td>
+    <td align="center"><sub><b>注册</b> —— 邮箱验证码流程（没配 SMTP 时验证码直接打在后端 stdout）</sub></td>
   </tr>
 </table>
 

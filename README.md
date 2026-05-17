@@ -33,10 +33,12 @@
     <td align="center"><sub><b>Knowledge library</b> — resume / interview question banks / official docs</sub></td>
   </tr>
   <tr>
-    <td colspan="2" align="center"><img src="docs/screenshots/auth.png" alt="Registration with email verification" width="50%" /></td>
+    <td width="50%"><img src="docs/screenshots/login.png" alt="Sign in" /></td>
+    <td width="50%"><img src="docs/screenshots/auth.png" alt="Registration with email verification" /></td>
   </tr>
   <tr>
-    <td colspan="2" align="center"><sub><b>Sign-up</b> — email-verification flow (codes printed to backend stdout when SMTP isn't configured)</sub></td>
+    <td align="center"><sub><b>Sign-in</b> — JWT access + refresh, jti revocation list in Redis</sub></td>
+    <td align="center"><sub><b>Sign-up</b> — email-verification flow (codes printed to backend stdout when SMTP isn't configured)</sub></td>
   </tr>
 </table>
 
