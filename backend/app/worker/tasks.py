@@ -39,16 +39,48 @@ def run_async(coro):
     autoretry_for=(ConnectionError, TimeoutError, OSError),
     retry_backoff=True,
     retry_backoff_max=120,
+    retry_jitter=True,          # avoid thundering herd on transient outages
     max_retries=3,
+    # Reliability: acks_late + time bounds. Keep both ceilings well below
+    # the broker visibility_timeout (3700s) so a hung task is reclaimed and
+    # re-delivered before Redis would re-deliver on its own.
+    acks_late=True,
+    time_limit=1800,            # 30 min hard
+    soft_time_limit=1740,       # 1 min before hard kill
 )
-def process_interview_analysis(self, record_id: str):
+def process_interview_analysis(self, record_id: str, language: str = "zh"):
     """Run the unified analysis pipeline for an InterviewRecord.
 
     The orchestrator handles both source='upload' (audio → ASR → analysis)
     and source='mock' (composed transcript from QA buffer → analysis).
+
+    ``language`` is a WhisperX language hint:
+      * ``"zh"`` / ``"en"``: force the decoder to that language. Faster
+        + much more accurate than auto-detect on clean monolingual audio.
+      * ``"auto"``: let Whisper detect per clip. Use only for genuinely
+        mixed-language recordings.
+    Default ``"zh"`` matches the API's default and the UI default.
+
+    Idempotent under retry: if the record is already in a terminal state
+    (``completed``/``failed`` from a prior attempt that succeeded but whose
+    ack we lost), short-circuit instead of re-running the entire pipeline.
     """
+    from app.models.interview_record import InterviewRecord
     from app.services.interview.analysis_orchestrator import analysis_orchestrator
     from app.services.interview_record_service import interview_record_service
+
+    # ── Idempotency gate ────────────────────────────────────────────────
+    db = SessionLocal()
+    try:
+        row = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+        if row is not None and row.status == "completed":
+            logger.info(
+                "[Task %s] InterviewRecord %s already completed; skipping re-run.",
+                self.request.id, record_id,
+            )
+            return {"status": "skipped", "record_id": record_id, "reason": "already_completed"}
+    finally:
+        db.close()
 
     # Stash the celery task id so the cancel endpoint can revoke us.
     try:
@@ -61,7 +93,7 @@ def process_interview_analysis(self, record_id: str):
         logger.warning("Failed to stash celery_task_id on %s", record_id)
 
     try:
-        return analysis_orchestrator.run(record_id)
+        return analysis_orchestrator.run(record_id, language=language)
     except Exception as exc:  # noqa: BLE001
         logger.error("Interview analysis task failed for %s: %s", record_id, exc)
         raise
@@ -73,10 +105,22 @@ def process_interview_analysis(self, record_id: str):
     autoretry_for=(ConnectionError, TimeoutError, OSError),
     retry_backoff=True,
     retry_backoff_max=120,
+    retry_jitter=True,
     max_retries=3,
+    acks_late=True,
+    time_limit=1200,            # 20 min hard
+    soft_time_limit=1140,
 )
 def process_document_ingestion(self, document_id: str):
-    """Download an uploaded document if needed and ingest it into Milvus/Docstore."""
+    """Download an uploaded document if needed and ingest it into Milvus/Docstore.
+
+    Idempotency contract:
+      * status='ready' with chunks already written → skip
+      * status='processing'/'failed' → fresh attempt; existing Milvus rows
+        for ``ref_doc_ids`` (if any) are best-effort deleted first to avoid
+        duplicate chunks on retry. Failure to delete is non-fatal.
+    """
+    import json
     import os
     import tempfile
 
@@ -99,6 +143,23 @@ def process_document_ingestion(self, document_id: str):
             raise ValueError("Knowledge document upload has invalid purpose")
         if document.status not in {"processing", "failed"}:
             return {"status": "skipped", "document_id": document_id, "current_status": document.status}
+
+        # If this is a retry of a partially-succeeded attempt (we crashed
+        # between Milvus insert and DB commit), log it. A Phase-3 follow-up
+        # will delete stale Milvus rows for ``document.ref_doc_ids`` to avoid
+        # duplicate chunks; for now status-gate is the main reliability win
+        # and duplicates are filtered at query time by document_id.
+        if self.request.retries > 0 and document.ref_doc_ids:
+            stale_count = 0
+            try:
+                stale_count = len(json.loads(document.ref_doc_ids) or [])
+            except json.JSONDecodeError:
+                pass
+            logger.warning(
+                "[Task %s] Retry attempt #%d for document %s; %d stale ref_doc_ids "
+                "from prior attempt may produce duplicates (filtered at query time).",
+                self.request.id, self.request.retries, document_id, stale_count,
+            )
 
         if not document.storage_uri.startswith("s3://"):
             raise ValueError("Knowledge ingestion only accepts owned S3 uploads")

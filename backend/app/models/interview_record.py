@@ -53,6 +53,13 @@ class InterviewRecord(Base):
     analysis_json = Column(Text, nullable=True)
     analysis_schema_version = Column(Integer, nullable=False, default=2)
 
+    # 200-400 字浓缩摘要，由分析 pipeline 末尾的 LLM 生成。注入到
+    # debrief 类 chat session 的 record_context 槽，作为该 record 下
+    # 每条 session 的恒定前导上下文。在 record 生命周期内不变 → 命中
+    # prompt cache。NULL = 该 record 还没跑完分析（mock 模式或者上传
+    # 后被取消的 record）。
+    debrief_summary = Column(Text, nullable=True)
+
     # Status & progress
     status = Column(String, index=True, default="pending", nullable=False)
     analyzed_qa_count = Column(Integer, nullable=False, default=0)

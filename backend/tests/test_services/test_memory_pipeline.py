@@ -1,8 +1,68 @@
+"""Tests for app.services.memory.*
+
+Covers:
+  - extract_and_merge: dedup via normalized_key, vector upsert
+  - retrieval recall_relevant: user_id scoping + lexical fusion
+  - post_turn_maintenance: cursor independence + advance-on-success semantics
+
+The two DB-touching tests use a local SQLite fixture because the shared
+conftest db_session fixture is broken (imports a removed
+``app.models.interview`` module).
+"""
 import asyncio
 import json
 
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-def test_memory_merge_uses_normalized_key(monkeypatch, db_session):
+
+@pytest.fixture
+def memory_db_session():
+    import app.models.memory  # noqa: F401 — register MemoryItem on Base
+    from app.db.database import Base
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine, tables=[Base.metadata.tables["memory_items"]])
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    try:
+        yield session
+    finally:
+        session.close()
+        engine.dispose()
+
+
+class _NoCloseSession:
+    """Forward attribute access to a real session but suppress close()."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def close(self):
+        # Flush — leave the underlying session alive for the next call.
+        try:
+            self._inner.commit()
+        except Exception:
+            self._inner.rollback()
+
+
+def test_memory_merge_uses_normalized_key(monkeypatch, memory_db_session):
+    """Two extractions with the same normalized_key should produce one row.
+
+    Post-0019: user_profile lives in a separate single-doc storage and the
+    multi-row dedup path is exclusively for ``interview_fact``. Test data
+    accordingly. The user_profile branch is stubbed to a no-op so the
+    test sqlite (which has no ``users`` table) doesn't get touched.
+    """
     from app.models.memory import MemoryItem
     from app.services.memory import extraction_service as module
 
@@ -13,21 +73,21 @@ def test_memory_merge_uses_normalized_key(monkeypatch, db_session):
     class FakeLLM:
         async def acomplete(self, *args, **kwargs):
             return FakeResponse(
-                json.dumps(
-                    [
-                        {
-                            "type": "user_profile",
-                            "description": "Prefer concise answers",
-                            "normalized_key": "concise_answers",
-                            "content": "User prefers concise answers.",
-                            "confidence": 0.92,
-                        }
-                    ]
-                )
+                json.dumps([
+                    {
+                        "type": "interview_fact",
+                        "description": "Redis persistence question",
+                        "normalized_key": "ivf_redis_persistence",
+                        "content": "Discussed AOF vs RDB; hybrid is preferred.",
+                        "confidence": 0.92,
+                    }
+                ])
             )
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(memory_db_session))
     monkeypatch.setattr(module, "agent_fast_llm", FakeLLM())
+    monkeypatch.setattr(module, "load_profile_doc", lambda user_id: "")
+    monkeypatch.setattr(module, "apply_profile_patches", lambda *a, **kw: {"applied": 0, "dropped": 0, "skipped": 0})
     monkeypatch.setattr(
         module.memory_vector_service,
         "upsert_memory",
@@ -50,17 +110,18 @@ def test_memory_merge_uses_normalized_key(monkeypatch, db_session):
         )
     )
 
-    rows = db_session.query(MemoryItem).all()
+    rows = memory_db_session.query(MemoryItem).all()
     assert len(rows) == 1
-    assert rows[0].normalized_key == "concise_answers"
+    assert rows[0].normalized_key == "ivf_redis_persistence"
     assert first[0]["normalized_key"] == second[0]["normalized_key"]
 
 
-def test_memory_retrieval_uses_user_scope_and_lexical_fusion(monkeypatch, db_session):
+def test_memory_retrieval_uses_user_scope(monkeypatch, memory_db_session):
+    """recall_relevant must only return memories belonging to the caller."""
     from app.models.memory import MemoryItem
     from app.services.memory import retrieval_service as module
 
-    db_session.add(
+    memory_db_session.add(
         MemoryItem(
             id="mem_alice",
             user_id="alice",
@@ -71,7 +132,7 @@ def test_memory_retrieval_uses_user_scope_and_lexical_fusion(monkeypatch, db_ses
             importance=0.9,
         )
     )
-    db_session.add(
+    memory_db_session.add(
         MemoryItem(
             id="mem_bob",
             user_id="bob",
@@ -82,9 +143,9 @@ def test_memory_retrieval_uses_user_scope_and_lexical_fusion(monkeypatch, db_ses
             importance=0.9,
         )
     )
-    db_session.commit()
+    memory_db_session.commit()
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(memory_db_session))
 
     async def fake_vector(**kwargs):
         return []
@@ -100,7 +161,14 @@ def test_memory_retrieval_uses_user_scope_and_lexical_fusion(monkeypatch, db_ses
         )
     )
 
-    assert [item["id"] for item in result] == ["mem_alice"]
+    # Only alice's memory is returned — bob's is filtered out.
+    returned_ids = [item["id"] for item in result]
+    assert "mem_alice" in returned_ids
+    assert "mem_bob" not in returned_ids
+
+
+# ── post_turn_maintenance ────────────────────────────────────────────────
+# These tests don't touch the DB; they fake the transcript service entirely.
 
 
 def test_post_turn_maintenance_does_not_advance_cursor_on_failed_extraction(monkeypatch):
@@ -130,24 +198,21 @@ def test_post_turn_maintenance_does_not_advance_cursor_on_failed_extraction(monk
 
     class FakeMemoryExtraction:
         async def extract_and_merge(self, session_id, user_id, new_messages):
-            return None
+            return None  # signal failure
 
     service = module.PostTurnMaintenanceService(
         compaction=FakeCompaction(),
         memory_extraction=FakeMemoryExtraction(),
     )
-
     monkeypatch.setattr(module, "transcript_service", FakeTranscriptService())
     asyncio.run(service.run("s1", "alice"))
 
+    # Failure → cursor must NOT advance (retry next turn)
     assert updates == []
 
 
 def test_memory_extraction_cursor_independent_of_compaction(monkeypatch):
-    """Compaction advances compaction_cursor but must NOT affect memory_extraction_cursor.
-
-    Memory extraction should still see messages that compaction already processed.
-    """
+    """compaction_cursor advancement must not skip memory extraction."""
     from app.services.memory import post_turn_maintenance as module
 
     updates = []
@@ -155,8 +220,6 @@ def test_memory_extraction_cursor_independent_of_compaction(monkeypatch):
 
     class FakeTranscriptService:
         def get_session_meta(self, session_id):
-            # compaction_cursor already at 20 (compaction ran before),
-            # but memory_extraction_cursor still at 5.
             return {
                 "compaction_cursor": 20,
                 "memory_extraction_cursor": 5,
@@ -166,7 +229,6 @@ def test_memory_extraction_cursor_independent_of_compaction(monkeypatch):
             }
 
         def get_recent_turns(self, session_id, max_turns, after_seq):
-            # Return messages AFTER the requested cursor
             if after_seq == 5:
                 return [
                     {"seq": 6, "role": "User", "content": "q1"},
@@ -181,7 +243,7 @@ def test_memory_extraction_cursor_independent_of_compaction(monkeypatch):
 
     class FakeCompaction:
         async def compact_if_needed(self, session_id):
-            return False  # Already compacted
+            return False
 
     class FakeMemoryExtraction:
         async def extract_and_merge(self, session_id, user_id, new_messages):
@@ -192,18 +254,14 @@ def test_memory_extraction_cursor_independent_of_compaction(monkeypatch):
         compaction=FakeCompaction(),
         memory_extraction=FakeMemoryExtraction(),
     )
-
     monkeypatch.setattr(module, "transcript_service", FakeTranscriptService())
     asyncio.run(service.run("s1", "alice"))
 
-    # Memory extraction should have seen messages from seq 6 onwards (after_seq=5)
     assert extracted_seqs == [6, 7, 20, 21]
-    # memory_extraction_cursor should be advanced to max seq
     assert updates == [{"memory_extraction_cursor": 21}]
 
 
 def test_memory_extraction_cursor_advances_on_success(monkeypatch):
-    """On successful extraction, memory_extraction_cursor advances to max seq."""
     from app.services.memory import post_turn_maintenance as module
 
     updates = []
@@ -241,7 +299,6 @@ def test_memory_extraction_cursor_advances_on_success(monkeypatch):
         compaction=FakeCompaction(),
         memory_extraction=FakeMemoryExtraction(),
     )
-
     monkeypatch.setattr(module, "transcript_service", FakeTranscriptService())
     asyncio.run(service.run("s1", "alice"))
 

@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
-import { LogOut, Save, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { LogOut, Save, RefreshCw, AlertCircle, CheckCircle2, Camera } from 'lucide-react';
 import { Btn } from '@/components/ui/Btn';
 import { Field } from '@/components/ui/Field';
 import { Pill } from '@/components/ui/Pill';
 import { Spinner } from '@/components/ui/Spinner';
 import { toast } from '@/store/uiStore';
-import { getMe, updateMe, type MeResponse } from '@/api/auth';
+import { getMe, updateMe, uploadAvatar, type MeResponse } from '@/api/auth';
 import { useAuthStore } from '@/store/authStore';
 
 const MACARON_BG = [
@@ -30,8 +30,41 @@ export function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [nickname, setNickname] = useState('');
+  // Render-only URL (whatever the backend handed back: data: / s3-presigned /
+  // user-supplied http URL). NEVER round-tripped through the URL editor field.
   const [avatarUrl, setAvatarUrl] = useState('');
+  // Editable URL field. Initialised to '' on load — once the user types a
+  // public http(s) URL here we send THAT in the PATCH; otherwise we leave
+  // the stored avatar_url alone so an S3-uploaded blob isn't clobbered.
+  const [avatarUrlInput, setAvatarUrlInput] = useState('');
   const [bio, setBio] = useState('');
+  // Per-user default for whether memory recall (interview_fact lookup) runs
+  // in new chat sessions. Opt-in: ``false`` by default for new accounts.
+  // Sessions can override this on a per-session basis via the chat header.
+  const [memoryRecallDefault, setMemoryRecallDefault] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
+
+  const onPickAvatarFile = async (file: File) => {
+    // Hard-fail clientside on >1MB so we don't waste a roundtrip.
+    if (file.size > 1024 * 1024) {
+      toast.error('图片过大（>1MB），请压缩后再试');
+      return;
+    }
+    setUploadingAvatar(true);
+    try {
+      const next = await uploadAvatar(file);
+      setMe(next);
+      setStoreMe(next);
+      setAvatarUrl(next.avatar_url ?? '');
+      toast.success('头像已更新');
+    } catch (e) {
+      const detail = (e as { response?: { data?: { detail?: string } } }).response?.data?.detail;
+      toast.error(detail ?? '上传失败');
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
 
   const refresh = async () => {
     setLoading(true);
@@ -41,7 +74,9 @@ export function ProfilePage() {
       setStoreMe(m);
       setNickname(m.nickname ?? '');
       setAvatarUrl(m.avatar_url ?? '');
+      setAvatarUrlInput('');
       setBio(m.bio ?? '');
+      setMemoryRecallDefault(Boolean(m.memory_recall_default));
     } catch {
       toast.error('个人信息加载失败');
     } finally {
@@ -54,19 +89,31 @@ export function ProfilePage() {
   const dirty =
     !!me &&
     (nickname !== (me.nickname ?? '') ||
-      avatarUrl !== (me.avatar_url ?? '') ||
-      bio !== (me.bio ?? ''));
+      avatarUrlInput.trim().length > 0 ||
+      bio !== (me.bio ?? '') ||
+      memoryRecallDefault !== Boolean(me.memory_recall_default));
 
   const onSave = async () => {
     setSaving(true);
     try {
-      const next = await updateMe({
+      // Only include avatar_url in the patch if the user actually typed a
+      // value into the URL editor. An untouched empty field MUST NOT clear
+      // the existing avatar (which might be an S3 blob just uploaded).
+      const patch: Parameters<typeof updateMe>[0] = {
         nickname: nickname.trim(),
-        avatar_url: avatarUrl.trim(),
         bio: bio.trim(),
-      });
+        memory_recall_default: memoryRecallDefault,
+      };
+      const inputTrim = avatarUrlInput.trim();
+      if (inputTrim) {
+        patch.avatar_url = inputTrim;
+      }
+      const next = await updateMe(patch);
       setMe(next);
       setStoreMe(next);
+      setAvatarUrl(next.avatar_url ?? '');
+      setAvatarUrlInput('');
+      setMemoryRecallDefault(Boolean(next.memory_recall_default));
       toast.success('已保存');
     } catch {
       toast.error('保存失败');
@@ -93,21 +140,42 @@ export function ProfilePage() {
     <div className="p-6 max-w-3xl mx-auto">
       <div className="bg-white rounded-xl border border-stone-200 p-6 shadow-xs">
         <div className="flex items-center gap-4">
-          {avatarUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={avatarUrl}
-              alt="头像"
-              className="w-20 h-20 rounded-full object-cover border border-stone-200"
-              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+          <div className="relative group">
+            <input
+              ref={avatarInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) onPickAvatarFile(f);
+                e.target.value = '';
+              }}
             />
-          ) : (
-            <div
-              className={`w-20 h-20 rounded-full ${color} text-white text-3xl font-semibold flex items-center justify-center`}
+            {avatarUrl ? (
+              <img
+                src={avatarUrl}
+                alt="头像"
+                className="w-20 h-20 rounded-full object-cover border border-stone-200"
+                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+              />
+            ) : (
+              <div
+                className={`w-20 h-20 rounded-full ${color} text-white text-3xl font-semibold flex items-center justify-center`}
+              >
+                {initial}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => avatarInputRef.current?.click()}
+              disabled={uploadingAvatar}
+              className="absolute inset-0 w-20 h-20 rounded-full bg-black/45 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center disabled:opacity-100"
+              title="点击上传新头像（≤1MB · PNG/JPG/WEBP/GIF）"
             >
-              {initial}
-            </div>
-          )}
+              {uploadingAvatar ? <Spinner size={16} /> : <Camera size={20} />}
+            </button>
+          </div>
           <div className="flex-1 min-w-0">
             <div className="text-xl font-semibold text-stone-800">
               {me.nickname || me.username}
@@ -147,12 +215,12 @@ export function ProfilePage() {
             hint="将显示在 TopBar 和复盘记录中"
           />
           <Field
-            label="头像 URL"
-            placeholder="https://... 留空则用首字母圆形头像"
-            value={avatarUrl}
-            onChange={setAvatarUrl}
+            label="头像 URL（可选）"
+            placeholder="https://… 留空则保留当前头像"
+            value={avatarUrlInput}
+            onChange={setAvatarUrlInput}
             maxLength={512}
-            hint="支持任意可公开访问的图片地址（http/https）"
+            hint="直接上传图片即可（点击头像）；也可以填一个公开图片地址替换"
           />
           <div className="block mb-3.5">
             <div className="text-xs font-medium text-stone-700 mb-1.5">个人简介</div>
@@ -175,6 +243,34 @@ export function ProfilePage() {
               更换邮箱需要邮箱验证流程，将在后续版本支持
             </div>
           </div>
+
+          {/* Per-user memory-recall default. Opt-in: when OFF (the default
+              for new accounts), new chat sessions won't pull past
+              interview-fact memories into the LLM prompt. Sessions can
+              still override this on a per-session basis (toggle next to
+              AGENT in the chat header). */}
+          <div className="block mb-3.5">
+            <div className="text-xs font-medium text-stone-700 mb-1.5">记忆召回（默认开关）</div>
+            <label className="flex items-start gap-3 px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-md cursor-pointer hover:bg-stone-100/60">
+              <input
+                type="checkbox"
+                checked={memoryRecallDefault}
+                onChange={(e) => setMemoryRecallDefault(e.target.checked)}
+                className="mt-0.5 accent-primary-500"
+              />
+              <div className="flex-1">
+                <div className="text-sm text-stone-800">
+                  {memoryRecallDefault ? '开启' : '关闭'} ·
+                  {memoryRecallDefault
+                    ? ' 新会话默认会读取你过去的面试事实记忆'
+                    : ' 新会话默认不会读取你过去的面试记忆'}
+                </div>
+                <div className="text-[11px] text-stone-500 mt-1">
+                  注：每个对话栏上方的「记忆」按钮可单独覆盖本默认值。个人资料类记忆（姓名、目标公司等）始终注入，不受此开关影响。
+                </div>
+              </div>
+            </label>
+          </div>
         </div>
 
         <div className="mt-6 flex items-center gap-2">
@@ -191,8 +287,8 @@ export function ProfilePage() {
             kind="outline"
             className="ml-auto"
             icon={<LogOut size={14} />}
-            onClick={() => {
-              logout();
+            onClick={async () => {
+              await logout();
               window.location.href = '/auth';
             }}
           >

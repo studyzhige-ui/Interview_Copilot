@@ -1,9 +1,9 @@
-import { useRef, useState } from 'react';
-import { Upload, FileText, Briefcase, CheckCircle2, Mic, FileUp, ClipboardPaste } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Upload, FileText, Briefcase, CheckCircle2, Mic, FileUp, ClipboardPaste, History } from 'lucide-react';
 import { Btn } from '@/components/ui/Btn';
 import { Spinner } from '@/components/ui/Spinner';
 import { toast } from '@/store/uiStore';
-import { uploadResume } from '@/api/interview';
+import { listStoredResumes, uploadResume, type StoredResume } from '@/api/interview';
 import { parseJdForMock } from '@/api/mock';
 
 export type InterviewerStyle = 'friendly' | 'professional' | 'rigorous' | 'pressure';
@@ -26,12 +26,6 @@ const STYLE_OPTIONS: Array<{ id: InterviewerStyle; label: string; desc: string }
   { id: 'pressure', label: '高压面试官', desc: '连珠追问、质疑回答、压力面' },
 ];
 
-const VOICE_OPTIONS: Array<{ id: VoiceMode; label: string; desc: string }> = [
-  { id: 'hybrid', label: '语音 + 文字（默认）', desc: '面试官 TTS，我自由切换打字 / 语音' },
-  { id: 'voice', label: '全程语音', desc: '面试官 TTS，我语音回答' },
-  { id: 'text', label: '全程文字', desc: '完全打字交互' },
-];
-
 type CardKey = 'resume' | 'jd';
 
 interface CardState {
@@ -47,12 +41,40 @@ export function MockSetup({ onReady, starting }: Props) {
     resume: { ...empty },
     jd: { ...empty },
   });
+  const [resumeMode, setResumeMode] = useState<'upload' | 'existing'>('existing');
+  const [storedResumes, setStoredResumes] = useState<StoredResume[]>([]);
+  const [loadingResumes, setLoadingResumes] = useState(false);
   const [jdMode, setJdMode] = useState<'upload' | 'paste'>('upload');
   const [jdText, setJdText] = useState('');
   const [style, setStyle] = useState<InterviewerStyle>('professional');
-  const [voiceMode, setVoiceMode] = useState<VoiceMode>('hybrid');
+  // Voice mode is no longer user-configurable on Setup — defaults to hybrid
+  // (TTS for interviewer + free text/voice input). Users mute / unmute mid-
+  // interview via the speaker button in MockLive header.
+  const voiceMode: VoiceMode = 'hybrid';
   const resumeRef = useRef<HTMLInputElement | null>(null);
   const jdRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setLoadingResumes(true);
+    listStoredResumes()
+      .then((rs) => {
+        if (!alive) return;
+        setStoredResumes(rs);
+        // Default to "existing" if user has previous resumes; otherwise "upload".
+        setResumeMode(rs.length > 0 ? 'existing' : 'upload');
+      })
+      .catch(() => { /* non-fatal — just hide the picker */ })
+      .finally(() => { if (alive) setLoadingResumes(false); });
+    return () => { alive = false; };
+  }, []);
+
+  const pickExistingResume = (r: StoredResume) => {
+    setCards((c) => ({
+      ...c,
+      resume: { filename: r.filename, uploadId: r.upload_id, uploading: false },
+    }));
+  };
 
   const update = (k: CardKey, patch: Partial<CardState>) =>
     setCards((c) => ({ ...c, [k]: { ...c[k], ...patch } }));
@@ -96,25 +118,28 @@ export function MockSetup({ onReady, starting }: Props) {
   const ready = !!cards.resume.uploadId && jdReady;
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-[760px] mx-auto px-9 py-16 flex flex-col items-center">
-        <div className="eyebrow text-[11px] font-medium uppercase tracking-wider text-stone-500">模拟面试</div>
-        <h2 className="text-2xl font-semibold text-stone-800 text-center mt-1.5">
-          开始之前，先准备两份材料
-        </h2>
-        <p className="text-stone-500 text-sm mt-1 mb-8 text-center">
-          上传简历和岗位 JD 后，AI 面试官会根据你的背景定制问题。
-        </p>
+    <div className="h-full flex items-center justify-center px-6 py-8 overflow-y-auto">
+      <div className="max-w-[720px] w-full mx-auto flex flex-col items-center">
+        {/* Header: clean, single hierarchy — title + subtitle, both centered. */}
+        <header className="mb-9 text-center">
+          <h2 className="text-[26px] font-semibold text-stone-800 leading-tight">
+            开始之前，先准备两份材料
+          </h2>
+          <p className="text-stone-500 text-[15px] mt-2.5 leading-relaxed">
+            上传简历和岗位 JD 后，AI 面试官会根据你的背景定制问题。
+          </p>
+        </header>
 
-        <div className="grid grid-cols-2 gap-4 w-full">
-          <UploadCard
-            icon={<FileText size={20} />}
-            title="上传简历"
-            subtitle="PDF / DOCX · 用于个性化提问"
+        <div className="grid grid-cols-2 gap-6 w-full">
+          <ResumeCard
+            mode={resumeMode}
+            setMode={setResumeMode}
             state={cards.resume}
-            accept=".pdf,.doc,.docx,.txt,.md"
+            storedResumes={storedResumes}
+            loadingResumes={loadingResumes}
             inputRef={resumeRef}
-            onPick={onResume}
+            onPickFile={onResume}
+            onPickExisting={pickExistingResume}
           />
           <JdCard
             mode={jdMode}
@@ -127,26 +152,21 @@ export function MockSetup({ onReady, starting }: Props) {
           />
         </div>
 
-        {/* Preferences */}
-        <div className="w-full mt-7 grid grid-cols-2 gap-4">
+        {/* Preferences: just interviewer style. Voice is always hybrid
+            (TTS + free text/voice answer), mute toggle lives inside MockLive. */}
+        <div className="w-full mt-8">
           <PrefGroup
             label="面试官风格"
             options={STYLE_OPTIONS}
             value={style}
             onChange={setStyle}
           />
-          <PrefGroup
-            label="语音模式"
-            options={VOICE_OPTIONS}
-            value={voiceMode}
-            onChange={setVoiceMode}
-          />
         </div>
 
-        <div className="mt-8">
+        <div className="mt-9 flex justify-center">
           <Btn
             size="lg"
-            icon={<Mic size={16} />}
+            icon={ready ? <Mic size={16} /> : <Upload size={16} />}
             disabled={!ready || starting}
             loading={starting}
             onClick={() =>
@@ -166,67 +186,157 @@ export function MockSetup({ onReady, starting }: Props) {
   );
 }
 
-function UploadCard({
-  icon,
-  title,
-  subtitle,
+function ResumeCard({
+  mode,
+  setMode,
   state,
-  accept,
+  storedResumes,
+  loadingResumes,
   inputRef,
-  onPick,
+  onPickFile,
+  onPickExisting,
 }: {
-  icon: React.ReactNode;
-  title: string;
-  subtitle: string;
+  mode: 'upload' | 'existing';
+  setMode: (m: 'upload' | 'existing') => void;
   state: CardState;
-  accept: string;
+  storedResumes: StoredResume[];
+  loadingResumes: boolean;
   inputRef: React.RefObject<HTMLInputElement>;
-  onPick: (f: File) => void;
+  onPickFile: (f: File) => void;
+  onPickExisting: (r: StoredResume) => void;
 }) {
   const done = !!state.uploadId;
+  const hasStored = storedResumes.length > 0;
   return (
     <div
-      onClick={() => inputRef.current?.click()}
+      style={{ minHeight: 210 }}
       className={[
-        'p-[22px] bg-white rounded-2xl cursor-pointer transition-all border-2 border-dashed',
+        'p-5 bg-white rounded-2xl transition-all border-2 border-dashed shadow-[0_2px_10px_rgba(15,23,42,0.04)] flex flex-col',
         done ? 'border-success-500' : 'border-stone-300 hover:border-primary-300',
       ].join(' ')}
     >
       <input
         ref={inputRef}
         type="file"
-        accept={accept}
+        accept=".pdf,.doc,.docx,.txt,.md"
         hidden
         onChange={(e) => {
           const f = e.target.files?.[0];
-          if (f) onPick(f);
+          if (f) onPickFile(f);
           e.target.value = '';
         }}
       />
-      <div
-        className={[
-          'w-11 h-11 rounded-xl mb-3.5 flex items-center justify-center',
-          done ? 'bg-success-50 text-success-700' : 'bg-primary-50 text-primary-600',
-        ].join(' ')}
-      >
-        {state.uploading ? <Spinner size={18} /> : done ? <CheckCircle2 size={20} /> : icon}
+
+      <div className="flex items-center gap-3 mb-3">
+        <div
+          className={[
+            'w-11 h-11 rounded-xl flex items-center justify-center shrink-0',
+            done ? 'bg-success-50 text-success-700' : 'bg-primary-50 text-primary-600',
+          ].join(' ')}
+        >
+          {state.uploading ? <Spinner size={18} /> : done ? <CheckCircle2 size={20} /> : <FileText size={20} />}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[16px] font-semibold text-stone-800 flex items-center gap-1.5 leading-tight">
+            上传简历
+            <span className="text-[11px] text-danger-500">*</span>
+          </div>
+          <div className="text-[12px] text-stone-500 mt-0.5">用于个性化提问</div>
+        </div>
       </div>
-      <div className="text-[15px] font-semibold text-stone-800 flex items-center gap-1.5">
-        {title}
-        <span className="text-[10px] text-danger-500">*</span>
-      </div>
-      <div className="text-xs text-stone-500 mt-1">{subtitle}</div>
-      {done && (
-        <div className="text-[11px] text-success-700 mt-2.5 truncate">
-          {state.filename || '已上传'} · 点击替换
+
+      {/* Mode toggle: existing vs new upload */}
+      {hasStored && (
+        <div className="inline-flex p-0.5 bg-primary-50 border border-primary-100 rounded-lg mb-2.5 text-[13px]">
+          <button
+            type="button"
+            onClick={() => setMode('existing')}
+            className={[
+              'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md transition-colors',
+              mode === 'existing'
+                ? 'bg-primary-500 text-white font-medium shadow-sm'
+                : 'text-primary-700 hover:bg-primary-100',
+            ].join(' ')}
+          >
+            <History size={12} />
+            选已有 ({storedResumes.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('upload')}
+            className={[
+              'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md transition-colors',
+              mode === 'upload'
+                ? 'bg-primary-500 text-white font-medium shadow-sm'
+                : 'text-primary-700 hover:bg-primary-100',
+            ].join(' ')}
+          >
+            <FileUp size={12} />
+            上传新文件
+          </button>
         </div>
       )}
-      {!done && !state.uploading && (
-        <div className="text-[11px] text-stone-400 mt-2.5 inline-flex items-center gap-1">
-          <Upload size={11} />
-          点击上传
-        </div>
-      )}
+
+      {/* Content area — fixed height so switching mode doesn't make the
+        * card jump. Vertical scroll if content exceeds the area. */}
+      <div className="flex-1 flex flex-col">
+        {mode === 'existing' && hasStored ? (
+          <div className="flex flex-col gap-2">
+            <select
+              value={state.uploadId ?? ''}
+              onChange={(e) => {
+                const r = storedResumes.find((x) => x.upload_id === e.target.value);
+                if (r) onPickExisting(r);
+              }}
+              className="w-full px-3 py-2.5 bg-white border border-stone-300 rounded-lg text-[14px] text-stone-800 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
+            >
+              <option value="">— 选一份简历 —</option>
+              {storedResumes.map((r) => (
+                <option key={r.upload_id} value={r.upload_id}>
+                  {r.filename} · {(r.created_at || '').slice(0, 10)}
+                </option>
+              ))}
+            </select>
+            {done && (
+              <div className="text-[12px] text-success-700 truncate">
+                ✓ 当前：{state.filename}
+              </div>
+            )}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            className={[
+              'w-full text-left px-3 py-2.5 rounded-lg transition-colors text-[14px]',
+              done
+                ? 'bg-success-50 text-success-700 hover:bg-success-100'
+                : 'bg-primary-50 text-primary-700 hover:bg-primary-100',
+            ].join(' ')}
+          >
+            {done ? (
+              <span className="truncate inline-block max-w-full">
+                {state.filename || '已上传'} · 点击替换
+              </span>
+            ) : loadingResumes ? (
+              <span className="inline-flex items-center gap-1.5">
+                <Spinner size={12} />
+                加载已有简历…
+              </span>
+            ) : (
+              <span className="flex items-center gap-2 leading-tight">
+                <Upload size={14} className="shrink-0" />
+                <span className="flex flex-col">
+                  <span className="text-[14px]">点击选择文件</span>
+                  <span className="text-[11px] text-primary-500/70 font-mono mt-0.5">
+                    PDF · DOCX · TXT · MD
+                  </span>
+                </span>
+              </span>
+            )}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -243,9 +353,9 @@ function PrefGroup<T extends string>({
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="bg-white border border-stone-200 rounded-2xl p-4">
-      <div className="text-xs font-semibold text-stone-600 mb-2.5">{label}</div>
-      <div className="flex flex-col gap-1.5">
+    <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-[0_2px_10px_rgba(15,23,42,0.04)]">
+      <div className="text-[16px] font-semibold text-stone-800 mb-3.5">{label}</div>
+      <div className="grid grid-cols-2 gap-2.5">
         {options.map((opt) => {
           const active = opt.id === value;
           return (
@@ -254,22 +364,22 @@ function PrefGroup<T extends string>({
               type="button"
               onClick={() => onChange(opt.id)}
               className={[
-                'text-left px-3 py-2 rounded-lg border transition-colors',
+                'text-left px-3.5 py-2.5 rounded-xl border transition-colors',
                 active
                   ? 'border-primary-300 bg-primary-50'
                   : 'border-stone-200 hover:border-stone-300 hover:bg-stone-50',
               ].join(' ')}
             >
-              <div className="text-[13px] font-medium text-stone-800 flex items-center gap-2">
+              <div className="text-[14px] font-medium text-stone-800 flex items-center gap-2 leading-tight">
                 <span
                   className={[
-                    'w-3 h-3 rounded-full border',
+                    'w-3 h-3 rounded-full border shrink-0',
                     active ? 'border-primary-500 bg-primary-500' : 'border-stone-300',
                   ].join(' ')}
                 />
                 {opt.label}
               </div>
-              <div className="text-[11px] text-stone-500 mt-0.5 ml-5">{opt.desc}</div>
+              <div className="text-[12px] text-stone-500 mt-1 ml-5 leading-snug">{opt.desc}</div>
             </button>
           );
         })}
@@ -301,9 +411,10 @@ function JdCard({
   const done = mode === 'upload' ? doneUpload : doneText;
   return (
     <div
+      style={{ minHeight: 210 }}
       className={[
-        'p-[22px] bg-white rounded-2xl transition-all border-2 border-dashed',
-        done ? 'border-success-500' : 'border-stone-300',
+        'p-5 bg-white rounded-2xl transition-all border-2 border-dashed shadow-[0_2px_10px_rgba(15,23,42,0.04)] flex flex-col',
+        done ? 'border-success-500' : 'border-stone-300 hover:border-primary-300',
       ].join(' ')}
     >
       <input
@@ -317,79 +428,95 @@ function JdCard({
           e.target.value = '';
         }}
       />
-      <div className="flex items-center gap-2 mb-3">
+      <div className="flex items-center gap-3 mb-3">
         <div
           className={[
-            'w-11 h-11 rounded-xl flex items-center justify-center',
+            'w-11 h-11 rounded-xl flex items-center justify-center shrink-0',
             done ? 'bg-success-50 text-success-700' : 'bg-primary-50 text-primary-600',
           ].join(' ')}
         >
           {state.uploading ? <Spinner size={18} /> : done ? <CheckCircle2 size={20} /> : <Briefcase size={20} />}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-[15px] font-semibold text-stone-800 flex items-center gap-1.5">
+          <div className="text-[16px] font-semibold text-stone-800 flex items-center gap-1.5 leading-tight">
             上传岗位 JD
-            <span className="text-[10px] text-danger-500">*</span>
+            <span className="text-[11px] text-danger-500">*</span>
           </div>
-          <div className="text-xs text-stone-500 mt-0.5">用于定位提问方向</div>
+          <div className="text-[12px] text-stone-500 mt-0.5">用于定位提问方向</div>
         </div>
       </div>
 
       {/* Mode toggle: upload file OR paste text */}
-      <div className="inline-flex p-0.5 bg-stone-100 rounded-md mb-3 text-xs">
+      <div className="inline-flex p-0.5 bg-primary-50 border border-primary-100 rounded-lg mb-2.5 text-[13px]">
         <button
           type="button"
           onClick={() => setMode('upload')}
           className={[
-            'inline-flex items-center gap-1 px-2.5 py-1 rounded',
+            'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md transition-colors',
             mode === 'upload'
-              ? 'bg-white text-stone-800 font-medium shadow-xs'
-              : 'text-stone-500 hover:text-stone-700',
+              ? 'bg-primary-500 text-white font-medium shadow-sm'
+              : 'text-primary-700 hover:bg-primary-100',
           ].join(' ')}
         >
-          <FileUp size={11} />
+          <FileUp size={12} />
           上传文件
         </button>
         <button
           type="button"
           onClick={() => setMode('paste')}
           className={[
-            'inline-flex items-center gap-1 px-2.5 py-1 rounded',
+            'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md transition-colors',
             mode === 'paste'
-              ? 'bg-white text-stone-800 font-medium shadow-xs'
-              : 'text-stone-500 hover:text-stone-700',
+              ? 'bg-primary-500 text-white font-medium shadow-sm'
+              : 'text-primary-700 hover:bg-primary-100',
           ].join(' ')}
         >
-          <ClipboardPaste size={11} />
+          <ClipboardPaste size={12} />
           粘贴文本
         </button>
       </div>
 
+      <div className="flex-1 flex flex-col">
       {mode === 'upload' ? (
-        <div
+        <button
+          type="button"
           onClick={() => inputRef.current?.click()}
-          className="cursor-pointer text-xs"
+          className={[
+            'w-full text-left px-3 py-2.5 rounded-lg transition-colors text-[14px]',
+            doneUpload
+              ? 'bg-success-50 text-success-700 hover:bg-success-100'
+              : 'bg-primary-50 text-primary-700 hover:bg-primary-100',
+          ].join(' ')}
         >
           {doneUpload ? (
-            <div className="text-success-700 truncate">{state.filename || '已上传'} · 点击替换</div>
+            <span className="truncate inline-block max-w-full">
+              {state.filename || '已上传'} · 点击替换
+            </span>
           ) : (
-            <div className="text-stone-400 inline-flex items-center gap-1">
-              <Upload size={11} />
-              点击上传 PDF / DOCX / TXT / MD
-            </div>
+            <span className="flex items-center gap-2 leading-tight">
+              <Upload size={14} className="shrink-0" />
+              <span className="flex flex-col">
+                <span className="text-[14px]">点击选择文件</span>
+                <span className="text-[11px] text-primary-500/70 font-mono mt-0.5">
+                  PDF · DOCX · TXT · MD
+                </span>
+              </span>
+            </span>
           )}
-        </div>
+        </button>
       ) : (
         <>
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="把 JD 全文粘贴到这里…（≥ 20 字才算有效）"
-            rows={5}
-            className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-md text-xs text-stone-700 outline-none focus:border-primary-300 resize-y leading-[1.6]"
+            rows={3}
+            className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-[13px] text-stone-700 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 resize-y leading-[1.55]"
           />
-          <div className="text-[11px] text-stone-400 mt-1 flex justify-between">
-            <span>{doneText ? '✓ 已就绪' : `当前 ${text.trim().length}/20 字`}</span>
+          <div className="text-[12px] text-stone-500 mt-1 flex justify-between">
+            <span className={doneText ? 'text-success-700 font-medium' : ''}>
+              {doneText ? '✓ 已就绪' : `当前 ${text.trim().length}/20 字`}
+            </span>
             {text && (
               <button type="button" onClick={() => setText('')} className="hover:text-danger-500">
                 清空
@@ -398,6 +525,7 @@ function JdCard({
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }

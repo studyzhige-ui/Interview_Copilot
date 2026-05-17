@@ -1,13 +1,13 @@
 """Chat-session and chat-message storage service.
 
 Manages persistent chat history (``ChatSession`` / ``ChatMessage`` rows) —
-sessions, recent turns, full transcripts, cursor advancement.  Renamed
-from ``transcript_service`` to remove ambiguity with the audio
-transcription pipeline.
+sessions, recent turns, full transcripts, cursor advancement.
 
-The public class is still ``TranscriptService`` and the module-level
-singleton is ``transcript_service`` to avoid touching every call site
-in one pass; these aliases may be renamed in a follow-up.
+Hierarchy (post-0018): an ``interview_record`` has many ``chat_sessions``;
+each session IS the chat thread (its own ``session_state`` compaction,
+its own monotonic ``chat_messages.seq``). The earlier "session → many
+conversations" hierarchy from 0015/0017 was reverted — multi-thread
+brainstorming now lives as siblings under the same record.
 """
 
 import logging
@@ -66,23 +66,14 @@ class TranscriptService:
             )
             next_seq = (max_seq + 1) if max_seq else 1
 
-            db.add(
-                ChatMessage(
-                    session_id=session_id,
-                    seq=next_seq,
-                    role="User",
-                    content=user_msg,
-                    rewritten_query=rewritten_query,
-                )
-            )
-            db.add(
-                ChatMessage(
-                    session_id=session_id,
-                    seq=next_seq + 1,
-                    role="Agent",
-                    content=ai_msg,
-                )
-            )
+            db.add(ChatMessage(
+                session_id=session_id, seq=next_seq, role="User",
+                content=user_msg, rewritten_query=rewritten_query,
+            ))
+            db.add(ChatMessage(
+                session_id=session_id, seq=next_seq + 1, role="Agent",
+                content=ai_msg,
+            ))
 
             session_row.turn_count = (session_row.turn_count or 0) + 1
             session_row.updated_at = datetime.utcnow()

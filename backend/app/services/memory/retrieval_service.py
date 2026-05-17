@@ -26,34 +26,32 @@ class MemoryRetrievalService:
         self.hybrid_retriever = hybrid_retriever or HybridRetriever()
 
     def load_user_profile(self, user_id: str) -> list[dict]:
-        """Load all user_profile memories directly from DB (no vector search).
+        """Return the user's profile as a list of fact entries.
 
-        user_profile items are always injected into the system prompt,
-        similar to hermes USER.md — small, always present.
+        Source of truth (post-0019): ``users.user_profile_doc`` — a single
+        markdown blob with one fact per line. The legacy multi-row
+        ``memory_items WHERE type='user_profile'`` storage was retired
+        because rule-based normalized_key dedup couldn't catch semantic
+        duplicates (e.g. "User's name: 卷卷" vs "用户名字: 卷卷"). Each
+        non-empty line in the doc becomes one dict so existing prompt
+        rendering code (which iterates ``profile``) keeps working.
         """
-        db: Session = SessionLocal()
-        try:
-            rows = (
-                db.query(MemoryItem)
-                .filter(
-                    MemoryItem.user_id == user_id,
-                    MemoryItem.type == "user_profile",
-                )
-                .order_by(MemoryItem.updated_at.desc())
-                .all()
-            )
-            return [
-                {
-                    "id": row.id,
-                    "type": row.type,
-                    "description": row.description,
-                    "content": row.content.strip()[:500],
-                    "normalized_key": row.normalized_key,
-                }
-                for row in rows
-            ]
-        finally:
-            db.close()
+        from app.services.memory.user_profile_doc_service import load_as_lines
+
+        lines = load_as_lines(user_id)
+        return [
+            {
+                "id": f"profile_line_{idx}",
+                "type": "user_profile",
+                # description + content both hold the same line text with
+                # the leading "- " bullet stripped; renderers that only
+                # look at one of them still produce sensible output.
+                "description": line.lstrip("- ").strip(),
+                "content": line.lstrip("- ").strip(),
+                "normalized_key": "",
+            }
+            for idx, line in enumerate(lines)
+        ]
 
     async def recall_relevant(
         self,

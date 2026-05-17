@@ -101,11 +101,6 @@ export interface ChatMessageItem {
   created_at: string;
 }
 
-export type WSEvent =
-  | { type: 'chunk'; content: string }
-  | { type: 'status'; content: string }
-  | { type: 'done' };
-
 export interface MockPlanPhase {
   phase_id: string;
   phase_name: string;
@@ -198,6 +193,8 @@ export interface ModelProfile {
   max_output_tokens: number;
   ready: boolean;
   selected_for: string[];
+  /** True when the entry came from a vendor /v1/models call rather than the curated registry. */
+  auto_discovered?: boolean;
 }
 
 export type ModelRole = 'primary' | 'fast' | 'agent' | 'mock_interview';

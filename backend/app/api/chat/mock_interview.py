@@ -12,7 +12,9 @@ import logging
 import os
 import tempfile
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
+
+from app.core.rate_limit import RATE_EXPENSIVE, RATE_UPLOAD, limiter
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -196,7 +198,17 @@ async def get_in_progress_mock(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    session = (
+    """Return the user's most recent unfinished mock-interview, if any.
+
+    Sweeps any stale "shell" sessions (created but never produced a Q&A —
+    e.g. plan generation failed, user closed the tab mid-startup) before
+    answering, so the resume banner never shows for sessions that have no
+    real content to recover.
+    """
+    from app.models.chat import ChatMessage
+    from app.models.interview_record import InterviewRecord
+
+    candidates = (
         db.query(ChatSession)
         .filter(
             ChatSession.user_id == current_user.username,
@@ -204,27 +216,68 @@ async def get_in_progress_mock(
             ChatSession.archived_at.is_(None),
         )
         .order_by(ChatSession.updated_at.desc())
-        .first()
+        .all()
     )
-    if session is None:
+
+    chosen: ChatSession | None = None
+    purged = 0
+    for sess in candidates:
+        try:
+            state = parse_session_state(sess.session_state, "mock_interview") or {}
+        except Exception:  # noqa: BLE001
+            state = {}
+        qa_history = state.get("qa_history") or []
+        is_finished = bool(state.get("is_finished"))
+
+        # Stale shell: no Q&A AND not actively marked finished. Hard-delete it
+        # along with its chat messages + any draft InterviewRecord so it
+        # doesn't keep haunting the resume banner.
+        if not qa_history and not is_finished:
+            record_id = state.get("interview_record_id") or sess.interview_id
+            if record_id:
+                (
+                    db.query(InterviewRecord)
+                    .filter(
+                        InterviewRecord.id == record_id,
+                        InterviewRecord.user_id == current_user.username,
+                    )
+                    .delete(synchronize_session=False)
+                )
+            db.query(ChatMessage).filter(ChatMessage.session_id == sess.id).delete(
+                synchronize_session=False
+            )
+            db.delete(sess)
+            purged += 1
+            continue
+
+        if is_finished:
+            continue
+
+        # First non-finished session with real Q&A is the one we surface.
+        if chosen is None:
+            chosen = sess
+
+    if purged:
+        db.commit()
+        logger.info("Purged %d stale empty mock_interview shell(s) for user=%s", purged, current_user.username)
+
+    if chosen is None:
         return {"has_in_progress": False}
 
     try:
-        state = parse_session_state(session.session_state, "mock_interview")
+        state = parse_session_state(chosen.session_state, "mock_interview") or {}
     except Exception:  # noqa: BLE001
         state = {}
     qa_history = state.get("qa_history") or []
-    if state.get("is_finished"):
-        return {"has_in_progress": False}
 
     return {
         "has_in_progress": True,
-        "session_id": session.id,
-        "title": session.title,
+        "session_id": chosen.id,
+        "title": chosen.title,
         "current_phase": state.get("current_phase"),
         "current_question_idx": int(state.get("turn_count", len(qa_history)) or 0),
         "qa_count": len(qa_history),
-        "last_activity_at": session.updated_at.isoformat() if session.updated_at else None,
+        "last_activity_at": chosen.updated_at.isoformat() if chosen.updated_at else None,
     }
 
 
@@ -318,8 +371,11 @@ async def get_current_question(
 
 
 @router.post("/chat/mock-interview/answer")
+@limiter.limit(RATE_EXPENSIVE)
 async def submit_mock_answer(
-    request: MockAnswerRequest,
+    request: Request,
+    response: Response,
+    body: MockAnswerRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -344,7 +400,7 @@ async def submit_mock_answer(
     )
 
     session = db.query(ChatSession).filter(
-        ChatSession.id == request.session_id,
+        ChatSession.id == body.session_id,
         ChatSession.user_id == current_user.username,
     ).first()
     if session is None:
@@ -362,11 +418,11 @@ async def submit_mock_answer(
 
     # LLM #2 (Runtime Director, with retry)
     try:
-        result = await run_director(state, request.answer)
+        result = await run_director(state, body.answer)
     except DirectorRetryExhausted as exc:
         logger.warning(
             "Director retries exhausted for session %s: %s",
-            request.session_id, exc.last_violation,
+            body.session_id, exc.last_violation,
         )
         # Roll the turn counter back so the user can retry without it being
         # counted twice toward max_turns.
@@ -385,7 +441,7 @@ async def submit_mock_answer(
     qa_entry = {
         "spoken_response": state.get("pending_response") or "",
         "question": state.get("pending_question") or "",
-        "answer": request.answer,
+        "answer": body.answer,
         "phase": answered_phase,
         "topic": answered_topic,
         "action": result.action,
@@ -651,7 +707,10 @@ async def parse_jd_for_mock(
 
 
 @router.post("/chat/mock-interview/transcribe")
+@limiter.limit(RATE_EXPENSIVE)
 async def transcribe_short_clip(
+    request: Request,
+    response: Response,
     file: UploadFile = File(...),
     language: str = Query("zh", description="Force decode language; 'auto' to detect"),
     current_user: User = Depends(get_current_user),

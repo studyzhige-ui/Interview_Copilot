@@ -1,9 +1,14 @@
-"""Chat-session CRUD + full-transcript endpoints."""
+"""Chat-session CRUD + history + transcript + memory-recall toggle.
+
+Hierarchy (post-0018): an interview_record has N chat_sessions; each
+session is a self-contained chat thread. No sub-conversation level.
+"""
 
 import logging
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
@@ -39,7 +44,6 @@ def create_chat_session(
     req = request or SessionCreateRequest()
     session_type = req.session_type if req.session_type in {"general", "debrief", "mock_interview"} else "general"
 
-    # Validate interview_id for debrief sessions
     if session_type == "debrief" and req.interview_id:
         from app.models.interview_record import InterviewRecord
         record = db.query(InterviewRecord).filter(
@@ -163,7 +167,6 @@ def update_session_title(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    # Prefer JSON body, fall back to query param for backward compatibility.
     new_title = (payload.title if payload and payload.title else title) or ""
     new_title = new_title.strip()
     if not new_title:
@@ -186,7 +189,6 @@ def delete_chat_session(
     if not row or row.user_id != current_user.username:
         raise HTTPException(status_code=404, detail="Session not found or access denied")
     try:
-        # ChatMessage has no ON DELETE CASCADE on its FK; remove children explicitly.
         db.query(ChatMessage).filter(
             ChatMessage.session_id == session_id
         ).delete(synchronize_session=False)
@@ -231,3 +233,42 @@ def get_full_transcript(
         "messages": messages,
         "total_messages": len(messages),
     }
+
+
+# ── Memory recall toggle (per session) ──────────────────────────────────
+# Resolves session_state override → user-level default → False via
+# ``recall_policy``. Frontend uses GET to render the switch and POST to
+# flip it. The interview_fact recall path checks this on every turn.
+
+
+class MemoryRecallToggleBody(BaseModel):
+    enabled: bool
+
+
+@router.get("/chat/sessions/{session_id}/memory-recall")
+def get_session_memory_recall(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session_row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not session_row or session_row.user_id != current_user.username:
+        raise HTTPException(status_code=404, detail="Session not found or access denied")
+    from app.services.memory.recall_policy import recall_enabled_for_session
+    effective = recall_enabled_for_session(session_id, current_user.username)
+    return {"status": "success", "session_id": session_id, "enabled": effective}
+
+
+@router.post("/chat/sessions/{session_id}/memory-recall")
+def set_session_memory_recall(
+    session_id: str,
+    body: MemoryRecallToggleBody,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session_row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not session_row or session_row.user_id != current_user.username:
+        raise HTTPException(status_code=404, detail="Session not found or access denied")
+    from app.services.memory.recall_policy import set_session_recall
+    set_session_recall(session_id, current_user.username, body.enabled)
+    return {"status": "success", "session_id": session_id, "enabled": bool(body.enabled)}

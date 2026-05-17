@@ -62,22 +62,72 @@ def extract_resume_text(file_path: str) -> str:
 
 
 def _extract_pdf(file_path: str) -> str:
-    """Extract text from PDF using PyMuPDF, with pypdf fallback."""
-    # Primary: PyMuPDF (already in requirements as pymupdf)
+    """Extract text from a PDF, preserving visual reading order where possible.
+
+    Three-layer ladder, best → worst layout fidelity:
+
+    1. **LlamaParse** (cloud)  — when ``LLAMA_CLOUD_API_KEY`` is set we use
+       the same parser already wired up for RAG ingestion. It produces
+       markdown that honors the visual layout (multi-column resumes,
+       sidebars, tables) much better than rule-based extractors. This is
+       the path that prevents the "项目经历 / 教育背景 / 日期" sections
+       from getting shuffled when the PDF has a two-column layout — the
+       failure mode that produced confusing analysis output before this
+       change.
+
+    2. **PyMuPDF with ``sort=True``** — local fallback. Without ``sort=True``
+       PyMuPDF returns text blocks in raw stream order, which on a
+       two-column resume tends to interleave the left and right columns
+       and scramble dates / section headers. ``sort=True`` re-orders by
+       (y, x) top-left coordinate so blocks come out in human reading
+       order. This is the single most important PyMuPDF flag for resume
+       parsing.
+
+    3. **pypdf** — last resort if both above fail. Layout fidelity is
+       roughly the same as unsorted PyMuPDF; we keep it as a safety net.
+    """
+    # ── Layer 1: LlamaParse (markdown, layout-aware) ──────────────────
+    try:
+        from app.core.config import settings
+
+        api_key = (settings.LLAMA_CLOUD_API_KEY or "").strip()
+        if api_key and not api_key.startswith("your_"):
+            import nest_asyncio
+            nest_asyncio.apply()
+            from llama_parse import LlamaParse
+
+            parser = LlamaParse(
+                result_type="markdown",
+                language="ch_sim",
+                api_key=api_key,
+                num_workers=1,
+            )
+            docs = parser.load_data(file_path)
+            text = "\n\n".join((d.text or "").strip() for d in docs).strip()
+            if text:
+                logger.info("PDF extracted via LlamaParse: %d chars", len(text))
+                return text
+            logger.warning("LlamaParse returned empty text; falling back to PyMuPDF.")
+    except Exception as exc:  # noqa: BLE001 — any LlamaParse failure → fall back
+        logger.warning("LlamaParse extraction failed, falling back to PyMuPDF: %s", exc)
+
+    # ── Layer 2: PyMuPDF with sort=True ───────────────────────────────
     try:
         import fitz  # pymupdf
 
         doc = fitz.open(file_path)
-        pages = [page.get_text("text") for page in doc]
+        # ``sort=True`` re-orders text blocks by visual position before
+        # serialization — critical for multi-column resumes.
+        pages = [page.get_text("text", sort=True) for page in doc]
         doc.close()
         text = "\n\n".join(pages).strip()
         if text:
-            logger.info("PDF extracted via PyMuPDF: %d chars", len(text))
+            logger.info("PDF extracted via PyMuPDF (sorted): %d chars", len(text))
             return text
     except Exception as exc:
         logger.warning("PyMuPDF extraction failed, trying pypdf: %s", exc)
 
-    # Fallback: pypdf (also in requirements)
+    # ── Layer 3: pypdf ────────────────────────────────────────────────
     try:
         from pypdf import PdfReader
 
@@ -87,7 +137,7 @@ def _extract_pdf(file_path: str) -> str:
         logger.info("PDF extracted via pypdf: %d chars", len(text))
         return text
     except Exception as exc:
-        logger.error("Both PDF extractors failed: %s", exc)
+        logger.error("All PDF extractors failed: %s", exc)
         raise
 
 

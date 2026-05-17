@@ -6,6 +6,7 @@ import { toast } from '@/store/uiStore';
 import { deleteInterviewRecord, updateInterviewRecord } from '@/api/interview';
 import { extractErr } from '@/api/client';
 import type { InterviewRecordListItem } from '@/types/api';
+import type { AnalysisProgress } from './AnalysisRunner';
 
 interface Props {
   records: InterviewRecordListItem[];
@@ -15,8 +16,35 @@ interface Props {
   onChanged: () => void;
   onDraftMutate: (id: string, patch: Partial<InterviewRecordListItem>) => void;
   onDraftDelete: (id: string) => void;
-  analyzingIds?: Set<string>;
+  /** Per-record live progress so the pill can show the current sub-stage. */
+  analyzingStates?: Map<string, AnalysisProgress>;
   width?: number;
+}
+
+/** Map backend stage strings to a short, user-readable Chinese label.
+ *
+ * The backend emits ``status`` like ``transcribing`` / ``extracting`` /
+ * ``analyzing`` / ``writing_report``. We render them with the same prefix
+ * style ("xx 中") so the user gets a stable, scannable indicator instead
+ * of a generic "分析中" no matter which sub-stage they're in.
+ *
+ * Unknown statuses fall back to "处理中" rather than the raw English word —
+ * better safe than leaking implementation jargon to the UI.
+ */
+function progressLabel(p: AnalysisProgress | undefined): string {
+  if (!p) return '';
+  if (p.phase === 'connecting') return '连接中';
+  if (p.phase === 'error')      return '失败';
+  if (p.phase === 'done')       return '完成';
+  // phase === 'progress' — use the backend's sub-status string.
+  const s = (p.status || '').toLowerCase();
+  if (s.includes('transcrib'))    return '转写中';
+  if (s.includes('diariz'))       return '说话人分离中';
+  if (s.includes('extract'))      return '提取中';
+  if (s.includes('summar'))       return '摘要中';
+  if (s.includes('analyz') || s.includes('analysis')) return '分析中';
+  if (s.includes('report') || s.includes('writ'))     return '生成报告中';
+  return '处理中';
 }
 
 function isDraftId(id: string): boolean {
@@ -25,12 +53,13 @@ function isDraftId(id: string): boolean {
 
 function formatDate(iso: string): string {
   if (!iso) return '';
-  try {
-    const d = new Date(iso);
-    return `${d.getMonth() + 1}/${String(d.getDate()).padStart(2, '0')}`;
-  } catch {
-    return iso.slice(0, 10);
-  }
+  // Treat naive backend timestamps as UTC; otherwise Windows / Safari would
+  // double-shift them into local time. After parsing, getMonth/getDate return
+  // the LOCAL clock so the sidebar shows the date in the user's timezone.
+  const stamp = /[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + 'Z';
+  const d = new Date(stamp);
+  if (isNaN(d.getTime())) return iso.slice(0, 10);
+  return `${d.getMonth() + 1}/${String(d.getDate()).padStart(2, '0')}`;
 }
 
 const TAG_OPTIONS = ['Backend', 'Frontend', 'Algorithm', 'System', 'HR'] as const;
@@ -59,7 +88,7 @@ export function SessionList({
   onChanged,
   onDraftMutate,
   onDraftDelete,
-  analyzingIds,
+  analyzingStates,
   width = 280,
 }: Props) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
@@ -249,12 +278,22 @@ export function SessionList({
                   {formatDate(r.created_at)}
                 </span>
                 <Pill tone={pill.tone}>{pill.label}</Pill>
-                {analyzingIds?.has(r.id) && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-full bg-warning-50 text-warning-700">
-                    <Loader2 size={10} className="animate-spin" />
-                    分析中
-                  </span>
-                )}
+                {analyzingStates?.has(r.id) && (() => {
+                  const p = analyzingStates.get(r.id);
+                  const errored = p?.phase === 'error';
+                  return (
+                    <span className={[
+                      'inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-full',
+                      errored ? 'bg-danger-50 text-danger-700' : 'bg-warning-50 text-warning-700',
+                    ].join(' ')}>
+                      {!errored && <Loader2 size={10} className="animate-spin" />}
+                      {progressLabel(p)}
+                      {p?.phase === 'progress' && typeof p.percent === 'number' && p.percent > 0 && (
+                        <span className="opacity-70">· {Math.round(p.percent)}%</span>
+                      )}
+                    </span>
+                  );
+                })()}
               </div>
               {openMenu === r.id && !isEditing && (
                 <div

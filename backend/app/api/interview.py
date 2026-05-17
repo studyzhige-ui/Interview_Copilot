@@ -43,6 +43,11 @@ class AnalyzeRequest(BaseModel):
     resume_upload_id: str
     jd_text: Optional[str] = None
     jd_upload_id: Optional[str] = None  # KnowledgeDocument id; if set, text is loaded server-side
+    # ISO-639-1 language hint for WhisperX. ``"zh"`` / ``"en"`` force the
+    # decoder, ``"auto"`` lets Whisper detect per-clip (slower, occasionally
+    # picks the wrong one — only worth it for genuinely mixed audio).
+    # Default matches the UI default of Simplified Chinese transcription.
+    language: str = "zh"
 
 
 class MemorySaveRequest(BaseModel):
@@ -83,6 +88,46 @@ async def upload_audio(
         "upload_id": upload.id,
         "storage_uri": upload.storage_uri,
         "filename": upload.original_filename,
+    }
+
+
+@router.get("/uploads/resumes")
+def list_user_resumes(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List the user's library resumes (KnowledgeDocument with category='简历').
+
+    Source-of-truth for "stored resumes" is the personal library, not previous
+    mock-interview uploads. Returns each library doc together with the
+    underlying UserUpload.id so MockSetup can pass it to /mock-interview/start
+    as ``resume_upload_id`` without extra translation.
+    """
+    from app.models.knowledge import KnowledgeDocument
+    from app.models.upload import UserUpload
+
+    rows = (
+        db.query(KnowledgeDocument, UserUpload)
+        .join(UserUpload, KnowledgeDocument.upload_id == UserUpload.id)
+        .filter(
+            KnowledgeDocument.user_id == current_user.username,
+            KnowledgeDocument.category == "简历",
+        )
+        .order_by(KnowledgeDocument.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    return {
+        "resumes": [
+            {
+                "upload_id": u.id,
+                "filename": d.title or u.original_filename,
+                "size_bytes": u.size_bytes,
+                "created_at": d.created_at.isoformat() if d.created_at else "",
+                "doc_id": d.id,
+            }
+            for (d, u) in rows
+        ],
     }
 
 
@@ -210,7 +255,13 @@ async def analyze_interview_endpoint(
         mark_upload_consumed(db, upload)
         db.commit()
 
-        task = process_interview_analysis.delay(record.id)
+        # Normalize language hint: anything other than the two we explicitly
+        # support falls back to "zh". WhisperX accepts "auto" by passing
+        # ``None``, which the orchestrator translates.
+        language = (request.language or "zh").strip().lower()
+        if language not in {"zh", "en", "auto"}:
+            language = "zh"
+        task = process_interview_analysis.delay(record.id, language=language)
         interview_record_service.set_status(record.id, "pending", celery_task_id=task.id)
 
         return {
@@ -495,21 +546,39 @@ def update_interview_record(
 @router.delete("/interview-records/{record_id}")
 def delete_interview_record(
     record_id: str,
-    cascade_chats: bool = Query(False, description="If true, also delete linked debrief chat sessions"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Delete an interview record.
+    """Hard-delete an interview record AND every trace tied to it.
 
-    By default chat sessions tied to this record are detached (interview_id
-    set to NULL), preserving their history. Pass `cascade_chats=true` to
-    delete them too.
+    Removes, in order:
+
+      1. **memory_items** derived from any chat_session linked to this
+         interview (``source_session_id`` ∈ linked sessions). These are
+         the ``type=interview_fact`` rows the system extracted from
+         debrief chats — they would otherwise contaminate future
+         recall.
+      2. **Milvus vectors** for those memory_items (``interview_copilot_memory``
+         collection, keyed by ``doc_id``). Best-effort: a Milvus failure
+         logs a warning but doesn't block the DB delete.
+      3. **chat_messages** for every session linked to this interview
+         (the FK has no ON DELETE CASCADE, so we have to be explicit).
+      4. **chat_sessions** linked to this interview (``interview_id == X``).
+      5. **interview_qa** + **mock_interview_sessions** (auto via FK
+         ON DELETE CASCADE on ``interview_records``).
+      6. The **interview_record** row itself.
+
+    Designed for "I want this interview gone — no leftover chat history,
+    no memory that could spill into other sessions." The legacy detach
+    mode (set ``interview_id = NULL``, keep the chat) was removed: in
+    practice nobody used it and it produced confusing orphan sessions.
     """
     import logging
 
     log = logging.getLogger(__name__)
     from app.models.chat import ChatMessage, ChatSession
     from app.models.interview_record import InterviewRecord
+    from app.models.memory import MemoryItem
 
     record = (
         db.query(InterviewRecord)
@@ -520,34 +589,62 @@ def delete_interview_record(
         raise HTTPException(status_code=404, detail="Interview record not found")
 
     try:
-        if cascade_chats:
-            # Find tied sessions, then cascade-delete their messages first
-            # because ChatMessage has no ON DELETE CASCADE on its FK.
-            session_ids = [
+        # ── (1) Find every chat_session linked to this interview ──────────
+        session_ids = [
+            row[0]
+            for row in db.query(ChatSession.id)
+            .filter(ChatSession.interview_id == record_id)
+            .all()
+        ]
+
+        # ── (2) memory_items derived from those sessions ─────────────────
+        memory_doc_ids: list[str] = []
+        if session_ids:
+            memory_doc_ids = [
                 row[0]
-                for row in db.query(ChatSession.id)
-                .filter(ChatSession.interview_id == record_id)
+                for row in db.query(MemoryItem.id)
+                .filter(MemoryItem.source_session_id.in_(session_ids))
                 .all()
             ]
-            if session_ids:
-                db.query(ChatMessage).filter(
-                    ChatMessage.session_id.in_(session_ids)
-                ).delete(synchronize_session=False)
-                db.query(ChatSession).filter(
-                    ChatSession.id.in_(session_ids)
-                ).delete(synchronize_session=False)
-        else:
-            # Detach: clear FK on linked chat sessions before deleting the record.
-            db.query(ChatSession).filter(
-                ChatSession.interview_id == record_id
-            ).update(
-                {ChatSession.interview_id: None}, synchronize_session=False
-            )
-            db.flush()
 
+        # ── (3) Milvus best-effort delete of memory vectors ──────────────
+        if memory_doc_ids:
+            try:
+                _delete_milvus_doc_ids(
+                    settings.MEMORY_MILVUS_COLLECTION, memory_doc_ids,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "Milvus delete failed for %d memory rows (continuing with DB delete): %s",
+                    len(memory_doc_ids), exc,
+                )
+
+        # ── (4) DB deletes in safe order ─────────────────────────────────
+        if memory_doc_ids:
+            db.query(MemoryItem).filter(
+                MemoryItem.id.in_(memory_doc_ids)
+            ).delete(synchronize_session=False)
+        if session_ids:
+            db.query(ChatMessage).filter(
+                ChatMessage.session_id.in_(session_ids)
+            ).delete(synchronize_session=False)
+            db.query(ChatSession).filter(
+                ChatSession.id.in_(session_ids)
+            ).delete(synchronize_session=False)
+        # interview_qa + mock_interview_sessions auto-cleaned by their
+        # ON DELETE CASCADE on interview_records.
         db.delete(record)
         db.commit()
-        return {"status": "success", "id": record_id, "cascade_chats": cascade_chats}
+        log.info(
+            "Deleted interview_record=%s with %d session(s) and %d memory(ies)",
+            record_id, len(session_ids), len(memory_doc_ids),
+        )
+        return {
+            "status": "success",
+            "id": record_id,
+            "deleted_sessions": len(session_ids),
+            "deleted_memories": len(memory_doc_ids),
+        }
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -560,6 +657,35 @@ def delete_interview_record(
             status_code=500,
             detail=f"删除失败: {type(exc).__name__}: {exc}",
         ) from exc
+
+
+def _delete_milvus_doc_ids(collection: str, doc_ids: list[str]) -> int:
+    """Delete every row in a Milvus collection whose ``doc_id`` is in ``doc_ids``.
+
+    Chunks the expression at 100 ids per call so we stay under Milvus's
+    expression length limit on large purges. Skips silently when the
+    collection doesn't exist (e.g. fresh install, no memory yet).
+    Returns the number of rows actually matched + deleted across chunks.
+    """
+    if not doc_ids:
+        return 0
+    from pymilvus import Collection, connections, utility
+
+    milvus_uri = (settings.MILVUS_URI or "http://localhost:19530").replace("http://", "").replace("https://", "")
+    host, _, port = milvus_uri.partition(":")
+    connections.connect(host=host or "localhost", port=port or "19530")
+    if not utility.has_collection(collection):
+        return 0
+    c = Collection(collection)
+    c.load()
+    deleted = 0
+    for i in range(0, len(doc_ids), 100):
+        chunk = doc_ids[i:i + 100]
+        expr = "doc_id in [" + ", ".join(f'"{d}"' for d in chunk) + "]"
+        c.delete(expr)
+        deleted += len(chunk)
+    c.flush()
+    return deleted
 
 
 class QAEditRequest(BaseModel):

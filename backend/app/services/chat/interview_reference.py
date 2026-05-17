@@ -45,7 +45,13 @@ logger = logging.getLogger(__name__)
 # yet hard-trim this slot (an upstream improvement) — so we self-cap here.
 # Transcripts under this length are emitted in full.
 _TRANSCRIPT_HARD_CAP_CHARS = 2400
-_PER_QUESTION_TAKE = 5  # top-N weakest questions (or first-N if no scores)
+# Per-question emission: only ``question`` and ``score`` (no improved_answer
+# / no full critique). Rationale (per product spec): improved_answer is
+# nearly as bulky as the transcript itself — and the model can always pull
+# it on demand via RAG / the record-detail endpoint when discussion
+# actually drifts into a specific Q. Front-loading every full answer just
+# burns prompt cache space.
+_PER_QUESTION_TAKE = 12
 
 
 def build_interview_reference(interview_id: str, user_id: str) -> str:
@@ -131,44 +137,44 @@ def _render(record: InterviewRecord, qa_rows: list[InterviewQA]) -> str:
         lines.append("\n".join(ovr_bits))
 
     if qa_rows:
-        ranked = sorted(qa_rows, key=lambda r: (r.score if r.score is not None else 999, r.order_idx))
-        ranked = ranked[:_PER_QUESTION_TAKE]
-        qa_bits = [f"## 逐题摘要（共 {len(qa_rows)} 题，按分数升序取前 {len(ranked)} 题）"]
+        # Light-touch QA index: just question + score. Full answers /
+        # critiques / improved-answers stay in the database and get pulled
+        # on demand by the agent's RAG layer when a specific Q is discussed.
+        ranked = sorted(qa_rows, key=lambda r: r.order_idx)[:_PER_QUESTION_TAKE]
+        qa_bits = [f"## 题目清单（共 {len(qa_rows)} 题，列出前 {len(ranked)} 题；详情按需通过 RAG 拉取）"]
         for qa in ranked:
             q = (qa.question or "").strip()
-            a = (qa.answer or "").strip()
-            critique = (qa.critique or "").strip()
-            improved = (qa.improved_answer or "").strip()
-            header = f"### Q{qa.order_idx + 1}"
-            if qa.score is not None:
-                header += f" · 评分 {qa.score}"
-            qa_bits.append(header)
+            score_str = f" · 评分 {qa.score}" if qa.score is not None else ""
+            header = f"- Q{qa.order_idx + 1}{score_str}"
             if q:
-                qa_bits.append(f"- 问题: {_truncate(q, 200)}")
-            if a:
-                qa_bits.append(f"- 我的回答: {_truncate(a, 300)}")
-            if critique:
-                qa_bits.append(f"- 点评: {_truncate(critique, 200)}")
-            if improved:
-                qa_bits.append(f"- 优化版回答: {_truncate(improved, 300)}")
+                header += f": {_truncate(q, 180)}"
+            qa_bits.append(header)
         lines.append("\n".join(qa_bits))
 
-    if record.transcript:
+    # Debrief 摘要——分析 pipeline 末尾由 LLM 生成的 200-400 字浓缩版。
+    # 用它替代原始转录全文（转录太大，会把 prompt cache 撑爆；具体内容
+    # 想看时通过 GET /interview-records/{id} 的 transcript 字段拉，或者
+    # 让 agent 走 RAG）。debrief_summary 为 NULL 时（mock 模式 / 旧记录）
+    # 退化到截断转录，保证最低限度的对话上下文。
+    if (record.debrief_summary or "").strip():
+        lines.append(f"## 本次面试浓缩摘要\n{record.debrief_summary.strip()}")
+    elif record.transcript:
         full = record.transcript.strip()
-        full_len = len(full)
-        if full_len <= _TRANSCRIPT_HARD_CAP_CHARS:
-            # Fits in the budget — emit in full so the model has authoritative text.
-            lines.append(f"## 原始转录（全文 {full_len} 字符）\n{full}")
+        if len(full) <= _TRANSCRIPT_HARD_CAP_CHARS:
+            lines.append(f"## 原始转录（debrief_summary 缺失，回退到全文，{len(full)} 字符）\n{full}")
         else:
-            head = full[: _TRANSCRIPT_HARD_CAP_CHARS]
-            tail_hint = (
-                f"\n\n…（已截取前 {_TRANSCRIPT_HARD_CAP_CHARS} 字符，全文 {full_len} 字符。"
-                f"完整内容可通过 GET /api/v1/interview-records/{record.id} 的 `transcript` 字段获取；"
-                "未来可向用户暴露 get_full_transcript 工具来按段拉取。）"
-            )
+            head = full[:_TRANSCRIPT_HARD_CAP_CHARS]
             lines.append(
-                f"## 原始转录（节选 · 前 {_TRANSCRIPT_HARD_CAP_CHARS}/{full_len} 字符）\n{head}{tail_hint}"
+                f"## 原始转录（debrief_summary 缺失，节选前 {_TRANSCRIPT_HARD_CAP_CHARS}/{len(full)} 字符）\n{head}"
             )
+
+    # 简历全文——围绕简历问问题是绝大多数面试的主线，所以这块对回答质量
+    # 收益最高。``resume_text_snapshot`` 由上传 pipeline 时一次性生成
+    # 并 freeze 在 record 行上（即便后续用户删原始文件也不丢）。空字符串
+    # 表示该 record 当时没传简历——跳过即可。
+    resume_snapshot = (record.resume_text_snapshot or "").strip()
+    if resume_snapshot:
+        lines.append(f"## 候选人简历全文\n{resume_snapshot}")
 
     # Upload pointers — tell the model what was provided. Actual file bodies
     # are reachable via /upload/audio/direct or /knowledge/documents if a tool

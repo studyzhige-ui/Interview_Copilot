@@ -61,6 +61,8 @@ def _clean_json_response(raw_text: str) -> dict[str, Any]:
 _EXTRACTION_MAX_TOKENS = 120_000
 
 _LLM_EXTRACTION_PROMPT = """\
+[硬性约束] 全部输出使用简体中文。即便原始转录里出现繁体字、英文术语，最终回复也用简体中文表达（专有名词、代码标识符保留原文）。
+
 你是一名专业的面试对话分析专家。下面是一场面试录音的语音转录文本（ASR 输出，可能有错别字和口语化表达）。
 
 转录文本：
@@ -293,6 +295,8 @@ def _deduplicate_qa_pairs(pairs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 _SLIDING_WINDOW_SIZE = 3  # include up to 3 preceding QA pairs
 
 _PER_QUESTION_PROMPT = """\
+[硬性约束] 全部输出使用简体中文。即便原始转录里出现繁体字、英文术语，最终回复也用简体中文表达（专有名词、代码标识符保留原文）。
+
 你是一名资深且严格的技术面试官。请对下面这道面试题的候选人回答进行深度分析。
 
 {resume_section}
@@ -416,6 +420,8 @@ async def _analyze_single_question(
 # ══════════════════════════════════════════════════════════════════════════
 
 _SYNTHESIS_PROMPT = """\
+[硬性约束] 全部输出使用简体中文。即便原始转录里出现繁体字、英文术语，最终回复也用简体中文表达（专有名词、代码标识符保留原文）。
+
 你是一位经验丰富的技术教练，正在帮助下面这位候选人复盘他刚结束的一场模拟面试。
 **这不是把关人，而是成长陪练**：你的目标是用最高信号量的方式告诉他下一步该练什么。
 不要给"建议通过 / 不建议通过"这种判决；不要打字母等级。
@@ -649,7 +655,9 @@ async def analyze_interview(
 # The output shape matches `_analyze_single_question`, so `_synthesize_report`
 # can consume it unchanged.
 
-_BATCH_PROMPT_PREFIX = """你是一位严格但建设性的资深技术面试官，正在对一场面试的结果做细致复盘。
+_BATCH_PROMPT_PREFIX = """[硬性约束] 全部输出使用简体中文。即便原始转录里出现繁体字、英文术语，最终回复也用简体中文表达（专有名词、代码标识符保留原文）。
+
+你是一位严格但建设性的资深技术面试官，正在对一场面试的结果做细致复盘。
 所有判断必须基于下面这位候选人的简历 + 目标岗位 JD。
 
 ═════════ 候选人简历（全文） ═════════

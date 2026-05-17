@@ -10,6 +10,7 @@ import time
 import traceback
 from typing import AsyncGenerator
 
+import openai
 import tiktoken
 from llama_index.core import Settings
 from llama_index.core.callbacks import CallbackManager, TokenCountingHandler
@@ -38,6 +39,52 @@ RAG_SYSTEM_RULES = """You are Interview Copilot, a concise technical interview a
 Use retrieved knowledge as evidence and avoid inventing sources."""
 
 
+def _humanize_exc(exc: Exception) -> str:
+    """Translate an upstream exception into a Chinese sentence the user
+    sees in the chat bubble.
+
+    Don't leak provider error codes (e.g. "401 Invalid API Key") into
+    the UI — that's a developer detail. Tell the user what to *do*.
+
+    Common cases:
+      * ``openai.AuthenticationError`` (HTTP 401) — wrong / revoked /
+        empty API key. Almost always: the user-saved key in
+        ``user_api_keys`` for the active provider expired, or .env
+        ``*_API_KEY`` was empty.
+      * ``openai.RateLimitError`` (HTTP 429) — vendor throttled us.
+      * ``openai.APIConnectionError`` — DNS / network / vendor down.
+      * ``openai.APITimeoutError`` — request timed out.
+      * ``openai.BadRequestError`` (HTTP 400) — prompt too long / bad
+        params; we expose the vendor's short reason since it's
+        actionable (e.g. "max_tokens exceeded").
+      * everything else — generic "system error, please retry".
+
+    Full exception still goes to backend log via the existing
+    logger.error() at the call site for ops to inspect.
+    """
+    if isinstance(exc, openai.AuthenticationError):
+        return (
+            "当前模型的密钥无效或已失效。请到「模型」页面，找到对应厂商卡片，"
+            "重新配置 API 密钥后再试。"
+        )
+    if isinstance(exc, openai.RateLimitError):
+        return "模型厂商当前限流（请求过于频繁），请稍等几秒后重试。"
+    if isinstance(exc, openai.APIConnectionError):
+        return "无法连接到模型服务，请检查网络或稍后再试。"
+    if isinstance(exc, openai.APITimeoutError):
+        return "模型响应超时，请重试一次。"
+    if isinstance(exc, openai.BadRequestError):
+        # BadRequest body often has actionable text (token limit, etc.).
+        try:
+            detail = (exc.body or {}).get("error", {}).get("message", "")
+        except Exception:  # noqa: BLE001
+            detail = ""
+        if detail:
+            return f"请求被模型拒绝：{detail}"
+        return "请求被模型拒绝（可能是上下文过长或参数不合规）。"
+    return "系统出了点问题，请稍后再试。如果反复发生，请把这次操作的时间告诉运维。"
+
+
 async def stream_chat_with_agent(
     user_message: str,
     user_id: str,
@@ -64,17 +111,27 @@ async def stream_chat_with_agent(
         standalone_query = query_plan.standalone_query
 
         yield "[status] 正在并发召回记忆和知识库...\n"
-        # user_profile: always loaded directly from DB (like hermes USER.md)
+        # user_profile: always loaded directly from DB (like hermes USER.md).
+        # This is "who you are" data (name, role, target companies, …)
+        # — small and always relevant, so it bypasses the recall toggle.
         user_profile = memory_retrieval_service.load_user_profile(user_id)
 
-        # interview_fact: vector-searched only when relevant
+        # interview_fact recall is OPT-IN. Honour the session-local toggle
+        # first (set by the chat-header switch), falling back to the
+        # user's account-wide default (个人中心). This is what users mean
+        # when they ask "don't pull old answers into this conversation":
+        # we still keep user_profile in scope, but we skip the vector
+        # search over past Q&A snippets entirely. Saves a Milvus round-trip
+        # and avoids contaminating the LLM with stale facts.
+        from app.services.memory.recall_policy import recall_enabled_for_session
+        recall_on = recall_enabled_for_session(session_id, user_id)
         memory_task = asyncio.create_task(
             memory_retrieval_service.recall_relevant(
                 user_id=user_id,
                 query=query_plan.dense_query or standalone_query,
                 memory_types=["interview_fact"],
             )
-        ) if query_plan.needs_memory_retrieval else None
+        ) if (query_plan.needs_memory_retrieval and recall_on) else None
         knowledge_task = asyncio.create_task(
             knowledge_retriever.retrieve(
                 dense_query=query_plan.dense_query or standalone_query,
@@ -126,8 +183,11 @@ async def stream_chat_with_agent(
         safe_background_task(post_turn_maintenance_service.run(session_id, user_id))
 
     except Exception as exc:  # noqa: BLE001
+        # Full detail to the backend log (provider, status code, body…).
         logger.error("Agent execution failed: %s\n%s", exc, traceback.format_exc())
-        yield f"系统异常: {exc}"
+        # User sees a sentence they can act on (no status codes, no
+        # tracebacks). _humanize_exc maps known upstream errors → Chinese.
+        yield _humanize_exc(exc)
     finally:
         safe_background_task(
             log_interaction_metrics(

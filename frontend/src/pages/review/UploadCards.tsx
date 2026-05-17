@@ -39,6 +39,11 @@ export function UploadCards({ initialTitle, analysis, onStart }: Props) {
   const [title, setTitle] = useState(initialTitle ?? '');
   const [tag, setTag] = useState<TagOpt | ''>('');
   const [starting, setStarting] = useState(false);
+  // Whisper language hint. Forcing the language is the single biggest
+  // accuracy win on clean monolingual audio. Default 中文 because that's
+  // what 95% of our users record in; users with English interviews flip
+  // this once.
+  const [language, setLanguage] = useState<'zh' | 'en' | 'auto'>('zh');
 
   const audioRef = useRef<HTMLInputElement | null>(null);
   const resumeRef = useRef<HTMLInputElement | null>(null);
@@ -71,6 +76,7 @@ export function UploadCards({ initialTitle, analysis, onStart }: Props) {
         upload_id: slots.audio.uploadId!,
         resume_upload_id: slots.resume.uploadId!,
         jd_upload_id: slots.jd.uploadId,
+        language,
       });
       onStart({
         record_id: r.record_id,
@@ -180,7 +186,39 @@ export function UploadCards({ initialTitle, analysis, onStart }: Props) {
         需要音视频 + 简历才能开始分析；岗位 JD 可选，提供后分析会更精准。
       </div>
 
-      <div className="flex justify-center">
+      {/* Whisper language picker — sits next to the start button so users
+          set it intentionally per upload. Forcing the language (vs auto)
+          is the single biggest accuracy win on clean monolingual audio. */}
+      <div className="flex flex-col items-center gap-3">
+        <div className="flex items-center gap-3 text-[13px] text-stone-600">
+          <span>转录语言：</span>
+          <div className="inline-flex rounded-lg border border-stone-200 bg-white overflow-hidden">
+            {([
+              { value: 'zh',   label: '中文'   },
+              { value: 'en',   label: 'English' },
+              { value: 'auto', label: '自动'   },
+            ] as const).map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setLanguage(opt.value)}
+                className={[
+                  'px-3 py-1.5 text-[13px] transition-colors',
+                  language === opt.value
+                    ? 'bg-primary-50 text-primary-700 font-medium'
+                    : 'text-stone-600 hover:bg-stone-50',
+                ].join(' ')}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <span className="text-stone-400 text-[11px]">
+            {language === 'auto'
+              ? '让 Whisper 自动检测（仅当录音中英混杂时推荐）'
+              : '强制指定语言可显著提升单语录音的转写质量'}
+          </span>
+        </div>
         <Btn
           size="lg"
           icon={<Play size={16} />}

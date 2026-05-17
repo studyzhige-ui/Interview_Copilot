@@ -50,13 +50,13 @@ class InterviewAnalysisOrchestrator:
 
     # ── Public synchronous entry point (called by Celery task) ────────
 
-    def run(self, record_id: str) -> dict[str, Any]:
+    def run(self, record_id: str, language: str = "zh") -> dict[str, Any]:
         loop = _get_loop()
-        return loop.run_until_complete(self._run_async(record_id))
+        return loop.run_until_complete(self._run_async(record_id, language=language))
 
     # ── Async core ────────────────────────────────────────────────────
 
-    async def _run_async(self, record_id: str) -> dict[str, Any]:
+    async def _run_async(self, record_id: str, language: str = "zh") -> dict[str, Any]:
         db = SessionLocal()
         try:
             record = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
@@ -71,7 +71,7 @@ class InterviewAnalysisOrchestrator:
 
         try:
             if source == "upload":
-                transcript = await self._stage_transcribe(record_id)
+                transcript = await self._stage_transcribe(record_id, language=language)
                 qa_pairs = await self._stage_extract(record_id, transcript, resume_text)
             else:  # mock
                 qa_pairs = self._load_mock_qa(record_id)
@@ -109,6 +109,17 @@ class InterviewAnalysisOrchestrator:
                 )
 
             self._persist_analysis(record_id, qa_pairs, report)
+            # Best-effort: produce the cache-friendly summary that gets
+            # injected into every debrief chat's record_context slot.
+            # Non-fatal — a missing summary just falls back to the
+            # truncated transcript at render time.
+            try:
+                await self._generate_debrief_summary(record_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "debrief_summary generation failed for %s (non-fatal): %s",
+                    record_id, exc,
+                )
             interview_record_service.set_status(record_id, STATUS_COMPLETED)
             return {"status": "completed", "record_id": record_id}
 
@@ -121,8 +132,13 @@ class InterviewAnalysisOrchestrator:
 
     # ── Stages ────────────────────────────────────────────────────────
 
-    async def _stage_transcribe(self, record_id: str) -> str:
-        """Download audio + run WhisperX. Returns diarized transcript."""
+    async def _stage_transcribe(self, record_id: str, language: str = "zh") -> str:
+        """Download audio + run WhisperX. Returns diarized transcript.
+
+        ``language`` is forwarded to ``transcribe_media`` which passes it
+        to WhisperX. ``"auto"`` becomes ``None`` (let Whisper detect)
+        inside the transcription service.
+        """
         from app.services.voice.audio_transcription_service import transcribe_media
 
         interview_record_service.set_status(record_id, STATUS_TRANSCRIBING)
@@ -161,7 +177,7 @@ class InterviewAnalysisOrchestrator:
             is_temp = True
 
         try:
-            transcript = await transcribe_media(local_path)
+            transcript = await transcribe_media(local_path, language=language)
             interview_record_service.set_transcript(record_id, transcript=transcript)
             return transcript
         finally:
@@ -324,6 +340,127 @@ class InterviewAnalysisOrchestrator:
                 rec.analysis_json = json.dumps(top_level, ensure_ascii=False)
                 rec.analyzed_qa_count = len(per_question)
             db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+
+    async def _generate_debrief_summary(self, record_id: str) -> None:
+        """LLM-produced 200-400 字 summary of one finished interview.
+
+        The summary is the centrepiece of the ``record_context`` prompt
+        slot — every debrief chat under this record sees it as part of
+        the LLM's standing context. We also opportunistically fill
+        ``record.tag`` when the user didn't pick one at upload time,
+        because the tag drives downstream UI filters.
+
+        Compose-once / cache-many: this runs exactly once per record at
+        the end of analysis. After that the value is invariant for the
+        lifetime of the record, which is why it cache-hits perfectly
+        when injected into chat prompts.
+        """
+        # Pull the snapshot we'll feed to the LLM in one transaction so
+        # we don't see a half-applied state.
+        db: Session = SessionLocal()
+        try:
+            rec = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            if rec is None:
+                return
+            existing_summary = (rec.debrief_summary or "").strip()
+            if existing_summary:
+                # Re-runs (e.g. user re-analyzed) shouldn't blow away a
+                # summary that's already cached on the prompt-side; skip.
+                return
+            title = (rec.title or "").strip()
+            tag = (rec.tag or "").strip()
+            transcript = (rec.transcript or "").strip()
+            analysis_json = rec.analysis_json or ""
+            qa_rows = (
+                db.query(InterviewQA)
+                .filter(InterviewQA.record_id == record_id)
+                .order_by(InterviewQA.order_idx)
+                .all()
+            )
+            qa_lines = []
+            for qa in qa_rows[:20]:  # cap so the prompt stays bounded
+                q = (qa.question or "").strip()[:200]
+                if not q:
+                    continue
+                score = f" (score={qa.score})" if qa.score is not None else ""
+                qa_lines.append(f"- Q{qa.order_idx + 1}{score}: {q}")
+        finally:
+            db.close()
+
+        # Parse the analysis blob defensively — bad JSON shouldn't kill
+        # the summary step.
+        overall_text = ""
+        try:
+            if analysis_json:
+                blob = json.loads(analysis_json)
+                overall = blob.get("overall") if isinstance(blob, dict) else None
+                if isinstance(overall, dict):
+                    pieces = []
+                    if overall.get("score") is not None:
+                        pieces.append(f"综合评分: {overall['score']}")
+                    if overall.get("summary"):
+                        pieces.append(f"综合评语: {overall['summary']}")
+                    if overall.get("strengths"):
+                        pieces.append("亮点: " + " / ".join(str(s) for s in overall["strengths"][:5]))
+                    if overall.get("weaknesses"):
+                        pieces.append("待提升: " + " / ".join(str(w) for w in overall["weaknesses"][:5]))
+                    overall_text = "\n".join(pieces)
+        except (json.JSONDecodeError, TypeError):
+            overall_text = ""
+
+        # Truncate transcript hard — we just want flavour, not the full
+        # text (the chat's RAG layer can pull full transcript on demand).
+        transcript_excerpt = transcript[:3000] if transcript else ""
+
+        prompt = (
+            "你正在为一份面试记录写一段浓缩的复盘摘要，这段摘要会作为后续所有对话的"
+            "**恒定前导上下文**（命中 prompt cache），所以要密度高、信息全、200-400 字之间。\n\n"
+            "请同时推断一个合适的标签（中文，不超过 8 字），用于该面试的分类。如果用户已设"
+            "标签则尊重原值不动。\n\n"
+            f"## 面试标题\n{title or '（未填）'}\n\n"
+            f"## 用户已选标签\n{tag or '（未填，请推断）'}\n\n"
+            f"## 分析概览\n{overall_text or '（无）'}\n\n"
+            f"## 题目清单\n{chr(10).join(qa_lines) or '（无 QA）'}\n\n"
+            f"## 转录片段（前 3000 字符，仅参考）\n{transcript_excerpt or '（无转录）'}\n\n"
+            "**输出格式（严格 JSON，不要任何额外文字）**：\n"
+            '{"tag": "<推断或保留的标签>", "summary": "<200-400 字浓缩摘要，覆盖：'
+            '岗位方向 / 主要话题 / 候选人表现亮点 / 待改进点 / 整体评价。不要罗列原题，'
+            '描述要凝练成段落。>"}\n'
+        )
+
+        from app.rag.embeddings import agent_fast_llm
+        from app.services.memory._json_payload import _extract_json_payload
+
+        response = await agent_fast_llm.acomplete(prompt)
+        payload = _extract_json_payload(str(response.text))
+        if not isinstance(payload, dict):
+            return
+        summary = str(payload.get("summary") or "").strip()
+        new_tag = str(payload.get("tag") or "").strip()
+        if not summary:
+            return
+
+        db = SessionLocal()
+        try:
+            rec = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            if rec is None:
+                return
+            rec.debrief_summary = summary[:1500]  # generous cap; prompt asked for 400
+            # Only fill tag when the user hadn't set one — never overwrite
+            # a user-chosen tag with an LLM guess.
+            if not (rec.tag or "").strip() and new_tag:
+                rec.tag = new_tag[:32]
+            db.commit()
+            logger.info(
+                "debrief_summary written for %s (%d chars; tag=%r)",
+                record_id, len(summary), rec.tag,
+            )
         except Exception:
             db.rollback()
             raise

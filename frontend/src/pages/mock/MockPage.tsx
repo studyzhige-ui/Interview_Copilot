@@ -113,7 +113,16 @@ export function MockPage() {
 
   const onFinished = (recordId: string) => {
     toast.success('面试已结束，正在跳转到复盘');
+    setStage({ kind: 'setup' });
     navigate(`/review?id=${encodeURIComponent(recordId)}`, { replace: true });
+  };
+
+  // Abandon: hard-delete on backend + reset local stage so MockSetup remounts
+  // fresh. The MockLive child also navigate('/mock'), but the stage reset is
+  // what actually makes the setup page show.
+  const onAbandoned = () => {
+    setStage({ kind: 'setup' });
+    setInProgress(null);
   };
 
   if (stage.kind === 'setup') {
@@ -137,6 +146,7 @@ export function MockPage() {
       initialQuestion={stage.question}
       voiceMode={stage.voiceMode}
       onFinished={onFinished}
+      onAbandoned={onAbandoned}
     />
   );
 }

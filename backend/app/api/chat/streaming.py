@@ -1,14 +1,26 @@
-"""WebSocket + SSE streaming endpoints for QA dialogue."""
+"""SSE chat streaming endpoint.
+
+One-way server-to-client streaming for chat turns. Frontend posts a
+message JSON, server emits ``data: {type, content}\\n\\n`` frames as
+the LLM streams its response, terminated by a ``{type:"done"}`` frame.
+
+Why SSE and not WebSocket: every major chat API (OpenAI, Anthropic,
+Gemini) uses SSE for one-way text streaming. SSE rides plain HTTP so it
+inherits standard JWT bearer auth, browser keep-alive, proxy/CDN/
+firewall friendliness — none of the complexity of WS subprotocol token
+plumbing or socket-life-cycle bookkeeping. The WebSocket path that used
+to live here was removed once the frontend migrated to SSE; bring it
+back ONLY when realtime voice (bidirectional audio frames) lands and
+WS is the right transport for that — text alone never justifies WS.
+"""
 
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.chat import ChatSession
@@ -20,68 +32,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 
 
-def get_ws_current_user(token: str, db: Session) -> User | None:
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        username = payload.get("sub")
-        if not username:
-            return None
-        return db.query(User).filter(User.username == username).first()
-    except JWTError:
-        return None
-
-
-@router.websocket("/chat/ws/{session_id}")
-async def websocket_chat_endpoint(
-    websocket: WebSocket,
-    session_id: str,
-    token: str = Query(...),
-    db: Session = Depends(get_db),
-):
-    user = get_ws_current_user(token, db)
-    if not user:
-        await websocket.close(code=1008, reason="Unauthorized or expired token")
-        return
-
-    session_row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
-    if not session_row or session_row.user_id != user.username:
-        await websocket.close(code=1008, reason="Session not found or access denied")
-        return
-
-    await websocket.accept()
-    from app.qa_pipeline.agent_executor import stream_chat_with_agent
-
-    try:
-        while True:
-            data = await websocket.receive_json()
-            message = data.get("message", "")
-            if not message:
-                continue
-            async for chunk in stream_chat_with_agent(message, user.username, session_id):
-                if not chunk:
-                    continue
-                # Separate transport: pipeline-internal status hints go on a
-                # different event type so the client can display them as
-                # progress indicators rather than concatenating them into the
-                # final assistant message.
-                stripped = chunk.lstrip()
-                if stripped.startswith("[status]"):
-                    content = stripped[len("[status]"):].strip().rstrip("\n")
-                    await websocket.send_json({"type": "status", "content": content})
-                else:
-                    await websocket.send_json({"type": "chunk", "content": chunk})
-            await websocket.send_json({"type": "done"})
-    except WebSocketDisconnect:
-        logger.info("WebSocket disconnected: session=%s", session_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("WebSocket pipeline failed: %s", exc)
-        try:
-            await websocket.send_json({"type": "chunk", "content": f"\n\n[system]: {exc}"})
-            await websocket.send_json({"type": "done"})
-        except Exception:  # noqa: BLE001
-            pass
-
-
 @router.post("/chat/sse/{session_id}")
 async def sse_chat_endpoint(
     session_id: str,
@@ -89,10 +39,20 @@ async def sse_chat_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Stream one chat turn over SSE for ``session_id``.
+
+    Ownership is enforced up-front (404 on mismatch) so the generator
+    doesn't waste an LLM round-trip on a session the caller can't see.
+    The frame protocol is intentionally minimal — three event types —
+    so frontend parsers stay small and provider-portable.
+    """
     row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if not row or row.user_id != current_user.username:
         raise HTTPException(status_code=404, detail="Session not found or access denied")
 
+    # Lazy import to keep cold startup snappy — agent_executor pulls in
+    # the QA pipeline + retrieval modules and isn't needed by the rest
+    # of the chat-API router.
     from app.qa_pipeline.agent_executor import stream_chat_with_agent
 
     async def event_generator():
@@ -102,10 +62,16 @@ async def sse_chat_endpoint(
                 current_user.username,
                 session_id,
             ):
-                if chunk:
+                if not chunk:
+                    continue
+                stripped = chunk.lstrip()
+                if stripped.startswith("[status]"):
+                    content = stripped[len("[status]"):].strip().rstrip("\n")
+                    yield f"data: {json.dumps({'type': 'status', 'content': content}, ensure_ascii=False)}\n\n"
+                else:
                     yield f"data: {json.dumps({'type': 'chunk', 'content': chunk}, ensure_ascii=False)}\n\n"
             yield "data: {\"type\": \"done\"}\n\n"
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — last-resort net so the stream always closes
             logger.error("SSE pipeline failed: %s", exc)
             yield f"data: {json.dumps({'type': 'chunk', 'content': f'[system]: {exc}'}, ensure_ascii=False)}\n\n"
             yield "data: {\"type\": \"done\"}\n\n"
@@ -114,6 +80,9 @@ async def sse_chat_endpoint(
         event_generator(),
         media_type="text/event-stream",
         headers={
+            # Disable nginx/proxy buffering — without this header an
+            # SSE response gets buffered into a single chunk and the
+            # whole "streaming" effect collapses.
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },

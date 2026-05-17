@@ -104,6 +104,7 @@ export function ReviewPage() {
     return () => { alive = false; };
   }, [activeId]);
 
+
   const onNew = () => {
     const d = makeDraft();
     setDrafts((arr) => [d, ...arr]);
@@ -140,12 +141,27 @@ export function ReviewPage() {
     try {
       const rows = await listInterviewRecords(0, 50);
       setRecords(rows);
-      if (activeId && !isDraft(activeId) && !rows.some((r) => r.id === activeId)) {
-        const next = rows[0]?.id ?? null;
-        setActiveId(next);
-        setDetail(null);
-        if (next) setSearch({ id: next }, { replace: true });
-        else setSearch({}, { replace: true });
+      if (activeId && !isDraft(activeId)) {
+        const stillExists = rows.some((r) => r.id === activeId);
+        if (!stillExists) {
+          // Active record was deleted — fall back to first row.
+          const next = rows[0]?.id ?? null;
+          setActiveId(next);
+          setDetail(null);
+          if (next) setSearch({ id: next }, { replace: true });
+          else setSearch({}, { replace: true });
+        } else {
+          // Active record was renamed / re-tagged — re-fetch its detail so
+          // QAPanel's header reflects the new title without the user having
+          // to switch tabs and back.
+          try {
+            const fresh = await getInterviewRecord(activeId);
+            setDetail(fresh);
+          } catch {
+            // Non-fatal — the list still shows the new title; the detail
+            // header will catch up on the next id-change useEffect.
+          }
+        }
       }
     } catch {
       toast.error('刷新记录列表失败');
@@ -220,8 +236,15 @@ export function ReviewPage() {
 
   const activeRecord = combined.find((r) => r.id === activeId) ?? null;
 
-  // Set of ids currently in analysis — used by SessionList to render a pill.
-  const analyzingIds = useMemo(() => new Set(Object.keys(analyses)), [analyses]);
+  // Map of record_id → live progress, used by SessionList to render a pill
+  // that shows the current sub-stage (connecting / transcribing / analyzing).
+  const analyzingStates = useMemo(() => {
+    const m = new Map<string, AnalysisProgress>();
+    for (const [id, entry] of Object.entries(analyses)) {
+      m.set(id, entry.state);
+    }
+    return m;
+  }, [analyses]);
 
   const middle = (() => {
     if (!activeId) return <QAPanel detail={null} loading={false} />;
@@ -305,7 +328,7 @@ export function ReviewPage() {
         onChanged={onRecordChanged}
         onDraftMutate={onDraftMutate}
         onDraftDelete={onDraftDelete}
-        analyzingIds={analyzingIds}
+        analyzingStates={analyzingStates}
         width={widths.left}
       />
       <Resizer
@@ -325,7 +348,8 @@ export function ReviewPage() {
       />
       <ChatPanel
         interviewId={!isDraft(activeId ?? '') ? activeId : null}
-        interviewTitle={activeRecord?.title ?? null}
+        sessionTitle={activeRecord?.title ?? null}
+        sessionType="debrief"
         width={widths.right}
       />
     </div>

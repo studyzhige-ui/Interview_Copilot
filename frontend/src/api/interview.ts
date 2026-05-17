@@ -41,6 +41,18 @@ export async function uploadResume(file: File): Promise<{ upload_id: string; fil
   return res.data;
 }
 
+export interface StoredResume {
+  upload_id: string;
+  filename: string;
+  size_bytes: number | null;
+  created_at: string;
+}
+
+export async function listStoredResumes(): Promise<StoredResume[]> {
+  const res = await apiClient.get('/uploads/resumes');
+  return res.data?.resumes ?? [];
+}
+
 /** Dispatch a unified analysis on an uploaded audio file. Returns the new
  *  `record_id` of the InterviewRecord — subscribe to SSE to follow progress. */
 export async function startAnalyze(payload: {
@@ -48,6 +60,10 @@ export async function startAnalyze(payload: {
   resume_upload_id: string;
   jd_text?: string;
   jd_upload_id?: string;
+  /** WhisperX language hint. ``"zh"`` / ``"en"`` force the decoder
+   *  (much more accurate on monolingual audio). ``"auto"`` lets Whisper
+   *  detect per clip — only use for genuinely mixed recordings. */
+  language?: 'zh' | 'en' | 'auto';
 }): Promise<AnalyzeDispatchResp> {
   const res = await apiClient.post('/analyze', payload);
   return res.data;

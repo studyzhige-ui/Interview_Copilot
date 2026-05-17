@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import {
   ClipboardList,
   Mic,
+  MessageSquare,
   BarChart3,
   Library,
   Cpu,
@@ -21,12 +22,13 @@ interface NavItem {
 }
 
 const ITEMS: NavItem[] = [
-  { to: '/review',    label: '复盘',     icon: ClipboardList },
-  { to: '/mock',      label: '模拟面试', icon: Mic },
-  { to: '/analytics', label: '能力分析', icon: BarChart3 },
-  { to: '/library',   label: '资料库',   icon: Library },
-  { to: '/models',    label: '模型',     icon: Cpu },
-  { to: '/me',        label: '个人中心', icon: UserRound },
+  { to: '/review',       label: '复盘',     icon: ClipboardList },
+  { to: '/mock',         label: '模拟面试', icon: Mic },
+  { to: '/general-chat', label: '通用对话', icon: MessageSquare },
+  { to: '/analytics',    label: '能力分析', icon: BarChart3 },
+  { to: '/library',      label: '资料库',   icon: Library },
+  { to: '/models',       label: '模型',     icon: Cpu },
+  { to: '/me',           label: '个人中心', icon: UserRound },
 ];
 
 const PIN_KEY = 'sidenav.pinned';

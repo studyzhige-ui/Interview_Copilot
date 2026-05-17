@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Mic, Square, CornerUpRight, Loader2, Volume2, VolumeX } from 'lucide-react';
 import { Btn } from '@/components/ui/Btn';
+import { Modal } from '@/components/ui/Modal';
 import { toast } from '@/store/uiStore';
 import { useMediaRecorder } from '@/hooks/useMediaRecorder';
 import { useTts } from '@/hooks/useTts';
@@ -8,15 +9,24 @@ import {
   SPEECH_RECOGNITION_AVAILABLE,
   useSpeechRecognition,
 } from '@/hooks/useSpeechRecognition';
-import { submitMockAnswer, finishMockInterview, TRANSCRIBE_AVAILABLE, transcribeAudio } from '@/api/mock';
+import { abandonMockInterview, submitMockAnswer, finishMockInterview, TRANSCRIBE_AVAILABLE, transcribeAudio } from '@/api/mock';
+import { useNavigate } from 'react-router-dom';
 import type { MockQuestion } from '@/types/api';
 import type { VoiceMode } from './MockSetup';
 
-// Prefer the browser's native Web Speech API when available — partial
-// transcripts stream into the textarea so the user can see what's being
-// captured. The MediaRecorder + /transcribe path stays as a fallback for
-// browsers without speech recognition (Firefox, Safari).
-const USE_NATIVE_STT = SPEECH_RECOGNITION_AVAILABLE;
+// Web Speech API is reachable on Chrome/Edge **only when the host can reach
+// Google's speech service** — in mainland China the recognizer silently fails
+// (`network` error) and we end up with 0 finalized text. We default to the
+// MediaRecorder → backend Whisper path which works offline. Users who do have
+// working Web Speech can flip the toggle at the bottom of the mic area.
+const STT_PREF_KEY = 'mock.sttMode'; // 'whisper' | 'native'
+function loadPreferredStt(): 'whisper' | 'native' {
+  try {
+    const v = localStorage.getItem(STT_PREF_KEY);
+    if (v === 'native' && SPEECH_RECOGNITION_AVAILABLE) return 'native';
+  } catch { /* ignore */ }
+  return 'whisper';
+}
 
 interface Turn {
   who: 'interviewer' | 'me';
@@ -28,6 +38,7 @@ interface Props {
   initialQuestion: MockQuestion;
   voiceMode: VoiceMode;
   onFinished: (recordId: string) => void;
+  onAbandoned: () => void;
 }
 
 function fmtDuration(ms: number) {
@@ -35,7 +46,7 @@ function fmtDuration(ms: number) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished }: Props) {
+export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, onAbandoned }: Props) {
   const [turns, setTurns] = useState<Turn[]>(
     initialQuestion.question ? [{ who: 'interviewer', text: initialQuestion.question }] : [],
   );
@@ -51,17 +62,35 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished }: 
   const ttsActive = ttsEnabledByMode && !ttsMuted;
   const tts = useTts({ enabled: ttsActive });
   const speech = useSpeechRecognition('zh-CN');
+  const [sttMode, setSttMode] = useState<'whisper' | 'native'>(loadPreferredStt);
+  useEffect(() => {
+    try { localStorage.setItem(STT_PREF_KEY, sttMode); } catch { /* ignore */ }
+  }, [sttMode]);
+  const useNativeStt = sttMode === 'native' && SPEECH_RECOGNITION_AVAILABLE;
+
+  // Auto-fall back if Web Speech errors out (commonly: `network` when Google's
+  // speech endpoint is unreachable in CN). Switch the user to Whisper for the
+  // rest of the session so they don't keep hitting the same wall.
+  useEffect(() => {
+    if (useNativeStt && speech.state.phase === 'error') {
+      const msg = speech.state.message ?? '';
+      if (/network|service|not-allowed/i.test(msg)) {
+        toast.warn('浏览器语音识别不可达，已切到 Whisper');
+        setSttMode('whisper');
+      }
+    }
+  }, [useNativeStt, speech.state]);
 
   // Live-stream Web Speech partials into the textarea so the user sees what
   // we're hearing in real time. final fragments accumulate in the textarea
   // for review/edit before submit.
   useEffect(() => {
-    if (!USE_NATIVE_STT) return;
+    if (!useNativeStt) return;
     if (speech.state.phase === 'listening') {
       const combined = (speech.state.finalText + speech.state.interim).trimStart();
       setTyping(combined);
     }
-  }, [speech.state]);
+  }, [speech.state, useNativeStt]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -153,10 +182,10 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished }: 
     }
   };
 
-  const onMicToggle = USE_NATIVE_STT ? onMicToggleNative : onMicToggleRecorder;
+  const onMicToggle = useNativeStt ? onMicToggleNative : onMicToggleRecorder;
 
   // Unified state for the mic button label / styling.
-  const micPhase = USE_NATIVE_STT
+  const micPhase = useNativeStt
     ? speech.state.phase === 'listening'
       ? 'recording'
       : 'idle'
@@ -166,27 +195,51 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished }: 
     ? 'transcribing'
     : 'idle';
   const micDisabled =
-    !USE_NATIVE_STT && (!TRANSCRIBE_AVAILABLE || finished || transcribing);
+    !useNativeStt && (!TRANSCRIBE_AVAILABLE || finished || transcribing);
   const micLabel =
     micPhase === 'recording'
-      ? USE_NATIVE_STT
+      ? useNativeStt
         ? '听写中…点击结束'
         : fmtDuration(rec.durationMs)
       : micPhase === 'transcribing'
       ? '转写中…'
-      : USE_NATIVE_STT
+      : useNativeStt
       ? '点击开始听写'
       : '按住说话';
 
-  const onFinish = async () => {
+  const [confirmingFinish, setConfirmingFinish] = useState(false);
+  const [abandoning, setAbandoning] = useState(false);
+  const answeredCount = turns.filter((t) => t.who === 'me').length;
+  const navigate = useNavigate();
+
+  const onGenerateDebrief = async () => {
     setFinishing(true);
     try {
       const r = await finishMockInterview(sessionId);
+      setConfirmingFinish(false);
       onFinished(r.record_id);
     } catch {
       toast.error('结束面试失败');
     } finally {
       setFinishing(false);
+    }
+  };
+
+  const onAbandonInterview = async () => {
+    setAbandoning(true);
+    try {
+      await abandonMockInterview(sessionId);
+      toast.success('已放弃本次面试，相关记录已删除');
+      setConfirmingFinish(false);
+      // Reset parent state first, THEN navigate. Without onAbandoned() the
+      // parent MockPage keeps `stage='live'` so even after navigate('/mock')
+      // we'd re-render MockLive on the same sessionId.
+      onAbandoned();
+      navigate('/mock', { replace: true });
+    } catch {
+      toast.error('放弃失败，请重试');
+    } finally {
+      setAbandoning(false);
     }
   };
 
@@ -221,12 +274,68 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished }: 
           kind="danger"
           size="sm"
           className={ttsEnabledByMode ? '' : 'ml-auto'}
-          onClick={onFinish}
+          onClick={() => setConfirmingFinish(true)}
           loading={finishing}
         >
           结束面试
         </Btn>
       </div>
+
+      <Modal
+        open={confirmingFinish}
+        onClose={() => !finishing && !abandoning && setConfirmingFinish(false)}
+        title="结束本次面试"
+        width={460}
+      >
+        <div className="text-stone-700 text-[15px] leading-[1.7]">
+          已完成 <span className="font-semibold text-stone-900">{answeredCount}</span> 题。
+          你希望如何处理这场面试？
+        </div>
+
+        <div className="mt-5 flex flex-col gap-2.5">
+          <button
+            type="button"
+            onClick={() => setConfirmingFinish(false)}
+            disabled={finishing || abandoning}
+            className="text-left px-4 py-3 rounded-xl border border-stone-200 bg-white hover:bg-stone-50 hover:border-primary-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <div className="text-[14px] font-semibold text-stone-800">继续面试</div>
+            <div className="text-[12px] text-stone-500 mt-0.5">关闭这个窗口，回到当前题目。</div>
+          </button>
+
+          <button
+            type="button"
+            onClick={onGenerateDebrief}
+            disabled={finishing || abandoning || answeredCount === 0}
+            className="text-left px-4 py-3 rounded-xl border border-primary-200 bg-primary-50 hover:bg-primary-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <div className="text-[14px] font-semibold text-primary-800 flex items-center gap-2">
+              生成复盘
+              {finishing && <Loader2 size={13} className="animate-spin" />}
+            </div>
+            <div className="text-[12px] text-primary-700/80 mt-0.5">
+              {answeredCount === 0
+                ? '至少答完一题才能生成复盘。'
+                : `让 AI 批量分析这 ${answeredCount} 题，生成报告并跳转到复盘页。`}
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={onAbandonInterview}
+            disabled={finishing || abandoning}
+            className="text-left px-4 py-3 rounded-xl border border-stone-200 bg-white hover:bg-danger-50 hover:border-danger-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <div className="text-[14px] font-semibold text-danger-700 flex items-center gap-2">
+              放弃本次面试
+              {abandoning && <Loader2 size={13} className="animate-spin" />}
+            </div>
+            <div className="text-[12px] text-stone-500 mt-0.5">
+              不保留记录，回到模拟面试首页重新开始。
+            </div>
+          </button>
+        </div>
+      </Modal>
 
       <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto px-6 py-8">
         <div className="max-w-[760px] mx-auto flex flex-col gap-4">
@@ -259,7 +368,7 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished }: 
             onClick={() => void onMicToggle()}
             disabled={micDisabled || finished}
             title={
-              USE_NATIVE_STT
+              useNativeStt
                 ? micPhase === 'recording' ? '点击结束听写' : '点击开始听写（浏览器原生）'
                 : !TRANSCRIBE_AVAILABLE
                 ? '录音转写功能即将上线'
@@ -285,11 +394,22 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished }: 
             )}
             <div className="text-[10px] mt-1">{micLabel}</div>
           </button>
-          {USE_NATIVE_STT && (
-            <div className="text-[10px] text-stone-400">
-              使用浏览器原生语音识别 · 实时字幕显示在下方输入框
-            </div>
-          )}
+          {/* Mode hint + toggle. Default Whisper because Web Speech needs
+            * Google's speech endpoint, which is unreachable in mainland CN. */}
+          <div className="flex items-center gap-2 text-[10px] text-stone-400">
+            {useNativeStt
+              ? '使用浏览器原生语音识别 · 实时字幕显示在下方输入框'
+              : '使用后端 Whisper · 适合国内网络环境'}
+            {SPEECH_RECOGNITION_AVAILABLE && (
+              <button
+                type="button"
+                onClick={() => setSttMode((m) => (m === 'native' ? 'whisper' : 'native'))}
+                className="text-primary-600 hover:text-primary-700 underline-offset-2 hover:underline"
+              >
+                切换到{useNativeStt ? ' Whisper' : ' 浏览器原生'}
+              </button>
+            )}
+          </div>
           <div className="w-full flex items-end gap-2">
             <textarea
               value={typing}

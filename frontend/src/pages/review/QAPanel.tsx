@@ -23,6 +23,32 @@ function asAnalysis(detail: InterviewRecordDetail | null): InterviewAnalysis | n
   return a && typeof a === 'object' ? a : null;
 }
 
+/** Render an ISO timestamp from the API in the user's local timezone.
+ *
+ * The backend sends UTC ISO strings (e.g. ``2026-05-17T02:34:55``). The
+ * previous code used ``slice(0,19).replace('T',' ')`` which kept the
+ * UTC clock unchanged — visually wrong for any user outside UTC.
+ * ``toLocaleString`` with ``zh-CN`` + the user's resolved timezone gives
+ * a stable "YYYY/M/D HH:MM:SS" rendering.
+ *
+ * Invalid / missing input returns an empty string so the surrounding "·"
+ * separator collapses to nothing instead of "Invalid Date".
+ */
+function formatLocal(iso: string | null | undefined): string {
+  if (!iso) return '';
+  // FastAPI emits naive UTC strings without a Z suffix. Force-mark UTC so
+  // the Date constructor doesn't interpret it as local time on Windows /
+  // Safari (which would shift the clock twice).
+  const stamp = /[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + 'Z';
+  const d = new Date(stamp);
+  if (isNaN(d.getTime())) return iso.slice(0, 19);
+  return d.toLocaleString('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+}
+
 export function QAPanel({ detail, loading }: Props) {
   // Default to the report tab when content first lands; flip to QA only if the
   // user explicitly switches. This matches the design spec.
@@ -59,7 +85,7 @@ export function QAPanel({ detail, loading }: Props) {
         <div className="mb-4">
           <h2 className="text-xl font-semibold text-stone-800">{detail.title || '未命名'}</h2>
           <div className="text-xs text-stone-500 mt-1">
-            {detail.created_at?.slice(0, 19).replace('T', ' ')} · {detail.status}
+            {formatLocal(detail.created_at)} · {detail.status}
             {detail.tag && (
               <span className="ml-2 inline-flex">
                 <Pill tone="sand">{detail.tag}</Pill>

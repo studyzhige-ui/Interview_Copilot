@@ -88,12 +88,20 @@ class PromptRenderer:
         *,
         system_rules: str,
     ) -> str:
+        # Slot ordering is chosen to maximize prompt-cache hit rate.
+        # MOST → LEAST stable across turns within one debrief session:
+        #   1. system_rules     (process-wide constant)
+        #   2. reference_material / record_context  (invariant within a record)
+        #   3. user_profile     (changes only when LLM extracts new facts)
+        #   4. retrieved knowledge / state / recent turns / current query
+        # Anything that changes per turn (4+) breaks the cache prefix for
+        # everything below it, so it must come AFTER the stable prefix.
         parts = [system_rules.strip()]
+        if ctx.reference_material:
+            parts.append(f"[Record Context]\n{ctx.reference_material}")
         profile_text = self._render_user_profile(ctx.user_profile)
         if profile_text:
             parts.append(f"[User Profile]\n{profile_text}")
-        if ctx.reference_material:
-            parts.append(f"[Reference Material]\n{ctx.reference_material}")
         if ctx.retrieved_context:
             parts.append(f"[Retrieved Context]\n{ctx.retrieved_context}")
         state_text = self._render_state(ctx.session_state)
