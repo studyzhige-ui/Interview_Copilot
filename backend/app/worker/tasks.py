@@ -95,7 +95,67 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
     try:
         return analysis_orchestrator.run(record_id, language=language)
     except Exception as exc:  # noqa: BLE001
-        logger.error("Interview analysis task failed for %s: %s", record_id, exc)
+        # The orchestrator itself catches and writes STATUS_FAILED before
+        # re-raising (see analysis_orchestrator.py:126), so in the common
+        # case the record is already in the right state. The block below
+        # is a *belt-and-braces* safety net:
+        #
+        #   1. If we're on the LAST retry attempt (Celery would discard
+        #      the task next), make sure the record actually carries a
+        #      "max retries exhausted" message so the user UI doesn't
+        #      show a transient error from one of the middle attempts.
+        #   2. If the orchestrator never got far enough to set FAILED
+        #      (e.g. it crashed before its own try/except), force the
+        #      status to FAILED here so the record never gets stuck in
+        #      an intermediate state forever.
+        retries_left = max(0, (self.max_retries or 0) - self.request.retries)
+        is_final_attempt = retries_left == 0
+        try:
+            if is_final_attempt:
+                interview_record_service.set_status(
+                    record_id,
+                    "failed",
+                    error_message=(
+                        f"Analysis exhausted {self.max_retries} retries. "
+                        f"Last error: {type(exc).__name__}: {exc}"
+                    )[:500],
+                )
+            else:
+                # Mid-retry: only force-write if status is still in an
+                # intermediate state (orchestrator didn't reach its
+                # except branch). Don't overwrite a "completed" set by
+                # a parallel success.
+                row = SessionLocal()
+                try:
+                    rec = (
+                        row.query(InterviewRecord)
+                        .filter(InterviewRecord.id == record_id)
+                        .first()
+                    )
+                    if rec is not None and rec.status not in {"completed", "failed"}:
+                        interview_record_service.set_status(
+                            record_id,
+                            "failed",
+                            error_message=(
+                                f"Attempt {self.request.retries + 1} crashed before "
+                                f"orchestrator could record state. "
+                                f"{type(exc).__name__}: {exc}"
+                            )[:500],
+                        )
+                finally:
+                    row.close()
+        except Exception as recovery_exc:  # noqa: BLE001
+            # Never let the recovery path mask the original error.
+            logger.error(
+                "Failed to mark interview %s as failed after task crash: %s "
+                "(original error follows)",
+                record_id, recovery_exc,
+            )
+
+        logger.error(
+            "Interview analysis task failed for %s (attempt %d/%d): %s",
+            record_id, self.request.retries + 1, self.max_retries + 1, exc,
+        )
         raise
 
 
@@ -213,12 +273,41 @@ def process_document_ingestion(self, document_id: str):
         return {"status": "failed", "error": "Empty or unparseable document"}
 
     except Exception as exc:
+        # Distinguish mid-retry vs final-attempt the same way
+        # process_interview_analysis does. Mid-retry: a transient
+        # status='failed' would make the UI flash "failed" between
+        # retries; tag it as "retrying" instead so the user sees a
+        # consistent in-progress signal until we give up for good.
+        retries_left = max(0, (self.max_retries or 0) - self.request.retries)
+        is_final_attempt = retries_left == 0
         if document is not None:
-            document.status = "failed"
-            document.error_message = str(exc)
-            db.add(document)
-            db.commit()
-        logger.error("[Task %s] RAG ingestion task failed: %s", self.request.id, exc)
+            try:
+                if is_final_attempt:
+                    document.status = "failed"
+                    document.error_message = (
+                        f"Ingestion exhausted {self.max_retries} retries. "
+                        f"Last error: {type(exc).__name__}: {exc}"
+                    )[:500]
+                else:
+                    # Don't mark as terminal "failed" mid-retry — leave
+                    # status='processing' (the prior set_status from line
+                    # 144's gate) and surface the latest error message
+                    # for debug visibility.
+                    document.error_message = (
+                        f"Attempt {self.request.retries + 1} crashed; will retry. "
+                        f"{type(exc).__name__}: {exc}"
+                    )[:500]
+                db.add(document)
+                db.commit()
+            except Exception as recovery_exc:  # noqa: BLE001
+                logger.error(
+                    "Failed to update document %s status after task crash: %s",
+                    document.id, recovery_exc,
+                )
+        logger.error(
+            "[Task %s] RAG ingestion task failed (attempt %d/%d): %s",
+            self.request.id, self.request.retries + 1, self.max_retries + 1, exc,
+        )
         raise
 
     finally:
