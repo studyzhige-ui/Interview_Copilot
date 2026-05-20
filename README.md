@@ -176,7 +176,7 @@ backend/
 frontend/
   src/                React SPA (Vite + TS + Tailwind + zustand)
   public/             nginx config / _headers / _redirects
-alembic/versions/     Database migrations (0001 → 0019)
+alembic/versions/     Database migrations (squashed to a single baseline)
 nginx/conf.d/         Reverse proxy configs (dev + production)
 scripts/              setup / start / stop · init_models / refresh_models · wipe_non_admin / migrate_avatars
 docs/                 ← you are here
