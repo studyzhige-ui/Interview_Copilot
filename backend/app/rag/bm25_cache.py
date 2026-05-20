@@ -28,7 +28,13 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
-_BM25_CACHE_TTL = 300  # seconds — rebuild index if older than 5 minutes
+# 1 hour. Active invalidation is the primary freshness mechanism — every
+# write path that puts new content into the Postgres docstore
+# (``ingest_document``, ``ingest_text``, and ``delete_knowledge_document``)
+# calls ``invalidate_bm25_cache(user_id)`` explicitly, so this TTL is a
+# safety net for edge cases (e.g. a worker writes nodes without going
+# through ingestion.py) rather than the primary "is this fresh" check.
+_BM25_CACHE_TTL = 3600  # seconds
 
 
 class _BM25CacheEntry:

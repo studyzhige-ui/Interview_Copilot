@@ -278,6 +278,10 @@ async def delete_knowledge_document(
         db.rollback()
         logger.error("Knowledge document deletion failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Failed to delete document: {exc}") from exc
+    # Flush the BM25 cache so the next retrieval doesn't surface
+    # snippets from the just-deleted document.
+    from app.rag.bm25_cache import invalidate_bm25_cache
+    invalidate_bm25_cache(current_user.username)
     return {"status": "success"}
 
 

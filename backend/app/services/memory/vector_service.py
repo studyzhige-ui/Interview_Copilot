@@ -2,10 +2,22 @@
 
 Was previously at ``app.services.memory_vector_service`` — moved here as
 part of the memory subpackage consolidation.
+
+Singleton notes
+---------------
+``MilvusVectorStore(...)`` is **not** cheap: each instantiation opens a
+gRPC channel, pings the collection, and re-fetches schema. Per-query
+recreation made memory recall 30-200ms slower under concurrency.
+
+We now cache one ``store`` + ``index`` pair per ``MemoryVectorService``
+instance, behind a double-checked lock. ``overwrite=True`` is reserved
+for initialisation and bypasses the cache via ``_build_fresh_store()``
+so it can re-create the collection without poisoning the live singleton.
 """
 
 import logging
 from datetime import datetime
+from threading import Lock
 from typing import Any
 
 from llama_index.core import Document, StorageContext, VectorStoreIndex
@@ -36,8 +48,14 @@ EMBEDDING_DIM = settings.EMBEDDING_DIM
 class MemoryVectorService:
     def __init__(self):
         self.collection_name = settings.MEMORY_MILVUS_COLLECTION
+        # Cached singletons — lazily initialised on first use.
+        self._store: MilvusVectorStore | None = None
+        self._index: VectorStoreIndex | None = None
+        self._lock = Lock()
 
-    def _vector_store(self, overwrite: bool = False) -> MilvusVectorStore:
+    def _build_fresh_store(self, overwrite: bool = False) -> MilvusVectorStore:
+        """Construct a NEW MilvusVectorStore (used for overwrite=True paths
+        and as the inner factory for the cached singleton)."""
         return MilvusVectorStore(
             uri=settings.MILVUS_URI,
             collection_name=self.collection_name,
@@ -55,6 +73,47 @@ class MemoryVectorService:
                 "params": {"ef": settings.MILVUS_HNSW_EF_SEARCH},
             },
         )
+
+    def _get_store_and_index(self) -> tuple[MilvusVectorStore, VectorStoreIndex]:
+        """Return cached (store, index) — double-checked lock pattern.
+
+        99% of calls hit the fast path with no lock. The slow path
+        (cold start, ~once per process per service instance) holds the
+        lock just long enough to construct the store + index.
+        """
+        if self._index is not None and self._store is not None:
+            return self._store, self._index
+        with self._lock:
+            if self._index is not None and self._store is not None:
+                return self._store, self._index
+            store = self._build_fresh_store(overwrite=False)
+            index = VectorStoreIndex.from_vector_store(store)
+            self._store = store
+            self._index = index
+            logger.info(
+                "MemoryVectorService singleton initialised (collection=%s)",
+                self.collection_name,
+            )
+            return store, index
+
+    # Kept for backward compatibility with backfill_pending() which uses
+    # one fresh store per batch (overwrite=False but isolated from the
+    # live singleton — batches don't pollute the read path).
+    def _vector_store(self, overwrite: bool = False) -> MilvusVectorStore:
+        if overwrite:
+            # Hold the lock for the WHOLE recreate-then-invalidate
+            # transaction. Earlier impl nulled out the cache, released
+            # the lock, then ran the rebuild — that opened a race where
+            # a concurrent reader could acquire the lock between steps
+            # and cache a fresh-but-doomed store against the
+            # about-to-be-recreated collection. Holding the lock
+            # serialises overwrite vs read-cold-start.
+            with self._lock:
+                fresh = self._build_fresh_store(overwrite=True)
+                self._store = None
+                self._index = None
+            return fresh
+        return self._build_fresh_store(overwrite=False)
 
     def _storage_context(self, vector_store: MilvusVectorStore) -> StorageContext:
         if PostgresDocumentStore is None:
@@ -82,7 +141,10 @@ class MemoryVectorService:
         }
 
     def upsert_memory(self, memory: MemoryItem, db: Session | None = None) -> bool:
-        vector_store = self._vector_store(overwrite=False)
+        # Reuse the singleton store; storage_context (PostgresDocumentStore)
+        # is still per-call — that's a separate optimisation tracked in
+        # the BM25 epoch work.
+        vector_store, _ = self._get_store_and_index()
         storage_context = self._storage_context(vector_store)
         document = Document(
             text=self.build_memory_text(memory),
@@ -125,8 +187,9 @@ class MemoryVectorService:
                 logger.info("Memory embedding backfill: nothing pending")
                 return 0
 
-            # One vector store + storage context for the whole batch.
-            vector_store = self._vector_store(overwrite=False)
+            # Reuse the singleton store; storage context is per-batch
+            # (PostgresDocumentStore is the expensive part — see TODO).
+            vector_store, _ = self._get_store_and_index()
             storage_context = self._storage_context(vector_store)
             now = datetime.utcnow()
             embedded = 0
@@ -186,8 +249,9 @@ class MemoryVectorService:
         memory_types: list[str],
         top_k: int,
     ) -> list[RetrievalChunk]:
-        vector_store = self._vector_store(overwrite=False)
-        index = VectorStoreIndex.from_vector_store(vector_store)
+        # Reuse the cached store + index — avoids 30-200ms gRPC dial +
+        # schema fetch per query.
+        _, index = self._get_store_and_index()
         filters = MetadataFilters(
             filters=[
                 MetadataFilter(key="user_id", value=user_id, operator=FilterOperator.EQ),

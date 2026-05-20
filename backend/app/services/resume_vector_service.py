@@ -7,9 +7,13 @@ Workflow:
   1. upsert_section() — embed a single ResumeSection into Milvus
   2. backfill_pending() — batch-embed all sections with status != "ready"
   3. retrieve() — vector search for resume sections relevant to a query
+
+Singleton — see ``app.services.memory.vector_service`` for the rationale;
+same double-checked-lock pattern applies here.
 """
 
 import logging
+from threading import Lock
 from typing import Any
 
 from llama_index.core import Document, StorageContext, VectorStoreIndex
@@ -42,10 +46,16 @@ RESUME_COLLECTION = settings.RESUME_MILVUS_COLLECTION
 class ResumeVectorService:
     def __init__(self):
         self.collection_name = RESUME_COLLECTION
+        # Cached singletons — lazily initialised on first use.
+        self._store: MilvusVectorStore | None = None
+        self._index: VectorStoreIndex | None = None
+        self._lock = Lock()
 
     # ── Milvus helpers ────────────────────────────────────────────────
 
-    def _vector_store(self, overwrite: bool = False) -> MilvusVectorStore:
+    def _build_fresh_store(self, overwrite: bool = False) -> MilvusVectorStore:
+        """Construct a NEW MilvusVectorStore (used for overwrite=True paths
+        and as the inner factory for the cached singleton)."""
         return MilvusVectorStore(
             uri=settings.MILVUS_URI,
             collection_name=self.collection_name,
@@ -63,6 +73,38 @@ class ResumeVectorService:
                 "params": {"ef": settings.MILVUS_HNSW_EF_SEARCH},
             },
         )
+
+    def _get_store_and_index(self) -> tuple[MilvusVectorStore, VectorStoreIndex]:
+        """Return cached (store, index) — double-checked lock pattern."""
+        if self._index is not None and self._store is not None:
+            return self._store, self._index
+        with self._lock:
+            if self._index is not None and self._store is not None:
+                return self._store, self._index
+            store = self._build_fresh_store(overwrite=False)
+            index = VectorStoreIndex.from_vector_store(store)
+            self._store = store
+            self._index = index
+            logger.info(
+                "ResumeVectorService singleton initialised (collection=%s)",
+                self.collection_name,
+            )
+            return store, index
+
+    # Back-compat shim — kept because tests may patch it. New code should
+    # use _get_store_and_index() for reads / _build_fresh_store(True) for
+    # collection recreation.
+    def _vector_store(self, overwrite: bool = False) -> MilvusVectorStore:
+        if overwrite:
+            # Hold the lock through the full rebuild → invalidate
+            # transaction. See vector_service.py for the race window
+            # this closes.
+            with self._lock:
+                fresh = self._build_fresh_store(overwrite=True)
+                self._store = None
+                self._index = None
+            return fresh
+        return self._build_fresh_store(overwrite=False)
 
     def _storage_context(self, vector_store: MilvusVectorStore) -> StorageContext:
         if PostgresDocumentStore is None:
@@ -94,7 +136,7 @@ class ResumeVectorService:
 
     def upsert_section(self, section: ResumeSection, db: Session | None = None) -> bool:
         """Embed a single ResumeSection into the vector store."""
-        vector_store = self._vector_store(overwrite=False)
+        vector_store, _ = self._get_store_and_index()
         storage_context = self._storage_context(vector_store)
         document = Document(
             text=self.build_section_text(section),
@@ -152,8 +194,7 @@ class ResumeVectorService:
         top_k: int = 5,
     ) -> list[RetrievalChunk]:
         """Vector search for resume sections relevant to a query."""
-        vector_store = self._vector_store(overwrite=False)
-        index = VectorStoreIndex.from_vector_store(vector_store)
+        _, index = self._get_store_and_index()
         filters = MetadataFilters(
             filters=[
                 MetadataFilter(
