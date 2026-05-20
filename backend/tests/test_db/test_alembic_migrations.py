@@ -133,10 +133,10 @@ def test_migration_chain_has_no_gaps_and_one_head():
 
     # Migration count is asserted explicitly so an accidentally-deleted
     # version file shows up as a test failure rather than a silent
-    # corruption of the chain. Bump this number whenever a new migration
-    # lands. Current head: 0019_rec_sum_doc.
+    # corruption of the chain. The chain was squashed to a single
+    # baseline; bump this number whenever a new forward migration lands.
     on_disk = [p for p in VERSIONS_DIR.glob("*.py") if not p.name.startswith("_")]
-    assert len(on_disk) == 19, f"Expected 19 migration files, found {len(on_disk)}"
+    assert len(on_disk) == 1, f"Expected 1 migration file (baseline), found {len(on_disk)}"
 
 
 def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
@@ -173,7 +173,10 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     missing = expected_tables - tables
     assert not missing, f"Missing tables after upgrade head: {missing}"
 
-    # Tables dropped by 0008 must NOT exist.
+    # Legacy tables from the pre-squash chain (originally dropped by the
+    # old 0008 migration) must NOT exist. We retain this assertion even
+    # after squashing so an accidental "restore from old dump" still
+    # trips the test.
     legacy = {"interviews", "transcripts", "analysis_results", "interview_states"}
     leftover = legacy & tables
     assert not leftover, f"Legacy tables still present: {leftover}"
@@ -184,8 +187,8 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         from sqlalchemy import text
 
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0019_rec_sum_doc", (
-            f"Head should be 0019_rec_sum_doc, got {version!r}"
+        assert version == "0001_baseline", (
+            f"Head should be 0001_baseline, got {version!r}"
         )
 
     engine.dispose()
