@@ -111,7 +111,10 @@ def test_validate_production_safety_dev_uses_info_for_bundled_creds(caplog):
     assert not warn_records, f"unexpected warnings: {[r.getMessage() for r in warn_records]}"
 
 
-def test_validate_production_safety_prod_emits_warning_per_finding(caplog):
+def test_validate_production_safety_prod_emits_error_per_finding(caplog):
+    """Prod-like env with bundled DB/MinIO creds: each finding logs at
+    ERROR level (changed from WARNING after we made SECRET_KEY a hard
+    raise — the other findings are now the loudest non-fatal signal)."""
     s = _make_settings(
         SECRET_KEY="a-real-key-not-on-blocklist-xyz",
         DATABASE_URL="postgresql://postgres:postgres@localhost:5432/x",
@@ -120,15 +123,32 @@ def test_validate_production_safety_prod_emits_warning_per_finding(caplog):
         SENTRY_ENVIRONMENT="prod",
     )
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="app.core.config"):
+    with caplog.at_level(logging.ERROR, logger="app.core.config"):
         _validate_production_safety(s)
-    warn_msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-    # Three findings → three warnings (DB, MinIO user, MinIO pass).
-    blocker_msgs = [m for m in warn_msgs if "PRODUCTION BLOCKER" in m]
+    err_msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    # Three findings → three ERROR lines (DB, MinIO user, MinIO pass).
+    blocker_msgs = [m for m in err_msgs if "PRODUCTION BLOCKER" in m]
     assert len(blocker_msgs) == 3, f"expected 3 blockers, got: {blocker_msgs}"
     assert any("DATABASE_URL" in m for m in blocker_msgs)
     assert any("AWS_ACCESS_KEY_ID" in m for m in blocker_msgs)
     assert any("AWS_SECRET_ACCESS_KEY" in m for m in blocker_msgs)
+
+
+def test_validate_production_safety_secret_key_raises_in_prod():
+    """A placeholder SECRET_KEY in prod must refuse to start (RuntimeError).
+
+    JWT signing + Fernet decryption both depend on a real SECRET_KEY;
+    booting with a default value is cryptographically catastrophic, so
+    we treat it as fatal rather than logging and continuing."""
+    s = _make_settings(
+        SECRET_KEY="change-me-for-local-development",
+        DATABASE_URL="postgresql://prod_user:strong_pw@db:5432/x",
+        AWS_ACCESS_KEY_ID="rotated",
+        AWS_SECRET_ACCESS_KEY="rotated",
+        SENTRY_ENVIRONMENT="production",
+    )
+    with pytest.raises(RuntimeError, match="SECRET_KEY"):
+        _validate_production_safety(s)
 
 
 def test_validate_production_safety_secret_key_always_warns(caplog):
@@ -164,6 +184,8 @@ def test_validate_production_safety_clean_settings_emit_nothing(caplog):
 
 @pytest.mark.parametrize("env", ["staging", "prod", "production", "PROD", "  Production  "])
 def test_validate_production_safety_treats_prod_aliases_as_prodlike(caplog, env):
+    """Various ways of spelling "production" should all trigger the ERROR
+    logging path for non-SECRET_KEY findings."""
     s = _make_settings(
         SECRET_KEY="a-real-key-not-on-blocklist-xyz",
         DATABASE_URL="postgresql://postgres:postgres@db:5432/x",
@@ -172,7 +194,7 @@ def test_validate_production_safety_treats_prod_aliases_as_prodlike(caplog, env)
         SENTRY_ENVIRONMENT=env,
     )
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="app.core.config"):
+    with caplog.at_level(logging.ERROR, logger="app.core.config"):
         _validate_production_safety(s)
     assert any("PRODUCTION BLOCKER" in r.getMessage()
-               for r in caplog.records if r.levelno == logging.WARNING)
+               for r in caplog.records if r.levelno == logging.ERROR)

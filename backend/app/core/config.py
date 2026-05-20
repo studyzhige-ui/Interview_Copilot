@@ -243,15 +243,22 @@ def _validate_production_safety(s: "Settings") -> None:
     """Audit settings for known-insecure defaults.
 
     Behaviour by ``SENTRY_ENVIRONMENT``:
-      * ``local`` (default) — single concise INFO line listing the
-        bundled creds still in use. Dev convenience wins; we don't spam
-        a WARNING per finding on every reload.
-      * ``staging`` / ``prod`` / ``production`` — one WARNING per finding
-        with a fix hint, so on-call notices in the startup log.
+      * ``local`` (default) — single INFO line listing bundled creds still
+        in use. Dev convenience wins; SECRET_KEY still gets a WARNING
+        because a placeholder key breaks JWT/Fernet even on localhost.
+      * ``staging`` / ``prod`` / ``production`` — a placeholder
+        ``SECRET_KEY`` is a **fatal startup error**. Refusing to boot is
+        the only safe response: a known-default key lets anyone with
+        access to the source code forge tokens and decrypt every stored
+        user-API-key ciphertext. Other bundled creds (Postgres / MinIO)
+        downgrade to ERROR-level logs — they're recoverable by network
+        isolation, but SECRET_KEY isn't.
 
-    Either way, the SECRET_KEY check always escalates to WARNING because
-    a placeholder SECRET_KEY breaks JWT signing and Fernet decryption
-    even in dev.
+    Generate a real SECRET_KEY with::
+
+        python scripts/generate_secret.py
+
+    Then drop the printed value into ``.env`` as ``SECRET_KEY=...``.
     """
     is_prodlike = (s.SENTRY_ENVIRONMENT or "local").strip().lower() in {"staging", "prod", "production"}
     findings: list[tuple[str, str]] = []
@@ -260,7 +267,8 @@ def _validate_production_safety(s: "Settings") -> None:
     if (s.SECRET_KEY or "").strip() in _INSECURE_SECRET_KEYS:
         secret_finding = (
             "SECRET_KEY",
-            "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(48))\"",
+            "Generate one with: python scripts/generate_secret.py "
+            "(or python -c \"import secrets; print(secrets.token_urlsafe(48))\")",
         )
 
     # Bundled-Postgres / MinIO well-known credentials. These are baked into
@@ -283,9 +291,18 @@ def _validate_production_safety(s: "Settings") -> None:
             "Rotate MINIO_ROOT_PASSWORD in .env.docker and AWS_SECRET_ACCESS_KEY in .env.",
         ))
 
-    # SECRET_KEY is always WARNING — it's not a "dev convenience" issue.
+    # ── SECRET_KEY: hard stop in production, WARN elsewhere ─────────────
     if secret_finding is not None:
         name, hint = secret_finding
+        if is_prodlike:
+            # Refuse to start. Letting a prod process boot with a
+            # default SECRET_KEY would let anyone with the source forge
+            # JWTs and read every Fernet-encrypted user API key.
+            raise RuntimeError(
+                f"[FATAL] {name} is set to an insecure default in "
+                f"production ({s.SENTRY_ENVIRONMENT!r}). Refusing to "
+                f"start. {hint}"
+            )
         logger.warning(
             "[security] %s is set to an insecure default. %s",
             name, hint,
@@ -295,13 +312,16 @@ def _validate_production_safety(s: "Settings") -> None:
         return
 
     if is_prodlike:
+        # DB / MinIO defaults: ERROR level so the operator sees red in
+        # the startup log, but don't refuse to start — those creds are
+        # recoverable by network isolation and rotation, unlike
+        # SECRET_KEY which is cryptographically catastrophic.
         for name, hint in findings:
-            logger.warning(
+            logger.error(
                 "[PRODUCTION BLOCKER] Insecure default: %s. Hint: %s",
                 name, hint,
             )
     else:
-        # Single info line in dev — keeps reload logs readable.
         items = "; ".join(name for name, _ in findings)
         logger.info(
             "[security] Using bundled dev credentials (%s). "

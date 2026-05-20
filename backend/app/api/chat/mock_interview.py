@@ -7,6 +7,7 @@ v6 chain (Runtime Director):
   finish   -> snapshot state -> dispatch InterviewAnalysisOrchestrator (Celery)
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -152,7 +153,10 @@ async def start_mock_interview(
         "is_finished": False,
     })
     session.session_state = dump_session_state(state)
-    db.commit()
+    # Wrap sync commit in to_thread so the event loop isn't blocked on the
+    # network round-trip to Postgres (every other in-flight request would
+    # stall otherwise).
+    await asyncio.to_thread(db.commit)
 
     plan_phases = [
         {
@@ -258,7 +262,7 @@ async def get_in_progress_mock(
             chosen = sess
 
     if purged:
-        db.commit()
+        await asyncio.to_thread(db.commit)
         logger.info("Purged %d stale empty mock_interview shell(s) for user=%s", purged, current_user.username)
 
     if chosen is None:
@@ -322,7 +326,7 @@ async def abandon_mock_interview(
         ).delete(synchronize_session=False)
 
         db.delete(session)
-        db.commit()
+        await asyncio.to_thread(db.commit)
         return {"status": "deleted", "session_id": session_id}
     except Exception as exc:  # noqa: BLE001
         db.rollback()
@@ -428,7 +432,7 @@ async def submit_mock_answer(
         # counted twice toward max_turns.
         state["turn_count"] = max(0, int(state.get("turn_count", 1)) - 1)
         session.session_state = dump_session_state(state)
-        db.commit()
+        await asyncio.to_thread(db.commit)
         raise HTTPException(
             status_code=503,
             detail="面试官暂时无法回应，请重试。",
@@ -484,7 +488,7 @@ async def submit_mock_answer(
             logger.warning("Rolling summary failed (non-fatal): %s", exc)
 
     session.session_state = dump_session_state(state)
-    db.commit()
+    await asyncio.to_thread(db.commit)
 
     # The frontend ``interviewer_response`` field stays as one string for
     # backward compat (TTS reads it). The new fields let the UI eventually
@@ -590,7 +594,7 @@ async def finish_mock_interview(
         ),
     )
     db.add(debrief_session)
-    db.commit()
+    await asyncio.to_thread(db.commit)
 
     task = process_interview_analysis.delay(record.id)
     interview_record_service.set_status(
@@ -677,20 +681,22 @@ async def parse_jd_for_mock(
     _current_user: User = Depends(get_current_user),
 ):
     """Parse a JD file inline and return its plain text. Does NOT persist."""
+    from app.services.file_validation import validate_upload
     from app.services.voice.file_parser import extract_resume_text
 
+    # validate_upload owns size + magic-byte checks; the older size guard
+    # below is now redundant but kept as a fast-path so a 100MB upload
+    # gets rejected before we read it into memory.
     if file.size is not None and file.size > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="JD 文件过大（限制 10MB）")
 
-    suffix = os.path.splitext(file.filename or "")[1] or ".pdf"
+    declared_ext = os.path.splitext(file.filename or "")[1].lower() or ".pdf"
+    contents = await validate_upload(file, purpose="jd", declared_ext=declared_ext)
+
+    suffix = declared_ext
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
         local_path = tf.name
-        contents = await file.read()
         tf.write(contents)
-    if not contents:
-        try: os.unlink(local_path)
-        except OSError: pass
-        raise HTTPException(status_code=400, detail="文件内容为空")
 
     try:
         text = extract_resume_text(local_path) or ""
@@ -716,20 +722,19 @@ async def transcribe_short_clip(
     current_user: User = Depends(get_current_user),
 ):
     """Transcribe a short audio clip (webm/opus/mp3/wav) to text."""
+    from app.services.file_validation import validate_upload
+
+    # Fast-path size guard (avoids reading megabytes for over-cap uploads);
+    # validate_upload re-asserts size + magic-byte.
     if file.size is not None and file.size > 25 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="音频过大（限制 25MB）")
+
+    contents = await validate_upload(file, purpose="audio_clip")
 
     suffix = os.path.splitext(file.filename or "")[1] or ".webm"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
         local_path = tf.name
-        contents = await file.read()
         tf.write(contents)
-    if not contents:
-        try:
-            os.unlink(local_path)
-        except OSError:
-            pass
-        raise HTTPException(status_code=400, detail="音频内容为空")
 
     try:
         from app.services.voice import audio_transcription_service as ats

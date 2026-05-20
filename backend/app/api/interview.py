@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.interview_qa import InterviewQA
@@ -63,13 +64,20 @@ async def upload_audio(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    import io
+
+    from app.services.file_validation import validate_upload
     from app.services.voice.file_parser import validate_media_format
 
+    # Cheap extension check first (rejects obviously-wrong filenames before
+    # we read megabytes into memory). validate_upload then enforces the
+    # real magic-byte check + size ceiling.
     if not validate_media_format(file.filename or ""):
         raise HTTPException(
             status_code=400,
             detail="不支持的音视频格式。支持: mp3, wav, m4a, flac, ogg, wma, aac, mp4, mkv, avi, mov, webm",
         )
+    body = await validate_upload(file, purpose="audio_upload")
 
     upload, _ = create_owned_upload(
         db,
@@ -78,7 +86,8 @@ async def upload_audio(
         purpose="interview_audio",
         content_type=file.content_type,
     )
-    storage_uri = upload_file_to_owned_key(file.file, upload.object_key, file.content_type)
+    # validate_upload consumed file.file; pass the buffered body instead.
+    storage_uri = upload_file_to_owned_key(io.BytesIO(body), upload.object_key, file.content_type)
     upload.storage_uri = storage_uri
     upload.status = "uploaded"
     db.add(upload)
@@ -138,6 +147,10 @@ async def upload_resume(
     current_user: User = Depends(get_current_user),
 ):
     """Upload a resume file for interview analysis context."""
+    import io
+    from pathlib import Path
+
+    from app.services.file_validation import validate_upload
     from app.services.voice.file_parser import validate_resume_format
 
     if not validate_resume_format(file.filename or ""):
@@ -145,6 +158,8 @@ async def upload_resume(
             status_code=400,
             detail="不支持的简历格式。支持: pdf, docx, txt, md",
         )
+    declared_ext = Path(file.filename or "").suffix.lower()
+    body = await validate_upload(file, purpose="resume", declared_ext=declared_ext)
 
     upload, _ = create_owned_upload(
         db,
@@ -153,7 +168,7 @@ async def upload_resume(
         purpose="interview_resume",
         content_type=file.content_type,
     )
-    storage_uri = upload_file_to_owned_key(file.file, upload.object_key, file.content_type)
+    storage_uri = upload_file_to_owned_key(io.BytesIO(body), upload.object_key, file.content_type)
     upload.storage_uri = storage_uri
     upload.status = "uploaded"
     db.add(upload)
