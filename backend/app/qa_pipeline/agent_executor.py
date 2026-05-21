@@ -23,6 +23,7 @@ from app.services.chat.chat_history_service import transcript_service
 from app.services.chat.context_assembly_pipeline import context_pipeline, prompt_renderer
 from app.services.memory.post_turn_maintenance import post_turn_maintenance_service
 from app.services.memory.v3_context_loader import (
+    load_profile_only,
     load_universal as load_universal_memory,
     load_with_active_bodies,
 )
@@ -116,14 +117,17 @@ async def stream_chat_with_agent(
         yield "[status] 正在并发召回记忆和知识库...\n"
 
         # ── v3 long-term memory ─────────────────────────────────────
-        # Two-layer load:
-        #   * Universal (always): user_profile + all-doc indexes.
-        #   * On-demand (opt-in): bodies of knowledge_doc topics the
-        #     selection LLM marks as relevant to this query.
-        # The recall toggle gates ONLY the on-demand body load — the
-        # universal layer always loads because it's lightweight
-        # personalisation context that helps even for non-domain chat
-        # (e.g. user_profile makes the AI address the user by name).
+        # Three load modes, in order of how much memory leaks into the
+        # LLM context:
+        #   1. recall ON + needs_memory_retrieval → full universal +
+        #      on-demand knowledge bodies (selection LLM picks topics).
+        #   2. recall ON + !needs_memory_retrieval → universal only
+        #      (user_profile + indexes + strategy + habit body).
+        #   3. recall OFF → user_profile only. Privacy-conscious users
+        #      who toggle recall off probably don't want their interview
+        #      prep notes (knowledge/strategy/habit) in the LLM prompt;
+        #      basic identity (name, target company) stays so the AI
+        #      doesn't address them wrong.
         from app.services.memory.recall_policy import recall_enabled_for_session
         recall_on = recall_enabled_for_session(session_id, user_id)
         if recall_on and query_plan.needs_memory_retrieval:
@@ -146,10 +150,12 @@ async def stream_chat_with_agent(
             )
         ) if query_plan.needs_knowledge_retrieval else None
 
-        v3_memory = (
-            await v3_memory_task if v3_memory_task is not None
-            else load_universal_memory(user_id)
-        )
+        if v3_memory_task is not None:
+            v3_memory = await v3_memory_task
+        elif recall_on:
+            v3_memory = load_universal_memory(user_id)
+        else:
+            v3_memory = load_profile_only(user_id)
         knowledge_result = await knowledge_task if knowledge_task else None
         retrieval_attempted = bool(knowledge_task)
         retrieval_hit = bool(knowledge_result and knowledge_result.retrieval_hit)

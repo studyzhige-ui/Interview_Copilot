@@ -78,8 +78,13 @@ _TOPIC_MAX = 80
 # Characters that break the index line format ``- [TOPIC] ...`` if
 # they appear in the topic name. The selection regex pulls the topic
 # substring out of ``[...]``, so ``]`` inside the topic would truncate
-# the name and make the topic unreachable. Strip them at the boundary.
-_TOPIC_FORBIDDEN_CHARS = "[]\n\r\t"
+# the name and make the topic unreachable.
+#
+# ``/`` ``?`` ``#`` are also stripped because topics travel via URL
+# path params (``GET /memory/knowledge/topics/{topic}``) — those would
+# either split the path or become URL fragments / query separators,
+# making the topic unreachable from the API surface.
+_TOPIC_FORBIDDEN_CHARS = "[]\n\r\t/?#"
 
 
 # ── Read paths ─────────────────────────────────────────────────────────
@@ -414,6 +419,11 @@ def delete_topic(user_id: str, topic: str) -> bool:
         if doc is None:
             return False
         before_body = doc.body or ""
+        # Order matters cosmetically: delete first, then audit, then commit.
+        # All three land in the same transaction so on rollback the audit
+        # row also vanishes — but logically the audit reads "topic was
+        # deleted" only after the delete is staged.
+        db.delete(doc)
         audit_record(
             user_id=user_id,
             doc_type="knowledge",
@@ -424,7 +434,6 @@ def delete_topic(user_id: str, topic: str) -> bool:
             summary=f"topic deleted ({len(before_body.splitlines())} lines)",
             db=db,
         )
-        db.delete(doc)
         db.commit()
         return True
     except Exception:

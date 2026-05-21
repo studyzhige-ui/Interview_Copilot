@@ -12,7 +12,8 @@ Coverage:
     the alembic migrations build.
   * Round-trip insert + query through an in-memory SQLite session for the
     core entities (User, ChatSession+ChatMessage, InterviewRecord +
-    InterviewQA, UserUpload, KnowledgeDocument, MemoryItem,
+    InterviewQA, UserUpload, KnowledgeDocument, KnowledgeDoc /
+    StrategyDoc / HabitDoc / MemoryAuditLog (v3 memory),
     MockInterviewSession, AgentRun + AgentStep, UserAPIKey,
     ResumeSection).
 """

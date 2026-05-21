@@ -162,8 +162,27 @@ def parse_patches(raw_patches: Iterable[Any]) -> list[DocPatch]:
         if op == "update" and not new_line:
             continue
 
+        # Reject any ``new_line`` that LOOKS like a markdown section header.
+        # The canonicaliser runs on every read/write and will eventually
+        # heal a stray ``## foo`` into the default section, but in the
+        # window before canonicalisation an ``add`` patch with this
+        # content would inject a fake header that ``_apply_add``'s
+        # section finder treats as real. Reject up-front.
+        if new_line and _looks_like_section_header(new_line):
+            continue
+        if match_line and _looks_like_section_header(match_line):
+            continue
+
         out.append(DocPatch(op=op, match_line=match_line, new_line=new_line, section=section))
     return out
+
+
+def _looks_like_section_header(line: str) -> bool:
+    """True iff the line would be parsed as a ``## ...`` (level-2) markdown
+    header by ``_is_section_header``. Used to reject patches whose
+    ``new_line`` would impersonate a canonical section."""
+    s = (line or "").lstrip("- ").lstrip()  # patches arrive bullet-prefixed
+    return s.startswith("##") and not s.startswith("###")
 
 
 def apply_patches(body: str, raw_patches: Iterable[Any]) -> PatchResult:

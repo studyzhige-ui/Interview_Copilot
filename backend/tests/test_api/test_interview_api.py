@@ -338,10 +338,9 @@ def test_delete_interview_record_cascades_chat_sessions(client, db: Session):
     db.add(ChatMessage(session_id="cs_1", seq=1, role="assistant", content="hello"))
     db.commit()
 
-    # Skip Milvus network call in the unit test — the cascade is best-effort
-    # there anyway. Patching by the import path used inside the handler.
-    with patch("app.api.interview._delete_milvus_doc_ids", return_value=0):
-        resp = client.delete("/api/v1/interview-records/ir_a")
+    # The delete handler no longer touches Milvus (memory_items cascade
+    # removed in v3 cleanup; ``_delete_milvus_doc_ids`` deleted with it).
+    resp = client.delete("/api/v1/interview-records/ir_a")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "success"

@@ -101,6 +101,20 @@ class V3MemoryContext:
 # ──────────────────────────────────────────────────────────────────────
 
 
+def load_profile_only(user_id: str) -> V3MemoryContext:
+    """Minimal context for sessions where memory recall is OFF.
+
+    Privacy-conscious users who toggle recall off expect their
+    interview prep notes to NOT leak into the LLM context. We still
+    load the user_profile though — without it the AI calls them by
+    the wrong name etc. That's basic identity, not interview prep
+    history, so it's defensible to keep.
+    """
+    return V3MemoryContext(
+        user_profile_body=user_profile_doc_service.load(user_id),
+    )
+
+
 def load_universal(user_id: str) -> V3MemoryContext:
     """Cheap pass — load user_profile (full) + all three index/single
     bodies. No LLM call.
@@ -312,5 +326,6 @@ def _extract_topic_name(index_line: str) -> str:
 __all__ = [
     "V3MemoryContext",
     "load_universal",
+    "load_profile_only",
     "load_with_active_bodies",
 ]

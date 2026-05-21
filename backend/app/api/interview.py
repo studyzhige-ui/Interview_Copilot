@@ -655,35 +655,6 @@ def delete_interview_record(
         ) from exc
 
 
-def _delete_milvus_doc_ids(collection: str, doc_ids: list[str]) -> int:
-    """Delete every row in a Milvus collection whose ``doc_id`` is in ``doc_ids``.
-
-    Chunks the expression at 100 ids per call so we stay under Milvus's
-    expression length limit on large purges. Skips silently when the
-    collection doesn't exist (e.g. fresh install, no memory yet).
-    Returns the number of rows actually matched + deleted across chunks.
-    """
-    if not doc_ids:
-        return 0
-    from pymilvus import Collection, connections, utility
-
-    milvus_uri = (settings.MILVUS_URI or "http://localhost:19530").replace("http://", "").replace("https://", "")
-    host, _, port = milvus_uri.partition(":")
-    connections.connect(host=host or "localhost", port=port or "19530")
-    if not utility.has_collection(collection):
-        return 0
-    c = Collection(collection)
-    c.load()
-    deleted = 0
-    for i in range(0, len(doc_ids), 100):
-        chunk = doc_ids[i:i + 100]
-        expr = "doc_id in [" + ", ".join(f'"{d}"' for d in chunk) + "]"
-        c.delete(expr)
-        deleted += len(chunk)
-    c.flush()
-    return deleted
-
-
 class QAEditRequest(BaseModel):
     question: Optional[str] = None
     answer: Optional[str] = None

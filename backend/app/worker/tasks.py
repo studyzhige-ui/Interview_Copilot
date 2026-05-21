@@ -345,9 +345,11 @@ def dream_for_record_task(self, record_id: str):
 
     summary = dream_for_record(record_id)
     if summary.get("error"):
-        # Hard failure — let Celery retry per the policy above.
-        # Wrapping in raise lets autoretry kick in only for the
-        # configured exception types; anything else propagates.
+        # RuntimeError is NOT in autoretry_for above (which only covers
+        # transient network errors). This raise therefore terminates
+        # the task without a Celery-level retry — soft failures (LLM
+        # timeout / hard_failure) rely on the next nightly scan to
+        # reconsider the record, NOT immediate Celery retry.
         raise RuntimeError(f"dream failed: {summary['error']}")
     return summary
 
