@@ -315,3 +315,76 @@ def process_document_ingestion(self, document_id: str):
             os.unlink(local_file_path)
             logger.info("[Task %s] Removed temporary document: %s", self.request.id, local_file_path)
         db.close()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Memory dreaming tasks
+# ══════════════════════════════════════════════════════════════════════
+
+
+@celery_app.task(
+    bind=True,
+    name="tasks.dream_for_record",
+    autoretry_for=(ConnectionError, TimeoutError, OSError),
+    retry_backoff=True,
+    retry_backoff_max=120,
+    retry_jitter=True,
+    max_retries=2,
+    acks_late=True,
+    time_limit=600,
+    soft_time_limit=540,
+)
+def dream_for_record_task(self, record_id: str):
+    """Run one dreaming pass for a single interview record.
+
+    Idempotent: ``dream_for_record`` re-checks ``last_dreamed_at`` under
+    the per-user lock, so a double-fire is harmless (the second run
+    sees no new content and bumps the cursor without an LLM call).
+    """
+    from app.services.memory.dreaming_worker import dream_for_record
+
+    summary = dream_for_record(record_id)
+    if summary.get("error"):
+        # Hard failure — let Celery retry per the policy above.
+        # Wrapping in raise lets autoretry kick in only for the
+        # configured exception types; anything else propagates.
+        raise RuntimeError(f"dream failed: {summary['error']}")
+    return summary
+
+
+@celery_app.task(
+    bind=True,
+    name="tasks.scan_and_dream_batch",
+    time_limit=900,
+    soft_time_limit=840,
+)
+def scan_and_dream_batch_task(self):
+    """Nightly batch entry — scan all users for records that need
+    dreaming, fire ``dream_for_record_task`` per candidate.
+
+    Wakes up via Celery Beat (see ``celery_app.py`` schedule). Uses
+    ``require_user_inactive=True`` so we don't dream while a user is
+    actively chatting.
+    """
+    from app.services.memory.dreaming_worker import select_candidate_records
+
+    candidates = select_candidate_records(
+        user_id=None,
+        require_user_inactive=True,
+        limit=200,
+    )
+    dispatched = 0
+    for rec in candidates:
+        try:
+            dream_for_record_task.delay(rec.id)
+            dispatched += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "scan_and_dream_batch: dispatch failed for record=%s: %s",
+                rec.id, exc,
+            )
+    logger.info(
+        "scan_and_dream_batch: dispatched %d dream tasks (of %d candidates)",
+        dispatched, len(candidates),
+    )
+    return {"dispatched": dispatched, "candidates": len(candidates)}

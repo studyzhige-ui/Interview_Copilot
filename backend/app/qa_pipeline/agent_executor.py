@@ -22,7 +22,10 @@ from app.rag.knowledge_retriever import knowledge_retriever
 from app.services.chat.chat_history_service import transcript_service
 from app.services.chat.context_assembly_pipeline import context_pipeline, prompt_renderer
 from app.services.memory.post_turn_maintenance import post_turn_maintenance_service
-from app.services.memory.retrieval_service import memory_retrieval_service
+from app.services.memory.v3_context_loader import (
+    load_universal as load_universal_memory,
+    load_with_active_bodies,
+)
 from app.services.telemetry_service import log_interaction_metrics
 
 logger = logging.getLogger(__name__)
@@ -111,27 +114,29 @@ async def stream_chat_with_agent(
         standalone_query = query_plan.standalone_query
 
         yield "[status] 正在并发召回记忆和知识库...\n"
-        # user_profile: always loaded directly from DB (like hermes USER.md).
-        # This is "who you are" data (name, role, target companies, …)
-        # — small and always relevant, so it bypasses the recall toggle.
-        user_profile = memory_retrieval_service.load_user_profile(user_id)
 
-        # interview_fact recall is OPT-IN. Honour the session-local toggle
-        # first (set by the chat-header switch), falling back to the
-        # user's account-wide default (个人中心). This is what users mean
-        # when they ask "don't pull old answers into this conversation":
-        # we still keep user_profile in scope, but we skip the vector
-        # search over past Q&A snippets entirely. Saves a Milvus round-trip
-        # and avoids contaminating the LLM with stale facts.
+        # ── v3 long-term memory ─────────────────────────────────────
+        # Two-layer load:
+        #   * Universal (always): user_profile + all-doc indexes.
+        #   * On-demand (opt-in): bodies of knowledge_doc topics the
+        #     selection LLM marks as relevant to this query.
+        # The recall toggle gates ONLY the on-demand body load — the
+        # universal layer always loads because it's lightweight
+        # personalisation context that helps even for non-domain chat
+        # (e.g. user_profile makes the AI address the user by name).
         from app.services.memory.recall_policy import recall_enabled_for_session
         recall_on = recall_enabled_for_session(session_id, user_id)
-        memory_task = asyncio.create_task(
-            memory_retrieval_service.recall_relevant(
-                user_id=user_id,
-                query=query_plan.dense_query or standalone_query,
-                memory_types=["interview_fact"],
+        if recall_on and query_plan.needs_memory_retrieval:
+            v3_memory_task = asyncio.create_task(
+                load_with_active_bodies(
+                    user_id,
+                    query=query_plan.dense_query or standalone_query,
+                    max_active_topics=3,
+                )
             )
-        ) if (query_plan.needs_memory_retrieval and recall_on) else None
+        else:
+            v3_memory_task = None
+
         knowledge_task = asyncio.create_task(
             knowledge_retriever.retrieve(
                 dense_query=query_plan.dense_query or standalone_query,
@@ -141,18 +146,30 @@ async def stream_chat_with_agent(
             )
         ) if query_plan.needs_knowledge_retrieval else None
 
-        relevant_memories = await memory_task if memory_task else []
+        v3_memory = (
+            await v3_memory_task if v3_memory_task is not None
+            else load_universal_memory(user_id)
+        )
         knowledge_result = await knowledge_task if knowledge_task else None
         retrieval_attempted = bool(knowledge_task)
         retrieval_hit = bool(knowledge_result and knowledge_result.retrieval_hit)
+
+        # Render v3 memory bundle into a single markdown block. We push
+        # it through ``reference_material`` so it lands in the same
+        # prompt-cache-friendly position as the existing record summary
+        # (see context_assembly_pipeline.PromptRenderer).
+        v3_memory_block = v3_memory.render()
 
         yield "[status] 正在生成回答...\n\n"
         answer_context = context_pipeline.assemble_answer_context(
             session_id=session_id,
             current_query=standalone_query,
-            user_profile=user_profile,
-            relevant_memories=relevant_memories,
+            # user_profile flows through v3_memory_block; pass empty
+            # list to legacy slot to avoid double-render.
+            user_profile=[],
+            relevant_memories=[],
             knowledge_chunks=knowledge_result.chunks if knowledge_result else [],
+            reference_material=v3_memory_block,
         )
 
         if not query_plan.needs_knowledge_retrieval:

@@ -28,17 +28,19 @@ _setup_llm_tracing()
 from app.db.database import engine
 import app.models.agent_trace
 import app.models.chat
+import app.models.habit_doc
 import app.models.interview_qa  # Ensure models are registered before table creation.
 import app.models.interview_record
 import app.models.knowledge
-import app.models.memory
+import app.models.knowledge_doc
+import app.models.memory_audit_log
 import app.models.mock_interview_session
 import app.models.resume_section
+import app.models.strategy_doc
 import app.models.upload
 import app.models.user
 from app.rag.embeddings import init_rag_settings
 from app.rag.retriever import init_reranker
-from app.services.memory.vector_service import memory_vector_service
 from app.core.config import settings
 
 # ─── Structured logging ──────────────────────────────────────────────────
@@ -146,14 +148,11 @@ async def lifespan(app: FastAPI):
     logger.info(">>> [2/5] Initializing LlamaIndex LLM and embedding settings...")
     init_rag_settings()
 
-    if settings.MEMORY_BACKFILL_ON_STARTUP:
-        logger.info(">>> [3/5] Backfilling memory embeddings...")
-        try:
-            memory_vector_service.backfill_pending()
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Memory embedding backfill degraded: %s", exc)
-    else:
-        logger.info(">>> [3/5] Memory embedding backfill disabled.")
+    # v3 memory is markdown docs, not Milvus vectors — no startup backfill
+    # needed. The MEMORY_BACKFILL_ON_STARTUP setting + memory_vector_service
+    # belong to the retired v2 ``memory_items`` path and are removed in
+    # the v3 cleanup phase.
+    logger.info(">>> [3/5] (v3 memory needs no startup backfill — skipping)")
 
     logger.info(">>> [4/5] Initializing reranker...")
     init_reranker()

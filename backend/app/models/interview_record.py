@@ -69,3 +69,10 @@ class InterviewRecord(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     completed_at = Column(DateTime, nullable=True)
+
+    # Dreaming cursor: when the dreaming worker last distilled this
+    # record's debrief sessions into long-term memory docs. NULL = never
+    # dreamed yet. Workers skip records where ``updated_at <=
+    # last_dreamed_at`` (no new content since last dream). See
+    # ``app.services.memory.dreaming_worker`` for the selection logic.
+    last_dreamed_at = Column(DateTime, nullable=True)

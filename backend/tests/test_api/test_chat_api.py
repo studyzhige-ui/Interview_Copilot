@@ -31,7 +31,7 @@ from app.models.chat import ChatMessage, ChatSession
 
 
 @pytest.fixture
-def db() -> Iterator[Session]:
+def db(monkeypatch) -> Iterator[Session]:
     # StaticPool + a single shared connection so the dependency-override
     # session and the test's own session see the same in-memory DB.
     engine = create_engine(
@@ -41,6 +41,21 @@ def db() -> Iterator[Session]:
     )
     Base.metadata.create_all(bind=engine)
     Session_ = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+    # The v3 memory doc services (knowledge_doc / strategy_doc / habit_doc /
+    # user_profile_doc / _single_doc / _audit_log) bypass FastAPI's
+    # ``get_db`` and open their own session via ``SessionLocal()`` imported
+    # at module-load time. To keep memory-endpoint tests honest we must
+    # rebind every such reference to a sessionmaker that points at THIS
+    # in-memory engine — otherwise those endpoints would talk to the real
+    # configured database (or fail with "no such table: knowledge_docs").
+    import app.services.memory._audit_log_service as _audit_mod
+    import app.services.memory._single_doc_service as _single_mod
+    import app.services.memory.knowledge_doc_service as _kd_mod
+    import app.services.memory.user_profile_doc_service as _up_mod
+    for _mod in (_audit_mod, _single_mod, _kd_mod, _up_mod):
+        monkeypatch.setattr(_mod, "SessionLocal", Session_, raising=False)
+
     session = Session_()
     try:
         yield session
@@ -203,29 +218,25 @@ def test_transcript_404_for_other_user(client: TestClient, db: Session):
     assert resp.status_code == 404
 
 
-# ── /memory/items ─────────────────────────────────────────────────────────
+# ── /memory/* (v3) ────────────────────────────────────────────────────────
 
 
-def test_memory_items_list_delegates_to_service(client: TestClient):
-    from app.api.chat import memory_items as memory_items_mod
-
-    async def fake_index(user_id):
-        return [{"id": "mem_1", "description": "remember this"}]
-
-    with patch.object(
-        memory_items_mod.memory_retrieval_service,
-        "get_memory_index",
-        side_effect=fake_index,
-    ):
-        resp = client.get("/api/v1/memory/items")
+def test_memory_overview_returns_v3_bundle(client: TestClient):
+    """Smoke: /memory/overview returns the 4-doc bundle (empty for a
+    user with no memory yet)."""
+    resp = client.get("/api/v1/memory/overview")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["total"] == 1
-    assert body["items"][0]["id"] == "mem_1"
+    assert "user_profile_body" in body
+    assert "knowledge_topics" in body
+    assert "strategy_body" in body
+    assert "habit_body" in body
+    # Fresh user → empty topic list (not None / missing).
+    assert isinstance(body["knowledge_topics"], list)
 
 
-def test_memory_item_get_404_when_missing(client: TestClient):
-    resp = client.get("/api/v1/memory/items/does_not_exist")
+def test_memory_knowledge_topic_get_404_when_missing(client: TestClient):
+    resp = client.get("/api/v1/memory/knowledge/topics/does_not_exist")
     assert resp.status_code == 404
 
 

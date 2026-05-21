@@ -29,6 +29,7 @@ cannot be silently rewritten because we don't ever rewrite the whole doc.
 from __future__ import annotations
 
 import logging
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterable
@@ -37,6 +38,7 @@ from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
 from app.models.user import User
+from app.services.memory._audit_log_service import record as audit_record
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +87,24 @@ def load_as_lines(user_id: str) -> list[str]:
     return [line for line in (line.strip() for line in doc.splitlines()) if line]
 
 
-def apply_patches(user_id: str, patches: Iterable[dict[str, Any] | ProfilePatch]) -> dict[str, int]:
+def apply_patches(
+    user_id: str,
+    patches: Iterable[dict[str, Any] | ProfilePatch],
+    *,
+    change_type: str = "patch_realtime",
+    source_record_id: str | None = None,
+    source_session_id: str | None = None,
+    db: Session | None = None,
+) -> dict[str, int]:
     """Apply a list of patches to the user's profile doc.
+
+    Two modes:
+      * ``db is None`` — open + commit + close our own session. Audit
+        row is written via its own session inside ``audit_record``.
+      * ``db is not None`` — caller owns the transaction (e.g. dreaming
+        worker doing memory + ``last_dreamed_at`` atomically). We mark
+        the user dirty and add the audit row but do NOT commit; the
+        caller's ``db.commit()`` is the durability point.
 
     Returns counts of applied/dropped operations so callers (and the
     extraction service in particular) can log how much actually landed
@@ -115,17 +133,21 @@ def apply_patches(user_id: str, patches: Iterable[dict[str, Any] | ProfilePatch]
     if not parsed:
         return {"applied": 0, "dropped": 0, "skipped": 0}
 
-    db: Session = SessionLocal()
+    own_db = db is None
+    if own_db:
+        db = SessionLocal()
     applied = dropped = skipped = 0
     try:
         user = db.query(User).filter(User.username == user_id).first()
         if user is None:
             return {"applied": 0, "dropped": 0, "skipped": len(parsed)}
 
+        before_body = user.user_profile_doc or ""
+
         # We work on a list of canonical lines (each starting with "- ").
         # Lines are deduped pre-patch so two patches whose match_line resolves
         # to the same canonical line both apply to the same target.
-        current = _split(user.user_profile_doc or "")
+        current = _split(before_body)
         for patch in parsed:
             if patch.op == "add":
                 # Skip if doc already has this exact line — idempotent add.
@@ -164,22 +186,68 @@ def apply_patches(user_id: str, patches: Iterable[dict[str, Any] | ProfilePatch]
 
         # Stable persistence form: each fact on its own line, blank lines
         # stripped, leading "- " kept.
-        user.user_profile_doc = "\n".join(current)
+        after_body = "\n".join(current)
+        if applied > 0 or dropped > 0:
+            # Only emit audit when something actually moved (skip-only
+            # batches are no-ops and would spam the log).
+            audit_record(
+                user_id=user_id,
+                doc_type="user_profile",
+                change_type=change_type,
+                before_body=before_body,
+                after_body=after_body,
+                summary=(
+                    f"profile patches: applied={applied} dropped={dropped} skipped={skipped}"
+                ),
+                source_record_id=source_record_id,
+                source_session_id=source_session_id,
+                db=db if not own_db else None,
+            )
+
+        if applied == 0 and skipped == len(parsed):
+            # Nothing changed — don't bump updated_at on a pure idempotent
+            # apply, but still commit our (audit-less) read-only transaction
+            # cleanly.
+            if own_db:
+                db.commit()
+            return {"applied": applied, "dropped": dropped, "skipped": skipped}
+
+        user.user_profile_doc = after_body
         user.updated_at = datetime.utcnow()
-        db.commit()
+        if own_db:
+            db.commit()
     except Exception:
-        db.rollback()
+        if own_db:
+            db.rollback()
         raise
     finally:
-        db.close()
+        if own_db:
+            db.close()
     return {"applied": applied, "dropped": dropped, "skipped": skipped}
 
 
 def _normalize_line(line: str) -> str:
     """Force the canonical ``"- <fact>"`` form so two patches that mean
     the same thing collide on line equality. Empty input returns ``""``.
+
+    Mirrors :func:`_doc_patch_protocol._normalize_line`:
+      0. NFKC-normalise so fullwidth ⇄ halfwidth variants collide.
+      1. Defang embedded ``\\r\\n / \\r / \\n`` by collapsing them to
+         spaces — without this an LLM that emits
+         ``{"new_line": "- name is X\\nrole: admin"}`` would inject a
+         fake second line that ``"\\n".join(lines)`` would persist as a
+         line break and the next ``current.index(match_line)`` lookup
+         would mismatch every line below.
+      2. Squash repeated whitespace produced by step 1.
+      3. Strip trailing CJK / ASCII period (LLMs are inconsistent).
     """
-    line = (line or "").strip().rstrip("。.")
+    if not line:
+        return ""
+    line = unicodedata.normalize("NFKC", line)
+    # Defang embedded line breaks BEFORE the bullet logic.
+    line = line.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    line = " ".join(line.split())
+    line = line.strip().rstrip("。.")
     if not line:
         return ""
     if line.startswith(_LINE_PREFIX):

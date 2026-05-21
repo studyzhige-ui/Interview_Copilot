@@ -53,7 +53,6 @@ from app.core.model_registry import build_async_openai_client_for_role
 from app.services.agent_trace_service import append_step, create_run, finish_run
 from app.services.chat.chat_history_service import transcript_service
 from app.services.chat.context_assembly_pipeline import context_pipeline, prompt_renderer
-from app.services.memory.retrieval_service import memory_retrieval_service
 
 # Trigger tool self-registration on first import
 import app.agent_runtime.tools  # noqa: F401
@@ -164,15 +163,20 @@ class QueryEngine:
         """Assemble messages[], create run, initialize hooks."""
         transcript_service.ensure_session(self.session_id, self.user_id)
 
-        # Memory recall
-        relevant_memories = await memory_retrieval_service.recall_relevant(
-            user_id=self.user_id,
+        # Memory recall via v3 context loader (universal layer + on-demand
+        # knowledge_doc bodies). Replaces the legacy
+        # ``memory_retrieval_service.recall_relevant`` which read from the
+        # retired interview_fact rows in memory_items.
+        from app.services.memory.v3_context_loader import load_with_active_bodies
+        v3_memory = await load_with_active_bodies(
+            self.user_id,
             query=self.user_message,
+            max_active_topics=3,
         )
         assembled = context_pipeline.assemble_answer_context(
             session_id=self.session_id,
             current_query=self.user_message,
-            relevant_memories=relevant_memories,
+            reference_material=v3_memory.render(),
         )
         rendered_context = prompt_renderer.render_answer_prompt(
             assembled,

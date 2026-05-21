@@ -133,10 +133,14 @@ def test_migration_chain_has_no_gaps_and_one_head():
 
     # Migration count is asserted explicitly so an accidentally-deleted
     # version file shows up as a test failure rather than a silent
-    # corruption of the chain. The chain was squashed to a single
-    # baseline; bump this number whenever a new forward migration lands.
+    # corruption of the chain. After the v3 memory rewrite the chain is:
+    #   0001_baseline → 0002_memory_v3 → 0003_drop_memory_items
+    # Bump this number whenever a new forward migration lands.
     on_disk = [p for p in VERSIONS_DIR.glob("*.py") if not p.name.startswith("_")]
-    assert len(on_disk) == 1, f"Expected 1 migration file (baseline), found {len(on_disk)}"
+    assert len(on_disk) == 3, (
+        f"Expected 3 migration files (baseline + memory_v3 + drop_memory_items), "
+        f"found {len(on_disk)}"
+    )
 
 
 def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
@@ -154,6 +158,9 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     tables = set(insp.get_table_names())
 
     # Core tables that must exist after head.
+    # After the v3 cleanup migration (0003) ``memory_items`` is GONE — the
+    # four v3 doc tables (knowledge_docs / strategy_docs / habit_docs /
+    # memory_audit_log) are the replacement.
     expected_tables = {
         "alembic_version",
         "users",
@@ -165,7 +172,10 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "mock_interview_sessions",
         "chat_sessions",
         "chat_messages",
-        "memory_items",
+        "knowledge_docs",
+        "strategy_docs",
+        "habit_docs",
+        "memory_audit_log",
         "agent_runs",
         "agent_steps",
         "resume_sections",
@@ -176,8 +186,12 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     # Legacy tables from the pre-squash chain (originally dropped by the
     # old 0008 migration) must NOT exist. We retain this assertion even
     # after squashing so an accidental "restore from old dump" still
-    # trips the test.
-    legacy = {"interviews", "transcripts", "analysis_results", "interview_states"}
+    # trips the test. ``memory_items`` is now also in this list since
+    # 0003 drops it.
+    legacy = {
+        "interviews", "transcripts", "analysis_results", "interview_states",
+        "memory_items",
+    }
     leftover = legacy & tables
     assert not leftover, f"Legacy tables still present: {leftover}"
 
@@ -187,8 +201,8 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         from sqlalchemy import text
 
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0001_baseline", (
-            f"Head should be 0001_baseline, got {version!r}"
+        assert version == "0003_drop_memory_items", (
+            f"Head should be 0003_drop_memory_items, got {version!r}"
         )
 
     engine.dispose()
@@ -207,10 +221,12 @@ def test_hot_query_composite_indexes_exist(fresh_pg_db, monkeypatch):
     engine = create_engine(fresh_pg_db)
     insp = inspect(engine)
 
+    # ``memory_items.ix_memory_items_user_type_key`` was dropped together
+    # with the table in 0003; only the still-relevant composite indexes
+    # are asserted here.
     expectations = {
         "chat_sessions": "ix_chat_sessions_user_type_arch",
         "knowledge_documents": "ix_knowledge_docs_user_category",
-        "memory_items": "ix_memory_items_user_type_key",
         "user_uploads": "ix_user_uploads_user_purpose",
         "interview_qa": "ix_interview_qa_record_order",
     }

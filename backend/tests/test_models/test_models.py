@@ -95,7 +95,11 @@ def test_all_expected_tables_registered(test_engine):
         "mock_interview_sessions",
         "chat_sessions",
         "chat_messages",
-        "memory_items",
+        # v3 memory tables (memory_items was retired in 0003)
+        "knowledge_docs",
+        "strategy_docs",
+        "habit_docs",
+        "memory_audit_log",
         "agent_runs",
         "agent_steps",
         "resume_sections",
@@ -303,23 +307,43 @@ def test_knowledge_document_default_values(db_session):
     assert loaded.node_ids == "[]"
 
 
-def test_memory_item_required_fields(db_session):
-    from app.models.memory import MemoryItem
+def test_knowledge_doc_defaults_and_unique_topic(db_session):
+    """v3 memory: one row per (user, topic), with denormalised index fields."""
+    from app.models.knowledge_doc import KnowledgeDoc
 
-    mem = MemoryItem(
+    doc = KnowledgeDoc(
         user_id="u1",
-        type="user_profile",
-        description="prefers concise answers",
-        normalized_key="prefers_concise_answers",
-        content="The user prefers short, direct answers.",
+        topic="Redis",
+        body="## 已掌握的认知\n\n## 学习进展\n",
     )
-    db_session.add(mem)
+    db_session.add(doc)
     db_session.flush()
 
-    loaded = db_session.query(MemoryItem).first()
-    assert loaded.scope == "user"
-    assert loaded.confidence == 0.0
-    assert loaded.embedding_status == "pending"
+    loaded = db_session.query(KnowledgeDoc).first()
+    assert loaded.mastery_level == "unknown"
+    assert loaded.fact_count == 0
+    assert loaded.one_liner == ""
+
+
+def test_strategy_and_habit_docs_are_singleton_per_user(db_session):
+    """strategy_doc / habit_doc have ``user_id UNIQUE`` so only one row
+    per user can exist."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models.habit_doc import HabitDoc
+    from app.models.strategy_doc import StrategyDoc
+
+    db_session.add(StrategyDoc(user_id="u1", body="x"))
+    db_session.flush()
+    db_session.add(StrategyDoc(user_id="u1", body="y"))
+    try:
+        db_session.flush()
+        raise AssertionError("expected IntegrityError on duplicate user_id")
+    except IntegrityError:
+        db_session.rollback()
+
+    db_session.add(HabitDoc(user_id="u1", body="x"))
+    db_session.flush()
 
 
 def test_agent_run_and_steps_relationship(db_session):

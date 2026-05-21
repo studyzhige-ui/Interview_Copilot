@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import worker_process_init
 
 from app.core.config import settings
@@ -68,6 +69,17 @@ celery_app.conf.update(
     # Don't prefetch jobs the worker can't process before visibility_timeout
     # — important with our --pool=solo single-task model.
     worker_prefetch_multiplier=1,
+    # ── Beat schedule ───────────────────────────────────────────────────
+    # Memory dreaming: nightly batch sweep at 03:30 Asia/Shanghai
+    # (covers the "user is asleep" window). The task itself filters out
+    # records where the user has been active in the last 4h — see
+    # ``USER_INACTIVE_HOURS_FOR_BATCH`` in dreaming_worker.
+    beat_schedule={
+        "memory-dream-nightly-batch": {
+            "task": "tasks.scan_and_dream_batch",
+            "schedule": crontab(hour=3, minute=30),
+        },
+    },
 )
 
 

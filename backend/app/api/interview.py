@@ -593,7 +593,6 @@ def delete_interview_record(
     log = logging.getLogger(__name__)
     from app.models.chat import ChatMessage, ChatSession
     from app.models.interview_record import InterviewRecord
-    from app.models.memory import MemoryItem
 
     record = (
         db.query(InterviewRecord)
@@ -612,33 +611,16 @@ def delete_interview_record(
             .all()
         ]
 
-        # ── (2) memory_items derived from those sessions ─────────────────
-        memory_doc_ids: list[str] = []
-        if session_ids:
-            memory_doc_ids = [
-                row[0]
-                for row in db.query(MemoryItem.id)
-                .filter(MemoryItem.source_session_id.in_(session_ids))
-                .all()
-            ]
+        # ── (2) v3 memory is user-scoped, not record-scoped ───────────────
+        # Knowledge / strategy / habit docs accumulate across all records
+        # for a user — they're personal memory, not record artefacts. We
+        # intentionally do NOT cascade-delete them when a record is
+        # removed. If the user wants to wipe a specific memory entry,
+        # they use the /memory/* endpoints. The legacy
+        # ``memory_items WHERE source_session_id IN sessions`` cascade
+        # is gone in v3.
 
-        # ── (3) Milvus best-effort delete of memory vectors ──────────────
-        if memory_doc_ids:
-            try:
-                _delete_milvus_doc_ids(
-                    settings.MEMORY_MILVUS_COLLECTION, memory_doc_ids,
-                )
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "Milvus delete failed for %d memory rows (continuing with DB delete): %s",
-                    len(memory_doc_ids), exc,
-                )
-
-        # ── (4) DB deletes in safe order ─────────────────────────────────
-        if memory_doc_ids:
-            db.query(MemoryItem).filter(
-                MemoryItem.id.in_(memory_doc_ids)
-            ).delete(synchronize_session=False)
+        # ── (3) DB deletes in safe order ─────────────────────────────────
         if session_ids:
             db.query(ChatMessage).filter(
                 ChatMessage.session_id.in_(session_ids)
@@ -651,14 +633,13 @@ def delete_interview_record(
         db.delete(record)
         db.commit()
         log.info(
-            "Deleted interview_record=%s with %d session(s) and %d memory(ies)",
-            record_id, len(session_ids), len(memory_doc_ids),
+            "Deleted interview_record=%s with %d session(s)",
+            record_id, len(session_ids),
         )
         return {
             "status": "success",
             "id": record_id,
             "deleted_sessions": len(session_ids),
-            "deleted_memories": len(memory_doc_ids),
         }
     except HTTPException:
         raise

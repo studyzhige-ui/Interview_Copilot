@@ -2,20 +2,28 @@
 
 Order of operations:
   1. Compact session_state via dual-threshold trigger (token growth + turns)
-  2. Extract user_profile / interview_fact memories from new messages
+  2. Run realtime memory extraction (v3) — produces patches against
+     knowledge / strategy / habit / user_profile docs.
+
+The session-level asyncio lock here is independent of the Redis-backed
+per-user lock used by realtime_extraction. Both are needed:
+  * asyncio lock prevents two overlapping turns on the same session
+    from doing the same work (cheap, in-process).
+  * per-user Redis lock prevents this session's extraction from
+    racing against the dreaming worker for the same user.
 """
 
 import asyncio
+import logging
 
 from app.services.chat.chat_history_service import transcript_service
 from app.services.memory.compaction_service import (
     CompactionService,
     compaction_service,
 )
-from app.services.memory.extraction_service import (
-    MemoryExtractionService,
-    memory_extraction_service,
-)
+from app.services.memory import realtime_extraction
+
+logger = logging.getLogger(__name__)
 
 
 class PostTurnMaintenanceService:
@@ -23,16 +31,12 @@ class PostTurnMaintenanceService:
 
     Responsibilities (in order):
     1. Compact session_state via dual-threshold trigger (token growth + turns)
-    2. Extract user_profile memories from new messages
+    2. Realtime memory extraction (strong signals only — see
+       ``realtime_extraction`` module)
     """
 
-    def __init__(
-        self,
-        compaction: CompactionService,
-        memory_extraction: MemoryExtractionService,
-    ):
+    def __init__(self, compaction: CompactionService):
         self.compaction = compaction
-        self.memory_extraction = memory_extraction
         self._locks: dict[str, asyncio.Lock] = {}
         self._locks_maxsize = 128
 
@@ -74,13 +78,12 @@ class PostTurnMaintenanceService:
             return
         mem_cursor = meta["memory_extraction_cursor"]
 
-        # Compaction runs first — only advances compaction_cursor
+        # Compaction runs first — only advances compaction_cursor.
         await self.compaction.compact_if_needed(session_id)
 
         if not allow_memory_write:
             return
 
-        # Long-term memory extraction uses its own independent cursor
         pending_messages = transcript_service.get_recent_turns(
             session_id=session_id,
             max_turns=20,
@@ -89,24 +92,58 @@ class PostTurnMaintenanceService:
         if not pending_messages:
             return
 
-        result = await self.memory_extraction.extract_and_merge(
+        # If the session is bound to an interview_record, propagate the
+        # source so audit log entries can be traced back to the record.
+        record_id = self._session_record_id(session_id)
+
+        result = await realtime_extraction.extract_and_apply(
             session_id=session_id,
             user_id=user_id,
             new_messages=pending_messages,
+            record_id=record_id,
         )
 
-        # Advance memory_extraction_cursor only on success (failure → retry next turn)
-        if result is not None:
+        # Advance the memory_extraction_cursor only on success
+        # (None = LLM/dispatch hard failure → hold cursor, retry next
+        # turn). A success with zero patches still advances — it just
+        # means there were no strong signals to extract.
+        if result is not None and result.error is None:
             max_seq = max(m["seq"] for m in pending_messages)
             transcript_service.update_session_fields(
                 session_id,
                 memory_extraction_cursor=max_seq,
             )
 
+    @staticmethod
+    def _session_record_id(session_id: str) -> str | None:
+        """Look up the interview_id this session belongs to (if any).
+        Returns None for general / unbound sessions OR on any lookup
+        failure — record_id is purely optional metadata for the audit
+        log, so we must never let its lookup poison the extraction path.
+        """
+        from app.db.database import SessionLocal
+        from app.models.chat import ChatSession
+
+        try:
+            db = SessionLocal()
+            try:
+                row = (
+                    db.query(ChatSession.interview_id)
+                    .filter(ChatSession.id == session_id)
+                    .first()
+                )
+                return row[0] if row and row[0] else None
+            finally:
+                db.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "_session_record_id: lookup failed for %s: %s", session_id, exc,
+            )
+            return None
+
 
 post_turn_maintenance_service = PostTurnMaintenanceService(
     compaction=compaction_service,
-    memory_extraction=memory_extraction_service,
 )
 
 
