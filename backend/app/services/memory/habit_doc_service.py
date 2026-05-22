@@ -30,6 +30,7 @@ _service = SingleDocService(
 
 load = _service.load
 load_as_lines = _service.load_as_lines
+load_description = _service.load_description
 apply_patches = _service.apply_patches
 upsert_user_edit = _service.upsert_user_edit
 
@@ -40,5 +41,6 @@ __all__ = [
     "apply_patches",
     "load",
     "load_as_lines",
+    "load_description",
     "upsert_user_edit",
 ]

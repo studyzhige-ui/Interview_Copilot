@@ -80,6 +80,21 @@ class SingleDocService:
         body = self.load(user_id)
         return [line for line in (l.rstrip() for l in body.splitlines()) if line]
 
+    def load_description(self, user_id: str) -> str:
+        """Universal-pass description (Phase A). Empty string when the
+        user has no doc yet so the renderer can choose to omit the
+        section entirely."""
+        db: Session = SessionLocal()
+        try:
+            row = (
+                db.query(self.cfg.model_cls)
+                .filter(self.cfg.model_cls.user_id == user_id)
+                .first()
+            )
+            return ((row.one_liner if row else "") or "").strip()
+        finally:
+            db.close()
+
     # ── writes ─────────────────────────────────────────────────────
 
     def apply_patches(
@@ -186,7 +201,10 @@ class SingleDocService:
             new_body = self._canonicalise(result.body)
             if result.applied == 0:
                 return result
-            row = self.cfg.model_cls(user_id=user_id, body=new_body)
+            row = self.cfg.model_cls(
+                user_id=user_id, body=new_body,
+                one_liner=self._derive_one_liner(new_body),
+            )
             db.add(row)
             db.flush()
             before_body = ""
@@ -207,6 +225,7 @@ class SingleDocService:
                 return result
 
             row.body = new_body
+            row.one_liner = self._derive_one_liner(new_body)
 
         row.updated_at = datetime.utcnow()
         db.add(row)
@@ -242,6 +261,7 @@ class SingleDocService:
             before_body = row.body or ""
             canon = self._canonicalise(new_body or "")
             row.body = canon
+            row.one_liner = self._derive_one_liner(canon)
             row.updated_at = datetime.utcnow()
 
             audit_record(
@@ -315,6 +335,35 @@ class SingleDocService:
         if was_new:
             return f"created (applied={result.applied}, dropped={result.dropped})"
         return f"applied={result.applied}, dropped={result.dropped}, skipped={result.skipped}"
+
+    # ── one_liner ────────────────────────────────────────────────────
+
+    _ONE_LINER_MAX = 120
+
+    def _derive_one_liner(self, body: str) -> str:
+        """Cheap auto-summary: total line count + first non-empty bullet.
+
+        Good enough for the universal-pass description until we add an
+        explicit LLM-generated summary path. Examples:
+          - "（空）" when the doc is empty
+          - "8 条；首条：先分析根因后给方案" for a populated doc
+
+        Kept short (≤_ONE_LINER_MAX) so it doesn't bloat the universal
+        context — the whole point of the description layer is cheapness.
+        """
+        if not (body or "").strip():
+            return ""
+        lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+        bullets = [ln for ln in lines if ln.startswith("- ")]
+        bullet_count = len(bullets)
+        first = bullets[0][2:].strip() if bullets else ""
+        if not first:
+            return f"{bullet_count} 条记录"
+        prefix = f"{bullet_count} 条；首条："
+        out = prefix + first
+        if len(out) > self._ONE_LINER_MAX:
+            out = out[: self._ONE_LINER_MAX - 1] + "…"
+        return out
 
 
 __all__ = ["SingleDocConfig", "SingleDocService"]

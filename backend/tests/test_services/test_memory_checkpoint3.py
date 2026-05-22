@@ -256,19 +256,24 @@ def test_f3_selection_llm_failure_falls_back_to_recent(engine_and_session, monke
     # Clear the per-process cache from earlier tests.
     v3_context_loader._SELECTION_CACHE.clear()
 
-    topics = asyncio.run(
-        v3_context_loader._select_active_topics(
+    decision = asyncio.run(
+        v3_context_loader._select_active_memory(
             user_id="alice",
             query="how does X work",
             index_lines=[
                 "- [Redis] strong | 1 facts | 上次 2026-05-21 — caching",
                 "- [TCP] 进展中 | 1 facts | 上次 2026-05-14 — networking",
             ],
+            strategy_description="",
+            habit_description="",
             max_topics=2,
         )
     )
     # Most-recently-discussed first → Redis before TCP.
-    assert topics == ["Redis", "TCP"]
+    assert decision.knowledge_topics == ("Redis", "TCP")
+    # No strategy/habit doc → fallback load_strategy/load_habit = False.
+    assert decision.load_strategy is False
+    assert decision.load_habit is False
     # And the failure was reported.
     assert any(c["event"] == "memory.selection_llm_failed" for c in metric_calls)
 
@@ -286,7 +291,10 @@ def test_f3_selection_llm_cache_skips_second_call(engine_and_session, monkeypatc
         call_count["n"] += 1
 
         class Resp:
-            text = '{"selected_topics": ["Redis"]}'
+            text = (
+                '{"knowledge_topics": ["Redis"], '
+                '"load_strategy": false, "load_habit": false}'
+            )
 
         return Resp()
 
@@ -298,15 +306,17 @@ def test_f3_selection_llm_cache_skips_second_call(engine_and_session, monkeypatc
 
     index_lines = ["- [Redis] strong | 1 facts | 上次 2026-05-21 — caching"]
     for _ in range(3):
-        topics = asyncio.run(
-            v3_context_loader._select_active_topics(
+        decision = asyncio.run(
+            v3_context_loader._select_active_memory(
                 user_id="alice",
                 query="redis ttl",
                 index_lines=index_lines,
+                strategy_description="",
+                habit_description="",
                 max_topics=2,
             )
         )
-        assert topics == ["Redis"]
+        assert decision.knowledge_topics == ("Redis",)
     # Only the first call hit the LLM.
     assert call_count["n"] == 1
 

@@ -47,30 +47,51 @@ logger = logging.getLogger(__name__)
 
 
 # ── Selection LLM hardening ───────────────────────────────────────────
-# Hard upper bound on how long we wait for the topic-selection LLM. Beyond
-# this the chat turn proceeds on the deterministic last_discussed_at
-# fallback. Should be << total chat-turn latency budget.
+# Hard upper bound on how long we wait for the selection LLM. Beyond
+# this the chat turn proceeds on the deterministic fallback. Should
+# be << total chat-turn latency budget.
 SELECTION_LLM_TIMEOUT_SEC = 2.5
 
 # Cache window for selection results. The most common pattern is the user
 # asking a follow-up that picks the same topics; caching for a minute
 # avoids paying the selection LLM cost on every keystroke-driven turn.
 _SELECTION_CACHE_TTL_SEC = 60.0
-_SELECTION_CACHE: dict[tuple[str, str, int], tuple[float, list[str]]] = {}
+# Cache value is a SelectionDecision (defined below). Key is
+# (user_id, lowercased query, max_topics).
+_SELECTION_CACHE: dict[tuple[str, str, int], tuple[float, "SelectionDecision"]] = {}
 _SELECTION_CACHE_MAX_ENTRIES = 512
+
+
+@dataclass(frozen=True)
+class SelectionDecision:
+    """What the selection LLM decided to load for the current turn."""
+    knowledge_topics: tuple[str, ...] = ()
+    load_strategy: bool = False
+    load_habit: bool = False
 
 
 @dataclass
 class V3MemoryContext:
-    """Bundle of memory artifacts to inject into a chat turn's prompt."""
+    """Bundle of memory artifacts to inject into a chat turn's prompt.
+
+    Phase A redesign: only ``user_profile_body`` is loaded as-is on
+    every turn. The other three memory types expose only a one-line
+    description in the universal pass; their full body lands in the
+    ``active_*`` fields ONLY when the selection LLM decides to load
+    them for this query.
+    """
 
     user_profile_body: str = ""
+
+    # Universal-pass descriptions (cheap, every turn).
     knowledge_index_lines: list[str] = field(default_factory=list)
-    strategy_body: str = ""
-    habit_body: str = ""
-    # Bodies of topics actively pulled in for this query.
-    # Maps topic_name -> body markdown.
+    strategy_description: str = ""
+    habit_description: str = ""
+
+    # On-demand bodies (only set when selection LLM said load=True).
     active_knowledge_bodies: dict[str, str] = field(default_factory=dict)
+    active_strategy_body: str = ""
+    active_habit_body: str = ""
 
     def render(self) -> str:
         """Render the whole bundle as a single markdown string suitable
@@ -84,16 +105,26 @@ class V3MemoryContext:
             parts.append("# 知识主题索引")
             parts.append("\n".join(self.knowledge_index_lines))
 
+        # Strategy / habit DESCRIPTIONS (one-liners). Only the active
+        # bodies, if pulled, get rendered in full below.
+        descriptions: list[str] = []
+        if self.strategy_description.strip():
+            descriptions.append(f"- 答题策略 doc: {self.strategy_description.strip()}")
+        if self.habit_description.strip():
+            descriptions.append(f"- 学习习惯 doc: {self.habit_description.strip()}")
+        if descriptions:
+            parts.append("# 其他记忆 doc 概览（如需详情，可调相应工具）")
+            parts.append("\n".join(descriptions))
+
+        # On-demand bodies (selection LLM decided to load).
         if self.active_knowledge_bodies:
-            parts.append("# 本次对话相关的主题详情")
+            parts.append("# 本次对话相关的知识主题详情")
             for topic, body in self.active_knowledge_bodies.items():
                 parts.append(f"## {topic}\n{body.strip()}")
-
-        if self.strategy_body.strip():
-            parts.append("# 答题策略\n" + self.strategy_body.strip())
-
-        if self.habit_body.strip():
-            parts.append("# 学习习惯与心态\n" + self.habit_body.strip())
+        if self.active_strategy_body.strip():
+            parts.append("# 答题策略详情\n" + self.active_strategy_body.strip())
+        if self.active_habit_body.strip():
+            parts.append("# 学习习惯与心态详情\n" + self.active_habit_body.strip())
 
         return "\n\n".join(parts)
 
@@ -116,20 +147,21 @@ def load_profile_only(user_id: str) -> V3MemoryContext:
 
 
 def load_universal(user_id: str) -> V3MemoryContext:
-    """Cheap pass — load user_profile (full) + all three index/single
-    bodies. No LLM call.
+    """Cheap pass (Phase A) — user_profile FULL + descriptions only for
+    the three other memory types. No LLM call.
 
-    Always called regardless of session type — these artifacts are
-    universal personalisation context (the user is the user even when
-    they're chatting about non-interview topics).
+    The strategy/habit/knowledge bodies are NOT loaded here; the
+    selection LLM in ``load_with_active_bodies`` picks which to pull
+    in for the current query. This mirrors Claude Code's "show the
+    description, let the LLM ask for content" pattern.
     """
     return V3MemoryContext(
         user_profile_body=user_profile_doc_service.load(user_id),
         knowledge_index_lines=knowledge_doc_service.list_index_lines(
             user_id, max_topics=50,
         ),
-        strategy_body=strategy_doc_service.load(user_id),
-        habit_body=habit_doc_service.load(user_id),
+        strategy_description=strategy_doc_service.load_description(user_id),
+        habit_description=habit_doc_service.load_description(user_id),
     )
 
 
@@ -139,36 +171,51 @@ async def load_with_active_bodies(
     query: str,
     max_active_topics: int = 3,
 ) -> V3MemoryContext:
-    """Universal pass + on-demand knowledge_doc bodies for topics the
-    LLM picks as relevant.
+    """Universal pass + on-demand bodies decided by the selection LLM.
 
-    Returns a context with ``active_knowledge_bodies`` populated when
-    the selection LLM found relevant topics OR the deterministic
-    fallback (most-recently-discussed) returned candidates. Empty
-    only when there are no indexed topics or the LLM and fallback
-    both yield nothing — never silently drops bodies just because the
-    selection LLM had a bad day.
+    Phase A: the selection LLM picks among ALL three non-profile doc
+    types (knowledge topics + strategy + habit), not just knowledge.
+
+    Returns a context with whichever bodies the LLM/fallback marked as
+    relevant. Never silently drops the universal pass — even on
+    selection failure the user_profile + description layer is still
+    present.
     """
     ctx = load_universal(user_id)
 
-    if not ctx.knowledge_index_lines or not (query or "").strip():
+    if not (query or "").strip():
         return ctx
 
-    selected = await _select_active_topics(
+    decision = await _select_active_memory(
         user_id=user_id,
         query=query,
         index_lines=ctx.knowledge_index_lines,
+        strategy_description=ctx.strategy_description,
+        habit_description=ctx.habit_description,
         max_topics=max_active_topics,
     )
-    if not selected:
-        return ctx
 
-    bodies: dict[str, str] = {}
-    for topic in selected:
-        doc = knowledge_doc_service.load(user_id, topic)
-        if doc and (doc.body or "").strip():
-            bodies[topic] = doc.body
-    ctx.active_knowledge_bodies = bodies
+    # Knowledge bodies
+    if decision.knowledge_topics:
+        bodies: dict[str, str] = {}
+        for topic in decision.knowledge_topics:
+            doc = knowledge_doc_service.load(user_id, topic)
+            if doc and (doc.body or "").strip():
+                bodies[topic] = doc.body
+        ctx.active_knowledge_bodies = bodies
+
+    # Strategy body
+    if decision.load_strategy:
+        body = strategy_doc_service.load(user_id)
+        if body.strip():
+            ctx.active_strategy_body = body
+
+    # Habit body
+    if decision.load_habit:
+        body = habit_doc_service.load(user_id)
+        if body.strip():
+            ctx.active_habit_body = body
+
     return ctx
 
 
@@ -177,42 +224,37 @@ async def load_with_active_bodies(
 # ──────────────────────────────────────────────────────────────────────
 
 
-async def _select_active_topics(
+async def _select_active_memory(
     *,
     user_id: str,
     query: str,
     index_lines: list[str],
+    strategy_description: str,
+    habit_description: str,
     max_topics: int,
-) -> list[str]:
-    """Ask the fast LLM which topics are relevant; on any failure or
-    timeout, fall back to the most-recently-discussed topics.
+) -> SelectionDecision:
+    """Ask the fast LLM which docs to load; on any failure or timeout,
+    fall back to a deterministic heuristic.
 
-    Hardening (Checkpoint 3, F3+F8):
+    Hardening (Checkpoint 3, F3+F8 — preserved from prior design):
 
     * **Cache** results per ``(user_id, lowercased query, max_topics)``
-      for 60s — a follow-up question typically wants the same topics
-      and the LLM round-trip can be skipped entirely.
-    * **Timeout** the LLM call at ``SELECTION_LLM_TIMEOUT_SEC`` so the
-      chat turn never blocks on a slow vendor.
-    * **Fallback** to a deterministic "top-N by last_discussed_at"
-      heuristic on any LLM failure (timeout, malformed JSON, vendor
-      error). Silent zero-body is a quality regression; non-zero
-      stale-but-related body is at least personalised.
-    * **Metric** ``memory.selection_llm_failed`` emitted per failure
-      with a ``reason`` label so ops can alarm on it.
+      for 60s — follow-up questions usually want the same docs.
+    * **Timeout** the LLM call at ``SELECTION_LLM_TIMEOUT_SEC``.
+    * **Fallback** on any LLM failure:
+        - knowledge: top-N by last_discussed_at
+        - strategy / habit: load=True iff the user has a non-empty doc
+          (cheap, never wrong: at worst we load a doc the user
+          didn't strictly need this turn).
+    * **Metric** ``memory.selection_llm_failed`` per failure.
     """
-    if not index_lines:
-        return []
-
-    cache_key = (user_id, query.strip().lower(), max_topics)
+    cache_key = (user_id, (query or "").strip().lower(), max_topics)
     now = time.monotonic()
     cached = _SELECTION_CACHE.get(cache_key)
     if cached is not None:
-        expiry, topics = cached
+        expiry, decision = cached
         if expiry > now:
-            return list(topics)
-        # Stale — drop it now so the cache doesn't grow unboundedly with
-        # expired keys.
+            return decision
         _SELECTION_CACHE.pop(cache_key, None)
 
     indexed_names = {_extract_topic_name(line) for line in index_lines}
@@ -221,7 +263,9 @@ async def _select_active_topics(
     fallback_reason: str | None = None
 
     prompt = CONTEXT_SELECTION_PROMPT.format(
-        knowledge_index="\n".join(index_lines),
+        knowledge_index="\n".join(index_lines) or "（暂无主题）",
+        strategy_description=strategy_description or "（空）",
+        habit_description=habit_description or "（空）",
         query=query.strip(),
     )
     try:
@@ -239,24 +283,33 @@ async def _select_active_topics(
         parsed = json.loads(raw) if raw else {}
         if not isinstance(parsed, dict):
             raise ValueError("selection LLM payload was not a JSON object")
-        topics = parsed.get("selected_topics") or []
-        if not isinstance(topics, list):
-            raise ValueError("selected_topics was not a list")
-        out = [t for t in topics if isinstance(t, str) and t in indexed_names][:max_topics]
-        _cache_selection(cache_key, out)
-        return out
+
+        topics_raw = parsed.get("knowledge_topics") or []
+        if not isinstance(topics_raw, list):
+            raise ValueError("knowledge_topics was not a list")
+        topics = tuple(
+            t for t in topics_raw if isinstance(t, str) and t in indexed_names
+        )[:max_topics]
+
+        decision = SelectionDecision(
+            knowledge_topics=topics,
+            load_strategy=bool(parsed.get("load_strategy", False)),
+            load_habit=bool(parsed.get("load_habit", False)),
+        )
+        _cache_selection(cache_key, decision)
+        return decision
     except asyncio.TimeoutError:
         fallback_reason = "timeout"
         logger.warning(
             "v3_context_loader: selection LLM timed out after %.2fs; "
-            "falling back to last_discussed_at heuristic",
+            "falling back to deterministic heuristic",
             SELECTION_LLM_TIMEOUT_SEC,
         )
     except Exception as exc:  # noqa: BLE001
         fallback_reason = type(exc).__name__
         logger.warning(
             "v3_context_loader: selection LLM failed (%s); "
-            "falling back to last_discussed_at heuristic",
+            "falling back to deterministic heuristic",
             exc,
         )
 
@@ -266,29 +319,39 @@ async def _select_active_topics(
         reason=fallback_reason,
     )
 
-    # Deterministic fallback: pick the N most-recently-discussed topics
-    # that actually have a body. Doesn't need the LLM and is safe under
-    # any failure mode (DB down → empty list → empty bodies, same as
-    # the old behaviour). Prefer this over zero-body so chat quality
-    # degrades gracefully.
-    fallback = _fallback_recent_topics(user_id, max_topics=max_topics)
-    fallback = [t for t in fallback if t in indexed_names]
+    # Deterministic fallback: most-recently-discussed knowledge topics +
+    # load strategy/habit iff the user actually has a non-empty doc.
+    # We prefer "load doc the user didn't strictly need this turn" over
+    # "drop all memory because the helper LLM died" — chat quality
+    # should degrade gracefully.
+    fallback_topics = tuple(
+        t for t in _fallback_recent_topics(user_id, max_topics=max_topics)
+        if t in indexed_names
+    )
+    fallback = SelectionDecision(
+        knowledge_topics=fallback_topics,
+        load_strategy=bool(strategy_description.strip()),
+        load_habit=bool(habit_description.strip()),
+    )
     _cache_selection(cache_key, fallback)
     return fallback
 
 
-def _cache_selection(key: tuple[str, str, int], topics: list[str]) -> None:
+def _cache_selection(
+    key: tuple[str, str, int], decision: SelectionDecision,
+) -> None:
     """Insert a cache entry. Cheap LRU-by-insertion-order eviction
     keeps the dict bounded; we don't care about strict LRU semantics
     since entries TTL out in 60s anyway."""
     if len(_SELECTION_CACHE) >= _SELECTION_CACHE_MAX_ENTRIES:
-        # Drop the oldest insertion-order key.
         try:
             oldest = next(iter(_SELECTION_CACHE))
             _SELECTION_CACHE.pop(oldest, None)
         except StopIteration:
             pass
-    _SELECTION_CACHE[key] = (time.monotonic() + _SELECTION_CACHE_TTL_SEC, list(topics))
+    _SELECTION_CACHE[key] = (
+        time.monotonic() + _SELECTION_CACHE_TTL_SEC, decision,
+    )
 
 
 def _fallback_recent_topics(user_id: str, *, max_topics: int) -> list[str]:
@@ -301,8 +364,6 @@ def _fallback_recent_topics(user_id: str, *, max_topics: int) -> list[str]:
         return []
 
     def _sort_key(doc: Any) -> Any:
-        # Sort recent-first; rows with no last_discussed_at fall to the
-        # bottom (they're stale).
         return doc.last_discussed_at or doc.updated_at or doc.created_at
 
     docs_sorted = sorted(
@@ -324,6 +385,7 @@ def _extract_topic_name(index_line: str) -> str:
 
 
 __all__ = [
+    "SelectionDecision",
     "V3MemoryContext",
     "load_universal",
     "load_profile_only",

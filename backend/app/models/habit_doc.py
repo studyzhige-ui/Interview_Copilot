@@ -17,7 +17,8 @@ Two sections (enforced by extraction prompt):
 
 Single row per user, like strategy_doc. The two doc types are
 structurally identical — different prompts, different content domain,
-same storage shape.
+same storage shape, both expose ``one_liner`` in the universal pass
+(Phase A redesign) and gate full-body load behind the selection LLM.
 """
 
 from __future__ import annotations
@@ -41,6 +42,8 @@ class HabitDoc(Base):
     user_id = Column(String, nullable=False, unique=True, index=True)
 
     body = Column(Text, nullable=False, default="")
+    # See strategy_doc.one_liner — same semantics.
+    one_liner = Column(String, nullable=False, default="")
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(

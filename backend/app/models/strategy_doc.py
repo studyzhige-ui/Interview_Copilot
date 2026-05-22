@@ -15,8 +15,16 @@ or actually internalised. Two sections (enforced by extraction prompt):
 The "尝试中 → 已内化" promotion happens during dreaming when the user
 reports the method actually worked across multiple uses.
 
-This is one row per user. Loaded fully into context — no index layer
-needed because the doc is small.
+One row per user. Loaded in two layers (Phase A redesign):
+
+  * Universal pass: ONLY the ``one_liner`` description goes into every
+    chat turn's prompt. Cheap (~50 chars).
+  * On-demand: when the selection LLM marks ``load_strategy=true``
+    for the current query, the full ``body`` is loaded.
+
+This mirrors knowledge_doc's index-then-body pattern and matches
+Claude Code's "expose description, let LLM decide if it wants the
+content".
 """
 
 from __future__ import annotations
@@ -43,6 +51,12 @@ class StrategyDoc(Base):
     user_id = Column(String, nullable=False, unique=True, index=True)
 
     body = Column(Text, nullable=False, default="")
+    # One-line description exposed in the universal pass so the
+    # selection LLM can decide whether to load the full body for
+    # this turn. Maintained by ``SingleDocService._derive_one_liner``;
+    # falls back to a short summary of the doc when LLM hasn't
+    # provided one. Empty = no doc yet.
+    one_liner = Column(String, nullable=False, default="")
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
