@@ -56,9 +56,11 @@ SELECTION_LLM_TIMEOUT_SEC = 2.5
 # asking a follow-up that picks the same topics; caching for a minute
 # avoids paying the selection LLM cost on every keystroke-driven turn.
 _SELECTION_CACHE_TTL_SEC = 60.0
-# Cache value is a SelectionDecision (defined below). Key is
-# (user_id, lowercased query, max_topics).
-_SELECTION_CACHE: dict[tuple[str, str, int], tuple[float, "SelectionDecision"]] = {}
+# Cache value is a SelectionDecision (defined below). Key includes a
+# fingerprint of the index_lines so a new topic added by realtime
+# extraction WITHIN the 60s window invalidates the cache for any
+# affected user-query pair (review F-H3).
+_SELECTION_CACHE: dict[tuple[str, str, int, int], tuple[float, "SelectionDecision"]] = {}
 _SELECTION_CACHE_MAX_ENTRIES = 512
 
 
@@ -248,7 +250,17 @@ async def _select_active_memory(
           didn't strictly need this turn).
     * **Metric** ``memory.selection_llm_failed`` per failure.
     """
-    cache_key = (user_id, (query or "").strip().lower(), max_topics)
+    # Hash the index_lines into the cache key so a new knowledge topic
+    # added by realtime extraction WITHIN the 60s TTL window
+    # invalidates this cache entry — otherwise the second turn would
+    # silently get the stale topic set even though the LLM would now
+    # have a new candidate to pick.
+    cache_key = (
+        user_id,
+        (query or "").strip().lower(),
+        max_topics,
+        hash(tuple(index_lines)),
+    )
     now = time.monotonic()
     cached = _SELECTION_CACHE.get(cache_key)
     if cached is not None:
@@ -338,7 +350,7 @@ async def _select_active_memory(
 
 
 def _cache_selection(
-    key: tuple[str, str, int], decision: SelectionDecision,
+    key: tuple[str, str, int, int], decision: SelectionDecision,
 ) -> None:
     """Insert a cache entry. Cheap LRU-by-insertion-order eviction
     keeps the dict bounded; we don't care about strict LRU semantics

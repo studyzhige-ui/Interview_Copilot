@@ -338,32 +338,72 @@ class SingleDocService:
 
     # ── one_liner ────────────────────────────────────────────────────
 
-    _ONE_LINER_MAX = 120
+    _ONE_LINER_MAX = 280
+    # Max bullets to preview per section. Past this we elide with "…".
+    _BULLETS_PER_SECTION_PREVIEW = 2
+    # Max chars per bullet preview (keep them snippet-length).
+    _BULLET_PREVIEW_CHARS = 40
 
     def _derive_one_liner(self, body: str) -> str:
-        """Cheap auto-summary: total line count + first non-empty bullet.
+        """Per-section preview the selection LLM can actually act on.
 
-        Good enough for the universal-pass description until we add an
-        explicit LLM-generated summary path. Examples:
-          - "（空）" when the doc is empty
-          - "8 条；首条：先分析根因后给方案" for a populated doc
+        Returns something like::
 
-        Kept short (≤_ONE_LINER_MAX) so it doesn't bloat the universal
-        context — the whole point of the description layer is cheapness.
+            已内化 (5): STAR 法已内化, 反问环节走技术; 尝试中 (3): 先分析根因…
+
+        Earlier version was just ``{count} 条；首条：{first bullet}``,
+        which gave the selection LLM almost zero signal about what was
+        inside — review caught it as H1. The new format names every
+        canonical section, gives the bullet count, and previews the
+        first few bullets per section. Truncated to ``_ONE_LINER_MAX``
+        chars to stay cheap in the universal pass.
         """
         if not (body or "").strip():
             return ""
-        lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
-        bullets = [ln for ln in lines if ln.startswith("- ")]
-        bullet_count = len(bullets)
-        first = bullets[0][2:].strip() if bullets else ""
-        if not first:
-            return f"{bullet_count} 条记录"
-        prefix = f"{bullet_count} 条；首条："
-        out = prefix + first
-        if len(out) > self._ONE_LINER_MAX:
-            out = out[: self._ONE_LINER_MAX - 1] + "…"
-        return out
+        per_section = self._bucket_bullets_by_section(body)
+        if not any(bullets for bullets in per_section.values()):
+            # No real bullets, just section headers or stray text.
+            return ""
+
+        parts: list[str] = []
+        for section in self.cfg.canonical_sections:
+            bullets = per_section.get(section, [])
+            if not bullets:
+                continue
+            previews = bullets[: self._BULLETS_PER_SECTION_PREVIEW]
+            preview_strs = [
+                self._truncate(b, self._BULLET_PREVIEW_CHARS) for b in previews
+            ]
+            tail = "…" if len(bullets) > len(previews) else ""
+            joined = ", ".join(preview_strs) + tail
+            parts.append(f"{section} ({len(bullets)}): {joined}")
+
+        if not parts:
+            return ""
+        out = "; ".join(parts)
+        return self._truncate(out, self._ONE_LINER_MAX)
+
+    def _bucket_bullets_by_section(self, body: str) -> dict[str, list[str]]:
+        """Same section parsing as ``_canonicalise``, but yields just the
+        text of bullets (no leading ``- ``)."""
+        buckets: dict[str, list[str]] = {n: [] for n in self.cfg.canonical_sections}
+        current = self.cfg.canonical_sections[0]
+        for raw in (body or "").splitlines():
+            m = _SECTION_HEADER_RE.match(raw)
+            if m:
+                name = m.group(1).strip()
+                current = name if name in buckets else self.cfg.default_fold_section
+                continue
+            line = raw.strip()
+            if line.startswith("- "):
+                buckets[current].append(line[2:].strip())
+        return buckets
+
+    @staticmethod
+    def _truncate(s: str, limit: int) -> str:
+        if len(s) <= limit:
+            return s
+        return s[: max(0, limit - 1)] + "…"
 
 
 __all__ = ["SingleDocConfig", "SingleDocService"]

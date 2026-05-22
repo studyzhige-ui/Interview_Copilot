@@ -172,15 +172,28 @@ def select_dreamable_users(*, limit: int = 200) -> list[str]:
 def _count_new_activity_since(
     db: Session, user_id: str, cursor: datetime | None,
 ) -> dict[str, int]:
-    """Counts of new chat_messages + chat_sessions for ``user_id`` since
-    ``cursor`` (None = all-time). Used by gate 3.
+    """Counts of new debrief chat_messages + chat_sessions for
+    ``user_id`` since ``cursor`` (None = all-time). Used by gate 3.
+
+    Only ``session_type == 'debrief'`` counts: dreaming consumes
+    exclusively debrief messages (see ``dream_for_record``'s
+    ``_load_record_debrief_messages``). A user opening 10 general
+    chats without any debrief activity wouldn't produce work for the
+    dreamer, so they shouldn't trip the gate either (review found
+    this as M2 — was dispatching empty Celery tasks).
     """
     msg_q = (
         db.query(ChatMessage)
         .join(ChatSession, ChatSession.id == ChatMessage.session_id)
-        .filter(ChatSession.user_id == user_id)
+        .filter(
+            ChatSession.user_id == user_id,
+            ChatSession.session_type == "debrief",
+        )
     )
-    sess_q = db.query(ChatSession).filter(ChatSession.user_id == user_id)
+    sess_q = db.query(ChatSession).filter(
+        ChatSession.user_id == user_id,
+        ChatSession.session_type == "debrief",
+    )
     if cursor is not None:
         msg_q = msg_q.filter(ChatMessage.created_at > cursor)
         sess_q = sess_q.filter(ChatSession.created_at > cursor)
@@ -235,17 +248,27 @@ def select_records_for_user(
         db.close()
 
 
-def bump_user_last_dreamed_at(user_id: str) -> None:
-    """Move the user's dream cursor to NOW. Caller invokes ONCE after
-    finishing the per-user dream loop, regardless of whether each
-    individual record produced patches — the per-record skip protection
-    lives inside ``dream_for_record`` (idempotent re-check)."""
+def bump_user_last_dreamed_at(
+    user_id: str, *, at: datetime | None = None,
+) -> None:
+    """Move the user's dream cursor. Caller invokes ONCE after finishing
+    the per-user dream loop, regardless of whether each individual
+    record produced patches — the per-record skip protection lives
+    inside ``dream_for_record`` (idempotent re-check).
+
+    ``at`` lets the caller pin the cursor to the moment the scan
+    STARTED, not the moment dreaming finished. The dream loop can take
+    several minutes per user (slow LLM × N records); without ``at``,
+    any chat_message that arrived during the loop has
+    ``created_at < bump_time`` and gets silently dropped from the next
+    nightly's gate-3 count. Review found this as M1.
+    """
     db: Session = SessionLocal()
     try:
         user = db.query(User).filter(User.username == user_id).first()
         if user is None:
             return
-        user.last_dreamed_at = datetime.utcnow()
+        user.last_dreamed_at = at if at is not None else datetime.utcnow()
         db.commit()
     finally:
         db.close()
@@ -301,8 +324,11 @@ def dream_for_record(record_id: str) -> dict[str, Any]:
         db.close()
 
     with user_memory_lock_sync(user_id):
-        # Re-check inside the lock — another worker may have just
-        # dreamed this record.
+        # Re-check inside the lock. Under Path B's single nightly cron
+        # there's no "another worker" in normal operation, but the
+        # re-check is defensive against operator-triggered ad-hoc
+        # re-runs (and against realtime extraction having bumped
+        # something between our pre-lock read and now).
         db = SessionLocal()
         try:
             record = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()

@@ -415,11 +415,20 @@ def dream_for_user_task(self, user_id: str):
     and continue — partial progress is better than re-doing finished
     records on the next batch.
     """
+    from datetime import datetime
     from app.services.memory.dreaming_worker import (
         bump_user_last_dreamed_at,
         dream_for_record,
         select_records_for_user,
     )
+
+    # Snapshot scan-start time BEFORE the per-record loop. The cursor
+    # is bumped to THIS timestamp at the end, not to "now after the
+    # dream finished" — otherwise any chat message arriving during the
+    # multi-minute dream loop would have created_at < bump_time and
+    # silently get dropped from the next nightly's gate-3 count.
+    # Review found this as M1.
+    scan_started_at = datetime.utcnow()
 
     records = select_records_for_user(user_id, limit=50)
     summary = {"user_id": user_id, "candidates": len(records), "dreamed": 0, "errors": 0}
@@ -445,7 +454,7 @@ def dream_for_user_task(self, user_id: str):
     # individual record produced patches, the "consolidation pass for
     # this user" has happened and the next nightly should wait for new
     # activity before firing again.
-    bump_user_last_dreamed_at(user_id)
+    bump_user_last_dreamed_at(user_id, at=scan_started_at)
     logger.info(
         "dream_for_user: user=%s candidates=%d dreamed=%d errors=%d",
         user_id, summary["candidates"], summary["dreamed"], summary["errors"],

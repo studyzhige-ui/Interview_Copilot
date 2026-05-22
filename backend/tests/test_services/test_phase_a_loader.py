@@ -214,3 +214,57 @@ def test_render_omits_body_sections_when_not_active(engine_and_session, monkeypa
     # But the detail section is NOT, since the body wasn't loaded:
     assert "答题策略详情" not in out
     assert "学习习惯与心态详情" not in out
+
+
+# ── L1: index format ↔ extractor round-trip ──────────────────────────
+
+
+def test_list_index_lines_round_trips_through_extract_topic_name(engine_and_session, monkeypatch):
+    """``v3_context_loader._extract_topic_name`` parses topic names out
+    of ``knowledge_doc_service.list_index_lines`` output. The two are
+    silently coupled by string format — if either drifts, the selection
+    LLM's topic picks all get rejected (``t in indexed_names`` fails).
+    Lock the contract with a round-trip test (review L1).
+    """
+    from app.models.knowledge_doc import KnowledgeDoc
+    from app.services.memory import knowledge_doc_service
+    from app.services.memory.v3_context_loader import _extract_topic_name
+
+    engine, Session = engine_and_session
+    _rebind(monkeypatch, Session)
+
+    # Seed three topics with varying mastery + dates so the format
+    # exercises all conditional branches in list_index_lines.
+    from datetime import datetime
+    db = Session()
+    try:
+        db.add_all([
+            KnowledgeDoc(
+                user_id="alice", topic="Redis", body="## 已掌握的认知\n- x\n",
+                one_liner="caching", mastery_level="strong", fact_count=8,
+                last_discussed_at=datetime(2026, 5, 21),
+            ),
+            KnowledgeDoc(
+                user_id="alice", topic="Postgres", body="## 已掌握的认知\n- y\n",
+                one_liner="networking", mastery_level="progressing", fact_count=3,
+                last_discussed_at=None,
+            ),
+            KnowledgeDoc(
+                user_id="alice", topic="系统设计", body="## 已掌握的认知\n- z\n",
+                one_liner="", mastery_level=None, fact_count=1,
+                last_discussed_at=datetime(2026, 4, 10),
+            ),
+        ])
+        db.commit()
+    finally:
+        db.close()
+
+    lines = knowledge_doc_service.list_index_lines("alice", max_topics=10)
+    assert len(lines) == 3
+    extracted = [_extract_topic_name(line) for line in lines]
+    # Every produced line MUST yield a non-empty topic name back, and
+    # the round-trip set must match what we put in.
+    assert all(name for name in extracted), (
+        f"Some index lines didn't round-trip: {list(zip(lines, extracted))}"
+    )
+    assert set(extracted) == {"Redis", "Postgres", "系统设计"}
