@@ -361,32 +361,93 @@ def dream_for_record_task(self, record_id: str):
     soft_time_limit=840,
 )
 def scan_and_dream_batch_task(self):
-    """Nightly batch entry — scan all users for records that need
-    dreaming, fire ``dream_for_record_task`` per candidate.
+    """Nightly batch entry — Path B autoDream.
 
-    Wakes up via Celery Beat (see ``celery_app.py`` schedule). Uses
-    ``require_user_inactive=True`` so we don't dream while a user is
-    actively chatting.
+    Wakes up via Celery Beat at 03:30 Asia/Shanghai. Walks every user
+    that passes the per-user gates (>=24h cursor + activity volume)
+    and dreams each user's silent records, then bumps the user's
+    cursor. See ``dreaming_worker`` module docstring for the full gate
+    table.
+
+    Per-user work is dispatched as a dedicated ``dream_for_user_task``
+    so a slow LLM call on one user doesn't block another, and Celery's
+    soft_time_limit / retry policy applies per-user (not per-batch).
     """
-    from app.services.memory.dreaming_worker import select_candidate_records
+    from app.services.memory.dreaming_worker import select_dreamable_users
 
-    candidates = select_candidate_records(
-        user_id=None,
-        require_user_inactive=True,
-        limit=200,
-    )
+    users = select_dreamable_users(limit=200)
     dispatched = 0
-    for rec in candidates:
+    for uid in users:
         try:
-            dream_for_record_task.delay(rec.id)
+            dream_for_user_task.delay(uid)
             dispatched += 1
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "scan_and_dream_batch: dispatch failed for record=%s: %s",
-                rec.id, exc,
+                "scan_and_dream_batch: dispatch failed for user=%s: %s",
+                uid, exc,
             )
     logger.info(
-        "scan_and_dream_batch: dispatched %d dream tasks (of %d candidates)",
-        dispatched, len(candidates),
+        "scan_and_dream_batch: dispatched %d dream tasks (of %d eligible users)",
+        dispatched, len(users),
     )
-    return {"dispatched": dispatched, "candidates": len(candidates)}
+    return {"dispatched": dispatched, "users": len(users)}
+
+
+@celery_app.task(
+    bind=True,
+    name="tasks.dream_for_user",
+    autoretry_for=(ConnectionError, TimeoutError, OSError),
+    retry_backoff=True,
+    retry_backoff_max=120,
+    retry_jitter=True,
+    max_retries=2,
+    acks_late=True,
+    time_limit=1200,
+    soft_time_limit=1140,
+)
+def dream_for_user_task(self, user_id: str):
+    """Run all of a user's pending dreams + bump cursor.
+
+    Per-record dream is delegated to ``dream_for_record`` (synchronous;
+    no separate Celery dispatch — we want the cursor bump to happen
+    AFTER all this user's records are processed, atomically observable
+    from the user's perspective). If any individual record fails, log
+    and continue — partial progress is better than re-doing finished
+    records on the next batch.
+    """
+    from app.services.memory.dreaming_worker import (
+        bump_user_last_dreamed_at,
+        dream_for_record,
+        select_records_for_user,
+    )
+
+    records = select_records_for_user(user_id, limit=50)
+    summary = {"user_id": user_id, "candidates": len(records), "dreamed": 0, "errors": 0}
+    for rec in records:
+        try:
+            r = dream_for_record(rec.id)
+            if r.get("error"):
+                summary["errors"] += 1
+                logger.warning(
+                    "dream_for_user: record %s for user %s failed: %s",
+                    rec.id, user_id, r["error"],
+                )
+            else:
+                summary["dreamed"] += 1
+        except Exception as exc:  # noqa: BLE001
+            summary["errors"] += 1
+            logger.exception(
+                "dream_for_user: record %s for user %s crashed: %s",
+                rec.id, user_id, exc,
+            )
+    # Bump cursor unconditionally — gate 3 (volume) is what guards
+    # against firing this task in the first place. Whether or not each
+    # individual record produced patches, the "consolidation pass for
+    # this user" has happened and the next nightly should wait for new
+    # activity before firing again.
+    bump_user_last_dreamed_at(user_id)
+    logger.info(
+        "dream_for_user: user=%s candidates=%d dreamed=%d errors=%d",
+        user_id, summary["candidates"], summary["dreamed"], summary["errors"],
+    )
+    return summary

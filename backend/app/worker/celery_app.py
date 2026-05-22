@@ -70,10 +70,13 @@ celery_app.conf.update(
     # — important with our --pool=solo single-task model.
     worker_prefetch_multiplier=1,
     # ── Beat schedule ───────────────────────────────────────────────────
-    # Memory dreaming: nightly batch sweep at 03:30 Asia/Shanghai
-    # (covers the "user is asleep" window). The task itself filters out
-    # records where the user has been active in the last 4h — see
-    # ``USER_INACTIVE_HOURS_FOR_BATCH`` in dreaming_worker.
+    # Memory dreaming (Path B): nightly batch at 03:30 Asia/Shanghai.
+    # Iterates eligible users (gate 1: >=24h since last_dreamed_at AND
+    # gate 3: enough new chat activity), then dreams each user's
+    # silent records. See ``dreaming_worker`` docstring for full gate
+    # logic. This is the ONLY trigger — there's no per-record completion
+    # hook, no per-turn hook (Path B over Path A decision in
+    # docs/v3_memory_refactor_report.md).
     beat_schedule={
         "memory-dream-nightly-batch": {
             "task": "tasks.scan_and_dream_batch",

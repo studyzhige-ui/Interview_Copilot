@@ -34,5 +34,12 @@ class User(Base):
     # 多行 user_profile 表带来的语义重复（"User's name" vs "用户名"
     # 这种同义异 key 的去重难题）。空字符串 = 新用户，还没积累画像。
     user_profile_doc = Column(Text, default="", nullable=False)
+    # When the nightly dreaming worker last consolidated this user's
+    # memory docs. NULL = never dreamed. Used as the "cursor" by the
+    # autoDream gate logic: the next nightly run only fires for this
+    # user if (a) it's been >=24h since this timestamp AND (b) the
+    # user has accumulated enough new chat activity since then. See
+    # ``app.services.memory.dreaming_worker``.
+    last_dreamed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

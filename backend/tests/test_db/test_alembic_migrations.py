@@ -133,12 +133,13 @@ def test_migration_chain_has_no_gaps_and_one_head():
 
     # Migration count is asserted explicitly so an accidentally-deleted
     # version file shows up as a test failure rather than a silent
-    # corruption of the chain. After the v3 memory rewrite the chain is:
+    # corruption of the chain. After Path B autoDream the chain is:
     #   0001_baseline → 0002_memory_v3 → 0003_drop_memory_items
+    #                 → 0004_user_last_dreamed_at
     # Bump this number whenever a new forward migration lands.
     on_disk = [p for p in VERSIONS_DIR.glob("*.py") if not p.name.startswith("_")]
-    assert len(on_disk) == 3, (
-        f"Expected 3 migration files (baseline + memory_v3 + drop_memory_items), "
+    assert len(on_disk) == 4, (
+        f"Expected 4 migration files (baseline + 3 memory-evolution), "
         f"found {len(on_disk)}"
     )
 
@@ -201,8 +202,8 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         from sqlalchemy import text
 
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0003_drop_memory_items", (
-            f"Head should be 0003_drop_memory_items, got {version!r}"
+        assert version == "0004_user_last_dreamed_at", (
+            f"Head should be 0004_user_last_dreamed_at, got {version!r}"
         )
 
     engine.dispose()

@@ -1,4 +1,4 @@
-"""Dreaming worker — nightly / per-record memory synthesis.
+"""Dreaming worker — nightly memory consolidation (Path B).
 
 Why dreaming
 ============
@@ -9,34 +9,46 @@ session 2 → only then should X get promoted from "trying" to
 "internalised"). Dreaming sees the full conversation window of an
 interview record and can synthesise these multi-session patterns.
 
-Trigger model (two paths, both supported)
-=========================================
+Trigger model (Path B — single entry, nightly cron)
+====================================================
+After deliberation we picked **Path B over Path A (per-turn hook)**.
+Reasoning is captured in docs/v3_memory_refactor_report.md but the
+short version: post-turn hook + "nightly only" time window are
+contradictory (users don't chat at 03:00); since we have Celery Beat
+and Claude Code's per-turn-hook constraint doesn't apply to us, a
+nightly batch is the right fit for an interview-prep tool.
 
-Path A — per-record idle:
-  A scheduler scans for ``interview_records`` where
-    (last_dreamed_at IS NULL OR updated_at > last_dreamed_at)
-    AND no chat_message added in the last 24h (debrief is "quiet")
-  and dreams each one.
-
-Path C — nightly batch:
-  A Celery beat job at the user's local ~03:00 runs the same scan but
-  also requires the user has been inactive for ≥4h (don't dream
-  while the user is actively chatting).
+  Celery Beat (worker/celery_app.py beat_schedule)
+       ↓ daily 03:30 Asia/Shanghai
+  scan_and_dream_batch_task (worker/tasks.py)
+       ↓ for each user, check 4 gates (per ``select_dreamable_users``):
+       │    1. time:   NOW - users.last_dreamed_at >= 24h
+       │    2. (no scan throttle — cron fires at most once per day)
+       │    3. volume: new messages >= NEW_MESSAGES_THRESHOLD
+       │              OR new chat_sessions > NEW_SESSIONS_THRESHOLD
+       │    4. lock:   user_memory_lock_sync acquired
+       ↓ for each user that passes:
+  select_records_for_user(user_id)
+       ↓ silent >= RECORD_QUIET_HOURS, status=completed
+  dream_for_record(record_id) per candidate
+       ↓ after all records processed
+  users.last_dreamed_at = NOW()
 
 Cursor + concurrency
 ====================
-
-Each record has ``last_dreamed_at``. Dreaming bumps it to ``now()`` on
-success. The next scan will skip records whose ``updated_at`` hasn't
-changed since their last dream — saves LLM calls.
+``users.last_dreamed_at`` is the per-user cursor that drives gate 1.
+``interview_records.last_dreamed_at`` is the per-record cursor that
+makes ``dream_for_record`` idempotent (re-running it after a successful
+dream is a no-op until the record gets new chat_messages).
 
 The work itself runs under ``user_memory_lock_sync`` (sync because
 Celery is sync). Realtime extraction holds the async sibling lock.
-The two are the same Redis key, so they serialise correctly.
+The two are the same Redis key, so they serialise correctly even when
+realtime fires during the dreaming window (unlikely at 03:30 but
+possible if a user is chatting through the night).
 
 Conflict avoidance
 ==================
-
 The LLM gets the CURRENT memory snapshot (after any realtime writes
 that happened during the record period). It produces patches that are
 deltas ON TOP of that snapshot. The patch protocol's exact-line-match
@@ -58,6 +70,7 @@ from sqlalchemy.orm import Session
 from app.db.database import SessionLocal
 from app.models.chat import ChatMessage, ChatSession
 from app.models.interview_record import InterviewRecord
+from app.models.user import User
 from app.rag.embeddings import agent_fast_llm
 from app.services.memory import (
     habit_doc_service,
@@ -73,14 +86,23 @@ logger = logging.getLogger(__name__)
 
 # ── Trigger parameters ────────────────────────────────────────────────
 
-# Path A: a record's last chat message must be at least this old before
-# dreaming considers it. Avoids dreaming a record while the user is
-# actively still talking about it.
-RECORD_QUIET_HOURS = 24
+# Gate 1 — minimum hours between consecutive nightly dreams for a user.
+# At cron cadence (once daily 03:30) this effectively means "at most one
+# dream per user per night". Lower than 24h would allow back-to-back
+# dreams if the operator ran an ad-hoc batch.
+USER_MIN_HOURS_SINCE_LAST_DREAM = 24
 
-# Path C: nightly batch only dreams when the user has been inactive
-# globally for at least this long. Covers normal sleep windows.
-USER_INACTIVE_HOURS_FOR_BATCH = 4
+# Gate 3 (OR'd) — minimum new chat activity since users.last_dreamed_at
+# before we bother to dream. Below this the LLM call is unlikely to
+# discover anything new, so we save the budget for an active user.
+NEW_MESSAGES_THRESHOLD = 50
+NEW_SESSIONS_THRESHOLD = 3   # strictly greater than, not >=
+
+# Per-record gate — a record's last chat message must be at least this
+# old before dreaming considers it. Avoids dreaming a record while the
+# user is actively chatting in it. At 03:30 essentially always passes,
+# but defensive against edge cases (night-owl user).
+RECORD_QUIET_HOURS = 6
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -88,68 +110,143 @@ USER_INACTIVE_HOURS_FOR_BATCH = 4
 # ──────────────────────────────────────────────────────────────────────
 
 
-def select_candidate_records(
-    *,
-    user_id: str | None = None,
-    require_user_inactive: bool = False,
-    limit: int = 50,
-) -> list[InterviewRecord]:
-    """Return records that need a dream pass.
+def select_dreamable_users(*, limit: int = 200) -> list[str]:
+    """Return user_ids that pass the per-user dream gates (1 + 3).
 
-    Filters:
-      * Status is ``completed`` (we don't dream half-analysed records)
-      * ``updated_at > last_dreamed_at`` OR ``last_dreamed_at IS NULL``
-      * Last chat_message on any debrief session of this record is at
-        least ``RECORD_QUIET_HOURS`` old (record is "settled")
-      * If ``require_user_inactive`` is True, the user has had no
-        new chat_message anywhere in the last
-        ``USER_INACTIVE_HOURS_FOR_BATCH`` hours
+    Gate 1 (time): the user has either NEVER been dreamed
+    (``last_dreamed_at IS NULL``) OR was last dreamed more than
+    ``USER_MIN_HOURS_SINCE_LAST_DREAM`` ago.
 
-    ``user_id=None`` means scan everyone (Path C nightly batch).
+    Gate 3 (volume): since the cursor, the user has accumulated EITHER
+    ``>= NEW_MESSAGES_THRESHOLD`` new chat_messages OR
+    ``> NEW_SESSIONS_THRESHOLD`` new chat_sessions. OR semantics — either
+    is sufficient. NULL cursor → all history counts, so a new user with
+    real activity passes naturally.
+
+    Gates 2 (scan throttle) and 4 (Redis lock) live elsewhere:
+      - Gate 2 isn't needed because cron fires at most once per day,
+        so re-scanning isn't a concern.
+      - Gate 4 is checked inside ``dream_for_record`` via the per-user
+        Redis lock, not at selection time.
+
+    Returns user_ids ordered by least-recently-dreamed first so a long
+    backlog drains evenly across nights.
     """
     now = datetime.utcnow()
-    quiet_threshold = now - timedelta(hours=RECORD_QUIET_HOURS)
-    user_idle_threshold = now - timedelta(hours=USER_INACTIVE_HOURS_FOR_BATCH)
+    time_threshold = now - timedelta(hours=USER_MIN_HOURS_SINCE_LAST_DREAM)
 
     db: Session = SessionLocal()
     try:
+        from sqlalchemy import or_
+
+        # Gate 1 prefilter — cheap (single index on users).
+        users = (
+            db.query(User.username, User.last_dreamed_at)
+            .filter(
+                or_(
+                    User.last_dreamed_at.is_(None),
+                    User.last_dreamed_at <= time_threshold,
+                )
+            )
+            .filter(User.is_active.is_(True))
+            .order_by(User.last_dreamed_at.asc().nullsfirst())
+            .limit(limit * 4)   # over-fetch then filter on gate 3
+            .all()
+        )
+
+        out: list[str] = []
+        for username, cursor in users:
+            counts = _count_new_activity_since(db, username, cursor)
+            if (
+                counts["messages"] >= NEW_MESSAGES_THRESHOLD
+                or counts["sessions"] > NEW_SESSIONS_THRESHOLD
+            ):
+                out.append(username)
+                if len(out) >= limit:
+                    break
+        return out
+    finally:
+        db.close()
+
+
+def _count_new_activity_since(
+    db: Session, user_id: str, cursor: datetime | None,
+) -> dict[str, int]:
+    """Counts of new chat_messages + chat_sessions for ``user_id`` since
+    ``cursor`` (None = all-time). Used by gate 3.
+    """
+    msg_q = (
+        db.query(ChatMessage)
+        .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+        .filter(ChatSession.user_id == user_id)
+    )
+    sess_q = db.query(ChatSession).filter(ChatSession.user_id == user_id)
+    if cursor is not None:
+        msg_q = msg_q.filter(ChatMessage.created_at > cursor)
+        sess_q = sess_q.filter(ChatSession.created_at > cursor)
+    return {"messages": msg_q.count(), "sessions": sess_q.count()}
+
+
+def select_records_for_user(
+    user_id: str, *, limit: int = 50,
+) -> list[InterviewRecord]:
+    """Return records that should be dreamed for ``user_id``.
+
+    Filters:
+      * status='completed' (we don't dream half-analysed records)
+      * ``updated_at > last_dreamed_at`` OR ``last_dreamed_at IS NULL``
+      * Last chat_message on any debrief session is at least
+        ``RECORD_QUIET_HOURS`` old (record is "settled" — covers the
+        "exclude currently-chatted record" requirement at 03:30, which
+        in practice is always true unless the user is awake at night).
+    """
+    now = datetime.utcnow()
+    quiet_threshold = now - timedelta(hours=RECORD_QUIET_HOURS)
+
+    db: Session = SessionLocal()
+    try:
+        from sqlalchemy import or_
+
         q = (
             db.query(InterviewRecord)
+            .filter(InterviewRecord.user_id == user_id)
             .filter(InterviewRecord.status == "completed")
-        )
-        if user_id is not None:
-            q = q.filter(InterviewRecord.user_id == user_id)
-        # Records that have new content since their last dream
-        # (or have never been dreamed).
-        from sqlalchemy import or_
-        q = q.filter(
-            or_(
-                InterviewRecord.last_dreamed_at.is_(None),
-                InterviewRecord.updated_at > InterviewRecord.last_dreamed_at,
+            .filter(
+                or_(
+                    InterviewRecord.last_dreamed_at.is_(None),
+                    InterviewRecord.updated_at > InterviewRecord.last_dreamed_at,
+                )
             )
+            .order_by(InterviewRecord.updated_at.asc())
+            .limit(limit * 2)
         )
-        # Limit at the SQL layer; we'll filter quiet/inactive below.
-        candidates = q.order_by(InterviewRecord.updated_at.asc()).limit(limit * 2).all()
-
         out: list[InterviewRecord] = []
-        for rec in candidates:
-            # Skip records whose debrief sessions are still hot.
+        for rec in q.all():
             latest_msg_at = _latest_debrief_message_at(db, rec.id)
             if latest_msg_at is None:
-                # No debrief chat at all → nothing to dream over.
-                continue
+                continue   # no debrief chat → nothing to consolidate
             if latest_msg_at > quiet_threshold:
-                continue
-            if require_user_inactive:
-                # Path C check: this user has been globally inactive
-                # for the batch window.
-                user_latest = _latest_user_chat_at(db, rec.user_id)
-                if user_latest is not None and user_latest > user_idle_threshold:
-                    continue
+                continue   # still active
             out.append(rec)
             if len(out) >= limit:
                 break
         return out
+    finally:
+        db.close()
+
+
+def bump_user_last_dreamed_at(user_id: str) -> None:
+    """Move the user's dream cursor to NOW. Caller invokes ONCE after
+    finishing the per-user dream loop, regardless of whether each
+    individual record produced patches — the per-record skip protection
+    lives inside ``dream_for_record`` (idempotent re-check)."""
+    db: Session = SessionLocal()
+    try:
+        user = db.query(User).filter(User.username == user_id).first()
+        if user is None:
+            return
+        user.last_dreamed_at = datetime.utcnow()
+        db.commit()
     finally:
         db.close()
 
@@ -164,19 +261,6 @@ def _latest_debrief_message_at(db: Session, record_id: str) -> datetime | None:
             ChatSession.interview_id == record_id,
             ChatSession.session_type == "debrief",
         )
-        .order_by(ChatMessage.created_at.desc())
-        .first()
-    )
-    return row[0] if row else None
-
-
-def _latest_user_chat_at(db: Session, user_id: str) -> datetime | None:
-    """Most recent ChatMessage timestamp across all of the user's
-    sessions, used to check whether they're currently active."""
-    row = (
-        db.query(ChatMessage.created_at)
-        .join(ChatSession, ChatSession.id == ChatMessage.session_id)
-        .filter(ChatSession.user_id == user_id)
         .order_by(ChatMessage.created_at.desc())
         .first()
     )
@@ -634,8 +718,12 @@ def _dispatch_dream_patches(
 
 
 __all__ = [
+    "NEW_MESSAGES_THRESHOLD",
+    "NEW_SESSIONS_THRESHOLD",
     "RECORD_QUIET_HOURS",
-    "USER_INACTIVE_HOURS_FOR_BATCH",
+    "USER_MIN_HOURS_SINCE_LAST_DREAM",
+    "bump_user_last_dreamed_at",
     "dream_for_record",
-    "select_candidate_records",
+    "select_dreamable_users",
+    "select_records_for_user",
 ]
