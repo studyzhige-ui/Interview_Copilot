@@ -211,24 +211,99 @@ services:
     networks:
       - copilot_net
 
-  worker:
+  # ── Worker fleet split: heavy (transcription) + light (memory etc.) ──
+  # Whisper alone is ~1.5 GB GPU; the dreaming / ingestion tasks don't
+  # need it. By subscribing each worker to ONE queue we avoid loading
+  # Whisper on the light worker (see celery_app.py init_worker_models
+  # for the conditional load). task_routes in celery config wires each
+  # task name to its queue; here we just start one worker per queue.
+
+  worker-transcription:
     profiles: [full]
     build:
       context: .
       dockerfile: backend/Dockerfile
-    container_name: interview_copilot_worker
+    container_name: interview_copilot_worker_transcription
     env_file: .env
     environment:
-      # Same overrides as api — see comment block there for the
-      # *_DOCKER override pattern.
       DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql://postgres:postgres@db:5432/interview_copilot}
       REDIS_URL: ${REDIS_URL_DOCKER:-redis://redis:6379/0}
       MILVUS_URI: ${MILVUS_URI_DOCKER:-http://milvus-standalone:19530}
       AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL_DOCKER:-http://minio:9000}
-    command: ["celery", "-A", "app.worker.celery_app.celery_app", "worker", "--loglevel=info", "--pool=solo"]
+      # Belt-and-braces signal in addition to --queues; init_worker_models
+      # checks this env var first when deciding whether to load Whisper.
+      CELERY_QUEUES: "transcription"
+    command:
+      - celery
+      - -A
+      - app.worker.celery_app.celery_app
+      - worker
+      - --loglevel=info
+      - --pool=solo
+      - --queues=transcription
+      - --hostname=transcription@%h
     depends_on:
       db:
         condition: service_started
+      redis:
+        condition: service_started
+    networks:
+      - copilot_net
+
+  worker-light:
+    profiles: [full]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: interview_copilot_worker_light
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql://postgres:postgres@db:5432/interview_copilot}
+      REDIS_URL: ${REDIS_URL_DOCKER:-redis://redis:6379/0}
+      MILVUS_URI: ${MILVUS_URI_DOCKER:-http://milvus-standalone:19530}
+      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL_DOCKER:-http://minio:9000}
+      CELERY_QUEUES: "default"
+    command:
+      - celery
+      - -A
+      - app.worker.celery_app.celery_app
+      - worker
+      - --loglevel=info
+      # Light tasks are LLM-bound (lots of waiting on the API), so a
+      # thread pool with modest concurrency beats --pool=solo.
+      - --pool=threads
+      - --concurrency=4
+      - --queues=default
+      - --hostname=light@%h
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+    networks:
+      - copilot_net
+
+  # Celery Beat — fires the nightly dreaming scan at 03:30 Asia/Shanghai.
+  # Sends tasks to the queue specified by task_routes (memory tasks go
+  # to 'default', so worker-light picks them up). Beat itself does no
+  # work; one instance is sufficient.
+  beat:
+    profiles: [full]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: interview_copilot_beat
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql://postgres:postgres@db:5432/interview_copilot}
+      REDIS_URL: ${REDIS_URL_DOCKER:-redis://redis:6379/0}
+    command:
+      - celery
+      - -A
+      - app.worker.celery_app.celery_app
+      - beat
+      - --loglevel=info
+    depends_on:
       redis:
         condition: service_started
     networks:

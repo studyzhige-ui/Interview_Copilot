@@ -49,6 +49,27 @@ celery_app.conf.update(
     task_time_limit=3600,        # Hard kill at 60 min (transcription headroom).
     task_soft_time_limit=3540,   # 1 min before hard kill, raise SoftTimeLimitExceeded
                                  # so handlers can flush partial state.
+    # ── Task routing ────────────────────────────────────────────────────
+    # Two-queue split (introduced when the worker fleet was unified
+    # against the user's "transcription is heavy, dreaming is light"
+    # concern):
+    #
+    #   transcription queue  → heavy worker, loads Whisper (~1.5 GB GPU)
+    #   default queue        → light worker, no Whisper (just LLM client)
+    #
+    # Operators run TWO worker processes — see docker-compose.yml's
+    # worker-transcription / worker-light services. Both subscribe to
+    # the same broker; queue subscription is the routing primitive.
+    task_default_queue="default",
+    task_routes={
+        # ── Heavy: needs Whisper + diarization model ──
+        "tasks.process_interview_analysis": {"queue": "transcription"},
+        # ── Light: LLM / embedding / DB only ──
+        "tasks.process_document_ingestion": {"queue": "default"},
+        "tasks.dream_for_record": {"queue": "default"},
+        "tasks.dream_for_user": {"queue": "default"},
+        "tasks.scan_and_dream_batch": {"queue": "default"},
+    },
     # ── Reliability ─────────────────────────────────────────────────────
     # Default acks_late=True so a worker crash during a task re-queues the
     # message instead of silently dropping it. Tasks MUST be idempotent
@@ -86,9 +107,46 @@ celery_app.conf.update(
 )
 
 
+def _worker_subscribes_to(queue_name: str) -> bool:
+    """True iff this Celery worker process was started with --queues
+    including ``queue_name``. Reads the parsed argv after Celery's
+    own option parser has consumed it.
+
+    Two ways the queue is signalled:
+      * Explicit ``--queues transcription`` flag on the command line
+      * ``CELERY_QUEUES`` env var set by the docker-compose service
+        (a belt to the CLI braces — see worker-transcription /
+        worker-light services for the wiring)
+
+    If neither is set, the worker defaults to the configured
+    ``task_default_queue`` ('default'), meaning it does NOT subscribe
+    to ``transcription``.
+    """
+    import os
+    import sys
+
+    env = os.environ.get("CELERY_QUEUES", "").strip()
+    if env and queue_name in {q.strip() for q in env.split(",")}:
+        return True
+
+    # Fall back to scanning argv for --queues/-Q.
+    argv = sys.argv
+    for i, arg in enumerate(argv):
+        if arg in ("-Q", "--queues") and i + 1 < len(argv):
+            return queue_name in {q.strip() for q in argv[i + 1].split(",")}
+        if arg.startswith("--queues="):
+            return queue_name in {q.strip() for q in arg.split("=", 1)[1].split(",")}
+    return False
+
+
 @worker_process_init.connect
 def init_worker_models(**kwargs):
-    """Warm model resources when each Celery worker process starts."""
+    """Warm model resources when each Celery worker process starts.
+
+    Whisper is only loaded on workers that subscribe to the
+    ``transcription`` queue — light workers (memory dreaming /
+    document ingestion) save ~1.5 GB GPU by skipping it.
+    """
     import logging
 
     logger = logging.getLogger(__name__)
@@ -98,11 +156,17 @@ def init_worker_models(**kwargs):
     # constructs them). No-op when LANGSMITH_TRACING isn't set in .env.
     from app.core.llm_tracing import setup_llm_tracing
     setup_llm_tracing()
-    logger.info(">>> Celery worker started; warming LLM, RAG, and audio models...")
 
     from app.rag.embeddings import init_rag_settings
-    from app.services.voice.audio_transcription_service import init_whisper_model
-
     init_rag_settings()
-    init_whisper_model()
-    logger.info(">>> Celery model warmup complete.")
+
+    if _worker_subscribes_to("transcription"):
+        logger.info(">>> Transcription worker — warming Whisper + diarization...")
+        from app.services.voice.audio_transcription_service import init_whisper_model
+        init_whisper_model()
+        logger.info(">>> Transcription worker model warmup complete.")
+    else:
+        logger.info(
+            ">>> Light worker (no Whisper). Subscribed queues: %s",
+            kwargs.get("sender", "<unknown>"),
+        )

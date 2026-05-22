@@ -277,11 +277,22 @@ curl http://localhost:9000/minio/health/live  # 200?
 
 ### worker 立刻退出，报 `--pool=solo` 错
 
-PowerShell 的引号转义坑你。用：
+PowerShell 的引号转义坑你。现在并行跑两个 worker（一重一轻 ——
+见 `docker-compose.yml` 的 `worker-transcription` / `worker-light`
+服务）。每个一个终端：
+
 ```powershell
-celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=solo
+# 终端 1 —— 转写 worker（加载 Whisper，~1.5 GB GPU）
+celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=solo --queues=transcription --hostname=transcription@%h
+
+# 终端 2 —— 轻 worker（记忆梦境、文档入库；不加载 Whisper）
+celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=threads --concurrency=4 --queues=default --hostname=light@%h
+
+# 终端 3 —— beat 调度器（每天 03:30 Asia/Shanghai 触发夜间梦境扫描）
+celery -A app.worker.celery_app.celery_app beat --loglevel=info
 ```
-单行、精确拼写，不要用管道或变量替换可能搅乱 `--pool=solo`。
+
+每条单行、精确拼写。不要用管道或变量替换搅乱 `--pool=solo`。
 
 ### 任务入队但不执行
 

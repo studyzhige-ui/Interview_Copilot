@@ -305,12 +305,23 @@ dev is `http://localhost:9000`.
 
 ### Worker exits immediately with `--pool=solo` error
 
-PowerShell quoting bites you. Use:
+PowerShell quoting bites you. Two workers run side by side now (one
+heavy, one light — see the `worker-transcription` / `worker-light`
+services in `docker-compose.yml`). Each in its own terminal:
+
 ```powershell
-celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=solo
+# Terminal 1 — transcription (loads Whisper, ~1.5 GB GPU)
+celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=solo --queues=transcription --hostname=transcription@%h
+
+# Terminal 2 — light tasks (memory dreaming, document ingestion; no Whisper)
+celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=threads --concurrency=4 --queues=default --hostname=light@%h
+
+# Terminal 3 — beat scheduler (fires nightly dreaming at 03:30 Asia/Shanghai)
+celery -A app.worker.celery_app.celery_app beat --loglevel=info
 ```
-Single line, exact spelling. Don't use a pipe / variable substitution
-that might mangle `--pool=solo`.
+
+Single line, exact spelling per command. Don't use a pipe / variable
+substitution that might mangle `--pool=solo`.
 
 ### Tasks queued but never picked up
 
