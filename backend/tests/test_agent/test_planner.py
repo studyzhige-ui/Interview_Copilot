@@ -1,41 +1,27 @@
-"""Unit tests for the query planner (``app.conversation.query_planner``).
+"""Unit tests for the unified query planner (``app.conversation.query_planner``).
 
-The planner asks a fast LLM for a JSON blob describing retrieval intent.
-We stub the LLM proxy so tests are deterministic and offline.
-
-Coverage:
-  * Successful JSON response → parsed QueryPlan with all fields preserved.
-  * LLM emits JSON wrapped in prose → still parses (regex extraction).
-  * LLM emits non-JSON → fallback plan returned.
-  * Empty ``dense_query`` / ``sparse_query`` → planner backfills from
-    ``standalone_query`` and the keyword extractor.
-  * ``fallback_query_plan`` returns the documented defaults.
-  * The keyword extractor handles Chinese + symbols correctly.
+After the planner-merge refactor the planner emits both the
+query-rewrite fields AND the memory-body selection decisions in a
+single LLM call. These tests stub the LLM proxy with deterministic
+JSON / exception responses to exercise the parser, the validators,
+and the fallback paths.
 """
-from __future__ import annotations
-
 import asyncio
 import json
-
-import pytest
-
-
-# ─────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────
+from dataclasses import dataclass
 
 
+@dataclass
 class _FakeResponse:
-    def __init__(self, text: str):
-        self.text = text
+    text: str
 
 
 class _FakeLLM:
-    """Async-completing stub that returns a canned response."""
+    """Pretends to be the LlamaIndex async LLM proxy."""
 
-    def __init__(self, response_text: str):
-        self._text = response_text
-        self.calls: list[tuple[tuple, dict]] = []
+    def __init__(self, text: str):
+        self._text = text
+        self.calls: list[tuple] = []
 
     async def acomplete(self, *args, **kwargs):
         self.calls.append((args, kwargs))
@@ -43,14 +29,18 @@ class _FakeLLM:
 
 
 def _patch_llm(monkeypatch, fake_llm):
-    """Patch the proxy the planner imports. Also patch the registry-level
-    factory so any future code path that calls ``get_llm_for_role`` lands
-    on the same fake."""
+    """Patch the proxy the planner imports."""
     from app.conversation import query_planner as planner
     from app.core import model_registry
 
     monkeypatch.setattr(planner, "agent_fast_llm", fake_llm)
     monkeypatch.setattr(model_registry, "get_llm_for_role", lambda role: fake_llm)
+
+
+_INDEX_LINES = [
+    "- [Redis] strong | 8 facts | 上次 2026-05-21 — caching + pub/sub",
+    "- [TCP] progressing | 3 facts | 上次 2026-05-14 — networking fundamentals",
+]
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -65,26 +55,27 @@ def test_plan_query_parses_full_json_response(monkeypatch):
         "standalone_query": "Explain Redis cache avalanche for interviews.",
         "dense_query": "Redis cache avalanche interview explanation",
         "sparse_query": "Redis cache avalanche",
-        "needs_memory_retrieval": True,
-        "memory_types": ["interaction_preference", "user_profile"],
         "needs_knowledge_retrieval": True,
-        "knowledge_sources": ["interview_qa", "official_docs"],
-        "answer_mode": "knowledge_qa",
-        "reasoning": "technical interview question",
+        "knowledge_topics": ["Redis"],
+        "load_strategy": False,
+        "load_habit": False,
     }
     fake = _FakeLLM(json.dumps(payload))
     _patch_llm(monkeypatch, fake)
 
-    plan = asyncio.run(planner.plan_query("那这个怎么答？", "Redis cache avalanche"))
+    plan = asyncio.run(planner.plan_query(
+        "那这个怎么答？",
+        "Redis cache avalanche",
+        knowledge_index_lines=_INDEX_LINES,
+    ))
 
     assert plan.standalone_query == payload["standalone_query"]
     assert plan.dense_query == payload["dense_query"]
     assert plan.sparse_query == payload["sparse_query"]
-    assert plan.memory_types == payload["memory_types"]
-    assert plan.knowledge_sources == payload["knowledge_sources"]
-    assert plan.answer_mode == "knowledge_qa"
-    assert plan.needs_memory_retrieval is True
     assert plan.needs_knowledge_retrieval is True
+    assert plan.knowledge_topics == ["Redis"]
+    assert plan.load_strategy is False
+    assert plan.load_habit is False
     # The planner must have asked the LLM for a JSON object.
     assert fake.calls, "planner should call the LLM exactly once"
     _, kwargs = fake.calls[0]
@@ -99,23 +90,21 @@ def test_plan_query_extracts_json_from_prose_wrapper(monkeypatch):
         "standalone_query": "What is HNSW indexing?",
         "dense_query": "HNSW indexing graph nearest neighbour",
         "sparse_query": "HNSW indexing graph nearest neighbour",
-        "needs_memory_retrieval": False,
-        "memory_types": [],
         "needs_knowledge_retrieval": True,
-        "knowledge_sources": ["official_docs"],
-        "answer_mode": "knowledge_qa",
-        "reasoning": "concept lookup",
+        "knowledge_topics": [],
+        "load_strategy": False,
+        "load_habit": False,
     }
     wrapped = "Sure! Here's the plan:\n" + json.dumps(payload) + "\nLet me know if you need more."
     _patch_llm(monkeypatch, _FakeLLM(wrapped))
 
     plan = asyncio.run(planner.plan_query("How does HNSW work?", ""))
-    assert plan.answer_mode == "knowledge_qa"
-    assert plan.knowledge_sources == ["official_docs"]
+    assert plan.needs_knowledge_retrieval is True
+    assert plan.knowledge_topics == []
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Direct chat / preference update
+# Direct chat — no retrieval, no body loads
 # ─────────────────────────────────────────────────────────────────────
 
 
@@ -126,42 +115,101 @@ def test_plan_query_handles_direct_chat_mode(monkeypatch):
         "standalone_query": "hi",
         "dense_query": "hi",
         "sparse_query": "hi",
-        "needs_memory_retrieval": False,
-        "memory_types": [],
         "needs_knowledge_retrieval": False,
-        "knowledge_sources": [],
-        "answer_mode": "direct_chat",
-        "reasoning": "casual greeting",
+        "knowledge_topics": [],
+        "load_strategy": False,
+        "load_habit": False,
     }
     _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
 
     plan = asyncio.run(planner.plan_query("hi", ""))
-    assert plan.answer_mode == "direct_chat"
     assert plan.needs_knowledge_retrieval is False
-    assert plan.knowledge_sources == []
+    assert plan.knowledge_topics == []
+    assert plan.load_strategy is False
+    assert plan.load_habit is False
 
 
-def test_plan_query_handles_preference_update(monkeypatch):
+# ─────────────────────────────────────────────────────────────────────
+# Knowledge topics — filtering + cap
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_plan_query_filters_invented_knowledge_topics(monkeypatch):
+    """The LLM might invent topic names that aren't in the index — the
+    planner must hard-filter them against the injected index so a
+    downstream attach_active_bodies doesn't silently miss the load."""
     from app.conversation import query_planner as planner
 
     payload = {
-        "standalone_query": "From now on answer in English only.",
-        "dense_query": "answer in English only",
-        "sparse_query": "answer English only",
-        "needs_memory_retrieval": True,
-        "memory_types": ["interaction_preference"],
+        "standalone_query": "Explain Redis",
+        "dense_query": "Redis avalanche",
+        "sparse_query": "Redis",
         "needs_knowledge_retrieval": False,
-        "knowledge_sources": [],
-        "answer_mode": "preference_update",
-        "reasoning": "user is updating an interaction preference",
+        "knowledge_topics": ["Redis", "Kafka", "GraphQL"],  # only Redis is real
+        "load_strategy": False,
+        "load_habit": False,
     }
     _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
 
     plan = asyncio.run(planner.plan_query(
-        "From now on answer in English only.", ""
+        "Tell me about Redis",
+        "",
+        knowledge_index_lines=_INDEX_LINES,
     ))
-    assert plan.answer_mode == "preference_update"
-    assert "interaction_preference" in plan.memory_types
+    assert plan.knowledge_topics == ["Redis"]
+
+
+def test_plan_query_caps_knowledge_topics_at_three(monkeypatch):
+    """Even if the LLM returns five valid topics, the planner trims to 3."""
+    from app.conversation import query_planner as planner
+
+    index = [
+        f"- [Topic{i}] strong | 1 facts | 上次 2026-05-21 — t{i}" for i in range(5)
+    ]
+    payload = {
+        "standalone_query": "x",
+        "dense_query": "x",
+        "sparse_query": "x",
+        "needs_knowledge_retrieval": False,
+        "knowledge_topics": [f"Topic{i}" for i in range(5)],
+        "load_strategy": False,
+        "load_habit": False,
+    }
+    _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
+
+    plan = asyncio.run(planner.plan_query("x", "", knowledge_index_lines=index))
+    assert len(plan.knowledge_topics) == 3
+    assert plan.knowledge_topics == ["Topic0", "Topic1", "Topic2"]
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Privacy gate
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_plan_query_with_recall_off_clears_memory_fields(monkeypatch):
+    """When recall_on=False the planner MUST output empty memory
+    selections, even if the LLM happened to suggest some — the
+    post-parse guard enforces the privacy contract."""
+    from app.conversation import query_planner as planner
+
+    payload = {
+        "standalone_query": "x",
+        "dense_query": "x",
+        "sparse_query": "x",
+        "needs_knowledge_retrieval": True,
+        "knowledge_topics": ["Redis"],   # LLM ignored our instruction
+        "load_strategy": True,
+        "load_habit": True,
+    }
+    _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
+
+    plan = asyncio.run(planner.plan_query(
+        "x", "", knowledge_index_lines=_INDEX_LINES, recall_on=False,
+    ))
+    assert plan.knowledge_topics == []
+    assert plan.load_strategy is False
+    assert plan.load_habit is False
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -177,29 +225,27 @@ def test_plan_query_backfills_missing_dense_and_sparse(monkeypatch):
         "standalone_query": "Explain Kafka consumer rebalance",
         "dense_query": "   ",
         "sparse_query": "",
-        "needs_memory_retrieval": False,
-        "memory_types": [],
         "needs_knowledge_retrieval": True,
-        "knowledge_sources": ["interview_qa"],
-        "answer_mode": "knowledge_qa",
-        "reasoning": "",
+        "knowledge_topics": [],
+        "load_strategy": False,
+        "load_habit": False,
     }
     _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
 
     plan = asyncio.run(planner.plan_query("explain it", "Kafka consumer rebalance"))
     assert plan.dense_query == "Explain Kafka consumer rebalance"
-    # Sparse query backfilled from the keyword extractor.
     assert "Kafka" in plan.sparse_query or "kafka" in plan.sparse_query.lower()
     assert "rebalance" in plan.sparse_query.lower() or "rebalance" in plan.sparse_query
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Failure → fallback
+# Failure → fallback (conservative: no RAG, no body loads)
 # ─────────────────────────────────────────────────────────────────────
 
 
 def test_plan_query_falls_back_on_non_json_response(monkeypatch):
-    """LLM returns plain prose with no JSON → planner returns its fallback plan."""
+    """LLM returns plain prose with no JSON → planner returns its
+    conservative fallback (no RAG, no memory bodies)."""
     from app.conversation import query_planner as planner
 
     _patch_llm(monkeypatch, _FakeLLM("sorry I cannot answer right now."))
@@ -208,11 +254,10 @@ def test_plan_query_falls_back_on_non_json_response(monkeypatch):
         "Tell me about Redis caching.", "earlier discussed concurrency"
     ))
     assert plan.standalone_query == "Tell me about Redis caching."
-    assert plan.needs_memory_retrieval is True
-    assert plan.needs_knowledge_retrieval is True
-    assert plan.answer_mode == "knowledge_qa"
-    assert plan.knowledge_sources == ["interview_qa"]
-    assert "Fallback" in plan.reasoning
+    assert plan.needs_knowledge_retrieval is False
+    assert plan.knowledge_topics == []
+    assert plan.load_strategy is False
+    assert plan.load_habit is False
 
 
 def test_plan_query_falls_back_when_llm_raises(monkeypatch):
@@ -227,21 +272,22 @@ def test_plan_query_falls_back_when_llm_raises(monkeypatch):
     monkeypatch.setattr(planner, "agent_fast_llm", boom)
 
     plan = asyncio.run(planner.plan_query("anything", ""))
-    assert plan.needs_knowledge_retrieval is True
-    assert "Fallback" in plan.reasoning
+    # Conservative fallback — DO NOT trigger RAG on the LLM failure.
+    assert plan.needs_knowledge_retrieval is False
+    assert plan.knowledge_topics == []
 
 
 def test_plan_query_falls_back_on_invalid_pydantic_payload(monkeypatch):
     """Valid JSON but missing required fields → fallback rather than crash."""
     from app.conversation import query_planner as planner
 
-    bad = json.dumps({"answer_mode": "knowledge_qa"})  # missing standalone_query etc
+    bad = json.dumps({"some_unknown_field": "value"})  # missing standalone_query etc
     _patch_llm(monkeypatch, _FakeLLM(bad))
 
     plan = asyncio.run(planner.plan_query("hi there", ""))
     # Falls back, so we see the user message echoed.
     assert plan.standalone_query == "hi there"
-    assert "Fallback" in plan.reasoning
+    assert plan.needs_knowledge_retrieval is False
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -249,29 +295,27 @@ def test_plan_query_falls_back_on_invalid_pydantic_payload(monkeypatch):
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_fallback_query_plan_returns_documented_defaults():
+def test_fallback_query_plan_returns_conservative_defaults():
+    """The post-refactor fallback is conservative — no RAG, no memory
+    bodies — so an LLM hiccup doesn't accidentally trigger an
+    expensive turn against the user's intent."""
     from app.conversation.query_planner import fallback_query_plan
 
     plan = fallback_query_plan("How does HNSW work?")
     assert plan.standalone_query == "How does HNSW work?"
-    assert plan.needs_memory_retrieval is True
-    assert plan.needs_knowledge_retrieval is True
-    assert set(plan.memory_types) == {
-        "user_profile",
-        "interaction_preference",
-        "feedback_rule",
-        "project_reference",
-    }
-    assert plan.knowledge_sources == ["interview_qa"]
-    assert plan.answer_mode == "knowledge_qa"
+    assert plan.needs_knowledge_retrieval is False
+    assert plan.knowledge_topics == []
+    assert plan.load_strategy is False
+    assert plan.load_habit is False
+    # Sparse query still derived from the keyword extractor so the
+    # fallback can at least produce a usable form.
+    assert plan.sparse_query, "fallback should still backfill sparse_query"
 
 
 def test_keyword_query_handles_mixed_lang_and_symbols():
     from app.conversation.query_planner import _keyword_query
 
     out = _keyword_query("Explain Redis 缓存雪崩 and C++ 多线程")
-    # English+symbols token preserved.
     assert "C++" in out
     assert "Redis" in out
-    # Chinese 2+ char clusters kept (Pinyin / single chars are NOT kept).
     assert "缓存雪崩" in out or "多线程" in out

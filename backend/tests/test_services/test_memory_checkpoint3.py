@@ -6,9 +6,11 @@ Covers:
        a shared ``db`` parameter for transactional composition
   F6 — single_doc ``apply_patches`` retries on ``IntegrityError`` when
        two writers race the first row
-  F3+F8 — v3_context_loader falls back to last_discussed_at on
-       selection-LLM failure, emits the metric, and caches results
   F9a — lock degradation emits the metric on Redis outage
+
+Note: the F3+F8 selection-LLM tests were retired when the selection
+LLM merged into the conversation engine's unified planner (see
+``tests/test_agent/test_planner.py`` for the post-merge coverage).
 """
 from __future__ import annotations
 
@@ -207,118 +209,6 @@ def test_f6_single_doc_retries_on_integrity_error_race(engine_and_session, monke
         assert "先分析根因" in row.body
     finally:
         db.close()
-
-
-# ── F3 + F8 ───────────────────────────────────────────────────────────
-
-
-def test_f3_selection_llm_failure_falls_back_to_recent(engine_and_session, monkeypatch):
-    """When the selection LLM fails (timeout / exception), the loader
-    must fall back to recent topics — NOT silently return zero bodies."""
-    from app.models.knowledge_doc import KnowledgeDoc
-    from app.services.memory import v3_context_loader
-
-    engine, Session = engine_and_session
-    _rebind_sessions(monkeypatch, Session)
-
-    db = Session()
-    now = datetime.utcnow()
-    db.add_all([
-        KnowledgeDoc(
-            user_id="alice", topic="Redis", body="## 已掌握的认知\n- recent\n## 学习进展\n",
-            one_liner="caching", mastery_level="strong", fact_count=1,
-            last_discussed_at=now,
-        ),
-        KnowledgeDoc(
-            user_id="alice", topic="TCP", body="## 已掌握的认知\n- old\n## 学习进展\n",
-            one_liner="networking", mastery_level="progressing", fact_count=1,
-            last_discussed_at=now - timedelta(days=7),
-        ),
-    ])
-    db.commit()
-    db.close()
-
-    metric_calls: list[dict] = []
-
-    def fake_incr(event, **labels):
-        metric_calls.append({"event": event, **labels})
-
-    monkeypatch.setattr(v3_context_loader, "_metric_incr", fake_incr)
-
-    async def boom(*args, **kwargs):
-        raise RuntimeError("selection LLM is angry")
-
-    class FakeLLM:
-        acomplete = staticmethod(boom)
-
-    monkeypatch.setattr(v3_context_loader, "agent_fast_llm", FakeLLM)
-
-    # Clear the per-process cache from earlier tests.
-    v3_context_loader._SELECTION_CACHE.clear()
-
-    decision = asyncio.run(
-        v3_context_loader._select_active_memory(
-            user_id="alice",
-            query="how does X work",
-            index_lines=[
-                "- [Redis] strong | 1 facts | 上次 2026-05-21 — caching",
-                "- [TCP] 进展中 | 1 facts | 上次 2026-05-14 — networking",
-            ],
-            strategy_description="",
-            habit_description="",
-            max_topics=2,
-        )
-    )
-    # Most-recently-discussed first → Redis before TCP.
-    assert decision.knowledge_topics == ("Redis", "TCP")
-    # No strategy/habit doc → fallback load_strategy/load_habit = False.
-    assert decision.load_strategy is False
-    assert decision.load_habit is False
-    # And the failure was reported.
-    assert any(c["event"] == "memory.selection_llm_failed" for c in metric_calls)
-
-
-def test_f3_selection_llm_cache_skips_second_call(engine_and_session, monkeypatch):
-    """A cache hit must not invoke the LLM at all."""
-    from app.services.memory import v3_context_loader
-
-    engine, Session = engine_and_session
-    _rebind_sessions(monkeypatch, Session)
-
-    call_count = {"n": 0}
-
-    async def fake_acomplete(prompt, **kwargs):
-        call_count["n"] += 1
-
-        class Resp:
-            text = (
-                '{"knowledge_topics": ["Redis"], '
-                '"load_strategy": false, "load_habit": false}'
-            )
-
-        return Resp()
-
-    class FakeLLM:
-        acomplete = staticmethod(fake_acomplete)
-
-    monkeypatch.setattr(v3_context_loader, "agent_fast_llm", FakeLLM)
-    v3_context_loader._SELECTION_CACHE.clear()
-
-    index_lines = ["- [Redis] strong | 1 facts | 上次 2026-05-21 — caching"]
-    for _ in range(3):
-        decision = asyncio.run(
-            v3_context_loader._select_active_memory(
-                user_id="alice",
-                query="redis ttl",
-                index_lines=index_lines,
-                strategy_description="",
-                habit_description="",
-                max_topics=2,
-            )
-        )
-        assert decision.knowledge_topics == ("Redis",)
-    # Only the first call hit the LLM.
-    assert call_count["n"] == 1
 
 
 # ── F9a ───────────────────────────────────────────────────────────────

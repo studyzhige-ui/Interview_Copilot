@@ -262,66 +262,15 @@ JSON 数组。每个元素：
 
 # ══════════════════════════════════════════════════════════════════════
 # Selection prompt for context assembly
-# ══════════════════════════════════════════════════════════════════════
-#
-# When user opens a chat (or sends a message), we already have:
-#  - user_profile_doc (always loaded, universal)
-#  - all 4 doc indexes (cheap, ~5K chars)
-#
-# But knowledge_doc bodies are not auto-loaded — we ask the LLM which
-# topics are relevant to the current query and only load those bodies.
-
-CONTEXT_SELECTION_PROMPT = """你正在帮助决定为用户的下一个 chat turn 加载哪些记忆文档。
-
-用户画像（``user_profile_doc``）已经默认加载，不需要你判断。
-你要决定的是另外**三种**记忆 doc 要不要拉详情进入对话上下文。
-
-## 用户的提问
-
-> {query}
-
-## 可用的记忆 doc
-
-### 1. knowledge_doc（按主题，下面是所有主题的一行索引）
-
-{knowledge_index}
-
-→ 你可以选 **最多 3 个** 与提问相关的主题，让系统拉这些主题的详细 body 进入上下文。
-
-### 2. strategy_doc（用户的答题策略总览）
-
-{strategy_description}
-
-→ 你可以决定要不要加载 strategy_doc 的详细 body。
-
-### 3. habit_doc（用户的学习节奏 + 心态总览）
-
-{habit_description}
-
-→ 你可以决定要不要加载 habit_doc 的详细 body。
-
-## 决策规则
-
-- **宁缺毋滥**：只选你**确信**对回答这个问题真有帮助的。
-- 闲聊天气、问天气、问简单 fact —— 全部返回 `false` / `[]`。
-- 用户问"我之前学的 Redis 怎么样了" —— 显然要 load knowledge: Redis。
-- 用户问"答 behavioural 题的话我之前总结了什么方法" —— load_strategy=true。
-- 用户问"我最近练习节奏怎么样" —— load_habit=true。
-
-## 输出格式（仅 JSON）
-
-```json
-{{
-  "knowledge_topics": ["Redis", "TCP"],
-  "load_strategy": false,
-  "load_habit": false
-}}
-```
-"""
+# NOTE: ``CONTEXT_SELECTION_PROMPT`` used to live here — it ran a
+# separate "selection LLM" to decide which knowledge / strategy /
+# habit doc bodies to load per turn. That responsibility merged into
+# the conversation engine's unified planner in
+# ``app/conversation/query_planner.py`` (one LLM call per turn now,
+# making both query-rewrite and memory-load decisions together).
 
 
 __all__ = [
     "REALTIME_EXTRACTION_PROMPT",
     "DREAMING_PROMPT",
-    "CONTEXT_SELECTION_PROMPT",
 ]

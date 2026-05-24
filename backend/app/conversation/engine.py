@@ -46,9 +46,9 @@ from app.services.chat.context_assembly_pipeline import (
 )
 from app.services.memory.post_turn_maintenance import post_turn_maintenance_service
 from app.services.memory.v3_context_loader import (
+    attach_active_bodies,
     load_profile_only,
     load_universal,
-    load_with_active_bodies,
 )
 from app.services.telemetry_service import log_interaction_metrics
 
@@ -154,10 +154,36 @@ class ConversationEngine:
 
     async def _prepare(self) -> None:
         """Build the StrategyContext. Identical for L1 and L2 — the
-        differences only kick in inside ``strategy.execute()``."""
+        differences only kick in inside ``strategy.execute()``.
+
+        Flow:
+          1. Universal memory load (fast: ~4 local DB reads, no LLM).
+             Gives the planner the knowledge index + strategy / habit
+             descriptions it needs to make body-load decisions.
+          2. Single planner LLM call: rewrites query + decides RAG
+             + picks memory bodies. (Used to be two LLM calls —
+             planner then a separate selection LLM. Merged in the
+             post-Stage-G simplification.)
+          3. Concurrent: RAG retrieval (Milvus + reranker, ~hundreds
+             of ms) // memory body loads (cheap DB reads). Running
+             them as tasks just lets the RAG round-trip overlap with
+             body loads + saves a few tens of ms.
+        """
         transcript_service.ensure_session(self.session_id, self.user_id)
 
-        # Lightweight context for query rewriting.
+        from app.services.memory.recall_policy import recall_enabled_for_session
+        recall_on = recall_enabled_for_session(self.session_id, self.user_id)
+
+        # Step 1: cheap universal load — picks up user_profile + the
+        # three description / index lines the planner needs to make
+        # informed body-load decisions. Privacy mode skips everything
+        # except user_profile (basic identity).
+        if recall_on:
+            universal_ctx = load_universal(self.user_id)
+        else:
+            universal_ctx = load_profile_only(self.user_id)
+
+        # Step 2: planner LLM — one call, all decisions.
         rewrite_context = context_pipeline.assemble_rewrite_context(
             session_id=self.session_id,
             current_query=self.user_message,
@@ -165,56 +191,51 @@ class ConversationEngine:
         query_plan = await plan_query(
             user_message=self.user_message,
             rewrite_context=rewrite_context.context_text,
+            knowledge_index_lines=universal_ctx.knowledge_index_lines,
+            strategy_description=universal_ctx.strategy_description,
+            habit_description=universal_ctx.habit_description,
+            recall_on=recall_on,
         )
         standalone_query = query_plan.standalone_query
 
-        # v3 memory recall + RAG knowledge retrieval run CONCURRENTLY
-        # — both are network-bound and independent. Sequential await
-        # would add (memory_latency + knowledge_latency); parallel
-        # cuts it to max(...). Matches the legacy
-        # ``qa_pipeline.agent_executor`` behaviour.
-        from app.services.memory.recall_policy import recall_enabled_for_session
-        recall_on = recall_enabled_for_session(self.session_id, self.user_id)
-
-        if recall_on and query_plan.needs_memory_retrieval:
-            v3_memory_task = asyncio.create_task(
-                load_with_active_bodies(
-                    self.user_id,
-                    query=query_plan.dense_query or standalone_query,
-                    max_active_topics=3,
-                )
-            )
-        else:
-            v3_memory_task = None
-
-        if query_plan.needs_knowledge_retrieval:
-            knowledge_task = asyncio.create_task(
+        # Step 3: concurrent RAG + memory body loads.
+        knowledge_task = (
+            asyncio.create_task(
                 knowledge_retriever.retrieve(
                     dense_query=query_plan.dense_query or standalone_query,
                     sparse_query=query_plan.sparse_query,
-                    source_types=query_plan.knowledge_sources,
                     user_id=self.user_id,
                 )
             )
-        else:
-            knowledge_task = None
+            if query_plan.needs_knowledge_retrieval else None
+        )
 
-        # Resolve memory first (then knowledge) — the actual await
-        # order doesn't matter for end-to-end latency since both
-        # tasks were launched concurrently.
-        if v3_memory_task is not None:
-            v3_memory = await v3_memory_task
-        elif recall_on:
-            v3_memory = load_universal(self.user_id)
+        wants_bodies = bool(
+            query_plan.knowledge_topics
+            or query_plan.load_strategy
+            or query_plan.load_habit
+        )
+        bodies_task = (
+            asyncio.create_task(
+                attach_active_bodies(
+                    universal_ctx,
+                    user_id=self.user_id,
+                    topics=query_plan.knowledge_topics,
+                    load_strategy=query_plan.load_strategy,
+                    load_habit=query_plan.load_habit,
+                )
+            )
+            if wants_bodies else None
+        )
+
+        if bodies_task is not None:
+            v3_memory = await bodies_task
         else:
-            v3_memory = load_profile_only(self.user_id)
+            v3_memory = universal_ctx
 
         knowledge_result = await knowledge_task if knowledge_task else None
         knowledge_chunks = knowledge_result.chunks if knowledge_result else []
 
-        # Telemetry: did we TRY retrieval (had a task) vs did we HIT
-        # (got non-empty chunks back)? Two different signals — the
-        # old code tracked them separately and so do we.
         self._retrieval_attempted = knowledge_task is not None
         self._retrieval_hit = bool(
             knowledge_result and getattr(knowledge_result, "retrieval_hit", False)

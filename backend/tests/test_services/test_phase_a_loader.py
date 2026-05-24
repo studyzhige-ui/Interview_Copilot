@@ -142,12 +142,14 @@ def test_load_universal_no_strategy_or_habit_body(engine_and_session, monkeypatc
     assert not hasattr(ctx, "habit_body")
 
 
-# ── selection LLM decides per-doc-type ───────────────────────────────
+# ── attach_active_bodies honours explicit planner decisions ──────────
 
 
-def test_load_with_active_bodies_honours_strategy_decision(engine_and_session, monkeypatch):
-    """When selection LLM says load_strategy=true, the strategy body
-    must end up in active_strategy_body."""
+def test_attach_active_bodies_loads_strategy_when_asked(engine_and_session, monkeypatch):
+    """When the planner explicitly says load_strategy=True, the
+    strategy body must end up in active_strategy_body. After the
+    planner-merge refactor this is deterministic — no LLM call inside
+    the loader."""
     from app.models.user import User
     from app.services.memory import (
         strategy_doc_service, habit_doc_service, v3_context_loader,
@@ -172,23 +174,13 @@ def test_load_with_active_bodies_honours_strategy_decision(engine_and_session, m
         change_type="patch_realtime",
     )
 
-    # Stub the selection LLM to say load strategy=true, habit=false.
-    async def fake_acomplete(prompt, **kwargs):
-        class Resp:
-            text = (
-                '{"knowledge_topics": [], '
-                '"load_strategy": true, "load_habit": false}'
-            )
-        return Resp()
-
-    class FakeLLM:
-        acomplete = staticmethod(fake_acomplete)
-
-    monkeypatch.setattr(v3_context_loader, "agent_fast_llm", FakeLLM)
-    v3_context_loader._SELECTION_CACHE.clear()
-
-    ctx = asyncio.run(v3_context_loader.load_with_active_bodies(
-        "alice", query="how do I answer behavioural questions",
+    ctx = v3_context_loader.load_universal("alice")
+    ctx = asyncio.run(v3_context_loader.attach_active_bodies(
+        ctx,
+        user_id="alice",
+        topics=[],
+        load_strategy=True,
+        load_habit=False,
     ))
     assert "STAR" in ctx.active_strategy_body
     assert ctx.active_habit_body == ""
@@ -220,15 +212,17 @@ def test_render_omits_body_sections_when_not_active(engine_and_session, monkeypa
 
 
 def test_list_index_lines_round_trips_through_extract_topic_name(engine_and_session, monkeypatch):
-    """``v3_context_loader._extract_topic_name`` parses topic names out
-    of ``knowledge_doc_service.list_index_lines`` output. The two are
-    silently coupled by string format — if either drifts, the selection
-    LLM's topic picks all get rejected (``t in indexed_names`` fails).
-    Lock the contract with a round-trip test (review L1).
+    """``query_planner._extract_topic_names`` parses topic names out of
+    ``knowledge_doc_service.list_index_lines`` output. The two are
+    silently coupled by string format — if either drifts, the planner
+    would silently reject every topic the LLM suggested (``t in
+    valid_topics`` would always fail). Lock the contract with a
+    round-trip test (originally review L1, kept after the planner
+    merge moved the extractor).
     """
     from app.models.knowledge_doc import KnowledgeDoc
+    from app.conversation.query_planner import _extract_topic_names
     from app.services.memory import knowledge_doc_service
-    from app.services.memory.v3_context_loader import _extract_topic_name
 
     engine, Session = engine_and_session
     _rebind(monkeypatch, Session)
@@ -261,10 +255,10 @@ def test_list_index_lines_round_trips_through_extract_topic_name(engine_and_sess
 
     lines = knowledge_doc_service.list_index_lines("alice", max_topics=10)
     assert len(lines) == 3
-    extracted = [_extract_topic_name(line) for line in lines]
-    # Every produced line MUST yield a non-empty topic name back, and
-    # the round-trip set must match what we put in.
-    assert all(name for name in extracted), (
+    extracted = _extract_topic_names(lines)
+    # Every produced line MUST yield a topic name, and the round-trip
+    # set must match what we put in.
+    assert len(extracted) == 3, (
         f"Some index lines didn't round-trip: {list(zip(lines, extracted))}"
     )
     assert set(extracted) == {"Redis", "Postgres", "系统设计"}

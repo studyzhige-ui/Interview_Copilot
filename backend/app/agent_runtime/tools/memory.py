@@ -22,32 +22,54 @@ logger = logging.getLogger(__name__)
 
 
 class RecallMemoryArgs(BaseModel):
-    query: str = Field(
-        ..., min_length=1, max_length=500,
-        description="Free-text query — drives the selection LLM that picks "
-                    "which knowledge_doc topic bodies to surface.",
+    """Inspect the user's memory and (optionally) pull specific doc bodies.
+
+    The agent decides what to load itself — no internal selection LLM.
+    Pass no args to inspect the universal pass (descriptions only);
+    pass explicit ``topics`` / ``load_strategy`` / ``load_habit`` to
+    hydrate the requested bodies.
+    """
+    topics: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Knowledge_doc topic names whose body to pull in. Must be "
+            "exact names from the index. Empty = no body loads."
+        ),
     )
-    max_topics: int = Field(
-        default=3, ge=1, le=5,
-        description="Max knowledge_doc topic bodies to pull in on-demand.",
+    load_strategy: bool = Field(
+        default=False,
+        description="Set true to load the full strategy_doc body.",
+    )
+    load_habit: bool = Field(
+        default=False,
+        description="Set true to load the full habit_doc body.",
     )
 
 
 async def _recall_memory_handler(args: RecallMemoryArgs, ctx: AgentToolContext) -> dict[str, Any]:
-    """Return the v3 memory snapshot tailored to ``query``."""
-    from app.services.memory.v3_context_loader import load_with_active_bodies
-
-    ctx_bundle = await load_with_active_bodies(
-        ctx.user_id,
-        query=args.query,
-        max_active_topics=args.max_topics,
+    """Return the v3 memory snapshot, optionally with explicit bodies."""
+    from app.services.memory.v3_context_loader import (
+        attach_active_bodies,
+        load_universal,
     )
+
+    ctx_bundle = load_universal(ctx.user_id)
+    if args.topics or args.load_strategy or args.load_habit:
+        await attach_active_bodies(
+            ctx_bundle,
+            user_id=ctx.user_id,
+            topics=args.topics[:3],
+            load_strategy=args.load_strategy,
+            load_habit=args.load_habit,
+        )
     return {
         "user_profile": ctx_bundle.user_profile_body,
         "knowledge_index": ctx_bundle.knowledge_index_lines,
+        "strategy_description": ctx_bundle.strategy_description,
+        "habit_description": ctx_bundle.habit_description,
         "active_topics": ctx_bundle.active_knowledge_bodies,
-        "strategy": ctx_bundle.strategy_body,
-        "habit": ctx_bundle.habit_body,
+        "active_strategy": ctx_bundle.active_strategy_body,
+        "active_habit": ctx_bundle.active_habit_body,
         "topic_count": len(ctx_bundle.knowledge_index_lines),
         "active_count": len(ctx_bundle.active_knowledge_bodies),
     }
