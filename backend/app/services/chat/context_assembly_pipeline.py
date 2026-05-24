@@ -1,26 +1,44 @@
-"""Context assembly pipeline — 6-slot context window for all session modes.
+"""Context assembly pipeline — slot-based prompt composition.
 
-Used by the L1 QA pipeline (and by the L2 agent's pre-context phase) to
-build a structured context window for LLM prompts.
+Builds the LLM prompt for a chat / agent turn by populating named
+slots, then rendering them in a single authoritative order. Slot
+ordering is chosen for prompt-cache friendliness — most-stable
+content at the top, per-turn content at the bottom.
 
-Slots:
-  1. system_prompt        — role identity + user_profile + mode-specific hints
-  2. reference_material   — analysis summary (debrief) / interview plan (mock)
-  3. retrieved_context     — vector search results (transcript, resume, knowledge)
-  4. session_state         — conversation summary (compressed periodically)
-  5. recent_turns          — last N turns of raw dialogue
-  6. current_input         — user's current message
+Slots (post Stage-G refactor, in order from most → least stable):
 
-The main class is :class:`ContextAssemblyPipeline`.  This is distinct from
-``app.agent_runtime.context_compactor.QueryLoopCompactor`` (and its
-test-friendly subclass ``AgentLoopContext``), which serves a different
-purpose: it compresses the running message list during a single L2
-agent execution.
+  1. [System Rules]        caller-supplied (chat vs RAG vs agent prompt)
+  2. [Record Context]      debrief sessions only — interview reference
+                           manifest (resume + JD + analysis summary).
+                           Stable for the duration of one debrief.
+  3. [Memory]              v3 memory bundle. user_profile is ALWAYS the
+                           first sub-section (enforced by
+                           ``V3MemoryContext.render``); other
+                           sub-sections (knowledge index, descriptions,
+                           active bodies) follow.
+  4. [Retrieved Context]   RAG knowledge chunks only — no longer mixed
+                           with memory items.
+  5. [Session State]       parsed session_state JSON.
+  6. [Recent Turns]        most recent user↔agent dialogue pairs.
+  7. [Current Query]       the user's standalone (rewritten) question.
+
+A single :data:`SLOT_ORDER` constant is the SOLE place that decides
+slot ordering — both the answer-prompt renderer and the lightweight
+rewrite-context renderer iterate it. Adding a slot is one tuple
+entry plus a matching field on :class:`AssembledContext`; no second
+ordering definition to keep in sync.
+
+This module is distinct from
+``app.agent_runtime.context_compactor.QueryLoopCompactor``, which
+compresses the running message list inside a single L2 agent
+execution (different problem, different file).
 """
+from __future__ import annotations
 
 import json
 import logging
 from dataclasses import dataclass, field
+from typing import Any, Callable
 
 import tiktoken
 
@@ -47,15 +65,15 @@ def count_tokens(text: str) -> int:
 
 
 # ── Token budget ─────────────────────────────────────────────────────────
-# Designed for 1M context models (DeepSeek V4 / Mimo).
-# Compression triggers at 75% of context window (hermes pattern).
+# Designed for 1M-context models (DeepSeek V4 / Mimo).
 
 class TokenBudget:
     MODEL_CONTEXT_WINDOW = 1_000_000
     COMPRESS_THRESHOLD_RATIO = 0.75
 
     SYSTEM_PROMPT_BUDGET = 3_000
-    REFERENCE_MATERIAL_BUDGET = 2_000
+    DEBRIEF_REFERENCE_BUDGET = 2_000
+    MEMORY_BUDGET = 6_000
     RETRIEVED_CONTEXT_BUDGET = 8_000
     SESSION_STATE_BUDGET = 3_000
     RECENT_TURNS_BUDGET = 32_000
@@ -65,89 +83,134 @@ class TokenBudget:
     COMPRESS_PROTECT_LAST_N = 6
 
 
-# ── Data classes ─────────────────────────────────────────────────────────
+# ── AssembledContext dataclass ───────────────────────────────────────────
+
 
 @dataclass
 class AssembledContext:
-    system_prompt: str = ""
-    user_profile: list[dict] = field(default_factory=list)
-    reference_material: str = ""
+    """All the slot contents for one chat / agent turn.
+
+    Field names match the keys in :data:`SLOT_ORDER`. Anything not
+    populated defaults to empty and gets skipped at render time.
+    """
+
+    # [System Rules] is rendered as a bare prefix (no [Tag] header)
+    # because the LLM treats it as the system prompt.
+    system_rules: str = ""
+
+    # [Record Context] — interview reference for debrief sessions.
+    debrief_reference: str = ""
+
+    # [Memory] — v3 memory bundle (user_profile first, then index /
+    # descriptions / active bodies, in the order V3MemoryContext.render
+    # produces).
+    memory_block: str = ""
+
+    # [Retrieved Context] — RAG knowledge chunks only.
     retrieved_context: str = ""
+
+    # [Session State] — session_state dict (rendered as JSON).
     session_state: dict = field(default_factory=dict)
+
+    # [Recent Turns] — list of {seq, role, content} message dicts.
     recent_turns: list[dict] = field(default_factory=list)
+
+    # [Current Query] — the user's (rewritten) standalone question.
     current_input: str = ""
+
+    # Computed at the end of _assemble for telemetry / token-budget logging.
     context_text: str = ""
     total_tokens: int = 0
 
 
+# ── Single source of slot ordering ────────────────────────────────────────
+# Tuples: (field_name on AssembledContext, slot tag, custom renderer).
+# Renderer is ``None`` for plain-string fields (rendered verbatim).
+# Adding a new slot = one entry here + matching dataclass field.
+
+_SlotRenderer = Callable[[AssembledContext], str] | None
+
+
+def _render_session_state(ctx: AssembledContext) -> str:
+    if not ctx.session_state:
+        return ""
+    return json.dumps(ctx.session_state, ensure_ascii=False, indent=2)
+
+
+def _render_recent_turns(ctx: AssembledContext) -> str:
+    if not ctx.recent_turns:
+        return ""
+    return "\n".join(f"{m['role']}: {m['content']}" for m in ctx.recent_turns)
+
+
+SLOT_ORDER: list[tuple[str, str | None, _SlotRenderer]] = [
+    # field_name,              tag (None = no header),    custom renderer
+    ("system_rules",           None,                      None),
+    ("debrief_reference",      "[Record Context]",        None),
+    ("memory_block",           "[Memory]",                None),
+    ("retrieved_context",      "[Retrieved Context]",     None),
+    ("session_state",          "[Session State]",         _render_session_state),
+    ("recent_turns",           "[Recent Turns]",          _render_recent_turns),
+    ("current_input",          "[Current Query]",         None),
+]
+
+
+# Slots the lightweight rewrite-context renderer skips (system rules
+# isn't useful to a query rewriter; the rewriter just needs the recent
+# turns + the current message).
+_REWRITE_SKIP_FIELDS = {"system_rules", "memory_block", "retrieved_context"}
+
+
 # ── Prompt rendering ─────────────────────────────────────────────────────
 
+
 class PromptRenderer:
+    """Renders an :class:`AssembledContext` into a single prompt string.
+
+    Both renderers iterate :data:`SLOT_ORDER`; the rewrite variant
+    just filters out a few slots that don't help query rewriting.
+    """
+
     def render_answer_prompt(
         self,
         ctx: AssembledContext,
         *,
         system_rules: str,
     ) -> str:
-        # Slot ordering is chosen to maximize prompt-cache hit rate.
-        # MOST → LEAST stable across turns within one debrief session:
-        #   1. system_rules     (process-wide constant)
-        #   2. reference_material / record_context  (invariant within a record)
-        #   3. user_profile     (changes only when LLM extracts new facts)
-        #   4. retrieved knowledge / state / recent turns / current query
-        # Anything that changes per turn (4+) breaks the cache prefix for
-        # everything below it, so it must come AFTER the stable prefix.
-        parts = [system_rules.strip()]
-        if ctx.reference_material:
-            parts.append(f"[Record Context]\n{ctx.reference_material}")
-        profile_text = self._render_user_profile(ctx.user_profile)
-        if profile_text:
-            parts.append(f"[User Profile]\n{profile_text}")
-        if ctx.retrieved_context:
-            parts.append(f"[Retrieved Context]\n{ctx.retrieved_context}")
-        state_text = self._render_state(ctx.session_state)
-        if state_text:
-            parts.append(f"[Session State]\n{state_text}")
-        if ctx.recent_turns:
-            parts.append(f"[Recent Turns]\n{self._render_turns(ctx.recent_turns)}")
-        parts.append(f"[Current Query]\n{ctx.current_input.strip()}")
-        return "\n\n".join(part for part in parts if part.strip())
+        """Full answer prompt — every populated slot in order."""
+        ctx.system_rules = system_rules.strip()
+        return self._render(ctx, skip_fields=set())
 
     def render_context_text(self, ctx: AssembledContext) -> str:
-        parts = []
-        if ctx.reference_material:
-            parts.append(f"[Reference Material]\n{ctx.reference_material}")
-        if ctx.retrieved_context:
-            parts.append(f"[Retrieved Context]\n{ctx.retrieved_context}")
-        state_text = self._render_state(ctx.session_state)
-        if state_text:
-            parts.append(f"[Session State]\n{state_text}")
-        if ctx.recent_turns:
-            parts.append(f"[Recent Turns]\n{self._render_turns(ctx.recent_turns)}")
-        parts.append(f"[Current Query]\n{ctx.current_input.strip()}")
-        return "\n\n".join(part for part in parts if part.strip())
+        """Lightweight rendering for the query-planner / rewriter input.
+
+        Drops system rules + memory + retrieved context — the planner
+        doesn't need them to do pronoun resolution. Includes session
+        state + recent turns + current query.
+        """
+        return self._render(ctx, skip_fields=_REWRITE_SKIP_FIELDS)
 
     @staticmethod
-    def _render_state(state: dict) -> str:
-        if not state:
-            return ""
-        return json.dumps(state, ensure_ascii=False, indent=2)
-
-    @staticmethod
-    def _render_turns(turns: list[dict]) -> str:
-        return "\n".join(f"{item['role']}: {item['content']}" for item in turns)
-
-    @staticmethod
-    def _render_user_profile(profile_items: list[dict]) -> str:
-        if not profile_items:
-            return ""
-        return "\n".join(
-            f"- {item.get('description', '')}: {item.get('content', '')}"
-            for item in profile_items
-        )
+    def _render(ctx: AssembledContext, *, skip_fields: set[str]) -> str:
+        parts: list[str] = []
+        for field_name, tag, custom in SLOT_ORDER:
+            if field_name in skip_fields:
+                continue
+            if custom is not None:
+                rendered = custom(ctx)
+            else:
+                rendered = str(getattr(ctx, field_name) or "").strip()
+            if not rendered:
+                continue
+            if tag is None:
+                parts.append(rendered)
+            else:
+                parts.append(f"{tag}\n{rendered}")
+        return "\n\n".join(parts)
 
 
 # ── Trimming utilities ───────────────────────────────────────────────────
+
 
 def trim_messages(messages: list[dict], budget: int) -> list[dict]:
     """Keep the most recent messages within a token budget."""
@@ -179,6 +242,7 @@ def trim_items(items: list[dict], *, content_key: str, budget: int) -> list[dict
 
 # ── Pipeline ─────────────────────────────────────────────────────────────
 
+
 class ContextAssemblyPipeline:
     DEFAULT_RECENT_TURNS = 20
 
@@ -197,33 +261,46 @@ class ContextAssemblyPipeline:
         session_id: str,
         current_query: str,
     ) -> AssembledContext:
-        """Lightweight context for query rewriting (no memories/knowledge)."""
+        """Lightweight context for query rewriting — no memory, no RAG,
+        no debrief reference. The planner only needs recent turns +
+        session state to do pronoun resolution; loading the debrief
+        manifest here would cost an extra SQL round-trip and balloon
+        the planner prompt by ~2K tokens for no benefit.
+        """
         return self._assemble(
             session_id=session_id,
             current_query=current_query,
-            user_profile=[],
-            relevant_memories=[],
+            memory_block="",
+            debrief_reference="",
             knowledge_chunks=[],
-            reference_material="",
+            skip_debrief_autoinject=True,
         )
 
     def assemble_answer_context(
         self,
         session_id: str,
         current_query: str,
-        user_profile: list[dict] | None = None,
-        relevant_memories: list[dict] | None = None,
+        memory_block: str = "",
+        debrief_reference: str = "",
         knowledge_chunks: list[dict] | None = None,
-        reference_material: str = "",
     ) -> AssembledContext:
-        """Full context for answer generation."""
+        """Full context for answer generation.
+
+        ``memory_block``        rendered v3 memory bundle (user_profile
+                                first, by V3MemoryContext.render's
+                                fixed contract)
+        ``debrief_reference``   interview reference manifest for debrief
+                                sessions. Caller may leave this empty
+                                in non-debrief mode and let the
+                                pipeline auto-inject when applicable.
+        ``knowledge_chunks``    RAG output chunks (already reranked).
+        """
         return self._assemble(
             session_id=session_id,
             current_query=current_query,
-            user_profile=user_profile or [],
-            relevant_memories=relevant_memories or [],
+            memory_block=memory_block,
+            debrief_reference=debrief_reference,
             knowledge_chunks=knowledge_chunks or [],
-            reference_material=reference_material,
         )
 
     # ── Internal ──────────────────────────────────────────────────────
@@ -232,16 +309,12 @@ class ContextAssemblyPipeline:
         self,
         session_id: str,
         current_query: str,
-        user_profile: list[dict] | None = None,
-        relevant_memories: list[dict] | None = None,
-        knowledge_chunks: list[dict] | None = None,
-        reference_material: str = "",
+        memory_block: str,
+        debrief_reference: str,
+        knowledge_chunks: list[dict],
+        *,
+        skip_debrief_autoinject: bool = False,
     ) -> AssembledContext:
-        # Defensive defaults — first-time users with no profile/memory/knowledge
-        # must not crash downstream callers.
-        user_profile = user_profile or []
-        relevant_memories = relevant_memories or []
-        knowledge_chunks = knowledge_chunks or []
         meta = transcript_service.get_session_meta(session_id)
         if meta is None:
             session_state = default_session_state_for_type("general")
@@ -257,55 +330,64 @@ class ContextAssemblyPipeline:
                 after_seq=meta["compaction_cursor"],
             )
 
-        cleaned = self._repair_pairs(
+        cleaned_turns = self._repair_pairs(
             trim_messages(self._sanitize(recent_turns), self.budget.RECENT_TURNS_BUDGET)
         )
 
-        # Auto-inject the bound interview's reference manifest for debrief
-        # sessions when no explicit reference_material was passed by the caller.
-        # See app/services/chat/interview_reference.py for the design notes.
-        if not reference_material:
+        # Auto-inject interview reference for debrief sessions when the
+        # caller didn't supply one. Strictly mode-bound: never fires
+        # for general / mock_interview sessions.
+        # ``skip_debrief_autoinject`` lets the lightweight rewrite
+        # path bail out before the SQL round-trip — the planner LLM
+        # doesn't benefit from seeing the interview manifest.
+        if (
+            not skip_debrief_autoinject
+            and not debrief_reference
+            and meta is not None
+        ):
             mode = session_state.get("mode")
             interview_id = session_state.get("interview_id")
-            if mode == "debrief" and interview_id and meta is not None:
+            if mode == "debrief" and interview_id:
                 from app.services.chat.interview_reference import build_interview_reference
                 ref = build_interview_reference(interview_id, meta["user_id"])
                 if ref:
-                    reference_material = ref
-
-        # Build retrieved_context from memories + knowledge
-        retrieved_parts: list[str] = []
-        if relevant_memories:
-            trimmed_memories = trim_items(
-                relevant_memories, content_key="content", budget=self.budget.SESSION_STATE_BUDGET,
-            )
-            for i, mem in enumerate(trimmed_memories, 1):
-                line = (
-                    f"[M{i}] [{mem.get('type', 'memory')}] "
-                    f"{mem.get('description', '')}: {mem.get('content', '')}"
+                    debrief_reference = ref
+            elif interview_id and mode != "debrief":
+                # Data sanity warning — interview_id is set but mode
+                # isn't debrief. Likely a stale write or a typo
+                # ("debriefing" / "Debrief" / etc.). Log so an
+                # operator can investigate; don't crash.
+                logger.warning(
+                    "session_state has interview_id=%s but mode=%r "
+                    "(expected 'debrief'); reference slot will stay empty",
+                    interview_id, mode,
                 )
-                if mem.get("staleness_note"):
-                    line += f" ({mem['staleness_note']})"
-                retrieved_parts.append(line)
 
+        # RAG retrieved-context: only knowledge_chunks now. The legacy
+        # "memories mixed into retrieved_context" path is gone — memory
+        # has its own dedicated slot.
+        retrieved_parts: list[str] = []
         if knowledge_chunks:
             trimmed_chunks = trim_items(
-                knowledge_chunks, content_key="text", budget=self.budget.RETRIEVED_CONTEXT_BUDGET,
+                knowledge_chunks,
+                content_key="text",
+                budget=self.budget.RETRIEVED_CONTEXT_BUDGET,
             )
             for i, chunk in enumerate(trimmed_chunks, 1):
                 source = chunk.get("source_type") or chunk.get("source") or "knowledge"
                 score = chunk.get("score")
                 score_text = f" score={float(score):.3f}" if score is not None else ""
-                retrieved_parts.append(f"[K{i}] [{source}{score_text}] {chunk.get('text', '')}")
-
+                retrieved_parts.append(
+                    f"[K{i}] [{source}{score_text}] {chunk.get('text', '')}"
+                )
         retrieved_context = "\n\n".join(retrieved_parts)
 
         ctx = AssembledContext(
-            user_profile=user_profile,
-            session_state=session_state,
-            recent_turns=cleaned,
+            debrief_reference=debrief_reference,
+            memory_block=memory_block,
             retrieved_context=retrieved_context,
-            reference_material=reference_material,
+            session_state=session_state,
+            recent_turns=cleaned_turns,
             current_input=current_query,
         )
         ctx.context_text = self.renderer.render_context_text(ctx)
@@ -349,10 +431,11 @@ __all__ = [
     "AssembledContext",
     "ContextAssemblyPipeline",
     "PromptRenderer",
+    "SLOT_ORDER",
     "TokenBudget",
     "context_pipeline",
-    "prompt_renderer",
     "count_tokens",
-    "trim_messages",
+    "prompt_renderer",
     "trim_items",
+    "trim_messages",
 ]

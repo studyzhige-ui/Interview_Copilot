@@ -12,16 +12,16 @@ writes. Two engineering options were considered:
 
   B) **Lazy fetch per turn.** The context-assembly pipeline reads the chat's
      ``session_state['interview_id']`` on each query, joins on InterviewRecord,
-     builds a compact manifest, fills the existing ``reference_material`` slot.
+     builds a compact manifest, fills the dedicated ``debrief_reference`` slot.
      Pros: always fresh; honors QA edits via ``PATCH /interview-records/{id}/qa/{idx}``;
      no schema migration. Cons: ~1 SQL roundtrip per turn (≈1ms).
 
-We picked (B). It plugs into the existing 6-slot context window without any
+We picked (B). It plugs into the slot-based context pipeline without any
 new infrastructure, and the cost is dominated by the LLM call itself.
 
 The output is a structured markdown block (~1–2k tokens) that goes straight
-into the ``[Reference Material]`` section of the prompt — see
-``app/services/chat/context_assembly_pipeline.py:PromptRenderer.render_answer_prompt``.
+into the ``[Record Context]`` slot of the prompt — see
+``app/services/chat/context_assembly_pipeline.py:SLOT_ORDER``.
 """
 
 import json
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # still pass through the TokenBudget gate so this is just an early trim.
 #
 # Why 2400? With Chinese text averaging ~1.8 tokens/char, 2400 chars ≈ 4300
-# tokens. The REFERENCE_MATERIAL_BUDGET is 2000 tokens but the pipeline doesn't
+# tokens. The DEBRIEF_REFERENCE_BUDGET is 2000 tokens but the pipeline doesn't
 # yet hard-trim this slot (an upstream improvement) — so we self-cap here.
 # Transcripts under this length are emitted in full.
 _TRANSCRIPT_HARD_CAP_CHARS = 2400
@@ -59,7 +59,7 @@ def build_interview_reference(interview_id: str, user_id: str) -> str:
 
     Empty string if the record doesn't exist, doesn't belong to the user, or
     has no usable data. Empty is fine — caller (the pipeline) just skips the
-    reference_material slot.
+    [Record Context] slot.
     """
     db: Session = SessionLocal()
     try:

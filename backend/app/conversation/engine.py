@@ -40,10 +40,7 @@ from app.core.background_tasks import safe_background_task
 from app.conversation.query_planner import plan_query
 from app.rag.knowledge_retriever import knowledge_retriever
 from app.services.chat.chat_history_service import transcript_service
-from app.services.chat.context_assembly_pipeline import (
-    context_pipeline,
-    prompt_renderer,
-)
+from app.services.chat.context_assembly_pipeline import context_pipeline
 from app.services.memory.post_turn_maintenance import post_turn_maintenance_service
 from app.services.memory.v3_context_loader import (
     attach_active_bodies,
@@ -243,26 +240,25 @@ class ConversationEngine:
 
         v3_memory_block = v3_memory.render()
 
-        # Full answer context (assemble_answer_context already takes
-        # care of fitting everything into TokenBudget slots).
+        # Full answer context — memory and debrief reference land in
+        # SEPARATE slots now (post Stage-G refactor). Debrief reference
+        # is auto-injected by the pipeline when in debrief mode.
+        # We build the AssembledContext ONCE here and hand it to the
+        # strategy so it can render with its own system rules without
+        # re-running the pipeline (and re-fetching the debrief
+        # reference from the DB).
         assembled = context_pipeline.assemble_answer_context(
             session_id=self.session_id,
             current_query=standalone_query,
-            user_profile=[],   # flows through v3_memory_block
-            relevant_memories=[],
+            memory_block=v3_memory_block,
             knowledge_chunks=knowledge_chunks,
-            reference_material=v3_memory_block,
         )
-        # The L1 strategy renders with one system prompt, the L2 agent
-        # builds its own messages structure — both consume
-        # ``rendered_context`` as their grounding payload.
-        rendered_context = prompt_renderer.render_context_text(assembled)
 
         self._ctx = StrategyContext(
             user_id=self.user_id,
             session_id=self.session_id,
             user_message=self.user_message,
-            rendered_context=rendered_context,
+            assembled=assembled,
             knowledge_chunks=knowledge_chunks,
             v3_memory_block=v3_memory_block,
             rewritten_query=(

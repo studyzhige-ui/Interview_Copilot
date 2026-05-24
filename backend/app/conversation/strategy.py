@@ -35,10 +35,14 @@ class StrategyContext:
     # Run identity (created in engine._prepare via agent_trace_service)
     run_id: str = ""
 
-    # Prepared context
-    rendered_context: str = ""        # Output of ContextAssemblyPipeline
+    # Prepared context — the FULL ``AssembledContext`` built by the
+    # engine. Strategies should render via
+    # ``prompt_renderer.render_answer_prompt(ctx.assembled, ...)``
+    # so memory, debrief reference, and RAG all reach the LLM with
+    # the SLOT_ORDER contract intact. Engine sets this in _prepare.
+    assembled: Any = None              # AssembledContext (forward ref to avoid import cycle)
     knowledge_chunks: list[dict] = field(default_factory=list)
-    v3_memory_block: str = ""         # Already-rendered v3 memory bundle
+    v3_memory_block: str = ""          # Convenience: already-rendered v3 memory bundle
     rewritten_query: str | None = None
     needs_knowledge_retrieval: bool = False
 

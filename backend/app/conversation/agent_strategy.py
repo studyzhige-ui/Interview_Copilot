@@ -117,11 +117,22 @@ class AgentLoopStrategy:
             user_id=ctx.user_id,
         )
 
+        # Render the full AssembledContext so the agent sees memory +
+        # debrief reference + RAG chunks + session state + recent
+        # turns. The system_rules slot is suppressed here — the agent
+        # has its own SYSTEM_PROMPT loaded as a separate message —
+        # but every other SLOT_ORDER slot reaches the LLM.
+        from app.services.chat.context_assembly_pipeline import prompt_renderer
+        grounding_text = (
+            prompt_renderer.render_answer_prompt(ctx.assembled, system_rules="")
+            if ctx.assembled is not None else "No context."
+        )
+
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "system", "content": (
                 f"Available tools:\n{registry.format_manifest()}\n\n"
-                f"Conversation context:\n{ctx.rendered_context or 'No context.'}"
+                f"Conversation context:\n{grounding_text or 'No context.'}"
             )},
             {"role": "user", "content": ctx.user_message},
         ]

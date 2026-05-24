@@ -73,23 +73,11 @@ class ChatPipelineStrategy:
         # captures every LlamaIndex LLM call.
         _token_counter.reset_counts()
 
-        # Use the same standalone (rewritten) query the engine used
-        # when assembling its rendered_context — matching that choice
-        # keeps the LLM-visible context internally consistent. Falls
-        # back to the original user message when no rewrite happened.
-        effective_query = ctx.rewritten_query or ctx.user_message
-
-        # Rebuild the assembled context with the right system-rules
-        # branch. assemble_answer_context is cheap (one session-meta
-        # read which is already warm from the engine's _prepare pass).
-        assembled: AssembledContext = context_pipeline.assemble_answer_context(
-            session_id=ctx.session_id,
-            current_query=effective_query,
-            user_profile=[],
-            relevant_memories=[],
-            knowledge_chunks=ctx.knowledge_chunks,
-            reference_material=ctx.v3_memory_block,
-        )
+        # Render the engine-prepared AssembledContext with the right
+        # system-rules branch. No rebuild — the engine already paid
+        # for the session-meta read + debrief reference fetch, and
+        # rebuilding would duplicate both round-trips.
+        assembled: AssembledContext = ctx.assembled
 
         if ctx.needs_knowledge_retrieval:
             prompt = self.renderer.render_answer_prompt(
