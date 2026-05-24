@@ -12,9 +12,21 @@ plumbing or socket-life-cycle bookkeeping. The WebSocket path that used
 to live here was removed once the frontend migrated to SSE; bring it
 back ONLY when realtime voice (bidirectional audio frames) lands and
 WS is the right transport for that — text alone never justifies WS.
-"""
 
-import json
+Wire format (Stage-G — unified across chat + agent paths):
+    Each frame is one :class:`HarnessEvent` serialized as JSON. The
+    frontend dispatches on ``event.type``:
+
+      status / text_delta / text / error / done   — emitted by both
+      tool_start / tool_done / budget             — agent-mode only
+
+    L1 (chat) uses ``mode="chat"``; the engine instantiates
+    :class:`ChatPipelineStrategy` and only the status / text_delta /
+    text / error / done events fire. L2 (agent) uses ``mode="agent"``
+    and gets the tool / budget events on top.
+"""
+from __future__ import annotations
+
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -43,38 +55,32 @@ async def sse_chat_endpoint(
 
     Ownership is enforced up-front (404 on mismatch) so the generator
     doesn't waste an LLM round-trip on a session the caller can't see.
-    The frame protocol is intentionally minimal — three event types —
-    so frontend parsers stay small and provider-portable.
     """
     row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if not row or row.user_id != current_user.username:
         raise HTTPException(status_code=404, detail="Session not found or access denied")
 
-    # Lazy import to keep cold startup snappy — agent_executor pulls in
-    # the QA pipeline + retrieval modules and isn't needed by the rest
-    # of the chat-API router.
-    from app.qa_pipeline.agent_executor import stream_chat_with_agent
+    # Lazy import so cold-startup doesn't pay the conversation-engine /
+    # qa_pipeline cost when other chat-router endpoints are hit.
+    from app.conversation import ConversationEngine, make_chat_strategy
 
     async def event_generator():
+        engine = ConversationEngine(
+            user_id=current_user.username,
+            session_id=session_id,
+            user_message=request.message,
+            strategy=make_chat_strategy(),
+        )
         try:
-            async for chunk in stream_chat_with_agent(
-                request.message,
-                current_user.username,
-                session_id,
-            ):
-                if not chunk:
-                    continue
-                stripped = chunk.lstrip()
-                if stripped.startswith("[status]"):
-                    content = stripped[len("[status]"):].strip().rstrip("\n")
-                    yield f"data: {json.dumps({'type': 'status', 'content': content}, ensure_ascii=False)}\n\n"
-                else:
-                    yield f"data: {json.dumps({'type': 'chunk', 'content': chunk}, ensure_ascii=False)}\n\n"
-            yield "data: {\"type\": \"done\"}\n\n"
+            async for event in engine.submit_message():
+                yield f"data: {event.to_json()}\n\n"
         except Exception as exc:  # noqa: BLE001 — last-resort net so the stream always closes
             logger.error("SSE pipeline failed: %s", exc)
-            yield f"data: {json.dumps({'type': 'chunk', 'content': f'[system]: {exc}'}, ensure_ascii=False)}\n\n"
-            yield "data: {\"type\": \"done\"}\n\n"
+            # Fall back to a hand-rolled error+done so the client
+            # always gets a terminator.
+            from app.conversation.events import HarnessEvent
+            yield f"data: {HarnessEvent.error(str(exc)).to_json()}\n\n"
+            yield f"data: {HarnessEvent.done(step=0, elapsed_ms=0).to_json()}\n\n"
 
     return StreamingResponse(
         event_generator(),

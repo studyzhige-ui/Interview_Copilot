@@ -245,23 +245,30 @@ def test_memory_knowledge_topic_get_404_when_missing(client: TestClient):
 
 def test_sse_chat_endpoint_streams_chunks(client: TestClient, db: Session, monkeypatch):
     """Smoke test for the SSE pipeline: dependency-overridden user owns the
-    session, the agent yields two chunks, and the response is an SSE stream
-    terminated with ``{"type": "done"}``."""
+    session, the engine yields HarnessEvent text_delta + done, and the
+    response is an SSE stream terminated with ``"type": "done"``."""
     db.add(ChatSession(id="s1", user_id="alice", title="t", session_type="general"))
     db.commit()
 
-    async def fake_stream(message, user_id, session_id):
-        yield "hello "
-        yield "world"
+    async def fake_submit(self):
+        from app.conversation.events import HarnessEvent
+        yield HarnessEvent.text_delta("hello ", step=0, elapsed_ms=0)
+        yield HarnessEvent.text_delta("world", step=0, elapsed_ms=0)
+        yield HarnessEvent.text("hello world", step=0, elapsed_ms=0)
+        yield HarnessEvent.done(step=0, elapsed_ms=0)
 
-    # The handler imports lazily inside the function, so patch where it lives.
-    import app.qa_pipeline.agent_executor as agent_executor_mod
-    monkeypatch.setattr(agent_executor_mod, "stream_chat_with_agent", fake_stream)
+    # The Stage-G SSE endpoint constructs a ConversationEngine and
+    # iterates its submit_message generator. Patch the method
+    # directly so we don't need to wire the planner / retrieval /
+    # memory subsystems in the unit test.
+    from app.conversation.engine import ConversationEngine
+    monkeypatch.setattr(ConversationEngine, "submit_message", fake_submit)
 
     resp = client.post("/api/v1/chat/sse/s1", json={"message": "hi"})
     assert resp.status_code == 200
     body = resp.text
     assert "hello" in body and "world" in body
+    assert '"type": "done"' in body
     assert '"type": "done"' in body
 
 

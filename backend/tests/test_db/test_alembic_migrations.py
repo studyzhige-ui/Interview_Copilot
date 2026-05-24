@@ -140,8 +140,10 @@ def test_migration_chain_has_no_gaps_and_one_head():
     #                 → 0005_single_doc_one_liner
     # Bump this number whenever a new forward migration lands.
     on_disk = [p for p in VERSIONS_DIR.glob("*.py") if not p.name.startswith("_")]
-    assert len(on_disk) == 5, (
-        f"Expected 5 migration files (baseline + 4 memory-evolution), "
+    # Stage-G refactor adds 0006_chat_message_content_blocks. Bump this
+    # number whenever a new forward migration lands.
+    assert len(on_disk) == 6, (
+        f"Expected 6 migration files (baseline + 5 memory/chat evolutions), "
         f"found {len(on_disk)}"
     )
 
@@ -204,8 +206,8 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         from sqlalchemy import text
 
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0005_single_doc_one_liner", (
-            f"Head should be 0005_single_doc_one_liner, got {version!r}"
+        assert version == "0006_chat_message_content_blocks", (
+            f"Head should be 0006_chat_message_content_blocks, got {version!r}"
         )
 
     engine.dispose()

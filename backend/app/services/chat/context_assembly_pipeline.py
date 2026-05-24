@@ -13,8 +13,9 @@ Slots:
 
 The main class is :class:`ContextAssemblyPipeline`.  This is distinct from
 ``app.agent_runtime.context_compactor.QueryLoopCompactor`` (and its
-``AgentLoopContext`` legacy alias), which serves a different purpose: it
-compresses the running message list during a single L2 agent execution.
+test-friendly subclass ``AgentLoopContext``), which serves a different
+purpose: it compresses the running message list during a single L2
+agent execution.
 """
 
 import json

@@ -1,9 +1,9 @@
 """Agent-loop context compactor for the L2 ReAct Harness.
 
 Model-aware, boundary-safe context management pipeline used by
-:class:`app.agent_runtime.query_engine.QueryEngine` to keep prompt
-tokens within the model's context window across multi-turn tool
-execution.
+:class:`app.conversation.agent_strategy.AgentLoopStrategy` to keep
+prompt tokens within the model's context window across multi-turn
+tool execution.
 
 Scope: This module belongs to L2 (single-turn ReAct agent execution).
 Do **not** confuse with
@@ -48,11 +48,13 @@ Pipeline layers:
 
 Public surface:
   QueryLoopCompactor — the active class used by the agent loop.
-  AgentLoopContext   — fixed-kwarg compactor (context_window /
-                       threshold_ratio / protect_tail).  Was previously
-                       named ``ContextPipeline`` and lived inside
-                       ``query_loop_compactor.py``; renamed to
-                       disambiguate from the L1 context pipeline.
+  AgentLoopContext   — test-friendly subclass of QueryLoopCompactor
+                       that takes (context_window / threshold_ratio /
+                       protect_tail) directly instead of a full
+                       ModelProfile.  Used by ``tests/`` to exercise
+                       the compactor without constructing a real
+                       provider profile; production code uses
+                       QueryLoopCompactor with a real profile.
 """
 
 from __future__ import annotations

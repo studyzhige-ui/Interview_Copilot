@@ -1,16 +1,23 @@
-"""Agent Harness — public API and shared types.
+"""Public agent harness API — backward-compat shims for ``run_react_agent``.
 
-The heavy lifting has been extracted to ``QueryEngine`` (Phase A).
-This module retains:
+The actual agent loop now lives in
+:class:`app.conversation.agent_strategy.AgentLoopStrategy`, and the
+per-conversation lifecycle in
+:class:`app.conversation.engine.ConversationEngine`. This module retains
+only:
 
-  - ``AgentBudget`` — iteration budget dataclass (used by tests + QueryEngine)
-  - Helper functions — ``_tool_call_payload``, ``_args_summary``, ``_result_summary``
-  - ``run_react_agent_stream()`` — streaming public API (delegates to QueryEngine)
-  - ``run_react_agent()`` — batch public API (wraps streaming variant)
+  - ``AgentBudget``        — iteration budget dataclass (still imported
+                              by the strategy + a few tests)
+  - Helper functions       — ``_tool_call_payload``, ``_args_summary``,
+                              ``_result_summary`` (used by the strategy
+                              for streaming event formatting)
+  - ``run_react_agent_stream`` / ``run_react_agent`` — thin shims that
+    construct a ConversationEngine with the agent strategy
 
-Design: keeps the public API surface identical so ``__init__.py``
-and all callers work without any import changes.
+Keeping the public signatures lets the existing API endpoints
+(``api/agent/react_agent.py``) and tests work without import churn.
 """
+from __future__ import annotations
 
 import time
 from collections import defaultdict
@@ -54,12 +61,6 @@ class AgentBudget:
         return time.perf_counter() - self.started_at
 
     def check(self) -> str | None:
-        """Check budget — only steps and wall-clock timeout.
-
-        Token usage and total tool calls are tracked for observability
-        but never trigger stops. Context window pressure is handled by
-        QueryLoopCompactor adaptively.
-        """
         if self.steps >= settings.AGENT_MAX_STEPS:
             return "max_steps_exceeded"
         if self.elapsed_seconds >= settings.AGENT_MAX_RUNTIME_SECONDS:
@@ -74,14 +75,7 @@ class AgentBudget:
         self.tool_usage[tool_name] += 1
 
     def refund_step(self) -> None:
-        """Refund a step on compression-retry (Hermes L12974 pattern).
-
-        Called when the system retries after context compaction — the
-        retry is a system-level action, not agent reasoning.
-
-        NOT called on tool failure — LLM already made a reasoning
-        decision that should count toward the step budget.
-        """
+        """Refund a step on compression-retry (Hermes L12974 pattern)."""
         if self.steps > 0:
             self.steps -= 1
 
@@ -95,12 +89,7 @@ class AgentBudget:
         }
 
 
-# ── Helper Functions ─────────────────────────────────────────────────────
-# These are used by QueryEngine for event formatting.
-
-
-def _elapsed_ms(budget: AgentBudget) -> float:
-    return round(budget.elapsed_seconds * 1000, 2)
+# ── Streaming event formatting helpers ──────────────────────────────────
 
 
 def _tool_call_payload(tool_call: Any) -> dict[str, Any]:
@@ -108,8 +97,9 @@ def _tool_call_payload(tool_call: Any) -> dict[str, Any]:
         "id": tool_call.id,
         "type": "function",
         "function": {
-            "name": tool_call.function.name,
-            "arguments": tool_call.function.arguments,
+            "name": tool_call.name if hasattr(tool_call, "name") else tool_call.function.name,
+            "arguments": tool_call.arguments if hasattr(tool_call, "arguments")
+                          else tool_call.function.arguments,
         },
     }
 
@@ -144,7 +134,7 @@ def _result_summary(observation: dict[str, Any]) -> str:
     return f"✅ 完成 ({len(str(observation))} chars)"
 
 
-# ── Streaming Public API ─────────────────────────────────────────────────
+# ── Public API — shim into ConversationEngine ───────────────────────────
 
 
 async def run_react_agent_stream(
@@ -154,16 +144,18 @@ async def run_react_agent_stream(
 ) -> AsyncGenerator[HarnessEvent, None]:
     """Run the agent loop, yielding HarnessEvents for SSE streaming.
 
-    Delegates all logic to ``QueryEngine.submit_message()``.
+    Delegates to ``ConversationEngine`` with the L2 agent strategy.
     """
-    from app.agent_runtime.query_engine import QueryEngine
+    from app.conversation import ConversationEngine, make_agent_strategy
 
-    engine = QueryEngine(user_message, user_id, session_id)
+    engine = ConversationEngine(
+        user_id=user_id,
+        session_id=session_id,
+        user_message=user_message,
+        strategy=make_agent_strategy(),
+    )
     async for event in engine.submit_message():
         yield event
-
-
-# ── Batch Public API ─────────────────────────────────────────────────────
 
 
 async def run_react_agent(
@@ -173,7 +165,7 @@ async def run_react_agent(
 ) -> dict[str, Any]:
     """Batch execution — collects all events and returns the final result dict.
 
-    This preserves full API compatibility with the old ``run_react_agent``.
+    Preserves API compatibility with the original ``run_react_agent``.
     """
     events: list[HarnessEvent] = []
     final_answer = ""
@@ -192,7 +184,12 @@ async def run_react_agent(
     ]
 
     return {
-        "run_id": "",  # run_id is managed internally by the engine
+        # run_id rides on the final budget event payload (see
+        # AgentLoopStrategy — it appends "run_id" into budget.to_dict()
+        # before yielding) so callers don't need a side-channel to
+        # surface it. Empty string when the budget event never fired
+        # (e.g. _prepare crashed before strategy.execute).
+        "run_id": budget_info.get("run_id", ""),
         "reply": final_answer,
         "trace": trace,
         "steps_used": budget_info.get("steps", 0),
@@ -201,3 +198,13 @@ async def run_react_agent(
         "completion_tokens": budget_info.get("completion_tokens", 0),
         "budget_stop_reason": None,
     }
+
+
+__all__ = [
+    "AgentBudget",
+    "_args_summary",
+    "_result_summary",
+    "_tool_call_payload",
+    "run_react_agent",
+    "run_react_agent_stream",
+]

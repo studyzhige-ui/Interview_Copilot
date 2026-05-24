@@ -1,10 +1,15 @@
-"""``/agent/chat`` — legacy compatibility wrapper around the L1 QA pipeline.
+"""``/agent/chat`` — legacy compatibility wrapper around the chat pipeline.
 
 The endpoint name is preserved for clients that still POST to ``/agent/chat``;
-internally it streams via :func:`app.agent.agent_executor.stream_chat_with_agent`
-and concatenates the chunks.  Newer code should call the SSE chat endpoint
-on the chat API instead.
+internally it constructs a :class:`ConversationEngine` with the chat
+strategy (the same plumbing used by ``/chat/sse/{session_id}``),
+consumes the HarnessEvent stream, and concatenates the final answer
+into a single ``{status, reply}`` response.
+
+Newer code should call ``/chat/sse/{session_id}`` directly for the
+real streaming UX.
 """
+from __future__ import annotations
 
 import logging
 
@@ -25,21 +30,28 @@ async def api_agent_chat(
     current_user: User = Depends(get_current_user),
     x_session_id: str = Header("default_session", description="Session id"),
 ):
-    """Legacy chat endpoint — keeps existing RAG-based conversational behavior."""
+    """Legacy chat endpoint — batch wrapper over the streaming engine."""
     try:
-        # Lazy import to avoid coupling app startup to legacy agent pipeline deps.
-        from app.qa_pipeline.agent_executor import stream_chat_with_agent
+        # Lazy import — keeps the conversation engine + strategies out
+        # of import-time graph for unrelated endpoints.
+        from app.conversation import ConversationEngine, make_chat_strategy
 
-        reply = ""
-        async for chunk in stream_chat_with_agent(
-            request.message,
+        engine = ConversationEngine(
             user_id=current_user.username,
             session_id=x_session_id,
-        ):
-            if chunk:
-                reply += chunk
+            user_message=request.message,
+            strategy=make_chat_strategy(),
+        )
+        reply = ""
+        async for event in engine.submit_message():
+            if event.type.value == "text_delta":
+                reply += event.data.get("delta", "")
+            elif event.type.value == "text" and not reply:
+                # Fallback if no text_delta arrived (e.g. tests that
+                # only emit a final `text` event).
+                reply = event.data.get("content", "")
 
         return {"status": "success", "reply": reply}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("Agent chat invocation failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

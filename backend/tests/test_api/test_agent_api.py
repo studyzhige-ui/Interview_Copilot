@@ -154,12 +154,18 @@ def test_metrics_endpoint(client, monkeypatch):
 
 
 def test_legacy_agent_chat_concatenates_chunks(client, monkeypatch):
-    async def fake_stream(message, user_id, session_id):
+    """``/agent/chat`` (legacy batch wrapper) now goes through
+    ConversationEngine just like ``/chat/sse``. Mock the engine's
+    submit_message to yield text_delta events that the wrapper
+    concatenates into the JSON ``reply`` field."""
+    async def fake_submit(self):
+        from app.conversation.events import HarnessEvent
         for piece in ["hel", "lo ", "world"]:
-            yield piece
+            yield HarnessEvent.text_delta(piece, step=0, elapsed_ms=0)
+        yield HarnessEvent.done(step=0, elapsed_ms=0)
 
-    import app.qa_pipeline.agent_executor as agent_executor_mod
-    monkeypatch.setattr(agent_executor_mod, "stream_chat_with_agent", fake_stream)
+    from app.conversation.engine import ConversationEngine
+    monkeypatch.setattr(ConversationEngine, "submit_message", fake_submit)
 
     resp = client.post(
         "/api/v1/agent/chat",

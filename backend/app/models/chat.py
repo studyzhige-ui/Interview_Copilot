@@ -52,7 +52,17 @@ class ChatMessage(Base):
     session_id = Column(String, ForeignKey("chat_sessions.id"), index=True, nullable=False)
     seq = Column(Integer, index=True, nullable=False)
     role = Column(String, nullable=False)
+    # Plain-text canonical form — used for session-list preview, memory
+    # extraction input, and the read-time fallback when an old row has
+    # no ``content_blocks_json``. Always populated.
     content = Column(Text, nullable=False)
+    # Anthropic BetaContentBlock[]-shaped JSON. NULL on rows written
+    # before the Stage-G conversation-engine refactor; non-NULL going
+    # forward — even L1 chat turns store ``[{type: "text", text: ...}]``
+    # so the frontend can render every message through the same code
+    # path. L2 agent turns include tool_use blocks interleaved with
+    # text blocks (Claude Code / Codex folded-card UX).
+    content_blocks_json = Column(Text, nullable=True)
     rewritten_query = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 

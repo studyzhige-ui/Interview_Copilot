@@ -1,4 +1,4 @@
-"""Unit tests for the query planner (``app.qa_pipeline.planner``).
+"""Unit tests for the query planner (``app.conversation.query_planner``).
 
 The planner asks a fast LLM for a JSON blob describing retrieval intent.
 We stub the LLM proxy so tests are deterministic and offline.
@@ -46,7 +46,7 @@ def _patch_llm(monkeypatch, fake_llm):
     """Patch the proxy the planner imports. Also patch the registry-level
     factory so any future code path that calls ``get_llm_for_role`` lands
     on the same fake."""
-    from app.qa_pipeline import planner
+    from app.conversation import query_planner as planner
     from app.core import model_registry
 
     monkeypatch.setattr(planner, "agent_fast_llm", fake_llm)
@@ -59,7 +59,7 @@ def _patch_llm(monkeypatch, fake_llm):
 
 
 def test_plan_query_parses_full_json_response(monkeypatch):
-    from app.qa_pipeline import planner
+    from app.conversation import query_planner as planner
 
     payload = {
         "standalone_query": "Explain Redis cache avalanche for interviews.",
@@ -93,7 +93,7 @@ def test_plan_query_parses_full_json_response(monkeypatch):
 
 def test_plan_query_extracts_json_from_prose_wrapper(monkeypatch):
     """If the LLM rambles before the JSON, the planner still extracts it."""
-    from app.qa_pipeline import planner
+    from app.conversation import query_planner as planner
 
     payload = {
         "standalone_query": "What is HNSW indexing?",
@@ -120,7 +120,7 @@ def test_plan_query_extracts_json_from_prose_wrapper(monkeypatch):
 
 
 def test_plan_query_handles_direct_chat_mode(monkeypatch):
-    from app.qa_pipeline import planner
+    from app.conversation import query_planner as planner
 
     payload = {
         "standalone_query": "hi",
@@ -142,7 +142,7 @@ def test_plan_query_handles_direct_chat_mode(monkeypatch):
 
 
 def test_plan_query_handles_preference_update(monkeypatch):
-    from app.qa_pipeline import planner
+    from app.conversation import query_planner as planner
 
     payload = {
         "standalone_query": "From now on answer in English only.",
@@ -171,7 +171,7 @@ def test_plan_query_handles_preference_update(monkeypatch):
 
 def test_plan_query_backfills_missing_dense_and_sparse(monkeypatch):
     """If the LLM returns blank dense/sparse, the planner derives them."""
-    from app.qa_pipeline import planner
+    from app.conversation import query_planner as planner
 
     payload = {
         "standalone_query": "Explain Kafka consumer rebalance",
@@ -200,7 +200,7 @@ def test_plan_query_backfills_missing_dense_and_sparse(monkeypatch):
 
 def test_plan_query_falls_back_on_non_json_response(monkeypatch):
     """LLM returns plain prose with no JSON → planner returns its fallback plan."""
-    from app.qa_pipeline import planner
+    from app.conversation import query_planner as planner
 
     _patch_llm(monkeypatch, _FakeLLM("sorry I cannot answer right now."))
 
@@ -217,7 +217,7 @@ def test_plan_query_falls_back_on_non_json_response(monkeypatch):
 
 def test_plan_query_falls_back_when_llm_raises(monkeypatch):
     """An async exception inside the LLM call must be caught silently."""
-    from app.qa_pipeline import planner
+    from app.conversation import query_planner as planner
 
     class BoomLLM:
         async def acomplete(self, *args, **kwargs):
@@ -233,7 +233,7 @@ def test_plan_query_falls_back_when_llm_raises(monkeypatch):
 
 def test_plan_query_falls_back_on_invalid_pydantic_payload(monkeypatch):
     """Valid JSON but missing required fields → fallback rather than crash."""
-    from app.qa_pipeline import planner
+    from app.conversation import query_planner as planner
 
     bad = json.dumps({"answer_mode": "knowledge_qa"})  # missing standalone_query etc
     _patch_llm(monkeypatch, _FakeLLM(bad))
@@ -250,7 +250,7 @@ def test_plan_query_falls_back_on_invalid_pydantic_payload(monkeypatch):
 
 
 def test_fallback_query_plan_returns_documented_defaults():
-    from app.qa_pipeline.planner import fallback_query_plan
+    from app.conversation.query_planner import fallback_query_plan
 
     plan = fallback_query_plan("How does HNSW work?")
     assert plan.standalone_query == "How does HNSW work?"
@@ -267,7 +267,7 @@ def test_fallback_query_plan_returns_documented_defaults():
 
 
 def test_keyword_query_handles_mixed_lang_and_symbols():
-    from app.qa_pipeline.planner import _keyword_query
+    from app.conversation.query_planner import _keyword_query
 
     out = _keyword_query("Explain Redis 缓存雪崩 and C++ 多线程")
     # English+symbols token preserved.

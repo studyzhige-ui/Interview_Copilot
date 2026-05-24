@@ -8,8 +8,21 @@ each session IS the chat thread (its own ``session_state`` compaction,
 its own monotonic ``chat_messages.seq``). The earlier "session → many
 conversations" hierarchy from 0015/0017 was reverted — multi-thread
 brainstorming now lives as siblings under the same record.
+
+Content blocks (Stage G refactor — Anthropic Claude Code style):
+  Each ChatMessage carries TWO representations of the assistant turn:
+    * ``content``               — plain text preview (used by session
+                                  list UI, memory extraction)
+    * ``content_blocks_json``   — JSON ``[BetaContentBlock, ...]`` so the
+                                  agent loop's interleaved
+                                  text / tool_use / tool_result chain
+                                  round-trips for the frontend folded-
+                                  card UX. NULL on legacy rows; the
+                                  reader synthesises a single-text-block
+                                  array as the fallback.
 """
 
+import json
 import logging
 from datetime import datetime
 
@@ -46,7 +59,19 @@ class TranscriptService:
         user_msg: str,
         ai_msg: str,
         rewritten_query: str | None = None,
+        ai_blocks: list[dict] | None = None,
+        user_blocks: list[dict] | None = None,
     ) -> int:
+        """Persist one ``User → Agent`` turn.
+
+        ``user_msg`` / ``ai_msg`` are the plain-text canonical form.
+        ``user_blocks`` / ``ai_blocks`` are the optional Anthropic
+        BetaContentBlock arrays — populate them when the turn included
+        tool calls (L2 agent) so the frontend can render the same
+        interleaved text + tool_use / tool_result UX it saw live.
+        When ``ai_blocks`` is None the reader synthesises a single text
+        block from ``ai_msg`` at GET time.
+        """
         db: Session = SessionLocal()
         try:
             session_row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
@@ -68,11 +93,20 @@ class TranscriptService:
 
             db.add(ChatMessage(
                 session_id=session_id, seq=next_seq, role="User",
-                content=user_msg, rewritten_query=rewritten_query,
+                content=user_msg,
+                content_blocks_json=(
+                    json.dumps(user_blocks, ensure_ascii=False)
+                    if user_blocks else None
+                ),
+                rewritten_query=rewritten_query,
             ))
             db.add(ChatMessage(
                 session_id=session_id, seq=next_seq + 1, role="Agent",
                 content=ai_msg,
+                content_blocks_json=(
+                    json.dumps(ai_blocks, ensure_ascii=False)
+                    if ai_blocks else None
+                ),
             ))
 
             session_row.turn_count = (session_row.turn_count or 0) + 1
@@ -182,10 +216,33 @@ class TranscriptService:
 
     @staticmethod
     def _message_to_dict(row: ChatMessage) -> dict:
+        """Serialize one row. ``blocks`` is always populated — either
+        parsed from ``content_blocks_json`` or synthesised as a single
+        text block from ``content`` (read-time backfill for legacy rows
+        and L1 chat turns that don't bother to write blocks_json)."""
+        blocks: list[dict] | None = None
+        if row.content_blocks_json:
+            try:
+                parsed = json.loads(row.content_blocks_json)
+                if isinstance(parsed, list):
+                    blocks = parsed
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(
+                    "chat_messages id=%s has unparseable content_blocks_json; "
+                    "falling back to single-text-block synthesis",
+                    row.id,
+                )
+        if blocks is None:
+            # Read-time backfill: synthesise the Claude-Code shape from
+            # the plain-text content. Frontend always receives a uniform
+            # blocks array, regardless of whether the row was written
+            # before or after the Stage-G refactor.
+            blocks = [{"type": "text", "text": row.content or ""}]
         return {
             "seq": row.seq,
             "role": row.role,
             "content": row.content,
+            "blocks": blocks,
             "rewritten_query": row.rewritten_query,
             "created_at": row.created_at.isoformat() if row.created_at else None,
         }
