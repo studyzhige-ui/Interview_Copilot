@@ -271,6 +271,91 @@ def test_sse_chat_endpoint_streams_chunks(client: TestClient, db: Session, monke
     assert '"type": "done"' in body
 
 
+def test_in_progress_keeps_session_when_brief_launched_but_zero_qa(
+    client: TestClient, db: Session,
+):
+    """Pre-fix sweeper bug: ``qa_history=[]`` was treated as "stale
+    shell" and hard-deleted. But a user who started a mock and saw the
+    AI's opening question without answering yet ALSO has
+    ``qa_history=[]`` — and that session was being purged out from
+    under them. Switching tabs mid-opening lost the whole interview.
+
+    Post-fix: a session is only "stale" when the brief was NEVER
+    launched (no ``interview_plan`` and no ``pending_question``).
+    Sessions with a launched brief but no answers yet are PRESERVED
+    and surfaced via the resume banner.
+    """
+    import json
+
+    # Launched session: brief has run, opening question is sitting in
+    # state, user has NOT answered yet.
+    db.add(ChatSession(
+        id="s_launched",
+        user_id="alice",
+        title="模拟面试",
+        session_type="mock_interview",
+        session_state=json.dumps({
+            "schema_version": 2,
+            "interview_plan": {
+                "phases": [{"phase": "self_intro", "budget": 1, "goal": "x"}],
+            },
+            "pending_question": "先简单做个自我介绍吧",
+            "qa_history": [],
+            "is_finished": False,
+        }),
+    ))
+    db.commit()
+
+    resp = client.get("/api/v1/chat/mock-interview/in-progress")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["has_in_progress"] is True, (
+        "session with launched brief but zero Q&A must be surfaced as "
+        "in-progress; pre-fix it was being silently hard-deleted"
+    )
+    assert body["session_id"] == "s_launched"
+    assert body["qa_count"] == 0
+
+    # The session row must still exist (the sweeper must NOT have
+    # deleted it just because qa_history was empty).
+    still_there = db.query(ChatSession).filter(ChatSession.id == "s_launched").first()
+    assert still_there is not None
+
+
+def test_in_progress_still_purges_genuine_stale_shells(
+    client: TestClient, db: Session,
+):
+    """The "stale shell" purge has to stay alive for the originally
+    intended case: a session row that was created but never reached
+    brief-generation (plan LLM crashed, tab closed mid-startup). Those
+    rows have neither ``interview_plan`` nor ``pending_question`` —
+    truly empty shells, nothing for the user to resume.
+    """
+    import json
+
+    db.add(ChatSession(
+        id="s_shell",
+        user_id="alice",
+        title="模拟面试",
+        session_type="mock_interview",
+        # No interview_plan, no pending_question, no qa_history — the
+        # session got created by /chat/sessions but the subsequent
+        # /chat/mock-interview/start call never completed.
+        session_state=json.dumps({"schema_version": 2}),
+    ))
+    db.commit()
+
+    resp = client.get("/api/v1/chat/mock-interview/in-progress")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["has_in_progress"] is False
+
+    # Confirm the genuinely-empty shell IS hard-deleted (so it doesn't
+    # keep haunting the resume banner on every page load).
+    purged = db.query(ChatSession).filter(ChatSession.id == "s_shell").first()
+    assert purged is None
+
+
 def test_sse_chat_404_for_other_user(client: TestClient, db: Session):
     db.add(ChatSession(id="s_bob", user_id="bob", title="t", session_type="general"))
     db.commit()

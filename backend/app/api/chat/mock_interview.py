@@ -322,10 +322,27 @@ async def get_in_progress_mock(
         qa_history = state.get("qa_history") or []
         is_finished = bool(state.get("is_finished"))
 
-        # Stale shell: no Q&A AND not actively marked finished. Hard-delete it
-        # along with its chat messages + any draft InterviewRecord so it
-        # doesn't keep haunting the resume banner.
-        if not qa_history and not is_finished:
+        # "Has the brief LLM call ever completed for this session?"
+        # A successful ``start_mock_interview`` writes ``interview_plan``
+        # + ``pending_question`` (the opening line) into session_state.
+        # If neither exists, the session is a stale shell — created
+        # but never actually launched (plan generation failed, user
+        # closed the tab mid-startup, etc.).
+        #
+        # CRITICAL: we cannot use ``qa_history`` alone as the
+        # liveness signal. ``qa_history`` only fills in once the
+        # user ANSWERS the first question. A user who started a
+        # mock, saw the opening prompt "请简单做个自我介绍" and
+        # then switched tabs would have ``qa_history=[]`` but a
+        # fully valid in-progress session — pre-fix this very page
+        # would silently hard-delete that session under them, and
+        # the resume banner never appeared because the candidate
+        # row was gone by the time the banner queried.
+        brief_launched = bool(state.get("interview_plan")) or bool(
+            state.get("pending_question")
+        )
+
+        if not qa_history and not is_finished and not brief_launched:
             record_id = state.get("interview_record_id") or sess.interview_id
             if record_id:
                 (
@@ -346,7 +363,9 @@ async def get_in_progress_mock(
         if is_finished:
             continue
 
-        # First non-finished session with real Q&A is the one we surface.
+        # First non-finished session with a launched brief (regardless
+        # of whether the user answered anything yet) is the one we
+        # surface for resume.
         if chosen is None:
             chosen = sess
 

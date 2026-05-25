@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Mic, Square, CornerUpRight, Loader2, Volume2, VolumeX } from 'lucide-react';
 import { Btn } from '@/components/ui/Btn';
 import { Modal } from '@/components/ui/Modal';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { toast } from '@/store/uiStore';
 import { useMediaRecorder } from '@/hooks/useMediaRecorder';
 import { useTts } from '@/hooks/useTts';
@@ -10,7 +11,7 @@ import {
   useSpeechRecognition,
 } from '@/hooks/useSpeechRecognition';
 import { abandonMockInterview, submitMockAnswer, finishMockInterview, TRANSCRIBE_AVAILABLE, transcribeAudio } from '@/api/mock';
-import { useNavigate } from 'react-router-dom';
+import { useBlocker, useNavigate } from 'react-router-dom';
 import type { MockQuestion } from '@/types/api';
 import type { VoiceMode } from './MockSetup';
 
@@ -211,6 +212,45 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, on
   const [abandoning, setAbandoning] = useState(false);
   const answeredCount = turns.filter((t) => t.who === 'me').length;
   const navigate = useNavigate();
+
+  // ── Navigation lock while interview is in flight ─────────────────────
+  // Without this, the user clicking the sidebar away from /mock would
+  // unmount MockLive, lose any local UI state (the typing draft, the
+  // mic recording, the TTS queue), and — pre-fix — silently churn the
+  // session: until the in-progress sweeper fix landed, switching tabs
+  // mid-interview could even hard-delete the session_state row. The
+  // backend sweeper is now defensive (interview_plan + pending_question
+  // are recognised as "launched") so the resume banner reliably picks
+  // sessions up again — but the user's typing buffer, the running TTS,
+  // and the active mic recorder all die on unmount regardless. So we
+  // intercept navigation HERE and ask before letting the unmount fire.
+  //
+  // We block when:
+  //   - interview hasn't finished (debrief generated) yet
+  //   - user isn't actively abandoning (they explicitly want to leave)
+  // Both are gated by ``finished`` / ``abandoning`` flags so the
+  // blocker doesn't fight the user's own "结束" / "放弃" buttons.
+  const shouldBlockNav = !finished && !abandoning;
+  const blocker = useBlocker(({ currentLocation, nextLocation }) =>
+    shouldBlockNav && currentLocation.pathname !== nextLocation.pathname,
+  );
+
+  // ``beforeunload`` covers the close-tab / reload paths that
+  // ``useBlocker`` can't see — those don't fire a route change. We can
+  // only show the browser's default "Leave site?" prompt (modern
+  // browsers ignore custom messages), but that's enough to save the
+  // user from a fat-finger Ctrl+R.
+  useEffect(() => {
+    if (!shouldBlockNav) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // Some legacy browsers still respect returnValue; setting it
+      // is harmless on modern ones and required on Chrome <Dec'22.
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [shouldBlockNav]);
 
   const onGenerateDebrief = async () => {
     setFinishing(true);
@@ -443,6 +483,26 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, on
           </div>
         </div>
       </div>
+
+      {/* Navigation guard. When the user tries to leave /mock mid-
+          interview, the blocker pauses the navigation and shows this
+          dialog. "继续面试" calls ``blocker.reset()`` to cancel the
+          navigation; "暂时离开" calls ``blocker.proceed()`` to let
+          it through. The backend session stays alive — the resume
+          banner on /mock will pick it up when the user returns. */}
+      <ConfirmDialog
+        open={blocker.state === 'blocked'}
+        title="确定要离开吗？"
+        description={
+          `面试正在进行中（已答 ${answeredCount} 题）。离开不会丢失进度 —— ` +
+          `下次回到「模拟面试」页面会看到「继续面试」的提示。如果想结束本场，` +
+          `请使用右上角「结束面试」按钮。`
+        }
+        confirmText="暂时离开"
+        cancelText="继续面试"
+        onConfirm={() => blocker.proceed?.()}
+        onCancel={() => blocker.reset?.()}
+      />
     </div>
   );
 }
