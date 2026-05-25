@@ -401,8 +401,8 @@ BRIEF_PROMPT = """{prefix}
       }}
     ]
   }},
-  "opening_spoken": "你说出口的招呼，1 句口语",
-  "opening_question": "你紧跟的第一个问题（自我介绍引导），≤ 30 字",
+  "opening_spoken": "极简口语招呼，≤ 8 字，例如「你好」或「咱们开始吧」",
+  "opening_question": "请候选人做自我介绍的一句话，≤ 20 字",
   "min_turns": 6,
   "target_turns": 10,
   "max_turns": 14
@@ -410,8 +410,26 @@ BRIEF_PROMPT = """{prefix}
 
 注意：
 - phases 必须按 self_intro → resume_deep_dive → technical → behavioral → reverse_qa 顺序列全 5 个。
-- opening_spoken 必须像真人招呼，不要"请详细阐述您的技术背景"这种书面语。
 - min/target/max_turns 根据简历复杂度自行决定，但 min<target<max。
+
+# 开场白硬约束（极其重要 —— 第一句话由 opening_question 直接展示给用户，必须干净）
+
+opening_spoken：
+- 仅是招呼，最多 8 字
+- ✅ 合法（按 interviewer_style 选择匹配语气）：
+  · 友好/默认：「你好」「咱们开始吧」「你好，准备好了吗」
+  · 专业/严谨：「您好」「我们开始吧」「您好，准备好了吗」
+- ❌ 违规：任何提到面试时长、岗位名、考察方向、JD 内容、简历项目的字样
+
+opening_question：
+- **必须**是单一、干净的「请你做自我介绍」类引导，最多 20 字
+- ✅ 合法：「先简单做个自我介绍吧」「咱们从自我介绍开始」「请先做个自我介绍」「请您先简单介绍一下自己」
+- ❌ 违规（绝对禁止）：
+  · 提到面试时长（「这场 30 分钟的面试…」）
+  · 提到考察方向或 JD 关键词（「我们今天主要看 Python 后端…」）
+  · 点名简历里的具体项目 / 公司 / 技术栈
+  · 把欢迎语和问题黏在一起（「欢迎参加面试，请介绍一下你的项目经验」）
+  · 任何「请详细阐述」「请深入介绍」类书面语 —— 自我介绍阶段就是让候选人放松开口，不是技术拷问
 """
 
 
@@ -595,8 +613,12 @@ async def generate_brief(
 
     plan = data.get("interview_plan") or {}
     plan = _normalize_plan(plan)
-    opening_spoken = str(data.get("opening_spoken") or "你好，咱们先聊一下。").strip()
-    opening_question = str(data.get("opening_question") or "先简单做个自我介绍吧。").strip()
+    # Defaults respect the same caps advertised to the LLM in the
+    # prompt (opening_spoken ≤ 8 字 / opening_question ≤ 20 字), so
+    # whether the JSON parses cleanly or we fall back to the defaults
+    # the user-visible opener still satisfies the contract.
+    opening_spoken = str(data.get("opening_spoken") or "你好").strip()
+    opening_question = str(data.get("opening_question") or "先简单做个自我介绍吧").strip()
 
     min_turns = _int_in_range(data.get("min_turns"), 3, 20, default=DEFAULT_TURN_BUDGETS["min"])
     target_turns = _int_in_range(data.get("target_turns"), min_turns, 30, default=DEFAULT_TURN_BUDGETS["target"])
@@ -798,8 +820,11 @@ def _fallback_brief() -> InterviewBrief:
     }
     return InterviewBrief(
         interview_plan=plan,
-        opening_spoken="你好，咱们开始吧。",
-        opening_question="先简单做个自我介绍吧。",
+        # Both strings stay within the BRIEF_PROMPT caps (8 / 20 字)
+        # so the fallback is byte-for-byte compatible with the
+        # contract the LLM was told to follow.
+        opening_spoken="你好",
+        opening_question="先简单做个自我介绍吧",
         min_turns=6,
         target_turns=10,
         max_turns=14,

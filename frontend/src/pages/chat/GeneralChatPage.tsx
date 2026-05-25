@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, Pencil, X as XIcon, MessageSquare, Sparkles } from 'lucide-react';
 import { Spinner } from '@/components/ui/Spinner';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { toast } from '@/store/uiStore';
 import { extractErr } from '@/api/client';
 import {
@@ -102,19 +103,42 @@ export function GeneralChatPage() {
     }
   };
 
-  const onDelete = async (id: string) => {
-    if (!window.confirm('确定删除这段对话？该对话下的所有消息都会被永久删除。')) return;
+  // Pending delete confirmation. Replaces the off-brand native
+  // ``window.confirm`` (Chrome titles it "Code" because it's not a
+  // PWA dialog — looks like a Chrome extension popup). Same
+  // ConfirmDialog used by Library, MemoryTab, and ChatPanel — keeps
+  // the visual language consistent across delete affordances.
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; title: string } | null>(null);
+  const [deletingChat, setDeletingChat] = useState(false);
+
+  const onDelete = useCallback((id: string) => {
+    const s = sessions.find((x) => x.session_id === id);
+    setPendingDelete({ id, title: s?.title ?? '该会话' });
+  }, [sessions]);
+
+  const confirmDelete = useCallback(async () => {
+    if (!pendingDelete) return;
+    const id = pendingDelete.id;
+    setDeletingChat(true);
     try {
       await deleteChatSession(id);
+      // Clean up the per-session localStorage drafts/mode so we
+      // don't leak keys (same cleanup ChatPanel does on its own
+      // delete path).
+      try { localStorage.removeItem(`chat-draft:${id}`); } catch { /* ignore */ }
+      try { localStorage.removeItem(`chat-mode:${id}`); } catch { /* ignore */ }
       setSessions((s) => {
         const next = s.filter((x) => x.session_id !== id);
         if (activeId === id) setActiveId(next[0]?.session_id ?? null);
         return next;
       });
+      setPendingDelete(null);
     } catch (e) {
       toast.error(extractErr(e, '删除对话失败'));
+    } finally {
+      setDeletingChat(false);
     }
-  };
+  }, [pendingDelete, activeId]);
 
   const commitRename = useCallback(async () => {
     if (!renaming) return;
@@ -257,6 +281,21 @@ export function GeneralChatPage() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        danger
+        title="删除对话"
+        description={
+          pendingDelete
+            ? `确定删除「${pendingDelete.title}」？该对话下的所有消息将被永久删除，不可恢复。`
+            : ''
+        }
+        confirmText="删除"
+        loading={deletingChat}
+        onConfirm={() => { void confirmDelete(); }}
+        onCancel={() => { if (!deletingChat) setPendingDelete(null); }}
+      />
     </div>
   );
 }

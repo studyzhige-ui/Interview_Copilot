@@ -34,6 +34,44 @@ from app.services.mock_interview_service import (
 )
 
 
+# ── opener invariants (BRIEF_PROMPT contract) ───────────────────────────
+
+
+def test_fallback_brief_opener_satisfies_prompt_caps():
+    """The prompt promises the LLM that ``opening_spoken`` ≤ 8 chars
+    and ``opening_question`` ≤ 20 chars. The server-side fallback
+    (used when the LLM returns garbage) MUST respect the same caps
+    so the user-visible first message is identical in spirit
+    whether the LLM succeeded or we fell back.
+
+    Also pins the no-mixing rule: the opener must NOT contain
+    interview-duration / JD-keyword / project-name leakage. The
+    fallback strings are static so this test guards against a future
+    contributor "improving" them and breaking the contract.
+    """
+    brief = mod._fallback_brief()
+
+    # Length caps match the prompt.
+    assert len(brief.opening_spoken) <= 8, (
+        f"opening_spoken={brief.opening_spoken!r} exceeds 8-char cap"
+    )
+    assert len(brief.opening_question) <= 20, (
+        f"opening_question={brief.opening_question!r} exceeds 20-char cap"
+    )
+
+    # Forbidden patterns (the screenshot's specific failure modes).
+    forbidden = [
+        "面试", "分钟", "JD", "岗位", "项目", "技术栈",
+        "请详细", "请深入", "欢迎参加",
+    ]
+    combined = brief.opening_spoken + brief.opening_question
+    for pat in forbidden:
+        assert pat not in combined, (
+            f"fallback opener leaks forbidden pattern {pat!r}; "
+            f"got {combined!r}"
+        )
+
+
 # ── build_prefix / prefix_hash ───────────────────────────────────────────
 
 
