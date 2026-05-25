@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 !.env.docker.example
+
+# User-local prompt scratchpad (not project content)
+docs/prompts/
 .venv/
 env/
 venv/
