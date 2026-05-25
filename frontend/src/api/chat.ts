@@ -118,11 +118,25 @@ export interface StreamChatHandlers {
   onBudget?: (info: BudgetInfo, step: number) => void;
 }
 
+/** Execution strategy for the turn — picks L1 chat vs L2 ReAct agent on
+ *  the server side. The frontend's AGENT pill MUST set ``mode='agent'``
+ *  to actually activate the tool registry (search_jobs, web_search,
+ *  read_url, search_knowledge, read_resume, read_interview_history,
+ *  read_file, write_file, recall_memory, save_memory). Without it the
+ *  AGENT pill is decorative and the LLM never sees a single tool. */
+export type ChatMode = 'chat' | 'agent';
+
+export interface StreamChatOpts {
+  signal?: AbortSignal;
+  /** Defaults to ``'chat'`` for back-compat. */
+  mode?: ChatMode;
+}
+
 export async function streamChatSSE(
   sessionId: string,
   message: string,
   handlers: StreamChatHandlers,
-  opts: { signal?: AbortSignal } = {},
+  opts: StreamChatOpts = {},
 ): Promise<void> {
   const token = tokenStore.getAccess() ?? '';
   const baseURL = (apiClient.defaults.baseURL ?? '').replace(/\/+$/, '');
@@ -134,7 +148,7 @@ export async function streamChatSSE(
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       Accept: 'text/event-stream',
     },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, mode: opts.mode ?? 'chat' }),
     signal: opts.signal,
   });
   if (!resp.ok || !resp.body) {

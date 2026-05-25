@@ -522,7 +522,14 @@ export function ChatPanel({
         rt.streaming = true;
         bump();
       },
-    }, { signal: ac.signal })
+    }, {
+      signal: ac.signal,
+      // The mode pill (CHAT vs AGENT) selects the server-side strategy.
+      // Without this plumbing the AGENT button is purely decorative and
+      // the full tool registry never reaches the LLM — see the SSE
+      // endpoint's dispatch on ``request.mode``.
+      mode: mode === 'AGENT' ? 'agent' : 'chat',
+    })
       .then(() => finalize())
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === 'AbortError') { finalize(); return; }

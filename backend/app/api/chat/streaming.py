@@ -61,15 +61,28 @@ async def sse_chat_endpoint(
         raise HTTPException(status_code=404, detail="Session not found or access denied")
 
     # Lazy import so cold-startup doesn't pay the conversation-engine /
-    # qa_pipeline cost when other chat-router endpoints are hit.
-    from app.conversation import ConversationEngine, make_chat_strategy
+    # qa_pipeline cost when other chat-router endpoints are hit. Both
+    # factory imports are kept lazy together — the agent factory in
+    # turn lazy-imports the full agent_runtime, which is heavy.
+    from app.conversation import (
+        ConversationEngine,
+        make_agent_strategy,
+        make_chat_strategy,
+    )
+
+    # Dispatch on the request's ``mode`` field. The frontend's AGENT
+    # pill sends ``mode="agent"``; everything else (and the default
+    # for back-compat) is the L1 chat pipeline.
+    strategy = (
+        make_agent_strategy() if request.mode == "agent" else make_chat_strategy()
+    )
 
     async def event_generator():
         engine = ConversationEngine(
             user_id=current_user.username,
             session_id=session_id,
             user_message=request.message,
-            strategy=make_chat_strategy(),
+            strategy=strategy,
         )
         try:
             async for event in engine.submit_message():

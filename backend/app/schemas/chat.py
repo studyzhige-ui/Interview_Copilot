@@ -1,6 +1,8 @@
 """Pydantic schemas for chat / mock-interview HTTP endpoints."""
 
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
 class SessionCreateRequest(BaseModel):
@@ -33,6 +35,18 @@ class MessageItem(BaseModel):
 
 class SSEChatRequest(BaseModel):
     message: str
+    # Execution strategy. ``chat`` runs the L1 chat pipeline (planner →
+    # answer LLM, no tool use). ``agent`` runs the L2 ReAct loop with
+    # the full tool registry (search_jobs, web_search, read_url,
+    # search_knowledge, read_resume, read_interview_history, read_file,
+    # write_file, recall_memory, save_memory).
+    #
+    # Default ``chat`` for back-compat: any pre-existing client that
+    # doesn't send the field continues to land on the chat path. The
+    # frontend's AGENT pill MUST pass ``"agent"`` here — without that
+    # plumbing the tool registry never reaches the LLM and "AGENT mode"
+    # is purely decorative.
+    mode: Literal["chat", "agent"] = Field(default="chat")
 
 
 class MockStartRequest(BaseModel):

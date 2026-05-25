@@ -269,7 +269,6 @@ def test_sse_chat_endpoint_streams_chunks(client: TestClient, db: Session, monke
     body = resp.text
     assert "hello" in body and "world" in body
     assert '"type": "done"' in body
-    assert '"type": "done"' in body
 
 
 def test_sse_chat_404_for_other_user(client: TestClient, db: Session):
@@ -277,3 +276,74 @@ def test_sse_chat_404_for_other_user(client: TestClient, db: Session):
     db.commit()
     resp = client.post("/api/v1/chat/sse/s_bob", json={"message": "hi"})
     assert resp.status_code == 404
+
+
+def test_sse_chat_mode_field_picks_strategy(client: TestClient, db: Session, monkeypatch):
+    """``mode`` in the request body selects the strategy factory.
+
+    Pre-fix, the SSE endpoint hardcoded ``make_chat_strategy()`` and the
+    AGENT pill in the frontend was decorative — every request landed on
+    the L1 chat path and the registered tool registry never reached
+    the LLM. This test pins the dispatch contract:
+
+      mode="chat"  (or omitted) → make_chat_strategy
+      mode="agent"               → make_agent_strategy
+
+    A wrong default ("agent") would unleash the full tool registry on
+    every legacy client that doesn't send the field — exactly the
+    regression we DO NOT want — so the back-compat default is
+    asserted explicitly.
+    """
+    db.add(ChatSession(id="s_dispatch", user_id="alice", title="t", session_type="general"))
+    db.commit()
+
+    captured: dict[str, str] = {}
+
+    class _StubStrategy:
+        def __init__(self, label: str) -> None:
+            captured["label"] = label
+
+    # Patch at the source module — the endpoint lazy-imports both
+    # factories from ``app.conversation`` inside its handler, so the
+    # patch must hit the symbol there rather than on the endpoint
+    # module (which never re-exports them as attributes).
+    monkeypatch.setattr(
+        "app.conversation.make_chat_strategy",
+        lambda: _StubStrategy("chat"),
+    )
+    monkeypatch.setattr(
+        "app.conversation.make_agent_strategy",
+        lambda: _StubStrategy("agent"),
+    )
+
+    async def fake_submit(self):
+        from app.conversation.events import HarnessEvent
+        yield HarnessEvent.done(step=0, elapsed_ms=0)
+
+    from app.conversation.engine import ConversationEngine
+    monkeypatch.setattr(ConversationEngine, "submit_message", fake_submit)
+
+    # Default (no mode) → chat.
+    resp = client.post("/api/v1/chat/sse/s_dispatch", json={"message": "hi"})
+    assert resp.status_code == 200
+    assert captured["label"] == "chat", "default should be chat strategy"
+
+    # Explicit chat → chat.
+    resp = client.post(
+        "/api/v1/chat/sse/s_dispatch", json={"message": "hi", "mode": "chat"},
+    )
+    assert resp.status_code == 200
+    assert captured["label"] == "chat"
+
+    # Explicit agent → agent.
+    resp = client.post(
+        "/api/v1/chat/sse/s_dispatch", json={"message": "hi", "mode": "agent"},
+    )
+    assert resp.status_code == 200
+    assert captured["label"] == "agent", "mode='agent' must pick agent strategy"
+
+    # Invalid mode → 422 (Pydantic Literal validation).
+    resp = client.post(
+        "/api/v1/chat/sse/s_dispatch", json={"message": "hi", "mode": "bogus"},
+    )
+    assert resp.status_code == 422
