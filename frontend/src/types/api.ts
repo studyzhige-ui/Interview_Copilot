@@ -173,19 +173,24 @@ export interface MockPlanPhase {
 }
 
 export interface MockQuestion {
-  // All five fields are present on a "live" question payload (when
-  // ``done === false`` — the normal in-flight case). When the session
-  // has flipped to finished, the backend returns just ``{done: true,
-  // message}`` from ``/question`` — in that branch every field except
-  // ``done`` is missing. Callers that branch on ``done`` first (see
-  // ``MockPage.resumeInProgress``) can treat the rest as required;
-  // we keep them optional in the type for the done=true escape.
+  // ``done`` is set on EVERY return path (start, /question both
+  // branches) so it's required. Everything else is gated by the
+  // ``done`` flag: when ``done === true`` the backend returns just
+  // ``{done, message}``; when ``done === false`` all the live-question
+  // fields are present. Callers should branch on ``done`` first (see
+  // ``MockPage.resumeInProgress``) — TypeScript would let us model
+  // this as a discriminated union, but the existing
+  // ``q.done ? ... : ...`` consumer pattern works fine with
+  // optional fields and avoids the union-narrowing boilerplate.
+  done: boolean;
+  /** Set when ``done === true`` — the human-readable "interview
+   *  finished" message. Empty / absent otherwise. */
+  message?: string;
+  // Live-question fields — all present when ``done === false``,
+  // absent when ``done === true``.
   question?: string;
   phase_id?: string;
   phase_name?: string;
-  done?: boolean;
-  // Backend sends these on EVERY non-done question (start + answer +
-  // /question reads). Kept optional only for the done=true branch.
   question_idx?: number;
   total_questions_in_phase?: number;
   // v6 director attaches the spoken pre-amble for the upcoming
