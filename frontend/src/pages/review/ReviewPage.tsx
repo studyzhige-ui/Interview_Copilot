@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { SessionList } from './SessionList';
 import { QAPanel } from './QAPanel';
@@ -9,6 +9,7 @@ import { Resizer } from '@/components/ui/Resizer';
 import { toast } from '@/store/uiStore';
 import { cancelAnalyze, getInterviewRecord, listInterviewRecords } from '@/api/interview';
 import type { InterviewRecordDetail, InterviewRecordListItem } from '@/types/api';
+import { useIsMounted } from '@/hooks/useIsMounted';
 
 const PANEL_KEY = 'review.panelWidths';
 
@@ -149,9 +150,20 @@ export function ReviewPage() {
     }
   };
 
+  const isMounted = useIsMounted();
+  const onRecordChangedAcRef = useRef<AbortController | null>(null);
   const onRecordChanged = async () => {
+    // Cancel any in-flight previous invocation so a fast
+    // rename → rename → delete sequence doesn't land the
+    // SECOND rename's detail while the user has just deleted
+    // the record. Also bail post-await if the user navigated
+    // away while the calls were in flight.
+    onRecordChangedAcRef.current?.abort();
+    const ac = new AbortController();
+    onRecordChangedAcRef.current = ac;
     try {
-      const rows = await listInterviewRecords(0, 50);
+      const rows = await listInterviewRecords(0, 50, { signal: ac.signal });
+      if (ac.signal.aborted || !isMounted.current) return;
       setRecords(rows);
       if (activeId && !isDraft(activeId)) {
         const stillExists = rows.some((r) => r.id === activeId);
@@ -167,7 +179,8 @@ export function ReviewPage() {
           // QAPanel's header reflects the new title without the user having
           // to switch tabs and back.
           try {
-            const fresh = await getInterviewRecord(activeId);
+            const fresh = await getInterviewRecord(activeId, { signal: ac.signal });
+            if (ac.signal.aborted || !isMounted.current) return;
             setDetail(fresh);
           } catch {
             // Non-fatal — the list still shows the new title; the detail
@@ -175,8 +188,11 @@ export function ReviewPage() {
           }
         }
       }
-    } catch {
-      toast.error('刷新记录列表失败');
+    } catch (e) {
+      if ((e as { code?: string })?.code === 'ERR_CANCELED') return;
+      if (isMounted.current) toast.error('刷新记录列表失败');
+    } finally {
+      if (onRecordChangedAcRef.current === ac) onRecordChangedAcRef.current = null;
     }
   };
 
@@ -211,8 +227,11 @@ export function ReviewPage() {
       const { [forActiveId]: _, ...rest } = prev;
       return rest;
     });
+    // Analysis completion can fire a few seconds after the user has
+    // navigated away — guard every setState past an await.
     try {
       const rows = await listInterviewRecords(0, 50);
+      if (!isMounted.current) return;
       setRecords(rows);
       const target = entry?.record_id;
       if (target) {
@@ -220,22 +239,26 @@ export function ReviewPage() {
         // records we created the row up front, so this is a no-op there.
         if (forActiveId !== target && entry) {
           await applyDraftMetadata(target, { title: entry.title, tag: entry.tag });
+          if (!isMounted.current) return;
           const refreshed = await listInterviewRecords(0, 50);
+          if (!isMounted.current) return;
           setRecords(refreshed);
         }
         // Re-hydrate detail so QAPanel picks up the new qa[] + analysis.
         try {
           const fresh = await getInterviewRecord(target);
+          if (!isMounted.current) return;
           setDetail(fresh);
         } catch {
           // ignore — useEffect will retry on next activeId change
         }
+        if (!isMounted.current) return;
         setActiveId((cur) => (cur === forActiveId ? target : cur));
         setDrafts((arr) => arr.filter((d) => d.id !== forActiveId));
         if (activeId === forActiveId) setSearch({ id: target }, { replace: true });
       }
     } catch {
-      toast.error('刷新记录失败');
+      if (isMounted.current) toast.error('刷新记录失败');
     }
   };
 

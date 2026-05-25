@@ -20,6 +20,7 @@
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useIsMounted } from '@/hooks/useIsMounted';
 import {
   Send, Paperclip, Bot, MessageSquare, Sparkles, ChevronDown,
   Plus, Pencil, X as XIcon, Square, Brain, Wrench, ChevronRight,
@@ -558,6 +559,7 @@ export function ChatPanel({
   }, [renaming]);
 
   // ── Attachments ──────────────────────────────────────────────────────
+  const isMounted = useIsMounted();
   const onAttachFiles = async (files: FileList) => {
     setUploading(true);
     const added: Attachment[] = [];
@@ -565,8 +567,13 @@ export function ChatPanel({
       try {
         const doc = await uploadKnowledgeFile(f, { category: 'chat_attachment', source_type: 'official_docs' });
         added.push({ doc_id: doc.id, filename: f.name });
-      } catch { toast.error(`附件上传失败：${f.name}`); }
+      } catch {
+        if (isMounted.current) toast.error(`附件上传失败：${f.name}`);
+      }
     }
+    // Bail before touching state if the user navigated away during
+    // a slow upload — multi-file uploads can take 10+ seconds.
+    if (!isMounted.current) return;
     if (added.length > 0) {
       setAttachments((arr) => [...arr, ...added]);
       toast.success(`已附加 ${added.length} 个文件`);

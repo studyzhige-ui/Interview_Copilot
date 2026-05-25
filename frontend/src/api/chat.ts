@@ -182,10 +182,36 @@ export async function streamChatSSE(
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
+  // ── Idle watchdog ─────────────────────────────────────────────────
+  // If the backend worker stalls or the proxy silently drops the
+  // connection without a FIN, ``reader.read()`` will hang forever
+  // and the UI will be stuck on "AI 正在生成…" until the user
+  // manually clicks Stop. Aborting the fetch on a 60s data-gap
+  // surfaces the stall as an error event the caller's .catch()
+  // path already handles. Externally-supplied opts.signal is
+  // unaffected — we hook into the same AbortController surface.
+  const idleAc = new AbortController();
+  const externalSignal = opts.signal;
+  if (externalSignal) {
+    if (externalSignal.aborted) idleAc.abort();
+    else externalSignal.addEventListener('abort', () => idleAc.abort(), { once: true });
+  }
+  const IDLE_TIMEOUT_MS = 60_000;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const armIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => idleAc.abort(), IDLE_TIMEOUT_MS);
+  };
+  armIdle();
+  // Cancel reader if the watchdog fires.
+  idleAc.signal.addEventListener('abort', () => {
+    try { reader.cancel(); } catch { /* ignore */ }
+  }, { once: true });
   try {
     for (;;) {
       const { value, done } = await reader.read();
       if (done) return;
+      armIdle();
       buf += decoder.decode(value, { stream: true });
       let idx: number;
       while ((idx = buf.indexOf('\n\n')) !== -1) {
@@ -266,7 +292,18 @@ export async function streamChatSSE(
         }
       }
     }
+  } catch (err) {
+    // Distinguish the watchdog-triggered abort from a user cancel
+    // so the UI can render "stream timed out" instead of a silent
+    // close. ``opts.signal?.aborted`` is true only if the user
+    // pressed Stop; if idleAc fired without user input that's the
+    // watchdog.
+    if (idleAc.signal.aborted && !externalSignal?.aborted) {
+      throw new Error('连接超时：服务端 60s 无数据响应，已中断');
+    }
+    throw err;
   } finally {
+    if (idleTimer) clearTimeout(idleTimer);
     try { reader.releaseLock(); } catch { /* ignore */ }
   }
 }

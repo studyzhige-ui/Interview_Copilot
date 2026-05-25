@@ -8,8 +8,12 @@ import type {
 export async function listInterviewRecords(
   offset = 0,
   limit = 50,
+  opts: { signal?: AbortSignal } = {},
 ): Promise<InterviewRecordListItem[]> {
-  const res = await apiClient.get('/interview-records', { params: { offset, limit } });
+  const res = await apiClient.get('/interview-records', {
+    params: { offset, limit },
+    signal: opts.signal,
+  });
   return res.data;
 }
 

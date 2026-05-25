@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useIsMounted } from '@/hooks/useIsMounted';
 import {
   Upload, Search, Pencil, Trash2, FileText, RefreshCw,
   ChevronLeft, ChevronRight, ArrowDown, ArrowUp, Folder, Brain,
@@ -129,11 +130,13 @@ function FilesSection() {
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [pickCategory, setPickCategory] = useState<Category>('简历');
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const isMounted = useIsMounted();
 
   // ``refresh`` is the manual / user-triggered reload (after upload,
-  // after edit, after delete) — runs without a signal, no race
-  // because the caller initiated it. The filter-driven effect below
-  // uses its own abort-aware variant.
+  // after edit, after delete). The filter-driven effect below uses its
+  // own abort lifecycle; this manual path uses ``useIsMounted`` so a
+  // refresh fired right before the user navigates away doesn't
+  // setState on an unmounted component.
   const refresh = async () => {
     setLoading(true);
     try {
@@ -141,12 +144,13 @@ function FilesSection() {
         listKnowledgeDocuments(filter ? { category: filter } : {}),
         listKnowledgeCategories(),
       ]);
+      if (!isMounted.current) return;
       setDocs(d);
       setCats(c);
     } catch {
-      toast.error('资料库加载失败');
+      if (isMounted.current) toast.error('资料库加载失败');
     } finally {
-      setLoading(false);
+      if (isMounted.current) setLoading(false);
     }
   };
 
@@ -249,10 +253,11 @@ function FilesSection() {
     if (!title) { setEditing(null); return; }
     try {
       await updateKnowledgeDocument(editing.id, { title });
+      if (!isMounted.current) return;
       setEditing(null);
       await refresh();
     } catch {
-      toast.error('保存失败');
+      if (isMounted.current) toast.error('保存失败');
     }
   };
 
@@ -260,11 +265,12 @@ function FilesSection() {
     if (!deleting) return;
     try {
       await deleteKnowledgeDocument(deleting.id);
+      if (!isMounted.current) return;
       setDeleting(null);
       toast.success('已删除');
       await refresh();
     } catch {
-      toast.error('删除失败');
+      if (isMounted.current) toast.error('删除失败');
     }
   };
 

@@ -72,26 +72,36 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, on
   // Auto-fall back if Web Speech errors out (commonly: `network` when Google's
   // speech endpoint is unreachable in CN). Switch the user to Whisper for the
   // rest of the session so they don't keep hitting the same wall.
+  //
+  // Deps destructured from speech.state — depending on the whole
+  // ``speech.state`` object would re-fire this effect on every
+  // interim-chunk update during listening (50+ times/sec for a
+  // chatty speaker), which is wasted work. We only care about
+  // ``phase`` and ``message`` here.
+  const speechPhase = speech.state.phase;
+  const speechMessage = 'message' in speech.state ? speech.state.message : undefined;
+  const speechFinalText = 'finalText' in speech.state ? speech.state.finalText : '';
+  const speechInterim = 'interim' in speech.state ? speech.state.interim : '';
   useEffect(() => {
-    if (useNativeStt && speech.state.phase === 'error') {
-      const msg = speech.state.message ?? '';
+    if (useNativeStt && speechPhase === 'error') {
+      const msg = speechMessage ?? '';
       if (/network|service|not-allowed/i.test(msg)) {
         toast.warn('浏览器语音识别不可达，已切到 Whisper');
         setSttMode('whisper');
       }
     }
-  }, [useNativeStt, speech.state]);
+  }, [useNativeStt, speechPhase, speechMessage]);
 
   // Live-stream Web Speech partials into the textarea so the user sees what
   // we're hearing in real time. final fragments accumulate in the textarea
   // for review/edit before submit.
   useEffect(() => {
     if (!useNativeStt) return;
-    if (speech.state.phase === 'listening') {
-      const combined = (speech.state.finalText + speech.state.interim).trimStart();
+    if (speechPhase === 'listening') {
+      const combined = (speechFinalText + speechInterim).trimStart();
       setTyping(combined);
     }
-  }, [speech.state, useNativeStt]);
+  }, [useNativeStt, speechPhase, speechFinalText, speechInterim]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });

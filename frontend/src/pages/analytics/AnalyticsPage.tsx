@@ -5,6 +5,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { Btn } from '@/components/ui/Btn';
 import { toast } from '@/store/uiStore';
 import { getAnalyticsReport, listInterviewRecords } from '@/api/interview';
+import { useIsMounted } from '@/hooks/useIsMounted';
 
 const MIN_SESSIONS = 3;
 
@@ -69,25 +70,28 @@ export function AnalyticsPage() {
   const [report, setReport] = useState<ReturnType<typeof normalize> | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const isMounted = useIsMounted();
   const refresh = async () => {
     setLoading(true);
     try {
       const records = await listInterviewRecords(0, 50);
+      if (!isMounted.current) return;
       setSessionCount(records.length);
       if (records.length >= MIN_SESSIONS) {
         const raw = await getAnalyticsReport();
+        if (!isMounted.current) return;
         setReport(normalize(raw));
       } else {
         setReport(null);
       }
     } catch {
-      toast.error('能力分析加载失败');
+      if (isMounted.current) toast.error('能力分析加载失败');
     } finally {
-      setLoading(false);
+      if (isMounted.current) setLoading(false);
     }
   };
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) {
     return (

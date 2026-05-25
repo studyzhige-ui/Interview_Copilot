@@ -7,6 +7,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { toast } from '@/store/uiStore';
 import { getMe, updateMe, uploadAvatar, type MeResponse } from '@/api/auth';
 import { useAuthStore } from '@/store/authStore';
+import { useIsMounted } from '@/hooks/useIsMounted';
 
 const MACARON_BG = [
   'bg-macaron-peach',
@@ -71,10 +72,12 @@ export function ProfilePage() {
     }
   };
 
+  const isMounted = useIsMounted();
   const refresh = async () => {
     setLoading(true);
     try {
       const m = await getMe();
+      if (!isMounted.current) return;
       setMe(m);
       setStoreMe(m);
       setNickname(m.nickname ?? '');
@@ -83,13 +86,13 @@ export function ProfilePage() {
       setBio(m.bio ?? '');
       setGlobalMemoryEnabled(Boolean(m.global_memory_enabled));
     } catch {
-      toast.error('个人信息加载失败');
+      if (isMounted.current) toast.error('个人信息加载失败');
     } finally {
-      setLoading(false);
+      if (isMounted.current) setLoading(false);
     }
   };
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const dirty =
     !!me &&

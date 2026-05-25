@@ -28,6 +28,7 @@ import { Pill } from '@/components/ui/Pill';
 import { Spinner } from '@/components/ui/Spinner';
 import { toast } from '@/store/uiStore';
 import { extractErr } from '@/api/client';
+import { useIsMounted } from '@/hooks/useIsMounted';
 import {
   deleteKnowledgeTopic,
   editHabitDoc,
@@ -107,12 +108,13 @@ export function MemoryTab() {
 function OverviewSection({ switchTo }: { switchTo: (s: SubTab) => void }) {
   const [data, setData] = useState<MemoryOverviewResp | null>(null);
   const [loading, setLoading] = useState(true);
+  const isMounted = useIsMounted();
   const refresh = () => {
     setLoading(true);
     getMemoryOverview()
-      .then(setData)
-      .catch((e) => toast.error(extractErr(e, '记忆概览加载失败')))
-      .finally(() => setLoading(false));
+      .then((d) => { if (isMounted.current) setData(d); })
+      .catch((e) => { if (isMounted.current) toast.error(extractErr(e, '记忆概览加载失败')); })
+      .finally(() => { if (isMounted.current) setLoading(false); });
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(refresh, []);
@@ -279,10 +281,15 @@ function ProfileSection() {
   const [body, setBody] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
+    // Skip-on-unmount guard. If the user switches sub-tabs (or
+    // navigates away) before this fetch resolves, the .then/.finally
+    // would otherwise setState on an unmounted component.
+    let alive = true;
     getUserProfileDoc()
-      .then(setBody)
-      .catch((e) => toast.error(extractErr(e, '个人资料加载失败')))
-      .finally(() => setLoading(false));
+      .then((b) => { if (alive) setBody(b); })
+      .catch((e) => { if (alive) toast.error(extractErr(e, '个人资料加载失败')); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
   }, []);
   if (loading) return <LoadingBlock />;
   if (!body?.trim()) {
@@ -629,16 +636,22 @@ function SingleDocSection({ kind }: { kind: 'strategy' | 'habit' }) {
   const docTypeLabel = kind === 'strategy' ? 'strategy_doc' : 'habit_doc';
   const fetchBody = kind === 'strategy' ? getStrategyDoc : getHabitDoc;
   const saveBody = kind === 'strategy' ? editStrategyDoc : editHabitDoc;
+  const isMounted = useIsMounted();
 
-  // ``refresh`` runs without a signal — it's used for user-initiated
-  // reloads (after save) where there's no race. The kind-switch
-  // effect below has its own abort lifecycle.
+  // ``refresh`` is user-initiated (after save). The kind-switch
+  // effect below has its own abort lifecycle; this path uses
+  // ``useIsMounted`` so a quick save → navigate-away doesn't
+  // setState on an unmounted component.
   const refresh = () => {
     setLoading(true);
     fetchBody()
-      .then((b) => { setBody(b); setDraft(b); })
-      .catch((e) => toast.error(extractErr(e, `${label}加载失败`)))
-      .finally(() => setLoading(false));
+      .then((b) => {
+        if (!isMounted.current) return;
+        setBody(b);
+        setDraft(b);
+      })
+      .catch((e) => { if (isMounted.current) toast.error(extractErr(e, `${label}加载失败`)); })
+      .finally(() => { if (isMounted.current) setLoading(false); });
   };
   useEffect(() => {
     // Abort on kind change — without this, switching strategy ↔ habit

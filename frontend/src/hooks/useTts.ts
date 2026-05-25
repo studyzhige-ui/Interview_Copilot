@@ -65,6 +65,7 @@ export function useTts({ enabled, voice }: UseTtsOptions) {
       const el = ensureAudio();
       setState({ phase: 'loading' });
 
+      let url: string | null = null;
       try {
         const res = await apiClient.post(
           '/chat/mock-interview/tts',
@@ -72,12 +73,24 @@ export function useTts({ enabled, voice }: UseTtsOptions) {
           { responseType: 'blob' },
         );
         const blob = res.data as Blob;
-        const url = URL.createObjectURL(blob);
+        url = URL.createObjectURL(blob);
         lastUrlRef.current = url;
         el.src = url;
         await el.play();
         setState({ phase: 'playing' });
       } catch (err) {
+        // ``el.play()`` rejects on browser autoplay policy
+        // (NotAllowedError when the user hasn't interacted) and on
+        // any media decode error. The blob URL was already created,
+        // assigned to ``lastUrlRef``, AND pinned via ``el.src`` —
+        // without explicit revoke + element detach the bytes stay
+        // in memory for the lifetime of the page. Repeated retries
+        // would leak one blob per failed play attempt.
+        if (url) {
+          try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+          if (lastUrlRef.current === url) lastUrlRef.current = null;
+        }
+        el.removeAttribute('src');
         const msg = err instanceof Error ? err.message : 'TTS 失败';
         setState({ phase: 'error', message: msg });
       }

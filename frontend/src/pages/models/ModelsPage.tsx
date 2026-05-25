@@ -15,6 +15,7 @@ import {
   type UserApiKeyStatus,
 } from '@/api/models';
 import type { ModelProfile, ModelRole } from '@/types/api';
+import { useIsMounted } from '@/hooks/useIsMounted';
 
 interface VendorInfo {
   key: string;
@@ -67,10 +68,12 @@ export function ModelsPage() {
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const [apiKeys, setApiKeys] = useState<UserApiKeyStatus>({});
 
+  const isMounted = useIsMounted();
   const refresh = async () => {
     setLoading(true);
     try {
       const c = await getModelsCatalog();
+      if (!isMounted.current) return;
       setProfiles(c.profiles);
       setSelection({
         primary: c.selection.primary ?? '',
@@ -79,16 +82,18 @@ export function ModelsPage() {
         mock_interview: c.selection.mock_interview ?? c.selection.fast ?? '',
       });
     } catch {
-      toast.error('模型目录加载失败');
+      if (isMounted.current) toast.error('模型目录加载失败');
     } finally {
-      setLoading(false);
+      if (isMounted.current) setLoading(false);
     }
   };
 
   useEffect(() => {
     refresh();
-    listMyApiKeys().then(setApiKeys).catch(() => {});
-  }, []);
+    listMyApiKeys()
+      .then((k) => { if (isMounted.current) setApiKeys(k); })
+      .catch(() => {});
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const onSaveKey = async (provider: string, key: string) => {
     try {
@@ -123,15 +128,16 @@ export function ModelsPage() {
     setPinging(true);
     try {
       const results = await pingAllModels();
+      if (!isMounted.current) return;
       const map: Record<string, ModelPingResult> = {};
       for (const r of results) map[r.profile_id] = r;
       setPingResults(map);
       const reachable = results.filter((r) => r.ok).length;
       toast.success(`已 ping ${results.length} 个模型，${reachable} 个可达`);
     } catch {
-      toast.error('Ping 失败');
+      if (isMounted.current) toast.error('Ping 失败');
     } finally {
-      setPinging(false);
+      if (isMounted.current) setPinging(false);
     }
   };
 
@@ -143,15 +149,17 @@ export function ModelsPage() {
       // pull through the standard catalog endpoint too so this page's local
       // state path matches what /catalog returns elsewhere.
       await refresh();
+      if (!isMounted.current) return;
       toast.success(
         `已刷新 ${result.profiles_total} 个模型，` +
         `其中 ${result.profiles_auto_discovered} 个自动发现`,
       );
     } catch (err) {
+      if (!isMounted.current) return;
       const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail;
       toast.error(detail ?? '刷新模型库失败');
     } finally {
-      setRefreshingCatalog(false);
+      if (isMounted.current) setRefreshingCatalog(false);
     }
   };
 
