@@ -398,8 +398,8 @@ class ConversationEngine:
     def _humanize_exc(exc: Exception) -> str:
         """Translate an upstream exception into actionable Chinese.
 
-        Moved here from ``qa_pipeline.agent_executor._humanize_exc`` so
-        the L2 agent path benefits from the same friendly messages.
+        Shared by both L1 chat and L2 agent paths so user-visible
+        errors look the same regardless of which strategy crashed.
         Full traceback still goes to the backend log via the caller's
         ``logger.error(...)``.
         """

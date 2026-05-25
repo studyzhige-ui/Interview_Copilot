@@ -1,4 +1,8 @@
-"""Tests for the refactored Agent Harness (react_agent.py).
+"""Tests for the agent_runtime primitives.
+
+The agent loop itself lives in
+:class:`app.conversation.agent_strategy.AgentLoopStrategy`; this file
+covers the lower-layer building blocks the strategy depends on.
 
 Covers:
   - AgentBudget: Hermes-style steps+timeout limits, correct refund semantics

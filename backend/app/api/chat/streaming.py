@@ -71,10 +71,9 @@ async def sse_chat_endpoint(
     if not row or row.user_id != current_user.username:
         raise HTTPException(status_code=404, detail="Session not found or access denied")
 
-    # Lazy import so cold-startup doesn't pay the conversation-engine /
-    # qa_pipeline cost when other chat-router endpoints are hit. Both
-    # factory imports are kept lazy together — the agent factory in
-    # turn lazy-imports the full agent_runtime, which is heavy.
+    # Lazy import so cold-startup doesn't pay the conversation-engine
+    # cost when other chat-router endpoints are hit. The agent factory
+    # in turn lazy-imports the full agent_runtime, which is heavy.
     from app.conversation import (
         ConversationEngine,
         make_agent_strategy,

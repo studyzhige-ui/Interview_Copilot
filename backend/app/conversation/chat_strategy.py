@@ -1,9 +1,8 @@
 """L1 chat-pipeline strategy — deterministic plan → retrieve → answer.
 
-Hosts the fixed-orchestration single-turn flow that used to live in
-``qa_pipeline.agent_executor.stream_chat_with_agent``. Memory recall,
+Hosts the fixed-orchestration single-turn flow. Memory recall,
 context assembly, retrieval, persistence, and post-turn maintenance
-have all moved into :class:`~app.conversation.engine.ConversationEngine`;
+all live in :class:`~app.conversation.engine.ConversationEngine`;
 this strategy only owns the single LLM call that produces the answer
 (streaming) plus the prompt-rendering choice between direct and RAG modes.
 
@@ -78,7 +77,7 @@ def _count_tokens(text: str) -> int:
     return max(1, len(text) // 3) if text else 0
 
 
-DIRECT_SYSTEM_RULES = """You are Interview Copilot, a concise technical interview assistant.
+DIRECT_SYSTEM_PROMPT = """You are Interview Copilot, a concise technical interview assistant.
 Use the provided session state and memories only when relevant. If context is insufficient, say what is missing."""
 
 RAG_SYSTEM_RULES = """You are Interview Copilot, a concise technical interview assistant.
@@ -114,7 +113,7 @@ class ChatPipelineStrategy:
             response_generator = await Settings.llm.astream_complete(prompt)
         else:
             prompt = self.renderer.render_answer_prompt(
-                assembled, system_prompt=DIRECT_SYSTEM_RULES,
+                assembled, system_prompt=DIRECT_SYSTEM_PROMPT,
             )
             response_generator = await agent_fast_llm.astream_complete(prompt)
 
