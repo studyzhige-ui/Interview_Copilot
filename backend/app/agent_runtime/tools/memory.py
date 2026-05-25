@@ -201,7 +201,11 @@ async def _save_memory_handler(args: SaveMemoryArgs, ctx: AgentToolContext) -> d
             if not topic:
                 return {"error": "knowledge doc_type requires a 'topic'"}
             try:
-                result = knowledge_doc_service.apply_patches(
+                # apply_patches is sync DB I/O; offload so the async
+                # user_memory_lock isn't held across an event-loop-
+                # blocking write to Postgres.
+                result = await asyncio.to_thread(
+                    knowledge_doc_service.apply_patches,
                     user_id=ctx.user_id,
                     topic=topic,
                     patches=[{
@@ -226,7 +230,8 @@ async def _save_memory_handler(args: SaveMemoryArgs, ctx: AgentToolContext) -> d
         if doc_type in {"strategy", "habit"}:
             service = strategy_doc_service if doc_type == "strategy" else habit_doc_service
             try:
-                result = service.apply_patches(
+                result = await asyncio.to_thread(
+                    service.apply_patches,
                     user_id=ctx.user_id,
                     patches=[{
                         "op": "add",
@@ -248,7 +253,8 @@ async def _save_memory_handler(args: SaveMemoryArgs, ctx: AgentToolContext) -> d
 
         if doc_type == "user_profile":
             try:
-                stats = user_profile_doc_service.apply_patches(
+                stats = await asyncio.to_thread(
+                    user_profile_doc_service.apply_patches,
                     ctx.user_id,
                     [{"op": "add", "new_line": fact_line}],
                     change_type="patch_realtime",

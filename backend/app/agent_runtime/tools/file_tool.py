@@ -4,6 +4,7 @@ read_file  — Read user-uploaded files (resume, JD, notes) by upload_id or purp
 write_file — Export structured output (study plans, reports) as downloadable files.
 """
 
+import asyncio
 import io
 import logging
 from typing import Any
@@ -23,6 +24,15 @@ class ReadFileArgs(BaseModel):
 
 
 async def _read_file_handler(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]:
+    # The whole body does sync DB + sync S3 I/O — both block the event
+    # loop. Offload to a thread so the agent loop stays responsive on
+    # slow storage backends. SessionLocal isn't thread-safe across
+    # ``await`` boundaries; opening + closing it entirely inside the
+    # worker thread is fine.
+    return await asyncio.to_thread(_read_file_sync, args, ctx)
+
+
+def _read_file_sync(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]:
     from app.db.database import SessionLocal
     from app.models.upload import UserUpload
 
@@ -98,6 +108,12 @@ class WriteFileArgs(BaseModel):
 
 
 async def _write_file_handler(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, Any]:
+    # Sync DB + sync S3 upload — offload to thread so agent step isn't
+    # blocked on storage latency.
+    return await asyncio.to_thread(_write_file_sync, args, ctx)
+
+
+def _write_file_sync(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, Any]:
     from app.db.database import SessionLocal
     from app.services.upload_service import create_owned_upload
 

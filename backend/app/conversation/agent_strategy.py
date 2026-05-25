@@ -666,9 +666,12 @@ class AgentLoopStrategy:
             latency_ms = round((time.perf_counter() - tool_started) * 1000, 2)
 
             # Persist large tool results to disk; the LLM context only
-            # keeps a small preview pointer.
+            # keeps a small preview pointer. maybe_persist_result does
+            # sync file_path.write_text() for content >30KB — offload
+            # so a chatty agent step doesn't stall the loop on disk I/O.
             result_text = safe_json_dumps(observation)
-            result_text = maybe_persist_result(
+            result_text = await asyncio.to_thread(
+                maybe_persist_result,
                 content=result_text,
                 tool_name=tool_name,
                 tool_call_id=tc.id,

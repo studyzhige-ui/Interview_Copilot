@@ -10,6 +10,7 @@ Security model:
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import re
@@ -632,7 +633,13 @@ async def upload_avatar(
     object_key = _avatar_object_key(current_user, file.content_type)
 
     try:
-        new_uri = _store_avatar_blob(body, object_key, file.content_type, current_user.username)
+        # _store_avatar_blob does sync boto3 upload_fileobj — 100-300ms
+        # of TLS handshake + S3 round-trip on every avatar change.
+        # Offload so a single avatar PUT doesn't pin the event-loop
+        # thread and starve all the in-flight SSE streams.
+        new_uri = await asyncio.to_thread(
+            _store_avatar_blob, body, object_key, file.content_type, current_user.username,
+        )
     except Exception as exc:  # noqa: BLE001
         # Both S3 and local-fallback failed (e.g. disk full + S3 down).
         # That's an actual server problem — surface a 5xx.

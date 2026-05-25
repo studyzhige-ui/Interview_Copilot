@@ -19,6 +19,7 @@ context via ``user_memory_lock_sync``).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -87,7 +88,9 @@ async def extract_and_apply(
     async with user_memory_lock(user_id):
         # Snapshot — must be inside the lock so dreaming can't write
         # between our read and our patches.
-        snapshot = _load_snapshot(user_id)
+        # _load_snapshot opens a SessionLocal and does 4 sync queries;
+        # to_thread keeps the post-turn maintenance loop responsive.
+        snapshot = await asyncio.to_thread(_load_snapshot, user_id)
 
         prompt = REALTIME_EXTRACTION_PROMPT.format(
             user_profile=snapshot["user_profile"] or "（空）",

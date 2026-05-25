@@ -73,7 +73,12 @@ class PostTurnMaintenanceService:
     ) -> None:
         # Read meta BEFORE compaction so we capture memory_extraction_cursor
         # independently of any compaction_cursor advancement.
-        meta = transcript_service.get_session_meta(session_id)
+        # ``get_session_meta``, ``get_recent_turns``, ``_session_record_id``,
+        # and ``update_session_fields`` all open sync ``SessionLocal``
+        # sessions and run sync DB I/O — off the event loop via to_thread
+        # so a background turn-maintenance task doesn't stall every
+        # other SSE stream while it waits on Postgres.
+        meta = await asyncio.to_thread(transcript_service.get_session_meta, session_id)
         if meta is None:
             return
         mem_cursor = meta["memory_extraction_cursor"]
@@ -84,7 +89,8 @@ class PostTurnMaintenanceService:
         if not allow_memory_write:
             return
 
-        pending_messages = transcript_service.get_recent_turns(
+        pending_messages = await asyncio.to_thread(
+            transcript_service.get_recent_turns,
             session_id=session_id,
             max_turns=20,
             after_seq=mem_cursor,
@@ -94,7 +100,7 @@ class PostTurnMaintenanceService:
 
         # If the session is bound to an interview_record, propagate the
         # source so audit log entries can be traced back to the record.
-        record_id = self._session_record_id(session_id)
+        record_id = await asyncio.to_thread(self._session_record_id, session_id)
 
         result = await realtime_extraction.extract_and_apply(
             session_id=session_id,
@@ -109,7 +115,8 @@ class PostTurnMaintenanceService:
         # means there were no strong signals to extract.
         if result is not None and result.error is None:
             max_seq = max(m["seq"] for m in pending_messages)
-            transcript_service.update_session_fields(
+            await asyncio.to_thread(
+                transcript_service.update_session_fields,
                 session_id,
                 memory_extraction_cursor=max_seq,
             )

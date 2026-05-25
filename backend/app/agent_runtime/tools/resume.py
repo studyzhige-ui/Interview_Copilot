@@ -3,6 +3,7 @@
 Wraps ResumeService to read the user's parsed resume sections.
 """
 
+import asyncio
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -18,6 +19,12 @@ class ReadResumeArgs(BaseModel):
 
 
 async def _read_resume_handler(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, Any]:
+    """Async wrapper — entire body is sync DB + docstore reads, so
+    offload to a worker thread to keep the agent loop responsive."""
+    return await asyncio.to_thread(_read_resume_sync, args, ctx)
+
+
+def _read_resume_sync(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, Any]:
     """Read the user's resume, with a graceful fallback for the common
     case where the upload landed in ``knowledge_documents`` but never
     got parsed into ``resume_sections``.

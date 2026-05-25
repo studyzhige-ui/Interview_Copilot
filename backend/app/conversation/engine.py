@@ -294,11 +294,18 @@ class ConversationEngine:
         # ``current_query`` is the user_message verbatim. The planner
         # no longer emits a ``standalone_query`` — the answer LLM
         # resolves pronouns itself using [Recent Turns] + [Memory].
-        assembled = context_pipeline.assemble_answer_context(
-            session_id=self.session_id,
-            current_query=self.user_message,
-            memory_block=v3_memory_block,
-            knowledge_chunks=knowledge_chunks,
+        # assemble_answer_context is sync and does 2-3 sync DB round-trips
+        # (get_session_meta + get_recent_turns + optionally
+        # build_interview_reference). Off the event loop so the
+        # SSE turn's _prepare phase doesn't block every other in-flight
+        # request while Postgres replies.
+        assembled = await asyncio.to_thread(
+            lambda: context_pipeline.assemble_answer_context(
+                session_id=self.session_id,
+                current_query=self.user_message,
+                memory_block=v3_memory_block,
+                knowledge_chunks=knowledge_chunks,
+            )
         )
 
         self._ctx = StrategyContext(

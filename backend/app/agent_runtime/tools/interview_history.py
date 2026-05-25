@@ -3,6 +3,7 @@
 Wraps InterviewRecordService to read past interview records and analysis.
 """
 
+import asyncio
 import json
 from typing import Any
 
@@ -17,6 +18,13 @@ class ReadInterviewHistoryArgs(BaseModel):
 
 
 async def _read_interview_history_handler(
+    args: ReadInterviewHistoryArgs, ctx: AgentToolContext
+) -> dict[str, Any]:
+    """Async wrapper — sync DB via service layer, offload to thread."""
+    return await asyncio.to_thread(_read_interview_history_sync, args, ctx)
+
+
+def _read_interview_history_sync(
     args: ReadInterviewHistoryArgs, ctx: AgentToolContext
 ) -> dict[str, Any]:
     from app.services.interview_record_service import interview_record_service

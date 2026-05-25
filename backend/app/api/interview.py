@@ -251,9 +251,15 @@ async def analyze_interview_endpoint(
 
         # Extract resume text for the snapshot. Failures are non-fatal —
         # orchestrator falls back to empty context.
+        # ``_extract_resume_snapshot`` downloads from S3 + parses (PDF/
+        # DOCX) — 100-1000ms of sync I/O + CPU. Offload so the analyze
+        # endpoint doesn't pin the event-loop thread while one user
+        # uploads a slow resume.
         resume_text = ""
         try:
-            resume_text = _extract_resume_snapshot(db, resume_upload.id, current_user.username)
+            resume_text = await asyncio.to_thread(
+                _extract_resume_snapshot, db, resume_upload.id, current_user.username,
+            )
         except Exception as exc:  # noqa: BLE001
             import logging
             logging.getLogger(__name__).warning("Resume snapshot extraction failed: %s", exc)
