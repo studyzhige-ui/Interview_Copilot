@@ -1,0 +1,36 @@
+# Run with:  pre-commit install     (one-time setup per clone)
+# Then commits automatically run the staged hooks.
+# Manual one-shot:  pre-commit run --all-files
+#
+# Kept minimal on purpose — heavy checks (pytest, vitest, full
+# typecheck) belong in CI, not pre-commit, because they're too slow
+# for the commit feedback loop. These hooks only catch fast, local
+# issues: ruff lint + format on changed Python files, plus a couple
+# of trivial hygiene fixes.
+
+repos:
+  # ruff handles BOTH lint (replacement for flake8 + isort + a chunk of
+  # bandit) and format (replacement for black). One tool, one config.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.4
+    hooks:
+      - id: ruff
+        name: ruff (lint)
+        args: [--fix]
+        files: ^backend/
+      - id: ruff-format
+        name: ruff (format)
+        files: ^backend/
+
+  # Stop accidental commits of broken YAML and trailing whitespace —
+  # the second one in particular saves a lot of "fix typo" follow-up
+  # commits. Both are sub-second.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=2048]

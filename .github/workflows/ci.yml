@@ -116,6 +116,16 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
+      - name: Lint
+        # Non-blocking for now — the v7 eslint-plugin-react-hooks adds
+        # several "warning" rules (set-state-in-effect, refs, etc.)
+        # that the existing codebase triggers in legitimate places.
+        # Surfacing the warnings is enough; making CI red on them
+        # would require a sweep that's its own follow-up. Errors
+        # (rules-of-hooks, parse errors) still fail the job because
+        # they're truly broken code.
+        run: npm run lint
+
       - name: Build
         run: npm run build
         env:
