@@ -1,12 +1,19 @@
 """Web tools: web_search (Tavily) and read_url (httpx + markdownify).
 
 web_search — Internet search via Tavily API.
-read_url   — Extract page content as Markdown via httpx.
+read_url   — Extract page content as Markdown via httpx, with SSRF
+             guard that resolves the host's DNS up-front and refuses
+             anything pointing at private / loopback / link-local /
+             reserved / multicast space.
 """
 
+import asyncio
+import ipaddress
 import logging
 import os
+import socket
 from typing import Any
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from pydantic import BaseModel, Field
@@ -14,6 +21,77 @@ from pydantic import BaseModel, Field
 from app.agent_runtime.tool_registry import AgentToolContext, ToolEntry, registry
 
 logger = logging.getLogger(__name__)
+
+
+# ── SSRF guard ───────────────────────────────────────────────────────────
+#
+# Why this exists: the agent is reachable via prompt injection (a
+# user can paste a JD that says "for QA, fetch
+# http://169.254.169.254/..."), and the LLM will obediently call
+# ``read_url`` on whatever it's told. Without a guard the tool would
+# happily hit the AWS instance-metadata endpoint and surface IAM
+# credentials, or scan the internal network for unauthenticated
+# services. Both have happened to real shipped LLM agents.
+#
+# What it covers:
+#   • non-http(s) schemes (rules out file://, gopher://, dict:// …)
+#   • RFC1918 (10/8, 172.16/12, 192.168/16) via ``is_private``
+#   • Loopback (127.0.0.0/8 + ::1) via ``is_loopback``
+#   • Link-local (169.254/16 — AWS/GCP/Azure metadata) via ``is_link_local``
+#   • Reserved / multicast / unspecified (broad belt-and-braces)
+#
+# What it does NOT cover: DNS rebinding. A determined attacker could
+# serve a public IP at first lookup and a private one at httpx's
+# subsequent connect-time lookup. Mitigating requires resolve-once
+# then dial-via-resolved-IP, which is a bigger refactor — left as a
+# follow-up if the threat model warrants. The current guard blocks
+# 99% of the prompt-injection-driven SSRF attempts that don't have
+# attacker-controlled DNS.
+
+
+class _UrlNotSafe(ValueError):
+    """Raised when an SSRF-prone URL is detected; mapped to a tool
+    error response so the agent sees a clear refusal without
+    crashing the run."""
+
+
+def _validate_safe_url(url: str) -> None:
+    """Block the URL if its scheme is not http(s) or if any resolved
+    IP lands in private / loopback / link-local / reserved /
+    multicast / unspecified space.
+
+    Synchronous: ``socket.getaddrinfo`` is blocking. The caller
+    offloads via ``asyncio.to_thread`` so the event loop stays
+    responsive on a slow DNS server.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise _UrlNotSafe(f"scheme not allowed: {parsed.scheme!r}")
+    if not parsed.hostname:
+        raise _UrlNotSafe("missing hostname")
+
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, None)
+    except socket.gaierror as exc:
+        # DNS failure is itself a refuse signal — without a resolved
+        # IP we can't make a safety decision.
+        raise _UrlNotSafe(f"dns resolution failed: {exc}") from exc
+
+    for _family, _socktype, _proto, _canonname, sockaddr in infos:
+        ip_str = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError as exc:
+            raise _UrlNotSafe(f"bad ip from dns: {ip_str!r}") from exc
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            raise _UrlNotSafe(
+                f"refusing url whose host resolves to {ip} "
+                f"(private/loopback/reserved space)"
+            )
+
+
+_MAX_REDIRECTS = 5
 
 
 # ── web_search ───────────────────────────────────────────────────────────
@@ -76,10 +154,43 @@ async def _read_url_handler(args: ReadUrlArgs, _ctx: AgentToolContext) -> dict[s
         "Accept": "text/html,application/xhtml+xml,text/plain",
     }
 
+    # SSRF guard — refuse before we even open the TCP socket. We
+    # also revalidate each hop manually below because
+    # ``follow_redirects=True`` would let an attacker hop from a
+    # public domain to a private one via a 302 Location header.
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            resp = await client.get(args.url, headers=headers)
+        await asyncio.to_thread(_validate_safe_url, args.url)
+    except _UrlNotSafe as exc:
+        logger.warning("read_url refused unsafe url=%r: %s", args.url, exc)
+        return {"error": f"refused by safety check: {exc}", "url": args.url}
 
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            current_url = args.url
+            resp = None
+            for _ in range(_MAX_REDIRECTS + 1):
+                resp = await client.get(current_url, headers=headers)
+                if resp.status_code not in (301, 302, 303, 307, 308):
+                    break
+                location = resp.headers.get("location", "")
+                if not location:
+                    break
+                next_url = urljoin(str(resp.url), location)
+                try:
+                    await asyncio.to_thread(_validate_safe_url, next_url)
+                except _UrlNotSafe as exc:
+                    logger.warning(
+                        "read_url refused redirect target=%r: %s", next_url, exc
+                    )
+                    return {
+                        "error": f"refused redirect to unsafe url: {exc}",
+                        "url": args.url,
+                    }
+                current_url = next_url
+            else:
+                return {"error": "too many redirects", "url": args.url}
+
+        assert resp is not None
         if resp.status_code != 200:
             return {"error": f"HTTP {resp.status_code}", "url": args.url}
 
