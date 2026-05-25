@@ -16,8 +16,13 @@ The strategy:
   * builds the Anthropic-style ``content_blocks_json`` chain
     (interleaved text/tool_use/tool_result) so the engine can persist
     it for the Claude-Code-style folded-card frontend UX
-  * writes ``agent_runs`` + ``agent_steps`` trace inline (developer
-    debugging surface, distinct from the user-facing transcript)
+
+Developer trace observability lives in LangSmith (every LLM call is
+auto-captured by ``wrap_openai`` in ``core/llm_tracing.py``). The
+former ``agent_runs`` + ``agent_steps`` persistence was deleted in
+the audit cleanup — LangSmith covers the same surface with a UI for
+free, and the user-facing tool cards still come from
+``chat_messages.content_blocks_json``.
 """
 from __future__ import annotations
 
@@ -27,7 +32,6 @@ import logging
 import time
 from typing import Any, AsyncGenerator
 
-from app.agent_runtime.agent_progress_hooks import PostSamplingHookRunner
 from app.agent_runtime.context_compactor import QueryLoopCompactor
 from app.agent_runtime.react_agent import (
     AgentBudget,
@@ -51,7 +55,6 @@ from app.conversation.events import HarnessEvent
 from app.conversation.strategy import StrategyContext, StrategyResult
 from app.core.config import settings
 from app.core.model_registry import build_async_openai_client_for_role
-from app.services.agent_trace_service import append_step, create_run, finish_run
 
 # Trigger tool self-registration on first import.
 import app.agent_runtime.tools  # noqa: F401
@@ -235,21 +238,12 @@ class AgentLoopStrategy:
         tool_schemas = registry.get_openai_schemas(exclude=excluded_tools)
         manifest_text = registry.format_manifest(exclude=excluded_tools)
 
-        # Persistent trace surface (developer view) lives in agent_runs/
-        # agent_steps. The user-facing transcript with content_blocks
-        # is built up in ``blocks`` below and handed back via
-        # ``result.assistant_blocks`` for the engine to persist.
-        run_id = await create_run(
-            user_id=ctx.user_id, session_id=ctx.session_id,
-            goal=ctx.user_message, mode="function_calling",
-        )
-        ctx.run_id = run_id
-
-        post_sampling_hooks = PostSamplingHookRunner(
-            run_id=run_id,
-            session_id=ctx.session_id,
-            user_id=ctx.user_id,
-        )
+        # Developer trace observability is handled by LangSmith
+        # (``wrap_openai`` in core/llm_tracing.py captures every LLM
+        # call automatically). User-facing tool cards come from the
+        # ``content_blocks_json`` chain we build below in ``blocks``
+        # and hand back via ``result.assistant_blocks`` for the
+        # engine to persist on ``chat_messages``.
 
         # Render the full AssembledContext so the agent sees memory +
         # debrief reference + RAG chunks + session state + recent
@@ -298,11 +292,6 @@ class AgentLoopStrategy:
         # replays the same UX the frontend showed live.
         blocks: list[dict[str, Any]] = []
 
-        # Trace blob mirrored to agent_steps for the developer view.
-        trace: list[dict[str, Any]] = []
-
-        status = "completed"
-        error_message: str | None = None
         final_answer = ""
 
         try:
@@ -310,21 +299,16 @@ class AgentLoopStrategy:
                 ctx=ctx,
                 messages=messages,
                 blocks=blocks,
-                trace=trace,
                 budget=budget,
                 client=client,
                 profile=profile,
                 compactor=compactor,
                 tool_schemas=tool_schemas,
-                post_sampling_hooks=post_sampling_hooks,
-                run_id=run_id,
             ):
                 if event.type.value == "text":
                     final_answer = event.data.get("content", "")
                 yield event
         except Exception as exc:
-            status = "failed"
-            error_message = str(exc)
             # Don't end on a dead "请稍后重试" — that throws away every
             # tool call the user just watched run. If we have any
             # accumulated text or tool results, render a graceful
@@ -338,26 +322,6 @@ class AgentLoopStrategy:
                 error_message=str(exc),
             )
             logger.error("AgentLoopStrategy crashed: %s", exc)
-            await append_step(
-                run_id=run_id, step_index=budget.steps + 1,
-                action_type="error", observation={"error": str(exc)},
-                assistant_content="", is_error=True, latency_ms=0.0,
-            )
-        finally:
-            # Always persist agent_runs row (developer view) even on
-            # failure — separate from the user-facing chat transcript
-            # which the ConversationEngine handles uniformly.
-            await finish_run(
-                run_id=run_id, status=status,
-                final_answer=final_answer,
-                steps_used=budget.steps,
-                tool_calls=budget.tool_calls,
-                prompt_tokens=budget.prompt_tokens,
-                completion_tokens=budget.completion_tokens,
-                total_latency_ms=round(budget.elapsed_seconds * 1000, 2),
-                error_message=error_message,
-                budget_stop_reason=budget.stop_reason,
-            )
 
         # Ensure a trailing text block exists (so the persisted message
         # always carries a final answer, even when the loop ended on
@@ -379,22 +343,13 @@ class AgentLoopStrategy:
         result.tool_calls = budget.tool_calls
         result.steps_used = budget.steps
         result.stop_reason = budget.stop_reason
-        # Surface run_id so callers of the batch API (run_react_agent)
-        # can plumb it back to the UI for trace lookups. Engine
-        # passes ``ctx`` through to the strategy untouched, so this
-        # mutation is safe.
-        result.extras["run_id"] = run_id
 
-        # Final budget event carries run_id so the batch wrapper
-        # (run_react_agent) can plumb it back to the API response —
-        # the streaming wire format doesn't have a dedicated channel
-        # for one-shot identifiers and adding a new HarnessEvent type
-        # would break existing frontend dispatchers. The frontend
-        # already ignores fields it doesn't recognise on budget.
-        budget_payload = budget.to_dict()
-        budget_payload["run_id"] = run_id
+        # Final budget event for the FE's BudgetInfo handler. LangSmith
+        # captures the same fields via the OpenAI wrap, but the FE
+        # surfaces budget in-band on the SSE stream so the chat panel
+        # can render token/step badges without a trace-service call.
         yield HarnessEvent.budget(
-            budget_payload,
+            budget.to_dict(),
             step=budget.steps,
             elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
         )
@@ -407,14 +362,11 @@ class AgentLoopStrategy:
         ctx: StrategyContext,
         messages: list[dict[str, Any]],
         blocks: list[dict[str, Any]],
-        trace: list[dict[str, Any]],
         budget: AgentBudget,
         client: Any,
         profile: Any,
         compactor: QueryLoopCompactor,
         tool_schemas: list[dict[str, Any]],
-        post_sampling_hooks: PostSamplingHookRunner,
-        run_id: str,
     ) -> AsyncGenerator[HarnessEvent, None]:
         # Track which text we've already emitted as a block so the
         # final pass doesn't double-count.
@@ -425,12 +377,6 @@ class AgentLoopStrategy:
             stop = budget.check()
             if stop:
                 budget.stop_reason = stop
-                await append_step(
-                    run_id=run_id, step_index=budget.steps + 1,
-                    action_type="budget_stop",
-                    observation={"error": stop},
-                    assistant_content="", is_error=True, latency_ms=0.0,
-                )
                 break
 
             budget.consume_step()
@@ -439,12 +385,6 @@ class AgentLoopStrategy:
             messages[:] = compactor.pre_llm_compact(messages, budget.prompt_tokens)
             if compactor.is_at_blocking_limit(budget.prompt_tokens):
                 budget.stop_reason = "context_window_exhausted"
-                await append_step(
-                    run_id=run_id, step_index=budget.steps,
-                    action_type="budget_stop",
-                    observation={"error": "context_window_exhausted"},
-                    assistant_content="", is_error=True, latency_ms=0.0,
-                )
                 yield HarnessEvent.error(
                     "上下文窗口即将耗尽，停止执行。请缩小目标范围后重试。",
                     step=budget.steps,
@@ -491,11 +431,10 @@ class AgentLoopStrategy:
             if tool_calls_acc:
                 async for ev in self._execute_tools(
                     ctx=ctx, messages=messages, blocks=blocks,
-                    trace=trace, tool_calls_acc=tool_calls_acc,
+                    tool_calls_acc=tool_calls_acc,
                     assistant_content=assistant_content,
                     reasoning_content="".join(reasoning_acc),
-                    budget=budget, post_sampling_hooks=post_sampling_hooks,
-                    run_id=run_id,
+                    budget=budget,
                 ):
                     yield ev
                 continue
@@ -511,17 +450,6 @@ class AgentLoopStrategy:
                 # fresh from system + persisted blocks; the model
                 # generates new reasoning_content for that turn from
                 # scratch. Discarding is correct.
-                trace.append({
-                    "step": budget.steps, "tool": None, "args": {},
-                    "observation": {}, "latency_ms": latency_ms,
-                    "is_error": False,
-                })
-                await append_step(
-                    run_id=run_id, step_index=budget.steps,
-                    action_type="final_answer",
-                    assistant_content=assistant_content,
-                    observation={}, is_error=False, latency_ms=latency_ms,
-                )
                 blocks.append({"type": "text", "text": assistant_content})
                 yield HarnessEvent.text(
                     assistant_content, step=budget.steps,
@@ -657,13 +585,10 @@ class AgentLoopStrategy:
         ctx: StrategyContext,
         messages: list[dict[str, Any]],
         blocks: list[dict[str, Any]],
-        trace: list[dict[str, Any]],
         tool_calls_acc: list[_ToolCallAccumulator],
         assistant_content: str,
         reasoning_content: str,
         budget: AgentBudget,
-        post_sampling_hooks: PostSamplingHookRunner,
-        run_id: str,
     ) -> AsyncGenerator[HarnessEvent, None]:
         # ``reasoning_content`` (thinking-mode trace) MUST round-trip
         # back to the API on the next assistant message — otherwise
@@ -758,13 +683,6 @@ class AgentLoopStrategy:
             messages.append(tool_msg)
             turn_tool_messages.append(tool_msg)
 
-            trace.append({
-                "step": budget.steps, "tool": tool_name,
-                "args": parsed_args if not tool_error else {},
-                "observation": observation,
-                "latency_ms": latency_ms, "is_error": tool_error,
-            })
-
             # Persistent chain (frontend folded-card replay).
             # ``content`` carries the full LLM-visible result text,
             # which is either the raw JSON observation or a
@@ -780,16 +698,6 @@ class AgentLoopStrategy:
                 "summary": _result_summary(observation),
                 "content": result_text,
             })
-
-            await append_step(
-                run_id=run_id, step_index=budget.steps,
-                action_type="tool_call", tool_name=tool_name,
-                tool_call_id=tc.id,
-                tool_args=parsed_args if not tool_error else {},
-                observation=observation,
-                assistant_content=assistant_content,
-                is_error=tool_error, latency_ms=latency_ms,
-            )
 
             yield HarnessEvent.tool_done(
                 tool_name, _result_summary(observation),
@@ -812,14 +720,6 @@ class AgentLoopStrategy:
 
         if turn_tool_messages:
             enforce_turn_budget(turn_tool_messages, ctx.session_id)
-
-        if post_sampling_hooks:
-            await post_sampling_hooks.execute(
-                step=budget.steps,
-                messages=messages,
-                tool_results=turn_tool_messages,
-                budget_snapshot=budget.to_dict(),
-            )
 
 
 __all__ = ["AgentLoopStrategy"]

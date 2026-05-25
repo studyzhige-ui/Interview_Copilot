@@ -59,9 +59,10 @@ def test_engine():
     from app.db.database import Base
     # Import every model module so its Base.metadata side-effect registers it.
     # Keep this list in sync with backend/app/models/*.py — see ``ls`` for the
-    # source of truth. ``app.models.interview`` was removed in alembic 0008;
+    # source of truth. ``app.models.interview`` was removed in alembic 0007;
     # ``interview_record`` + ``interview_qa`` replace it.
-    import app.models.agent_trace          # noqa: F401
+    # ``app.models.agent_trace`` was removed in alembic 0008
+    # (LangSmith covers the per-step trace surface).
     import app.models.chat                 # noqa: F401
     import app.models.habit_doc            # noqa: F401
     import app.models.interview_qa         # noqa: F401

@@ -55,7 +55,6 @@ USER_TABLES = (
     "mock_interview_sessions",
     "interview_records",
     "interview_qa",             # FK via interview_records.user_id
-    "agent_runs",
     "resume_sections",
 )
 
@@ -210,8 +209,6 @@ def _delete_postgres_rows(db, admin_username: str, dry_run: bool) -> None:
     for table in (
         "interview_qa",            # child of interview_records
         "chat_messages",           # child of chat_sessions
-        "agent_steps",             # child of agent_runs
-        "agent_runs",
         "memory_audit_log",
         "knowledge_docs",
         "strategy_docs",

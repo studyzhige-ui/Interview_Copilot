@@ -26,7 +26,6 @@ from app.core.llm_tracing import setup_llm_tracing as _setup_llm_tracing
 _setup_llm_tracing()
 
 from app.db.database import engine
-import app.models.agent_trace
 import app.models.chat
 import app.models.habit_doc
 import app.models.interview_qa  # Ensure models are registered before table creation.
@@ -279,13 +278,12 @@ except ImportError:
         "Run: pip install slowapi"
     )
 
-from app.api import agent, auth, chat, interview, model_runtime, rag
+from app.api import auth, chat, interview, model_runtime, rag
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(chat.router, prefix="/api/v1")
 app.include_router(interview.router, prefix="/api/v1")
 app.include_router(rag.router, prefix="/api/v1")
-app.include_router(agent.router, prefix="/api/v1")
 app.include_router(model_runtime.router, prefix="/api/v1")
 
 

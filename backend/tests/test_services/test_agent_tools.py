@@ -517,8 +517,6 @@ def test_tool_call_id_propagates_from_strategy_to_sse_events(monkeypatch):
         "app.agent_runtime.tool_registry.registry.dispatch",
         fake_dispatch,
     )
-    async def _noop(*a, **k): return None
-    monkeypatch.setattr("app.conversation.agent_strategy.append_step", _noop)
     monkeypatch.setattr(
         "app.conversation.agent_strategy.maybe_persist_result",
         lambda content, **k: content,
@@ -547,13 +545,11 @@ def test_tool_call_id_propagates_from_strategy_to_sse_events(monkeypatch):
 
     async def drain():
         async for ev in strategy._execute_tools(
-            ctx=ctx, messages=messages, blocks=blocks, trace=trace,
+            ctx=ctx, messages=messages, blocks=blocks,
             tool_calls_acc=tool_calls_acc,
             assistant_content="",
             reasoning_content="",
             budget=budget,
-            post_sampling_hooks=None,
-            run_id="run_y",
         ):
             events.append(ev)
 
@@ -616,10 +612,8 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
         fake_dispatch,
     )
 
-    # append_step / maybe_persist_result / enforce_turn_budget are
-    # imported into the strategy module — patch at the use site.
-    async def _noop(*a, **k): return None
-    monkeypatch.setattr("app.conversation.agent_strategy.append_step", _noop)
+    # maybe_persist_result / enforce_turn_budget are imported into
+    # the strategy module — patch at the use site.
     monkeypatch.setattr(
         "app.conversation.agent_strategy.maybe_persist_result",
         lambda content, **k: content,
@@ -650,13 +644,11 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
     # ── Branch 1: non-empty reasoning_content → key MUST be present ──
     async def run_with_reasoning():
         async for _ in strategy._execute_tools(
-            ctx=ctx, messages=messages, blocks=blocks, trace=trace,
+            ctx=ctx, messages=messages, blocks=blocks,
             tool_calls_acc=tool_calls_acc,
             assistant_content="visible text from LLM",
             reasoning_content="hidden thinking trace — this MUST round-trip back",
             budget=budget,
-            post_sampling_hooks=None,
-            run_id="run_x",
         ):
             pass
 
@@ -687,13 +679,11 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
 
     async def run_without_reasoning():
         async for _ in strategy._execute_tools(
-            ctx=ctx, messages=messages2, blocks=[], trace=[],
+            ctx=ctx, messages=messages2, blocks=[],
             tool_calls_acc=tool_calls_acc2,
             assistant_content="visible text",
             reasoning_content="",  # plain model, no thinking trace
             budget=budget,
-            post_sampling_hooks=None,
-            run_id="run_y",
         ):
             pass
 
@@ -941,13 +931,6 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
         "app.conversation.agent_strategy.QueryLoopCompactor",
         _StubCompactor,
     )
-
-    # Stub agent_runs persistence — we don't care about it here.
-    async def _noop(*args, **kwargs): return "stub_run_id"
-    async def _noop_step(*args, **kwargs): return None
-    monkeypatch.setattr("app.conversation.agent_strategy.create_run", _noop)
-    monkeypatch.setattr("app.conversation.agent_strategy.append_step", _noop_step)
-    monkeypatch.setattr("app.conversation.agent_strategy.finish_run", _noop_step)
 
     # Force memory toggle on so we don't have to mock recall_policy.
     monkeypatch.setattr(

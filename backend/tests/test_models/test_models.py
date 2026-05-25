@@ -14,8 +14,7 @@ Coverage:
     core entities (User, ChatSession+ChatMessage, InterviewRecord +
     InterviewQA, UserUpload, KnowledgeDocument, KnowledgeDoc /
     StrategyDoc / HabitDoc / MemoryAuditLog (v3 memory),
-    MockInterviewSession, AgentRun + AgentStep, UserAPIKey,
-    ResumeSection).
+    MockInterviewSession, UserAPIKey, ResumeSection).
 """
 from __future__ import annotations
 
@@ -101,8 +100,6 @@ def test_all_expected_tables_registered(test_engine):
         "strategy_docs",
         "habit_docs",
         "memory_audit_log",
-        "agent_runs",
-        "agent_steps",
         "resume_sections",
     }
     missing = expected - tables
@@ -347,24 +344,10 @@ def test_strategy_and_habit_docs_are_singleton_per_user(db_session):
     db_session.flush()
 
 
-def test_agent_run_and_steps_relationship(db_session):
-    from app.models.agent_trace import AgentRun, AgentStep
-
-    run = AgentRun(user_id="u1", session_id="s1", goal="answer X")
-    db_session.add(run)
-    db_session.flush()
-
-    db_session.add_all([
-        AgentStep(run_id=run.id, step_index=0, action_type="tool_call",
-                  tool_name="search"),
-        AgentStep(run_id=run.id, step_index=1, action_type="final_answer"),
-    ])
-    db_session.flush()
-
-    loaded = db_session.query(AgentRun).filter(AgentRun.id == run.id).first()
-    assert len(loaded.steps) == 2
-    assert loaded.steps[0].action_type == "tool_call"
-    assert loaded.steps[1].action_type == "final_answer"
+# test_agent_run_and_steps_relationship was removed in the audit
+# cleanup — the agent_runs / agent_steps tables were dropped (see
+# alembic 0008_drop_agent_trace) because LangSmith's wrap_openai
+# instrumentation already captures every LLM call with full trace.
 
 
 def test_user_api_key_uniqueness(db_session):

@@ -1,4 +1,3 @@
-from app.models.agent_trace import AgentRun, AgentStep
 from app.models.chat import ChatMessage, ChatSession
 from app.models.habit_doc import HabitDoc
 from app.models.interview_qa import InterviewQA
@@ -14,8 +13,6 @@ from app.models.user import User
 from app.models.user_api_key import UserAPIKey
 
 __all__ = [
-    "AgentRun",
-    "AgentStep",
     "ChatMessage",
     "ChatSession",
     "HabitDoc",

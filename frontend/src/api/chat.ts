@@ -93,18 +93,15 @@ export interface ToolDoneInfo {
 
 /**
  * Agent-mode budget snapshot — emitted exactly once per turn by
- * AgentReActStrategy when the run completes (success or budget-stop).
- * Mirrors ``AgentBudget.to_dict()`` + the ``run_id`` injection in
- * backend/app/conversation/agent_strategy.py:228-229.
+ * AgentLoopStrategy when the run completes (success or budget-stop).
+ * Mirrors ``AgentBudget.to_dict()`` in
+ * backend/app/agent_runtime/react_agent.py.
  *
  * All fields are always present on the wire — the backend never omits
  * one, so callers may treat them as required (the wire→type cast in
  * ``streamChatSSE`` trusts this).
  */
 export interface BudgetInfo {
-  /** Agent run id, surfaced so the UI can deep-link to the
-   *  /agent/runs trace viewer (developer-only — no user UI yet). */
-  run_id: string;
   /** ReAct steps consumed this turn. */
   steps: number;
   /** Total tool calls dispatched this turn. */

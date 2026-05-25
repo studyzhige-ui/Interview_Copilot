@@ -32,9 +32,6 @@ class StrategyContext:
     session_id: str
     user_message: str
 
-    # Run identity (created in engine._prepare via agent_trace_service)
-    run_id: str = ""
-
     # Prepared context — the FULL ``AssembledContext`` built by the
     # engine. Strategies should render via
     # ``prompt_renderer.render_answer_prompt(ctx.assembled, ...)``

@@ -1,7 +1,7 @@
 """Structured event types for the Agent Harness execution pipeline.
 
-These events are emitted during ``run_react_agent`` and can be
-serialized to JSON for SSE streaming to the frontend.
+These events are emitted by ``ConversationEngine`` (via the L1/L2
+strategies) and serialized to JSON for SSE streaming to the frontend.
 """
 
 import json

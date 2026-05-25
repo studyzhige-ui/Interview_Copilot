@@ -32,15 +32,13 @@ async def log_interaction_metrics(
     retrieval_attempted: bool,
     retrieval_hit: bool,
     stop_reason: str | None = None,
-    run_id: str = "",
 ):
     """Persist interaction metrics without affecting the API response path.
 
-    ``stop_reason`` and ``run_id`` are populated by the L2 agent
-    strategy (budget stop / agent_runs row id respectively). Empty /
-    None for L1 chat turns. Surfaced here so log post-mortems can
-    correlate a tail-latency outlier with its budget exhaust reason
-    or its agent_runs trace row.
+    ``stop_reason`` is populated by the L2 agent strategy (budget stop
+    reason) and is None for L1 chat turns — kept so log post-mortems
+    can correlate a tail-latency outlier with its budget exhaust
+    reason. LangSmith covers the rest of the per-step trace surface.
     """
     try:
         timestamp = datetime.now().isoformat()
@@ -55,7 +53,6 @@ async def log_interaction_metrics(
             "retrieval_attempted": retrieval_attempted,
             "retrieval_hit": retrieval_hit,
             "stop_reason": stop_reason,
-            "run_id": run_id or None,
         }
 
         await asyncio.to_thread(_write_log_sync, log_payload)

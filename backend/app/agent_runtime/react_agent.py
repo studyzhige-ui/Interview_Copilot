@@ -1,30 +1,28 @@
-"""Public agent harness API — backward-compat shims for ``run_react_agent``.
+"""Agent harness primitives — ``AgentBudget`` + streaming helpers.
 
-The actual agent loop now lives in
+The actual agent loop lives in
 :class:`app.conversation.agent_strategy.AgentLoopStrategy`, and the
 per-conversation lifecycle in
-:class:`app.conversation.engine.ConversationEngine`. This module retains
-only:
+:class:`app.conversation.engine.ConversationEngine`. The legacy
+``run_react_agent`` / ``run_react_agent_stream`` shims that wrapped
+the engine for the old ``/agent/react/*`` endpoints were deleted in
+the audit cleanup — the unified ``/chat/sse`` (mode=agent) is the
+sole entry point now.
 
-  - ``AgentBudget``        — iteration budget dataclass (still imported
-                              by the strategy + a few tests)
-  - Helper functions       — ``_tool_call_payload``, ``_args_summary``,
-                              ``_result_summary`` (used by the strategy
-                              for streaming event formatting)
-  - ``run_react_agent_stream`` / ``run_react_agent`` — thin shims that
-    construct a ConversationEngine with the agent strategy
+What this module retains:
 
-Keeping the public signatures lets the existing API endpoints
-(``api/agent/react_agent.py``) and tests work without import churn.
+  - ``AgentBudget``        — iteration budget dataclass
+  - ``_tool_call_payload`` — OpenAI tool_calls dict shape
+  - ``_args_summary``      — short label for the SSE tool_start event
+  - ``_result_summary``    — short label for the SSE tool_done event
 """
 from __future__ import annotations
 
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator
+from typing import Any
 
-from app.agent_runtime.harness_events import HarnessEvent
 from app.core.config import settings
 
 
@@ -154,77 +152,9 @@ def _result_summary(observation: dict[str, Any]) -> str:
     return f"✅ 完成 ({len(str(observation))} chars)"
 
 
-# ── Public API — shim into ConversationEngine ───────────────────────────
-
-
-async def run_react_agent_stream(
-    user_message: str,
-    user_id: str,
-    session_id: str,
-) -> AsyncGenerator[HarnessEvent, None]:
-    """Run the agent loop, yielding HarnessEvents for SSE streaming.
-
-    Delegates to ``ConversationEngine`` with the L2 agent strategy.
-    """
-    from app.conversation import ConversationEngine, make_agent_strategy
-
-    engine = ConversationEngine(
-        user_id=user_id,
-        session_id=session_id,
-        user_message=user_message,
-        strategy=make_agent_strategy(),
-    )
-    async for event in engine.submit_message():
-        yield event
-
-
-async def run_react_agent(
-    user_message: str,
-    user_id: str,
-    session_id: str,
-) -> dict[str, Any]:
-    """Batch execution — collects all events and returns the final result dict.
-
-    Preserves API compatibility with the original ``run_react_agent``.
-    """
-    events: list[HarnessEvent] = []
-    final_answer = ""
-    budget_info: dict[str, Any] = {}
-
-    async for event in run_react_agent_stream(user_message, user_id, session_id):
-        events.append(event)
-        if event.type.value == "text":
-            final_answer = event.data.get("content", "")
-        elif event.type.value == "budget":
-            budget_info = event.data
-
-    trace = [
-        e.to_dict() for e in events
-        if e.type.value in ("tool_start", "tool_done", "error")
-    ]
-
-    return {
-        # run_id rides on the final budget event payload (see
-        # AgentLoopStrategy — it appends "run_id" into budget.to_dict()
-        # before yielding) so callers don't need a side-channel to
-        # surface it. Empty string when the budget event never fired
-        # (e.g. _prepare crashed before strategy.execute).
-        "run_id": budget_info.get("run_id", ""),
-        "reply": final_answer,
-        "trace": trace,
-        "steps_used": budget_info.get("steps", 0),
-        "tool_calls": budget_info.get("tool_calls", 0),
-        "prompt_tokens": budget_info.get("prompt_tokens", 0),
-        "completion_tokens": budget_info.get("completion_tokens", 0),
-        "budget_stop_reason": None,
-    }
-
-
 __all__ = [
     "AgentBudget",
     "_args_summary",
     "_result_summary",
     "_tool_call_payload",
-    "run_react_agent",
-    "run_react_agent_stream",
 ]

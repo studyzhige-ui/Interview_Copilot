@@ -11,7 +11,6 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from app.core.config import settings
 from app.db.database import Base
-import app.models.agent_trace  # noqa: F401
 import app.models.chat  # noqa: F401
 import app.models.habit_doc  # noqa: F401 — v3 memory: single doc per user
 import app.models.interview_qa  # noqa: F401

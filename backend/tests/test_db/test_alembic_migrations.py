@@ -139,10 +139,11 @@ def test_migration_chain_has_no_gaps_and_one_head():
     #                 → 0005_single_doc_one_liner
     #                 → 0006_chat_message_content_blocks
     #                 → 0007_global_memory_rename
+    #                 → 0008_drop_agent_trace
     # Bump this number whenever a new forward migration lands.
     on_disk = [p for p in VERSIONS_DIR.glob("*.py") if not p.name.startswith("_")]
-    assert len(on_disk) == 7, (
-        f"Expected 7 migration files (baseline + 6 memory/chat evolutions), "
+    assert len(on_disk) == 8, (
+        f"Expected 8 migration files (baseline + 7 evolutions), "
         f"found {len(on_disk)}"
     )
 
@@ -180,8 +181,6 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "strategy_docs",
         "habit_docs",
         "memory_audit_log",
-        "agent_runs",
-        "agent_steps",
         "resume_sections",
     }
     missing = expected_tables - tables
@@ -190,11 +189,11 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     # Legacy tables from the pre-squash chain (originally dropped by the
     # old 0008 migration) must NOT exist. We retain this assertion even
     # after squashing so an accidental "restore from old dump" still
-    # trips the test. ``memory_items`` is now also in this list since
-    # 0003 drops it.
+    # trips the test. ``memory_items`` is in this list since 0003
+    # drops it; ``agent_runs``/``agent_steps`` since 0008 drops them.
     legacy = {
         "interviews", "transcripts", "analysis_results", "interview_states",
-        "memory_items",
+        "memory_items", "agent_runs", "agent_steps",
     }
     leftover = legacy & tables
     assert not leftover, f"Legacy tables still present: {leftover}"
@@ -205,8 +204,8 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         from sqlalchemy import text
 
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0007_global_memory_rename", (
-            f"Head should be 0007_global_memory_rename, got {version!r}"
+        assert version == "0008_drop_agent_trace", (
+            f"Head should be 0008_drop_agent_trace, got {version!r}"
         )
 
     engine.dispose()
