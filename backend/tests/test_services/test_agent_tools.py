@@ -145,6 +145,112 @@ def test_graceful_fallback_handles_empty_blocks():
     assert "network_timeout" in msg
 
 
+def test_tool_done_event_carries_full_result_content():
+    """``tool_done`` SSE event must include ``result_content`` so the
+    live tool card renders the expanded view without a refresh.
+
+    Pre-fix the wire format only carried ``result_summary`` and the
+    frontend showed "(刷新会话以加载完整输出)" until reload.
+    """
+    from app.agent_runtime.harness_events import HarnessEvent
+
+    ev = HarnessEvent.tool_done(
+        "search_jobs",
+        "返回 5 条结果",
+        step=1, elapsed_ms=120.0,
+        tool_latency_ms=80.0, is_error=False,
+        result_content='{"source":"lever","count":5,"jobs":[...]}',
+    )
+    payload = ev.to_dict()
+    assert payload["type"] == "tool_done"
+    assert payload["data"]["result_summary"] == "返回 5 条结果"
+    assert payload["data"]["result_content"].startswith("{")
+    assert payload["data"]["tool_latency_ms"] == 80.0
+    assert payload["data"]["is_error"] is False
+
+    # Backwards-compat: omitting ``result_content`` produces an empty
+    # string, not a missing key — so the frontend's String(...) coerce
+    # always lands on a defined value.
+    ev2 = HarnessEvent.tool_done(
+        "search_jobs", "返回 0 条结果",
+        step=1, elapsed_ms=120.0,
+        tool_latency_ms=80.0, is_error=False,
+    )
+    assert ev2.to_dict()["data"]["result_content"] == ""
+
+
+def test_reasoning_content_roundtrips_into_next_assistant_message(monkeypatch):
+    """DeepSeek V4 Flash / o1-mini stream ``reasoning_content`` on a
+    separate delta field. The API REQUIRES that field to come back on
+    the next assistant message — without it the 2nd LLM call rejects
+    with HTTP 400 "The reasoning_content in the thinking mode must be
+    passed back to the API".
+
+    Pre-fix screenshot evidence: 4 tool calls fired, then the next
+    LLM call retried 3 times with that exact 400, and the user got
+    the graceful fallback (which only fires because the loop crashed).
+    This test pins the contract: when the stream emits
+    ``reasoning_content`` chunks, the assistant message appended for
+    the next turn carries them under the ``reasoning_content`` key.
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.agent_runtime.react_agent import AgentBudget
+    from app.conversation.agent_strategy import AgentLoopStrategy
+
+    # Build a fake OpenAI-stream that emits reasoning_content + content
+    # + tool_calls in three chunks, then a usage chunk.
+    class _FakeChunk:
+        def __init__(self, *, content=None, reasoning=None, tool_call=None, usage=None):
+            self.usage = usage
+            if usage is not None:
+                self.choices = []
+                return
+            delta = SimpleNamespace(
+                content=content,
+                reasoning_content=reasoning,
+                tool_calls=[tool_call] if tool_call else None,
+            )
+            self.choices = [SimpleNamespace(delta=delta, index=0)]
+
+    async def fake_stream():
+        # Step 1: reasoning trace (no content yet)
+        yield _FakeChunk(reasoning="Let me think about which tools to call. ")
+        yield _FakeChunk(reasoning="The user wants jobs. ")
+        # Step 2: visible text
+        yield _FakeChunk(content="好的，我先查一下。")
+        # Step 3: tool call
+        yield _FakeChunk(tool_call=SimpleNamespace(
+            index=0,
+            id="call_x",
+            function=SimpleNamespace(name="search_jobs", arguments='{"keywords":"AI"}'),
+        ))
+        # Usage (terminator)
+        yield _FakeChunk(usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5))
+
+    strategy = AgentLoopStrategy()
+    budget = AgentBudget(started_at=0.0)
+    tool_calls_acc: list = []
+    reasoning_acc: list[str] = []
+
+    async def drain():
+        async for _ in strategy._consume_stream(
+            fake_stream(), budget, tool_calls_acc, reasoning_acc,
+        ):
+            pass
+
+    asyncio.run(drain())
+
+    # Reasoning was captured.
+    assert "".join(reasoning_acc) == (
+        "Let me think about which tools to call. The user wants jobs. "
+    )
+    # Tool call was captured.
+    assert len(tool_calls_acc) == 1
+    assert tool_calls_acc[0].name == "search_jobs"
+
+
 def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
     """Pin the WIRING: a crash in the inner loop must route through
     ``_build_graceful_fallback`` and never re-introduce the dead

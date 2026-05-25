@@ -55,12 +55,22 @@ class HarnessEvent:
         elapsed_ms: float,
         tool_latency_ms: float,
         is_error: bool = False,
+        result_content: str = "",
     ) -> "HarnessEvent":
+        """Emitted when a tool call returns. ``result_content`` carries
+        the FULL LLM-visible result text — the frontend renders this in
+        the expanded tool card. Pre-fix the event only carried
+        ``result_summary``, so the live UI showed "(刷新会话以加载完整
+        输出)" until the user reloaded; now the content is inline.
+        Already bounded by the per-tool ``max_result_chars`` limit so
+        SSE frame size stays sane.
+        """
         return cls(
             type=HarnessEventType.TOOL_DONE,
             data={
                 "tool": name,
                 "result_summary": result_summary,
+                "result_content": result_content,
                 "tool_latency_ms": round(tool_latency_ms, 2),
                 "is_error": is_error,
             },

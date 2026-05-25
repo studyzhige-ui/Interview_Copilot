@@ -69,6 +69,12 @@ export interface ToolStartInfo {
 export interface ToolDoneInfo {
   tool: string;
   result_summary: string;
+  /** Full LLM-visible result text (post Stage-G+ wire format).
+   *  Populated live by the agent strategy so the expanded tool card
+   *  renders without a session refresh. Empty string when the
+   *  upstream emitter omits it (e.g. a very old backend); the
+   *  renderer falls back to "(刷新会话以加载完整输出)" then. */
+  result_content: string;
   step: number;
   elapsed_ms: number;
   tool_latency_ms: number;
@@ -215,6 +221,7 @@ export async function streamChatSSE(
             handlers.onToolDone?.({
               tool: String(data.tool ?? ''),
               result_summary: String(data.result_summary ?? ''),
+              result_content: String(data.result_content ?? ''),
               tool_latency_ms: Number(data.tool_latency_ms ?? 0),
               is_error: Boolean(data.is_error),
               step, elapsed_ms: elapsed,

@@ -133,7 +133,39 @@ export function ChatPanel({
 
   // ── Chat input / mode / attachments ──────────────────────────────────
   const [input, setInput] = useState('');
-  const [mode, setMode] = useState<Mode>('CHAT');
+  // Mode is persisted per-session in localStorage — without this the
+  // user's AGENT pill resets to CHAT every time they refresh, and the
+  // backend silently downgrades the strategy back to L1. We key by
+  // session_id so a chat session and an agent session can co-exist.
+  // (Backend session_state would be the more "correct" home for this
+  // but the round-trip cost isn't worth it for a boolean.)
+  const modeStorageKey = activeSessionId ? `chat-mode:${activeSessionId}` : null;
+  const [mode, setModeState] = useState<Mode>(() => {
+    if (!modeStorageKey) return 'CHAT';
+    try {
+      const v = localStorage.getItem(modeStorageKey);
+      return v === 'AGENT' ? 'AGENT' : 'CHAT';
+    } catch { return 'CHAT'; }
+  });
+  const setMode = useCallback((next: Mode | ((prev: Mode) => Mode)) => {
+    setModeState((prev) => {
+      const resolved = typeof next === 'function' ? next(prev) : next;
+      if (modeStorageKey) {
+        try { localStorage.setItem(modeStorageKey, resolved); } catch { /* quota */ }
+      }
+      return resolved;
+    });
+  }, [modeStorageKey]);
+  // When the active session changes (sidebar switch), re-read mode for
+  // the newly-active session. Without this, switching from an AGENT
+  // session back to a CHAT one would show the wrong pill.
+  useEffect(() => {
+    if (!modeStorageKey) return;
+    try {
+      const v = localStorage.getItem(modeStorageKey);
+      setModeState(v === 'AGENT' ? 'AGENT' : 'CHAT');
+    } catch { /* ignore */ }
+  }, [modeStorageKey]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
 
@@ -501,7 +533,7 @@ export function ChatPanel({
         rt.streaming = true;
         bump();
       },
-      onToolDone: ({ tool, result_summary, is_error, tool_latency_ms }) => {
+      onToolDone: ({ tool, result_summary, result_content, is_error, tool_latency_ms }) => {
         const rt = getRuntime(sid);
         const block: ToolResultBlock = {
           type: 'tool_result',
@@ -509,12 +541,11 @@ export function ChatPanel({
           is_error,
           latency_ms: tool_latency_ms,
           summary: result_summary,
-          // Full content arrives in the persisted block on next reload.
-          // Live streaming only sends the summary — that's enough for
-          // the folded label; the expanded view shows "(refresh to load)"
-          // until the user reloads. Acceptable: same trade-off as the
-          // "preview vs. full" pattern in Claude Code's chat UI.
-          content: '',
+          // Full content now streams alongside the summary, so the
+          // expanded card renders immediately — no more "refresh to
+          // load" placeholder. ``result_content`` is already capped
+          // by the tool's ``max_result_chars`` so this stays bounded.
+          content: result_content,
         };
         rt.inflightBlocks.push(block);
         const icon = is_error ? '✗' : '✓';

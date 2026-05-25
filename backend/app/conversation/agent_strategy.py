@@ -439,9 +439,15 @@ class AgentLoopStrategy:
 
             assistant_content = ""
             tool_calls_acc: list[_ToolCallAccumulator] = []
+            # Thinking-mode reasoning trace must round-trip back to the
+            # API on the next assistant message — accumulate it here
+            # and pass to ``_execute_tools`` which writes the message.
+            reasoning_acc: list[str] = []
             stream_started_at = time.perf_counter()
 
-            async for ev in self._consume_stream(stream, budget, tool_calls_acc):
+            async for ev in self._consume_stream(
+                stream, budget, tool_calls_acc, reasoning_acc,
+            ):
                 if isinstance(ev, HarnessEvent):
                     yield ev
                 elif isinstance(ev, str):
@@ -467,6 +473,7 @@ class AgentLoopStrategy:
                     ctx=ctx, messages=messages, blocks=blocks,
                     trace=trace, tool_calls_acc=tool_calls_acc,
                     assistant_content=assistant_content,
+                    reasoning_content="".join(reasoning_acc),
                     budget=budget, post_sampling_hooks=post_sampling_hooks,
                     run_id=run_id,
                 ):
@@ -474,7 +481,16 @@ class AgentLoopStrategy:
                 continue
 
             if assistant_content:
-                # Final answer — terminator for the loop.
+                # Final answer — terminator for the loop. NB:
+                # ``reasoning_acc`` is intentionally NOT persisted on
+                # this path. The thinking trace is intra-turn only —
+                # it must round-trip while the loop is calling tools
+                # within a single user-turn, but the persisted message
+                # (``content_blocks_json``) carries only the visible
+                # ``text`` blocks. On the NEXT user turn we start
+                # fresh from system + persisted blocks; the model
+                # generates new reasoning_content for that turn from
+                # scratch. Discarding is correct.
                 trace.append({
                     "step": budget.steps, "tool": None, "args": {},
                     "observation": {}, "latency_ms": latency_ms,
@@ -541,9 +557,21 @@ class AgentLoopStrategy:
         stream: Any,
         budget: AgentBudget,
         tool_calls_acc: list[_ToolCallAccumulator],
+        reasoning_acc: list[str],
     ) -> AsyncGenerator[HarnessEvent | str, None]:
         """Yield either a HarnessEvent (text_delta) for SSE OR a raw
-        text-chunk str for the loop to accumulate."""
+        text-chunk str for the loop to accumulate.
+
+        ``reasoning_acc`` is a mutable single-element-style list the
+        caller passes in to capture the model's ``reasoning_content``
+        (DeepSeek / o1-style thinking-mode field). Same pattern as
+        ``tool_calls_acc``: out-of-band side-channel because the yield
+        protocol is already overloaded with two types. We do NOT yield
+        reasoning as ``text_delta`` — it's the model's internal scratch
+        pad and the frontend doesn't render it; we only need it to
+        replay back into the NEXT LLM call (the API errors out
+        otherwise — see issue C in commit message).
+        """
         index_map: dict[int, _ToolCallAccumulator] = {}
         saw_tool_call = False
 
@@ -556,6 +584,18 @@ class AgentLoopStrategy:
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
+
+            # Thinking-mode reasoning trace. DeepSeek V3.x / V4 Flash
+            # and OpenAI o1-mini stream this on a separate ``delta``
+            # field. The downstream API REQUIRES us to send it back
+            # on the next-turn assistant message — without it the
+            # second LLM call rejects with HTTP 400 "The
+            # reasoning_content in the thinking mode must be passed
+            # back to the API". So we accumulate even though we never
+            # surface it to the UI.
+            reasoning_piece = getattr(delta, "reasoning_content", None)
+            if reasoning_piece:
+                reasoning_acc.append(str(reasoning_piece))
 
             if delta.content:
                 # Always accumulate into the loop's local text buffer.
@@ -600,15 +640,26 @@ class AgentLoopStrategy:
         trace: list[dict[str, Any]],
         tool_calls_acc: list[_ToolCallAccumulator],
         assistant_content: str,
+        reasoning_content: str,
         budget: AgentBudget,
         post_sampling_hooks: PostSamplingHookRunner,
         run_id: str,
     ) -> AsyncGenerator[HarnessEvent, None]:
-        messages.append({
+        # ``reasoning_content`` (thinking-mode trace) MUST round-trip
+        # back to the API on the next assistant message — otherwise
+        # DeepSeek V4 Flash / o1-style models reject the next call with
+        # HTTP 400 "The reasoning_content in the thinking mode must be
+        # passed back to the API". We attach it conditionally so plain
+        # (non-thinking) models that never produce reasoning_content
+        # don't get a confusing empty field.
+        assistant_msg: dict[str, Any] = {
             "role": "assistant",
             "content": assistant_content,
             "tool_calls": [_tool_call_payload(c) for c in tool_calls_acc],
-        })
+        }
+        if reasoning_content:
+            assistant_msg["reasoning_content"] = reasoning_content
+        messages.append(assistant_msg)
 
         turn_tool_messages: list[dict[str, Any]] = []
 
@@ -724,6 +775,12 @@ class AgentLoopStrategy:
                 step=budget.steps,
                 elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
                 tool_latency_ms=latency_ms, is_error=tool_error,
+                # Ship the full result text on the wire so the live
+                # tool card can render the expanded view without a
+                # refresh. ``result_text`` is already capped at the
+                # per-tool ``max_result_chars`` ceiling so this won't
+                # blow up an SSE frame.
+                result_content=result_text,
             )
 
         if turn_tool_messages:
