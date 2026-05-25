@@ -9,7 +9,7 @@ These tests stub the LLM proxy with deterministic JSON / exception
 responses to exercise:
   * JSON / JSON-in-prose parsing
   * topic-name filtering against the injected index
-  * recall_on=False privacy gate
+  * global_memory_on=False privacy gate
   * conservative fallback on parse / vendor failure
   * structured inputs (session_state + recent_turns instead of
     a pre-rendered ``rewrite_context`` string)
@@ -250,7 +250,7 @@ def test_plan_query_caps_knowledge_topics_at_three(monkeypatch):
 
 
 def test_plan_query_with_recall_off_clears_memory_fields(monkeypatch):
-    """When recall_on=False the planner MUST output empty memory
+    """When global_memory_on=False the planner MUST output empty memory
     selections, even if the LLM happened to suggest some — the
     post-parse guard enforces the privacy contract."""
     from app.conversation import query_planner as planner
@@ -270,7 +270,7 @@ def test_plan_query_with_recall_off_clears_memory_fields(monkeypatch):
         session_state={},
         recent_turns=[],
         knowledge_index_lines=_INDEX_LINES,
-        recall_on=False,
+        global_memory_on=False,
     ))
     assert plan.knowledge_topics == []
     assert plan.load_strategy is False
@@ -300,7 +300,7 @@ def test_plan_query_with_recall_off_omits_memory_section_from_prompt(monkeypatch
         knowledge_index_lines=_INDEX_LINES,
         strategy_description="STAR (5) ...",
         habit_description="weekly mocks",
-        recall_on=False,
+        global_memory_on=False,
     ))
 
     sent_prompt = fake.calls[0][0][0]

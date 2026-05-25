@@ -47,7 +47,36 @@ class RecallMemoryArgs(BaseModel):
 
 
 async def _recall_memory_handler(args: RecallMemoryArgs, ctx: AgentToolContext) -> dict[str, Any]:
-    """Return the v3 memory snapshot, optionally with explicit bodies."""
+    """Return the v3 memory snapshot, optionally with explicit bodies.
+
+    Privacy gate (Stage-H): when the user has the global memory toggle
+    OFF for this session, refuse to surface any memory content. The
+    tool itself remains in the manifest (so the agent doesn't get
+    confused by an asymmetric tool list), but every call returns an
+    empty bundle plus an explicit ``disabled`` flag the LLM can see.
+    Mirrors Claude Code's ``isAutoMemoryEnabled=false`` shutdown.
+    """
+    from app.services.memory.recall_policy import (
+        is_global_memory_enabled_for_session,
+    )
+    if not is_global_memory_enabled_for_session(ctx.session_id, ctx.user_id):
+        return {
+            "disabled": True,
+            "reason": (
+                "用户已关闭全局记忆开关，本会话不读取跨 session 记忆。"
+                "请仅基于本会话上下文回答。"
+            ),
+            "user_profile": "",
+            "knowledge_index": [],
+            "strategy_description": "",
+            "habit_description": "",
+            "active_topics": {},
+            "active_strategy": "",
+            "active_habit": "",
+            "topic_count": 0,
+            "active_count": 0,
+        }
+
     from app.services.memory.v3_context_loader import (
         attach_active_bodies,
         load_universal,
@@ -123,7 +152,24 @@ async def _save_memory_handler(args: SaveMemoryArgs, ctx: AgentToolContext) -> d
     can't race the realtime-extraction / dreaming writers (which both
     grab the same per-user lock). Patch protocol still defends against
     line-level corruption if the lock degrades to no-op (Redis down).
+
+    Privacy gate (Stage-H): when the global memory toggle is OFF, the
+    write is refused. The user explicitly told us they don't want
+    cross-session memory built up; an agent tool call sneaking
+    through is a privacy bug, not a feature.
     """
+    from app.services.memory.recall_policy import (
+        is_global_memory_enabled_for_session,
+    )
+    if not is_global_memory_enabled_for_session(ctx.session_id, ctx.user_id):
+        return {
+            "disabled": True,
+            "reason": (
+                "用户已关闭全局记忆开关，禁止写入跨 session 记忆。"
+                "如需启用，请到「个人中心」打开全局记忆开关。"
+            ),
+        }
+
     from app.services.memory import (
         habit_doc_service,
         knowledge_doc_service,

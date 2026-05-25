@@ -254,8 +254,8 @@ def get_session_memory_recall(
     session_row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if not session_row or session_row.user_id != current_user.username:
         raise HTTPException(status_code=404, detail="Session not found or access denied")
-    from app.services.memory.recall_policy import recall_enabled_for_session
-    effective = recall_enabled_for_session(session_id, current_user.username)
+    from app.services.memory.recall_policy import is_global_memory_enabled_for_session
+    effective = is_global_memory_enabled_for_session(session_id, current_user.username)
     return {"status": "success", "session_id": session_id, "enabled": effective}
 
 
@@ -269,6 +269,6 @@ def set_session_memory_recall(
     session_row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if not session_row or session_row.user_id != current_user.username:
         raise HTTPException(status_code=404, detail="Session not found or access denied")
-    from app.services.memory.recall_policy import set_session_recall
-    set_session_recall(session_id, current_user.username, body.enabled)
+    from app.services.memory.recall_policy import set_session_global_memory
+    set_session_global_memory(session_id, current_user.username, body.enabled)
     return {"status": "success", "session_id": session_id, "enabled": bool(body.enabled)}

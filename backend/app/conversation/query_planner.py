@@ -8,7 +8,7 @@ needs:
   * session state + recent turns                → pronoun resolution
   * knowledge_doc index + strategy/habit
     one-liner descriptions                       → which doc bodies to load
-  * recall_on flag                               → privacy gate
+  * global_memory_on flag                               → privacy gate
   * current user message                         → the question to plan around
 
 Prompt assembly follows the "large models attend more to the end of
@@ -156,7 +156,7 @@ async def plan_query(
     knowledge_index_lines: list[str] | None = None,
     strategy_description: str = "",
     habit_description: str = "",
-    recall_on: bool = True,
+    global_memory_on: bool = True,
 ) -> QueryPlan:
     """One LLM call per turn: rewrite query for RAG + decide memory bodies.
 
@@ -170,7 +170,7 @@ async def plan_query(
     ``knowledge_index_lines`` / ``strategy_description`` /
     ``habit_description`` come from ``v3_context_loader.load_universal``.
 
-    When ``recall_on=False`` (privacy mode), the memory section is
+    When ``global_memory_on=False`` (privacy mode), the memory section is
     omitted entirely and the contract enforces empty memory output.
     """
     index_lines = knowledge_index_lines or []
@@ -178,7 +178,7 @@ async def plan_query(
 
     # ── Slot bodies (built lazily so privacy mode skips memory) ──
 
-    if recall_on:
+    if global_memory_on:
         index_block = (
             "\n".join(index_lines) if index_lines else "(no knowledge topics yet)"
         )
@@ -278,7 +278,7 @@ async def plan_query(
             ][:3]
         # Recall-off contract guard: even if the LLM ignored the
         # instruction, drop any memory loads.
-        if not recall_on:
+        if not global_memory_on:
             plan.knowledge_topics = []
             plan.load_strategy = False
             plan.load_habit = False

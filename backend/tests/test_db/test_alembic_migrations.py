@@ -133,17 +133,16 @@ def test_migration_chain_has_no_gaps_and_one_head():
 
     # Migration count is asserted explicitly so an accidentally-deleted
     # version file shows up as a test failure rather than a silent
-    # corruption of the chain. After Phase A (single-doc one_liner)
-    # the chain is:
+    # corruption of the chain. The current chain is:
     #   0001_baseline → 0002_memory_v3 → 0003_drop_memory_items
     #                 → 0004_user_last_dreamed_at
     #                 → 0005_single_doc_one_liner
+    #                 → 0006_chat_message_content_blocks
+    #                 → 0007_global_memory_rename
     # Bump this number whenever a new forward migration lands.
     on_disk = [p for p in VERSIONS_DIR.glob("*.py") if not p.name.startswith("_")]
-    # Stage-G refactor adds 0006_chat_message_content_blocks. Bump this
-    # number whenever a new forward migration lands.
-    assert len(on_disk) == 6, (
-        f"Expected 6 migration files (baseline + 5 memory/chat evolutions), "
+    assert len(on_disk) == 7, (
+        f"Expected 7 migration files (baseline + 6 memory/chat evolutions), "
         f"found {len(on_disk)}"
     )
 
@@ -206,8 +205,8 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         from sqlalchemy import text
 
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0006_chat_message_content_blocks", (
-            f"Head should be 0006_chat_message_content_blocks, got {version!r}"
+        assert version == "0007_global_memory_rename", (
+            f"Head should be 0007_global_memory_rename, got {version!r}"
         )
 
     engine.dispose()

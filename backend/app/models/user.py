@@ -19,15 +19,25 @@ class User(Base):
     # base64). Plain http(s) URLs still fit fine.
     avatar_url = Column(Text, nullable=True)
     bio = Column(Text, nullable=True)
-    # Per-user default for "should the QA pipeline pull this user's past
-    # interview_fact memories into the LLM prompt?" Opt-in (default False)
-    # for two reasons: (1) avoid surprising new users by surfacing things
-    # they don't remember saying; (2) avoid contaminating answers with
-    # stale facts from old sessions until the user has had a chance to
-    # curate their memory list. A per-session override lives in
-    # chat_sessions.session_state JSON (key ``memory_recall_enabled``);
-    # service code reads the session value first and falls back here.
-    memory_recall_default = Column(Boolean, default=False, nullable=False)
+    # Per-user default for the GLOBAL (cross-session) memory toggle.
+    # When False, the LLM does NOT see the v3 memory bundle
+    # (user_profile + knowledge / strategy / habit docs) — only
+    # session-local context (recent_turns, session_state, debrief
+    # reference) reaches the prompt. Matches Claude Code's
+    # ``isAutoMemoryEnabled`` semantics — global memdir off; per-
+    # session context untouched.
+    #
+    # Storage is unaffected: this is an INJECTION gate. The user's
+    # personalization page can still read user_profile_doc / docs from
+    # the DB directly to render the user's own memory inventory.
+    #
+    # Opt-in (default False) for new users — they get vanilla chat
+    # until they curate their memory and explicitly opt in.
+    #
+    # A per-session override lives in chat_sessions.session_state JSON
+    # (key ``global_memory_enabled``); service code reads the session
+    # value first and falls back here.
+    global_memory_enabled = Column(Boolean, default=False, nullable=False)
     # 单文档形式的用户画像。每行一条事实（"- 用户名：卷卷"）。每轮
     # 抽取时整份加载给 LLM，LLM 输出**补丁列表**（add / update / delete
     # 各行），后端按补丁原地改，未涉及的行保持字节级不变 —— 杜绝旧的

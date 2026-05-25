@@ -4,8 +4,9 @@ Owns every concern that is identical between chat and agent paths:
 
   1. Session lifecycle ........  transcript_service.ensure_session
   2. Memory recall ............  v3_context_loader (universal +
-                                  on-demand bodies, gated by
-                                  ``recall_enabled_for_session``)
+                                  on-demand bodies, gated by the
+                                  GLOBAL memory toggle —
+                                  ``is_global_memory_enabled_for_session``)
   3. Context assembly .........  ContextAssemblyPipeline + renderer
   4. Per-turn execution .......  delegated to ExecutionStrategy
   5. Persistence ..............  transcript_service.append_turn with
@@ -43,8 +44,8 @@ from app.services.chat.chat_history_service import transcript_service
 from app.services.chat.context_assembly_pipeline import context_pipeline
 from app.services.memory.post_turn_maintenance import post_turn_maintenance_service
 from app.services.memory.v3_context_loader import (
+    V3MemoryContext,
     attach_active_bodies,
-    load_profile_only,
     load_universal,
 )
 from app.services.telemetry_service import log_interaction_metrics
@@ -168,17 +169,29 @@ class ConversationEngine:
         """
         transcript_service.ensure_session(self.session_id, self.user_id)
 
-        from app.services.memory.recall_policy import recall_enabled_for_session
-        recall_on = recall_enabled_for_session(self.session_id, self.user_id)
+        from app.services.memory.recall_policy import (
+            is_global_memory_enabled_for_session,
+        )
+        global_memory_on = is_global_memory_enabled_for_session(
+            self.session_id, self.user_id,
+        )
 
         # Step 1: cheap universal load — picks up user_profile + the
         # three description / index lines the planner needs to make
-        # informed body-load decisions. Privacy mode skips everything
-        # except user_profile (basic identity).
-        if recall_on:
+        # informed body-load decisions.
+        #
+        # When the global memory toggle is OFF, we skip this entirely:
+        # NO user_profile, NO knowledge index, NO descriptions, NO
+        # bodies. Per Stage-H semantics, the toggle is the cross-
+        # session memory gate (analog of Claude Code's
+        # ``isAutoMemoryEnabled``). Session-local context
+        # (recent_turns + session_state + debrief reference) still
+        # flows in normally — debrief reference is interview-bound
+        # material, not "memory".
+        if global_memory_on:
             universal_ctx = load_universal(self.user_id)
         else:
-            universal_ctx = load_profile_only(self.user_id)
+            universal_ctx = V3MemoryContext()  # truly empty bundle
 
         # Step 2: planner LLM. Inputs are STRUCTURED — session_state +
         # recent_turns come straight from transcript_service, no
@@ -208,7 +221,7 @@ class ConversationEngine:
             knowledge_index_lines=universal_ctx.knowledge_index_lines,
             strategy_description=universal_ctx.strategy_description,
             habit_description=universal_ctx.habit_description,
-            recall_on=recall_on,
+            global_memory_on=global_memory_on,
         )
 
         # Step 3: concurrent RAG + memory body loads.

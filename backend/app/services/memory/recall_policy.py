@@ -1,20 +1,38 @@
-"""Resolve "should we recall past memories?" for a chat session.
+"""Resolve "is the GLOBAL memory toggle on?" for a chat session.
 
-Memory recall (the vector search over past ``interview_fact`` items that
-gets injected into the LLM prompt) is opt-in.  Two tiers of preference:
+Semantics (Stage-H clarification): this is the **cross-session memory**
+switch — same scope as Claude Code's ``isAutoMemoryEnabled``. When off:
 
-  1. **Per-session override** — stored as ``memory_recall_enabled`` (bool)
-     inside ``chat_sessions.session_state``. Set by the toggle next to
-     the "agent" button in the chat header. Takes precedence whenever
-     present (even when explicitly set to False).
-  2. **Per-user default** — ``users.memory_recall_default`` column.
+  * The v3 memory bundle (user_profile + knowledge / strategy / habit
+    docs) is NOT injected into the LLM prompt.
+  * The planner doesn't see the user's memory inventory either, so it
+    can't request body loads.
+  * Session-local context (recent_turns, session_state, [Record Context]
+    for debrief sessions) STILL loads — those are per-conversation
+    working context, not "memory".
+  * User-facing UI can still read the docs directly from the DB — the
+    toggle only gates LLM INJECTION, not storage.
+
+Two tiers of preference:
+
+  1. **Per-session override** — stored as ``global_memory_enabled``
+     (bool) inside ``chat_sessions.session_state``. Set by the toggle
+     next to the "agent" button in the chat header. Takes precedence
+     whenever present (even when explicitly set to False).
+  2. **Per-user default** — ``users.global_memory_enabled`` column.
      Toggled in the 个人中心 preferences page. Used when the session-
      level value is unset.
 
-If both are missing or unreadable (e.g. brand new session, JSON parse
-error), the policy falls back to ``False`` — opt-in by design. A failed
-DB lookup also returns False so a transient outage degrades safely
-(skip recall, keep answering) instead of leaking memory contents.
+If both are missing or unreadable, the policy falls back to ``False``
+— opt-in by design. A failed DB lookup also returns False so a
+transient outage degrades safely (skip injection, keep answering)
+instead of accidentally leaking memory contents.
+
+Back-compat read shim: rows persisted before Stage-H carry the legacy
+JSON key ``memory_recall_enabled`` in their session_state. We read
+either key; new writes always use the new key. The DB column was
+renamed by alembic 0007 (``memory_recall_default`` →
+``global_memory_enabled``).
 
 Keep this module tiny and dependency-free so the QA pipeline can import
 it without dragging in heavy retrieval/embedding modules.
@@ -35,7 +53,11 @@ from app.models.user import User
 logger = logging.getLogger(__name__)
 
 
-_STATE_KEY = "memory_recall_enabled"
+# Canonical key used by new writes. Old rows may still carry the
+# legacy ``memory_recall_enabled`` key — the read path falls back to
+# it so we don't need a JSON migration for in-flight sessions.
+_STATE_KEY = "global_memory_enabled"
+_LEGACY_STATE_KEY = "memory_recall_enabled"
 
 
 def _coerce_bool(v: Any) -> bool | None:
@@ -59,11 +81,13 @@ def _coerce_bool(v: Any) -> bool | None:
     return None
 
 
-def recall_enabled_for_session(session_id: str, user_id: str) -> bool:
-    """Return True iff memory recall should run for this turn.
+def is_global_memory_enabled_for_session(session_id: str, user_id: str) -> bool:
+    """Return True iff the GLOBAL (cross-session) memory bundle should
+    be injected into the LLM prompt for this turn.
 
     Resolution order (first hit wins):
-      session.session_state[memory_recall_enabled] → user.memory_recall_default → False
+      session.session_state[global_memory_enabled or memory_recall_enabled]
+      → user.global_memory_enabled → False
     """
     db: Session = SessionLocal()
     try:
@@ -77,21 +101,24 @@ def recall_enabled_for_session(session_id: str, user_id: str) -> bool:
             try:
                 state = json.loads(row[0])
                 if isinstance(state, dict):
-                    v = _coerce_bool(state.get(_STATE_KEY))
+                    # Prefer the canonical key; fall back to the legacy
+                    # one so pre-Stage-H sessions still honour their
+                    # stored choice.
+                    raw = state.get(_STATE_KEY)
+                    if raw is None:
+                        raw = state.get(_LEGACY_STATE_KEY)
+                    v = _coerce_bool(raw)
                     if v is not None:
                         return v
             except (json.JSONDecodeError, TypeError) as exc:
-                # Garbled session_state JSON is non-fatal — fall through.
                 logger.warning(
                     "recall_policy: malformed session_state for %s: %s",
                     session_id, exc,
                 )
 
-        # User-level default. We look up by username (the JWT subject)
-        # because ``user_id`` in chat code is the username, not the
-        # numeric id.
+        # User-level default.
         user_default = (
-            db.query(User.memory_recall_default)
+            db.query(User.global_memory_enabled)
             .filter(User.username == user_id)
             .first()
         )
@@ -100,18 +127,19 @@ def recall_enabled_for_session(session_id: str, user_id: str) -> bool:
 
         return False
     except Exception as exc:  # noqa: BLE001
-        # Degrade safely on DB errors — never blow up the chat turn.
-        logger.warning("recall_policy: lookup failed for %s/%s: %s",
-                       session_id, user_id, exc)
+        logger.warning(
+            "recall_policy: lookup failed for %s/%s: %s",
+            session_id, user_id, exc,
+        )
         return False
     finally:
         db.close()
 
 
-def set_session_recall(session_id: str, user_id: str, enabled: bool) -> None:
+def set_session_global_memory(session_id: str, user_id: str, enabled: bool) -> None:
     """Persist a per-session override into ``session_state`` JSON.
 
-    Reads the existing blob, sets ``memory_recall_enabled``, writes back.
+    Reads the existing blob, sets ``global_memory_enabled``, writes back.
     No-op (without raising) when the session doesn't exist or isn't owned
     by ``user_id`` — the API layer enforces ownership before calling
     this; this is the safety net.
@@ -129,6 +157,9 @@ def set_session_recall(session_id: str, user_id: str, enabled: bool) -> None:
         except json.JSONDecodeError:
             state = {}
         state[_STATE_KEY] = bool(enabled)
+        # Tidy: drop the legacy key when we own the write — no point
+        # carrying both.
+        state.pop(_LEGACY_STATE_KEY, None)
         row.session_state = json.dumps(state, ensure_ascii=False, sort_keys=True)
         db.commit()
     except Exception:
@@ -138,8 +169,8 @@ def set_session_recall(session_id: str, user_id: str, enabled: bool) -> None:
         db.close()
 
 
-def set_user_default(user_id: str, enabled: bool) -> None:
-    """Update the per-user default (``users.memory_recall_default``).
+def set_user_global_memory_default(user_id: str, enabled: bool) -> None:
+    """Update the per-user default (``users.global_memory_enabled``).
 
     ``user_id`` is the username (consistent with the rest of the chat
     code paths). No-op for missing users.
@@ -149,7 +180,7 @@ def set_user_default(user_id: str, enabled: bool) -> None:
         row = db.query(User).filter(User.username == user_id).first()
         if row is None:
             return
-        row.memory_recall_default = bool(enabled)
+        row.global_memory_enabled = bool(enabled)
         db.commit()
     except Exception:
         db.rollback()
@@ -159,7 +190,7 @@ def set_user_default(user_id: str, enabled: bool) -> None:
 
 
 __all__ = [
-    "recall_enabled_for_session",
-    "set_session_recall",
-    "set_user_default",
+    "is_global_memory_enabled_for_session",
+    "set_session_global_memory",
+    "set_user_global_memory_default",
 ]

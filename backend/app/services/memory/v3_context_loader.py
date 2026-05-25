@@ -4,7 +4,6 @@ After the planner-merge refactor the selection LLM lives inside
 :func:`app.conversation.query_planner.plan_query` instead of here.
 This module only does **deterministic, no-LLM work**:
 
-  * :func:`load_profile_only` — privacy-mode minimum (just user_profile)
   * :func:`load_universal`    — the cheap "every turn" pass:
                                    user_profile (full body) + knowledge
                                    index lines + strategy / habit
@@ -13,6 +12,12 @@ This module only does **deterministic, no-LLM work**:
                                    flags from the planner, hydrate
                                    the universal context with the
                                    requested bodies
+
+When the global memory toggle is OFF (Stage-H), the engine bypasses
+this module entirely and uses ``V3MemoryContext()`` directly — no
+user_profile, no descriptions, no bodies. Privacy mode is "no
+cross-session memory at all"; session-local context (recent_turns,
+session_state, debrief reference) keeps flowing.
 
 There is no LLM call, no cache, no fallback heuristic — those moved
 to the planner. ``V3MemoryContext.render()`` still produces the same
@@ -93,20 +98,6 @@ class V3MemoryContext:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def load_profile_only(user_id: str) -> V3MemoryContext:
-    """Minimal context for sessions where memory recall is OFF.
-
-    Privacy-conscious users who toggle recall off expect their
-    interview prep notes to NOT leak into the LLM context. We still
-    load user_profile though — without it the AI calls them by the
-    wrong name etc. That's basic identity, not interview prep
-    history, so it's defensible to keep.
-    """
-    return V3MemoryContext(
-        user_profile_body=user_profile_doc_service.load(user_id),
-    )
-
-
 def load_universal(user_id: str) -> V3MemoryContext:
     """The cheap every-turn pass — user_profile FULL + descriptions
     for the three other memory types. **No LLM call**, just a handful
@@ -167,6 +158,5 @@ async def attach_active_bodies(
 __all__ = [
     "V3MemoryContext",
     "attach_active_bodies",
-    "load_profile_only",
     "load_universal",
 ]

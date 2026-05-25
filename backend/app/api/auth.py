@@ -93,12 +93,24 @@ class MeUpdate(BaseModel):
     nickname: Optional[str] = Field(default=None, max_length=64)
     avatar_url: Optional[str] = Field(default=None, max_length=512)
     bio: Optional[str] = Field(default=None, max_length=2000)
-    # PATCH /me can flip the per-user "memory recall default". Frontend
-    # exposes it as a toggle in 个人中心; sessions without an explicit
-    # per-session override inherit this value. ``None`` here means
-    # "don't touch" — the handler only writes the column when the
-    # client actually sends a value.
-    memory_recall_default: Optional[bool] = Field(default=None)
+    # PATCH /me can flip the user-level GLOBAL memory toggle. Frontend
+    # exposes it in 个人中心; sessions without an explicit per-session
+    # override inherit this value. ``None`` here means "don't touch" —
+    # the handler only writes the column when the client actually
+    # sends a value. Semantics: when False, the LLM does NOT see the
+    # v3 memory bundle for this user; session-local context still
+    # flows. See ``recall_policy`` module docstring for the full
+    # contract.
+    #
+    # The ``memory_recall_default`` alias keeps in-flight frontend
+    # builds (pre-Stage-H) writing the toggle correctly. Once the
+    # frontend ships with ``global_memory_enabled`` everywhere this
+    # alias can be retired in a follow-up.
+    global_memory_enabled: Optional[bool] = Field(
+        default=None, alias="memory_recall_default",
+    )
+
+    model_config = {"populate_by_name": True}
 
     @field_validator("avatar_url", mode="before")
     @classmethod
@@ -139,9 +151,13 @@ class MeResponse(BaseModel):
     email_verified: bool
     created_at: str
     updated_at: str
-    # User-level preferences. Today only one knob — surface it on the same
-    # /me payload to avoid a second round-trip when the profile page mounts.
-    memory_recall_default: bool = False
+    # User-level preferences. Today only one knob — surface it on the
+    # same /me payload to avoid a second round-trip when the profile
+    # page mounts. Emit BOTH the canonical ``global_memory_enabled``
+    # AND the legacy ``memory_recall_default`` alias so a pre-Stage-H
+    # frontend still sees the toggle state at the old key.
+    global_memory_enabled: bool = False
+    memory_recall_default: bool = False  # legacy alias — same value
 
 
 # Avatar upload limits.
@@ -457,7 +473,8 @@ def _serialize_me(user: User) -> MeResponse:
         email_verified=bool(user.email_verified),
         created_at=user.created_at.isoformat() if user.created_at else "",
         updated_at=user.updated_at.isoformat() if user.updated_at else "",
-        memory_recall_default=bool(getattr(user, "memory_recall_default", False)),
+        global_memory_enabled=bool(getattr(user, "global_memory_enabled", False)),
+        memory_recall_default=bool(getattr(user, "global_memory_enabled", False)),
     )
 
 
@@ -482,11 +499,11 @@ def update_me(
     if payload.bio is not None:
         current_user.bio = payload.bio.strip() or None
         changed = True
-    if payload.memory_recall_default is not None:
+    if payload.global_memory_enabled is not None:
         # Don't normalize to a string truthy/falsy — Pydantic already
         # gave us a real bool, just persist it. ``False`` is a legitimate
         # write (the opt-in default), so we don't filter on truthiness.
-        current_user.memory_recall_default = bool(payload.memory_recall_default)
+        current_user.global_memory_enabled = bool(payload.global_memory_enabled)
         changed = True
     if changed:
         db.add(current_user)
