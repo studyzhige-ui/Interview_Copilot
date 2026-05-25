@@ -43,8 +43,10 @@ router = APIRouter(tags=["chat"])
 
 
 @router.post("/chat/mock-interview/start")
+@limiter.limit(RATE_EXPENSIVE)
 async def start_mock_interview(
-    request: MockStartRequest,
+    request: Request,
+    body: MockStartRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -61,7 +63,7 @@ async def start_mock_interview(
     from app.services.resume_service import resume_service
 
     session = db.query(ChatSession).filter(
-        ChatSession.id == request.session_id,
+        ChatSession.id == body.session_id,
         ChatSession.user_id == current_user.username,
     ).first()
     if session is None:
@@ -94,10 +96,10 @@ async def start_mock_interview(
 
     logger.info(
         "mock_start: user=%s session=%s resume=%s jd_upload=%s jd_text_len=%d style=%s voice=%s",
-        current_user.username, request.session_id,
-        request.resume_upload_id, request.jd_upload_id,
-        len(request.jd_text or ""),
-        request.interviewer_style, request.voice_mode,
+        current_user.username, body.session_id,
+        body.resume_upload_id, body.jd_upload_id,
+        len(body.jd_text or ""),
+        body.interviewer_style, body.voice_mode,
     )
 
     # Resume text resolution. Three tiers, fastest first:
@@ -128,10 +130,10 @@ async def start_mock_interview(
     # block.
     resume_context = ""
     resume_source = "none"
-    if request.resume_upload_id:
+    if body.resume_upload_id:
         try:
             sections = resume_service.get_sections_by_upload(
-                request.resume_upload_id, current_user.username,
+                body.resume_upload_id, current_user.username,
             )
             if sections:
                 resume_context = resume_service.format_for_context(sections)
@@ -142,7 +144,7 @@ async def start_mock_interview(
                     read_full_text_from_docstore,
                 )
                 kdoc = find_knowledge_doc_by_upload(
-                    db, request.resume_upload_id, current_user.username,
+                    db, body.resume_upload_id, current_user.username,
                 )
                 if kdoc is not None:
                     text, node_count = read_full_text_from_docstore(kdoc)
@@ -151,7 +153,7 @@ async def start_mock_interview(
                         resume_source = "docstore"
                 if not resume_context:
                     resume_context = await _parse_resume_on_demand(
-                        db, request.resume_upload_id, current_user.username,
+                        db, body.resume_upload_id, current_user.username,
                     )
                     resume_source = "reparsed" if resume_context else "none"
         except Exception as exc:  # noqa: BLE001
@@ -166,11 +168,11 @@ async def start_mock_interview(
         len(resume_context), resume_source,
     )
 
-    jd_context = (request.jd_text or "").strip()
-    if not jd_context and request.jd_upload_id:
+    jd_context = (body.jd_text or "").strip()
+    if not jd_context and body.jd_upload_id:
         from app.services.knowledge_text_service import load_knowledge_text
         try:
-            jd_context = load_knowledge_text(db, request.jd_upload_id, current_user.username)
+            jd_context = load_knowledge_text(db, body.jd_upload_id, current_user.username)
         except Exception as exc:  # noqa: BLE001
             logger.warning("JD load failed: %s", exc)
             jd_context = ""
@@ -180,7 +182,7 @@ async def start_mock_interview(
     # Build the cacheable prefix *once* and stash it in session_state. Every
     # subsequent LLM call this session reuses it verbatim so DeepSeek's
     # prompt cache can hit on it.
-    cacheable_prefix = build_prefix(resume_context, jd_context, request.interviewer_style)
+    cacheable_prefix = build_prefix(resume_context, jd_context, body.interviewer_style)
     _mark("prefix_done")
 
     # LLM #1 (the ONLY LLM call in this endpoint): interview brief + opening.
@@ -188,7 +190,7 @@ async def start_mock_interview(
         brief = await generate_brief(
             resume_context=resume_context,
             jd_context=jd_context,
-            interviewer_style=request.interviewer_style,
+            interviewer_style=body.interviewer_style,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("mock_start: brief generation failed: %s", exc)
@@ -204,8 +206,8 @@ async def start_mock_interview(
         "schema_version": 2,
         "resume_context": resume_context,
         "jd_context": jd_context,
-        "interviewer_style": request.interviewer_style,
-        "voice_mode": request.voice_mode,
+        "interviewer_style": body.interviewer_style,
+        "voice_mode": body.voice_mode,
 
         "cacheable_prefix": cacheable_prefix,
         "prefix_hash": prefix_hash(cacheable_prefix),
@@ -633,7 +635,9 @@ async def submit_mock_answer(
 
 
 @router.post("/chat/mock-interview/finish", response_model=MockFinishResp)
+@limiter.limit(RATE_EXPENSIVE)
 async def finish_mock_interview(
+    request: Request,
     session_id: str = Query(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -791,7 +795,9 @@ async def _parse_resume_on_demand(db: Session, upload_id: str, user_id: str) -> 
 
 
 @router.post("/chat/mock-interview/parse-jd")
+@limiter.limit(RATE_UPLOAD)
 async def parse_jd_for_mock(
+    request: Request,
     file: UploadFile = File(...),
     _current_user: User = Depends(get_current_user),
 ):
@@ -904,19 +910,21 @@ async def transcribe_short_clip(
 
 
 @router.post("/chat/mock-interview/tts")
+@limiter.limit(RATE_EXPENSIVE)
 async def synthesize_speech(
-    request: TTSRequest,
+    request: Request,
+    body: TTSRequest,
     _current_user: User = Depends(get_current_user),
 ):
     """Convert text to speech using edge-tts. Returns mp3 audio stream."""
     from app.services.voice.tts_service import tts_service
 
-    if not request.text.strip():
+    if not body.text.strip():
         raise HTTPException(status_code=400, detail="Text is empty")
 
     audio_bytes = await tts_service.synthesize(
-        text=request.text,
-        voice=request.voice,
+        text=body.text,
+        voice=body.voice,
     )
     if not audio_bytes:
         raise HTTPException(status_code=500, detail="TTS synthesis failed")
