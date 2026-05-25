@@ -271,6 +271,21 @@ async def unhandled_exception_logger(request: _Request, exc: Exception):
         exc,
         _tb.format_exc(),
     )
+    # Belt-and-braces Sentry capture. FastApiIntegration normally
+    # catches exceptions that bubble OUT of the request handler, but
+    # if a generator inside a StreamingResponse raises after the
+    # response started, ASGI middleware has already eaten the
+    # exception by the time it reaches us — the integration misses
+    # it. Calling capture_exception here means the user always
+    # gets a Sentry event, even on those edge cases. No-op when
+    # SENTRY_DSN isn't set.
+    try:
+        import sentry_sdk
+        sentry_sdk.capture_exception(exc)
+    except ImportError:
+        # sentry-sdk not installed → fall through silently. We
+        # already logged the traceback above.
+        pass
     return _JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},
