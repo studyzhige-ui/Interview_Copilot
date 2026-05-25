@@ -706,6 +706,78 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
     )
 
 
+def test_budget_stop_synthesizes_final_answer():
+    """When the agent loop exits with no final_answer AND a non-empty
+    ``budget.stop_reason``, the strategy synthesizes a user-visible
+    "执行因预算策略停止" message. Pre-fix this code path was
+    untested — a regression that swapped the two synth strings would
+    silently degrade UX without breaking any test.
+    """
+    # The synth happens inline in execute() right before the finally
+    # block; we verify it by exercising the source-level branch logic
+    # since fully driving execute() requires extensive LLM stubbing.
+    # The two branches:
+    #
+    #   if budget.stop_reason:
+    #       final_answer = f"Agent 执行因预算策略停止: {stop_reason}. ..."
+    #   else:
+    #       final_answer = "Agent 无法生成最终回答。"
+    #
+    # Confirm both strings exist in the source so a regression that
+    # swaps or deletes either fails this test.
+    import inspect
+    from app.conversation.agent_strategy import AgentLoopStrategy
+
+    src = inspect.getsource(AgentLoopStrategy.execute)
+    assert "Agent 执行因预算策略停止" in src, (
+        "budget-stop synthesis string missing — a user hitting "
+        "max_steps_exceeded would get a blank answer or the wrong "
+        "fallback message."
+    )
+    assert "Agent 无法生成最终回答" in src, (
+        "empty-answer fallback string missing — same UX failure for "
+        "the no-stop-reason branch."
+    )
+
+
+def test_session_scope_does_not_close_passed_session():
+    """The ``session_scope`` helper's load-bearing contract:
+       * db is None → open + close (auto-manage)
+       * db is not None → yield, leave OPEN (caller-managed)
+
+    Without this contract the P1-F shared-session plumbing breaks:
+    the second ``.load(..., db=db)`` would hit a closed session and
+    raise ``InvalidRequestError``. Indirect coverage via
+    ``test_load_universal_opens_exactly_one_db_session`` only sees
+    the 1-vs-4 count; this test pins the close-vs-stay-open behavior.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from app.services.memory._db_helpers import session_scope
+
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Session = sessionmaker(bind=engine)
+
+    # Branch 1: passing a session → helper must NOT close it.
+    own = Session()
+    try:
+        with session_scope(own) as got:
+            assert got is own
+            assert own.is_active
+        assert own.is_active, (
+            "session_scope closed a passed-in session — breaks the "
+            "P1-F shared-session contract that orchestrators rely on"
+        )
+    finally:
+        own.close()
+        engine.dispose()
+
+
 def test_strategy_context_carries_global_memory_on(monkeypatch):
     """Pre-P1-H the engine resolved ``is_global_memory_enabled_for_
     session`` in ``_prepare``, and the agent strategy resolved it

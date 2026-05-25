@@ -373,6 +373,11 @@ class ConversationEngine:
                 completion_tokens=self._result.completion_tokens,
                 retrieval_attempted=self._retrieval_attempted,
                 retrieval_hit=self._retrieval_hit,
+                # L2 strategy populates these (budget stop reason +
+                # agent_runs row id); empty/None on L1. Pulled from
+                # result so the post-mortem trail covers both paths.
+                stop_reason=self._result.stop_reason,
+                run_id=self._result.extras.get("run_id", ""),
             )
         )
 

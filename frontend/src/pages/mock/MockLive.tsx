@@ -97,14 +97,27 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, on
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [turns]);
 
-  // Speak the opening question once on mount when voice is on.
+  // Speak the opening once on mount when voice is on.
+  //
+  // The backend's ``/answer`` endpoint hands the FE a single
+  // ``interviewer_response`` = ``spoken_response + "\n\n" +
+  // next_question`` so the answer-turn TTS speaks both pieces. But
+  // ``/start`` and ``/question`` return them as SEPARATE
+  // ``spoken_response`` + ``question`` fields. Pre-fix this effect
+  // only spoke ``question``, dropping the spoken pre-amble — so the
+  // resume-from-/question path was audibly inconsistent with the
+  // answer-turn path. Concatenate them here so the opening flow
+  // matches the answer flow's TTS shape.
   const spokeInitialRef = useRef(false);
   useEffect(() => {
     if (spokeInitialRef.current) return;
     if (!ttsActive) return;
     if (!initialQuestion.question) return;
     spokeInitialRef.current = true;
-    void tts.speak(initialQuestion.question);
+    const parts: string[] = [];
+    if (initialQuestion.spoken_response) parts.push(initialQuestion.spoken_response);
+    parts.push(initialQuestion.question);
+    void tts.speak(parts.join('\n\n'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ttsActive]);
 

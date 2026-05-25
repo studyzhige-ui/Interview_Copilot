@@ -51,7 +51,31 @@ logger = logging.getLogger(__name__)
 # ``raw.usage`` when the SDK exposes it (the agent strategy reads
 # ``chunk.usage.prompt_tokens`` directly — chat strategy's streaming
 # completion shape doesn't surface usage so we tokenize locally).
-_TIKTOKEN_ENC = tiktoken.get_encoding("cl100k_base")
+#
+# Hardened against offline boot: ``tiktoken.get_encoding`` downloads
+# BPE data from OpenAI's CDN on first call when no local cache file
+# exists. On a brand-new deploy with no network access, this raises
+# at import time — which would crash the entire FastAPI app boot
+# (every chat-router import path imports this module transitively).
+# The try/except falls back to a None sentinel; ``execute()`` checks
+# for it and uses a heuristic char-based estimate as a degraded mode.
+try:
+    _TIKTOKEN_ENC: tiktoken.Encoding | None = tiktoken.get_encoding("cl100k_base")
+except Exception as _exc:  # noqa: BLE001 — network / disk / version
+    logger.warning(
+        "tiktoken encoder unavailable at import (%s); token counts "
+        "will use a char-length heuristic instead", _exc,
+    )
+    _TIKTOKEN_ENC = None
+
+
+def _count_tokens(text: str) -> int:
+    """Tiktoken count when available; else a ~3-chars-per-token
+    heuristic (typical English / mixed-language ratio; coarse but
+    non-zero so telemetry isn't blank in degraded mode)."""
+    if _TIKTOKEN_ENC is not None:
+        return len(_TIKTOKEN_ENC.encode(text))
+    return max(1, len(text) // 3) if text else 0
 
 
 DIRECT_SYSTEM_RULES = """You are Interview Copilot, a concise technical interview assistant.
@@ -115,8 +139,9 @@ class ChatPipelineStrategy:
         # Per-turn token estimate via local tiktoken — no global state,
         # no race with concurrent turns. See module docstring for why
         # we don't use Settings.callback_manager's TokenCountingHandler.
-        result.prompt_tokens = len(_TIKTOKEN_ENC.encode(prompt))
-        result.completion_tokens = len(_TIKTOKEN_ENC.encode(final_answer))
+        # Falls back to a heuristic when tiktoken couldn't load.
+        result.prompt_tokens = _count_tokens(prompt)
+        result.completion_tokens = _count_tokens(final_answer)
 
 
 __all__ = ["ChatPipelineStrategy"]

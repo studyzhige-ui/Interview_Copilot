@@ -88,6 +88,29 @@ def test_legacy_session_state_key_is_honoured(engine_and_session, monkeypatch):
     assert is_global_memory_enabled_for_session("s1", "alice") is True
 
 
+def test_legacy_session_state_off_overrides_user_default_on(engine_and_session, monkeypatch):
+    """The legacy key must DOWN-grade as well as UP-grade — a buggy
+    implementation that returned ``None`` for explicit-false values
+    would silently flip user_default=True back ON for everyone with
+    an old session-level OFF override. Symmetric to
+    ``test_legacy_session_state_key_is_honoured`` (which pinned the
+    True override winning); this pins the False override winning.
+    """
+    from app.services.memory.recall_policy import (
+        is_global_memory_enabled_for_session,
+    )
+
+    engine, Session = engine_and_session
+    _rebind(monkeypatch, Session)
+    _seed(
+        Session,
+        user_default=True,                              # user-level says ON
+        session_state={"memory_recall_enabled": False}, # legacy override says OFF
+    )
+
+    assert is_global_memory_enabled_for_session("s1", "alice") is False
+
+
 def test_new_key_takes_precedence_over_legacy(engine_and_session, monkeypatch):
     """When both keys are present (mid-migration edge case) the
     canonical ``global_memory_enabled`` wins."""
