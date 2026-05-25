@@ -278,3 +278,66 @@ export interface AnalyzeDispatchResp {
   record_id: string;
   task_id: string;
 }
+
+// ── v3 memory ──────────────────────────────────────────────────────────
+// Mirrors backend/app/api/chat/memory_items.py. The four v3 doc types
+// (user_profile, knowledge, strategy, habit) replace the retired
+// ``memory_items`` table.
+
+export type MasteryLevel = 'weak' | 'progressing' | 'strong' | 'unknown';
+
+export interface KnowledgeTopicSummary {
+  topic: string;
+  one_liner: string | null;
+  mastery_level: MasteryLevel | null;
+  /** Number of bullet-list "- ..." lines in the body. Use as a
+   *  "richness" hint when listing topics. */
+  fact_count: number;
+  last_discussed_at: string | null;
+  updated_at: string | null;
+}
+
+export interface KnowledgeTopicDetail extends KnowledgeTopicSummary {
+  body: string;
+  created_at: string | null;
+}
+
+export interface MemoryOverviewResp {
+  /** User profile doc body (markdown). Empty string when not yet seeded. */
+  user_profile_body: string;
+  knowledge_topics: KnowledgeTopicSummary[];
+  strategy_body: string;
+  habit_body: string;
+}
+
+export type MemoryDocType = 'user_profile' | 'knowledge' | 'strategy' | 'habit';
+
+export type MemoryChangeType =
+  | 'patch_realtime'
+  | 'patch_dreaming'
+  | 'user_edit'
+  | 'user_delete'
+  | 'migration';
+
+export interface MemoryAuditEntry {
+  id: string;
+  doc_type: MemoryDocType;
+  topic: string | null;
+  change_type: MemoryChangeType;
+  summary: string;
+  source_record_id: string | null;
+  source_session_id: string | null;
+  created_at: string | null;
+}
+
+export interface MemoryAuditDetail extends MemoryAuditEntry {
+  before_body: string;
+  after_body: string;
+}
+
+export interface MemoryAuditListResp {
+  total: number;
+  limit: number;
+  offset: number;
+  entries: MemoryAuditEntry[];
+}

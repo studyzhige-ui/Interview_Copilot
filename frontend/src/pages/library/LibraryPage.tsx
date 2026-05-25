@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Upload, Search, Pencil, Trash2, FileText, RefreshCw,
-  ChevronLeft, ChevronRight, ArrowDown, ArrowUp,
+  ChevronLeft, ChevronRight, ArrowDown, ArrowUp, Folder, Brain,
 } from 'lucide-react';
 import { Btn } from '@/components/ui/Btn';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -18,6 +18,9 @@ import {
   uploadKnowledgeFile,
 } from '@/api/knowledge';
 import type { KnowledgeCategory, KnowledgeDoc } from '@/types/api';
+import { MemoryTab } from './MemoryTab';
+
+type TopTab = 'files' | 'memory';
 
 // Fixed set of user-selectable categories. Picking 简历/面试题库/官方文档 as
 // the canonical labels per spec; backend still accepts any string.
@@ -64,6 +67,54 @@ function humanSize(n: number | null): string {
 }
 
 export function LibraryPage() {
+  // Top-level tab: 文件 (uploaded knowledge docs) vs 记忆 (v3 memory browser).
+  // The memory tab is its own component so this file stays focused on the
+  // file-CRUD flow; both share the page header + tab bar below.
+  const [tab, setTab] = useState<TopTab>('files');
+  return (
+    <div className="p-6 max-w-6xl mx-auto">
+      <div className="flex items-center gap-3 mb-4">
+        <h2 className="text-xl font-semibold text-stone-800">个人资料库</h2>
+        <div className="ml-3 inline-flex items-center gap-1 p-0.5 bg-stone-100 rounded-lg">
+          <TopTabBtn active={tab === 'files'}  icon={<Folder size={13} />} onClick={() => setTab('files')}>
+            文件
+          </TopTabBtn>
+          <TopTabBtn active={tab === 'memory'} icon={<Brain size={13} />}  onClick={() => setTab('memory')}>
+            记忆
+          </TopTabBtn>
+        </div>
+      </div>
+      {tab === 'files'  && <FilesSection />}
+      {tab === 'memory' && <MemoryTab />}
+    </div>
+  );
+}
+
+function TopTabBtn({
+  active, icon, children, onClick,
+}: {
+  active: boolean;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={[
+        'inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-sm',
+        active
+          ? 'bg-white text-primary-700 shadow-xs font-medium'
+          : 'text-stone-600 hover:text-stone-800',
+      ].join(' ')}
+    >
+      {icon}
+      {children}
+    </button>
+  );
+}
+
+function FilesSection() {
   const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
   const [cats, setCats] = useState<KnowledgeCategory[]>([]);
   const [filter, setFilter] = useState<string>('');
@@ -193,9 +244,8 @@ export function LibraryPage() {
   const pageItems = processed.slice(pageStart, pageStart + PAGE_SIZE);
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <>
       <div className="flex items-center gap-3 mb-4">
-        <h2 className="text-xl font-semibold text-stone-800">个人资料库</h2>
         <span className="text-xs text-stone-400">{processed.length} 条</span>
         <div className="ml-auto flex items-center gap-2">
           <button
@@ -446,7 +496,7 @@ export function LibraryPage() {
         onConfirm={onConfirmDelete}
         onCancel={() => setDeleting(null)}
       />
-    </div>
+    </>
   );
 }
 
