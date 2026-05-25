@@ -76,11 +76,32 @@ export interface ToolDoneInfo {
   is_error: boolean;
 }
 
+/**
+ * Agent-mode budget snapshot — emitted exactly once per turn by
+ * AgentReActStrategy when the run completes (success or budget-stop).
+ * Mirrors ``AgentBudget.to_dict()`` + the ``run_id`` injection in
+ * backend/app/conversation/agent_strategy.py:228-229.
+ *
+ * All fields are always present on the wire — the backend never omits
+ * one, so callers may treat them as required (the wire→type cast in
+ * ``streamChatSSE`` trusts this).
+ */
 export interface BudgetInfo {
-  /** Agent run id, surfaced for trace deep-links. */
-  run_id?: string;
-  /** Free-form payload from HarnessEvent.budget(...). */
-  [key: string]: unknown;
+  /** Agent run id, surfaced so the UI can deep-link to the
+   *  /agent/runs trace viewer (developer-only — no user UI yet). */
+  run_id: string;
+  /** ReAct steps consumed this turn. */
+  steps: number;
+  /** Total tool calls dispatched this turn. */
+  tool_calls: number;
+  /** Sum of prompt tokens across all step LLM calls. */
+  prompt_tokens: number;
+  /** Sum of completion tokens across all step LLM calls. */
+  completion_tokens: number;
+  /** Wall-clock SECONDS spent in this turn. NB: the outer
+   *  ``HarnessEvent.elapsed_ms`` is milliseconds; this nested
+   *  ``elapsed_s`` is seconds (per AgentBudget.to_dict). */
+  elapsed_s: number;
 }
 
 export interface StreamChatHandlers {
@@ -183,7 +204,12 @@ export async function streamChatSSE(
             });
             break;
           case 'budget':
-            handlers.onBudget?.(data as BudgetInfo, step);
+            // Wire→type cast: the backend's AgentBudget.to_dict() always
+            // emits every BudgetInfo field, so we trust the shape. TS
+            // requires the ``unknown`` hop because BudgetInfo's required
+            // fields don't structurally overlap with the generic
+            // ``Record<string, unknown>`` form of the parsed JSON.
+            handlers.onBudget?.(data as unknown as BudgetInfo, step);
             break;
           case 'error':
             // Throw so the caller's .catch() handles it — also lets the

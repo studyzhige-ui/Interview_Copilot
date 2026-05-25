@@ -22,7 +22,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Send, Paperclip, Bot, MessageSquare, Sparkles, ChevronDown,
-  Plus, Pencil, X as XIcon, Check, Brain, Wrench, ChevronRight,
+  Plus, Pencil, X as XIcon, Square, Brain, Wrench, ChevronRight,
   CheckCircle2, AlertCircle,
 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -535,6 +535,22 @@ export function ChatPanel({
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   };
 
+  /**
+   * Abort the in-flight stream for the active session. Fires the
+   * AbortController that ``send()`` registered on the runtime; the
+   * SSE reader's ``fetch`` rejects with AbortError, the promise's
+   * ``.catch`` falls into the abort branch, and ``finalize()`` runs
+   * normally — so anything streamed so far becomes the assistant
+   * message and the panel is ready for the next turn.
+   *
+   * No-op when no session is selected or no stream is in flight.
+   */
+  const cancel = useCallback(() => {
+    if (!activeSessionId) return;
+    const rt = runtimes.current.get(activeSessionId);
+    rt?.abort?.abort();
+  }, [activeSessionId]);
+
   // ── Model picker ────────────────────────────────────────────────────
   const activeRole: ModelRole = mode === 'AGENT' ? 'agent' : 'primary';
   const activeProfileId = selection[activeRole];
@@ -925,13 +941,29 @@ export function ChatPanel({
             rows={2}
             className="flex-1 resize-none border border-stone-200 rounded-lg px-3 py-2 text-[13px] outline-none focus:border-primary-300 bg-stone-50 text-stone-800 disabled:opacity-50"
           />
-          <button
-            onClick={send}
-            disabled={!activeSessionId || !input.trim() || streaming}
-            className="w-9 h-9 rounded-lg bg-primary-500 text-white hover:bg-primary-600 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {streaming ? <Check size={14} /> : <Send size={14} />}
-          </button>
+          {streaming ? (
+            <button
+              onClick={cancel}
+              title="停止生成（保留已生成的部分）"
+              aria-label="停止生成"
+              className="w-9 h-9 rounded-lg bg-danger-500 text-white hover:bg-danger-700 flex items-center justify-center"
+            >
+              {/* Filled square = the canonical "stop streaming" affordance
+                  shared with every other modern chat UI (ChatGPT, Claude,
+                  Gemini). Click → AbortController.abort() → fetch aborts
+                  → ``finalize()`` flushes the partial bubble as the
+                  assistant message. */}
+              <Square size={12} fill="currentColor" />
+            </button>
+          ) : (
+            <button
+              onClick={send}
+              disabled={!activeSessionId || !input.trim()}
+              className="w-9 h-9 rounded-lg bg-primary-500 text-white hover:bg-primary-600 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Send size={14} />
+            </button>
+          )}
         </div>
       </div>
     </aside>
