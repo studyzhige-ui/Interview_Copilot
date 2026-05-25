@@ -59,23 +59,138 @@ import app.agent_runtime.tools  # noqa: F401
 logger = logging.getLogger(__name__)
 
 
-SYSTEM_PROMPT = """你是 Interview Copilot 的执行 Agent。你的职责是帮助用户完成面试准备的复杂任务。
+SYSTEM_PROMPT = """你是 Interview Copilot 的执行 Agent，帮助用户完成面试准备相关的复杂任务。
 
-你了解用户的背景（简历、面试历史、记忆），能够：
+# 工作原则
+
+## 1. 先想清楚再调工具，不要盲调
+- 收到用户问题，先判断：用户的问题真的需要工具吗？需要哪个？
+- **工具是数据增强，不是知识替代**。你的训练知识本身就涵盖了大量信息（公司、技术栈、框架对比、最佳实践、面经常见题……）。能直接答的就直接答，工具只用于补充你不知道的、时效性强的、用户私有的数据。
+- 「我想做 agent 开发，哪些公司在招」→ 即使 search_jobs 返回 0 条，也要用你训练数据里的知识列出 OpenAI / Anthropic / Cognition / Adept / Sierra / Imbue 等，配上每家的方向特点。**不要**因为工具没数据就不答了。
+- 「帮我分析这道题」→ 直接答，不用调任何工具
+- 「我之前讨论过的 Redis 你还记得吗」→ 调 recall_memory（关闭全局记忆时此工具不会出现在你的 manifest 里）
+- 反例（不要做）：一收到问题就并发调 read_resume + read_interview_history + recall_memory + search_jobs。这样既慢又浪费 token，还会让用户看到一堆「0 条结果」的卡片。
+
+## 2. 工具失败 ≠ 任务失败 —— 永远要给用户有用的答复
+
+工具会因为各种原因失败或返回空：
+- 用户还没上传简历 / 没有面试历史 / 知识库为空
+- 外部 API 没配密钥（search_jobs、web_search）
+- 网络问题、限流
+
+**绝对不要**因为工具失败就放弃。正确做法：
+- 基于你已知的领域知识 + 部分工具结果，给用户一个**还不错的回答**
+- 用**友善的语气**说明哪些信息缺失，提供具体的下一步建议
+- 例如 search_jobs 返回 0 条 → 用你自己掌握的"哪些公司招 agent 开发"知识答题，并友善提示「Lever 公司列表配上后可以拉到实时职位」
+
+## 3. 失败信息的友好转译
+
+- ❌ "工具调用失败，请重试"  ← 用户看了一脸懵
+- ✅ "我没找到你的简历的结构化版本，但看到资料库里有一份 PDF —— 我可以基于通用建议先答，或者你可以告诉我你的背景关键词（学校 / 工作经验 / 技术栈），我能更精准。"
+
+- ❌ "No resume found"  ← 直译报错
+- ✅ "看起来还没上传过简历。上传到「资料库 → 文件」之后我能给更个性化的分析。先从通用角度聊聊？"
+
+## 4. 工具返回 disabled / 工具不可见 / 工具失败时的处理
+
+- 工具返回 `{"disabled": true, "reason": ...}`：尊重它，不要再调，按用户本会话上下文继续
+- 工具不在你的 manifest 里：说明该功能未启用，不要假装会用
+- 工具抛错：先看 error 信息，常见原因（无数据、未配置）友好转译给用户
+
+## 5. 关于工具组合
+
+如果一个工具结果不够，**主动**用其它工具补：
+- read_resume 说"有 PDF 但没解析"→ 调 search_knowledge 带"工作经历"/"教育背景"查 PDF 内容
+- search_jobs 返回 0 条 → 试 web_search 用「AI Agent 工程师 招聘」等关键词
+- read_url 拿到 JD → 配合 read_resume / search_knowledge 做差距分析
+
+## 6. 你能做的事
+
 - 分析岗位要求（JD）与用户能力的差距
 - 基于面试历史识别薄弱环节并制定学习计划
 - 搜索互联网获取面经、公司信息、技术资料
 - 从知识库检索八股文和技术文档
-- 将重要发现存入用户记忆供未来参考
+- 把重要结论 save_memory 存起来（仅当全局记忆开启）
 - 导出结构化的分析报告和学习笔记为文件
 
-规则：
-- 先了解用户当前状态（简历、面试历史），再给建议
-- 使用工具获取真实数据，不要编造
-- 输出结构化的、可执行的建议
-- 如果信息不足，明确告诉用户缺什么
-- 将重要结论和发现用 save_memory 存储
+# 输出规则
+
+- 用结构化的、可执行的建议
+- 不要编造工具没返回的数据
+- 不要以「我失败了，请重试」结尾 —— 永远给用户**至少一个可以立刻做的下一步**
+- 如果用户问的是知识 / 概念问题，直接答，不要绕一大圈调工具
 """
+
+
+def _build_graceful_fallback(
+    blocks: list[dict[str, Any]],
+    error_message: str,
+) -> str:
+    """Construct a user-facing message when the agent loop crashed.
+
+    Pre-fix behaviour: any exception in the inner loop produced a
+    flat "Agent 执行失败，请稍后重试" string, discarding every tool
+    call's worth of context the user just watched run. That's the
+    failure mode the user called out — 4 tools fired, then a generic
+    dead-end message. New behaviour:
+
+    1. If any text block was emitted before the crash, surface it
+       (the LLM did say SOMETHING useful).
+    2. Summarise which tools ran and what they returned (success /
+       empty / error) — at minimum the user knows what was attempted.
+    3. Close with a friendly suggestion + the raw error in a small
+       debug note (not at the top, not the headline).
+
+    The intent: never leave the user with a content-less "I failed"
+    bubble. There's always something to say.
+    """
+    parts: list[str] = []
+    text_blocks = [b for b in blocks if b.get("type") == "text" and b.get("text")]
+    tool_use_blocks = [b for b in blocks if b.get("type") == "tool_use"]
+    tool_result_blocks = [b for b in blocks if b.get("type") == "tool_result"]
+
+    if text_blocks:
+        # The LLM produced reasoning text before crashing — that's
+        # likely the bulk of a useful answer. ``str()`` wrap is a
+        # defensive guard against an unexpected non-string ``text``
+        # field (the loop itself only ever writes strings, but block
+        # shapes can drift over time).
+        parts.append(str(text_blocks[-1].get("text") or "").strip())
+
+    if tool_use_blocks:
+        tool_names = ", ".join(
+            sorted({b.get("name", "?") for b in tool_use_blocks})
+        )
+        empty_or_error = sum(
+            1 for b in tool_result_blocks
+            if b.get("is_error") or "未找到" in (b.get("summary") or "")
+            or "0 条" in (b.get("summary") or "")
+            or "⊘" in (b.get("summary") or "")
+        )
+        parts.append(
+            f"\n\n---\n本轮我已尝试调用：{tool_names}"
+            + (
+                f"（其中 {empty_or_error} 个未返回有效数据）"
+                if empty_or_error else ""
+            )
+            + "。"
+        )
+
+    # Friendly close — never blame the user.
+    parts.append(
+        "\n\n执行链路中途断开，没能完整跑完。可以再发一次相同的问题让我重试，"
+        "或者把问题拆得更具体一点 —— 比如直接给关键词 / 公司名 / 技术方向，"
+        "通常能跳过工具直接答。"
+    )
+
+    # Last: a small dev-debug line (kept short — users will see it
+    # but it's not the headline). Strip backticks so an error message
+    # containing them doesn't break the surrounding markdown code-span.
+    safe_err = (error_message or "")[:200].replace("`", "'")
+    parts.append(f"\n\n_错误详情_: `{safe_err}`")
+
+    body = "".join(parts).strip()
+    return body or "执行过程中断，请稍后重试。"
 
 
 class AgentLoopStrategy:
@@ -99,7 +214,27 @@ class AgentLoopStrategy:
         budget = AgentBudget(started_at=time.perf_counter())
         client, profile = build_async_openai_client_for_role("agent")
         compactor = QueryLoopCompactor(profile=profile)
-        tool_schemas = registry.get_openai_schemas()
+
+        # Per-turn tool gating. When the global-memory toggle is OFF
+        # for this session, drop ``recall_memory`` and ``save_memory``
+        # from the LLM's tool manifest entirely (Claude Code's
+        # ``isAutoMemoryEnabled=false`` semantics). The pre-fix
+        # behaviour kept them visible so the LLM "wouldn't be confused
+        # by an asymmetric tool list" — but in practice the LLM
+        # eagerly called them, got back a 273-char ``disabled`` refusal,
+        # and the user saw a noisy "✅ 完成 (273 chars)" card for what
+        # was really a no-op. Hiding the tools is the honest signal.
+        from app.services.memory.recall_policy import (
+            is_global_memory_enabled_for_session,
+        )
+        global_memory_on = is_global_memory_enabled_for_session(
+            ctx.session_id, ctx.user_id,
+        )
+        excluded_tools: set[str] = (
+            set() if global_memory_on else {"recall_memory", "save_memory"}
+        )
+        tool_schemas = registry.get_openai_schemas(exclude=excluded_tools)
+        manifest_text = registry.format_manifest(exclude=excluded_tools)
 
         # Persistent trace surface (developer view) lives in agent_runs/
         # agent_steps. The user-facing transcript with content_blocks
@@ -131,7 +266,7 @@ class AgentLoopStrategy:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "system", "content": (
-                f"Available tools:\n{registry.format_manifest()}\n\n"
+                f"Available tools:\n{manifest_text}\n\n"
                 f"Conversation context:\n{grounding_text or 'No context.'}"
             )},
             {"role": "user", "content": ctx.user_message},
@@ -170,7 +305,18 @@ class AgentLoopStrategy:
         except Exception as exc:
             status = "failed"
             error_message = str(exc)
-            final_answer = "Agent 执行失败，请稍后重试。"
+            # Don't end on a dead "请稍后重试" — that throws away every
+            # tool call the user just watched run. If we have any
+            # accumulated text or tool results, render a graceful
+            # partial-answer fallback referencing them. The LLM can't
+            # be called again from inside an except block (the client
+            # might be in a bad state), but we can deterministically
+            # build a message that's strictly better than a generic
+            # "I failed".
+            final_answer = _build_graceful_fallback(
+                blocks=blocks,
+                error_message=str(exc),
+            )
             logger.error("AgentLoopStrategy crashed: %s", exc)
             await append_step(
                 run_id=run_id, step_index=budget.steps + 1,

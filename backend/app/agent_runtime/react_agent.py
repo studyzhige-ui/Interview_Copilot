@@ -119,9 +119,29 @@ def _args_summary(raw_args: str) -> str:
 
 
 def _result_summary(observation: dict[str, Any]) -> str:
-    """Short summary of tool result for event display."""
+    """Short, HONEST summary of a tool result for event display.
+
+    Order matters — check the "negative" signals first (disabled,
+    error) so they never fall through to a misleading "✅ 完成 (N
+    chars)" line. Pre-fix screenshot: ``recall_memory`` returning
+    ``{"disabled": true, "reason": "用户已关闭…"}`` rendered as
+    "✅ 完成 (273 chars)" — the 273 chars were the JSON of the
+    refusal payload. That looked like success to the user.
+    """
+    # Privacy/gate refusal — tool returned a structured "I won't run"
+    # payload (recall_memory / save_memory under global-memory off).
+    if observation.get("disabled") is True:
+        reason = observation.get("reason") or "已禁用"
+        return f"⊘ {str(reason)[:100]}"
+
+    # Hard error from the handler.
     if "error" in observation:
         return f"❌ {observation['error']}"
+
+    # Empty-result patterns — surface them so the LLM (and the user)
+    # see "0 条" without ambiguity. (Previously a 0-count could fall
+    # through to the byte-counter fallback and look like a successful
+    # "完成" payload — the dedicated branch below fixes that.)
     if "count" in observation:
         return f"返回 {observation['count']} 条结果"
     if "content" in observation:

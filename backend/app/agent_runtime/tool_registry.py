@@ -150,11 +150,27 @@ class ToolRegistry:
             entries.append(entry)
         return entries
 
-    def get_openai_schemas(self, toolset: str = "default") -> list[dict[str, Any]]:
-        """Build OpenAI function-calling schemas for the specified toolset."""
+    def get_openai_schemas(
+        self,
+        toolset: str = "default",
+        *,
+        exclude: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Build OpenAI function-calling schemas for the specified toolset.
+
+        ``exclude`` removes tools by name AFTER the ``check_fn`` filter.
+        The agent strategy uses this to hide memory tools when the
+        global-memory toggle is off — Claude Code's
+        ``isAutoMemoryEnabled=false`` semantics, kept symmetric with
+        :meth:`format_manifest` so the LLM never sees a tool in the
+        manifest that's missing from the schemas (or vice versa).
+        """
         self._ensure_default_tools_loaded()
+        exclude = exclude or set()
         schemas = []
         for entry in self._entries.values():
+            if entry.name in exclude:
+                continue
             if entry.check_fn is not None and not entry.check_fn():
                 continue
             schemas.append(
@@ -162,11 +178,19 @@ class ToolRegistry:
             )
         return schemas
 
-    def format_manifest(self) -> str:
-        """Human-readable tool manifest for the system prompt."""
+    def format_manifest(self, *, exclude: set[str] | None = None) -> str:
+        """Human-readable tool manifest for the system prompt.
+
+        ``exclude`` filters by name — must match the same set passed to
+        :meth:`get_openai_schemas` so the schemas and the manifest
+        always agree about which tools the LLM is allowed to call.
+        """
         self._ensure_default_tools_loaded()
+        exclude = exclude or set()
         manifest = []
         for entry in self._entries.values():
+            if entry.name in exclude:
+                continue
             if entry.check_fn is not None and not entry.check_fn():
                 continue
             schema = _pydantic_to_openai_schema(entry.name, entry.description, entry.args_model)
