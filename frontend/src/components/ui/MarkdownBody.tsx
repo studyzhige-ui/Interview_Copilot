@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -10,8 +11,16 @@ import remarkGfm from 'remark-gfm';
  *
  * No `rehype-raw` / no `dangerouslySetInnerHTML` — assistant content is
  * treated as plain markdown text only.
+ *
+ * Wrapped in ``React.memo``: ChatPanel triggers a re-render on every
+ * SSE text_delta (~50/sec for a fast LLM). Without memo, every visible
+ * bubble's MarkdownBody re-parses its (unchanged) source. With memo +
+ * stable ``source`` prop, only the bubble currently being streamed
+ * actually re-parses; the rest short-circuit at the props check. With
+ * ~10 visible bubbles this is a 10× reduction in react-markdown work
+ * per streaming turn.
  */
-export function MarkdownBody({ source }: { source: string }) {
+function MarkdownBodyImpl({ source }: { source: string }) {
   return (
     <div className="md-body break-words">
       <ReactMarkdown
@@ -65,3 +74,5 @@ export function MarkdownBody({ source }: { source: string }) {
     </div>
   );
 }
+
+export const MarkdownBody = memo(MarkdownBodyImpl);

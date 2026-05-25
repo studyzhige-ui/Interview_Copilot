@@ -223,7 +223,29 @@ export function ChatPanel({
   // ── Per-session SSE runtime cache ────────────────────────────────────
   const runtimes = useRef<Map<string, SessionRuntime>>(new Map());
   const [tick, setTick] = useState(0);
-  const bump = useCallback(() => setTick((n) => n + 1), []);
+
+  // ``bump()`` triggers a re-render after we've mutated a runtime out-
+  // of-band (the runtimes Map is a ref, so React doesn't see writes).
+  // Pre-fix every text_delta from the SSE stream fired ``bump()``
+  // synchronously — at typical streaming rates (~50 deltas/sec for a
+  // fast LLM) with ~10 visible bubbles that drove ~500 react-markdown
+  // reparses/sec (see ``Bubble`` + ``MarkdownBody`` below). Profiler
+  // showed it pinning the main thread.
+  //
+  // Coalesce via ``requestAnimationFrame``: at most one re-render per
+  // frame (~60Hz on a typical display). Multiple ``bump()`` calls
+  // within the same frame fold into one. The visual result is
+  // identical — chunks land within one frame anyway — but render
+  // work drops by an order of magnitude.
+  const rafScheduledRef = useRef(false);
+  const bump = useCallback(() => {
+    if (rafScheduledRef.current) return;
+    rafScheduledRef.current = true;
+    requestAnimationFrame(() => {
+      rafScheduledRef.current = false;
+      setTick((n) => n + 1);
+    });
+  }, []);
   const getRuntime = useCallback((id: string): SessionRuntime => {
     let r = runtimes.current.get(id);
     if (!r) {
