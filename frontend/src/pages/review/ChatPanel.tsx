@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Spinner } from '@/components/ui/Spinner';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { MarkdownBody } from '@/components/ui/MarkdownBody';
 import { toast } from '@/store/uiStore';
 import { extractErr } from '@/api/client';
@@ -132,7 +133,37 @@ export function ChatPanel({
   const activeSessionId = externalMode ? externalSessionId : internalActiveId;
 
   // ── Chat input / mode / attachments ──────────────────────────────────
-  const [input, setInput] = useState('');
+  // Draft persists per-session in localStorage so navigating away
+  // (sidebar / different page) and back doesn't lose what the user
+  // was typing. Same pattern as ``mode`` below — pure-React state
+  // alone gets wiped on every ChatPanel unmount.
+  //
+  // We intentionally do NOT wire a ``storage`` event listener: if the
+  // user has the same session open in two tabs, typing in tab A won't
+  // live-update tab B's input. That's an acceptable edge case (dual-
+  // tabbing the same session is rare) and avoids cursor-position
+  // weirdness across tabs.
+  const draftStorageKey = activeSessionId ? `chat-draft:${activeSessionId}` : null;
+  const [input, setInputState] = useState<string>(() => {
+    if (!draftStorageKey) return '';
+    try { return localStorage.getItem(draftStorageKey) ?? ''; }
+    catch { return ''; }
+  });
+  const setInput = useCallback((next: string) => {
+    setInputState(next);
+    if (draftStorageKey) {
+      try {
+        if (next) localStorage.setItem(draftStorageKey, next);
+        else localStorage.removeItem(draftStorageKey);
+      } catch { /* quota / privacy mode */ }
+    }
+  }, [draftStorageKey]);
+  // Re-read draft when the active session changes (sidebar switch).
+  useEffect(() => {
+    if (!draftStorageKey) { setInputState(''); return; }
+    try { setInputState(localStorage.getItem(draftStorageKey) ?? ''); }
+    catch { /* ignore */ }
+  }, [draftStorageKey]);
   // Mode is persisted per-session in localStorage — without this the
   // user's AGENT pill resets to CHAT every time they refresh, and the
   // backend silently downgrades the strategy back to L1. We key by
@@ -376,21 +407,42 @@ export function ChatPanel({
     } finally { setCreating(false); }
   }, [externalMode, interviewId, sessionType, creating, sessions.length]);
 
-  const removeChat = useCallback(async (id: string) => {
+  // Pending delete confirmation. We render a styled <ConfirmDialog>
+  // instead of the unstyled native window.confirm (which shows up as
+  // a "Code" titled OS dialog — looks like a Chrome extension popup
+  // and feels off-brand). ``pendingDelete`` carries both id and title
+  // so the dialog body can name the session being deleted.
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; title: string } | null>(null);
+  const [deletingChat, setDeletingChat] = useState(false);
+
+  const removeChat = useCallback((id: string) => {
     if (externalMode) return;
-    if (!window.confirm('确定删除这段会话？所有消息会被永久删除。')) return;
+    const s = sessions.find((x) => x.session_id === id);
+    setPendingDelete({ id, title: s?.title ?? '该会话' });
+  }, [externalMode, sessions]);
+
+  const confirmRemoveChat = useCallback(async () => {
+    if (!pendingDelete) return;
+    const id = pendingDelete.id;
+    setDeletingChat(true);
     try {
       await deleteChatSession(id);
       const r = runtimes.current.get(id);
       r?.abort?.abort();
       runtimes.current.delete(id);
+      // Clean up the persisted draft + mode for the dead session so
+      // localStorage doesn't accumulate orphaned keys.
+      try { localStorage.removeItem(`chat-draft:${id}`); } catch { /* ignore */ }
+      try { localStorage.removeItem(`chat-mode:${id}`); } catch { /* ignore */ }
       setSessions((s) => {
         const next = s.filter((x) => x.session_id !== id);
         if (internalActiveId === id) setInternalActiveId(next[0]?.session_id ?? null);
         return next;
       });
+      setPendingDelete(null);
     } catch (e) { toast.error(extractErr(e, '删除会话失败')); }
-  }, [externalMode, internalActiveId]);
+    finally { setDeletingChat(false); }
+  }, [pendingDelete, internalActiveId]);
 
   const commitRename = useCallback(async () => {
     if (!renaming) return;
@@ -1004,6 +1056,25 @@ export function ChatPanel({
           )}
         </div>
       </div>
+
+      {/* Styled delete confirmation — replaces the off-brand native
+          window.confirm() that showed "Code" as its dialog title.
+          Same ConfirmDialog component used by the Library page and
+          the Memory tab, so the visual language stays consistent. */}
+      <ConfirmDialog
+        open={!!pendingDelete}
+        danger
+        title="删除对话"
+        description={
+          pendingDelete
+            ? `确定删除「${pendingDelete.title}」？该对话下的所有消息将被永久删除，不可恢复。`
+            : ''
+        }
+        confirmText="删除"
+        loading={deletingChat}
+        onConfirm={() => { void confirmRemoveChat(); }}
+        onCancel={() => { if (!deletingChat) setPendingDelete(null); }}
+      />
     </aside>
   );
 }

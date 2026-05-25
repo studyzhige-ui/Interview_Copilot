@@ -81,33 +81,106 @@ async def _read_resume_handler(args: ReadResumeArgs, ctx: AgentToolContext) -> d
         db.close()
 
     if raw_resumes:
-        # The raw PDF/DOCX is in the knowledge corpus but hasn't been
-        # split into typed sections. Tell the LLM exactly that so it
-        # can call search_knowledge for the body (the chunks live in
-        # the LlamaIndex docstore reachable via the RAG retriever).
+        # The raw PDF/DOCX lives in the knowledge corpus and was parsed
+        # into chunks (TextNodes) at upload time — the same parser the
+        # RAG retriever uses. We read those chunks DIRECTLY from the
+        # PostgresDocumentStore and concatenate them, so the LLM sees
+        # the full resume text in one shot. Previously the fallback
+        # told the LLM to call ``search_knowledge`` which returns
+        # ~5 reranked chunks × 1500 chars (carved up + filtered) —
+        # fragmented and misses sections. Direct docstore read is
+        # exactly the right primitive for "give me the user's resume".
+        from app.services.knowledge_service import json_list
+
+        # Most-recent resume is the canonical one (the user may have
+        # iterated). Tag the rest as "additional resumes available".
+        primary = raw_resumes[0]
+        primary_node_ids = json_list(primary.node_ids)
+
+        full_text = ""
+        nodes_read = 0
+        if primary_node_ids:
+            try:
+                from llama_index.storage.docstore.postgres import (
+                    PostgresDocumentStore,
+                )
+                from app.core.config import settings
+                docstore = PostgresDocumentStore.from_uri(uri=settings.DATABASE_URL)
+                pieces: list[str] = []
+                for nid in primary_node_ids:
+                    try:
+                        node = docstore.get_document(nid)
+                    except Exception:
+                        continue
+                    if node is None:
+                        continue
+                    text = getattr(node, "text", None) or getattr(node, "get_content", lambda: "")()
+                    if text:
+                        pieces.append(str(text))
+                        nodes_read += 1
+                # Concatenate chunks in the order they were stored —
+                # this is the parser's left-to-right order for a PDF,
+                # so headings stay above body paragraphs.
+                full_text = "\n\n".join(pieces)
+            except Exception as exc:  # noqa: BLE001
+                # Docstore unreachable / module not importable — fall
+                # through to a friendly hint instead of crashing the
+                # whole agent turn. The agent can still pivot via
+                # search_knowledge as a last resort.
+                full_text = ""
+                docstore_error = str(exc)
+            else:
+                docstore_error = ""
+        else:
+            docstore_error = ""
+
+        if full_text:
+            return {
+                "section_count": 0,
+                "raw_resume_available": True,
+                "source": "docstore_direct",
+                "title": primary.title,
+                "doc_id": primary.id,
+                "status": primary.status,
+                "uploaded_at": (
+                    primary.created_at.isoformat() if primary.created_at else None
+                ),
+                "node_count": nodes_read,
+                # Truncate at 18K so we stay under the tool's
+                # max_result_chars limit (raised to 20K below) with
+                # headroom for the rest of the payload's JSON
+                # overhead. Typical Chinese resumes run 2-6K chars,
+                # so this rarely truncates anything.
+                "full_text": full_text[:18000],
+                "additional_resumes": [
+                    {"title": r.title, "doc_id": r.id, "uploaded_at": (
+                        r.created_at.isoformat() if r.created_at else None
+                    )}
+                    for r in raw_resumes[1:]
+                ],
+            }
+
+        # Doc row exists but no readable chunks — likely still
+        # processing (status=processing/pending) or ingestion failed.
         return {
             "section_count": 0,
             "raw_resume_available": True,
-            "raw_uploads": [
-                {
-                    "title": r.title,
-                    "doc_id": r.id,
-                    "status": r.status,
-                    "uploaded_at": (r.created_at.isoformat() if r.created_at else None),
-                }
-                for r in raw_resumes
-            ],
-            "hint": (
-                "The user has uploaded a resume (raw file in the knowledge "
-                "corpus) but it has not been parsed into structured "
-                "sections. To read its content use ``search_knowledge`` "
-                "with queries like '工作经历', '教育背景', '技能', "
-                "'项目经验' — the RAG retriever will pull the relevant "
-                "chunks from the PDF. Do NOT tell the user 'no resume "
-                "found' — they have one."
+            "source": "docstore_empty",
+            "title": primary.title,
+            "doc_id": primary.id,
+            "status": primary.status,
+            "uploaded_at": (
+                primary.created_at.isoformat() if primary.created_at else None
             ),
-            "sections": [],
-            "formatted_text": "",
+            "hint": (
+                f"Resume '{primary.title}' is in the corpus but its "
+                f"parsed nodes aren't yet available "
+                f"(status={primary.status}). If status is 'processing' "
+                f"or 'pending', ingestion is still running — tell the "
+                f"user to wait ~30 seconds and retry. If status is "
+                f"'failed', ingestion crashed — the user should re-upload."
+                + (f" Docstore error: {docstore_error}" if docstore_error else "")
+            ),
         }
 
     # Genuinely no resume anywhere.
@@ -123,9 +196,17 @@ async def _read_resume_handler(args: ReadResumeArgs, ctx: AgentToolContext) -> d
 
 registry.register(ToolEntry(
     name="read_resume",
-    description="Read the user's uploaded resume. Returns structured sections (summary, project experience, education, skills). Use to understand user's background before giving advice.",
+    description=(
+        "Read the user's uploaded resume. Tries the parsed-sections "
+        "table first; falls back to reading the raw PDF directly from "
+        "the document store (concatenates all parsed chunks). Returns "
+        "either structured sections or ``full_text`` plus metadata."
+    ),
     args_model=ReadResumeArgs,
     handler=_read_resume_handler,
-    max_result_chars=10000,
+    # Bumped from 10K to 20K to accommodate the full-text fallback —
+    # the handler caps full_text at 18K internally, leaving headroom
+    # for the surrounding JSON envelope.
+    max_result_chars=20000,
     emoji="📄",
 ))

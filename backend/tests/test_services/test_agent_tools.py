@@ -145,6 +145,123 @@ def test_graceful_fallback_handles_empty_blocks():
     assert "network_timeout" in msg
 
 
+def test_read_resume_direct_docstore_read(monkeypatch):
+    """When the user has a resume PDF in ``knowledge_documents`` (but
+    no parsed ``resume_sections`` row yet), ``read_resume`` reads the
+    full document text DIRECTLY from the LlamaIndex PostgresDocumentStore
+    via the row's ``node_ids``. Pre-fix the tool told the LLM to use
+    search_knowledge (which returns ~5 reranked chunks of 1500 chars —
+    fragmented and partial). Direct read returns the full resume text.
+
+    Covers three branches:
+      (1) full_text returned when docstore yields nodes
+      (2) docstore_empty hint when node_ids is empty (still processing)
+      (3) docstore exception path surfaces ``Docstore error: ...``
+    """
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    from app.agent_runtime.tool_registry import AgentToolContext
+    from app.agent_runtime.tools.resume import _read_resume_handler, ReadResumeArgs
+
+    # --- Common stubs -----------------------------------------------------
+
+    # resume_service.get_sections_by_user returns [] so we always enter Tier 2.
+    monkeypatch.setattr(
+        "app.services.resume_service.resume_service.get_sections_by_user",
+        lambda user_id: [],
+    )
+
+    # Fake KnowledgeDocument rows. Branch (1) has node_ids; (2) empty list.
+    class _FakeDoc:
+        def __init__(self, *, id, title, status, node_ids, created_at=None):
+            self.id = id
+            self.title = title
+            self.status = status
+            self.node_ids = json.dumps(node_ids)
+            self.created_at = created_at
+
+    ctx = AgentToolContext(user_id="alice", session_id="s1")
+    args = ReadResumeArgs(section_types=[])
+
+    def _patch_db(doc_rows):
+        """Stub SessionLocal so the query returns the given doc_rows."""
+        class _Q:
+            def __init__(self, rows): self.rows = rows
+            def filter(self, *a, **k): return self
+            def order_by(self, *a, **k): return self
+            def all(self): return self.rows
+        class _Db:
+            def __init__(self, rows): self.rows = rows
+            def query(self, *a, **k): return _Q(self.rows)
+            def close(self): pass
+        monkeypatch.setattr(
+            "app.db.database.SessionLocal",
+            lambda: _Db(doc_rows),
+        )
+
+    # --- Branch 1: docstore yields nodes → full_text -------------------
+
+    _patch_db([_FakeDoc(
+        id="kdoc_X", title="resume.pdf", status="ready",
+        node_ids=["n1", "n2", "n3"],
+    )])
+
+    class _FakeDocstore:
+        def __init__(self, mapping): self.mapping = mapping
+        def get_document(self, nid):
+            text = self.mapping.get(nid)
+            return SimpleNamespace(text=text) if text else None
+
+    fake_store = _FakeDocstore({
+        "n1": "孙根武\n北京邮电大学",
+        "n2": "工作经历: ...",
+        "n3": "技能: Python, Rust",
+    })
+    monkeypatch.setattr(
+        "llama_index.storage.docstore.postgres.PostgresDocumentStore.from_uri",
+        classmethod(lambda cls, uri: fake_store),
+    )
+
+    result = asyncio.run(_read_resume_handler(args, ctx))
+    assert result["source"] == "docstore_direct"
+    assert result["node_count"] == 3
+    assert "孙根武" in result["full_text"]
+    assert "工作经历" in result["full_text"]
+    assert "技能" in result["full_text"]
+    # Ordering preserved (n1 before n2 before n3).
+    assert result["full_text"].index("孙根武") < result["full_text"].index("工作经历")
+
+    # --- Branch 2: empty node_ids → processing hint -------------------
+
+    _patch_db([_FakeDoc(
+        id="kdoc_Y", title="resume.pdf", status="processing",
+        node_ids=[],
+    )])
+    result = asyncio.run(_read_resume_handler(args, ctx))
+    assert result["source"] == "docstore_empty"
+    assert result["status"] == "processing"
+    assert "processing" in result["hint"].lower()
+
+    # --- Branch 3: docstore.from_uri raises → friendly error hint -----
+
+    _patch_db([_FakeDoc(
+        id="kdoc_Z", title="resume.pdf", status="ready",
+        node_ids=["n1"],
+    )])
+    def _boom(cls, uri):
+        raise RuntimeError("simulated_db_down")
+    monkeypatch.setattr(
+        "llama_index.storage.docstore.postgres.PostgresDocumentStore.from_uri",
+        classmethod(_boom),
+    )
+    result = asyncio.run(_read_resume_handler(args, ctx))
+    assert result["source"] == "docstore_empty"
+    assert "Docstore error" in result["hint"]
+    assert "simulated_db_down" in result["hint"]
+
+
 def test_tool_done_event_carries_full_result_content():
     """``tool_done`` SSE event must include ``result_content`` so the
     live tool card renders the expanded view without a refresh.
