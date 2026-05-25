@@ -9,13 +9,21 @@ export interface ListKnowledgeQuery {
   source_type?: KnowledgeSourceType;
 }
 
-export async function listKnowledgeDocuments(q: ListKnowledgeQuery = {}): Promise<KnowledgeDoc[]> {
-  const res = await apiClient.get('/knowledge/documents', { params: q });
+export async function listKnowledgeDocuments(
+  q: ListKnowledgeQuery = {},
+  opts: { signal?: AbortSignal } = {},
+): Promise<KnowledgeDoc[]> {
+  const res = await apiClient.get('/knowledge/documents', {
+    params: q,
+    signal: opts.signal,
+  });
   return res.data?.documents ?? [];
 }
 
-export async function listKnowledgeCategories(): Promise<KnowledgeCategory[]> {
-  const res = await apiClient.get('/knowledge/categories');
+export async function listKnowledgeCategories(
+  opts: { signal?: AbortSignal } = {},
+): Promise<KnowledgeCategory[]> {
+  const res = await apiClient.get('/knowledge/categories', { signal: opts.signal });
   return res.data?.categories ?? [];
 }
 

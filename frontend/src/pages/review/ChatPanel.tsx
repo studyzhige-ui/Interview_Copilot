@@ -258,13 +258,23 @@ export function ChatPanel({
       setInternalActiveId(null);
       return;
     }
+    // ``listChatSessions`` race is worse than the read-only sibling
+    // effects: if the result is empty we auto-create "会话 1", which
+    // is a SIDE EFFECT on the backend. A rapid switch from interview
+    // A → B → A could in principle land an auto-created session
+    // attached to interview A while the UI has moved on. ``alive``
+    // gates the FE write but doesn't stop the backend create from
+    // committing. ``controller.abort()`` cancels the in-flight list
+    // call, which prevents reaching the create branch in the first
+    // place.
+    const controller = new AbortController();
     let alive = true;
     (async () => {
       try {
-        const rows = await listChatSessions({
-          session_type: sessionType,
-          interview_id: interviewId,
-        });
+        const rows = await listChatSessions(
+          { session_type: sessionType, interview_id: interviewId },
+          { signal: controller.signal },
+        );
         if (!alive) return;
         if (rows.length > 0) {
           setSessions(rows);
@@ -277,6 +287,8 @@ export function ChatPanel({
         // No sessions yet → auto-create "会话 1" so the panel isn't a
         // blank slate when the user clicks into a fresh record. The user
         // can still delete this down to zero if they don't want it.
+        // ``createChatSession`` does not take an AbortSignal — the
+        // post is fast (~30ms) and idempotent enough at this scope.
         const created = await createChatSession({
           session_type: sessionType,
           interview_id: interviewId,
@@ -293,10 +305,17 @@ export function ChatPanel({
         }]);
         setInternalActiveId(created.session_id);
       } catch (e) {
+        // Suppress aborted-on-switch errors (same pattern as the
+        // transcript-load effect — ERR_CANCELED is benign).
+        const code = (e as { code?: string })?.code;
+        if (code === 'ERR_CANCELED') return;
         if (alive) toast.error(extractErr(e, '会话列表加载失败'));
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+      controller.abort();
+    };
   }, [externalMode, interviewId, sessionType]);
 
   // ── Lazy-load transcript for the active session ──────────────────────
@@ -343,11 +362,19 @@ export function ChatPanel({
   // ── Global memory: fetch resolved value on session change ────────────
   useEffect(() => {
     if (!activeSessionId) { setGlobalMemoryOn(false); return; }
+    // Same race shape as the transcript-load effect — abort on
+    // session switch so a stale response from session A can't
+    // overwrite session B's toggle state, and the backend doesn't
+    // keep materialising the abandoned response.
+    const controller = new AbortController();
     let alive = true;
-    getSessionGlobalMemory(activeSessionId)
+    getSessionGlobalMemory(activeSessionId, { signal: controller.signal })
       .then((v) => { if (alive) setGlobalMemoryOn(v); })
-      .catch(() => { /* leave at false */ });
-    return () => { alive = false; };
+      .catch(() => { /* empty / aborted on switch — both fine */ });
+    return () => {
+      alive = false;
+      controller.abort();
+    };
   }, [activeSessionId]);
 
   const toggleGlobalMemory = useCallback(async () => {

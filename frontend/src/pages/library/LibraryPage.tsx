@@ -130,6 +130,10 @@ function FilesSection() {
   const [pickCategory, setPickCategory] = useState<Category>('简历');
   const fileRef = useRef<HTMLInputElement | null>(null);
 
+  // ``refresh`` is the manual / user-triggered reload (after upload,
+  // after edit, after delete) — runs without a signal, no race
+  // because the caller initiated it. The filter-driven effect below
+  // uses its own abort-aware variant.
   const refresh = async () => {
     setLoading(true);
     try {
@@ -147,9 +151,34 @@ function FilesSection() {
   };
 
   useEffect(() => {
-    refresh();
+    // Abort on filter change — without this, switching filters
+    // rapidly could land an older filter's response into ``docs``.
+    const controller = new AbortController();
+    let alive = true;
     setPage(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setLoading(true);
+    Promise.all([
+      listKnowledgeDocuments(
+        filter ? { category: filter } : {},
+        { signal: controller.signal },
+      ),
+      listKnowledgeCategories({ signal: controller.signal }),
+    ])
+      .then(([d, c]) => {
+        if (!alive) return;
+        setDocs(d);
+        setCats(c);
+      })
+      .catch((e) => {
+        if ((e as { code?: string })?.code === 'ERR_CANCELED') return;
+        if (alive) toast.error('资料库加载失败');
+      })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => {
+      alive = false;
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- listKnowledgeCategories ignores filter
   }, [filter]);
 
   // Auto-poll while any doc is still processing/pending. This is why the
@@ -160,12 +189,28 @@ function FilesSection() {
   );
   useEffect(() => {
     if (!hasInFlight) return;
+    // Per-tick AbortController so a still-running poll request from
+    // the previous filter / interval can't land on the new state.
+    // Tracked at outer scope so the cleanup can cancel an in-flight
+    // tick when ``filter`` / ``hasInFlight`` flips.
+    let inFlightAbort: AbortController | null = null;
+    let alive = true;
     const t = setInterval(() => {
-      listKnowledgeDocuments(filter ? { category: filter } : {})
-        .then((d) => setDocs(d))
+      // Abort the prior tick if it's still pending.
+      inFlightAbort?.abort();
+      inFlightAbort = new AbortController();
+      listKnowledgeDocuments(
+        filter ? { category: filter } : {},
+        { signal: inFlightAbort.signal },
+      )
+        .then((d) => { if (alive) setDocs(d); })
         .catch(() => {});
     }, 2500);
-    return () => clearInterval(t);
+    return () => {
+      alive = false;
+      clearInterval(t);
+      inFlightAbort?.abort();
+    };
   }, [hasInFlight, filter]);
 
   const onPickFile = (f: File) => {

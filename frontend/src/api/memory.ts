@@ -39,9 +39,13 @@ export async function listKnowledgeTopics(): Promise<KnowledgeTopicSummary[]> {
   return res.data?.topics ?? [];
 }
 
-export async function getKnowledgeTopic(topic: string): Promise<KnowledgeTopicDetail> {
+export async function getKnowledgeTopic(
+  topic: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<KnowledgeTopicDetail> {
   const res = await apiClient.get(
     `/memory/knowledge/topics/${encodeURIComponent(topic)}`,
+    { signal: opts.signal },
   );
   return res.data;
 }
@@ -70,8 +74,10 @@ export async function deleteKnowledgeTopic(topic: string): Promise<void> {
 
 // ── strategy_doc + habit_doc ───────────────────────────────────────────
 
-export async function getStrategyDoc(): Promise<string> {
-  const res = await apiClient.get('/memory/strategy');
+export async function getStrategyDoc(
+  opts: { signal?: AbortSignal } = {},
+): Promise<string> {
+  const res = await apiClient.get('/memory/strategy', { signal: opts.signal });
   return String(res.data?.body ?? '');
 }
 
@@ -79,8 +85,10 @@ export async function editStrategyDoc(body: string): Promise<void> {
   await apiClient.put('/memory/strategy', { body });
 }
 
-export async function getHabitDoc(): Promise<string> {
-  const res = await apiClient.get('/memory/habit');
+export async function getHabitDoc(
+  opts: { signal?: AbortSignal } = {},
+): Promise<string> {
+  const res = await apiClient.get('/memory/habit', { signal: opts.signal });
   return String(res.data?.body ?? '');
 }
 
@@ -109,12 +117,22 @@ export interface MemoryAuditQuery {
 
 export async function listMemoryAudit(
   q: MemoryAuditQuery = {},
+  opts: { signal?: AbortSignal } = {},
 ): Promise<MemoryAuditListResp> {
-  const res = await apiClient.get('/memory/audit', { params: q });
+  const res = await apiClient.get('/memory/audit', {
+    params: q,
+    signal: opts.signal,
+  });
   return res.data;
 }
 
-export async function getMemoryAuditEntry(entryId: string): Promise<MemoryAuditDetail> {
-  const res = await apiClient.get(`/memory/audit/${encodeURIComponent(entryId)}`);
+export async function getMemoryAuditEntry(
+  entryId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<MemoryAuditDetail> {
+  const res = await apiClient.get(
+    `/memory/audit/${encodeURIComponent(entryId)}`,
+    { signal: opts.signal },
+  );
   return res.data;
 }

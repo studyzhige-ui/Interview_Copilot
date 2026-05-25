@@ -95,13 +95,25 @@ export function ReviewPage() {
 
   useEffect(() => {
     if (!activeId || isDraft(activeId)) { setDetail(null); return; }
+    // Abort the in-flight detail fetch on activeId change — same race
+    // shape as the chat-panel transcript loader. Stale writes are
+    // already gated by ``alive`` but the backend keeps materialising
+    // the abandoned response without the abort.
+    const controller = new AbortController();
     let alive = true;
     setDetailLoading(true);
-    getInterviewRecord(activeId)
+    getInterviewRecord(activeId, { signal: controller.signal })
       .then((d) => alive && setDetail(d))
-      .catch(() => alive && toast.error('记录详情加载失败'))
+      .catch((e) => {
+        // Aborted on switch → benign, no toast.
+        if ((e as { code?: string })?.code === 'ERR_CANCELED') return;
+        if (alive) toast.error('记录详情加载失败');
+      })
       .finally(() => alive && setDetailLoading(false));
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+      controller.abort();
+    };
   }, [activeId]);
 
 

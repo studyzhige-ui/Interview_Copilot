@@ -285,9 +285,11 @@ export async function createChatSession(payload: {
 
 export async function listChatSessions(
   q: { offset?: number; limit?: number; session_type?: string; interview_id?: string } = {},
+  opts: { signal?: AbortSignal } = {},
 ): Promise<ChatSessionListItem[]> {
   const res = await apiClient.get('/chat/sessions', {
     params: { offset: 0, limit: 50, ...q },
+    signal: opts.signal,
   });
   return res.data;
 }
@@ -352,9 +354,13 @@ export async function deleteChatSession(sessionId: string): Promise<void> {
 // Note: the endpoint path is still ``/memory-recall`` for back-compat
 // (renaming a public URL is more expensive than the function alias).
 
-export async function getSessionGlobalMemory(sessionId: string): Promise<boolean> {
+export async function getSessionGlobalMemory(
+  sessionId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<boolean> {
   const res = await apiClient.get(
     `/chat/sessions/${encodeURIComponent(sessionId)}/memory-recall`,
+    { signal: opts.signal },
   );
   return Boolean(res.data?.enabled);
 }

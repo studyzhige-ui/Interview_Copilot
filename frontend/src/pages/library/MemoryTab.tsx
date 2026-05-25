@@ -449,17 +449,31 @@ function KnowledgeTopicDetailView({
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
+    // Abort on topic switch — without this, rapid clicks A → B → A
+    // race: A's response could land after B's effect already updated
+    // ``doc`` / draft fields. Same shape as the ChatPanel transcript-
+    // load effect.
+    const controller = new AbortController();
+    let alive = true;
     setLoading(true);
     setEditing(false);
-    getKnowledgeTopic(topic)
+    getKnowledgeTopic(topic, { signal: controller.signal })
       .then((d) => {
+        if (!alive) return;
         setDoc(d);
         setDraftBody(d.body);
         setDraftOneLiner(d.one_liner ?? '');
         setDraftMastery(d.mastery_level ?? 'unknown');
       })
-      .catch((e) => toast.error(extractErr(e, '主题内容加载失败')))
-      .finally(() => setLoading(false));
+      .catch((e) => {
+        if ((e as { code?: string })?.code === 'ERR_CANCELED') return;
+        if (alive) toast.error(extractErr(e, '主题内容加载失败'));
+      })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => {
+      alive = false;
+      controller.abort();
+    };
   }, [topic]);
 
   const onSave = async () => {
@@ -616,6 +630,9 @@ function SingleDocSection({ kind }: { kind: 'strategy' | 'habit' }) {
   const fetchBody = kind === 'strategy' ? getStrategyDoc : getHabitDoc;
   const saveBody = kind === 'strategy' ? editStrategyDoc : editHabitDoc;
 
+  // ``refresh`` runs without a signal — it's used for user-initiated
+  // reloads (after save) where there's no race. The kind-switch
+  // effect below has its own abort lifecycle.
   const refresh = () => {
     setLoading(true);
     fetchBody()
@@ -623,7 +640,25 @@ function SingleDocSection({ kind }: { kind: 'strategy' | 'habit' }) {
       .catch((e) => toast.error(extractErr(e, `${label}加载失败`)))
       .finally(() => setLoading(false));
   };
-  useEffect(refresh, [kind]);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    // Abort on kind change — without this, switching strategy ↔ habit
+    // rapidly could land the wrong doc's body in the wrong editor.
+    const controller = new AbortController();
+    let alive = true;
+    setLoading(true);
+    fetchBody({ signal: controller.signal })
+      .then((b) => { if (alive) { setBody(b); setDraft(b); } })
+      .catch((e) => {
+        if ((e as { code?: string })?.code === 'ERR_CANCELED') return;
+        if (alive) toast.error(extractErr(e, `${label}加载失败`));
+      })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => {
+      alive = false;
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchBody/label change in lockstep with kind
+  }, [kind]);
 
   const onSave = async () => {
     setSaving(true);
@@ -737,24 +772,45 @@ function AuditSection() {
   const [docFilter, setDocFilter] = useState<MemoryDocType | 'all'>('all');
   const [changeFilter, setChangeFilter] = useState<MemoryChangeType | 'all'>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // ``reloadTick`` is bumped by the manual "刷新" button to re-trigger
+  // the load effect without changing filter / page state. Keeps the
+  // abort-controlled effect as the SINGLE place that fires the
+  // listMemoryAudit call.
+  const [reloadTick, setReloadTick] = useState(0);
+  const refresh = () => setReloadTick((n) => n + 1);
 
-  const refresh = () => {
+  useEffect(() => {
+    // Abort on any filter / page change — three-key dep means users
+    // WILL toggle these fast (especially page <-> filter combos).
+    // Without the abort, a delayed response from an older filter
+    // could overwrite entries that match the current filter.
+    const controller = new AbortController();
+    let alive = true;
     setLoading(true);
-    listMemoryAudit({
-      doc_type: docFilter === 'all' ? undefined : docFilter,
-      change_type: changeFilter === 'all' ? undefined : changeFilter,
-      limit: AUDIT_PAGE_SIZE,
-      offset: (page - 1) * AUDIT_PAGE_SIZE,
-    })
+    listMemoryAudit(
+      {
+        doc_type: docFilter === 'all' ? undefined : docFilter,
+        change_type: changeFilter === 'all' ? undefined : changeFilter,
+        limit: AUDIT_PAGE_SIZE,
+        offset: (page - 1) * AUDIT_PAGE_SIZE,
+      },
+      { signal: controller.signal },
+    )
       .then((resp) => {
+        if (!alive) return;
         setEntries(resp.entries);
         setTotal(resp.total);
       })
-      .catch((e) => toast.error(extractErr(e, '审计日志加载失败')))
-      .finally(() => setLoading(false));
-  };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(refresh, [docFilter, changeFilter, page]);
+      .catch((e) => {
+        if ((e as { code?: string })?.code === 'ERR_CANCELED') return;
+        if (alive) toast.error(extractErr(e, '审计日志加载失败'));
+      })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => {
+      alive = false;
+      controller.abort();
+    };
+  }, [docFilter, changeFilter, page, reloadTick]);
 
   const totalPages = Math.max(1, Math.ceil(total / AUDIT_PAGE_SIZE));
 
@@ -914,11 +970,23 @@ function AuditDetail({ entryId, entry }: { entryId: string; entry: MemoryAuditEn
   const [detail, setDetail] = useState<MemoryAuditDetail | null>(null);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
+    // Abort on re-key — expanding a different audit row remounts
+    // this component with a new ``entryId``; without the abort the
+    // prior detail fetch could resolve after and paint stale data.
+    const controller = new AbortController();
+    let alive = true;
     setLoading(true);
-    getMemoryAuditEntry(entryId)
-      .then(setDetail)
-      .catch((e) => toast.error(extractErr(e, '审计详情加载失败')))
-      .finally(() => setLoading(false));
+    getMemoryAuditEntry(entryId, { signal: controller.signal })
+      .then((d) => { if (alive) setDetail(d); })
+      .catch((e) => {
+        if ((e as { code?: string })?.code === 'ERR_CANCELED') return;
+        if (alive) toast.error(extractErr(e, '审计详情加载失败'));
+      })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => {
+      alive = false;
+      controller.abort();
+    };
   }, [entryId]);
   return (
     <div className="bg-stone-50 px-3 py-3 border-t border-stone-100">

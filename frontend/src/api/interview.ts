@@ -13,8 +13,14 @@ export async function listInterviewRecords(
   return res.data;
 }
 
-export async function getInterviewRecord(id: string): Promise<InterviewRecordDetail> {
-  const res = await apiClient.get(`/interview-records/${encodeURIComponent(id)}`);
+export async function getInterviewRecord(
+  id: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<InterviewRecordDetail> {
+  const res = await apiClient.get(
+    `/interview-records/${encodeURIComponent(id)}`,
+    { signal: opts.signal },
+  );
   return res.data;
 }
 
