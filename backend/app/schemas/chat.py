@@ -5,6 +5,50 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+# ── Mock-interview Director action enum ──────────────────────────────────
+# Must match the seven keys in
+# ``app/services/mock_interview_service.py:DISPLAY_INTENT``. Mirrored 1:1 by
+# the frontend ``MockDirectorAction`` union in
+# ``frontend/src/types/api.ts``. Adding a new action requires updating all
+# three sites — the Literal here will refuse new strings at response time so
+# the BE can't silently emit an action the FE doesn't render.
+MockDirectorAction = Literal[
+    "follow_up",
+    "new_question",
+    "transition",
+    "hint",
+    "clarify",
+    "reverse_answer",
+    "finish",
+]
+
+
+class MockPhaseProgress(BaseModel):
+    """v6 phase progress — populated on every Director turn (no Optional)."""
+    current_phase: str
+    turn_count: int
+    max_turns: int
+    follow_up_depth: int
+
+
+class MockAnswerResp(BaseModel):
+    """Wire-format response for ``POST /chat/mock-interview/answer``.
+
+    Mirrored 1:1 by ``MockAnswerResp`` in ``frontend/src/types/api.ts``.
+    The TS type is hand-written, so renaming a field here without
+    updating it ships a runtime bug that typecheck cannot catch. The
+    cross-cutting fix would be an openapi-generated TS client; until
+    that lands, treat both files as the contract.
+    """
+    interviewer_response: str
+    spoken_response: str
+    next_question: str
+    action: MockDirectorAction
+    display_intent: str
+    is_finished: bool
+    phase_progress: MockPhaseProgress
+
+
 class SessionCreateRequest(BaseModel):
     session_type: str = "general"  # "general" | "debrief" | "mock_interview"
     interview_id: str | None = None

@@ -24,7 +24,7 @@ from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.chat import ChatSession, generate_uuid
 from app.models.user import User
-from app.schemas.chat import MockAnswerRequest, MockStartRequest, TTSRequest
+from app.schemas.chat import MockAnswerRequest, MockAnswerResp, MockStartRequest, TTSRequest
 from app.services.chat.session_state import dump_session_state, parse_session_state
 
 logger = logging.getLogger(__name__)
@@ -482,7 +482,7 @@ async def get_current_question(
 # ── /answer ────────────────────────────────────────────────────────────
 
 
-@router.post("/chat/mock-interview/answer")
+@router.post("/chat/mock-interview/answer", response_model=MockAnswerResp)
 @limiter.limit(RATE_EXPENSIVE)
 async def submit_mock_answer(
     request: Request,
