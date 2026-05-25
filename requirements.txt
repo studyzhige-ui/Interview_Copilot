@@ -12,7 +12,15 @@ psycopg2-binary==2.9.11
 alembic==1.17.2
 
 # Security & Auth
-python-jose[cryptography]==3.3.0
+# python-jose 3.5.0 closes the algorithm-confusion CVEs that affected
+# 3.3.0 (GHSA-cjwg-qfpm-7377, GHSA-6c5p-j8vq-pqhj). The JWT API surface
+# we use (encode + decode with explicit algorithms=["HS256"]) is
+# unchanged across the bump.
+python-jose[cryptography]==3.5.0
+# passlib 1.7.4 (last release, 2020) — staying for now because the
+# password-hash API surface is stable; tracked as a follow-up to
+# swap for direct bcrypt or argon2-cffi once we plan a password-
+# rehash migration. See p4-g notes.
 passlib[bcrypt]==1.7.4
 
 # Redis & Async Task Queue
