@@ -25,6 +25,7 @@ markdown bundle the L1 / L2 strategies inject into their prompts.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 
@@ -133,26 +134,44 @@ async def attach_active_bodies(
     Mutates ``ctx`` in place (and returns it for chaining). Skips
     bodies whose stored content is empty / whitespace-only so the
     render layer doesn't print blank detail sections.
+
+    Why ``to_thread``: the body underneath is **entirely synchronous**
+    DB I/O (each ``knowledge_doc_service.load`` opens a SessionLocal,
+    runs a query, closes). Pre-fix this function was ``async def``
+    around a sync body — calling it from ``asyncio.create_task`` in
+    the engine LOOKED like memory-and-RAG concurrency but actually
+    ran serially, because the coroutine never yielded back to the
+    loop. ``to_thread`` is the minimal fix: dispatch the sync block
+    to a worker thread, let the event loop drive the concurrent
+    ``knowledge_task`` in parallel.
+
+    Doing this properly (async DB session per service) is tracked as
+    a P2 follow-up — for now the perf win comes from unblocking the
+    RAG retrieval, which is by far the heavier of the two.
     """
-    if topics:
-        bodies: dict[str, str] = {}
-        for topic in topics:
-            doc = knowledge_doc_service.load(user_id, topic)
-            if doc and (doc.body or "").strip():
-                bodies[topic] = doc.body
-        ctx.active_knowledge_bodies = bodies
 
-    if load_strategy:
-        body = strategy_doc_service.load(user_id)
-        if body and body.strip():
-            ctx.active_strategy_body = body
+    def _sync_body() -> V3MemoryContext:
+        if topics:
+            bodies: dict[str, str] = {}
+            for topic in topics:
+                doc = knowledge_doc_service.load(user_id, topic)
+                if doc and (doc.body or "").strip():
+                    bodies[topic] = doc.body
+            ctx.active_knowledge_bodies = bodies
 
-    if load_habit:
-        body = habit_doc_service.load(user_id)
-        if body and body.strip():
-            ctx.active_habit_body = body
+        if load_strategy:
+            body = strategy_doc_service.load(user_id)
+            if body and body.strip():
+                ctx.active_strategy_body = body
 
-    return ctx
+        if load_habit:
+            body = habit_doc_service.load(user_id)
+            if body and body.strip():
+                ctx.active_habit_body = body
+
+        return ctx
+
+    return await asyncio.to_thread(_sync_body)
 
 
 __all__ = [

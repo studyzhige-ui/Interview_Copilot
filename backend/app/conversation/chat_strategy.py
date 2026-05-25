@@ -18,7 +18,6 @@ from typing import AsyncGenerator
 
 import tiktoken
 from llama_index.core import Settings
-from llama_index.core.callbacks import CallbackManager, TokenCountingHandler
 
 from app.conversation.events import HarnessEvent
 from app.conversation.strategy import StrategyContext, StrategyResult
@@ -32,16 +31,27 @@ from app.services.chat.context_assembly_pipeline import (
 logger = logging.getLogger(__name__)
 
 
-# LlamaIndex callback that records prompt + completion token counts per
-# LLM call. Installed on the global Settings.callback_manager at module
-# import (same as the legacy ``qa_pipeline.agent_executor`` did) so the
-# next streaming call's usage is captured into the counter. The strategy
-# resets the counter at the start of each turn and reads it after the
-# stream finishes — same pattern as the old code.
-_token_counter = TokenCountingHandler(
-    tokenizer=tiktoken.get_encoding("cl100k_base").encode,
-)
-Settings.callback_manager = CallbackManager([_token_counter])
+# Per-turn token counting via a module-level tiktoken encoder.
+#
+# Pre-fix this module installed a single ``TokenCountingHandler`` on
+# the global ``Settings.callback_manager`` at import time, then reset
+# it at the start of every turn and read its counters at the end. That
+# was racy: two concurrent ``/chat/sse`` turns would call
+# ``reset_counts()`` mid-stream, wiping each other's accumulated
+# counts. Result: telemetry showed each L1 turn reporting the other's
+# tokens (or zero), and any code that *also* relied on the global
+# callback manager (the planner, realtime extraction) would silently
+# share a noisy counter.
+#
+# Local counting via tiktoken removes both the race AND the global
+# mutation. The numbers are APPROXIMATE — ``cl100k_base`` is OpenAI's
+# GPT-3.5/4 tokenizer; the L1 default provider is DeepSeek, whose own
+# BPE diverges 10-15% on Chinese-heavy prompts. For race-free
+# telemetry that's fine; for exact billing you'd want the response's
+# ``raw.usage`` when the SDK exposes it (the agent strategy reads
+# ``chunk.usage.prompt_tokens`` directly — chat strategy's streaming
+# completion shape doesn't surface usage so we tokenize locally).
+_TIKTOKEN_ENC = tiktoken.get_encoding("cl100k_base")
 
 
 DIRECT_SYSTEM_RULES = """You are Interview Copilot, a concise technical interview assistant.
@@ -67,12 +77,6 @@ class ChatPipelineStrategy:
         ctx: StrategyContext,
         result: StrategyResult,
     ) -> AsyncGenerator[HarnessEvent, None]:
-        # Snapshot before/after token counts so we can report exact
-        # per-turn usage to ``result`` (and from there to telemetry).
-        # The global TokenCountingHandler installed at module load
-        # captures every LlamaIndex LLM call.
-        _token_counter.reset_counts()
-
         # Render the engine-prepared AssembledContext with the right
         # system-rules branch. No rebuild — the engine already paid
         # for the session-meta read + debrief reference fetch, and
@@ -108,8 +112,11 @@ class ChatPipelineStrategy:
         result.final_answer = final_answer
         result.assistant_blocks = [{"type": "text", "text": final_answer}]
         result.steps_used = 1
-        result.prompt_tokens = _token_counter.prompt_llm_token_count
-        result.completion_tokens = _token_counter.completion_llm_token_count
+        # Per-turn token estimate via local tiktoken — no global state,
+        # no race with concurrent turns. See module docstring for why
+        # we don't use Settings.callback_manager's TokenCountingHandler.
+        result.prompt_tokens = len(_TIKTOKEN_ENC.encode(prompt))
+        result.completion_tokens = len(_TIKTOKEN_ENC.encode(final_answer))
 
 
 __all__ = ["ChatPipelineStrategy"]

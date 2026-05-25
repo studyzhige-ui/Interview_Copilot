@@ -263,10 +263,31 @@ class AgentLoopStrategy:
             if ctx.assembled is not None else "No context."
         )
 
+        # Three system messages in cache-friendly order: stable →
+        # less-stable → per-turn. DeepSeek's prompt cache (the L1/L2
+        # default provider) hashes the prefix as a single contiguous
+        # span IMPLICITLY — a per-turn change in the grounding text
+        # would otherwise invalidate the cached tokens for the manifest
+        # too, costing 800-2000 cached-token misses per turn. Splitting
+        # into separate messages lets DeepSeek reuse the SYSTEM_PROMPT
+        # + manifest prefix across every turn in a session.
+        #
+        # Order is load-bearing: the cache prefix only extends as far
+        # as the longest stable run. Putting the stable manifest
+        # before the per-turn grounding ensures the manifest tokens
+        # are inside the cacheable prefix even when grounding_text
+        # changes byte-by-byte across turns.
+        #
+        # NB for Anthropic: Claude requires EXPLICIT ``cache_control``
+        # markers per content block to actually cache. The message
+        # boundary split alone does nothing for Claude. If we add an
+        # Anthropic backend, the manifest message needs a
+        # ``cache_control: {"type": "ephemeral"}`` annotation —
+        # tracked as a follow-up.
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": f"Available tools:\n{manifest_text}"},
             {"role": "system", "content": (
-                f"Available tools:\n{manifest_text}\n\n"
                 f"Conversation context:\n{grounding_text or 'No context.'}"
             )},
             {"role": "user", "content": ctx.user_message},

@@ -55,6 +55,19 @@ export function MockPage() {
     setStarting(true);
     try {
       const q = await getMockCurrentQuestion(inProgress.sessionId);
+      // Race-safety: the backend's ``/question`` endpoint returns
+      // ``{done: true, message}`` (no ``question`` / ``phase_id``)
+      // when the session has flipped to finished between when the
+      // resume banner queried ``/in-progress`` and now. The MockLive
+      // child reads ``initialQuestion.question`` and would otherwise
+      // try to TTS-speak ``undefined``. Bail back to setup + clear the
+      // stale banner so the next render shows a clean slate.
+      if (q.done) {
+        toast.info('该面试已结束，正在为你刷新页面');
+        setInProgress(null);
+        setStage({ kind: 'setup' });
+        return;
+      }
       setStage({
         kind: 'live',
         sessionId: inProgress.sessionId,

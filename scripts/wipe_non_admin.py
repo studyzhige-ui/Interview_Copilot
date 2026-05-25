@@ -41,7 +41,15 @@ USER_TABLES = (
     "user_api_keys",
     "user_uploads",
     "knowledge_documents",
-    "memory_items",
+    # ``memory_items`` was dropped by alembic 0003 — the v3 memory
+    # architecture uses ``knowledge_docs / strategy_docs / habit_docs
+    # / user_profile_doc / memory_audit_log`` instead. Those tables
+    # are also user-scoped, so they're listed below.
+    "knowledge_docs",
+    "strategy_docs",
+    "habit_docs",
+    "user_profile_doc",
+    "memory_audit_log",
     "chat_sessions",
     "chat_messages",            # FK via chat_sessions.user_id
     "mock_interview_sessions",
@@ -117,17 +125,19 @@ def _non_admin_doc_ids(db, admin_username: str) -> list[str]:
     Two source tables:
       * ``knowledge_documents.id`` — the ``kdoc_*`` key stored as
         ``doc_id`` in the ``interview_copilot_rag`` collection.
-      * ``memory_items.id`` (UUID) — stored as ``doc_id`` in the
-        ``interview_copilot_memory`` collection.
+    Post-v3 cleanup (alembic 0003 dropped ``memory_items``): only
+    ``knowledge_documents.id`` is a valid source. The historical UNION
+    against ``memory_items`` would now crash with ``relation
+    "memory_items" does not exist`` on every invocation — operators
+    trying to wipe a staging DB would get nothing wiped.
 
-    We merge both into one expression; entries that don't exist in a given
-    collection are simply no-ops at delete time.
+    The ``interview_copilot_memory`` collection itself was retired by
+    the v3 migration; Milvus delete iterates whatever collections exist
+    today (``_delete_milvus_vectors`` skips missing collections).
     """
     rows = db.execute(
         text(
-            "SELECT id FROM knowledge_documents WHERE user_id != :auname "
-            "UNION "
-            "SELECT id FROM memory_items WHERE user_id != :auname"
+            "SELECT id FROM knowledge_documents WHERE user_id != :auname"
         ),
         {"auname": admin_username},
     ).fetchall()
@@ -194,13 +204,21 @@ def _delete_postgres_rows(db, admin_username: str, dry_run: bool) -> None:
     if dry_run:
         return
     # Delete in reverse dependency order so non-CASCADE FKs don't trip.
+    # ``memory_items`` removed (dropped by alembic 0003); v3 memory
+    # tables (knowledge_docs/strategy_docs/habit_docs/user_profile_doc/
+    # memory_audit_log) are user-scoped and included below.
     for table in (
         "interview_qa",            # child of interview_records
         "chat_messages",           # child of chat_sessions
+        "agent_steps",             # child of agent_runs
         "agent_runs",
+        "memory_audit_log",
+        "knowledge_docs",
+        "strategy_docs",
+        "habit_docs",
+        "user_profile_doc",
         "user_api_keys",
         "user_uploads",
-        "memory_items",
         "knowledge_documents",
         "resume_sections",
         "interview_records",
