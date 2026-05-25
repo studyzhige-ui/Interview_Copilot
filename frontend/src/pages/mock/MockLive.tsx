@@ -139,7 +139,11 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, on
   const pushUserAnswer = async (answer: string) => {
     if (!answer.trim() || finished) return;
     setSending(true);
-    setTurns((t) => [...t, { who: 'me', text: answer }]);
+    // Optimistic insert — the user sees their message immediately
+    // rather than waiting for the backend's interviewer-response
+    // round-trip.
+    const optimisticTurn: Turn = { who: 'me', text: answer };
+    setTurns((t) => [...t, optimisticTurn]);
     try {
       const resp = await submitMockAnswer({ session_id: sessionId, answer });
       setTurns((t) => [...t, { who: 'interviewer', text: resp.interviewer_response }]);
@@ -150,6 +154,14 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, on
       }
     } catch {
       toast.error('提交回答失败');
+      // Roll back the optimistic insert so the user can retry. Pre-
+      // fix the failed message just hung in the transcript with no
+      // AI response — visually identical to "AI ghosted me".
+      setTurns((t) => {
+        const idx = t.lastIndexOf(optimisticTurn);
+        if (idx === -1) return t;
+        return [...t.slice(0, idx), ...t.slice(idx + 1)];
+      });
     } finally {
       setSending(false);
     }

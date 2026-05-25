@@ -42,20 +42,27 @@ export function Resizer({
     onChange(next);
   }, [direction, min, max, onChange, anchorRef]);
 
+  // Window listeners are only attached during a drag — pre-fix
+  // every Resizer instance held a permanent mousemove listener for
+  // the page's lifetime, doing nothing 99% of the time. Multiple
+  // Resizer instances on the same page (review's left+right panels)
+  // each fired their no-op listener on every mousemove. Lazy attach
+  // costs one extra event per drag (mousedown) but removes the
+  // continuous-listener cost.
+  const detachRef = useRef<(() => void) | null>(null);
   const onMouseUp = useCallback(() => {
     draggingRef.current = false;
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
+    detachRef.current?.();
+    detachRef.current = null;
   }, []);
 
+  // Tear down on unmount in case the user releases focus mid-drag
+  // (e.g. tab switch) so we don't leak listeners.
   useEffect(() => {
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
-  }, [onMouseMove, onMouseUp]);
+    return () => { detachRef.current?.(); };
+  }, []);
 
   const onMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -64,6 +71,13 @@ export function Resizer({
     startValRef.current = value;
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
+    // Attach listeners only for the duration of this drag.
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    detachRef.current = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
   };
 
   return (

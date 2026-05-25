@@ -57,10 +57,15 @@ function MarkdownBodyImpl({ source }: { source: string }) {
             </blockquote>
           ),
           a: ({ children, href }) => (
+            // ``noopener`` blocks window.opener tabnabbing — modern
+            // browsers infer it from ``noreferrer`` but legacy ones
+            // (some webview wrappers, older Safari) don't, so spell it
+            // out. ``noreferrer`` keeps the Referer header off so the
+            // link target can't fingerprint the user via referer.
             <a
               href={href}
               target="_blank"
-              rel="noreferrer"
+              rel="noreferrer noopener"
               className="text-primary-600 underline underline-offset-2 hover:text-primary-700"
             >
               {children}
