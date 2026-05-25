@@ -8,6 +8,7 @@ v6 chain (Runtime Director):
 """
 
 import asyncio
+import time
 import json
 import logging
 import os
@@ -61,6 +62,29 @@ async def start_mock_interview(
     if session.session_type != "mock_interview":
         raise HTTPException(status_code=400, detail="Session is not a mock interview")
 
+    # Per-phase timing is captured so the "why is mock start slow"
+    # question has a real answer in the logs. The chain has exactly
+    # ONE LLM call (generate_brief) — anything beyond that is local
+    # work (S3 download, PDF parse, DB commit). When users report
+    # slowness, we look at this log line first.
+    #
+    # Single ``mock_start_timing`` line is emitted only on the
+    # success path (after commit). On the error path the exception
+    # already includes ``logger.exception`` with the failing phase,
+    # so we don't double-log a partial timing breakdown that would
+    # just confuse readers.
+    _t_marks: dict[str, float] = {}
+
+    def _mark(label: str) -> None:
+        _t_marks[label] = time.perf_counter()
+
+    def _ms(label_from: str, label_to: str) -> float:
+        # ``%.1f`` in the log format truncates display precision;
+        # no need to round here.
+        return (_t_marks[label_to] - _t_marks[label_from]) * 1000
+
+    _mark("begin")
+
     logger.info(
         "mock_start: user=%s session=%s resume=%s jd_upload=%s jd_text_len=%d style=%s voice=%s",
         current_user.username, request.session_id,
@@ -72,21 +96,33 @@ async def start_mock_interview(
     # Load resume text. /upload/resume/direct only stores the file; we extract
     # on demand here.
     resume_context = ""
+    resume_cached = False
     if request.resume_upload_id:
         try:
             sections = resume_service.get_sections_by_upload(
                 request.resume_upload_id, current_user.username,
             )
             if not sections:
+                # Cold path: S3 download + PyMuPDF parse. Synchronous
+                # in the called function and historically the largest
+                # contributor to mock_start latency. We DO NOT wrap in
+                # ``to_thread`` here yet — leaving that as a future
+                # optimization once telemetry confirms it's the
+                # bottleneck across users.
                 resume_context = await _parse_resume_on_demand(
                     db, request.resume_upload_id, current_user.username,
                 )
             else:
                 resume_context = resume_service.format_for_context(sections)
+                resume_cached = True
         except Exception as exc:  # noqa: BLE001
             logger.warning("Resume context load failed: %s", exc)
             resume_context = ""
-    logger.info("mock_start: resume_context_chars=%d", len(resume_context))
+    _mark("resume_done")
+    logger.info(
+        "mock_start: resume_context_chars=%d cached=%s",
+        len(resume_context), resume_cached,
+    )
 
     jd_context = (request.jd_text or "").strip()
     if not jd_context and request.jd_upload_id:
@@ -96,14 +132,16 @@ async def start_mock_interview(
         except Exception as exc:  # noqa: BLE001
             logger.warning("JD load failed: %s", exc)
             jd_context = ""
+    _mark("jd_done")
     logger.info("mock_start: jd_context_chars=%d", len(jd_context))
 
     # Build the cacheable prefix *once* and stash it in session_state. Every
     # subsequent LLM call this session reuses it verbatim so DeepSeek's
     # prompt cache can hit on it.
     cacheable_prefix = build_prefix(resume_context, jd_context, request.interviewer_style)
+    _mark("prefix_done")
 
-    # LLM #1: interview brief + opening
+    # LLM #1 (the ONLY LLM call in this endpoint): interview brief + opening.
     try:
         brief = await generate_brief(
             resume_context=resume_context,
@@ -116,6 +154,7 @@ async def start_mock_interview(
             status_code=500,
             detail=f"生成面试地图失败: {type(exc).__name__}: {exc}",
         ) from exc
+    _mark("brief_done")
 
     # Initial state machine
     state = parse_session_state(session.session_state, "mock_interview")
@@ -157,6 +196,21 @@ async def start_mock_interview(
     # network round-trip to Postgres (every other in-flight request would
     # stall otherwise).
     await asyncio.to_thread(db.commit)
+    _mark("commit_done")
+
+    # Phase-by-phase latency. Use a single log line so log scrapers can
+    # ingest it as one event. Whenever a user reports "mock start is
+    # slow", grep this and the biggest field is the answer.
+    logger.info(
+        "mock_start_timing: total=%.1fms resume=%.1fms (cached=%s) "
+        "jd=%.1fms prefix=%.1fms brief_llm=%.1fms commit=%.1fms",
+        _ms("begin", "commit_done"),
+        _ms("begin", "resume_done"), resume_cached,
+        _ms("resume_done", "jd_done"),
+        _ms("jd_done", "prefix_done"),
+        _ms("prefix_done", "brief_done"),
+        _ms("brief_done", "commit_done"),
+    )
 
     plan_phases = [
         {
