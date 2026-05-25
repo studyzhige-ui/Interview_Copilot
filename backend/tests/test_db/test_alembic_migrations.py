@@ -140,10 +140,11 @@ def test_migration_chain_has_no_gaps_and_one_head():
     #                 → 0006_chat_message_content_blocks
     #                 → 0007_global_memory_rename
     #                 → 0008_drop_agent_trace
+    #                 → 0009_add_record_cascade
     # Bump this number whenever a new forward migration lands.
     on_disk = [p for p in VERSIONS_DIR.glob("*.py") if not p.name.startswith("_")]
-    assert len(on_disk) == 8, (
-        f"Expected 8 migration files (baseline + 7 evolutions), "
+    assert len(on_disk) == 9, (
+        f"Expected 9 migration files (baseline + 8 evolutions), "
         f"found {len(on_disk)}"
     )
 
@@ -204,8 +205,8 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         from sqlalchemy import text
 
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0008_drop_agent_trace", (
-            f"Head should be 0008_drop_agent_trace, got {version!r}"
+        assert version == "0009_add_record_cascade", (
+            f"Head should be 0009_add_record_cascade, got {version!r}"
         )
 
     engine.dispose()
@@ -236,5 +237,58 @@ def test_hot_query_composite_indexes_exist(fresh_pg_db, monkeypatch):
     for table, ix_name in expectations.items():
         names = {ix["name"] for ix in insp.get_indexes(table)}
         assert ix_name in names, f"{table} missing composite index {ix_name}: have {names}"
+
+    engine.dispose()
+
+
+def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
+    """Alembic 0009 added ON DELETE CASCADE to the two FKs that the
+    ``DELETE /interview-records/{id}`` endpoint silently depended on.
+
+    Verify behaviourally (not just via inspector): insert one parent
+    interview_records row + one interview_qa child + one
+    mock_interview_sessions child, delete the parent, and assert
+    that both children disappear without any IntegrityError. Without
+    the cascade, the parent delete would either raise or leave
+    orphan children — both are regressions worth pinning.
+    """
+    from alembic import command
+    from sqlalchemy import create_engine, text
+
+    monkeypatch.setenv("DATABASE_URL", fresh_pg_db)
+    cfg = _make_alembic_config(fresh_pg_db)
+    command.upgrade(cfg, "head")
+
+    engine = create_engine(fresh_pg_db)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO interview_records (id, user_id, source, status) "
+            "VALUES ('ir_cascade', 'alice', 'upload', 'completed')"
+        ))
+        conn.execute(text(
+            "INSERT INTO interview_qa (id, record_id, order_idx, question, answer) "
+            "VALUES ('qa_x', 'ir_cascade', 0, 'q?', 'a.')"
+        ))
+        conn.execute(text(
+            "INSERT INTO mock_interview_sessions "
+            "(id, user_id, interview_record_id, status, current_question_idx) "
+            "VALUES ('mis_x', 'alice', 'ir_cascade', 'finished', 0)"
+        ))
+
+    # The actual cascade probe. Pre-0009 this would have raised
+    # IntegrityError because the FKs had no ondelete clause.
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM interview_records WHERE id = 'ir_cascade'"))
+
+    with engine.connect() as conn:
+        qa_left = conn.execute(text(
+            "SELECT count(*) FROM interview_qa WHERE record_id = 'ir_cascade'"
+        )).scalar()
+        mis_left = conn.execute(text(
+            "SELECT count(*) FROM mock_interview_sessions "
+            "WHERE interview_record_id = 'ir_cascade'"
+        )).scalar()
+    assert qa_left == 0, f"interview_qa not cascaded — {qa_left} orphan rows"
+    assert mis_left == 0, f"mock_interview_sessions not cascaded — {mis_left} orphan rows"
 
     engine.dispose()
