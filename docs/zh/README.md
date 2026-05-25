@@ -172,7 +172,7 @@ backend/
     services/         业务逻辑（chat, voice, knowledge, memory, agent, …）
     worker/           Celery app + tasks
     scripts/          一次性维护脚本，可用 `python -m app.scripts.X` 调用
-  tests/              266 个测试（api / services / rag / models / core / db）
+  tests/              ~380 个测试（api / services / rag / models / core / db）
 frontend/
   src/                React SPA（Vite + TS + Tailwind + zustand）
   public/             nginx 配置 / _headers / _redirects

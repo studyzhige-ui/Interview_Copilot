@@ -172,7 +172,7 @@ backend/
     services/         business logic (chat, voice, knowledge, memory, agent, …)
     worker/           Celery app + tasks
     scripts/          one-shot maintenance scripts importable as `python -m app.scripts.X`
-  tests/              266 tests across api / services / rag / models / core / db
+  tests/              ~380 tests across api / services / rag / models / core / db
 frontend/
   src/                React SPA (Vite + TS + Tailwind + zustand)
   public/             nginx config / _headers / _redirects

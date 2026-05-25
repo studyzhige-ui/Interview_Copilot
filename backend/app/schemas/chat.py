@@ -31,6 +31,23 @@ class MockPhaseProgress(BaseModel):
     follow_up_depth: int
 
 
+class MockFinishResp(BaseModel):
+    """Wire-format response for ``POST /chat/mock-interview/finish``.
+
+    Mirrored 1:1 by ``MockFinishResp`` in ``frontend/src/types/api.ts``.
+    """
+    status: Literal["analyzing"]
+    record_id: str
+    debrief_session_id: str
+    task_id: str
+
+
+class MockAbandonResp(BaseModel):
+    """Wire-format response for ``POST /chat/mock-interview/abandon``."""
+    status: Literal["deleted"]
+    session_id: str
+
+
 class MockAnswerResp(BaseModel):
     """Wire-format response for ``POST /chat/mock-interview/answer``.
 

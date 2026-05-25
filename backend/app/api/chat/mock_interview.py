@@ -24,7 +24,14 @@ from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.chat import ChatSession, generate_uuid
 from app.models.user import User
-from app.schemas.chat import MockAnswerRequest, MockAnswerResp, MockStartRequest, TTSRequest
+from app.schemas.chat import (
+    MockAbandonResp,
+    MockAnswerRequest,
+    MockAnswerResp,
+    MockFinishResp,
+    MockStartRequest,
+    TTSRequest,
+)
 from app.services.chat.session_state import dump_session_state, parse_session_state
 
 logger = logging.getLogger(__name__)
@@ -393,7 +400,7 @@ async def get_in_progress_mock(
     }
 
 
-@router.post("/chat/mock-interview/abandon")
+@router.post("/chat/mock-interview/abandon", response_model=MockAbandonResp)
 async def abandon_mock_interview(
     session_id: str = Query(...),
     current_user: User = Depends(get_current_user),
@@ -625,7 +632,7 @@ async def submit_mock_answer(
 # ── /finish ────────────────────────────────────────────────────────────
 
 
-@router.post("/chat/mock-interview/finish")
+@router.post("/chat/mock-interview/finish", response_model=MockFinishResp)
 async def finish_mock_interview(
     session_id: str = Query(...),
     current_user: User = Depends(get_current_user),
