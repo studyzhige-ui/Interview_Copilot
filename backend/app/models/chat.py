@@ -2,7 +2,16 @@ import json
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 
 from app.db.database import Base
@@ -21,6 +30,18 @@ def default_session_state() -> str:
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
+    # Production composite indexes — declared here so ORM is the single
+    # source of truth and ``alembic revision --autogenerate`` doesn't
+    # generate spurious DROP INDEX statements for them. See alembic
+    # 0001_baseline (user_type_arch) and 0010_orm_alembic_drift_fixup
+    # (user_updated).
+    __table_args__ = (
+        Index(
+            "ix_chat_sessions_user_type_arch",
+            "user_id", "session_type", "archived_at",
+        ),
+        Index("ix_chat_sessions_user_updated", "user_id", "updated_at"),
+    )
 
     id = Column(String, primary_key=True, default=generate_uuid, index=True)
     user_id = Column(String, index=True, nullable=False)
@@ -47,6 +68,13 @@ class ChatSession(Base):
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
+    # ix_*_session_seq: read-time order-by-seq for chat history pagination.
+    # uq_*_session_seq: write-side guard against duplicate seqs under
+    #   concurrent ``append``. See alembic 0001_baseline + 0010.
+    __table_args__ = (
+        Index("ix_chat_messages_session_seq", "session_id", "seq"),
+        UniqueConstraint("session_id", "seq", name="uq_chat_messages_session_seq"),
+    )
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     session_id = Column(String, ForeignKey("chat_sessions.id"), index=True, nullable=False)

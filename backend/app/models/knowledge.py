@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from app.db.database import Base
@@ -13,6 +13,13 @@ def generate_document_id() -> str:
 
 class KnowledgeDocument(Base):
     __tablename__ = "knowledge_documents"
+    # Composite — library list filters by user + category. NB the
+    # index is named ``ix_knowledge_docs_user_category`` despite living
+    # on the ``knowledge_documents`` table (legacy from when the table
+    # was named ``knowledge_docs``). See alembic 0001_baseline:318.
+    __table_args__ = (
+        Index("ix_knowledge_docs_user_category", "user_id", "category"),
+    )
 
     id = Column(String, primary_key=True, default=generate_document_id, index=True)
     user_id = Column(String, index=True, nullable=False)

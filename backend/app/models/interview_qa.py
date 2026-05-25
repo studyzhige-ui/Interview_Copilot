@@ -14,6 +14,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -28,6 +29,11 @@ def _generate_qa_id() -> str:
 
 class InterviewQA(Base):
     __tablename__ = "interview_qa"
+    # Composite — QAPanel renders QA list ordered by order_idx for one
+    # record. See alembic 0001_baseline:277.
+    __table_args__ = (
+        Index("ix_interview_qa_record_order", "record_id", "order_idx"),
+    )
 
     id = Column(String, primary_key=True, default=_generate_qa_id)
     record_id = Column(

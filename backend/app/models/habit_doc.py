@@ -26,7 +26,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, String, Text
+from sqlalchemy import Column, DateTime, Index, String, Text
 
 from app.db.database import Base
 
@@ -37,9 +37,13 @@ def _generate_habit_doc_id() -> str:
 
 class HabitDoc(Base):
     __tablename__ = "habit_docs"
+    # Same shape as StrategyDoc — see that file for the rationale.
+    __table_args__ = (
+        Index("ix_habit_docs_user_id", "user_id", unique=True),
+    )
 
     id = Column(String, primary_key=True, default=_generate_habit_doc_id)
-    user_id = Column(String, nullable=False, unique=True, index=True)
+    user_id = Column(String, nullable=False)
 
     body = Column(Text, nullable=False, default="")
     # See strategy_doc.one_liner — same semantics.

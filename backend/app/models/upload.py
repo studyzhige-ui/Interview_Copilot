@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Integer, String
+from sqlalchemy import Column, DateTime, Index, Integer, String
 
 from app.db.database import Base
 
@@ -12,6 +12,11 @@ def generate_upload_id() -> str:
 
 class UserUpload(Base):
     __tablename__ = "user_uploads"
+    # Composite — file_tool.py:40 list path filters by user + purpose,
+    # ordered by created_at. See alembic 0001_baseline:126.
+    __table_args__ = (
+        Index("ix_user_uploads_user_purpose", "user_id", "purpose"),
+    )
 
     id = Column(String, primary_key=True, default=generate_upload_id, index=True)
     user_id = Column(String, index=True, nullable=False)

@@ -32,7 +32,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, String, Text
+from sqlalchemy import Column, DateTime, Index, String, Text
 
 from app.db.database import Base
 
@@ -43,12 +43,18 @@ def _generate_strategy_doc_id() -> str:
 
 class StrategyDoc(Base):
     __tablename__ = "strategy_docs"
+    # Single source of truth for the uniqueness contract: one row per
+    # user, enforced as a unique INDEX (not a column-level constraint).
+    # Pre-0010 the migration created BOTH a column-level unique constraint
+    # AND a non-unique index — redundant and made every insert pay two
+    # index writes. 0010 drops the constraint and promotes the index
+    # to unique; the ORM matches that shape now.
+    __table_args__ = (
+        Index("ix_strategy_docs_user_id", "user_id", unique=True),
+    )
 
     id = Column(String, primary_key=True, default=_generate_strategy_doc_id)
-    # Unique by user — one strategy doc per user. We don't add a
-    # UniqueConstraint because the service enforces single-row
-    # semantics via upsert anyway.
-    user_id = Column(String, nullable=False, unique=True, index=True)
+    user_id = Column(String, nullable=False)
 
     body = Column(Text, nullable=False, default="")
     # One-line description exposed in the universal pass so the

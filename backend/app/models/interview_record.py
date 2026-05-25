@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Integer, String, Text
+from sqlalchemy import Column, DateTime, Index, Integer, String, Text
 
 from app.db.database import Base
 
@@ -24,6 +24,18 @@ class InterviewRecord(Base):
     """
 
     __tablename__ = "interview_records"
+    # Composite indexes serving the two list paths:
+    #   * user_created — record list ordered by created_at desc
+    #   * user_last_dreamed — dreaming-worker selection
+    # See alembic 0001_baseline:96 and 0002_memory_v3_schema:162.
+    __table_args__ = (
+        Index("ix_interview_records_user_created", "user_id", "created_at"),
+        Index(
+            "ix_interview_records_user_last_dreamed",
+            "user_id",
+            "last_dreamed_at",
+        ),
+    )
 
     id = Column(String, primary_key=True, default=_generate_record_id, index=True)
     user_id = Column(String, index=True, nullable=False)

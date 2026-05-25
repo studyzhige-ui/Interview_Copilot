@@ -141,10 +141,11 @@ def test_migration_chain_has_no_gaps_and_one_head():
     #                 → 0007_global_memory_rename
     #                 → 0008_drop_agent_trace
     #                 → 0009_add_record_cascade
+    #                 → 0010_orm_alembic_drift_fixup
     # Bump this number whenever a new forward migration lands.
     on_disk = [p for p in VERSIONS_DIR.glob("*.py") if not p.name.startswith("_")]
-    assert len(on_disk) == 9, (
-        f"Expected 9 migration files (baseline + 8 evolutions), "
+    assert len(on_disk) == 10, (
+        f"Expected 10 migration files (baseline + 9 evolutions), "
         f"found {len(on_disk)}"
     )
 
@@ -205,8 +206,8 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         from sqlalchemy import text
 
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0009_add_record_cascade", (
-            f"Head should be 0009_add_record_cascade, got {version!r}"
+        assert version == "0010_orm_alembic_drift_fixup", (
+            f"Head should be 0010_orm_alembic_drift_fixup, got {version!r}"
         )
 
     engine.dispose()

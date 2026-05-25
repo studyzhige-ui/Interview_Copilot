@@ -53,7 +53,13 @@ class KnowledgeDoc(Base):
     __tablename__ = "knowledge_docs"
 
     id = Column(String, primary_key=True, default=_generate_knowledge_doc_id)
-    user_id = Column(String, nullable=False, index=True)
+    # No ``index=True`` here — the composite ``uq_knowledge_doc_user_topic``
+    # below is a unique index with ``user_id`` as the leading column, so
+    # any ``WHERE user_id = ?`` query already uses that index's
+    # left-prefix. Declaring a redundant ``ix_knowledge_docs_user_id``
+    # would have alembic check perpetually flag the ORM-vs-schema
+    # mismatch (0002_memory_v3 deliberately omits the single-col index).
+    user_id = Column(String, nullable=False)
 
     # Topic name. Free-text — extraction LLM is told to prefer an
     # existing topic if the new content fits, so we don't need a
