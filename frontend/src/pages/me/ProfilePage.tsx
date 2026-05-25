@@ -38,10 +38,15 @@ export function ProfilePage() {
   // the stored avatar_url alone so an S3-uploaded blob isn't clobbered.
   const [avatarUrlInput, setAvatarUrlInput] = useState('');
   const [bio, setBio] = useState('');
-  // Per-user default for whether memory recall (interview_fact lookup) runs
-  // in new chat sessions. Opt-in: ``false`` by default for new accounts.
-  // Sessions can override this on a per-session basis via the chat header.
-  const [memoryRecallDefault, setMemoryRecallDefault] = useState(false);
+  // Phase-H global-memory toggle (cross-session). When ON the v3 memory
+  // bundle (user_profile + knowledge / strategy / habit docs) is injected
+  // into the LLM prompt for new chat sessions. When OFF the prompt skips
+  // the bundle entirely — debrief reference materials still load (they
+  // belong to the interview record, not to memory). Storage is unaffected
+  // either way: the personalization view can still read the saved docs.
+  // Opt-in by design: ``false`` for new accounts; per-session override
+  // available via the chat header.
+  const [globalMemoryEnabled, setGlobalMemoryEnabled] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -76,7 +81,7 @@ export function ProfilePage() {
       setAvatarUrl(m.avatar_url ?? '');
       setAvatarUrlInput('');
       setBio(m.bio ?? '');
-      setMemoryRecallDefault(Boolean(m.memory_recall_default));
+      setGlobalMemoryEnabled(Boolean(m.global_memory_enabled));
     } catch {
       toast.error('个人信息加载失败');
     } finally {
@@ -91,7 +96,7 @@ export function ProfilePage() {
     (nickname !== (me.nickname ?? '') ||
       avatarUrlInput.trim().length > 0 ||
       bio !== (me.bio ?? '') ||
-      memoryRecallDefault !== Boolean(me.memory_recall_default));
+      globalMemoryEnabled !== Boolean(me.global_memory_enabled));
 
   const onSave = async () => {
     setSaving(true);
@@ -102,7 +107,7 @@ export function ProfilePage() {
       const patch: Parameters<typeof updateMe>[0] = {
         nickname: nickname.trim(),
         bio: bio.trim(),
-        memory_recall_default: memoryRecallDefault,
+        global_memory_enabled: globalMemoryEnabled,
       };
       const inputTrim = avatarUrlInput.trim();
       if (inputTrim) {
@@ -113,7 +118,7 @@ export function ProfilePage() {
       setStoreMe(next);
       setAvatarUrl(next.avatar_url ?? '');
       setAvatarUrlInput('');
-      setMemoryRecallDefault(Boolean(next.memory_recall_default));
+      setGlobalMemoryEnabled(Boolean(next.global_memory_enabled));
       toast.success('已保存');
     } catch {
       toast.error('保存失败');
@@ -244,29 +249,36 @@ export function ProfilePage() {
             </div>
           </div>
 
-          {/* Per-user memory-recall default. Opt-in: when OFF (the default
-              for new accounts), new chat sessions won't pull past
-              interview-fact memories into the LLM prompt. Sessions can
-              still override this on a per-session basis (toggle next to
-              AGENT in the chat header). */}
+          {/* Phase-H global-memory toggle. When OFF, the v3 memory bundle
+              (user_profile + knowledge / strategy / habit docs) is NOT
+              injected into the LLM prompt for new chat sessions. Debrief
+              reference materials (bound to an interview record) still
+              load — those are interview context, not memory. Sessions
+              can override this default via the chat-header toggle. */}
           <div className="block mb-3.5">
-            <div className="text-xs font-medium text-stone-700 mb-1.5">记忆召回（默认开关）</div>
+            <div className="text-xs font-medium text-stone-700 mb-1.5">
+              全局记忆（跨会话）
+            </div>
             <label className="flex items-start gap-3 px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-md cursor-pointer hover:bg-stone-100/60">
               <input
                 type="checkbox"
-                checked={memoryRecallDefault}
-                onChange={(e) => setMemoryRecallDefault(e.target.checked)}
+                checked={globalMemoryEnabled}
+                onChange={(e) => setGlobalMemoryEnabled(e.target.checked)}
                 className="mt-0.5 accent-primary-500"
               />
               <div className="flex-1">
                 <div className="text-sm text-stone-800">
-                  {memoryRecallDefault ? '开启' : '关闭'} ·
-                  {memoryRecallDefault
-                    ? ' 新会话默认会读取你过去的面试事实记忆'
-                    : ' 新会话默认不会读取你过去的面试记忆'}
+                  {globalMemoryEnabled ? '开启' : '关闭'} ·
+                  {globalMemoryEnabled
+                    ? ' 新会话默认会读取你的全局记忆（个人资料、知识 / 策略 / 习惯文档）'
+                    : ' 新会话默认不读取任何跨会话记忆'}
                 </div>
-                <div className="text-[11px] text-stone-500 mt-1">
-                  注：每个对话栏上方的「记忆」按钮可单独覆盖本默认值。个人资料类记忆（姓名、目标公司等）始终注入，不受此开关影响。
+                <div className="text-[11px] text-stone-500 mt-1 leading-relaxed">
+                  关闭后：当前会话的上下文（对话历史、本场面试的复盘资料）仍会正常加载，
+                  只是不再注入跨会话的全局记忆。已保存的记忆仍可在「个人资料」中查看 / 编辑，
+                  不会被删除。
+                  <br />
+                  每个对话栏上方的「全局记忆」按钮可单独覆盖本会话的默认值。
                 </div>
               </div>
             </label>

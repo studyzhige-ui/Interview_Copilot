@@ -60,10 +60,18 @@ export interface MeResponse {
   email_verified: boolean;
   created_at: string;
   updated_at: string;
-  /** Whether memory recall (vector lookup over past interview_fact items)
-   *  should run by default for this user. Per-session toggle in the chat
-   *  header overrides this. Opt-in by design — default false. */
-  memory_recall_default: boolean;
+  /** Global cross-session memory toggle (Phase H, mirrors Claude Code's
+   *  ``isAutoMemoryEnabled``). When OFF, new chat sessions do NOT inject
+   *  the v3 memory bundle (user_profile / knowledge / strategy / habit
+   *  docs) into the LLM prompt. The DB column is still readable for
+   *  the personalization page — toggle gates injection, not storage.
+   *  Per-session override available via the chat header.
+   *  Default: false (opt-in). */
+  global_memory_enabled: boolean;
+  /** @deprecated Pre-Phase-H name. Backend still emits it as an alias of
+   *  ``global_memory_enabled`` for back-compat — same value, do not read
+   *  both. New code should use ``global_memory_enabled``. */
+  memory_recall_default?: boolean;
 }
 
 export async function getMe(): Promise<MeResponse> {
@@ -75,7 +83,9 @@ export async function updateMe(patch: {
   nickname?: string;
   avatar_url?: string;
   bio?: string;
-  memory_recall_default?: boolean;
+  /** Canonical (Phase H). Backend also accepts the legacy alias
+   *  ``memory_recall_default`` via Pydantic ``populate_by_name``. */
+  global_memory_enabled?: boolean;
 }): Promise<MeResponse> {
   const res = await apiClient.patch('/auth/me', patch);
   return res.data;

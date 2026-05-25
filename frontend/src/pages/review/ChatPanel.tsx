@@ -22,7 +22,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Send, Paperclip, Bot, MessageSquare, Sparkles, ChevronDown,
-  Plus, Pencil, X as XIcon, Check, Brain,
+  Plus, Pencil, X as XIcon, Check, Brain, Wrench, ChevronRight,
+  CheckCircle2, AlertCircle,
 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Spinner } from '@/components/ui/Spinner';
@@ -32,16 +33,19 @@ import { extractErr } from '@/api/client';
 import {
   createChatSession,
   deleteChatSession,
-  getChatHistory,
-  getSessionMemoryRecall,
+  getChatTranscript,
+  getSessionGlobalMemory,
   listChatSessions,
   renameChatSession,
-  setSessionMemoryRecall,
+  setSessionGlobalMemory,
   streamChatSSE,
 } from '@/api/chat';
 import { uploadKnowledgeFile } from '@/api/knowledge';
 import { getModelsRuntime, updateModelsRuntime, getModelsCatalog } from '@/api/models';
-import type { ChatMessageItem, ChatSessionListItem, ModelProfile, ModelRole } from '@/types/api';
+import type {
+  ChatMessageItem, ChatSessionListItem, ContentBlock,
+  ModelProfile, ModelRole, ToolUseBlock, ToolResultBlock,
+} from '@/types/api';
 
 interface Props {
   /** Review/debrief mode: bind to this interview record. ChatPanel will
@@ -63,7 +67,15 @@ interface Props {
   flexible?: boolean;
 }
 
-interface UIMessage { role: 'user' | 'assistant' | 'system'; content: string; }
+interface UIMessage {
+  role: 'user' | 'assistant' | 'system';
+  /** Flat-text rendering for user / system messages and as a fallback
+   *  for assistant messages with no ``blocks``. */
+  content: string;
+  /** Anthropic-style block chain for assistant turns. When present,
+   *  the renderer uses these and ignores ``content``. */
+  blocks?: ContentBlock[];
+}
 interface Attachment { doc_id: string; filename: string; }
 
 type Mode = 'CHAT' | 'AGENT';
@@ -71,7 +83,13 @@ type Mode = 'CHAT' | 'AGENT';
 interface SessionRuntime {
   abort: AbortController | null;  // in-flight SSE aborter (null between turns)
   messages: UIMessage[];
+  /** Streaming-only state — text being typed RIGHT NOW that hasn't
+   *  yet been flushed into ``inflightBlocks`` as a finalized text block. */
   partial: string;
+  /** Streaming-only state — finalized blocks for the assistant message
+   *  currently being built. Becomes the assistant UIMessage's ``blocks``
+   *  on ``finalize``. */
+  inflightBlocks: ContentBlock[];
   status: string;
   streaming: boolean;
   hidePartialBar: boolean;
@@ -80,9 +98,12 @@ interface SessionRuntime {
 
 function toUI(m: ChatMessageItem): UIMessage {
   const r = (m.role ?? '').toLowerCase();
+  // /chat/transcript always sets ``blocks`` (legacy rows are synthesised
+  // into a single-text-block array server-side). Pass through unchanged
+  // so the renderer can branch uniformly.
   if (r === 'user') return { role: 'user', content: m.content };
   if (r === 'assistant' || r === 'agent' || r === 'ai' || r === 'bot') {
-    return { role: 'assistant', content: m.content };
+    return { role: 'assistant', content: m.content, blocks: m.blocks };
   }
   return { role: 'system', content: m.content };
 }
@@ -116,9 +137,13 @@ export function ChatPanel({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
 
-  // ── Memory recall toggle (per-session resolved value) ────────────────
-  const [recallEnabled, setRecallEnabled] = useState(false);
-  const [togglingRecall, setTogglingRecall] = useState(false);
+  // ── Global-memory toggle (per-session resolved value) ────────────────
+  // The button reflects the effective per-session value (session_state
+  // override → user-level default → False). Toggling writes the
+  // override into session_state so this session diverges from the
+  // user-level default for subsequent turns.
+  const [globalMemoryOn, setGlobalMemoryOn] = useState(false);
+  const [togglingMemory, setTogglingMemory] = useState(false);
 
   // ── Model picker ─────────────────────────────────────────────────────
   const [modelOpen, setModelOpen] = useState(false);
@@ -140,8 +165,9 @@ export function ChatPanel({
     let r = runtimes.current.get(id);
     if (!r) {
       r = {
-        abort: null, messages: [], partial: '', status: '',
-        streaming: false, hidePartialBar: false, loadedHistory: false,
+        abort: null, messages: [], partial: '', inflightBlocks: [],
+        status: '', streaming: false, hidePartialBar: false,
+        loadedHistory: false,
       };
       runtimes.current.set(id, r);
     }
@@ -210,21 +236,25 @@ export function ChatPanel({
     return () => { alive = false; };
   }, [externalMode, interviewId, sessionType]);
 
-  // ── Lazy-load history for the active session ─────────────────────────
+  // ── Lazy-load transcript for the active session ──────────────────────
+  // Uses ``/chat/transcript`` (block-aware) rather than ``/chat/history``
+  // (flat-content) — necessary for replaying L2 agent turns with their
+  // tool-call cards. The endpoint always sets ``blocks`` per message,
+  // synthesising a single text block for legacy rows.
   useEffect(() => {
     if (!activeSessionId) return;
     const r = getRuntime(activeSessionId);
     if (r.loadedHistory) return;
     let alive = true;
-    getChatHistory(activeSessionId, 0, 100)
-      .then((rows) => {
+    getChatTranscript(activeSessionId)
+      .then((resp) => {
         if (!alive) return;
         const rt = getRuntime(activeSessionId);
-        if (rt.messages.length === 0) rt.messages = rows.map(toUI);
+        if (rt.messages.length === 0) rt.messages = resp.messages.map(toUI);
         rt.loadedHistory = true;
         bump();
       })
-      .catch(() => { /* empty history is fine */ });
+      .catch(() => { /* empty / fresh session is fine */ });
     return () => { alive = false; };
   }, [activeSessionId, getRuntime, bump]);
 
@@ -234,27 +264,27 @@ export function ChatPanel({
     return () => { map.forEach((r) => r.abort?.abort()); };
   }, []);
 
-  // ── Memory recall: fetch resolved value on session change ────────────
+  // ── Global memory: fetch resolved value on session change ────────────
   useEffect(() => {
-    if (!activeSessionId) { setRecallEnabled(false); return; }
+    if (!activeSessionId) { setGlobalMemoryOn(false); return; }
     let alive = true;
-    getSessionMemoryRecall(activeSessionId)
-      .then((v) => { if (alive) setRecallEnabled(v); })
+    getSessionGlobalMemory(activeSessionId)
+      .then((v) => { if (alive) setGlobalMemoryOn(v); })
       .catch(() => { /* leave at false */ });
     return () => { alive = false; };
   }, [activeSessionId]);
 
-  const toggleRecall = useCallback(async () => {
-    if (!activeSessionId || togglingRecall) return;
-    const next = !recallEnabled;
-    setRecallEnabled(next);
-    setTogglingRecall(true);
-    try { await setSessionMemoryRecall(activeSessionId, next); }
+  const toggleGlobalMemory = useCallback(async () => {
+    if (!activeSessionId || togglingMemory) return;
+    const next = !globalMemoryOn;
+    setGlobalMemoryOn(next);
+    setTogglingMemory(true);
+    try { await setSessionGlobalMemory(activeSessionId, next); }
     catch (e) {
-      setRecallEnabled(!next);
-      toast.error(extractErr(e, '切换记忆召回失败'));
-    } finally { setTogglingRecall(false); }
-  }, [activeSessionId, recallEnabled, togglingRecall]);
+      setGlobalMemoryOn(!next);
+      toast.error(extractErr(e, '切换全局记忆失败'));
+    } finally { setTogglingMemory(false); }
+  }, [activeSessionId, globalMemoryOn, togglingMemory]);
 
   // ── Models: load + refresh on focus + close on outside click ─────────
   const refreshModels = useCallback(() => {
@@ -371,6 +401,7 @@ export function ChatPanel({
     }
     r.messages.push({ role: 'user', content: payload });
     r.partial = '';
+    r.inflightBlocks = [];
     r.status = '';
     r.hidePartialBar = false;
     r.streaming = true;
@@ -381,14 +412,37 @@ export function ChatPanel({
     const ac = new AbortController();
     r.abort = ac;
     const sid = activeSessionId;
+
+    /** Push the current ``partial`` (if any) onto inflightBlocks as a
+     *  text block, then reset. Called at step boundaries: when a
+     *  ``text`` event marks the assistant text complete for the step,
+     *  or when a tool starts (the text-before-tool needs to be a
+     *  separate block from the text-after-tool). */
+    const flushPartial = (rt: SessionRuntime) => {
+      const trimmed = rt.partial.trim();
+      if (!trimmed) { rt.partial = ''; return; }
+      rt.inflightBlocks.push({ type: 'text', text: rt.partial });
+      rt.partial = '';
+    };
+
     const finalize = (errMsg?: string) => {
       const rt = getRuntime(sid);
-      if (rt.partial.trim()) {
-        rt.messages.push({ role: 'assistant', content: rt.partial });
+      flushPartial(rt);
+      if (rt.inflightBlocks.length > 0) {
+        // Build a flat-content fallback (last text block's body) so any
+        // surface that ignores ``blocks`` still has something to show.
+        const lastText = [...rt.inflightBlocks].reverse()
+          .find((b): b is { type: 'text'; text: string } => b.type === 'text');
+        rt.messages.push({
+          role: 'assistant',
+          content: lastText?.text ?? '',
+          blocks: rt.inflightBlocks,
+        });
       } else if (errMsg) {
         rt.messages.push({ role: 'system', content: `（连接中断：${errMsg}）` });
       }
       rt.partial = '';
+      rt.inflightBlocks = [];
       rt.status = '';
       rt.streaming = false;
       rt.hidePartialBar = false;
@@ -396,15 +450,75 @@ export function ChatPanel({
       bump();
     };
     streamChatSSE(sid, payload, {
-      onChunk: (delta) => {
+      onStatus: (status) => {
+        const rt = getRuntime(sid);
+        rt.status = status;
+        rt.streaming = true;
+        bump();
+      },
+      onTextDelta: (delta) => {
         const rt = getRuntime(sid);
         rt.partial += delta;
         rt.streaming = true;
         bump();
       },
-      onStatus: (status) => {
+      // Step-boundary marker (agent only). The accumulated ``partial``
+      // (which the server-side ``text_delta`` chain populated) becomes
+      // a finalized text block. We prefer ``rt.partial`` over the
+      // event's ``content`` since they should be identical — the
+      // event is a redundancy check, not a re-render.
+      onText: (content) => {
         const rt = getRuntime(sid);
-        rt.status = status;
+        if (!rt.partial.trim() && content) {
+          // Defensive: agent emitted ``text`` without prior deltas
+          // (e.g. non-streamed model). Use the event payload directly.
+          rt.partial = content;
+        }
+        flushPartial(rt);
+        rt.streaming = true;
+        bump();
+      },
+      onToolStart: ({ tool, args_summary }) => {
+        const rt = getRuntime(sid);
+        // Flush any text-before-tool so it lands BEFORE the tool card.
+        flushPartial(rt);
+        // Synthetic id during streaming — the persisted version (loaded
+        // from /chat/transcript on next session view) carries the real
+        // OpenAI tool_call_id. The renderer doesn't match by id.
+        const block: ToolUseBlock = {
+          type: 'tool_use',
+          id: '',
+          name: tool,
+          // ``args_summary`` is a flat string for display; we surface
+          // it under an ``_args_summary`` key so the JSON-inspector
+          // view still renders nicely. The persisted shape has full
+          // ``input`` (parsed args); during live streaming we don't
+          // have the parsed dict yet.
+          input: args_summary ? { _args_summary: args_summary } : {},
+        };
+        rt.inflightBlocks.push(block);
+        rt.status = `🔧 ${tool}`;
+        rt.streaming = true;
+        bump();
+      },
+      onToolDone: ({ tool, result_summary, is_error, tool_latency_ms }) => {
+        const rt = getRuntime(sid);
+        const block: ToolResultBlock = {
+          type: 'tool_result',
+          tool_use_id: '',
+          is_error,
+          latency_ms: tool_latency_ms,
+          summary: result_summary,
+          // Full content arrives in the persisted block on next reload.
+          // Live streaming only sends the summary — that's enough for
+          // the folded label; the expanded view shows "(refresh to load)"
+          // until the user reloads. Acceptable: same trade-off as the
+          // "preview vs. full" pattern in Claude Code's chat UI.
+          content: '',
+        };
+        rt.inflightBlocks.push(block);
+        const icon = is_error ? '✗' : '✓';
+        rt.status = `${icon} ${tool}${result_summary ? ` · ${result_summary}` : ''}`;
         rt.streaming = true;
         bump();
       },
@@ -449,6 +563,7 @@ export function ChatPanel({
   const activeRuntime = activeSessionId ? getRuntime(activeSessionId) : null;
   const messages = activeRuntime?.messages ?? [];
   const partial = activeRuntime?.partial ?? '';
+  const inflightBlocks = activeRuntime?.inflightBlocks ?? [];
   const statusHint = activeRuntime?.status ?? '';
   const streaming = !!activeRuntime?.streaming;
   const hidePartialBar = !!activeRuntime?.hidePartialBar;
@@ -679,7 +794,7 @@ export function ChatPanel({
                 style={{ position: 'absolute', top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` }}
               >
                 <div className="pb-3">
-                  <Bubble role={m.role} content={m.content} />
+                  <Bubble role={m.role} content={m.content} blocks={m.blocks} />
                 </div>
               </div>
             );
@@ -688,12 +803,23 @@ export function ChatPanel({
         {streaming && !hidePartialBar && (
           <div className="flex justify-start">
             <div className="max-w-[85%] px-3.5 py-2.5 text-[14px] leading-[1.65] bg-stone-50 border border-stone-200 rounded-2xl">
-              {partial ? <MarkdownBody source={partial} /> : (
+              {/* Tool cards & finalized text blocks accumulated so far
+                  for this in-flight assistant turn. Same renderer as
+                  the persisted assistant bubble — what you see during
+                  streaming matches what you see after refresh. */}
+              {inflightBlocks.length > 0 && (
+                <BlockChain blocks={inflightBlocks} />
+              )}
+              {/* Live typing tail. ``partial`` is what hasn't yet been
+                  flushed into a finalized text block. */}
+              {partial ? (
+                <MarkdownBody source={partial} />
+              ) : inflightBlocks.length === 0 ? (
                 <span className="text-stone-400 inline-flex items-center gap-1.5">
                   <Spinner size={10} className="text-primary-500" />
                   {statusHint || 'AI 正在生成…'}
                 </span>
-              )}
+              ) : null}
               <button
                 onClick={() => { if (activeRuntime) { activeRuntime.hidePartialBar = true; bump(); } }}
                 className="ml-2 text-[11px] text-stone-400 hover:text-stone-600"
@@ -736,18 +862,22 @@ export function ChatPanel({
             {mode === 'AGENT' ? <><Bot size={11} /> AGENT</> : <><MessageSquare size={11} /> CHAT</>}
           </button>
           <button
-            onClick={toggleRecall}
-            disabled={!activeSessionId || togglingRecall}
-            title={recallEnabled ? '关闭记忆召回' : '开启记忆召回'}
+            onClick={toggleGlobalMemory}
+            disabled={!activeSessionId || togglingMemory}
+            title={
+              globalMemoryOn
+                ? '关闭全局记忆（本会话不再注入跨会话记忆）'
+                : '开启全局记忆（本会话注入个人资料 + 知识 / 策略 / 习惯）'
+            }
             className={[
               'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium tracking-wider disabled:opacity-50',
-              recallEnabled
+              globalMemoryOn
                 ? 'bg-accent-50 border-accent-200 text-accent-700'
                 : 'bg-white border-stone-200 text-stone-600',
             ].join(' ')}
           >
             <Brain size={11} />
-            {recallEnabled ? '记忆 · 开' : '记忆 · 关'}
+            {globalMemoryOn ? '全局记忆 · 开' : '全局记忆 · 关'}
           </button>
           <input
             ref={fileRef}
@@ -808,7 +938,11 @@ export function ChatPanel({
   );
 }
 
-function Bubble({ role, content }: { role: UIMessage['role']; content: string }) {
+function Bubble({ role, content, blocks }: {
+  role: UIMessage['role'];
+  content: string;
+  blocks?: ContentBlock[];
+}) {
   const mine = role === 'user';
   return (
     <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
@@ -822,8 +956,149 @@ function Bubble({ role, content }: { role: UIMessage['role']; content: string })
               : 'bg-stone-50 text-stone-800 border border-stone-200 rounded-2xl rounded-bl-sm',
         ].join(' ')}
       >
-        {mine ? <span className="whitespace-pre-wrap">{content}</span> : <MarkdownBody source={content} />}
+        {mine ? (
+          <span className="whitespace-pre-wrap">{content}</span>
+        ) : blocks && blocks.length > 0 ? (
+          <BlockChain blocks={blocks} />
+        ) : (
+          <MarkdownBody source={content} />
+        )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Render a chain of Anthropic-style content blocks. Adjacent
+ * ``tool_use`` + ``tool_result`` pairs collapse into a single folded
+ * card (Claude-Code style) so a ReAct turn reads as: text → [🔧 card]
+ * → text → [🔧 card] → final text.
+ */
+function BlockChain({ blocks }: { blocks: ContentBlock[] }) {
+  const out: React.ReactNode[] = [];
+  let i = 0;
+  while (i < blocks.length) {
+    const b = blocks[i];
+    if (b.type === 'text') {
+      out.push(
+        <div key={`b${i}`} className="prose-block">
+          <MarkdownBody source={b.text} />
+        </div>
+      );
+      i += 1;
+      continue;
+    }
+    if (b.type === 'tool_use') {
+      const next = blocks[i + 1];
+      const result = next && next.type === 'tool_result' ? next : null;
+      out.push(<ToolCard key={`b${i}`} use={b} result={result} />);
+      i += result ? 2 : 1;
+      continue;
+    }
+    if (b.type === 'tool_result') {
+      // Orphaned tool_result (no preceding tool_use) — shouldn't happen
+      // with the current backend but render defensively.
+      out.push(<ToolCard key={`b${i}`} use={null} result={b} />);
+      i += 1;
+      continue;
+    }
+    i += 1;  // unknown block type — skip
+  }
+  return <>{out}</>;
+}
+
+/**
+ * Folded tool call card. Header always shows "🔧 name · summary";
+ * click to expand input (JSON args) + full result content.
+ */
+function ToolCard({
+  use, result,
+}: { use: ToolUseBlock | null; result: ToolResultBlock | null }) {
+  const [open, setOpen] = useState(false);
+  const name = use?.name ?? '(unknown tool)';
+  const summary = result?.summary ?? '';
+  const isError = !!result?.is_error;
+  const pending = !result;   // tool_start fired but tool_done not yet
+  const latencyMs = result?.latency_ms;
+  const Icon = pending ? Wrench : isError ? AlertCircle : CheckCircle2;
+  return (
+    <div
+      className={[
+        'my-1.5 rounded-lg border text-[12px] font-mono leading-snug',
+        isError
+          ? 'bg-danger-50 border-danger-200'
+          : pending
+            ? 'bg-stone-50 border-stone-200'
+            : 'bg-accent-50/50 border-accent-100',
+      ].join(' ')}
+    >
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={[
+          'w-full flex items-center gap-1.5 px-2.5 py-1.5 text-left',
+          'hover:bg-black/[0.02] rounded-lg',
+        ].join(' ')}
+      >
+        <ChevronRight
+          size={12}
+          className={['shrink-0 text-stone-400 transition-transform',
+            open ? 'rotate-90' : ''].join(' ')}
+        />
+        <Icon
+          size={12}
+          className={[
+            'shrink-0',
+            isError ? 'text-danger-600'
+              : pending ? 'text-stone-400'
+              : 'text-accent-700',
+          ].join(' ')}
+        />
+        <span className="font-semibold text-stone-700">{name}</span>
+        {summary && (
+          <span className="text-stone-500 truncate">· {summary}</span>
+        )}
+        {pending && (
+          <Spinner size={10} className="ml-auto text-stone-400 shrink-0" />
+        )}
+        {!pending && typeof latencyMs === 'number' && (
+          <span className="ml-auto shrink-0 text-stone-400 text-[10px]">
+            {latencyMs >= 1000
+              ? `${(latencyMs / 1000).toFixed(1)}s`
+              : latencyMs < 1
+                ? '<1ms'
+                : `${Math.round(latencyMs)}ms`}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="px-2.5 pb-2 space-y-1.5">
+          {use && Object.keys(use.input).length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-stone-400 mb-0.5">
+                Input
+              </div>
+              <pre className="bg-white border border-stone-200 rounded p-2 text-[11px] overflow-x-auto whitespace-pre-wrap break-words">
+                {JSON.stringify(use.input, null, 2)}
+              </pre>
+            </div>
+          )}
+          {result && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-stone-400 mb-0.5">
+                {isError ? 'Error' : 'Output'}
+              </div>
+              <pre className={[
+                'border rounded p-2 text-[11px] overflow-x-auto whitespace-pre-wrap break-words',
+                isError
+                  ? 'bg-white border-danger-200 text-danger-700'
+                  : 'bg-white border-stone-200',
+              ].join(' ')}>
+                {result.content || '(刷新会话以加载完整输出)'}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

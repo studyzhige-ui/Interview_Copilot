@@ -94,11 +94,76 @@ export interface ChatSessionCreateResp {
   session_type: string;
 }
 
+/**
+ * Anthropic-style content block. Mirrors the persisted shape in
+ * ``chat_messages.content_blocks_json`` (backend Stage-G refactor).
+ *
+ * Both L1 chat turns and L2 agent turns now persist this structure:
+ *   - L1 chat persists a single ``text`` block per assistant turn.
+ *   - L2 agent persists an interleaved chain like
+ *     ``[text, tool_use, tool_result, text, tool_use, tool_result, ...]``
+ *     so a folded-card replay UI can reconstruct the ReAct loop.
+ *
+ * The backend ALWAYS returns ``blocks`` from ``/chat/transcript`` —
+ * legacy rows with no JSON column are synthesised into a single text
+ * block at read-time (chat_history_service._message_to_dict).
+ */
+export type ContentBlock =
+  | TextBlock
+  | ToolUseBlock
+  | ToolResultBlock;
+
+export interface TextBlock {
+  type: 'text';
+  text: string;
+}
+
+export interface ToolUseBlock {
+  type: 'tool_use';
+  /** Tool call id assigned by the LLM (empty when synthesised during
+   *  live streaming, since the SSE ``tool_start`` event doesn't carry it). */
+  id: string;
+  name: string;
+  /** Parsed JSON args. Free-form per tool — render as inspectable JSON. */
+  input: Record<string, unknown>;
+}
+
+export interface ToolResultBlock {
+  type: 'tool_result';
+  /** Matches a preceding ``ToolUseBlock.id``. Empty during streaming. */
+  tool_use_id: string;
+  is_error: boolean;
+  latency_ms: number;
+  /** Always-visible folded label, e.g. "topic_count=8". */
+  summary: string;
+  /** Full LLM-visible result text — may be a ``<persisted-output ...>``
+   *  pointer string for results too large to inline. Expanded on demand. */
+  content: string;
+}
+
 export interface ChatMessageItem {
   seq: number;
   role: string;
+  /** Flat-text fallback. For agent turns this is the LAST text block
+   *  joined; ``blocks`` is the source of truth when present. */
   content: string;
-  created_at: string;
+  /** Anthropic-style content blocks. Always populated by
+   *  ``/chat/transcript``; legacy ``/chat/history`` omits this. */
+  blocks?: ContentBlock[];
+  /** Planner's rewritten query for the turn — agent-mode only. */
+  rewritten_query?: string | null;
+  created_at: string | null;
+}
+
+export interface ChatTranscriptResp {
+  status: 'success';
+  session_id: string;
+  session_type: string;
+  turn_count: number;
+  compaction_cursor: number;
+  session_state: Record<string, unknown>;
+  messages: ChatMessageItem[];
+  total_messages: number;
 }
 
 export interface MockPlanPhase {

@@ -4,6 +4,7 @@ import type {
   ChatSessionCreateResp,
   ChatSessionListItem,
   ChatMessageItem,
+  ChatTranscriptResp,
 } from '@/types/api';
 
 /**
@@ -18,18 +19,82 @@ import type {
  * keeps the WS endpoint server-side as a forward hook for real-time
  * voice but its text-only flow goes through this same helper.
  *
- * Wire shape: server emits ``data: { type, content }\n\n`` lines, where
- * type ∈ {"status", "chunk", "done"}. We dispatch to the callbacks
- * accordingly and resolve / reject the returned promise once the
- * server sends ``{type:"done"}`` or the fetch errors.
+ * Wire shape (Stage-G unified — see backend/app/agent_runtime/
+ * harness_events.py for the source of truth):
+ *
+ *     data: {"type": "<HarnessEventType>", "data": {...},
+ *            "step": N, "elapsed_ms": M}\n\n
+ *
+ * Event types we expect:
+ *   - status      data.message   transient progress hint
+ *   - text_delta  data.delta     incremental token (THE new "chunk")
+ *   - text        data.content   step-final consolidated text (agent only;
+ *                                L1 chat is delta-only and never emits this)
+ *   - tool_start  data.{tool, args_summary}                (agent only)
+ *   - tool_done   data.{tool, result_summary,
+ *                       tool_latency_ms, is_error}         (agent only)
+ *   - budget      data.{run_id, prompt_tokens, ...}        (agent only — once)
+ *   - error       data.error     terminal: promise rejects
+ *   - done                       terminal: promise resolves
  *
  * Cancellation: pass an AbortController.signal in ``opts.signal`` —
  * the active fetch is aborted, the server-side generator yields its
  * cleanup hook, and the promise rejects with the signal's reason.
  */
+
+/** Mirrors HarnessEventType in backend/app/agent_runtime/harness_events.py. */
+export type HarnessEventType =
+  | 'status'
+  | 'text_delta'
+  | 'text'
+  | 'tool_start'
+  | 'tool_done'
+  | 'budget'
+  | 'error'
+  | 'done';
+
+export interface HarnessEvent {
+  type: HarnessEventType;
+  data: Record<string, unknown>;
+  step: number;
+  elapsed_ms: number;
+}
+
+export interface ToolStartInfo {
+  tool: string;
+  args_summary: string;
+  step: number;
+  elapsed_ms: number;
+}
+
+export interface ToolDoneInfo {
+  tool: string;
+  result_summary: string;
+  step: number;
+  elapsed_ms: number;
+  tool_latency_ms: number;
+  is_error: boolean;
+}
+
+export interface BudgetInfo {
+  /** Agent run id, surfaced for trace deep-links. */
+  run_id?: string;
+  /** Free-form payload from HarnessEvent.budget(...). */
+  [key: string]: unknown;
+}
+
 export interface StreamChatHandlers {
-  onChunk: (delta: string) => void;
-  onStatus?: (status: string) => void;
+  /** Transient "正在生成…" pings. Safe to ignore — UI sugar only. */
+  onStatus?: (message: string) => void;
+  /** Incremental token. Append to your in-flight assistant buffer. */
+  onTextDelta?: (delta: string, step: number) => void;
+  /** Agent-mode step boundary: the LLM's text response for this step
+   *  is finalized. L1 chat NEVER emits this (delta-only contract).
+   *  Treat it as "flush the partial buffer into a finalized text block". */
+  onText?: (content: string, step: number) => void;
+  onToolStart?: (info: ToolStartInfo) => void;
+  onToolDone?: (info: ToolDoneInfo) => void;
+  onBudget?: (info: BudgetInfo, step: number) => void;
 }
 
 export async function streamChatSSE(
@@ -84,15 +149,61 @@ export async function streamChatSSE(
           .map((l) => l.slice(5).trimStart())
           .join('\n');
         if (!payload) continue;
-        let evt: { type?: string; content?: string };
-        try { evt = JSON.parse(payload); }
+        let evt: HarnessEvent;
+        try { evt = JSON.parse(payload) as HarnessEvent; }
         catch { continue; }
-        if (evt.type === 'chunk') {
-          handlers.onChunk(evt.content ?? '');
-        } else if (evt.type === 'status') {
-          handlers.onStatus?.(evt.content ?? '');
-        } else if (evt.type === 'done') {
-          return;
+        if (!evt || typeof evt.type !== 'string') continue;
+        const data = (evt.data ?? {}) as Record<string, unknown>;
+        const step = typeof evt.step === 'number' ? evt.step : 0;
+        const elapsed = typeof evt.elapsed_ms === 'number' ? evt.elapsed_ms : 0;
+        switch (evt.type) {
+          case 'status':
+            handlers.onStatus?.(String(data.message ?? ''));
+            break;
+          case 'text_delta':
+            handlers.onTextDelta?.(String(data.delta ?? ''), step);
+            break;
+          case 'text':
+            handlers.onText?.(String(data.content ?? ''), step);
+            break;
+          case 'tool_start':
+            handlers.onToolStart?.({
+              tool: String(data.tool ?? ''),
+              args_summary: String(data.args_summary ?? ''),
+              step, elapsed_ms: elapsed,
+            });
+            break;
+          case 'tool_done':
+            handlers.onToolDone?.({
+              tool: String(data.tool ?? ''),
+              result_summary: String(data.result_summary ?? ''),
+              tool_latency_ms: Number(data.tool_latency_ms ?? 0),
+              is_error: Boolean(data.is_error),
+              step, elapsed_ms: elapsed,
+            });
+            break;
+          case 'budget':
+            handlers.onBudget?.(data as BudgetInfo, step);
+            break;
+          case 'error':
+            // Throw so the caller's .catch() handles it — also lets the
+            // ``finally`` release the reader. The server may emit a
+            // trailing ``done`` after the error per streaming.py's
+            // fallback path; we never reach it because the throw
+            // short-circuits the loop, which is the right behaviour
+            // (an errored stream is finished from our POV).
+            throw new Error(String(data.error ?? 'stream error'));
+          case 'done':
+            return;
+          default:
+            // Forward-compat: unknown event types are silently skipped
+            // rather than throwing — lets the backend add new event
+            // types without lockstep frontend deploys. We log under
+            // ``debug`` so a dev with the console open spots a wire
+            // drift without a debugger.
+            // eslint-disable-next-line no-console
+            console.debug('[sse] unknown event type', evt.type, data);
+            break;
         }
       }
     }
@@ -130,6 +241,23 @@ export async function getChatHistory(
   return res.data;
 }
 
+/**
+ * Block-aware history loader — preferred over ``getChatHistory`` for any
+ * UI that needs to replay an L2 agent turn (tool-use / tool-result
+ * cards). Returns the full transcript (no pagination) plus session meta.
+ *
+ * The backend ALWAYS attaches ``blocks[]`` to every message — for
+ * legacy rows with no ``content_blocks_json`` it synthesises a single
+ * ``text`` block from ``content`` at read time, so the renderer can
+ * uniformly branch on ``blocks`` without a flat-string fallback.
+ */
+export async function getChatTranscript(sessionId: string): Promise<ChatTranscriptResp> {
+  const res = await apiClient.get('/chat/transcript', {
+    params: { session_id: sessionId },
+  });
+  return res.data;
+}
+
 export async function renameChatSession(sessionId: string, title: string): Promise<void> {
   // Backend now prefers JSON body; query param kept as fallback for compat.
   await apiClient.patch(`/chat/sessions/${encodeURIComponent(sessionId)}/title`, { title });
@@ -140,20 +268,25 @@ export async function deleteChatSession(sessionId: string): Promise<void> {
 }
 
 
-// ── Memory recall toggle (per-session + per-user) ─────────────────────────
-// The per-session value is stored inside chat_sessions.session_state JSON;
-// reading via this endpoint also resolves the effective fallback from
-// the user-level default, so the switch UI never lies about what the
-// agent will actually do on the next turn.
+// ── Global-memory toggle (per-session override + per-user default) ───────
+// The per-session value lives inside ``chat_sessions.session_state`` JSON
+// under the key ``global_memory_enabled`` (legacy key
+// ``memory_recall_enabled`` is read for back-compat — see backend
+// recall_policy). The GET endpoint resolves the effective value:
+// per-session override → user-level default → False, so the switch UI
+// never lies about what the next turn will inject.
+//
+// Note: the endpoint path is still ``/memory-recall`` for back-compat
+// (renaming a public URL is more expensive than the function alias).
 
-export async function getSessionMemoryRecall(sessionId: string): Promise<boolean> {
+export async function getSessionGlobalMemory(sessionId: string): Promise<boolean> {
   const res = await apiClient.get(
     `/chat/sessions/${encodeURIComponent(sessionId)}/memory-recall`,
   );
   return Boolean(res.data?.enabled);
 }
 
-export async function setSessionMemoryRecall(
+export async function setSessionGlobalMemory(
   sessionId: string,
   enabled: boolean,
 ): Promise<void> {
