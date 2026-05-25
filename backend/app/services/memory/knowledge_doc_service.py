@@ -113,14 +113,23 @@ def load(
         )
 
 
-def load_all(user_id: str) -> list[KnowledgeDoc]:
+def load_all(
+    user_id: str, *, db: Session | None = None,
+) -> list[KnowledgeDoc]:
     """All topics for a user, ordered by last_discussed_at desc then
     created_at desc so the most recently-touched topics come first
-    in the index."""
-    db: Session = SessionLocal()
-    try:
+    in the index.
+
+    ``db`` lets a higher-level orchestrator share a session across
+    multiple doc-service reads (e.g. ``/memory/overview`` reading all
+    four doc types in one shot). Same contract as ``load`` — returns
+    ORM rows, so the caller must read attributes before the session
+    closes.
+    """
+    from app.services.memory._db_helpers import session_scope
+    with session_scope(db) as session:
         return (
-            db.query(KnowledgeDoc)
+            session.query(KnowledgeDoc)
             .filter(KnowledgeDoc.user_id == user_id)
             .order_by(
                 KnowledgeDoc.last_discussed_at.desc().nullslast(),
@@ -128,8 +137,6 @@ def load_all(user_id: str) -> list[KnowledgeDoc]:
             )
             .all()
         )
-    finally:
-        db.close()
 
 
 def list_index_lines(

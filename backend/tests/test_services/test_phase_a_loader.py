@@ -57,6 +57,33 @@ def _rebind(monkeypatch, Session):
 # ── single_doc one_liner derivation ───────────────────────────────────
 
 
+def test_load_all_accepts_db_kwarg(engine_and_session, monkeypatch):
+    """``knowledge_doc_service.load_all`` must accept ``db: Session |
+    None`` so the ``/memory/overview`` endpoint (and any future
+    orchestrator) can share one session across all four memory reads.
+    Before P1-J this function was the only doc-service reader without
+    the kwarg.
+    """
+    from app.services.memory import knowledge_doc_service
+
+    _, Session = engine_and_session
+    _rebind(monkeypatch, Session)
+
+    # Without db: helper opens + closes a fresh session internally.
+    rows = knowledge_doc_service.load_all("alice")
+    assert rows == []
+
+    # With db: shared session, helper doesn't close it.
+    shared = Session()
+    try:
+        rows2 = knowledge_doc_service.load_all("alice", db=shared)
+        assert rows2 == []
+        # Session is still usable after the call.
+        assert shared.is_active
+    finally:
+        shared.close()
+
+
 def test_load_universal_opens_exactly_one_db_session(engine_and_session, monkeypatch):
     """``load_universal`` MUST share a single ``SessionLocal()`` across
     all four universal-pass reads (user_profile + knowledge_index +
@@ -103,6 +130,55 @@ def test_load_universal_opens_exactly_one_db_session(engine_and_session, monkeyp
         f"its 4 service calls; got {call_count['n']}. A regression "
         f"that drops the shared-session plumbing brings this back "
         f"to 4 — silently regressing perf without breaking behavior."
+    )
+
+
+def test_memory_overview_opens_exactly_one_db_session(engine_and_session, monkeypatch):
+    """``/memory/overview`` endpoint MUST share a single ``SessionLocal()``
+    across its 4 doc-service reads (user_profile + knowledge.load_all
+    + strategy + habit). Pre-P1-J each opened its own — 4 connections
+    per page load for the user-facing endpoint, mirroring the agent
+    side's pre-P1-F behavior.
+
+    Same counter pattern as
+    ``test_load_universal_opens_exactly_one_db_session``: a future
+    refactor that drops ``db=db`` from any of the 4 calls bumps the
+    counter back to 4 and this test fails loudly.
+    """
+    from app.api.chat.memory import memory_overview
+    from app.services.memory import (
+        habit_doc_service, knowledge_doc_service,
+        strategy_doc_service, user_profile_doc_service,
+    )
+
+    _, Session = engine_and_session
+    _rebind(monkeypatch, Session)
+
+    call_count = {"n": 0}
+    real_session = Session
+
+    def _counting_factory(*args, **kwargs):
+        call_count["n"] += 1
+        return real_session(*args, **kwargs)
+
+    import app.services.memory._db_helpers as helpers_mod
+    monkeypatch.setattr(helpers_mod, "SessionLocal", _counting_factory)
+    monkeypatch.setattr(user_profile_doc_service, "SessionLocal", _counting_factory)
+    monkeypatch.setattr(knowledge_doc_service, "SessionLocal", _counting_factory)
+    import app.services.memory._single_doc_service as single_mod
+    monkeypatch.setattr(single_mod, "SessionLocal", _counting_factory)
+
+    # Fake current_user — the endpoint only reads ``.username``.
+    class _FakeUser:
+        username = "alice"
+
+    memory_overview(current_user=_FakeUser())
+
+    assert call_count["n"] == 1, (
+        f"/memory/overview should open EXACTLY 1 SessionLocal across "
+        f"its 4 service calls; got {call_count['n']}. A regression "
+        f"that drops ``db=db`` from any call would bring this back to "
+        f"4 — silently regressing the user-facing perf gain from P1-J."
     )
 
 

@@ -62,26 +62,41 @@ class DocBodyRequest(BaseModel):
 
 @router.get("/memory/overview")
 def memory_overview(current_user: User = Depends(get_current_user)):
-    """One-shot summary of all four memory artifacts for the UI."""
+    """One-shot summary of all four memory artifacts for the UI.
+
+    Opens ONE database session and threads it through all four
+    doc-service reads — pre-fix each opened its own ``SessionLocal``
+    (4 connections per page load). Same pattern P1-F applied to
+    ``load_universal`` for the agent path; this endpoint is the
+    user-facing equivalent.
+
+    The knowledge-topics ORM row attributes (``topic``, ``one_liner``,
+    etc.) are read INSIDE the ``with`` block via the list comprehension
+    — they must be touched before the session closes (per the
+    ``knowledge_doc_service.load_all`` docstring contract).
+    """
+    from app.services.memory._db_helpers import session_scope
+
     user_id = current_user.username
-    return {
-        "user_profile_body": user_profile_doc_service.load(user_id),
-        "knowledge_topics": [
-            {
-                "topic": d.topic,
-                "one_liner": d.one_liner,
-                "mastery_level": d.mastery_level,
-                "fact_count": d.fact_count,
-                "last_discussed_at": (
-                    d.last_discussed_at.isoformat() if d.last_discussed_at else None
-                ),
-                "updated_at": d.updated_at.isoformat() if d.updated_at else None,
-            }
-            for d in knowledge_doc_service.load_all(user_id)
-        ],
-        "strategy_body": strategy_doc_service.load(user_id),
-        "habit_body": habit_doc_service.load(user_id),
-    }
+    with session_scope(None) as db:
+        return {
+            "user_profile_body": user_profile_doc_service.load(user_id, db=db),
+            "knowledge_topics": [
+                {
+                    "topic": d.topic,
+                    "one_liner": d.one_liner,
+                    "mastery_level": d.mastery_level,
+                    "fact_count": d.fact_count,
+                    "last_discussed_at": (
+                        d.last_discussed_at.isoformat() if d.last_discussed_at else None
+                    ),
+                    "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+                }
+                for d in knowledge_doc_service.load_all(user_id, db=db)
+            ],
+            "strategy_body": strategy_doc_service.load(user_id, db=db),
+            "habit_body": habit_doc_service.load(user_id, db=db),
+        }
 
 
 # ── knowledge_doc ──────────────────────────────────────────────────────
