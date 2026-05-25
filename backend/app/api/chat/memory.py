@@ -14,7 +14,8 @@ Exposes the four v3 doc types via a uniform ``/memory/...`` surface:
   GET  /memory/user-profile           — read user_profile_doc (raw text)
 
 Legacy ``/memory/items*`` endpoints (per-row interview_fact CRUD) are
-removed — the underlying ``memory_items`` table is being retired.
+removed; the underlying ``memory_items`` table was dropped by alembic
+0003.
 """
 
 from __future__ import annotations

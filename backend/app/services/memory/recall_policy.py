@@ -169,28 +169,16 @@ def set_session_global_memory(session_id: str, user_id: str, enabled: bool) -> N
         db.close()
 
 
-def set_user_global_memory_default(user_id: str, enabled: bool) -> None:
-    """Update the per-user default (``users.global_memory_enabled``).
-
-    ``user_id`` is the username (consistent with the rest of the chat
-    code paths). No-op for missing users.
-    """
-    db: Session = SessionLocal()
-    try:
-        row = db.query(User).filter(User.username == user_id).first()
-        if row is None:
-            return
-        row.global_memory_enabled = bool(enabled)
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+# NB: a ``set_user_global_memory_default`` helper used to live here as a
+# wrapper around ``users.global_memory_enabled``, but every caller (just
+# ``PATCH /auth/me``) writes the column directly via SQLAlchemy on the
+# already-loaded ``current_user`` row — going through a fresh DB session
+# in a wrapper was pure indirection. Deleted in the Phase-H audit
+# cleanup; if a future caller actually needs the policy module to own the
+# write (symmetric with ``set_session_global_memory``), reintroduce it.
 
 
 __all__ = [
     "is_global_memory_enabled_for_session",
     "set_session_global_memory",
-    "set_user_global_memory_default",
 ]

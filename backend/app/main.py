@@ -148,10 +148,10 @@ async def lifespan(app: FastAPI):
     logger.info(">>> [2/5] Initializing LlamaIndex LLM and embedding settings...")
     init_rag_settings()
 
-    # v3 memory is markdown docs, not Milvus vectors — no startup backfill
-    # needed. The MEMORY_BACKFILL_ON_STARTUP setting + memory_vector_service
-    # belong to the retired v2 ``memory_items`` path and are removed in
-    # the v3 cleanup phase.
+    # v3 memory is markdown docs, not Milvus vectors — no startup
+    # backfill needed. (The retired v2 ``memory_items`` path used a
+    # ``MEMORY_BACKFILL_ON_STARTUP`` setting + a ``memory_vector_service``
+    # priming step here; both were removed in the audit cleanup.)
     logger.info(">>> [3/5] (v3 memory needs no startup backfill — skipping)")
 
     logger.info(">>> [4/5] Initializing reranker...")

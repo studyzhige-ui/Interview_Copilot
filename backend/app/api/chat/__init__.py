@@ -2,7 +2,12 @@
 
 Submodules:
   - sessions       : session CRUD + full transcript
-  - memory_items   : memory-item CRUD
+  - memory         : v3 memory CRUD (knowledge / strategy / habit /
+                     user_profile docs + audit log). The file was
+                     historically named ``memory_items.py`` (back when
+                     v2 memory was a flat row-per-item table) — renamed
+                     in the audit cleanup so a grep for "where are the
+                     memory endpoints" actually lands here.
   - streaming      : WebSocket + SSE QA streaming
   - mock_interview : mock interview control + TTS
 
@@ -19,12 +24,12 @@ but new tests should patch the specific submodule
 
 from fastapi import APIRouter
 
-from app.api.chat import memory_items, mock_interview, sessions, streaming
+from app.api.chat import memory, mock_interview, sessions, streaming
 from app.services.chat.chat_history_service import transcript_service  # noqa: F401
 
 router = APIRouter()
 router.include_router(sessions.router)
-router.include_router(memory_items.router)
+router.include_router(memory.router)
 router.include_router(streaming.router)
 router.include_router(mock_interview.router)
 

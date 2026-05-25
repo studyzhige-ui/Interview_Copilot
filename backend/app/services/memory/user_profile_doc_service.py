@@ -79,14 +79,6 @@ def load(user_id: str) -> str:
         db.close()
 
 
-def load_as_lines(user_id: str) -> list[str]:
-    """Same as :func:`load` but split into a list of non-empty lines —
-    convenient for the renderer that injects the doc into prompts.
-    """
-    doc = load(user_id)
-    return [line for line in (line.strip() for line in doc.splitlines()) if line]
-
-
 def apply_patches(
     user_id: str,
     patches: Iterable[dict[str, Any] | ProfilePatch],
@@ -274,5 +266,4 @@ __all__ = [
     "ProfilePatch",
     "apply_patches",
     "load",
-    "load_as_lines",
 ]

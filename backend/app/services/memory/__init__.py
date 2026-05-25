@@ -18,9 +18,9 @@ dreaming pipelines that maintain them:
     v3_context_loader         — universal + on-demand body loader
 
 The legacy ``MemoryExtractionService`` / ``MemoryVectorService`` /
-multi-row ``memory_items`` path is retired. ``MemoryRetrievalService``
-remains as a thin compatibility adapter (only ``load_user_profile``)
-until all call sites are migrated to v3_context_loader.
+multi-row ``memory_items`` path is retired. The Phase-H back-compat
+adapter ``MemoryRetrievalService`` was also deleted once all call sites
+migrated to ``v3_context_loader``.
 """
 
 from app.services.memory import (  # noqa: F401
@@ -39,10 +39,6 @@ from app.services.memory.post_turn_maintenance import (  # noqa: F401
     PostTurnMaintenanceService,
     post_turn_maintenance_service,
 )
-from app.services.memory.retrieval_service import (  # noqa: F401
-    MemoryRetrievalService,
-    memory_retrieval_service,
-)
 
 __all__ = [
     # Doc services
@@ -60,7 +56,4 @@ __all__ = [
     # Post-turn maintenance
     "PostTurnMaintenanceService",
     "post_turn_maintenance_service",
-    # Legacy adapter (user_profile only)
-    "MemoryRetrievalService",
-    "memory_retrieval_service",
 ]

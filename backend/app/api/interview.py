@@ -568,25 +568,26 @@ def delete_interview_record(
 
     Removes, in order:
 
-      1. **memory_items** derived from any chat_session linked to this
-         interview (``source_session_id`` ∈ linked sessions). These are
-         the ``type=interview_fact`` rows the system extracted from
-         debrief chats — they would otherwise contaminate future
-         recall.
-      2. **Milvus vectors** for those memory_items (``interview_copilot_memory``
-         collection, keyed by ``doc_id``). Best-effort: a Milvus failure
-         logs a warning but doesn't block the DB delete.
-      3. **chat_messages** for every session linked to this interview
+      1. **chat_messages** for every session linked to this interview
          (the FK has no ON DELETE CASCADE, so we have to be explicit).
-      4. **chat_sessions** linked to this interview (``interview_id == X``).
-      5. **interview_qa** + **mock_interview_sessions** (auto via FK
+      2. **chat_sessions** linked to this interview (``interview_id == X``).
+      3. **interview_qa** + **mock_interview_sessions** (auto via FK
          ON DELETE CASCADE on ``interview_records``).
-      6. The **interview_record** row itself.
+      4. The **interview_record** row itself.
 
-    Designed for "I want this interview gone — no leftover chat history,
-    no memory that could spill into other sessions." The legacy detach
-    mode (set ``interview_id = NULL``, keep the chat) was removed: in
-    practice nobody used it and it produced confusing orphan sessions.
+    Designed for "I want this interview gone — no leftover chat history."
+
+    **v3 memory survives.** Knowledge / strategy / habit / user_profile
+    docs accumulate across ALL of a user's interviews — they're
+    personal memory, not record artefacts. Deleting a record does NOT
+    touch them. If the user wants to wipe specific memory entries,
+    they use the ``/memory/*`` endpoints. (The legacy v2 cascade —
+    ``memory_items WHERE source_session_id IN sessions`` + Milvus row
+    deletes — is gone with the ``memory_items`` table itself.)
+
+    The legacy detach mode (set ``interview_id = NULL``, keep the chat)
+    was removed: in practice nobody used it and it produced confusing
+    orphan sessions.
     """
     import logging
 

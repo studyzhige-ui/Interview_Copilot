@@ -121,11 +121,10 @@ class Settings(BaseSettings):
     RAG_MIN_SCORE: float = 0.5
     RAG_FALLBACK_MIN_SCORE: float = 0.02
     RAG_LEXICAL_FALLBACK_MIN_OVERLAP: float = 0.35
-    MEMORY_MILVUS_COLLECTION: str = "interview_copilot_memory"
-    MEMORY_VECTOR_TOP_K: int = 8
-    MEMORY_LEXICAL_TOP_K: int = 12
-    MEMORY_FINAL_TOP_K: int = 3
-    MEMORY_BACKFILL_ON_STARTUP: bool = True
+    # Memory v2 settings (MEMORY_MILVUS_COLLECTION / MEMORY_*_TOP_K /
+    # MEMORY_BACKFILL_ON_STARTUP) were removed in the audit cleanup —
+    # the v3 memory architecture uses markdown docs, not vectors. See
+    # ``app/services/memory/__init__.py`` for the live entry points.
     RESUME_MILVUS_COLLECTION: str = "interview_copilot_resume"
     TTS_DEFAULT_VOICE: str = "zh-CN-YunxiNeural"
     LEVER_API_BASE: str = "https://api.lever.co/v0"
