@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel any in-flight run for the same branch when a new push lands.
+# Saves CI minutes during rapid iteration (two pushes in 30s no longer
+# means two full pipelines run to completion). ``group`` is the ref so
+# main/develop runs are independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest

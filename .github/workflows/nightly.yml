@@ -1,0 +1,97 @@
+name: Nightly
+
+# Slow / external-dep tests that don't belong on every PR but matter
+# for regression detection:
+#   * test_query_knowledge_base_requires_live_milvus — pinned by the
+#     codebase's only ``pytest.mark.skip`` marker because Milvus
+#     can't be reached from the standard CI sandbox.
+#   * (room to grow: integration tests, dependency-drift scans, etc.)
+#
+# Runs once a day at 02:00 UTC. Failures notify via the workflow's
+# default channel (GitHub Actions UI badge + email-on-fail).
+
+on:
+  schedule:
+    # Daily at 02:00 UTC.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    # Manual trigger for debugging without waiting for the cron.
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  milvus-integration:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: interview_copilot
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      milvus:
+        image: milvusdb/milvus:v2.4.3
+        ports: ["19530:19530"]
+        # Milvus has no built-in healthcheck; we trust the action's
+        # default service-up signal + a sleep inside the test itself.
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/interview_copilot
+      MILVUS_URI: http://localhost:19530
+      SECRET_KEY: nightly-test-key-not-for-production
+      DEEPSEEK_API_KEY: test-key-not-real
+      HF_ENDPOINT: https://hf-mirror.com
+      # Force-enable the test that's normally skipped.
+      RUN_LIVE_MILVUS_TESTS: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Wait for Milvus
+        # Milvus needs ~30-60s to fully boot before accepting
+        # gRPC connections. The test's own retry loop covers some of
+        # this, but failing-fast here gives a clearer error.
+        run: |
+          for i in $(seq 1 30); do
+            if python -c "import pymilvus; pymilvus.connections.connect('default', host='localhost', port='19530')" 2>/dev/null; then
+              echo "Milvus ready after ${i}s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Milvus did not become ready" >&2
+          exit 1
+
+      - name: Run Milvus-dependent tests
+        run: |
+          python -m pytest backend/tests \
+            -v --tb=short \
+            -k "milvus or rag" \
+            --no-header
