@@ -44,6 +44,10 @@ def db(monkeypatch) -> Iterator[Session]:
     # bound to the real configured DB. Redirect that to our test engine.
     import app.services.interview_record_service as irs_mod
     monkeypatch.setattr(irs_mod, "SessionLocal", Session_)
+    # The SSE events endpoint (interview_record_events_stream + the
+    # _poll_record_snapshot helper) also opens its own SessionLocal()
+    # per tick — same redirect needed.
+    monkeypatch.setattr(interview_mod, "SessionLocal", Session_)
 
     try:
         yield session
@@ -350,3 +354,111 @@ def test_delete_interview_record_cascades_chat_sessions(client, db: Session):
     assert db.get(InterviewRecord, "ir_a") is None
     assert db.get(ChatSession, "cs_1") is None
     assert db.query(ChatMessage).filter(ChatMessage.session_id == "cs_1").count() == 0
+
+
+# ── /interview-records/{id}/events (SSE) ─────────────────────────────────
+
+
+def test_events_stream_404_when_record_missing(client):
+    """No row → 404 (before the SSE stream starts, so a normal HTTP
+    error response, not an in-band 'error' event)."""
+    resp = client.get("/api/v1/interview-records/missing/events")
+    assert resp.status_code == 404
+
+
+def test_events_stream_404_when_record_belongs_to_other_user(client, db: Session):
+    """The owner check is on user_id, not just record_id — pinning
+    that a record belonging to a different user looks identical to
+    a missing record (no IDOR leakage)."""
+    db.add(InterviewRecord(
+        id="ir_other", user_id="bob", source="upload",
+        status="analyzing", title="bob's record",
+    ))
+    db.commit()
+    resp = client.get("/api/v1/interview-records/ir_other/events")
+    assert resp.status_code == 404
+
+
+def test_events_stream_emits_done_for_completed_record(client, db: Session):
+    """When the record is already COMPLETED on the first poll, the
+    stream yields one progress frame + one done frame, then closes.
+
+    We use TestClient.stream() to consume the SSE response — the
+    handler closes the generator after emitting ``done`` so the
+    context manager exits cleanly without timing out."""
+    import json as _json
+    db.add(InterviewRecord(
+        id="ir_done", user_id="alice", source="upload",
+        status="completed", title="finished",
+        analysis_json=_json.dumps({"overall": {"score": 88, "summary": "well done"}}),
+        analyzed_qa_count=5,
+    ))
+    db.commit()
+
+    with client.stream("GET", "/api/v1/interview-records/ir_done/events") as resp:
+        assert resp.status_code == 200
+        chunks = [line for line in resp.iter_lines() if line.startswith("data: ")]
+
+    # One progress frame (the first tick reads status=completed) then
+    # one done frame, then the generator returns.
+    payloads = [_json.loads(line[len("data: "):]) for line in chunks]
+    assert any(p["type"] == "progress" for p in payloads)
+    done = next((p for p in payloads if p["type"] == "done"), None)
+    assert done is not None, payloads
+    assert done["status"] == "completed"
+    assert done["analysis"]["score"] == 88
+    assert done["analysis"]["summary"] == "well done"
+
+
+def test_events_stream_emits_error_for_failed_record(client, db: Session):
+    """failed status → in-band ``error`` event with the row's
+    ``error_message``, then close. (Contrast with the 404 path,
+    which fails synchronously before the stream starts.)"""
+    import json as _json
+    db.add(InterviewRecord(
+        id="ir_failed", user_id="alice", source="upload",
+        status="failed", title="bad upload",
+        error_message="upload corrupted",
+    ))
+    db.commit()
+
+    with client.stream("GET", "/api/v1/interview-records/ir_failed/events") as resp:
+        assert resp.status_code == 200
+        chunks = [line for line in resp.iter_lines() if line.startswith("data: ")]
+
+    payloads = [_json.loads(line[len("data: "):]) for line in chunks]
+    err = next((p for p in payloads if p["type"] == "error"), None)
+    assert err is not None, payloads
+    assert err["message"] == "upload corrupted"
+
+
+def test_poll_record_snapshot_returns_none_for_missing_id(db: Session):
+    """The poll helper must return None when the row disappears
+    (the SSE loop maps None → 'record disappeared' error event)."""
+    from app.api.interview import _poll_record_snapshot
+    # ``db`` fixture didn't insert anything, so any id misses.
+    assert _poll_record_snapshot("nothing-here") is None
+
+
+def test_poll_record_snapshot_returns_plain_dict_not_orm_row(db: Session):
+    """The helper must NOT return an ORM row — the SessionLocal
+    closes immediately after the read, and any attempt to access
+    a lazy-loaded attribute on a detached row would raise
+    DetachedInstanceError. Returning a plain dict pins that
+    contract so a future edit can't reintroduce the leak."""
+    db.add(InterviewRecord(
+        id="ir_snap", user_id="alice", source="upload",
+        status="analyzing", title="snap test",
+        analyzed_qa_count=3,
+    ))
+    db.commit()
+
+    from app.api.interview import _poll_record_snapshot
+    snap = _poll_record_snapshot("ir_snap")
+    assert isinstance(snap, dict)
+    assert snap["status"] == "analyzing"
+    assert snap["analyzed_qa_count"] == 3
+    # Whatever the snapshot returns must be safely usable without
+    # a live session — assertable equality after the fixture-owned
+    # session is no longer referenced anywhere in this test.
+    assert snap["id"] == "ir_snap"

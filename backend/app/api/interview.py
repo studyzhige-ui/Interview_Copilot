@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.security import get_current_user
-from app.db.database import get_db
+from app.db.database import SessionLocal, get_db
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
 from app.models.user import User
@@ -704,26 +704,69 @@ _PROGRESS_TICK_REFERENCE = 80  # ~120s expected wall-clock for upload pipeline
 _TERMINAL_STATUSES = {STATUS_COMPLETED, STATUS_FAILED}
 
 
+def _poll_record_snapshot(record_id: str) -> dict | None:
+    """One-shot DB read for the SSE poll loop.
+
+    Each call opens its own short-lived ``SessionLocal()`` and closes
+    it immediately. Returns a plain dict — the ORM row is NOT
+    returned outside the session scope (that would trigger
+    DetachedInstanceError on any lazy-loaded attribute). Returns
+    ``None`` if the row disappeared between polls.
+
+    Designed to run inside ``asyncio.to_thread`` so the sync DB
+    round-trip doesn't block the event loop. Without this, 20
+    concurrent SSE viewers each holding a request-scoped session
+    for up to 8 minutes (320 ticks × 1.5s) would exhaust the
+    DB_POOL_SIZE=20 pool and the loop would stall on every query.
+    """
+    with SessionLocal() as db:
+        row = (
+            db.query(InterviewRecord)
+            .filter(InterviewRecord.id == record_id)
+            .first()
+        )
+        if row is None:
+            return None
+        return {
+            "id": row.id,
+            "status": (row.status or "").lower(),
+            "analyzed_qa_count": row.analyzed_qa_count or 0,
+            "analysis_json": row.analysis_json,
+            "error_message": row.error_message,
+        }
+
+
 @router.get("/interview-records/{record_id}/events")
 async def interview_record_events_stream(
     record_id: str,
-    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """SSE progress stream for the unified analysis pipeline.
 
     Polls InterviewRecord.status and analyzed_qa_count. Mock-source records
     skip the transcribing/extracting prefix and go straight to analyzing.
+
+    Each poll opens its own short-lived DB session (via
+    ``_poll_record_snapshot`` + ``asyncio.to_thread``) so 20+
+    concurrent viewers don't pin the connection pool for 8 minutes
+    apiece. The owner check at the top of the request does one
+    short read; the long-running generator opens its own sessions
+    so the request-scoped ``get_db`` isn't held for the lifetime
+    of the stream.
     """
-    initial = (
-        db.query(InterviewRecord)
-        .filter(
-            InterviewRecord.id == record_id,
-            InterviewRecord.user_id == current_user.username,
-        )
-        .first()
-    )
-    if not initial:
+    def _initial_check_sync() -> bool:
+        with SessionLocal() as db:
+            return (
+                db.query(InterviewRecord.id)
+                .filter(
+                    InterviewRecord.id == record_id,
+                    InterviewRecord.user_id == current_user.username,
+                )
+                .first()
+                is not None
+            )
+
+    if not await asyncio.to_thread(_initial_check_sync):
         raise HTTPException(status_code=404, detail="Interview record not found")
 
     POLL_INTERVAL = 1.5
@@ -732,38 +775,33 @@ async def interview_record_events_stream(
     async def event_generator():
         try:
             for tick in range(MAX_TICKS):
-                db.expire_all()
-                row = (
-                    db.query(InterviewRecord)
-                    .filter(InterviewRecord.id == record_id)
-                    .first()
-                )
-                if row is None:
+                snap = await asyncio.to_thread(_poll_record_snapshot, record_id)
+                if snap is None:
                     yield f"data: {json.dumps({'type': 'error', 'message': 'record disappeared'})}\n\n"
                     return
-                status = (row.status or "").lower()
+                status = snap["status"]
                 percent = min(95, int(tick * 100 / _PROGRESS_TICK_REFERENCE))
                 yield "data: " + json.dumps(
                     {
                         "type": "progress",
                         "status": status,
                         "percent": percent,
-                        "analyzed_qa_count": row.analyzed_qa_count or 0,
+                        "analyzed_qa_count": snap["analyzed_qa_count"],
                     },
                     ensure_ascii=False,
                 ) + "\n\n"
 
                 if status == STATUS_COMPLETED:
                     overall = {}
-                    if row.analysis_json:
+                    if snap["analysis_json"]:
                         try:
-                            overall = (json.loads(row.analysis_json) or {}).get("overall", {})
+                            overall = (json.loads(snap["analysis_json"]) or {}).get("overall", {})
                         except json.JSONDecodeError:
                             overall = {}
                     yield "data: " + json.dumps(
                         {
                             "type": "done",
-                            "record_id": row.id,
+                            "record_id": snap["id"],
                             "status": status,
                             "percent": 100,
                             "analysis": {
@@ -779,7 +817,7 @@ async def interview_record_events_stream(
                         {
                             "type": "error",
                             "status": status,
-                            "message": row.error_message or "分析失败",
+                            "message": snap["error_message"] or "分析失败",
                         },
                         ensure_ascii=False,
                     ) + "\n\n"
@@ -787,6 +825,9 @@ async def interview_record_events_stream(
                 await asyncio.sleep(POLL_INTERVAL)
             yield f"data: {json.dumps({'type': 'error', 'message': 'timeout'})}\n\n"
         except asyncio.CancelledError:
+            # Client disconnect — every SessionLocal() opened inside
+            # the loop was already ``with``-closed on its iteration,
+            # so there's nothing to release here.
             return
 
     return StreamingResponse(
