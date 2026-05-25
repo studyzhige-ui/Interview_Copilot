@@ -68,10 +68,6 @@ export interface MeResponse {
    *  Per-session override available via the chat header.
    *  Default: false (opt-in). */
   global_memory_enabled: boolean;
-  /** @deprecated Pre-Phase-H name. Backend still emits it as an alias of
-   *  ``global_memory_enabled`` for back-compat — same value, do not read
-   *  both. New code should use ``global_memory_enabled``. */
-  memory_recall_default?: boolean;
 }
 
 export async function getMe(): Promise<MeResponse> {

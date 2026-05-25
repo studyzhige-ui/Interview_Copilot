@@ -153,11 +153,13 @@ class MeResponse(BaseModel):
     updated_at: str
     # User-level preferences. Today only one knob — surface it on the
     # same /me payload to avoid a second round-trip when the profile
-    # page mounts. Emit BOTH the canonical ``global_memory_enabled``
-    # AND the legacy ``memory_recall_default`` alias so a pre-Stage-H
-    # frontend still sees the toggle state at the old key.
+    # page mounts. The legacy ``memory_recall_default`` alias used to
+    # be emitted here too for pre-Stage-H clients, but the frontend
+    # was migrated and now reads only the canonical name — the alias
+    # emit was dead weight on every /me round-trip (audit cleanup).
+    # ``MeUpdate`` still ACCEPTS the legacy name on input via Pydantic
+    # ``populate_by_name`` so any stale PATCH client keeps working.
     global_memory_enabled: bool = False
-    memory_recall_default: bool = False  # legacy alias — same value
 
 
 # Avatar upload limits.
@@ -474,7 +476,6 @@ def _serialize_me(user: User) -> MeResponse:
         created_at=user.created_at.isoformat() if user.created_at else "",
         updated_at=user.updated_at.isoformat() if user.updated_at else "",
         global_memory_enabled=bool(getattr(user, "global_memory_enabled", False)),
-        memory_recall_default=bool(getattr(user, "global_memory_enabled", False)),
     )
 
 

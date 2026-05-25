@@ -173,11 +173,23 @@ export interface MockPlanPhase {
 }
 
 export interface MockQuestion {
+  // All five fields are present on a "live" question payload (when
+  // ``done === false`` — the normal in-flight case). When the session
+  // has flipped to finished, the backend returns just ``{done: true,
+  // message}`` from ``/question`` — in that branch every field except
+  // ``done`` is missing. Callers that branch on ``done`` first (see
+  // ``MockPage.resumeInProgress``) can treat the rest as required;
+  // we keep them optional in the type for the done=true escape.
   question?: string;
   phase_id?: string;
   phase_name?: string;
   done?: boolean;
-  // v6 director may attach the cached spoken_response from the previous turn
+  // Backend sends these on EVERY non-done question (start + answer +
+  // /question reads). Kept optional only for the done=true branch.
+  question_idx?: number;
+  total_questions_in_phase?: number;
+  // v6 director attaches the spoken pre-amble for the upcoming
+  // question so the TTS layer can speak it alongside the question.
   spoken_response?: string;
 }
 
@@ -197,23 +209,29 @@ export type MockDirectorAction =
   | 'finish';
 
 export interface MockAnswerResp {
-  // Concatenated spoken_response + next_question for the TTS layer and any
-  // existing single-bubble UI. New code should prefer the split fields below.
+  // Concatenated spoken_response + next_question for the TTS layer and
+  // any existing single-bubble UI. New code should prefer the split
+  // fields below.
   interviewer_response: string;
-  // v6 Runtime Director output. Optional so a stale frontend stays happy.
-  spoken_response?: string;
-  next_question?: string;
-  action?: MockDirectorAction;
-  display_intent?: string;
+  // v6 Runtime Director output. The backend emits all four
+  // unconditionally on every successful answer turn (see
+  // ``mock_interview.py`` answer endpoint). Pre-fix the type lied
+  // about this with ``?`` markers; tightening so callers don't have
+  // to optional-chain through known-present fields.
+  spoken_response: string;
+  next_question: string;
+  action: MockDirectorAction;
+  display_intent: string;
   is_finished: boolean;
   phase_progress: {
     current_phase: string;
     // v6 renamed: turn_count + max_turns + follow_up_depth. Old keys
-    // (question_idx / total_answered) are gone — see Mock UI for the new
-    // progress chip.
-    turn_count?: number;
-    max_turns?: number;
-    follow_up_depth?: number;
+    // (question_idx / total_answered) are gone — see Mock UI for the
+    // new progress chip. The backend writes all three on every turn,
+    // so they're required here.
+    turn_count: number;
+    max_turns: number;
+    follow_up_depth: number;
   };
 }
 
