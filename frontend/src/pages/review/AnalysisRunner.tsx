@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { tokenStore } from '@/lib/token';
+import { authedFetch } from '@/api/client';
 
 export interface AnalysisProgress {
   phase: 'connecting' | 'progress' | 'done' | 'error';
@@ -33,11 +33,16 @@ export function AnalysisRunner({ recordId, onProgress, onDone, onError }: Props)
 
     (async () => {
       try {
-        const token = tokenStore.getAccess() ?? '';
-        const res = await fetch(`/api/v1/interview-records/${encodeURIComponent(recordId)}/events`, {
-          headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
-          signal: controller.signal,
-        });
+        // ``authedFetch`` mirrors apiClient's bearer + 401-refresh
+        // interceptor; without it an expired token leaves the analysis
+        // runner stuck on a generic "HTTP 401" with no recovery path.
+        const res = await authedFetch(
+          `/api/v1/interview-records/${encodeURIComponent(recordId)}/events`,
+          {
+            headers: { Accept: 'text/event-stream' },
+            signal: controller.signal,
+          },
+        );
         if (!res.ok || !res.body) {
           const msg = `HTTP ${res.status}`;
           onProgress({ phase: 'error', percent: 0, message: msg });

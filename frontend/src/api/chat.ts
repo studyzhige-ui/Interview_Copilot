@@ -1,5 +1,4 @@
-import { apiClient } from './client';
-import { tokenStore } from '@/lib/token';
+import { apiClient, authedFetch } from './client';
 import type {
   ChatSessionCreateResp,
   ChatSessionListItem,
@@ -138,14 +137,18 @@ export async function streamChatSSE(
   handlers: StreamChatHandlers,
   opts: StreamChatOpts = {},
 ): Promise<void> {
-  const token = tokenStore.getAccess() ?? '';
   const baseURL = (apiClient.defaults.baseURL ?? '').replace(/\/+$/, '');
   const url = `${baseURL}/chat/sse/${encodeURIComponent(sessionId)}`;
-  const resp = await fetch(url, {
+  // ``authedFetch`` mirrors the axios interceptor's auth flow for non-
+  // axios paths: attaches the bearer, refreshes once on 401, redirects
+  // to /auth if refresh itself fails. Without this an expired access
+  // token shows up as "连接中断: Could not validate credentials" and
+  // the user is stuck — fetch doesn't go through axios so the response
+  // interceptor at client.ts:62 never sees the 401.
+  const resp = await authedFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       Accept: 'text/event-stream',
     },
     body: JSON.stringify({ message, mode: opts.mode ?? 'chat' }),

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { tokenStore } from '@/lib/token';
+import { authedFetch } from '@/api/client';
 
 // SSE event shapes (per backend/app/api/interview.py:interview_record_events_stream)
 export type AnalysisEvent =
@@ -33,11 +33,17 @@ export function useAnalysisStream(
 
     (async () => {
       try {
-        const token = tokenStore.getAccess() ?? '';
-        const res = await fetch(`/api/v1/interview-records/${encodeURIComponent(recordId)}/events`, {
-          headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
-          signal: controller.signal,
-        });
+        // ``authedFetch`` handles bearer + 401-refresh-retry — without
+        // it an expired access token would surface here as an opaque
+        // "HTTP 401" message and the user couldn't recover without a
+        // manual page reload.
+        const res = await authedFetch(
+          `/api/v1/interview-records/${encodeURIComponent(recordId)}/events`,
+          {
+            headers: { Accept: 'text/event-stream' },
+            signal: controller.signal,
+          },
+        );
         if (!res.ok || !res.body) {
           setState({ phase: 'error', percent: 0, message: `HTTP ${res.status}` });
           onError?.(`HTTP ${res.status}`);
