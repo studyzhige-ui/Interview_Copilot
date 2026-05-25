@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
@@ -6,6 +7,17 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: { '@': path.resolve(__dirname, 'src') },
+  },
+  // Vitest config — kept inline so component tests inherit the same
+  // ``@/`` alias resolution + React plugin transform as production.
+  // ``jsdom`` is the standard DOM env for React Testing Library; the
+  // setup file wires the @testing-library/jest-dom matchers so
+  // assertions like ``toBeInTheDocument()`` work.
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.ts'],
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
   },
   server: {
     host: '127.0.0.1',
