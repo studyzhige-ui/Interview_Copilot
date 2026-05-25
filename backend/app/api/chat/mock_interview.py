@@ -93,35 +93,70 @@ async def start_mock_interview(
         request.interviewer_style, request.voice_mode,
     )
 
-    # Load resume text. /upload/resume/direct only stores the file; we extract
-    # on demand here.
+    # Resume text resolution. Three tiers, fastest first:
+    #
+    #   1. ``resume_sections`` — the dedicated structured-parsing table
+    #      used by older flows. Hot when present.
+    #
+    #   2. ``KnowledgeDocument`` docstore — when the resume was added to
+    #      the library, ingestion ALREADY parsed the PDF into chunks
+    #      and stored them in PostgresDocumentStore. We just read them
+    #      back and concatenate — no S3 round-trip, no LlamaParse call.
+    #      Resolves in ~5-50 ms.
+    #
+    #   3. ``_parse_resume_on_demand`` — last-resort cold path. S3
+    #      download + LlamaParse fresh parse. The historical default,
+    #      which is why mock_start used to take 8-10 seconds on every
+    #      fresh resume (the LlamaParse round-trip alone is 7-8 s on
+    #      a typical 2-page CV). Now only fires when the upload has
+    #      neither parsed sections NOR a library row.
+    #
+    # **Tier order is load-bearing** — sections > docstore > reparse.
+    # A future contributor swapping these will silently regress mock
+    # interview quality (sections are structured/cleaned; docstore is
+    # raw concatenated chunks). The helper-level pieces are pinned by
+    # ``tests/test_services/test_knowledge_text_service.py`` (docstore
+    # priority over reparse) but the THIS-FILE wiring is verified by
+    # hand right now — add an integration test if you change this
+    # block.
     resume_context = ""
-    resume_cached = False
+    resume_source = "none"
     if request.resume_upload_id:
         try:
             sections = resume_service.get_sections_by_upload(
                 request.resume_upload_id, current_user.username,
             )
-            if not sections:
-                # Cold path: S3 download + PyMuPDF parse. Synchronous
-                # in the called function and historically the largest
-                # contributor to mock_start latency. We DO NOT wrap in
-                # ``to_thread`` here yet — leaving that as a future
-                # optimization once telemetry confirms it's the
-                # bottleneck across users.
-                resume_context = await _parse_resume_on_demand(
+            if sections:
+                resume_context = resume_service.format_for_context(sections)
+                resume_source = "sections"
+            else:
+                from app.services.knowledge_text_service import (
+                    find_knowledge_doc_by_upload,
+                    read_full_text_from_docstore,
+                )
+                kdoc = find_knowledge_doc_by_upload(
                     db, request.resume_upload_id, current_user.username,
                 )
-            else:
-                resume_context = resume_service.format_for_context(sections)
-                resume_cached = True
+                if kdoc is not None:
+                    text, node_count = read_full_text_from_docstore(kdoc)
+                    if node_count > 0:
+                        resume_context = text
+                        resume_source = "docstore"
+                if not resume_context:
+                    resume_context = await _parse_resume_on_demand(
+                        db, request.resume_upload_id, current_user.username,
+                    )
+                    resume_source = "reparsed" if resume_context else "none"
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Resume context load failed: %s", exc)
+            logger.warning(
+                "Resume context load failed (tier reached=%s): %s",
+                resume_source, exc,
+            )
             resume_context = ""
     _mark("resume_done")
     logger.info(
-        "mock_start: resume_context_chars=%d cached=%s",
-        len(resume_context), resume_cached,
+        "mock_start: resume_context_chars=%d source=%s",
+        len(resume_context), resume_source,
     )
 
     jd_context = (request.jd_text or "").strip()
@@ -202,10 +237,10 @@ async def start_mock_interview(
     # ingest it as one event. Whenever a user reports "mock start is
     # slow", grep this and the biggest field is the answer.
     logger.info(
-        "mock_start_timing: total=%.1fms resume=%.1fms (cached=%s) "
+        "mock_start_timing: total=%.1fms resume=%.1fms (source=%s) "
         "jd=%.1fms prefix=%.1fms brief_llm=%.1fms commit=%.1fms",
         _ms("begin", "commit_done"),
-        _ms("begin", "resume_done"), resume_cached,
+        _ms("begin", "resume_done"), resume_source,
         _ms("resume_done", "jd_done"),
         _ms("jd_done", "prefix_done"),
         _ms("prefix_done", "brief_done"),

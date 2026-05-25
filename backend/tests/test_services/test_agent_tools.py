@@ -245,6 +245,13 @@ def test_read_resume_direct_docstore_read(monkeypatch):
     assert "processing" in result["hint"].lower()
 
     # --- Branch 3: docstore.from_uri raises → friendly error hint -----
+    # NB: post-refactor, the exception is swallowed + logged inside
+    # ``read_full_text_from_docstore`` (the shared helper) rather than
+    # propagating up to the tool handler. That's the right separation
+    # of concerns — the raw exception message ("simulated_db_down" or
+    # similar) stays in server logs and does NOT leak into the LLM-
+    # facing hint string. The user-facing branch detection is
+    # unchanged: still ``source=docstore_empty`` with a hint.
 
     _patch_db([_FakeDoc(
         id="kdoc_Z", title="resume.pdf", status="ready",
@@ -258,8 +265,12 @@ def test_read_resume_direct_docstore_read(monkeypatch):
     )
     result = asyncio.run(_read_resume_handler(args, ctx))
     assert result["source"] == "docstore_empty"
-    assert "Docstore error" in result["hint"]
-    assert "simulated_db_down" in result["hint"]
+    # Hint mentions status + the no-readable-nodes signal. Raw
+    # exception text is intentionally NOT in the hint.
+    assert "status=ready" in result["hint"]
+    assert "no readable nodes" in result["hint"]
+    # The user-facing string should not leak raw infrastructure errors.
+    assert "simulated_db_down" not in result["hint"]
 
 
 def test_tool_done_event_carries_full_result_content():
