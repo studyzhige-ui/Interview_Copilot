@@ -46,6 +46,14 @@ class StrategyContext:
     rewritten_query: str | None = None
     needs_knowledge_retrieval: bool = False
 
+    # Global memory toggle resolved ONCE by the engine in ``_prepare``.
+    # The agent strategy uses this to gate the recall_memory /
+    # save_memory tools out of the manifest. Pre-fix the engine read
+    # this in _prepare AND the strategy re-read the same value in its
+    # execute(), opening 2 DB sessions for a single boolean.
+    # Engine populates; strategy reads only.
+    global_memory_on: bool = False
+
     # Per-strategy extras (e.g. agent gets a tool registry handle)
     extras: dict[str, Any] = field(default_factory=dict)
 

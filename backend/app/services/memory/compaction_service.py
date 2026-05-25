@@ -86,14 +86,25 @@ class CompactionService:
 """
 
     async def compact_if_needed(self, session_id: str) -> bool:
-        meta = transcript_service.get_session_meta(session_id)
+        import asyncio
+
+        # All transcript_service reads/writes are sync DB queries.
+        # ``compact_if_needed`` runs as a background task (engine
+        # dispatches via ``safe_background_task``), but the LLM call
+        # below YIELDS the loop, so any other coroutine pinned on
+        # this thread could land during the await. Without to_thread
+        # wrapping, the three queries here form sync bottlenecks
+        # that block the loop for ~10-50ms each. Wrapped to keep the
+        # parent's event-loop thread free across the whole compaction.
+        meta = await asyncio.to_thread(
+            transcript_service.get_session_meta, session_id,
+        )
         if meta is None:
             return False
 
-        pending = transcript_service.get_recent_turns(
-            session_id=session_id,
-            max_turns=100,
-            after_seq=meta["compaction_cursor"],
+        pending = await asyncio.to_thread(
+            transcript_service.get_recent_turns,
+            session_id, 100, meta["compaction_cursor"],
         )
         if not pending:
             return False
@@ -139,7 +150,8 @@ class CompactionService:
                 new_summary = new_summary[:1200]
 
             session_state["summary"] = new_summary
-            transcript_service.update_session_fields(
+            await asyncio.to_thread(
+                transcript_service.update_session_fields,
                 session_id,
                 session_state=dump_session_state(session_state),
                 compaction_cursor=pending[-1]["seq"],

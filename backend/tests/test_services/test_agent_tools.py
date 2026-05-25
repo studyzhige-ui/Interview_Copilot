@@ -706,6 +706,36 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
     )
 
 
+def test_strategy_context_carries_global_memory_on(monkeypatch):
+    """Pre-P1-H the engine resolved ``is_global_memory_enabled_for_
+    session`` in ``_prepare``, and the agent strategy resolved it
+    AGAIN at the top of ``execute`` to gate the memory tools. Two DB
+    round-trips for a single boolean. P1-H plumbs the value through
+    ``StrategyContext.global_memory_on`` so the strategy reads the
+    cached value.
+
+    Pin: the strategy MUST NOT call ``is_global_memory_enabled_for_
+    session`` directly anymore (would silently re-introduce the
+    double-read). We verify by source inspection — a regression that
+    re-adds the call would fail this assertion.
+    """
+    import inspect
+    from app.conversation.agent_strategy import AgentLoopStrategy
+
+    src = inspect.getsource(AgentLoopStrategy.execute)
+    assert "is_global_memory_enabled_for_session" not in src, (
+        "agent_strategy.execute() must NOT re-query the global-memory "
+        "toggle — engine resolves it once in _prepare and the value "
+        "lives on ctx.global_memory_on. Re-adding the direct call "
+        "silently regresses to 2x DB round-trips per agent turn."
+    )
+    # ctx.global_memory_on must be the field that's read in its place.
+    assert "ctx.global_memory_on" in src or "global_memory_on" in src, (
+        "agent_strategy.execute() should read ctx.global_memory_on; "
+        "if you renamed it, update this test."
+    )
+
+
 def test_attach_active_bodies_yields_event_loop_via_to_thread(monkeypatch):
     """``attach_active_bodies`` is invoked via ``asyncio.create_task``
     in the engine, with the intent that memory body loads run

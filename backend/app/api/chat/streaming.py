@@ -56,6 +56,17 @@ async def sse_chat_endpoint(
     Ownership is enforced up-front (404 on mismatch) so the generator
     doesn't waste an LLM round-trip on a session the caller can't see.
     """
+    # NB (P1-H deferral): this query is SYNC on the event-loop thread.
+    # The audit considered wrapping it in ``asyncio.to_thread`` for
+    # consistency with engine._prepare, but the FastAPI-injected ``db``
+    # is a sync ``Session`` whose lifecycle is bound to this request
+    # scope. Handing it to another thread risks cross-thread session
+    # use (SQLAlchemy 1.4+ doesn't guarantee thread-safety on the sync
+    # session). The query is a single indexed lookup (~3-10ms) — the
+    # complexity-vs-perf trade-off lands on keeping it sync. If load
+    # testing later shows this is a real bottleneck, the right fix is
+    # to open a fresh ``SessionLocal()`` inside ``to_thread`` rather
+    # than reusing ``db``.
     row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if not row or row.user_id != current_user.username:
         raise HTTPException(status_code=404, detail="Session not found or access denied")

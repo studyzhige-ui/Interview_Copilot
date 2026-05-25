@@ -224,14 +224,13 @@ class AgentLoopStrategy:
         # eagerly called them, got back a 273-char ``disabled`` refusal,
         # and the user saw a noisy "✅ 完成 (273 chars)" card for what
         # was really a no-op. Hiding the tools is the honest signal.
-        from app.services.memory.recall_policy import (
-            is_global_memory_enabled_for_session,
-        )
-        global_memory_on = is_global_memory_enabled_for_session(
-            ctx.session_id, ctx.user_id,
-        )
+        #
+        # NB: ``ctx.global_memory_on`` is populated by the engine in
+        # ``_prepare`` so we don't re-query the DB for the same
+        # boolean (pre-P1-H this opened a second SessionLocal +
+        # 2 sync queries per agent turn).
         excluded_tools: set[str] = (
-            set() if global_memory_on else {"recall_memory", "save_memory"}
+            set() if ctx.global_memory_on else {"recall_memory", "save_memory"}
         )
         tool_schemas = registry.get_openai_schemas(exclude=excluded_tools)
         manifest_text = registry.format_manifest(exclude=excluded_tools)

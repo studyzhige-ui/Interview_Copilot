@@ -137,7 +137,7 @@ class ConversationEngine:
         # memory extraction would manufacture fake user-state facts.
         if self._turn_status == "completed":
             try:
-                self._persist_turn()
+                await self._persist_turn()
             except Exception as exc:  # noqa: BLE001
                 logger.error("transcript persistence failed: %s", exc)
             self._fire_post_turn_maintenance()
@@ -167,12 +167,21 @@ class ConversationEngine:
              them as tasks just lets the RAG round-trip overlap with
              body loads + saves a few tens of ms.
         """
-        transcript_service.ensure_session(self.session_id, self.user_id)
+        # ``ensure_session`` opens a SessionLocal + INSERT — wrap in
+        # to_thread so the event loop isn't blocked on the DB round-
+        # trip. Same treatment for every sync DB read in this block —
+        # collectively they used to chain ~4 sync queries on the loop
+        # thread before the first await, freezing every concurrent
+        # SSE turn for the duration.
+        await asyncio.to_thread(
+            transcript_service.ensure_session, self.session_id, self.user_id,
+        )
 
         from app.services.memory.recall_policy import (
             is_global_memory_enabled_for_session,
         )
-        global_memory_on = is_global_memory_enabled_for_session(
+        global_memory_on = await asyncio.to_thread(
+            is_global_memory_enabled_for_session,
             self.session_id, self.user_id,
         )
 
@@ -189,7 +198,12 @@ class ConversationEngine:
         # flows in normally — debrief reference is interview-bound
         # material, not "memory".
         if global_memory_on:
-            universal_ctx = load_universal(self.user_id)
+            # load_universal is sync (opens 1 session via session_scope
+            # post-P1-F). Dispatching to a worker thread keeps the
+            # loop free during the 4-query universal pass.
+            universal_ctx = await asyncio.to_thread(
+                load_universal, self.user_id,
+            )
         else:
             universal_ctx = V3MemoryContext()  # truly empty bundle
 
@@ -198,7 +212,9 @@ class ConversationEngine:
         # pre-rendered string wrapper. The planner builds its own
         # prompt internally with the user message at the end (LLMs
         # attend more to the tail of the context).
-        meta = transcript_service.get_session_meta(self.session_id)
+        meta = await asyncio.to_thread(
+            transcript_service.get_session_meta, self.session_id,
+        )
         if meta is None:
             session_state: dict = {}
             recent_turns: list[dict] = []
@@ -208,10 +224,9 @@ class ConversationEngine:
                 meta["session_state"],
                 meta.get("session_type", "general"),
             )
-            recent_turns = transcript_service.get_recent_turns(
-                session_id=self.session_id,
-                max_turns=20,
-                after_seq=meta["compaction_cursor"],
+            recent_turns = await asyncio.to_thread(
+                transcript_service.get_recent_turns,
+                self.session_id, 20, meta["compaction_cursor"],
             )
 
         query_plan = await plan_query(
@@ -295,13 +310,24 @@ class ConversationEngine:
             v3_memory_block=v3_memory_block,
             rewritten_query=None,
             needs_knowledge_retrieval=query_plan.needs_knowledge_retrieval,
+            # Cached so the agent strategy doesn't re-query the DB for
+            # the same boolean — engine already resolved it for the
+            # universal-load gate above.
+            global_memory_on=global_memory_on,
         )
 
     # ── Phase 3: Persist + maintenance ────────────────────────────
 
-    def _persist_turn(self) -> None:
+    async def _persist_turn(self) -> None:
         """Write the user message + assistant message pair to
-        chat_messages, including Claude-Code-style content blocks."""
+        chat_messages, including Claude-Code-style content blocks.
+
+        ``transcript_service.append_turn`` is a sync DB transaction
+        (opens a SessionLocal, inserts 2 rows, commits). Dispatching
+        to a worker thread keeps the event loop free while the commit
+        roundtrips to Postgres — otherwise every concurrent SSE turn
+        stalls for the ~10-50ms it takes.
+        """
         if not self._ctx:
             return
         # Empty answer guard — don't poison the transcript with a
@@ -313,7 +339,8 @@ class ConversationEngine:
         ai_blocks = self._result.assistant_blocks or [
             {"type": "text", "text": self._result.final_answer},
         ]
-        transcript_service.append_turn(
+        await asyncio.to_thread(
+            transcript_service.append_turn,
             session_id=self.session_id,
             user_id=self.user_id,
             user_msg=self.user_message,

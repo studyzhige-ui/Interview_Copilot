@@ -8,6 +8,7 @@ habit_doc / user_profile_doc). The old multi-row ``memory_items`` path
 is retired; this module no longer touches that table.
 """
 
+import asyncio
 import logging
 from typing import Any
 
@@ -59,7 +60,13 @@ async def _recall_memory_handler(args: RecallMemoryArgs, ctx: AgentToolContext) 
     from app.services.memory.recall_policy import (
         is_global_memory_enabled_for_session,
     )
-    if not is_global_memory_enabled_for_session(ctx.session_id, ctx.user_id):
+    # Both reads below are sync DB queries; wrap in to_thread so the
+    # agent's tool-dispatch await yields the event loop to other
+    # in-flight requests during the ~5-50ms it takes.
+    enabled = await asyncio.to_thread(
+        is_global_memory_enabled_for_session, ctx.session_id, ctx.user_id,
+    )
+    if not enabled:
         return {
             "disabled": True,
             "reason": (
@@ -82,7 +89,7 @@ async def _recall_memory_handler(args: RecallMemoryArgs, ctx: AgentToolContext) 
         load_universal,
     )
 
-    ctx_bundle = load_universal(ctx.user_id)
+    ctx_bundle = await asyncio.to_thread(load_universal, ctx.user_id)
     if args.topics or args.load_strategy or args.load_habit:
         await attach_active_bodies(
             ctx_bundle,
@@ -161,7 +168,10 @@ async def _save_memory_handler(args: SaveMemoryArgs, ctx: AgentToolContext) -> d
     from app.services.memory.recall_policy import (
         is_global_memory_enabled_for_session,
     )
-    if not is_global_memory_enabled_for_session(ctx.session_id, ctx.user_id):
+    enabled = await asyncio.to_thread(
+        is_global_memory_enabled_for_session, ctx.session_id, ctx.user_id,
+    )
+    if not enabled:
         return {
             "disabled": True,
             "reason": (
