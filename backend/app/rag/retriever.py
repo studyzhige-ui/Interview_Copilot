@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from threading import Lock
@@ -328,10 +329,23 @@ async def query_knowledge_base(
             logger.error(f"节点召回失败: {ret_e}")
             raw_nodes = []
 
-        # Reranker 交叉注意力重排序
+        # Reranker 交叉注意力重排序.
+        #
+        # ``postprocess_nodes`` is synchronous regardless of which
+        # reranker backend is active: the local HF cross-encoder runs
+        # CPU/GPU-bound torch ops; the remote API rerank
+        # (``RemoteAPIRerank._postprocess_nodes``) uses ``httpx.Client``
+        # with a 15s timeout. Either way, calling it inline from an
+        # async retriever blocks the WHOLE event loop until the call
+        # returns. ``asyncio.to_thread`` dispatches to a worker thread
+        # so every other in-flight request can keep making progress
+        # while reranking runs — typically saves 100-2000ms of
+        # head-of-line blocking per concurrent turn.
         used_reranker = bool(_reranker and raw_nodes)
         if used_reranker:
-            processed_nodes = _reranker.postprocess_nodes(raw_nodes, query_bundle)
+            processed_nodes = await asyncio.to_thread(
+                _reranker.postprocess_nodes, raw_nodes, query_bundle,
+            )
         else:
             processed_nodes = raw_nodes
         _log_top_nodes("RAG processed candidates", processed_nodes)

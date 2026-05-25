@@ -859,11 +859,19 @@ async def transcribe_short_clip(
 
         import whisperx  # type: ignore
 
-        audio = whisperx.load_audio(local_path)
+        # ``load_audio`` decodes the file from disk (sync) and
+        # ``whisper_model.transcribe`` runs a 1-5s CPU/GPU pass on
+        # the audio. Both block the event loop if called inline from
+        # an async handler — every concurrent /chat/sse turn would
+        # stall while transcription runs. Dispatch via to_thread so
+        # the loop stays free to drive other in-flight requests.
+        audio = await asyncio.to_thread(whisperx.load_audio, local_path)
         kwargs: dict = {"batch_size": 8}
         if language and language.lower() != "auto":
             kwargs["language"] = language
-        result = ats.whisper_model.transcribe(audio, **kwargs)
+        result = await asyncio.to_thread(
+            ats.whisper_model.transcribe, audio, **kwargs,
+        )
         segments = result.get("segments", []) if isinstance(result, dict) else []
         text = " ".join((seg.get("text", "") or "").strip() for seg in segments).strip()
         detected = result.get("language", "") if isinstance(result, dict) else ""
