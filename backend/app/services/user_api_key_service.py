@@ -117,8 +117,56 @@ def _session(db: Session | None):
 
 
 # Tiny in-process cache so resolve_api_key doesn't hit DB + decrypt on every
-# LLM call. Cleared on set / delete.
-_decrypt_cache: dict[tuple[str, str], str] = {}
+# LLM call. Cleared on set / delete. Bounded by LRU + TTL because the
+# values are PLAINTEXT API keys — long-lived caching of decrypted
+# secrets is a memory-disclosure risk if a process gets cored/dumped.
+# TTL also bounds staleness in the unlikely event that an external
+# process rotates the underlying row (e.g. another worker's set call
+# would invalidate this worker's cache via _decrypt_cache.pop — but
+# cross-process invalidation isn't wired). 5 min is short enough that
+# any externally-rotated key reaches the new worker quickly, long
+# enough that a chatty LLM-call burst still benefits from caching.
+import time as _time
+from collections import OrderedDict as _OrderedDict
+from threading import Lock as _Lock
+
+_DECRYPT_CACHE_MAX = 256
+_DECRYPT_CACHE_TTL_S = 300
+
+# Entries are (plaintext, expires_at_monotonic). monotonic() so a system
+# clock jump doesn't corrupt expiry math.
+_decrypt_cache: "_OrderedDict[tuple[str, str], tuple[str, float]]" = _OrderedDict()
+# OrderedDict operations are individually GIL-atomic but the composite
+# sequences ``get → branch → pop/move_to_end`` and ``set → while-evict``
+# inside _cache_get / _cache_put are not. Without this lock, a worker
+# thread calling ``asyncio.to_thread(resolve_api_key, ...)`` while
+# another thread is over the cap and evicting can race into a
+# ``KeyError`` on move_to_end (the entry it just observed got popped
+# by the eviction loop). Mirrors the explicit-lock pattern in
+# ``app/rag/bm25_cache.py`` where the same composite-op problem
+# applied.
+_decrypt_cache_lock = _Lock()
+
+
+def _cache_get(key: tuple[str, str]) -> Optional[str]:
+    with _decrypt_cache_lock:
+        entry = _decrypt_cache.get(key)
+        if entry is None:
+            return None
+        plaintext, exp = entry
+        if _time.monotonic() > exp:
+            _decrypt_cache.pop(key, None)
+            return None
+        _decrypt_cache.move_to_end(key)  # MRU
+        return plaintext
+
+
+def _cache_put(key: tuple[str, str], plaintext: str) -> None:
+    with _decrypt_cache_lock:
+        _decrypt_cache[key] = (plaintext, _time.monotonic() + _DECRYPT_CACHE_TTL_S)
+        _decrypt_cache.move_to_end(key)
+        while len(_decrypt_cache) > _DECRYPT_CACHE_MAX:
+            _decrypt_cache.popitem(last=False)  # evict LRU
 
 
 def _encrypt(plaintext: str) -> str:
@@ -191,7 +239,7 @@ def set_user_api_key(
             row.key_ciphertext = ciphertext
             row.key_masked = masked
         s.commit()
-    _decrypt_cache[(user_id, provider)] = plaintext
+    _cache_put((user_id, provider), plaintext)
     return {"provider": provider, "masked": masked, "set": True}
 
 
@@ -235,7 +283,7 @@ def get_user_api_key_plaintext(
     call so the migration completes without a maintenance window.
     """
     cache_key = (user_id, provider)
-    cached = _decrypt_cache.get(cache_key)
+    cached = _cache_get(cache_key)
     if cached:
         return cached
 
@@ -275,7 +323,7 @@ def get_user_api_key_plaintext(
                 )
                 s.rollback()
 
-        _decrypt_cache[cache_key] = plaintext
+        _cache_put(cache_key, plaintext)
         return plaintext
 
 

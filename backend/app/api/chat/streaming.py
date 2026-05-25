@@ -29,10 +29,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.core.rate_limit import RATE_EXPENSIVE, limiter
 from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.chat import ChatSession
@@ -45,9 +46,11 @@ router = APIRouter(tags=["chat"])
 
 
 @router.post("/chat/sse/{session_id}")
+@limiter.limit(RATE_EXPENSIVE)
 async def sse_chat_endpoint(
+    request: Request,
     session_id: str,
-    request: SSEChatRequest,
+    body: SSEChatRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -84,14 +87,14 @@ async def sse_chat_endpoint(
     # pill sends ``mode="agent"``; everything else (and the default
     # for back-compat) is the L1 chat pipeline.
     strategy = (
-        make_agent_strategy() if request.mode == "agent" else make_chat_strategy()
+        make_agent_strategy() if body.mode == "agent" else make_chat_strategy()
     )
 
     async def event_generator():
         engine = ConversationEngine(
             user_id=current_user.username,
             session_id=session_id,
-            user_message=request.message,
+            user_message=body.message,
             strategy=strategy,
         )
         try:

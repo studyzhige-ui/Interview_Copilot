@@ -13,6 +13,7 @@ Cache lifecycle:
 
 import logging
 import time
+from collections import OrderedDict
 from threading import Lock
 from typing import Optional
 
@@ -36,6 +37,14 @@ logger = logging.getLogger(__name__)
 # through ingestion.py) rather than the primary "is this fresh" check.
 _BM25_CACHE_TTL = 3600  # seconds
 
+# LRU cap. Each entry holds a fully-built BM25Retriever (token frequency
+# tables + the cached nodes themselves). A power user's corpus can be
+# tens of MB; without a cap, a multi-tenant deploy with many active
+# users would grow this dict without bound. 32 keeps memory predictable
+# while comfortably exceeding the realistic concurrent-active-user
+# count for a single API worker.
+_BM25_CACHE_MAX = 32
+
 
 class _BM25CacheEntry:
     __slots__ = ("retriever", "node_count", "created_at")
@@ -50,7 +59,11 @@ class _BM25CacheEntry:
         return (time.monotonic() - self.created_at) > _BM25_CACHE_TTL
 
 
-_bm25_cache: dict[str, _BM25CacheEntry] = {}
+# Ordered for LRU semantics — most-recently-used at the tail, evict from
+# the head when over ``_BM25_CACHE_MAX``. JS Maps' insertion-order trick
+# isn't free in Python dicts (3.7+ guarantees insertion order on the
+# normal dict but doesn't expose ``move_to_end``), hence OrderedDict.
+_bm25_cache: "OrderedDict[str, _BM25CacheEntry]" = OrderedDict()
 _bm25_cache_lock = Lock()
 
 
@@ -85,6 +98,9 @@ def _get_cached_bm25(
     with _bm25_cache_lock:
         entry = _bm25_cache.get(cache_key)
         if entry is not None and not entry.expired:
+            # Move to tail (MRU) so the LRU eviction in
+            # ``_build_and_cache_bm25`` doesn't drop a still-active user.
+            _bm25_cache.move_to_end(cache_key)
             logger.info(
                 "BM25 cache hit: key=%s nodes=%d", cache_key, entry.node_count,
             )
@@ -134,6 +150,12 @@ def _build_and_cache_bm25(
         cache_key = _bm25_cache_key(user_id, source_type)
         with _bm25_cache_lock:
             _bm25_cache[cache_key] = _BM25CacheEntry(retriever, len(filtered_nodes))
+            _bm25_cache.move_to_end(cache_key)  # MRU on (re)insert
+            # Evict oldest until under cap. Each entry can be MB-scale
+            # so the cap protects multi-tenant memory budget.
+            while len(_bm25_cache) > _BM25_CACHE_MAX:
+                evicted_key, _ = _bm25_cache.popitem(last=False)
+                logger.info("BM25 cache evict (LRU): key=%s", evicted_key)
         logger.info(
             "BM25 index built and cached: key=%s nodes=%d",
             cache_key,

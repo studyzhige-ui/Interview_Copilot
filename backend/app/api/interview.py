@@ -3,12 +3,13 @@ import json
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.rate_limit import RATE_EXPENSIVE, RATE_UPLOAD, limiter
 from app.core.security import get_current_user
 from app.db.database import SessionLocal, get_db
 from app.models.interview_qa import InterviewQA
@@ -59,7 +60,9 @@ class MemorySaveRequest(BaseModel):
 
 
 @router.post("/upload/audio/direct")
+@limiter.limit(RATE_UPLOAD)
 async def upload_audio(
+    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -141,7 +144,9 @@ def list_user_resumes(
 
 
 @router.post("/upload/resume/direct")
+@limiter.limit(RATE_UPLOAD)
 async def upload_resume(
+    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -213,8 +218,10 @@ async def get_upload_presigned_url(
 
 
 @router.post("/analyze")
+@limiter.limit(RATE_EXPENSIVE)
 async def analyze_interview_endpoint(
-    request: AnalyzeRequest,
+    request: Request,
+    body: AnalyzeRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -223,7 +230,7 @@ async def analyze_interview_endpoint(
     try:
         upload = get_owned_upload(
             db,
-            upload_id=request.upload_id,
+            upload_id=body.upload_id,
             user_id=current_user.username,
             purpose="interview_audio",
         )
@@ -234,18 +241,18 @@ async def analyze_interview_endpoint(
 
         resume_upload = get_owned_upload(
             db,
-            upload_id=request.resume_upload_id,
+            upload_id=body.resume_upload_id,
             user_id=current_user.username,
             purpose="interview_resume",
         )
         if resume_upload is None:
             raise HTTPException(status_code=404, detail="Resume upload not found")
 
-        jd_text = (request.jd_text or "").strip()
-        if not jd_text and request.jd_upload_id:
+        jd_text = (body.jd_text or "").strip()
+        if not jd_text and body.jd_upload_id:
             from app.services.knowledge_text_service import load_knowledge_text
             try:
-                jd_text = load_knowledge_text(db, request.jd_upload_id, current_user.username) or ""
+                jd_text = load_knowledge_text(db, body.jd_upload_id, current_user.username) or ""
             except Exception:  # noqa: BLE001
                 jd_text = ""
 
@@ -279,7 +286,7 @@ async def analyze_interview_endpoint(
         # Normalize language hint: anything other than the two we explicitly
         # support falls back to "zh". WhisperX accepts "auto" by passing
         # ``None``, which the orchestrator translates.
-        language = (request.language or "zh").strip().lower()
+        language = (body.language or "zh").strip().lower()
         if language not in {"zh", "en", "auto"}:
             language = "zh"
         task = process_interview_analysis.delay(record.id, language=language)
@@ -362,8 +369,10 @@ def _extract_resume_snapshot(db: Session, resume_upload_id: str, user_id: str) -
 
 
 @router.post("/memory/save")
+@limiter.limit(RATE_EXPENSIVE)
 async def save_personal_memory(
-    request: MemorySaveRequest,
+    request: Request,
+    body: MemorySaveRequest,
     current_user: User = Depends(get_current_user),
 ):
     try:
@@ -372,16 +381,16 @@ async def save_personal_memory(
             from app.rag.ingestion import ingest_text as ingest_fn
 
         combined_text = (
-            f"[Question]\n{request.question}\n\n"
-            f"[Improved Answer]\n{request.improved_answer}"
+            f"[Question]\n{body.question}\n\n"
+            f"[Improved Answer]\n{body.improved_answer}"
         )
         metadata = {
             "source_type": "personal_memory",
-            "original_score": request.original_score,
+            "original_score": body.original_score,
             "last_accessed": datetime.now().isoformat(),
         }
-        if request.tags:
-            metadata["tags"] = ", ".join(request.tags)
+        if body.tags:
+            metadata["tags"] = ", ".join(body.tags)
 
         await ingest_fn(
             text=combined_text,
@@ -391,7 +400,7 @@ async def save_personal_memory(
         )
         return {
             "status": "success",
-            "message": f"Saved personal memory with baseline score {request.original_score}.",
+            "message": f"Saved personal memory with baseline score {body.original_score}.",
         }
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
