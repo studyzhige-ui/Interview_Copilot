@@ -271,6 +271,199 @@ def test_sse_chat_endpoint_streams_chunks(client: TestClient, db: Session, monke
     assert '"type": "done"' in body
 
 
+def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypatch):
+    """``start_mock_interview`` tries three resume-resolution tiers
+    in a load-bearing order: ``resume_sections`` (structured) →
+    ``KnowledgeDocument`` docstore (chunks already parsed at library-
+    upload time) → ``_parse_resume_on_demand`` (last-resort S3 +
+    LlamaParse, ~8s). A future contributor swapping that order would
+    silently regress mock_start latency (or quality).
+
+    This test wires a call-recorder into each tier and drives three
+    scenarios; the recorder asserts both WHICH tiers ran AND in WHAT
+    ORDER. Pre-fix the wiring was "verified by hand" per the comment
+    in mock_interview.py.
+    """
+    import json as _json
+
+    # Owning session + UserUpload row (the endpoint validates both).
+    db.add(ChatSession(
+        id="s_mock", user_id="alice", title="模拟面试",
+        session_type="mock_interview",
+    ))
+    from app.models.upload import UserUpload
+    db.add(UserUpload(
+        id="upl_resume", user_id="alice",
+        original_filename="r.pdf",
+        storage_uri="s3://bucket/r.pdf",
+        object_key="r.pdf",
+        purpose="knowledge_document",
+        status="ready",
+    ))
+    db.commit()
+
+    calls: list[str] = []
+
+    # Stub each tier so we can assert ordering without paying their
+    # real cost.
+    def fake_sections(upload_id, user_id):
+        calls.append("sections")
+        return []  # forces tier 2/3
+
+    def fake_format(sections, **kw):
+        return "(formatted) " + " ".join(s.title for s in sections)
+
+    def fake_find_kdoc(db_, upload_id, user_id):
+        calls.append("find_kdoc")
+        # ``has_kdoc`` driven by scenario below.
+        return _fake_kdoc[0]
+
+    def fake_docstore_read(doc, **k):
+        calls.append("docstore")
+        return ("docstore text", 3)
+
+    async def fake_reparse(db_, upload_id, user_id):
+        calls.append("reparse")
+        return "reparsed text"
+
+    monkeypatch.setattr(
+        "app.services.resume_service.resume_service.get_sections_by_upload",
+        fake_sections,
+    )
+    monkeypatch.setattr(
+        "app.services.resume_service.resume_service.format_for_context",
+        fake_format,
+    )
+    monkeypatch.setattr(
+        "app.services.knowledge_text_service.find_knowledge_doc_by_upload",
+        fake_find_kdoc,
+    )
+    monkeypatch.setattr(
+        "app.services.knowledge_text_service.read_full_text_from_docstore",
+        fake_docstore_read,
+    )
+    monkeypatch.setattr(
+        "app.api.chat.mock_interview._parse_resume_on_demand",
+        fake_reparse,
+    )
+
+    # Stub generate_brief so the endpoint doesn't make a real LLM call.
+    from app.services.mock_interview_service import InterviewBrief
+    fake_brief = InterviewBrief(
+        interview_plan={"phases": [
+            {"phase": "self_intro", "budget": 1, "goal": "x",
+             "suggested_topics": [], "difficulty": "warm_up"},
+        ]},
+        opening_spoken="你好",
+        opening_question="请简单做个自我介绍",
+        min_turns=3, target_turns=5, max_turns=8,
+    )
+    async def fake_generate_brief(**kwargs):
+        return fake_brief
+    monkeypatch.setattr(
+        "app.services.mock_interview_service.generate_brief",
+        fake_generate_brief,
+    )
+    # build_prefix / prefix_hash are deterministic pure functions —
+    # let them run for real; they don't hit external services.
+
+    # ── Scenario A: sections-tier hit (no kdoc lookup, no reparse) ──
+    _fake_kdoc = [None]  # sentinel — not consulted in scenario A
+    monkeypatch.setattr(
+        "app.services.resume_service.resume_service.get_sections_by_upload",
+        lambda u, n: (calls.append("sections"), [
+            # Non-empty so tier 1 wins.
+            type("S", (), {"section_type": "summary", "title": "X", "content": "y"})()
+        ])[1],
+    )
+    resp = client.post(
+        "/api/v1/chat/mock-interview/start",
+        json={
+            "session_id": "s_mock",
+            "resume_upload_id": "upl_resume",
+            "jd_text": "JD content",
+            "interviewer_style": "professional",
+            "voice_mode": "hybrid",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert calls == ["sections"], (
+        f"sections tier should be the only one consulted when "
+        f"resume_sections is non-empty; got calls={calls}"
+    )
+
+    # ── Scenario B: sections empty + kdoc present → docstore wins ──
+    calls.clear()
+    monkeypatch.setattr(
+        "app.services.resume_service.resume_service.get_sections_by_upload",
+        fake_sections,  # returns []
+    )
+
+    class _FakeKDoc:
+        id = "kdoc_X"
+        title = "resume.pdf"
+        status = "ready"
+        node_ids = _json.dumps(["n1", "n2"])
+        created_at = None
+
+    _fake_kdoc[0] = _FakeKDoc()
+    # Reset session_state since the first scenario already initialized.
+    s = db.query(ChatSession).filter(ChatSession.id == "s_mock").first()
+    s.session_state = None
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/chat/mock-interview/start",
+        json={
+            "session_id": "s_mock",
+            "resume_upload_id": "upl_resume",
+            "jd_text": "JD content",
+            "interviewer_style": "professional",
+            "voice_mode": "hybrid",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    # Sections checked first, fails → docstore tier consulted and wins.
+    # ``reparse`` must NOT be called (that's the whole point of the
+    # docstore tier — it saved the 8-second LlamaParse round-trip).
+    assert "sections" in calls and "find_kdoc" in calls and "docstore" in calls, (
+        f"expected sections+find_kdoc+docstore to all be consulted; "
+        f"got calls={calls}"
+    )
+    assert "reparse" not in calls, (
+        f"reparse tier ran even though docstore returned text; "
+        f"the perf optimization is silently broken. calls={calls}"
+    )
+    # Order check: sections BEFORE find_kdoc BEFORE docstore (load-
+    # bearing tier priority — parsed/cleaned > raw chunks > re-parse).
+    assert calls.index("sections") < calls.index("find_kdoc") < calls.index("docstore")
+
+    # ── Scenario C: nothing → reparse fallback ──
+    calls.clear()
+    _fake_kdoc[0] = None  # no library doc either
+    s = db.query(ChatSession).filter(ChatSession.id == "s_mock").first()
+    s.session_state = None
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/chat/mock-interview/start",
+        json={
+            "session_id": "s_mock",
+            "resume_upload_id": "upl_resume",
+            "jd_text": "JD content",
+            "interviewer_style": "professional",
+            "voice_mode": "hybrid",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    # All three tiers consulted in order; reparse is the only one
+    # that produces output.
+    assert "sections" in calls
+    assert "find_kdoc" in calls
+    assert "reparse" in calls
+    assert calls.index("sections") < calls.index("find_kdoc") < calls.index("reparse")
+
+
 def test_in_progress_keeps_session_when_brief_launched_but_zero_qa(
     client: TestClient, db: Session,
 ):
@@ -361,6 +554,50 @@ def test_sse_chat_404_for_other_user(client: TestClient, db: Session):
     db.commit()
     resp = client.post("/api/v1/chat/sse/s_bob", json={"message": "hi"})
     assert resp.status_code == 404
+
+
+def test_sse_chat_emits_error_and_done_when_engine_crashes(
+    client: TestClient, db: Session, monkeypatch,
+):
+    """The SSE endpoint's last-resort except-net (streaming.py:event_generator)
+    MUST emit BOTH an ``error`` and a ``done`` frame when
+    ``engine.submit_message`` raises. Without the ``done`` terminator the
+    frontend's reader loop never exits and the chat panel stays stuck on
+    "AI 正在生成…" forever.
+
+    Pre-fix the contract was only documented in code comments. This test
+    pins both frames so a future refactor of the except-net can't
+    silently drop the terminator.
+    """
+    db.add(ChatSession(id="s_boom", user_id="alice", title="t", session_type="general"))
+    db.commit()
+
+    async def boom(self):
+        raise RuntimeError("simulated_engine_crash")
+        # Yield ensures Python treats this as an async generator —
+        # otherwise the function body would be a coroutine that
+        # raises before returning the iterator, which is a different
+        # error shape than the "iterate then raise" we want to test.
+        yield  # noqa: F704
+
+    from app.conversation.engine import ConversationEngine
+    monkeypatch.setattr(ConversationEngine, "submit_message", boom)
+
+    resp = client.post("/api/v1/chat/sse/s_boom", json={"message": "hi"})
+    assert resp.status_code == 200
+    body = resp.text
+
+    # Both terminators must be present so the FE reader can exit cleanly.
+    assert '"type": "error"' in body, (
+        "missing error frame — FE would have no signal that the turn "
+        "failed; body=%r" % body[:500]
+    )
+    assert '"type": "done"' in body, (
+        "missing done terminator — FE reader loop hangs forever; "
+        "body=%r" % body[:500]
+    )
+    # The raw exception message must propagate so debugging is possible.
+    assert "simulated_engine_crash" in body
 
 
 def test_sse_chat_mode_field_picks_strategy(client: TestClient, db: Session, monkeypatch):

@@ -448,6 +448,128 @@ def test_agent_messages_split_manifest_from_grounding_for_prompt_cache():
     )
 
 
+def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
+    """Drive ``_execute_tools`` directly with a reasoning trace and
+    assert the assistant message it appends to ``messages`` carries the
+    ``reasoning_content`` key. This pins the actual round-trip that
+    the DeepSeek thinking-mode HTTP 400 forced us to plumb.
+
+    Pre-fix the only test for reasoning_content asserted the
+    accumulator captured the chunks from ``_consume_stream``. That was
+    weaker than necessary — the accumulator string never being used to
+    populate the next-turn assistant message was the actual production
+    bug. This test drives the *use* of the accumulator, not just its
+    capture.
+    """
+    import asyncio
+
+    from app.agent_runtime.react_agent import AgentBudget
+    from app.conversation.agent_strategy import AgentLoopStrategy, _ToolCallAccumulator
+    from app.conversation.strategy import StrategyContext
+
+    # Stub the inner tool-dispatch + persistence so _execute_tools can
+    # run without touching the registry / DB / post-sampling hooks.
+    # ``recall_memory`` is a real registered tool, so the ``name in
+    # registry`` check passes unpatched — no need to monkeypatch
+    # ``__contains__`` (reviewer flagged that as dead weight).
+    async def fake_dispatch(name, args, ctx):
+        return {"ok": True, "count": 0}
+
+    monkeypatch.setattr(
+        "app.agent_runtime.tool_registry.registry.dispatch",
+        fake_dispatch,
+    )
+
+    # append_step / maybe_persist_result / enforce_turn_budget are
+    # imported into the strategy module — patch at the use site.
+    async def _noop(*a, **k): return None
+    monkeypatch.setattr("app.conversation.agent_strategy.append_step", _noop)
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.maybe_persist_result",
+        lambda content, **k: content,
+    )
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.enforce_turn_budget",
+        lambda *a, **k: None,
+    )
+
+    # Build the minimum input set for _execute_tools.
+    strategy = AgentLoopStrategy()
+    ctx = StrategyContext(
+        user_id="alice", session_id="s1",
+        user_message="test", assembled=None,
+    )
+    budget = AgentBudget(started_at=0.0)
+    budget.consume_step()  # so steps > 0 like the real loop
+    messages: list[dict] = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "u"},
+    ]
+    blocks: list[dict] = []
+    trace: list[dict] = []
+    tool_calls_acc = [
+        _ToolCallAccumulator(id="call_1", name="recall_memory", arguments="{}"),
+    ]
+
+    # ── Branch 1: non-empty reasoning_content → key MUST be present ──
+    async def run_with_reasoning():
+        async for _ in strategy._execute_tools(
+            ctx=ctx, messages=messages, blocks=blocks, trace=trace,
+            tool_calls_acc=tool_calls_acc,
+            assistant_content="visible text from LLM",
+            reasoning_content="hidden thinking trace — this MUST round-trip back",
+            budget=budget,
+            post_sampling_hooks=None,
+            run_id="run_x",
+        ):
+            pass
+
+    asyncio.run(run_with_reasoning())
+
+    # First appended assistant message (BEFORE the tool result message).
+    assistant_msgs = [m for m in messages if m.get("role") == "assistant"]
+    assert len(assistant_msgs) == 1
+    assistant_msg = assistant_msgs[0]
+    assert assistant_msg["content"] == "visible text from LLM"
+    assert "reasoning_content" in assistant_msg, (
+        "reasoning trace not attached to the next-turn assistant "
+        "message — DeepSeek thinking-mode API would reject the next "
+        "call with HTTP 400 'reasoning_content must be passed back'"
+    )
+    assert assistant_msg["reasoning_content"] == (
+        "hidden thinking trace — this MUST round-trip back"
+    )
+
+    # ── Branch 2: empty reasoning_content → key MUST NOT be present ──
+    # Plain (non-thinking) models don't produce reasoning_content;
+    # attaching an empty string on those would be a noise field at
+    # best and an API contract violation at worst.
+    messages2: list[dict] = []
+    tool_calls_acc2 = [
+        _ToolCallAccumulator(id="call_2", name="recall_memory", arguments="{}"),
+    ]
+
+    async def run_without_reasoning():
+        async for _ in strategy._execute_tools(
+            ctx=ctx, messages=messages2, blocks=[], trace=[],
+            tool_calls_acc=tool_calls_acc2,
+            assistant_content="visible text",
+            reasoning_content="",  # plain model, no thinking trace
+            budget=budget,
+            post_sampling_hooks=None,
+            run_id="run_y",
+        ):
+            pass
+
+    asyncio.run(run_without_reasoning())
+
+    assistant_msg2 = next(m for m in messages2 if m.get("role") == "assistant")
+    assert "reasoning_content" not in assistant_msg2, (
+        "empty reasoning_content should NOT add the key — non-thinking "
+        "model APIs would see a confusing always-empty field"
+    )
+
+
 def test_attach_active_bodies_yields_event_loop_via_to_thread(monkeypatch):
     """``attach_active_bodies`` is invoked via ``asyncio.create_task``
     in the engine, with the intent that memory body loads run
