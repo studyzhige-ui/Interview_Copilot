@@ -81,6 +81,12 @@ interface Attachment { doc_id: string; filename: string; }
 
 type Mode = 'CHAT' | 'AGENT';
 
+/** Cap for the per-session runtime LRU in ChatPanel.
+ *  Hoisted to module scope so the ``useCallback([])`` closure inside
+ *  ``getRuntime`` doesn't develop a stale-closure footgun if this
+ *  ever becomes non-literal. */
+const MAX_CACHED_RUNTIMES = 24;
+
 interface SessionRuntime {
   abort: AbortController | null;  // in-flight SSE aborter (null between turns)
   messages: UIMessage[];
@@ -221,6 +227,22 @@ export function ChatPanel({
   const renameInputRef = useRef<HTMLInputElement | null>(null);
 
   // ── Per-session SSE runtime cache ────────────────────────────────────
+  // Bounded LRU. JS Maps preserve insertion order, so we use that as
+  // the recency axis: every ``getRuntime`` re-inserts at the tail
+  // (most-recently-used) and the prune step at the bottom of that
+  // function drops entries from the head until we're back under
+  // ``MAX_CACHED_RUNTIMES`` (declared at module scope above).
+  //
+  // Why bother: long-lived FE tabs (esp. for power users with many
+  // active interviews) used to grow this Map without bound — every
+  // distinct session opened in a tab stayed cached forever, dragging
+  // its loaded ``messages`` array along. 50 sessions × ~100 messages
+  // × ~2KB markdown ≈ 10MB of heap, plus the React keep-alive cost
+  // of holding inactive runtimes' state. The cap is a soft limit
+  // (active streamers are skipped during prune so an in-flight SSE
+  // is never orphaned). Evicted sessions re-fetch their history on
+  // next open via the ``loadedHistory`` flag — no data loss, just a
+  // cold refetch.
   const runtimes = useRef<Map<string, SessionRuntime>>(new Map());
   const [tick, setTick] = useState(0);
 
@@ -247,14 +269,32 @@ export function ChatPanel({
     });
   }, []);
   const getRuntime = useCallback((id: string): SessionRuntime => {
-    let r = runtimes.current.get(id);
-    if (!r) {
+    const map = runtimes.current;
+    let r = map.get(id);
+    if (r) {
+      // Re-insert at tail to mark MRU. JS Maps preserve insertion
+      // order so this is the canonical idiom; delete+set is O(1).
+      map.delete(id);
+      map.set(id, r);
+    } else {
       r = {
         abort: null, messages: [], partial: '', inflightBlocks: [],
         status: '', streaming: false, hidePartialBar: false,
         loadedHistory: false,
       };
-      runtimes.current.set(id, r);
+      map.set(id, r);
+    }
+    // Prune from head (LRU) until we're under cap. Skip streamers
+    // (an in-flight SSE owns its runtime; orphaning would leak the
+    // AbortController + the half-built inflightBlocks) and skip the
+    // entry we just touched (always the tail, but belt-and-braces).
+    if (map.size > MAX_CACHED_RUNTIMES) {
+      for (const [k, v] of map) {
+        if (map.size <= MAX_CACHED_RUNTIMES) break;
+        if (v.streaming) continue;
+        if (k === id) continue;
+        map.delete(k);
+      }
     }
     return r;
   }, []);
