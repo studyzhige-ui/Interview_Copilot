@@ -68,12 +68,16 @@ jobs:
         run: python -m compileall -q backend/app
 
       - name: Run unit tests
+        # ``-x`` removed so a single failure doesn't hide the rest of the
+        # regression surface — we'd rather see all failing tests in a PR
+        # than chase one at a time. ``test_alembic_migrations`` is no
+        # longer ignored: the postgres service above is reachable at
+        # localhost:5432, and the file's own ``pytest.mark.skipif(not
+        # _pg_available())`` keeps it green in environments without PG.
         run: |
           python -m pytest backend/tests \
             -v \
-            --tb=short \
-            -x \
-            --ignore=backend/tests/test_db/test_alembic_migrations.py
+            --tb=short
 
   lint:
     runs-on: ubuntu-latest
@@ -116,3 +120,10 @@ jobs:
         run: npm run build
         env:
           VITE_API_BASE: /api/v1
+
+      - name: Test (vitest)
+        # ``test:run`` is the one-shot CI variant; bare ``test`` enters
+        # watch mode and would hang the job. Vitest + RTL + jsdom were
+        # added in P2-E — until this step landed, the test files
+        # rotted silently.
+        run: npm run test:run
