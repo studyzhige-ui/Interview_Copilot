@@ -2,11 +2,12 @@ import logging
 from enum import Enum
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.rate_limit import RATE_DEFAULT, RATE_EXPENSIVE, RATE_UPLOAD, limiter
 from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.knowledge import KnowledgeDocument
@@ -51,16 +52,18 @@ class QueryRequest(BaseModel):
 
 
 @router.post("/rag/query")
+@limiter.limit(RATE_EXPENSIVE)
 async def api_query_knowledge_base(
-    request: QueryRequest,
+    request: Request,
+    body: QueryRequest,
     current_user: User = Depends(get_current_user),
 ):
     """Execute a user-scoped RAG query against the configured vector store."""
     try:
-        source_type_val = request.source_type.value if request.source_type else None
+        source_type_val = body.source_type.value if body.source_type else None
 
         result = await query_knowledge_base(
-            request.query,
+            body.query,
             source_type=source_type_val,
             user_id=current_user.username,
         )
@@ -98,8 +101,10 @@ def _document_payload(document: KnowledgeDocument) -> dict:
 
 
 @router.post("/knowledge/upload/url")
+@limiter.limit(RATE_UPLOAD)
 async def create_knowledge_upload_url(
-    request: KnowledgeUploadRequest,
+    request: Request,
+    body: KnowledgeUploadRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -107,10 +112,10 @@ async def create_knowledge_upload_url(
     upload, url_info = create_owned_upload(
         db,
         user_id=current_user.username,
-        filename=request.filename,
+        filename=body.filename,
         purpose="knowledge_document",
-        content_type=request.content_type,
-        size_bytes=request.size_bytes,
+        content_type=body.content_type,
+        size_bytes=body.size_bytes,
     )
     return {
         "status": "success",
@@ -121,15 +126,17 @@ async def create_knowledge_upload_url(
 
 
 @router.post("/knowledge/documents")
+@limiter.limit(RATE_UPLOAD)
 async def create_knowledge_document(
-    request: KnowledgeDocumentCreateRequest,
+    request: Request,
+    body: KnowledgeDocumentCreateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     try:
         upload = get_owned_upload(
             db,
-            upload_id=request.upload_id,
+            upload_id=body.upload_id,
             user_id=current_user.username,
             purpose="knowledge_document",
         )
@@ -141,9 +148,9 @@ async def create_knowledge_document(
         document = KnowledgeDocument(
             user_id=current_user.username,
             upload_id=upload.id,
-            title=request.title or default_title(upload),
-            category=request.category.strip() or "默认",
-            source_type=request.source_type.value,
+            title=body.title or default_title(upload),
+            category=body.category.strip() or "默认",
+            source_type=body.source_type.value,
             storage_uri=upload.storage_uri,
             object_key=upload.object_key,
             status="processing",
