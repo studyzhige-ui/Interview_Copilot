@@ -29,7 +29,10 @@ from app.schemas.chat import (
     MockAnswerRequest,
     MockAnswerResp,
     MockFinishResp,
+    MockInProgressResp,
+    MockQuestion,
     MockStartRequest,
+    MockStartResp,
     TTSRequest,
 )
 from app.services.chat.session_state import dump_session_state, parse_session_state
@@ -42,7 +45,7 @@ router = APIRouter(tags=["chat"])
 # ── /start ─────────────────────────────────────────────────────────────
 
 
-@router.post("/chat/mock-interview/start")
+@router.post("/chat/mock-interview/start", response_model=MockStartResp)
 @limiter.limit(RATE_EXPENSIVE)
 async def start_mock_interview(
     request: Request,
@@ -295,7 +298,7 @@ _PHASE_NAME_MAP = {
 # ── /in-progress + /abandon ────────────────────────────────────────────
 
 
-@router.get("/chat/mock-interview/in-progress")
+@router.get("/chat/mock-interview/in-progress", response_model=MockInProgressResp)
 async def get_in_progress_mock(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -457,7 +460,7 @@ async def abandon_mock_interview(
 # ── /question ──────────────────────────────────────────────────────────
 
 
-@router.get("/chat/mock-interview/question")
+@router.get("/chat/mock-interview/question", response_model=MockQuestion)
 async def get_current_question(
     session_id: str = Query(...),
     current_user: User = Depends(get_current_user),

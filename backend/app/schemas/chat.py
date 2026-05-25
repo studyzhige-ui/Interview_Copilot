@@ -31,6 +31,61 @@ class MockPhaseProgress(BaseModel):
     follow_up_depth: int
 
 
+class MockPlanPhase(BaseModel):
+    """One row of the interview plan returned by /start. Mirrored
+    1:1 by ``MockPlanPhase`` in ``frontend/src/types/api.ts``."""
+    phase_id: str
+    phase_name: str
+    question_count: int
+
+
+class MockQuestion(BaseModel):
+    """The interviewer's current ask. Returned by /start
+    (``current_question`` field) and by /question (top-level).
+
+    Discriminated by ``done``: when True only ``message`` is meaningful;
+    when False the live-question fields are populated. We keep the
+    other fields as Optional rather than using a proper TypeScript-
+    style discriminated union — the FE pattern is
+    ``q.done ? renderDone(q) : renderLive(q)`` and Optional matches
+    that consumer shape without forcing every caller to type-narrow.
+    """
+    done: bool
+    message: str | None = None
+    question: str | None = None
+    phase_id: str | None = None
+    phase_name: str | None = None
+    question_idx: int | None = None
+    total_questions_in_phase: int | None = None
+    spoken_response: str | None = None
+
+
+class MockStartResp(BaseModel):
+    """Wire-format for ``POST /chat/mock-interview/start``.
+
+    Mirrored 1:1 by ``MockStartResp`` in ``frontend/src/types/api.ts``.
+    """
+    status: str
+    plan_phases: list[MockPlanPhase]
+    current_question: MockQuestion
+
+
+class MockInProgressResp(BaseModel):
+    """Wire-format for ``GET /chat/mock-interview/in-progress``.
+
+    Discriminated by ``has_in_progress``: when False all other fields
+    are None / absent. The frontend ``MockEntry.resumeInProgress``
+    consumer branches on this flag.
+    """
+    has_in_progress: bool
+    session_id: str | None = None
+    title: str | None = None
+    current_phase: str | None = None
+    current_question_idx: int | None = None
+    qa_count: int | None = None
+    last_activity_at: str | None = None
+
+
 class MockFinishResp(BaseModel):
     """Wire-format response for ``POST /chat/mock-interview/finish``.
 
