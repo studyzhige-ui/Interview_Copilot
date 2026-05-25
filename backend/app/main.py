@@ -43,13 +43,25 @@ from app.rag.retriever import init_reranker
 from app.core.config import settings
 
 # ─── Structured logging ──────────────────────────────────────────────────
-_LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s %(message)s"
+# The ``%(request_id)s`` field is populated by
+# ``RequestIdFormatter`` (see ``app.core.request_id``) from a
+# contextvar set by the middleware below. Outside a request the
+# default ``"-"`` keeps the column aligned.
+_LOG_FORMAT = "%(asctime)s [req=%(request_id)s] [%(name)s] %(levelname)s %(message)s"
 _LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
+from app.core.request_id import RequestIdFormatter, new_request_id, set_request_id  # noqa: E402
+
+# ``logging.basicConfig`` writes a default Formatter; replace the
+# handler's formatter with our request-id-aware variant so every log
+# line — including the third-party ones we keep — carries the
+# correlation column.
+_root_handler = logging.StreamHandler()
+_root_handler.setFormatter(RequestIdFormatter(_LOG_FORMAT, _LOG_DATEFMT))
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
-    format=_LOG_FORMAT,
-    datefmt=_LOG_DATEFMT,
+    handlers=[_root_handler],
+    force=True,
 )
 # Quiet noisy third-party loggers
 for _quiet in ("httpx", "httpcore", "urllib3", "openai", "milvus"):
@@ -263,6 +275,23 @@ async def unhandled_exception_logger(request: _Request, exc: Exception):
         status_code=500,
         content={"detail": "Internal server error"},
     )
+
+
+# ─── Request-ID middleware ──────────────────────────────────────────────
+# Generate (or pick up) a correlation id per request and stuff it into
+# the contextvar so every log line emitted between here and the
+# response carries it. The id also rides back via ``X-Request-ID``
+# (already in CORS's expose_headers) so a user reporting a bug can
+# share it and we can grep one string to find every line for that
+# request.
+@app.middleware("http")
+async def request_id_middleware(request, call_next):
+    incoming = request.headers.get("x-request-id", "").strip()
+    rid = incoming if incoming else new_request_id()
+    set_request_id(rid)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = rid
+    return response
 
 
 # ─── Security response headers ───────────────────────────────────────────
