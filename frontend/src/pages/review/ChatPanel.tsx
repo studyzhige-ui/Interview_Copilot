@@ -575,16 +575,25 @@ export function ChatPanel({
         rt.streaming = true;
         bump();
       },
-      onToolStart: ({ tool, args_summary }) => {
+      onToolStart: ({ tool, tool_call_id, args_summary }) => {
         const rt = getRuntime(sid);
         // Flush any text-before-tool so it lands BEFORE the tool card.
         flushPartial(rt);
-        // Synthetic id during streaming — the persisted version (loaded
-        // from /chat/transcript on next session view) carries the real
-        // OpenAI tool_call_id. The renderer doesn't match by id.
+        // ``tool_call_id`` carries the real LLM-assigned id (post
+        // P1-C wire-format upgrade). Writing it onto the inflight
+        // block aligns the live-stream shape with the persisted
+        // ``/chat/transcript`` shape (which already carried
+        // ``tc.id``) — pre/post-reload are now byte-identical.
+        //
+        // The BlockChain renderer still pairs ``tool_use`` /
+        // ``tool_result`` blocks by ADJACENCY today (use[i] →
+        // result[i+1]); the wire id is groundwork for switching to
+        // id-keyed pairing once an agent dispatches tools in
+        // parallel and adjacency becomes unsafe. Empty string from a
+        // pre-P1-C backend renders the same as it did then.
         const block: ToolUseBlock = {
           type: 'tool_use',
-          id: '',
+          id: tool_call_id,
           name: tool,
           // ``args_summary`` is a flat string for display; we surface
           // it under an ``_args_summary`` key so the JSON-inspector
@@ -598,11 +607,14 @@ export function ChatPanel({
         rt.streaming = true;
         bump();
       },
-      onToolDone: ({ tool, result_summary, result_content, is_error, tool_latency_ms }) => {
+      onToolDone: ({ tool, tool_call_id, result_summary, result_content, is_error, tool_latency_ms }) => {
         const rt = getRuntime(sid);
         const block: ToolResultBlock = {
           type: 'tool_result',
-          tool_use_id: '',
+          // Mirrors ``onToolStart.tool_call_id`` — when present,
+          // BlockChain pairs use/result by id; falls back to FIFO
+          // order on empty id (pre-P1-C backends).
+          tool_use_id: tool_call_id,
           is_error,
           latency_ms: tool_latency_ms,
           summary: result_summary,

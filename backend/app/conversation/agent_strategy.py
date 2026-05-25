@@ -707,6 +707,7 @@ class AgentLoopStrategy:
                 tool_name, _args_summary(tc.arguments),
                 step=budget.steps,
                 elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
+                tool_call_id=tc.id,
             )
 
             observation: dict[str, Any]
@@ -802,6 +803,12 @@ class AgentLoopStrategy:
                 # per-tool ``max_result_chars`` ceiling so this won't
                 # blow up an SSE frame.
                 result_content=result_text,
+                # Mirror tool_start's id so the frontend can pair the
+                # tool_use / tool_result blocks by id rather than the
+                # ambient FIFO order — robust to parallel tools and
+                # makes the live-stream shape match the persisted
+                # blocks loaded by ``/chat/transcript``.
+                tool_call_id=tc.id,
             )
 
         if turn_tool_messages:

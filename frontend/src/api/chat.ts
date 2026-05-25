@@ -61,6 +61,13 @@ export interface HarnessEvent {
 
 export interface ToolStartInfo {
   tool: string;
+  /** LLM-assigned tool call id (e.g. ``call_AbC123``). Mirrors the
+   *  matching ``tool_done.tool_call_id`` so the renderer can pair
+   *  live-stream tool_use/tool_result blocks by id rather than FIFO
+   *  order — robust to parallel tool calls and makes the live shape
+   *  match what ``/chat/transcript`` persists. Empty string from
+   *  older backends; renderer falls back to FIFO-by-order then. */
+  tool_call_id: string;
   args_summary: string;
   step: number;
   elapsed_ms: number;
@@ -68,6 +75,9 @@ export interface ToolStartInfo {
 
 export interface ToolDoneInfo {
   tool: string;
+  /** Mirrors ``tool_start.tool_call_id`` — use for id-based pairing
+   *  of live tool_use/tool_result blocks. */
+  tool_call_id: string;
   result_summary: string;
   /** Full LLM-visible result text (post Stage-G+ wire format).
    *  Populated live by the agent strategy so the expanded tool card
@@ -213,6 +223,7 @@ export async function streamChatSSE(
           case 'tool_start':
             handlers.onToolStart?.({
               tool: String(data.tool ?? ''),
+              tool_call_id: String(data.tool_call_id ?? ''),
               args_summary: String(data.args_summary ?? ''),
               step, elapsed_ms: elapsed,
             });
@@ -220,6 +231,7 @@ export async function streamChatSSE(
           case 'tool_done':
             handlers.onToolDone?.({
               tool: String(data.tool ?? ''),
+              tool_call_id: String(data.tool_call_id ?? ''),
               result_summary: String(data.result_summary ?? ''),
               result_content: String(data.result_content ?? ''),
               tool_latency_ms: Number(data.tool_latency_ms ?? 0),

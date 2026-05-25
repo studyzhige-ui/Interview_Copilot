@@ -273,6 +273,49 @@ def test_read_resume_direct_docstore_read(monkeypatch):
     assert "simulated_db_down" not in result["hint"]
 
 
+def test_tool_start_and_tool_done_carry_tool_call_id():
+    """Both ``tool_start`` and ``tool_done`` SSE events must surface
+    the LLM-assigned ``tool_call_id`` so the frontend can pair live-
+    stream tool_use/tool_result blocks by id rather than FIFO order.
+    The empty-default keeps the wire backwards-compatible with any
+    older client that ignores the field.
+    """
+    from app.agent_runtime.harness_events import HarnessEvent
+
+    start = HarnessEvent.tool_start(
+        "search_jobs",
+        "keywords=AI Agent",
+        step=1, elapsed_ms=10.0,
+        tool_call_id="call_AbC123",
+    )
+    assert start.to_dict()["data"]["tool_call_id"] == "call_AbC123"
+    assert start.to_dict()["data"]["tool"] == "search_jobs"
+
+    done = HarnessEvent.tool_done(
+        "search_jobs", "返回 5 条结果",
+        step=1, elapsed_ms=120.0,
+        tool_latency_ms=80.0, is_error=False,
+        result_content='{"count":5}',
+        tool_call_id="call_AbC123",
+    )
+    assert done.to_dict()["data"]["tool_call_id"] == "call_AbC123"
+    # Pairs with the start event by id.
+    assert done.to_dict()["data"]["tool_call_id"] == start.to_dict()["data"]["tool_call_id"]
+
+    # Back-compat: omitting tool_call_id yields the empty string, not
+    # a missing key. The FE's ``String(data.tool_call_id ?? '')``
+    # coerce always lands on a defined value.
+    start_compat = HarnessEvent.tool_start(
+        "x", "y", step=0, elapsed_ms=0.0,
+    )
+    assert start_compat.to_dict()["data"]["tool_call_id"] == ""
+    done_compat = HarnessEvent.tool_done(
+        "x", "y", step=0, elapsed_ms=0.0,
+        tool_latency_ms=0.0, is_error=False,
+    )
+    assert done_compat.to_dict()["data"]["tool_call_id"] == ""
+
+
 def test_tool_done_event_carries_full_result_content():
     """``tool_done`` SSE event must include ``result_content`` so the
     live tool card renders the expanded view without a refresh.
@@ -446,6 +489,99 @@ def test_agent_messages_split_manifest_from_grounding_for_prompt_cache():
         f"expected ≥3 system messages in execute() for cache-friendly "
         f"prefix; found {len(matches)}: {[m[:80] for m in matches]}"
     )
+
+
+def test_tool_call_id_propagates_from_strategy_to_sse_events(monkeypatch):
+    """End-to-end strategy-side check: when ``_execute_tools`` runs a
+    tool with a known ``tc.id``, BOTH the emitted ``tool_start`` and
+    ``tool_done`` SSE events MUST carry that exact id under
+    ``data.tool_call_id``.
+
+    The factory-level test ``test_tool_start_and_tool_done_carry_tool_call_id``
+    only verified the HarnessEvent constructors do the right thing
+    given an id. This test catches the regression case where
+    ``agent_strategy.py`` stops passing ``tool_call_id=tc.id`` to the
+    factory — the factory test would still pass while the wire goes
+    silently broken.
+    """
+    import asyncio
+    from app.agent_runtime.harness_events import HarnessEventType
+    from app.agent_runtime.react_agent import AgentBudget
+    from app.conversation.agent_strategy import AgentLoopStrategy, _ToolCallAccumulator
+    from app.conversation.strategy import StrategyContext
+
+    async def fake_dispatch(name, args, ctx):
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        "app.agent_runtime.tool_registry.registry.dispatch",
+        fake_dispatch,
+    )
+    async def _noop(*a, **k): return None
+    monkeypatch.setattr("app.conversation.agent_strategy.append_step", _noop)
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.maybe_persist_result",
+        lambda content, **k: content,
+    )
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.enforce_turn_budget",
+        lambda *a, **k: None,
+    )
+
+    strategy = AgentLoopStrategy()
+    ctx = StrategyContext(
+        user_id="alice", session_id="s1",
+        user_message="test", assembled=None,
+    )
+    budget = AgentBudget(started_at=0.0)
+    budget.consume_step()
+    messages: list[dict] = []
+    blocks: list[dict] = []
+    trace: list[dict] = []
+    KNOWN_TC_ID = "call_xyz_42"
+    tool_calls_acc = [
+        _ToolCallAccumulator(id=KNOWN_TC_ID, name="recall_memory", arguments="{}"),
+    ]
+
+    events: list = []
+
+    async def drain():
+        async for ev in strategy._execute_tools(
+            ctx=ctx, messages=messages, blocks=blocks, trace=trace,
+            tool_calls_acc=tool_calls_acc,
+            assistant_content="",
+            reasoning_content="",
+            budget=budget,
+            post_sampling_hooks=None,
+            run_id="run_y",
+        ):
+            events.append(ev)
+
+    asyncio.run(drain())
+
+    starts = [e for e in events if e.type == HarnessEventType.TOOL_START]
+    dones = [e for e in events if e.type == HarnessEventType.TOOL_DONE]
+    assert len(starts) == 1 and len(dones) == 1, (
+        f"expected exactly one start+done pair; got starts={len(starts)} "
+        f"dones={len(dones)}"
+    )
+    assert starts[0].data["tool_call_id"] == KNOWN_TC_ID, (
+        f"tool_start lost the LLM-assigned tc.id; "
+        f"got {starts[0].data['tool_call_id']!r} expected {KNOWN_TC_ID!r}"
+    )
+    assert dones[0].data["tool_call_id"] == KNOWN_TC_ID, (
+        f"tool_done lost the LLM-assigned tc.id; "
+        f"got {dones[0].data['tool_call_id']!r} expected {KNOWN_TC_ID!r}"
+    )
+    # Pairing: start id == done id (so a future id-based pair pass on
+    # the FE has matching keys to work with).
+    assert starts[0].data["tool_call_id"] == dones[0].data["tool_call_id"]
+
+    # Persisted tool_use block also carries the same id (live + replay
+    # shape parity — the whole point of P1-C).
+    use_blocks = [b for b in blocks if b.get("type") == "tool_use"]
+    assert len(use_blocks) == 1
+    assert use_blocks[0]["id"] == KNOWN_TC_ID
 
 
 def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
