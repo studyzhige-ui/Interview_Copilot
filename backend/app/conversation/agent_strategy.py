@@ -119,12 +119,12 @@ class AgentLoopStrategy:
 
         # Render the full AssembledContext so the agent sees memory +
         # debrief reference + RAG chunks + session state + recent
-        # turns. The system_rules slot is suppressed here — the agent
+        # turns. The system_prompt slot is suppressed here — the agent
         # has its own SYSTEM_PROMPT loaded as a separate message —
         # but every other SLOT_ORDER slot reaches the LLM.
         from app.services.chat.context_assembly_pipeline import prompt_renderer
         grounding_text = (
-            prompt_renderer.render_answer_prompt(ctx.assembled, system_rules="")
+            prompt_renderer.render_answer_prompt(ctx.assembled, system_prompt="")
             if ctx.assembled is not None else "No context."
         )
 

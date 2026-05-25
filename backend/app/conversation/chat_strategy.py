@@ -81,12 +81,12 @@ class ChatPipelineStrategy:
 
         if ctx.needs_knowledge_retrieval:
             prompt = self.renderer.render_answer_prompt(
-                assembled, system_rules=RAG_SYSTEM_RULES,
+                assembled, system_prompt=RAG_SYSTEM_RULES,
             )
             response_generator = await Settings.llm.astream_complete(prompt)
         else:
             prompt = self.renderer.render_answer_prompt(
-                assembled, system_rules=DIRECT_SYSTEM_RULES,
+                assembled, system_prompt=DIRECT_SYSTEM_RULES,
             )
             response_generator = await agent_fast_llm.astream_complete(prompt)
 

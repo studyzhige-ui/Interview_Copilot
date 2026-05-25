@@ -180,26 +180,42 @@ class ConversationEngine:
         else:
             universal_ctx = load_profile_only(self.user_id)
 
-        # Step 2: planner LLM — one call, all decisions.
-        rewrite_context = context_pipeline.assemble_rewrite_context(
-            session_id=self.session_id,
-            current_query=self.user_message,
-        )
+        # Step 2: planner LLM. Inputs are STRUCTURED — session_state +
+        # recent_turns come straight from transcript_service, no
+        # pre-rendered string wrapper. The planner builds its own
+        # prompt internally with the user message at the end (LLMs
+        # attend more to the tail of the context).
+        meta = transcript_service.get_session_meta(self.session_id)
+        if meta is None:
+            session_state: dict = {}
+            recent_turns: list[dict] = []
+        else:
+            from app.services.chat.session_state import parse_session_state
+            session_state = parse_session_state(
+                meta["session_state"],
+                meta.get("session_type", "general"),
+            )
+            recent_turns = transcript_service.get_recent_turns(
+                session_id=self.session_id,
+                max_turns=20,
+                after_seq=meta["compaction_cursor"],
+            )
+
         query_plan = await plan_query(
             user_message=self.user_message,
-            rewrite_context=rewrite_context.context_text,
+            session_state=session_state,
+            recent_turns=recent_turns,
             knowledge_index_lines=universal_ctx.knowledge_index_lines,
             strategy_description=universal_ctx.strategy_description,
             habit_description=universal_ctx.habit_description,
             recall_on=recall_on,
         )
-        standalone_query = query_plan.standalone_query
 
         # Step 3: concurrent RAG + memory body loads.
         knowledge_task = (
             asyncio.create_task(
                 knowledge_retriever.retrieve(
-                    dense_query=query_plan.dense_query or standalone_query,
+                    dense_query=query_plan.dense_query or self.user_message,
                     sparse_query=query_plan.sparse_query,
                     user_id=self.user_id,
                 )
@@ -247,9 +263,12 @@ class ConversationEngine:
         # strategy so it can render with its own system rules without
         # re-running the pipeline (and re-fetching the debrief
         # reference from the DB).
+        # ``current_query`` is the user_message verbatim. The planner
+        # no longer emits a ``standalone_query`` — the answer LLM
+        # resolves pronouns itself using [Recent Turns] + [Memory].
         assembled = context_pipeline.assemble_answer_context(
             session_id=self.session_id,
-            current_query=standalone_query,
+            current_query=self.user_message,
             memory_block=v3_memory_block,
             knowledge_chunks=knowledge_chunks,
         )
@@ -261,9 +280,7 @@ class ConversationEngine:
             assembled=assembled,
             knowledge_chunks=knowledge_chunks,
             v3_memory_block=v3_memory_block,
-            rewritten_query=(
-                standalone_query if standalone_query != self.user_message else None
-            ),
+            rewritten_query=None,
             needs_knowledge_retrieval=query_plan.needs_knowledge_retrieval,
         )
 

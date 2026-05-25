@@ -7,7 +7,8 @@ content at the top, per-turn content at the bottom.
 
 Slots (post Stage-G refactor, in order from most → least stable):
 
-  1. [System Rules]        caller-supplied (chat vs RAG vs agent prompt)
+  1. (System Prompt)       caller-supplied (chat vs RAG vs agent prompt);
+                           rendered raw with no [Tag] header.
   2. [Record Context]      debrief sessions only — interview reference
                            manifest (resume + JD + analysis summary).
                            Stable for the duration of one debrief.
@@ -94,9 +95,9 @@ class AssembledContext:
     populated defaults to empty and gets skipped at render time.
     """
 
-    # [System Rules] is rendered as a bare prefix (no [Tag] header)
-    # because the LLM treats it as the system prompt.
-    system_rules: str = ""
+    # System prompt slot is rendered as a bare prefix (no [Tag]
+    # header) because the LLM treats it as the system prompt.
+    system_prompt: str = ""
 
     # [Record Context] — interview reference for debrief sessions.
     debrief_reference: str = ""
@@ -145,7 +146,7 @@ def _render_recent_turns(ctx: AssembledContext) -> str:
 
 SLOT_ORDER: list[tuple[str, str | None, _SlotRenderer]] = [
     # field_name,              tag (None = no header),    custom renderer
-    ("system_rules",           None,                      None),
+    ("system_prompt",           None,                      None),
     ("debrief_reference",      "[Record Context]",        None),
     ("memory_block",           "[Memory]",                None),
     ("retrieved_context",      "[Retrieved Context]",     None),
@@ -158,7 +159,7 @@ SLOT_ORDER: list[tuple[str, str | None, _SlotRenderer]] = [
 # Slots the lightweight rewrite-context renderer skips (system rules
 # isn't useful to a query rewriter; the rewriter just needs the recent
 # turns + the current message).
-_REWRITE_SKIP_FIELDS = {"system_rules", "memory_block", "retrieved_context"}
+_REWRITE_SKIP_FIELDS = {"system_prompt", "memory_block", "retrieved_context"}
 
 
 # ── Prompt rendering ─────────────────────────────────────────────────────
@@ -175,10 +176,10 @@ class PromptRenderer:
         self,
         ctx: AssembledContext,
         *,
-        system_rules: str,
+        system_prompt: str,
     ) -> str:
         """Full answer prompt — every populated slot in order."""
-        ctx.system_rules = system_rules.strip()
+        ctx.system_prompt = system_prompt.strip()
         return self._render(ctx, skip_fields=set())
 
     def render_context_text(self, ctx: AssembledContext) -> str:
@@ -255,26 +256,10 @@ class ContextAssemblyPipeline:
         self.renderer = renderer or PromptRenderer()
 
     # ── Public API ────────────────────────────────────────────────────
-
-    def assemble_rewrite_context(
-        self,
-        session_id: str,
-        current_query: str,
-    ) -> AssembledContext:
-        """Lightweight context for query rewriting — no memory, no RAG,
-        no debrief reference. The planner only needs recent turns +
-        session state to do pronoun resolution; loading the debrief
-        manifest here would cost an extra SQL round-trip and balloon
-        the planner prompt by ~2K tokens for no benefit.
-        """
-        return self._assemble(
-            session_id=session_id,
-            current_query=current_query,
-            memory_block="",
-            debrief_reference="",
-            knowledge_chunks=[],
-            skip_debrief_autoinject=True,
-        )
+    # ``assemble_rewrite_context`` was retired with the planner merge
+    # — the planner now reads session_state + recent_turns directly
+    # via ``transcript_service`` instead of going through this pipeline
+    # (which was over-fitted to producing pre-rendered prompt strings).
 
     def assemble_answer_context(
         self,
