@@ -62,38 +62,45 @@ class SingleDocService:
 
     # ── reads ──────────────────────────────────────────────────────
 
-    def load(self, user_id: str) -> str:
-        """Return the doc body (empty string if no row yet)."""
-        db: Session = SessionLocal()
-        try:
+    def load(self, user_id: str, *, db: Session | None = None) -> str:
+        """Return the doc body (empty string if no row yet).
+
+        ``db`` lets a higher-level orchestrator (e.g.
+        ``v3_context_loader.load_universal``) share a single session
+        across multiple doc-service reads — collapses N+1 DB
+        connections per agent turn. See ``_db_helpers.session_scope``
+        for the contract.
+        """
+        from app.services.memory._db_helpers import session_scope
+        with session_scope(db) as session:
             row = (
-                db.query(self.cfg.model_cls)
+                session.query(self.cfg.model_cls)
                 .filter(self.cfg.model_cls.user_id == user_id)
                 .first()
             )
             return (row.body if row else "") or ""
-        finally:
-            db.close()
 
-    def load_as_lines(self, user_id: str) -> list[str]:
+    def load_as_lines(self, user_id: str, *, db: Session | None = None) -> list[str]:
         """Doc split into non-empty lines, convenient for prompt rendering."""
-        body = self.load(user_id)
+        body = self.load(user_id, db=db)
         return [line for line in (l.rstrip() for l in body.splitlines()) if line]
 
-    def load_description(self, user_id: str) -> str:
+    def load_description(self, user_id: str, *, db: Session | None = None) -> str:
         """Universal-pass description (Phase A). Empty string when the
         user has no doc yet so the renderer can choose to omit the
-        section entirely."""
-        db: Session = SessionLocal()
-        try:
+        section entirely.
+
+        ``db`` lets a caller share a session across multiple reads —
+        see ``load`` for the same contract.
+        """
+        from app.services.memory._db_helpers import session_scope
+        with session_scope(db) as session:
             row = (
-                db.query(self.cfg.model_cls)
+                session.query(self.cfg.model_cls)
                 .filter(self.cfg.model_cls.user_id == user_id)
                 .first()
             )
             return ((row.one_liner if row else "") or "").strip()
-        finally:
-            db.close()
 
     # ── writes ─────────────────────────────────────────────────────
 

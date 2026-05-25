@@ -90,16 +90,27 @@ _TOPIC_FORBIDDEN_CHARS = "[]\n\r\t/?#"
 # ── Read paths ─────────────────────────────────────────────────────────
 
 
-def load(user_id: str, topic: str) -> KnowledgeDoc | None:
-    db: Session = SessionLocal()
-    try:
+def load(
+    user_id: str, topic: str, *, db: Session | None = None,
+) -> KnowledgeDoc | None:
+    """``db`` lets a higher-level orchestrator share a session across
+    multiple ``load`` calls (e.g. the ``attach_active_bodies`` inner
+    loop, where N topics would otherwise open N connections).
+
+    NB: returns an ORM-mapped ``KnowledgeDoc`` instance. The caller
+    MUST read attributes (``.body``, ``.topic``, ``.one_liner``, …)
+    BEFORE the surrounding ``session_scope`` exits — once the session
+    closes, lazy-loaded attributes raise ``DetachedInstanceError``.
+    In practice the only caller (``attach_active_bodies._sync_body``)
+    reads inside the same ``with`` block.
+    """
+    from app.services.memory._db_helpers import session_scope
+    with session_scope(db) as session:
         return (
-            db.query(KnowledgeDoc)
+            session.query(KnowledgeDoc)
             .filter(KnowledgeDoc.user_id == user_id, KnowledgeDoc.topic == topic)
             .first()
         )
-    finally:
-        db.close()
 
 
 def load_all(user_id: str) -> list[KnowledgeDoc]:
@@ -121,7 +132,9 @@ def load_all(user_id: str) -> list[KnowledgeDoc]:
         db.close()
 
 
-def list_index_lines(user_id: str, max_topics: int = 50) -> list[str]:
+def list_index_lines(
+    user_id: str, max_topics: int = 50, *, db: Session | None = None,
+) -> list[str]:
     """Render the always-loaded topic index for context assembly.
 
     Format (per line)::
@@ -130,11 +143,14 @@ def list_index_lines(user_id: str, max_topics: int = 50) -> list[str]:
 
     Pushes ``LIMIT max_topics`` into the DB so a user with hundreds of
     topics doesn't read them all just to slice off 50.
+
+    ``db`` lets ``load_universal`` reuse one session across all four
+    universal-pass reads — see ``_db_helpers.session_scope``.
     """
-    db: Session = SessionLocal()
-    try:
+    from app.services.memory._db_helpers import session_scope
+    with session_scope(db) as session:
         docs = (
-            db.query(KnowledgeDoc)
+            session.query(KnowledgeDoc)
             .filter(KnowledgeDoc.user_id == user_id)
             .order_by(
                 KnowledgeDoc.last_discussed_at.desc().nullslast(),
@@ -143,8 +159,6 @@ def list_index_lines(user_id: str, max_topics: int = 50) -> list[str]:
             .limit(max_topics)
             .all()
         )
-    finally:
-        db.close()
     out: list[str] = []
     for d in docs:
         mastery_zh = {

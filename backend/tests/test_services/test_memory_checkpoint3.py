@@ -52,12 +52,24 @@ def engine_and_session():
 
 
 def _rebind_sessions(monkeypatch, Session):
-    """Point every v3 service's ``SessionLocal`` at our test Session."""
+    """Point every v3 service's ``SessionLocal`` at our test Session.
+
+    Includes ``_db_helpers`` because the doc services now route their
+    ``SessionLocal()`` opens through ``_db_helpers.session_scope``
+    (P1-F refactor). Current tests in this file only exercise
+    ``apply_patches`` paths (which still open their own session
+    directly when ``db is None``), so technically the helper rebind
+    isn't load-bearing today — but if a future test adds a
+    ``load_universal`` / ``load_description`` assertion to this file,
+    the helper rebind keeps the session pointed at the in-memory
+    fixture instead of leaking to the real DB.
+    """
     import app.services.memory._audit_log_service as audit_mod
+    import app.services.memory._db_helpers as helpers_mod
     import app.services.memory._single_doc_service as single_mod
     import app.services.memory.knowledge_doc_service as kd_mod
     import app.services.memory.user_profile_doc_service as up_mod
-    for mod in (audit_mod, single_mod, kd_mod, up_mod):
+    for mod in (audit_mod, helpers_mod, single_mod, kd_mod, up_mod):
         monkeypatch.setattr(mod, "SessionLocal", Session, raising=False)
 
 

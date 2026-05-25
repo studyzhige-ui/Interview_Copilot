@@ -65,18 +65,20 @@ class ProfilePatch:
     new_line: str = ""
 
 
-def load(user_id: str) -> str:
+def load(user_id: str, *, db: Session | None = None) -> str:
     """Return the current user_profile doc verbatim. Empty string when
     the user has no profile yet.
+
+    ``db`` lets ``load_universal`` share one session across the four
+    universal-pass reads (user_profile + knowledge_index + strategy +
+    habit). See ``_db_helpers.session_scope``.
     """
-    db: Session = SessionLocal()
-    try:
-        row = db.query(User.user_profile_doc).filter(User.username == user_id).first()
+    from app.services.memory._db_helpers import session_scope
+    with session_scope(db) as session:
+        row = session.query(User.user_profile_doc).filter(User.username == user_id).first()
         if row is None:
             return ""
         return (row[0] or "").strip()
-    finally:
-        db.close()
 
 
 def apply_patches(

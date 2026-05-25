@@ -106,15 +106,25 @@ def load_universal(user_id: str) -> V3MemoryContext:
 
     The planner consumes these descriptions + the topic index to
     decide which bodies (if any) to load on demand.
+
+    Opens ONE database session and threads it through all four
+    service calls — collapses 4 separate ``SessionLocal()`` opens
+    down to 1 connection per turn. Pre-fix each service opened its
+    own; the audit measured 9-10 conns per L2 agent turn in
+    aggregate (4 here + 3 topic bodies in ``attach_active_bodies`` +
+    2 ``is_global_memory_enabled_for_session`` checks).
     """
-    return V3MemoryContext(
-        user_profile_body=user_profile_doc_service.load(user_id),
-        knowledge_index_lines=knowledge_doc_service.list_index_lines(
-            user_id, max_topics=50,
-        ),
-        strategy_description=strategy_doc_service.load_description(user_id),
-        habit_description=habit_doc_service.load_description(user_id),
-    )
+    from app.services.memory._db_helpers import session_scope
+
+    with session_scope(None) as db:
+        return V3MemoryContext(
+            user_profile_body=user_profile_doc_service.load(user_id, db=db),
+            knowledge_index_lines=knowledge_doc_service.list_index_lines(
+                user_id, max_topics=50, db=db,
+            ),
+            strategy_description=strategy_doc_service.load_description(user_id, db=db),
+            habit_description=habit_doc_service.load_description(user_id, db=db),
+        )
 
 
 async def attach_active_bodies(
@@ -151,23 +161,33 @@ async def attach_active_bodies(
     """
 
     def _sync_body() -> V3MemoryContext:
-        if topics:
-            bodies: dict[str, str] = {}
-            for topic in topics:
-                doc = knowledge_doc_service.load(user_id, topic)
-                if doc and (doc.body or "").strip():
-                    bodies[topic] = doc.body
-            ctx.active_knowledge_bodies = bodies
+        # Open ONE session and reuse it across every doc-service call
+        # in this turn. Pre-fix each ``.load`` opened its own
+        # ``SessionLocal``; with 3 topics + strategy + habit that's 5
+        # connections per L2 agent turn, all serial. Sharing collapses
+        # to 1 conn. Done inside the to_thread sync body — a
+        # SQLAlchemy session is NOT thread-safe, so we can't reuse
+        # ``load_universal``'s session here (it lives on the main
+        # loop's thread).
+        from app.services.memory._db_helpers import session_scope
+        with session_scope(None) as db:
+            if topics:
+                bodies: dict[str, str] = {}
+                for topic in topics:
+                    doc = knowledge_doc_service.load(user_id, topic, db=db)
+                    if doc and (doc.body or "").strip():
+                        bodies[topic] = doc.body
+                ctx.active_knowledge_bodies = bodies
 
-        if load_strategy:
-            body = strategy_doc_service.load(user_id)
-            if body and body.strip():
-                ctx.active_strategy_body = body
+            if load_strategy:
+                body = strategy_doc_service.load(user_id, db=db)
+                if body and body.strip():
+                    ctx.active_strategy_body = body
 
-        if load_habit:
-            body = habit_doc_service.load(user_id)
-            if body and body.strip():
-                ctx.active_habit_body = body
+            if load_habit:
+                body = habit_doc_service.load(user_id, db=db)
+                if body and body.strip():
+                    ctx.active_habit_body = body
 
         return ctx
 

@@ -50,10 +50,15 @@ def db(monkeypatch) -> Iterator[Session]:
     # in-memory engine — otherwise those endpoints would talk to the real
     # configured database (or fail with "no such table: knowledge_docs").
     import app.services.memory._audit_log_service as _audit_mod
+    import app.services.memory._db_helpers as _helpers_mod
     import app.services.memory._single_doc_service as _single_mod
     import app.services.memory.knowledge_doc_service as _kd_mod
     import app.services.memory.user_profile_doc_service as _up_mod
-    for _mod in (_audit_mod, _single_mod, _kd_mod, _up_mod):
+    # Includes ``_db_helpers`` because the doc services now route all
+    # ``SessionLocal()`` opens through ``_db_helpers.session_scope`` —
+    # rebinding only the doc-service modules' own ``SessionLocal``
+    # leaves the helper's binding pointed at the real configured DB.
+    for _mod in (_audit_mod, _helpers_mod, _single_mod, _kd_mod, _up_mod):
         monkeypatch.setattr(_mod, "SessionLocal", Session_, raising=False)
 
     session = Session_()

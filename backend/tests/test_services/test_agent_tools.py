@@ -732,7 +732,10 @@ def test_attach_active_bodies_yields_event_loop_via_to_thread(monkeypatch):
 
     BLOCK_SECONDS = 0.05  # 50ms per simulated DB read
 
-    def sleepy_load(user_id, topic=None):
+    # ``**_`` swallows the new ``db: Session | None`` kwarg from P1-F
+    # — the test only cares about wall-clock blocking behavior, not
+    # session plumbing.
+    def sleepy_load(user_id, topic=None, **_):
         time.sleep(BLOCK_SECONDS)
         return None
 
@@ -742,11 +745,11 @@ def test_attach_active_bodies_yields_event_loop_via_to_thread(monkeypatch):
     )
     monkeypatch.setattr(
         "app.services.memory.strategy_doc_service.load",
-        lambda user_id: (time.sleep(BLOCK_SECONDS), "")[1],
+        lambda user_id, **_: (time.sleep(BLOCK_SECONDS), "")[1],
     )
     monkeypatch.setattr(
         "app.services.memory.habit_doc_service.load",
-        lambda user_id: (time.sleep(BLOCK_SECONDS), "")[1],
+        lambda user_id, **_: (time.sleep(BLOCK_SECONDS), "")[1],
     )
 
     timings: dict[str, float] = {}

@@ -42,14 +42,68 @@ def engine_and_session():
 
 def _rebind(monkeypatch, Session):
     import app.services.memory._audit_log_service as audit_mod
+    import app.services.memory._db_helpers as helpers_mod
     import app.services.memory._single_doc_service as single_mod
     import app.services.memory.knowledge_doc_service as kd_mod
     import app.services.memory.user_profile_doc_service as up_mod
-    for mod in (audit_mod, single_mod, kd_mod, up_mod):
+    # Includes ``_db_helpers`` because the doc services now route all
+    # ``SessionLocal()`` opens through ``_db_helpers.session_scope`` —
+    # rebinding only the doc-service modules' own ``SessionLocal``
+    # leaves the helper's binding pointed at the real configured DB.
+    for mod in (audit_mod, helpers_mod, single_mod, kd_mod, up_mod):
         monkeypatch.setattr(mod, "SessionLocal", Session, raising=False)
 
 
 # ── single_doc one_liner derivation ───────────────────────────────────
+
+
+def test_load_universal_opens_exactly_one_db_session(engine_and_session, monkeypatch):
+    """``load_universal`` MUST share a single ``SessionLocal()`` across
+    all four universal-pass reads (user_profile + knowledge_index +
+    strategy_description + habit_description). Pre-fix each service
+    opened its own — 4 connections per turn just for the universal
+    pass, scaling worse in ``attach_active_bodies``.
+
+    Counts every ``SessionLocal()`` invocation via a wrapper and
+    asserts exactly 1 — a regression that reverts the plumbing would
+    bump the count back to 4 and fail loudly.
+    """
+    from app.services.memory import (
+        habit_doc_service, knowledge_doc_service,
+        strategy_doc_service, user_profile_doc_service,
+        v3_context_loader,
+    )
+
+    _, Session = engine_and_session
+    _rebind(monkeypatch, Session)
+
+    call_count = {"n": 0}
+    real_session = Session
+
+    def _counting_factory(*args, **kwargs):
+        call_count["n"] += 1
+        return real_session(*args, **kwargs)
+
+    # Patch the helper's binding (and every doc service's, just to be
+    # safe — the helper is the only consumer post P1-F, but if a
+    # future change reverts to per-service opens we want the count
+    # invariant to catch it).
+    import app.services.memory._db_helpers as helpers_mod
+    monkeypatch.setattr(helpers_mod, "SessionLocal", _counting_factory)
+    monkeypatch.setattr(user_profile_doc_service, "SessionLocal", _counting_factory)
+    monkeypatch.setattr(knowledge_doc_service, "SessionLocal", _counting_factory)
+    import app.services.memory._single_doc_service as single_mod
+    monkeypatch.setattr(single_mod, "SessionLocal", _counting_factory)
+
+    v3_context_loader.load_universal("alice")
+
+    # Acceptable upper bound: 1 (the goal). Strictly assert it.
+    assert call_count["n"] == 1, (
+        f"load_universal should open EXACTLY 1 SessionLocal across "
+        f"its 4 service calls; got {call_count['n']}. A regression "
+        f"that drops the shared-session plumbing brings this back "
+        f"to 4 — silently regressing perf without breaking behavior."
+    )
 
 
 def test_strategy_apply_patches_populates_one_liner(engine_and_session, monkeypatch):
