@@ -118,8 +118,13 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, on
     if (initialQuestion.spoken_response) parts.push(initialQuestion.spoken_response);
     parts.push(initialQuestion.question);
     void tts.speak(parts.join('\n\n'));
+    // tts.speak is stable for the lifetime of the useTts hook + we
+    // gate via spokeInitialRef so the effect is once-only by design.
+    // initialQuestion.question is included so the once-only fire still
+    // happens if the prop arrives async after the first render
+    // (e.g. parent fetches it after mounting MockLive).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ttsActive]);
+  }, [ttsActive, initialQuestion.question]);
 
   const pushUserAnswer = async (answer: string) => {
     if (!answer.trim() || finished) return;

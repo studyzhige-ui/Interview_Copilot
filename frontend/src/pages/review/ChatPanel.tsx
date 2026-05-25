@@ -19,7 +19,7 @@
  * Claude / Gemini all use SSE for one-way text).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Send, Paperclip, Bot, MessageSquare, Sparkles, ChevronDown,
   Plus, Pencil, X as XIcon, Square, Brain, Wrench, ChevronRight,
@@ -1153,7 +1153,23 @@ export function ChatPanel({
   );
 }
 
-function Bubble({ role, content, blocks }: {
+/**
+ * Wrapped in ``React.memo`` so finalized message bubbles in the
+ * virtualizer don't re-render every time the parent ticks for
+ * streaming progress. Pre-memo the parent re-rendered ~50/sec
+ * during a stream, rebuilding every visible bubble's JSX (the
+ * heavy markdown work was already short-circuited by MarkdownBody's
+ * own memo, but the wrapper churn was still visible in profiler
+ * flame graphs as "Bubble" rows). With memo, the inflight bubble
+ * (rendered outside the virtualizer) is the only one that re-renders.
+ *
+ * Default shallow-compare works because finalized messages have
+ * stable references: ``rt.messages.push({...})`` captures the
+ * inflightBlocks ref into the new message, then ``rt.inflightBlocks
+ * = []`` swaps in a fresh array — so the message's ``blocks`` ref
+ * never changes after creation.
+ */
+const Bubble = memo(function Bubble({ role, content, blocks }: {
   role: UIMessage['role'];
   content: string;
   blocks?: ContentBlock[];
@@ -1181,7 +1197,7 @@ function Bubble({ role, content, blocks }: {
       </div>
     </div>
   );
-}
+});
 
 /**
  * Render a chain of Anthropic-style content blocks. Adjacent
