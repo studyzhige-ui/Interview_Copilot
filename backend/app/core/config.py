@@ -161,6 +161,17 @@ class Settings(BaseSettings):
     # CORS — comma-separated origins, default allows local Vite dev server.
     CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
 
+    # Reverse-proxy trust list (comma-separated IPs/hosts; "*" trusts all).
+    # When non-empty, ProxyHeadersMiddleware rewrites ``request.client.host``
+    # from the X-Forwarded-For header sent by trusted proxies. **Without
+    # this set in prod, every per-IP rate-limit and login-lockout counter
+    # collapses to a single global counter keyed by the nginx/ALB IP —
+    # one attacker burns the quota for everyone.**
+    # Default empty = dev direct-connect, no rewrite, ``request.client.host``
+    # is the real socket peer. Set to e.g. ``"127.0.0.1"`` (nginx on same
+    # host) or your ALB CIDR in prod.
+    TRUSTED_PROXIES: str = ""
+
     # Redis and Celery
     REDIS_URL: str = "redis://localhost:6379/0"
 
@@ -288,6 +299,22 @@ def _validate_production_safety(s: "Settings") -> None:
         findings.append((
             "AWS_SECRET_ACCESS_KEY is bundled 'minioadmin'",
             "Rotate MINIO_ROOT_PASSWORD in .env.docker and AWS_SECRET_ACCESS_KEY in .env.",
+        ))
+
+    # Prod-only: with TRUSTED_PROXIES empty, every request's
+    # ``request.client.host`` collapses to the proxy IP (nginx / ALB)
+    # so slowapi's per-IP rate-limit and the verification-code
+    # IP-lockout both degrade to a single global counter — one
+    # attacker can burn the 5/minute auth quota for the entire
+    # deployment. Skipped in dev because direct-connect doesn't need
+    # the rewrite.
+    if is_prodlike and not (s.TRUSTED_PROXIES or "").strip():
+        findings.append((
+            "TRUSTED_PROXIES is empty in production",
+            "Set to the nginx/ALB IP(s) (e.g. '127.0.0.1' for same-host "
+            "nginx) so ProxyHeadersMiddleware can rewrite client.host "
+            "from X-Forwarded-For. Without it, per-IP rate-limit and "
+            "login-lockout share one global counter.",
         ))
 
     # ── SECRET_KEY: hard stop in production, WARN elsewhere ─────────────

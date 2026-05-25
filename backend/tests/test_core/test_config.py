@@ -121,6 +121,10 @@ def test_validate_production_safety_prod_emits_error_per_finding(caplog):
         AWS_ACCESS_KEY_ID="minioadmin",
         AWS_SECRET_ACCESS_KEY="minioadmin",
         SENTRY_ENVIRONMENT="prod",
+        # TRUSTED_PROXIES set to a sane prod value so this test only
+        # exercises the DB / MinIO findings — the TRUSTED_PROXIES
+        # finding has its own dedicated test below.
+        TRUSTED_PROXIES="127.0.0.1",
     )
     caplog.clear()
     with caplog.at_level(logging.ERROR, logger="app.core.config"):
@@ -174,12 +178,57 @@ def test_validate_production_safety_clean_settings_emit_nothing(caplog):
         AWS_ACCESS_KEY_ID="AKIA_ROTATED",
         AWS_SECRET_ACCESS_KEY="rotated_secret_xyz",
         SENTRY_ENVIRONMENT="prod",
+        TRUSTED_PROXIES="127.0.0.1",
     )
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="app.core.config"):
         _validate_production_safety(s)
     msgs = [r.getMessage() for r in caplog.records]
     assert not msgs, f"expected silence, got {msgs}"
+
+
+def test_validate_production_safety_warns_on_empty_trusted_proxies_in_prod(caplog):
+    """TRUSTED_PROXIES empty in prod = silent rate-limit collapse.
+
+    Without ProxyHeadersMiddleware, every request behind nginx/ALB
+    looks like it came from the proxy IP — slowapi's per-IP key_func
+    and the verification-code IP-lockout both degrade to one global
+    counter, so one attacker burns the 5/min auth quota for everyone.
+    The startup-time finding is the only thing standing between a
+    misconfigured deploy and a silently broken security boundary."""
+    s = _make_settings(
+        SECRET_KEY="random-strong-secret-12345xyz",
+        DATABASE_URL="postgresql://prod_user:strong_pw@db:5432/x",
+        AWS_ACCESS_KEY_ID="AKIA_ROTATED",
+        AWS_SECRET_ACCESS_KEY="rotated_secret_xyz",
+        SENTRY_ENVIRONMENT="prod",
+        TRUSTED_PROXIES="",
+    )
+    caplog.clear()
+    with caplog.at_level(logging.ERROR, logger="app.core.config"):
+        _validate_production_safety(s)
+    err_msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert any("TRUSTED_PROXIES" in m and "PRODUCTION BLOCKER" in m for m in err_msgs), err_msgs
+
+
+def test_validate_production_safety_dev_silent_on_empty_trusted_proxies(caplog):
+    """Dev (SENTRY_ENVIRONMENT=local) must NOT warn about empty
+    TRUSTED_PROXIES — direct-connect doesn't need the rewrite, and
+    nagging on every local startup would train developers to
+    ignore the warning."""
+    s = _make_settings(
+        SECRET_KEY="random-strong-secret-12345xyz",
+        DATABASE_URL="postgresql://prod_user:strong_pw@db:5432/x",
+        AWS_ACCESS_KEY_ID="AKIA_ROTATED",
+        AWS_SECRET_ACCESS_KEY="rotated_secret_xyz",
+        SENTRY_ENVIRONMENT="local",
+        TRUSTED_PROXIES="",
+    )
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="app.core.config"):
+        _validate_production_safety(s)
+    msgs = [r.getMessage() for r in caplog.records]
+    assert not any("TRUSTED_PROXIES" in m for m in msgs), msgs
 
 
 @pytest.mark.parametrize("env", ["staging", "prod", "production", "PROD", "  Production  "])
@@ -192,6 +241,7 @@ def test_validate_production_safety_treats_prod_aliases_as_prodlike(caplog, env)
         AWS_ACCESS_KEY_ID="rotated",
         AWS_SECRET_ACCESS_KEY="rotated",
         SENTRY_ENVIRONMENT=env,
+        TRUSTED_PROXIES="127.0.0.1",
     )
     caplog.clear()
     with caplog.at_level(logging.ERROR, logger="app.core.config"):

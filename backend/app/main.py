@@ -172,6 +172,34 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ─── Reverse-proxy headers (must come BEFORE rate-limit / lockout reads) ─
+# When ``TRUSTED_PROXIES`` is set, ProxyHeadersMiddleware reads the
+# X-Forwarded-For header from the trusted proxy and rewrites
+# ``request.client.host`` to the real client IP. Without this, every
+# request behind nginx/ALB looks like it came from the proxy IP —
+# slowapi's per-IP key_func and verification_code_service's IP-lockout
+# both degrade to a single global counter, and one attacker burns the
+# quota for everyone.
+#
+# Default empty = dev direct-connect, no rewrite — same behaviour as
+# before. Must be configured in prod for the rate-limit P0 to actually
+# bite.
+_trusted_proxies = [
+    p.strip()
+    for p in settings.TRUSTED_PROXIES.split(",")
+    if p.strip()
+]
+if _trusted_proxies:
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+    # trusted_hosts accepts a list or comma-string; we pass the parsed
+    # list so a typo in TRUSTED_PROXIES surfaces at startup, not later.
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_proxies)
+    logger.info(
+        "ProxyHeadersMiddleware enabled (trusted_hosts=%s) — request.client.host "
+        "will be rewritten from X-Forwarded-For",
+        _trusted_proxies,
+    )
+
 # CORS Configuration — read allowed origins from settings (comma-separated).
 _cors_origins = [
     origin.strip()
