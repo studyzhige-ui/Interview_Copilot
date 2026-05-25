@@ -102,13 +102,41 @@ class WebSearchArgs(BaseModel):
 
 
 def _tavily_available() -> bool:
+    # Manifest gate — runs without a user context (registry's
+    # ``available()`` predicate is queried once at startup for global
+    # OpenAI-schema generation). True if EITHER per-user keys can
+    # exist (we always allow that — the actual check is per-request)
+    # OR the global env-var fallback is set. In practice this stays
+    # ``True`` whenever the env var is configured, and we let the
+    # per-request handler return a clear error when neither source
+    # has a key for the actual calling user.
     return bool(os.getenv("TAVILY_API_KEY"))
 
 
-async def _web_search_handler(args: WebSearchArgs, _ctx: AgentToolContext) -> dict[str, Any]:
-    api_key = os.getenv("TAVILY_API_KEY", "")
+def _resolve_tavily_key(user_id: str | None) -> str:
+    """Prefer per-user encrypted key, fall back to global env var.
+
+    The same resolution shape as ``model_registry.resolve_api_key``
+    but specialised for Tavily (not a chat-LLM ``ModelProfile``).
+    Pre-fix the web_search tool only read the env var so a
+    multi-tenant deploy had every user share one Tavily account
+    (billing + quota cross-tenant).
+    """
+    if user_id:
+        try:
+            from app.services.user_api_key_service import get_user_api_key_plaintext
+            per_user = get_user_api_key_plaintext(user_id, "tavily")
+            if per_user:
+                return per_user
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("tavily per-user key lookup failed: %s", exc)
+    return os.getenv("TAVILY_API_KEY", "")
+
+
+async def _web_search_handler(args: WebSearchArgs, ctx: AgentToolContext) -> dict[str, Any]:
+    api_key = _resolve_tavily_key(ctx.user_id)
     if not api_key:
-        return {"error": "TAVILY_API_KEY not set"}
+        return {"error": "TAVILY_API_KEY not set (and no per-user key configured)"}
 
     timeout = httpx.Timeout(15.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
