@@ -97,6 +97,20 @@ class MockFinishResp(BaseModel):
     task_id: str
 
 
+class MockParseJdResp(BaseModel):
+    """Wire-format for ``POST /chat/mock-interview/parse-jd``."""
+    text: str
+    filename: str | None = None
+    chars: int
+
+
+class MockTranscribeResp(BaseModel):
+    """Wire-format for ``POST /chat/mock-interview/transcribe``."""
+    text: str
+    language: str
+    duration_sec: float
+
+
 class MockAbandonResp(BaseModel):
     """Wire-format response for ``POST /chat/mock-interview/abandon``."""
     status: Literal["deleted"]

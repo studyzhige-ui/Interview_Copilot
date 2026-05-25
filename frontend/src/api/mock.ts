@@ -65,10 +65,23 @@ export async function getInProgressMock(): Promise<InProgressMock> {
   return res.data;
 }
 
-export async function abandonMockInterview(sessionId: string): Promise<void> {
-  await apiClient.post('/chat/mock-interview/abandon', null, {
+/** ``MockAbandonResp`` from the backend — mirrored in
+ *  ``backend/app/schemas/chat.py::MockAbandonResp``. We surface the
+ *  shape so future call sites can read the confirmation without
+ *  another round-trip; existing callers can keep ignoring the
+ *  resolved value (await abandonMockInterview(...)). */
+export interface AbandonMockResp {
+  status: 'deleted';
+  session_id: string;
+}
+
+export async function abandonMockInterview(
+  sessionId: string,
+): Promise<AbandonMockResp> {
+  const res = await apiClient.post('/chat/mock-interview/abandon', null, {
     params: { session_id: sessionId },
   });
+  return res.data;
 }
 
 // JD parsing for mock interview — stateless, does NOT persist to knowledge library.

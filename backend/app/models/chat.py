@@ -68,11 +68,14 @@ class ChatSession(Base):
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
-    # ix_*_session_seq: read-time order-by-seq for chat history pagination.
-    # uq_*_session_seq: write-side guard against duplicate seqs under
-    #   concurrent ``append``. See alembic 0001_baseline + 0010.
+    # uq_chat_messages_session_seq is a UNIQUE constraint (backed by
+    # a unique B-tree) that does double duty: guards the concurrent-
+    # append race AND serves read-time ``ORDER BY seq`` paginations
+    # for the chat-history endpoint. 0001 originally created a
+    # separate non-unique ``ix_chat_messages_session_seq`` for the
+    # read path; 0011 drops it (the unique B-tree is just as good for
+    # the read direction and halves the per-INSERT index-write cost).
     __table_args__ = (
-        Index("ix_chat_messages_session_seq", "session_id", "seq"),
         UniqueConstraint("session_id", "seq", name="uq_chat_messages_session_seq"),
     )
 

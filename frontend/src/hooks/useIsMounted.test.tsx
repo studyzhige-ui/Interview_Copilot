@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
-import { useEffect } from 'react';
+import { StrictMode, useEffect } from 'react';
 
 import { useIsMounted } from './useIsMounted';
 
@@ -33,6 +33,34 @@ describe('useIsMounted', () => {
     }
     const view = render(<Probe />);
     // Sanity: ref captured, mounted true.
+    expect(capturedRef!.current).toBe(true);
+    view.unmount();
+    expect(capturedRef!.current).toBe(false);
+  });
+
+  it('survives the StrictMode mount → cleanup → mount cycle', () => {
+    // React 18 StrictMode in development double-invokes mount effects:
+    //   mount A → effect runs (current=true) → cleanup runs (current=false)
+    //   → mount B → effect runs (current=true).
+    // The hook's design assumes the second mount's effect restores
+    // ``current=true`` so the rest of the component lifetime works
+    // normally. Pin that behaviour — a future contributor who replaces
+    // the ``useEffect`` with ``useLayoutEffect`` or removes the
+    // ``mounted.current = true`` line in the effect body would break
+    // this contract silently in production-only test runs.
+    let capturedRef: { current: boolean } | null = null;
+    function Probe() {
+      const isMounted = useIsMounted();
+      capturedRef = isMounted;
+      return null;
+    }
+    const view = render(
+      <StrictMode>
+        <Probe />
+      </StrictMode>,
+    );
+    // After StrictMode's double-cycle, the ref must end up true (mount
+    // semantics, not unmount semantics).
     expect(capturedRef!.current).toBe(true);
     view.unmount();
     expect(capturedRef!.current).toBe(false);

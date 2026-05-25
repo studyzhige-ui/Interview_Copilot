@@ -256,7 +256,12 @@ def delete_user_api_key(
             .delete(synchronize_session=False)
         )
         s.commit()
-    _decrypt_cache.pop((user_id, provider), None)
+    # Hold the lock for the cache invalidation so this delete-on-revoke
+    # path doesn't race against a concurrent _cache_get (GIL-atomic dict
+    # ops were safe, but the lock guarantees ordering: callers can't see
+    # plaintext for a key that's already been deleted from the DB).
+    with _decrypt_cache_lock:
+        _decrypt_cache.pop((user_id, provider), None)
     return bool(rows)
 
 

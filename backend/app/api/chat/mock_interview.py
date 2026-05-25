@@ -16,7 +16,7 @@ import tempfile
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
 
-from app.core.rate_limit import RATE_EXPENSIVE, RATE_UPLOAD, limiter
+from app.core.rate_limit import RATE_DEFAULT, RATE_EXPENSIVE, RATE_UPLOAD, limiter
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -30,9 +30,11 @@ from app.schemas.chat import (
     MockAnswerResp,
     MockFinishResp,
     MockInProgressResp,
+    MockParseJdResp,
     MockQuestion,
     MockStartRequest,
     MockStartResp,
+    MockTranscribeResp,
     TTSRequest,
 )
 from app.services.chat.session_state import dump_session_state, parse_session_state
@@ -299,7 +301,9 @@ _PHASE_NAME_MAP = {
 
 
 @router.get("/chat/mock-interview/in-progress", response_model=MockInProgressResp)
+@limiter.limit(RATE_DEFAULT)
 async def get_in_progress_mock(
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -406,7 +410,9 @@ async def get_in_progress_mock(
 
 
 @router.post("/chat/mock-interview/abandon", response_model=MockAbandonResp)
+@limiter.limit(RATE_DEFAULT)
 async def abandon_mock_interview(
+    request: Request,
     session_id: str = Query(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -461,7 +467,9 @@ async def abandon_mock_interview(
 
 
 @router.get("/chat/mock-interview/question", response_model=MockQuestion)
+@limiter.limit(RATE_DEFAULT)
 async def get_current_question(
+    request: Request,
     session_id: str = Query(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -797,7 +805,7 @@ async def _parse_resume_on_demand(db: Session, upload_id: str, user_id: str) -> 
 # ── Stateless JD parsing ───────────────────────────────────────────────
 
 
-@router.post("/chat/mock-interview/parse-jd")
+@router.post("/chat/mock-interview/parse-jd", response_model=MockParseJdResp)
 @limiter.limit(RATE_UPLOAD)
 async def parse_jd_for_mock(
     request: Request,
@@ -836,7 +844,7 @@ async def parse_jd_for_mock(
 # ── Short-clip transcription (MediaRecorder → text) ────────────────────
 
 
-@router.post("/chat/mock-interview/transcribe")
+@router.post("/chat/mock-interview/transcribe", response_model=MockTranscribeResp)
 @limiter.limit(RATE_EXPENSIVE)
 async def transcribe_short_clip(
     request: Request,

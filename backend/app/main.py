@@ -286,9 +286,18 @@ async def unhandled_exception_logger(request: _Request, exc: Exception):
         # sentry-sdk not installed → fall through silently. We
         # already logged the traceback above.
         pass
+    # Explicitly attach X-Request-ID. Starlette's ServerErrorMiddleware
+    # short-circuits past our middleware chain on exception, so the
+    # ``request_id_middleware`` doesn't get to stamp the header on
+    # the response. Stamping it here keeps client↔server correlation
+    # working even on 500s — the user reporting a bug + the on-call
+    # log line share one searchable token. ``get_request_id`` returns
+    # the contextvar's current value (or "-" if somehow unset).
+    from app.core.request_id import get_request_id
     return _JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},
+        headers={"X-Request-ID": get_request_id()},
     )
 
 
