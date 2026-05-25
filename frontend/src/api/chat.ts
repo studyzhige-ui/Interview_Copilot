@@ -300,10 +300,21 @@ export async function getChatHistory(
  * legacy rows with no ``content_blocks_json`` it synthesises a single
  * ``text`` block from ``content`` at read time, so the renderer can
  * uniformly branch on ``blocks`` without a flat-string fallback.
+ *
+ * Pass ``opts.signal`` from a session-switch ``AbortController`` so
+ * a stale response from a previous session can't land on the active
+ * runtime after the user has navigated away — the
+ * ``runtimes.current`` Map is keyed by session_id and a delayed
+ * response from session A could overwrite session B's messages
+ * during rapid sidebar clicks.
  */
-export async function getChatTranscript(sessionId: string): Promise<ChatTranscriptResp> {
+export async function getChatTranscript(
+  sessionId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<ChatTranscriptResp> {
   const res = await apiClient.get('/chat/transcript', {
     params: { session_id: sessionId },
+    signal: opts.signal,
   });
   return res.data;
 }

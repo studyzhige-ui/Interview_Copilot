@@ -308,8 +308,18 @@ export function ChatPanel({
     if (!activeSessionId) return;
     const r = getRuntime(activeSessionId);
     if (r.loadedHistory) return;
+    // Abort the in-flight transcript fetch on session switch so a
+    // late response from session A can't stomp on session B's
+    // ``runtimes`` entry. ``alive`` alone was insufficient: even with
+    // ``alive = false`` the network request kept running and the
+    // backend kept materialising the (now-unused) transcript. Worse,
+    // the closed-over ``activeSessionId`` in the ``.then`` always
+    // referenced the SESSION FOR THIS EFFECT INSTANCE — so a delayed
+    // response correctly hit only its own session — but the underlying
+    // axios call was still wasted bandwidth + DB work. Abort cuts both.
+    const controller = new AbortController();
     let alive = true;
-    getChatTranscript(activeSessionId)
+    getChatTranscript(activeSessionId, { signal: controller.signal })
       .then((resp) => {
         if (!alive) return;
         const rt = getRuntime(activeSessionId);
@@ -317,8 +327,11 @@ export function ChatPanel({
         rt.loadedHistory = true;
         bump();
       })
-      .catch(() => { /* empty / fresh session is fine */ });
-    return () => { alive = false; };
+      .catch(() => { /* empty / fresh session OR aborted on switch — both fine */ });
+    return () => {
+      alive = false;
+      controller.abort();
+    };
   }, [activeSessionId, getRuntime, bump]);
 
   // ── Abort all in-flight SSE on unmount ──────────────────────────────

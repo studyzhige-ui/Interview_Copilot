@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { authedFetch } from '@/api/client';
 
 export interface AnalysisProgress {
@@ -27,9 +27,24 @@ type Event = ProgressEvent | DoneEvent | ErrorEvent;
  * UploadCards that started it.
  */
 export function AnalysisRunner({ recordId, onProgress, onDone, onError }: Props) {
+  // Latest-callback refs. Effect deps stay at ``[recordId]`` so we
+  // don't re-open the SSE connection just because the parent
+  // re-rendered and produced new arrow-function callbacks. Refs let
+  // the long-lived stream loop dispatch to the LATEST callbacks each
+  // event without restarting the connection. Same pattern as
+  // ``useAnalysisStream`` — see that file for the longer rationale.
+  const onProgressRef = useRef(onProgress);
+  const onDoneRef = useRef(onDone);
+  const onErrorRef = useRef(onError);
+  useEffect(() => {
+    onProgressRef.current = onProgress;
+    onDoneRef.current = onDone;
+    onErrorRef.current = onError;
+  });
+
   useEffect(() => {
     const controller = new AbortController();
-    onProgress({ phase: 'connecting', percent: 0 });
+    onProgressRef.current({ phase: 'connecting', percent: 0 });
 
     (async () => {
       try {
@@ -45,8 +60,8 @@ export function AnalysisRunner({ recordId, onProgress, onDone, onError }: Props)
         );
         if (!res.ok || !res.body) {
           const msg = `HTTP ${res.status}`;
-          onProgress({ phase: 'error', percent: 0, message: msg });
-          onError(msg);
+          onProgressRef.current({ phase: 'error', percent: 0, message: msg });
+          onErrorRef.current(msg);
           return;
         }
 
@@ -67,15 +82,15 @@ export function AnalysisRunner({ recordId, onProgress, onDone, onError }: Props)
             let evt: Event;
             try { evt = JSON.parse(payload); } catch { continue; }
             if (evt.type === 'progress') {
-              onProgress({ phase: 'progress', percent: evt.percent, status: evt.status });
+              onProgressRef.current({ phase: 'progress', percent: evt.percent, status: evt.status });
             } else if (evt.type === 'done') {
-              onProgress({ phase: 'done', percent: 100, status: evt.status });
-              onDone(evt.analysis);
+              onProgressRef.current({ phase: 'done', percent: 100, status: evt.status });
+              onDoneRef.current(evt.analysis);
               return;
             } else if (evt.type === 'error') {
               const msg = evt.message ?? evt.status ?? 'unknown';
-              onProgress({ phase: 'error', percent: 0, message: msg });
-              onError(msg);
+              onProgressRef.current({ phase: 'error', percent: 0, message: msg });
+              onErrorRef.current(msg);
               return;
             }
           }
@@ -83,13 +98,13 @@ export function AnalysisRunner({ recordId, onProgress, onDone, onError }: Props)
       } catch (err) {
         if ((err as { name?: string }).name === 'AbortError') return;
         const msg = err instanceof Error ? err.message : 'stream error';
-        onProgress({ phase: 'error', percent: 0, message: msg });
-        onError(msg);
+        onProgressRef.current({ phase: 'error', percent: 0, message: msg });
+        onErrorRef.current(msg);
       }
     })();
 
     return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks read via refs above
   }, [recordId]);
 
   return null;

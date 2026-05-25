@@ -25,6 +25,25 @@ export function useAnalysisStream(
   const [state, setState] = useState<AnalysisState>({ phase: 'idle', percent: 0 });
   const abortRef = useRef<AbortController | null>(null);
 
+  // Latest-callback refs. The stream effect's deps are intentionally
+  // ``[recordId]`` only — we don't want to tear down and re-open the
+  // SSE connection just because the parent passed a new arrow
+  // function for ``onDone``. But the callbacks captured by the
+  // async-iife at mount time would otherwise be STALE: a parent that
+  // does ``<X onDone={(a) => setLocal(a)}>`` recreates the callback
+  // every render, and the stream — closed over the first one — would
+  // call back into the first render's ``setLocal`` closure (which
+  // still works for setters, but for any consumer that reads parent
+  // state inside the callback, the read is stale). Refs let the
+  // closure read the LATEST callback each invocation while keeping
+  // the connection sticky.
+  const onDoneRef = useRef(onDone);
+  const onErrorRef = useRef(onError);
+  useEffect(() => {
+    onDoneRef.current = onDone;
+    onErrorRef.current = onError;
+  });
+
   useEffect(() => {
     if (!recordId) return;
     const controller = new AbortController();
@@ -46,7 +65,7 @@ export function useAnalysisStream(
         );
         if (!res.ok || !res.body) {
           setState({ phase: 'error', percent: 0, message: `HTTP ${res.status}` });
-          onError?.(`HTTP ${res.status}`);
+          onErrorRef.current?.(`HTTP ${res.status}`);
           return;
         }
 
@@ -75,12 +94,12 @@ export function useAnalysisStream(
               setState({ phase: 'progress', status: evt.status, percent: evt.percent });
             } else if (evt.type === 'done') {
               setState({ phase: 'done', status: evt.status, percent: 100 });
-              onDone?.(evt.analysis);
+              onDoneRef.current?.(evt.analysis);
               return;
             } else if (evt.type === 'error') {
               const msg = evt.message ?? evt.status ?? 'unknown';
               setState({ phase: 'error', percent: 0, message: msg });
-              onError?.(msg);
+              onErrorRef.current?.(msg);
               return;
             }
           }
@@ -89,12 +108,12 @@ export function useAnalysisStream(
         if ((err as { name?: string }).name === 'AbortError') return;
         const msg = err instanceof Error ? err.message : 'stream error';
         setState({ phase: 'error', percent: 0, message: msg });
-        onError?.(msg);
+        onErrorRef.current?.(msg);
       }
     })();
 
     return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks read via refs above
   }, [recordId]);
 
   return state;
