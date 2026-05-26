@@ -11,16 +11,24 @@ from __future__ import annotations
 import pytest
 from llama_index.llms.openai_like import OpenAILike
 
-import app.core.model_registry as model_registry
-from app.core.model_registry import (
-    ROLE_DEFAULTS,
-    ModelProfile,
+# P8-10 split: catalog / selection / client-factory now live in their own
+# modules. The model_registry shim still re-exports the public surface
+# for back-compat, but monkeypatching MUST target the leaf modules where
+# the symbols are defined — patching the shim's local binding wouldn't
+# affect the real callers that look symbols up through their own module
+# namespace.
+import app.core.llm_client_factory as llm_client_factory
+import app.core.model_catalog as model_catalog
+import app.core.user_model_selection as user_model_selection
+from app.core.llm_client_factory import (
     _build_llm_instance,
-    _normalize_selection,
-    get_profile,
-    get_profile_for_role,
     profile_ready,
     validate_role_update,
+)
+from app.core.model_catalog import ROLE_DEFAULTS, ModelProfile, get_profile
+from app.core.user_model_selection import (
+    _normalize_selection,
+    get_profile_for_role,
 )
 
 
@@ -54,7 +62,7 @@ def _stub_profile_cache(monkeypatch):
         "openai/gpt-4o-mini": _mkprofile("openai/gpt-4o-mini", fc=True),
         "nvidia/nemotron-1": _mkprofile("nvidia/nemotron-1", fc=False),
     }
-    monkeypatch.setattr(model_registry, "_get_all_profiles", lambda: catalog)
+    monkeypatch.setattr(model_catalog, "_get_all_profiles", lambda: catalog)
     yield catalog
 
 
@@ -74,11 +82,11 @@ def _isolated_user_selection(monkeypatch):
     def fake_save(user_id: str, selection: dict[str, str]) -> None:
         store[user_id] = dict(selection)
 
-    monkeypatch.setattr(model_registry, "_load_user_selection", fake_load)
-    monkeypatch.setattr(model_registry, "_save_user_selection", fake_save)
-    model_registry._llm_cache.clear()
+    monkeypatch.setattr(user_model_selection, "_load_user_selection", fake_load)
+    monkeypatch.setattr(user_model_selection, "_save_user_selection", fake_save)
+    llm_client_factory._llm_cache.clear()
     yield
-    model_registry._llm_cache.clear()
+    llm_client_factory._llm_cache.clear()
 
 
 # ── ROLE_DEFAULTS resolve through the cache ─────────────────────────────
@@ -154,7 +162,7 @@ def test_get_profile_for_role_falls_back_when_selection_stale(monkeypatch, _stub
     """User selection points at a now-missing profile → fall back to default."""
     # Patch the in-memory store to return a stale selection.
     monkeypatch.setattr(
-        model_registry, "_load_user_selection",
+        user_model_selection, "_load_user_selection",
         lambda uid: {"primary": "openai/gpt-retired"},
     )
     prof = get_profile_for_role("primary", user_id="alice")
@@ -170,7 +178,7 @@ def test_get_profile_for_role_picks_any_fc_model_when_default_missing(monkeypatc
         "openai/gpt-4o": _mkprofile("openai/gpt-4o", fc=True),
         "nvidia/nemotron-1": _mkprofile("nvidia/nemotron-1", fc=False),
     }
-    monkeypatch.setattr(model_registry, "_get_all_profiles", lambda: catalog)
+    monkeypatch.setattr(model_catalog, "_get_all_profiles", lambda: catalog)
     prof = get_profile_for_role("agent")
     # Some FC profile must be returned (the only FC in catalog is gpt-4o here).
     assert prof.id == "openai/gpt-4o"
@@ -179,7 +187,7 @@ def test_get_profile_for_role_picks_any_fc_model_when_default_missing(monkeypatc
 
 def test_get_profile_for_role_raises_when_catalog_empty(monkeypatch):
     """Empty catalog → ValueError so ops sees a clear "run refresh" hint."""
-    monkeypatch.setattr(model_registry, "_get_all_profiles", lambda: {})
+    monkeypatch.setattr(model_catalog, "_get_all_profiles", lambda: {})
     with pytest.raises(ValueError, match="catalog is empty"):
         get_profile_for_role("primary")
 
@@ -189,15 +197,15 @@ def test_get_profile_for_role_raises_when_catalog_empty(monkeypatch):
 
 def test_runtime_selection_is_per_user_isolated():
     """A's update doesn't leak into B's read (P6-C cross-tenant fix)."""
-    sel_a = model_registry.update_runtime_selection(
+    sel_a = user_model_selection.update_runtime_selection(
         {"fast": "openai/gpt-4o"}, user_id="alice",
     )
     assert sel_a["fast"] == "openai/gpt-4o"
-    assert model_registry.get_runtime_selection(user_id="alice")["fast"] == "openai/gpt-4o"
-    bob_sel = model_registry.get_runtime_selection(user_id="bob")
+    assert user_model_selection.get_runtime_selection(user_id="alice")["fast"] == "openai/gpt-4o"
+    bob_sel = user_model_selection.get_runtime_selection(user_id="bob")
     assert bob_sel["fast"] == ROLE_DEFAULTS["fast"]
     # Process-default lookup (no user) returns defaults too.
-    process_sel = model_registry.get_runtime_selection()
+    process_sel = user_model_selection.get_runtime_selection()
     assert process_sel["fast"] == ROLE_DEFAULTS["fast"]
 
 
@@ -286,13 +294,13 @@ def test_resolve_api_base_uses_user_override_when_present(monkeypatch, _stub_pro
         def query(self, *_a, **_kw): return FakeQuery()
 
     monkeypatch.setattr("app.db.database.SessionLocal", lambda: FakeSession())
-    assert model_registry._resolve_api_base(prof, user_id="alice") == \
+    assert llm_client_factory._resolve_api_base(prof, user_id="alice") == \
         "https://my-enterprise-gateway.example.com/v1"
 
 
 def test_resolve_api_base_returns_default_when_no_user(monkeypatch, _stub_profile_cache):
     prof = _stub_profile_cache["openai/gpt-4o"]
-    assert model_registry._resolve_api_base(prof, user_id=None) == prof.api_base
+    assert llm_client_factory._resolve_api_base(prof, user_id=None) == prof.api_base
 
 
 def test_resolve_api_base_returns_default_when_db_lookup_fails(monkeypatch, _stub_profile_cache):
@@ -301,4 +309,4 @@ def test_resolve_api_base_returns_default_when_db_lookup_fails(monkeypatch, _stu
     def boom():
         raise RuntimeError("DB down")
     monkeypatch.setattr("app.db.database.SessionLocal", boom)
-    assert model_registry._resolve_api_base(prof, user_id="alice") == prof.api_base
+    assert llm_client_factory._resolve_api_base(prof, user_id="alice") == prof.api_base
