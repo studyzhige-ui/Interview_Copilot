@@ -67,30 +67,38 @@ async def upload_audio(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    import io
-
-    from app.services.file_validation import validate_upload
+    from app.services.file_validation import validate_upload_stream
     from app.services.voice.file_parser import validate_media_format
 
     # Cheap extension check first (rejects obviously-wrong filenames before
-    # we read megabytes into memory). validate_upload then enforces the
-    # real magic-byte check + size ceiling.
+    # we read any bytes). validate_upload_stream then enforces the real
+    # magic-byte check + progressive size ceiling.
     if not validate_media_format(file.filename or ""):
         raise HTTPException(
             status_code=400,
             detail="不支持的音视频格式。支持: mp3, wav, m4a, flac, ogg, wma, aac, mp4, mkv, avi, mov, webm",
         )
-    body = await validate_upload(file, purpose="audio_upload")
-
-    upload, _ = create_owned_upload(
-        db,
-        user_id=current_user.username,
-        filename=file.filename,
-        purpose="interview_audio",
-        content_type=file.content_type,
+    # Streaming validation — never loads the 500 MB body into RAM.
+    # Spool rolls to disk past 1 MiB; we hand the file-like directly
+    # to S3 upload_fileobj below.
+    _detected, _size, body_stream = await validate_upload_stream(
+        file, purpose="audio_upload",
     )
-    # validate_upload consumed file.file; pass the buffered body instead.
-    storage_uri = upload_file_to_owned_key(io.BytesIO(body), upload.object_key, file.content_type)
+    try:
+        upload, _ = create_owned_upload(
+            db,
+            user_id=current_user.username,
+            filename=file.filename,
+            purpose="interview_audio",
+            content_type=file.content_type,
+        )
+        # boto3.upload_fileobj reads via .read() in chunks; SpooledTemporaryFile
+        # supports that natively. No bytes-into-memory copy.
+        storage_uri = upload_file_to_owned_key(
+            body_stream, upload.object_key, file.content_type,
+        )
+    finally:
+        body_stream.close()  # drops the temp disk spill if one was created
     upload.storage_uri = storage_uri
     upload.status = "uploaded"
     db.add(upload)
