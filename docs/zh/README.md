@@ -167,17 +167,36 @@ python scripts/init_models.py                        # 总共约 5GB，支持字
 ```
 backend/
   app/
-    api/              FastAPI 路由（auth, chat, interview, rag, model_runtime）
-    core/             config, security, rate_limit, model_registry, llm_tracing
-    rag/              embedding/reranker 注册表、retriever、ingestion
-    services/         业务逻辑（chat, voice, knowledge, memory, agent, …）
-    worker/           Celery app + tasks
-    scripts/          一次性维护脚本，可用 `python -m app.scripts.X` 调用
-  tests/              ~390 个测试（api / services / rag / models / core / db）
+    api/              FastAPI 路由 —— auth · chat/ · interview · memory · model_runtime · rag
+    schemas/          Pydantic 请求 / 响应模型（每个路由一份）
+    core/             config · security · rate_limit · ssrf · request_id
+                      · model_catalog + user_model_selection + llm_client_factory
+                        （model_registry.py 现在是只做 re-export 的兼容垫片）
+                      · llm_tracing · hf_runtime · background_tasks
+    db/               SQLAlchemy engine、session factory、同步 + 异步 Redis 客户端
+    models/           ORM 行 —— User、InterviewRecord、InterviewQA、KnowledgeDocument、……
+    rag/              embedding / reranker 注册表、retriever、ingestion、BM25
+    services/         业务逻辑，按领域分包：
+                        auth/        email、token_blacklist、user_api_key、user_provider_settings、verification_code
+                        resume/      resume_service、resume_vector_service
+                        knowledge/   knowledge_service、knowledge_text_service
+                        uploads/     file_validation、upload_service
+                        analytics/   diagnostics_report_service、telemetry_service
+                        interview/   analysis_orchestrator、interview_record_service、mock_interview_service
+                        chat/        session、runner、recall_policy、memory bundle
+                        memory/      v3 长期记忆（Milvus 落盘）
+                        voice/       WhisperX、Pyannote、TTS
+                        model_sources/  每家厂商 /v1/models 适配器 + Redis 目录管道
+                        storage_service.py + cache_service.py 仍在 services/ 根
+                        （跨域 —— S3 封装、Redis-TTL 缓存）
+    conversation/     聊天引擎 + agent 策略（L1 chat vs L2 ReAct 循环）
+    agent_runtime/    工具注册表、ReAct 循环、context compactor、事件流
+    worker/           Celery app + tasks（analyze / ingest / refresh-catalog）
+  tests/              ~500 个测试（api / services / rag / models / core / db）
 frontend/
   src/                React SPA（Vite + TS + Tailwind + zustand）
   public/             nginx 配置 / _headers / _redirects
-alembic/versions/     数据库迁移（0001 → 0019）
+alembic/versions/     数据库迁移（squash 为单一基线）
 nginx/conf.d/         反向代理配置（dev + production）
 scripts/              setup / start / stop · init_models / refresh_models · wipe_non_admin / migrate_avatars
 docs/                 ← 你在这里

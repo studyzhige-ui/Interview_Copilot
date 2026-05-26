@@ -168,13 +168,32 @@ on either path — see `docs/providers.md`.
 ```
 backend/
   app/
-    api/              FastAPI routers (auth, chat, interview, rag, model_runtime)
-    core/             config, security, rate_limit, model_registry, llm_tracing
-    rag/              embedding/reranker registries, retriever, ingestion
-    services/         business logic (chat, voice, knowledge, memory, agent, …)
-    worker/           Celery app + tasks
-    scripts/          one-shot maintenance scripts importable as `python -m app.scripts.X`
-  tests/              ~390 tests across api / services / rag / models / core / db
+    api/              FastAPI routers — auth · chat/ · interview · memory · model_runtime · rag
+    schemas/          Pydantic request / response models (one file per router)
+    core/             config · security · rate_limit · ssrf · request_id
+                      · model_catalog + user_model_selection + llm_client_factory
+                        (model_registry.py is a back-compat shim re-exporting all three)
+                      · llm_tracing · hf_runtime · background_tasks
+    db/               SQLAlchemy engine, session factory, sync + async Redis clients
+    models/           ORM rows — User, InterviewRecord, InterviewQA, KnowledgeDocument, ...
+    rag/              embedding / reranker registries, retriever, ingestion, BM25
+    services/         business logic, grouped by domain:
+                        auth/        email, token_blacklist, user_api_key, user_provider_settings, verification_code
+                        resume/      resume_service, resume_vector_service
+                        knowledge/   knowledge_service, knowledge_text_service
+                        uploads/     file_validation, upload_service
+                        analytics/   diagnostics_report_service, telemetry_service
+                        interview/   analysis_orchestrator, interview_record_service, mock_interview_service
+                        chat/        session, runner, recall_policy, memory bundle
+                        memory/      v3 long-term memory (Milvus-backed)
+                        voice/       WhisperX, Pyannote, TTS
+                        model_sources/  per-vendor /v1/models adapters + Redis catalog pipeline
+                        storage_service.py + cache_service.py stay at services/ root
+                        (cross-domain — S3 wrapper, Redis-TTL cache)
+    conversation/     chat engine + agent strategy (L1 chat vs L2 ReAct loop)
+    agent_runtime/    tool registry, ReAct loop, context compactor, event streaming
+    worker/           Celery app + tasks (analyze, ingest, refresh-catalog)
+  tests/              ~500 tests across api / services / rag / models / core / db
 frontend/
   src/                React SPA (Vite + TS + Tailwind + zustand)
   public/             nginx config / _headers / _redirects

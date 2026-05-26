@@ -18,7 +18,7 @@ You can also mix on a per-role basis — e.g. local embedding + remote rerank.
 
 | Role | Env vars | Registry file |
 |------|----------|---------------|
-| **LLM** (chat / agent / mock interviewer) | picked per-user via Models page UI | `backend/app/core/model_registry.py` |
+| **LLM** (chat / agent / mock interviewer) | picked per-user via Models page UI | `backend/app/core/model_catalog.py` + `user_model_selection.py` + `llm_client_factory.py` |
 | **Embedding** | `EMBEDDING_PROVIDER` + `EMBEDDING_MODEL` + `EMBEDDING_DIM` | `backend/app/rag/embedding_registry.py` |
 | **Reranker** | `RERANKER_PROVIDER` + `RERANKER_MODEL` | `backend/app/rag/reranker_registry.py` |
 | **ASR** (audio → text) | `TRANSCRIPTION_PROVIDER` + `TRANSCRIPTION_MODEL` | `backend/app/services/voice/transcription_registry.py` |
@@ -189,10 +189,22 @@ means hybrid will auto-degrade to single-speaker.
 ### LLM providers
 
 LLM is selected per-user from the Models page UI (different users in
-the same deployment can use different chat models). The catalog of ~38
-profiles is in `backend/app/core/model_registry.py` — DeepSeek, OpenAI,
-Anthropic, Gemini, Qwen, Moonshot, 智谱, MiMo, NVIDIA. New users see
-all and only configure the ones they want.
+the same deployment can use different chat models). The runtime catalog
+is sourced live from each vendor's own `/v1/models` endpoint and joined
+to per-provider connection defaults — DeepSeek, OpenAI, Anthropic,
+Gemini, Qwen, Moonshot, 智谱, MiMo, NVIDIA. New users see everything in
+the catalog and only configure the providers they want.
+
+The three modules involved (split out in P8-10 from the original 737-line
+`model_registry.py`, which now stays as a 70-line back-compat shim):
+
+- `backend/app/core/model_catalog.py` — vendor-driven catalog + Redis-backed
+  cache; `ModelProfile`, `ROLE_DEFAULTS`, `get_profile`
+- `backend/app/core/user_model_selection.py` — per-user role → profile
+  persistence (`users.model_selection_json`)
+- `backend/app/core/llm_client_factory.py` — api-key + override resolution,
+  `AsyncOpenAI` + LlamaIndex client caches, `_build_llm_instance`,
+  `get_llm_for_role`, `RuntimeLLMProxy`
 
 This one keeps the per-(provider, model) profile pattern because LLMs
 need richer per-model metadata (function calling, context window,
@@ -237,7 +249,7 @@ Switching providers is purely **(api_base, api_key, model_id)** — no
 per-vendor branching in the runtime path. Adding a new provider = one
 row in `providers.py` + one adapter spec in `model_sources/vendors/`.
 
-The actual builder in `backend/app/core/model_registry.py:_build_llm_instance`
+The actual builder in `backend/app/core/llm_client_factory.py:_build_llm_instance`
 is six lines:
 
 ```python

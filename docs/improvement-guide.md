@@ -852,7 +852,7 @@ for i in {1..10}; do curl -s -o /dev/null -w "%{http_code}\n" https://yourdomain
 
 🛠 **改进方案**
 
-新建 `backend/app/services/file_validation.py`：
+新建 `backend/app/services/uploads/file_validation.py`：
 
 ```python
 """上传文件 magic-byte 校验。
@@ -974,7 +974,7 @@ async def upload_resume_direct(
     file: UploadFile,
     current_user: User = Depends(get_current_user),
 ):
-    from app.services.file_validation import validate_upload
+    from app.services.uploads.file_validation import validate_upload
     content = await validate_upload(file, purpose="resume")
     # 拿到 content 后存 S3 / 写 DB
     upload = await storage_service.save_blob(...)
@@ -1048,7 +1048,7 @@ def _vector_store(self, overwrite=False):
     # ↑ MilvusVectorStore 构造时会建 gRPC 连接、ping collection、读 schema 信息
 ```
 
-`services/resume_vector_service.py` 同模式。
+`services/resume/resume_vector_service.py` 同模式。
 
 对比 `rag/retriever.py:66-90` 已经做了正确的单例：
 
@@ -1641,7 +1641,7 @@ async def hammer(n=50):
 | 文件 | 行数 | 内含职责 |
 |---|---|---|
 | `services/voice/interview_analysis_service.py` | 904 | 转录 → 解析 → 段落分析 → 全局汇总 → mock 批量分析 |
-| `services/mock_interview_service.py` | 883 | 简历/JD 加载 → brief 生成 → director 决策 → 状态机 → 摘要 |
+| `services/interview/mock_interview_service.py` | 883 | 简历/JD 加载 → brief 生成 → director 决策 → 状态机 → 摘要 |
 | `api/chat/mock_interview.py` | 800 | start/in-progress/abandon/answer/finish/parse_jd/transcribe/tts 8 个 endpoint |
 | `agent_runtime/context_compactor.py` | 633 | 截断/摘要/dedup/3-pass pruning/容量监控 |
 
