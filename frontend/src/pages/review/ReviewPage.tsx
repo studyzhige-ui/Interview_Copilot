@@ -271,6 +271,53 @@ export function ReviewPage() {
 
   const activeRecord = combined.find((r) => r.id === activeId) ?? null;
 
+  // ── Auto-spawn an AnalysisRunner for the active record ──────────────
+  // When the user lands on a record whose status is in-flight
+  // (pending/transcribing/extracting/analyzing) but no Runner has
+  // been registered yet, register one. Pre-fix this lived inside
+  // the render-time ``middle = (() => { ... })()`` closure, gated
+  // by ``queueMicrotask`` to avoid the setState-in-render warning.
+  // That worked in React 18 stable but is an anti-pattern: React 19
+  // / concurrent rendering can discard a render mid-flight, leaving
+  // the queued microtask's setState dangling against a non-
+  // committed state. An effect is the contractually-correct anchor.
+  //
+  // Deps are the four inputs the registration decision reads:
+  //   - activeId, the row we're considering
+  //   - whether it's a draft (drafts get a different path — see
+  //     middle's UploadCards branch)
+  //   - detail.status, the source of the analyzing-flag
+  //   - whether an entry for this activeId already exists in
+  //     analyses (otherwise we'd register a second Runner)
+  //
+  // Reading ``analyses[activeId]`` directly inside the effect would
+  // make every register-call into a re-trigger (analyses changes on
+  // setAnalyses), so we read it from a ref synced each render. This
+  // mirrors the "latest-state-ref" idiom we use elsewhere for
+  // AbortController patterns.
+  const analysesRef = useRef(analyses);
+  analysesRef.current = analyses;
+  useEffect(() => {
+    if (!activeId || !detail || isDraft(activeId)) return;
+    const status = (detail.status ?? '').toLowerCase();
+    const isAnalyzingStatus = ['pending', 'transcribing', 'extracting', 'analyzing'].includes(status);
+    if (!isAnalyzingStatus) return;
+    if (analysesRef.current[activeId]) return;  // already registered
+
+    setAnalyses((prev) => {
+      if (prev[activeId]) return prev;
+      return {
+        ...prev,
+        [activeId]: {
+          record_id: detail.id,
+          title: detail.title || '面试',
+          tag: detail.tag ?? undefined,
+          state: { phase: 'connecting', percent: 0 },
+        },
+      };
+    });
+  }, [activeId, detail?.id, detail?.status, detail?.title, detail?.tag]);
+
   // Map of record_id → live progress, used by SessionList to render a pill
   // that shows the current sub-stage (connecting / transcribing / analyzing).
   const analyzingStates = useMemo(() => {
@@ -306,25 +353,10 @@ export function ReviewPage() {
     // dedicated progress card backed by the existing SSE runner (auto-spawned
     // below) instead of UploadCards.
     if (detail && (isAnalyzingStatus || isMockSource) && !hasContent) {
-      // Spawn a runner if we don't already have one for this record. The
-      // analyses map keys are activeIds; the AnalysisRunner subscribes once.
-      if (!a && detail.id && isAnalyzingStatus) {
-        // Lazy registration: use a microtask to avoid a setState-in-render.
-        queueMicrotask(() => {
-          setAnalyses((prev) => {
-            if (prev[activeId]) return prev;
-            return {
-              ...prev,
-              [activeId]: {
-                record_id: detail.id,
-                title: detail.title || '面试',
-                tag: detail.tag ?? undefined,
-                state: { phase: 'connecting', percent: 0 },
-              },
-            };
-          });
-        });
-      }
+      // Runner registration moved into a dedicated useEffect above —
+      // see "Auto-spawn an AnalysisRunner for the active record".
+      // Here we just read the (possibly-still-loading) entry to
+      // pass progress through.
       return <AnalyzingState progress={a?.state ?? null} sourceLabel={isMockSource ? '模拟面试' : '面试录音'} />;
     }
 
