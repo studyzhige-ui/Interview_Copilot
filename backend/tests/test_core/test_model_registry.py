@@ -21,9 +21,27 @@ from app.core.model_registry import (
 
 
 @pytest.fixture(autouse=True)
-def _isolated_selection_file(tmp_path, monkeypatch):
-    """Point MODEL_SELECTION_FILE at a fresh path so tests can't leak state."""
-    monkeypatch.setenv("MODEL_SELECTION_FILE", str(tmp_path / "model_selection.json"))
+def _isolated_user_selection(monkeypatch):
+    """Replace the DB-backed per-user selection storage with an in-memory
+    dict so tests can persist + reload without spinning up a real DB
+    session. Each test sees an empty store.
+
+    Pre-P6-C the runtime selection lived in a single file controlled by
+    ``MODEL_SELECTION_FILE``; the fixture wrote there. Now selections
+    live in ``users.model_selection_json`` and ``_load_user_selection``
+    / ``_save_user_selection`` open SessionLocal directly — so we
+    monkeypatch those at the module boundary to bypass the DB.
+    """
+    store: dict[str, dict[str, str]] = {}
+
+    def fake_load(user_id: str) -> dict[str, str]:
+        return dict(store.get(user_id, ROLE_DEFAULTS))
+
+    def fake_save(user_id: str, selection: dict[str, str]) -> None:
+        store[user_id] = dict(selection)
+
+    monkeypatch.setattr(model_registry, "_load_user_selection", fake_load)
+    monkeypatch.setattr(model_registry, "_save_user_selection", fake_save)
     # Defensive: clear LLM cache so cached instances don't bleed across tests.
     model_registry._llm_cache.clear()
     yield
@@ -127,15 +145,27 @@ def test_get_profile_unknown_raises():
 
 
 def test_get_profile_for_role_defaults_when_selection_missing():
-    # No selection file written → returns ROLE_DEFAULTS.
+    # No user context (None) → returns ROLE_DEFAULTS.
     for role, pid in ROLE_DEFAULTS.items():
         assert get_profile_for_role(role).id == pid
+        assert get_profile_for_role(role, user_id=None).id == pid
 
 
-def test_runtime_selection_persists_and_reloads():
-    selection = model_registry.update_runtime_selection({"fast": "deepseek-v4-flash"})
-    assert selection["fast"] == "deepseek-v4-flash"
-    assert model_registry.get_runtime_selection()["fast"] == "deepseek-v4-flash"
+def test_runtime_selection_is_per_user_isolated():
+    """A's update doesn't leak into B's read — this is the whole
+    point of P6-C (pre-fix one shared file blew up multi-tenant)."""
+    sel_a = model_registry.update_runtime_selection(
+        {"fast": "deepseek-v4-flash"}, user_id="alice",
+    )
+    assert sel_a["fast"] == "deepseek-v4-flash"
+    # Alice reads back what she wrote.
+    assert model_registry.get_runtime_selection(user_id="alice")["fast"] == "deepseek-v4-flash"
+    # Bob, having never set anything, still sees defaults.
+    bob_sel = model_registry.get_runtime_selection(user_id="bob")
+    assert bob_sel["fast"] == ROLE_DEFAULTS["fast"]
+    # Process-default lookup (no user) also returns defaults.
+    process_sel = model_registry.get_runtime_selection()
+    assert process_sel["fast"] == ROLE_DEFAULTS["fast"]
 
 
 def test_validate_role_update_rejects_non_function_calling_for_agent(monkeypatch):

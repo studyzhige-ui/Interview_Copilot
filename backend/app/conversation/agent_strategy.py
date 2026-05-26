@@ -215,7 +215,9 @@ class AgentLoopStrategy:
     ) -> AsyncGenerator[HarnessEvent, None]:
         # ── Per-turn state ────────────────────────────────────────
         budget = AgentBudget(started_at=time.perf_counter())
-        client, profile = build_async_openai_client_for_role("agent")
+        client, profile = build_async_openai_client_for_role(
+            "agent", user_id=ctx.user_id,
+        )
         compactor = QueryLoopCompactor(profile=profile)
 
         # Per-turn tool gating. When the global-memory toggle is OFF

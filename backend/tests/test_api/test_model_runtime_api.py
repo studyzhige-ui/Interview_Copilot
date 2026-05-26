@@ -36,7 +36,7 @@ def test_models_catalog_returns_selection_and_profiles(client, monkeypatch):
     monkeypatch.setattr(
         model_runtime_mod,
         "get_runtime_selection",
-        lambda: {"primary": "p1", "fast": "p1", "agent": "p2", "mock_interview": "p1"},
+        lambda user_id=None: {"primary": "p1", "fast": "p1", "agent": "p2", "mock_interview": "p1"},
     )
 
     async def fake_list(user_id=None, force_refresh=False):
@@ -64,7 +64,7 @@ def test_models_runtime_get_resolves_each_role(client, monkeypatch):
     monkeypatch.setattr(
         model_runtime_mod,
         "get_runtime_selection",
-        lambda: {"primary": "p1", "fast": "p1", "agent": "p2", "mock_interview": "p1"},
+        lambda user_id=None: {"primary": "p1", "fast": "p1", "agent": "p2", "mock_interview": "p1"},
     )
 
     class FakeProfile:
@@ -75,7 +75,9 @@ def test_models_runtime_get_resolves_each_role(client, monkeypatch):
             self.display_name = pid
 
     monkeypatch.setattr(
-        model_runtime_mod, "get_profile_for_role", lambda role: FakeProfile(f"p_{role}"),
+        model_runtime_mod,
+        "get_profile_for_role",
+        lambda role, user_id=None: FakeProfile(f"p_{role}"),
     )
     resp = client.get("/api/v1/models/runtime")
     assert resp.status_code == 200
@@ -99,7 +101,10 @@ def test_update_runtime_validates_and_persists(client, monkeypatch):
     def fake_validate(role, profile_id, user_id=None):
         calls["validate"] += 1
 
-    def fake_update(updates):
+    def fake_update(updates, user_id):
+        # P6-C: ``update_runtime_selection`` now takes (updates, user_id)
+        # so per-user storage is enforced at the call boundary.
+        assert user_id, "endpoint must pass current_user.username"
         return {
             "primary": "p1",
             "fast": "p1",

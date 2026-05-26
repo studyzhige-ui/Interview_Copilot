@@ -917,7 +917,7 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
         model = "stub"
     monkeypatch.setattr(
         "app.conversation.agent_strategy.build_async_openai_client_for_role",
-        lambda role: (object(), _StubProfile()),
+        lambda role, user_id=None: (object(), _StubProfile()),
     )
 
     # Stub the budget compactor so the loop reaches the LLM-stream call.

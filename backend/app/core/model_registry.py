@@ -460,26 +460,6 @@ _selection_lock = Lock()
 _llm_cache: dict[tuple[str, str], Any] = {}
 
 
-def _selection_file() -> Path:
-    configured = os.getenv("MODEL_SELECTION_FILE")
-    if configured:
-        return Path(configured)
-    return Path(settings.APP_DATA_DIR) / "runtime" / "model_selection.json"
-
-
-def _read_selection_file() -> dict[str, str]:
-    path = _selection_file()
-    if not path.exists():
-        return dict(ROLE_DEFAULTS)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            return {str(k): str(v) for k, v in data.items()}
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to read model selection file %s: %s", path, exc)
-    return dict(ROLE_DEFAULTS)
-
-
 def _normalize_selection(raw: dict[str, str]) -> dict[str, str]:
     selection = dict(ROLE_DEFAULTS)
     for role in ROLE_DEFAULTS:
@@ -494,28 +474,90 @@ def _normalize_selection(raw: dict[str, str]) -> dict[str, str]:
     return selection
 
 
-def get_runtime_selection() -> dict[str, str]:
-    with _selection_lock:
-        return _normalize_selection(_read_selection_file())
+def _load_user_selection(user_id: str) -> dict[str, str]:
+    """Read a user's persisted ``model_selection_json`` from the DB.
 
+    Returns ROLE_DEFAULTS if the user row has no selection saved
+    (NULL column), the JSON is corrupt, or the lookup itself fails.
+    Lookup failures are logged but never crash the caller — model
+    resolution must always return SOMETHING usable, even if it's
+    just the defaults.
+    """
+    from app.db.database import SessionLocal
+    from app.models.user import User
 
-def persist_runtime_selection(selection: dict[str, str]) -> dict[str, str]:
-    normalized = _normalize_selection(selection)
-    path = _selection_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with _selection_lock:
-        path.write_text(
-            json.dumps(normalized, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+    try:
+        with SessionLocal() as db:
+            row = (
+                db.query(User.model_selection_json)
+                .filter(User.username == user_id)
+                .first()
+            )
+        if row is None or not row[0]:
+            return dict(ROLE_DEFAULTS)
+        data = json.loads(row[0])
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items()}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to load model selection for user=%s: %s", user_id, exc,
         )
+    return dict(ROLE_DEFAULTS)
+
+
+def _save_user_selection(user_id: str, selection: dict[str, str]) -> None:
+    from app.db.database import SessionLocal
+    from app.models.user import User
+
+    payload = json.dumps(selection, ensure_ascii=False)
+    with SessionLocal() as db:
+        db.query(User).filter(User.username == user_id).update(
+            {"model_selection_json": payload},
+            synchronize_session=False,
+        )
+        db.commit()
+
+
+def get_runtime_selection(user_id: str | None = None) -> dict[str, str]:
+    """Return the active model selection for ``user_id``.
+
+    Without ``user_id`` (startup contexts like RAG-embedding init or
+    the LlamaIndex global ``Settings.llm``) returns ROLE_DEFAULTS —
+    those code paths don't have a user context and can't be per-
+    user. With ``user_id`` reads ``users.model_selection_json`` and
+    falls back to defaults on any error.
+    """
+    with _selection_lock:
+        if user_id is None:
+            return dict(ROLE_DEFAULTS)
+        return _normalize_selection(_load_user_selection(user_id))
+
+
+def persist_runtime_selection(
+    selection: dict[str, str], user_id: str,
+) -> dict[str, str]:
+    """Save ``selection`` for ``user_id`` to the DB. Returns the
+    normalized form actually written (invalid model ids stripped,
+    fallback to ROLE_DEFAULTS for unrecognised roles)."""
+    normalized = _normalize_selection(selection)
+    with _selection_lock:
+        _save_user_selection(user_id, normalized)
+        # Clear the (role, profile_id) → LLM-instance cache so the
+        # user's next chat constructs a fresh LLM honouring the new
+        # selection. The cache is process-wide — harmless to clear
+        # all entries even when only one user changed; under typical
+        # cardinality (4 roles × ~10 profiles = 40 entries) the
+        # rebuild on next call is microseconds.
         _llm_cache.clear()
     return normalized
 
 
-def update_runtime_selection(updates: dict[str, str]) -> dict[str, str]:
-    current = get_runtime_selection()
+def update_runtime_selection(
+    updates: dict[str, str], user_id: str,
+) -> dict[str, str]:
+    current = get_runtime_selection(user_id)
     current.update({k: v for k, v in updates.items() if v is not None})
-    return persist_runtime_selection(current)
+    return persist_runtime_selection(current, user_id)
 
 
 def get_profile(profile_id: str) -> ModelProfile:
@@ -524,8 +566,8 @@ def get_profile(profile_id: str) -> ModelProfile:
     return MODEL_PROFILES[profile_id]
 
 
-def get_profile_for_role(role: str) -> ModelProfile:
-    selection = get_runtime_selection()
+def get_profile_for_role(role: str, user_id: str | None = None) -> ModelProfile:
+    selection = get_runtime_selection(user_id)
     profile_id = selection.get(role, ROLE_DEFAULTS[role])
     return get_profile(profile_id)
 
@@ -732,7 +774,7 @@ def list_profiles(user_id: str | None = None) -> list[dict[str, Any]]:
     Use ``list_profiles_with_discovery()`` from async contexts to also
     surface vendor-listed models that aren't in the curated set.
     """
-    selection = get_runtime_selection()
+    selection = get_runtime_selection(user_id)
     return [_serialize_profile(p, selection, user_id) for p in MODEL_PROFILES.values()]
 
 
@@ -750,7 +792,7 @@ async def list_profiles_with_discovery(
     """
     from app.services.model_catalog_service import discover_all
 
-    selection = get_runtime_selection()
+    selection = get_runtime_selection(user_id)
     out: list[dict[str, Any]] = [
         _serialize_profile(p, selection, user_id) for p in MODEL_PROFILES.values()
     ]
@@ -844,8 +886,16 @@ def _build_llm_instance(profile: ModelProfile):
     return llm
 
 
-def get_llm_for_role(role: str):
-    profile = get_profile_for_role(role)
+def get_llm_for_role(role: str, user_id: str | None = None):
+    """Build (or fetch from cache) a llama-index LLM for ``role``.
+
+    ``user_id`` selects the per-user role→profile mapping; without
+    one we fall back to ROLE_DEFAULTS (used by global LlamaIndex
+    Settings.llm during startup). Cache key includes profile.id
+    not user_id directly, so users who pick the same profile
+    share a single LLM instance (cheap; LLM clients are heavy).
+    """
+    profile = get_profile_for_role(role, user_id=user_id)
     cache_key = (role, profile.id)
     with _selection_lock:
         cached = _llm_cache.get(cache_key)
@@ -864,17 +914,27 @@ def build_async_openai_client_for_role(
 
     Thin wrapper over :func:`get_async_openai_client` so existing call sites
     that pass a role name don't have to resolve the profile themselves.
+    ``user_id`` plumbs through both the selection lookup and the
+    API-key resolution so per-user model + per-user key compose.
     """
-    profile = get_profile_for_role(role)
+    profile = get_profile_for_role(role, user_id=user_id)
     return get_async_openai_client(profile, user_id=user_id), profile
 
 
 class RuntimeLLMProxy:
+    """Process-global LLM proxy. Always resolves with user_id=None
+    (i.e. uses ROLE_DEFAULTS) — this proxy is wired into
+    LlamaIndex ``Settings.llm`` and other module-level singletons
+    where there's no per-request user context. Per-user model
+    selection goes through ``build_async_openai_client_for_role
+    (role, user_id=current_user.username)`` in the conversation
+    engine instead.
+    """
     def __init__(self, role: str):
         self.role = role
 
     def _delegate(self):
-        return get_llm_for_role(self.role)
+        return get_llm_for_role(self.role)  # global default, no user_id
 
     async def acomplete(self, *args, **kwargs):
         return await self._delegate().acomplete(*args, **kwargs)

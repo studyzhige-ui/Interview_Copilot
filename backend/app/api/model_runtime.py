@@ -53,7 +53,7 @@ async def api_model_catalog(
     from app.services.cache_service import cached
 
     async def _build():
-        selection = get_runtime_selection()
+        selection = get_runtime_selection(user_id=current_user.username)
         # list_profiles_with_discovery merges curated MODEL_PROFILES with
         # whatever each vendor's /v1/models endpoint currently advertises.
         # Discovery itself is cached 24h in Redis (model_catalog_service);
@@ -104,7 +104,8 @@ async def refresh_model_catalog(
 async def api_model_runtime(
     current_user: User = Depends(get_current_user),
 ):
-    selection = get_runtime_selection()
+    uid = current_user.username
+    selection = get_runtime_selection(user_id=uid)
     return {
         "status": "success",
         "selection": selection,
@@ -116,10 +117,10 @@ async def api_model_runtime(
                 "display_name": profile.display_name,
             }
             for role, profile in {
-                "primary": get_profile_for_role("primary"),
-                "fast": get_profile_for_role("fast"),
-                "agent": get_profile_for_role("agent"),
-                "mock_interview": get_profile_for_role("mock_interview"),
+                "primary": get_profile_for_role("primary", user_id=uid),
+                "fast": get_profile_for_role("fast", user_id=uid),
+                "agent": get_profile_for_role("agent", user_id=uid),
+                "mock_interview": get_profile_for_role("mock_interview", user_id=uid),
             }.items()
         },
     }
@@ -266,7 +267,7 @@ async def api_update_model_runtime(
     try:
         for role, profile_id in updates.items():
             validate_role_update(role, profile_id, user_id=current_user.username)
-        selection = update_runtime_selection(updates)
+        selection = update_runtime_selection(updates, user_id=current_user.username)
         refresh_primary_llm()
         # The selection affects every profile's `selected_for` in the cached
         # catalog payload, so drop it for this user.
