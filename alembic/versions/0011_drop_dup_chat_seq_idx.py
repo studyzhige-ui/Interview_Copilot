@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Sequence, Union
 
 from alembic import op
+from sqlalchemy import inspect
 
 
 revision: str = "0011_drop_dup_chat_seq_idx"
@@ -33,7 +34,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.drop_index("ix_chat_messages_session_seq", table_name="chat_messages")
+    # Idempotent: the index might already be missing on dev DBs where
+    # ``Base.metadata.create_all()`` was used at some point (the ORM
+    # has only the unique constraint in __table_args__, so create_all
+    # never made the redundant non-unique index in the first place).
+    bind = op.get_bind()
+    insp = inspect(bind)
+    existing = {ix["name"] for ix in insp.get_indexes("chat_messages")}
+    if "ix_chat_messages_session_seq" in existing:
+        op.drop_index("ix_chat_messages_session_seq", table_name="chat_messages")
 
 
 def downgrade() -> None:

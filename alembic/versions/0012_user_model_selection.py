@@ -28,6 +28,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import inspect
 
 
 revision: str = "0012_user_model_selection"
@@ -37,10 +38,16 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "users",
-        sa.Column("model_selection_json", sa.Text(), nullable=True),
-    )
+    # Idempotent: dev DBs that ran ``Base.metadata.create_all()`` after
+    # the User model gained the new column (P6-C) will already have it.
+    bind = op.get_bind()
+    insp = inspect(bind)
+    cols = {c["name"] for c in insp.get_columns("users")}
+    if "model_selection_json" not in cols:
+        op.add_column(
+            "users",
+            sa.Column("model_selection_json", sa.Text(), nullable=True),
+        )
 
 
 def downgrade() -> None:

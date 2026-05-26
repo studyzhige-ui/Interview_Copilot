@@ -73,6 +73,7 @@ from __future__ import annotations
 from typing import Sequence, Union
 
 from alembic import op
+from sqlalchemy import inspect
 
 
 revision: str = "0010_orm_alembic_drift_fixup"
@@ -81,13 +82,41 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+# ── Idempotent helpers ───────────────────────────────────────────────────
+# Why this migration needs them: ORM declared these constraints/indexes
+# from day one, but the originating migrations (0001 / 0002) didn't
+# create them. Some dev environments have run ``Base.metadata.create_all
+# ()`` at startup which DID create them from the ORM declarations — so
+# those DBs already have the very things 0010 is trying to add. Other
+# environments (the test PG, fresh prod) don't. The straight ``op.create
+# _*`` / ``op.drop_*`` calls below would crash on whichever side of
+# that fork they hit first.
+#
+# Each helper checks pg_constraint / pg_index before issuing DDL, so the
+# migration converges to the same schema regardless of starting state.
+
+
+def _has_constraint(table: str, name: str) -> bool:
+    bind = op.get_bind()
+    insp = inspect(bind)
+    names = {uq["name"] for uq in insp.get_unique_constraints(table)}
+    return name in names
+
+
+def _has_index(table: str, name: str) -> bool:
+    bind = op.get_bind()
+    insp = inspect(bind)
+    return name in {ix["name"] for ix in insp.get_indexes(table)}
+
+
 def upgrade() -> None:
     # ── 1. user_api_keys: add (user_id, provider) unique ────────────────
-    op.create_unique_constraint(
-        "uq_user_api_keys_user_provider",
-        "user_api_keys",
-        ["user_id", "provider"],
-    )
+    if not _has_constraint("user_api_keys", "uq_user_api_keys_user_provider"):
+        op.create_unique_constraint(
+            "uq_user_api_keys_user_provider",
+            "user_api_keys",
+            ["user_id", "provider"],
+        )
 
     # ── 2. strategy_docs / habit_docs: collapse redundant uniqueness ────
     # 0002 created BOTH a column-level UNIQUE constraint (via
@@ -103,20 +132,24 @@ def upgrade() -> None:
     # shape should make this impossible, but check anyway), unique-
     # index creation aborts. That's the right behaviour — data
     # corruption surfaces at migration time, not at read time.
-    op.drop_constraint(
-        "strategy_docs_user_id_key", "strategy_docs", type_="unique",
-    )
-    op.drop_index("ix_strategy_docs_user_id", table_name="strategy_docs")
+    if _has_constraint("strategy_docs", "strategy_docs_user_id_key"):
+        op.drop_constraint(
+            "strategy_docs_user_id_key", "strategy_docs", type_="unique",
+        )
+    if _has_index("strategy_docs", "ix_strategy_docs_user_id"):
+        op.drop_index("ix_strategy_docs_user_id", table_name="strategy_docs")
     op.create_index(
         "ix_strategy_docs_user_id",
         "strategy_docs",
         ["user_id"],
         unique=True,
     )
-    op.drop_constraint(
-        "habit_docs_user_id_key", "habit_docs", type_="unique",
-    )
-    op.drop_index("ix_habit_docs_user_id", table_name="habit_docs")
+    if _has_constraint("habit_docs", "habit_docs_user_id_key"):
+        op.drop_constraint(
+            "habit_docs_user_id_key", "habit_docs", type_="unique",
+        )
+    if _has_index("habit_docs", "ix_habit_docs_user_id"):
+        op.drop_index("ix_habit_docs_user_id", table_name="habit_docs")
     op.create_index(
         "ix_habit_docs_user_id",
         "habit_docs",
@@ -125,18 +158,20 @@ def upgrade() -> None:
     )
 
     # ── 3. chat_messages: add (session_id, seq) unique constraint ───────
-    op.create_unique_constraint(
-        "uq_chat_messages_session_seq",
-        "chat_messages",
-        ["session_id", "seq"],
-    )
+    if not _has_constraint("chat_messages", "uq_chat_messages_session_seq"):
+        op.create_unique_constraint(
+            "uq_chat_messages_session_seq",
+            "chat_messages",
+            ["session_id", "seq"],
+        )
 
     # ── 4. chat_sessions: add (user_id, updated_at) composite index ─────
-    op.create_index(
-        "ix_chat_sessions_user_updated",
-        "chat_sessions",
-        ["user_id", "updated_at"],
-    )
+    if not _has_index("chat_sessions", "ix_chat_sessions_user_updated"):
+        op.create_index(
+            "ix_chat_sessions_user_updated",
+            "chat_sessions",
+            ["user_id", "updated_at"],
+        )
 
 
 def downgrade() -> None:
