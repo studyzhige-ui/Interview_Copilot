@@ -78,10 +78,15 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, on
   // interim-chunk update during listening (50+ times/sec for a
   // chatty speaker), which is wasted work. We only care about
   // ``phase`` and ``message`` here.
+  // ``useSpeechRecognition`` declares ``State`` as a single shape
+  // (not a discriminated union) with ``finalText``/``interim`` always
+  // present and ``message`` Optional. Destructure directly — earlier
+  // versions used ``'finalText' in speech.state`` guards which were
+  // dead-defensive (the property is always defined).
   const speechPhase = speech.state.phase;
-  const speechMessage = 'message' in speech.state ? speech.state.message : undefined;
-  const speechFinalText = 'finalText' in speech.state ? speech.state.finalText : '';
-  const speechInterim = 'interim' in speech.state ? speech.state.interim : '';
+  const speechMessage = speech.state.message;
+  const speechFinalText = speech.state.finalText;
+  const speechInterim = speech.state.interim;
   useEffect(() => {
     if (useNativeStt && speechPhase === 'error') {
       const msg = speechMessage ?? '';

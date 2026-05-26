@@ -192,6 +192,17 @@ export async function streamChatSSE(
   // unaffected — we hook into the same AbortController surface.
   const idleAc = new AbortController();
   const externalSignal = opts.signal;
+  // Register the reader-cancel listener BEFORE bridging external →
+  // idle, so the "external signal already aborted" path still wires
+  // the cancel correctly. Pre-fix ordering called ``idleAc.abort()``
+  // synchronously inside the if-aborted branch before the cancel
+  // listener was attached — the once-listener registered on line
+  // below would never fire (abort already happened). fetch was
+  // already rejected by the external signal so it never reached us,
+  // but the code-self-consistency was wrong.
+  idleAc.signal.addEventListener('abort', () => {
+    try { reader.cancel(); } catch { /* ignore */ }
+  }, { once: true });
   if (externalSignal) {
     if (externalSignal.aborted) idleAc.abort();
     else externalSignal.addEventListener('abort', () => idleAc.abort(), { once: true });
@@ -203,10 +214,6 @@ export async function streamChatSSE(
     idleTimer = setTimeout(() => idleAc.abort(), IDLE_TIMEOUT_MS);
   };
   armIdle();
-  // Cancel reader if the watchdog fires.
-  idleAc.signal.addEventListener('abort', () => {
-    try { reader.cancel(); } catch { /* ignore */ }
-  }, { once: true });
   try {
     for (;;) {
       const { value, done } = await reader.read();

@@ -90,8 +90,14 @@ jobs:
           exit 1
 
       - name: Run Milvus-dependent tests
+        # Precise selector — runs ONLY the Milvus-skip-marked test
+        # (and any sibling test that adds the same marker later).
+        # Earlier ``-k "milvus or rag"`` swept ~30 unrelated rag
+        # tests that don't need a live Milvus and already run in
+        # the main CI; the broader pattern bloated nightly runtime
+        # 3-5 minutes for zero diagnostic gain.
         run: |
           python -m pytest backend/tests \
             -v --tb=short \
-            -k "milvus or rag" \
+            -k "test_query_knowledge_base_requires_live_milvus" \
             --no-header

@@ -100,8 +100,21 @@ export function useTts({ enabled, voice }: UseTtsOptions) {
 
   useEffect(() => {
     return () => {
-      if (lastUrlRef.current) URL.revokeObjectURL(lastUrlRef.current);
-      audioRef.current?.pause();
+      if (lastUrlRef.current) {
+        URL.revokeObjectURL(lastUrlRef.current);
+        lastUrlRef.current = null;
+      }
+      const el = audioRef.current;
+      if (el) {
+        el.pause();
+        // Detach the dead blob URL so the audio element doesn't
+        // keep a reference that prevents the underlying buffer from
+        // being released. Belt-and-braces — the element itself
+        // gets GC'd with the component, but removeAttribute makes
+        // the cleanup intent explicit.
+        el.removeAttribute('src');
+        el.load();
+      }
     };
   }, []);
 

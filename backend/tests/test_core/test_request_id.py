@@ -60,59 +60,65 @@ def test_formatter_injects_request_id_into_record(monkeypatch):
 
 
 def test_middleware_echoes_response_header():
-    """End-to-end: the middleware sets an id, the handler runs, the
-    response header echoes the id back to the client."""
-    from app.core.request_id import new_request_id, set_request_id
+    """End-to-end through ``app.main:app`` — verify the production
+    wiring (not just an inline copy of the middleware). If someone
+    accidentally removes the middleware registration from main.py,
+    this test fails.
 
-    app = FastAPI()
+    NB: TestClient WITHOUT a ``with`` block skips the lifespan
+    startup so the alembic-migration check (which runs against the
+    local SQLite that doesn't have our latest head) doesn't fire.
+    We're testing middleware wiring, not startup checks.
+    """
+    from app.main import app
 
-    @app.middleware("http")
-    async def rid_mw(request, call_next):
-        incoming = request.headers.get("x-request-id", "").strip()
-        rid = incoming if incoming else new_request_id()
-        set_request_id(rid)
-        resp = await call_next(request)
-        resp.headers["X-Request-ID"] = rid
-        return resp
-
-    @app.get("/echo")
-    def echo():
-        return {"rid": get_request_id()}
-
-    with TestClient(app) as client:
-        resp = client.get("/echo")
+    client = TestClient(app)
+    resp = client.get("/ping")
     assert resp.status_code == 200
-    # The handler saw whatever the middleware set, and the response
-    # header carries the same value.
-    body_rid = resp.json()["rid"]
-    header_rid = resp.headers["X-Request-ID"]
-    assert body_rid == header_rid
+    rid = resp.headers.get("X-Request-ID", "")
     # Auto-generated (no X-Request-ID inbound) is the 12-char hex form.
-    assert len(body_rid) == 12
+    assert len(rid) == 12
+    assert all(c in "0123456789abcdef" for c in rid)
 
 
 def test_middleware_honors_incoming_x_request_id():
-    """If the caller already supplied an X-Request-ID, the middleware
-    uses it verbatim instead of minting a fresh one. Lets a frontend
-    (or upstream gateway) correlate IDs across systems."""
-    from app.core.request_id import new_request_id, set_request_id
+    """If the caller already supplied an X-Request-ID, the production
+    middleware uses it verbatim instead of minting a fresh one. Lets
+    a frontend (or upstream gateway) correlate IDs across systems."""
+    from app.main import app
 
-    app = FastAPI()
+    client = TestClient(app)
+    resp = client.get("/ping", headers={"X-Request-ID": "client-supplied-id"})
+    assert resp.headers.get("X-Request-ID") == "client-supplied-id"
 
-    @app.middleware("http")
-    async def rid_mw(request, call_next):
-        incoming = request.headers.get("x-request-id", "").strip()
-        rid = incoming if incoming else new_request_id()
-        set_request_id(rid)
-        resp = await call_next(request)
-        resp.headers["X-Request-ID"] = rid
-        return resp
 
-    @app.get("/echo")
-    def echo():
-        return {"rid": get_request_id()}
+def test_unhandled_exception_handler_attaches_request_id_header():
+    """Source-level pin: ``unhandled_exception_logger`` in main.py
+    must build its 500 JSONResponse with ``headers={"X-Request-ID":
+    get_request_id()}``. A live end-to-end test would need to drive
+    Starlette's ServerErrorMiddleware which the new starlette 1.0 +
+    httpx TestClient combo handles differently across versions —
+    instead we read the source and assert the contract literally.
 
-    with TestClient(app) as client:
-        resp = client.get("/echo", headers={"X-Request-ID": "client-supplied-id"})
-    assert resp.json()["rid"] == "client-supplied-id"
-    assert resp.headers["X-Request-ID"] == "client-supplied-id"
+    Why source inspection here: the actual production behaviour is
+    that ServerErrorMiddleware short-circuits past our request_id
+    middleware on the exception path, so the explicit ``headers=``
+    kwarg in main.py is the ONLY thing keeping the header on a 500.
+    A future refactor that drops that kwarg breaks the
+    client↔server correlation contract silently.
+    """
+    import inspect
+    from app.main import unhandled_exception_logger
+
+    src = inspect.getsource(unhandled_exception_logger)
+    # The body must reference get_request_id and the JSONResponse
+    # headers= kwarg (regardless of exact formatting).
+    assert "get_request_id" in src, (
+        "unhandled_exception_logger must import + call get_request_id()"
+    )
+    assert "X-Request-ID" in src, (
+        "unhandled_exception_logger must stamp X-Request-ID into the response"
+    )
+    assert "headers=" in src, (
+        "unhandled_exception_logger must pass headers= to JSONResponse"
+    )

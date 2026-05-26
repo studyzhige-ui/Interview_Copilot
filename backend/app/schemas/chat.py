@@ -206,13 +206,30 @@ class TTSRequest(BaseModel):
 
 
 __all__ = [
+    # Generic chat session DTOs
     "SessionCreateRequest",
     "SessionCreateResponse",
     "SessionListItem",
     "MessageItem",
     "SSEChatRequest",
+    "SessionRenameRequest",
+    # Mock-interview request DTOs
     "MockStartRequest",
     "MockAnswerRequest",
-    "SessionRenameRequest",
     "TTSRequest",
+    # Mock-interview response DTOs (all surfaced for ``from
+    # app.schemas.chat import *`` compatibility + IDE auto-import).
+    # Mirrored 1:1 by the corresponding TS interfaces in
+    # frontend/src/types/api.ts.
+    "MockDirectorAction",
+    "MockPhaseProgress",
+    "MockPlanPhase",
+    "MockQuestion",
+    "MockStartResp",
+    "MockInProgressResp",
+    "MockAnswerResp",
+    "MockFinishResp",
+    "MockAbandonResp",
+    "MockParseJdResp",
+    "MockTranscribeResp",
 ]
