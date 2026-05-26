@@ -182,6 +182,15 @@
     },
     {
       "provider": "openai",
+      "model": "o4-mini",
+      "display_name": "O4 Mini",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "supports_vision": false
+    },
+    {
+      "provider": "openai",
       "model": "gpt-4o-mini-transcribe",
       "display_name": "GPT 4o Mini Transcribe",
       "supports_function_calling": true,
@@ -263,6 +272,24 @@
     },
     {
       "provider": "openai",
+      "model": "o3",
+      "display_name": "O3",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "supports_vision": false
+    },
+    {
+      "provider": "openai",
+      "model": "o3-mini",
+      "display_name": "O3 Mini",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "supports_vision": false
+    },
+    {
+      "provider": "openai",
       "model": "sora-2-pro",
       "display_name": "Sora 2 Pro",
       "supports_function_calling": true,
@@ -281,6 +308,15 @@
     },
     {
       "provider": "openai",
+      "model": "o1",
+      "display_name": "O1",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "supports_vision": false
+    },
+    {
+      "provider": "openai",
       "model": "babbage-002",
       "display_name": "Babbage 002",
       "supports_function_calling": true,
@@ -292,42 +328,6 @@
       "provider": "openai",
       "model": "davinci-002",
       "display_name": "Davinci 002",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 16384,
-      "supports_vision": false
-    },
-    {
-      "provider": "openai",
-      "model": "o3",
-      "display_name": "O3",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 16384,
-      "supports_vision": false
-    },
-    {
-      "provider": "openai",
-      "model": "o1",
-      "display_name": "O1",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 16384,
-      "supports_vision": false
-    },
-    {
-      "provider": "openai",
-      "model": "o4-mini",
-      "display_name": "O4 Mini",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 16384,
-      "supports_vision": false
-    },
-    {
-      "provider": "openai",
-      "model": "o3-mini",
-      "display_name": "O3 Mini",
       "supports_function_calling": true,
       "context_window": 128000,
       "max_output_tokens": 16384,
@@ -703,42 +703,6 @@
     },
     {
       "provider": "nvidia_nim",
-      "model": "writer/palmyra-med-70b-32k",
-      "display_name": "Writer/palmyra Med 70b 32k",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "writer/palmyra-med-70b",
-      "display_name": "Writer/palmyra Med 70b",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "writer/palmyra-fin-70b-32k",
-      "display_name": "Writer/palmyra Fin 70b 32k",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "writer/palmyra-creative-122b",
-      "display_name": "Writer/palmyra Creative 122b",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
       "model": "upstage/solar-10.7b-instruct",
       "display_name": "Upstage/solar 10.7b Instruct",
       "supports_function_calling": false,
@@ -748,143 +712,8 @@
     },
     {
       "provider": "nvidia_nim",
-      "model": "openai/gpt-oss-20b",
-      "display_name": "Openai/gpt OSS 20b",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "nvidia/nemotron-nano-12b-v2-vl",
-      "display_name": "Nvidia/nemotron Nano 12b v2 VL",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "nv-mistralai/mistral-nemo-12b-instruct",
-      "display_name": "Nv Mistralai/mistral Nemo 12b Instruct",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "mistralai/ministral-14b-instruct-2512",
-      "display_name": "Mistralai/ministral 14b Instruct 2512",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "meta/llama2-70b",
-      "display_name": "Meta/llama2 70b",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "meta/codellama-70b",
-      "display_name": "Meta/codellama 70b",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "ibm/granite-34b-code-instruct",
-      "display_name": "Ibm/granite 34b Code Instruct",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "bytedance/seed-oss-36b-instruct",
-      "display_name": "Bytedance/seed OSS 36b Instruct",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "bigcode/starcoder2-15b",
-      "display_name": "Bigcode/starcoder2 15b",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "nvidia/nvidia-nemotron-nano-9b-v2",
-      "display_name": "Nvidia/nvidia Nemotron Nano 9b v2",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "nvidia/cosmos-reason2-8b",
-      "display_name": "Nvidia/cosmos Reason2 8b",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "ibm/granite-8b-code-instruct",
-      "display_name": "Ibm/granite 8b Code Instruct",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
       "model": "nvidia/mistral-nemo-minitron-8b-8k-instruct",
       "display_name": "Nvidia/mistral Nemo Minitron 8b 8k Instruct",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "zyphra/zamba2-7b-instruct",
-      "display_name": "Zyphra/zamba2 7b Instruct",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "google/codegemma-7b",
-      "display_name": "Google/codegemma 7b",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "aisingapore/sea-lion-7b-instruct",
-      "display_name": "Aisingapore/sea Lion 7b Instruct",
       "supports_function_calling": false,
       "context_window": 128000,
       "max_output_tokens": 4096,
@@ -930,15 +759,6 @@
       "provider": "nvidia_nim",
       "model": "google/gemma-4-31b-it",
       "display_name": "Google/gemma 4 31b It",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "nvidia/nemotron-mini-4b-instruct",
-      "display_name": "Nvidia/nemotron Mini 4b Instruct",
       "supports_function_calling": false,
       "context_window": 128000,
       "max_output_tokens": 4096,
@@ -1171,6 +991,15 @@
     },
     {
       "provider": "nvidia_nim",
+      "model": "baai/bge-m3",
+      "display_name": "Baai/bge M3",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
       "model": "nvidia/nemotron-nano-3-30b-a3b",
       "display_name": "Nvidia/nemotron Nano 3 30b A3b",
       "supports_function_calling": false,
@@ -1207,8 +1036,26 @@
     },
     {
       "provider": "nvidia_nim",
+      "model": "zyphra/zamba2-7b-instruct",
+      "display_name": "Zyphra/zamba2 7b Instruct",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
       "model": "stockmark/stockmark-2-100b-instruct",
       "display_name": "Stockmark/stockmark 2 100b Instruct",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "nvidia/cosmos-reason2-8b",
+      "display_name": "Nvidia/cosmos Reason2 8b",
       "supports_function_calling": false,
       "context_window": 128000,
       "max_output_tokens": 4096,
@@ -1225,17 +1072,8 @@
     },
     {
       "provider": "nvidia_nim",
-      "model": "google/recurrentgemma-2b",
-      "display_name": "Google/recurrentgemma 2b",
-      "supports_function_calling": false,
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "supports_vision": false
-    },
-    {
-      "provider": "nvidia_nim",
-      "model": "google/gemma-2b",
-      "display_name": "Google/gemma 2b",
+      "model": "meta/llama2-70b",
+      "display_name": "Meta/llama2 70b",
       "supports_function_calling": false,
       "context_window": 128000,
       "max_output_tokens": 4096,
@@ -1245,6 +1083,33 @@
       "provider": "nvidia_nim",
       "model": "google/gemma-2-2b-it",
       "display_name": "Google/gemma 2 2b It",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "bigcode/starcoder2-15b",
+      "display_name": "Bigcode/starcoder2 15b",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "nvidia/nvidia-nemotron-nano-9b-v2",
+      "display_name": "Nvidia/nvidia Nemotron Nano 9b v2",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "nvidia/nemotron-nano-12b-v2-vl",
+      "display_name": "Nvidia/nemotron Nano 12b v2 VL",
       "supports_function_calling": false,
       "context_window": 128000,
       "max_output_tokens": 4096,
@@ -1324,8 +1189,62 @@
     },
     {
       "provider": "nvidia_nim",
+      "model": "writer/palmyra-med-70b-32k",
+      "display_name": "Writer/palmyra Med 70b 32k",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "writer/palmyra-med-70b",
+      "display_name": "Writer/palmyra Med 70b",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "writer/palmyra-fin-70b-32k",
+      "display_name": "Writer/palmyra Fin 70b 32k",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "writer/palmyra-creative-122b",
+      "display_name": "Writer/palmyra Creative 122b",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
       "model": "sarvamai/sarvam-m",
       "display_name": "Sarvamai/sarvam M",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "openai/gpt-oss-20b",
+      "display_name": "Openai/gpt OSS 20b",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "nv-mistralai/mistral-nemo-12b-instruct",
+      "display_name": "Nv Mistralai/mistral Nemo 12b Instruct",
       "supports_function_calling": false,
       "context_window": 128000,
       "max_output_tokens": 4096,
@@ -1351,6 +1270,69 @@
     },
     {
       "provider": "nvidia_nim",
+      "model": "mistralai/ministral-14b-instruct-2512",
+      "display_name": "Mistralai/ministral 14b Instruct 2512",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "meta/codellama-70b",
+      "display_name": "Meta/codellama 70b",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "ibm/granite-8b-code-instruct",
+      "display_name": "Ibm/granite 8b Code Instruct",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "ibm/granite-34b-code-instruct",
+      "display_name": "Ibm/granite 34b Code Instruct",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "google/recurrentgemma-2b",
+      "display_name": "Google/recurrentgemma 2b",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "google/gemma-2b",
+      "display_name": "Google/gemma 2b",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "google/codegemma-7b",
+      "display_name": "Google/codegemma 7b",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
       "model": "databricks/dbrx-instruct",
       "display_name": "Databricks/dbrx Instruct",
       "supports_function_calling": false,
@@ -1360,8 +1342,17 @@
     },
     {
       "provider": "nvidia_nim",
-      "model": "baai/bge-m3",
-      "display_name": "Baai/bge M3",
+      "model": "bytedance/seed-oss-36b-instruct",
+      "display_name": "Bytedance/seed OSS 36b Instruct",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "aisingapore/sea-lion-7b-instruct",
+      "display_name": "Aisingapore/sea Lion 7b Instruct",
       "supports_function_calling": false,
       "context_window": 128000,
       "max_output_tokens": 4096,
@@ -1371,6 +1362,15 @@
       "provider": "nvidia_nim",
       "model": "01-ai/yi-large",
       "display_name": "01 Ai/yi Large",
+      "supports_function_calling": false,
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "supports_vision": false
+    },
+    {
+      "provider": "nvidia_nim",
+      "model": "nvidia/nemotron-mini-4b-instruct",
+      "display_name": "Nvidia/nemotron Mini 4b Instruct",
       "supports_function_calling": false,
       "context_window": 128000,
       "max_output_tokens": 4096,
@@ -1575,249 +1575,6 @@
   "qwen": [
     {
       "provider": "qwen",
-      "model": "qwen3-next-80b-a3b-thinking",
-      "display_name": "Qwen3 Next 80b A3b Thinking",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-next-80b-a3b-instruct",
-      "display_name": "Qwen3 Next 80b A3b Instruct",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen2-57b-a14b-instruct",
-      "display_name": "Qwen2 57b A14b Instruct",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen-deep-research-2025-12-15",
-      "display_name": "Qwen Deep Research 2025 12 15",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen-turbo-0919",
-      "display_name": "Qwen Turbo 0919",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-30b-a3b",
-      "display_name": "Qwen3 30b A3b",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-32b",
-      "display_name": "Qwen3 32b",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-s2s-flash-realtime-2025-09-22",
-      "display_name": "Qwen3 S2s Flash Realtime 2025 09 22",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-235b-a22b-thinking-2507",
-      "display_name": "Qwen3 235b A22b Thinking 2507",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-235b-a22b-instruct-2507",
-      "display_name": "Qwen3 235b A22b Instruct 2507",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-30b-a3b-instruct-2507",
-      "display_name": "Qwen3 30b A3b Instruct 2507",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-coder-480b-a35b-instruct",
-      "display_name": "Qwen3 Coder 480b A35b Instruct",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-14b",
-      "display_name": "Qwen3 14b",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-30b-a3b-thinking-2507",
-      "display_name": "Qwen3 30b A3b Thinking 2507",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen-max-0919",
-      "display_name": "Qwen Max 0919",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen-coder-turbo-0919",
-      "display_name": "Qwen Coder Turbo 0919",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen-coder-plus-1106",
-      "display_name": "Qwen Coder Plus 1106",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-235b-a22b",
-      "display_name": "Qwen3 235b A22b",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen-max-0428",
-      "display_name": "Qwen Max 0428",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen-72b-chat",
-      "display_name": "Qwen 72b Chat",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen-14b-chat",
-      "display_name": "Qwen 14b Chat",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen-max-1201",
-      "display_name": "Qwen Max 1201",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen-max-0107",
-      "display_name": "Qwen Max 0107",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-8b",
-      "display_name": "Qwen3 8b",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen2-7b-instruct",
-      "display_name": "Qwen2 7b Instruct",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen-7b-chat",
-      "display_name": "Qwen 7b Chat",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-4b",
-      "display_name": "Qwen3 4b",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
       "model": "qwen3.7-max",
       "display_name": "Qwen3.7 Max",
       "supports_function_calling": true,
@@ -1980,6 +1737,231 @@
     },
     {
       "provider": "qwen",
+      "model": "qwen3-max",
+      "display_name": "Qwen3 Max",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-max-preview",
+      "display_name": "Qwen3 Max Preview",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-next-80b-a3b-thinking",
+      "display_name": "Qwen3 Next 80b A3b Thinking",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-235b-a22b-thinking-2507",
+      "display_name": "Qwen3 235b A22b Thinking 2507",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-30b-a3b-thinking-2507",
+      "display_name": "Qwen3 30b A3b Thinking 2507",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-coder-plus",
+      "display_name": "Qwen3 Coder Plus",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-vl-plus",
+      "display_name": "Qwen3 VL Plus",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-next-80b-a3b-instruct",
+      "display_name": "Qwen3 Next 80b A3b Instruct",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-coder-next",
+      "display_name": "Qwen3 Coder Next",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-30b-a3b",
+      "display_name": "Qwen3 30b A3b",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-32b",
+      "display_name": "Qwen3 32b",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-235b-a22b-instruct-2507",
+      "display_name": "Qwen3 235b A22b Instruct 2507",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-30b-a3b-instruct-2507",
+      "display_name": "Qwen3 30b A3b Instruct 2507",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-coder-480b-a35b-instruct",
+      "display_name": "Qwen3 Coder 480b A35b Instruct",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-4b",
+      "display_name": "Qwen3 4b",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-14b",
+      "display_name": "Qwen3 14b",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-8b",
+      "display_name": "Qwen3 8b",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-235b-a22b",
+      "display_name": "Qwen3 235b A22b",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-vl-flash",
+      "display_name": "Qwen3 VL Flash",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-coder-flash",
+      "display_name": "Qwen3 Coder Flash",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-omni-flash",
+      "display_name": "Qwen3 Omni Flash",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-omni-flash-realtime",
+      "display_name": "Qwen3 Omni Flash Realtime",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-livetranslate-flash",
+      "display_name": "Qwen3 Livetranslate Flash",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-s2s-flash-realtime-2025-09-22",
+      "display_name": "Qwen3 S2s Flash Realtime 2025 09 22",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen3-livetranslate-flash-realtime",
+      "display_name": "Qwen3 Livetranslate Flash Realtime",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
       "model": "qwen2.5-14b-instruct-1m",
       "display_name": "Qwen2.5 14b Instruct 1m",
       "supports_function_calling": true,
@@ -2090,6 +2072,24 @@
       "provider": "qwen",
       "model": "qwen2.5-3b-instruct",
       "display_name": "Qwen2.5 3b Instruct",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen2-7b-instruct",
+      "display_name": "Qwen2 7b Instruct",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen2-57b-a14b-instruct",
+      "display_name": "Qwen2 57b A14b Instruct",
       "supports_function_calling": true,
       "context_window": 128000,
       "max_output_tokens": 8192,
@@ -2223,15 +2223,6 @@
     },
     {
       "provider": "qwen",
-      "model": "qwen3-max",
-      "display_name": "Qwen3 Max",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
       "model": "qwen-vl-max",
       "display_name": "Qwen VL Max",
       "supports_function_calling": true,
@@ -2259,6 +2250,24 @@
     },
     {
       "provider": "qwen",
+      "model": "qwen-max-0919",
+      "display_name": "Qwen Max 0919",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen-max-0428",
+      "display_name": "Qwen Max 0428",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
       "model": "qwen-max-longcontext",
       "display_name": "Qwen Max Longcontext",
       "supports_function_calling": true,
@@ -2268,8 +2277,17 @@
     },
     {
       "provider": "qwen",
-      "model": "qwen3-max-preview",
-      "display_name": "Qwen3 Max Preview",
+      "model": "qwen-max-1201",
+      "display_name": "Qwen Max 1201",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen-max-0107",
+      "display_name": "Qwen Max 0107",
       "supports_function_calling": true,
       "context_window": 128000,
       "max_output_tokens": 8192,
@@ -2286,26 +2304,8 @@
     },
     {
       "provider": "qwen",
-      "model": "qwen3-coder-plus",
-      "display_name": "Qwen3 Coder Plus",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
       "model": "qwen-plus",
       "display_name": "Qwen Plus",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-vl-plus",
-      "display_name": "Qwen3 VL Plus",
       "supports_function_calling": true,
       "context_window": 128000,
       "max_output_tokens": 8192,
@@ -2358,6 +2358,15 @@
     },
     {
       "provider": "qwen",
+      "model": "qwen-coder-plus-1106",
+      "display_name": "Qwen Coder Plus 1106",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
       "model": "qwen-coder-plus",
       "display_name": "Qwen Coder Plus",
       "supports_function_calling": true,
@@ -2367,8 +2376,8 @@
     },
     {
       "provider": "qwen",
-      "model": "qwen3-coder-next",
-      "display_name": "Qwen3 Coder Next",
+      "model": "qwen-deep-research-2025-12-15",
+      "display_name": "Qwen Deep Research 2025 12 15",
       "supports_function_calling": true,
       "context_window": 128000,
       "max_output_tokens": 8192,
@@ -2412,6 +2421,33 @@
     },
     {
       "provider": "qwen",
+      "model": "qwen-7b-chat",
+      "display_name": "Qwen 7b Chat",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen-72b-chat",
+      "display_name": "Qwen 72b Chat",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen-14b-chat",
+      "display_name": "Qwen 14b Chat",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
       "model": "qwen-flash",
       "display_name": "Qwen Flash",
       "supports_function_calling": true,
@@ -2430,60 +2466,6 @@
     },
     {
       "provider": "qwen",
-      "model": "qwen3-vl-flash",
-      "display_name": "Qwen3 VL Flash",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-coder-flash",
-      "display_name": "Qwen3 Coder Flash",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-omni-flash",
-      "display_name": "Qwen3 Omni Flash",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-omni-flash-realtime",
-      "display_name": "Qwen3 Omni Flash Realtime",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-livetranslate-flash",
-      "display_name": "Qwen3 Livetranslate Flash",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
-      "model": "qwen3-livetranslate-flash-realtime",
-      "display_name": "Qwen3 Livetranslate Flash Realtime",
-      "supports_function_calling": true,
-      "context_window": 128000,
-      "max_output_tokens": 8192,
-      "supports_vision": false
-    },
-    {
-      "provider": "qwen",
       "model": "qwen-mt-flash",
       "display_name": "Qwen Mt Flash",
       "supports_function_calling": true,
@@ -2495,6 +2477,15 @@
       "provider": "qwen",
       "model": "qwen-mt-lite",
       "display_name": "Qwen Mt Lite",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen-turbo-0919",
+      "display_name": "Qwen Turbo 0919",
       "supports_function_calling": true,
       "context_window": 128000,
       "max_output_tokens": 8192,
@@ -2540,6 +2531,15 @@
       "provider": "qwen",
       "model": "qwen-coder-turbo-latest",
       "display_name": "Qwen Coder Turbo Latest",
+      "supports_function_calling": true,
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "supports_vision": false
+    },
+    {
+      "provider": "qwen",
+      "model": "qwen-coder-turbo-0919",
+      "display_name": "Qwen Coder Turbo 0919",
       "supports_function_calling": true,
       "context_window": 128000,
       "max_output_tokens": 8192,

@@ -81,6 +81,47 @@ def test_auto_tier_rank_higher_version_lower_rank():
     assert r55 < r54 < r41
 
 
+def test_auto_tier_rank_qwen_brand_attached_version():
+    """``qwen3-*`` must parse as version 3, NOT as version 80 from
+    ``-80b`` param-size suffix. ``qwen3.7-*`` must beat ``qwen3-*``."""
+    r37 = _auto_tier_rank("qwen", "qwen3.7-max-preview")
+    r3_next = _auto_tier_rank("qwen", "qwen3-next-80b-a3b-thinking")
+    r3_max = _auto_tier_rank("qwen", "qwen3-max")
+    r2 = _auto_tier_rank("qwen", "qwen2-57b-a14b-instruct")
+    # qwen3.7 above qwen3.0 above qwen2.0
+    assert r37 < r3_max < r2
+    # qwen3-* family all near each other (within ~100)
+    assert abs(r3_max - r3_next) < 200
+    # qwen3-next must NOT be misparsed as version 80 (which would
+    # clamp to 100, way above curated 1-99 but below normal range)
+    assert r3_next > 5000  # confirms version 3 not 80
+
+
+def test_auto_tier_rank_param_size_not_treated_as_version():
+    """The Gemma '4-31b' and Qwen '80b' / '14b' / '7b' suffixes are
+    parameter counts, not versions. These must NOT outrank legit
+    version-X models."""
+    r_gemma_31b = _auto_tier_rank("gemini", "gemma-4-31b-it")
+    r_qwen_80b  = _auto_tier_rank("qwen", "qwen3-next-80b-a3b-thinking")
+    # Both should land in a reasonable mid-range, not floored at 100.
+    assert r_gemma_31b > 100, "gemma-4-31b must not be parsed as v31"
+    assert r_qwen_80b  > 100, "qwen3-next-80b must not be parsed as v80"
+
+
+def test_auto_tier_rank_b_suffix_not_treated_as_version():
+    """The crucial ``-7b`` / ``-14b`` / ``-72b`` form (Qwen-7B,
+    Qwen-72B etc.) must be recognised as parameter count, not as
+    "version 7" or "version 72". Bare ``qwen-7b-chat`` should rank
+    LOWER (= further down the card) than any qwen3.x release."""
+    r_7b   = _auto_tier_rank("qwen", "qwen-7b-chat")
+    r_37   = _auto_tier_rank("qwen", "qwen3.7-max-preview")
+    r_3max = _auto_tier_rank("qwen", "qwen3-max")
+    # qwen-7b-chat has NO version parseable (b suffix excluded) →
+    # falls to default ~10000.
+    assert r_7b > r_3max, "qwen-7b-chat must rank below qwen3-max"
+    assert r_7b > r_37,   "qwen-7b-chat must rank below qwen3.7-max-preview"
+
+
 def test_auto_tier_rank_pro_boosts():
     """Within same version family, Pro should outrank bare."""
     pro = _auto_tier_rank("openai", "gpt-5.5-pro")

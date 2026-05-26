@@ -176,17 +176,33 @@ def _parse_version(model_id: str) -> tuple[int, int]:
     but Anthropic is hand-curated in CURATED so it never reaches this
     function. If a future auto-vendor needs this, special-case it.
     """
+    # X.Y decimal — covers most modern names (gpt-5.5, gemini-3.5,
+    # glm-4.7, mimo-v2.5, kimi-k2.6, qwen3.7).
     m = re.search(r"(\d+)\.(\d+)", model_id)
     if m:
         return int(m.group(1)), int(m.group(2))
-    # Single integer. Allow an optional ``v`` prefix (``deepseek-v4``,
-    # ``moonshot-v1-128k``) so the version segment wins over the
-    # size segment that comes later (``-128k`` would otherwise match
-    # as version 128 because re.search returns the leftmost match,
-    # and ``-v1-`` without the optional ``v`` doesn't match).
-    m = re.search(r"-v?(\d+)(?=[a-z]|-|$)", model_id)
+
+    # Letter-attached digit: vendors who fuse the version digit to the
+    # brand prefix WITHOUT a dash (``qwen3-max``, ``qwen3-next``).
+    # Matches when a letter is followed by digit(s) followed by a
+    # delimiter — captures the brand version BEFORE the dash-integer
+    # regex below has a chance to misfire on a later ``-80b``
+    # parameter-size segment.
+    m = re.search(r"[a-z](\d+)(?=[-.]|$)", model_id)
     if m:
         return int(m.group(1)), 0
+
+    # Dash-prefixed SINGLE-DIGIT integer (gpt-5, gpt-4o, gemini-3-pro,
+    # moonshot-v1, deepseek-v4).
+    #
+    # Two guards against param-size false positives:
+    #   1. Single digit only — ``-80b`` / ``-128k`` / ``-31b`` never match
+    #   2. Negative lookahead skips ``b`` — ``-7b-chat`` is 7 BILLION
+    #      params (Qwen-7B), not version 7.
+    m = re.search(r"-v?(\d)(?![\db])(?=[a-z]|-|$)", model_id)
+    if m:
+        return int(m.group(1)), 0
+
     return 0, 0
 
 
