@@ -17,11 +17,13 @@ alembic==1.17.2
 # we use (encode + decode with explicit algorithms=["HS256"]) is
 # unchanged across the bump.
 python-jose[cryptography]==3.5.0
-# passlib 1.7.4 (last release, 2020) — staying for now because the
-# password-hash API surface is stable; tracked as a follow-up to
-# swap for direct bcrypt or argon2-cffi once we plan a password-
-# rehash migration. See p4-g notes.
-passlib[bcrypt]==1.7.4
+# pwdlib (FastAPI's recommended password-hashing library since 2024)
+# replaces passlib[bcrypt]. Argon2id is the default hasher for new
+# passwords; BcryptHasher is kept on the verifier list so users whose
+# password rows still have the legacy bcrypt hash from before P6-D
+# can log in once and have ``verify_and_maybe_rehash`` upgrade them
+# to Argon2id. passlib is removed entirely — see app/core/security.py.
+pwdlib[argon2,bcrypt]==0.3.0
 
 # Redis & Async Task Queue
 redis==5.2.1

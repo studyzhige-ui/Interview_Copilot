@@ -30,6 +30,7 @@ from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
+    verify_and_maybe_rehash,
     get_current_user,
     get_password_hash,
     oauth2_scheme,
@@ -317,8 +318,33 @@ def login_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
 ):
     user = db.query(User).filter(User.username == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    if not user:
+        # Constant-ish work to avoid trivial timing oracle: still hash
+        # something so the not-found branch isn't dramatically faster
+        # than the wrong-password branch. (Argon2id is ~300ms; the
+        # difference is the dominant signal an attacker could exploit
+        # to enumerate users.)
+        verify_and_maybe_rehash(form_data.password, "$argon2id$v=19$m=65536,t=3,p=4$bm9uZQ$x")
         raise HTTPException(status_code=400, detail="用户名或密码错误")
+
+    valid, new_hash = verify_and_maybe_rehash(
+        form_data.password, user.hashed_password,
+    )
+    if not valid:
+        raise HTTPException(status_code=400, detail="用户名或密码错误")
+
+    # Lazy hash upgrade: if pwdlib decided this user's stored hash
+    # was a legacy algorithm (bcrypt today, maybe argon2-old-params
+    # tomorrow), it returned the new-algorithm hash here. Persist it
+    # so the next login goes faster + uses the upgraded algorithm.
+    # Best-effort — a write failure here doesn't break login, the
+    # user can keep using bcrypt until the next successful auth.
+    if new_hash is not None:
+        try:
+            user.hashed_password = new_hash
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
 
     access_token = create_access_token(
         data={"sub": user.username},

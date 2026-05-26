@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import timedelta
 from unittest.mock import patch
 
+import bcrypt as _bcrypt
 import pytest
 from jose import JWTError, jwt as jose_jwt
 
@@ -13,6 +14,7 @@ from app.core.security import (
     create_refresh_token,
     decode_token,
     get_password_hash,
+    verify_and_maybe_rehash,
     verify_password,
 )
 
@@ -46,6 +48,60 @@ def test_verify_password_accepts_bytes_hash():
     pw = "bytes-input"
     hashed = get_password_hash(pw)
     assert verify_password(pw, hashed.encode("utf-8"))
+
+
+def test_new_hashes_use_argon2id():
+    """Pin the algorithm: ``get_password_hash`` must produce an
+    Argon2id hash, not bcrypt. If a future contributor swaps the
+    pwdlib hasher order this test fails. Argon2id is the 2015 PHC
+    competition winner and the default in FastAPI's current
+    security guide."""
+    hashed = get_password_hash("any-password")
+    assert hashed.startswith("$argon2id$"), (
+        f"expected argon2id prefix, got {hashed[:20]!r} — "
+        "did the pwdlib hasher order regress?"
+    )
+
+
+def test_verify_password_accepts_legacy_bcrypt_hash():
+    """Existing user rows whose passwords were hashed by the pre-
+    P6-D bcrypt-only code path must still authenticate. Pwdlib's
+    verifier list includes BcryptHasher specifically for this
+    backward-compat purpose."""
+    pw = "legacy-from-bcrypt-era"
+    legacy_hash = _bcrypt.hashpw(
+        pw.encode("utf-8"), _bcrypt.gensalt(),
+    ).decode("utf-8")
+    assert legacy_hash.startswith("$2"), "test fixture must be a bcrypt hash"
+    assert verify_password(pw, legacy_hash)
+    assert not verify_password("wrong", legacy_hash)
+
+
+def test_verify_and_maybe_rehash_upgrades_legacy_bcrypt():
+    """The lazy-rehash path: a successful login against a legacy
+    bcrypt hash returns ``(True, <new argon2id hash>)`` so the
+    caller can persist the upgraded hash. New-format hashes
+    return ``(True, None)`` (no upgrade needed)."""
+    pw = "rehash-on-login"
+    legacy = _bcrypt.hashpw(pw.encode(), _bcrypt.gensalt()).decode()
+
+    valid, new_hash = verify_and_maybe_rehash(pw, legacy)
+    assert valid is True
+    assert new_hash is not None
+    assert new_hash.startswith("$argon2id$"), "upgrade must produce argon2id"
+
+    # Verify the upgraded hash works too.
+    assert verify_password(pw, new_hash)
+
+    # New-style hash should NOT trigger a re-hash.
+    fresh = get_password_hash(pw)
+    valid2, new_hash2 = verify_and_maybe_rehash(pw, fresh)
+    assert valid2 is True
+    assert new_hash2 is None
+
+    # Wrong password against any hash returns (False, None).
+    assert verify_and_maybe_rehash("nope", legacy) == (False, None)
+    assert verify_and_maybe_rehash("nope", fresh) == (False, None)
 
 
 # ── JWT round trips ──────────────────────────────────────────────────────
