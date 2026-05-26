@@ -359,11 +359,12 @@ except ImportError:
         "Run: pip install slowapi"
     )
 
-from app.api import auth, chat, interview, model_runtime, rag
+from app.api import auth, chat, interview, memory, model_runtime, rag
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(chat.router, prefix="/api/v1")
 app.include_router(interview.router, prefix="/api/v1")
+app.include_router(memory.router, prefix="/api/v1")
 app.include_router(rag.router, prefix="/api/v1")
 app.include_router(model_runtime.router, prefix="/api/v1")
 

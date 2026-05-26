@@ -1,15 +1,14 @@
-"""Chat API package — assembles all chat-related routers under one mount point.
+"""Chat API package — assembles all chat session routers under one mount point.
 
 Submodules:
   - sessions       : session CRUD + full transcript
-  - memory         : v3 memory CRUD (knowledge / strategy / habit /
-                     user_profile docs + audit log). The file was
-                     historically named ``memory_items.py`` (back when
-                     v2 memory was a flat row-per-item table) — renamed
-                     in the audit cleanup so a grep for "where are the
-                     memory endpoints" actually lands here.
-  - streaming      : WebSocket + SSE QA streaming
+  - streaming      : SSE QA streaming
   - mock_interview : mock interview control + TTS
+
+Memory CRUD endpoints used to live here as ``chat/memory.py`` but were
+moved out in P8-1 — they manage cross-session memory docs (knowledge /
+strategy / habit / user_profile), not chat-session operations.
+See ``app.api.memory`` for the new home.
 
 The package mounts every submodule's router into a single ``router`` so
 that ``app.main`` can keep its existing one-line include:
@@ -24,12 +23,11 @@ but new tests should patch the specific submodule
 
 from fastapi import APIRouter
 
-from app.api.chat import memory, mock_interview, sessions, streaming
+from app.api.chat import mock_interview, sessions, streaming
 from app.services.chat.chat_history_service import transcript_service  # noqa: F401
 
 router = APIRouter()
 router.include_router(sessions.router)
-router.include_router(memory.router)
 router.include_router(streaming.router)
 router.include_router(mock_interview.router)
 

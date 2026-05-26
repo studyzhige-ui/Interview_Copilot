@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api import chat as chat_api
+from app.api import memory as memory_api
 from app.api.chat import sessions as chat_sessions_mod
 from app.core.security import get_current_user
 from app.db.database import Base, get_db
@@ -84,6 +85,11 @@ def client(db: Session) -> Iterator[TestClient]:
 
     app = FastAPI()
     app.include_router(chat_api.router, prefix="/api/v1")
+    # /memory/* lives under app.api.memory now (moved out of chat/
+    # in P8-1 because the routes are cross-session memory CRUD,
+    # not chat-session operations). Mount it here so the existing
+    # tests targeting ``/api/v1/memory/...`` keep working.
+    app.include_router(memory_api.router, prefix="/api/v1")
     app.dependency_overrides[get_current_user] = fake_user
     app.dependency_overrides[get_db] = fake_db
     yield TestClient(app)

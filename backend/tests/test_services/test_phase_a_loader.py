@@ -145,7 +145,7 @@ def test_memory_overview_opens_exactly_one_db_session(engine_and_session, monkey
     refactor that drops ``db=db`` from any of the 4 calls bumps the
     counter back to 4 and this test fails loudly.
     """
-    from app.api.chat.memory import memory_overview
+    from app.api.memory import memory_overview
     from app.services.memory import (
         habit_doc_service, knowledge_doc_service,
         strategy_doc_service, user_profile_doc_service,
