@@ -44,7 +44,13 @@ const VENDORS: VendorInfo[] = [
 // Each row renders: 1 line of centered display_name + 1 row of centered
 // glass role tabs. The row is intentionally tight (no internal padding
 // breathing room); whitespace lives between rows, not inside them.
-const MODELS_VISIBLE_ROWS = 2;
+//
+// Why 4 (was 2): vendors like OpenAI / Anthropic / Zhipu ship 6-10 curated
+// profiles. With 2 rows visible the user often thought "GPT-5.2 is the
+// only model" because the rest were hidden below the fold AND the scroll
+// affordance was invisible. 4 rows + the explicit "共 N 个" badge + the
+// bottom fade gradient now make it obvious there's more to see.
+const MODELS_VISIBLE_ROWS = 4;
 const MODEL_ROW_HEIGHT_PX = 64;
 const MODEL_ROW_GAP_PX = 8;
 
@@ -298,7 +304,9 @@ function VendorCard({
   const envName = list[0]?.api_key_env ?? '';
   const userKeySet = !!apiKeyStatus?.set;
   // Flat rectangular card: wide aspect ratio, bigger fonts, scrollable model
-  // list (no pagination). The model area always shows ~2 rows by default.
+  // list (no pagination). The model area shows ``MODELS_VISIBLE_ROWS`` rows
+  // by default (currently 4) and scrolls below that; the bottom fade
+  // gradient + "下滑查看全部" hint make the overflow obvious.
   const modelsAreaHeight =
     MODELS_VISIBLE_ROWS * MODEL_ROW_HEIGHT_PX + (MODELS_VISIBLE_ROWS - 1) * MODEL_ROW_GAP_PX;
 
@@ -309,7 +317,12 @@ function VendorCard({
           <VendorAvatar vendor={vendor} />
           <div className="min-w-0">
             <div className="text-[15px] font-semibold text-stone-800 truncate leading-tight">{vendor.label}</div>
-            <div className="text-[10px] text-stone-400 truncate">{list.length} 个模型</div>
+            <div className="text-[10px] text-stone-400 truncate">
+              {list.length} 个模型
+              {list.length > MODELS_VISIBLE_ROWS && (
+                <span className="ml-1 text-stone-500">· 下滑查看全部</span>
+              )}
+            </div>
           </div>
         </div>
         {anyReady
@@ -317,20 +330,40 @@ function VendorCard({
           : <Pill tone="warn">未配置</Pill>}
       </div>
 
-      {/* Scrollable model list — fixed visible area, content scrolls inside */}
-      <div
-        className="overflow-y-auto pr-1 mb-2 flex flex-col"
-        style={{ height: modelsAreaHeight, gap: MODEL_ROW_GAP_PX }}
-      >
-        {list.map((p) => (
-          <ModelRow
-            key={p.id}
-            profile={p}
-            selectedRoles={ROLES.filter((r) => selection[r] === p.id)}
-            onAssign={(role) => onAssign(role, p.id)}
-            ping={pingResults[p.id]}
+      {/*
+        Scrollable model list — fixed visible area, content scrolls inside.
+        We wrap in a positioned container so we can layer a bottom fade
+        gradient *outside* the scroll viewport (otherwise the fade scrolls
+        away with the content and stops hinting).
+      */}
+      <div className="relative mb-2" style={{ height: modelsAreaHeight }}>
+        <div
+          className="overflow-y-auto pr-1 flex flex-col h-full"
+          style={{ gap: MODEL_ROW_GAP_PX }}
+        >
+          {list.map((p) => (
+            <ModelRow
+              key={p.id}
+              profile={p}
+              selectedRoles={ROLES.filter((r) => selection[r] === p.id)}
+              onAssign={(role) => onAssign(role, p.id)}
+              ping={pingResults[p.id]}
+            />
+          ))}
+        </div>
+        {list.length > MODELS_VISIBLE_ROWS && (
+          // Subtle white-to-transparent fade at the bottom of the
+          // viewport so the user immediately reads "more below". The
+          // overlay is pointer-events-none so it doesn't eat clicks
+          // on the last visible row.
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-8 rounded-b-xl"
+            style={{
+              background:
+                'linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.92) 80%, #ffffff 100%)',
+            }}
           />
-        ))}
+        )}
       </div>
 
       {/* API Key — collapsed by default. The plaintext is NEVER displayed

@@ -111,13 +111,65 @@ async def _fetch_one_provider(
     if not isinstance(raw, list):
         return []
     ids: list[str] = []
+    created_by_id: dict[str, int] = {}
     for entry in raw:
         if not isinstance(entry, dict):
             continue
         mid = entry.get("id") or entry.get("name") or entry.get("model")
-        if isinstance(mid, str) and _looks_like_chat_model(mid):
-            ids.append(mid)
-    return sorted(set(ids))
+        if not (isinstance(mid, str) and _looks_like_chat_model(mid)):
+            continue
+        ids.append(mid)
+        # Per-vendor timestamp field naming differs:
+        #   OpenAI / DeepSeek / Moonshot → ``created`` as Unix int (seconds)
+        #   Anthropic                    → ``created_at`` as ISO-8601 string
+        # We coerce either form to a Unix int so the sort key is uniform.
+        # Last-write-wins on duplicate ids is fine: vendors don't ship
+        # multiple rows for the same id with materially different timestamps.
+        ts = _coerce_created(entry.get("created") or entry.get("created_at"))
+        if ts is not None:
+            created_by_id[mid] = ts
+    # Dedupe ids (vendors occasionally ship the same id twice).
+    unique_ids = list(dict.fromkeys(ids))
+    # Sort: prefer vendor-supplied timestamp desc; for ids without one
+    # fall back to reverse-alphabetical. For the version-suffixed naming
+    # OpenAI / DeepSeek / Google / Moonshot / Zhipu use, reverse-alpha
+    # already lands on newest-first (gpt-5.2 > gpt-5 > gpt-4o > gpt-4.1;
+    # glm-5 > glm-4.7 > glm-4.6; gemini-3-pro > gemini-2.5-pro). For
+    # Anthropic (claude-opus / claude-sonnet / claude-haiku) reverse-alpha
+    # is NOT a meaningful recency signal — the tier name dominates the
+    # version — which is exactly why we parse ``created_at`` for them.
+    #
+    # Two-pass stable sort: first by id reverse-alpha, then by timestamp
+    # desc. Python's sort is stable, so within equal timestamps (or both
+    # ids missing one) the alpha-desc order from the first pass survives.
+    # This handles the "gpt-5" vs "gpt-5.2" prefix-equality case that a
+    # tuple-of-negated-ords key would mishandle (the shorter tuple sorts
+    # before the longer one in tuple compare, which reverses what we want).
+    unique_ids.sort(reverse=True)
+    unique_ids.sort(key=lambda mid: created_by_id.get(mid, 0), reverse=True)
+    return unique_ids
+
+
+def _coerce_created(value: object) -> int | None:
+    """Normalise a vendor's ``created`` / ``created_at`` field to Unix seconds.
+
+    Returns ``None`` if the value is missing or unparseable — callers fall
+    back to reverse-alpha ordering for those ids.
+    """
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str) and value:
+        # ISO-8601 — Anthropic and a few others. ``fromisoformat`` accepts
+        # the trailing ``Z`` only on Python 3.11+, but the project pins
+        # 3.11 so we can rely on it. If the string is malformed we just
+        # return None (silent fallback to alpha sort).
+        from datetime import datetime
+        try:
+            iso = value.replace("Z", "+00:00")
+            return int(datetime.fromisoformat(iso).timestamp())
+        except (ValueError, TypeError):
+            return None
+    return None
 
 
 async def discover_provider(
