@@ -14,7 +14,7 @@ from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
 from app.rag.retriever import query_knowledge_base
 from app.services.knowledge.knowledge_service import default_title, hard_delete_knowledge_document
-from app.services.upload_service import create_owned_upload, get_owned_upload, mark_upload_consumed
+from app.services.uploads.upload_service import create_owned_upload, get_owned_upload, mark_upload_consumed
 from app.worker.tasks import process_document_ingestion
 
 logger = logging.getLogger(__name__)

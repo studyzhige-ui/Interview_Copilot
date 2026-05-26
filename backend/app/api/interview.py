@@ -22,7 +22,7 @@ from app.services.interview_record_service import (
     interview_record_service,
 )
 from app.services.storage_service import upload_file_to_owned_key
-from app.services.upload_service import create_owned_upload, get_owned_upload, mark_upload_consumed
+from app.services.uploads.upload_service import create_owned_upload, get_owned_upload, mark_upload_consumed
 from app.worker.tasks import process_interview_analysis
 
 try:
@@ -68,7 +68,7 @@ async def upload_audio(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.services.file_validation import validate_upload_stream
+    from app.services.uploads.file_validation import validate_upload_stream
     from app.services.voice.file_parser import validate_media_format
 
     # Cheap extension check first (rejects obviously-wrong filenames before
@@ -165,7 +165,7 @@ async def upload_resume(
     import io
     from pathlib import Path
 
-    from app.services.file_validation import validate_upload
+    from app.services.uploads.file_validation import validate_upload
     from app.services.voice.file_parser import validate_resume_format
 
     if not validate_resume_format(file.filename or ""):

@@ -115,7 +115,7 @@ async def _write_file_handler(args: WriteFileArgs, ctx: AgentToolContext) -> dic
 
 def _write_file_sync(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, Any]:
     from app.db.database import SessionLocal
-    from app.services.upload_service import create_owned_upload
+    from app.services.uploads.upload_service import create_owned_upload
 
     db = SessionLocal()
     try:
@@ -136,7 +136,7 @@ def _write_file_sync(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, An
             content_type=upload.content_type,
         )
 
-        from app.services.upload_service import mark_upload_consumed
+        from app.services.uploads.upload_service import mark_upload_consumed
         mark_upload_consumed(db, upload)
         db.commit()
 

@@ -1,4 +1,4 @@
-"""Streaming-validator tests for ``app.services.file_validation``.
+"""Streaming-validator tests for ``app.services.uploads.file_validation``.
 
 P6-E switched the audio_upload path from "read 500 MB into a Python
 ``bytes``" to a SpooledTemporaryFile-backed streaming pipeline.
@@ -18,7 +18,7 @@ import io
 import pytest
 from fastapi import HTTPException, UploadFile
 
-from app.services.file_validation import (
+from app.services.uploads.file_validation import (
     _SIZE_LIMITS_BYTES,
     validate_upload_stream,
 )

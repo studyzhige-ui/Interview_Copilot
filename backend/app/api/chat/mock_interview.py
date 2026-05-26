@@ -819,7 +819,7 @@ async def parse_jd_for_mock(
     _current_user: User = Depends(get_current_user),
 ):
     """Parse a JD file inline and return its plain text. Does NOT persist."""
-    from app.services.file_validation import validate_upload
+    from app.services.uploads.file_validation import validate_upload
     from app.services.voice.file_parser import extract_resume_text
 
     # validate_upload owns size + magic-byte checks; the older size guard
@@ -860,7 +860,7 @@ async def transcribe_short_clip(
     current_user: User = Depends(get_current_user),
 ):
     """Transcribe a short audio clip (webm/opus/mp3/wav) to text."""
-    from app.services.file_validation import validate_upload
+    from app.services.uploads.file_validation import validate_upload
 
     # Fast-path size guard (avoids reading megabytes for over-cap uploads);
     # validate_upload re-asserts size + magic-byte.

@@ -93,7 +93,7 @@ def test_rag_query_500_on_retriever_error(client):
 def test_create_upload_url_creates_user_upload(client, db: Session):
     fake_url_info = {"upload_url": "https://upload", "storage_uri": "s3://b/k"}
     with patch(
-        "app.services.upload_service.generate_presigned_upload_url_for_key",
+        "app.services.uploads.upload_service.generate_presigned_upload_url_for_key",
         return_value=fake_url_info,
     ):
         resp = client.post(
