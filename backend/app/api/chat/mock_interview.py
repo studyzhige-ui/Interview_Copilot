@@ -51,6 +51,7 @@ router = APIRouter(tags=["chat"])
 @limiter.limit(RATE_EXPENSIVE)
 async def start_mock_interview(
     request: Request,
+    response: Response,
     body: MockStartRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -304,6 +305,7 @@ _PHASE_NAME_MAP = {
 @limiter.limit(RATE_DEFAULT)
 async def get_in_progress_mock(
     request: Request,
+    response: Response,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -413,6 +415,7 @@ async def get_in_progress_mock(
 @limiter.limit(RATE_DEFAULT)
 async def abandon_mock_interview(
     request: Request,
+    response: Response,
     session_id: str = Query(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -470,6 +473,7 @@ async def abandon_mock_interview(
 @limiter.limit(RATE_DEFAULT)
 async def get_current_question(
     request: Request,
+    response: Response,
     session_id: str = Query(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -649,6 +653,7 @@ async def submit_mock_answer(
 @limiter.limit(RATE_EXPENSIVE)
 async def finish_mock_interview(
     request: Request,
+    response: Response,
     session_id: str = Query(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -809,6 +814,7 @@ async def _parse_resume_on_demand(db: Session, upload_id: str, user_id: str) -> 
 @limiter.limit(RATE_UPLOAD)
 async def parse_jd_for_mock(
     request: Request,
+    response: Response,
     file: UploadFile = File(...),
     _current_user: User = Depends(get_current_user),
 ):
@@ -924,6 +930,7 @@ async def transcribe_short_clip(
 @limiter.limit(RATE_EXPENSIVE)
 async def synthesize_speech(
     request: Request,
+    response: Response,
     body: TTSRequest,
     _current_user: User = Depends(get_current_user),
 ):

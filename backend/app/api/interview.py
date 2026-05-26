@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -63,6 +63,7 @@ class MemorySaveRequest(BaseModel):
 @limiter.limit(RATE_UPLOAD)
 async def upload_audio(
     request: Request,
+    response: Response,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -155,6 +156,7 @@ def list_user_resumes(
 @limiter.limit(RATE_UPLOAD)
 async def upload_resume(
     request: Request,
+    response: Response,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -229,6 +231,7 @@ async def get_upload_presigned_url(
 @limiter.limit(RATE_EXPENSIVE)
 async def analyze_interview_endpoint(
     request: Request,
+    response: Response,
     body: AnalyzeRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -380,6 +383,7 @@ def _extract_resume_snapshot(db: Session, resume_upload_id: str, user_id: str) -
 @limiter.limit(RATE_EXPENSIVE)
 async def save_personal_memory(
     request: Request,
+    response: Response,
     body: MemorySaveRequest,
     current_user: User = Depends(get_current_user),
 ):

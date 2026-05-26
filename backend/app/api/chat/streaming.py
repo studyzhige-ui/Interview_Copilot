@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -49,6 +49,7 @@ router = APIRouter(tags=["chat"])
 @limiter.limit(RATE_EXPENSIVE)
 async def sse_chat_endpoint(
     request: Request,
+    response: Response,
     session_id: str,
     body: SSEChatRequest,
     current_user: User = Depends(get_current_user),

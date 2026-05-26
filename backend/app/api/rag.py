@@ -2,7 +2,7 @@ import logging
 from enum import Enum
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
@@ -55,6 +55,7 @@ class QueryRequest(BaseModel):
 @limiter.limit(RATE_EXPENSIVE)
 async def api_query_knowledge_base(
     request: Request,
+    response: Response,
     body: QueryRequest,
     current_user: User = Depends(get_current_user),
 ):
@@ -104,6 +105,7 @@ def _document_payload(document: KnowledgeDocument) -> dict:
 @limiter.limit(RATE_UPLOAD)
 async def create_knowledge_upload_url(
     request: Request,
+    response: Response,
     body: KnowledgeUploadRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -129,6 +131,7 @@ async def create_knowledge_upload_url(
 @limiter.limit(RATE_UPLOAD)
 async def create_knowledge_document(
     request: Request,
+    response: Response,
     body: KnowledgeDocumentCreateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
