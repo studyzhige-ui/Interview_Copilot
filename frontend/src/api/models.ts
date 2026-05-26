@@ -46,7 +46,7 @@ export interface RefreshCatalogResult {
   profiles: ModelProfile[];
 }
 
-/** Force the backend to re-fetch the LiteLLM catalog (P6-L). */
+/** Force the backend to re-fetch each vendor's /v1/models (P7-A). */
 export async function refreshModelCatalog(): Promise<RefreshCatalogResult> {
   const res = await apiClient.post('/models/refresh-catalog', null, { timeout: 60_000 });
   return res.data;

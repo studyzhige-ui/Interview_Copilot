@@ -22,8 +22,8 @@ import type { ModelProfile, ModelRole } from '@/types/api';
 import { useIsMounted } from '@/hooks/useIsMounted';
 
 // Brand colors for the vendor avatar tile. Static — these don't come from
-// LiteLLM / the backend, and they shouldn't be user-configurable. Provider
-// ids without a colour fall back to a neutral stone tone, which is fine.
+// the backend, and they shouldn't be user-configurable. Provider ids
+// without a colour fall back to a neutral stone tone, which is fine.
 const BRAND_COLORS: Record<string, string> = {
   deepseek:     '#3A6AC1',
   openai:       '#10A37F',
@@ -210,7 +210,7 @@ export function ModelsPage() {
       await refresh();
       if (!isMounted.current) return;
       toast.success(
-        `已从 LiteLLM 拉取 ${result.profiles_total} 个模型 ` +
+        `已从各厂商官方 /v1/models 拉取 ${result.profiles_total} 个模型 ` +
         `（${result.providers_refreshed} 家厂商）`,
       );
     } catch (err) {
@@ -276,7 +276,7 @@ export function ModelsPage() {
           <button
             onClick={() => setShowMoreOpen(true)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm border border-stone-200 text-stone-700 hover:bg-stone-50"
-            title="勾选 LiteLLM 已支持但尚未显示的厂商"
+            title="勾选默认隐藏的厂商，使其在主页面显示"
           >
             <Plus size={13} />
             <span>显示更多厂商</span>
@@ -285,7 +285,7 @@ export function ModelsPage() {
             onClick={refreshCatalog}
             disabled={refreshingCatalog}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm border border-stone-200 text-stone-700 hover:bg-stone-50 disabled:opacity-50"
-            title="从 LiteLLM 重新拉取所有厂商的最新模型列表"
+            title="重新调用每家厂商官方 /v1/models 拉取最新模型清单"
           >
             {refreshingCatalog ? <Spinner size={12} /> : <Sparkles size={13} />}
             <span>刷新模型库</span>
@@ -428,7 +428,7 @@ function VendorCard({
             <div className="text-xs text-stone-400 text-center py-6 leading-relaxed">
               暂无可用模型<br />
               <span className="text-[10px]">
-                （配置 API Key 或等待 LiteLLM 收录该厂商）
+                （配置 API Key 后点"刷新模型库"，即可从该厂商官方拉取）
               </span>
             </div>
           ) : (
