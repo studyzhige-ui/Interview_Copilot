@@ -1,5 +1,8 @@
 # RAG Evaluation Suite
 
+> **中文版**：[README.zh.md](README.zh.md)
+
+
 Three-layer quality harness for the Interview Copilot RAG pipeline.
 Lives outside `backend/tests/` because the runs are slow (Milvus +
 reranker + LLM calls) and gated by external state (your DeepSeek
