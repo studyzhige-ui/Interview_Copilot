@@ -165,45 +165,47 @@ on either path — see `docs/providers.md`.
 
 ## Repository layout
 
-```
-backend/
-  app/
-    api/              FastAPI routers — auth · chat/ · interview · memory · model_runtime · rag
-    schemas/          Pydantic request / response models (one file per router)
-    core/             config · security · rate_limit · ssrf · request_id
-                      · model_catalog + user_model_selection + llm_client_factory
-                        (model_registry.py is a back-compat shim re-exporting all three)
-                      · llm_tracing · hf_runtime · background_tasks
-    db/               SQLAlchemy engine, session factory, sync + async Redis clients
-    models/           ORM rows — User, InterviewRecord, InterviewQA, KnowledgeDocument, ...
-    rag/              embedding / reranker registries, retriever, ingestion, BM25
-    services/         business logic, grouped by domain:
-                        auth/        email, token_blacklist, user_api_key, user_provider_settings, verification_code
-                        resume/      resume_service, resume_vector_service
-                        knowledge/   knowledge_service, knowledge_text_service
-                        uploads/     file_validation, upload_service
-                        analytics/   diagnostics_report_service, telemetry_service
-                        interview/   analysis_orchestrator, interview_record_service, mock_interview_service
-                        chat/        session, runner, recall_policy, memory bundle
-                        memory/      v3 long-term memory (Milvus-backed)
-                        voice/       WhisperX, Pyannote, TTS
-                        model_sources/  per-vendor /v1/models adapters + Redis catalog pipeline
-                        storage_service.py + cache_service.py stay at services/ root
-                        (cross-domain — S3 wrapper, Redis-TTL cache)
-    conversation/     chat engine + agent strategy (L1 chat vs L2 ReAct loop)
-    agent_runtime/    tool registry, ReAct loop, context compactor, event streaming
-    worker/           Celery app + tasks (analyze, ingest, refresh-catalog)
-  tests/              ~500 tests across api / services / rag / models / core / db
-frontend/
-  src/                React SPA (Vite + TS + Tailwind + zustand)
-  public/             nginx config / _headers / _redirects
-alembic/versions/     Database migrations (squashed to a single baseline)
-nginx/conf.d/         Reverse proxy configs (dev + production)
-scripts/              setup / start / stop · init_models / refresh_models · wipe_non_admin / migrate_avatars
-docs/                 ← you are here
-  zh/                 Chinese mirror of every doc
-.github/workflows/    CI (backend tests, ruff, frontend build)
-```
+### `backend/app/` — FastAPI application
+
+| Subpackage | Purpose |
+|---|---|
+| `api/` | Routers — auth, chat, interview, memory, model_runtime, rag |
+| `schemas/` | Pydantic request / response models (one file per router) |
+| `core/` | config, security, rate limiting, SSRF, request IDs, LLM tracing, HF runtime. Model registry was split into `model_catalog.py` + `user_model_selection.py` + `llm_client_factory.py` — `model_registry.py` survives as a 70-line back-compat shim |
+| `db/` | SQLAlchemy engine, session factory, sync + async Redis clients |
+| `models/` | ORM rows — `User`, `InterviewRecord`, `InterviewQA`, `KnowledgeDocument`, … |
+| `rag/` | Embedding + reranker registries, hybrid retriever, ingestion, BM25 cache |
+| `services/` | Business logic, grouped by domain — see the table below |
+| `conversation/` | Chat engine + strategy split (L1 chat pipeline vs L2 ReAct loop) |
+| `agent_runtime/` | Tool registry, ReAct loop, context compactor, event streaming |
+| `worker/` | Celery app + tasks (analyze, ingest, refresh-catalog) |
+
+### `backend/app/services/` — domain subpackages
+
+| Subpackage | Files |
+|---|---|
+| `auth/` | email, token_blacklist, user_api_key, user_provider_settings, verification_code |
+| `resume/` | resume_service, resume_vector_service |
+| `knowledge/` | knowledge_service, knowledge_text_service |
+| `uploads/` | file_validation, upload_service |
+| `analytics/` | diagnostics_report_service, telemetry_service |
+| `interview/` | analysis_orchestrator, interview_record_service, mock_interview_service |
+| `chat/` | session, runner, recall_policy, memory bundle |
+| `memory/` | v3 long-term memory — doc-per-type, persisted in Postgres |
+| `voice/` | WhisperX, Pyannote, TTS |
+| `model_sources/` | Per-vendor `/v1/models` adapters + Redis catalog pipeline |
+
+`storage_service.py` and `cache_service.py` live at the `services/` root — both are cross-domain (S3 wrapper, Redis-TTL cache) with importers across most subpackages.
+
+### Top-level
+
+- **`backend/tests/`** — ~500 tests across api / services / rag / models / core / db
+- **`frontend/`** — React SPA (Vite + TS + Tailwind + zustand); nginx static configs under `public/`
+- **`alembic/versions/`** — DB migrations (squashed to a single baseline + a few incremental adds)
+- **`nginx/conf.d/`** — Reverse-proxy configs (dev + production)
+- **`scripts/`** — setup / start / stop / init_models / refresh_models / wipe_non_admin / migrate_avatars
+- **`docs/`** — getting-started · providers · postgres-tuning · troubleshooting · deploy-cloudflare-pages (each with a `zh/` mirror)
+- **`.github/workflows/`** — CI (backend tests, ruff, frontend build)
 
 ---
 

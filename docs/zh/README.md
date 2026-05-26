@@ -164,45 +164,47 @@ python scripts/init_models.py                        # 总共约 5GB，支持字
 
 ## 仓库结构
 
-```
-backend/
-  app/
-    api/              FastAPI 路由 —— auth · chat/ · interview · memory · model_runtime · rag
-    schemas/          Pydantic 请求 / 响应模型（每个路由一份）
-    core/             config · security · rate_limit · ssrf · request_id
-                      · model_catalog + user_model_selection + llm_client_factory
-                        （model_registry.py 现在是只做 re-export 的兼容垫片）
-                      · llm_tracing · hf_runtime · background_tasks
-    db/               SQLAlchemy engine、session factory、同步 + 异步 Redis 客户端
-    models/           ORM 行 —— User、InterviewRecord、InterviewQA、KnowledgeDocument、……
-    rag/              embedding / reranker 注册表、retriever、ingestion、BM25
-    services/         业务逻辑，按领域分包：
-                        auth/        email、token_blacklist、user_api_key、user_provider_settings、verification_code
-                        resume/      resume_service、resume_vector_service
-                        knowledge/   knowledge_service、knowledge_text_service
-                        uploads/     file_validation、upload_service
-                        analytics/   diagnostics_report_service、telemetry_service
-                        interview/   analysis_orchestrator、interview_record_service、mock_interview_service
-                        chat/        session、runner、recall_policy、memory bundle
-                        memory/      v3 长期记忆（Milvus 落盘）
-                        voice/       WhisperX、Pyannote、TTS
-                        model_sources/  每家厂商 /v1/models 适配器 + Redis 目录管道
-                        storage_service.py + cache_service.py 仍在 services/ 根
-                        （跨域 —— S3 封装、Redis-TTL 缓存）
-    conversation/     聊天引擎 + agent 策略（L1 chat vs L2 ReAct 循环）
-    agent_runtime/    工具注册表、ReAct 循环、context compactor、事件流
-    worker/           Celery app + tasks（analyze / ingest / refresh-catalog）
-  tests/              ~500 个测试（api / services / rag / models / core / db）
-frontend/
-  src/                React SPA（Vite + TS + Tailwind + zustand）
-  public/             nginx 配置 / _headers / _redirects
-alembic/versions/     数据库迁移（squash 为单一基线）
-nginx/conf.d/         反向代理配置（dev + production）
-scripts/              setup / start / stop · init_models / refresh_models · wipe_non_admin / migrate_avatars
-docs/                 ← 你在这里
-  zh/                 每个文档的中文版
-.github/workflows/    CI（后端测试、ruff、前端构建）
-```
+### `backend/app/` —— FastAPI 应用
+
+| 子包 | 作用 |
+|---|---|
+| `api/` | 路由 —— auth、chat、interview、memory、model_runtime、rag |
+| `schemas/` | Pydantic 请求 / 响应模型（每个路由一份） |
+| `core/` | config、security、rate_limit、SSRF、request_id、LLM tracing、HF runtime。原 model_registry 已经拆成 `model_catalog.py` + `user_model_selection.py` + `llm_client_factory.py`，`model_registry.py` 留作 70 行的 re-export 兼容垫片 |
+| `db/` | SQLAlchemy engine、session factory、同步 + 异步 Redis 客户端 |
+| `models/` | ORM 行 —— `User`、`InterviewRecord`、`InterviewQA`、`KnowledgeDocument`、…… |
+| `rag/` | embedding + reranker 注册表、混合检索、ingestion、BM25 缓存 |
+| `services/` | 业务逻辑，按领域分包 —— 见下表 |
+| `conversation/` | 聊天引擎 + 策略分流（L1 chat 流水线 vs L2 ReAct 循环） |
+| `agent_runtime/` | 工具注册表、ReAct 循环、context compactor、事件流 |
+| `worker/` | Celery app + tasks（analyze / ingest / refresh-catalog） |
+
+### `backend/app/services/` —— 领域子包
+
+| 子包 | 文件 |
+|---|---|
+| `auth/` | email、token_blacklist、user_api_key、user_provider_settings、verification_code |
+| `resume/` | resume_service、resume_vector_service |
+| `knowledge/` | knowledge_service、knowledge_text_service |
+| `uploads/` | file_validation、upload_service |
+| `analytics/` | diagnostics_report_service、telemetry_service |
+| `interview/` | analysis_orchestrator、interview_record_service、mock_interview_service |
+| `chat/` | session、runner、recall_policy、memory bundle |
+| `memory/` | v3 长期记忆 —— 按 doc-per-type 存进 Postgres |
+| `voice/` | WhisperX、Pyannote、TTS |
+| `model_sources/` | 每家厂商 `/v1/models` 适配器 + Redis 目录管道 |
+
+`storage_service.py` 和 `cache_service.py` 留在 `services/` 根 —— 都是跨域工具（S3 封装、Redis-TTL 缓存），上面几乎每个子包都在 import。
+
+### 顶层目录
+
+- **`backend/tests/`** —— ~500 个测试（api / services / rag / models / core / db）
+- **`frontend/`** —— React SPA（Vite + TS + Tailwind + zustand）；nginx 静态配置在 `public/` 下
+- **`alembic/versions/`** —— 数据库迁移（squash 为单一基线 + 少量增量）
+- **`nginx/conf.d/`** —— 反向代理配置（dev + production）
+- **`scripts/`** —— setup / start / stop / init_models / refresh_models / wipe_non_admin / migrate_avatars
+- **`docs/`** —— getting-started · providers · postgres-tuning · troubleshooting · deploy-cloudflare-pages（每个都有 `zh/` 中文版）
+- **`.github/workflows/`** —— CI（后端测试、ruff、前端构建）
 
 ---
 
