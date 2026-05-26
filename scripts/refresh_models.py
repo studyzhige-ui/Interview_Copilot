@@ -107,7 +107,8 @@ async def _main() -> int:
         print(f"{provider:<14} {len(entries):>7}  {head}{more}")
         if args.verbose:
             for e in entries:
-                fc = "✓" if e.supports_function_calling else " "
+                # ASCII-only marker for Windows console (cp936) compat.
+                fc = "[fc]" if e.supports_function_calling else "    "
                 print(f"              {fc} {e.model}")
     if extras:
         print()

@@ -1,55 +1,52 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Lock, RefreshCw, Activity, Settings2, Trash2, X, Sparkles } from 'lucide-react';
+import { Lock, RefreshCw, Activity, Settings2, Trash2, X, Sparkles, Plus, Globe } from 'lucide-react';
 import { Pill } from '@/components/ui/Pill';
 import { Spinner } from '@/components/ui/Spinner';
 import { toast } from '@/store/uiStore';
 import {
   deleteMyApiKey,
+  deleteProviderSettings,
   getModelsCatalog,
   listMyApiKeys,
+  listProviders,
   pingAllModels,
   refreshModelCatalog,
   saveMyApiKey,
   updateModelsRuntime,
+  updateProviderSettings,
   type ModelPingResult,
+  type ProviderInfo,
   type UserApiKeyStatus,
 } from '@/api/models';
 import type { ModelProfile, ModelRole } from '@/types/api';
 import { useIsMounted } from '@/hooks/useIsMounted';
 
-interface VendorInfo {
-  key: string;
-  label: string;
-  brand: string;
-  // Slug on https://simpleicons.org for the official brand SVG. Loaded from
-  // their CDN as a white-on-brand-color glyph; falls back to the letter
-  // initial on network error (see <VendorAvatar/>).
-  iconSlug?: string;
-}
+// Brand colors for the vendor avatar tile. Static — these don't come from
+// LiteLLM / the backend, and they shouldn't be user-configurable. Provider
+// ids without a colour fall back to a neutral stone tone, which is fine.
+const BRAND_COLORS: Record<string, string> = {
+  deepseek:     '#3A6AC1',
+  openai:       '#10A37F',
+  anthropic:    '#C26A4A',
+  gemini:       '#4285F4',
+  qwen:         '#7A5BC0',
+  moonshot:     '#1E4A78',
+  zai:          '#0F62FE',
+  xiaomi:       '#FF6900',
+  nvidia_nim:   '#76B900',
+  mistral:      '#FE5D26',
+  cohere:       '#FF7A0E',
+  groq:         '#F55036',
+  together_ai:  '#0F76FB',
+  fireworks_ai: '#F58025',
+  perplexity:   '#1C4D5F',
+  xai:          '#000000',
+  novita:       '#7B61FF',
+};
 
-const VENDORS: VendorInfo[] = [
-  { key: 'deepseek',  label: 'DeepSeek',          brand: '#3A6AC1', iconSlug: 'deepseek' },
-  { key: 'openai',    label: 'OpenAI',            brand: '#10A37F', iconSlug: 'openai' },
-  { key: 'anthropic', label: 'Anthropic',         brand: '#C26A4A', iconSlug: 'anthropic' },
-  { key: 'google',    label: 'Google Gemini',     brand: '#4285F4', iconSlug: 'googlegemini' },
-  { key: 'qwen',      label: '通义 Qwen',          brand: '#7A5BC0', iconSlug: 'alibabacloud' },
-  { key: 'moonshot',  label: 'Moonshot Kimi',     brand: '#1E4A78' },
-  { key: 'zhipu',     label: '智谱 GLM',           brand: '#0F62FE' },
-  { key: 'xiaomi',    label: '小米 MiMo',          brand: '#FF6900', iconSlug: 'xiaomi' },
-  { key: 'nvidia',    label: 'NVIDIA',            brand: '#76B900', iconSlug: 'nvidia' },
-];
-
-// Visible rows in each vendor card's scrollable model list. Cards stay the
-// same height regardless of how many models a vendor has — overflow scrolls.
-// Each row renders: 1 line of centered display_name + 1 row of centered
-// glass role tabs. The row is intentionally tight (no internal padding
-// breathing room); whitespace lives between rows, not inside them.
-//
-// Why 4 (was 2): vendors like OpenAI / Anthropic / Zhipu ship 6-10 curated
-// profiles. With 2 rows visible the user often thought "GPT-5.2 is the
-// only model" because the rest were hidden below the fold AND the scroll
-// affordance was invisible. 4 rows + the explicit "共 N 个" badge + the
-// bottom fade gradient now make it obvious there's more to see.
+// Visible rows in each vendor card's scrollable model list. 4 rows + the
+// "下滑查看全部" hint and bottom fade gradient make the overflow obvious;
+// vendors with 10+ models still scroll inside the same card height.
 const MODELS_VISIBLE_ROWS = 4;
 const MODEL_ROW_HEIGHT_PX = 64;
 const MODEL_ROW_GAP_PX = 8;
@@ -60,11 +57,12 @@ const ROLE_DESC: Record<ModelRole, { label: string; short: string }> = {
   mock_interview: { label: '模拟面试', short: '模' },
   fast:           { label: '快速 / 改写', short: '快' }, // not shown in UI; kept for type
 };
-// Only these three are user-configurable. 'fast' is internal back-compat.
 const ROLES: ModelRole[] = ['primary', 'agent', 'mock_interview'];
+
 
 export function ModelsPage() {
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selection, setSelection] = useState<Record<ModelRole, string>>({
     primary: '', fast: '', agent: '', mock_interview: '',
   });
@@ -73,19 +71,26 @@ export function ModelsPage() {
   const [pinging, setPinging] = useState(false);
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const [apiKeys, setApiKeys] = useState<UserApiKeyStatus>({});
+  const [showMoreOpen, setShowMoreOpen] = useState(false);
 
   const isMounted = useIsMounted();
+
+  /** Refresh both the per-user provider settings AND the catalog. */
   const refresh = async () => {
     setLoading(true);
     try {
-      const c = await getModelsCatalog();
+      const [catalog, provs] = await Promise.all([
+        getModelsCatalog(),
+        listProviders(),
+      ]);
       if (!isMounted.current) return;
-      setProfiles(c.profiles);
+      setProfiles(catalog.profiles);
+      setProviders(provs);
       setSelection({
-        primary: c.selection.primary ?? '',
-        fast: c.selection.fast ?? '',
-        agent: c.selection.agent ?? '',
-        mock_interview: c.selection.mock_interview ?? c.selection.fast ?? '',
+        primary: catalog.selection.primary ?? '',
+        fast: catalog.selection.fast ?? '',
+        agent: catalog.selection.agent ?? '',
+        mock_interview: catalog.selection.mock_interview ?? catalog.selection.fast ?? '',
       });
     } catch {
       if (isMounted.current) toast.error('模型目录加载失败');
@@ -105,7 +110,6 @@ export function ModelsPage() {
     try {
       const { masked } = await saveMyApiKey(provider, key);
       setApiKeys((k) => ({ ...k, [provider]: { set: true, masked } }));
-      // Refresh catalog so `ready` flags update for the newly-configured provider
       refresh();
       toast.success(`${provider} 密钥已加密保存`);
       return true;
@@ -130,6 +134,58 @@ export function ModelsPage() {
     }
   };
 
+  /** Save api_base / organization_id overrides for one provider. */
+  const onSaveProviderSettings = async (
+    provider: string,
+    patch: { api_base_override?: string; organization_id?: string },
+  ): Promise<boolean> => {
+    try {
+      const updated = await updateProviderSettings(provider, patch);
+      setProviders((cur) => cur.map((p) => (p.provider === provider ? updated : p)));
+      toast.success(`${provider} 设置已保存`);
+      return true;
+    } catch (e) {
+      // FastAPI 422 from Pydantic returns ``detail`` as an array of
+      // validation errors. Surface the first one's message so the user
+      // sees "api_base rejected: scheme not allowed" etc.
+      const data = (e as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+      let msg = '保存设置失败';
+      if (typeof data === 'string') msg = data;
+      else if (Array.isArray(data) && data[0] && typeof data[0] === 'object') {
+        msg = (data[0] as { msg?: string }).msg ?? msg;
+      }
+      toast.error(msg);
+      return false;
+    }
+  };
+
+  /** Toggle whether a provider's card shows on the Models page. */
+  const onToggleProvider = async (provider: string, enabled: boolean) => {
+    // Optimistic update so the picker feels snappy.
+    setProviders((cur) => cur.map((p) => (p.provider === provider ? { ...p, enabled } : p)));
+    try {
+      await updateProviderSettings(provider, { enabled });
+    } catch {
+      // Rollback on failure.
+      setProviders((cur) => cur.map((p) => (p.provider === provider ? { ...p, enabled: !enabled } : p)));
+      toast.error('设置失败');
+    }
+  };
+
+  /** Wipe ALL per-user overrides for a provider (api_base + org_id + enabled).
+   * Does NOT delete the encrypted API key. */
+  const onResetProvider = async (provider: string) => {
+    try {
+      await deleteProviderSettings(provider);
+      // After reset, the provider returns to its default settings.
+      // Reload providers to pick up the new effective state.
+      refresh();
+      toast.success(`${provider} 设置已重置`);
+    } catch {
+      toast.error('重置失败');
+    }
+  };
+
   const pingAll = async () => {
     setPinging(true);
     try {
@@ -151,14 +207,11 @@ export function ModelsPage() {
     setRefreshingCatalog(true);
     try {
       const result = await refreshModelCatalog();
-      // The refresh call already returned the freshly-discovered list, but
-      // pull through the standard catalog endpoint too so this page's local
-      // state path matches what /catalog returns elsewhere.
       await refresh();
       if (!isMounted.current) return;
       toast.success(
-        `已刷新 ${result.profiles_total} 个模型，` +
-        `其中 ${result.profiles_auto_discovered} 个自动发现`,
+        `已从 LiteLLM 拉取 ${result.profiles_total} 个模型 ` +
+        `（${result.providers_refreshed} 家厂商）`,
       );
     } catch (err) {
       if (!isMounted.current) return;
@@ -169,17 +222,28 @@ export function ModelsPage() {
     }
   };
 
+  /** Group profiles by provider, only for providers the user has enabled.
+   * The pipeline already sorts each provider's models newest-first
+   * (P6-M backend); we just preserve that order. */
   const groups = useMemo(() => {
-    const m = new Map<string, ModelProfile[]>();
+    const enabledProviderIds = new Set(
+      providers.filter((p) => p.enabled).map((p) => p.provider),
+    );
+    const profilesByProvider = new Map<string, ModelProfile[]>();
     for (const p of profiles) {
-      const arr = m.get(p.provider) ?? [];
+      const arr = profilesByProvider.get(p.provider) ?? [];
       arr.push(p);
-      m.set(p.provider, arr);
+      profilesByProvider.set(p.provider, arr);
     }
-    return VENDORS
-      .map((v) => ({ vendor: v, list: m.get(v.key) ?? [] }))
-      .filter((g) => g.list.length > 0);
-  }, [profiles]);
+    // Iterate providers in the order the backend returned them so the
+    // default-enabled vendors keep their canonical order on the page.
+    return providers
+      .filter((info) => enabledProviderIds.has(info.provider))
+      .map((info) => ({
+        info,
+        list: profilesByProvider.get(info.provider) ?? [],
+      }));
+  }, [providers, profiles]);
 
   const assign = async (role: ModelRole, profileId: string) => {
     const prev = selection[role];
@@ -210,10 +274,18 @@ export function ModelsPage() {
         <span className="text-sm text-stone-500">点卡片上的角色标签即可切换</span>
         <div className="ml-auto flex items-center gap-2">
           <button
+            onClick={() => setShowMoreOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm border border-stone-200 text-stone-700 hover:bg-stone-50"
+            title="勾选 LiteLLM 已支持但尚未显示的厂商"
+          >
+            <Plus size={13} />
+            <span>显示更多厂商</span>
+          </button>
+          <button
             onClick={refreshCatalog}
             disabled={refreshingCatalog}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm border border-stone-200 text-stone-700 hover:bg-stone-50 disabled:opacity-50"
-            title="重新拉取每家厂商 /v1/models 列表（24h 缓存，新模型自动出现在下拉）"
+            title="从 LiteLLM 重新拉取所有厂商的最新模型列表"
           >
             {refreshingCatalog ? <Spinner size={12} /> : <Sparkles size={13} />}
             <span>刷新模型库</span>
@@ -237,7 +309,7 @@ export function ModelsPage() {
         </div>
       </div>
 
-      {/* Compact role assignment bar — single row, all three roles inline */}
+      {/* Compact role assignment bar */}
       <div className="bg-white rounded-xl border border-stone-200 shadow-xs px-4 py-2.5 mb-6 flex items-stretch divide-x divide-stone-200">
         {ROLES.map((r) => {
           const cur = profiles.find((p) => p.id === selection[r]);
@@ -251,9 +323,7 @@ export function ModelsPage() {
               <span className="text-[14px] font-semibold text-stone-800 truncate">
                 {cur?.display_name ?? <span className="text-stone-400 font-normal">未选择</span>}
               </span>
-              {cur && !cur.ready && (
-                <Pill tone="warn">需配置</Pill>
-              )}
+              {cur && !cur.ready && <Pill tone="warn">需配置</Pill>}
             </div>
           );
         })}
@@ -262,24 +332,38 @@ export function ModelsPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {groups.map((g) => (
           <VendorCard
-            key={g.vendor.key}
-            vendor={g.vendor}
+            key={g.info.provider}
+            info={g.info}
             list={g.list}
             selection={selection}
             onAssign={assign}
             pingResults={pingResults}
-            apiKeyStatus={apiKeys[g.vendor.key]}
-            onSaveKey={(k) => onSaveKey(g.vendor.key, k)}
-            onDeleteKey={() => onDeleteKey(g.vendor.key)}
+            apiKeyStatus={apiKeys[g.info.provider]}
+            onSaveKey={(k) => onSaveKey(g.info.provider, k)}
+            onDeleteKey={() => onDeleteKey(g.info.provider)}
+            onSaveSettings={(patch) => onSaveProviderSettings(g.info.provider, patch)}
+            onResetSettings={() => onResetProvider(g.info.provider)}
           />
         ))}
       </div>
+
+      {showMoreOpen && (
+        <ShowMoreProvidersModal
+          providers={providers}
+          onToggle={onToggleProvider}
+          onClose={() => setShowMoreOpen(false)}
+        />
+      )}
     </div>
   );
 }
 
+
+// ── VendorCard ──────────────────────────────────────────────────────────
+
+
 function VendorCard({
-  vendor,
+  info,
   list,
   selection,
   onAssign,
@@ -287,8 +371,10 @@ function VendorCard({
   apiKeyStatus,
   onSaveKey,
   onDeleteKey,
+  onSaveSettings,
+  onResetSettings,
 }: {
-  vendor: VendorInfo;
+  info: ProviderInfo;
   list: ModelProfile[];
   selection: Record<ModelRole, string>;
   onAssign: (role: ModelRole, id: string) => void;
@@ -296,17 +382,13 @@ function VendorCard({
   apiKeyStatus?: { set: boolean; masked: string };
   onSaveKey: (key: string) => Promise<boolean>;
   onDeleteKey: () => void;
+  onSaveSettings: (patch: { api_base_override?: string; organization_id?: string }) => Promise<boolean>;
+  onResetSettings: () => void;
 }) {
   const anyReady = list.some((p) => p.ready);
-  const [keyEditorOpen, setKeyEditorOpen] = useState(false);
-  const [keyDraft, setKeyDraft] = useState('');
-  const [saving, setSaving] = useState(false);
-  const envName = list[0]?.api_key_env ?? '';
-  const userKeySet = !!apiKeyStatus?.set;
-  // Flat rectangular card: wide aspect ratio, bigger fonts, scrollable model
-  // list (no pagination). The model area shows ``MODELS_VISIBLE_ROWS`` rows
-  // by default (currently 4) and scrolls below that; the bottom fade
-  // gradient + "下滑查看全部" hint make the overflow obvious.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const userKeySet = info.has_user_api_key || !!apiKeyStatus?.set;
+
   const modelsAreaHeight =
     MODELS_VISIBLE_ROWS * MODEL_ROW_HEIGHT_PX + (MODELS_VISIBLE_ROWS - 1) * MODEL_ROW_GAP_PX;
 
@@ -314,48 +396,54 @@ function VendorCard({
     <div className="bg-white rounded-xl p-3.5 border border-stone-200 shadow-sm flex flex-col">
       <div className="flex items-center justify-between mb-2.5">
         <div className="flex items-center gap-2.5 min-w-0">
-          <VendorAvatar vendor={vendor} />
+          <VendorAvatar info={info} />
           <div className="min-w-0">
-            <div className="text-[15px] font-semibold text-stone-800 truncate leading-tight">{vendor.label}</div>
+            <div className="text-[15px] font-semibold text-stone-800 truncate leading-tight">
+              {info.display_label}
+            </div>
             <div className="text-[10px] text-stone-400 truncate">
               {list.length} 个模型
               {list.length > MODELS_VISIBLE_ROWS && (
                 <span className="ml-1 text-stone-500">· 下滑查看全部</span>
               )}
+              {info.api_base_override && (
+                <span className="ml-1 text-primary-600" title={info.api_base_override}>
+                  · 自定义网关
+                </span>
+              )}
             </div>
           </div>
         </div>
-        {anyReady
-          ? <Pill tone="success">已配置</Pill>
-          : <Pill tone="warn">未配置</Pill>}
+        {anyReady ? <Pill tone="success">已配置</Pill> : <Pill tone="warn">未配置</Pill>}
       </div>
 
-      {/*
-        Scrollable model list — fixed visible area, content scrolls inside.
-        We wrap in a positioned container so we can layer a bottom fade
-        gradient *outside* the scroll viewport (otherwise the fade scrolls
-        away with the content and stops hinting).
-      */}
+      {/* Scrollable model list. Models are sorted newest-first by the
+        * backend pipeline; we just preserve that order. */}
       <div className="relative mb-2" style={{ height: modelsAreaHeight }}>
         <div
           className="overflow-y-auto pr-1 flex flex-col h-full"
           style={{ gap: MODEL_ROW_GAP_PX }}
         >
-          {list.map((p) => (
-            <ModelRow
-              key={p.id}
-              profile={p}
-              selectedRoles={ROLES.filter((r) => selection[r] === p.id)}
-              onAssign={(role) => onAssign(role, p.id)}
-              ping={pingResults[p.id]}
-            />
-          ))}
+          {list.length === 0 ? (
+            <div className="text-xs text-stone-400 text-center py-6 leading-relaxed">
+              暂无可用模型<br />
+              <span className="text-[10px]">
+                （配置 API Key 或等待 LiteLLM 收录该厂商）
+              </span>
+            </div>
+          ) : (
+            list.map((p) => (
+              <ModelRow
+                key={p.id}
+                profile={p}
+                selectedRoles={ROLES.filter((r) => selection[r] === p.id)}
+                onAssign={(role) => onAssign(role, p.id)}
+                ping={pingResults[p.id]}
+              />
+            ))
+          )}
         </div>
         {list.length > MODELS_VISIBLE_ROWS && (
-          // Subtle white-to-transparent fade at the bottom of the
-          // viewport so the user immediately reads "more below". The
-          // overlay is pointer-events-none so it doesn't eat clicks
-          // on the last visible row.
           <div
             className="pointer-events-none absolute inset-x-0 bottom-0 h-8 rounded-b-xl"
             style={{
@@ -366,145 +454,340 @@ function VendorCard({
         )}
       </div>
 
-      {/* API Key — collapsed by default. The plaintext is NEVER displayed
-        * back. Status badge shows "✓ 已配置 sk-…abcd" or env var hint. */}
+      {/* API Key + advanced settings row */}
       <div className="pt-2 border-t border-stone-100">
-        {!keyEditorOpen ? (
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <Lock size={13} className={userKeySet || anyReady ? 'text-success-600' : 'text-stone-400'} />
-              {userKeySet || anyReady ? (
-                <span className="text-xs text-success-700 truncate font-medium">已配置</span>
-              ) : (
-                <span className="text-xs text-warning-700 truncate font-medium">未配置</span>
-              )}
-            </div>
-            <div className="flex items-center gap-1 shrink-0">
-              {userKeySet && (
-                <button
-                  type="button"
-                  onClick={onDeleteKey}
-                  className="p-1 text-stone-400 hover:text-danger-500 rounded"
-                  title="删除已保存的密钥"
-                >
-                  <Trash2 size={13} />
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => { setKeyDraft(''); setKeyEditorOpen(true); }}
-                className={[
-                  'inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-md font-medium transition-colors',
-                  userKeySet
-                    ? 'text-stone-600 hover:bg-stone-100 border border-stone-200'
-                    : 'text-stone-800 bg-white hover:bg-stone-50 border border-stone-300 shadow-xs',
-                ].join(' ')}
-              >
-                <Settings2 size={12} />
-                {userKeySet ? '更换' : '配置 API Key'}
-              </button>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Lock size={13} className={userKeySet || anyReady ? 'text-success-600' : 'text-stone-400'} />
+            {userKeySet || anyReady ? (
+              <span className="text-xs text-success-700 truncate font-medium">已配置</span>
+            ) : (
+              <span className="text-xs text-warning-700 truncate font-medium">未配置</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              className={[
+                'inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-md font-medium transition-colors',
+                userKeySet
+                  ? 'text-stone-600 hover:bg-stone-100 border border-stone-200'
+                  : 'text-stone-800 bg-white hover:bg-stone-50 border border-stone-300 shadow-xs',
+              ].join(' ')}
+            >
+              <Settings2 size={12} />
+              {userKeySet ? '设置' : '配置'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {settingsOpen && (
+        <VendorSettingsModal
+          info={info}
+          apiKeyMasked={apiKeyStatus?.masked}
+          onClose={() => setSettingsOpen(false)}
+          onSaveKey={onSaveKey}
+          onDeleteKey={onDeleteKey}
+          onSaveSettings={onSaveSettings}
+          onResetSettings={onResetSettings}
+        />
+      )}
+    </div>
+  );
+}
+
+
+// ── VendorSettingsModal — P6-M ──────────────────────────────────────────
+
+
+function VendorSettingsModal({
+  info,
+  apiKeyMasked,
+  onClose,
+  onSaveKey,
+  onDeleteKey,
+  onSaveSettings,
+  onResetSettings,
+}: {
+  info: ProviderInfo;
+  apiKeyMasked?: string;
+  onClose: () => void;
+  onSaveKey: (key: string) => Promise<boolean>;
+  onDeleteKey: () => void;
+  onSaveSettings: (patch: { api_base_override?: string; organization_id?: string }) => Promise<boolean>;
+  onResetSettings: () => void;
+}) {
+  const [keyDraft, setKeyDraft] = useState('');
+  const [apiBase, setApiBase] = useState(info.api_base_override ?? '');
+  const [orgId, setOrgId] = useState(info.organization_id ?? '');
+  const [saving, setSaving] = useState(false);
+  const userKeySet = info.has_user_api_key;
+
+  const handleSaveAll = async () => {
+    setSaving(true);
+    try {
+      // 1) Save the API key if the user typed a new one.
+      if (keyDraft.trim()) {
+        const ok = await onSaveKey(keyDraft.trim());
+        if (!ok) return;
+      }
+      // 2) Save api_base / org overrides. Pass "" so the backend
+      //    treats an empty input as "clear the override" instead of
+      //    "don't touch" (which is what undefined would mean).
+      const patch: { api_base_override?: string; organization_id?: string } = {};
+      const apiBaseTrimmed = apiBase.trim();
+      const orgIdTrimmed = orgId.trim();
+      if (apiBaseTrimmed !== (info.api_base_override ?? '')) {
+        patch.api_base_override = apiBaseTrimmed;
+      }
+      if (orgIdTrimmed !== (info.organization_id ?? '')) {
+        patch.organization_id = orgIdTrimmed;
+      }
+      if (Object.keys(patch).length > 0) {
+        const ok = await onSaveSettings(patch);
+        if (!ok) return;
+      }
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-2xl shadow-xl w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-stone-100">
+          <div className="flex items-center gap-3">
+            <VendorAvatar info={info} small />
+            <div>
+              <div className="text-[15px] font-semibold text-stone-800">{info.display_label} 设置</div>
+              <div className="text-[11px] text-stone-400 truncate max-w-[280px]">{info.api_base}</div>
             </div>
           </div>
-        ) : (
+          <button onClick={onClose} className="p-1 text-stone-400 hover:text-stone-600 rounded">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-5">
+          {/* API Key */}
           <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <div className="text-xs font-semibold text-stone-700">输入 {vendor.label} API Key</div>
-              <button
-                type="button"
-                onClick={() => { setKeyEditorOpen(false); setKeyDraft(''); }}
-                className="p-1 text-stone-400 hover:text-stone-600 rounded"
-                title="取消"
-              >
-                <X size={13} />
-              </button>
-            </div>
+            <label className="text-xs font-semibold text-stone-700 mb-1.5 block">API Key</label>
             <div className="relative">
               <Lock size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400" />
               <input
                 type="password"
-                autoFocus
                 value={keyDraft}
                 onChange={(e) => setKeyDraft(e.target.value)}
-                placeholder={`粘贴 ${envName} 的值，加密入库`}
+                placeholder={
+                  userKeySet
+                    ? `已配置 ${apiKeyMasked ?? ''}（输入新值以替换）`
+                    : `粘贴 ${info.api_key_env} 的值`
+                }
                 className="w-full pl-8 pr-3 py-2 bg-white border border-stone-300 rounded-md text-sm text-stone-800 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
-                onKeyDown={async (e) => {
-                  if (e.key === 'Enter' && keyDraft.trim() && !saving) {
-                    setSaving(true);
-                    const ok = await onSaveKey(keyDraft.trim());
-                    setSaving(false);
-                    if (ok) { setKeyDraft(''); setKeyEditorOpen(false); }
-                  }
-                }}
               />
             </div>
-            <div className="flex items-center gap-1.5 mt-2">
+            {userKeySet && (
               <button
                 type="button"
-                onClick={async () => {
-                  if (!keyDraft.trim()) { toast.warn('请先输入 API Key'); return; }
-                  setSaving(true);
-                  const ok = await onSaveKey(keyDraft.trim());
-                  setSaving(false);
-                  if (ok) { setKeyDraft(''); setKeyEditorOpen(false); }
-                }}
-                disabled={!keyDraft.trim() || saving}
-                className="flex-1 inline-flex items-center justify-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-primary-500 text-white hover:bg-primary-600 disabled:opacity-40 font-medium"
+                onClick={async () => { await onDeleteKey(); }}
+                className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-danger-600 hover:text-danger-700"
               >
-                {saving ? <Spinner size={11} /> : '加密保存'}
+                <Trash2 size={11} /> 删除已保存的密钥
               </button>
+            )}
+            <div className="text-[10px] text-stone-400 mt-1.5 leading-relaxed">
+              密钥使用 Fernet 对称加密入库，不在 GET 接口返回明文。
+            </div>
+          </div>
+
+          {/* Advanced: api_base override + organization_id */}
+          <div className="border-t border-stone-100 pt-4">
+            <div className="flex items-center gap-1.5 mb-2">
+              <Globe size={13} className="text-stone-500" />
+              <span className="text-xs font-semibold text-stone-700">高级（订阅 / 自建网关）</span>
+            </div>
+
+            <label className="text-[11px] font-semibold text-stone-600 mb-1 block">
+              API Base 覆盖
+            </label>
+            <input
+              type="url"
+              value={apiBase}
+              onChange={(e) => setApiBase(e.target.value)}
+              placeholder={`默认 ${info.api_base}`}
+              className="w-full px-3 py-2 bg-white border border-stone-300 rounded-md text-sm text-stone-800 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 mb-1"
+            />
+            <div className="text-[10px] text-stone-400 leading-relaxed mb-3">
+              必须 HTTPS；内网 / 私网段会被拒绝。留空使用 vendor 默认。
+            </div>
+
+            <label className="text-[11px] font-semibold text-stone-600 mb-1 block">
+              Organization / Project ID（可选）
+            </label>
+            <input
+              type="text"
+              value={orgId}
+              onChange={(e) => setOrgId(e.target.value)}
+              placeholder="org-xxxxxx / 留空"
+              maxLength={100}
+              className="w-full px-3 py-2 bg-white border border-stone-300 rounded-md text-sm text-stone-800 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
+            />
+          </div>
+
+          {/* Footer actions */}
+          <div className="flex items-center justify-between border-t border-stone-100 pt-4">
+            {info.has_user_row ? (
               <button
                 type="button"
-                onClick={() => { setKeyEditorOpen(false); setKeyDraft(''); }}
-                className="text-xs px-3 py-1.5 rounded-md border border-stone-300 text-stone-600 hover:bg-stone-50"
+                onClick={async () => { await onResetSettings(); onClose(); }}
+                className="text-[11px] text-stone-500 hover:text-danger-600"
+                title="清除 api_base / organization 的覆盖，恢复默认值。不删除 API Key。"
+              >
+                重置为默认
+              </button>
+            ) : (
+              <span />
+            )}
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                onClick={onClose}
+                className="text-sm px-4 py-2 rounded-md border border-stone-300 text-stone-600 hover:bg-stone-50"
               >
                 取消
               </button>
-            </div>
-            <div className="text-[10px] text-stone-400 mt-1.5 leading-relaxed">
-              密钥使用 Fernet 对称加密入库，不在 GET 接口返回明文，前端也不显示。
+              <button
+                type="button"
+                onClick={handleSaveAll}
+                disabled={saving}
+                className="text-sm px-4 py-2 rounded-md bg-primary-500 text-white hover:bg-primary-600 disabled:opacity-40 font-medium inline-flex items-center gap-1.5"
+              >
+                {saving ? <Spinner size={11} /> : '保存'}
+              </button>
             </div>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
 }
 
-function VendorAvatar({ vendor }: { vendor: VendorInfo }) {
-  // Brand-color tile + monochrome white glyph fetched from jsdelivr's mirror
-  // of simple-icons (more reliable in CN than cdn.simpleicons.org). The SVG
-  // ships black; CSS filter recolors it to white. Falls back to letter on
-  // 404 / network failure.
-  const [failed, setFailed] = useState(false);
-  const hasIcon = !!vendor.iconSlug && !failed;
+
+// ── ShowMoreProvidersModal — P6-M ───────────────────────────────────────
+
+
+function ShowMoreProvidersModal({
+  providers,
+  onToggle,
+  onClose,
+}: {
+  providers: ProviderInfo[];
+  onToggle: (provider: string, enabled: boolean) => void;
+  onClose: () => void;
+}) {
   return (
     <div
-      className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 overflow-hidden"
-      style={{ background: vendor.brand }}
-      aria-label={vendor.label}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-2xl shadow-xl w-full max-w-lg mx-4 max-h-[85vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-stone-100 shrink-0">
+          <div>
+            <div className="text-[15px] font-semibold text-stone-800">显示更多厂商</div>
+            <div className="text-[11px] text-stone-400 mt-0.5">
+              勾选后即在主页面显示对应卡片；可随时取消勾选
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1 text-stone-400 hover:text-stone-600 rounded">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
+          {providers.map((info) => (
+            <label
+              key={info.provider}
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-stone-50 cursor-pointer border border-stone-100"
+            >
+              <input
+                type="checkbox"
+                checked={info.enabled}
+                onChange={(e) => onToggle(info.provider, e.target.checked)}
+                className="w-4 h-4 accent-primary-500"
+              />
+              <VendorAvatar info={info} small />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-stone-800 truncate">
+                  {info.display_label}
+                </div>
+                <div className="text-[10px] text-stone-400 truncate">{info.provider}</div>
+              </div>
+              {info.has_user_api_key && <Pill tone="success">已配置</Pill>}
+            </label>
+          ))}
+        </div>
+
+        <div className="border-t border-stone-100 px-5 py-3 shrink-0 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-sm px-4 py-2 rounded-md bg-primary-500 text-white hover:bg-primary-600 font-medium"
+          >
+            完成
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ── VendorAvatar + ModelRow (unchanged from P6-H, accept ProviderInfo) ──
+
+
+function VendorAvatar({ info, small = false }: { info: ProviderInfo; small?: boolean }) {
+  const [failed, setFailed] = useState(false);
+  const hasIcon = !!info.icon_slug && !failed;
+  const size = small ? 'w-7 h-7' : 'w-9 h-9';
+  const iconPx = small ? 14 : 18;
+  const brand = BRAND_COLORS[info.provider] ?? '#71717A';
+  return (
+    <div
+      className={`${size} rounded-lg flex items-center justify-center shrink-0 overflow-hidden`}
+      style={{ background: brand }}
+      aria-label={info.display_label}
     >
       {hasIcon ? (
         <img
-          src={`https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/${vendor.iconSlug}.svg`}
+          src={`https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/${info.icon_slug}.svg`}
           alt=""
-          width={18}
-          height={18}
+          width={iconPx}
+          height={iconPx}
           loading="lazy"
           onError={() => setFailed(true)}
-          style={{
-            width: 18,
-            height: 18,
-            // Recolor the black source SVG → white so it sits cleanly on the
-            // brand-color tile.
-            filter: 'brightness(0) invert(1)',
-          }}
+          style={{ width: iconPx, height: iconPx, filter: 'brightness(0) invert(1)' }}
         />
       ) : (
-        <span className="text-sm font-bold text-white">{vendor.label[0]}</span>
+        <span className={`${small ? 'text-xs' : 'text-sm'} font-bold text-white`}>
+          {info.display_label[0]}
+        </span>
       )}
     </div>
   );
 }
+
 
 function ModelRow({
   profile,
@@ -517,13 +800,9 @@ function ModelRow({
   onAssign: (role: ModelRole) => void;
   ping?: ModelPingResult;
 }) {
-  // Agent role requires function-calling support
   const isRoleAvailable = (role: ModelRole) =>
     role === 'agent' ? profile.supports_function_calling : true;
 
-  // Ping status takes priority over static readiness. Without a ping result
-  // we color by configured-vs-not (green / gray) so the user can immediately
-  // see which models are usable.
   const dotColor = ping
     ? ping.ok
       ? 'bg-success-500'
@@ -550,7 +829,6 @@ function ModelRow({
       style={{ height: MODEL_ROW_HEIGHT_PX }}
       title={profile.model}
     >
-      {/* status dot + optional latency, top-right corner */}
       <span
         className={`absolute top-1.5 right-1.5 inline-block w-2 h-2 rounded-full ${dotColor}`}
         title={dotTitle}
@@ -561,8 +839,6 @@ function ModelRow({
         </span>
       )}
 
-      {/* Model name — centered, font shrinks for long names so the full
-        * label always fits (no ellipsis cut). */}
       <div
         className="font-semibold text-stone-800 leading-tight text-center px-5 w-full"
         style={{
@@ -580,9 +856,6 @@ function ModelRow({
         {profile.display_name}
       </div>
 
-      {/* Glass role tabs — soft iridescent gradient, real backdrop blur.
-        * gap-1 keeps a 4px breathing space between the three pills so
-        * adjacent active pills never visually merge. */}
       <div
         className="inline-flex items-center gap-1 p-[3px] rounded-full w-full max-w-[230px]"
         style={{

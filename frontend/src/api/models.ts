@@ -41,13 +41,12 @@ export async function pingAllModels(): Promise<ModelPingResult[]> {
 
 export interface RefreshCatalogResult {
   status: string;
-  discovery_cache_dropped: number;
+  providers_refreshed: number;
   profiles_total: number;
-  profiles_auto_discovered: number;
   profiles: ModelProfile[];
 }
 
-/** Force the backend to re-discover models from each vendor's /v1/models endpoint. */
+/** Force the backend to re-fetch the LiteLLM catalog (P6-L). */
 export async function refreshModelCatalog(): Promise<RefreshCatalogResult> {
   const res = await apiClient.post('/models/refresh-catalog', null, { timeout: 60_000 });
   return res.data;
@@ -72,4 +71,56 @@ export async function saveMyApiKey(provider: string, apiKey: string): Promise<{ 
 
 export async function deleteMyApiKey(provider: string): Promise<void> {
   await apiClient.delete(`/models/api-keys/${encodeURIComponent(provider)}`);
+}
+
+
+// ── Per-user provider settings (P6-M) ─────────────────────────────────
+
+/** One row of GET /models/providers. */
+export interface ProviderInfo {
+  provider: string;                  // PROVIDERS dict id, e.g. "openai"
+  display_label: string;
+  icon_slug: string | null;
+  enabled: boolean;                  // shown on the Models page for THIS user
+  has_user_row: boolean;             // user has overridden any field
+  api_base: string;                  // effective (override if set, else default)
+  api_base_override: string | null;  // null = using default
+  organization_id: string | null;
+  extra_headers_json: string | null; // raw JSON string; v1 UI doesn't expose
+  api_key_env: string;               // env-var name to surface in placeholders
+  has_user_api_key: boolean;         // user has saved an encrypted key
+}
+
+export async function listProviders(): Promise<ProviderInfo[]> {
+  const res = await apiClient.get('/models/providers');
+  return res.data?.providers ?? [];
+}
+
+export async function getProviderSettings(provider: string): Promise<ProviderInfo> {
+  const res = await apiClient.get(
+    `/models/providers/${encodeURIComponent(provider)}`,
+  );
+  return res.data?.provider;
+}
+
+export interface ProviderSettingsPatch {
+  enabled?: boolean;
+  api_base_override?: string;     // pass "" to clear
+  organization_id?: string;       // pass "" to clear
+  extra_headers_json?: string;    // v1 only via direct PATCH; no UI
+}
+
+export async function updateProviderSettings(
+  provider: string,
+  patch: ProviderSettingsPatch,
+): Promise<ProviderInfo> {
+  const res = await apiClient.patch(
+    `/models/providers/${encodeURIComponent(provider)}`,
+    patch,
+  );
+  return res.data?.provider;
+}
+
+export async function deleteProviderSettings(provider: string): Promise<void> {
+  await apiClient.delete(`/models/providers/${encodeURIComponent(provider)}`);
 }

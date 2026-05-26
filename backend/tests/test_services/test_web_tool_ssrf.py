@@ -70,9 +70,13 @@ def test_validator_rejects_dangerous_ips(ip, label):
     from app.agent_runtime.tools.web import _UrlNotSafe, _validate_safe_url
 
     fake_dns = [(0, 0, 0, "", (ip, 0))]
-    with patch("app.agent_runtime.tools.web.socket.getaddrinfo",
+    with patch("app.core.ssrf.socket.getaddrinfo",
                return_value=fake_dns):
-        with pytest.raises(_UrlNotSafe, match="private|loopback|reserved"):
+        # The new ssrf module categorises ALL refused ranges in the error
+        # message; match the common "address space" suffix so the regex
+        # covers private / loopback / link-local / reserved / multicast /
+        # unspecified without enumerating each.
+        with pytest.raises(_UrlNotSafe, match="address space"):
             _validate_safe_url(f"http://attacker-controlled.example.com/x")
     # ``label`` is documentation-only — the regex above covers any of
     # the categorical refusal substrings.
@@ -84,7 +88,7 @@ def test_validator_accepts_public_ip():
     from app.agent_runtime.tools.web import _validate_safe_url
 
     fake_dns = [(0, 0, 0, "", ("8.8.8.8", 0))]
-    with patch("app.agent_runtime.tools.web.socket.getaddrinfo",
+    with patch("app.core.ssrf.socket.getaddrinfo",
                return_value=fake_dns):
         # Should not raise.
         _validate_safe_url("https://dns.google/")
@@ -100,7 +104,7 @@ def test_validator_rejects_when_any_resolved_ip_is_dangerous():
         (0, 0, 0, "", ("8.8.8.8", 0)),
         (0, 0, 0, "", ("10.0.0.1", 0)),
     ]
-    with patch("app.agent_runtime.tools.web.socket.getaddrinfo",
+    with patch("app.core.ssrf.socket.getaddrinfo",
                return_value=fake_dns):
         with pytest.raises(_UrlNotSafe):
             _validate_safe_url("http://multihomed.example.com/")
@@ -115,7 +119,7 @@ def test_validator_refuses_when_dns_fails():
     from app.agent_runtime.tools.web import _UrlNotSafe, _validate_safe_url
 
     with patch(
-        "app.agent_runtime.tools.web.socket.getaddrinfo",
+        "app.core.ssrf.socket.getaddrinfo",
         side_effect=real_socket.gaierror("no such host"),
     ):
         with pytest.raises(_UrlNotSafe, match="dns resolution failed"):
@@ -150,7 +154,7 @@ def test_handler_returns_error_for_cloud_metadata_ip():
     ctx = AgentToolContext(user_id="alice", session_id="s1")
     args = ReadUrlArgs(url="http://169.254.169.254/latest/meta-data/iam/")
     fake_dns = [(0, 0, 0, "", ("169.254.169.254", 0))]
-    with patch("app.agent_runtime.tools.web.socket.getaddrinfo",
+    with patch("app.core.ssrf.socket.getaddrinfo",
                return_value=fake_dns):
         result = asyncio.run(_read_url_handler(args, ctx))
     assert "error" in result
@@ -208,7 +212,7 @@ def test_handler_refuses_redirect_to_private_host():
 
     ctx = AgentToolContext(user_id="alice", session_id="s1")
     args = ReadUrlArgs(url="http://public.example.com/page")
-    with patch("app.agent_runtime.tools.web.socket.getaddrinfo",
+    with patch("app.core.ssrf.socket.getaddrinfo",
                side_effect=fake_getaddrinfo):
         with patch.object(httpx, "AsyncClient", _FakeClient):
             result = asyncio.run(_read_url_handler(args, ctx))

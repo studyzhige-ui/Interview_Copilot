@@ -267,16 +267,20 @@ def test_resolve_api_base_uses_user_override_when_present(monkeypatch, _stub_pro
     """If the user has saved an ``api_base_override``, ``_resolve_api_base``
     returns THAT instead of the profile default. This is what P6-M's
     subscription-endpoint UI writes to.
+
+    SQLAlchemy ``first()`` returns a Row that the registry unpacks as
+    a 3-tuple ``(api_base_override, organization_id, extra_headers_json)``,
+    so the fake must mimic tuple iteration — using a plain tuple keeps
+    the fixture aligned with whatever shape ``_load_user_provider_overrides``
+    expects today.
     """
     prof = _stub_profile_cache["openai/gpt-4o"]
 
-    class FakeRow:
-        def __getitem__(self, idx):
-            return "https://my-enterprise-gateway.example.com/v1"
-
     class FakeQuery:
         def filter(self, *_a, **_kw): return self
-        def first(self): return FakeRow()
+        def first(self):
+            # (api_base_override, organization_id, extra_headers_json)
+            return ("https://my-enterprise-gateway.example.com/v1", None, None)
     class FakeSession:
         def __enter__(self): return self
         def __exit__(self, *_a): return None

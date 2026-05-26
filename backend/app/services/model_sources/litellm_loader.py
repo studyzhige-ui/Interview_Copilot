@@ -245,7 +245,48 @@ def _validate_and_extract(payload: object) -> dict[str, list[ModelEntry]]:
             f"no entries matched after filtering ({rows_total} input rows)",
         )
 
+    # Sort within each provider newest-first. LiteLLM JSON has no
+    # ``created`` / ``release_date`` field, so we infer recency from the
+    # model id itself: a YYYYMMDD suffix wins; failing that, reverse-
+    # alpha (which puts ``gpt-5.2`` ahead of ``gpt-5.1``, ``claude-...-4-7``
+    # ahead of ``claude-...-3-7``, etc.). Two-pass stable sort handles
+    # both: alpha-desc first, then date-desc takes precedence for ids
+    # that have one.
+    for provider_id in out:
+        out[provider_id].sort(key=lambda e: e.model, reverse=True)
+        out[provider_id].sort(key=_recency_key, reverse=True)
+
     return out
+
+
+def _recency_key(entry: ModelEntry) -> int:
+    """Extract a recency signal from the model id.
+
+    Returns the YYYYMMDD date encoded in the suffix as an int, or 0 if no
+    such suffix exists. Combined with a stable secondary reverse-alpha
+    sort, this lands ``claude-opus-4-7-20251115`` above
+    ``claude-opus-4-7-20251001`` and ``gpt-5-2025-01-31`` above
+    ``gpt-4o-2024-08-06``, regardless of how LiteLLM ordered the JSON.
+
+    Models without a date suffix all get 0, so the reverse-alpha
+    secondary sort dictates their relative order — fine for typical
+    version-numbered ids (``gpt-5.2`` > ``gpt-5.1`` > ``gpt-5`` >
+    ``gpt-4o``).
+    """
+    m = re.search(r"(\d{8})(?:[-_.]|$)", entry.model)
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            return 0
+    # Also handle the ``-YYYY-MM-DD`` variant some vendors use.
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", entry.model)
+    if m:
+        try:
+            return int(m.group(1) + m.group(2) + m.group(3))
+        except ValueError:
+            return 0
+    return 0
 
 
 async def fetch_litellm_catalog(

@@ -410,37 +410,73 @@ def resolve_api_key(profile: ModelProfile, user_id: str | None = None) -> str:
     return os.getenv(profile.api_key_env, "")
 
 
-def _resolve_api_base(profile: ModelProfile, user_id: str | None = None) -> str:
-    """Resolve the api_base to call, honouring per-user overrides.
+@dataclass(frozen=True)
+class _UserProviderOverrides:
+    """Cached snapshot of one (user, provider) row used at chat-completion
+    time. Pulled from ``user_provider_settings``."""
+    api_base: str
+    organization_id: str | None
+    extra_headers: dict[str, str]
 
-    P6-M adds ``user_provider_settings.api_base_override`` for users on
-    subscription endpoints / self-hosted gateways. If the user has no
-    row OR the override is NULL, we use the profile's default api_base
-    (which itself came from ``ProviderDefaults.default_api_base``).
+
+_NO_OVERRIDES = _UserProviderOverrides(api_base="", organization_id=None, extra_headers={})
+
+
+def _load_user_provider_overrides(
+    profile: ModelProfile, user_id: str | None,
+) -> _UserProviderOverrides:
+    """Single DB read for the per-user (api_base / org_id / extra_headers).
+
+    Returns a sentinel with empty api_base when no row exists OR no
+    user_id is given — caller falls back to the profile's default
+    api_base in that case. We do ONE query and return all three fields
+    together so chat completion isn't hit by three sequential queries.
     """
     if not user_id:
-        return profile.api_base
+        return _NO_OVERRIDES
     try:
         from app.db.database import SessionLocal
         from app.models.user_provider_settings import UserProviderSettings
+        from app.services.user_provider_settings_service import parse_extra_headers
 
         with SessionLocal() as db:
             row = (
-                db.query(UserProviderSettings.api_base_override)
+                db.query(
+                    UserProviderSettings.api_base_override,
+                    UserProviderSettings.organization_id,
+                    UserProviderSettings.extra_headers_json,
+                )
                 .filter(
                     UserProviderSettings.user_id == user_id,
                     UserProviderSettings.provider == profile.provider,
                 )
                 .first()
             )
-        if row and row[0]:
-            return str(row[0])
-    except Exception as exc:  # noqa: BLE001
+        if row is None:
+            return _NO_OVERRIDES
+        api_base_override, org_id, extra_headers_json = row
+        return _UserProviderOverrides(
+            api_base=str(api_base_override) if api_base_override else "",
+            organization_id=str(org_id) if org_id else None,
+            extra_headers=parse_extra_headers(extra_headers_json),
+        )
+    except Exception as exc:  # noqa: BLE001 — never crash chat on DB blip
         logger.warning(
-            "api_base override lookup failed for user=%s provider=%s: %s",
+            "user_provider_settings lookup failed for user=%s provider=%s: %s",
             user_id, profile.provider, exc,
         )
-    return profile.api_base
+        return _NO_OVERRIDES
+
+
+def _resolve_api_base(profile: ModelProfile, user_id: str | None = None) -> str:
+    """Resolve the api_base to call, honouring per-user overrides.
+
+    P6-M adds ``user_provider_settings.api_base_override`` for users on
+    subscription endpoints / self-hosted gateways. If the user has no
+    row OR the override is NULL, we use the profile's default api_base.
+    """
+    overrides = _load_user_provider_overrides(profile, user_id)
+    return overrides.api_base or profile.api_base
 
 
 # ── AsyncOpenAI client cache ────────────────────────────────────────────
@@ -481,17 +517,24 @@ def _close_client_quietly(client: AsyncOpenAI) -> None:
 def get_async_openai_client(profile: ModelProfile, user_id: str | None = None) -> AsyncOpenAI:
     """Return a process-cached ``AsyncOpenAI`` for ``profile`` + ``user_id``.
 
-    Auto-invalidates on key rotation (fingerprint mismatch) and honours
-    the per-user ``api_base_override`` from ``user_provider_settings``.
-    LRU-bounded — least-recently-used entries get evicted at the cap.
+    Auto-invalidates when the user changes ANY of (api_key, api_base,
+    organization_id, extra_headers) by baking all of them into the
+    cache-entry fingerprint. LRU-bounded — least-recently-used entries
+    get evicted at the cap.
     """
     api_key = resolve_api_key(profile, user_id=user_id)
-    api_base = _resolve_api_base(profile, user_id=user_id)
-    # Fingerprint covers BOTH key and api_base so a user changing
-    # either invalidates the cached client. We bake the api_base into
-    # the fingerprint (not just the key) so a subscription endpoint
-    # change triggers a rebuild.
-    fp_input = f"{api_key}|{api_base}"
+    overrides = _load_user_provider_overrides(profile, user_id)
+    api_base = overrides.api_base or profile.api_base
+    organization = overrides.organization_id
+    extra_headers = overrides.extra_headers
+
+    # Fingerprint covers EVERY configurable bit so any user-side change
+    # invalidates the cached client. Including the headers dict means
+    # an edit to extra_headers_json forces a rebuild on next call.
+    fp_input = (
+        f"{api_key}|{api_base}|org={organization or ''}|"
+        f"hdr={json.dumps(extra_headers, sort_keys=True) if extra_headers else ''}"
+    )
     fp = _key_fingerprint(fp_input)
     cache_key = (user_id, profile.id)
     with _selection_lock:
@@ -501,11 +544,21 @@ def get_async_openai_client(profile: ModelProfile, user_id: str | None = None) -
             return cached[1]
         if cached is not None:
             _close_client_quietly(cached[1])
-        client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=api_base,
-            timeout=30.0,
-        )
+
+        # AsyncOpenAI accepts ``organization`` and ``default_headers``
+        # constructor kwargs; we pass them only when set so the
+        # default behaviour is unchanged for users with no overrides.
+        kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": api_base,
+            "timeout": 30.0,
+        }
+        if organization:
+            kwargs["organization"] = organization
+        if extra_headers:
+            kwargs["default_headers"] = dict(extra_headers)
+        client = AsyncOpenAI(**kwargs)
+
         _async_openai_cache[cache_key] = (fp, client)
         _async_openai_cache.move_to_end(cache_key)
         while len(_async_openai_cache) > _ASYNC_OPENAI_CACHE_MAX:
