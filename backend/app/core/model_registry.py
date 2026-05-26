@@ -798,8 +798,16 @@ async def list_profiles_with_discovery(
     ]
     seen_pairs = {(p.provider, p.model) for p in MODEL_PROFILES.values()}
 
+    # Pass user_id down so ``discover_provider`` looks up the user's
+    # encrypted ``user_api_keys`` row (P4-E) instead of only the env var.
+    # Without this, users who configured their key via the Models page
+    # but never touched .env get no auto-discovered models at all —
+    # discover_all silently returns [] for every vendor and the curated
+    # MODEL_PROFILES is the entire catalog they ever see.
     discovered = await discover_all(
-        _provider_specs_for_discovery(), force_refresh=force_refresh,
+        _provider_specs_for_discovery(),
+        user_id=user_id,
+        force_refresh=force_refresh,
     )
     for provider, models in discovered.items():
         for m in models:

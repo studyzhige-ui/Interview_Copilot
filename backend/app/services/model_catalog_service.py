@@ -40,12 +40,24 @@ class DiscoveredModel:
 
 
 # Redis key namespace; bump suffix to invalidate every cached entry.
-_CACHE_PREFIX = "model_catalog:v1:"
+# v2 because P6-I rekeyed by (user_id, provider) — v1 keys without a user
+# dimension would be stale and never reused, but ``invalidate_all`` scans
+# by prefix so they'll get cleaned up the first time someone refreshes.
+_CACHE_PREFIX = "model_catalog:v2:"
 _CACHE_TTL = 24 * 3600  # 24h — vendors release new models on ~weekly cadence
 
 
-def _key(provider: str) -> str:
-    return f"{_CACHE_PREFIX}{provider}"
+def _key(provider: str, user_id: str | None) -> str:
+    """Cache key includes ``user_id`` because different users have different
+    API keys — and a vendor's /v1/models response varies by key (a user with
+    preview access sees gpt-5.5 that another user doesn't). Without the user
+    dimension we'd leak one user's catalog into another's view.
+
+    ``user_id=None`` (startup / global contexts) gets its own bucket so
+    those reads stay env-only and don't mix with per-user discovery.
+    """
+    scope = f"user:{user_id}" if user_id else "global"
+    return f"{_CACHE_PREFIX}{scope}:{provider}"
 
 
 # Some vendors put the model list at a non-standard path. The defaults
@@ -60,6 +72,28 @@ def _models_url(api_base: str, provider: str) -> str:
     base = api_base.rstrip("/")
     path = _PATH_OVERRIDES.get(provider, "models")
     return f"{base}/{path}"
+
+
+def _auth_headers(provider: str, api_key: str) -> dict[str, str]:
+    """Build the per-vendor auth headers for a /v1/models GET.
+
+    Most vendors that ship an OpenAI-compatible surface accept
+    ``Authorization: Bearer {key}``. Anthropic is the major exception —
+    its native API uses ``x-api-key`` plus an ``anthropic-version`` date
+    pin. Sending Bearer to Anthropic returns 401, so the previous
+    one-size-fits-all code path silently dropped every Claude id from
+    discovery (the curated MODEL_PROFILES is all you saw).
+    """
+    if provider == "anthropic":
+        return {
+            "x-api-key": api_key,
+            # Pin the API version Anthropic documents for /v1/models. The
+            # date is fixed by Anthropic's API contract — see
+            # https://docs.anthropic.com/en/api/versioning . If they
+            # ship a new pin we'd update this string.
+            "anthropic-version": "2023-06-01",
+        }
+    return {"Authorization": f"Bearer {api_key}"}
 
 
 # Some vendors return /v1/models entries that aren't actual chat models
@@ -98,7 +132,7 @@ async def _fetch_one_provider(
     url = _models_url(api_base, provider)
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+            resp = await client.get(url, headers=_auth_headers(provider, api_key))
             resp.raise_for_status()
             payload = resp.json()
     except Exception as exc:  # noqa: BLE001
@@ -172,11 +206,45 @@ def _coerce_created(value: object) -> int | None:
     return None
 
 
+def _resolve_api_key(
+    provider: str, api_key_env: str, user_id: str | None,
+) -> str:
+    """Resolve a discovery-time API key.
+
+    Priority matches ``model_registry.resolve_api_key`` so discovery sees
+    EXACTLY the same key the chat / agent paths will use at request time:
+
+      1. ``user_api_keys`` row for ``(user_id, provider)`` — the encrypted
+         in-app store (P4-E). Users who configure keys through the UI
+         and never touched ``.env`` only have a key here.
+      2. ``os.environ[api_key_env]`` — legacy / single-tenant deployments.
+
+    Returns ``""`` when neither source has a value, which makes the caller
+    skip the vendor (and avoids a guaranteed 401 against /v1/models with
+    an empty Bearer).
+    """
+    import os
+
+    if user_id:
+        try:
+            from app.services.user_api_key_service import get_user_api_key_plaintext
+            user_key = get_user_api_key_plaintext(user_id, provider)
+            if user_key:
+                return user_key
+        except Exception as exc:  # noqa: BLE001 — DB / decrypt failures are non-fatal
+            logger.warning(
+                "user_api_keys lookup failed for user=%s provider=%s: %s",
+                user_id, provider, exc,
+            )
+    return (os.getenv(api_key_env) or "").strip()
+
+
 async def discover_provider(
     provider: str,
     api_base: str,
     api_key_env: str,
     *,
+    user_id: str | None = None,
     force_refresh: bool = False,
 ) -> list[DiscoveredModel]:
     """Return the list of currently-callable chat models for ``provider``.
@@ -184,14 +252,19 @@ async def discover_provider(
     Reads cached result from Redis unless ``force_refresh=True``. Persists
     fresh fetches with a 24h TTL so subsequent ``list_profiles`` calls are
     free.
-    """
-    import os
 
-    api_key = (os.getenv(api_key_env) or "").strip()
+    ``user_id`` selects the encrypted user key from ``user_api_keys`` —
+    without it (startup contexts) we fall back to env vars and use the
+    ``global`` cache scope. With it we look up the user's UI-configured
+    key first and cache under ``user:{user_id}``, so per-user differences
+    in /v1/models response (preview access, region restrictions) stay
+    properly scoped instead of bleeding across tenants.
+    """
+    api_key = _resolve_api_key(provider, api_key_env, user_id)
     if not api_key:
         return []
 
-    redis_key = _key(provider)
+    redis_key = _key(provider, user_id)
     if not force_refresh:
         try:
             cached = await redis_client.get(redis_key)
@@ -206,10 +279,16 @@ async def discover_provider(
             logger.warning("Discovery cache read failed for %s: %s", provider, exc)
 
     ids = await _fetch_one_provider(provider, api_base, api_key)
-    try:
-        await redis_client.set(redis_key, json.dumps(ids), ex=_CACHE_TTL)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Discovery cache write failed for %s: %s", provider, exc)
+    # Don't cache empty results — a transient 5xx / 401 / DNS blip would
+    # otherwise poison this user's entry for the full 24h TTL, making
+    # subsequent unforced reads silently serve "no models" even after the
+    # vendor recovered. Empty fetches stay uncached so the next call
+    # (forced or unforced) re-tries the vendor immediately.
+    if ids:
+        try:
+            await redis_client.set(redis_key, json.dumps(ids), ex=_CACHE_TTL)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Discovery cache write failed for %s: %s", provider, exc)
 
     return [
         DiscoveredModel(provider=provider, model=mid,
@@ -221,6 +300,7 @@ async def discover_provider(
 async def discover_all(
     provider_specs: list[tuple[str, str, str]],
     *,
+    user_id: str | None = None,
     force_refresh: bool = False,
 ) -> dict[str, list[DiscoveredModel]]:
     """Run discovery for many providers in parallel.
@@ -228,14 +308,15 @@ async def discover_all(
     ``provider_specs`` is a list of ``(provider_id, api_base, api_key_env)``
     tuples — usually built from ``MODEL_PROFILES`` by deduping on provider.
     Returns ``{provider_id: [DiscoveredModel, ...]}``; providers without an
-    API key map to an empty list.
+    API key (in either ``user_api_keys`` or env) map to an empty list.
     """
     import asyncio
 
     async def _one(spec: tuple[str, str, str]) -> tuple[str, list[DiscoveredModel]]:
         provider, api_base, api_key_env = spec
         models = await discover_provider(
-            provider, api_base, api_key_env, force_refresh=force_refresh,
+            provider, api_base, api_key_env,
+            user_id=user_id, force_refresh=force_refresh,
         )
         return provider, models
 
@@ -244,15 +325,44 @@ async def discover_all(
 
 
 async def invalidate_all() -> int:
-    """Drop every cached discovery result. Returns count of keys deleted."""
+    """Drop every cached discovery result. Returns count of keys deleted.
+
+    The scan pattern matches the current ``_CACHE_PREFIX`` (``v2``); any
+    leftover ``v1`` keys from before the per-user re-key are also caught
+    when ``_CACHE_PREFIX_LEGACY`` is included. Both prefixes share the
+    ``model_catalog:`` namespace so a single combined scan covers them.
+    """
     deleted = 0
+    patterns = (f"{_CACHE_PREFIX}*", "model_catalog:v1:*")
     try:
-        async for key in redis_client.scan_iter(match=f"{_CACHE_PREFIX}*", count=200):
-            await redis_client.delete(key)
-            deleted += 1
+        for pattern in patterns:
+            async for key in redis_client.scan_iter(match=pattern, count=200):
+                await redis_client.delete(key)
+                deleted += 1
     except Exception as exc:  # noqa: BLE001
         logger.warning("invalidate_all failed: %s", exc)
     return deleted
+
+
+async def invalidate_for_user_provider(user_id: str, provider: str) -> bool:
+    """Drop just this user's discovery cache for one vendor.
+
+    Called from the API-key upsert / delete handlers so a key rotation
+    immediately reflects in the next /catalog read instead of waiting
+    up to 24h for the TTL — that delay was the exact symptom users
+    saw as "I refreshed but still don't see the latest models".
+    Returns True on a successful delete (which Redis reports even if
+    the key didn't exist), False if the underlying call raised.
+    """
+    try:
+        await redis_client.delete(_key(provider, user_id))
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "invalidate_for_user_provider failed user=%s provider=%s: %s",
+            user_id, provider, exc,
+        )
+        return False
 
 
 __all__ = [
@@ -260,4 +370,5 @@ __all__ = [
     "discover_provider",
     "discover_all",
     "invalidate_all",
+    "invalidate_for_user_provider",
 ]
