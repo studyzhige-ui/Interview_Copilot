@@ -1,23 +1,41 @@
-"""Evaluation report generator.
+"""JSON + Markdown report writer.
 
-Produces JSON and Markdown reports from evaluation results and saves them
-to ``data/evaluation/reports/<run_id>/``.
+Consumes the metric dicts returned by ``runners.run_*`` and writes them
+to ``data/evaluation/reports/eval_<timestamp>/``. The CLI calls this
+when ``--report`` is passed; the pytest layer doesn't (it just asserts
+thresholds and discards the numbers).
 """
-
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+# Make ``app.core.config`` importable for the EVAL_DIR setting.
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_BACKEND_ROOT = _PROJECT_ROOT / "backend"
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
 
-def _run_dir(base: Path) -> Path:
-    """Create a timestamped run directory."""
+
+# Latency sub-tables we know about. Adding a new latency stat to a
+# runner = add a row here. Anything not listed renders as a top-level
+# scalar in the metric table.
+_LATENCY_KEYS = {
+    "latency_ms":            "Latency (ms)",
+    "retrieval_latency_ms":  "Retrieval Latency (ms)",
+    "ttfb_ms":               "TTFB — Time to First Token (ms)",
+    "e2e_latency_ms":        "End-to-End QA Latency (ms)",
+}
+
+
+def _timestamped_dir(base: Path) -> Path:
     ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    run_dir = base / f"eval_{ts}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    return run_dir
+    out = base / f"eval_{ts}"
+    out.mkdir(parents=True, exist_ok=True)
+    return out
 
 
 def save_json(data: Any, path: Path) -> None:
@@ -28,6 +46,44 @@ def save_json(data: Any, path: Path) -> None:
     )
 
 
+def _render_metric_table(layer: str, metrics: dict[str, Any]) -> list[str]:
+    """Emit one Markdown table for a layer's scalar metrics."""
+    lines: list[str] = [
+        f"## {layer}",
+        "",
+        "| Metric | Value |",
+        "|--------|-------|",
+    ]
+    for key, value in metrics.items():
+        if key == "per_sample_details" or key in _LATENCY_KEYS:
+            continue
+        if isinstance(value, dict):
+            continue  # nested dict (only expected for unknown latency keys)
+        if isinstance(value, float):
+            lines.append(f"| {key} | {value:.4f} |")
+        else:
+            lines.append(f"| {key} | {value} |")
+    lines.append("")
+
+    for key, label in _LATENCY_KEYS.items():
+        stats = metrics.get(key)
+        if not isinstance(stats, dict):
+            continue
+        lines.extend([
+            f"### {label}",
+            "",
+            "| Stat | Value |",
+            "|------|-------|",
+        ])
+        for stat_key, stat_value in stats.items():
+            if isinstance(stat_value, float):
+                lines.append(f"| {stat_key} | {stat_value:.1f} |")
+            else:
+                lines.append(f"| {stat_key} | {stat_value} |")
+        lines.append("")
+    return lines
+
+
 def generate_report(
     *,
     retrieval: dict[str, Any] | None = None,
@@ -35,100 +91,39 @@ def generate_report(
     trajectory: dict[str, Any] | None = None,
     output_dir: Path | None = None,
 ) -> Path:
-    """Generate JSON + Markdown report and return the report directory path."""
-    import sys
-    from pathlib import Path as _P
-
-    project_root = _P(__file__).resolve().parents[1]
-    sys.path.insert(0, str(project_root / "backend"))
+    """Write JSON + Markdown reports; return the run directory."""
     from app.core.config import settings
 
     base = output_dir or (Path(settings.EVAL_DIR) / "reports")
-    run_dir = _run_dir(base)
+    run_dir = _timestamped_dir(base)
 
-    # --- JSON ---
-    full_result: dict[str, Any] = {"generated_at": datetime.now().isoformat()}
-    if retrieval:
-        full_result["retrieval"] = retrieval
-        save_json(retrieval, run_dir / "retrieval_details.json")
-    if generation:
-        full_result["generation"] = generation
-        save_json(generation, run_dir / "generation_details.json")
-    if trajectory:
-        full_result["trajectory"] = trajectory
-        save_json(trajectory, run_dir / "trajectory_details.json")
-    save_json(full_result, run_dir / "report.json")
+    # ── JSON ──
+    full: dict[str, Any] = {"generated_at": datetime.now().isoformat()}
+    layer_payloads = [
+        ("retrieval", "Layer 1: Retrieval Quality", retrieval),
+        ("generation", "Layer 2: Generation Quality (RAGAS)", generation),
+        ("trajectory", "Layer 3: Planner Routing", trajectory),
+    ]
+    for key, _label, payload in layer_payloads:
+        if payload is not None:
+            full[key] = payload
+            save_json(payload, run_dir / f"{key}_details.json")
+    save_json(full, run_dir / "report.json")
 
-    # --- Markdown ---
-    md_lines = [
+    # ── Markdown ──
+    md: list[str] = [
         "# RAG Evaluation Report",
         "",
-        f"**Generated**: {full_result['generated_at']}",
+        f"**Generated**: {full['generated_at']}",
         "",
     ]
+    for _key, label, payload in layer_payloads:
+        if payload is not None:
+            md.extend(_render_metric_table(label, payload))
 
-    if retrieval:
-        md_lines.extend([
-            "## Layer 1: Retrieval Quality",
-            "",
-            "| Metric | Value |",
-            "|--------|-------|",
-        ])
-        for key, value in retrieval.items():
-            if isinstance(value, (int, float)):
-                md_lines.append(f"| {key} | {value:.4f} |" if isinstance(value, float) else f"| {key} | {value} |")
-        md_lines.append("")
-
-    if generation:
-        md_lines.extend([
-            "## Layer 2: Generation Quality (RAGAS)",
-            "",
-            "| Metric | Value |",
-            "|--------|-------|",
-        ])
-        for key, value in generation.items():
-            if key in ("per_sample_details",):
-                continue
-            if isinstance(value, dict):
-                continue  # handled below as sub-tables
-            if isinstance(value, (int, float)):
-                md_lines.append(f"| {key} | {value:.4f} |" if isinstance(value, float) else f"| {key} | {value} |")
-        md_lines.append("")
-
-        # Latency sub-tables
-        for latency_key, label in [
-            ("retrieval_latency", "Retrieval Latency (ms)"),
-            ("ttfb", "TTFB — Time to First Token (ms)"),
-            ("e2e_latency", "End-to-End QA Latency (ms)"),
-        ]:
-            lat = generation.get(latency_key)
-            if isinstance(lat, dict):
-                md_lines.extend([
-                    f"### {label}",
-                    "",
-                    "| Stat | Value |",
-                    "|------|-------|",
-                ])
-                for k, v in lat.items():
-                    md_lines.append(f"| {k} | {v:.1f} |" if isinstance(v, float) else f"| {k} | {v} |")
-                md_lines.append("")
-
-    if trajectory:
-        md_lines.extend([
-            "## Layer 3: Agent Trajectory",
-            "",
-            "| Metric | Value |",
-            "|--------|-------|",
-        ])
-        for key, value in trajectory.items():
-            if isinstance(value, (int, float)):
-                md_lines.append(f"| {key} | {value:.4f} |" if isinstance(value, float) else f"| {key} | {value} |")
-        md_lines.append("")
-
-    md_lines.extend([
+    md.extend([
         "---",
         f"*Report saved to `{run_dir}`*",
     ])
-
-    (run_dir / "report.md").write_text("\n".join(md_lines), encoding="utf-8")
+    (run_dir / "report.md").write_text("\n".join(md), encoding="utf-8")
     return run_dir
