@@ -303,7 +303,7 @@ export interface AnalyzeDispatchResp {
 }
 
 // ── v3 memory ──────────────────────────────────────────────────────────
-// Mirrors backend/app/api/chat/memory.py. The four v3 doc types
+// Mirrors backend/app/api/memory.py. The four v3 doc types
 // (user_profile, knowledge, strategy, habit) replace the retired
 // ``memory_items`` table.
 

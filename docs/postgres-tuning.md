@@ -105,17 +105,21 @@ index that matches the WHERE / ORDER BY shape (composite if both).
 
 ## Index audit (current state)
 
-Migrations 0012 / 0013 / 0014 cover the high-traffic shapes:
+Migration `0001_baseline` (a squash of the historical 0001–0019 chain)
+ships every composite that matters for the hot query shapes. New
+incremental migrations (`0012`, `0013`) on top of that baseline only
+add per-user model-selection columns + provider-settings tables and
+do not introduce new composites.
 
-| Migration | Table              | Index columns                              | Use case                                    |
-|-----------|--------------------|--------------------------------------------|---------------------------------------------|
-| 0012      | chat_messages      | (session_id, seq)                          | History fetch in render order               |
-| 0013      | interview_records  | (user_id, created_at)                      | Dashboard pagination                        |
-| 0014      | chat_sessions      | (user_id, session_type, archived_at)       | Mock interview "in-progress" lookup         |
-| 0014      | knowledge_documents| (user_id, category)                        | Library filter sidebar                      |
-| 0014      | memory_items       | (user_id, type, normalized_key)            | Memory upsert-by-key                        |
-| 0014      | user_uploads       | (user_id, purpose)                         | Resume / JD picker                          |
-| 0014      | interview_qa       | (record_id, order_idx)                     | QAPanel ordered render                      |
+| Index name                          | Table              | Columns                                  | Use case                              |
+|-------------------------------------|--------------------|------------------------------------------|---------------------------------------|
+| `ix_chat_messages_session_seq`      | chat_messages      | (session_id, seq)                        | History fetch in render order         |
+| `ix_interview_records_user_created` | interview_records  | (user_id, created_at)                    | Dashboard pagination                  |
+| `ix_chat_sessions_user_type_arch`   | chat_sessions      | (user_id, session_type, archived_at)     | Mock-interview "in-progress" lookup   |
+| `ix_knowledge_docs_user_category`   | knowledge_documents| (user_id, category)                      | Library filter sidebar                |
+| `ix_memory_items_user_type_key`     | memory_items       | (user_id, type, normalized_key)          | Memory upsert-by-key                  |
+| `ix_user_uploads_user_purpose`      | user_uploads       | (user_id, purpose)                       | Resume / JD picker                    |
+| `ix_interview_qa_record_order`      | interview_qa       | (record_id, order_idx)                   | QAPanel ordered render                |
 
 Run `\d+ <table>` in psql to see all indexes per table. If a real-world
 query shows up at the top of `pg_stat_statements` and isn't covered

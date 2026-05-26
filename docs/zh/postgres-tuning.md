@@ -93,17 +93,19 @@ SELECT pg_stat_statements_reset();
 
 ## 当前索引审计
 
-迁移 0012 / 0013 / 0014 覆盖了高频查询形状：
+迁移 `0001_baseline`（历史 0001–0019 的 squash 合并）已经覆盖了所有
+高频查询形状的复合索引。后续增量迁移（`0012`、`0013`）只增加每用户
+模型选择列 + provider settings 表，没有新增复合索引。
 
-| 迁移 | 表                | 索引列                                        | 用途                                   |
-|------|-------------------|---------------------------------------------|---------------------------------------|
-| 0012 | chat_messages     | (session_id, seq)                           | 按渲染顺序拉历史                        |
-| 0013 | interview_records | (user_id, created_at)                       | Dashboard 分页                          |
-| 0014 | chat_sessions     | (user_id, session_type, archived_at)        | 模拟面试 in-progress 检测              |
-| 0014 | knowledge_documents | (user_id, category)                       | Library 分类筛选                        |
-| 0014 | memory_items      | (user_id, type, normalized_key)             | Memory upsert-by-key                  |
-| 0014 | user_uploads      | (user_id, purpose)                          | 简历 / JD 选择器                       |
-| 0014 | interview_qa      | (record_id, order_idx)                      | QAPanel 按序渲染                       |
+| 索引名                              | 表                | 索引列                                       | 用途                                  |
+|-------------------------------------|-------------------|---------------------------------------------|---------------------------------------|
+| `ix_chat_messages_session_seq`      | chat_messages     | (session_id, seq)                           | 按渲染顺序拉历史                       |
+| `ix_interview_records_user_created` | interview_records | (user_id, created_at)                       | Dashboard 分页                         |
+| `ix_chat_sessions_user_type_arch`   | chat_sessions     | (user_id, session_type, archived_at)        | 模拟面试 in-progress 检测              |
+| `ix_knowledge_docs_user_category`   | knowledge_documents | (user_id, category)                       | Library 分类筛选                       |
+| `ix_memory_items_user_type_key`     | memory_items      | (user_id, type, normalized_key)             | Memory upsert-by-key                   |
+| `ix_user_uploads_user_purpose`      | user_uploads      | (user_id, purpose)                          | 简历 / JD 选择器                       |
+| `ix_interview_qa_record_order`      | interview_qa      | (record_id, order_idx)                      | QAPanel 按序渲染                       |
 
 在 psql 里跑 `\d+ <表名>` 看每张表的所有索引。如果某条查询经常出现在 `pg_stat_statements` 顶部但没在上表覆盖范围里，那就是新复合索引的候选。
 

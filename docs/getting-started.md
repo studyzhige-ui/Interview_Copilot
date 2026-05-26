@@ -394,19 +394,22 @@ python scripts/wipe_non_admin.py --admin-username <you> --yes
 
 ### G6. Chat 401 + the active model says a vendor I never configured
 
-`data/runtime/model_selection.json` points at a profile whose
-`api_key_env` is empty in `.env`. Edit that file:
+Your per-user selection points at a profile whose `api_key_env` is empty
+in `.env`. Two ways to fix:
 
-```json
-{
-  "primary":        "deepseek-v4-flash",
-  "fast":           "deepseek-v4-flash",
-  "agent":          "deepseek-v4-flash",
-  "mock_interview": "deepseek-v4-flash"
-}
-```
+- **Models page** (preferred): left nav → Models → pick a primary /
+  agent / mock-interview profile from a vendor whose key you've actually
+  filled. Hit save.
+- **DB-level reset**: clear the selection column so the next chat falls
+  back to `ROLE_DEFAULTS`:
+  ```sql
+  UPDATE users SET model_selection_json = NULL WHERE username = '<you>';
+  ```
 
-Restart backend.
+Per-user selection lives in the `users.model_selection_json` Postgres
+column (no JSON file on disk anymore). Profile ids are `provider/model`
+strings — e.g. `deepseek/deepseek-chat`, `openai/gpt-4o-mini` — which
+the live `/v1/models` catalog populates.
 
 ### G7. Frontend gets `http proxy error: EACCES` on every request
 

@@ -1,7 +1,7 @@
 /**
  * v3 memory inspection + edit client.
  *
- * Mirrors ``backend/app/api/chat/memory.py``. Four doc types:
+ * Mirrors ``backend/app/api/memory.py``. Four doc types:
  *
  *   user_profile  — single doc, identity / preferences (read-only here;
  *                   no PUT endpoint on the backend).

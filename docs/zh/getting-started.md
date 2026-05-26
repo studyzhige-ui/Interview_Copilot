@@ -372,19 +372,20 @@ python scripts/wipe_non_admin.py --admin-username <你> --yes
 
 ### G6. 聊天 401 + 当前模型显示的厂商我没配过 key
 
-`data/runtime/model_selection.json` 指向了一个 profile，但对应的
-`api_key_env` 在 `.env` 里没填。改这个 json：
+你的用户级模型选择指向了一个 profile，但对应的 `api_key_env` 在
+`.env` 里没填。两种修法：
 
-```json
-{
-  "primary":        "deepseek-v4-flash",
-  "fast":           "deepseek-v4-flash",
-  "agent":          "deepseek-v4-flash",
-  "mock_interview": "deepseek-v4-flash"
-}
-```
+- **模型页**（推荐）：左侧导航 → 模型 → 给 primary / agent / mock-interview
+  选一个你确实配了 key 的厂商的 profile，保存。
+- **DB 级重置**：把选择列清空，下次聊天就回退到 `ROLE_DEFAULTS`：
+  ```sql
+  UPDATE users SET model_selection_json = NULL WHERE username = '<你>';
+  ```
 
-重启后端。
+用户级选择存在 `users.model_selection_json`（Postgres 列），不再有磁盘
+JSON 文件。Profile id 是 `provider/model` 形式 ——
+比如 `deepseek/deepseek-chat`、`openai/gpt-4o-mini` —— 由实时
+`/v1/models` 目录填充。
 
 ### G7. 前端每个请求都 `http proxy error: EACCES`
 

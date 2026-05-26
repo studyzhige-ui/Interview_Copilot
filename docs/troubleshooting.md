@@ -10,20 +10,21 @@ have a commit message that mentions the symptom.
 
 ## Python env / Windows shell
 
-### `pwsh scripts/dev.ps1` reports base Python despite `(env)` prompt
+### `pwsh scripts/start.ps1` reports base Python despite `(env)` prompt
 
 You activated a conda env in the parent shell, but the script still
 sees base Python with the wrong package versions.
 
-Root cause: `pwsh script.ps1` spawns a **child** PowerShell process. The
-child loads your `$PROFILE`, whose conda init hook can reset PATH back
-to base. So even though the parent prompt shows `(your-env)`, the child
-runs with base activated.
+Root cause: `pwsh script.ps1` (with the explicit `pwsh` prefix) spawns
+a **child** PowerShell process. The child loads your `$PROFILE`, whose
+conda init hook can reset PATH back to base. So even though the parent
+prompt shows `(your-env)`, the child runs with base activated.
 
-**Fix:** run with `.\` instead, which executes in the current shell:
+**Fix:** drop the `pwsh` prefix and run with `.\` instead, which
+executes in the current shell:
 
 ```powershell
-.\scripts\start.ps1 -Backend
+.\scripts\start.ps1 -SkipFrontend
 ```
 
 If the script is blocked by ExecutionPolicy, allow signed user scripts
@@ -219,25 +220,27 @@ python scripts/wipe_non_admin.py --admin-username <you> --yes        # commit
 
 ### Chat returns 401 and the active model says it uses a vendor I never configured
 
-`data/runtime/model_selection.json` points at a profile whose
-`api_key_env` isn't filled in `.env` (and you don't have a per-user
-key for it either). Common case: someone clicked through the Models
-page and selected Xiaomi MiMo for "primary", but `MIMO_API_KEY` is
-empty.
+Your per-user selection (column `users.model_selection_json`) points
+at a profile whose `api_key_env` isn't filled in `.env` and you don't
+have a per-user key for it either. Common case: someone clicked
+through the Models page and selected Xiaomi MiMo for "primary", but
+`MIMO_API_KEY` is empty.
 
-**Fix:** edit `data/runtime/model_selection.json` to reference a
-profile you actually have a key for:
+**Fix (preferred):** go to the **Models** page in the frontend, pick a
+primary / agent / mock-interview profile from a vendor whose key is
+actually configured, and save.
 
-```json
-{
-  "primary":        "deepseek-v4-flash",
-  "fast":           "deepseek-v4-flash",
-  "agent":          "deepseek-v4-flash",
-  "mock_interview": "deepseek-v4-flash"
-}
+**Fix (DB-level reset):** clear the selection column so the next chat
+falls back to `ROLE_DEFAULTS`:
+
+```sql
+docker exec interview_copilot_db psql -U postgres -d interview_copilot -c \
+  "UPDATE users SET model_selection_json = NULL WHERE username = '<you>';"
 ```
 
-Then restart the backend.
+Profile ids are `provider/model` strings — e.g. `deepseek/deepseek-chat`,
+`openai/gpt-4o-mini`. The full set comes from the live `/v1/models`
+catalog cache (refreshable from the Models page).
 
 ---
 

@@ -8,18 +8,18 @@
 
 ## Python 环境 / Windows shell
 
-### `pwsh scripts/dev.ps1` 显示 base Python，明明 prompt 已经是 `(env)`
+### `pwsh scripts/start.ps1` 显示 base Python，明明 prompt 已经是 `(env)`
 
 父 shell 已经 conda activate 过了，但脚本看到的还是 base Python + 包版本错的。
 
-根因：`pwsh script.ps1` 会**新开**一个 pwsh 子进程。子进程加载 `$PROFILE`，
-里面的 conda init hook 可能把 PATH 重置回 base。所以即便父 prompt 是
-`(your-env)`，子进程实际是 base 激活态。
+根因：`pwsh script.ps1`（带 `pwsh` 前缀）会**新开**一个 pwsh 子进程。
+子进程加载 `$PROFILE`，里面的 conda init hook 可能把 PATH 重置回 base。
+所以即便父 prompt 是 `(your-env)`，子进程实际是 base 激活态。
 
-**修复：** 用 `.\` 形式在当前 shell 里跑：
+**修复：** 去掉 `pwsh` 前缀，用 `.\` 形式在当前 shell 里跑：
 
 ```powershell
-.\scripts\start.ps1 -Backend
+.\scripts\start.ps1 -SkipFrontend
 ```
 
 ExecutionPolicy 拦着的话一次性放开签名脚本：
@@ -73,23 +73,23 @@ python scripts/wipe_non_admin.py --admin-username <你> --yes        # 真删
 
 ### 聊天 401 + 活动模型显示的是我没配过的厂商
 
-`data/runtime/model_selection.json` 里指向了一个 profile，对应的
-`api_key_env` 在 `.env` 里没填（用户级 key 也没存）。最常见：在「模型」
-页给 primary 选了小米 MiMo，但 `MIMO_API_KEY` 是空的。
+用户级模型选择（`users.model_selection_json` 列）指向了一个 profile，
+但对应的 `api_key_env` 在 `.env` 里没填，用户级 key 也没存。最常见：
+在「模型」页给 primary 选了小米 MiMo，但 `MIMO_API_KEY` 是空的。
 
-**修复：** 编辑 `data/runtime/model_selection.json` 把它指向有 key 的
-profile：
+**修复（推荐）：** 前端「模型」页，给 primary / agent / mock-interview
+选一个你确实配了 key 的厂商的 profile，保存即可。
 
-```json
-{
-  "primary":        "deepseek-v4-flash",
-  "fast":           "deepseek-v4-flash",
-  "agent":          "deepseek-v4-flash",
-  "mock_interview": "deepseek-v4-flash"
-}
+**修复（DB 级重置）：** 把选择列清空，下次聊天就回退到 `ROLE_DEFAULTS`：
+
+```sql
+docker exec interview_copilot_db psql -U postgres -d interview_copilot -c \
+  "UPDATE users SET model_selection_json = NULL WHERE username = '<你>';"
 ```
 
-再重启后端。
+Profile id 是 `provider/model` 形式 —— 比如 `deepseek/deepseek-chat`、
+`openai/gpt-4o-mini`。完整集合来自实时 `/v1/models` 目录缓存（在
+「模型」页可以手动刷新）。
 
 ---
 
