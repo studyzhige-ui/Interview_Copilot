@@ -421,8 +421,13 @@ function VendorCard({
       </div>
 
       {/* Scrollable model list. Models are sorted newest-first by the
-        * backend pipeline; we just preserve that order. */}
-      <div className="relative mb-2" style={{ height: modelsAreaHeight }}>
+        * backend pipeline; we just preserve that order.
+        *
+        * No bottom fade gradient: with MODELS_VISIBLE_ROWS=2 the card
+        * is 136px tall and a 32px fade would obscure half of the
+        * second model row. The "下滑查看全部" text hint above the
+        * scroll area already signals there's more content. */}
+      <div className="mb-2" style={{ height: modelsAreaHeight }}>
         <div
           className="overflow-y-auto pr-1 flex flex-col h-full"
           style={{ gap: MODEL_ROW_GAP_PX }}
@@ -446,15 +451,6 @@ function VendorCard({
             ))
           )}
         </div>
-        {list.length > MODELS_VISIBLE_ROWS && (
-          <div
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-8 rounded-b-xl"
-            style={{
-              background:
-                'linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.92) 80%, #ffffff 100%)',
-            }}
-          />
-        )}
       </div>
 
       {/* API Key + advanced settings row */}
