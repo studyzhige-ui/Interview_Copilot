@@ -40,10 +40,14 @@ async def _main() -> int:
         help="Refresh only this provider (e.g. 'deepseek'). Default: all.",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON.")
+    parser.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="Show the full id list per vendor (default: head + count).",
+    )
     args = parser.parse_args()
 
     # Imports here so --help works without the full backend stack loaded.
-    from app.core.model_registry import _provider_specs_for_discovery
+    from app.core.model_registry import MODEL_PROFILES, _provider_specs_for_discovery
     from app.services.model_catalog_service import discover_all, invalidate_all
 
     specs = _provider_specs_for_discovery()
@@ -53,13 +57,31 @@ async def _main() -> int:
             print(f"No provider '{args.provider}' in MODEL_PROFILES.", file=sys.stderr)
             return 2
 
+    # Per-provider curated-id set, so we can compute "net-new" (the diff
+    # between vendor /v1/models and what we've already hand-curated). This
+    # is the most useful diagnostic for "we should see GPT-X.Y but don't":
+    # if X.Y isn't in vendor's response, the issue is upstream; if it IS
+    # there and curated already, you'll see it in the curated count; if
+    # it's there and net-new, it'll show in the auto-discovered count.
+    curated_by_provider: dict[str, set[str]] = {}
+    for profile in MODEL_PROFILES.values():
+        curated_by_provider.setdefault(profile.provider, set()).add(profile.model)
+
     dropped = await invalidate_all()
     discovered = await discover_all(specs, force_refresh=True)
 
     summary = {
         "discovery_cache_dropped": dropped,
         "providers": {
-            provider: [m.model for m in models]
+            provider: {
+                "discovered": [m.model for m in models],
+                "discovered_count": len(models),
+                "curated_count": len(curated_by_provider.get(provider, set())),
+                "net_new": [
+                    m.model for m in models
+                    if m.model not in curated_by_provider.get(provider, set())
+                ],
+            }
             for provider, models in discovered.items()
         },
     }
@@ -70,15 +92,37 @@ async def _main() -> int:
 
     print(f"Dropped {dropped} cached entries.")
     print()
-    print(f"{'Provider':<14} {'Discovered':<12} Models")
-    print("-" * 78)
+    # Wider columns so per-vendor counts are immediately readable.
+    print(f"{'Provider':<12} {'Returned':>8} {'Curated':>8} {'NetNew':>7}  Head of new models")
+    print("-" * 90)
     for provider, models in sorted(discovered.items()):
+        curated = curated_by_provider.get(provider, set())
+        net_new = [m.model for m in models if m.model not in curated]
         if not models:
-            print(f"{provider:<14} {'0 (no key?)':<12}")
+            # 0 returned == "vendor responded with empty list" OR "no key".
+            # The discover_provider layer short-circuits on missing key so
+            # we can't distinguish in this view — but checking your env or
+            # user_api_keys row for that vendor takes 5 seconds.
+            print(f"{provider:<12} {'0':>8} {len(curated):>8} {'-':>7}  (no key, or vendor returned empty)")
             continue
-        head = ", ".join(m.model for m in models[:3])
-        more = f" + {len(models) - 3} more" if len(models) > 3 else ""
-        print(f"{provider:<14} {len(models):<12} {head}{more}")
+        head = ", ".join(net_new[:4]) if net_new else "(all already curated)"
+        more = f" + {len(net_new) - 4} more" if len(net_new) > 4 else ""
+        print(
+            f"{provider:<12} {len(models):>8} {len(curated):>8} {len(net_new):>7}  {head}{more}"
+        )
+        if args.verbose and models:
+            for m in models:
+                tag = "  " if m.model in curated else "★ "  # ★ = net-new
+                print(f"              {tag}{m.model}")
+    print()
+    print(
+        "Legend: Returned=ids vendor sent back (post chat-only filter), "
+        "Curated=ids in MODEL_PROFILES, NetNew=auto-discovered."
+    )
+    print(
+        "If a model you expect isn't in 'Returned', the vendor isn't exposing "
+        "it via /v1/models — there's nothing this script can do about that."
+    )
     return 0
 
 

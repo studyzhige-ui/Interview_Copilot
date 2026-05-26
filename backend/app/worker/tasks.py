@@ -460,3 +460,70 @@ def dream_for_user_task(self, user_id: str):
         user_id, summary["candidates"], summary["dreamed"], summary["errors"],
     )
     return summary
+
+
+# ── Daily model catalog refresh (P6-K) ─────────────────────────────────
+# Why this is a Celery beat task and not a separate cron entry on the
+# host: we already run Celery beat for the dreaming nightly, the worker
+# image has the full FastAPI / RAG stack imported and ready, and using
+# beat means there's exactly one place to look for "what scheduled
+# work runs in this project" (``celery_app.py: beat_schedule``).
+#
+# Why daily (not 24h TTL natural expiry): the natural-expiry path only
+# refreshes on the FIRST user request after the cache expires — and
+# that user pays the per-vendor /v1/models roundtrip latency (~200ms-2s
+# each, ~9 vendors in parallel = ~2s overall). A pre-warmed cache means
+# the morning's first user gets an instant /catalog response with the
+# day's freshest model list. The scheduled time (04:00) is well before
+# the workday so production users never collide with the refresh
+# window, and well after the dreaming batch (03:30) so the two heavy
+# jobs don't share the LLM/network at the same moment.
+@celery_app.task(
+    bind=True,
+    name="tasks.refresh_model_catalog",
+    # /v1/models calls are bounded by the per-request 10s httpx timeout
+    # inside model_catalog_service plus retries; a generous 5-min limit
+    # covers extreme tail latency across all configured vendors.
+    time_limit=300,
+    soft_time_limit=270,
+)
+def refresh_model_catalog_task(self):
+    """Re-fetch every vendor's /v1/models and replace the cached entries.
+
+    No ``user_id``: scheduled context, so ``discover_provider`` falls back
+    to env vars (the cron host's deployment env should have the keys
+    configured for any vendor whose models we want pre-warmed). Cache is
+    GLOBAL (P6-J), so this single fetch warms the entry every user reads
+    from on their next /catalog GET.
+    """
+    from app.core.model_registry import _provider_specs_for_discovery
+    from app.services.model_catalog_service import discover_all, invalidate_all
+
+    async def _run():
+        # Drop everything first so the force_refresh=True writes are
+        # the only entries in the namespace after this task completes.
+        dropped = await invalidate_all()
+        discovered = await discover_all(
+            _provider_specs_for_discovery(), force_refresh=True,
+        )
+        return dropped, discovered
+
+    dropped, discovered = run_async(_run())
+    per_vendor = {p: len(ms) for p, ms in discovered.items()}
+    total = sum(per_vendor.values())
+    empty_vendors = [p for p, n in per_vendor.items() if n == 0]
+    logger.info(
+        "refresh_model_catalog: dropped=%d total_models=%d per_vendor=%s",
+        dropped, total, per_vendor,
+    )
+    if empty_vendors:
+        # Surface vendors that returned 0 models — most often this means
+        # the env var for that provider's API key isn't set on the cron
+        # host. Ops can then either configure the key OR remove the
+        # vendor from MODEL_PROFILES if it's not used.
+        logger.warning(
+            "refresh_model_catalog: %d vendor(s) returned 0 models "
+            "(missing API key on cron host?): %s",
+            len(empty_vendors), empty_vendors,
+        )
+    return {"dropped": dropped, "per_vendor": per_vendor, "total": total}

@@ -457,6 +457,66 @@ async def test_non_empty_fetch_result_is_still_cached(monkeypatch):
     assert "gpt-5.5" in value
 
 
+def test_refresh_model_catalog_task_signature_and_dispatch(monkeypatch):
+    """P6-K: the Celery beat task exists, lives under the expected name
+    'tasks.refresh_model_catalog', and the inner async work calls
+    invalidate_all + discover_all in that order. Doesn't actually hit the
+    network — patches both helpers to inert returns and asserts the
+    summary shape the beat schedule consumer expects.
+
+    Sync test (not @pytest.mark.asyncio): the task body uses
+    ``run_async`` which spins its own event loop; nesting that inside
+    pytest-asyncio's already-running loop raises "loop already running".
+    """
+    # Import via the worker module so we exercise the registration path,
+    # not just the function in isolation.
+    from app.worker.tasks import refresh_model_catalog_task
+    from app.core import model_registry as registry_mod
+    from app.services import model_catalog_service as svc_mod
+
+    # Stub the two outbound calls. discover_all is the expensive one.
+    invalidate_calls = {"count": 0}
+    discover_calls = {"force_refresh": None}
+
+    async def fake_invalidate_all():
+        invalidate_calls["count"] += 1
+        return 7
+
+    async def fake_discover_all(specs, *, user_id=None, force_refresh=False):
+        discover_calls["force_refresh"] = force_refresh
+        discover_calls["user_id"] = user_id
+        # Return one model per spec so the per-vendor count assertion is
+        # meaningful regardless of how many providers are registered.
+        return {spec[0]: [object()] for spec in specs}
+
+    monkeypatch.setattr(svc_mod, "invalidate_all", fake_invalidate_all)
+    monkeypatch.setattr(svc_mod, "discover_all", fake_discover_all)
+    # Pin the registry specs to a small fixed set so the test isn't
+    # coupled to whoever edits MODEL_PROFILES.
+    monkeypatch.setattr(
+        registry_mod, "_provider_specs_for_discovery",
+        lambda: [("openai", "https://api.openai.com/v1", "OPENAI_API_KEY")],
+    )
+
+    # Run the task body synchronously. Celery's bind=True wraps the
+    # function as a method on the Task instance; ``.run(...)`` invokes
+    # it with the bound self, no broker / worker needed.
+    result = refresh_model_catalog_task.run()
+
+    assert invalidate_calls["count"] == 1
+    assert discover_calls["force_refresh"] is True, (
+        "Scheduled refresh must force-bypass the cache — the whole point "
+        "is to write fresh entries, not read stale ones."
+    )
+    assert discover_calls["user_id"] is None, (
+        "No user context in scheduled runs — discovery must fall back to "
+        "env-only key resolution."
+    )
+    assert result["dropped"] == 7
+    assert result["per_vendor"] == {"openai": 1}
+    assert result["total"] == 1
+
+
 @pytest.mark.asyncio
 async def test_cache_is_shared_across_users(monkeypatch):
     """Concrete behavior assertion: a fetch triggered by Alice serves Bob

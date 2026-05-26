@@ -69,6 +69,9 @@ celery_app.conf.update(
         "tasks.dream_for_record": {"queue": "default"},
         "tasks.dream_for_user": {"queue": "default"},
         "tasks.scan_and_dream_batch": {"queue": "default"},
+        # Catalog refresh is pure outbound HTTP — no GPU, no heavy
+        # in-process model. Lands on the light queue alongside dreaming.
+        "tasks.refresh_model_catalog": {"queue": "default"},
     },
     # ── Reliability ─────────────────────────────────────────────────────
     # Default acks_late=True so a worker crash during a task re-queues the
@@ -98,10 +101,23 @@ celery_app.conf.update(
     # logic. This is the ONLY trigger — there's no per-record completion
     # hook, no per-turn hook (Path B over Path A decision in
     # docs/v3_memory_refactor_report.md).
+    #
+    # Model catalog refresh (P6-K): daily at 04:00 Asia/Shanghai. Hits
+    # every vendor's /v1/models, drops + repopulates the global discovery
+    # cache so the first user request of the day reads a warm entry
+    # instead of paying the ~2s fan-out latency. Scheduled after the
+    # dreaming batch (03:30) so the two heavy outbound-API jobs don't
+    # share the network/LLM window. CRITICAL: this runs with no
+    # user_id, so the cron host's env must have the API keys for any
+    # vendor you want pre-warmed (per-user-only keys won't apply here).
     beat_schedule={
         "memory-dream-nightly-batch": {
             "task": "tasks.scan_and_dream_batch",
             "schedule": crontab(hour=3, minute=30),
+        },
+        "model-catalog-daily-refresh": {
+            "task": "tasks.refresh_model_catalog",
+            "schedule": crontab(hour=4, minute=0),
         },
     },
 )
