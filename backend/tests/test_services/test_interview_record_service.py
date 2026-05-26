@@ -1,4 +1,4 @@
-"""Tests for app.services.interview_record_service.
+"""Tests for app.services.interview.interview_record_service.
 
 Local SQLite fixture — the shared conftest db_session fixture is broken
 because it imports a removed ``app.models.interview`` module.
@@ -57,7 +57,7 @@ class _NoCloseSession:
 
 def test_create_for_upload(record_db_session, monkeypatch):
     from app.models.interview_record import InterviewRecord
-    from app.services import interview_record_service as module
+    from app.services.interview import interview_record_service as module
 
     monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
 
@@ -81,7 +81,7 @@ def test_create_for_upload(record_db_session, monkeypatch):
 
 
 def test_create_for_mock(record_db_session, monkeypatch):
-    from app.services import interview_record_service as module
+    from app.services.interview import interview_record_service as module
 
     monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
 
@@ -101,7 +101,7 @@ def test_create_for_mock(record_db_session, monkeypatch):
 def test_set_status_set_transcript_set_analysis(record_db_session, monkeypatch):
     """Status / transcript / analysis writes should all be observable on reload."""
     from app.models.interview_record import InterviewRecord
-    from app.services import interview_record_service as module
+    from app.services.interview import interview_record_service as module
 
     monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
 
@@ -132,7 +132,7 @@ def test_set_status_set_transcript_set_analysis(record_db_session, monkeypatch):
 
 def test_bulk_insert_qa_and_summary(record_db_session, monkeypatch):
     from app.models.interview_qa import InterviewQA
-    from app.services import interview_record_service as module
+    from app.services.interview import interview_record_service as module
 
     monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
 
@@ -180,7 +180,7 @@ def test_bulk_insert_qa_and_summary(record_db_session, monkeypatch):
 
 def test_get_analysis_summary_returns_empty_for_unknown(record_db_session, monkeypatch):
     """Unknown record_id / wrong user → empty string, no exception."""
-    from app.services import interview_record_service as module
+    from app.services.interview import interview_record_service as module
 
     monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
 

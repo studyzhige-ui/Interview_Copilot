@@ -67,7 +67,7 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
     """
     from app.models.interview_record import InterviewRecord
     from app.services.interview.analysis_orchestrator import analysis_orchestrator
-    from app.services.interview_record_service import interview_record_service
+    from app.services.interview.interview_record_service import interview_record_service
 
     # ── Idempotency gate ────────────────────────────────────────────────
     db = SessionLocal()

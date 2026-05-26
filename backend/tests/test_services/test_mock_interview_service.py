@@ -1,4 +1,4 @@
-"""Tests for app.services.mock_interview_service (Runtime Director v6).
+"""Tests for app.services.interview.mock_interview_service (Runtime Director v6).
 
 The old plan/state-machine API was removed in the v6 refactor. The new
 surface is built around:
@@ -16,8 +16,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services import mock_interview_service as mod
-from app.services.mock_interview_service import (
+from app.services.interview import mock_interview_service as mod
+from app.services.interview.mock_interview_service import (
     AnswerQuality,
     DEFAULT_TURN_BUDGETS,
     DirectorOutput,

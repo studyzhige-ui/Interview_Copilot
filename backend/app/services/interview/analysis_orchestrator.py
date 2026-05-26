@@ -33,7 +33,7 @@ from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
 from app.models.mock_interview_session import MockInterviewSession
 from app.models.upload import UserUpload
-from app.services.interview_record_service import (
+from app.services.interview.interview_record_service import (
     STATUS_ANALYZING,
     STATUS_COMPLETED,
     STATUS_EXTRACTING,

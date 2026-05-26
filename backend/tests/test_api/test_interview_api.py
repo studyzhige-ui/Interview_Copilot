@@ -42,7 +42,7 @@ def db(monkeypatch) -> Iterator[Session]:
     # Several interview endpoints (cancel, list, get, delete) call into
     # ``interview_record_service`` which opens its own ``SessionLocal()``
     # bound to the real configured DB. Redirect that to our test engine.
-    import app.services.interview_record_service as irs_mod
+    import app.services.interview.interview_record_service as irs_mod
     monkeypatch.setattr(irs_mod, "SessionLocal", Session_)
     # The SSE events endpoint (interview_record_events_stream + the
     # _poll_record_snapshot helper) also opens its own SessionLocal()

@@ -27,7 +27,7 @@ async def _read_interview_history_handler(
 def _read_interview_history_sync(
     args: ReadInterviewHistoryArgs, ctx: AgentToolContext
 ) -> dict[str, Any]:
-    from app.services.interview_record_service import interview_record_service
+    from app.services.interview.interview_record_service import interview_record_service
 
     if args.record_id:
         record = interview_record_service.get(args.record_id, ctx.user_id)

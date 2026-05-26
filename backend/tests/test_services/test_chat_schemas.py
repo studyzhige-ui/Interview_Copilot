@@ -67,7 +67,7 @@ def test_mock_answer_resp_requires_all_top_level_fields(missing):
 ])
 def test_mock_answer_resp_action_accepts_all_seven_director_actions(action):
     """The Literal enum must accept exactly the seven keys in
-    ``app.services.mock_interview_service.DISPLAY_INTENT``. If the
+    ``app.services.interview.mock_interview_service.DISPLAY_INTENT``. If the
     Director adds a new action and you forget to update the
     Literal, this test fails — forcing the FE union to update too."""
     payload = {**_VALID_ANSWER_RESP, "action": action}

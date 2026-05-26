@@ -59,7 +59,7 @@ async def start_mock_interview(
     """Initialise the Runtime Director session: load resume+JD, ask the LLM
     to build a thin interview map + opening line, freeze the cacheable prefix
     into state, and return the opening to the frontend."""
-    from app.services.mock_interview_service import (
+    from app.services.interview.mock_interview_service import (
         DEFAULT_TURN_BUDGETS,
         VALID_PHASES,
         build_prefix,
@@ -524,7 +524,7 @@ async def submit_mock_answer(
          answered — NOT the LLM's `result.phase`, which is the NEXT phase).
       4. Only AFTER that, swap pending_* / current_* to the next turn.
     """
-    from app.services.mock_interview_service import (
+    from app.services.interview.mock_interview_service import (
         DISPLAY_INTENT,
         MAX_FOLLOW_UP_DEPTH,
         SUMMARY_EVERY_N_TURNS,
@@ -663,7 +663,7 @@ async def finish_mock_interview(
     from datetime import datetime as _dt
 
     from app.models.mock_interview_session import MockInterviewSession
-    from app.services.interview_record_service import (
+    from app.services.interview.interview_record_service import (
         STATUS_ANALYZING,
         interview_record_service,
     )

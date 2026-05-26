@@ -359,7 +359,7 @@ def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypat
     )
 
     # Stub generate_brief so the endpoint doesn't make a real LLM call.
-    from app.services.mock_interview_service import InterviewBrief
+    from app.services.interview.mock_interview_service import InterviewBrief
     fake_brief = InterviewBrief(
         interview_plan={"phases": [
             {"phase": "self_intro", "budget": 1, "goal": "x",
@@ -372,7 +372,7 @@ def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypat
     async def fake_generate_brief(**kwargs):
         return fake_brief
     monkeypatch.setattr(
-        "app.services.mock_interview_service.generate_brief",
+        "app.services.interview.mock_interview_service.generate_brief",
         fake_generate_brief,
     )
     # build_prefix / prefix_hash are deterministic pure functions —

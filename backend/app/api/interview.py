@@ -16,7 +16,7 @@ from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
 from app.models.user import User
 from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
-from app.services.interview_record_service import (
+from app.services.interview.interview_record_service import (
     STATUS_COMPLETED,
     STATUS_FAILED,
     interview_record_service,
@@ -446,7 +446,7 @@ def list_interview_records(
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
 ):
-    from app.services.interview_record_service import interview_record_service
+    from app.services.interview.interview_record_service import interview_record_service
 
     records = interview_record_service.list_by_user(
         current_user.username, offset=offset, limit=limit,
@@ -541,7 +541,7 @@ def get_interview_record_summary(
     current_user: User = Depends(get_current_user),
 ):
     """Short analysis summary for context injection (slot 2)."""
-    from app.services.interview_record_service import interview_record_service
+    from app.services.interview.interview_record_service import interview_record_service
 
     summary = interview_record_service.get_analysis_summary(record_id, current_user.username)
     if not summary:
