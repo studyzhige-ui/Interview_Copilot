@@ -1,19 +1,17 @@
-"""CLI: force-refresh the live LLM model catalog from every configured vendor.
+"""CLI: force-refresh the LiteLLM-driven model catalog.
 
-Reads each ``EMBEDDING_PROVIDER`` / ``RERANKER_PROVIDER`` / ... env var,
-plus the curated ``MODEL_PROFILES`` table, and hits each vendor's
-``/v1/models`` endpoint to enumerate the chat models the API key can see.
-Results land in Redis with a 24h TTL.
+P6-L: the catalog's only data source is LiteLLM's
+``model_prices_and_context_window.json``. This CLI is identical in
+effect to ``POST /api/v1/models/refresh-catalog`` and the daily
+Celery beat — useful for verifying what the LiteLLM JSON currently
+contains for each provider and for pre-warming on first deploy.
 
 Usage::
 
-    python scripts/refresh_models.py                # refresh all vendors
-    python scripts/refresh_models.py --json         # machine-readable output
-    python scripts/refresh_models.py --provider deepseek    # one vendor only
-
-Same effect as POSTing to ``/api/v1/models/refresh-catalog``; this CLI is
-useful for cron jobs / CI pre-warming so the first user request doesn't
-pay a discovery roundtrip.
+    python scripts/refresh_models.py                     # all providers
+    python scripts/refresh_models.py --json              # JSON output
+    python scripts/refresh_models.py --provider openai   # filter one
+    python scripts/refresh_models.py --verbose           # show every id
 """
 
 from __future__ import annotations
@@ -33,95 +31,94 @@ load_dotenv(ROOT / ".env")
 
 async def _main() -> int:
     parser = argparse.ArgumentParser(
-        description="Refresh the live LLM model catalog from each configured vendor.",
+        description="Refresh the LiteLLM-driven model catalog and print a "
+        "per-provider summary.",
     )
     parser.add_argument(
         "--provider", default=None,
-        help="Refresh only this provider (e.g. 'deepseek'). Default: all.",
+        help="Filter output to one provider (e.g. 'openai'). The fetch "
+        "still pulls the full JSON — this only narrows the print view.",
     )
-    parser.add_argument("--json", action="store_true", help="Emit JSON.")
+    parser.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
     parser.add_argument(
         "--verbose", "-v", action="store_true",
-        help="Show the full id list per vendor (default: head + count).",
+        help="Show every model id per provider (default: head + count).",
     )
     args = parser.parse_args()
 
-    # Imports here so --help works without the full backend stack loaded.
-    from app.core.model_registry import MODEL_PROFILES, _provider_specs_for_discovery
-    from app.services.model_catalog_service import discover_all, invalidate_all
+    # Lazy imports so --help doesn't load the full backend stack.
+    from app.services.model_sources.litellm_loader import (
+        LiteLLMFetchFailed,
+        fetch_litellm_catalog,
+    )
+    from app.services.model_sources.pipeline import refresh_catalog
+    from app.services.model_sources.providers import PROVIDERS
 
-    specs = _provider_specs_for_discovery()
-    if args.provider:
-        specs = [s for s in specs if s[0] == args.provider]
-        if not specs:
-            print(f"No provider '{args.provider}' in MODEL_PROFILES.", file=sys.stderr)
-            return 2
+    try:
+        grouped = await refresh_catalog()
+    except LiteLLMFetchFailed as exc:
+        print(f"LiteLLM fetch failed: {exc}", file=sys.stderr)
+        return 2
 
-    # Per-provider curated-id set, so we can compute "net-new" (the diff
-    # between vendor /v1/models and what we've already hand-curated). This
-    # is the most useful diagnostic for "we should see GPT-X.Y but don't":
-    # if X.Y isn't in vendor's response, the issue is upstream; if it IS
-    # there and curated already, you'll see it in the curated count; if
-    # it's there and net-new, it'll show in the auto-discovered count.
-    curated_by_provider: dict[str, set[str]] = {}
-    for profile in MODEL_PROFILES.values():
-        curated_by_provider.setdefault(profile.provider, set()).add(profile.model)
-
-    dropped = await invalidate_all()
-    discovered = await discover_all(specs, force_refresh=True)
-
-    summary = {
-        "discovery_cache_dropped": dropped,
-        "providers": {
-            provider: {
-                "discovered": [m.model for m in models],
-                "discovered_count": len(models),
-                "curated_count": len(curated_by_provider.get(provider, set())),
-                "net_new": [
-                    m.model for m in models
-                    if m.model not in curated_by_provider.get(provider, set())
-                ],
-            }
-            for provider, models in discovered.items()
-        },
-    }
+    # Order rows by PROVIDERS dict iteration so the table matches the
+    # Models page card order (default-enabled first, opt-in after).
+    provider_order = [
+        p for p in PROVIDERS.keys() if (not args.provider or p == args.provider)
+    ]
+    # Include any LiteLLM providers we got data for that aren't yet in
+    # PROVIDERS — useful for spotting "should we add this to PROVIDERS?"
+    extras = [
+        p for p in sorted(grouped.keys())
+        if p not in PROVIDERS and (not args.provider or p == args.provider)
+    ]
 
     if args.json:
-        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        out = {
+            "providers": {
+                p: [
+                    {
+                        "model": e.model,
+                        "display_name": e.display_name,
+                        "supports_function_calling": e.supports_function_calling,
+                        "context_window": e.context_window,
+                        "supports_vision": e.supports_vision,
+                    }
+                    for e in grouped.get(p, [])
+                ]
+                for p in provider_order + extras
+            },
+        }
+        print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0
 
-    print(f"Dropped {dropped} cached entries.")
+    print(f"Catalog refreshed from LiteLLM. {sum(len(v) for v in grouped.values())} chat models total.")
     print()
-    # Wider columns so per-vendor counts are immediately readable.
-    print(f"{'Provider':<12} {'Returned':>8} {'Curated':>8} {'NetNew':>7}  Head of new models")
+    print(f"{'Provider':<14} {'Models':>7}  Head of available models")
     print("-" * 90)
-    for provider, models in sorted(discovered.items()):
-        curated = curated_by_provider.get(provider, set())
-        net_new = [m.model for m in models if m.model not in curated]
-        if not models:
-            # 0 returned == "vendor responded with empty list" OR "no key".
-            # The discover_provider layer short-circuits on missing key so
-            # we can't distinguish in this view — but checking your env or
-            # user_api_keys row for that vendor takes 5 seconds.
-            print(f"{provider:<12} {'0':>8} {len(curated):>8} {'-':>7}  (no key, or vendor returned empty)")
+    for provider in provider_order:
+        entries = grouped.get(provider, [])
+        defaults = PROVIDERS.get(provider)
+        label = defaults.display_label if defaults else provider
+        if not entries:
+            print(f"{provider:<14} {'0':>7}  ({label}: no chat entries in LiteLLM JSON)")
             continue
-        head = ", ".join(net_new[:4]) if net_new else "(all already curated)"
-        more = f" + {len(net_new) - 4} more" if len(net_new) > 4 else ""
-        print(
-            f"{provider:<12} {len(models):>8} {len(curated):>8} {len(net_new):>7}  {head}{more}"
-        )
-        if args.verbose and models:
-            for m in models:
-                tag = "  " if m.model in curated else "★ "  # ★ = net-new
-                print(f"              {tag}{m.model}")
+        head = ", ".join(e.model for e in entries[:4])
+        more = f" + {len(entries) - 4} more" if len(entries) > 4 else ""
+        print(f"{provider:<14} {len(entries):>7}  {head}{more}")
+        if args.verbose:
+            for e in entries:
+                fc = "✓" if e.supports_function_calling else " "
+                print(f"              {fc} {e.model}")
+    if extras:
+        print()
+        print("Providers present in LiteLLM JSON but NOT in PROVIDERS (add to "
+              "model_sources/providers.py to surface in the UI):")
+        for p in extras:
+            print(f"   - {p}: {len(grouped[p])} chat model(s)")
     print()
     print(
-        "Legend: Returned=ids vendor sent back (post chat-only filter), "
-        "Curated=ids in MODEL_PROFILES, NetNew=auto-discovered."
-    )
-    print(
-        "If a model you expect isn't in 'Returned', the vendor isn't exposing "
-        "it via /v1/models — there's nothing this script can do about that."
+        "Source: LiteLLM model_prices_and_context_window.json. "
+        "Set LITELLM_CATALOG_URL to override the source URL."
     )
     return 0
 

@@ -11,6 +11,7 @@ from app.models.strategy_doc import StrategyDoc
 from app.models.upload import UserUpload
 from app.models.user import User
 from app.models.user_api_key import UserAPIKey
+from app.models.user_provider_settings import UserProviderSettings
 
 __all__ = [
     "ChatMessage",
@@ -27,4 +28,5 @@ __all__ = [
     "UserUpload",
     "User",
     "UserAPIKey",
+    "UserProviderSettings",
 ]

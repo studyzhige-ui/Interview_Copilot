@@ -1,0 +1,236 @@
+"""Provider defaults registry (dev-maintained).
+
+This file is the SOLE place where supported providers are declared.
+Adding a new vendor = add one ``ProviderDefaults`` row below. No other
+code changes. The pipeline (``litellm_loader`` → ``pipeline``) joins
+LiteLLM model entries to these defaults by matching ``litellm_provider``
+in LiteLLM JSON against the ``id`` field here.
+
+ID convention: MUST match the value LiteLLM uses in its
+``litellm_provider`` field for that vendor's entries, or no models
+will surface for that vendor in the catalog. The notable mismatch with
+our internal vocabulary is Google → LiteLLM calls it ``"gemini"`` (the
+free generative-language API) or ``"vertex_ai"`` (paid enterprise).
+We use ``"gemini"`` here; if a deployment needs Vertex, add a second
+provider entry with id ``"vertex_ai"``.
+
+``enabled_by_default``: keeps the Models page tidy. The 9 vendors a
+new user sees out of the box; the rest LiteLLM covers (Cohere, Mistral,
+Together, Fireworks, Groq, Replicate, Azure, Bedrock, Vertex, ...) show
+up in the "show more vendors" picker (P6-M UI) so the user opts in.
+"""
+from __future__ import annotations
+
+import os
+
+from .base import ProviderDefaults
+
+
+# Default-enabled providers (the 9 the system has been shipping with):
+#
+# DeepSeek / OpenAI / Anthropic / Google Gemini / Alibaba Qwen /
+# Moonshot Kimi / Zhipu GLM / Xiaomi MiMo / NVIDIA NIM.
+#
+# Why each one is `enabled_by_default=True`: each was already in the
+# pre-P6-L ``MODEL_PROFILES`` curated list and is something a typical
+# user on this product is likely to have access to. Vendors LiteLLM
+# also covers but we hide by default (Cohere/Mistral/Together/etc.)
+# are listed AFTER this block.
+#
+# Each ``default_api_base`` is also overridable via env var so the
+# same image can be redirected at an internal mirror without code edits.
+PROVIDERS: dict[str, ProviderDefaults] = {
+    "deepseek": ProviderDefaults(
+        id="deepseek",
+        display_label="DeepSeek",
+        default_api_base=os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com"),
+        api_key_env="DEEPSEEK_API_KEY",
+        icon_slug="deepseek",
+        enabled_by_default=True,
+    ),
+    "openai": ProviderDefaults(
+        id="openai",
+        display_label="OpenAI",
+        default_api_base=os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+        api_key_env="OPENAI_API_KEY",
+        icon_slug="openai",
+        enabled_by_default=True,
+    ),
+    "anthropic": ProviderDefaults(
+        id="anthropic",
+        display_label="Anthropic",
+        default_api_base=os.getenv("ANTHROPIC_API_BASE", "https://api.anthropic.com/v1"),
+        api_key_env="ANTHROPIC_API_KEY",
+        icon_slug="anthropic",
+        enabled_by_default=True,
+    ),
+    "gemini": ProviderDefaults(
+        id="gemini",
+        display_label="Google Gemini",
+        default_api_base=os.getenv(
+            "GOOGLE_API_BASE",
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+        ),
+        api_key_env="GOOGLE_API_KEY",
+        icon_slug="googlegemini",
+        enabled_by_default=True,
+    ),
+    # NOTE: LiteLLM currently tracks Qwen models ONLY through reseller
+    # gateways (Novita, Fireworks, Vertex AI, Bedrock). It has no direct
+    # ``litellm_provider: "qwen"`` entries yet. That means this card
+    # will show 0 models from the LiteLLM catalog until upstream adds
+    # them. The vendor's own ``/v1/models`` endpoint via DashScope
+    # works fine — once a user configures their key + LiteLLM ships
+    # entries, the card populates automatically with no code change.
+    "qwen": ProviderDefaults(
+        id="qwen",
+        display_label="通义 Qwen",
+        default_api_base=os.getenv(
+            "DASHSCOPE_API_BASE",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        ),
+        api_key_env="DASHSCOPE_API_KEY",
+        icon_slug="alibabacloud",
+        enabled_by_default=True,
+    ),
+    "moonshot": ProviderDefaults(
+        id="moonshot",
+        display_label="Moonshot Kimi",
+        default_api_base=os.getenv("MOONSHOT_API_BASE", "https://api.moonshot.cn/v1"),
+        api_key_env="MOONSHOT_API_KEY",
+        icon_slug=None,
+        enabled_by_default=True,
+    ),
+    # LiteLLM tracks Zhipu under its English brand ``z.ai``, so the id
+    # MUST be ``zai`` for the join to match. The display label / icon
+    # / env var stay Chinese-facing so existing keys keep working.
+    "zai": ProviderDefaults(
+        id="zai",
+        display_label="智谱 GLM",
+        default_api_base=os.getenv(
+            "ZHIPU_API_BASE", "https://open.bigmodel.cn/api/paas/v4",
+        ),
+        api_key_env="ZHIPU_API_KEY",
+        icon_slug=None,
+        enabled_by_default=True,
+    ),
+    # NOTE: Same situation as Qwen — LiteLLM only carries MiMo via the
+    # Novita reseller path. No direct ``litellm_provider: "xiaomi"``
+    # entries upstream yet, so this card shows 0 models until LiteLLM
+    # adds them. The card is left ON by default for visibility.
+    "xiaomi": ProviderDefaults(
+        id="xiaomi",
+        display_label="小米 MiMo",
+        default_api_base=os.getenv(
+            "MIMO_API_BASE", "https://token-plan-cn.xiaomimimo.com/v1",
+        ),
+        api_key_env="MIMO_API_KEY",
+        icon_slug="xiaomi",
+        enabled_by_default=True,
+    ),
+    # LiteLLM tracks NVIDIA NIM (their hosted inference catalog) under
+    # ``nvidia_nim``. Same env var / api_base as before.
+    "nvidia_nim": ProviderDefaults(
+        id="nvidia_nim",
+        display_label="NVIDIA",
+        default_api_base=os.getenv(
+            "NVIDIA_API_BASE", "https://integrate.api.nvidia.com/v1",
+        ),
+        api_key_env="NVIDIA_API_KEY",
+        icon_slug="nvidia",
+        enabled_by_default=True,
+    ),
+
+    # ── Opt-in providers (hidden until user enables via UI) ─────────────
+    # All of these have entries in LiteLLM's JSON, so once the user
+    # toggles them ON in the Models page, models surface automatically.
+    "mistral": ProviderDefaults(
+        id="mistral",
+        display_label="Mistral",
+        default_api_base=os.getenv("MISTRAL_API_BASE", "https://api.mistral.ai/v1"),
+        api_key_env="MISTRAL_API_KEY",
+        icon_slug="mistralai",
+        enabled_by_default=False,
+    ),
+    "cohere": ProviderDefaults(
+        id="cohere",
+        display_label="Cohere",
+        default_api_base=os.getenv("COHERE_API_BASE", "https://api.cohere.ai/compatibility/v1"),
+        api_key_env="COHERE_API_KEY",
+        icon_slug="cohere",
+        enabled_by_default=False,
+    ),
+    "groq": ProviderDefaults(
+        id="groq",
+        display_label="Groq",
+        default_api_base=os.getenv("GROQ_API_BASE", "https://api.groq.com/openai/v1"),
+        api_key_env="GROQ_API_KEY",
+        icon_slug=None,
+        enabled_by_default=False,
+    ),
+    "together_ai": ProviderDefaults(
+        id="together_ai",
+        display_label="Together AI",
+        default_api_base=os.getenv(
+            "TOGETHER_API_BASE", "https://api.together.xyz/v1",
+        ),
+        api_key_env="TOGETHER_API_KEY",
+        icon_slug=None,
+        enabled_by_default=False,
+    ),
+    "fireworks_ai": ProviderDefaults(
+        id="fireworks_ai",
+        display_label="Fireworks AI",
+        default_api_base=os.getenv(
+            "FIREWORKS_API_BASE", "https://api.fireworks.ai/inference/v1",
+        ),
+        api_key_env="FIREWORKS_API_KEY",
+        icon_slug=None,
+        enabled_by_default=False,
+    ),
+    "perplexity": ProviderDefaults(
+        id="perplexity",
+        display_label="Perplexity",
+        default_api_base=os.getenv("PERPLEXITY_API_BASE", "https://api.perplexity.ai"),
+        api_key_env="PERPLEXITY_API_KEY",
+        icon_slug="perplexity",
+        enabled_by_default=False,
+    ),
+    "xai": ProviderDefaults(
+        id="xai",
+        display_label="xAI",
+        default_api_base=os.getenv("XAI_API_BASE", "https://api.x.ai/v1"),
+        api_key_env="XAI_API_KEY",
+        icon_slug="x",
+        enabled_by_default=False,
+    ),
+    # Novita — a reseller gateway that carries Qwen / Xiaomi MiMo / Zhipu
+    # GLM / etc. Opt-in. Useful when users want to reach those models
+    # but don't have direct vendor keys, since LiteLLM currently tracks
+    # those vendors' models ONLY via this gateway.
+    "novita": ProviderDefaults(
+        id="novita",
+        display_label="Novita AI (聚合)",
+        default_api_base=os.getenv("NOVITA_API_BASE", "https://api.novita.ai/v3/openai"),
+        api_key_env="NOVITA_API_KEY",
+        icon_slug=None,
+        enabled_by_default=False,
+    ),
+}
+
+
+def get_provider_defaults(provider_id: str) -> ProviderDefaults | None:
+    """Return ``ProviderDefaults`` for ``provider_id``, or ``None`` if unknown.
+
+    Returning ``None`` (not raising) is deliberate: callers that filter
+    LiteLLM entries by provider can silently drop entries for providers
+    we don't ship support for (e.g., a brand-new vendor in LiteLLM JSON
+    that we haven't added here yet). The catalog still works; ops just
+    add a row above when they want to surface that vendor.
+    """
+    return PROVIDERS.get(provider_id)
+
+
+def known_provider_ids() -> set[str]:
+    """Set of provider ids the system supports right now."""
+    return set(PROVIDERS.keys())

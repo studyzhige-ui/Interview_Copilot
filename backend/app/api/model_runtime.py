@@ -10,17 +10,18 @@ from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.user import User
 from app.core.model_registry import (
-    MODEL_PROFILES,
+    _get_all_profiles,
+    _serialize_profile,
     get_async_openai_client,
     get_profile,
     get_profile_for_role,
     get_runtime_selection,
-    list_profiles_with_discovery,
     profile_ready,
     update_runtime_selection,
     validate_role_update,
 )
 from app.rag.embeddings import refresh_primary_llm
+from app.services.model_sources.pipeline import load_catalog, refresh_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +55,23 @@ async def api_model_catalog(
 
     async def _build():
         selection = get_runtime_selection(user_id=current_user.username)
-        # list_profiles_with_discovery merges curated MODEL_PROFILES with
-        # whatever each vendor's /v1/models endpoint currently advertises.
-        # Discovery itself is cached 24h in Redis (model_catalog_service);
-        # this 60-s wrapper just reduces per-page-load DB churn.
-        profiles = await list_profiles_with_discovery(user_id=current_user.username)
+        # Pull the LiteLLM-driven catalog from the Redis pipeline cache.
+        # ``load_catalog`` doesn't hit the vendor itself — that's the
+        # daily Celery beat's job. The serialization layer below joins
+        # each ``ModelEntry`` with its ``ProviderDefaults`` and tags
+        # per-user state (ready flag, selected_for).
+        from app.core.model_registry import repopulate_profile_cache
+        grouped = await load_catalog()
+        # Hint the sync profile cache with what we just read so chat
+        # paths in this process don't take a Redis round-trip on the
+        # next call.
+        if grouped:
+            repopulate_profile_cache(grouped)
+        profiles_map = _get_all_profiles()
+        profiles = [
+            _serialize_profile(p, selection, current_user.username)
+            for p in profiles_map.values()
+        ]
         return {
             "status": "success",
             "selection": selection,
@@ -76,26 +89,32 @@ async def api_model_catalog(
 async def refresh_model_catalog(
     current_user: User = Depends(get_current_user),
 ):
-    """Force-refresh the auto-discovered model list for every vendor.
+    """Force-refresh the LiteLLM-driven catalog.
 
-    Drops the per-vendor 24h Redis cache from ``model_catalog_service``
-    AND the per-user 60-s catalog cache, then re-runs discovery in the
-    same call so the response already reflects the new state.
+    P6-L: data source is LiteLLM's public model_prices JSON, not per-vendor
+    /v1/models discovery. ``refresh_catalog`` re-fetches the JSON with
+    layer-3 protection (retry → schema validate → last-known-good
+    fallback), persists per-provider entries to Redis, and updates the
+    process-local profile cache. Also drops the per-user 60-s wrapper
+    so this user sees the fresh entries on their very next read.
     """
     from app.services.cache_service import invalidate
-    from app.services.model_catalog_service import invalidate_all
+    from app.core.model_registry import repopulate_profile_cache
 
-    dropped = await invalidate_all()
+    grouped = await refresh_catalog()
+    repopulate_profile_cache(grouped)
     await invalidate(f"models:catalog:{current_user.username}")
-    profiles = await list_profiles_with_discovery(
-        user_id=current_user.username, force_refresh=True,
-    )
-    auto = sum(1 for p in profiles if p.get("auto_discovered"))
+
+    selection = get_runtime_selection(user_id=current_user.username)
+    profiles_map = _get_all_profiles()
+    profiles = [
+        _serialize_profile(p, selection, current_user.username)
+        for p in profiles_map.values()
+    ]
     return {
         "status": "refreshed",
-        "discovery_cache_dropped": dropped,
+        "providers_refreshed": len(grouped),
         "profiles_total": len(profiles),
-        "profiles_auto_discovered": auto,
         "profiles": profiles,
     }
 
@@ -254,7 +273,7 @@ async def ping_models(
     per profile rather than discovering breakage only when they try to use
     a model in production.
     """
-    ids = list(MODEL_PROFILES.keys())
+    ids = list(_get_all_profiles().keys())
     results = await asyncio.gather(*[_ping_one(pid, user_id=current_user.username) for pid in ids])
     return {"results": results, "checked_at": int(time.time())}
 

@@ -488,42 +488,48 @@ def dream_for_user_task(self, user_id: str):
     soft_time_limit=270,
 )
 def refresh_model_catalog_task(self):
-    """Re-fetch every vendor's /v1/models and replace the cached entries.
+    """Re-fetch the LiteLLM catalog and replace the per-provider Redis cache.
 
-    No ``user_id``: scheduled context, so ``discover_provider`` falls back
-    to env vars (the cron host's deployment env should have the keys
-    configured for any vendor whose models we want pre-warmed). Cache is
-    GLOBAL (P6-J), so this single fetch warms the entry every user reads
-    from on their next /catalog GET.
+    P6-L: data source is LiteLLM's community JSON, NOT per-vendor
+    /v1/models discovery. Single HTTP GET (with one retry on transient
+    failure), schema-validated, written under ``model_catalog:v4:*``
+    keys + LKG snapshot. No API key needed — the JSON is public.
+
+    On terminal fetch failure, ``refresh_catalog`` keeps the last-known-
+    good snapshot in place and returns whatever LKG has. We log the
+    distinction so ops can tell a "refresh ran successfully" from a
+    "fetch broke, serving stale" condition.
     """
-    from app.core.model_registry import _provider_specs_for_discovery
-    from app.services.model_catalog_service import discover_all, invalidate_all
+    from app.core.model_registry import repopulate_profile_cache
+    from app.services.model_sources.litellm_loader import LiteLLMFetchFailed
+    from app.services.model_sources.pipeline import refresh_catalog
 
     async def _run():
-        # Drop everything first so the force_refresh=True writes are
-        # the only entries in the namespace after this task completes.
-        dropped = await invalidate_all()
-        discovered = await discover_all(
-            _provider_specs_for_discovery(), force_refresh=True,
-        )
-        return dropped, discovered
+        grouped = await refresh_catalog()
+        return grouped
 
-    dropped, discovered = run_async(_run())
-    per_vendor = {p: len(ms) for p, ms in discovered.items()}
+    grouped = run_async(_run())
+    # Keep this worker process's sync profile cache in sync so any
+    # subsequent chat path in THIS process doesn't take a Redis round-trip.
+    repopulate_profile_cache(grouped)
+
+    per_vendor = {p: len(entries) for p, entries in grouped.items()}
     total = sum(per_vendor.values())
     empty_vendors = [p for p, n in per_vendor.items() if n == 0]
     logger.info(
-        "refresh_model_catalog: dropped=%d total_models=%d per_vendor=%s",
-        dropped, total, per_vendor,
+        "refresh_model_catalog: total_models=%d per_vendor=%s",
+        total, per_vendor,
     )
     if empty_vendors:
-        # Surface vendors that returned 0 models — most often this means
-        # the env var for that provider's API key isn't set on the cron
-        # host. Ops can then either configure the key OR remove the
-        # vendor from MODEL_PROFILES if it's not used.
+        # LiteLLM ships entries for every provider we declare in
+        # PROVIDERS — an empty vendor here means LiteLLM JSON
+        # genuinely has no chat-mode entries under that
+        # ``litellm_provider`` field (probably means the provider id
+        # is misspelled, OR LiteLLM hasn't merged that vendor's
+        # entries yet).
         logger.warning(
-            "refresh_model_catalog: %d vendor(s) returned 0 models "
-            "(missing API key on cron host?): %s",
+            "refresh_model_catalog: %d vendor(s) returned 0 models from "
+            "LiteLLM JSON: %s",
             len(empty_vendors), empty_vendors,
         )
-    return {"dropped": dropped, "per_vendor": per_vendor, "total": total}
+    return {"per_vendor": per_vendor, "total": total}

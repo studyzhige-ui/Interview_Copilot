@@ -33,16 +33,43 @@ def client():
 
 
 def test_models_catalog_returns_selection_and_profiles(client, monkeypatch):
+    """P6-L: catalog is sourced from the pipeline cache, not from
+    a static MODEL_PROFILES dict. We stub the pipeline load + the
+    sync profile cache used to serialise the response."""
+    from app.core.model_registry import ModelProfile
+
+    fake_profiles = {
+        "openai/gpt-4o": ModelProfile(
+            id="openai/gpt-4o", provider="openai", display_name="GPT-4o",
+            model="gpt-4o", api_base="https://x",
+            api_key_env="OPENAI_API_KEY", supports_function_calling=True,
+        ),
+        "openai/gpt-4o-mini": ModelProfile(
+            id="openai/gpt-4o-mini", provider="openai", display_name="GPT-4o Mini",
+            model="gpt-4o-mini", api_base="https://x",
+            api_key_env="OPENAI_API_KEY", supports_function_calling=True,
+        ),
+    }
+    monkeypatch.setattr(model_runtime_mod, "_get_all_profiles", lambda: fake_profiles)
     monkeypatch.setattr(
         model_runtime_mod,
         "get_runtime_selection",
-        lambda user_id=None: {"primary": "p1", "fast": "p1", "agent": "p2", "mock_interview": "p1"},
+        lambda user_id=None: {
+            "primary": "openai/gpt-4o", "fast": "openai/gpt-4o-mini",
+            "agent": "openai/gpt-4o", "mock_interview": "openai/gpt-4o",
+        },
+    )
+    # profile_ready imported from registry — stub to True so the
+    # serialiser sets ready=True without needing env vars set.
+    monkeypatch.setattr(
+        "app.core.model_registry.profile_ready",
+        lambda profile, user_id=None: True,
     )
 
-    async def fake_list(user_id=None, force_refresh=False):
-        return [{"id": "p1", "ready": True}, {"id": "p2", "ready": False}]
+    async def fake_load_catalog():
+        return {}  # empty → endpoint falls through to the planted profile cache
 
-    monkeypatch.setattr(model_runtime_mod, "list_profiles_with_discovery", fake_list)
+    monkeypatch.setattr(model_runtime_mod, "load_catalog", fake_load_catalog)
 
     # cached() goes via Redis — patch it to call the loader directly.
     async def fake_cached(name, ttl, loader):
@@ -53,8 +80,8 @@ def test_models_catalog_returns_selection_and_profiles(client, monkeypatch):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "success"
-    assert body["selection"]["primary"] == "p1"
-    assert {p["id"] for p in body["profiles"]} == {"p1", "p2"}
+    assert body["selection"]["primary"] == "openai/gpt-4o"
+    assert {p["id"] for p in body["profiles"]} == {"openai/gpt-4o", "openai/gpt-4o-mini"}
 
 
 # ── /models/runtime (GET) ─────────────────────────────────────────────────
@@ -207,8 +234,9 @@ def test_delete_api_key_reports_status(client):
 
 
 def test_ping_models_returns_one_result_per_profile(client, monkeypatch):
+    """P6-L: ping iterates ``_get_all_profiles()``, not the deleted MODEL_PROFILES."""
     fake_profiles = {"p1": object(), "p2": object()}
-    monkeypatch.setattr(model_runtime_mod, "MODEL_PROFILES", fake_profiles)
+    monkeypatch.setattr(model_runtime_mod, "_get_all_profiles", lambda: fake_profiles)
 
     async def fake_ping(pid, user_id=None):
         return {"profile_id": pid, "ok": True, "latency_ms": 1}
