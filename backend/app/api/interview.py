@@ -261,7 +261,7 @@ async def analyze_interview_endpoint(
 
         jd_text = (body.jd_text or "").strip()
         if not jd_text and body.jd_upload_id:
-            from app.services.knowledge_text_service import load_knowledge_text
+            from app.services.knowledge.knowledge_text_service import load_knowledge_text
             try:
                 jd_text = load_knowledge_text(db, body.jd_upload_id, current_user.username) or ""
             except Exception:  # noqa: BLE001

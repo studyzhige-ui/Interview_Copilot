@@ -190,7 +190,7 @@ class ResumeService:
     def _vectorize_sections(sections: list[ResumeSection]) -> None:
         """Best-effort vectorization — failures are logged, not raised."""
         try:
-            from app.services.resume_vector_service import resume_vector_service
+            from app.services.resume.resume_vector_service import resume_vector_service
         except Exception:  # noqa: BLE001
             logger.warning("Resume vector service unavailable, skipping vectorization")
             return

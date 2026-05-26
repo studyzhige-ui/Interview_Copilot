@@ -32,7 +32,7 @@ def test_read_full_text_returns_concatenated_chunks_in_stored_order(monkeypatch)
     flow (top → bottom for PDFs), so concatenating in node_ids order
     preserves heading-above-body structure. Without this the LLM sees
     the resume scrambled."""
-    from app.services import knowledge_text_service as svc
+    from app.services.knowledge import knowledge_text_service as svc
 
     fake_nodes = {
         "n1": SimpleNamespace(text="孙根武\n北京邮电大学"),
@@ -65,7 +65,7 @@ def test_read_full_text_returns_empty_on_no_node_ids():
     (status=processing / pending / failed) must return ``("", 0)``
     rather than try to talk to the docstore — the caller will fall
     back to re-parsing the raw upload."""
-    from app.services import knowledge_text_service as svc
+    from app.services.knowledge import knowledge_text_service as svc
 
     doc = _make_doc(node_ids=[])
     text, count = svc.read_full_text_from_docstore(doc)
@@ -78,7 +78,7 @@ def test_read_full_text_swallows_docstore_connection_failure(monkeypatch):
     not installed in this env), return ``("", 0)`` and let the caller
     fall back. Crashing the whole endpoint over an observability path
     would be much worse than re-parsing."""
-    from app.services import knowledge_text_service as svc
+    from app.services.knowledge import knowledge_text_service as svc
 
     def _boom(cls, uri):
         raise RuntimeError("simulated_db_down")
@@ -101,7 +101,7 @@ def test_read_full_text_skips_missing_nodes(monkeypatch):
 
     All-missing collapses to ``("", 0)`` so the caller knows to fall
     back to re-parsing."""
-    from app.services import knowledge_text_service as svc
+    from app.services.knowledge import knowledge_text_service as svc
 
     class _PartiallyEmpty:
         def __init__(self): self.calls = 0
@@ -129,7 +129,7 @@ def test_read_full_text_uses_get_content_when_text_attr_missing(monkeypatch):
     """Older llama_index versions / Document-subtype nodes may not
     expose ``.text`` directly. Cover both shapes so a library upgrade
     doesn't silently drop the content."""
-    from app.services import knowledge_text_service as svc
+    from app.services.knowledge import knowledge_text_service as svc
 
     class _DocLikeNode:
         # No .text; only get_content()
@@ -151,7 +151,7 @@ def test_read_full_text_uses_get_content_when_text_attr_missing(monkeypatch):
 
 
 def test_read_full_text_truncates_at_max_chars(monkeypatch):
-    from app.services import knowledge_text_service as svc
+    from app.services.knowledge import knowledge_text_service as svc
 
     class _Big:
         def get_document(self, nid):
@@ -172,7 +172,7 @@ def test_find_knowledge_doc_by_upload_filters_user_and_upload(monkeypatch):
     """``find_knowledge_doc_by_upload`` must filter on BOTH user_id and
     upload_id so a user can't access another user's library row by
     guessing an upload id."""
-    from app.services import knowledge_text_service as svc
+    from app.services.knowledge import knowledge_text_service as svc
 
     captured_filters: list = []
 
@@ -198,7 +198,7 @@ def test_load_knowledge_text_prefers_docstore_over_reparse(monkeypatch):
     """The fast path must short-circuit the slow path — that's the
     whole point of this refactor. Verify ``load_knowledge_text``
     returns the docstore text and never touches ``download_file_from_s3``."""
-    from app.services import knowledge_text_service as svc
+    from app.services.knowledge import knowledge_text_service as svc
 
     class _Q:
         def filter(self, *a, **k): return self
@@ -228,11 +228,11 @@ def test_load_knowledge_text_prefers_docstore_over_reparse(monkeypatch):
         raise AssertionError("download_file_from_s3 should NOT be called when docstore returns text")
 
     monkeypatch.setattr(
-        "app.services.knowledge_text_service.download_file_from_s3",
+        "app.services.knowledge.knowledge_text_service.download_file_from_s3",
         _no_s3,
     )
     monkeypatch.setattr(
-        "app.services.knowledge_text_service.extract_resume_text",
+        "app.services.knowledge.knowledge_text_service.extract_resume_text",
         _no_s3,
     )
 
@@ -243,7 +243,7 @@ def test_load_knowledge_text_prefers_docstore_over_reparse(monkeypatch):
 def test_load_knowledge_text_falls_back_to_reparse_when_docstore_empty(monkeypatch):
     """When docstore returns empty (ingestion still pending), the
     download+parse fallback runs and its result is returned."""
-    from app.services import knowledge_text_service as svc
+    from app.services.knowledge import knowledge_text_service as svc
 
     class _Q:
         def filter(self, *a, **k): return self
@@ -260,11 +260,11 @@ def test_load_knowledge_text_falls_back_to_reparse_when_docstore_empty(monkeypat
         def query(self, *a, **k): return _Q()
 
     monkeypatch.setattr(
-        "app.services.knowledge_text_service.download_file_from_s3",
+        "app.services.knowledge.knowledge_text_service.download_file_from_s3",
         lambda src, dst: None,  # no-op
     )
     monkeypatch.setattr(
-        "app.services.knowledge_text_service.extract_resume_text",
+        "app.services.knowledge.knowledge_text_service.extract_resume_text",
         lambda path: "from reparse",
     )
 

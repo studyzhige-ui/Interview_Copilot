@@ -46,7 +46,7 @@ def _read_resume_sync(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, 
       3. If neither table has anything, only THEN return the
          no-resume hint.
     """
-    from app.services.resume_service import resume_service
+    from app.services.resume.resume_service import resume_service
 
     sections = resume_service.get_sections_by_user(ctx.user_id)
     if sections:
@@ -97,7 +97,7 @@ def _read_resume_sync(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, 
         # ``search_knowledge`` (which returns ~5 reranked chunks ×
         # 1500 chars — fragmented + filtered). Direct docstore read is
         # the right primitive for "give me the user's resume".
-        from app.services.knowledge_text_service import (
+        from app.services.knowledge.knowledge_text_service import (
             read_full_text_from_docstore,
         )
 

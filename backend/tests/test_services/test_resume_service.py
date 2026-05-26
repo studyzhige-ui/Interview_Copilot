@@ -1,4 +1,4 @@
-"""Tests for app.services.resume_service.
+"""Tests for app.services.resume.resume_service.
 
 Local SQLite fixture — the shared conftest db_session fixture is broken
 because it imports a removed ``app.models.interview`` module.
@@ -53,7 +53,7 @@ class _NoCloseSession:
 def test_resume_parse_and_store(monkeypatch, resume_db_session):
     """extract_and_store should run LLM parse + persist all valid sections."""
     from app.models.resume_section import ResumeSection
-    from app.services import resume_service as module
+    from app.services.resume import resume_service as module
 
     class FakeResponse:
         def __init__(self, text):
@@ -109,7 +109,7 @@ def test_resume_parse_and_store(monkeypatch, resume_db_session):
 def test_format_for_context_filters_by_section_type(monkeypatch, resume_db_session):
     """format_for_context with section_types=[project] should only include project rows."""
     from app.models.resume_section import ResumeSection
-    from app.services import resume_service as module
+    from app.services.resume import resume_service as module
 
     monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(resume_db_session))
 
@@ -141,7 +141,7 @@ def test_format_for_context_filters_by_section_type(monkeypatch, resume_db_sessi
 def test_reparse_replaces_old_sections(monkeypatch, resume_db_session):
     """Calling extract_and_store again for the same upload_id wipes old rows first."""
     from app.models.resume_section import ResumeSection
-    from app.services import resume_service as module
+    from app.services.resume import resume_service as module
 
     class FakeResponse:
         def __init__(self, text):
@@ -177,7 +177,7 @@ def test_reparse_replaces_old_sections(monkeypatch, resume_db_session):
 def test_persist_handles_invalid_section_type(monkeypatch, resume_db_session):
     """Unknown section_type values get coerced to 'summary' rather than dropped."""
     from app.models.resume_section import ResumeSection
-    from app.services import resume_service as module
+    from app.services.resume import resume_service as module
 
     class FakeLLM:
         async def acomplete(self, *args, **kwargs):

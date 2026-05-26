@@ -169,7 +169,7 @@ def test_read_resume_direct_docstore_read(monkeypatch):
 
     # resume_service.get_sections_by_user returns [] so we always enter Tier 2.
     monkeypatch.setattr(
-        "app.services.resume_service.resume_service.get_sections_by_user",
+        "app.services.resume.resume_service.resume_service.get_sections_by_user",
         lambda user_id: [],
     )
 

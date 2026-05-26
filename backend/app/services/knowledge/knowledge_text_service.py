@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.knowledge import KnowledgeDocument
-from app.services.knowledge_service import json_list
+from app.services.knowledge.knowledge_service import json_list
 from app.services.storage_service import download_file_from_s3
 from app.services.voice.file_parser import extract_resume_text
 

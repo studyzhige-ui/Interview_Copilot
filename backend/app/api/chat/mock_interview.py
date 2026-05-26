@@ -66,7 +66,7 @@ async def start_mock_interview(
         generate_brief,
         prefix_hash,
     )
-    from app.services.resume_service import resume_service
+    from app.services.resume.resume_service import resume_service
 
     session = db.query(ChatSession).filter(
         ChatSession.id == body.session_id,
@@ -145,7 +145,7 @@ async def start_mock_interview(
                 resume_context = resume_service.format_for_context(sections)
                 resume_source = "sections"
             else:
-                from app.services.knowledge_text_service import (
+                from app.services.knowledge.knowledge_text_service import (
                     find_knowledge_doc_by_upload,
                     read_full_text_from_docstore,
                 )
@@ -176,7 +176,7 @@ async def start_mock_interview(
 
     jd_context = (body.jd_text or "").strip()
     if not jd_context and body.jd_upload_id:
-        from app.services.knowledge_text_service import load_knowledge_text
+        from app.services.knowledge.knowledge_text_service import load_knowledge_text
         try:
             jd_context = load_knowledge_text(db, body.jd_upload_id, current_user.username)
         except Exception as exc:  # noqa: BLE001

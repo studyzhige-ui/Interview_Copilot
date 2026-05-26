@@ -185,7 +185,7 @@ def process_document_ingestion(self, document_id: str):
     import tempfile
 
     from app.rag.ingestion import ingest_document
-    from app.services.knowledge_service import dump_json_list
+    from app.services.knowledge.knowledge_service import dump_json_list
     from app.services.storage_service import download_file_from_s3
 
     db = SessionLocal()

@@ -338,19 +338,19 @@ def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypat
         return "reparsed text"
 
     monkeypatch.setattr(
-        "app.services.resume_service.resume_service.get_sections_by_upload",
+        "app.services.resume.resume_service.resume_service.get_sections_by_upload",
         fake_sections,
     )
     monkeypatch.setattr(
-        "app.services.resume_service.resume_service.format_for_context",
+        "app.services.resume.resume_service.resume_service.format_for_context",
         fake_format,
     )
     monkeypatch.setattr(
-        "app.services.knowledge_text_service.find_knowledge_doc_by_upload",
+        "app.services.knowledge.knowledge_text_service.find_knowledge_doc_by_upload",
         fake_find_kdoc,
     )
     monkeypatch.setattr(
-        "app.services.knowledge_text_service.read_full_text_from_docstore",
+        "app.services.knowledge.knowledge_text_service.read_full_text_from_docstore",
         fake_docstore_read,
     )
     monkeypatch.setattr(
@@ -381,7 +381,7 @@ def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypat
     # ── Scenario A: sections-tier hit (no kdoc lookup, no reparse) ──
     _fake_kdoc = [None]  # sentinel — not consulted in scenario A
     monkeypatch.setattr(
-        "app.services.resume_service.resume_service.get_sections_by_upload",
+        "app.services.resume.resume_service.resume_service.get_sections_by_upload",
         lambda u, n: (calls.append("sections"), [
             # Non-empty so tier 1 wins.
             type("S", (), {"section_type": "summary", "title": "X", "content": "y"})()
@@ -406,7 +406,7 @@ def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypat
     # ── Scenario B: sections empty + kdoc present → docstore wins ──
     calls.clear()
     monkeypatch.setattr(
-        "app.services.resume_service.resume_service.get_sections_by_upload",
+        "app.services.resume.resume_service.resume_service.get_sections_by_upload",
         fake_sections,  # returns []
     )
 
