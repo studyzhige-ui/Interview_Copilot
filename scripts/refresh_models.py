@@ -48,6 +48,13 @@ async def _main() -> int:
         "--verbose", "-v", action="store_true",
         help="Show every model id per provider (default: head + count).",
     )
+    parser.add_argument(
+        "--write-seed", action="store_true",
+        help="After refreshing, write backend/app/services/model_sources/"
+             "seed_catalog.json with the current catalog snapshot. "
+             "This file ships with the repo so fresh clones show a "
+             "populated Models page before users configure any keys.",
+    )
     args = parser.parse_args()
 
     # Lazy imports so --help doesn't load the full backend stack.
@@ -58,6 +65,34 @@ async def _main() -> int:
     # internally. If ALL 9 vendors fail (cold cache + no LKG), we get
     # an empty dict back.
     grouped = await refresh_catalog()
+
+    if args.write_seed:
+        import json as _json
+        from pathlib import Path as _Path
+
+        seed_path = _Path("backend/app/services/model_sources/seed_catalog.json")
+        snapshot = {
+            provider: [
+                {
+                    "provider": e.provider,
+                    "model": e.model,
+                    "display_name": e.display_name,
+                    "supports_function_calling": e.supports_function_calling,
+                    "context_window": e.context_window,
+                    "max_output_tokens": e.max_output_tokens,
+                    "supports_vision": e.supports_vision,
+                }
+                for e in entries
+            ]
+            for provider, entries in grouped.items() if entries
+        }
+        seed_path.parent.mkdir(parents=True, exist_ok=True)
+        with seed_path.open("w", encoding="utf-8") as f:
+            _json.dump(snapshot, f, ensure_ascii=False, indent=2)
+        total = sum(len(v) for v in snapshot.values())
+        print(f"Wrote seed catalog: {total} models across "
+              f"{len(snapshot)} providers → {seed_path}")
+        print()
 
     # Order rows by PROVIDERS dict iteration so the table matches the
     # Models page card order (default-enabled first, opt-in after).

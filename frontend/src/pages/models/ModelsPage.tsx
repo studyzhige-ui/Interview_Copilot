@@ -44,10 +44,13 @@ const BRAND_COLORS: Record<string, string> = {
   novita:       '#7B61FF',
 };
 
-// Visible rows in each vendor card's scrollable model list. 4 rows + the
-// "下滑查看全部" hint and bottom fade gradient make the overflow obvious;
-// vendors with 10+ models still scroll inside the same card height.
-const MODELS_VISIBLE_ROWS = 4;
+// Visible rows in each vendor card's scrollable model list. 2 rows is
+// the original design intent — keeps the page compact when there are
+// 9+ vendor cards. The "下滑查看全部" hint + bottom fade gradient + the
+// vendor's tier_rank sort (highest-priority models at top) mean the
+// first 2 are always the recommended choices; users with the rare
+// "show me every model" need just scroll the card.
+const MODELS_VISIBLE_ROWS = 2;
 const MODEL_ROW_HEIGHT_PX = 64;
 const MODEL_ROW_GAP_PX = 8;
 

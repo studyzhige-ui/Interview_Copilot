@@ -30,6 +30,7 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from app.db.redis import redis_client
@@ -41,6 +42,48 @@ from .vendors import ALL_SPECS, VendorAdapterSpec, fetch_one_vendor
 from .vendors.base import VendorFetchFailed
 
 logger = logging.getLogger(__name__)
+
+
+# Seed catalog: a snapshot of the live catalog at packaging time,
+# shipped with the repo so a fresh `git clone` shows a populated
+# Models page even before the user configures any API keys. Loaded
+# once at module import; the in-memory copy is the third fallback
+# layer (per-provider Redis → LKG sentinel → seed → empty).
+#
+# Models served from the seed always show as `ready=false` because
+# the user has no key — that's correct UX (browse to see what's
+# available; configure a key to actually use).
+#
+# Regenerate via: scripts/refresh_models.py --write-seed
+_SEED_PATH = Path(__file__).parent / "seed_catalog.json"
+
+
+def _load_seed_catalog() -> dict[str, list[ModelEntry]]:
+    """Read seed_catalog.json once at import. Returns empty dict if
+    the file is absent or malformed — fresh repos may not have it."""
+    if not _SEED_PATH.exists():
+        return {}
+    try:
+        with _SEED_PATH.open(encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("seed_catalog.json load failed: %s", exc)
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, list[ModelEntry]] = {}
+    for provider, entries in raw.items():
+        if not isinstance(entries, list):
+            continue
+        deserialized = _deserialize_entries(json.dumps(entries, ensure_ascii=False))
+        if deserialized:
+            out[provider] = deserialized
+    return out
+
+
+# Computed lazily so we can import _deserialize_entries below. See
+# the module-end `_SEED_CATALOG = _load_seed_catalog()` line.
+_SEED_CATALOG: dict[str, list[ModelEntry]] = {}
 
 
 # Cache key namespace. ``v5`` because v1-v4 prefixes are from the
@@ -146,8 +189,13 @@ async def _persist_all(grouped: dict[str, list[ModelEntry]]) -> None:
 
 
 async def _load_one_provider(provider: str) -> list[ModelEntry]:
-    """Fast path: read this provider's slice from Redis. Falls back to
-    extracting from the LKG sentinel if the per-provider TTL expired."""
+    """3-layer fallback: per-provider Redis → LKG sentinel → seed snapshot.
+
+    The seed is the static JSON shipped with the repo so a fresh
+    `git clone` shows a populated catalog even before any vendor
+    fetch has run. Models served from the seed will still show as
+    ``ready=false`` because the user has no key — accurate UX.
+    """
     try:
         raw = await redis_client.get(_redis_key(provider))
     except Exception as exc:  # noqa: BLE001
@@ -155,7 +203,12 @@ async def _load_one_provider(provider: str) -> list[ModelEntry]:
         raw = None
     if raw is not None:
         return _deserialize_entries(raw)
-    return await _load_one_from_lkg(provider)
+    lkg_entries = await _load_one_from_lkg(provider)
+    if lkg_entries:
+        return lkg_entries
+    # Final fallback: the shipped seed. Always available unless someone
+    # deleted seed_catalog.json or this provider isn't in the snapshot.
+    return list(_SEED_CATALOG.get(provider, []))
 
 
 async def _load_one_from_lkg(provider: str) -> list[ModelEntry]:
@@ -176,24 +229,27 @@ async def _load_one_from_lkg(provider: str) -> list[ModelEntry]:
 
 
 async def _load_all_from_lkg() -> dict[str, list[ModelEntry]]:
+    """Full-catalog LKG read. Falls back to the shipped seed snapshot
+    when no LKG exists — so even a brand-new deploy with cold Redis
+    serves something for the /catalog endpoint."""
     try:
         raw = await redis_client.get(_redis_key_lkg())
     except Exception as exc:  # noqa: BLE001
         logger.warning("catalog: LKG read failed during refresh fallback: %s", exc)
-        return {}
-    if raw is None:
-        return {}
-    try:
-        snapshot = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return {}
-    if not isinstance(snapshot, dict):
-        return {}
-    return {
-        provider: _deserialize_entries(serialized)
-        for provider, serialized in snapshot.items()
-        if isinstance(serialized, str)
-    }
+        raw = None
+    if raw is not None:
+        try:
+            snapshot = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            snapshot = None
+        if isinstance(snapshot, dict):
+            return {
+                provider: _deserialize_entries(serialized)
+                for provider, serialized in snapshot.items()
+                if isinstance(serialized, str)
+            }
+    # Final fallback: shipped seed.
+    return {p: list(es) for p, es in _SEED_CATALOG.items()}
 
 
 def _resolve_key_for_provider(provider: str, user_id: str | None) -> str:
@@ -245,9 +301,12 @@ async def refresh_catalog(
             return spec.provider, [], False
         api_key = api_keys[spec.provider]
         if not api_key:
-            # No key for this vendor — return empty, the catalog
-            # serializer will show "未配置 API Key" downstream.
-            return spec.provider, [], True   # "success" in the sense of "no fetch needed"
+            # No key for this vendor — serve the shipped seed snapshot
+            # so the user still sees what's available (cards with
+            # ready=false). They configure a key and re-refresh to
+            # replace with live data.
+            seed_entries = list(_SEED_CATALOG.get(spec.provider, []))
+            return spec.provider, seed_entries, True
         api_base = _resolve_list_models_base(spec, defaults.default_api_base)
         try:
             entries = await fetch_one_vendor(spec, api_base, api_key)
@@ -381,3 +440,15 @@ __all__ = [
     "load_catalog_for",
     "invalidate_all",
 ]
+
+
+# Module-load: populate the seed cache. Done at the bottom so
+# _deserialize_entries (used inside _load_seed_catalog) is defined.
+# Failure is non-fatal — empty seed just means new clones get blank
+# cards until they configure a key + refresh.
+_SEED_CATALOG = _load_seed_catalog()
+if _SEED_CATALOG:
+    logger.info(
+        "model_catalog seed loaded: %d providers, %d total models",
+        len(_SEED_CATALOG), sum(len(es) for es in _SEED_CATALOG.values()),
+    )

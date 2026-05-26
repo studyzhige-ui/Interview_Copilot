@@ -159,10 +159,16 @@ async def test_refresh_one_vendor_failure_falls_back_to_lkg(
 async def test_refresh_all_failures_keeps_cache_untouched(
     monkeypatch, fake_redis, stubbed_specs,
 ):
-    """Global outage (all vendors fail with no keys / no LKG) → cache
-    NOT written. Caller receives LKG payload."""
+    """Global outage (all vendors fail with no keys / no LKG / no seed)
+    → cache NOT written. Caller receives empty dict.
+
+    The seed_catalog.json shipped with the repo would normally cover
+    the "no key" case (P7-D) — we monkeypatch it to empty here to
+    isolate the genuine all-fail behaviour.
+    """
     monkeypatch.delenv("ALPHA_API_KEY", raising=False)
     monkeypatch.delenv("BETA_API_KEY", raising=False)
+    monkeypatch.setattr(pipeline_mod, "_SEED_CATALOG", {})
 
     out = await pipeline_mod.refresh_catalog()
     # No writes happened because no vendor returned a non-empty list.
@@ -201,12 +207,87 @@ async def test_load_catalog_for_falls_back_to_lkg(monkeypatch, fake_redis):
 
 @pytest.mark.asyncio
 async def test_load_catalog_empty_when_redis_cold(monkeypatch, fake_redis):
-    """First deploy / Redis wiped / no LKG → empty dict, no exception."""
+    """Redis wiped + seed empty → empty dict, no exception."""
     import app.services.model_sources.providers as p_mod
     monkeypatch.setattr(p_mod, "PROVIDERS", {"openai": object()})
     monkeypatch.setattr(pipeline_mod, "PROVIDERS", {"openai": object()})
+    monkeypatch.setattr(pipeline_mod, "_SEED_CATALOG", {})
     out = await pipeline_mod.load_catalog()
     assert out == {}
+
+
+# ── seed catalog fallback (P7-D) ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_load_one_falls_back_to_seed_when_redis_and_lkg_empty(
+    monkeypatch, fake_redis,
+):
+    """Fresh deploy: no Redis, no LKG, but seed_catalog.json shipped
+    with the repo. The user MUST see the shipped snapshot."""
+    seeded = {"openai": [_entry("openai", "gpt-5.5")]}
+    monkeypatch.setattr(pipeline_mod, "_SEED_CATALOG", seeded)
+    entries = await pipeline_mod._load_one_provider("openai")
+    assert [e.model for e in entries] == ["gpt-5.5"]
+
+
+@pytest.mark.asyncio
+async def test_redis_data_wins_over_seed(monkeypatch, fake_redis):
+    """Once a real refresh has populated Redis, the live data takes
+    precedence over the shipped seed."""
+    fake_redis.store["model_catalog:v5:openai"] = json.dumps([
+        _entry_dict("openai", "gpt-from-live-refresh"),
+    ])
+    seeded = {"openai": [_entry("openai", "gpt-from-stale-seed")]}
+    monkeypatch.setattr(pipeline_mod, "_SEED_CATALOG", seeded)
+    entries = await pipeline_mod._load_one_provider("openai")
+    assert [e.model for e in entries] == ["gpt-from-live-refresh"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_no_key_serves_seed_not_empty(
+    monkeypatch, fake_redis, stubbed_specs,
+):
+    """When a user has no key configured, refresh_catalog returns the
+    seed snapshot for that vendor — NOT an empty list. So the Models
+    page shows what's available even pre-configuration."""
+    monkeypatch.delenv("ALPHA_API_KEY", raising=False)
+    monkeypatch.delenv("BETA_API_KEY", raising=False)
+    seeded = {
+        "alpha": [_entry("alpha", "alpha-seed-model")],
+        "beta":  [_entry("beta",  "beta-seed-model")],
+    }
+    monkeypatch.setattr(pipeline_mod, "_SEED_CATALOG", seeded)
+
+    out = await pipeline_mod.refresh_catalog()
+    assert [e.model for e in out["alpha"]] == ["alpha-seed-model"]
+    assert [e.model for e in out["beta"]]  == ["beta-seed-model"]
+
+
+def test_seed_catalog_file_is_loadable():
+    """The shipped seed_catalog.json must parse + have at least one
+    provider populated. If this fails, regenerate via
+    `python scripts/refresh_models.py --write-seed`."""
+    import json
+    from pathlib import Path
+    seed_path = Path(pipeline_mod.__file__).parent / "seed_catalog.json"
+    assert seed_path.exists(), (
+        "seed_catalog.json missing — fresh clones won't show populated "
+        "Models page. Regenerate with: "
+        "python scripts/refresh_models.py --write-seed"
+    )
+    with seed_path.open(encoding="utf-8") as f:
+        data = json.load(f)
+    assert isinstance(data, dict) and data, "seed_catalog.json is empty"
+    # Spot-check shape on first provider's first entry.
+    first_provider_entries = next(iter(data.values()))
+    assert first_provider_entries, "first provider in seed has zero entries"
+    e = first_provider_entries[0]
+    for required in (
+        "provider", "model", "display_name",
+        "supports_function_calling", "context_window", "max_output_tokens",
+    ):
+        assert required in e, f"seed entry missing field: {required}"
 
 
 # ── deserialize robustness ─────────────────────────────────────────
