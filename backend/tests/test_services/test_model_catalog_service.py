@@ -29,7 +29,6 @@ from app.services.model_catalog_service import (
     _key,
     _resolve_api_key,
     discover_provider,
-    invalidate_for_user_provider,
 )
 
 
@@ -292,19 +291,20 @@ def test_resolve_api_key_no_user_id_uses_env_only(monkeypatch):
     assert _resolve_api_key("openai", "OPENAI_API_KEY", user_id=None) == "env-key"
 
 
-def test_cache_key_is_per_user():
-    """Different users must get different cache buckets — otherwise user A's
-    preview-tier /v1/models response leaks into user B's catalog view."""
-    a = _key("openai", "alice")
-    b = _key("openai", "bob")
-    g = _key("openai", None)
-    assert a != b
-    assert a != g
-    assert b != g
-    # All under the same prefix so invalidate_all (which scans by prefix)
-    # still purges every variant in one shot.
-    for k in (a, b, g):
-        assert k.startswith("model_catalog:v2:")
+def test_cache_key_is_global_per_provider():
+    """Cache is keyed by vendor only — the model list is independent of
+    which API key fetched it, so sharing the cache lets one user's refresh
+    (or the nightly ``scripts/refresh_models.py`` cron) benefit everyone.
+
+    Per-user differences in usability are surfaced by the per-profile
+    ``ready`` flag at /catalog read time, not by hiding models from the
+    discovery list.
+    """
+    k1 = _key("openai")
+    k2 = _key("openai")
+    assert k1 == k2 == "model_catalog:v3:openai"
+    # Different vendors → different keys
+    assert _key("openai") != _key("anthropic")
 
 
 @pytest.mark.asyncio
@@ -429,7 +429,8 @@ async def test_empty_fetch_result_is_not_cached(monkeypatch):
 @pytest.mark.asyncio
 async def test_non_empty_fetch_result_is_still_cached(monkeypatch):
     """Sanity check: the empty-skip logic doesn't accidentally also skip
-    successful fetches."""
+    successful fetches. Cache key is global (vendor-only), not per-user —
+    so the nightly cron's write benefits every user equally."""
     fake = _FakeRedis()
     monkeypatch.setattr(model_catalog_service, "redis_client", fake)
 
@@ -447,44 +448,47 @@ async def test_non_empty_fetch_result_is_still_cached(monkeypatch):
         user_id="alice", force_refresh=True,
     )
     assert [m.model for m in models] == ["gpt-5.5"]
-    # Cache write happened under the per-user key:
+    # Cache write happened under the GLOBAL vendor key — no user dimension.
+    # Bob's next read with no user_id (e.g. the cron pre-warmer) hits the
+    # same entry.
     assert len(fake.set_calls) == 1
     key, value = fake.set_calls[0]
-    assert key == _key("openai", "alice")
+    assert key == _key("openai") == "model_catalog:v3:openai"
     assert "gpt-5.5" in value
 
 
 @pytest.mark.asyncio
-async def test_invalidate_for_user_provider_drops_only_that_users_key(monkeypatch):
-    """Key rotation must clear only the affected user/vendor entry,
-    leaving other users' caches and other vendors for the same user intact.
-    """
+async def test_cache_is_shared_across_users(monkeypatch):
+    """Concrete behavior assertion: a fetch triggered by Alice serves Bob
+    on the very next read. This is the property the nightly refresh script
+    relies on — one fetch warms the cache for the entire user base."""
     fake = _FakeRedis()
     monkeypatch.setattr(model_catalog_service, "redis_client", fake)
 
-    # Seed three entries: alice/openai, alice/anthropic, bob/openai.
-    fake.store[_key("openai", "alice")] = '["gpt-5.5"]'
-    fake.store[_key("anthropic", "alice")] = '["claude-opus-4-7"]'
-    fake.store[_key("openai", "bob")] = '["gpt-4.1"]'
+    keys_by_user = {"alice": "sk-alice", "bob": "sk-bob"}
 
-    ok = await invalidate_for_user_provider("alice", "openai")
-    assert ok is True
+    def fake_user_lookup(uid, prov, **kw):  # noqa: ANN001
+        return keys_by_user.get(uid)
 
-    # Only alice/openai is gone:
-    assert _key("openai", "alice") not in fake.store
-    assert _key("anthropic", "alice") in fake.store
-    assert _key("openai", "bob") in fake.store
+    import app.services.user_api_key_service as svc
+    monkeypatch.setattr(svc, "get_user_api_key_plaintext", fake_user_lookup)
 
+    payload = {"data": [{"id": "gpt-5.5", "created": 2_000_000_000}]}
+    _install_mock_transport(monkeypatch, httpx.Response(200, json=payload))
 
-@pytest.mark.asyncio
-async def test_invalidate_for_user_provider_swallows_redis_error(monkeypatch):
-    """A Redis outage during invalidation must not break the API-key
-    upsert / delete flow that calls this — best-effort only."""
-    class BrokenRedis:
-        async def delete(self, key):
-            raise RuntimeError("redis down")
+    # Alice forces a refresh → cache populated under the global vendor key.
+    alice_models = await discover_provider(
+        "openai", "https://api.openai.com/v1", "OPENAI_API_KEY",
+        user_id="alice", force_refresh=True,
+    )
+    assert [m.model for m in alice_models] == ["gpt-5.5"]
+    assert len(fake.set_calls) == 1  # one write
 
-    monkeypatch.setattr(model_catalog_service, "redis_client", BrokenRedis())
-
-    ok = await invalidate_for_user_provider("alice", "openai")
-    assert ok is False  # signal failure, but don't raise
+    # Bob now reads (no force) — should hit the cache Alice populated.
+    bob_models = await discover_provider(
+        "openai", "https://api.openai.com/v1", "OPENAI_API_KEY",
+        user_id="bob", force_refresh=False,
+    )
+    assert [m.model for m in bob_models] == ["gpt-5.5"]
+    # No additional vendor fetches (no extra set), confirming cache hit.
+    assert len(fake.set_calls) == 1

@@ -216,13 +216,13 @@ async def upsert_my_api_key(
     clear_llm_cache_for_provider(provider)
     # Invalidate this user's cached catalog response so the new "ready" flag
     # for the just-configured provider shows up on the next /catalog GET.
+    # NOTE: we do NOT touch the 24h discovery cache (model_catalog:v3:*).
+    # That cache is global because the vendor's /v1/models response is the
+    # same for every key — rotating one user's key doesn't change which
+    # models the vendor advertises. The per-user "ready"/"selected_for"
+    # bits are recomputed every catalog read, sourced from this user's
+    # api-key DB row at that moment.
     await invalidate(f"models:catalog:{current_user.username}")
-    # Also drop this user's per-vendor discovery cache (24h TTL). Without
-    # this the next /catalog read would still serve the OLD key's model
-    # list for up to 24h — exactly the "I rotated my key, why don't I see
-    # the new models" complaint that motivated P6-I.
-    from app.services.model_catalog_service import invalidate_for_user_provider
-    await invalidate_for_user_provider(current_user.username, provider)
     return {"status": "saved", **result}
 
 
@@ -237,12 +237,10 @@ async def delete_my_api_key(
     deleted = delete_user_api_key(current_user.username, provider, db=db)
     from app.core.model_registry import clear_llm_cache_for_provider
     clear_llm_cache_for_provider(provider)
+    # Per-user 60s catalog wrapper needs to drop so the next /catalog read
+    # recomputes "ready" flags from the now-empty key state. The 24h
+    # global discovery cache is left alone — see comment in upsert.
     await invalidate(f"models:catalog:{current_user.username}")
-    # Drop the 24h discovery cache for this user/vendor so the catalog
-    # immediately reflects "key gone → no discovery" instead of serving
-    # the pre-delete model list until TTL.
-    from app.services.model_catalog_service import invalidate_for_user_provider
-    await invalidate_for_user_provider(current_user.username, provider)
     return {"status": "deleted" if deleted else "noop"}
 
 

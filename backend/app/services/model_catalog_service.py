@@ -40,24 +40,31 @@ class DiscoveredModel:
 
 
 # Redis key namespace; bump suffix to invalidate every cached entry.
-# v2 because P6-I rekeyed by (user_id, provider) — v1 keys without a user
-# dimension would be stale and never reused, but ``invalidate_all`` scans
-# by prefix so they'll get cleaned up the first time someone refreshes.
-_CACHE_PREFIX = "model_catalog:v2:"
+# Version history:
+#   v1 — original global keying
+#   v2 — P6-I per-(user, provider) keying. REVERTED: a vendor's
+#        /v1/models is the same for every API key (the per-key
+#        permission differences are handled by the per-profile
+#        ``ready`` flag at /catalog read time, not by hiding models),
+#        and per-user keying broke ``scripts/refresh_models.py`` —
+#        the cron pre-warmer writes under a single scope and we'd
+#        never serve it to any actual user. v3 restores the global
+#        shape so one nightly refresh benefits every user.
+_CACHE_PREFIX = "model_catalog:v3:"
 _CACHE_TTL = 24 * 3600  # 24h — vendors release new models on ~weekly cadence
 
 
-def _key(provider: str, user_id: str | None) -> str:
-    """Cache key includes ``user_id`` because different users have different
-    API keys — and a vendor's /v1/models response varies by key (a user with
-    preview access sees gpt-5.5 that another user doesn't). Without the user
-    dimension we'd leak one user's catalog into another's view.
+def _key(provider: str) -> str:
+    """One cache entry per vendor, shared across all users.
 
-    ``user_id=None`` (startup / global contexts) gets its own bucket so
-    those reads stay env-only and don't mix with per-user discovery.
+    The vendor's /v1/models response is independent of which key
+    authenticated the request — different users with different keys to
+    the same vendor see the same model list. ``user_id`` is therefore
+    NOT part of the key. (Whether the user can actually *call* a given
+    model is a separate concern, surfaced via the ``ready`` flag on
+    each /catalog row, not by filtering the discovery list.)
     """
-    scope = f"user:{user_id}" if user_id else "global"
-    return f"{_CACHE_PREFIX}{scope}:{provider}"
+    return f"{_CACHE_PREFIX}{provider}"
 
 
 # Some vendors put the model list at a non-standard path. The defaults
@@ -253,18 +260,19 @@ async def discover_provider(
     fresh fetches with a 24h TTL so subsequent ``list_profiles`` calls are
     free.
 
-    ``user_id`` selects the encrypted user key from ``user_api_keys`` —
-    without it (startup contexts) we fall back to env vars and use the
-    ``global`` cache scope. With it we look up the user's UI-configured
-    key first and cache under ``user:{user_id}``, so per-user differences
-    in /v1/models response (preview access, region restrictions) stay
-    properly scoped instead of bleeding across tenants.
+    ``user_id`` ONLY affects which API key we use to authenticate the
+    /v1/models request — caller's encrypted ``user_api_keys`` row wins
+    over the env var, mirroring ``model_registry.resolve_api_key``. The
+    *cache* is global (one entry per vendor) because the vendor returns
+    the same model list regardless of which key signed the request, and
+    a shared cache lets ``scripts/refresh_models.py`` (run as a cron
+    pre-warmer) benefit every user with one fetch.
     """
     api_key = _resolve_api_key(provider, api_key_env, user_id)
     if not api_key:
         return []
 
-    redis_key = _key(provider, user_id)
+    redis_key = _key(provider)
     if not force_refresh:
         try:
             cached = await redis_client.get(redis_key)
@@ -327,13 +335,18 @@ async def discover_all(
 async def invalidate_all() -> int:
     """Drop every cached discovery result. Returns count of keys deleted.
 
-    The scan pattern matches the current ``_CACHE_PREFIX`` (``v2``); any
-    leftover ``v1`` keys from before the per-user re-key are also caught
-    when ``_CACHE_PREFIX_LEGACY`` is included. Both prefixes share the
-    ``model_catalog:`` namespace so a single combined scan covers them.
+    Sweeps all historical prefixes (``v1`` / ``v2`` / ``v3``) so that
+    stale entries from earlier keying schemes get reaped on the first
+    refresh after deploy — they'd never be re-used otherwise, but the
+    24h TTL would let them squat memory for a day. One scan per prefix
+    is fine: each prefix typically holds <20 entries.
     """
     deleted = 0
-    patterns = (f"{_CACHE_PREFIX}*", "model_catalog:v1:*")
+    patterns = (
+        f"{_CACHE_PREFIX}*",
+        "model_catalog:v2:*",
+        "model_catalog:v1:*",
+    )
     try:
         for pattern in patterns:
             async for key in redis_client.scan_iter(match=pattern, count=200):
@@ -344,31 +357,9 @@ async def invalidate_all() -> int:
     return deleted
 
 
-async def invalidate_for_user_provider(user_id: str, provider: str) -> bool:
-    """Drop just this user's discovery cache for one vendor.
-
-    Called from the API-key upsert / delete handlers so a key rotation
-    immediately reflects in the next /catalog read instead of waiting
-    up to 24h for the TTL — that delay was the exact symptom users
-    saw as "I refreshed but still don't see the latest models".
-    Returns True on a successful delete (which Redis reports even if
-    the key didn't exist), False if the underlying call raised.
-    """
-    try:
-        await redis_client.delete(_key(provider, user_id))
-        return True
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "invalidate_for_user_provider failed user=%s provider=%s: %s",
-            user_id, provider, exc,
-        )
-        return False
-
-
 __all__ = [
     "DiscoveredModel",
     "discover_provider",
     "discover_all",
     "invalidate_all",
-    "invalidate_for_user_provider",
 ]
