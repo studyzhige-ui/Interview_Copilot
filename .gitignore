@@ -7,6 +7,11 @@
 
 # User-local prompt scratchpad (not project content)
 docs/prompts/
+
+# Local RAG quality harness — uses a hand-curated 835-row golden dataset
+# scraped from copyrighted PDFs; kept off GitHub for that reason. The
+# harness itself runs locally via scripts/ + the bundled golden_dataset.jsonl.
+evaluation/
 .venv/
 env/
 venv/
