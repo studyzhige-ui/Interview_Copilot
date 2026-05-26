@@ -1,23 +1,25 @@
 """Provider defaults registry (dev-maintained).
 
-This file is the SOLE place where supported providers are declared.
-Adding a new vendor = add one ``ProviderDefaults`` row below. No other
-code changes. The pipeline (``litellm_loader`` → ``pipeline``) joins
-LiteLLM model entries to these defaults by matching ``litellm_provider``
-in LiteLLM JSON against the ``id`` field here.
+Post-P7-A: this file declares the connection-level metadata for each
+vendor — what api_base to hit, what env var holds the deployment-level
+key, what to label / icon on the Models page card, whether to
+default-show or hide-until-user-enables.
 
-ID convention: MUST match the value LiteLLM uses in its
-``litellm_provider`` field for that vendor's entries, or no models
-will surface for that vendor in the catalog. The notable mismatch with
-our internal vocabulary is Google → LiteLLM calls it ``"gemini"`` (the
-free generative-language API) or ``"vertex_ai"`` (paid enterprise).
-We use ``"gemini"`` here; if a deployment needs Vertex, add a second
-provider entry with id ``"vertex_ai"``.
+The actual MODEL LIST for each vendor comes from that vendor's own
+``/v1/models`` endpoint, fetched live by an adapter spec in
+``vendors/<provider>.py``. The pipeline pairs (this dict's defaults)
+with (that adapter's fetched entries) to build the user-facing
+catalog.
 
-``enabled_by_default``: keeps the Models page tidy. The 9 vendors a
-new user sees out of the box; the rest LiteLLM covers (Cohere, Mistral,
-Together, Fireworks, Groq, Replicate, Azure, Bedrock, Vertex, ...) show
-up in the "show more vendors" picker (P6-M UI) so the user opts in.
+Adding a new vendor:
+  1. Add a row below with id = the canonical provider name
+  2. Drop a ``vendors/<id>.py`` adapter spec
+  3. Append the spec into ``vendors/__init__.py::ALL_SPECS``
+No edits to pipeline / API / FE needed.
+
+``enabled_by_default``: 9 vendors with adapters are True (shown on
+every new user's Models page). Everything else is False (must opt-in
+via "显示更多厂商" picker).
 """
 from __future__ import annotations
 
@@ -114,15 +116,15 @@ PROVIDERS: dict[str, ProviderDefaults] = {
         icon_slug=None,
         enabled_by_default=True,
     ),
-    # NOTE: Same situation as Qwen — LiteLLM only carries MiMo via the
-    # Novita reseller path. No direct ``litellm_provider: "xiaomi"``
-    # entries upstream yet, so this card shows 0 models until LiteLLM
-    # adds them. The card is left ON by default for visibility.
+    # Xiaomi's official OpenAI-compatible API base is
+    # ``api.xiaomimimo.com/v1`` (per platform.xiaomimimo.com docs).
+    # The earlier ``token-plan-cn.xiaomimimo.com`` was a separate token
+    # plan gateway that returns 401 on /v1/models — wrong host.
     "xiaomi": ProviderDefaults(
         id="xiaomi",
         display_label="小米 MiMo",
         default_api_base=os.getenv(
-            "MIMO_API_BASE", "https://token-plan-cn.xiaomimimo.com/v1",
+            "MIMO_API_BASE", "https://api.xiaomimimo.com/v1",
         ),
         api_key_env="MIMO_API_KEY",
         icon_slug="xiaomi",

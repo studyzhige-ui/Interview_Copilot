@@ -1,26 +1,28 @@
-"""LiteLLM-driven model catalog pipeline (P6-L).
+"""Vendor-authoritative model catalog pipeline (P7-A).
 
-Pre-P6-L: ``MODEL_PROFILES`` was a static ~400-line dict in
-``model_registry.py``. Every new vendor release required a code edit.
+Pre-P6-L: hardcoded ``MODEL_PROFILES`` dict (450 lines, needed code
+edits every time a vendor released a model).
 
-Post-P6-L: the universe of available models is sourced live from
-LiteLLM's community-maintained ``model_prices_and_context_window.json``.
-Per-vendor connection metadata (api_base, api_key_env, display label)
-lives in ``providers.py`` as a small Python dict that dev maintains.
-The pipeline merges the two into the ``ModelEntry`` records the rest
-of the system consumes.
+P6-L: LiteLLM JSON as single data source. Worked but had real lag —
+DeepSeek released V4 a month before LiteLLM's PR merged.
 
-Public API (what callers should import):
+Post-P7-A: each vendor's OWN ``/v1/models`` endpoint is the data
+source — vendor-authoritative, current, no third-party dependency.
+``vendors/`` package holds one declarative ``VendorAdapterSpec`` per
+vendor (~30-50 lines each). Pipeline iterates them. Per-user
+overrides (api_base, organization, headers) from P6-M still apply.
 
-    PROVIDERS                                       — provider defaults dict
-    ProviderDefaults, ModelEntry                    — dataclasses
-    refresh_catalog() / refresh_catalog_for(provider) — pipeline triggers
-    load_catalog() / load_catalog_for(provider)     — read from cache
+Public API:
+    PROVIDERS                                    — provider defaults dict
+    ProviderDefaults, ModelEntry                 — dataclasses
+    refresh_catalog() / refresh_catalog_for(provider)
+    load_catalog() / load_catalog_for(provider)
+    invalidate_all()                             — wipe Redis cache
 """
 from .base import ModelEntry, ProviderDefaults
 from .providers import PROVIDERS, get_provider_defaults, known_provider_ids
-from .litellm_loader import LITELLM_CATALOG_URL, fetch_litellm_catalog
 from .pipeline import (
+    invalidate_all,
     load_catalog,
     load_catalog_for,
     refresh_catalog,
@@ -33,10 +35,9 @@ __all__ = [
     "ModelEntry",
     "get_provider_defaults",
     "known_provider_ids",
-    "LITELLM_CATALOG_URL",
-    "fetch_litellm_catalog",
     "load_catalog",
     "load_catalog_for",
     "refresh_catalog",
     "refresh_catalog_for",
+    "invalidate_all",
 ]

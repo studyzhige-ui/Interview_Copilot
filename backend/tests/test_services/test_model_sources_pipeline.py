@@ -1,11 +1,12 @@
-"""Tests for ``app.services.model_sources.pipeline`` (P6-L).
+"""Tests for the vendor-driven catalog pipeline (P7-A).
 
-Locked behaviours:
-
-  - refresh_catalog → persists per-provider Redis entries + LKG snapshot
-  - On fetch failure, returns the LKG snapshot (cache stays put)
-  - load_catalog falls back to LKG when per-provider TTL expired
-  - Schema-drift entries get silently dropped on deserialize
+Locks in:
+  - refresh_catalog parallelises across all vendor adapters
+  - A vendor with no key returns empty without raising
+  - A vendor that fails terminally falls back to its LKG slice
+  - Per-provider Redis entries + LKG sentinel both get written on success
+  - When ALL vendors fail, the cache is NOT touched (we serve LKG)
+  - load_catalog falls back from per-provider key to LKG when expired
 """
 from __future__ import annotations
 
@@ -15,10 +16,11 @@ import pytest
 
 from app.services.model_sources import pipeline as pipeline_mod
 from app.services.model_sources.base import ModelEntry
+from app.services.model_sources.vendors.base import VendorFetchFailed
 
 
 class _FakeRedis:
-    """Async stand-in. Tracks gets/sets/deletes; serves stored data."""
+    """Async stand-in for the Redis client. Tracks every set/delete."""
     def __init__(self):
         self.store: dict[str, str] = {}
         self.set_calls: list[tuple[str, str, int | None]] = []
@@ -35,16 +37,12 @@ class _FakeRedis:
         return 1 if self.store.pop(key, None) is not None else 0
 
 
-def _entry(provider: str, model: str, **overrides) -> ModelEntry:
-    base = {
-        "provider": provider, "model": model, "display_name": model,
-        "supports_function_calling": True,
-        "context_window": 128_000,
-        "max_output_tokens": 4_096,
-        "supports_vision": False,
-    }
-    base.update(overrides)
-    return ModelEntry(**base)
+def _entry(provider: str, model: str) -> ModelEntry:
+    return ModelEntry(
+        provider=provider, model=model, display_name=model,
+        supports_function_calling=True,
+        context_window=128_000, max_output_tokens=4_096, supports_vision=False,
+    )
 
 
 @pytest.fixture
@@ -54,163 +52,189 @@ def fake_redis(monkeypatch):
     return fr
 
 
+@pytest.fixture
+def stubbed_specs(monkeypatch):
+    """Pin the spec list to a small set so tests don't depend on real
+    vendor lineup. Each stub spec just carries a provider id."""
+    from app.services.model_sources.vendors import VendorAdapterSpec
+    stubs = [
+        VendorAdapterSpec(provider="alpha", models_path="/models", auth_style="bearer"),
+        VendorAdapterSpec(provider="beta",  models_path="/models", auth_style="bearer"),
+    ]
+    monkeypatch.setattr(pipeline_mod, "ALL_SPECS", stubs)
+    # Pretend both providers exist in PROVIDERS so resolve_key works.
+    from app.services.model_sources.base import ProviderDefaults
+    fake_defaults = {
+        "alpha": ProviderDefaults(
+            id="alpha", display_label="Alpha", default_api_base="https://a",
+            api_key_env="ALPHA_API_KEY", enabled_by_default=True,
+        ),
+        "beta": ProviderDefaults(
+            id="beta", display_label="Beta", default_api_base="https://b",
+            api_key_env="BETA_API_KEY", enabled_by_default=True,
+        ),
+    }
+    monkeypatch.setattr(
+        pipeline_mod, "get_provider_defaults", lambda pid: fake_defaults.get(pid),
+    )
+    return stubs
+
+
 # ── refresh_catalog ─────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_refresh_catalog_writes_per_provider_and_lkg(monkeypatch, fake_redis):
-    """A successful fetch writes one Redis key per provider AND the LKG sentinel."""
-    async def fake_fetch():
-        return {
-            "openai": [_entry("openai", "gpt-4o")],
-            "anthropic": [_entry("anthropic", "claude-opus-4-7")],
-        }
-    monkeypatch.setattr(pipeline_mod, "fetch_litellm_catalog", fake_fetch)
+async def test_refresh_writes_per_provider_and_lkg(monkeypatch, fake_redis, stubbed_specs):
+    """Successful fetch writes one TTL'd key per provider + one no-TTL LKG."""
+    monkeypatch.setenv("ALPHA_API_KEY", "sk-a")
+    monkeypatch.setenv("BETA_API_KEY", "sk-b")
+
+    async def fake_fetch(spec, api_base, api_key):
+        return [_entry(spec.provider, f"{spec.provider}-model")]
+
+    monkeypatch.setattr(pipeline_mod, "fetch_one_vendor", fake_fetch)
 
     out = await pipeline_mod.refresh_catalog()
-    assert set(out.keys()) == {"openai", "anthropic"}
+    assert set(out.keys()) == {"alpha", "beta"}
 
-    # Per-provider keys with TTL.
     keys_with_ttl = {k for (k, _v, ttl) in fake_redis.set_calls if ttl is not None}
-    assert "model_catalog:v4:openai" in keys_with_ttl
-    assert "model_catalog:v4:anthropic" in keys_with_ttl
+    assert "model_catalog:v5:alpha" in keys_with_ttl
+    assert "model_catalog:v5:beta" in keys_with_ttl
 
-    # LKG sentinel without TTL.
     lkg_writes = [(k, v, ttl) for (k, v, ttl) in fake_redis.set_calls if ttl is None]
     assert len(lkg_writes) == 1
-    lkg_key, lkg_value, _ = lkg_writes[0]
-    assert lkg_key == "model_catalog:v4:_last_known_good"
-    snapshot = json.loads(lkg_value)
-    assert set(snapshot.keys()) == {"openai", "anthropic"}
+    assert lkg_writes[0][0] == "model_catalog:v5:_last_known_good"
 
 
 @pytest.mark.asyncio
-async def test_refresh_catalog_falls_back_to_lkg_on_fetch_failure(
-    monkeypatch, fake_redis,
-):
-    """Layer 3 protection — fetch failure MUST NOT touch the existing cache."""
-    # Seed the LKG with prior good data.
-    seeded = {"openai": json.dumps([
-        {"provider": "openai", "model": "gpt-old",
-         "display_name": "GPT Old", "supports_function_calling": True,
-         "context_window": 128_000, "max_output_tokens": 4_096, "supports_vision": False},
-    ])}
-    fake_redis.store["model_catalog:v4:_last_known_good"] = json.dumps(seeded)
+async def test_refresh_skips_vendor_without_key(monkeypatch, fake_redis, stubbed_specs):
+    """No env key for a vendor → its slice is empty, OTHER vendors still
+    refresh. This is the "user hasn't configured Anthropic yet but
+    OpenAI works fine" case."""
+    monkeypatch.setenv("ALPHA_API_KEY", "sk-a")
+    monkeypatch.delenv("BETA_API_KEY", raising=False)
 
-    from app.services.model_sources.litellm_loader import LiteLLMFetchFailed
-    async def fake_fetch_fail():
-        raise LiteLLMFetchFailed("network down")
-    monkeypatch.setattr(pipeline_mod, "fetch_litellm_catalog", fake_fetch_fail)
+    fetched = {"count": 0}
+    async def fake_fetch(spec, api_base, api_key):
+        fetched["count"] += 1
+        return [_entry(spec.provider, "x")]
+
+    monkeypatch.setattr(pipeline_mod, "fetch_one_vendor", fake_fetch)
 
     out = await pipeline_mod.refresh_catalog()
-    # We get the LKG snapshot back...
-    assert "openai" in out
-    assert out["openai"][0].model == "gpt-old"
-    # ...and the cache wasn't touched by this refresh (no new writes).
+    assert fetched["count"] == 1, "vendor without key must NOT call fetch_one_vendor"
+    assert out["alpha"], "alpha has key → must have entries"
+    assert out["beta"] == [], "beta has no key → empty"
+
+
+@pytest.mark.asyncio
+async def test_refresh_one_vendor_failure_falls_back_to_lkg(
+    monkeypatch, fake_redis, stubbed_specs,
+):
+    """When one vendor's /v1/models fails, that vendor's slice comes
+    from LKG; other vendors are unaffected."""
+    monkeypatch.setenv("ALPHA_API_KEY", "sk-a")
+    monkeypatch.setenv("BETA_API_KEY", "sk-b")
+    # Seed LKG with prior good data for both.
+    fake_redis.store["model_catalog:v5:_last_known_good"] = json.dumps({
+        "alpha": json.dumps([_entry_dict("alpha", "alpha-old")]),
+        "beta":  json.dumps([_entry_dict("beta",  "beta-old")]),
+    })
+
+    async def fake_fetch(spec, api_base, api_key):
+        if spec.provider == "beta":
+            raise VendorFetchFailed("beta down")
+        return [_entry(spec.provider, f"{spec.provider}-new")]
+
+    monkeypatch.setattr(pipeline_mod, "fetch_one_vendor", fake_fetch)
+
+    out = await pipeline_mod.refresh_catalog()
+    # alpha got fresh data
+    assert [e.model for e in out["alpha"]] == ["alpha-new"]
+    # beta fell back to its LKG slice — old data still served
+    assert [e.model for e in out["beta"]] == ["beta-old"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_all_failures_keeps_cache_untouched(
+    monkeypatch, fake_redis, stubbed_specs,
+):
+    """Global outage (all vendors fail with no keys / no LKG) → cache
+    NOT written. Caller receives LKG payload."""
+    monkeypatch.delenv("ALPHA_API_KEY", raising=False)
+    monkeypatch.delenv("BETA_API_KEY", raising=False)
+
+    out = await pipeline_mod.refresh_catalog()
+    # No writes happened because no vendor returned a non-empty list.
     assert fake_redis.set_calls == []
-
-
-@pytest.mark.asyncio
-async def test_refresh_catalog_failure_returns_empty_when_no_lkg(
-    monkeypatch, fake_redis,
-):
-    """Cold start + fetch fails → empty dict, no exception."""
-    from app.services.model_sources.litellm_loader import LiteLLMFetchFailed
-    async def fake_fetch_fail():
-        raise LiteLLMFetchFailed("network down")
-    monkeypatch.setattr(pipeline_mod, "fetch_litellm_catalog", fake_fetch_fail)
-
-    out = await pipeline_mod.refresh_catalog()
     assert out == {}
 
 
-@pytest.mark.asyncio
-async def test_refresh_catalog_for_persists_all_not_just_one(monkeypatch, fake_redis):
-    """Refresh-for-one-provider still writes the full payload — the JSON is in
-    hand anyway, and sharing benefits everyone (P6-J property)."""
-    async def fake_fetch():
-        return {
-            "openai": [_entry("openai", "gpt-4o")],
-            "anthropic": [_entry("anthropic", "claude-opus-4-7")],
-        }
-    monkeypatch.setattr(pipeline_mod, "fetch_litellm_catalog", fake_fetch)
-
-    ret = await pipeline_mod.refresh_catalog_for("openai")
-    assert [e.model for e in ret] == ["gpt-4o"]
-    # Both per-provider keys got written
-    written_keys = {k for (k, _v, _ttl) in fake_redis.set_calls}
-    assert "model_catalog:v4:openai" in written_keys
-    assert "model_catalog:v4:anthropic" in written_keys
-
-
-# ── load_catalog ────────────────────────────────────────────────────────
+# ── load_catalog ─────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_load_catalog_reads_per_provider_entries(monkeypatch, fake_redis):
-    fake_redis.store["model_catalog:v4:openai"] = json.dumps([
-        {"provider": "openai", "model": "gpt-4o",
-         "display_name": "GPT-4o", "supports_function_calling": True,
-         "context_window": 128_000, "max_output_tokens": 4_096, "supports_vision": False},
+async def test_load_catalog_reads_per_provider(monkeypatch, fake_redis):
+    fake_redis.store["model_catalog:v5:openai"] = json.dumps([
+        _entry_dict("openai", "gpt-5.5"),
     ])
-    # Pin known_provider_ids to a small set so load_catalog only checks openai.
-    monkeypatch.setattr(
-        pipeline_mod,
-        "known_provider_ids" if False else "providers",  # we monkey the imported function below
-        None,
-    ) if False else None
-    # Easier: directly patch the import name used inside load_catalog.
-    import app.services.model_sources.providers as providers_mod
-    monkeypatch.setattr(providers_mod, "known_provider_ids", lambda: {"openai"})
+    # Pin known_provider_ids so load_catalog only checks openai.
+    import app.services.model_sources.providers as p_mod
+    monkeypatch.setattr(p_mod, "PROVIDERS", {"openai": object()})
+    # pipeline_mod imports PROVIDERS at top-level too:
+    monkeypatch.setattr(pipeline_mod, "PROVIDERS", {"openai": object()})
 
     out = await pipeline_mod.load_catalog()
     assert set(out.keys()) == {"openai"}
-    assert out["openai"][0].model == "gpt-4o"
+    assert out["openai"][0].model == "gpt-5.5"
 
 
 @pytest.mark.asyncio
-async def test_load_catalog_for_falls_back_to_lkg_when_per_provider_expired(
-    monkeypatch, fake_redis,
-):
-    """Per-provider keys have a TTL; LKG doesn't. When the TTL expires,
-    load_catalog_for should serve LKG until the next refresh repopulates."""
-    fake_redis.store["model_catalog:v4:_last_known_good"] = json.dumps({
-        "openai": json.dumps([
-            {"provider": "openai", "model": "gpt-from-lkg",
-             "display_name": "GPT From LKG", "supports_function_calling": True,
-             "context_window": 128_000, "max_output_tokens": 4_096, "supports_vision": False},
-        ]),
+async def test_load_catalog_for_falls_back_to_lkg(monkeypatch, fake_redis):
+    """Per-provider key expired (TTL) → fall back to LKG snapshot."""
+    fake_redis.store["model_catalog:v5:_last_known_good"] = json.dumps({
+        "openai": json.dumps([_entry_dict("openai", "gpt-from-lkg")]),
     })
     entries = await pipeline_mod.load_catalog_for("openai")
     assert [e.model for e in entries] == ["gpt-from-lkg"]
 
 
 @pytest.mark.asyncio
-async def test_load_catalog_returns_empty_on_total_cache_miss(monkeypatch, fake_redis):
+async def test_load_catalog_empty_when_redis_cold(monkeypatch, fake_redis):
     """First deploy / Redis wiped / no LKG → empty dict, no exception."""
+    import app.services.model_sources.providers as p_mod
+    monkeypatch.setattr(p_mod, "PROVIDERS", {"openai": object()})
+    monkeypatch.setattr(pipeline_mod, "PROVIDERS", {"openai": object()})
     out = await pipeline_mod.load_catalog()
     assert out == {}
 
 
-# ── Deserialization robustness ──────────────────────────────────────────
+# ── deserialize robustness ─────────────────────────────────────────
 
 
-def test_deserialize_drops_rows_with_missing_required_fields():
-    """A future schema change must not 500 the catalog."""
+def test_deserialize_drops_rows_with_missing_fields():
     raw = json.dumps([
-        {"provider": "openai", "model": "gpt-4o",
-         "display_name": "GPT-4o", "supports_function_calling": True,
-         "context_window": 128_000, "max_output_tokens": 4_096, "supports_vision": False},
-        # Missing required `model`:
-        {"provider": "openai", "display_name": "Broken"},
-        # Not even a dict:
+        _entry_dict("openai", "gpt-5.5"),
+        {"provider": "openai", "display_name": "Broken"},  # missing 'model'
         "garbage",
     ])
     entries = pipeline_mod._deserialize_entries(raw)
     assert len(entries) == 1
-    assert entries[0].model == "gpt-4o"
+    assert entries[0].model == "gpt-5.5"
 
 
-def test_deserialize_returns_empty_on_malformed_json():
+def test_deserialize_returns_empty_on_malformed():
     assert pipeline_mod._deserialize_entries("not json") == []
     assert pipeline_mod._deserialize_entries('{"obj": "not list"}') == []
+
+
+# ── helpers ─────────────────────────────────────────────────────────
+
+
+def _entry_dict(provider: str, model: str) -> dict:
+    return {
+        "provider": provider, "model": model, "display_name": model,
+        "supports_function_calling": True,
+        "context_window": 128_000, "max_output_tokens": 4_096,
+        "supports_vision": False,
+    }

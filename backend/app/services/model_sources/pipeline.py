@@ -1,42 +1,51 @@
-"""Catalog pipeline: fetch → validate → persist → serve (P6-L).
+"""Catalog pipeline: per-vendor /v1/models → cache → serve (P7-A).
 
-Glue between ``litellm_loader`` and the rest of the system. The
-pipeline:
+Pre-P7-A: LiteLLM JSON was the only data source.
+Post-P7-A: each vendor's OWN ``/v1/models`` is the data source —
+vendor-authoritative, no upstream lag, no third-party dependency.
+The ``vendors/`` package holds one ``VendorAdapterSpec`` per vendor;
+this pipeline orchestrates them.
 
-  refresh:  fetch (with retry + validate)
-              → on success: write Redis (24h TTL) + DB shadow
-              → on failure: silently keep the last-known-good in place
+  refresh_catalog():
+    For each spec in vendors.ALL_SPECS:
+      resolve api_base + api_key from PROVIDERS + env
+      fetch_one_vendor(spec) — runs the spec's chat_filter + sort
+      on success: persist to Redis (per-provider key + LKG sentinel)
+      on failure: keep last-known-good in place
 
-  load:     read Redis first (fast path)
-              → on miss: read DB shadow (last-known-good fallback)
-              → on miss: empty (caller decides UX — typically log a
-                warning + serve empty list)
+  load_catalog():
+    Pure Redis read — never hits the network. Used by /catalog
+    endpoint. Falls back to LKG sentinel when per-provider TTL has
+    expired.
 
-Cache key is GLOBAL (per-provider, NOT per-user). LiteLLM JSON is
-the same for everyone; per-user differences (ready flag, role
-selection) are computed at /catalog read time, not stored here.
-This is the P6-J design decision we already settled — one nightly
-refresh benefits every user.
+Cache key is GLOBAL (per-provider, not per-user). Vendor /v1/models
+returns the same list regardless of which key signed the request,
+and a shared cache means the daily Celery beat warms the entry every
+user reads from. Per-user differences (ready / selected_for / enabled)
+are computed at /catalog read time, not stored here.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 from typing import Any
 
 from app.db.redis import redis_client
 
 from .base import ModelEntry
-from .litellm_loader import LiteLLMFetchFailed, fetch_litellm_catalog
+from .providers import PROVIDERS, get_provider_defaults
+from .vendors import ALL_SPECS, VendorAdapterSpec, fetch_one_vendor
+from .vendors.base import VendorFetchFailed
 
 logger = logging.getLogger(__name__)
 
 
-# Cache key namespace. ``v4`` because v1/v2/v3 prefixes are from the
-# pre-P6-L direct /v1/models discovery era. ``invalidate_all`` in
-# the legacy ``model_catalog_service`` sweeps v1/v2/v3, so the next
-# refresh after deploy reaps stale entries.
-_CACHE_PREFIX = "model_catalog:v4:"
+# Cache key namespace. ``v5`` because v1-v4 prefixes are from the
+# LiteLLM and pre-LiteLLM eras. ``invalidate_all`` below sweeps all
+# historical prefixes so leftover keys get reaped on first refresh.
+_CACHE_PREFIX = "model_catalog:v5:"
 _CACHE_TTL_S = 24 * 3600
 
 
@@ -45,16 +54,29 @@ def _redis_key(provider: str) -> str:
 
 
 def _redis_key_lkg() -> str:
-    """Last-known-good ALL-providers snapshot.
-
-    The per-provider keys above have a TTL — they expire 24h after
-    the last successful refresh. This sentinel key has NO TTL, so
-    even when the per-provider entries are gone (e.g., the cron
-    has been failing for 48h), we still have a snapshot to serve
-    until the next successful refresh. Kept in sync with the per-
-    provider keys on every successful write.
-    """
+    """Last-known-good ALL-providers snapshot. NO TTL — survives the
+    24h per-provider expiry so we can still serve stale-but-complete
+    data when the cron has been failing for >24h."""
     return f"{_CACHE_PREFIX}_last_known_good"
+
+
+# Gemini's chat-completion endpoint and its list-models endpoint
+# live at DIFFERENT paths on the same host:
+#   chat:        /v1beta/openai/chat/completions
+#   list models: /v1beta/models
+# PROVIDERS['gemini'].default_api_base points at the chat path so
+# the chat client works out of the box; we adjust here for the
+# list-models fetch. Other vendors don't have this split.
+_GEMINI_LIST_MODELS_BASE = "https://generativelanguage.googleapis.com/v1beta"
+
+
+def _resolve_list_models_base(spec: VendorAdapterSpec, defaults_api_base: str) -> str:
+    """Some vendors split list-models / chat into different paths.
+    For all-but-one, the spec's models_path appended to the provider's
+    default_api_base gives the right URL; Gemini is the exception."""
+    if spec.provider == "gemini":
+        return os.getenv("GOOGLE_LIST_MODELS_BASE", _GEMINI_LIST_MODELS_BASE)
+    return defaults_api_base
 
 
 def _serialize_entries(entries: list[ModelEntry]) -> str:
@@ -74,8 +96,8 @@ def _serialize_entries(entries: list[ModelEntry]) -> str:
 
 def _deserialize_entries(raw: str) -> list[ModelEntry]:
     """Best-effort deserialization. Drops rows that don't match the
-    current ModelEntry shape (e.g., a field was renamed) — better to
-    serve a subset than to 500 the catalog."""
+    current ModelEntry shape (schema drift) — better to serve a
+    subset than to 500 the catalog."""
     try:
         rows = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
@@ -97,33 +119,23 @@ def _deserialize_entries(raw: str) -> list[ModelEntry]:
                 supports_vision=bool(row.get("supports_vision", False)),
             ))
         except (KeyError, TypeError, ValueError):
-            # Schema drift — skip this row.
             continue
     return out
 
 
 async def _persist_all(grouped: dict[str, list[ModelEntry]]) -> None:
-    """Write every provider's entries to Redis + refresh the LKG snapshot.
-
-    Pipelining via a single ``json.dumps`` per provider is fine —
-    typical provider list is 5-50 entries (~few KB). The LKG sentinel
-    is a single payload-keyed-by-provider dict so a single GET
-    recovers the entire catalog on cache miss.
-    """
+    """Write every provider's entries to Redis + refresh the LKG snapshot."""
     snapshot: dict[str, str] = {}
     for provider, entries in grouped.items():
         serialized = _serialize_entries(entries)
         snapshot[provider] = serialized
         try:
             await redis_client.set(_redis_key(provider), serialized, ex=_CACHE_TTL_S)
-        except Exception as exc:  # noqa: BLE001 — best-effort cache write
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "catalog: per-provider cache write failed for %s: %s",
                 provider, exc,
             )
-    # LKG snapshot: no TTL. Survives the 24h per-provider expiry so
-    # we can serve stale-but-complete data when the cron has been
-    # failing.
     try:
         await redis_client.set(
             _redis_key_lkg(), json.dumps(snapshot, ensure_ascii=False),
@@ -134,8 +146,7 @@ async def _persist_all(grouped: dict[str, list[ModelEntry]]) -> None:
 
 async def _load_one_provider(provider: str) -> list[ModelEntry]:
     """Fast path: read this provider's slice from Redis. Falls back to
-    extracting the provider's slice from the LKG sentinel if the
-    per-provider TTL expired."""
+    extracting from the LKG sentinel if the per-provider TTL expired."""
     try:
         raw = await redis_client.get(_redis_key(provider))
     except Exception as exc:  # noqa: BLE001
@@ -143,7 +154,6 @@ async def _load_one_provider(provider: str) -> list[ModelEntry]:
         raw = None
     if raw is not None:
         return _deserialize_entries(raw)
-    # Per-provider key missing — try LKG.
     return await _load_one_from_lkg(provider)
 
 
@@ -164,103 +174,7 @@ async def _load_one_from_lkg(provider: str) -> list[ModelEntry]:
     return _deserialize_entries(snapshot.get(provider, ""))
 
 
-# ── Public API ──────────────────────────────────────────────────────
-
-
-async def refresh_catalog() -> dict[str, list[ModelEntry]]:
-    """Pull a fresh catalog from LiteLLM and replace the cache.
-
-    Layer 3 protection: on ``LiteLLMFetchFailed`` (HTTP retries
-    exhausted OR validation rejected), we DO NOT touch the cache —
-    the previous good snapshot stays as-is and the next /catalog
-    read still serves real data. Returns the freshly-loaded entries
-    on success, or the LKG snapshot on failure (so the caller's
-    return value is always a non-empty dict when at least one
-    successful refresh has ever happened).
-    """
-    try:
-        grouped = await fetch_litellm_catalog()
-    except LiteLLMFetchFailed as exc:
-        logger.error(
-            "catalog refresh failed (%s) — keeping last-known-good in cache",
-            exc,
-        )
-        # Return whatever LKG holds so the caller's logging shows
-        # the user-visible state, not "we got nothing".
-        return await _load_all_from_lkg()
-
-    await _persist_all(grouped)
-    return grouped
-
-
-async def refresh_catalog_for(provider: str) -> list[ModelEntry]:
-    """Same as ``refresh_catalog`` but only persists ONE provider's
-    slice. Used by the per-user "configure API key" flow (P6-M) where
-    we want to nudge that vendor's entries in case LiteLLM updated
-    since the last cron — without blowing 8 other providers' TTLs.
-
-    Implementation: still fetches the entire LiteLLM JSON (it's a
-    single 1 MB GET — splitting per provider would be overkill), but
-    only writes the named provider's slice to Redis. The LKG
-    snapshot still gets a full refresh because we have the data
-    anyway.
-    """
-    try:
-        grouped = await fetch_litellm_catalog()
-    except LiteLLMFetchFailed as exc:
-        logger.error(
-            "catalog refresh-for-%s failed (%s) — keeping LKG",
-            provider, exc,
-        )
-        return await _load_one_from_lkg(provider)
-
-    # We have the full JSON in hand anyway — persist EVERYTHING, not
-    # just the requested provider's slice. The whole point of doing
-    # a refresh is the fresh data; throwing away 15 providers' rows
-    # because the caller only asked about one would be wasteful and
-    # break the "shared cache benefits everyone" property (P6-J).
-    await _persist_all(grouped)
-    return grouped.get(provider, [])
-
-
-async def load_catalog() -> dict[str, list[ModelEntry]]:
-    """Read the entire catalog from cache.
-
-    Used by the /catalog API endpoint. Fast — pure Redis read, no
-    network. If Redis is cold (first deploy, no successful refresh
-    yet) returns the empty dict — the caller (API endpoint) should
-    log + return an empty list with a warning, not 500.
-    """
-    from .providers import known_provider_ids
-
-    out: dict[str, list[ModelEntry]] = {}
-    # Read every known provider in parallel. Concurrency cost is
-    # negligible (one Redis GET each) but cuts wall time when reading
-    # ~16 providers.
-    import asyncio
-    provider_ids = list(known_provider_ids())
-    results = await asyncio.gather(
-        *[_load_one_provider(p) for p in provider_ids],
-        return_exceptions=True,
-    )
-    for pid, res in zip(provider_ids, results):
-        if isinstance(res, Exception):
-            logger.warning("catalog: load failed for %s: %s", pid, res)
-            continue
-        if res:
-            out[pid] = res
-    return out
-
-
-async def load_catalog_for(provider: str) -> list[ModelEntry]:
-    """Read one provider's slice from cache."""
-    return await _load_one_provider(provider)
-
-
 async def _load_all_from_lkg() -> dict[str, list[ModelEntry]]:
-    """Read the LKG snapshot in its entirety. Used as the failure-mode
-    return from ``refresh_catalog`` so the caller still gets a
-    non-empty dict when LiteLLM is unreachable but we have history."""
     try:
         raw = await redis_client.get(_redis_key_lkg())
     except Exception as exc:  # noqa: BLE001
@@ -279,3 +193,182 @@ async def _load_all_from_lkg() -> dict[str, list[ModelEntry]]:
         for provider, serialized in snapshot.items()
         if isinstance(serialized, str)
     }
+
+
+def _resolve_key_for_provider(provider: str, user_id: str | None) -> str:
+    """API-key resolution priority for fetching /v1/models:
+       1) user_api_keys[user_id, provider] (encrypted DB row, P4-E)
+       2) env var named by ProviderDefaults.api_key_env (P6-L)
+    """
+    defaults = get_provider_defaults(provider)
+    if defaults is None:
+        return ""
+    if user_id:
+        try:
+            from app.services.user_api_key_service import get_user_api_key_plaintext
+            key = get_user_api_key_plaintext(user_id, provider)
+            if key:
+                return key
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "user_api_key lookup failed for %s/%s: %s",
+                user_id, provider, exc,
+            )
+    return (os.getenv(defaults.api_key_env) or "").strip()
+
+
+# ── Public API ──────────────────────────────────────────────────────
+
+
+async def refresh_catalog(
+    *, user_id: str | None = None,
+) -> dict[str, list[ModelEntry]]:
+    """Re-fetch every vendor's /v1/models in parallel and replace the cache.
+
+    Per-vendor failure does NOT block other vendors — each adapter is
+    awaited independently. A vendor whose fetch raises
+    ``VendorFetchFailed`` falls back to its slice of the last-known-good
+    snapshot (if any), so a single outage doesn't blank that card.
+
+    ``user_id`` is forwarded to the key resolver so a user with their
+    own UI-saved key gets a fetch through THEIR key (the user can
+    see fine-tunes / preview models their personal account unlocked).
+    Without a user_id (cron context), env-only fallback.
+    """
+    specs = ALL_SPECS
+    api_keys = {s.provider: _resolve_key_for_provider(s.provider, user_id) for s in specs}
+
+    async def _one(spec: VendorAdapterSpec) -> tuple[str, list[ModelEntry], bool]:
+        defaults = get_provider_defaults(spec.provider)
+        if defaults is None:
+            return spec.provider, [], False
+        api_key = api_keys[spec.provider]
+        if not api_key:
+            # No key for this vendor — return empty, the catalog
+            # serializer will show "未配置 API Key" downstream.
+            return spec.provider, [], True   # "success" in the sense of "no fetch needed"
+        api_base = _resolve_list_models_base(spec, defaults.default_api_base)
+        try:
+            entries = await fetch_one_vendor(spec, api_base, api_key)
+            return spec.provider, entries, True
+        except VendorFetchFailed as exc:
+            logger.error("catalog: %s fetch failed (%s) — using LKG", spec.provider, exc)
+            entries = await _load_one_from_lkg(spec.provider)
+            return spec.provider, entries, False
+
+    results = await asyncio.gather(*[_one(s) for s in specs])
+
+    fresh: dict[str, list[ModelEntry]] = {}
+    success_count = 0
+    for provider, entries, ok in results:
+        fresh[provider] = entries
+        if ok:
+            success_count += 1
+
+    # Only persist when at least ONE vendor returned data. If everything
+    # failed (e.g. global network outage), keep whatever's in the cache.
+    if any(entries for entries in fresh.values()):
+        await _persist_all(fresh)
+        logger.info(
+            "catalog refresh: %d vendors OK, %d total models",
+            success_count, sum(len(e) for e in fresh.values()),
+        )
+    else:
+        logger.error("catalog refresh: ALL vendors failed — cache untouched")
+        return await _load_all_from_lkg()
+    return fresh
+
+
+async def refresh_catalog_for(
+    provider: str, *, user_id: str | None = None,
+) -> list[ModelEntry]:
+    """Refresh ONE vendor's entries. Used by the "user just configured
+    their key" hook so the catalog reflects the new state immediately
+    instead of waiting for the daily Celery beat."""
+    spec = next((s for s in ALL_SPECS if s.provider == provider), None)
+    if spec is None:
+        return []
+    defaults = get_provider_defaults(provider)
+    if defaults is None:
+        return []
+    api_key = _resolve_key_for_provider(provider, user_id)
+    if not api_key:
+        return []
+    api_base = _resolve_list_models_base(spec, defaults.default_api_base)
+    try:
+        entries = await fetch_one_vendor(spec, api_base, api_key)
+    except VendorFetchFailed as exc:
+        logger.error("catalog: refresh-for-%s failed (%s) — using LKG", provider, exc)
+        return await _load_one_from_lkg(provider)
+    # Persist just this provider's slice + update LKG.
+    try:
+        await redis_client.set(
+            _redis_key(provider), _serialize_entries(entries), ex=_CACHE_TTL_S,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("catalog: per-provider cache write failed for %s: %s", provider, exc)
+    # Update LKG snapshot — merge this provider's fresh slice with
+    # whatever's already cached for other providers.
+    try:
+        existing = await _load_all_from_lkg()
+        existing[provider] = entries
+        snapshot = {p: _serialize_entries(es) for p, es in existing.items()}
+        await redis_client.set(_redis_key_lkg(), json.dumps(snapshot, ensure_ascii=False))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("catalog: LKG merge for %s failed: %s", provider, exc)
+    return entries
+
+
+async def load_catalog() -> dict[str, list[ModelEntry]]:
+    """Read the entire catalog from cache. Pure Redis read, no network."""
+    provider_ids = list(PROVIDERS.keys())
+    results = await asyncio.gather(
+        *[_load_one_provider(p) for p in provider_ids],
+        return_exceptions=True,
+    )
+    out: dict[str, list[ModelEntry]] = {}
+    for pid, res in zip(provider_ids, results):
+        if isinstance(res, Exception):
+            logger.warning("catalog: load failed for %s: %s", pid, res)
+            continue
+        if res:
+            out[pid] = res
+    return out
+
+
+async def load_catalog_for(provider: str) -> list[ModelEntry]:
+    """Read one provider's slice from cache."""
+    return await _load_one_provider(provider)
+
+
+async def invalidate_all() -> int:
+    """Drop every cached discovery result across all prefix versions.
+    Used by the manual ``POST /models/refresh-catalog`` endpoint and
+    legacy callers that still call this name."""
+    deleted = 0
+    # Sweep current + every historical prefix so leftover entries
+    # from earlier keying schemes get reaped on first refresh.
+    patterns = (
+        f"{_CACHE_PREFIX}*",
+        "model_catalog:v4:*",
+        "model_catalog:v3:*",
+        "model_catalog:v2:*",
+        "model_catalog:v1:*",
+    )
+    try:
+        for pattern in patterns:
+            async for key in redis_client.scan_iter(match=pattern, count=200):
+                await redis_client.delete(key)
+                deleted += 1
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("invalidate_all failed: %s", exc)
+    return deleted
+
+
+__all__ = [
+    "refresh_catalog",
+    "refresh_catalog_for",
+    "load_catalog",
+    "load_catalog_for",
+    "invalidate_all",
+]

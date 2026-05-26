@@ -26,7 +26,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
 from dotenv import load_dotenv
-load_dotenv(ROOT / ".env")
+# override=True so an empty value in the parent shell (e.g. left over
+# from a prior `unset` or test run) does NOT silently mask a populated
+# value in .env — without this, a single stale ``ANTHROPIC_API_KEY=``
+# in the shell would skip Anthropic refresh forever.
+load_dotenv(ROOT / ".env", override=True)
 
 
 async def _main() -> int:
@@ -47,30 +51,23 @@ async def _main() -> int:
     args = parser.parse_args()
 
     # Lazy imports so --help doesn't load the full backend stack.
-    from app.services.model_sources.litellm_loader import (
-        LiteLLMFetchFailed,
-        fetch_litellm_catalog,
-    )
     from app.services.model_sources.pipeline import refresh_catalog
     from app.services.model_sources.providers import PROVIDERS
 
-    try:
-        grouped = await refresh_catalog()
-    except LiteLLMFetchFailed as exc:
-        print(f"LiteLLM fetch failed: {exc}", file=sys.stderr)
-        return 2
+    # Pipeline never raises — vendor-level failures fall back to LKG
+    # internally. If ALL 9 vendors fail (cold cache + no LKG), we get
+    # an empty dict back.
+    grouped = await refresh_catalog()
 
     # Order rows by PROVIDERS dict iteration so the table matches the
     # Models page card order (default-enabled first, opt-in after).
     provider_order = [
         p for p in PROVIDERS.keys() if (not args.provider or p == args.provider)
     ]
-    # Include any LiteLLM providers we got data for that aren't yet in
-    # PROVIDERS — useful for spotting "should we add this to PROVIDERS?"
-    extras = [
-        p for p in sorted(grouped.keys())
-        if p not in PROVIDERS and (not args.provider or p == args.provider)
-    ]
+    # No "extras" path post-P7-A — PROVIDERS is now the complete set
+    # of vendors we ship adapters for; the pipeline never returns a
+    # provider that's not in PROVIDERS.
+    extras: list[str] = []
 
     if args.json:
         out = {
@@ -91,7 +88,7 @@ async def _main() -> int:
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0
 
-    print(f"Catalog refreshed from LiteLLM. {sum(len(v) for v in grouped.values())} chat models total.")
+    print(f"Catalog refreshed from vendor /v1/models endpoints. {sum(len(v) for v in grouped.values())} chat models total.")
     print()
     print(f"{'Provider':<14} {'Models':>7}  Head of available models")
     print("-" * 90)
@@ -100,7 +97,7 @@ async def _main() -> int:
         defaults = PROVIDERS.get(provider)
         label = defaults.display_label if defaults else provider
         if not entries:
-            print(f"{provider:<14} {'0':>7}  ({label}: no chat entries in LiteLLM JSON)")
+            print(f"{provider:<14} {'0':>7}  ({label}: no API key in .env, or vendor returned no chat models)")
             continue
         head = ", ".join(e.model for e in entries[:4])
         more = f" + {len(entries) - 4} more" if len(entries) > 4 else ""
@@ -110,16 +107,12 @@ async def _main() -> int:
                 # ASCII-only marker for Windows console (cp936) compat.
                 fc = "[fc]" if e.supports_function_calling else "    "
                 print(f"              {fc} {e.model}")
-    if extras:
-        print()
-        print("Providers present in LiteLLM JSON but NOT in PROVIDERS (add to "
-              "model_sources/providers.py to surface in the UI):")
-        for p in extras:
-            print(f"   - {p}: {len(grouped[p])} chat model(s)")
     print()
     print(
-        "Source: LiteLLM model_prices_and_context_window.json. "
-        "Set LITELLM_CATALOG_URL to override the source URL."
+        "Source: each vendor's official /v1/models endpoint. "
+        "An empty count means either no API key for that vendor in .env, "
+        "or the vendor returned no chat models (after applying the "
+        "vendor adapter's chat-only filter)."
     )
     return 0
 

@@ -501,7 +501,6 @@ def refresh_model_catalog_task(self):
     "fetch broke, serving stale" condition.
     """
     from app.core.model_registry import repopulate_profile_cache
-    from app.services.model_sources.litellm_loader import LiteLLMFetchFailed
     from app.services.model_sources.pipeline import refresh_catalog
 
     async def _run():
