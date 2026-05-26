@@ -1,9 +1,7 @@
 import logging
-from enum import Enum
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
@@ -13,6 +11,13 @@ from app.db.database import get_db
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
 from app.rag.retriever import query_knowledge_base
+from app.schemas.rag import (
+    KnowledgeDocumentCreateRequest,
+    KnowledgeDocumentUpdateRequest,
+    KnowledgeUploadRequest,
+    QueryRequest,
+    SourceTypeEnum,
+)
 from app.services.knowledge.knowledge_service import default_title, hard_delete_knowledge_document
 from app.services.uploads.upload_service import create_owned_upload, get_owned_upload, mark_upload_consumed
 from app.worker.tasks import process_document_ingestion
@@ -20,35 +25,6 @@ from app.worker.tasks import process_document_ingestion
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["rag"])
-
-
-class SourceTypeEnum(str, Enum):
-    interview_qa = "interview_qa"
-    official_docs = "official_docs"
-    personal_memory = "personal_memory"
-
-
-class KnowledgeUploadRequest(BaseModel):
-    filename: str
-    content_type: Optional[str] = "application/octet-stream"
-    size_bytes: Optional[int] = None
-
-
-class KnowledgeDocumentCreateRequest(BaseModel):
-    upload_id: str
-    source_type: SourceTypeEnum = SourceTypeEnum.interview_qa
-    title: Optional[str] = None
-    category: str = "默认"
-
-
-class KnowledgeDocumentUpdateRequest(BaseModel):
-    title: Optional[str] = None
-    category: Optional[str] = None
-
-
-class QueryRequest(BaseModel):
-    query: str = Field(..., description="User question directed at the LLM")
-    source_type: Optional[SourceTypeEnum] = Field(None, description="Optional metadata filter bounds")
 
 
 @router.post("/rag/query")

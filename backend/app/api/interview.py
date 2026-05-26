@@ -5,7 +5,6 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -34,29 +33,15 @@ except ModuleNotFoundError:
 router = APIRouter()
 
 
-class PresignedUrlRequest(BaseModel):
-    filename: str
-    content_type: Optional[str] = None
-    size_bytes: Optional[int] = None
-
-
-class AnalyzeRequest(BaseModel):
-    upload_id: str
-    resume_upload_id: str
-    jd_text: Optional[str] = None
-    jd_upload_id: Optional[str] = None  # KnowledgeDocument id; if set, text is loaded server-side
-    # ISO-639-1 language hint for WhisperX. ``"zh"`` / ``"en"`` force the
-    # decoder, ``"auto"`` lets Whisper detect per-clip (slower, occasionally
-    # picks the wrong one — only worth it for genuinely mixed audio).
-    # Default matches the UI default of Simplified Chinese transcription.
-    language: str = "zh"
-
-
-class MemorySaveRequest(BaseModel):
-    question: str
-    improved_answer: str
-    original_score: float
-    tags: Optional[List[str]] = Field(default_factory=list)
+# Pydantic schemas now live in app/schemas/interview.py.
+from app.schemas.interview import (  # noqa: E402, F401
+    AnalyzeRequest,
+    InterviewRecordListItem,
+    InterviewRecordUpdateRequest,
+    MemorySaveRequest,
+    PresignedUrlRequest,
+    QAEditRequest,
+)
 
 
 @router.post("/upload/audio/direct")
@@ -431,14 +416,6 @@ async def get_analytics_report(
 
 # ── InterviewRecord endpoints ─────────────────────────────────────────
 
-class InterviewRecordListItem(BaseModel):
-    id: str
-    source: str
-    title: str
-    tag: Optional[str] = None
-    status: str
-    created_at: str
-
 
 @router.get("/interview-records", response_model=List[InterviewRecordListItem])
 def list_interview_records(
@@ -547,11 +524,6 @@ def get_interview_record_summary(
     if not summary:
         raise HTTPException(status_code=404, detail="Interview record or analysis not found")
     return {"summary": summary}
-
-
-class InterviewRecordUpdateRequest(BaseModel):
-    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
-    tag: Optional[str] = Field(default=None, max_length=32)
 
 
 @router.patch("/interview-records/{record_id}")
@@ -681,13 +653,6 @@ def delete_interview_record(
             status_code=500,
             detail=f"删除失败: {type(exc).__name__}: {exc}",
         ) from exc
-
-
-class QAEditRequest(BaseModel):
-    question: Optional[str] = None
-    answer: Optional[str] = None
-    critique: Optional[str] = None
-    improved_answer: Optional[str] = None
 
 
 @router.patch("/interview-records/{record_id}/qa/{qa_id}")
