@@ -35,6 +35,7 @@ from typing import Any
 from app.db.redis import redis_client
 
 from .base import ModelEntry
+from .curated import apply_overrides
 from .providers import PROVIDERS, get_provider_defaults
 from .vendors import ALL_SPECS, VendorAdapterSpec, fetch_one_vendor
 from .vendors.base import VendorFetchFailed
@@ -250,11 +251,18 @@ async def refresh_catalog(
         api_base = _resolve_list_models_base(spec, defaults.default_api_base)
         try:
             entries = await fetch_one_vendor(spec, api_base, api_key)
-            return spec.provider, entries, True
         except VendorFetchFailed as exc:
             logger.error("catalog: %s fetch failed (%s) — using LKG", spec.provider, exc)
             entries = await _load_one_from_lkg(spec.provider)
+            # LKG entries were stored AFTER curated overrides applied
+            # (we persist post-curation), so no second pass here.
             return spec.provider, entries, False
+        # Apply curated UX layer: hide variant noise + dated aliases,
+        # override display names, re-sort by tier_rank. Stored to
+        # Redis post-curation so /catalog reads serve the polished
+        # view directly.
+        entries = apply_overrides(spec.provider, entries)
+        return spec.provider, entries, True
 
     results = await asyncio.gather(*[_one(s) for s in specs])
 
@@ -297,6 +305,7 @@ async def refresh_catalog_for(
     api_base = _resolve_list_models_base(spec, defaults.default_api_base)
     try:
         entries = await fetch_one_vendor(spec, api_base, api_key)
+        entries = apply_overrides(provider, entries)
     except VendorFetchFailed as exc:
         logger.error("catalog: refresh-for-%s failed (%s) — using LKG", provider, exc)
         return await _load_one_from_lkg(provider)
