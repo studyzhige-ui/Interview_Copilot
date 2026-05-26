@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.example.lite
 !.env.docker.example
 
 # User-local prompt scratchpad (not project content)

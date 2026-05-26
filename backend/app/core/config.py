@@ -130,8 +130,14 @@ class Settings(BaseSettings):
     LEVER_API_BASE: str = "https://api.lever.co/v0"
     LEVER_SITES: str = "openai"
     LEVER_DEFAULT_LIMIT: int = 30
-    NVIDIA_API_BASE: str = "https://integrate.api.nvidia.com/v1"
-    NVIDIA_CHAT_MODEL: str = "meta/llama-3.1-70b-instruct"
+    # NVIDIA_API_BASE / NVIDIA_CHAT_MODEL fields used to live here as
+    # Pydantic settings but nothing in the codebase ever read them
+    # through ``settings.``. The live read path is
+    # ``services/model_sources/providers.py`` calling
+    # ``os.getenv("NVIDIA_API_BASE", "https://integrate.api.nvidia.com/v1")``
+    # directly, and the model list is sourced from
+    # ``/v1/models`` (no hardcoded chat model). Only ``NVIDIA_API_KEY``
+    # above is required to enable the provider.
 
     # ── Observability (Sentry) ──────────────────────────────────────────
     # Empty DSN disables Sentry entirely (default for local dev). For prod
