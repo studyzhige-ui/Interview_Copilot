@@ -1,31 +1,30 @@
-"""Per-model display overrides (P7-B).
+"""Per-model display overrides + auto-derivation fallback (P7-F).
 
 The vendor /v1/models endpoints (P7-A) give us authoritative model
-**existence** — but the raw ids are often:
-  * machine-named (``gpt-5.5-2026-04-23``, ``mimo-v2.5-pro``)
-  * duplicated as version-pinned dated aliases of a rolling alias
-    (OpenAI ships both ``gpt-5.5`` AND ``gpt-5.5-2026-04-23``)
-  * sorted by chronology rather than tier (Gemma > Gemini in raw,
-    but Gemini should rank above its open-source Gemma cousin)
+EXISTENCE. The UX layer in this file decides:
 
-This module is the thin UX-polish layer that sits on top of the
-adapter output. Two mechanisms:
+  1. What to display each model as (friendly name vs raw API id)
+  2. Which models float to the top of each vendor's card
+  3. Which models get hidden as redundant variants
 
-  1. ``CURATED[(provider, model_id)] = ModelOverride(...)`` — explicit
-     per-model display_name / tier_rank / hidden override.
-  2. Per-vendor "variant hide" regex — auto-suppress dated aliases
-     when their bare equivalent is already in the list.
+Two paths produce a (display_name, tier_rank, hidden) decision per
+entry:
 
-Entries WITHOUT an override:
-  * keep their vendor-supplied display_name (Anthropic's
-    ``"Claude Opus 4.7"``, Gemini's ``"Gemini 3.5 Flash"``) or fall
-    back to the bare id
-  * get ``tier_rank=999`` (sorted to the bottom of their vendor card)
-  * stay visible — never auto-hidden
+  HAND-CURATED — for vendors where the auto rule produces wrong order:
+    * Anthropic — must respect marketing tier (Opus > Sonnet > Haiku
+      regardless of release date)
+    * NVIDIA NIM — hosts hundreds of OSS models; need to feature the
+      handful users actually want (DeepSeek V4 / Llama 3.3 / Qwen3
+      Coder / etc) above the long tail
 
-Adding a new model: if the vendor's display_name + auto-recency sort
-are good enough, do nothing. If you want it featured higher up or
-renamed, add a row to CURATED.
+  AUTO-DERIVED — every other vendor (OpenAI / Gemini / DeepSeek /
+  Moonshot / Zhipu / Qwen / Xiaomi). Display name comes from a
+  brand-aware capitalisation rule; tier_rank from parsing the version
+  number + tier suffix out of the id.
+
+Dated-alias auto-hide (e.g. ``gpt-5.5-2026-04-23`` when ``gpt-5.5``
+exists) runs FIRST, before either path — it's pattern-based, not
+per-vendor knowledge.
 """
 from __future__ import annotations
 
@@ -38,90 +37,234 @@ from .base import ModelEntry
 
 @dataclass(frozen=True)
 class ModelOverride:
-    """UX-layer override for one vendor-emitted model id.
-
-    Every field is optional — set only the ones you want to change.
-    Missing fields keep whatever the vendor reported / the default sort.
-    """
-    display_name: str | None = None      # None → keep vendor's / bare id
-    tier_rank: int = 999                  # lower = higher in vendor card; 999 = bottom
-    hidden: bool = False                  # drop from catalog entirely
+    """Hand-curated UX override. All fields optional."""
+    display_name: str | None = None      # None → use vendor / auto-derived
+    tier_rank: int = 999                  # lower = higher in card; 999 = bottom
+    hidden: bool = False                  # drop entirely
 
 
-# Per-vendor regex of ids to auto-hide IF their bare equivalent is
-# present in the same response. This kills the "two entries for the
-# same model" noise (vendor's rolling alias + dated pin) without
-# requiring an explicit hidden=True row per dated variant.
+# ── Dated-alias auto-suppression ─────────────────────────────────────
+# Vendors often ship a rolling alias (``gpt-5.5``) AND a date-pinned
+# alias (``gpt-5.5-2026-04-23``) for the same underlying weights.
+# Auto-hide the dated one whenever the bare one is in the same response.
+
+
 _DATE_SUFFIX_PATTERNS: dict[str, re.Pattern[str]] = {
-    # OpenAI / DeepSeek / Moonshot use "-YYYY-MM-DD"
-    "openai":   re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
-    "deepseek": re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
-    "moonshot": re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
-    # Anthropic uses "-YYYYMMDD" (compact)
+    "openai":    re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
+    "deepseek":  re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
+    "moonshot":  re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
+    "qwen":      re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
     "anthropic": re.compile(r"^(?P<bare>.+)-\d{8}$"),
-    # Qwen DashScope uses "-YYYY-MM-DD" too
-    "qwen":     re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
-    # Gemini / NVIDIA / zai / Xiaomi don't ship dated aliases in their
-    # current /v1/models output — no entry means no auto-suppression.
+    # Gemini / NVIDIA / zai / Xiaomi don't ship dated aliases in
+    # current /v1/models responses — no rule means no suppression.
 }
 
 
-# ── Hand-curated per-model overrides ─────────────────────────────────────
+# ── Auto display name ────────────────────────────────────────────────
+# Maps the lowercase brand / acronym segment to its preferred display
+# form. Used by ``_auto_display_name`` for vendors without manual
+# curated entries.
+
+
+_BRAND_DISPLAY: dict[str, str] = {
+    "gpt":      "GPT",
+    "glm":      "GLM",
+    "deepseek": "DeepSeek",
+    "mimo":     "MiMo",
+    "kimi":     "Kimi",
+    "moonshot": "Moonshot",
+    "qwen":     "Qwen",
+    "qwq":      "QwQ",
+    "gemini":   "Gemini",
+    "gemma":    "Gemma",
+    # Acronyms
+    "vl":  "VL",
+    "vlm": "VLM",
+    "tts": "TTS",
+    "asr": "ASR",
+    "oss": "OSS",
+    "nim": "NIM",
+}
+
+
+_TIER_SUFFIX_DISPLAY: dict[str, str] = {
+    "pro":     "Pro",
+    "max":     "Max",
+    "plus":    "Plus",
+    "mini":    "Mini",
+    "nano":    "Nano",
+    "flash":   "Flash",
+    "lite":    "Lite",
+    "turbo":   "Turbo",
+    "air":     "Air",
+    "omni":    "Omni",
+    "preview": "Preview",
+    "latest":  "Latest",
+    "thinking": "Thinking",
+}
+
+
+def _auto_display_name(model_id: str) -> str:
+    """Auto-derive a friendly display name from the raw model id.
+
+    Handles:
+      * brand acronyms (gpt → GPT, glm → GLM, mimo → MiMo, deepseek
+        → DeepSeek) via ``_BRAND_DISPLAY``
+      * tier suffix capitalisation (pro → Pro, mini → Mini) via
+        ``_TIER_SUFFIX_DISPLAY``
+      * version segments (4.7, v2.5, 3-pro) kept as-is
+      * unknown tokens get ``Title-Case``
+
+    Examples:
+      gpt-5.5-pro         → "GPT 5.5 Pro"
+      glm-4.7             → "GLM 4.7"
+      mimo-v2.5-pro       → "MiMo v2.5 Pro"
+      kimi-k2.6           → "Kimi K2.6"
+      deepseek-v4-pro     → "DeepSeek v4 Pro"
+      qwen3-coder-plus    → "Qwen3 Coder Plus"
+      gemini-3.5-flash    → "Gemini 3.5 Flash"
+      gemma-4-31b-it      → "Gemma 4 31b It"
+    """
+    parts = model_id.split("-")
+    out: list[str] = []
+    for raw in parts:
+        if not raw:
+            continue
+        low = raw.lower()
+        if low in _BRAND_DISPLAY:
+            out.append(_BRAND_DISPLAY[low])
+            continue
+        if low in _TIER_SUFFIX_DISPLAY:
+            out.append(_TIER_SUFFIX_DISPLAY[low])
+            continue
+        # Version segment "v2.5" / "v4" / "k2.6" → preserve case but
+        # ensure leading letter is the lowercase ``v`` / ``k`` form
+        # vendors actually publish.
+        if re.fullmatch(r"v\d+(?:\.\d+)?", low):
+            out.append(low)
+            continue
+        if re.fullmatch(r"[a-z]\d+\.\d+", low):  # k2.6, etc
+            out.append(low[0].upper() + low[1:])
+            continue
+        # Pure number or version (3.5, 4.1, 70b) → keep raw
+        if low[0].isdigit():
+            out.append(raw)
+            continue
+        # Fallback: Title case the unknown token
+        out.append(raw[0].upper() + raw[1:])
+    return " ".join(out) if out else model_id
+
+
+# ── Auto tier_rank ────────────────────────────────────────────────────
+
+
+def _parse_version(model_id: str) -> tuple[int, int]:
+    """Extract (major, minor) version from an id.
+
+    Two rules — in priority order:
+
+      1. ``X.Y`` decimal anywhere: most modern vendor naming
+         (``gpt-5.5``, ``gemini-3.5``, ``glm-4.7``, ``mimo-v2.5``,
+         ``kimi-k2.6``).
+      2. Single integer after a dash, followed by a letter / dash / end:
+         ``gpt-5``, ``gpt-4o``, ``gemini-3-pro``, ``deepseek-v4``.
+
+    The ``X-Y both digits`` pattern is INTENTIONALLY NOT supported in
+    the auto path because vendors use ``X-Y`` for parameter sizes too
+    (``gemma-4-31b-it`` is a 31 BILLION-parameter Gemma 4, not Gemma
+    version 4.31). Anthropic uses ``claude-opus-4-7`` for version 4.7
+    but Anthropic is hand-curated in CURATED so it never reaches this
+    function. If a future auto-vendor needs this, special-case it.
+    """
+    m = re.search(r"(\d+)\.(\d+)", model_id)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    # Single integer. Allow an optional ``v`` prefix (``deepseek-v4``,
+    # ``moonshot-v1-128k``) so the version segment wins over the
+    # size segment that comes later (``-128k`` would otherwise match
+    # as version 128 because re.search returns the leftmost match,
+    # and ``-v1-`` without the optional ``v`` doesn't match).
+    m = re.search(r"-v?(\d+)(?=[a-z]|-|$)", model_id)
+    if m:
+        return int(m.group(1)), 0
+    return 0, 0
+
+
+_TIER_RANK_OFFSETS: dict[str, int] = {
+    # Tier suffix → rank adjustment. Negative = boost (closer to top).
+    # Magnitudes are deliberately small (max ±40) so that a tier
+    # difference can NEVER flip the order across version families —
+    # gpt-5.5 (bare) must always beat gpt-5.4-pro because 5.5 is the
+    # newer generation.
+    "pro":      -30,
+    "max":      -25,
+    "plus":     -10,
+    "thinking": -15,   # thinking variants often preferred for hard tasks
+    "flash":     10,
+    "mini":      20,
+    "nano":      30,
+    "lite":      35,
+    "turbo":     40,
+    "air":       40,
+    "preview":    5,   # preview demoted slightly vs stable
+}
+
+
+def _auto_tier_rank(provider: str, model_id: str) -> int:
+    """Derive a tier_rank for a model without a hand-curated entry.
+
+    Returns values in 100-9999 so curated tiers (1-99) ALWAYS win.
+
+    Heuristic (lower = higher in card):
+      base 10000
+      − major*1000 − minor*100   (version dominates: 5.5 always above 5.4)
+      + sum of tier offsets       (pro / mini / etc. fine-grain rank
+                                   WITHIN the same version family)
+      + brand demotion            (Google's Gemma sinks below Gemini)
+
+    The major gap (1000) and minor gap (100) are both larger than the
+    max tier spread (±40), so cross-version ordering can never be
+    inverted by a tier suffix. Within a version family the suffixes
+    cluster correctly: pro > bare > mini > nano > lite > turbo.
+    """
+    rank = 10000
+
+    # Brand demotion: vendor's secondary line goes below their primary.
+    # Currently just Google — Gemma (open-source) sinks below Gemini.
+    lower = model_id.lower()
+    if provider == "gemini" and lower.startswith("gemma"):
+        rank += 2000   # Gemma well below any Gemini entry
+
+    major, minor = _parse_version(model_id)
+    rank -= major * 1000 + minor * 100
+
+    # Tier suffix detection — ACCUMULATE all matches so e.g.
+    # ``-pro-preview`` sums pro(-30) + preview(+5) = -25, slightly
+    # less boosted than bare ``-pro``. Match on ``-suffix`` plus
+    # end-of-string to avoid false positives (``-promax`` matches
+    # neither ``pro`` nor ``max`` on its own).
+    for suffix, offset in _TIER_RANK_OFFSETS.items():
+        if f"-{suffix}" in lower or lower.endswith(f"-{suffix}"):
+            rank += offset
+
+    return max(rank, 100)
+
+
+# ── Hand-curated overrides ───────────────────────────────────────────
 #
-# Format: CURATED[(provider, model_id)] = ModelOverride(...)
+# ONLY for vendors where auto-derivation produces wrong order:
+#   * Anthropic — must respect Opus > Sonnet > Haiku marketing tier
+#     (vendor's release date ordering doesn't capture this)
+#   * NVIDIA NIM — needs hot models featured above the long tail
 #
-# Tier rank ranges per vendor (lower = higher in UI card):
-#    1-10 :  "hero" / latest / flagship models — top of card
-#   20-50 :  recent stable models — middle
-#   60-100:  legacy / specialty — bottom of curated section
-#   (no entry, default 999) : pushed below all curated entries
+# Everything else flows through auto-derivation.
 
 
 CURATED: dict[tuple[str, str], ModelOverride] = {
 
-    # ── OpenAI ────────────────────────────────────────────────────────────
-    ("openai", "gpt-5.5-pro"):      ModelOverride("GPT-5.5 Pro",      tier_rank=1),
-    ("openai", "gpt-5.5"):          ModelOverride("GPT-5.5",          tier_rank=2),
-    ("openai", "gpt-5.5-codex"):    ModelOverride("GPT-5.5 Codex",    tier_rank=3),
-    ("openai", "gpt-5.4-pro"):      ModelOverride("GPT-5.4 Pro",      tier_rank=4),
-    ("openai", "gpt-5.4"):          ModelOverride("GPT-5.4",          tier_rank=5),
-    ("openai", "gpt-5.4-mini"):     ModelOverride("GPT-5.4 Mini",     tier_rank=6),
-    ("openai", "gpt-5.4-nano"):     ModelOverride("GPT-5.4 Nano",     tier_rank=7),
-    ("openai", "gpt-5.3-codex"):    ModelOverride("GPT-5.3 Codex",    tier_rank=8),
-    ("openai", "gpt-5.2-pro"):      ModelOverride("GPT-5.2 Pro",      tier_rank=9),
-    ("openai", "gpt-5.2"):          ModelOverride("GPT-5.2",          tier_rank=10),
-    ("openai", "gpt-5.2-codex"):    ModelOverride("GPT-5.2 Codex",    tier_rank=11),
-    ("openai", "gpt-5.1"):          ModelOverride("GPT-5.1",          tier_rank=12),
-    ("openai", "gpt-5.1-codex"):    ModelOverride("GPT-5.1 Codex",    tier_rank=13),
-    ("openai", "gpt-5"):            ModelOverride("GPT-5",            tier_rank=14),
-    ("openai", "gpt-5-pro"):        ModelOverride("GPT-5 Pro",        tier_rank=15),
-    ("openai", "gpt-5-mini"):       ModelOverride("GPT-5 Mini",       tier_rank=16),
-    ("openai", "gpt-5-nano"):       ModelOverride("GPT-5 Nano",       tier_rank=17),
-    ("openai", "gpt-4.1"):          ModelOverride("GPT-4.1",          tier_rank=30),
-    ("openai", "gpt-4.1-mini"):     ModelOverride("GPT-4.1 Mini",     tier_rank=31),
-    ("openai", "gpt-4o"):           ModelOverride("GPT-4o",           tier_rank=40),
-    ("openai", "gpt-4o-mini"):      ModelOverride("GPT-4o Mini",      tier_rank=41),
-    ("openai", "o4-mini"):          ModelOverride("o4 Mini",          tier_rank=50),
-    ("openai", "o3-pro"):           ModelOverride("o3 Pro",           tier_rank=51),
-    ("openai", "o3"):               ModelOverride("o3",               tier_rank=52),
-    # Hide the rolling "chat-latest" sibling — pure alias of the
-    # latest GPT-5.x, no value showing both.
-    ("openai", "gpt-5.5-chat-latest"): ModelOverride(hidden=True),
-    ("openai", "gpt-5.4-chat-latest"): ModelOverride(hidden=True),
-    ("openai", "gpt-5.3-chat-latest"): ModelOverride(hidden=True),
-    ("openai", "gpt-5.2-chat-latest"): ModelOverride(hidden=True),
-    ("openai", "gpt-5.1-chat-latest"): ModelOverride(hidden=True),
-    ("openai", "gpt-5-chat"):          ModelOverride(hidden=True),
-    ("openai", "gpt-5-chat-latest"):   ModelOverride(hidden=True),
-    # codex-mini-latest / codex-max — agent-oriented variants, hide by default
-    ("openai", "codex-mini-latest"):   ModelOverride(hidden=True),
-    ("openai", "gpt-5.1-codex-mini"):  ModelOverride(hidden=True),
-    ("openai", "gpt-5.1-codex-max"):   ModelOverride(hidden=True),
-
-    # ── Anthropic ─────────────────────────────────────────────────────────
-    # Anthropic's response already includes display_name — we don't
-    # override those. We DO add tier_rank so the family stack ordering
-    # matches Anthropic's marketing hierarchy (Opus > Sonnet > Haiku).
+    # ── Anthropic — marketing tier (Opus > Sonnet > Haiku) ──────────
+    # Vendor ships display_name natively so we don't override that;
+    # only set tier_rank to enforce the product hierarchy.
     ("anthropic", "claude-opus-4-7"):              ModelOverride(tier_rank=1),
     ("anthropic", "claude-sonnet-4-6"):            ModelOverride(tier_rank=2),
     ("anthropic", "claude-opus-4-6"):              ModelOverride(tier_rank=3),
@@ -130,104 +273,39 @@ CURATED: dict[tuple[str, str], ModelOverride] = {
     ("anthropic", "claude-sonnet-4-5-20250929"):   ModelOverride(tier_rank=6),
     ("anthropic", "claude-opus-4-1-20250805"):     ModelOverride(tier_rank=10),
 
-    # ── Google Gemini ─────────────────────────────────────────────────────
-    # Gemini's response includes displayName — we keep them. tier_rank
-    # only, to bring Gemini-branded above Gemma (open-source line).
-    ("gemini", "gemini-3-pro-preview"):       ModelOverride(tier_rank=1),
-    ("gemini", "gemini-3.5-flash"):           ModelOverride(tier_rank=2),
-    ("gemini", "gemini-3-flash-preview"):     ModelOverride(tier_rank=3),
-    ("gemini", "gemini-3.1-pro-preview"):     ModelOverride(tier_rank=4),
-    ("gemini", "gemini-3.1-flash-lite"):      ModelOverride(tier_rank=5),
-    ("gemini", "gemini-pro-latest"):          ModelOverride(tier_rank=6),
-    ("gemini", "gemini-flash-latest"):        ModelOverride(tier_rank=7),
-    ("gemini", "gemini-flash-lite-latest"):   ModelOverride(tier_rank=8),
-    ("gemini", "gemini-2.5-pro"):             ModelOverride(tier_rank=10),
-    ("gemini", "gemini-2.5-flash"):           ModelOverride(tier_rank=11),
-    ("gemini", "gemini-2.5-flash-lite"):      ModelOverride(tier_rank=12),
-    ("gemini", "gemini-2.0-flash"):           ModelOverride(tier_rank=20),
-    ("gemini", "gemini-2.0-flash-lite"):      ModelOverride(tier_rank=21),
-    # Gemma (Google's open-source family) — show below Gemini-branded
-    ("gemini", "gemma-4-31b-it"):             ModelOverride("Gemma 4 31B", tier_rank=50),
-    ("gemini", "gemma-4-26b-a4b-it"):         ModelOverride("Gemma 4 26B MoE", tier_rank=51),
-    # Hide the experimental / preview-only / sub-1B variants
-    ("gemini", "gemini-3.1-pro-preview-customtools"): ModelOverride(hidden=True),
-    ("gemini", "gemini-3.1-flash-lite-preview"):      ModelOverride(hidden=True),
-
-    # ── DeepSeek ──────────────────────────────────────────────────────────
-    ("deepseek", "deepseek-v4-pro"):      ModelOverride("DeepSeek V4 Pro",   tier_rank=1),
-    ("deepseek", "deepseek-v4-flash"):    ModelOverride("DeepSeek V4 Flash", tier_rank=2),
-
-    # ── NVIDIA NIM ────────────────────────────────────────────────────────
-    # NIM is a HOSTED catalog of third-party OSS models. Hero ranks
-    # for the most commonly useful ones; everything else stays in the
-    # uncurated 999 tier (visible but at bottom of card).
+    # ── NVIDIA NIM — hot models featured; long tail at default 999 ──
+    # NIM hosts hundreds of third-party OSS models; only the
+    # most-used ones get a rank, everything else auto-sinks.
     ("nvidia_nim", "deepseek-ai/deepseek-v4-pro"):       ModelOverride("DeepSeek V4 Pro (NIM)",   tier_rank=1),
     ("nvidia_nim", "deepseek-ai/deepseek-v4-flash"):     ModelOverride("DeepSeek V4 Flash (NIM)", tier_rank=2),
-    ("nvidia_nim", "meta/llama-3.3-70b-instruct"):       ModelOverride("Llama 3.3 70B",            tier_rank=5),
-    ("nvidia_nim", "meta/llama-3.1-70b-instruct"):       ModelOverride("Llama 3.1 70B",            tier_rank=6),
-    ("nvidia_nim", "meta/llama-4-maverick-17b-128e-instruct"): ModelOverride("Llama 4 Maverick",   tier_rank=7),
-    ("nvidia_nim", "qwen/qwen3-coder-480b-a35b-instruct"):     ModelOverride("Qwen3 Coder 480B",   tier_rank=10),
-    ("nvidia_nim", "qwen/qwen3-next-80b-a3b-instruct"):        ModelOverride("Qwen3 Next 80B",     tier_rank=11),
+    ("nvidia_nim", "meta/llama-3.3-70b-instruct"):       ModelOverride("Llama 3.3 70B",           tier_rank=5),
+    ("nvidia_nim", "meta/llama-3.1-70b-instruct"):       ModelOverride("Llama 3.1 70B",           tier_rank=6),
+    ("nvidia_nim", "meta/llama-4-maverick-17b-128e-instruct"): ModelOverride("Llama 4 Maverick",  tier_rank=7),
+    ("nvidia_nim", "qwen/qwen3-coder-480b-a35b-instruct"):     ModelOverride("Qwen3 Coder 480B",  tier_rank=10),
+    ("nvidia_nim", "qwen/qwen3-next-80b-a3b-instruct"):        ModelOverride("Qwen3 Next 80B",    tier_rank=11),
     ("nvidia_nim", "mistralai/mistral-large-3-675b-instruct-2512"): ModelOverride("Mistral Large 3 675B", tier_rank=15),
-    ("nvidia_nim", "openai/gpt-oss-120b"):               ModelOverride("GPT OSS 120B",             tier_rank=20),
-    ("nvidia_nim", "moonshotai/kimi-k2.6"):              ModelOverride("Kimi K2.6 (NIM)",          tier_rank=25),
-    ("nvidia_nim", "z-ai/glm-5.1"):                       ModelOverride("GLM-5.1 (NIM)",            tier_rank=26),
-
-    # ── Xiaomi MiMo ───────────────────────────────────────────────────────
-    ("xiaomi", "mimo-v2.5-pro"):     ModelOverride("MiMo v2.5 Pro",   tier_rank=1),
-    ("xiaomi", "mimo-v2.5"):         ModelOverride("MiMo v2.5",       tier_rank=2),
-    ("xiaomi", "mimo-v2-pro"):       ModelOverride("MiMo v2 Pro",     tier_rank=10),
-    ("xiaomi", "mimo-v2-flash"):     ModelOverride("MiMo v2 Flash",   tier_rank=11),
-    ("xiaomi", "mimo-v2-omni"):      ModelOverride("MiMo v2 Omni",    tier_rank=12),
-
-    # ── Moonshot Kimi ─────────────────────────────────────────────────────
-    ("moonshot", "kimi-k2.6"):                       ModelOverride("Kimi K2.6",         tier_rank=1),
-    ("moonshot", "moonshot-v1-128k-vision-preview"): ModelOverride("Moonshot v1 128K Vision", tier_rank=5),
-    ("moonshot", "moonshot-v1-32k-vision-preview"):  ModelOverride("Moonshot v1 32K Vision",  tier_rank=6),
-    ("moonshot", "moonshot-v1-8k-vision-preview"):   ModelOverride("Moonshot v1 8K Vision",   tier_rank=7),
-    ("moonshot", "moonshot-v1-128k"):                ModelOverride("Moonshot v1 128K",  tier_rank=10),
-    ("moonshot", "moonshot-v1-32k"):                 ModelOverride("Moonshot v1 32K",   tier_rank=11),
-    ("moonshot", "moonshot-v1-8k"):                  ModelOverride("Moonshot v1 8K",    tier_rank=12),
-    ("moonshot", "moonshot-v1-auto"):                ModelOverride("Moonshot v1 Auto",  tier_rank=20),
-
-    # ── zai (Zhipu GLM) ───────────────────────────────────────────────────
-    ("zai", "glm-5.1"):       ModelOverride("GLM-5.1",        tier_rank=1),
-    ("zai", "glm-5"):         ModelOverride("GLM-5",          tier_rank=2),
-    ("zai", "glm-5-turbo"):   ModelOverride("GLM-5 Turbo",    tier_rank=3),
-    ("zai", "glm-4.7"):       ModelOverride("GLM-4.7",        tier_rank=10),
-    ("zai", "glm-4.6"):       ModelOverride("GLM-4.6",        tier_rank=11),
-    ("zai", "glm-4.5"):       ModelOverride("GLM-4.5",        tier_rank=12),
-    ("zai", "glm-4.5-air"):   ModelOverride("GLM-4.5 Air",    tier_rank=13),
-
-    # ── Qwen ──────────────────────────────────────────────────────────────
-    ("qwen", "qwen3.7-max-preview"):  ModelOverride("Qwen3.7 Max Preview", tier_rank=1),
-    ("qwen", "qwen3-max"):            ModelOverride("Qwen3 Max",           tier_rank=2),
-    ("qwen", "qwen3-coder-plus"):     ModelOverride("Qwen3 Coder",         tier_rank=5),
-    ("qwen", "qwen3-vl-plus"):        ModelOverride("Qwen3 VL",            tier_rank=10),
-    ("qwen", "qwen3-next-80b-a3b-thinking"): ModelOverride("Qwen3 Next 80B Thinking", tier_rank=15),
-    ("qwen", "qwen-plus"):            ModelOverride("Qwen Plus",           tier_rank=20),
-    ("qwen", "qwen-plus-latest"):     ModelOverride("Qwen Plus Latest",    tier_rank=21),
-    ("qwen", "qwen-turbo"):           ModelOverride("Qwen Turbo",          tier_rank=22),
-    ("qwen", "qwen-turbo-latest"):    ModelOverride("Qwen Turbo Latest",   tier_rank=23),
-    ("qwen", "qwen-max"):             ModelOverride("Qwen Max",            tier_rank=24),
+    ("nvidia_nim", "openai/gpt-oss-120b"):               ModelOverride("GPT OSS 120B",            tier_rank=20),
+    ("nvidia_nim", "moonshotai/kimi-k2.6"):              ModelOverride("Kimi K2.6 (NIM)",         tier_rank=25),
+    ("nvidia_nim", "z-ai/glm-5.1"):                      ModelOverride("GLM-5.1 (NIM)",           tier_rank=26),
 }
+
+
+# ── Public entry point ──────────────────────────────────────────────
 
 
 def apply_overrides(
     provider: str, entries: Iterable[ModelEntry],
 ) -> list[ModelEntry]:
-    """Apply curated overrides to a vendor's entry list.
+    """Apply the full UX layer to one vendor's adapter output.
 
-    Pipeline:
-      1. Auto-hide dated aliases when the bare id is present (most
-         vendors ship both ``gpt-5.5`` AND ``gpt-5.5-2026-04-23`` —
-         the latter is just a version-pinned alias, no extra info).
-      2. Apply per-entry CURATED override: drop if hidden=True,
-         replace display_name if set.
-      3. Sort by tier_rank ascending. Entries with no override keep
-         tier_rank=999 → sorted to the bottom but still visible (the
-         vendor's freshness sort from the adapter still applies within
-         that uncurated tail).
+    Order of operations:
+      1. Drop dated aliases whose bare equivalent is in the same response
+      2. Drop entries marked ``hidden=True`` in CURATED
+      3. Apply display_name: CURATED.display_name → vendor-supplied
+         display name → ``_auto_display_name(model_id)``
+      4. Sort by tier_rank ascending (CURATED → auto-derived → 999).
+         Stable sort preserves the adapter's recency order within
+         entries of equal rank.
     """
     entries = list(entries)
     bare_ids = {e.model for e in entries}
@@ -235,22 +313,35 @@ def apply_overrides(
 
     out: list[ModelEntry] = []
     for entry in entries:
-        # (1) auto-hide dated alias if bare version exists in same response
+        # (1) auto-hide dated alias if its bare twin is also present
         if date_pattern:
             m = date_pattern.match(entry.model)
             if m and m.group("bare") in bare_ids:
                 continue
-        # (2) per-entry override
+        # (2) explicit hidden in CURATED
         override = CURATED.get((provider, entry.model))
         if override and override.hidden:
             continue
+        # (3) display name: CURATED wins; otherwise if the entry has
+        # a vendor-supplied display_name that's NOT just the bare id,
+        # keep it; otherwise auto-derive from the id.
         if override and override.display_name:
             entry = replace(entry, display_name=override.display_name)
+        elif entry.display_name == entry.model:
+            # Vendor didn't ship display_name (adapter fell back to bare
+            # id). Replace with our auto-derived friendly form.
+            entry = replace(entry, display_name=_auto_display_name(entry.model))
         out.append(entry)
 
-    # (3) tier_rank sort. Stable sort — entries with the same rank
-    # keep the adapter's recency order.
-    out.sort(key=lambda e: CURATED.get((e.provider, e.model), ModelOverride()).tier_rank)
+    # (4) tier_rank sort: explicit CURATED first, then auto-derived
+    # for the rest. Stable so the adapter's recency tiebreak holds.
+    def _rank(e: ModelEntry) -> int:
+        ov = CURATED.get((e.provider, e.model))
+        if ov is not None:
+            return ov.tier_rank
+        return _auto_tier_rank(e.provider, e.model)
+
+    out.sort(key=_rank)
     return out
 
 

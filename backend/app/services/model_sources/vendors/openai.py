@@ -4,12 +4,12 @@ from __future__ import annotations
 from .base import VendorAdapterSpec
 
 
-# OpenAI's /v1/models returns ALL models the org has access to —
-# chat + embedding + image + audio + tts + realtime + search-api etc.
-# This filter keeps only the chat-family ids. The list of "non-chat"
-# hints comes from inspecting the live response (see verification
-# script output in P7-A).
+# OpenAI's /v1/models returns ALL models the org has access to:
+# chat + embedding + image + audio + tts + realtime + search-api + ...
+# This filter keeps only chat-family ids. The hint list comes from
+# inspecting the live response (P7-A verification script).
 _NON_CHAT_HINTS = (
+    # Non-chat product lines
     "embed", "embedding",
     "whisper", "tts", "audio",
     "dall-e", "image", "moderation",
@@ -17,15 +17,16 @@ _NON_CHAT_HINTS = (
     "search-api",                  # gpt-5.5-search-api etc — search wrapper
     "gpt-image",
     "computer-use",                # computer-use-preview — agent-only
+    # Variants that ARE chat but introduce noise / non-determinism
+    # (moved here from the old CURATED hidden=True layer):
+    "chat-latest",                 # rolling alias of bare gpt-5.x — non-deterministic
+    "codex",                       # codex / codex-mini / codex-max — coding-agent variant
 )
 
 
 def _chat_filter(entry: dict, bare_id: str) -> bool:
     lower = bare_id.lower()
     if any(hint in lower for hint in _NON_CHAT_HINTS):
-        return False
-    # Drop bare placeholders like "chat-latest" without a vendor prefix.
-    if lower == "chat-latest":
         return False
     return True
 
