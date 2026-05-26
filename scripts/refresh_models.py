@@ -1,10 +1,9 @@
-"""CLI: force-refresh the LiteLLM-driven model catalog.
+"""CLI: force-refresh the model catalog from every vendor's /v1/models.
 
-P6-L: the catalog's only data source is LiteLLM's
-``model_prices_and_context_window.json``. This CLI is identical in
-effect to ``POST /api/v1/models/refresh-catalog`` and the daily
-Celery beat — useful for verifying what the LiteLLM JSON currently
-contains for each provider and for pre-warming on first deploy.
+Identical in effect to ``POST /api/v1/models/refresh-catalog`` and
+the daily Celery beat — useful for verifying what each vendor's API
+currently exposes, pre-warming the cache on first deploy, and
+regenerating the shipped ``seed_catalog.json`` snapshot.
 
 Usage::
 
@@ -12,6 +11,8 @@ Usage::
     python scripts/refresh_models.py --json              # JSON output
     python scripts/refresh_models.py --provider openai   # filter one
     python scripts/refresh_models.py --verbose           # show every id
+    python scripts/refresh_models.py --write-seed        # regenerate the
+                                                         # repo-shipped snapshot
 """
 
 from __future__ import annotations
@@ -35,8 +36,8 @@ load_dotenv(ROOT / ".env", override=True)
 
 async def _main() -> int:
     parser = argparse.ArgumentParser(
-        description="Refresh the LiteLLM-driven model catalog and print a "
-        "per-provider summary.",
+        description="Refresh the model catalog from every vendor's "
+        "/v1/models endpoint and print a per-provider summary.",
     )
     parser.add_argument(
         "--provider", default=None,

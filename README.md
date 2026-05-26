@@ -94,8 +94,10 @@ flowchart LR
 ```
 
 LLM / embedding / reranker / ASR are dispatched through small **provider
-registries**. Pick `*_PROVIDER` + free-form `*_MODEL` in `.env`. Adding a new
-vendor is one new `MODEL_PROFILES` entry; adding a new model is zero code.
+registries**. The LLM catalog is sourced live from each vendor's official
+`/v1/models` endpoint (no hardcoded list) — adding a new vendor is one
+row in `providers.py` + one adapter spec under `model_sources/vendors/`.
+New models appear automatically as the vendor ships them.
 
 ---
 

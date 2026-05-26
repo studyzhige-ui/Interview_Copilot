@@ -1,16 +1,22 @@
-"""Vendor-authoritative model catalog pipeline (P7-A).
+"""Vendor-authoritative model catalog pipeline.
 
-Pre-P6-L: hardcoded ``MODEL_PROFILES`` dict (450 lines, needed code
-edits every time a vendor released a model).
+Each vendor's own ``/v1/models`` endpoint is the data source —
+authoritative, current, no third-party dependency.
 
-P6-L: LiteLLM JSON as single data source. Worked but had real lag —
-DeepSeek released V4 a month before LiteLLM's PR merged.
+  ``vendors/<provider>.py`` declares one ``VendorAdapterSpec``
+    (api path, auth style, response shape, chat-only filter).
+  ``providers.py`` declares connection-level defaults (api_base,
+    api_key_env, display label, default-enabled flag).
+  ``curated.py`` applies the UX layer (display name, tier_rank,
+    hide variants). Hand-curated for Anthropic + NVIDIA, fully
+    auto-derived for the other 7 vendors.
+  ``pipeline.py`` orchestrates fetch → curated → cache with 3
+    fallback layers (per-provider Redis → LKG snapshot → shipped
+    seed catalog).
 
-Post-P7-A: each vendor's OWN ``/v1/models`` endpoint is the data
-source — vendor-authoritative, current, no third-party dependency.
-``vendors/`` package holds one declarative ``VendorAdapterSpec`` per
-vendor (~30-50 lines each). Pipeline iterates them. Per-user
-overrides (api_base, organization, headers) from P6-M still apply.
+Per-user overrides (api_base / organization / extra_headers) live
+in ``user_provider_settings`` and apply at chat-completion time —
+not in this module.
 
 Public API:
     PROVIDERS                                    — provider defaults dict

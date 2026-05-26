@@ -58,17 +58,6 @@ These two ML libraries don't have wheels for 3.13 yet. Use 3.10, 3.11, or
 
 ## Install / pip
 
-### `tokenizers` / `transformers` version conflict after installing `litellm`
-
-LiteLLM bumps `tokenizers>=0.22` which breaks the `transformers` version
-WhisperX needs.
-
-**Fix**:
-```bash
-pip install "tokenizers<0.22"
-```
-LiteLLM still works (just emits a deprecation warning).
-
 ### `torchcodec` symbol-missing on Windows
 
 ```
@@ -388,10 +377,12 @@ Force-refresh either way:
 - **HTTP**: `POST /api/v1/models/refresh-catalog`
 
 If the model still doesn't appear, the vendor either hasn't exposed it
-on `/v1/models` yet OR our filter heuristic dropped it (it contains
-`embedding` / `whisper` / `tts-` / `dall-e` / `rerank`). For the latter,
-add it to `MODEL_PROFILES` in `backend/app/core/model_registry.py` and
-it'll show up curated.
+on `/v1/models` yet OR the vendor adapter's chat-only filter dropped
+it (e.g. ids containing `embed`, `whisper`, `tts-`, `dall-e`, `realtime`).
+For the latter, edit the relevant `_NON_CHAT_HINTS` list in
+`backend/app/services/model_sources/vendors/<vendor>.py` — or, if it
+deserves a featured display name + ranking, add a row in
+`backend/app/services/model_sources/curated.py`.
 
 ### "I changed POSTGRES_PASSWORD in .env.docker and the API can't connect"
 
@@ -421,10 +412,12 @@ alembic upgrade head        # rebuild schema in fresh DB
 
 ### `/models/ping` very slow
 
-Each profile pings its provider. If you have 30 profiles and 20 of them
-have wrong API keys (timeout 10s each), total is ~3+ minutes. Either:
-- Only configure provider keys you actually use
-- Drop unused profiles from `MODEL_PROFILES` in `model_registry.py`
+Each profile pings its provider. With 280+ models in the catalog and
+~10 timing out at 10 s each, a full ping takes minutes. Either:
+- Only configure API keys for vendors you actually use (others get
+  skipped at the "no key" short-circuit, no HTTP fired)
+- Hide vendors you don't need via the Models page "显示更多厂商"
+  picker — toggling a card OFF stops the ping from including it
 
 ### Embedding very slow, no GPU
 

@@ -481,31 +481,28 @@ def dream_for_user_task(self, user_id: str):
 @celery_app.task(
     bind=True,
     name="tasks.refresh_model_catalog",
-    # /v1/models calls are bounded by the per-request 10s httpx timeout
-    # inside model_catalog_service plus retries; a generous 5-min limit
-    # covers extreme tail latency across all configured vendors.
+    # Each vendor's /v1/models call is bounded by the per-request 20s
+    # httpx timeout inside the adapter base, plus one retry on
+    # transient failure. With 9 vendors fanned out in parallel the
+    # wall-clock worst case is ~40s; a 5-minute outer limit gives
+    # plenty of headroom for slow upstreams without letting a hung
+    # task starve the worker.
     time_limit=300,
     soft_time_limit=270,
 )
 def refresh_model_catalog_task(self):
-    """Re-fetch the LiteLLM catalog and replace the per-provider Redis cache.
+    """Re-fetch each vendor's /v1/models and replace the Redis cache.
 
-    P6-L: data source is LiteLLM's community JSON, NOT per-vendor
-    /v1/models discovery. Single HTTP GET (with one retry on transient
-    failure), schema-validated, written under ``model_catalog:v4:*``
-    keys + LKG snapshot. No API key needed — the JSON is public.
-
-    On terminal fetch failure, ``refresh_catalog`` keeps the last-known-
-    good snapshot in place and returns whatever LKG has. We log the
-    distinction so ops can tell a "refresh ran successfully" from a
-    "fetch broke, serving stale" condition.
+    Per-vendor failure is isolated — one vendor down doesn't blank
+    the others, that vendor's slice falls back to its last-known-good
+    snapshot. When ALL vendors fail (genuine network outage) the
+    cache is NOT touched and we keep serving whatever was last good.
     """
     from app.core.model_registry import repopulate_profile_cache
     from app.services.model_sources.pipeline import refresh_catalog
 
     async def _run():
-        grouped = await refresh_catalog()
-        return grouped
+        return await refresh_catalog()
 
     grouped = run_async(_run())
     # Keep this worker process's sync profile cache in sync so any
@@ -520,15 +517,13 @@ def refresh_model_catalog_task(self):
         total, per_vendor,
     )
     if empty_vendors:
-        # LiteLLM ships entries for every provider we declare in
-        # PROVIDERS — an empty vendor here means LiteLLM JSON
-        # genuinely has no chat-mode entries under that
-        # ``litellm_provider`` field (probably means the provider id
-        # is misspelled, OR LiteLLM hasn't merged that vendor's
-        # entries yet).
+        # An empty vendor here usually means the deployment env is
+        # missing that vendor's API key (no key → no /v1/models call
+        # → empty list). Less commonly: the vendor's adapter
+        # chat_filter dropped everything they returned.
         logger.warning(
-            "refresh_model_catalog: %d vendor(s) returned 0 models from "
-            "LiteLLM JSON: %s",
+            "refresh_model_catalog: %d vendor(s) returned 0 chat models "
+            "(missing API key on cron host?): %s",
             len(empty_vendors), empty_vendors,
         )
     return {"per_vendor": per_vendor, "total": total}

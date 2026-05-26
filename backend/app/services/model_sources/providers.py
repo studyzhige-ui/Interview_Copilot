@@ -28,19 +28,18 @@ import os
 from .base import ProviderDefaults
 
 
-# Default-enabled providers (the 9 the system has been shipping with):
+# Default-enabled providers — the 9 vendors that ship with a working
+# adapter and a card on the new-user Models page:
 #
 # DeepSeek / OpenAI / Anthropic / Google Gemini / Alibaba Qwen /
 # Moonshot Kimi / Zhipu GLM / Xiaomi MiMo / NVIDIA NIM.
 #
-# Why each one is `enabled_by_default=True`: each was already in the
-# pre-P6-L ``MODEL_PROFILES`` curated list and is something a typical
-# user on this product is likely to have access to. Vendors LiteLLM
-# also covers but we hide by default (Cohere/Mistral/Together/etc.)
-# are listed AFTER this block.
+# Opt-in providers (Cohere / Mistral / Together / etc.) come AFTER
+# this block and stay hidden until the user enables them via the
+# "显示更多厂商" picker in the UI.
 #
-# Each ``default_api_base`` is also overridable via env var so the
-# same image can be redirected at an internal mirror without code edits.
+# Each ``default_api_base`` is overridable via env var so a deployment
+# can redirect at an internal mirror without code edits.
 PROVIDERS: dict[str, ProviderDefaults] = {
     "deepseek": ProviderDefaults(
         id="deepseek",
@@ -77,13 +76,11 @@ PROVIDERS: dict[str, ProviderDefaults] = {
         icon_slug="googlegemini",
         enabled_by_default=True,
     ),
-    # NOTE: LiteLLM currently tracks Qwen models ONLY through reseller
-    # gateways (Novita, Fireworks, Vertex AI, Bedrock). It has no direct
-    # ``litellm_provider: "qwen"`` entries yet. That means this card
-    # will show 0 models from the LiteLLM catalog until upstream adds
-    # them. The vendor's own ``/v1/models`` endpoint via DashScope
-    # works fine — once a user configures their key + LiteLLM ships
-    # entries, the card populates automatically with no code change.
+    # Qwen models come from Alibaba's DashScope OpenAI-compatible
+    # endpoint. The vendor's /v1/models returns 200+ ids including
+    # third-party gateway models (ZHIPU/GLM, deepseek-*, llama-*);
+    # the qwen adapter's chat_filter keeps only qwen*/qwq* brand ids
+    # so other vendors' models stay in THEIR own cards.
     "qwen": ProviderDefaults(
         id="qwen",
         display_label="通义 Qwen",
@@ -103,9 +100,9 @@ PROVIDERS: dict[str, ProviderDefaults] = {
         icon_slug=None,
         enabled_by_default=True,
     ),
-    # LiteLLM tracks Zhipu under its English brand ``z.ai``, so the id
-    # MUST be ``zai`` for the join to match. The display label / icon
-    # / env var stay Chinese-facing so existing keys keep working.
+    # Zhipu BigModel internationally markets as "z.ai" — the provider
+    # id matches the brand. Display label / env var stay Chinese-facing
+    # so existing ZHIPU_API_KEY env values keep working.
     "zai": ProviderDefaults(
         id="zai",
         display_label="智谱 GLM",
@@ -130,8 +127,10 @@ PROVIDERS: dict[str, ProviderDefaults] = {
         icon_slug="xiaomi",
         enabled_by_default=True,
     ),
-    # LiteLLM tracks NVIDIA NIM (their hosted inference catalog) under
-    # ``nvidia_nim``. Same env var / api_base as before.
+    # NVIDIA NIM is NVIDIA's hosted-inference catalog (build.nvidia.com).
+    # Provider id intentionally ``nvidia_nim`` (with underscore) to
+    # disambiguate from a hypothetical future ``nvidia`` direct GPU
+    # binding.
     "nvidia_nim": ProviderDefaults(
         id="nvidia_nim",
         display_label="NVIDIA",
@@ -144,8 +143,9 @@ PROVIDERS: dict[str, ProviderDefaults] = {
     ),
 
     # ── Opt-in providers (hidden until user enables via UI) ─────────────
-    # All of these have entries in LiteLLM's JSON, so once the user
-    # toggles them ON in the Models page, models surface automatically.
+    # All of these expose an OpenAI-compatible /v1/models endpoint —
+    # once the user toggles them on AND configures a key, models
+    # surface automatically via the vendor adapter pipeline.
     "mistral": ProviderDefaults(
         id="mistral",
         display_label="Mistral",
@@ -206,10 +206,10 @@ PROVIDERS: dict[str, ProviderDefaults] = {
         icon_slug="x",
         enabled_by_default=False,
     ),
-    # Novita — a reseller gateway that carries Qwen / Xiaomi MiMo / Zhipu
-    # GLM / etc. Opt-in. Useful when users want to reach those models
-    # but don't have direct vendor keys, since LiteLLM currently tracks
-    # those vendors' models ONLY via this gateway.
+    # Novita — a third-party gateway that resells Qwen / Xiaomi MiMo /
+    # Zhipu GLM / Meta Llama / many other open-source models behind one
+    # OpenAI-compatible endpoint. Opt-in; useful when a user wants
+    # access without configuring each direct vendor key.
     "novita": ProviderDefaults(
         id="novita",
         display_label="Novita AI (聚合)",
@@ -224,10 +224,11 @@ PROVIDERS: dict[str, ProviderDefaults] = {
 def get_provider_defaults(provider_id: str) -> ProviderDefaults | None:
     """Return ``ProviderDefaults`` for ``provider_id``, or ``None`` if unknown.
 
-    Returning ``None`` (not raising) is deliberate: callers that filter
-    LiteLLM entries by provider can silently drop entries for providers
-    we don't ship support for (e.g., a brand-new vendor in LiteLLM JSON
-    that we haven't added here yet). The catalog still works; ops just
+    Returning ``None`` (not raising) is deliberate: callers that process
+    a vendor response can silently drop entries for providers we don't
+    ship support for (e.g., a vendor's /v1/models endpoint returning
+    third-party models tagged with a provider id we don't recognise).
+    The catalog still works; ops just
     add a row above when they want to surface that vendor.
     """
     return PROVIDERS.get(provider_id)

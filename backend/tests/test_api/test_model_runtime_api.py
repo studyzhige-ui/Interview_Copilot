@@ -33,9 +33,8 @@ def client():
 
 
 def test_models_catalog_returns_selection_and_profiles(client, monkeypatch):
-    """P6-L: catalog is sourced from the pipeline cache, not from
-    a static MODEL_PROFILES dict. We stub the pipeline load + the
-    sync profile cache used to serialise the response."""
+    """Catalog is sourced from the pipeline cache. We stub the pipeline
+    load + the sync profile cache used to serialise the response."""
     from app.core.model_registry import ModelProfile
 
     fake_profiles = {
@@ -234,7 +233,7 @@ def test_delete_api_key_reports_status(client):
 
 
 def test_ping_models_returns_one_result_per_profile(client, monkeypatch):
-    """P6-L: ping iterates ``_get_all_profiles()``, not the deleted MODEL_PROFILES."""
+    """Ping iterates the catalog's current ``_get_all_profiles()`` snapshot."""
     fake_profiles = {"p1": object(), "p2": object()}
     monkeypatch.setattr(model_runtime_mod, "_get_all_profiles", lambda: fake_profiles)
 

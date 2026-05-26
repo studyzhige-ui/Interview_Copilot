@@ -1,21 +1,21 @@
-"""Core dataclasses for the LiteLLM-driven catalog (P6-L).
+"""Core dataclasses for the model-catalog pipeline.
 
 ``ProviderDefaults`` describes a vendor's connection-level metadata —
 what URL we call, what env var holds the key, what label / icon to
 show in the UI. Dev-maintained in ``providers.py``.
 
 ``ModelEntry`` is one row in the catalog: a single chat model from
-one provider, with the metadata LiteLLM publishes (context window,
-function-calling support, etc.). Built by the pipeline from LiteLLM
-JSON + the matching ProviderDefaults.
+one provider, with the metadata the vendor's /v1/models endpoint
+publishes (context window, function-calling support, etc.). Built
+by ``vendors/base.py::fetch_one_vendor`` and polished by
+``curated.py::apply_overrides``.
 
-Why two types instead of one fat ``ModelProfile``: pre-P6-L the
-``ModelProfile`` dataclass mixed identity (id, provider, model),
-connection (api_base, api_key_env), and capability (context_window,
-supports_function_calling) into one record, with provider-level
-fields duplicated across every model entry. Splitting them lets the
-provider record be a single source of truth — change ``api_base``
-once instead of editing every model row for that provider.
+Why two types instead of one fat ``ModelProfile``: the ``ModelProfile``
+the runtime uses mixes identity (id, provider, model), connection
+(api_base, api_key_env), and capability (context_window,
+supports_function_calling) into one record. Splitting at this layer
+lets the provider record be a single source of truth — change
+``api_base`` once instead of editing every model row for that vendor.
 """
 from __future__ import annotations
 
@@ -30,11 +30,11 @@ class ProviderDefaults:
     the user hasn't overridden anything in ``user_provider_settings``.
     """
 
-    # Provider id. MUST match LiteLLM's ``litellm_provider`` field value
-    # so the pipeline can join LiteLLM entries to provider defaults
-    # without an extra mapping table. Examples: "openai", "anthropic",
-    # "deepseek", "gemini" (note: NOT "google" — LiteLLM uses "gemini"),
-    # "azure", "bedrock", "cohere", "mistral".
+    # Provider id. Convention: lowercase, matches what the vendor itself
+    # uses where possible. Examples: "openai", "anthropic", "deepseek",
+    # "gemini" (Google's free generative-language API; "vertex_ai" for
+    # the paid enterprise channel), "zai" (Zhipu's English brand),
+    # "nvidia_nim", "moonshot", "qwen", "xiaomi".
     id: str
 
     # Human-readable label for the UI vendor card header.
@@ -42,7 +42,7 @@ class ProviderDefaults:
 
     # OpenAI-compatible chat completion endpoint. The user can override
     # this per-account via ``user_provider_settings.api_base_override``
-    # (P6-M) for subscription-tier endpoints, self-hosted gateways, etc.
+    # for subscription-tier endpoints, self-hosted gateways, etc.
     default_api_base: str
 
     # Environment-variable name the system reads as a FALLBACK when the
@@ -56,10 +56,10 @@ class ProviderDefaults:
     icon_slug: str | None = None
 
     # Whether this provider card appears in a brand-new user's Models
-    # page by default. The 9 main vendors we ship support for are True;
-    # everything else LiteLLM covers (Cohere, Together, Fireworks,
-    # Replicate, Groq, Azure, Bedrock, Vertex, etc.) defaults to False
-    # and shows up in the "show more vendors" picker.
+    # page by default. The 9 vendors with shipped adapters are True;
+    # opt-in providers (Cohere / Mistral / Together / Fireworks / Groq /
+    # Perplexity / xAI / Novita) default to False and show up in the
+    # "显示更多厂商" picker.
     enabled_by_default: bool = False
 
 
@@ -67,38 +67,42 @@ class ProviderDefaults:
 class ModelEntry:
     """One chat model row in the catalog.
 
-    All fields besides ``provider`` / ``model`` are derived from
-    LiteLLM JSON; if LiteLLM ships richer metadata in the future we
-    just extend this dataclass without touching the pipeline.
+    All fields besides ``provider`` / ``model`` are derived from the
+    vendor's /v1/models response. If a vendor ships richer metadata
+    in the future, extend this dataclass and update the adapter base
+    to populate the new field.
     """
 
-    # The provider this model belongs to (LiteLLM's ``litellm_provider``).
-    # Joins to ``ProviderDefaults.id``.
+    # The provider this model belongs to. Joins to ``ProviderDefaults.id``.
     provider: str
 
-    # The model id LiteLLM exposes (also what we pass to the vendor's
-    # ``/chat/completions`` endpoint as the ``model`` field). Example:
-    # ``"gpt-4o"``, ``"claude-opus-4-7"``, ``"deepseek-chat"``.
+    # The model id as the vendor's API exposes it. This is the string
+    # we pass back in /chat/completions as the ``model`` field.
+    # Examples: ``"gpt-4o"``, ``"claude-opus-4-7"``, ``"deepseek-v4-pro"``.
     model: str
 
-    # Cleaned-up display name for the UI. The pipeline derives this
-    # from the model id by capitalising / inserting spaces — vendors
-    # rarely publish a "pretty" name in /v1/models, so we synthesise.
+    # Display name for the UI card. Comes from one of three places,
+    # in priority order:
+    #   1. CURATED override in ``curated.py`` (manual rename)
+    #   2. Vendor-supplied display_name field (Anthropic / Gemini only)
+    #   3. Auto-derived from the model id (other vendors) — brand
+    #      acronym capitalisation + tier-suffix Title Case
     display_name: str
 
-    # LiteLLM's ``supports_function_calling`` boolean. Used by the
-    # "agent" role guard — only function-calling models are valid for
-    # tool-use chains.
+    # Whether the model accepts function-calling / tool-use payloads.
+    # Used by the "agent" role guard — only FC models are valid choices
+    # for tool-use chains.
     supports_function_calling: bool
 
-    # LiteLLM's ``max_input_tokens``. Frontend may surface this so the
-    # user picks an appropriately-sized model for long-context tasks.
+    # Vendor's max_input_tokens / inputTokenLimit. Frontend may surface
+    # this so the user picks an appropriately-sized model for long
+    # context.
     context_window: int
 
-    # LiteLLM's ``max_output_tokens``. Used to clamp the generation
-    # budget when the role doesn't explicitly set one.
+    # Vendor's max_output_tokens / outputTokenLimit. Used to clamp the
+    # generation budget when the role doesn't set one explicitly.
     max_output_tokens: int
 
-    # LiteLLM's ``supports_vision`` boolean. Reserved for future image
-    # input UI; not used by chat path yet.
+    # Whether the model accepts image input. Reserved for future
+    # multimodal UI; chat path doesn't read this yet.
     supports_vision: bool = False

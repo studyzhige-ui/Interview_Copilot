@@ -114,8 +114,9 @@ Then `python scripts/init_models.py` to pre-download everything you
 configured (it reads the env vars, downloads only the local-* roles).
 
 For 100% offline you'd add a local LLM (Ollama / vLLM) — register it as
-a new entry in `MODEL_PROFILES` (model_registry.py) with
-`api_base="http://localhost:11434/v1"`.
+a new entry in `app/services/model_sources/providers.py` with
+`default_api_base="http://localhost:11434/v1"`, then drop a matching
+adapter spec in `model_sources/vendors/<id>.py`.
 
 ### 🔀 Hybrid (best of both)
 
@@ -216,23 +217,25 @@ docker compose exec milvus-standalone /bin/sh -c \
 ## LLM provider routing — one branch for everything
 
 Every supported LLM provider is reached through the **same**
-`OpenAILike` client. Each `MODEL_PROFILES` entry just plugs in a
-different `api_base`:
+`OpenAILike` client. The `default_api_base` from
+`model_sources/providers.py` plus the user's API key is everything
+the runtime needs:
 
-| Provider | `api_base` |
+| Provider | `default_api_base` |
 |---|---|
 | DeepSeek | `https://api.deepseek.com` |
 | OpenAI | `https://api.openai.com/v1` |
-| Anthropic | `https://api.anthropic.com/v1` *(OpenAI-compat shim)* |
-| NVIDIA | `https://integrate.api.nvidia.com/v1` |
+| Anthropic | `https://api.anthropic.com/v1` |
+| NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | Alibaba DashScope | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| Moonshot, Zhipu, MiMo, SiliconFlow, … | each vendor's own OpenAI-compatible base URL |
+| Moonshot Kimi | `https://api.moonshot.cn/v1` |
+| Zhipu (z.ai) | `https://open.bigmodel.cn/api/paas/v4` |
+| Xiaomi MiMo | `https://api.xiaomimimo.com/v1` |
 
-So switching providers is purely **(api_base, api_key, model_id)**.
-No special wrappers, no LiteLLM, no per-vendor branches. Adding a new
-provider = one new `MODEL_PROFILES` entry; the runtime code never
-grows another `if`.
+Switching providers is purely **(api_base, api_key, model_id)** — no
+per-vendor branching in the runtime path. Adding a new provider = one
+row in `providers.py` + one adapter spec in `model_sources/vendors/`.
 
 The actual builder in `backend/app/core/model_registry.py:_build_llm_instance`
 is six lines:
@@ -291,38 +294,42 @@ no code update needed.
 
 **How it works**:
 
-1. On every Models-page load, the backend merges the curated
-   `MODEL_PROFILES` dict with the cached output of each vendor's
-   `/v1/models` call.
-2. Discovery results are cached in Redis for 24 h
-   (`model_catalog:v1:<provider>`). The first user to load the page
-   after a deploy pays the discovery cost (~1–2 s per vendor); everyone
-   else hits cache.
-3. Curated entries always win on metadata (display name, description,
-   context window). Auto-discovered models that aren't in the curated
-   set get sensible defaults (128 K context, function-calling assumed)
-   and a `auto_discovered: true` flag in the API response.
+1. Each vendor has a declarative adapter spec under
+   `model_sources/vendors/<id>.py` (api path, auth style, response
+   shape, per-vendor chat-only filter).
+2. The pipeline fans out to every adapter in parallel, applies the
+   adapter's chat filter, then runs the curated UX layer
+   (`curated.py`: display name + tier_rank + variant hide).
+3. Results land in Redis under `model_catalog:v5:<provider>`
+   (24 h TTL) plus a no-TTL last-known-good snapshot. Vendor failure
+   on one provider falls back to that vendor's LKG slice; other
+   vendors are unaffected.
+4. A repo-shipped `seed_catalog.json` snapshot serves the catalog
+   for fresh clones that haven't run any refresh yet.
 
 **How to trigger a refresh manually**:
 
 - **Web UI**: Models page → click **「刷新模型库」** (next to the
-  "Ping 测试" button). Drops the cache + re-discovers in one round trip.
+  "Ping 测试" button). Re-fetches every vendor's `/v1/models` and
+  rewrites the cache.
 - **HTTP**: `POST /api/v1/models/refresh-catalog` (any logged-in user).
 - **CLI** (great for cron / CI pre-warming):
   ```bash
   python scripts/refresh_models.py                 # all vendors
   python scripts/refresh_models.py --provider openai
   python scripts/refresh_models.py --json
+  python scripts/refresh_models.py --write-seed    # regenerate the shipped snapshot
   ```
 
-**Vendor coverage**: any provider whose `api_base` serves an OpenAI-style
-`/v1/models` endpoint — that's all the chat-LLM vendors in the catalog
-(OpenAI / Anthropic / DeepSeek / Moonshot / Qwen / SiliconFlow / Zhipu /
-xAI / Mistral). Vendors without a key set are silently skipped (nothing
-to discover anyway).
+**Auto-refresh**: Celery beat task `tasks.refresh_model_catalog`
+runs daily at 04:00 Asia/Shanghai to keep the cache warm.
 
-**Filter heuristic**: the discovery code drops models whose id contains
-`embedding`, `whisper`, `tts-`, `dall-e`, `rerank`, etc. so the LLM
-dropdown doesn't get cluttered with non-chat models. If a chat model
-happens to match the heuristic (rare), promote it to `MODEL_PROFILES`
-and it'll show up curated.
+**Vendor coverage**: 9 providers ship with adapters out of the box
+(see the table above). Adding a vendor = one row in `providers.py`
++ one adapter spec; the runtime path is unchanged.
+
+**Chat-only filter**: each adapter declares a per-vendor predicate
+that drops embedding / image / audio / TTS / safety-classifier
+entries the vendor returns alongside chat models. See
+`vendors/openai.py::_chat_filter` for an example; the OpenAI filter
+catches `embed`, `whisper`, `tts-`, `dall-e`, `realtime`, etc.

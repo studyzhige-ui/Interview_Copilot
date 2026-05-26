@@ -169,11 +169,12 @@ async def api_model_catalog(
 
     async def _build():
         selection = get_runtime_selection(user_id=current_user.username)
-        # Pull the LiteLLM-driven catalog from the Redis pipeline cache.
-        # ``load_catalog`` doesn't hit the vendor itself — that's the
-        # daily Celery beat's job. The serialization layer below joins
-        # each ``ModelEntry`` with its ``ProviderDefaults`` and tags
-        # per-user state (ready flag, selected_for).
+        # Pull the catalog from the Redis pipeline cache. ``load_catalog``
+        # doesn't hit any vendor — that's the daily Celery beat's job
+        # plus the manual refresh-catalog endpoint below. The
+        # serialization layer joins each ``ModelEntry`` with its
+        # ``ProviderDefaults`` and tags per-user state (ready /
+        # selected_for).
         from app.core.model_registry import repopulate_profile_cache
         grouped = await load_catalog()
         # Hint the sync profile cache with what we just read so chat
@@ -203,14 +204,15 @@ async def api_model_catalog(
 async def refresh_model_catalog(
     current_user: User = Depends(get_current_user),
 ):
-    """Force-refresh the LiteLLM-driven catalog.
+    """Force-refresh the model catalog from every vendor.
 
-    P6-L: data source is LiteLLM's public model_prices JSON, not per-vendor
-    /v1/models discovery. ``refresh_catalog`` re-fetches the JSON with
-    layer-3 protection (retry → schema validate → last-known-good
-    fallback), persists per-provider entries to Redis, and updates the
-    process-local profile cache. Also drops the per-user 60-s wrapper
-    so this user sees the fresh entries on their very next read.
+    ``refresh_catalog`` fans out to each vendor's /v1/models in parallel,
+    applies per-vendor chat filters + curated UX layer, then persists
+    per-provider entries to Redis. Per-vendor failure is isolated —
+    one vendor down doesn't blank the others, that vendor's slice
+    falls back to its last-known-good snapshot. The user's 60-s
+    catalog wrapper is invalidated so this user sees fresh entries
+    on their very next read.
     """
     from app.services.cache_service import invalidate
     from app.core.model_registry import repopulate_profile_cache

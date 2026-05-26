@@ -5,8 +5,7 @@ describing the URL path, auth style, response shape, and an optional
 ``chat_filter`` predicate. The shared ``fetch_one_vendor`` here handles:
 
   * URL construction + auth header / query-param injection
-  * HTTP GET with 1 retry on transient failure (same 3-layer protection
-    pattern as the old LiteLLM loader)
+  * HTTP GET with 1 retry on transient failure
   * JSON parse + per-row extraction into ``ModelEntry``
   * Per-row chat-only filtering (most vendors return embedding /
     image / audio entries we need to drop)

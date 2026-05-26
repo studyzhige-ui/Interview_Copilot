@@ -1,26 +1,22 @@
 """Model registry — runtime view of "what models exist + what's selected".
 
-P6-L refactor: the universe of available models is no longer a
-hardcoded ``MODEL_PROFILES`` dict. It's sourced from LiteLLM's
-community JSON via ``app.services.model_sources``, cached in Redis,
-and mirrored into a small process-local map that this module reads.
+The universe of available models is sourced live from each vendor's
+own ``/v1/models`` endpoint via per-vendor adapters in
+``app.services.model_sources.vendors``. Pipeline writes per-provider
+entries to Redis (24h TTL) plus a no-TTL last-known-good snapshot;
+this module mirrors the cache into a small process-local map for
+the sync code paths (LlamaIndex Settings.llm, validators, etc.).
 
-What lives in THIS file now:
-  * ``ModelProfile`` — the runtime row shape (used everywhere by type)
-  * ``ROLE_DEFAULTS`` — the global-fallback selection
-  * Profile lookup helpers backed by the LiteLLM-driven cache
+What lives in THIS file:
+  * ``ModelProfile`` — runtime row shape used by every chat / agent
+    call site as the type
+  * ``ROLE_DEFAULTS`` — fallback selection when a user hasn't picked
+  * Profile lookup helpers backed by the vendor-adapter pipeline cache
   * Per-user runtime selection (``users.model_selection_json``)
-  * API-key resolution priority (user_api_keys → env)
-  * LLM client caches (LlamaIndex + raw AsyncOpenAI)
-  * Per-user API-base override (consumes ``user_provider_settings``)
-
-What's deleted:
-  * The ~400-line ``MODEL_PROFILES`` literal
-  * ``_synthesize_discovered_profile`` — discovery via ``/v1/models``
-    is gone (LiteLLM JSON is the only source now)
-  * ``_provider_specs_for_discovery`` — same reason
-  * ``list_profiles_with_discovery`` — replaced by reading from the
-    pipeline cache in ``app.services.model_sources.pipeline``
+  * API-key resolution priority (user_api_keys → env var fallback)
+  * LLM client caches (LlamaIndex + raw AsyncOpenAI), per-user-keyed
+  * Per-user api_base / organization / extra_headers override
+    (consumes ``user_provider_settings`` from P6-M)
 """
 from __future__ import annotations
 
@@ -59,11 +55,11 @@ logger = logging.getLogger(__name__)
 class ModelProfile:
     """Runtime row: one (provider, model) entry exposed to chat / agent code.
 
-    Pre-P6-L this was hand-maintained in ``MODEL_PROFILES``; post-P6-L
-    the pipeline builds these dynamically by joining LiteLLM JSON
-    entries to ``ProviderDefaults``. The dataclass shape is preserved
-    so consumers (every chat call site, every LLM-build call) don't
-    need to change.
+    Built dynamically by the pipeline (vendor adapter output joined to
+    ``ProviderDefaults`` for connection metadata, then polished by the
+    curated UX layer for display_name + tier_rank). Consumers — every
+    chat call site, every LLM-build call — pull these via
+    ``get_profile`` / ``get_profile_for_role``.
     """
     id: str
     provider: str
@@ -80,11 +76,11 @@ class ModelProfile:
 # ── Role defaults ───────────────────────────────────────────────────────
 # Used when (a) we have no user_id (startup, global LlamaIndex Settings.llm),
 # OR (b) a user hasn't set anything in ``model_selection_json``. Values
-# must be LiteLLM-canonical profile ids: ``"{litellm_provider}/{model}"``.
-# If the LiteLLM cache is cold / a model id here isn't (yet) in the
-# fetched catalog, ``get_profile_for_role`` falls back to the first
-# function-calling profile in the catalog so the system never deadlocks
-# on a missing default.
+# are profile ids in ``"{provider}/{model}"`` form — must match what the
+# vendor's /v1/models endpoint actually returns. If the catalog is cold
+# / a default id isn't yet present, ``get_profile_for_role`` falls back
+# to the first function-calling profile in the catalog so the system
+# never deadlocks on a missing default.
 ROLE_DEFAULTS: dict[str, str] = {
     # Three user-facing roles:
     #   primary        — chat / debrief default model (must support function
@@ -101,12 +97,12 @@ ROLE_DEFAULTS: dict[str, str] = {
 
 
 # ── Profile cache ───────────────────────────────────────────────────────
-# Process-local view of the LiteLLM-driven catalog. Built by joining each
-# ``ModelEntry`` from the pipeline cache with the matching ``ProviderDefaults``.
-# Sync read path: refreshes from Redis on first call AND when older than
-# ``_PROFILE_CACHE_REFRESH_S``. The async pipeline write path also calls
-# ``_repopulate_cache_from_entries`` directly so refreshes done in this
-# process show up without a Redis roundtrip.
+# Process-local view of the vendor-adapter-driven catalog. Built by
+# joining each ``ModelEntry`` from the pipeline cache with the matching
+# ``ProviderDefaults``. Sync read path: refreshes from Redis on first
+# call AND when older than ``_PROFILE_CACHE_REFRESH_S``. The async
+# pipeline write path also calls ``repopulate_profile_cache`` directly
+# so refreshes done in this process show up without a Redis round-trip.
 _PROFILE_CACHE_REFRESH_S = 60.0
 _profile_cache: dict[str, ModelProfile] = {}
 _profile_cache_loaded_at: float = 0.0
@@ -116,10 +112,10 @@ _profile_cache_lock = Lock()
 def _build_profile(entry: ModelEntry, defaults: ProviderDefaults) -> ModelProfile:
     """Join one ``ModelEntry`` to its ``ProviderDefaults`` → ``ModelProfile``.
 
-    Profile id uses the ``"{provider}/{model}"`` form to disambiguate
-    cases where two providers ship the same model name (rare but
-    possible with the LiteLLM proxy aliases), and to align with the
-    LiteLLM convention.
+    Profile id uses the ``"{provider}/{model}"`` form so two vendors
+    that happen to ship a same-named model (e.g. ``llama-3.1-70b``
+    available via both Together AI and NVIDIA NIM) get distinct
+    profile ids the user can select between.
     """
     return ModelProfile(
         id=f"{defaults.id}/{entry.model}",
@@ -363,7 +359,7 @@ def get_profile_for_role(role: str, user_id: str | None = None) -> ModelProfile:
     profile that's no longer in the catalog (rare: vendor retired the
     model since last refresh). Falls back to "first function-calling
     profile in the catalog" if even ROLE_DEFAULTS isn't present (e.g.,
-    LiteLLM JSON dropped DeepSeek temporarily).
+    the vendor's /v1/models temporarily dropped that id).
     """
     profiles = _get_all_profiles()
     selection = get_runtime_selection(user_id)
@@ -618,10 +614,10 @@ def _serialize_profile(profile: ModelProfile, selection: dict, user_id: str | No
 def list_profiles(user_id: str | None = None) -> list[dict[str, Any]]:
     """Snapshot of the runtime catalog for ``user_id``.
 
-    Reads the pipeline cache (warmed lazily from Redis). Pre-P6-L this
-    listed a hand-curated dict; post-P6-L every entry comes from
-    LiteLLM JSON via ``app.services.model_sources``. Empty list means
-    the catalog hasn't been populated yet — operators should run
+    Reads the pipeline cache (warmed lazily from Redis). Every entry
+    comes from a vendor's own /v1/models endpoint via the adapter
+    pipeline in ``app.services.model_sources``. Empty list means
+    nothing has populated the catalog yet — operators should run
     ``scripts/refresh_models.py`` or wait for the daily Celery beat.
     """
     profiles = _get_all_profiles()

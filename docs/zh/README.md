@@ -93,9 +93,10 @@ flowchart LR
     Worker -->|转写| Whisper[WhisperX + Pyannote<br/>本地或云端]
 ```
 
-LLM / embedding / reranker / ASR 走小型 **provider 注册表**。在 `.env` 里
-配 `*_PROVIDER` + 任意 `*_MODEL` 字符串。加新厂商 = `MODEL_PROFILES` 加
-一条；加新模型 = 零代码。
+LLM / embedding / reranker / ASR 走小型 **provider 注册表**。LLM 目录
+不再硬编码 —— 由每家厂商官方 `/v1/models` 实时驱动。加新厂商 =
+`model_sources/providers.py` 加一行 + `model_sources/vendors/` 加一个
+适配器文件；新模型由厂商发布即自动出现，零代码改动。
 
 ---
 

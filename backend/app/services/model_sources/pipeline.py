@@ -1,28 +1,29 @@
-"""Catalog pipeline: per-vendor /v1/models → cache → serve (P7-A).
+"""Catalog pipeline: per-vendor /v1/models → curated → cache → serve.
 
-Pre-P7-A: LiteLLM JSON was the only data source.
-Post-P7-A: each vendor's OWN ``/v1/models`` is the data source —
-vendor-authoritative, no upstream lag, no third-party dependency.
-The ``vendors/`` package holds one ``VendorAdapterSpec`` per vendor;
-this pipeline orchestrates them.
+Each vendor's own ``/v1/models`` endpoint is the authoritative data
+source — no third-party dependency, no upstream lag. The ``vendors/``
+package holds one ``VendorAdapterSpec`` per vendor; this pipeline
+orchestrates them.
 
   refresh_catalog():
     For each spec in vendors.ALL_SPECS:
-      resolve api_base + api_key from PROVIDERS + env
+      resolve api_base + api_key (user_api_keys → env fallback)
       fetch_one_vendor(spec) — runs the spec's chat_filter + sort
+      apply_overrides() — curated UX layer (display name / tier / hide)
       on success: persist to Redis (per-provider key + LKG sentinel)
-      on failure: keep last-known-good in place
+      on failure: that vendor falls back to its LKG slice; others
+                  proceed independently
 
   load_catalog():
     Pure Redis read — never hits the network. Used by /catalog
-    endpoint. Falls back to LKG sentinel when per-provider TTL has
-    expired.
+    endpoint. Falls back through: per-provider key → LKG sentinel →
+    repo-shipped seed_catalog.json → empty.
 
-Cache key is GLOBAL (per-provider, not per-user). Vendor /v1/models
-returns the same list regardless of which key signed the request,
-and a shared cache means the daily Celery beat warms the entry every
-user reads from. Per-user differences (ready / selected_for / enabled)
-are computed at /catalog read time, not stored here.
+Cache key is GLOBAL (per-provider, not per-user). A vendor's
+/v1/models returns the same list regardless of which key signed the
+request, so a shared cache means one nightly refresh warms the entry
+every user reads from. Per-user differences (ready / selected_for /
+enabled) are computed at /catalog read time, not stored here.
 """
 from __future__ import annotations
 
@@ -86,9 +87,10 @@ def _load_seed_catalog() -> dict[str, list[ModelEntry]]:
 _SEED_CATALOG: dict[str, list[ModelEntry]] = {}
 
 
-# Cache key namespace. ``v5`` because v1-v4 prefixes are from the
-# LiteLLM and pre-LiteLLM eras. ``invalidate_all`` below sweeps all
-# historical prefixes so leftover keys get reaped on first refresh.
+# Cache key namespace. Versioned so a schema-incompatible payload
+# change (renamed field, etc.) doesn't blow up readers — bump the
+# suffix and ``invalidate_all`` will reap older variants on the
+# first refresh.
 _CACHE_PREFIX = "model_catalog:v5:"
 _CACHE_TTL_S = 24 * 3600
 

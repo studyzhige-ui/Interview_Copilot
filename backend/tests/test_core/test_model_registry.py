@@ -1,11 +1,10 @@
-"""Tests for ``app.core.model_registry`` after the P6-L pipeline refactor.
+"""Tests for ``app.core.model_registry``.
 
-Pre-P6-L this file asserted heavily against the static ``MODEL_PROFILES``
-dict. That dict is gone now — the registry is populated dynamically from
-the LiteLLM-driven pipeline cache. These tests therefore mock the
-``_get_all_profiles`` lookup to plant a known-good set of profiles, then
-verify the higher-level behaviour (selection normalisation, role
-resolution, FC validation, LLM construction, api-base override).
+The registry is populated dynamically from the vendor-adapter pipeline
+cache. These tests mock the ``_get_all_profiles`` lookup to plant a
+known-good set of profiles, then verify the higher-level behaviour
+(selection normalisation, role resolution, function-calling validation,
+LLM construction, api-base override).
 """
 from __future__ import annotations
 
@@ -163,9 +162,9 @@ def test_get_profile_for_role_falls_back_when_selection_stale(monkeypatch, _stub
 
 
 def test_get_profile_for_role_picks_any_fc_model_when_default_missing(monkeypatch):
-    """If ROLE_DEFAULTS itself isn't in the catalog (LiteLLM dropped DeepSeek
-    temporarily), agent role still resolves to SOME function-calling model
-    rather than 500ing the chat path."""
+    """If ROLE_DEFAULTS itself isn't in the catalog (the vendor's
+    /v1/models temporarily dropped that id), agent role still resolves
+    to SOME function-calling model rather than 500ing the chat path."""
     # Replant the catalog WITHOUT the default deepseek-chat.
     catalog = {
         "openai/gpt-4o": _mkprofile("openai/gpt-4o", fc=True),

@@ -46,17 +46,17 @@ huggingface-hub==0.28.1
 sentence-transformers==5.1.2
 transformers==4.48.0
 llama-index-core==0.14.19
-# LLM provider adapter. Every provider in MODEL_PROFILES is reached through
-# the SAME OpenAILike client — each profile just plugs a different api_base:
+# LLM provider adapter. Every provider in
+# ``app/services/model_sources/providers.py`` is reached through the SAME
+# OpenAILike client — each provider just plugs a different api_base:
 #   - DeepSeek  → https://api.deepseek.com
 #   - OpenAI    → https://api.openai.com/v1
-#   - Anthropic → https://api.anthropic.com/v1   (OpenAI-compat shim)
+#   - Anthropic → https://api.anthropic.com/v1   (Bearer-compat for chat)
 #   - NVIDIA    → https://integrate.api.nvidia.com/v1
 #   - Google    → https://generativelanguage.googleapis.com/v1beta/openai
-#   - DashScope / Moonshot / Zhipu / SiliconFlow / modelscope / …
-# Adding a new provider = one MODEL_PROFILES entry, no code change.
-# (We previously had per-vendor wrappers + litellm; both were redundant and
-# litellm's version pins also fought the rest of this stack.)
+#   - DashScope / Moonshot / Zhipu / Xiaomi / …
+# Adding a new provider = one row in providers.py + one adapter spec under
+# model_sources/vendors/; no runtime branching.
 llama-index-llms-openai==0.6.26
 llama-index-llms-openai-like==0.5.3
 llama-index-embeddings-huggingface==0.7.0

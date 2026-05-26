@@ -95,16 +95,6 @@ profile：
 
 ## 安装 / pip
 
-### 装 `litellm` 后 `tokenizers` / `transformers` 版本冲突
-
-LiteLLM 会拉 `tokenizers>=0.22`，跟 WhisperX 需要的 `transformers` 版本打架。
-
-**修复**：
-```bash
-pip install "tokenizers<0.22"
-```
-LiteLLM 仍然能用（只是会有 deprecation warning）。
-
 ### Windows 上 `torchcodec` 缺符号
 
 ```
@@ -344,7 +334,7 @@ PG max_connections 太小。两条路：
 - **CLI**：`python scripts/refresh_models.py`
 - **HTTP**：`POST /api/v1/models/refresh-catalog`
 
-刷新后还是没出现，要么是厂商还没把这个模型公开到 `/v1/models`，要么是被我们的过滤启发删掉了（名字里包含 `embedding` / `whisper` / `tts-` / `dall-e` / `rerank` 会被认为是非聊天模型）。后者解决办法：把它加到 `backend/app/core/model_registry.py` 的 `MODEL_PROFILES`，就会作为策展条目显示。
+刷新后还是没出现，要么是厂商还没把这个模型公开到 `/v1/models`，要么是被 vendor 适配器的"仅聊天"过滤器删掉了（如名字含 `embed` / `whisper` / `tts-` / `dall-e` / `realtime` 等）。后者解决办法：改 `backend/app/services/model_sources/vendors/<vendor>.py` 里的 `_NON_CHAT_HINTS` 列表；如果想给它单独的显示名 / 优先级，再到 `backend/app/services/model_sources/curated.py` 加一条 CURATED。
 
 ### 「我改了 .env.docker 的 POSTGRES_PASSWORD，API 连不上数据库」
 
@@ -369,9 +359,9 @@ alembic upgrade head        # 在干净的 DB 上重建 schema
 
 ### `/models/ping` 巨慢
 
-每个 profile 都 ping 一遍它的 provider。如果你有 30 个 profile，其中 20 个 API key 错（每次超时 10 秒），总计 ~3 分钟以上。要么：
-- 只配置你实际用的 provider key
-- 或者从 `model_registry.py` 的 `MODEL_PROFILES` 删掉不用的 profile
+每个 profile 都 ping 一遍它的 provider。280+ 个模型，如果有 10 个 key 错（每次超时 10 秒），总计 ~分钟级。要么：
+- 只配置你实际用的 vendor key（没 key 的 vendor 在 "no key" 短路，不会真发请求）
+- 或者在模型页用"显示更多厂商"把不用的 vendor 卡片关掉，ping 就不会包含它
 
 ### Embedding 巨慢，没 GPU
 
