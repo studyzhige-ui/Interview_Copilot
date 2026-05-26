@@ -322,7 +322,7 @@ def list_my_api_keys(
     Never includes plaintext. Frontend uses this to render
     "✓ 已配置 (sk-***abcd)" badges per vendor card.
     """
-    from app.services.user_api_key_service import list_user_api_keys
+    from app.services.auth.user_api_key_service import list_user_api_keys
     return {"keys": list_user_api_keys(current_user.username, db=db)}
 
 
@@ -339,7 +339,7 @@ async def upsert_my_api_key(
     masked form. To replace, just PUT again — it overwrites.
     """
     from app.services.cache_service import invalidate
-    from app.services.user_api_key_service import set_user_api_key
+    from app.services.auth.user_api_key_service import set_user_api_key
     try:
         result = set_user_api_key(
             current_user.username, provider, payload.api_key, db=db,
@@ -368,7 +368,7 @@ async def delete_my_api_key(
     db: Session = Depends(get_db),
 ):
     from app.services.cache_service import invalidate
-    from app.services.user_api_key_service import delete_user_api_key
+    from app.services.auth.user_api_key_service import delete_user_api_key
     deleted = delete_user_api_key(current_user.username, provider, db=db)
     from app.core.model_registry import clear_llm_cache_for_provider
     clear_llm_cache_for_provider(provider)
@@ -415,7 +415,7 @@ async def api_list_providers(
     response includes ALL providers in ``PROVIDERS`` — the frontend
     decides whether to show or hide each based on ``enabled``.
     """
-    from app.services.user_provider_settings_service import (
+    from app.services.auth.user_provider_settings_service import (
         resolve_all_provider_settings,
     )
     settings = resolve_all_provider_settings(current_user.username)
@@ -432,7 +432,7 @@ async def api_get_provider_settings(
 ):
     """Effective settings for one provider — same shape as one entry
     from the /models/providers list endpoint."""
-    from app.services.user_provider_settings_service import (
+    from app.services.auth.user_provider_settings_service import (
         resolve_provider_settings,
     )
     resolved = resolve_provider_settings(current_user.username, provider)
@@ -463,7 +463,7 @@ async def api_update_provider_settings(
     rebuilds with the new api_base / headers.
     """
     from app.services.cache_service import invalidate
-    from app.services.user_provider_settings_service import (
+    from app.services.auth.user_provider_settings_service import (
         SettingsPatch, upsert_settings,
     )
 
@@ -500,7 +500,7 @@ async def api_delete_provider_settings(
     use ``DELETE /models/api-keys/{provider}`` for that.
     """
     from app.services.cache_service import invalidate
-    from app.services.user_provider_settings_service import delete_settings
+    from app.services.auth.user_provider_settings_service import delete_settings
 
     deleted = delete_settings(current_user.username, provider)
 

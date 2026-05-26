@@ -46,8 +46,8 @@ from app.services.storage_service import (
     save_blob_to_local,
     upload_file_to_owned_key,
 )
-from app.services.token_blacklist_service import is_revoked, revoke
-from app.services.verification_code_service import (
+from app.services.auth.token_blacklist_service import is_revoked, revoke
+from app.services.auth.verification_code_service import (
     CodeError,
     assert_ip_not_locked,
     record_verify_failure_for_ip,

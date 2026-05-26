@@ -63,7 +63,7 @@ def _resolve_tavily_key(user_id: str | None) -> str:
     """
     if user_id:
         try:
-            from app.services.user_api_key_service import get_user_api_key_plaintext
+            from app.services.auth.user_api_key_service import get_user_api_key_plaintext
             per_user = get_user_api_key_plaintext(user_id, "tavily")
             if per_user:
                 return per_user

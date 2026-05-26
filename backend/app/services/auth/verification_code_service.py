@@ -22,7 +22,7 @@ from typing import Literal
 
 from app.core.config import settings
 from app.db.redis import redis_client
-from app.services.email_service import send_email
+from app.services.auth.email_service import send_email
 
 logger = logging.getLogger(__name__)
 

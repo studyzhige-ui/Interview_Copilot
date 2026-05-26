@@ -2,7 +2,7 @@
 
 Every token carries a ``jti`` (random UUID hex) so it can be revoked via
 Redis blacklist on logout or refresh-rotation. See
-``app.services.token_blacklist_service``.
+``app.services.auth.token_blacklist_service``.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.database import get_db
 from app.models.user import User
-from app.services.token_blacklist_service import is_revoked
+from app.services.auth.token_blacklist_service import is_revoked
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 

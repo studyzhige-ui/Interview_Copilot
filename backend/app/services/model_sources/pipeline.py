@@ -264,7 +264,7 @@ def _resolve_key_for_provider(provider: str, user_id: str | None) -> str:
         return ""
     if user_id:
         try:
-            from app.services.user_api_key_service import get_user_api_key_plaintext
+            from app.services.auth.user_api_key_service import get_user_api_key_plaintext
             key = get_user_api_key_plaintext(user_id, provider)
             if key:
                 return key

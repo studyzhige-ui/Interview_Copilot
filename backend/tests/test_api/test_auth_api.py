@@ -184,7 +184,7 @@ async def test_register_duplicate_username_returns_generic_400(db_session_local)
 
 @pytest.mark.asyncio
 async def test_register_bad_code_returns_generic_400(db_session_local):
-    from app.services.verification_code_service import CodeError
+    from app.services.auth.verification_code_service import CodeError
 
     with patch("app.api.auth.assert_ip_not_locked", new_callable=AsyncMock), \
          patch(

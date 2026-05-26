@@ -397,7 +397,7 @@ def resolve_api_key(profile: ModelProfile, user_id: str | None = None) -> str:
     """
     if user_id:
         try:
-            from app.services.user_api_key_service import get_user_api_key_plaintext
+            from app.services.auth.user_api_key_service import get_user_api_key_plaintext
             user_key = get_user_api_key_plaintext(user_id, profile.provider)
             if user_key:
                 return user_key
@@ -433,7 +433,7 @@ def _load_user_provider_overrides(
     try:
         from app.db.database import SessionLocal
         from app.models.user_provider_settings import UserProviderSettings
-        from app.services.user_provider_settings_service import parse_extra_headers
+        from app.services.auth.user_provider_settings_service import parse_extra_headers
 
         with SessionLocal() as db:
             row = (
