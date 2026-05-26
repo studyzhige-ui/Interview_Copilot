@@ -15,7 +15,7 @@ from app.db.database import SessionLocal, get_db
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
 from app.models.user import User
-from app.services.diagnostics_report_service import generate_comprehensive_report
+from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
 from app.services.interview_record_service import (
     STATUS_COMPLETED,
     STATUS_FAILED,

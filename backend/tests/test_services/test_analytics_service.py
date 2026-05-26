@@ -10,8 +10,8 @@ from unittest.mock import patch, MagicMock, AsyncMock
 @pytest.mark.asyncio
 async def test_generate_report_empty_when_no_docstore():
     """当 DOCSTORE_DIR 不存在时，应返回 empty 状态。"""
-    with patch("app.services.diagnostics_report_service.os.path.exists", return_value=False):
-        from app.services.diagnostics_report_service import generate_comprehensive_report
+    with patch("app.services.analytics.diagnostics_report_service.os.path.exists", return_value=False):
+        from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
         result = await generate_comprehensive_report(limit=20, user_id="u1")
         assert result["status"] == "empty"
 
@@ -22,9 +22,9 @@ async def test_generate_report_empty_when_no_personal_memories():
     mock_docstore = MagicMock()
     mock_docstore.docs = {}  # 空文档库
 
-    with patch("app.services.diagnostics_report_service.os.path.exists", return_value=True), \
-         patch("app.services.diagnostics_report_service.SimpleDocumentStore.from_persist_dir", return_value=mock_docstore):
-        from app.services.diagnostics_report_service import generate_comprehensive_report
+    with patch("app.services.analytics.diagnostics_report_service.os.path.exists", return_value=True), \
+         patch("app.services.analytics.diagnostics_report_service.SimpleDocumentStore.from_persist_dir", return_value=mock_docstore):
+        from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
         result = await generate_comprehensive_report(limit=20, user_id="u1")
         assert result["status"] == "empty"
 
@@ -54,12 +54,12 @@ async def test_generate_report_successful_json_parse():
     mock_response = MagicMock()
     mock_response.text = report_json
 
-    with patch("app.services.diagnostics_report_service.os.path.exists", return_value=True), \
-         patch("app.services.diagnostics_report_service.SimpleDocumentStore.from_persist_dir", return_value=mock_docstore), \
-         patch("app.services.diagnostics_report_service.agent_fast_llm") as llm_mock:
+    with patch("app.services.analytics.diagnostics_report_service.os.path.exists", return_value=True), \
+         patch("app.services.analytics.diagnostics_report_service.SimpleDocumentStore.from_persist_dir", return_value=mock_docstore), \
+         patch("app.services.analytics.diagnostics_report_service.agent_fast_llm") as llm_mock:
         llm_mock.acomplete = AsyncMock(return_value=mock_response)
 
-        from app.services.diagnostics_report_service import generate_comprehensive_report
+        from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
         result = await generate_comprehensive_report(limit=20, user_id="u1")
 
         assert result["status"] == "success"
@@ -86,12 +86,12 @@ async def test_generate_report_strips_markdown_codeblock():
     mock_response = MagicMock()
     mock_response.text = raw
 
-    with patch("app.services.diagnostics_report_service.os.path.exists", return_value=True), \
-         patch("app.services.diagnostics_report_service.SimpleDocumentStore.from_persist_dir", return_value=mock_docstore), \
-         patch("app.services.diagnostics_report_service.agent_fast_llm") as llm_mock:
+    with patch("app.services.analytics.diagnostics_report_service.os.path.exists", return_value=True), \
+         patch("app.services.analytics.diagnostics_report_service.SimpleDocumentStore.from_persist_dir", return_value=mock_docstore), \
+         patch("app.services.analytics.diagnostics_report_service.agent_fast_llm") as llm_mock:
         llm_mock.acomplete = AsyncMock(return_value=mock_response)
 
-        from app.services.diagnostics_report_service import generate_comprehensive_report
+        from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
         result = await generate_comprehensive_report(limit=20, user_id="u1")
 
         assert result["status"] == "success"
@@ -112,12 +112,12 @@ async def test_generate_report_fallback_on_invalid_json():
     mock_response = MagicMock()
     mock_response.text = "这不是合法的 JSON 格式"
 
-    with patch("app.services.diagnostics_report_service.os.path.exists", return_value=True), \
-         patch("app.services.diagnostics_report_service.SimpleDocumentStore.from_persist_dir", return_value=mock_docstore), \
-         patch("app.services.diagnostics_report_service.agent_fast_llm") as llm_mock:
+    with patch("app.services.analytics.diagnostics_report_service.os.path.exists", return_value=True), \
+         patch("app.services.analytics.diagnostics_report_service.SimpleDocumentStore.from_persist_dir", return_value=mock_docstore), \
+         patch("app.services.analytics.diagnostics_report_service.agent_fast_llm") as llm_mock:
         llm_mock.acomplete = AsyncMock(return_value=mock_response)
 
-        from app.services.diagnostics_report_service import generate_comprehensive_report
+        from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
         result = await generate_comprehensive_report(limit=20, user_id="u1")
 
         assert result["status"] == "fallback"

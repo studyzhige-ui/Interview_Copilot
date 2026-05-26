@@ -48,7 +48,7 @@ from app.services.memory.v3_context_loader import (
     attach_active_bodies,
     load_universal,
 )
-from app.services.telemetry_service import log_interaction_metrics
+from app.services.analytics.telemetry_service import log_interaction_metrics
 
 logger = logging.getLogger(__name__)
 
