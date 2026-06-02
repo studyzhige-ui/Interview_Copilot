@@ -34,7 +34,12 @@ boto3==1.38.0
 
 # Config & Environment
 python-dotenv==1.2.2
-pydantic==2.12.5
+# The [email] extra pulls in email-validator, required by the EmailStr
+# fields in app/schemas/auth.py (UserCreate etc). It was previously only
+# present locally as a transitive dependency, so a clean install (CI) hit
+# "email-validator is not installed" and aborted test collection. Declare
+# it explicitly via the extra so every environment has it.
+pydantic[email]==2.12.5
 pydantic-settings==2.13.1
 nest_asyncio==1.6.0
 
