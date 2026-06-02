@@ -22,14 +22,22 @@ from llama_index.core.retrievers import QueryFusionRetriever
 from app.core.config import settings
 from app.rag.reranker_registry import build_reranker, resolve_reranker
 from app.rag.bm25_cache import (
-    _BM25_CACHE_TTL,
-    _BM25CacheEntry,
-    _bm25_cache,
-    _bm25_cache_key,
-    _bm25_cache_lock,
     _build_and_cache_bm25 as _build_and_cache_bm25_impl,
     _get_cached_bm25,
-    invalidate_bm25_cache,
+)
+
+# Re-exported so other modules and tests can import these via
+# ``app.rag.retriever`` — ingestion.py imports ``invalidate_bm25_cache``
+# from here, and test_bm25_cache.py asserts the re-export identity.
+# They're unused *in this module*, so ``ruff --fix`` strips them as F401;
+# the per-line noqa pins them on purpose. Do NOT delete.
+from app.rag.bm25_cache import (
+    _BM25_CACHE_TTL,  # noqa: F401
+    _BM25CacheEntry,  # noqa: F401
+    _bm25_cache,  # noqa: F401
+    _bm25_cache_key,  # noqa: F401
+    _bm25_cache_lock,  # noqa: F401
+    invalidate_bm25_cache,  # noqa: F401
 )
 
 logger = logging.getLogger(__name__)

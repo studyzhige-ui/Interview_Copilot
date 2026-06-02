@@ -83,7 +83,7 @@ class SingleDocService:
     def load_as_lines(self, user_id: str, *, db: Session | None = None) -> list[str]:
         """Doc split into non-empty lines, convenient for prompt rendering."""
         body = self.load(user_id, db=db)
-        return [line for line in (l.rstrip() for l in body.splitlines()) if line]
+        return [line for line in (raw.rstrip() for raw in body.splitlines()) if line]
 
     def load_description(self, user_id: str, *, db: Session | None = None) -> str:
         """Universal-pass description (Phase A). Empty string when the

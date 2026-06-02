@@ -33,7 +33,6 @@ from app.core.security import (
     get_current_user,
     get_password_hash,
     oauth2_scheme,
-    verify_password,
 )
 from app.db.database import get_db
 from app.models.user import User
@@ -43,7 +42,6 @@ from app.services.storage_service import (
     generate_presigned_get_url,
     is_local_uri,
     save_blob_to_local,
-    upload_file_to_owned_key,
 )
 from app.services.auth.token_blacklist_service import is_revoked, revoke
 from app.services.auth.verification_code_service import (

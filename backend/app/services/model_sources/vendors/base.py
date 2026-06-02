@@ -250,7 +250,6 @@ async def fetch_one_vendor(
     url = _url_for(spec, api_base, api_key)
     headers = _headers_for(spec, api_key)
 
-    last_exc: Exception | None = None
     payload: Any = None
     for attempt in range(retries + 1):
         try:
@@ -268,7 +267,6 @@ async def fetch_one_vendor(
         except VendorFetchFailed:
             raise
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as exc:
-            last_exc = exc
             if attempt < retries:
                 await asyncio.sleep(0.5)
                 logger.warning(

@@ -74,12 +74,18 @@ def validate_safe_url(url: str, *, require_https: bool = False) -> None:
             # Classify rather than echo the IP — keeps the error
             # actionable without disclosing the resolution.
             classes = []
-            if ip.is_private:      classes.append("private")
-            if ip.is_loopback:     classes.append("loopback")
-            if ip.is_link_local:   classes.append("link-local (metadata)")
-            if ip.is_reserved:     classes.append("reserved")
-            if ip.is_multicast:    classes.append("multicast")
-            if ip.is_unspecified:  classes.append("unspecified")
+            if ip.is_private:
+                classes.append("private")
+            if ip.is_loopback:
+                classes.append("loopback")
+            if ip.is_link_local:
+                classes.append("link-local (metadata)")
+            if ip.is_reserved:
+                classes.append("reserved")
+            if ip.is_multicast:
+                classes.append("multicast")
+            if ip.is_unspecified:
+                classes.append("unspecified")
             raise UrlNotSafe(
                 f"host resolves to {'/'.join(classes)} address space",
             )

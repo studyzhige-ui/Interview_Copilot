@@ -40,7 +40,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, Integer, String, Text, UniqueConstraint
 
 from app.db.database import Base
 

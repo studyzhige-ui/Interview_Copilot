@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Awaitable, Callable, TypeVar
+from typing import Awaitable, Callable, TypeVar
 
 from app.db.redis import redis_client
 

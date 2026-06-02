@@ -23,7 +23,6 @@ from typing import Any
 import tiktoken
 from llama_index.core import Settings
 
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 

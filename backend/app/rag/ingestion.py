@@ -257,7 +257,7 @@ async def ingest_text(text: str, source_type: str, user_id: str, metadata: dict 
         storage_context = _get_storage_context(vector_store)
 
         logger.info(f"纯文本摄取: {len(all_nodes)} 个节点写入 Milvus...")
-        index = VectorStoreIndex(
+        VectorStoreIndex(
             nodes=all_nodes,
             storage_context=storage_context,
             store_nodes_override=True

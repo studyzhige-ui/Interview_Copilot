@@ -27,7 +27,6 @@ free, and the user-facing tool cards still come from
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from typing import Any, AsyncGenerator
@@ -405,7 +404,6 @@ class AgentLoopStrategy:
             # API on the next assistant message — accumulate it here
             # and pass to ``_execute_tools`` which writes the message.
             reasoning_acc: list[str] = []
-            stream_started_at = time.perf_counter()
 
             async for ev in self._consume_stream(
                 stream, budget, tool_calls_acc, reasoning_acc,
@@ -415,7 +413,6 @@ class AgentLoopStrategy:
                 elif isinstance(ev, str):
                     assistant_content += ev
 
-            latency_ms = round((time.perf_counter() - stream_started_at) * 1000, 2)
             compactor.reset_circuit_breaker()
 
             # If the model emitted any text in this turn (whether it

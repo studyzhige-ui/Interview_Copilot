@@ -1,3 +1,10 @@
+# ruff: noqa: E402
+# ^ This entrypoint deliberately runs setup code (HF mirror default +
+# the LangSmith monkey-patch via _setup_llm_tracing) BEFORE importing
+# any llama_index-backed modules, so those imports cannot sit at the
+# very top of the file. See the block comment by _setup_llm_tracing()
+# below for why the ordering is load-bearing. Suppressing E402 file-wide
+# is correct here rather than scattering ~25 inline noqa comments.
 import logging
 import os
 from contextlib import asynccontextmanager

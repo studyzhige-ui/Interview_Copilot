@@ -18,7 +18,6 @@ the same so existing callers (Celery worker bootstrap, analysis pipeline)
 don't need updates.
 """
 
-import asyncio
 import logging
 from typing import Any, Optional
 

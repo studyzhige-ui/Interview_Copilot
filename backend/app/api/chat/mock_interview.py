@@ -60,7 +60,6 @@ async def start_mock_interview(
     to build a thin interview map + opening line, freeze the cacheable prefix
     into state, and return the opening to the frontend."""
     from app.services.interview.mock_interview_service import (
-        DEFAULT_TURN_BUDGETS,
         VALID_PHASES,
         build_prefix,
         generate_brief,
@@ -526,7 +525,6 @@ async def submit_mock_answer(
     """
     from app.services.interview.mock_interview_service import (
         DISPLAY_INTENT,
-        MAX_FOLLOW_UP_DEPTH,
         SUMMARY_EVERY_N_TURNS,
         DirectorRetryExhausted,
         apply_state_update,
@@ -843,8 +841,10 @@ async def parse_jd_for_mock(
         logger.error("parse_jd_for_mock failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"JD 解析失败: {exc}") from exc
     finally:
-        try: os.unlink(local_path)
-        except OSError: pass
+        try:
+            os.unlink(local_path)
+        except OSError:
+            pass
 
 
 # ── Short-clip transcription (MediaRecorder → text) ────────────────────

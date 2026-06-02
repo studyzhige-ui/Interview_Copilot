@@ -11,11 +11,14 @@ name: Nightly
 # default channel (GitHub Actions UI badge + email-on-fail).
 
 on:
-  schedule:
-    # Daily at 02:00 UTC.
-    - cron: "0 2 * * *"
+  # Manual trigger only. The daily schedule was removed: the Milvus
+  # service container can't boot reliably in GitHub-hosted CI (Milvus
+  # standalone needs etcd + minio sidecars that aren't wired up here),
+  # so the "Wait for Milvus" step always timed out and produced a
+  # false-red run every night. The integration test it gates is also a
+  # skip-only placeholder today. Run this by hand from the Actions tab
+  # ("Run workflow") once there's a real Milvus-dependent test to cover.
   workflow_dispatch:
-    # Manual trigger for debugging without waiting for the cron.
 
 concurrency:
   group: nightly

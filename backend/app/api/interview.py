@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Res
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.rate_limit import RATE_EXPENSIVE, RATE_UPLOAD, limiter
 from app.core.security import get_current_user
 from app.db.database import SessionLocal, get_db

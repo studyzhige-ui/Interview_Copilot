@@ -126,9 +126,9 @@ def _session(db: Session | None):
 # cross-process invalidation isn't wired). 5 min is short enough that
 # any externally-rotated key reaches the new worker quickly, long
 # enough that a chatty LLM-call burst still benefits from caching.
-import time as _time
-from collections import OrderedDict as _OrderedDict
-from threading import Lock as _Lock
+import time as _time  # noqa: E402
+from collections import OrderedDict as _OrderedDict  # noqa: E402
+from threading import Lock as _Lock  # noqa: E402
 
 _DECRYPT_CACHE_MAX = 256
 _DECRYPT_CACHE_TTL_S = 300

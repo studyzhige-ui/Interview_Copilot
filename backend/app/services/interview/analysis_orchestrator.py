@@ -62,7 +62,6 @@ class InterviewAnalysisOrchestrator:
             record = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
             if record is None:
                 return {"status": "missing", "record_id": record_id}
-            user_id = record.user_id
             source = record.source
             resume_text = record.resume_text_snapshot or ""
             jd_text = record.jd_text_snapshot or ""
@@ -470,7 +469,7 @@ class InterviewAnalysisOrchestrator:
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
-import threading
+import threading  # noqa: E402
 
 
 _loop_local = threading.local()

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.rate_limit import RATE_DEFAULT, RATE_EXPENSIVE, RATE_UPLOAD, limiter
+from app.core.rate_limit import RATE_EXPENSIVE, RATE_UPLOAD, limiter
 from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.knowledge import KnowledgeDocument
