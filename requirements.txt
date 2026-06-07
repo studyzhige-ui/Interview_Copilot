@@ -101,7 +101,3 @@ markdownify==1.1.0
 
 # Rate limiting (Redis-backed, shared across uvicorn workers)
 slowapi==0.1.9
-
-# Observability — error + light-tracing reporting. Empty SENTRY_DSN
-# disables it entirely, so the dependency is safe to ship enabled.
-sentry-sdk[fastapi,celery]==2.18.0

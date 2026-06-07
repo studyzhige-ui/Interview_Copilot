@@ -41,8 +41,6 @@ export default defineConfig({
     //     so this is the long-cached "framework" chunk
     //   - markdown: react-markdown + remark-gfm (~70KB gz) — used only on
     //     review chat + ai message bubbles
-    //   - sentry: dynamically imported when DSN is set; manualChunks groups
-    //     the sub-modules into one file instead of N tiny ones
     //   - icons: lucide-react has hundreds of icons; pulling them into a
     //     dedicated chunk lets esbuild tree-shake what we actually use
     //
@@ -50,7 +48,6 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            if (id.includes('@sentry/'))         return 'sentry';
             if (id.includes('react-markdown') ||
                 id.includes('remark-') ||
                 id.includes('micromark') ||

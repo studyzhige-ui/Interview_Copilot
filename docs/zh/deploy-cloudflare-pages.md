@@ -36,9 +36,6 @@
 4. **环境变量**（Settings → Environment variables，选 "Production" 或两环境都加）：
    ```
    VITE_API_BASE              https://api.your-domain.com/api/v1
-   VITE_SENTRY_DSN            <你的 Sentry DSN 或留空>
-   VITE_SENTRY_ENVIRONMENT    prod
-   VITE_SENTRY_TRACES_SAMPLE  0.1
    ```
 5. 触发首次部署。后续 push 到 `main` 自动部署。
 

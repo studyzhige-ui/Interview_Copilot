@@ -32,19 +32,6 @@ export class ErrorBoundary extends React.Component<
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     // eslint-disable-next-line no-console
     console.error('[ErrorBoundary] render crash:', error, info.componentStack);
-    // Forward to Sentry if it's been initialised. Dynamic import keeps
-    // the SDK out of the main bundle when VITE_SENTRY_DSN is unset.
-    if (import.meta.env.VITE_SENTRY_DSN) {
-      import('@sentry/react')
-        .then((Sentry) => {
-          Sentry.captureException(error, {
-            contexts: { react: { componentStack: info.componentStack } },
-          });
-        })
-        .catch(() => {
-          /* SDK not installed → swallow; we already console.error'd above */
-        });
-    }
   }
 
   handleReset = () => {

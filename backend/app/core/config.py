@@ -137,15 +137,12 @@ class Settings(BaseSettings):
     # ``/v1/models`` (no hardcoded chat model). Only ``NVIDIA_API_KEY``
     # above is required to enable the provider.
 
-    # ── Observability (Sentry) ──────────────────────────────────────────
-    # Empty DSN disables Sentry entirely (default for local dev). For prod
-    # set the DSN from your Sentry project settings; sample rate controls
-    # what fraction of transactions get traced (0.0–1.0). Errors are always
-    # captured regardless of the sample rate.
-    SENTRY_DSN: str = ""
-    SENTRY_ENVIRONMENT: str = "local"          # "local" / "staging" / "prod"
-    SENTRY_TRACES_SAMPLE_RATE: float = 0.1     # 10% of transactions
-    SENTRY_RELEASE: str = ""                   # optional: git SHA / app version
+    # ── Deployment environment ──────────────────────────────────────────
+    # Drives production-safety validation (see _validate_production_safety):
+    # "staging" / "prod" / "production" turn a placeholder SECRET_KEY into a
+    # fatal startup error and enable other prod-only checks. Default "local"
+    # keeps dev convenient.
+    ENVIRONMENT: str = "local"                 # "local" / "staging" / "prod"
 
     # Security and JWT.
     # No in-code default — keys must come from .env (or environment). An empty
@@ -256,7 +253,7 @@ _INSECURE_SECRET_KEYS = {
 def _validate_production_safety(s: "Settings") -> None:
     """Audit settings for known-insecure defaults.
 
-    Behaviour by ``SENTRY_ENVIRONMENT``:
+    Behaviour by ``ENVIRONMENT``:
       * ``local`` (default) — single INFO line listing bundled creds still
         in use. Dev convenience wins; SECRET_KEY still gets a WARNING
         because a placeholder key breaks JWT/Fernet even on localhost.
@@ -274,7 +271,7 @@ def _validate_production_safety(s: "Settings") -> None:
 
     Then drop the printed value into ``.env`` as ``SECRET_KEY=...``.
     """
-    is_prodlike = (s.SENTRY_ENVIRONMENT or "local").strip().lower() in {"staging", "prod", "production"}
+    is_prodlike = (s.ENVIRONMENT or "local").strip().lower() in {"staging", "prod", "production"}
     findings: list[tuple[str, str]] = []
     secret_finding: tuple[str, str] | None = None
 
@@ -330,7 +327,7 @@ def _validate_production_safety(s: "Settings") -> None:
             # JWTs and read every Fernet-encrypted user API key.
             raise RuntimeError(
                 f"[FATAL] {name} is set to an insecure default in "
-                f"production ({s.SENTRY_ENVIRONMENT!r}). Refusing to "
+                f"production ({s.ENVIRONMENT!r}). Refusing to "
                 f"start. {hint}"
             )
         logger.warning(

@@ -78,61 +78,6 @@ logger = logging.getLogger("interview.copilot.main")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-# ─── Sentry (errors + light tracing) ─────────────────────────────────────
-# Init BEFORE FastAPI so the FastAPI integration can hook the app at create
-# time. Empty SENTRY_DSN → no-op; SDK never sends anything in dev.
-def _init_sentry() -> None:
-    if not settings.SENTRY_DSN:
-        return
-    try:
-        import sentry_sdk
-        from sentry_sdk.integrations.fastapi import FastApiIntegration
-        from sentry_sdk.integrations.starlette import StarletteIntegration
-        from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
-        from sentry_sdk.integrations.redis import RedisIntegration
-    except ImportError:
-        logger.warning(
-            "SENTRY_DSN is set but sentry-sdk not installed — skipping. "
-            "Run: pip install 'sentry-sdk[fastapi]'"
-        )
-        return
-
-    def _scrub(event, _hint):
-        # Drop the Authorization header + any cookies before they leave the
-        # process. Sentry already redacts a default set, but we belt-and-
-        # braces on the bearer token explicitly.
-        try:
-            headers = event.get("request", {}).get("headers", {})
-            for k in list(headers):
-                if k.lower() in {"authorization", "cookie", "sec-websocket-protocol"}:
-                    headers[k] = "[redacted]"
-        except (AttributeError, TypeError):
-            pass
-        return event
-
-    sentry_sdk.init(
-        dsn=settings.SENTRY_DSN,
-        environment=settings.SENTRY_ENVIRONMENT,
-        release=settings.SENTRY_RELEASE or None,
-        traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
-        integrations=[
-            StarletteIntegration(),
-            FastApiIntegration(),
-            SqlalchemyIntegration(),
-            RedisIntegration(),
-        ],
-        send_default_pii=False,   # don't ship request bodies / cookies
-        before_send=_scrub,
-    )
-    logger.info(
-        "Sentry initialized (env=%s, traces=%s)",
-        settings.SENTRY_ENVIRONMENT, settings.SENTRY_TRACES_SAMPLE_RATE,
-    )
-
-
-_init_sentry()
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize shared resources once during the FastAPI lifecycle."""
@@ -278,21 +223,6 @@ async def unhandled_exception_logger(request: _Request, exc: Exception):
         exc,
         _tb.format_exc(),
     )
-    # Belt-and-braces Sentry capture. FastApiIntegration normally
-    # catches exceptions that bubble OUT of the request handler, but
-    # if a generator inside a StreamingResponse raises after the
-    # response started, ASGI middleware has already eaten the
-    # exception by the time it reaches us — the integration misses
-    # it. Calling capture_exception here means the user always
-    # gets a Sentry event, even on those edge cases. No-op when
-    # SENTRY_DSN isn't set.
-    try:
-        import sentry_sdk
-        sentry_sdk.capture_exception(exc)
-    except ImportError:
-        # sentry-sdk not installed → fall through silently. We
-        # already logged the traceback above.
-        pass
     # Explicitly attach X-Request-ID. Starlette's ServerErrorMiddleware
     # short-circuits past our middleware chain on exception, so the
     # ``request_id_middleware`` doesn't get to stamp the header on

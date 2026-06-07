@@ -5,33 +5,6 @@ from celery.signals import worker_process_init
 from app.core.config import settings
 
 
-# ── Sentry (per-worker) ─────────────────────────────────────────────────
-# Each Celery worker process runs in its own interpreter, so we have to
-# init the SDK after fork — the worker_process_init signal handler below
-# does that. We only call sentry_sdk.init when SENTRY_DSN is configured.
-def _init_sentry_for_worker() -> None:
-    if not settings.SENTRY_DSN:
-        return
-    try:
-        import sentry_sdk
-        from sentry_sdk.integrations.celery import CeleryIntegration
-        from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
-        from sentry_sdk.integrations.redis import RedisIntegration
-    except ImportError:
-        return
-    sentry_sdk.init(
-        dsn=settings.SENTRY_DSN,
-        environment=settings.SENTRY_ENVIRONMENT,
-        release=settings.SENTRY_RELEASE or None,
-        traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
-        integrations=[
-            CeleryIntegration(monitor_beat_tasks=False),
-            SqlalchemyIntegration(),
-            RedisIntegration(),
-        ],
-        send_default_pii=False,
-    )
-
 celery_app = Celery(
     "interview_copilot_worker",
     broker=settings.REDIS_URL,
@@ -166,9 +139,7 @@ def init_worker_models(**kwargs):
     import logging
 
     logger = logging.getLogger(__name__)
-    # Sentry first so any subsequent init failure gets reported.
-    _init_sentry_for_worker()
-    # LangSmith next — must run BEFORE any LLM client is created (init_rag_settings
+    # LangSmith — must run BEFORE any LLM client is created (init_rag_settings
     # constructs them). No-op when LANGSMITH_TRACING isn't set in .env.
     from app.core.llm_tracing import setup_llm_tracing
     setup_llm_tracing()

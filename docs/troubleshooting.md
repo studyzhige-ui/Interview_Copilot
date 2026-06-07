@@ -73,7 +73,7 @@ Pyannote falls back to `torchaudio`, which works fine.
 
 ### `slowapi` not installed
 
-Backend logs `SENTRY_DSN is set but ...` or `slowapi not installed`.
+Backend logs `slowapi not installed`.
 
 **Fix**:
 ```bash
@@ -464,4 +464,4 @@ Open an issue with:
 - Mode (lite / full / hybrid)
 - The exact error from the log (NOT a screenshot)
 - Output of `docker compose ps`
-- Output of `pip list | grep -E "(fastapi|sqlalchemy|llama-index|whisperx|sentry-sdk)"`
+- Output of `pip list | grep -E "(fastapi|sqlalchemy|llama-index|whisperx)"`

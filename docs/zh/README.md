@@ -226,14 +226,14 @@ CDN"的时候才用得到。
 
 ## 技术栈
 
-- **API**：FastAPI 0.135、SQLAlchemy 2、Pydantic v2、slowapi（限流）、Sentry SDK
+- **API**：FastAPI 0.135、SQLAlchemy 2、Pydantic v2、slowapi（限流）
 - **后台任务**：Celery 5 + Redis（队列 / 缓存 / 黑名单）
 - **存储**：PostgreSQL 15、Milvus 2.5（向量）、MinIO（S3 兼容）
 - **AI**：LlamaIndex、BGE-M3 + BGE-Reranker-v2-m3、WhisperX、Pyannote
 - **LLM**：任意 OpenAI 兼容 API（默认 DeepSeek）
 - **前端**：React 18、Vite 5、Tailwind、zustand、react-virtual
 - **基础设施**：Docker Compose、nginx
-- **观测**：Sentry（错误）、LangSmith（LLM trace，按需启用）
+- **观测**：LangSmith（LLM trace，按需启用）
 
 ---
 
