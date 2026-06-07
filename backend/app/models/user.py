@@ -14,6 +14,18 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
     email_verified = Column(Boolean, default=False, nullable=False)
+    # ── Token invalidation baseline ──────────────────────────────────
+    # Stamped into every access/refresh JWT at issuance (see
+    # ``security.token_claims_for``) and re-checked in ``get_current_user``
+    # / ``/auth/refresh``. Incrementing it (on password change / reset)
+    # makes EVERY previously-issued token fail the version check on its
+    # next use — instant logout-everywhere without enumerating jti's into
+    # the Redis blacklist. Starts at 0; only ever moves forward.
+    token_version = Column(Integer, default=0, nullable=False, server_default="0")
+    # When the password was last changed. NULL = never changed since
+    # registration. Audit / display only — the security guarantee is
+    # carried by ``token_version``, not this timestamp.
+    password_changed_at = Column(DateTime, nullable=True)
     nickname = Column(String(64), nullable=True)
     # Widened to Text so we can inline ~1MB image as `data:` URL (≈1.4MB
     # base64). Plain http(s) URLs still fit fine.

@@ -145,7 +145,27 @@ apiClient.interceptors.response.use(
   },
 );
 
+/** FastAPI error detail: a plain string, or a structured `{code, message}`
+ *  body (used by auth conflict responses like EMAIL_ALREADY_REGISTERED). */
+type ErrDetail = string | { code?: string; message?: string };
+
 export function extractErr(e: unknown, fallback = '请求失败'): string {
-  const ax = e as AxiosError<{ detail?: string }>;
-  return ax?.response?.data?.detail ?? ax?.message ?? fallback;
+  const ax = e as AxiosError<{ detail?: ErrDetail }>;
+  const detail = ax?.response?.data?.detail;
+  if (typeof detail === 'string') return detail;
+  if (detail && typeof detail === 'object' && detail.message) return detail.message;
+  return ax?.message ?? fallback;
+}
+
+/** Business error code from a structured 4xx detail (`{code, message}`),
+ *  or `null` when the response carried a plain-string / no detail. Lets
+ *  call-sites branch on stable codes (e.g. route to login on
+ *  EMAIL_ALREADY_REGISTERED) instead of matching human text. */
+export function extractErrCode(e: unknown): string | null {
+  const ax = e as AxiosError<{ detail?: ErrDetail }>;
+  const detail = ax?.response?.data?.detail;
+  if (detail && typeof detail === 'object' && typeof detail.code === 'string') {
+    return detail.code;
+  }
+  return null;
 }

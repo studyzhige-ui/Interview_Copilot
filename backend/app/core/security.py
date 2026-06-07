@@ -143,6 +143,25 @@ def decode_token(token: str) -> dict:
     return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
 
 
+def token_claims_for(user: User) -> dict:
+    """Identity claims embedded in every access/refresh token for ``user``.
+
+    Single source of truth so login / refresh / any future issuer all agree:
+
+      * ``sub``           — the stable ``users.id`` (string). This is the ONLY
+        authoritative identity; ``username`` is mutable and never trusted for
+        auth or business-row ownership.
+      * ``token_version`` — snapshot of ``users.token_version`` at issuance.
+        ``get_current_user`` / ``/auth/refresh`` reject the token if it no
+        longer matches the row, which is how a password change invalidates
+        every outstanding token at once.
+
+    ``username`` is deliberately NOT included — keeping it out of the token
+    removes any temptation to authorize against it.
+    """
+    return {"sub": str(user.id), "token_version": user.token_version}
+
+
 # ── FastAPI auth dependency ─────────────────────────────────────────────
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
@@ -158,22 +177,35 @@ async def get_current_user(
     except JWTError:
         raise credentials_exception
 
-    username: str = payload.get("sub")
+    sub: str | None = payload.get("sub")
     token_type: str = payload.get("type", "access")
     jti: str | None = payload.get("jti")
-    if not username or token_type != "access" or not jti:
-        # Reject access tokens issued before the jti rollout — they cannot be
-        # revoked via the blacklist and would create a permanent un-loggable
-        # session. Users with a still-valid pre-rollout token will be force-
-        # logged-out once (their 30-min access expires or this check fires);
-        # the frontend's 401 → refresh path then issues a fresh jti-bearing
-        # pair, so the disruption is bounded.
+    token_version = payload.get("token_version")
+    if not sub or token_type != "access" or not jti or token_version is None:
+        # Reject access tokens that predate the jti / token_version rollout —
+        # they can't be revoked via the blacklist or invalidated by a password
+        # change, so honouring them would create a permanently un-loggable
+        # session. The frontend's 401 → refresh path then issues a fresh
+        # compliant pair, so the disruption is bounded to one round-trip.
         raise credentials_exception
 
     if await is_revoked(jti):
         raise credentials_exception
 
-    user = db.query(User).filter(User.username == username).first()
+    # ``sub`` is the stable ``users.id``. Non-integer subs (e.g. legacy
+    # username-based tokens from before the AUTH-IDENTITY migration) can't
+    # match any row — reject rather than fall back to a username lookup.
+    try:
+        user_id = int(sub)
+    except (TypeError, ValueError):
+        raise credentials_exception
+
+    user = db.query(User).filter(User.id == user_id).first()
     if user is None:
+        raise credentials_exception
+
+    # Token-version gate: a password change bumps ``users.token_version``,
+    # so every token minted before it fails here on next use.
+    if token_version != user.token_version:
         raise credentials_exception
     return user

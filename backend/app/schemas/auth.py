@@ -38,6 +38,18 @@ class EmailRequest(BaseModel):
     purpose: str = "register"  # "register" | "reset_password" | "change_email"
 
 
+class ChangePasswordRequest(BaseModel):
+    """Body for ``POST /auth/change-password``.
+
+    Requires the current password (the endpoint re-verifies it) plus the new
+    one. ``new_password`` carries a minimal length floor so the structured 422
+    fires before we ever hash an obviously-too-short secret.
+    """
+
+    old_password: str
+    new_password: str = Field(..., min_length=6, max_length=128)
+
+
 class MeUpdate(BaseModel):
     nickname: Optional[str] = Field(default=None, max_length=64)
     avatar_url: Optional[str] = Field(default=None, max_length=512)
@@ -117,6 +129,7 @@ __all__ = [
     "RefreshRequest",
     "LogoutRequest",
     "EmailRequest",
+    "ChangePasswordRequest",
     "MeUpdate",
     "MeResponse",
 ]

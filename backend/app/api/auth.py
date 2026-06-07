@@ -15,7 +15,7 @@ import io
 import logging
 import re
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
@@ -33,6 +33,7 @@ from app.core.security import (
     get_current_user,
     get_password_hash,
     oauth2_scheme,
+    token_claims_for,
 )
 from app.db.database import get_db
 from app.models.user import User
@@ -62,6 +63,7 @@ router = APIRouter()
 # Pydantic models live in app/schemas/auth.py — re-exported here so
 # existing callers (`from app.api.auth import UserCreate`) keep working.
 from app.schemas.auth import (  # noqa: E402, F401
+    ChangePasswordRequest,
     EmailRequest,
     LogoutRequest,
     MeResponse,
@@ -131,6 +133,22 @@ def _generic_400(detail_human: str) -> HTTPException:
     return HTTPException(status_code=400, detail=detail_human)
 
 
+# Business error codes for the REGISTER link. Registration deliberately
+# trades a little enumeration exposure for UX: telling a returning user
+# "this account already exists, just log in" beats making them wait on a
+# verification code that will never arrive. LOGIN and password-reset stay
+# generic (those links are the high-value enumeration targets). The codes
+# are stable contract strings the frontend switches on; ``message`` is the
+# default human text. Detail is a dict → the FE reads ``detail.code``.
+ERR_EMAIL_ALREADY_REGISTERED = "EMAIL_ALREADY_REGISTERED"
+ERR_USERNAME_ALREADY_REGISTERED = "USERNAME_ALREADY_REGISTERED"
+
+
+def _conflict(code: str, message: str) -> HTTPException:
+    """409 with a structured ``{code, message}`` detail body."""
+    return HTTPException(status_code=409, detail={"code": code, "message": message})
+
+
 # ── Endpoints ────────────────────────────────────────────────────────
 
 
@@ -144,21 +162,20 @@ async def send_verification_code(
 ):
     """Generate and send a 6-digit code to the given email.
 
-    Account-enumeration defence: for ``purpose="register"`` we ALWAYS return a
-    "sent" response, even when the email is already registered. We just don't
-    actually issue/email a code in that case. A real registered user who
-    tries to register their own email will fail at /register with the same
-    generic 400 — they cannot distinguish "already taken" from "verification
-    code wrong" by API response alone.
+    Registration UX over enumeration secrecy: for ``purpose="register"`` an
+    already-registered email returns ``409 EMAIL_ALREADY_REGISTERED`` so the
+    user is told to log in instead of waiting on a code that never arrives.
+    Mature consumer products do this; the residual enumeration exposure is
+    accepted only for the register link. The high-value enumeration targets —
+    LOGIN and password reset — keep generic responses elsewhere.
     """
     if payload.purpose == "register":
         existing = db.query(User).filter(User.email == payload.email).first()
         if existing is not None:
-            logger.info(
-                "send-code: ignoring register attempt for already-registered email"
+            raise _conflict(
+                ERR_EMAIL_ALREADY_REGISTERED,
+                "该邮箱已注册，请直接登录",
             )
-            # Lie convincingly: same shape, same approximate TTL.
-            return {"status": "sent", "expires_in": settings.EMAIL_CODE_TTL_SECONDS}
 
     try:
         ttl = await request_code(payload.email, purpose=payload.purpose)  # type: ignore[arg-type]
@@ -177,8 +194,13 @@ async def register_user(
 ):
     """Register a new user after verifying their email code.
 
-    Returns the same generic error for "username taken" / "email taken" /
-    "code wrong" so the attacker cannot tell which field tripped.
+    Duplicate username / email return an explicit ``409`` with a stable
+    business code so the frontend can say "already registered, just log in".
+    A *wrong code* still returns the generic 400 (a code attempt is the only
+    thing a brute-forcer controls, so that branch stays opaque). Per the auth
+    design, the duplicate-account checks run BEFORE code verification and do
+    NOT consume the IP verification-failure budget — a returning user fat-
+    fingering their own email shouldn't get the IP locked out.
     """
     generic_err = _generic_400("注册失败，请检查输入或重试")
     client_ip = request.client.host if request.client else None
@@ -190,12 +212,17 @@ async def register_user(
     except CodeError:
         raise generic_err
 
+    # Duplicate-account checks first, and they don't count as verify failures.
     if db.query(User).filter(User.username == user_in.username).first():
-        await record_verify_failure_for_ip(client_ip)
-        raise generic_err
+        raise _conflict(
+            ERR_USERNAME_ALREADY_REGISTERED,
+            "该用户名已被注册，请更换或直接登录",
+        )
     if db.query(User).filter(User.email == user_in.email).first():
-        await record_verify_failure_for_ip(client_ip)
-        raise generic_err
+        raise _conflict(
+            ERR_EMAIL_ALREADY_REGISTERED,
+            "该邮箱已注册，请直接登录",
+        )
 
     try:
         await verify_code(user_in.email, user_in.code, purpose="register")
@@ -254,11 +281,12 @@ def login_access_token(
         except Exception:  # noqa: BLE001
             db.rollback()
 
+    claims = token_claims_for(user)
     access_token = create_access_token(
-        data={"sub": user.username},
+        data=claims,
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
-    refresh_token = create_refresh_token(data={"sub": user.username})
+    refresh_token = create_refresh_token(data=claims)
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -294,27 +322,38 @@ async def refresh_access_token(
     except JWTError:
         raise credentials_exception
 
-    username = payload.get("sub")
+    sub = payload.get("sub")
     token_type = payload.get("type")
     jti = payload.get("jti")
-    if not username or token_type != "refresh":
+    token_version = payload.get("token_version")
+    if not sub or token_type != "refresh" or token_version is None:
         raise credentials_exception
     if await is_revoked(jti):
         raise credentials_exception
 
-    user = db.query(User).filter(User.username == username).first()
+    try:
+        user_id = int(sub)
+    except (TypeError, ValueError):
+        raise credentials_exception
+    user = db.query(User).filter(User.id == user_id).first()
     if user is None:
+        raise credentials_exception
+
+    # A password change bumps token_version, so a refresh token minted before
+    # it is dead even if it hasn't expired and wasn't individually revoked.
+    if token_version != user.token_version:
         raise credentials_exception
 
     # Revoke the consumed refresh token before issuing the new pair so a
     # double-spend race loses one of the two attempts.
     await revoke(jti, exp=payload.get("exp"))
 
+    claims = token_claims_for(user)
     access_token = create_access_token(
-        data={"sub": user.username},
+        data=claims,
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
     )
-    refresh_token = create_refresh_token(data={"sub": user.username})
+    refresh_token = create_refresh_token(data=claims)
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -339,6 +378,42 @@ async def logout(
     if body and body.refresh_token:
         await _revoke_token_if_present(body.refresh_token)
     return {"status": "ok"}
+
+
+@router.post("/change-password", response_model=dict)
+@limiter.limit(RATE_AUTH)
+def change_password(
+    request: Request,
+    response: Response,
+    body: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Change the caller's password and invalidate every outstanding token.
+
+    Requires the current password — a hijacked-but-still-logged-in session
+    shouldn't be able to silently lock the real owner out. On success, in one
+    commit we: rehash the new password, bump ``token_version`` (which kills
+    ALL access + refresh tokens, including the one that authorized THIS
+    request), and stamp ``password_changed_at``.
+
+    We deliberately do NOT return a fresh token pair: the user re-logs in with
+    the new password. The frontend's 401 → refresh → redirect flow takes them
+    to /auth on their next call, since the old refresh token now fails the
+    token-version check too.
+    """
+    valid, _ = verify_and_maybe_rehash(body.old_password, current_user.hashed_password)
+    if not valid:
+        raise HTTPException(status_code=400, detail="当前密码不正确")
+
+    current_user.hashed_password = get_password_hash(body.new_password)
+    current_user.token_version = (current_user.token_version or 0) + 1
+    # Naive UTC to match the model's created_at/updated_at convention and the
+    # TIMESTAMP (without-tz) column. ``updated_at`` auto-stamps via onupdate.
+    current_user.password_changed_at = datetime.utcnow()
+    db.add(current_user)
+    db.commit()
+    return {"status": "ok", "message": "密码已修改，请使用新密码重新登录"}
 
 
 # ── Profile ─────────────────────────────────────────────────────────────
