@@ -131,27 +131,14 @@ def test_migration_chain_has_no_gaps_and_one_head():
         for d in downs:
             assert d in revision_ids, f"{rev.revision} points at missing {d}"
 
-    # Migration count is asserted explicitly so an accidentally-deleted
-    # version file shows up as a test failure rather than a silent
-    # corruption of the chain. The current chain is:
-    #   0001_baseline → 0002_memory_v3 → 0003_drop_memory_items
-    #                 → 0004_user_last_dreamed_at
-    #                 → 0005_single_doc_one_liner
-    #                 → 0006_chat_message_content_blocks
-    #                 → 0007_global_memory_rename
-    #                 → 0008_drop_agent_trace
-    #                 → 0009_add_record_cascade
-    #                 → 0010_orm_alembic_drift_fixup
-    #                 → 0011_drop_dup_chat_seq_idx
-    #                 → 0012_user_model_selection
-    #                 → 0013_user_provider_settings
-    #                 → 0014_session_global_memory_col
-    #                 → 0015_rename_session_state
-    # Bump this number whenever a new forward migration lands.
+    # Every on-disk version file must be part of the single linear chain:
+    # no orphan revision, no accidentally-deleted middle file. Comparing the
+    # file count to the walked-chain length catches both and stays correct as
+    # new migrations land — no magic number to bump each package.
     on_disk = [p for p in VERSIONS_DIR.glob("*.py") if not p.name.startswith("_")]
-    assert len(on_disk) == 15, (
-        f"Expected 15 migration files (baseline + 14 evolutions), "
-        f"found {len(on_disk)}"
+    assert len(on_disk) == len(revisions), (
+        f"On-disk version files ({len(on_disk)}) don't match the walked chain "
+        f"length ({len(revisions)}) — orphan or deleted migration?"
     )
 
 
@@ -177,8 +164,9 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "alembic_version",
         "users",
         "user_uploads",
-        "user_api_keys",
-        "user_provider_settings",
+        "user_model_credentials",
+        "user_model_provider_settings",
+        "user_model_selections",
         "knowledge_documents",
         "interview_records",
         "interview_qa",
@@ -212,8 +200,10 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         from sqlalchemy import text
 
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0015_rename_session_state", (
-            f"Head should be 0015_rename_session_state, got {version!r}"
+        from alembic.script import ScriptDirectory
+        expected_head = ScriptDirectory.from_config(cfg).get_current_head()
+        assert version == expected_head, (
+            f"DB should be at the script head {expected_head!r}, got {version!r}"
         )
 
     engine.dispose()

@@ -14,7 +14,7 @@ Coverage:
     core entities (User, ChatSession+ChatMessage, InterviewRecord +
     InterviewQA, UserUpload, KnowledgeDocument, KnowledgeDoc /
     StrategyDoc / HabitDoc / MemoryAuditLog (v3 memory),
-    MockInterviewSession, UserAPIKey, ResumeSection).
+    MockInterviewSession, UserModelCredential, ResumeSection).
 """
 from __future__ import annotations
 
@@ -88,7 +88,9 @@ def test_all_expected_tables_registered(test_engine):
     expected = {
         "users",
         "user_uploads",
-        "user_api_keys",
+        "user_model_credentials",
+        "user_model_provider_settings",
+        "user_model_selections",
         "knowledge_documents",
         "interview_records",
         "interview_qa",
@@ -119,11 +121,11 @@ def test_user_columns_and_uniques(test_engine):
         "username should be indexed"
 
 
-def test_user_api_key_unique_constraint(test_engine):
+def test_user_model_credential_unique_constraint(test_engine):
     insp = inspect(test_engine)
-    uqs = insp.get_unique_constraints("user_api_keys")
+    uqs = insp.get_unique_constraints("user_model_credentials")
     names = {u["name"] for u in uqs}
-    assert "uq_user_api_keys_user_provider" in names, \
+    assert "uq_user_model_credentials_user_provider" in names, \
         f"Missing unique (user_id, provider): {uqs}"
 
 
@@ -350,16 +352,21 @@ def test_strategy_and_habit_docs_are_singleton_per_user(db_session):
 # instrumentation already captures every LLM call with full trace.
 
 
-def test_user_api_key_uniqueness(db_session):
-    from app.models.user_api_key import UserAPIKey
+def test_user_model_credential_uniqueness(db_session):
+    from app.models.user import User
+    from app.models.user_model_credentials import UserModelCredential
 
-    db_session.add(UserAPIKey(
-        user_id="u1", provider="openai",
+    user = User(username="u1", email="u1@example.com", hashed_password="x")
+    db_session.add(user)
+    db_session.flush()
+
+    db_session.add(UserModelCredential(
+        user_id=user.id, provider="openai",
         key_ciphertext="aaa", key_masked="sk-****abcd",
     ))
     db_session.flush()
-    db_session.add(UserAPIKey(
-        user_id="u1", provider="openai",
+    db_session.add(UserModelCredential(
+        user_id=user.id, provider="openai",
         key_ciphertext="bbb", key_masked="sk-****xyzw",
     ))
     with pytest.raises(IntegrityError):

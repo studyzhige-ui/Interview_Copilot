@@ -67,7 +67,7 @@ class ModelProfile:
 
 # ── Role defaults ───────────────────────────────────────────────────────
 # Used when (a) we have no user_id (startup, global LlamaIndex Settings.llm),
-# OR (b) a user hasn't set anything in ``model_selection_json``. Values
+# OR (b) a user hasn't set a role in ``user_model_selections``. Values
 # are profile ids in ``"{provider}/{model}"`` form — must match what the
 # vendor's /v1/models endpoint actually returns. If the catalog is cold
 # / a default id isn't yet present, ``get_profile_for_role`` falls back

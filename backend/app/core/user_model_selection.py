@@ -1,6 +1,7 @@
 """Per-user model selection: which profile drives each role.
 
-Persists to ``users.model_selection_json``. Layers on top of the
+Persists to the ``user_model_selections`` table (one row per role, keyed by
+the stable users.id). Layers on top of the
 catalog cache in ``app.core.model_catalog`` — selection ids are
 normalised against the live catalog so a stale id (vendor retired
 the model) silently degrades to ``ROLE_DEFAULTS`` instead of
@@ -14,7 +15,6 @@ What lives here:
 """
 from __future__ import annotations
 
-import json
 import logging
 from threading import Lock
 
@@ -62,39 +62,54 @@ def _normalize_selection(raw: dict[str, str]) -> dict[str, str]:
 
 
 def _load_user_selection(user_id: str) -> dict[str, str]:
-    """Read a user's persisted ``model_selection_json`` from the DB."""
+    """Read a user's role→profile_id selection rows from the DB.
+
+    ``user_id`` is the runtime principal (username); we join to ``users`` so
+    the actual filter is on the stable id. A partial result is fine —
+    ``_normalize_selection`` fills any unset role from ROLE_DEFAULTS.
+    """
     from app.db.database import SessionLocal
     from app.models.user import User
+    from app.models.user_model_selections import UserModelSelection
 
     try:
         with SessionLocal() as db:
-            row = (
-                db.query(User.model_selection_json)
+            rows = (
+                db.query(UserModelSelection.role, UserModelSelection.profile_id)
+                .join(User, User.id == UserModelSelection.user_id)
                 .filter(User.username == user_id)
-                .first()
+                .all()
             )
-        if row is None or not row[0]:
-            return dict(ROLE_DEFAULTS)
-        data = json.loads(row[0])
-        if isinstance(data, dict):
-            return {str(k): str(v) for k, v in data.items()}
+        return {str(role): str(pid) for role, pid in rows}
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Failed to load model selection for user=%s: %s", user_id, exc,
         )
-    return dict(ROLE_DEFAULTS)
+        return dict(ROLE_DEFAULTS)
 
 
 def _save_user_selection(user_id: str, selection: dict[str, str]) -> None:
-    from app.db.database import SessionLocal
-    from app.models.user import User
+    """Replace the user's selection rows with ``selection`` (role→profile_id).
 
-    payload = json.dumps(selection, ensure_ascii=False)
+    The caller always hands a complete normalized dict, so we full-replace
+    (delete + re-insert) rather than diff per role.
+    """
+    from app.core.user_identity import resolve_user_pk
+    from app.db.database import SessionLocal
+    from app.models.user_model_selections import UserModelSelection
+
     with SessionLocal() as db:
-        db.query(User).filter(User.username == user_id).update(
-            {"model_selection_json": payload},
-            synchronize_session=False,
-        )
+        user_pk = resolve_user_pk(db, user_id)
+        if user_pk is None:
+            logger.warning("Cannot save model selection: unknown user=%s", user_id)
+            return
+        db.query(UserModelSelection).filter(
+            UserModelSelection.user_id == user_pk,
+        ).delete(synchronize_session=False)
+        db.add_all([
+            UserModelSelection(user_id=user_pk, role=role, profile_id=pid)
+            for role, pid in selection.items()
+        ])
         db.commit()
 
 
@@ -102,8 +117,8 @@ def get_runtime_selection(user_id: str | None = None) -> dict[str, str]:
     """Return the active model selection for ``user_id``.
 
     Without ``user_id`` (startup contexts) returns ROLE_DEFAULTS. With
-    it, reads ``users.model_selection_json`` and falls back to defaults
-    on any error.
+    it, reads the user's ``user_model_selections`` rows and falls back to
+    defaults on any error.
     """
     with _selection_lock:
         if user_id is None:

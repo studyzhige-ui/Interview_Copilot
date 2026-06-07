@@ -6,9 +6,9 @@ call sites end up here when they need an actual callable LLM
 object.
 
 What lives here:
-  * API-key resolution priority (user_api_keys → env-var fallback)
+  * API-key resolution priority (user_model_credentials → env-var fallback)
   * Per-user api_base / organization / extra_headers override
-    (consumes ``user_provider_settings`` from P6-M)
+    (consumes ``user_model_provider_settings``)
   * Two caches, both process-local:
       - LlamaIndex ``OpenAILike`` keyed by (role, profile_id)
       - Raw ``AsyncOpenAI`` keyed by (user_id, profile_id) with an
@@ -51,7 +51,7 @@ def resolve_api_key(profile: ModelProfile, user_id: str | None = None) -> str:
     """Resolve the API key to use when calling this profile.
 
     Priority:
-      1) ``user_api_keys`` row for (user_id, provider) — encrypted DB
+      1) ``user_model_credentials`` row for (user_id, provider) — encrypted DB
       2) ``os.environ[profile.api_key_env]`` — legacy / single-tenant path
 
     Returns ``""`` when nothing resolves; downstream auth then fails
@@ -68,13 +68,13 @@ def resolve_api_key(profile: ModelProfile, user_id: str | None = None) -> str:
     return os.getenv(profile.api_key_env, "")
 
 
-# ── Per-user provider overrides (P6-M) ─────────────────────────────────
+# ── Per-user provider overrides ────────────────────────────────────────
 
 
 @dataclass(frozen=True)
 class _UserProviderOverrides:
     """Cached snapshot of one (user, provider) row used at chat-completion
-    time. Pulled from ``user_provider_settings``."""
+    time. Pulled from ``user_model_provider_settings``."""
     api_base: str
     organization_id: str | None
     extra_headers: dict[str, str]
@@ -97,19 +97,21 @@ def _load_user_provider_overrides(
         return _NO_OVERRIDES
     try:
         from app.db.database import SessionLocal
-        from app.models.user_provider_settings import UserProviderSettings
+        from app.models.user import User
+        from app.models.user_model_provider_settings import UserModelProviderSettings
         from app.services.auth.user_provider_settings_service import parse_extra_headers
 
         with SessionLocal() as db:
             row = (
                 db.query(
-                    UserProviderSettings.api_base_override,
-                    UserProviderSettings.organization_id,
-                    UserProviderSettings.extra_headers_json,
+                    UserModelProviderSettings.api_base_override,
+                    UserModelProviderSettings.organization_id,
+                    UserModelProviderSettings.extra_headers_json,
                 )
+                .join(User, User.id == UserModelProviderSettings.user_id)
                 .filter(
-                    UserProviderSettings.user_id == user_id,
-                    UserProviderSettings.provider == profile.provider,
+                    User.username == user_id,
+                    UserModelProviderSettings.provider == profile.provider,
                 )
                 .first()
             )
@@ -123,7 +125,7 @@ def _load_user_provider_overrides(
         )
     except Exception as exc:  # noqa: BLE001 — never crash chat on DB blip
         logger.warning(
-            "user_provider_settings lookup failed for user=%s provider=%s: %s",
+            "user_model_provider_settings lookup failed for user=%s provider=%s: %s",
             user_id, profile.provider, exc,
         )
         return _NO_OVERRIDES
@@ -132,7 +134,7 @@ def _load_user_provider_overrides(
 def _resolve_api_base(profile: ModelProfile, user_id: str | None = None) -> str:
     """Resolve the api_base to call, honouring per-user overrides.
 
-    P6-M adds ``user_provider_settings.api_base_override`` for users on
+    ``user_model_provider_settings.api_base_override`` covers users on
     subscription endpoints / self-hosted gateways. If the user has no
     row OR the override is NULL, we use the profile's default api_base.
     """
@@ -266,7 +268,7 @@ def clear_llm_cache_for_provider(provider: str) -> None:
 def profile_ready(profile: ModelProfile, user_id: str | None = None) -> bool:
     """A profile is "ready" when SOME key resolves for it.
 
-    With ``user_id`` we check ``user_api_keys`` first, then env.
+    With ``user_id`` we check ``user_model_credentials`` first, then env.
     Without ``user_id`` we fall back to env-only (legacy / ping path).
     """
     return bool(resolve_api_key(profile, user_id=user_id)) and bool(profile.model.strip())

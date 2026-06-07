@@ -43,7 +43,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.database import SessionLocal
-from app.models.user_api_key import UserAPIKey
+from app.core.user_identity import resolve_user_pk
+from app.models.user_model_credentials import UserModelCredential
 
 logger = logging.getLogger(__name__)
 
@@ -222,14 +223,20 @@ def set_user_api_key(
     masked = _mask(plaintext)
 
     with _session(db) as s:
+        user_pk = resolve_user_pk(s, user_id)
+        if user_pk is None:
+            raise ValueError(f"Unknown user: {user_id}")
         row = (
-            s.query(UserAPIKey)
-            .filter(UserAPIKey.user_id == user_id, UserAPIKey.provider == provider)
+            s.query(UserModelCredential)
+            .filter(
+                UserModelCredential.user_id == user_pk,
+                UserModelCredential.provider == provider,
+            )
             .first()
         )
         if row is None:
-            row = UserAPIKey(
-                user_id=user_id,
+            row = UserModelCredential(
+                user_id=user_pk,
                 provider=provider,
                 key_ciphertext=ciphertext,
                 key_masked=masked,
@@ -250,9 +257,15 @@ def delete_user_api_key(
     db: Session | None = None,
 ) -> bool:
     with _session(db) as s:
+        user_pk = resolve_user_pk(s, user_id)
+        if user_pk is None:
+            return False
         rows = (
-            s.query(UserAPIKey)
-            .filter(UserAPIKey.user_id == user_id, UserAPIKey.provider == provider)
+            s.query(UserModelCredential)
+            .filter(
+                UserModelCredential.user_id == user_pk,
+                UserModelCredential.provider == provider,
+            )
             .delete(synchronize_session=False)
         )
         s.commit()
@@ -268,7 +281,14 @@ def delete_user_api_key(
 def list_user_api_keys(user_id: str, *, db: Session | None = None) -> dict[str, dict]:
     """Return ``{provider: {set: True, masked: '...'}}``. NEVER returns plaintext."""
     with _session(db) as s:
-        rows = s.query(UserAPIKey).filter(UserAPIKey.user_id == user_id).all()
+        user_pk = resolve_user_pk(s, user_id)
+        if user_pk is None:
+            return {}
+        rows = (
+            s.query(UserModelCredential)
+            .filter(UserModelCredential.user_id == user_pk)
+            .all()
+        )
         return {r.provider: {"set": True, "masked": r.key_masked} for r in rows}
 
 
@@ -293,9 +313,15 @@ def get_user_api_key_plaintext(
         return cached
 
     with _session(db) as s:
+        user_pk = resolve_user_pk(s, user_id)
+        if user_pk is None:
+            return None
         row = (
-            s.query(UserAPIKey)
-            .filter(UserAPIKey.user_id == user_id, UserAPIKey.provider == provider)
+            s.query(UserModelCredential)
+            .filter(
+                UserModelCredential.user_id == user_pk,
+                UserModelCredential.provider == provider,
+            )
             .first()
         )
         if row is None:

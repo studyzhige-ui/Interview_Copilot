@@ -63,13 +63,8 @@ class User(Base):
     # user has accumulated enough new chat activity since then. See
     # ``app.services.memory.dreaming_worker``.
     last_dreamed_at = Column(DateTime, nullable=True)
-    # Per-user runtime model selection. JSON-encoded dict mapping role
-    # (``primary`` / ``fast`` / ``agent`` / ``mock_interview``) → model
-    # profile id. NULL = use ROLE_DEFAULTS. Pre-fix this lived in a
-    # shared ``data/runtime/model_selection.json`` single file that
-    # every process read — User A's PUT /models/runtime would change
-    # B's next chat (cross-tenant model + billing). Stored per-user
-    # so each account's choice only affects their own LLM calls.
-    model_selection_json = Column(Text, nullable=True)
+    # Per-user model-role selection moved out to the ``user_model_selections``
+    # table (one row per role, keyed by the stable users.id) — see
+    # app.models.user_model_selections / app.core.user_model_selection.
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

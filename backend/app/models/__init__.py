@@ -10,8 +10,9 @@ from app.models.resume_section import ResumeSection
 from app.models.strategy_doc import StrategyDoc
 from app.models.upload import UserUpload
 from app.models.user import User
-from app.models.user_api_key import UserAPIKey
-from app.models.user_provider_settings import UserProviderSettings
+from app.models.user_model_credentials import UserModelCredential
+from app.models.user_model_provider_settings import UserModelProviderSettings
+from app.models.user_model_selections import UserModelSelection
 
 __all__ = [
     "ChatMessage",
@@ -27,6 +28,7 @@ __all__ = [
     "StrategyDoc",
     "UserUpload",
     "User",
-    "UserAPIKey",
-    "UserProviderSettings",
+    "UserModelCredential",
+    "UserModelProviderSettings",
+    "UserModelSelection",
 ]

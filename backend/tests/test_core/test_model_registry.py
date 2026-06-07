@@ -70,9 +70,9 @@ def _stub_profile_cache(monkeypatch):
 def _isolated_user_selection(monkeypatch):
     """In-memory replacement for the DB-backed per-user selection storage.
 
-    Pre-P6-C the runtime selection lived in a single shared file;
-    post-P6-C it lives in ``users.model_selection_json``. We replace
-    the load/save helpers so tests don't need a real DB session.
+    The runtime selection lives in the ``user_model_selections`` table
+    (one row per role). We replace the load/save helpers so tests don't
+    need a real DB session.
     """
     store: dict[str, dict[str, str]] = {}
 
@@ -284,6 +284,7 @@ def test_resolve_api_base_uses_user_override_when_present(monkeypatch, _stub_pro
     prof = _stub_profile_cache["openai/gpt-4o"]
 
     class FakeQuery:
+        def join(self, *_a, **_kw): return self
         def filter(self, *_a, **_kw): return self
         def first(self):
             # (api_base_override, organization_id, extra_headers_json)

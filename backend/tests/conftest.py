@@ -75,7 +75,9 @@ def test_engine():
     import app.models.strategy_doc         # noqa: F401
     import app.models.upload               # noqa: F401
     import app.models.user                 # noqa: F401
-    import app.models.user_api_key         # noqa: F401
+    import app.models.user_model_credentials       # noqa: F401
+    import app.models.user_model_provider_settings  # noqa: F401
+    import app.models.user_model_selections         # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     yield engine
