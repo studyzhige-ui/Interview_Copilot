@@ -116,9 +116,10 @@ class Settings(BaseSettings):
     BM25_TOP_K: int = 8
     FUSION_TOP_K: int = 6
     RERANK_TOP_N: int = 5
+    # Single relevance threshold for RAG retrieval. Applied uniformly with or
+    # without a reranker — nothing clearing it means an empty result, never a
+    # relaxed second pass (see rag/retriever._score_passes).
     RAG_MIN_SCORE: float = 0.5
-    RAG_FALLBACK_MIN_SCORE: float = 0.02
-    RAG_LEXICAL_FALLBACK_MIN_OVERLAP: float = 0.35
     # Memory v2 settings (MEMORY_MILVUS_COLLECTION / MEMORY_*_TOP_K /
     # MEMORY_BACKFILL_ON_STARTUP) were removed in the audit cleanup —
     # the v3 memory architecture uses markdown docs, not vectors. See

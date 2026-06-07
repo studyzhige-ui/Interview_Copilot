@@ -9,8 +9,8 @@ to a given query*:
   * ``_metadata_matches_scope`` — node-level visibility check.
   * ``_build_metadata_filters`` — Milvus MetadataFilter construction.
   * ``_query_terms`` / ``_lexical_overlap`` — Chinese + English term
-    extraction and fallback overlap.
-  * ``_score_passes`` — reranker-vs-retriever score threshold.
+    extraction and lexical-overlap scoring (debug / source signal only).
+  * ``_score_passes`` — single absolute score threshold, no fallback.
 
 Plus a behavioural assertion that *user A's query never returns user B's
 documents* by routing fake nodes through the same filter helpers used by
@@ -162,21 +162,22 @@ def test_lexical_overlap_zero_for_empty_query():
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_score_passes_with_reranker_uses_strict_threshold():
+def test_score_passes_meets_threshold():
     from app.rag import retriever
 
-    assert retriever._score_passes(0.6, min_score=0.5, used_reranker=True)
-    assert not retriever._score_passes(0.3, min_score=0.5, used_reranker=True)
+    assert retriever._score_passes(0.6, min_score=0.5)
+    assert not retriever._score_passes(0.3, min_score=0.5)
 
 
-def test_score_passes_without_reranker_uses_relaxed_fallback():
-    """Without a reranker, RRF / vector scores live on a much smaller scale;
-    the helper should consult ``RAG_FALLBACK_MIN_SCORE`` instead of the
-    stricter rerank threshold."""
+def test_score_passes_no_relaxation_below_threshold():
+    """No fallback: the same RAG_MIN_SCORE applies whether or not a reranker
+    ran. A low RRF / vector score (0.03) that used to slip through the old
+    ``RAG_FALLBACK_MIN_SCORE`` relaxation is now rejected — retrieval returns
+    an empty result instead of admitting a low-relevance chunk."""
     from app.rag import retriever
 
-    assert retriever._score_passes(0.03, min_score=0.5, used_reranker=False)
-    assert not retriever._score_passes(None, min_score=0.5, used_reranker=False)
+    assert not retriever._score_passes(0.03, min_score=0.5)
+    assert not retriever._score_passes(None, min_score=0.5)
 
 
 # ─────────────────────────────────────────────────────────────────────

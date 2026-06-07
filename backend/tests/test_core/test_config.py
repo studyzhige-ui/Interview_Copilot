@@ -78,8 +78,6 @@ def test_subdir_field_validator_picks_named_subfolders(monkeypatch):
 # ── RAG numeric sanity ───────────────────────────────────────────────────
 def test_rag_score_thresholds_are_valid():
     assert 0 < settings.RAG_MIN_SCORE <= 1.0
-    assert 0 < settings.RAG_FALLBACK_MIN_SCORE <= settings.RAG_MIN_SCORE
-    assert 0 < settings.RAG_LEXICAL_FALLBACK_MIN_OVERLAP <= 1.0
     assert settings.VECTOR_TOP_K > 0
     assert settings.BM25_TOP_K > 0
     assert settings.FUSION_TOP_K > 0

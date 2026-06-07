@@ -223,12 +223,17 @@ def _lexical_overlap(query: str, content: str) -> float:
     return hits / len(terms)
 
 
-def _score_passes(score: Optional[float], min_score: float, used_reranker: bool) -> bool:
+def _score_passes(score: Optional[float], min_score: float) -> bool:
+    """A node clears the bar iff its score meets ``min_score``.
+
+    One threshold, no relaxation: the same ``RAG_MIN_SCORE`` applies whether or
+    not a reranker ran. RAG holds the line — if nothing clears the bar the
+    caller returns an empty result rather than admitting low-relevance chunks
+    (宁缺毋滥). There is deliberately no second-pass score/lexical fallback.
+    """
     if score is None:
         return False
-    if used_reranker:
-        return score >= min_score
-    return score >= min(min_score, settings.RAG_FALLBACK_MIN_SCORE)
+    return score >= min_score
 
 
 def _log_top_nodes(label: str, nodes: list[Any], limit: int = 5) -> None:
@@ -358,27 +363,13 @@ async def query_knowledge_base(
             processed_nodes = raw_nodes
         _log_top_nodes("RAG processed candidates", processed_nodes)
 
-        # 绝对分数阈值拦截。RRF/向量分数和 reranker 分数尺度不同，不能共用 0.5。
+        # 绝对分数阈值拦截：统一使用 RAG_MIN_SCORE，不因缺少 reranker 而放宽。
+        # 过滤后无命中即返回空结果（宁缺毋滥），不再做词面覆盖 / 低分二次放行。
         valid_nodes = [
             node for node in processed_nodes
-            if _score_passes(node.score, min_score, used_reranker)
+            if _score_passes(node.score, min_score)
         ]
         valid_nodes = valid_nodes[:settings.RERANK_TOP_N]
-
-        if not valid_nodes and processed_nodes:
-            lexical_nodes = [
-                node
-                for node in processed_nodes
-                if _lexical_overlap(query_str, node.node.get_content())
-                >= settings.RAG_LEXICAL_FALLBACK_MIN_OVERLAP
-            ]
-            if lexical_nodes:
-                logger.warning(
-                    "RAG 阈值未命中，但词面覆盖通过 fallback: query=%s overlap_threshold=%.2f",
-                    query_str,
-                    settings.RAG_LEXICAL_FALLBACK_MIN_OVERLAP,
-                )
-                valid_nodes = lexical_nodes[:settings.RERANK_TOP_N]
 
         if not valid_nodes:
             logger.warning(f"防幻觉拦截触发：所有节点得分低于阈值 ({min_score})")
