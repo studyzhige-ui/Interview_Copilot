@@ -422,73 +422,82 @@ def test_reasoning_content_roundtrips_into_next_assistant_message(monkeypatch):
     assert tool_calls_acc[0].name == "search_jobs"
 
 
-def test_agent_messages_split_manifest_from_grounding_for_prompt_cache():
-    """The agent's system messages MUST be three separate entries:
-    SYSTEM_PROMPT (stable, slot 0) → manifest (stable per session,
-    slot 1) → grounding (per-turn, slot 2). DeepSeek / Anthropic prompt
-    caches hash the prefix as a single contiguous span; a per-turn
-    change to grounding text would invalidate the cached manifest
-    tokens too if they shared a system message. Splitting saves
-    800-2000 cached tokens per agent turn.
-
-    This test reads the actual messages array the strategy constructs,
-    so a future contributor merging them back into one message will
-    silently regress and this test fails loudly.
-    """
-    import asyncio
-    from types import SimpleNamespace
-
+def test_agent_system_block_keeps_manifest_before_grounding_for_prompt_cache():
+    """The agent renders its context through the SHARED pipeline (one
+    SLOT_ORDER, no separate assembler). The tool manifest is part of the
+    system prompt and, together with the stable prefix (summary / recent
+    turns), precedes the per-turn grounding (memory / RAG) inside the system
+    block — so a grounding change can't evict the cached prefix. The query is
+    NOT in the system block (it's sent as the user message)."""
     from app.agent_runtime.tool_registry import registry
-    from app.conversation.agent_strategy import (
-        AgentLoopStrategy,
-        SYSTEM_PROMPT,
+    from app.conversation.agent_strategy import SYSTEM_PROMPT
+    from app.services.chat.context_assembly_pipeline import (
+        AssembledContext,
+        prompt_renderer,
     )
 
-    # Inspect the message-construction logic without running the LLM.
-    # We mirror the construction by calling registry.format_manifest
-    # the same way the strategy does. The order check matters more
-    # than the exact text.
     manifest = registry.format_manifest()
-    grounding = "Recent turns: [{user: 'hi'}]"
+    ctx = AssembledContext(
+        summary="prior summary",
+        memory_block="# Memory bundle",
+        retrieved_context="[K1] some chunk",
+        recent_turns=[{"role": "User", "content": "earlier"}],
+        current_input="the user query",
+    )
+    system_block = prompt_renderer.render_answer_prompt(
+        ctx,
+        system_prompt=f"{SYSTEM_PROMPT}\n\nAvailable tools:\n{manifest}",
+        skip_fields={"current_input"},
+    )
 
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": f"Available tools:\n{manifest}"},
-        {"role": "system", "content": f"Conversation context:\n{grounding}"},
-        {"role": "user", "content": "test"},
+    # Manifest is part of the system prompt and precedes the grounding.
+    assert "Available tools:" in system_block
+    assert system_block.index("Available tools:") < system_block.index("[Memory]")
+    # Stable prefix (summary, recent turns) precedes the per-turn grounding.
+    assert system_block.index("[Context Summary]") < system_block.index("[Memory]")
+    assert system_block.index("[Recent Turns]") < system_block.index("[Retrieved Context]")
+    # The query is rendered as the user message, not wedged in the system block.
+    assert "the user query" not in system_block
+
+
+def test_reconstruct_history_messages_rebuilds_tool_roundtrips():
+    """Prior agent turns reload as real messages incl. tool_calls + tool results
+    (so the agent sees its own tool history, Claude-Code style)."""
+    from app.conversation.agent_strategy import _reconstruct_history_messages
+
+    turns = [
+        {"role": "User", "content": "find redis stuff",
+         "blocks": [{"type": "text", "text": "find redis stuff"}]},
+        {"role": "Agent", "content": "Here's what I found.", "blocks": [
+            {"type": "text", "text": "Let me search."},
+            {"type": "tool_use", "id": "tc1", "name": "search_knowledge",
+             "input": {"query": "redis"}},
+            {"type": "tool_result", "tool_use_id": "tc1", "content": "redis docs ..."},
+            {"type": "text", "text": "Here's what I found."},
+        ]},
     ]
-    # Sanity checks on the cache-friendly shape:
-    assert messages[0]["content"] == SYSTEM_PROMPT
-    assert messages[1]["content"].startswith("Available tools:")
-    assert "Conversation context:" not in messages[1]["content"], (
-        "tool manifest must NOT be wedged into the per-turn grounding "
-        "message — that defeats prompt cache reuse"
-    )
-    assert messages[2]["content"].startswith("Conversation context:")
-    assert "Available tools:" not in messages[2]["content"]
 
-    # The actual strategy builds this same shape — verify by reading the
-    # source. Brittle but cheap; catches a copy-paste regression.
-    import inspect
-    src = inspect.getsource(AgentLoopStrategy.execute)
-    assert "Available tools:" in src
-    assert "Conversation context:" in src
-    # The two strings must appear in separate ``{"role": "system"...}``
-    # entries. If a future refactor concatenates them into one f-string
-    # again, this regex catches the regression.
-    import re
-    # Match the system messages section. Each message must end before
-    # the next ``{"role"`` begins.
-    matches = re.findall(
-        r'\{"role":\s*"system",\s*"content":[^}]+\}',
-        src,
-        re.DOTALL,
-    )
-    # SYSTEM_PROMPT, manifest, grounding = at least 3 system messages
-    assert len(matches) >= 3, (
-        f"expected ≥3 system messages in execute() for cache-friendly "
-        f"prefix; found {len(matches)}: {[m[:80] for m in matches]}"
-    )
+    msgs = _reconstruct_history_messages(turns)
+
+    assert msgs[0] == {"role": "user", "content": "find redis stuff"}
+    asst = msgs[1]
+    assert asst["role"] == "assistant"
+    assert asst["tool_calls"][0]["id"] == "tc1"
+    assert asst["tool_calls"][0]["function"]["name"] == "search_knowledge"
+    assert "redis" in asst["tool_calls"][0]["function"]["arguments"]
+    assert msgs[2] == {"role": "tool", "tool_call_id": "tc1", "content": "redis docs ..."}
+
+
+def test_reconstruct_history_messages_legacy_text_only():
+    """A turn with only a text block (legacy / L1) reconstructs without tool_calls."""
+    from app.conversation.agent_strategy import _reconstruct_history_messages
+
+    turns = [
+        {"role": "Agent", "content": "plain answer",
+         "blocks": [{"type": "text", "text": "plain answer"}]},
+    ]
+    msgs = _reconstruct_history_messages(turns)
+    assert msgs == [{"role": "assistant", "content": "plain answer"}]
 
 
 def test_tool_call_id_propagates_from_strategy_to_sse_events(monkeypatch):
@@ -535,7 +544,6 @@ def test_tool_call_id_propagates_from_strategy_to_sse_events(monkeypatch):
     budget.consume_step()
     messages: list[dict] = []
     blocks: list[dict] = []
-    trace: list[dict] = []
     KNOWN_TC_ID = "call_xyz_42"
     tool_calls_acc = [
         _ToolCallAccumulator(id=KNOWN_TC_ID, name="recall_memory", arguments="{}"),
@@ -636,7 +644,6 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
         {"role": "user", "content": "u"},
     ]
     blocks: list[dict] = []
-    trace: list[dict] = []
     tool_calls_acc = [
         _ToolCallAccumulator(id="call_1", name="recall_memory", arguments="{}"),
     ]
@@ -923,10 +930,9 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
     # Stub the budget compactor so the loop reaches the LLM-stream call.
     class _StubCompactor:
         def __init__(self, profile=None): self.profile = profile
-        def pre_llm_compact(self, messages, _): return messages
-        def is_at_blocking_limit(self, _): return False
+        async def compress(self, messages): return messages, False
         def reset_circuit_breaker(self): pass
-        def on_context_too_long(self, messages): return messages, False
+        async def on_context_too_long(self, messages): return messages, False
     monkeypatch.setattr(
         "app.conversation.agent_strategy.QueryLoopCompactor",
         _StubCompactor,
@@ -967,3 +973,75 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
     assert "simulated_llm_failure" in result.final_answer
     # The dead headline must NOT come back.
     assert not result.final_answer.startswith("Agent 执行失败")
+
+
+def test_strategy_crash_yields_humanized_error_event(monkeypatch):
+    """THE FIX: a crash in the inner loop must YIELD an actionable error
+    event to the LIVE stream — not just persist a fallback into ``result``.
+
+    Pre-fix the except branch only set ``result.final_answer`` (persisted)
+    and yielded nothing, so a clean API failure — e.g. a 402 "insufficient
+    balance" on the very first LLM call — showed the user an empty turn with
+    no explanation. This pins that the user now gets the actionable balance
+    message live, and that it routes through the shared ``humanize_error``.
+    """
+    import asyncio
+
+    from app.conversation.agent_strategy import AgentLoopStrategy
+    from app.core.error_messages import MSG_BALANCE
+    from app.conversation.strategy import StrategyContext, StrategyResult
+
+    class _StubProfile:
+        model = "stub"
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.build_async_openai_client_for_role",
+        lambda role, user_id=None: (object(), _StubProfile()),
+    )
+
+    class _StubCompactor:
+        def __init__(self, profile=None): self.profile = profile
+        async def compress(self, messages): return messages, False
+        def reset_circuit_breaker(self): pass
+        async def on_context_too_long(self, messages): return messages, False
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.QueryLoopCompactor",
+        _StubCompactor,
+    )
+    monkeypatch.setattr(
+        "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
+        lambda sid, uid: True,
+    )
+
+    # DeepSeek-style 402 insufficient-balance error on the first LLM call.
+    class _Boom402(Exception):
+        status_code = 402
+        def __str__(self):
+            return "Error code: 402 - Insufficient account balance"
+    async def boom(*args, **kwargs):
+        raise _Boom402()
+    monkeypatch.setattr(AgentLoopStrategy, "_call_llm_stream", boom)
+
+    strategy = AgentLoopStrategy()
+    ctx = StrategyContext(
+        user_id="alice", session_id="s1",
+        user_message="任何输入都会触发 402",
+        assembled=None,
+    )
+    result = StrategyResult()
+
+    async def drain():
+        events = []
+        async for ev in strategy.execute(ctx, result):
+            events.append(ev)
+        return events
+
+    events = asyncio.run(drain())
+
+    error_events = [e for e in events if e.type.value == "error"]
+    assert error_events, (
+        "crash did not yield an error event — the user would see nothing"
+    )
+    assert error_events[-1].data["error"] == MSG_BALANCE, (
+        f"error event should carry the actionable balance message, got "
+        f"{error_events[-1].data['error']!r}"
+    )

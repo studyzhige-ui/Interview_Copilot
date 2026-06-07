@@ -161,7 +161,8 @@ export interface ChatTranscriptResp {
   session_type: string;
   turn_count: number;
   compaction_cursor: number;
-  session_state: Record<string, unknown>;
+  /** Mock-interview runtime state; ``{}`` for general / debrief sessions. */
+  mock_interview_state: Record<string, unknown>;
   messages: ChatMessageItem[];
   total_messages: number;
 }

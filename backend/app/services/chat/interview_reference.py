@@ -7,11 +7,11 @@ without manually copying transcripts or analysis into every prompt the user
 writes. Two engineering options were considered:
 
   A) **Snapshot on chat creation.** When the debrief chat is created, denormalize
-     the interview's analysis + transcript into ``ChatSession.session_state``.
+     the interview's analysis + transcript into the ``ChatSession`` row.
      Pros: zero per-turn cost. Cons: stale if the user edits a Q&A afterwards.
 
   B) **Lazy fetch per turn.** The context-assembly pipeline reads the chat's
-     ``session_state['interview_id']`` on each query, joins on InterviewRecord,
+     ``interview_id`` column on each query, joins on InterviewRecord,
      builds a compact manifest, fills the dedicated ``debrief_reference`` slot.
      Pros: always fresh; honors QA edits via ``PATCH /interview-records/{id}/qa/{idx}``;
      no schema migration. Cons: ~1 SQL roundtrip per turn (≈1ms).

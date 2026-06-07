@@ -263,7 +263,7 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, on
   // unmount MockLive, lose any local UI state (the typing draft, the
   // mic recording, the TTS queue), and — pre-fix — silently churn the
   // session: until the in-progress sweeper fix landed, switching tabs
-  // mid-interview could even hard-delete the session_state row. The
+  // mid-interview could even hard-delete the session's mock_interview_state. The
   // backend sweeper is now defensive (interview_plan + pending_question
   // are recognised as "launched") so the resume banner reliably picks
   // sessions up again — but the user's typing buffer, the running TTS,

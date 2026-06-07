@@ -32,6 +32,21 @@ def classify_api_error(error: Exception) -> ErrorCategory:
     )):
         return ErrorCategory.CONTEXT_TOO_LONG
 
+    # Payment / balance / quota exhausted — retrying NEVER helps (DeepSeek
+    # returns HTTP 402 here). Must be checked before the rate-limit /
+    # default-retryable branches so we fail fast instead of burning the
+    # full backoff schedule on a hopeless call.
+    status = getattr(error, "status_code", None)
+    if status == 402 or any(phrase in msg for phrase in (
+        "insufficient_balance",
+        "insufficient account balance",
+        "insufficient_quota",
+        "payment required",
+        "余额不足",
+        "欠费",
+    )):
+        return ErrorCategory.FATAL
+
     # Rate limit / server errors — retryable
     if any(phrase in msg for phrase in ("429", "rate_limit", "rate limit")):
         return ErrorCategory.RETRYABLE

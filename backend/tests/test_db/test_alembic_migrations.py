@@ -145,10 +145,12 @@ def test_migration_chain_has_no_gaps_and_one_head():
     #                 → 0011_drop_dup_chat_seq_idx
     #                 → 0012_user_model_selection
     #                 → 0013_user_provider_settings
+    #                 → 0014_session_global_memory_col
+    #                 → 0015_rename_session_state
     # Bump this number whenever a new forward migration lands.
     on_disk = [p for p in VERSIONS_DIR.glob("*.py") if not p.name.startswith("_")]
-    assert len(on_disk) == 13, (
-        f"Expected 13 migration files (baseline + 12 evolutions), "
+    assert len(on_disk) == 15, (
+        f"Expected 15 migration files (baseline + 14 evolutions), "
         f"found {len(on_disk)}"
     )
 
@@ -210,8 +212,8 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         from sqlalchemy import text
 
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0013_user_provider_settings", (
-            f"Head should be 0013_user_provider_settings, got {version!r}"
+        assert version == "0015_rename_session_state", (
+            f"Head should be 0015_rename_session_state, got {version!r}"
         )
 
     engine.dispose()

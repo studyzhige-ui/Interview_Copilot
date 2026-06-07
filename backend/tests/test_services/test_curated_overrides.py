@@ -180,16 +180,44 @@ def test_hidden_curated_entries_dropped():
         del cm.CURATED[("anthropic", "test-hidden-entry")]
 
 
-def test_anthropic_marketing_tier_respected():
-    """Opus 4.7 → Sonnet 4.6 → Opus 4.6 (CURATED tier 1, 2, 3)."""
+def test_anthropic_version_primary_then_tier():
+    """Anthropic auto-ranks version-first, then Opus > Sonnet > Haiku
+    WITHIN a version (no hand-curation). v4.7 (newest) leads; at v4.6
+    Opus precedes Sonnet."""
     entries = [
-        _entry("anthropic", "claude-opus-4-6",   "Claude Opus 4.6"),
         _entry("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6"),
+        _entry("anthropic", "claude-opus-4-6",   "Claude Opus 4.6"),
         _entry("anthropic", "claude-opus-4-7",   "Claude Opus 4.7"),
     ]
     out = apply_overrides("anthropic", entries)
     assert [e.model for e in out] == [
-        "claude-opus-4-7", "claude-sonnet-4-6", "claude-opus-4-6",
+        "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6",
+    ]
+
+
+def test_anthropic_new_release_auto_ranks_to_top():
+    """Regression (the Opus 4.8 report): a freshly-added Claude model NOT
+    in CURATED must still float to the top by version. Pre-fix it sank to
+    ~rank 6000 because the generic parser dropped the dash-version (``4-8``
+    → major 4 only) and Anthropic was hand-curated, so the un-curated id
+    auto-derived to the bottom of the card."""
+    entries = [
+        _entry("anthropic", "claude-opus-4-7",            "Claude Opus 4.7"),
+        _entry("anthropic", "claude-sonnet-4-6",          "Claude Sonnet 4.6"),
+        _entry("anthropic", "claude-haiku-4-5-20251001",  "Claude Haiku 4.5"),
+        _entry("anthropic", "claude-opus-4-8",            "Claude Opus 4.8"),
+        _entry("anthropic", "claude-opus-4-1-20250805",   "Claude Opus 4.1"),
+    ]
+    out = apply_overrides("anthropic", entries)
+    ids = [e.model for e in out]
+    assert ids[0] == "claude-opus-4-8", f"Opus 4.8 must lead, got {ids}"
+    # Full version-primary order (dated aliases rank by their version too).
+    assert ids == [
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001",
+        "claude-opus-4-1-20250805",
     ]
 
 

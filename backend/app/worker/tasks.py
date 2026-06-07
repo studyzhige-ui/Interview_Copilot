@@ -2,6 +2,7 @@ import asyncio
 import logging
 import threading
 
+from app.core.error_messages import humanize_error
 from app.db.database import SessionLocal
 from app.models.knowledge import KnowledgeDocument
 from app.worker.celery_app import celery_app
@@ -112,13 +113,12 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
         is_final_attempt = retries_left == 0
         try:
             if is_final_attempt:
+                # Humanize the user-facing message — the raw exception
+                # (incl. the retry count) is already in the worker log above.
                 interview_record_service.set_status(
                     record_id,
                     "failed",
-                    error_message=(
-                        f"Analysis exhausted {self.max_retries} retries. "
-                        f"Last error: {type(exc).__name__}: {exc}"
-                    )[:500],
+                    error_message=f"分析失败：{humanize_error(exc)}"[:500],
                 )
             else:
                 # Mid-retry: only force-write if status is still in an
@@ -136,11 +136,7 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
                         interview_record_service.set_status(
                             record_id,
                             "failed",
-                            error_message=(
-                                f"Attempt {self.request.retries + 1} crashed before "
-                                f"orchestrator could record state. "
-                                f"{type(exc).__name__}: {exc}"
-                            )[:500],
+                            error_message=f"分析失败：{humanize_error(exc)}"[:500],
                         )
                 finally:
                     row.close()
@@ -284,10 +280,9 @@ def process_document_ingestion(self, document_id: str):
             try:
                 if is_final_attempt:
                     document.status = "failed"
-                    document.error_message = (
-                        f"Ingestion exhausted {self.max_retries} retries. "
-                        f"Last error: {type(exc).__name__}: {exc}"
-                    )[:500]
+                    # Humanize the terminal user-facing message (e.g. a 402
+                    # balance error during embedding); raw detail is logged.
+                    document.error_message = f"导入失败：{humanize_error(exc)}"[:500]
                 else:
                     # Don't mark as terminal "failed" mid-retry — leave
                     # status='processing' (the prior set_status from line

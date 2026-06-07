@@ -49,8 +49,8 @@ __all__ = [
     # Pipelines
     "realtime_extraction",
     "v3_context_loader",
-    # Compaction (session_state summarisation; unrelated to memory v3 but
-    # historically lived in this package)
+    # Compaction (conversation → summary summarisation; unrelated to memory v3
+    # but historically lived in this package)
     "CompactionService",
     "compaction_service",
     # Post-turn maintenance

@@ -17,7 +17,7 @@ When the global memory toggle is OFF (Stage-H), the engine bypasses
 this module entirely and uses ``V3MemoryContext()`` directly — no
 user_profile, no descriptions, no bodies. Privacy mode is "no
 cross-session memory at all"; session-local context (recent_turns,
-session_state, debrief reference) keeps flowing.
+debrief reference) keeps flowing.
 
 There is no LLM call, no cache, no fallback heuristic — those moved
 to the planner. ``V3MemoryContext.render()`` still produces the same

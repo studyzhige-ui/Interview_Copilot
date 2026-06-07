@@ -100,20 +100,18 @@ class Settings(BaseSettings):
     #   "none"     — never diarize; transcripts come back single-speaker.
     DIARIZATION_MODE: str = "auto"
     DIARIZATION_MODEL_ID: str = "pyannote-community/speaker-diarization-community-1"
-    AGENT_MAX_STEPS: int = 25
+    AGENT_MAX_STEPS: int = 80  # hard safety-valve — the ONLY hard stop (no time budget)
     AGENT_TOOL_TIMEOUT_SECONDS: int = 30
     AGENT_TEMPERATURE: float = 0.2
-    AGENT_MAX_RUNTIME_SECONDS: int = 180
     AGENT_MAX_TOTAL_TOKENS: int = 200000  # observability only, not a hard stop
     AGENT_MAX_RESPONSE_TOKENS: int = 4096
     AGENT_MAX_TOOL_CALLS: int = 50  # observability only, not a hard stop
-    AGENT_MAX_CALLS_PER_TOOL: int = 8
     AGENT_TOOL_SCHEMA_STRICT: bool = True
     AGENT_MAX_TOOL_ARG_CHARS: int = 4000
-    # Tool result persistence thresholds (Hermes/Claude Code pattern)
-    AGENT_PERSIST_THRESHOLD: int = 30_000      # per-result: persist if > 30K chars
-    AGENT_TURN_BUDGET_CHARS: int = 100_000     # per-turn aggregate: spill largest until < 100K
-    AGENT_PERSIST_PREVIEW_SIZE: int = 1_500    # preview size in persisted-output block
+    # Stage A — tool-result offload thresholds.
+    AGENT_PERSIST_THRESHOLD: int = 50_000      # per-result: offload if > 50K chars
+    AGENT_TURN_BUDGET_CHARS: int = 200_000     # per-turn aggregate: spill largest until < 200K
+    AGENT_PERSIST_PREVIEW_SIZE: int = 2_000    # preview size (chars) in persisted-output block
     VECTOR_TOP_K: int = 8
     BM25_TOP_K: int = 8
     FUSION_TOP_K: int = 6

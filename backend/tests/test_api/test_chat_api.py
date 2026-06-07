@@ -10,7 +10,6 @@ shared ``db_session`` fixture in ``tests/conftest.py`` references the missing
 from __future__ import annotations
 
 from typing import Iterator
-from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
@@ -200,7 +199,6 @@ def test_transcript_returns_structured_state(client: TestClient, db: Session, mo
             return {
                 "turn_count": 2,
                 "compaction_cursor": 4,
-                "session_state": '{"mode": "debrief", "summary": "focus on redis"}',
                 "session_type": "debrief",
                 "current_conversation_id": "s1",
             }
@@ -218,7 +216,8 @@ def test_transcript_returns_structured_state(client: TestClient, db: Session, mo
     body = resp.json()
     assert body["session_type"] == "debrief"
     assert body["compaction_cursor"] == 4
-    assert body["session_state"]["summary"] == "focus on redis"
+    # Debrief sessions don't use the mock-interview state column.
+    assert body["mock_interview_state"] == {}
     assert body["total_messages"] == 1
 
 
@@ -418,9 +417,9 @@ def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypat
         created_at = None
 
     _fake_kdoc[0] = _FakeKDoc()
-    # Reset session_state since the first scenario already initialized.
+    # Reset mock_interview_state since the first scenario already initialized.
     s = db.query(ChatSession).filter(ChatSession.id == "s_mock").first()
-    s.session_state = None
+    s.mock_interview_state = None
     db.commit()
 
     resp = client.post(
@@ -453,7 +452,7 @@ def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypat
     calls.clear()
     _fake_kdoc[0] = None  # no library doc either
     s = db.query(ChatSession).filter(ChatSession.id == "s_mock").first()
-    s.session_state = None
+    s.mock_interview_state = None
     db.commit()
 
     resp = client.post(
@@ -498,7 +497,7 @@ def test_in_progress_keeps_session_when_brief_launched_but_zero_qa(
         user_id="alice",
         title="模拟面试",
         session_type="mock_interview",
-        session_state=json.dumps({
+        mock_interview_state=json.dumps({
             "schema_version": 2,
             "interview_plan": {
                 "phases": [{"phase": "self_intro", "budget": 1, "goal": "x"}],
@@ -545,7 +544,7 @@ def test_in_progress_still_purges_genuine_stale_shells(
         # No interview_plan, no pending_question, no qa_history — the
         # session got created by /chat/sessions but the subsequent
         # /chat/mock-interview/start call never completed.
-        session_state=json.dumps({"schema_version": 2}),
+        mock_interview_state=json.dumps({"schema_version": 2}),
     ))
     db.commit()
 
@@ -607,8 +606,12 @@ def test_sse_chat_emits_error_and_done_when_engine_crashes(
         "missing done terminator — FE reader loop hangs forever; "
         "body=%r" % body[:500]
     )
-    # The raw exception message must propagate so debugging is possible.
-    assert "simulated_engine_crash" in body
+    # The user-facing error frame is HUMANIZED: the raw exception text
+    # (``simulated_engine_crash``) must NOT leak to the client — it goes to
+    # the server log instead. This is the point of routing the last-resort
+    # net through ``humanize_error`` (no raw ``Error code: 402 - {...}``
+    # dumps reaching the chat panel).
+    assert "simulated_engine_crash" not in body
 
 
 def test_sse_chat_mode_field_picks_strategy(client: TestClient, db: Session, monkeypatch):

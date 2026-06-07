@@ -385,11 +385,9 @@ export async function deleteChatSession(sessionId: string): Promise<void> {
 
 
 // ── Global-memory toggle (per-session override + per-user default) ───────
-// The per-session value lives inside ``chat_sessions.session_state`` JSON
-// under the key ``global_memory_enabled`` (legacy key
-// ``memory_recall_enabled`` is read for back-compat — see backend
-// recall_policy). The GET endpoint resolves the effective value:
-// per-session override → user-level default → False, so the switch UI
+// The per-session value lives in the ``chat_sessions.global_memory_enabled``
+// column (see backend recall_policy). The GET endpoint resolves the effective
+// value: per-session override → user-level default → False, so the switch UI
 // never lies about what the next turn will inject.
 //
 // Note: the endpoint path is still ``/memory-recall`` for back-compat

@@ -29,8 +29,6 @@ import time
 import traceback
 from typing import AsyncGenerator
 
-import openai
-
 from app.conversation.events import HarnessEvent
 from app.conversation.strategy import (
     ExecutionStrategy,
@@ -38,6 +36,7 @@ from app.conversation.strategy import (
     StrategyResult,
 )
 from app.core.background_tasks import safe_background_task
+from app.core.error_messages import humanize_error
 from app.conversation.query_planner import plan_query
 from app.rag.knowledge_retriever import knowledge_retriever
 from app.services.chat.chat_history_service import transcript_service
@@ -194,9 +193,8 @@ class ConversationEngine:
         # bodies. Per Stage-H semantics, the toggle is the cross-
         # session memory gate (analog of Claude Code's
         # ``isAutoMemoryEnabled``). Session-local context
-        # (recent_turns + session_state + debrief reference) still
-        # flows in normally — debrief reference is interview-bound
-        # material, not "memory".
+        # (recent_turns + debrief reference) still flows in normally —
+        # debrief reference is interview-bound material, not "memory".
         if global_memory_on:
             # load_universal is sync (opens 1 session via session_scope
             # post-P1-F). Dispatching to a worker thread keeps the
@@ -207,23 +205,16 @@ class ConversationEngine:
         else:
             universal_ctx = V3MemoryContext()  # truly empty bundle
 
-        # Step 2: planner LLM. Inputs are STRUCTURED — session_state +
-        # recent_turns come straight from transcript_service, no
-        # pre-rendered string wrapper. The planner builds its own
-        # prompt internally with the user message at the end (LLMs
-        # attend more to the tail of the context).
+        # Step 2: planner LLM. Inputs are STRUCTURED — recent_turns comes
+        # straight from transcript_service, no pre-rendered string wrapper.
+        # The planner builds its own prompt internally with the user message
+        # at the end (LLMs attend more to the tail of the context).
         meta = await asyncio.to_thread(
             transcript_service.get_session_meta, self.session_id,
         )
         if meta is None:
-            session_state: dict = {}
             recent_turns: list[dict] = []
         else:
-            from app.services.chat.session_state import parse_session_state
-            session_state = parse_session_state(
-                meta["session_state"],
-                meta.get("session_type", "general"),
-            )
             recent_turns = await asyncio.to_thread(
                 transcript_service.get_recent_turns,
                 self.session_id, 20, meta["compaction_cursor"],
@@ -231,7 +222,6 @@ class ConversationEngine:
 
         query_plan = await plan_query(
             user_message=self.user_message,
-            session_state=session_state,
             recent_turns=recent_turns,
             knowledge_index_lines=universal_ctx.knowledge_index_lines,
             strategy_description=universal_ctx.strategy_description,
@@ -240,6 +230,14 @@ class ConversationEngine:
         )
 
         # Step 3: concurrent RAG + memory body loads.
+        #
+        # L2 (agent) mode skips engine-side RAG: the agent retrieves knowledge
+        # on demand via the ``search_knowledge`` tool, so injecting it here
+        # would be redundant and double-pay the Milvus + rerank cost. It also
+        # lengthens the cache-stable prompt prefix — RAG chunks were the
+        # per-turn-variable part of the agent's grounding. L1 (chat) keeps it.
+        # ``query_plan`` is left intact so memory-body loads below still fire.
+        agent_mode = self.strategy.name == "agent"
         knowledge_task = (
             asyncio.create_task(
                 knowledge_retriever.retrieve(
@@ -248,7 +246,7 @@ class ConversationEngine:
                     user_id=self.user_id,
                 )
             )
-            if query_plan.needs_knowledge_retrieval else None
+            if query_plan.needs_knowledge_retrieval and not agent_mode else None
         )
 
         wants_bodies = bool(
@@ -405,33 +403,12 @@ class ConversationEngine:
     def _humanize_exc(exc: Exception) -> str:
         """Translate an upstream exception into actionable Chinese.
 
-        Shared by both L1 chat and L2 agent paths so user-visible
-        errors look the same regardless of which strategy crashed.
-        Full traceback still goes to the backend log via the caller's
-        ``logger.error(...)``.
+        Delegates to the shared :func:`humanize_error` so L1 chat, L2
+        agent, the SSE last-resort net, and this engine all surface
+        identical wording. Full traceback still goes to the backend log
+        via the caller's ``logger.error(...)``.
         """
-        if isinstance(exc, openai.AuthenticationError):
-            return (
-                "当前模型的密钥无效或已失效。请到「模型」页面，找到对应厂商卡片，"
-                "重新配置 API 密钥后再试。"
-            )
-        if isinstance(exc, openai.RateLimitError):
-            return "模型厂商当前限流（请求过于频繁），请稍等几秒后重试。"
-        if isinstance(exc, openai.APIConnectionError):
-            return "无法连接到模型服务，请检查网络或稍后再试。"
-        if isinstance(exc, openai.APITimeoutError):
-            return "模型响应超时，请重试一次。"
-        if isinstance(exc, openai.BadRequestError):
-            try:
-                detail = (exc.body or {}).get("error", {}).get("message", "")
-            except Exception:  # noqa: BLE001
-                detail = ""
-            if detail:
-                return f"请求被模型拒绝：{detail}"
-            return "请求被模型拒绝（可能是上下文过长或参数不合规）。"
-        return (
-            "系统出了点问题，请稍后再试。如果反复发生，请把这次操作的时间告诉运维。"
-        )
+        return humanize_error(exc)
 
     # ── Helpers ───────────────────────────────────────────────────
 

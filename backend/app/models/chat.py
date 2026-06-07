@@ -1,8 +1,8 @@
-import json
 import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -19,13 +19,6 @@ from app.db.database import Base
 
 def generate_uuid() -> str:
     return str(uuid.uuid4())
-
-
-def default_session_state() -> str:
-    return json.dumps(
-        {"mode": "general", "summary": ""},
-        ensure_ascii=False,
-    )
 
 
 class ChatSession(Base):
@@ -51,7 +44,12 @@ class ChatSession(Base):
     interview_id = Column(
         String, ForeignKey("interview_records.id"), index=True, nullable=True,
     )
-    session_state = Column(Text, default=default_session_state)
+    # Mock-interview runtime state JSON (NULL for general / debrief sessions);
+    # serialized via services.chat.mock_interview_state.
+    mock_interview_state = Column(Text, nullable=True)
+    # Per-session global-memory override (NULL = use users.global_memory_enabled
+    # default). Resolved by services.memory.recall_policy.
+    global_memory_enabled = Column(Boolean, nullable=True)
     compaction_cursor = Column(Integer, default=0)
     memory_extraction_cursor = Column(Integer, default=0)
     turn_count = Column(Integer, default=0)

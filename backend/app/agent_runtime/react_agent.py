@@ -31,15 +31,12 @@ from app.core.config import settings
 
 @dataclass
 class AgentBudget:
-    """Lightweight iteration budget — Hermes-style.
+    """Lightweight iteration budget.
 
-    Design: only two hard limits (steps + wall-clock timeout), both of
-    which are essential for a Web-served agent.  Token usage and tool
-    call counts are *tracked* for observability but do NOT trigger
-    early stops — the QueryLoopCompactor handles context window pressure
-    adaptively, which is far superior to a hard token cap.
-
-    Per-tool call limits are the sole loop-prevention safety valve.
+    The step count (``AGENT_MAX_STEPS``) is the hard safety-valve. Token usage
+    and wall-clock time are *tracked* for observability but never trigger an
+    early stop — context-window pressure is handled adaptively by
+    ``compress()`` rather than by arbitrary token or time caps.
     """
 
     started_at: float
@@ -49,6 +46,7 @@ class AgentBudget:
     completion_tokens: int = 0
     stop_reason: str | None = None
     tool_usage: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    tool_signatures: dict[str, int] = field(default_factory=lambda: defaultdict(int))
 
     @property
     def total_tokens(self) -> int:
@@ -61,19 +59,28 @@ class AgentBudget:
     def check(self) -> str | None:
         if self.steps >= settings.AGENT_MAX_STEPS:
             return "max_steps_exceeded"
-        if self.elapsed_seconds >= settings.AGENT_MAX_RUNTIME_SECONDS:
-            return "runtime_timeout"
         return None
 
     def consume_step(self) -> None:
         self.steps += 1
 
-    def consume_tool_call(self, tool_name: str) -> None:
+    def consume_tool_call(self, tool_name: str, signature: str = "") -> int:
+        """Record a tool call; return the repeat count for *signature*.
+
+        ``signature`` identifies a (tool, args) pair so the loop can softly
+        nudge on identical repeated calls. Returns how many times this exact
+        signature has been seen (0 when no signature is given).
+        """
         self.tool_calls += 1
         self.tool_usage[tool_name] += 1
+        if not signature:
+            return 0
+        self.tool_signatures[signature] += 1
+        return self.tool_signatures[signature]
 
     def refund_step(self) -> None:
-        """Refund a step on compression-retry (Hermes L12974 pattern)."""
+        """Refund a step consumed by a compression-retry (a system action,
+        not a reasoning step, so it must not count against the step budget)."""
         if self.steps > 0:
             self.steps -= 1
 

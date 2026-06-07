@@ -175,7 +175,7 @@ export function ChatPanel({
   // user's AGENT pill resets to CHAT every time they refresh, and the
   // backend silently downgrades the strategy back to L1. We key by
   // session_id so a chat session and an agent session can co-exist.
-  // (Backend session_state would be the more "correct" home for this
+  // (A backend column would be the more "correct" home for this
   // but the round-trip cost isn't worth it for a boolean.)
   const modeStorageKey = activeSessionId ? `chat-mode:${activeSessionId}` : null;
   const [mode, setModeState] = useState<Mode>(() => {
@@ -208,10 +208,10 @@ export function ChatPanel({
   const [uploading, setUploading] = useState(false);
 
   // ── Global-memory toggle (per-session resolved value) ────────────────
-  // The button reflects the effective per-session value (session_state
-  // override → user-level default → False). Toggling writes the
-  // override into session_state so this session diverges from the
-  // user-level default for subsequent turns.
+  // The button reflects the effective per-session value (the
+  // global_memory_enabled column override → user-level default →
+  // False). Toggling writes the override into that column so this
+  // session diverges from the user-level default for subsequent turns.
   const [globalMemoryOn, setGlobalMemoryOn] = useState(false);
   const [togglingMemory, setTogglingMemory] = useState(false);
 

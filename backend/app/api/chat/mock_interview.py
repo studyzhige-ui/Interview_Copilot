@@ -20,6 +20,7 @@ from app.core.rate_limit import RATE_DEFAULT, RATE_EXPENSIVE, RATE_UPLOAD, limit
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.core.error_messages import humanize_error
 from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.chat import ChatSession, generate_uuid
@@ -37,7 +38,7 @@ from app.schemas.chat import (
     MockTranscribeResp,
     TTSRequest,
 )
-from app.services.chat.session_state import dump_session_state, parse_session_state
+from app.services.chat.mock_interview_state import dump_mock_state, parse_mock_state
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +185,7 @@ async def start_mock_interview(
     _mark("jd_done")
     logger.info("mock_start: jd_context_chars=%d", len(jd_context))
 
-    # Build the cacheable prefix *once* and stash it in session_state. Every
+    # Build the cacheable prefix *once* and stash it in mock_interview_state. Every
     # subsequent LLM call this session reuses it verbatim so DeepSeek's
     # prompt cache can hit on it.
     cacheable_prefix = build_prefix(resume_context, jd_context, body.interviewer_style)
@@ -199,14 +200,17 @@ async def start_mock_interview(
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("mock_start: brief generation failed: %s", exc)
+        # Humanize so a model-side failure (e.g. 402 balance) tells the user
+        # what to fix, instead of leaking ``APIStatusError: Error code: 402``.
+        # Full detail still goes to the log above.
         raise HTTPException(
             status_code=500,
-            detail=f"生成面试地图失败: {type(exc).__name__}: {exc}",
+            detail=f"开始模拟面试失败：{humanize_error(exc)}",
         ) from exc
     _mark("brief_done")
 
     # Initial state machine
-    state = parse_session_state(session.session_state, "mock_interview")
+    state = parse_mock_state(session.mock_interview_state)
     state.update({
         "schema_version": 2,
         "resume_context": resume_context,
@@ -240,7 +244,7 @@ async def start_mock_interview(
         "reverse_qa_prompted": False,
         "is_finished": False,
     })
-    session.session_state = dump_session_state(state)
+    session.mock_interview_state = dump_mock_state(state)
     # Wrap sync commit in to_thread so the event loop isn't blocked on the
     # network round-trip to Postgres (every other in-flight request would
     # stall otherwise).
@@ -333,7 +337,7 @@ async def get_in_progress_mock(
     purged = 0
     for sess in candidates:
         try:
-            state = parse_session_state(sess.session_state, "mock_interview") or {}
+            state = parse_mock_state(sess.mock_interview_state) or {}
         except Exception:  # noqa: BLE001
             state = {}
         qa_history = state.get("qa_history") or []
@@ -341,7 +345,7 @@ async def get_in_progress_mock(
 
         # "Has the brief LLM call ever completed for this session?"
         # A successful ``start_mock_interview`` writes ``interview_plan``
-        # + ``pending_question`` (the opening line) into session_state.
+        # + ``pending_question`` (the opening line) into mock_interview_state.
         # If neither exists, the session is a stale shell — created
         # but never actually launched (plan generation failed, user
         # closed the tab mid-startup, etc.).
@@ -394,7 +398,7 @@ async def get_in_progress_mock(
         return {"has_in_progress": False}
 
     try:
-        state = parse_session_state(chosen.session_state, "mock_interview") or {}
+        state = parse_mock_state(chosen.mock_interview_state) or {}
     except Exception:  # noqa: BLE001
         state = {}
     qa_history = state.get("qa_history") or []
@@ -437,7 +441,7 @@ async def abandon_mock_interview(
         raise HTTPException(status_code=404, detail="Session not found")
 
     try:
-        state = parse_session_state(session.session_state, "mock_interview")
+        state = parse_mock_state(session.mock_interview_state)
         record_id = state.get("interview_record_id") or session.interview_id
         if record_id:
             (
@@ -486,7 +490,7 @@ async def get_current_question(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    state = parse_session_state(session.session_state, "mock_interview")
+    state = parse_mock_state(session.mock_interview_state)
     _require_v2_schema(state)
     if state.get("is_finished"):
         return {"done": True, "message": "面试已完成"}
@@ -540,7 +544,7 @@ async def submit_mock_answer(
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    state = parse_session_state(session.session_state, "mock_interview")
+    state = parse_mock_state(session.mock_interview_state)
     _require_v2_schema(state)
 
     if state.get("is_finished"):
@@ -561,12 +565,27 @@ async def submit_mock_answer(
         # Roll the turn counter back so the user can retry without it being
         # counted twice toward max_turns.
         state["turn_count"] = max(0, int(state.get("turn_count", 1)) - 1)
-        session.session_state = dump_session_state(state)
+        session.mock_interview_state = dump_mock_state(state)
         await asyncio.to_thread(db.commit)
         raise HTTPException(
             status_code=503,
             detail="面试官暂时无法回应，请重试。",
         ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # Safety net: an unexpected director failure (e.g. a 402 balance
+        # error that propagated instead of being retried as a violation)
+        # would otherwise surface as a bare 500. Roll the turn counter back
+        # like the retry path, and humanize so the user gets an actionable
+        # reason instead of a generic "internal error".
+        logger.exception(
+            "next-question director failed for %s: %s", body.session_id, exc,
+        )
+        state["turn_count"] = max(0, int(state.get("turn_count", 1)) - 1)
+        session.mock_interview_state = dump_mock_state(state)
+        await asyncio.to_thread(db.commit)
+        raise HTTPException(status_code=500, detail=humanize_error(exc)) from exc
 
     # ── State machine writes (strict order) ────────────────────────────
     answered_phase = state.get("current_phase") or "self_intro"
@@ -617,7 +636,7 @@ async def submit_mock_answer(
         except Exception as exc:  # noqa: BLE001
             logger.warning("Rolling summary failed (non-fatal): %s", exc)
 
-    session.session_state = dump_session_state(state)
+    session.mock_interview_state = dump_mock_state(state)
     await asyncio.to_thread(db.commit)
 
     # The frontend ``interviewer_response`` field stays as one string for
@@ -676,7 +695,7 @@ async def finish_mock_interview(
     if session.session_type != "mock_interview":
         raise HTTPException(status_code=400, detail="Session is not a mock interview")
 
-    state = parse_session_state(session.session_state, "mock_interview")
+    state = parse_mock_state(session.mock_interview_state)
     _require_v2_schema(state)
     qa_history = state.get("qa_history", []) or []
     if not qa_history:
@@ -712,7 +731,7 @@ async def finish_mock_interview(
     db.add(mis)
 
     state["is_finished"] = True
-    session.session_state = dump_session_state(state)
+    session.mock_interview_state = dump_mock_state(state)
     session.archived_at = now
 
     debrief_session = ChatSession(
@@ -721,10 +740,6 @@ async def finish_mock_interview(
         title=f"复盘: {session.title or '模拟面试'}",
         session_type="debrief",
         interview_id=record.id,
-        session_state=json.dumps(
-            {"mode": "debrief", "interview_id": record.id, "summary": ""},
-            ensure_ascii=False,
-        ),
     )
     db.add(debrief_session)
     await asyncio.to_thread(db.commit)

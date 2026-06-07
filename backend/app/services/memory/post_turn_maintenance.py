@@ -1,7 +1,8 @@
 """Post-turn maintenance service — runs in the background after each turn.
 
 Order of operations:
-  1. Compact session_state via dual-threshold trigger (token growth + turns)
+  1. Compact the conversation into the ``summary`` column via dual-threshold
+     trigger (token growth + turns)
   2. Run realtime memory extraction (v3) — produces patches against
      knowledge / strategy / habit / user_profile docs.
 
@@ -30,7 +31,8 @@ class PostTurnMaintenanceService:
     """Runs after each conversation turn as a background task.
 
     Responsibilities (in order):
-    1. Compact session_state via dual-threshold trigger (token growth + turns)
+    1. Compact the conversation into the ``summary`` column via dual-threshold
+     trigger (token growth + turns)
     2. Realtime memory extraction (strong signals only — see
        ``realtime_extraction`` module)
     """

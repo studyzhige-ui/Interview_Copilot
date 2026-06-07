@@ -103,10 +103,13 @@ async def sse_chat_endpoint(
                 yield f"data: {event.to_json()}\n\n"
         except Exception as exc:  # noqa: BLE001 — last-resort net so the stream always closes
             logger.error("SSE pipeline failed: %s", exc)
-            # Fall back to a hand-rolled error+done so the client
-            # always gets a terminator.
+            # Fall back to a hand-rolled error+done so the client always
+            # gets a terminator. Use the shared humanizer so even this
+            # last-resort path shows an actionable message, never a raw
+            # ``Error code: 402 - {...}`` dump.
             from app.conversation.events import HarnessEvent
-            yield f"data: {HarnessEvent.error(str(exc)).to_json()}\n\n"
+            from app.core.error_messages import humanize_error
+            yield f"data: {HarnessEvent.error(humanize_error(exc)).to_json()}\n\n"
             yield f"data: {HarnessEvent.done(step=0, elapsed_ms=0).to_json()}\n\n"
 
     return StreamingResponse(

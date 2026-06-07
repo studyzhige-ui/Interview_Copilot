@@ -4,7 +4,7 @@ Manages persistent chat history (``ChatSession`` / ``ChatMessage`` rows) —
 sessions, recent turns, full transcripts, cursor advancement.
 
 Hierarchy (post-0018): an ``interview_record`` has many ``chat_sessions``;
-each session IS the chat thread (its own ``session_state`` compaction,
+each session IS the chat thread (its own ``summary`` compaction,
 its own monotonic ``chat_messages.seq``). The earlier "session → many
 conversations" hierarchy from 0015/0017 was reverted — multi-thread
 brainstorming now lives as siblings under the same record.
@@ -30,7 +30,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
-from app.models.chat import ChatMessage, ChatSession, default_session_state, generate_uuid
+from app.models.chat import ChatMessage, ChatSession, generate_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,6 @@ class TranscriptService:
                 row = ChatSession(
                     id=session_id or generate_uuid(),
                     user_id=user_id,
-                    session_state=default_session_state(),
                 )
                 db.add(row)
                 db.commit()
@@ -79,7 +78,6 @@ class TranscriptService:
                 session_row = ChatSession(
                     id=session_id,
                     user_id=user_id,
-                    session_state=default_session_state(),
                 )
                 db.add(session_row)
                 db.flush()
@@ -191,7 +189,7 @@ class TranscriptService:
                 "turn_count": row.turn_count or 0,
                 "compaction_cursor": row.compaction_cursor or 0,
                 "memory_extraction_cursor": row.memory_extraction_cursor or 0,
-                "session_state": row.session_state or default_session_state(),
+                "summary": row.summary or "",
             }
         finally:
             db.close()

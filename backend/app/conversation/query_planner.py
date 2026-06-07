@@ -121,12 +121,6 @@ def _format_recent_turns(recent_turns: list[dict]) -> str:
     )
 
 
-def _format_session_state(session_state: dict) -> str:
-    if not session_state:
-        return "(empty)"
-    return json.dumps(session_state, ensure_ascii=False, indent=2)
-
-
 def fallback_query_plan(user_message: str) -> QueryPlan:
     """Conservative fallback used when the planner LLM fails.
 
@@ -150,7 +144,6 @@ def fallback_query_plan(user_message: str) -> QueryPlan:
 async def plan_query(
     *,
     user_message: str,
-    session_state: dict,
     recent_turns: list[dict],
     knowledge_index_lines: list[str] | None = None,
     strategy_description: str = "",
@@ -164,9 +157,8 @@ async def plan_query(
     message appears EXACTLY ONCE, at the very end, where the LLM's
     attention is highest.
 
-    ``session_state`` / ``recent_turns`` come from
-    ``transcript_service`` (engine reads them directly).
-    ``knowledge_index_lines`` / ``strategy_description`` /
+    ``recent_turns`` comes from ``transcript_service`` (engine reads it
+    directly). ``knowledge_index_lines`` / ``strategy_description`` /
     ``habit_description`` come from ``v3_context_loader.load_universal``.
 
     When ``global_memory_on=False`` (privacy mode), the memory section is
@@ -233,8 +225,8 @@ async def plan_query(
         "  questions answerable from memory alone, or meta-questions about\n"
         "  the copilot itself.\n"
         "- When generating dense_query / sparse_query, resolve any pronouns or\n"
-        "  follow-up references using [Session State] + [Recent Turns]. Leave\n"
-        "  both empty when needs_knowledge_retrieval=false."
+        "  follow-up references using [Recent Turns]. Leave both empty when\n"
+        "  needs_knowledge_retrieval=false."
     )
 
     # ── Assemble in slot order (LLM attends more to the END) ────
@@ -242,7 +234,6 @@ async def plan_query(
     parts: list[str] = [system_prompt]
     if memory_files_slot:
         parts.append(memory_files_slot)
-    parts.append(f"[Session State]\n{_format_session_state(session_state)}")
     parts.append(f"[Recent Turns]\n{_format_recent_turns(recent_turns)}")
     # The actual user message appears EXACTLY ONCE, last.
     parts.append(f"[Current Query]\n{user_message}")

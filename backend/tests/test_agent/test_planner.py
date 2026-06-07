@@ -11,8 +11,8 @@ responses to exercise:
   * topic-name filtering against the injected index
   * global_memory_on=False privacy gate
   * conservative fallback on parse / vendor failure
-  * structured inputs (session_state + recent_turns instead of
-    a pre-rendered ``rewrite_context`` string)
+  * structured inputs (recent_turns instead of a pre-rendered
+    ``rewrite_context`` string)
   * the prompt-assembly order: user_message ends up exactly ONCE at
     the end of the planner's prompt.
 """
@@ -70,7 +70,6 @@ def test_plan_query_parses_full_json_response(monkeypatch):
 
     plan = asyncio.run(planner.plan_query(
         user_message="那这个怎么答？",
-        session_state={"mode": "general"},
         recent_turns=[{"role": "User", "content": "Redis cache avalanche"}],
         knowledge_index_lines=_INDEX_LINES,
     ))
@@ -104,7 +103,6 @@ def test_plan_query_extracts_json_from_prose_wrapper(monkeypatch):
 
     plan = asyncio.run(planner.plan_query(
         user_message="How does HNSW work?",
-        session_state={},
         recent_turns=[],
     ))
     assert plan.needs_knowledge_retrieval is True
@@ -138,7 +136,6 @@ def test_plan_query_prompt_has_user_message_exactly_once_at_end(monkeypatch):
     user_msg = "Explain Redis cache avalanche please"
     asyncio.run(planner.plan_query(
         user_message=user_msg,
-        session_state={"mode": "general"},
         recent_turns=[{"role": "User", "content": "something earlier"}],
     ))
 
@@ -176,7 +173,6 @@ def test_plan_query_handles_direct_chat_mode(monkeypatch):
 
     plan = asyncio.run(planner.plan_query(
         user_message="hi",
-        session_state={},
         recent_turns=[],
     ))
     assert plan.needs_knowledge_retrieval is False
@@ -210,7 +206,6 @@ def test_plan_query_filters_invented_knowledge_topics(monkeypatch):
 
     plan = asyncio.run(planner.plan_query(
         user_message="Tell me about Redis",
-        session_state={},
         recent_turns=[],
         knowledge_index_lines=_INDEX_LINES,
     ))
@@ -236,7 +231,6 @@ def test_plan_query_caps_knowledge_topics_at_three(monkeypatch):
 
     plan = asyncio.run(planner.plan_query(
         user_message="x",
-        session_state={},
         recent_turns=[],
         knowledge_index_lines=index,
     ))
@@ -267,7 +261,6 @@ def test_plan_query_with_recall_off_clears_memory_fields(monkeypatch):
 
     plan = asyncio.run(planner.plan_query(
         user_message="x",
-        session_state={},
         recent_turns=[],
         knowledge_index_lines=_INDEX_LINES,
         global_memory_on=False,
@@ -295,7 +288,6 @@ def test_plan_query_with_recall_off_omits_memory_section_from_prompt(monkeypatch
 
     asyncio.run(planner.plan_query(
         user_message="hi",
-        session_state={},
         recent_turns=[],
         knowledge_index_lines=_INDEX_LINES,
         strategy_description="STAR (5) ...",
@@ -332,7 +324,6 @@ def test_plan_query_backfills_missing_dense_and_sparse(monkeypatch):
 
     plan = asyncio.run(planner.plan_query(
         user_message="Explain Kafka consumer rebalance",
-        session_state={},
         recent_turns=[],
     ))
     assert plan.dense_query == "Explain Kafka consumer rebalance"
@@ -357,7 +348,6 @@ def test_plan_query_drops_dense_sparse_when_rag_off(monkeypatch):
 
     plan = asyncio.run(planner.plan_query(
         user_message="how are you",
-        session_state={},
         recent_turns=[],
     ))
     assert plan.dense_query == ""
@@ -378,7 +368,6 @@ def test_plan_query_falls_back_on_non_json_response(monkeypatch):
 
     plan = asyncio.run(planner.plan_query(
         user_message="Tell me about Redis caching.",
-        session_state={},
         recent_turns=[{"role": "User", "content": "earlier discussed concurrency"}],
     ))
     assert plan.needs_knowledge_retrieval is False
@@ -399,7 +388,6 @@ def test_plan_query_falls_back_when_llm_raises(monkeypatch):
 
     plan = asyncio.run(planner.plan_query(
         user_message="anything",
-        session_state={},
         recent_turns=[],
     ))
     # Conservative fallback — DO NOT trigger RAG on the LLM failure.
@@ -418,7 +406,6 @@ def test_plan_query_falls_back_on_invalid_pydantic_payload(monkeypatch):
 
     plan = asyncio.run(planner.plan_query(
         user_message="hi there",
-        session_state={},
         recent_turns=[],
     ))
     assert plan.needs_knowledge_retrieval is False

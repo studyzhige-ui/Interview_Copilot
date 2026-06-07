@@ -97,7 +97,7 @@ def build_prefix(resume_context: str, jd_context: str, style: str) -> str:
 
     Keep this function deterministic w.r.t. its inputs — no timestamps, no
     random whitespace — so DeepSeek prompt cache can hit on the prefix tokens.
-    Call once at session start, store the result in session_state, and reuse.
+    Call once at session start, store the result in mock_interview_state, and reuse.
     """
     resume = (resume_context or "").strip() or "（候选人未提供简历）"
     jd = (jd_context or "").strip() or "（未提供 JD）"

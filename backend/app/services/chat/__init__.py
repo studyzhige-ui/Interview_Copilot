@@ -3,7 +3,7 @@
 Submodules:
   - chat_history_service:        ``TranscriptService``, ``transcript_service``
   - context_assembly_pipeline:   ``ContextAssemblyPipeline``, ``context_pipeline``, helpers
-  - session_state:               state serialization helpers
+  - mock_interview_state:        mock-interview state serialization helpers
 
 Submodules are imported lazily (no eager re-exports here) — callers should
 import from the specific submodule.

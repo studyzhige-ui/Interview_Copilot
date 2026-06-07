@@ -7,14 +7,14 @@ from app.services.chat.context_assembly_pipeline import (
 
 
 def test_prompt_renderer_keeps_expected_slot_order():
-    """Slots render in the documented order: system → debrief →
-    memory → retrieved → state → turns → current."""
+    """Slots render in the cache-stable order: system → record → summary →
+    recent turns → memory → retrieved → current (grounding at the tail)."""
     renderer = PromptRenderer()
     ctx = AssembledContext(
         debrief_reference="[Resume]\n张三",
+        summary="focusing on redis",
         memory_block="# 用户画像\n- name: alice",
         retrieved_context="[K1] [interview_qa score=0.900] Redis cache avalanche.",
-        session_state={"mode": "general", "summary": "focusing on redis"},
         recent_turns=[
             {"role": "User", "content": "What is cache avalanche?"},
             {"role": "Agent", "content": "It is a cache failure pattern."},
@@ -28,10 +28,10 @@ def test_prompt_renderer_keeps_expected_slot_order():
     indices = [
         prompt.index("System rules"),
         prompt.index("[Record Context]"),
+        prompt.index("[Context Summary]"),
+        prompt.index("[Recent Turns]"),
         prompt.index("[Memory]"),
         prompt.index("[Retrieved Context]"),
-        prompt.index("[Session State]"),
-        prompt.index("[Recent Turns]"),
         prompt.index("[Current Query]"),
     ]
     assert indices == sorted(indices), (
@@ -58,7 +58,7 @@ def test_renderer_skips_empty_slots():
     assert "[Memory]" in prompt
     assert "[Record Context]" not in prompt        # debrief slot empty
     assert "[Retrieved Context]" not in prompt     # no RAG
-    assert "[Session State]" not in prompt         # empty dict
+    assert "[Context Summary]" not in prompt       # no summary
     assert "[Recent Turns]" not in prompt          # empty list
 
 
@@ -81,13 +81,13 @@ def test_rewrite_context_skips_heavy_slots():
         system_prompt="should not appear",
         memory_block="should not appear",
         retrieved_context="should not appear",
-        session_state={"mode": "general"},
+        summary="prior conversation summary",
         recent_turns=[{"role": "User", "content": "earlier message"}],
         current_input="follow-up",
     )
     out = renderer.render_context_text(ctx)
     assert "should not appear" not in out
-    assert "[Session State]" in out
+    assert "[Context Summary]" in out
     assert "[Recent Turns]" in out
     assert "[Current Query]" in out
 
@@ -119,17 +119,12 @@ def test_debrief_reference_auto_inject_fires_only_in_debrief_mode(monkeypatch):
         def __init__(self, mode: str):
             self.mode = mode
         def get_session_meta(self, session_id):
-            import json
             return {
                 "session_id": session_id,
                 "user_id": "alice",
                 "session_type": self.mode,
                 "interview_id": "ir_42" if self.mode != "general" else None,
                 "compaction_cursor": 0,
-                "session_state": json.dumps({
-                    "mode": self.mode,
-                    "interview_id": "ir_42" if self.mode != "general" else None,
-                }),
             }
         def get_recent_turns(self, **_kw):
             return []
@@ -158,7 +153,39 @@ def test_debrief_reference_auto_inject_fires_only_in_debrief_mode(monkeypatch):
     assert fetch_calls == []
 
 
+def test_summary_comes_from_summary_column(monkeypatch):
+    """The [Context Summary] slot is sourced from the dedicated ``summary``
+    column (get_session_meta['summary']) — the sole source."""
+    from app.services.chat import context_assembly_pipeline as pipeline_mod
+    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
+
+    class FakeTranscript:
+        def get_session_meta(self, session_id):
+            return {
+                "session_id": session_id,
+                "user_id": "alice",
+                "session_type": "general",
+                "interview_id": None,
+                "turn_count": 0,
+                "compaction_cursor": 0,
+                "memory_extraction_cursor": 0,
+                "summary": "## 当前状态\n聚焦 redis 缓存",      # dedicated column
+            }
+
+        def get_recent_turns(self, **_kw):
+            return []
+
+    pipeline = ContextAssemblyPipeline()
+    monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
+
+    ctx = pipeline.assemble_answer_context(session_id="s", current_query="q")
+    assert ctx.summary == "## 当前状态\n聚焦 redis 缓存"
+
+    rendered = pipeline.renderer.render_answer_prompt(ctx, system_prompt="rules")
+    assert "[Context Summary]" in rendered
+    assert "聚焦 redis 缓存" in rendered
+
+
 # Note: ``assemble_rewrite_context`` was retired with the planner
-# merge — the planner reads session_state + recent_turns directly via
-# transcript_service now. See test_agent/test_planner.py for the
-# planner-input contract tests.
+# merge — the planner reads recent_turns directly via transcript_service
+# now. See test_agent/test_planner.py for the planner-input contract tests.

@@ -23,14 +23,31 @@ from app.schemas.chat import (
     SessionRenameRequest,
 )
 from app.services.chat.chat_history_service import transcript_service
-from app.services.chat.session_state import (
-    default_session_state_for_type,
-    dump_session_state,
-    parse_session_state,
-    summarize_session_state,
+from app.services.chat.mock_interview_state import (
+    default_mock_state,
+    dump_mock_state,
+    parse_mock_state,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _session_list_label(row: ChatSession) -> str:
+    """One-line label for the session-list UI, derived from dedicated columns.
+
+    Prefers the compaction ``summary``; otherwise a type-based label (mock
+    sessions append the current phase, read from ``mock_interview_state``).
+    """
+    summary = (row.summary or "").strip()
+    if summary:
+        return summary[:150]
+    session_type = row.session_type or "general"
+    if session_type == "mock_interview":
+        phase = str(parse_mock_state(row.mock_interview_state).get("current_phase") or "").strip()
+        return f"模拟面试 | {phase}" if phase else "模拟面试"
+    if session_type == "debrief":
+        return "面试复盘"
+    return "通用对话"
 
 router = APIRouter(tags=["chat"])
 
@@ -61,14 +78,18 @@ def create_chat_session(
     title = req.title or default_titles.get(session_type, "新的面试对话")
 
     try:
-        state = default_session_state_for_type(session_type, req.interview_id or "")
+        mock_state = (
+            dump_mock_state(default_mock_state(req.interview_id or ""))
+            if session_type == "mock_interview"
+            else None
+        )
         new_session = ChatSession(
             id=generate_uuid(),
             user_id=current_user.username,
             title=title,
             session_type=session_type,
             interview_id=req.interview_id,
-            session_state=dump_session_state(state),
+            mock_interview_state=mock_state,
         )
         db.add(new_session)
         db.commit()
@@ -117,9 +138,7 @@ def list_chat_sessions(
             session_id=row.id,
             title=row.title or "新的面试对话",
             session_type=row.session_type or "general",
-            state_summary=summarize_session_state(
-                parse_session_state(row.session_state, row.session_type or "general")
-            ),
+            state_summary=_session_list_label(row),
             turn_count=row.turn_count or 0,
             updated_at=row.updated_at.isoformat() if row.updated_at else "",
         )
@@ -225,9 +244,9 @@ def get_full_transcript(
         "session_type": meta["session_type"] if meta else "general",
         "turn_count": meta["turn_count"] if meta else 0,
         "compaction_cursor": meta["compaction_cursor"] if meta else 0,
-        "session_state": (
-            parse_session_state(meta["session_state"], meta.get("session_type", "general"))
-            if meta
+        "mock_interview_state": (
+            parse_mock_state(session_row.mock_interview_state)
+            if (session_row.session_type or "general") == "mock_interview"
             else {}
         ),
         "messages": messages,
@@ -236,8 +255,9 @@ def get_full_transcript(
 
 
 # ── Memory recall toggle (per session) ──────────────────────────────────
-# Resolves session_state override → user-level default → False via
-# ``recall_policy``. Frontend uses GET to render the switch and POST to
+# Resolves the per-session ``global_memory_enabled`` column → user-level
+# default → False via ``recall_policy``. Frontend uses GET to render the
+# switch and POST to
 # flip it. The interview_fact recall path checks this on every turn.
 
 
