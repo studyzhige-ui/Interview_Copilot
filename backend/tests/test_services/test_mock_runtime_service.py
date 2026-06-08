@@ -3,7 +3,22 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from app.services.interview import mock_runtime_service as svc
+
+
+@pytest.fixture(autouse=True)
+def _seed_users(db_session):
+    """The runtime now keys on users.id — the service resolves the username, so
+    a matching ``users`` row must exist."""
+    from app.models.user import User
+
+    db_session.add_all([
+        User(username="alice", hashed_password="x"),
+        User(username="bob", hashed_password="x"),
+    ])
+    db_session.flush()
 
 
 def _create(db, user_id="alice", record_id="ir_1", **kw):

@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.user_identity import resolve_user_pk
 from app.models.mock_interview_runtime import MockInterviewRuntime
 
 # The single live status; every other status is terminal.
@@ -32,9 +33,16 @@ def create_runtime(
     current_stage_key: str | None = None,
     commit: bool = True,
 ) -> MockInterviewRuntime:
-    """Create the runtime for a newly-started mock interview."""
+    """Create the runtime for a newly-started mock interview.
+
+    ``user_id`` is the caller's username; it's resolved to the stable
+    ``users.id`` for the FK.
+    """
+    user_pk = resolve_user_pk(db, user_id)
+    if user_pk is None:
+        raise ValueError(f"Unknown user: {user_id}")
     runtime = MockInterviewRuntime(
-        user_id=user_id,
+        user_id=user_pk,
         interview_record_id=interview_record_id,
         conversation_id=conversation_id,
         status=ACTIVE_STATUS,
@@ -52,11 +60,17 @@ def create_runtime(
 
 
 def get_active_runtime(db: Session, *, user_id: str) -> MockInterviewRuntime | None:
-    """The user's most recent in-progress mock, for resume-after-refresh."""
+    """The user's most recent in-progress mock, for resume-after-refresh.
+
+    ``user_id`` is the username; resolved to the stable ``users.id`` for the
+    query (returns None for an unknown user)."""
+    user_pk = resolve_user_pk(db, user_id)
+    if user_pk is None:
+        return None
     return (
         db.query(MockInterviewRuntime)
         .filter(
-            MockInterviewRuntime.user_id == user_id,
+            MockInterviewRuntime.user_id == user_pk,
             MockInterviewRuntime.status == ACTIVE_STATUS,
         )
         .order_by(MockInterviewRuntime.last_activity_at.desc())

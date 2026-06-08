@@ -15,8 +15,8 @@ Lifecycle: the mock-start flow atomically creates an ``interview_records`` row
 ``processing_review`` → ``review_ready`` and the structured QA is frozen into
 ``interview_qa``; this *runtime* row carries its own status set (see below).
 
-``user_id`` mirrors the conversation/interview key (username today); it migrates
-to the stable ``users.id`` with those tables in CLEANUP.
+``user_id`` is the stable ``users.id`` FK; the runtime service resolves the
+caller's username via ``app.core.user_identity.resolve_user_pk``.
 """
 import uuid
 from datetime import datetime
@@ -46,7 +46,9 @@ class MockInterviewRuntime(Base):
     )
 
     id = Column(String, primary_key=True, default=generate_runtime_id, index=True)
-    user_id = Column(String, index=True, nullable=False)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False,
+    )
     interview_record_id = Column(
         String,
         ForeignKey("interview_records.id", ondelete="CASCADE"),
