@@ -83,4 +83,10 @@ class InterviewQA(Base):
     key_points_json = Column(Text, nullable=True)
     analyzed_at = Column(DateTime, nullable=True)
 
+    # Set when the user saves this QA's improved answer to the knowledge base:
+    # the resulting ``knowledge_documents.id``. NULL = not saved. The actual
+    # ingest (knowledge_documents + chunks) is generated in KNOWLEDGE-CHUNKS;
+    # this column is the back-reference so the review UI can show "已保存".
+    saved_document_id = Column(String, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

@@ -179,6 +179,7 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "strategy_docs",
         "habit_docs",
         "memory_audit_log",
+        "resumes",
         "resume_sections",
     }
     missing = expected_tables - tables

@@ -99,6 +99,7 @@ def test_all_expected_tables_registered(test_engine):
         "mock_interview_sessions",
         "chat_sessions",
         "chat_messages",
+        "resumes",
         # v3 memory tables (memory_items was retired in 0003)
         "knowledge_docs",
         "strategy_docs",

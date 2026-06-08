@@ -43,6 +43,7 @@ import app.models.memory_audit_log
 import app.models.mock_interview_session
 import app.models.file_asset
 import app.models.outbox_job
+import app.models.resume
 import app.models.resume_section
 import app.models.strategy_doc
 import app.models.upload
@@ -298,7 +299,7 @@ except ImportError:
         "Run: pip install slowapi"
     )
 
-from app.api import auth, chat, file_assets, interview, memory, model_runtime, rag
+from app.api import auth, chat, file_assets, interview, memory, model_runtime, rag, resumes
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(chat.router, prefix="/api/v1")
@@ -307,6 +308,7 @@ app.include_router(interview.router, prefix="/api/v1")
 app.include_router(memory.router, prefix="/api/v1")
 app.include_router(rag.router, prefix="/api/v1")
 app.include_router(model_runtime.router, prefix="/api/v1")
+app.include_router(resumes.router, prefix="/api/v1")
 
 
 @app.get("/ping")

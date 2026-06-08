@@ -8,6 +8,7 @@ from app.models.knowledge_doc import KnowledgeDoc
 from app.models.memory_audit_log import MemoryAuditLog
 from app.models.mock_interview_session import MockInterviewSession
 from app.models.outbox_job import OutboxJob
+from app.models.resume import Resume
 from app.models.resume_section import ResumeSection
 from app.models.strategy_doc import StrategyDoc
 from app.models.upload import UserUpload
@@ -28,6 +29,7 @@ __all__ = [
     "MemoryAuditLog",
     "MockInterviewSession",
     "OutboxJob",
+    "Resume",
     "ResumeSection",
     "StrategyDoc",
     "User",
