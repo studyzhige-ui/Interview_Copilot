@@ -98,6 +98,7 @@ def test_all_expected_tables_registered(test_engine):
         "interview_records",
         "interview_qa",
         "mock_interview_sessions",
+        "mock_interview_runtime",
         "chat_sessions",
         "chat_messages",
         "resumes",

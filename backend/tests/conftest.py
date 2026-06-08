@@ -72,6 +72,7 @@ def test_engine():
     import app.models.knowledge            # noqa: F401
     import app.models.knowledge_doc        # noqa: F401
     import app.models.memory_audit_log     # noqa: F401
+    import app.models.mock_interview_runtime   # noqa: F401
     import app.models.mock_interview_session  # noqa: F401
     import app.models.outbox_job           # noqa: F401
     import app.models.resume               # noqa: F401

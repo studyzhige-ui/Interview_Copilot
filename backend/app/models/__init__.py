@@ -7,6 +7,7 @@ from app.models.interview_record import InterviewRecord
 from app.models.knowledge import KnowledgeDocument
 from app.models.knowledge_doc import KnowledgeDoc
 from app.models.memory_audit_log import MemoryAuditLog
+from app.models.mock_interview_runtime import MockInterviewRuntime
 from app.models.mock_interview_session import MockInterviewSession
 from app.models.outbox_job import OutboxJob
 from app.models.resume import Resume
@@ -29,6 +30,7 @@ __all__ = [
     "KnowledgeDoc",
     "KnowledgeDocument",
     "MemoryAuditLog",
+    "MockInterviewRuntime",
     "MockInterviewSession",
     "OutboxJob",
     "Resume",

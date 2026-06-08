@@ -41,6 +41,16 @@ class ChatSession(Base):
     title = Column(String, default="新的面试对话")
     summary = Column(Text, default="")
     session_type = Column(String, index=True, default="general", nullable=False)
+    # Run mode for general/debrief: "chat" (L1 deterministic) or "agent" (L2
+    # ReAct). mock_interview is always chat. Persisted snapshot of the mode the
+    # SSE endpoint selects per request.
+    mode = Column(String, nullable=False, default="chat")
+    # Polymorphic subject binding (weak FK). subject_type whitelist =
+    # {interview_record}; general -> NULL, debrief/mock_interview -> the bound
+    # interview_record. Generalizes the legacy ``interview_id`` column (which it
+    # replaces in CLEANUP). The app layer validates existence + ownership.
+    subject_type = Column(String, nullable=True)
+    subject_id = Column(String, nullable=True)
     interview_id = Column(
         String, ForeignKey("interview_records.id"), index=True, nullable=True,
     )
