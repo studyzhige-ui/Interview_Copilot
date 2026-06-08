@@ -2,7 +2,7 @@
 
 Parsed chunks now live in the Postgres ``document_chunks`` fact table (not a
 LlamaIndex docstore). ``read_document_text`` concatenates them in order;
-``read_full_text_from_docstore`` is the thin KnowledgeDocument wrapper, and
+``read_full_text_from_chunks`` is the thin KnowledgeDocument wrapper, and
 ``load_knowledge_text`` short-circuits the S3 re-parse when chunks exist.
 """
 from __future__ import annotations
@@ -50,7 +50,7 @@ def test_read_document_text_truncates_at_max_chars(db_session):
     assert count == 1
 
 
-# ── read_full_text_from_docstore (thin wrapper) ─────────────────────────────
+# ── read_full_text_from_chunks (thin wrapper) ─────────────────────────────
 
 
 def test_read_full_text_delegates_to_chunks(monkeypatch):
@@ -60,7 +60,7 @@ def test_read_full_text_delegates_to_chunks(monkeypatch):
         "app.services.knowledge.document_chunk_service.read_document_text",
         lambda db, doc_id, *, max_chars=20000: ("full resume text", 2),
     )
-    text, count = svc.read_full_text_from_docstore(SimpleNamespace(id="kdoc_1"))
+    text, count = svc.read_full_text_from_chunks(SimpleNamespace(id="kdoc_1"))
     assert (text, count) == ("full resume text", 2)
 
 
@@ -73,7 +73,7 @@ def test_read_full_text_swallows_read_failure(monkeypatch):
     monkeypatch.setattr(
         "app.services.knowledge.document_chunk_service.read_document_text", _boom,
     )
-    text, count = svc.read_full_text_from_docstore(SimpleNamespace(id="kdoc_1"))
+    text, count = svc.read_full_text_from_chunks(SimpleNamespace(id="kdoc_1"))
     assert (text, count) == ("", 0)
 
 
@@ -117,7 +117,7 @@ def test_load_knowledge_text_prefers_chunks_over_reparse(monkeypatch):
     class _Db:
         def query(self, *a, **k): return _Q()
 
-    monkeypatch.setattr(svc, "read_full_text_from_docstore", lambda doc, **k: ("from chunks", 1))
+    monkeypatch.setattr(svc, "read_full_text_from_chunks", lambda doc, **k: ("from chunks", 1))
 
     def _no_s3(*a, **k):
         raise AssertionError("download_file_from_s3 must NOT run when chunks exist")
@@ -141,7 +141,7 @@ def test_load_knowledge_text_falls_back_to_reparse_when_no_chunks(monkeypatch):
     class _Db:
         def query(self, *a, **k): return _Q()
 
-    monkeypatch.setattr(svc, "read_full_text_from_docstore", lambda doc, **k: ("", 0))
+    monkeypatch.setattr(svc, "read_full_text_from_chunks", lambda doc, **k: ("", 0))
     monkeypatch.setattr(svc, "download_file_from_s3", lambda src, dst: None)
     monkeypatch.setattr(svc, "extract_resume_text", lambda path: "from reparse")
 

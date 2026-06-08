@@ -113,10 +113,10 @@ async def start_mock_interview(
     #   1. ``resume_sections`` — the dedicated structured-parsing table
     #      used by older flows. Hot when present.
     #
-    #   2. ``KnowledgeDocument`` docstore — when the resume was added to
-    #      the library, ingestion ALREADY parsed the PDF into chunks
-    #      and stored them in PostgresDocumentStore. We just read them
-    #      back and concatenate — no S3 round-trip, no LlamaParse call.
+    #   2. ``document_chunks`` — when the resume was added to the
+    #      library, ingestion ALREADY parsed the PDF into chunks (in
+    #      Postgres ``document_chunks``). We just read them back and
+    #      concatenate — no S3 round-trip, no LlamaParse call.
     #      Resolves in ~5-50 ms.
     #
     #   3. ``_parse_resume_on_demand`` — last-resort cold path. S3
@@ -126,11 +126,11 @@ async def start_mock_interview(
     #      a typical 2-page CV). Now only fires when the upload has
     #      neither parsed sections NOR a library row.
     #
-    # **Tier order is load-bearing** — sections > docstore > reparse.
+    # **Tier order is load-bearing** — sections > chunks > reparse.
     # A future contributor swapping these will silently regress mock
-    # interview quality (sections are structured/cleaned; docstore is
-    # raw concatenated chunks). The helper-level pieces are pinned by
-    # ``tests/test_services/test_knowledge_text_service.py`` (docstore
+    # interview quality (sections are structured/cleaned; chunks are
+    # raw concatenated text). The helper-level pieces are pinned by
+    # ``tests/test_services/test_knowledge_text_service.py`` (chunks
     # priority over reparse) but the THIS-FILE wiring is verified by
     # hand right now — add an integration test if you change this
     # block.
@@ -147,16 +147,16 @@ async def start_mock_interview(
             else:
                 from app.services.knowledge.knowledge_text_service import (
                     find_knowledge_doc_by_upload,
-                    read_full_text_from_docstore,
+                    read_full_text_from_chunks,
                 )
                 kdoc = find_knowledge_doc_by_upload(
                     db, body.resume_upload_id, current_user.username,
                 )
                 if kdoc is not None:
-                    text, node_count = read_full_text_from_docstore(kdoc)
+                    text, node_count = read_full_text_from_chunks(kdoc)
                     if node_count > 0:
                         resume_context = text
-                        resume_source = "docstore"
+                        resume_source = "chunks"
                 if not resume_context:
                     resume_context = await _parse_resume_on_demand(
                         db, body.resume_upload_id, current_user.username,

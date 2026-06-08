@@ -19,7 +19,7 @@ class ReadResumeArgs(BaseModel):
 
 
 async def _read_resume_handler(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, Any]:
-    """Async wrapper — entire body is sync DB + docstore reads, so
+    """Async wrapper — entire body is sync DB + chunk reads, so
     offload to a worker thread to keep the agent loop responsive."""
     return await asyncio.to_thread(_read_resume_sync, args, ctx)
 
@@ -90,30 +90,30 @@ def _read_resume_sync(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, 
     if raw_resumes:
         # The raw PDF/DOCX lives in the knowledge corpus and was parsed
         # into chunks at upload time — the same parser the RAG retriever
-        # uses. ``read_full_text_from_docstore`` reads those chunks
+        # uses. ``read_full_text_from_chunks`` reads those chunks
         # DIRECTLY from the ``document_chunks`` fact table and joins them
         # in stored order, so the LLM sees the full resume in one shot.
         # Pre-fix the fallback told the LLM to call
         # ``search_knowledge`` (which returns ~5 reranked chunks ×
-        # 1500 chars — fragmented + filtered). Direct docstore read is
+        # 1500 chars — fragmented + filtered). A direct chunk read is
         # the right primitive for "give me the user's resume".
         from app.services.knowledge.knowledge_text_service import (
-            read_full_text_from_docstore,
+            read_full_text_from_chunks,
         )
 
         # Most-recent resume is the canonical one (the user may have
         # iterated). Tag the rest as "additional resumes available".
         primary = raw_resumes[0]
-        full_text, nodes_read = read_full_text_from_docstore(
+        full_text, nodes_read = read_full_text_from_chunks(
             primary, max_chars=18000,
         )
-        docstore_empty_reason = "" if full_text else "docstore returned no readable nodes"
+        chunks_empty_reason = "" if full_text else "no readable chunks"
 
         if full_text:
             return {
                 "section_count": 0,
                 "raw_resume_available": True,
-                "source": "docstore_direct",
+                "source": "chunks_direct",
                 "title": primary.title,
                 "doc_id": primary.id,
                 "status": primary.status,
@@ -140,7 +140,7 @@ def _read_resume_sync(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, 
         return {
             "section_count": 0,
             "raw_resume_available": True,
-            "source": "docstore_empty",
+            "source": "chunks_empty",
             "title": primary.title,
             "doc_id": primary.id,
             "status": primary.status,
@@ -154,7 +154,7 @@ def _read_resume_sync(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, 
                 f"or 'pending', ingestion is still running — tell the "
                 f"user to wait ~30 seconds and retry. If status is "
                 f"'failed', ingestion crashed — the user should re-upload."
-                + (f" Detail: {docstore_empty_reason}." if docstore_empty_reason else "")
+                + (f" Detail: {chunks_empty_reason}." if chunks_empty_reason else "")
             ),
         }
 

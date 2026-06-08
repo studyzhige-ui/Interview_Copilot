@@ -355,7 +355,7 @@ def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypat
         fake_find_kdoc,
     )
     monkeypatch.setattr(
-        "app.services.knowledge.knowledge_text_service.read_full_text_from_docstore",
+        "app.services.knowledge.knowledge_text_service.read_full_text_from_chunks",
         fake_docstore_read,
     )
     monkeypatch.setattr(

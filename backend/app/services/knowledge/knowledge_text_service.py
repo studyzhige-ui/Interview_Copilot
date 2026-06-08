@@ -25,7 +25,7 @@ from app.services.voice.file_parser import extract_resume_text
 logger = logging.getLogger(__name__)
 
 
-def read_full_text_from_docstore(
+def read_full_text_from_chunks(
     doc: KnowledgeDocument,
     *,
     max_chars: int = 20000,
@@ -34,10 +34,6 @@ def read_full_text_from_docstore(
     order. Returns ``(text, chunk_count)``; ``("", 0)`` when the document has
     no chunks yet (ingestion still running / failed) so the caller falls back
     to re-parsing the raw upload.
-
-    Reads the ``document_chunks`` fact table now — the old LlamaIndex
-    ``PostgresDocumentStore`` is gone. (Name kept for its callers; a rename to
-    ``read_full_text_from_chunks`` is a CLEANUP item.)
     """
     from app.db.database import SessionLocal
     from app.services.knowledge.document_chunk_service import read_document_text
@@ -101,7 +97,7 @@ def load_knowledge_text(db: Session, document_id: str, user_id: str) -> str:
         return ""
 
     # Fast path
-    text, count = read_full_text_from_docstore(doc)
+    text, count = read_full_text_from_chunks(doc)
     if count > 0:
         return text
 

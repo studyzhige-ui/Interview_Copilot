@@ -358,7 +358,7 @@ def test_read_resume_direct_docstore_read(monkeypatch):
     )
 
     # Fake KnowledgeDocument rows. Branch behaviour is driven by the mocked
-    # read_full_text_from_docstore return, not the row (the tool reads status,
+    # read_full_text_from_chunks return, not the row (the tool reads status,
     # title, id, created_at — never node_ids, which was dropped in 0024).
     class _FakeDoc:
         def __init__(self, *, id, title, status, created_at=None):
@@ -386,7 +386,7 @@ def test_read_resume_direct_docstore_read(monkeypatch):
             lambda: _Db(doc_rows),
         )
 
-    _TXT = "app.services.knowledge.knowledge_text_service.read_full_text_from_docstore"
+    _TXT = "app.services.knowledge.knowledge_text_service.read_full_text_from_chunks"
 
     # --- Branch 1: chunks present → full_text --------------------------
 
@@ -396,7 +396,7 @@ def test_read_resume_direct_docstore_read(monkeypatch):
         lambda doc, **k: ("孙根武\n北京邮电大学\n\n工作经历: ...\n\n技能: Python, Rust", 3),
     )
     result = asyncio.run(_read_resume_handler(args, ctx))
-    assert result["source"] == "docstore_direct"
+    assert result["source"] == "chunks_direct"
     assert result["node_count"] == 3
     assert "孙根武" in result["full_text"]
     assert "技能" in result["full_text"]
@@ -407,7 +407,7 @@ def test_read_resume_direct_docstore_read(monkeypatch):
     _patch_db([_FakeDoc(id="kdoc_Y", title="resume.pdf", status="processing")])
     monkeypatch.setattr(_TXT, lambda doc, **k: ("", 0))
     result = asyncio.run(_read_resume_handler(args, ctx))
-    assert result["source"] == "docstore_empty"
+    assert result["source"] == "chunks_empty"
     assert result["status"] == "processing"
     assert "processing" in result["hint"].lower()
 
@@ -416,9 +416,9 @@ def test_read_resume_direct_docstore_read(monkeypatch):
     _patch_db([_FakeDoc(id="kdoc_Z", title="resume.pdf", status="ready")])
     monkeypatch.setattr(_TXT, lambda doc, **k: ("", 0))
     result = asyncio.run(_read_resume_handler(args, ctx))
-    assert result["source"] == "docstore_empty"
+    assert result["source"] == "chunks_empty"
     assert "status=ready" in result["hint"]
-    assert "no readable nodes" in result["hint"]
+    assert "no readable chunks" in result["hint"]
 
 
 def test_tool_start_and_tool_done_carry_tool_call_id():

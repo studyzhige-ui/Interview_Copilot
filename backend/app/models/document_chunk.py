@@ -4,7 +4,7 @@ Postgres owns the chunk TEXT (this table). Milvus owns the retrieval INDEX
 (dense vector + — going forward — BM25 sparse). Milvus stores a copy of the
 text only as a BM25/full-text index field; the authoritative chunk text lives
 here. This replaces the LlamaIndex ``PostgresDocumentStore`` as the project's
-chunk store: full-text reconstruction (``read_full_text_from_docstore``) and
+chunk store: full-text reconstruction (``read_full_text_from_chunks``) and
 the keyword (BM25) source both read this table now.
 
 A row is one chunk:
