@@ -26,11 +26,6 @@ from llama_index.core.vector_stores import (
 from llama_index.vector_stores.milvus import MilvusVectorStore
 from sqlalchemy.orm import Session
 
-try:
-    from llama_index.storage.docstore.postgres import PostgresDocumentStore
-except ModuleNotFoundError:  # pragma: no cover
-    PostgresDocumentStore = None
-
 from app.core.config import settings
 from app.db.database import SessionLocal
 from app.models.resume_section import ResumeSection
@@ -107,10 +102,10 @@ class ResumeVectorService:
         return self._build_fresh_store(overwrite=False)
 
     def _storage_context(self, vector_store: MilvusVectorStore) -> StorageContext:
-        if PostgresDocumentStore is None:
-            raise RuntimeError("PostgresDocumentStore is unavailable")
-        docstore = PostgresDocumentStore.from_uri(uri=settings.DATABASE_URL)
-        return StorageContext.from_defaults(docstore=docstore, vector_store=vector_store)
+        # Milvus-only: the resume-section text fact source is Postgres
+        # ``resume_sections``; Milvus holds the retrieval index. The old
+        # LlamaIndex PostgresDocumentStore cache path is removed (CLEANUP).
+        return StorageContext.from_defaults(vector_store=vector_store)
 
     # ── Document building ─────────────────────────────────────────────
 
@@ -145,7 +140,6 @@ class ResumeVectorService:
         VectorStoreIndex.from_documents(
             [document],
             storage_context=storage_context,
-            store_nodes_override=True,
             show_progress=False,
         )
         section.embedding_status = "ready"
