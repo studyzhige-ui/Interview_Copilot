@@ -13,8 +13,11 @@ A row is one chunk:
     row), identified by ``source_kind='personal_memory'`` + ``user_id``.
 
 ``user_id`` / ``source_kind`` are denormalised so the keyword + diagnostics
-scoped reads don't need a join. (``user_id`` mirrors ``knowledge_documents``'s
-current username key; it migrates to the stable id with that table.)
+scoped reads don't need a join. ``user_id`` here is the retrieval-scope
+**username** — it mirrors the Milvus metadata scope key and intentionally stays
+username-keyed even though ``knowledge_documents.user_id`` moved to the stable
+``users.id`` in CLEANUP #2 (the ingestion bridge resolves pk→username when
+writing chunks).
 """
 import uuid
 from datetime import datetime

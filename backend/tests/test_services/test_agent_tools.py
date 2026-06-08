@@ -331,18 +331,18 @@ def test_graceful_fallback_handles_empty_blocks():
     assert "network_timeout" in msg
 
 
-def test_read_resume_direct_docstore_read(monkeypatch):
+def test_read_resume_direct_chunk_read(monkeypatch):
     """When the user has a resume PDF in ``knowledge_documents`` (but
     no parsed ``resume_sections`` row yet), ``read_resume`` reads the
-    full document text DIRECTLY from the LlamaIndex PostgresDocumentStore
-    via the row's ``node_ids``. Pre-fix the tool told the LLM to use
-    search_knowledge (which returns ~5 reranked chunks of 1500 chars —
-    fragmented and partial). Direct read returns the full resume text.
+    full document text DIRECTLY from the Postgres ``document_chunks`` fact
+    table via ``read_full_text_from_chunks``. Pre-fix the tool told the LLM
+    to use search_knowledge (~5 reranked 1500-char chunks — fragmented);
+    the direct read returns the full resume text.
 
     Covers three branches:
-      (1) full_text returned when docstore yields nodes
-      (2) docstore_empty hint when node_ids is empty (still processing)
-      (3) docstore exception path surfaces ``Docstore error: ...``
+      (1) source='chunks_direct' when the chunks reconstruct full text
+      (2) source='chunks_empty' processing hint when no chunks yet
+      (3) chunks empty for a ready doc → hint says "no readable chunks"
     """
     import asyncio
 
@@ -355,6 +355,16 @@ def test_read_resume_direct_docstore_read(monkeypatch):
     monkeypatch.setattr(
         "app.services.resume.resume_service.resume_service.get_sections_by_user",
         lambda user_id: [],
+    )
+
+    # Tier 2 resolves the username → users.id via ``resolve_user_pk`` (a real
+    # ``db.query(User.id)...scalar()``) before filtering ``KnowledgeDocument``.
+    # The fake ``_Db`` below has no ``.scalar()``; the tool imports
+    # ``resolve_user_pk`` locally from ``app.core.user_identity`` at call time,
+    # so patch it at that source module.
+    monkeypatch.setattr(
+        "app.core.user_identity.resolve_user_pk",
+        lambda db, username: 1,
     )
 
     # Fake KnowledgeDocument rows. Branch behaviour is driven by the mocked

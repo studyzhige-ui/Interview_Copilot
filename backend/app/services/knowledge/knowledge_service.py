@@ -54,11 +54,9 @@ def delete_document_vectors_and_chunks(db: Session, document: KnowledgeDocument)
 
 
 def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> None:
-    from app.core.user_identity import resolve_user_pk
-
-    # object_key is namespaced by the stable users.id (the FileAsset's owner),
-    # while document.user_id is the username — resolve before building the prefix.
-    owner_pk = resolve_user_pk(db, document.user_id)
+    # document.user_id is the stable users.id (CLEANUP #2) — the FileAsset's
+    # owner — and object_key is namespaced by it, so use it directly.
+    owner_pk = document.user_id
     expected_prefix = f"uploads/{owner_pk}/{document.upload_id}/"
     _, storage_key = parse_s3_uri(document.storage_uri)
     if document.object_key != storage_key or not document.object_key.startswith(expected_prefix):

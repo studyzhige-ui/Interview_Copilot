@@ -112,6 +112,7 @@ def list_user_resumes(
     underlying FileAsset.id so MockSetup can pass it to /mock-interview/start
     as ``resume_upload_id`` without extra translation.
     """
+    from app.core.user_identity import resolve_user_pk
     from app.models.file_asset import FileAsset
     from app.models.knowledge import KnowledgeDocument
 
@@ -119,7 +120,7 @@ def list_user_resumes(
         db.query(KnowledgeDocument, FileAsset)
         .join(FileAsset, KnowledgeDocument.upload_id == FileAsset.id)
         .filter(
-            KnowledgeDocument.user_id == current_user.username,
+            KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username),
             KnowledgeDocument.category == "简历",
         )
         .order_by(KnowledgeDocument.created_at.desc())

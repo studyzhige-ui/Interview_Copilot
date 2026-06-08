@@ -22,7 +22,12 @@ class KnowledgeDocument(Base):
     )
 
     id = Column(String, primary_key=True, default=generate_document_id, index=True)
-    user_id = Column(String, index=True, nullable=False)
+    # Stable users.id FK (CLEANUP #2). The library API resolves the caller's
+    # username via resolve_user_pk; ingestion bridges this back to the username
+    # for the Milvus / document_chunks index copies (which key on the username).
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False,
+    )
     upload_id = Column(String, ForeignKey("file_assets.id"), index=True, nullable=False)
     title = Column(String, nullable=False)
     category = Column(String, index=True, default="默认", nullable=False)

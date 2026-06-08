@@ -18,6 +18,7 @@ import tempfile
 
 from sqlalchemy.orm import Session
 
+from app.core.user_identity import resolve_user_pk
 from app.models.knowledge import KnowledgeDocument
 from app.services.storage_service import download_file_from_s3
 from app.services.voice.file_parser import extract_resume_text
@@ -64,7 +65,7 @@ def find_knowledge_doc_by_upload(
         db.query(KnowledgeDocument)
         .filter(
             KnowledgeDocument.upload_id == upload_id,
-            KnowledgeDocument.user_id == user_id,
+            KnowledgeDocument.user_id == resolve_user_pk(db, user_id),
         )
         .first()
     )
@@ -89,7 +90,7 @@ def load_knowledge_text(db: Session, document_id: str, user_id: str) -> str:
         db.query(KnowledgeDocument)
         .filter(
             KnowledgeDocument.id == document_id,
-            KnowledgeDocument.user_id == user_id,
+            KnowledgeDocument.user_id == resolve_user_pk(db, user_id),
         )
         .first()
     )

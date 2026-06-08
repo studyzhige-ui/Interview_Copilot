@@ -214,7 +214,9 @@ def test_create_document_marks_failed_when_dispatch_explodes(client, db: Session
 
     # The document row should now exist with status='failed' so the UI
     # surfaces a real error rather than a forever-processing row.
-    rows = db.query(KnowledgeDocument).filter(KnowledgeDocument.user_id == "alice").all()
+    rows = db.query(KnowledgeDocument).filter(
+        KnowledgeDocument.user_id == _uid(db, "alice")
+    ).all()
     assert len(rows) == 1
     assert rows[0].status == "failed"
     assert "redis broker offline" in (rows[0].error_message or "")
@@ -237,7 +239,7 @@ def test_list_documents_is_user_scoped(client, db: Session):
         ))
         db.add(KnowledgeDocument(
             id=f"doc_{user}",
-            user_id=user,
+            user_id=_uid(db, user),
             upload_id=f"upl_{user}",
             title=f"{user} doc",
             category="默认",
@@ -266,7 +268,7 @@ def test_list_documents_filters_by_category(client, db: Session):
         validation_status="passed",
     ))
     db.add(KnowledgeDocument(
-        id="doc_a", user_id="alice", upload_id="upl_a", title="A",
+        id="doc_a", user_id=_uid(db, "alice"), upload_id="upl_a", title="A",
         category="Redis", source_kind="interview_qa",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
@@ -281,7 +283,7 @@ def test_list_documents_filters_by_category(client, db: Session):
         validation_status="passed",
     ))
     db.add(KnowledgeDocument(
-        id="doc_b", user_id="alice", upload_id="upl_b", title="B",
+        id="doc_b", user_id=_uid(db, "alice"), upload_id="upl_b", title="B",
         category="Java", source_kind="interview_qa",
         storage_uri="s3://b/y", object_key="y", status="ready",
     ))
@@ -302,7 +304,7 @@ def test_get_document_404_for_other_user(client, db: Session):
         object_key="x", upload_status="consumed", validation_status="passed",
     ))
     db.add(KnowledgeDocument(
-        id="doc_b", user_id="bob", upload_id="upl_b", title="B",
+        id="doc_b", user_id=_uid(db, "bob"), upload_id="upl_b", title="B",
         category="默认", source_kind="interview_qa",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
@@ -318,7 +320,7 @@ def test_patch_document_updates_title_and_category(client, db: Session):
         object_key="x", upload_status="consumed", validation_status="passed",
     ))
     db.add(KnowledgeDocument(
-        id="doc_a", user_id="alice", upload_id="upl_a", title="old",
+        id="doc_a", user_id=_uid(db, "alice"), upload_id="upl_a", title="old",
         category="默认", source_kind="interview_qa",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
@@ -341,7 +343,7 @@ def test_delete_document_calls_hard_delete(client, db: Session):
         object_key="x", upload_status="consumed", validation_status="passed",
     ))
     db.add(KnowledgeDocument(
-        id="doc_a", user_id="alice", upload_id="upl_a", title="t",
+        id="doc_a", user_id=_uid(db, "alice"), upload_id="upl_a", title="t",
         category="默认", source_kind="interview_qa",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
@@ -350,6 +352,42 @@ def test_delete_document_calls_hard_delete(client, db: Session):
         resp = client.delete("/api/v1/knowledge/documents/doc_a")
     assert resp.status_code == 200
     mock_del.assert_called_once()
+
+
+def test_hard_delete_guard_uses_pk_namespaced_prefix(db: Session, monkeypatch):
+    """Regression for CLEANUP #2: hard_delete builds the object-key prefix from
+    ``document.user_id`` (the users.id pk). A pk-namespaced key must pass the
+    guard, a foreign one must be refused. The route test above mocks
+    ``hard_delete``, so this is the only thing pinning the prefix logic — a stale
+    ``resolve_user_pk(pk-as-username)`` would yield ``uploads/None/...`` and 500
+    every real delete."""
+    from app.services.knowledge import knowledge_service as ks
+
+    uid = _uid(db, "alice")
+    monkeypatch.setattr(ks, "delete_document_vectors_and_chunks", lambda db, d: None)
+    monkeypatch.setattr(ks, "delete_s3_object", lambda uri: None)
+
+    ok = KnowledgeDocument(
+        id="kdoc_ok", user_id=uid, upload_id="fa_ok", title="r", category="简历",
+        source_kind="user_upload", storage_uri=f"s3://b/uploads/{uid}/fa_ok/r.pdf",
+        object_key=f"uploads/{uid}/fa_ok/r.pdf", status="ready",
+    )
+    db.add(ok)
+    db.commit()
+    monkeypatch.setattr(ks, "parse_s3_uri", lambda uri: ("b", f"uploads/{uid}/fa_ok/r.pdf"))
+    ks.hard_delete_knowledge_document(db, ok)  # pk-prefixed key → guard passes
+    assert ok.status == "deleting"
+
+    foreign = KnowledgeDocument(
+        id="kdoc_bad", user_id=uid, upload_id="fa_bad", title="x", category="c",
+        source_kind="user_upload", storage_uri="s3://b/uploads/999/fa_bad/x.pdf",
+        object_key="uploads/999/fa_bad/x.pdf", status="ready",
+    )
+    db.add(foreign)
+    db.commit()
+    monkeypatch.setattr(ks, "parse_s3_uri", lambda uri: ("b", "uploads/999/fa_bad/x.pdf"))
+    with pytest.raises(ValueError):
+        ks.hard_delete_knowledge_document(db, foreign)
 
 
 # ── /knowledge/categories ─────────────────────────────────────────────────
@@ -363,7 +401,7 @@ def test_list_categories_returns_counts(client, db: Session):
             object_key=f"{i}", upload_status="consumed", validation_status="passed",
         ))
         db.add(KnowledgeDocument(
-            id=f"doc_{i}", user_id="alice", upload_id=f"upl_{i}", title=f"t{i}",
+            id=f"doc_{i}", user_id=_uid(db, "alice"), upload_id=f"upl_{i}", title=f"t{i}",
             category=cat, source_kind="interview_qa",
             storage_uri=f"s3://b/{i}", object_key=f"{i}", status="ready",
         ))

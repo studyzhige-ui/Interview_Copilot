@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.rate_limit import RATE_EXPENSIVE, RATE_UPLOAD, limiter
 from app.core.security import get_current_user
+from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
@@ -129,7 +130,7 @@ async def create_knowledge_document(
             raise HTTPException(status_code=409, detail="Upload has already been consumed")
 
         document = KnowledgeDocument(
-            user_id=current_user.username,
+            user_id=resolve_user_pk(db, current_user.username),
             upload_id=upload.id,
             title=body.title or default_title(upload),
             category=body.category.strip() or "默认",
@@ -197,7 +198,7 @@ async def list_knowledge_documents(
     query = (
         db.query(KnowledgeDocument)
         .options(selectinload(KnowledgeDocument.upload))
-        .filter(KnowledgeDocument.user_id == current_user.username)
+        .filter(KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username))
     )
     if category:
         query = query.filter(KnowledgeDocument.category == category)
@@ -217,7 +218,7 @@ async def get_knowledge_document(
 ):
     document = (
         db.query(KnowledgeDocument)
-        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == current_user.username)
+        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username))
         .first()
     )
     if document is None:
@@ -234,7 +235,7 @@ async def update_knowledge_document(
 ):
     document = (
         db.query(KnowledgeDocument)
-        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == current_user.username)
+        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username))
         .first()
     )
     if document is None:
@@ -257,7 +258,7 @@ async def delete_knowledge_document(
 ):
     document = (
         db.query(KnowledgeDocument)
-        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == current_user.username)
+        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username))
         .first()
     )
     if document is None:
@@ -282,7 +283,7 @@ async def list_knowledge_categories(
 ):
     rows = (
         db.query(KnowledgeDocument.category, func.count(KnowledgeDocument.id))
-        .filter(KnowledgeDocument.user_id == current_user.username)
+        .filter(KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username))
         .group_by(KnowledgeDocument.category)
         .order_by(KnowledgeDocument.category.asc())
         .all()

@@ -80,8 +80,19 @@ def test_read_full_text_swallows_read_failure(monkeypatch):
 # ── find_knowledge_doc_by_upload (unchanged) ────────────────────────────────
 
 
-def test_find_knowledge_doc_by_upload_filters_user_and_upload():
+def test_find_knowledge_doc_by_upload_filters_user_and_upload(monkeypatch):
     from app.services.knowledge import knowledge_text_service as svc
+
+    # ``find_knowledge_doc_by_upload`` resolves the username → users.id via
+    # ``resolve_user_pk`` (a real ``db.query(User.id)...scalar()``) before
+    # filtering. The hand-rolled ``_Db`` fake below has no ``.scalar()``, so
+    # stub the resolver to a fixed pk; the user_id filter then compares
+    # against that pk and the captured-filter count stays at 2 (upload_id +
+    # user_id) — the ownership scoping is still genuinely exercised.
+    monkeypatch.setattr(
+        "app.services.knowledge.knowledge_text_service.resolve_user_pk",
+        lambda db, username: 1,
+    )
 
     captured_filters: list = []
 
@@ -117,6 +128,14 @@ def test_load_knowledge_text_prefers_chunks_over_reparse(monkeypatch):
     class _Db:
         def query(self, *a, **k): return _Q()
 
+    # ``load_knowledge_text`` resolves username → users.id via
+    # ``resolve_user_pk`` (a real ``db.query(User.id)...scalar()``) before
+    # filtering; the ``_Db`` fake has no ``.scalar()``, so stub the resolver.
+    monkeypatch.setattr(
+        "app.services.knowledge.knowledge_text_service.resolve_user_pk",
+        lambda db, username: 1,
+    )
+
     monkeypatch.setattr(svc, "read_full_text_from_chunks", lambda doc, **k: ("from chunks", 1))
 
     def _no_s3(*a, **k):
@@ -140,6 +159,12 @@ def test_load_knowledge_text_falls_back_to_reparse_when_no_chunks(monkeypatch):
 
     class _Db:
         def query(self, *a, **k): return _Q()
+
+    # See note above: stub the username→pk resolver for the fake ``_Db``.
+    monkeypatch.setattr(
+        "app.services.knowledge.knowledge_text_service.resolve_user_pk",
+        lambda db, username: 1,
+    )
 
     monkeypatch.setattr(svc, "read_full_text_from_chunks", lambda doc, **k: ("", 0))
     monkeypatch.setattr(svc, "download_file_from_s3", lambda src, dst: None)

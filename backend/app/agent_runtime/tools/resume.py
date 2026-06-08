@@ -70,6 +70,7 @@ def _read_resume_sync(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, 
         }
 
     # No parsed sections — fall back to the raw upload table.
+    from app.core.user_identity import resolve_user_pk
     from app.db.database import SessionLocal
     from app.models.knowledge import KnowledgeDocument
 
@@ -78,7 +79,7 @@ def _read_resume_sync(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, 
         raw_resumes = (
             db.query(KnowledgeDocument)
             .filter(
-                KnowledgeDocument.user_id == ctx.user_id,
+                KnowledgeDocument.user_id == resolve_user_pk(db, ctx.user_id),
                 KnowledgeDocument.category == "简历",
             )
             .order_by(KnowledgeDocument.updated_at.desc())
