@@ -160,7 +160,6 @@ def test_read_resume_direct_docstore_read(monkeypatch):
     """
     import asyncio
     import json
-    from types import SimpleNamespace
 
     from app.agent_runtime.tool_registry import AgentToolContext
     from app.agent_runtime.tools.resume import _read_resume_handler, ReadResumeArgs
@@ -201,76 +200,45 @@ def test_read_resume_direct_docstore_read(monkeypatch):
             lambda: _Db(doc_rows),
         )
 
-    # --- Branch 1: docstore yields nodes → full_text -------------------
+    _TXT = "app.services.knowledge.knowledge_text_service.read_full_text_from_docstore"
+
+    # --- Branch 1: chunks present → full_text --------------------------
 
     _patch_db([_FakeDoc(
-        id="kdoc_X", title="resume.pdf", status="ready",
-        node_ids=["n1", "n2", "n3"],
+        id="kdoc_X", title="resume.pdf", status="ready", node_ids=["n1", "n2", "n3"],
     )])
-
-    class _FakeDocstore:
-        def __init__(self, mapping): self.mapping = mapping
-        def get_document(self, nid):
-            text = self.mapping.get(nid)
-            return SimpleNamespace(text=text) if text else None
-
-    fake_store = _FakeDocstore({
-        "n1": "孙根武\n北京邮电大学",
-        "n2": "工作经历: ...",
-        "n3": "技能: Python, Rust",
-    })
     monkeypatch.setattr(
-        "llama_index.storage.docstore.postgres.PostgresDocumentStore.from_uri",
-        classmethod(lambda cls, uri: fake_store),
+        _TXT,
+        lambda doc, **k: ("孙根武\n北京邮电大学\n\n工作经历: ...\n\n技能: Python, Rust", 3),
     )
-
     result = asyncio.run(_read_resume_handler(args, ctx))
     assert result["source"] == "docstore_direct"
     assert result["node_count"] == 3
     assert "孙根武" in result["full_text"]
-    assert "工作经历" in result["full_text"]
     assert "技能" in result["full_text"]
-    # Ordering preserved (n1 before n2 before n3).
     assert result["full_text"].index("孙根武") < result["full_text"].index("工作经历")
 
-    # --- Branch 2: empty node_ids → processing hint -------------------
+    # --- Branch 2: no chunks yet → processing hint ---------------------
 
     _patch_db([_FakeDoc(
-        id="kdoc_Y", title="resume.pdf", status="processing",
-        node_ids=[],
+        id="kdoc_Y", title="resume.pdf", status="processing", node_ids=[],
     )])
+    monkeypatch.setattr(_TXT, lambda doc, **k: ("", 0))
     result = asyncio.run(_read_resume_handler(args, ctx))
     assert result["source"] == "docstore_empty"
     assert result["status"] == "processing"
     assert "processing" in result["hint"].lower()
 
-    # --- Branch 3: docstore.from_uri raises → friendly error hint -----
-    # NB: post-refactor, the exception is swallowed + logged inside
-    # ``read_full_text_from_docstore`` (the shared helper) rather than
-    # propagating up to the tool handler. That's the right separation
-    # of concerns — the raw exception message ("simulated_db_down" or
-    # similar) stays in server logs and does NOT leak into the LLM-
-    # facing hint string. The user-facing branch detection is
-    # unchanged: still ``source=docstore_empty`` with a hint.
+    # --- Branch 3: chunk read returns empty for a ready doc ------------
 
     _patch_db([_FakeDoc(
-        id="kdoc_Z", title="resume.pdf", status="ready",
-        node_ids=["n1"],
+        id="kdoc_Z", title="resume.pdf", status="ready", node_ids=["n1"],
     )])
-    def _boom(cls, uri):
-        raise RuntimeError("simulated_db_down")
-    monkeypatch.setattr(
-        "llama_index.storage.docstore.postgres.PostgresDocumentStore.from_uri",
-        classmethod(_boom),
-    )
+    monkeypatch.setattr(_TXT, lambda doc, **k: ("", 0))
     result = asyncio.run(_read_resume_handler(args, ctx))
     assert result["source"] == "docstore_empty"
-    # Hint mentions status + the no-readable-nodes signal. Raw
-    # exception text is intentionally NOT in the hint.
     assert "status=ready" in result["hint"]
     assert "no readable nodes" in result["hint"]
-    # The user-facing string should not leak raw infrastructure errors.
-    assert "simulated_db_down" not in result["hint"]
 
 
 def test_tool_start_and_tool_done_carry_tool_call_id():

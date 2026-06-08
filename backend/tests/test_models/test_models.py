@@ -94,6 +94,7 @@ def test_all_expected_tables_registered(test_engine):
         "user_model_provider_settings",
         "user_model_selections",
         "knowledge_documents",
+        "document_chunks",
         "interview_records",
         "interview_qa",
         "mock_interview_sessions",

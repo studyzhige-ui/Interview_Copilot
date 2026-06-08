@@ -1,19 +1,10 @@
-"""Resolve a KnowledgeDocument (or its UserUpload) into plain text.
+"""Resolve a KnowledgeDocument into plain text.
 
-The fast path reads the **already-parsed chunks** out of the LlamaIndex
-``PostgresDocumentStore`` — i.e. the work that was done ONCE at library
-ingestion time. We concatenate the chunk texts back in stored order
-(which is left-to-right document order for the SentenceSplitter the
-ingestion pipeline uses) and return the result.
-
-The slow path (download from S3 → re-parse with PyMuPDF / LlamaParse) is
-kept as a fallback for documents that have no docstore nodes — either
-because ingestion is still running, failed, or the upload was used
-without ever being added to the knowledge library. **This cold path used
-to be the default** for the mock-interview start endpoint, which is why
-"start mock interview" was taking 8-10 seconds: the file was already
-parsed, but we were paying for a fresh remote LlamaParse round-trip on
-every single session start. The docstore path resolves in ~5-50 ms.
+The fast path reads the **already-parsed chunks** from the Postgres
+``document_chunks`` fact table — the work done ONCE at ingestion time —
+concatenated in chunk order. The slow path (download from S3 → re-parse) is a
+fallback for documents that have no chunks yet (ingestion still running /
+failed). The fast path resolves in ~5-50 ms vs. an 8-10 s re-parse.
 
 Used by:
   - ``/chat/mock-interview/start``  for both resume and JD text
@@ -27,9 +18,7 @@ import tempfile
 
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.models.knowledge import KnowledgeDocument
-from app.services.knowledge.knowledge_service import json_list
 from app.services.storage_service import download_file_from_s3
 from app.services.voice.file_parser import extract_resume_text
 
@@ -41,63 +30,24 @@ def read_full_text_from_docstore(
     *,
     max_chars: int = 20000,
 ) -> tuple[str, int]:
-    """Pull the document's parsed chunks out of PostgresDocumentStore and
-    concatenate them in stored order.
+    """Concatenate the document's chunks from Postgres ``document_chunks`` in
+    order. Returns ``(text, chunk_count)``; ``("", 0)`` when the document has
+    no chunks yet (ingestion still running / failed) so the caller falls back
+    to re-parsing the raw upload.
 
-    Returns ``(text, node_count)``. Empty tuple ``("", 0)`` when the
-    document has no usable node_ids — caller is expected to fall back
-    to re-parsing the raw upload in that case.
-
-    Failure modes we silently absorb (and return ``("", 0)`` for):
-      - ``node_ids`` column is empty / malformed (ingestion never ran,
-        or row was created but the chunk-storage step crashed)
-      - ``PostgresDocumentStore.from_uri`` can't import (e.g. a stripped
-        environment without llama_index extras) or fails to connect
-      - All ``get_document`` lookups return None / raise
-
-    Logging is at WARNING for the connection failure (real problem) and
-    silent for per-node missing (expected churn).
+    Reads the ``document_chunks`` fact table now — the old LlamaIndex
+    ``PostgresDocumentStore`` is gone. (Name kept for its callers; a rename to
+    ``read_full_text_from_chunks`` is a CLEANUP item.)
     """
-    node_ids = json_list(doc.node_ids)
-    if not node_ids:
-        return "", 0
+    from app.db.database import SessionLocal
+    from app.services.knowledge.document_chunk_service import read_document_text
 
     try:
-        from llama_index.storage.docstore.postgres import PostgresDocumentStore
-        docstore = PostgresDocumentStore.from_uri(uri=settings.DATABASE_URL)
-    except Exception as exc:  # noqa: BLE001 — broad on purpose
-        logger.warning(
-            "docstore unreachable; falling back to re-parse for doc=%s: %s",
-            doc.id, exc,
-        )
+        with SessionLocal() as db:
+            return read_document_text(db, doc.id, max_chars=max_chars)
+    except Exception as exc:  # noqa: BLE001 — never break the caller on a read
+        logger.warning("chunk read failed for doc=%s: %s", doc.id, exc)
         return "", 0
-
-    pieces: list[str] = []
-    nodes_read = 0
-    for nid in node_ids:
-        try:
-            node = docstore.get_document(nid)
-        except Exception:
-            continue
-        if node is None:
-            continue
-        # TextNode exposes ``.text`` directly; the broader BaseNode
-        # surface uses ``get_content()``. Cover both so a future
-        # llama_index version change doesn't silently regress us.
-        text = getattr(node, "text", None)
-        if not text and hasattr(node, "get_content"):
-            try:
-                text = node.get_content()
-            except Exception:
-                text = None
-        if text:
-            pieces.append(str(text))
-            nodes_read += 1
-
-    if nodes_read == 0:
-        return "", 0
-    full = "\n\n".join(pieces)
-    return full[:max_chars], nodes_read
 
 
 def find_knowledge_doc_by_upload(
@@ -127,14 +77,14 @@ def find_knowledge_doc_by_upload(
 def load_knowledge_text(db: Session, document_id: str, user_id: str) -> str:
     """Resolve a ``KnowledgeDocument.id`` into plain text.
 
-    Fast path: read the already-parsed chunks out of the docstore. This
+    Fast path: read the already-parsed chunks from ``document_chunks``. This
     is the common case — anything in the user's library has been
     ingested. Resolves in ~5-50 ms with no remote calls.
 
     Cold path: download the original file and re-parse it. Only happens
-    for documents whose docstore nodes aren't readable (ingestion still
-    pending / failed / disconnected docstore). Used to be the only path,
-    which is why /mock-interview/start took ~9s on cold resumes.
+    for documents that have no chunks yet (ingestion still pending /
+    failed). Used to be the only path, which is why /mock-interview/start
+    took ~9s on cold resumes.
 
     Returns ``""`` on any failure — callers should treat the result as
     optional and not block the broader flow.
@@ -155,7 +105,7 @@ def load_knowledge_text(db: Session, document_id: str, user_id: str) -> str:
     if count > 0:
         return text
 
-    # Cold fallback — only when docstore is truly unhelpful.
+    # Cold fallback — only when no chunks exist yet.
     if not doc.storage_uri:
         return ""
     suffix = os.path.splitext(doc.title or doc.object_key or "")[1] or ".txt"

@@ -34,6 +34,7 @@ _setup_llm_tracing()
 
 from app.db.database import engine
 import app.models.chat
+import app.models.document_chunk
 import app.models.habit_doc
 import app.models.interview_qa  # Ensure models are registered before table creation.
 import app.models.interview_record

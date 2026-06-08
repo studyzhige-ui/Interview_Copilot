@@ -8,7 +8,8 @@ Cache lifecycle:
   - :func:`invalidate_bm25_cache` drops all entries for a user after
     document ingestion so subsequent queries see fresh content.
   - :func:`_get_cached_bm25` returns an unexpired entry if present.
-  - :func:`_build_and_cache_bm25` re-builds from the Postgres docstore.
+  - :func:`_build_and_cache_bm25` re-builds from the Postgres ``document_chunks``
+    fact table.
 """
 
 import logging
@@ -19,18 +20,13 @@ from typing import Optional
 
 from llama_index.retrievers.bm25 import BM25Retriever
 
-try:
-    from llama_index.storage.docstore.postgres import PostgresDocumentStore
-except ModuleNotFoundError:  # pragma: no cover - optional runtime dependency
-    PostgresDocumentStore = None
-
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 # 1 hour. Active invalidation is the primary freshness mechanism — every
-# write path that puts new content into the Postgres docstore
+# write path that puts new content into ``document_chunks``
 # (``ingest_document``, ``ingest_text``, and ``delete_knowledge_document``)
 # calls ``invalidate_bm25_cache(user_id)`` explicitly, so this TTL is a
 # safety net for edge cases (e.g. a worker writes nodes without going
@@ -115,29 +111,36 @@ def _build_and_cache_bm25(
     *,
     metadata_matches_scope,
 ) -> Optional[BM25Retriever]:
-    """Build a BM25 retriever from the Postgres docstore, cache it, and return it.
+    """Build a BM25 retriever from the Postgres ``document_chunks`` fact table.
 
-    ``metadata_matches_scope`` is injected from the caller so that this
-    module does not depend on the higher-level retriever's metadata-scope
-    helper (avoids a circular import).
+    Scoping is done by the SQL filter (user_id IN allowed + source_type), so
+    ``metadata_matches_scope`` is no longer needed here; it's kept in the
+    signature for the caller's compatibility.
     """
-    if PostgresDocumentStore is None:
-        return None
-    try:
-        docstore = PostgresDocumentStore.from_uri(uri=settings.DATABASE_URL)
-        all_nodes = list(docstore.docs.values())
-        logger.info("Postgres Docstore 节点总数: %s", len(all_nodes))
+    from llama_index.core.schema import TextNode
 
-        if not all_nodes:
-            return None
+    from app.db.database import SessionLocal
+    from app.models.document_chunk import DocumentChunk
+
+    try:
+        scope_users = allowed_user_ids or [user_id]
+        with SessionLocal() as db:
+            query = db.query(DocumentChunk).filter(DocumentChunk.user_id.in_(scope_users))
+            if source_type:
+                query = query.filter(DocumentChunk.source_type == source_type)
+            rows = query.order_by(DocumentChunk.created_at.asc()).all()
 
         filtered_nodes = [
-            n for n in all_nodes
-            if metadata_matches_scope(n.metadata, allowed_user_ids, source_type)
+            TextNode(
+                text=r.text,
+                id_=r.node_id or r.id,
+                metadata={"user_id": r.user_id, "source_type": r.source_type},
+            )
+            for r in rows if r.text
         ]
         if not filtered_nodes:
             logger.warning(
-                "BM25: 目标隔离区域下节点为空。allowed_user_ids=%s source_type=%s",
+                "BM25: 目标隔离区域下 chunk 为空。allowed_user_ids=%s source_type=%s",
                 allowed_user_ids, source_type,
             )
             return None

@@ -170,6 +170,7 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "user_model_provider_settings",
         "user_model_selections",
         "knowledge_documents",
+        "document_chunks",
         "interview_records",
         "interview_qa",
         "mock_interview_sessions",

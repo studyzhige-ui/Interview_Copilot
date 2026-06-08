@@ -1,4 +1,5 @@
 from app.models.chat import ChatMessage, ChatSession
+from app.models.document_chunk import DocumentChunk
 from app.models.file_asset import FileAsset
 from app.models.habit_doc import HabitDoc
 from app.models.interview_qa import InterviewQA
@@ -20,6 +21,7 @@ from app.models.user_model_selections import UserModelSelection
 __all__ = [
     "ChatMessage",
     "ChatSession",
+    "DocumentChunk",
     "FileAsset",
     "HabitDoc",
     "InterviewQA",

@@ -11,31 +11,39 @@ per-interview transcript scoring in
 
 import json
 import logging
-import os
 from typing import Any
 
-from llama_index.core.storage.docstore import SimpleDocumentStore
-
-from app.core.config import settings
 from app.rag.embeddings import agent_fast_llm
 
 logger = logging.getLogger(__name__)
 
 
-def _extract_personal_memories(docstore: Any, user_id: str) -> list[dict[str, Any]]:
+def _extract_personal_memories(db: Any, user_id: str) -> list[dict[str, Any]]:
+    """Read a user's personal_memory chunks from the Postgres document_chunks
+    fact table (replaces the old LlamaIndex docstore scan)."""
+    from app.models.document_chunk import DocumentChunk
+
+    rows = (
+        db.query(DocumentChunk)
+        .filter(
+            DocumentChunk.user_id == user_id,
+            DocumentChunk.source_type == "personal_memory",
+        )
+        .all()
+    )
     memories: list[dict[str, Any]] = []
-    docs = getattr(docstore, "docs", {}) or {}
-    for _, doc in docs.items():
-        metadata = getattr(doc, "metadata", {}) or {}
-        if metadata.get("source_type") != "personal_memory":
-            continue
-        if metadata.get("user_id") != user_id:
-            continue
+    for r in rows:
+        meta = {}
+        if r.metadata_json:
+            try:
+                meta = json.loads(r.metadata_json)
+            except json.JSONDecodeError:
+                meta = {}
         memories.append(
             {
-                "content": getattr(doc, "text", ""),
-                "score": float(metadata.get("original_score", 10.0)),
-                "time": metadata.get("last_accessed", ""),
+                "content": r.text or "",
+                "score": float(meta.get("original_score", 10.0)),
+                "time": meta.get("last_accessed", ""),
             }
         )
     return memories
@@ -57,13 +65,9 @@ async def generate_comprehensive_report(limit: int = 20, user_id: str | None = N
         return {"status": "empty", "message": "missing user id"}
 
     try:
-        docstore = None
-        if os.path.exists(settings.DOCSTORE_DIR):
-            docstore = SimpleDocumentStore.from_persist_dir(settings.DOCSTORE_DIR)
-        else:
-            return {"status": "empty", "message": "底层缓存为空"}
-
-        personal_memories = _extract_personal_memories(docstore, user_id=user_id)
+        from app.db.database import SessionLocal
+        with SessionLocal() as db:
+            personal_memories = _extract_personal_memories(db, user_id=user_id)
         if not personal_memories:
             return {"status": "empty", "message": "暂无人格记忆特征数据"}
 

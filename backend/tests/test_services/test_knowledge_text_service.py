@@ -1,177 +1,86 @@
-"""Tests for the docstore fast-path in knowledge_text_service.
+"""Tests for the knowledge-text fast path.
 
-These pin the perf win: when a document has been ingested into the
-library, its parsed chunks already live in PostgresDocumentStore — so
-mock-start / analyze / read_resume can read them back without a fresh
-S3 download + LlamaParse round-trip.
-
-Pre-fix mock-start timing on a fresh resume showed ``resume=8610ms``,
-99% of which was the LlamaParse remote call. With the docstore fast
-path that drops to ~5-50 ms.
+Parsed chunks now live in the Postgres ``document_chunks`` fact table (not a
+LlamaIndex docstore). ``read_document_text`` concatenates them in order;
+``read_full_text_from_docstore`` is the thin KnowledgeDocument wrapper, and
+``load_knowledge_text`` short-circuits the S3 re-parse when chunks exist.
 """
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
-import pytest
-
-
-def _make_doc(*, node_ids: list[str], id: str = "kdoc_1") -> SimpleNamespace:
-    """A minimal stand-in for a KnowledgeDocument row — only the fields
-    ``read_full_text_from_docstore`` actually touches."""
-    return SimpleNamespace(
-        id=id,
-        node_ids=json.dumps(node_ids),
-    )
+from app.models.document_chunk import DocumentChunk
 
 
-def test_read_full_text_returns_concatenated_chunks_in_stored_order(monkeypatch):
-    """Stored-order matters: SentenceSplitter emits chunks in document
-    flow (top → bottom for PDFs), so concatenating in node_ids order
-    preserves heading-above-body structure. Without this the LLM sees
-    the resume scrambled."""
-    from app.services.knowledge import knowledge_text_service as svc
+def _seed(db, document_id: str, texts: list[str], user_id: str = "u1") -> None:
+    for i, t in enumerate(texts):
+        db.add(DocumentChunk(
+            document_id=document_id, user_id=user_id,
+            source_type="official_docs", chunk_index=i, text=t,
+        ))
+    db.commit()
 
-    fake_nodes = {
-        "n1": SimpleNamespace(text="孙根武\n北京邮电大学"),
-        "n2": SimpleNamespace(text="工作经历: Acme Corp 2024-至今"),
-        "n3": SimpleNamespace(text="技能: Python, Rust, Go"),
-    }
 
-    class _FakeDocstore:
-        def get_document(self, nid):
-            return fake_nodes.get(nid)
+# ── read_document_text (the fact-source reader) ─────────────────────────────
 
-    monkeypatch.setattr(
-        "llama_index.storage.docstore.postgres.PostgresDocumentStore.from_uri",
-        classmethod(lambda cls, uri: _FakeDocstore()),
-    )
 
-    doc = _make_doc(node_ids=["n1", "n2", "n3"])
-    text, count = svc.read_full_text_from_docstore(doc)
+def test_read_document_text_concatenates_in_order(db_session):
+    from app.services.knowledge.document_chunk_service import read_document_text
 
+    _seed(db_session, "kdoc_1", ["孙根武\n北京邮电大学", "工作经历: Acme", "技能: Python"])
+    text, count = read_document_text(db_session, "kdoc_1")
     assert count == 3
-    assert "孙根武" in text
-    assert "工作经历" in text
-    assert "技能" in text
-    # Order matters — n1 before n2 before n3.
     assert text.index("孙根武") < text.index("工作经历") < text.index("技能")
 
 
-def test_read_full_text_returns_empty_on_no_node_ids():
-    """Documents whose ingestion hasn't populated ``node_ids`` yet
-    (status=processing / pending / failed) must return ``("", 0)``
-    rather than try to talk to the docstore — the caller will fall
-    back to re-parsing the raw upload."""
-    from app.services.knowledge import knowledge_text_service as svc
+def test_read_document_text_empty_when_no_chunks(db_session):
+    from app.services.knowledge.document_chunk_service import read_document_text
 
-    doc = _make_doc(node_ids=[])
-    text, count = svc.read_full_text_from_docstore(doc)
+    text, count = read_document_text(db_session, "kdoc_missing")
     assert text == ""
     assert count == 0
 
 
-def test_read_full_text_swallows_docstore_connection_failure(monkeypatch):
-    """If the docstore can't even be reached (DB down, llama_index extras
-    not installed in this env), return ``("", 0)`` and let the caller
-    fall back. Crashing the whole endpoint over an observability path
-    would be much worse than re-parsing."""
-    from app.services.knowledge import knowledge_text_service as svc
+def test_read_document_text_truncates_at_max_chars(db_session):
+    from app.services.knowledge.document_chunk_service import read_document_text
 
-    def _boom(cls, uri):
-        raise RuntimeError("simulated_db_down")
-
-    monkeypatch.setattr(
-        "llama_index.storage.docstore.postgres.PostgresDocumentStore.from_uri",
-        classmethod(_boom),
-    )
-
-    doc = _make_doc(node_ids=["n1"])
-    text, count = svc.read_full_text_from_docstore(doc)
-    assert text == ""
-    assert count == 0
-
-
-def test_read_full_text_skips_missing_nodes(monkeypatch):
-    """Individual ``get_document`` lookups can return None (chunk was
-    deleted out from under us) or raise (transient DB hiccup). Both
-    are absorbed and we keep going with whatever nodes we got.
-
-    All-missing collapses to ``("", 0)`` so the caller knows to fall
-    back to re-parsing."""
-    from app.services.knowledge import knowledge_text_service as svc
-
-    class _PartiallyEmpty:
-        def __init__(self): self.calls = 0
-        def get_document(self, nid):
-            self.calls += 1
-            if nid == "n_ok":
-                return SimpleNamespace(text="readable content")
-            if nid == "n_raises":
-                raise RuntimeError("transient")
-            return None  # n_missing
-
-    monkeypatch.setattr(
-        "llama_index.storage.docstore.postgres.PostgresDocumentStore.from_uri",
-        classmethod(lambda cls, uri: _PartiallyEmpty()),
-    )
-
-    doc = _make_doc(node_ids=["n_missing", "n_ok", "n_raises"])
-    text, count = svc.read_full_text_from_docstore(doc)
-    # Only 1 of 3 succeeded — we don't lose that one.
-    assert count == 1
-    assert "readable content" in text
-
-
-def test_read_full_text_uses_get_content_when_text_attr_missing(monkeypatch):
-    """Older llama_index versions / Document-subtype nodes may not
-    expose ``.text`` directly. Cover both shapes so a library upgrade
-    doesn't silently drop the content."""
-    from app.services.knowledge import knowledge_text_service as svc
-
-    class _DocLikeNode:
-        # No .text; only get_content()
-        def get_content(self): return "from get_content"
-
-    class _Store:
-        def get_document(self, nid):
-            return _DocLikeNode()
-
-    monkeypatch.setattr(
-        "llama_index.storage.docstore.postgres.PostgresDocumentStore.from_uri",
-        classmethod(lambda cls, uri: _Store()),
-    )
-
-    doc = _make_doc(node_ids=["n1"])
-    text, count = svc.read_full_text_from_docstore(doc)
-    assert count == 1
-    assert text == "from get_content"
-
-
-def test_read_full_text_truncates_at_max_chars(monkeypatch):
-    from app.services.knowledge import knowledge_text_service as svc
-
-    class _Big:
-        def get_document(self, nid):
-            return SimpleNamespace(text="A" * 30000)
-
-    monkeypatch.setattr(
-        "llama_index.storage.docstore.postgres.PostgresDocumentStore.from_uri",
-        classmethod(lambda cls, uri: _Big()),
-    )
-
-    doc = _make_doc(node_ids=["n1"])
-    text, count = svc.read_full_text_from_docstore(doc, max_chars=100)
+    _seed(db_session, "kdoc_big", ["A" * 30000])
+    text, count = read_document_text(db_session, "kdoc_big", max_chars=100)
     assert len(text) == 100
     assert count == 1
 
 
-def test_find_knowledge_doc_by_upload_filters_user_and_upload(monkeypatch):
-    """``find_knowledge_doc_by_upload`` must filter on BOTH user_id and
-    upload_id so a user can't access another user's library row by
-    guessing an upload id."""
+# ── read_full_text_from_docstore (thin wrapper) ─────────────────────────────
+
+
+def test_read_full_text_delegates_to_chunks(monkeypatch):
+    from app.services.knowledge import knowledge_text_service as svc
+
+    monkeypatch.setattr(
+        "app.services.knowledge.document_chunk_service.read_document_text",
+        lambda db, doc_id, *, max_chars=20000: ("full resume text", 2),
+    )
+    text, count = svc.read_full_text_from_docstore(SimpleNamespace(id="kdoc_1"))
+    assert (text, count) == ("full resume text", 2)
+
+
+def test_read_full_text_swallows_read_failure(monkeypatch):
+    from app.services.knowledge import knowledge_text_service as svc
+
+    def _boom(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(
+        "app.services.knowledge.document_chunk_service.read_document_text", _boom,
+    )
+    text, count = svc.read_full_text_from_docstore(SimpleNamespace(id="kdoc_1"))
+    assert (text, count) == ("", 0)
+
+
+# ── find_knowledge_doc_by_upload (unchanged) ────────────────────────────────
+
+
+def test_find_knowledge_doc_by_upload_filters_user_and_upload():
     from app.services.knowledge import knowledge_text_service as svc
 
     captured_filters: list = []
@@ -188,85 +97,52 @@ def test_find_knowledge_doc_by_upload_filters_user_and_upload(monkeypatch):
             return _Q()
 
     out = svc.find_knowledge_doc_by_upload(_Db(), "upl_x", "alice")
-    assert out is not None
-    assert out.id == "kdoc_ok"
-    # Two filter expressions: one on upload_id, one on user_id.
-    assert len(captured_filters) == 2
+    assert out is not None and out.id == "kdoc_ok"
+    assert len(captured_filters) == 2  # upload_id + user_id
 
 
-def test_load_knowledge_text_prefers_docstore_over_reparse(monkeypatch):
-    """The fast path must short-circuit the slow path — that's the
-    whole point of this refactor. Verify ``load_knowledge_text``
-    returns the docstore text and never touches ``download_file_from_s3``."""
+# ── load_knowledge_text (fast path vs S3 re-parse) ──────────────────────────
+
+
+def test_load_knowledge_text_prefers_chunks_over_reparse(monkeypatch):
     from app.services.knowledge import knowledge_text_service as svc
 
     class _Q:
         def filter(self, *a, **k): return self
         def first(self):
             return SimpleNamespace(
-                id="kdoc_ok",
-                node_ids=json.dumps(["n1"]),
-                storage_uri="s3://b/k",
-                title="x.pdf",
-                object_key="x.pdf",
+                id="kdoc_ok", storage_uri="s3://b/k", title="x.pdf", object_key="x.pdf",
             )
 
     class _Db:
         def query(self, *a, **k): return _Q()
 
-    class _Store:
-        def get_document(self, nid):
-            return SimpleNamespace(text="from docstore")
+    monkeypatch.setattr(svc, "read_full_text_from_docstore", lambda doc, **k: ("from chunks", 1))
 
-    monkeypatch.setattr(
-        "llama_index.storage.docstore.postgres.PostgresDocumentStore.from_uri",
-        classmethod(lambda cls, uri: _Store()),
-    )
-
-    # Sentinel: if anything tries to hit S3, the test fails loudly.
     def _no_s3(*a, **k):
-        raise AssertionError("download_file_from_s3 should NOT be called when docstore returns text")
+        raise AssertionError("download_file_from_s3 must NOT run when chunks exist")
 
-    monkeypatch.setattr(
-        "app.services.knowledge.knowledge_text_service.download_file_from_s3",
-        _no_s3,
-    )
-    monkeypatch.setattr(
-        "app.services.knowledge.knowledge_text_service.extract_resume_text",
-        _no_s3,
-    )
+    monkeypatch.setattr(svc, "download_file_from_s3", _no_s3)
+    monkeypatch.setattr(svc, "extract_resume_text", _no_s3)
 
-    text = svc.load_knowledge_text(_Db(), "kdoc_ok", "alice")
-    assert text == "from docstore"
+    assert svc.load_knowledge_text(_Db(), "kdoc_ok", "alice") == "from chunks"
 
 
-def test_load_knowledge_text_falls_back_to_reparse_when_docstore_empty(monkeypatch):
-    """When docstore returns empty (ingestion still pending), the
-    download+parse fallback runs and its result is returned."""
+def test_load_knowledge_text_falls_back_to_reparse_when_no_chunks(monkeypatch):
     from app.services.knowledge import knowledge_text_service as svc
 
     class _Q:
         def filter(self, *a, **k): return self
         def first(self):
             return SimpleNamespace(
-                id="kdoc_pending",
-                node_ids=json.dumps([]),  # not yet ingested
-                storage_uri="s3://b/k",
-                title="x.pdf",
-                object_key="x.pdf",
+                id="kdoc_pending", storage_uri="s3://b/k", title="x.pdf", object_key="x.pdf",
             )
 
     class _Db:
         def query(self, *a, **k): return _Q()
 
-    monkeypatch.setattr(
-        "app.services.knowledge.knowledge_text_service.download_file_from_s3",
-        lambda src, dst: None,  # no-op
-    )
-    monkeypatch.setattr(
-        "app.services.knowledge.knowledge_text_service.extract_resume_text",
-        lambda path: "from reparse",
-    )
+    monkeypatch.setattr(svc, "read_full_text_from_docstore", lambda doc, **k: ("", 0))
+    monkeypatch.setattr(svc, "download_file_from_s3", lambda src, dst: None)
+    monkeypatch.setattr(svc, "extract_resume_text", lambda path: "from reparse")
 
-    text = svc.load_knowledge_text(_Db(), "kdoc_pending", "alice")
-    assert text == "from reparse"
+    assert svc.load_knowledge_text(_Db(), "kdoc_pending", "alice") == "from reparse"

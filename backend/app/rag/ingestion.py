@@ -3,8 +3,13 @@ import logging
 from llama_index.core import SimpleDirectoryReader, StorageContext, VectorStoreIndex, Document
 from llama_index.vector_stores.milvus import MilvusVectorStore
 from llama_index.readers.file import PyMuPDFReader
-from llama_index.storage.docstore.postgres import PostgresDocumentStore
-from llama_index.core.node_parser import MarkdownNodeParser, SentenceSplitter, JSONNodeParser, CodeSplitter
+from llama_index.core.node_parser import (
+    CodeSplitter,
+    HTMLNodeParser,
+    JSONNodeParser,
+    MarkdownNodeParser,
+    SentenceSplitter,
+)
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -33,6 +38,30 @@ def _milvus_search_config() -> dict:
     }
 
 
+def _table_aware_nodes(document: Document, char_budget: int) -> list:
+    """Split CSV/XLSX-extracted text into row-group chunks, repeating the
+    header in each chunk so a single retrieved chunk stays self-describing."""
+    from llama_index.core.schema import TextNode
+
+    lines = [ln for ln in (document.text or "").splitlines() if ln.strip()]
+    if not lines:
+        return []
+    header = lines[0]
+    body = lines[1:] or [header]
+    nodes: list = []
+    buf: list[str] = []
+    size = len(header)
+    for row in body:
+        if buf and size + len(row) > char_budget:
+            nodes.append(TextNode(text=header + "\n" + "\n".join(buf), metadata=dict(document.metadata)))
+            buf, size = [], len(header)
+        buf.append(row)
+        size += len(row) + 1
+    if buf:
+        nodes.append(TextNode(text=header + "\n" + "\n".join(buf), metadata=dict(document.metadata)))
+    return nodes
+
+
 def get_optimal_nodes(document: Document) -> list:
     """
     自适应切块引擎：基于文档类型和内容结构智能选择切分策略。
@@ -50,20 +79,33 @@ def get_optimal_nodes(document: Document) -> list:
 
     is_markdown_parsed = document.metadata.get("is_markdown_parsed", False)
 
-    if is_markdown_parsed or file_name.endswith(".md") or file_name.endswith(".markdown") or source_type in ["interview_qa", "official_docs"]:
-        parser = MarkdownNodeParser()
-    elif file_name.endswith(".json"):
-        parser = JSONNodeParser()
-    elif file_name.endswith(".py"):
-        parser = CodeSplitter(language="python", chunk_lines=40, chunk_lines_overlap=5)
-    elif file_name.endswith(".java"):
-        parser = CodeSplitter(language="java", chunk_lines=40, chunk_lines_overlap=5)
-    elif file_name.endswith(".cpp") or file_name.endswith(".c"):
-        parser = CodeSplitter(language="cpp", chunk_lines=40, chunk_lines_overlap=5)
+    # Tabular files (CSV / XLSX): split by row groups and repeat the header in
+    # every chunk so a retrieved chunk is independently understandable.
+    if file_name.endswith((".csv", ".tsv", ".xlsx", ".xls")):
+        nodes = _table_aware_nodes(document, CHUNK_SIZE * 2)
     else:
-        parser = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+        if (
+            is_markdown_parsed
+            or file_name.endswith((".md", ".markdown"))
+            or source_type in ["interview_qa", "official_docs"]
+        ):
+            parser = MarkdownNodeParser()
+        elif file_name.endswith((".html", ".htm")):
+            # HTML-aware: keeps heading/section/list/table/code structure,
+            # drops script/style/nav noise.
+            parser = HTMLNodeParser()
+        elif file_name.endswith(".json"):
+            parser = JSONNodeParser()
+        elif file_name.endswith(".py"):
+            parser = CodeSplitter(language="python", chunk_lines=40, chunk_lines_overlap=5)
+        elif file_name.endswith(".java"):
+            parser = CodeSplitter(language="java", chunk_lines=40, chunk_lines_overlap=5)
+        elif file_name.endswith(".cpp") or file_name.endswith(".c"):
+            parser = CodeSplitter(language="cpp", chunk_lines=40, chunk_lines_overlap=5)
+        else:
+            parser = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
 
-    nodes = parser.get_nodes_from_documents([document])
+        nodes = parser.get_nodes_from_documents([document])
 
     # 二次兜底：对超长 chunk 做再切分，确保不超过 embedding 模型 max_seq_length
     secondary_splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
@@ -107,21 +149,13 @@ def _get_milvus_vector_store(overwrite: bool = False) -> MilvusVectorStore:
 
 
 def _get_storage_context(vector_store: MilvusVectorStore) -> StorageContext:
-    """
-    加载全局共享的混合储藏环境。
-    通过 PostgreSQL 获取纯天然持久化的 DocumentStore，配合 Milvus 驱动 Reranker 的回溯。
-    """
-    try:
-        docstore = PostgresDocumentStore.from_uri(uri=settings.DATABASE_URL)
-        logger.info("已成功挂载基于 PostgreSQL 的 Docstore.")
-    except Exception as e:
-        logger.error(f"无法衔接 PostgreSQL Docstore: {e}")
-        raise
+    """Milvus-only storage context.
 
-    return StorageContext.from_defaults(
-        docstore=docstore,
-        vector_store=vector_store
-    )
+    Chunk TEXT is the fact source in Postgres ``document_chunks`` (written by
+    ``document_chunk_service`` after the Milvus write) — NOT a LlamaIndex
+    docstore. Milvus holds the retrieval index only.
+    """
+    return StorageContext.from_defaults(vector_store=vector_store)
 
 
 async def ingest_document(
@@ -134,7 +168,7 @@ async def ingest_document(
     category: str | None = None,
 ):
     """
-    文档摄取入口：解析文件 → 自适应切块 → 写入 Milvus + Docstore。
+    文档摄取入口：解析文件 → 自适应切块 → 写入 Milvus 索引 + Postgres document_chunks。
     P0 安全：强制绑定 user_id 执行多租户物理隔离。
     """
     try:
@@ -210,28 +244,36 @@ async def ingest_document(
             if category:
                 node.metadata["category"] = category
 
-        # 连接 Milvus（追加模式，不清空现有数据）
+        # Milvus index (append mode), then the Postgres chunk fact rows.
         vector_store = _get_milvus_vector_store(overwrite=False)
         storage_context = _get_storage_context(vector_store)
 
-        logger.info(f">>> 开始写入 Milvus + Docstore，共 {len(all_nodes)} 个节点...")
-        index = VectorStoreIndex(
+        logger.info(f">>> 写入 Milvus 索引，共 {len(all_nodes)} 个节点...")
+        VectorStoreIndex(
             nodes=all_nodes,
             storage_context=storage_context,
-            store_nodes_override=True,
-            show_progress=True
+            show_progress=True,
         )
+
+        # Persist chunk TEXT to Postgres document_chunks — the fact source.
+        from app.db.database import SessionLocal
+        from app.services.knowledge.document_chunk_service import write_chunks
+        with SessionLocal() as db:
+            chunk_info = write_chunks(
+                db, nodes=all_nodes, user_id=user_id, source_type=source_type,
+                document_id=document_id,
+                metadata={"category": category} if category else None,
+            )
 
         logger.info(f">>> 摄取完成: '{file_path}' (source_type={source_type}, user_id={user_id})")
 
-        # Invalidate BM25 cache so next retrieval picks up new content.
         from app.rag.retriever import invalidate_bm25_cache
         invalidate_bm25_cache(user_id)
 
         return {
             "success": True,
-            "chunk_count": len(all_nodes),
-            "node_ids": [node.node_id for node in all_nodes],
+            "chunk_count": chunk_info["chunk_count"],
+            "node_ids": chunk_info["node_ids"],
             "ref_doc_ids": list({node.ref_doc_id for node in all_nodes if node.ref_doc_id}),
         }
 
@@ -257,11 +299,17 @@ async def ingest_text(text: str, source_type: str, user_id: str, metadata: dict 
         storage_context = _get_storage_context(vector_store)
 
         logger.info(f"纯文本摄取: {len(all_nodes)} 个节点写入 Milvus...")
-        VectorStoreIndex(
-            nodes=all_nodes,
-            storage_context=storage_context,
-            store_nodes_override=True
-        )
+        VectorStoreIndex(nodes=all_nodes, storage_context=storage_context)
+
+        # Persist to document_chunks (document_id NULL — e.g. personal_memory),
+        # so the diagnostics report reads from Postgres, not a docstore.
+        from app.db.database import SessionLocal
+        from app.services.knowledge.document_chunk_service import write_chunks
+        with SessionLocal() as db:
+            chunk_info = write_chunks(
+                db, nodes=all_nodes, user_id=user_id, source_type=source_type,
+                document_id=None, metadata=metadata or None,
+            )
 
         logger.info(f"文本摄取完成 (source_type='{source_type}')。")
 
@@ -270,8 +318,8 @@ async def ingest_text(text: str, source_type: str, user_id: str, metadata: dict 
 
         return {
             "success": True,
-            "chunk_count": len(all_nodes),
-            "node_ids": [node.node_id for node in all_nodes],
+            "chunk_count": chunk_info["chunk_count"],
+            "node_ids": chunk_info["node_ids"],
             "ref_doc_ids": list({node.ref_doc_id for node in all_nodes if node.ref_doc_id}),
         }
     except Exception as e:

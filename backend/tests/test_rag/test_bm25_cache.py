@@ -188,61 +188,67 @@ def test_invalidate_does_not_match_user_id_as_substring():
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_build_and_cache_bm25_returns_none_when_docstore_empty():
-    """No nodes in the docstore → no cache entry, returns None."""
+# The BM25 source is the Postgres ``document_chunks`` table now (read via
+# SessionLocal). These fakes control what that scoped query returns.
+def _fake_sessionlocal(rows):
+    class _Q:
+        def filter(self, *a, **k): return self
+        def order_by(self, *a, **k): return self
+        def all(self): return rows
+
+    class _Db:
+        def query(self, *a, **k): return _Q()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    return lambda: _Db()
+
+
+def test_build_and_cache_bm25_returns_none_when_no_chunks():
+    """No chunks for the scope → no cache entry, returns None."""
     from app.rag import bm25_cache as mod
 
-    fake_store = MagicMock()
-    fake_store.docs = {}
-
-    with patch.object(mod, "PostgresDocumentStore") as fake_cls:
-        fake_cls.from_uri.return_value = fake_store
+    with patch("app.db.database.SessionLocal", _fake_sessionlocal([])):
         result = mod._build_and_cache_bm25(
-            user_id="u-empty",
-            source_type=None,
-            allowed_user_ids=["u-empty"],
-            metadata_matches_scope=lambda meta, allowed, st: True,
+            user_id="u-empty", source_type=None, allowed_user_ids=["u-empty"],
+            metadata_matches_scope=lambda *a: True,
         )
     assert result is None
     with mod._bm25_cache_lock:
         assert "u-empty|*" not in mod._bm25_cache
 
 
-def test_build_and_cache_bm25_returns_none_when_scope_filters_everything():
-    from app.rag import bm25_cache as mod
-
-    other_user_node = MagicMock()
-    other_user_node.metadata = {"user_id": "other", "source_type": "interview_qa"}
-
-    fake_store = MagicMock()
-    fake_store.docs = {"id1": other_user_node}
-
-    def scope(meta, allowed, st):
-        return meta.get("user_id") in allowed
-
-    with patch.object(mod, "PostgresDocumentStore") as fake_cls:
-        fake_cls.from_uri.return_value = fake_store
-        result = mod._build_and_cache_bm25(
-            user_id="alice",
-            source_type=None,
-            allowed_user_ids=["alice"],
-            metadata_matches_scope=scope,
-        )
-    assert result is None
-    with mod._bm25_cache_lock:
-        assert "alice|*" not in mod._bm25_cache
-
-
 def test_build_and_cache_bm25_swallows_errors_and_returns_none():
-    """A failure inside Postgres connection should degrade quietly."""
+    """A failure opening the DB should degrade quietly."""
     from app.rag import bm25_cache as mod
 
-    with patch.object(mod, "PostgresDocumentStore") as fake_cls:
-        fake_cls.from_uri.side_effect = RuntimeError("PG down")
+    def _boom():
+        raise RuntimeError("PG down")
+
+    with patch("app.db.database.SessionLocal", _boom):
         result = mod._build_and_cache_bm25(
-            user_id="u-err",
-            source_type=None,
-            allowed_user_ids=["u-err"],
-            metadata_matches_scope=lambda meta, allowed, st: True,
+            user_id="u-err", source_type=None, allowed_user_ids=["u-err"],
+            metadata_matches_scope=lambda *a: True,
         )
     assert result is None
+
+
+def test_build_and_cache_bm25_builds_and_caches_from_chunks():
+    """Chunks present → a retriever is built and cached under the scope key."""
+    from types import SimpleNamespace
+
+    from app.rag import bm25_cache as mod
+
+    rows = [
+        SimpleNamespace(text="redis 缓存穿透 解决方案", node_id="n1", id="dch1",
+                        user_id="alice", source_type="official_docs"),
+    ]
+    with patch("app.db.database.SessionLocal", _fake_sessionlocal(rows)):
+        result = mod._build_and_cache_bm25(
+            user_id="alice", source_type="official_docs", allowed_user_ids=["alice"],
+            metadata_matches_scope=lambda *a: True,
+        )
+    assert result is not None
+    with mod._bm25_cache_lock:
+        assert "alice|official_docs" in mod._bm25_cache
+        mod._bm25_cache.clear()

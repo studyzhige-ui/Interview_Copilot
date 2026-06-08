@@ -4,7 +4,6 @@ from datetime import datetime
 from pathlib import Path
 
 from llama_index.vector_stores.milvus import MilvusVectorStore
-from llama_index.storage.docstore.postgres import PostgresDocumentStore
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -34,27 +33,24 @@ def default_title(upload: UserUpload) -> str:
     return Path(upload.original_filename).stem or upload.original_filename
 
 
-def delete_document_vectors_and_docstore(document: KnowledgeDocument) -> None:
-    node_ids = json_list(document.node_ids)
-    ref_doc_ids = json_list(document.ref_doc_ids)
+def delete_document_vectors_and_chunks(db: Session, document: KnowledgeDocument) -> None:
+    """Delete a document's chunk facts (Postgres ``document_chunks``) and its
+    Milvus index entries. The chunk rows are the source of the Milvus node ids.
+    """
+    from app.services.knowledge.document_chunk_service import delete_document_chunks
 
-    vector_store = MilvusVectorStore(
-        uri=settings.MILVUS_URI,
-        collection_name=settings.MILVUS_COLLECTION,
-        dim=settings.EMBEDDING_DIM,
-        overwrite=False,
-        similarity_metric=settings.MILVUS_SIMILARITY_METRIC,
-        index_config=_milvus_dense_index_config(),
-        search_config=_milvus_search_config(),
-    )
+    node_ids = delete_document_chunks(db, document.id)
     if node_ids:
+        vector_store = MilvusVectorStore(
+            uri=settings.MILVUS_URI,
+            collection_name=settings.MILVUS_COLLECTION,
+            dim=settings.EMBEDDING_DIM,
+            overwrite=False,
+            similarity_metric=settings.MILVUS_SIMILARITY_METRIC,
+            index_config=_milvus_dense_index_config(),
+            search_config=_milvus_search_config(),
+        )
         vector_store.delete_nodes(node_ids=node_ids)
-
-    docstore = PostgresDocumentStore.from_uri(uri=settings.DATABASE_URL)
-    for ref_doc_id in ref_doc_ids:
-        docstore.delete_ref_doc(ref_doc_id, raise_error=False)
-    for node_id in node_ids:
-        docstore.delete_document(node_id, raise_error=False)
 
 
 def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> None:
@@ -69,7 +65,7 @@ def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> 
     db.commit()
 
     try:
-        delete_document_vectors_and_docstore(document)
+        delete_document_vectors_and_chunks(db, document)
         delete_s3_object(document.storage_uri)
     except Exception as exc:
         document.status = "delete_failed"
