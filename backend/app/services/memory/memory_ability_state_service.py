@@ -42,17 +42,17 @@ def build_search_text(topic: str, summary: str | None) -> str:
     return "\n".join(parts)
 
 
-def _enqueue_index_upsert(db: Session, *, user_pk: int, username: str, row) -> None:
+def _enqueue_index_upsert(db: Session, *, user_pk: int, row) -> None:
     """Queue a durable Milvus re-index for this ability state, in the caller's
-    transaction. ``payload.user_id`` is the USERNAME — the search filter keys on
-    it — while the outbox row's FK uses the stable pk."""
+    transaction. ``payload.user_id`` is the stable users.id pk — the same value
+    the ability collection's node metadata and search filter key on (CLEANUP #2)."""
     from app.services.uploads.outbox_service import enqueue_job
 
     enqueue_job(
         db, user_pk=user_pk, job_type="upsert_memory_ability_index",
         aggregate_type="memory_ability_state", aggregate_id=row.id,
         payload={
-            "state_id": row.id, "user_id": username,
+            "state_id": row.id, "user_id": user_pk,
             "search_text": row.search_text or "", "topic": row.topic,
             "skill_type": row.skill_type, "mastery_level": row.mastery_level,
             "summary": row.summary or "",
@@ -262,7 +262,7 @@ def _upsert_inner(
                 f"{topic}/{skill_type} → {mastery_level}",
         db=db,
     )
-    _enqueue_index_upsert(db, user_pk=user_pk, username=username, row=row)
+    _enqueue_index_upsert(db, user_pk=user_pk, row=row)
     return row
 
 

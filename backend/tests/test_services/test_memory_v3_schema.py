@@ -285,16 +285,19 @@ def test_build_search_text():
 
 def test_ability_upsert_enqueues_milvus_index_job(seeded):
     """Each ability upsert queues a durable Milvus re-index in the same tx; the
-    payload carries the username (the search filter key) + the row snapshot."""
+    payload carries the owner pk (the ability collection's scope key) + the row
+    snapshot."""
     import json
 
     from app.models.outbox_job import OutboxJob
+    from app.models.user import User
     from app.services.memory import memory_ability_state_service as svc
 
     svc.upsert("alice", topic="Redis", skill_type="knowledge_topic",
                mastery_level="weak", summary="s", change_type="patch_realtime")
     s = seeded()
     try:
+        alice_pk = s.query(User.id).filter(User.username == "alice").scalar()
         jobs = (
             s.query(OutboxJob)
             .filter(OutboxJob.job_type == "upsert_memory_ability_index")
@@ -302,7 +305,7 @@ def test_ability_upsert_enqueues_milvus_index_job(seeded):
         )
         assert len(jobs) == 1
         payload = json.loads(jobs[0].payload_json)
-        assert payload["user_id"] == "alice" and payload["topic"] == "Redis"
+        assert payload["user_id"] == alice_pk and payload["topic"] == "Redis"
         assert payload["state_id"]
     finally:
         s.close()

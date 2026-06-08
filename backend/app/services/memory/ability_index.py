@@ -64,7 +64,7 @@ def _init() -> Any:
 def upsert_ability(
     state_id: str,
     *,
-    user_id: str,
+    user_id: int,
     search_text: str,
     topic: str,
     skill_type: str,
@@ -109,12 +109,16 @@ def delete_ability(state_id: str) -> None:
 def search_abilities(user_id: str, query: str, top_k: int | None = None) -> list[dict[str, Any]]:
     """Return the user's most topic-relevant ability states for ``query``.
 
-    Read path — degrades to ``[]`` on any Milvus error so a turn never breaks.
+    ``user_id`` is the username principal; it's resolved to the stable users.id
+    pk (the ability collection's scope key, CLEANUP #2) before filtering. Read
+    path — degrades to ``[]`` on any Milvus error so a turn never breaks.
     """
     if not (query or "").strip():
         return []
     top_k = top_k or settings.MEMORY_ABILITY_TOP_K
     try:
+        from app.core.user_identity import resolve_user_pk
+        from app.db.database import SessionLocal
         from llama_index.core.retrievers import VectorIndexRetriever
         from llama_index.core.vector_stores import (
             FilterOperator,
@@ -122,19 +126,25 @@ def search_abilities(user_id: str, query: str, top_k: int | None = None) -> list
             MetadataFilters,
         )
 
+        # Resolve the username principal -> the pk the ability collection keys on.
+        # Inside the try so a resolve/db hiccup degrades to [] like any other.
+        with SessionLocal() as _db:
+            user_pk = resolve_user_pk(_db, user_id)
+        if user_pk is None:
+            return []
         index = _init()
         retriever = VectorIndexRetriever(
             index=index,
             similarity_top_k=top_k,
             filters=MetadataFilters(
-                filters=[MetadataFilter(key="user_id", value=user_id, operator=FilterOperator.EQ)]
+                filters=[MetadataFilter(key="user_id", value=user_pk, operator=FilterOperator.EQ)]
             ),
         )
         nodes = retriever.retrieve(query)
         out: list[dict[str, Any]] = []
         for n in nodes:
             m = n.node.metadata or {}
-            if m.get("user_id") != user_id:  # defence-in-depth on the tenant filter
+            if m.get("user_id") != user_pk:  # defence-in-depth on the tenant filter
                 continue
             out.append({
                 "topic": m.get("topic", ""),

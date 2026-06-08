@@ -30,7 +30,7 @@ def test_upsert_handler_calls_index_from_payload():
     from app.services.memory import ability_outbox
 
     payload = {
-        "state_id": "mas_1", "user_id": "alice", "search_text": "Redis\n穿透",
+        "state_id": "mas_1", "user_id": 1, "search_text": "Redis\n穿透",
         "topic": "Redis", "skill_type": "knowledge_topic", "mastery_level": "weak",
         "summary": "s",
     }
@@ -38,7 +38,7 @@ def test_upsert_handler_calls_index_from_payload():
         ability_outbox._handle_upsert(None, _job(payload))
     up.assert_called_once()
     assert up.call_args.args[0] == "mas_1"
-    assert up.call_args.kwargs["user_id"] == "alice"
+    assert up.call_args.kwargs["user_id"] == 1
     assert up.call_args.kwargs["topic"] == "Redis"
 
 
@@ -64,7 +64,9 @@ def test_search_abilities_degrades_to_empty_on_error():
     an empty list, not an exception."""
     from app.services.memory import ability_index
 
-    with patch.object(ability_index, "_init", side_effect=RuntimeError("milvus down")):
+    # resolve succeeds (mocked) so the Milvus _init failure is what's exercised.
+    with patch.object(ability_index, "_init", side_effect=RuntimeError("milvus down")), \
+         patch("app.core.user_identity.resolve_user_pk", return_value=1):
         assert ability_index.search_abilities("alice", "redis 穿透", top_k=3) == []
 
 
