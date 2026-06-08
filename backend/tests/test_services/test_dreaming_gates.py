@@ -59,11 +59,21 @@ def _seed_user(Session, username: str, *, last_dreamed_at: datetime | None):
 def _seed_chat(Session, *, user_id: str, session_id: str, messages: int,
                session_created_at: datetime | None = None,
                message_created_at: datetime | None = None):
+    """Seed a debrief session (+ messages) owned by ``user_id`` (a username).
+
+    ``chat_sessions.user_id`` is the integer ``users.id`` FK now (CLEANUP #2),
+    and gate 3's ``_count_new_activity_since`` filters on
+    ``ChatSession.user_id == resolve_user_pk(db, username)``. So resolve the
+    username → pk here (the ``users`` row is seeded by ``_seed_user`` first)
+    and store the integer pk on the session.
+    """
     from app.models.chat import ChatMessage, ChatSession
+    from app.models.user import User
     db = Session()
     try:
+        user_pk = db.query(User.id).filter(User.username == user_id).scalar()
         sess = ChatSession(
-            id=session_id, user_id=user_id, title="t",
+            id=session_id, user_id=user_pk, title="t",
             session_type="debrief",
         )
         if session_created_at is not None:
@@ -216,7 +226,7 @@ def test_record_quiet_threshold_excludes_active_record(engine_and_session, monke
         ))
         # Active record: most recent message is 30min old.
         db.add(ChatSession(
-            id="s_active", user_id="alice", title="t",
+            id="s_active", user_id=alice_pk, title="t",
             session_type="debrief", interview_id="ir_active",
         ))
         db.add(ChatMessage(
@@ -225,7 +235,7 @@ def test_record_quiet_threshold_excludes_active_record(engine_and_session, monke
         ))
         # Settled record: most recent message is (RECORD_QUIET_HOURS+1) old.
         db.add(ChatSession(
-            id="s_settled", user_id="alice", title="t",
+            id="s_settled", user_id=alice_pk, title="t",
             session_type="debrief", interview_id="ir_settled",
         ))
         db.add(ChatMessage(

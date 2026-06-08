@@ -37,7 +37,16 @@ class ChatSession(Base):
     )
 
     id = Column(String, primary_key=True, default=generate_uuid, index=True)
-    user_id = Column(String, index=True, nullable=False)
+    # Stable users.id FK (CLEANUP #2). Resolved from the runtime username via
+    # resolve_user_pk at every API/service boundary. A debrief session's owner
+    # pk equals its bound interview_record's owner pk, so build_interview_reference
+    # matches pk==pk directly — no pk->username bridge needed there.
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
     title = Column(String, default="新的面试对话")
     summary = Column(Text, default="")
     session_type = Column(String, index=True, default="general", nullable=False)

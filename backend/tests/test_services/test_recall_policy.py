@@ -50,15 +50,20 @@ def _seed(Session, *, username="alice", user_default=False, session_override=Non
     from app.models.user import User
     db = Session()
     try:
-        db.add(User(
+        user = User(
             username=username,
             email=f"{username}@e.com",
             hashed_password="x",
             global_memory_enabled=user_default,
-        ))
+        )
+        db.add(user)
+        db.flush()  # assign users.id so the session can key on the integer pk
+        # chat_sessions.user_id is the integer users.id FK now (CLEANUP #2);
+        # the writer's ownership guard resolves the username → pk and compares
+        # against this column, so seed the resolved pk (not the username).
         db.add(ChatSession(
             id="s1",
-            user_id=username,
+            user_id=user.id,
             global_memory_enabled=session_override,
         ))
         db.commit()
@@ -148,11 +153,20 @@ def test_set_session_is_noop_for_wrong_owner(engine_and_session, monkeypatch):
     """Ownership safety net: a write for a session owned by someone else is a
     no-op and leaves the column untouched."""
     from app.models.chat import ChatSession
+    from app.models.user import User
     from app.services.memory.recall_policy import set_session_global_memory
 
     engine, Session = engine_and_session
     _rebind(monkeypatch, Session)
     _seed(Session, session_override=None)
+    # Seed mallory as a distinct real user so the no-op is driven by a genuine
+    # pk mismatch (alice_pk != mallory_pk), not by an unseeded user → None.
+    seed_db = Session()
+    try:
+        seed_db.add(User(username="mallory", email="mallory@e.com", hashed_password="x"))
+        seed_db.commit()
+    finally:
+        seed_db.close()
 
     set_session_global_memory("s1", "mallory", enabled=True)
 

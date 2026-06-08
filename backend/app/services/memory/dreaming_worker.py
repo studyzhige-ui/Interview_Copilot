@@ -178,16 +178,17 @@ def _count_new_activity_since(
     dreamer, so they shouldn't trip the gate either (review found
     this as M2 — was dispatching empty Celery tasks).
     """
+    user_pk = resolve_user_pk(db, user_id)
     msg_q = (
         db.query(ChatMessage)
         .join(ChatSession, ChatSession.id == ChatMessage.session_id)
         .filter(
-            ChatSession.user_id == user_id,
+            ChatSession.user_id == user_pk,
             ChatSession.session_type == "debrief",
         )
     )
     sess_q = db.query(ChatSession).filter(
-        ChatSession.user_id == user_id,
+        ChatSession.user_id == user_pk,
         ChatSession.session_type == "debrief",
     )
     if cursor is not None:

@@ -38,6 +38,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
+from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.chat import ChatSession
 from app.models.user import User
@@ -92,7 +93,7 @@ def set_session_global_memory(session_id: str, user_id: str, enabled: bool) -> N
     db: Session = SessionLocal()
     try:
         row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
-        if row is None or row.user_id != user_id:
+        if row is None or row.user_id != resolve_user_pk(db, user_id):
             return
         row.global_memory_enabled = bool(enabled)
         db.commit()

@@ -71,7 +71,7 @@ async def start_mock_interview(
 
     session = db.query(ChatSession).filter(
         ChatSession.id == body.session_id,
-        ChatSession.user_id == current_user.username,
+        ChatSession.user_id == resolve_user_pk(db, current_user.username),
     ).first()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -326,7 +326,7 @@ async def get_in_progress_mock(
     candidates = (
         db.query(ChatSession)
         .filter(
-            ChatSession.user_id == current_user.username,
+            ChatSession.user_id == resolve_user_pk(db, current_user.username),
             ChatSession.session_type == "mock_interview",
             ChatSession.archived_at.is_(None),
         )
@@ -433,7 +433,7 @@ async def abandon_mock_interview(
         db.query(ChatSession)
         .filter(
             ChatSession.id == session_id,
-            ChatSession.user_id == current_user.username,
+            ChatSession.user_id == resolve_user_pk(db, current_user.username),
             ChatSession.session_type == "mock_interview",
         )
         .first()
@@ -486,7 +486,7 @@ async def get_current_question(
     ``state.pending_question`` + ``state.pending_response`` — no LLM call."""
     session = db.query(ChatSession).filter(
         ChatSession.id == session_id,
-        ChatSession.user_id == current_user.username,
+        ChatSession.user_id == resolve_user_pk(db, current_user.username),
     ).first()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -540,7 +540,7 @@ async def submit_mock_answer(
 
     session = db.query(ChatSession).filter(
         ChatSession.id == body.session_id,
-        ChatSession.user_id == current_user.username,
+        ChatSession.user_id == resolve_user_pk(db, current_user.username),
     ).first()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -689,7 +689,7 @@ async def finish_mock_interview(
 
     session = db.query(ChatSession).filter(
         ChatSession.id == session_id,
-        ChatSession.user_id == current_user.username,
+        ChatSession.user_id == resolve_user_pk(db, current_user.username),
     ).first()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -737,7 +737,7 @@ async def finish_mock_interview(
 
     debrief_session = ChatSession(
         id=generate_uuid(),
-        user_id=current_user.username,
+        user_id=resolve_user_pk(db, current_user.username),
         title=f"复盘: {session.title or '模拟面试'}",
         session_type="debrief",
         interview_id=record.id,

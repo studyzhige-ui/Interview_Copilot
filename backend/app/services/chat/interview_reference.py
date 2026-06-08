@@ -30,7 +30,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
@@ -55,8 +54,13 @@ _TRANSCRIPT_HARD_CAP_CHARS = 2400
 _PER_QUESTION_TAKE = 12
 
 
-def build_interview_reference(interview_id: str, user_id: str) -> str:
+def build_interview_reference(interview_id: str, owner_pk: int) -> str:
     """Return a compact markdown reference for the given interview record.
+
+    ``owner_pk`` is the stable users.id of the session owner. A debrief chat
+    session and its bound interview_record always belong to the same user, so we
+    match ``InterviewRecord.user_id == owner_pk`` directly (pk==pk) — context
+    assembly passes the chat session's owner pk straight through.
 
     Empty string if the record doesn't exist, doesn't belong to the user, or
     has no usable data. Empty is fine — caller (the pipeline) just skips the
@@ -68,7 +72,7 @@ def build_interview_reference(interview_id: str, user_id: str) -> str:
             db.query(InterviewRecord)
             .filter(
                 InterviewRecord.id == interview_id,
-                InterviewRecord.user_id == resolve_user_pk(db, user_id),
+                InterviewRecord.user_id == owner_pk,
             )
             .first()
         )

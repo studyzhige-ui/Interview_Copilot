@@ -2,7 +2,7 @@
 
 Wipes, in this order (each step transactional or idempotent):
   1. Milvus  — vector rows whose ``doc_id`` belongs to a non-admin user
-  2. Postgres — rows in 9 user-scoped tables, then the users themselves
+  2. Postgres — rows in every user-scoped table, then the users themselves
   3. MinIO   — object keys under ``uploads/<username>/`` and ``avatars/<username>/``
                for every non-admin username
 
@@ -34,17 +34,13 @@ from app.db.database import SessionLocal
 from app.models.user import User
 
 
-# User-scoped tables, split by how ``user_id`` is keyed (the refactor left
-# business/runtime tables on the username string but moved newer stores to the
-# stable users.id integer FK). chat_messages / interview_qa are wiped via a
-# parent-id subquery (handled specially below).
+# User-scoped tables, split by how ``user_id`` is keyed. After CLEANUP #2 most
+# tables use the stable users.id integer FK; only document_chunks / resume_sections
+# stay on the username string (they mirror the Milvus retrieval-scope key).
+# chat_messages / interview_qa carry no user_id — they're wiped via a parent-id
+# subquery (handled specially below).
 USERNAME_TABLES = (
-    "knowledge_documents",
     "document_chunks",
-    "chat_sessions",
-    "mock_interview_sessions",
-    "mock_interview_runtime",
-    "interview_records",
     "resume_sections",
 )
 USER_PK_TABLES = (
@@ -57,6 +53,11 @@ USER_PK_TABLES = (
     "memory_ability_states",
     "memory_audit_logs",
     "resumes",
+    "knowledge_documents",
+    "interview_records",
+    "mock_interview_sessions",
+    "mock_interview_runtime",
+    "chat_sessions",
 )
 # Order is exception-tolerant (each statement runs in its own savepoint), but we
 # still wipe children before parents for any non-CASCADE FK.
@@ -103,10 +104,10 @@ def _count_rows_per_table(db, admin_username: str) -> dict[str, int]:
     queries: list[tuple[str, str, dict]] = [
         ("chat_messages",
          "SELECT COUNT(*) FROM chat_messages cm JOIN chat_sessions cs "
-         "ON cm.session_id = cs.id WHERE cs.user_id != :auname", {"auname": admin_username}),
+         "ON cm.session_id = cs.id WHERE cs.user_id != :apk", {"apk": admin_pk}),
         ("interview_qa",
          "SELECT COUNT(*) FROM interview_qa iq JOIN interview_records ir "
-         "ON iq.record_id = ir.id WHERE ir.user_id != :auname", {"auname": admin_username}),
+         "ON iq.record_id = ir.id WHERE ir.user_id != :apk", {"apk": admin_pk}),
     ]
     queries += [
         (t, f"SELECT COUNT(*) FROM {t} WHERE user_id != :auname", {"auname": admin_username})
@@ -131,7 +132,7 @@ def _count_rows_per_table(db, admin_username: str) -> dict[str, int]:
 def _non_admin_doc_ids(db, admin_username: str) -> list[str]:
     """Collect every Milvus-side ``doc_id`` that points at non-admin data.
 
-    Two source tables:
+    Source table:
       * ``knowledge_documents.id`` — the ``kdoc_*`` key stored as
         ``doc_id`` in the ``interview_copilot_rag`` collection.
     Post-v3 cleanup (alembic 0003 dropped ``memory_items``): only
@@ -144,11 +145,14 @@ def _non_admin_doc_ids(db, admin_username: str) -> list[str]:
     the v3 migration; Milvus delete iterates whatever collections exist
     today (``_delete_milvus_vectors`` skips missing collections).
     """
+    admin_pk = db.execute(
+        text("SELECT id FROM users WHERE username = :auname"), {"auname": admin_username},
+    ).scalar()
     rows = db.execute(
         text(
-            "SELECT id FROM knowledge_documents WHERE user_id != :auname"
+            "SELECT id FROM knowledge_documents WHERE user_id != :apk"
         ),
-        {"auname": admin_username},
+        {"apk": admin_pk},
     ).fetchall()
     return [r[0] for r in rows if r[0]]
 
@@ -220,10 +224,10 @@ def _delete_postgres_rows(db, admin_username: str, dry_run: bool) -> None:
     deletes: list[tuple[str, str, dict]] = [
         ("interview_qa",
          "DELETE FROM interview_qa WHERE record_id IN "
-         "(SELECT id FROM interview_records WHERE user_id != :auname)", {"auname": admin_username}),
+         "(SELECT id FROM interview_records WHERE user_id != :apk)", {"apk": admin_pk}),
         ("chat_messages",
          "DELETE FROM chat_messages WHERE session_id IN "
-         "(SELECT id FROM chat_sessions WHERE user_id != :auname)", {"auname": admin_username}),
+         "(SELECT id FROM chat_sessions WHERE user_id != :apk)", {"apk": admin_pk}),
     ]
     deletes += [
         (t, f"DELETE FROM {t} WHERE user_id != :auname", {"auname": admin_username})

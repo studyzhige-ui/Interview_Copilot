@@ -29,6 +29,7 @@ from datetime import datetime
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.chat import ChatMessage, ChatSession, generate_uuid
 
@@ -43,7 +44,7 @@ class TranscriptService:
             if row is None:
                 row = ChatSession(
                     id=session_id or generate_uuid(),
-                    user_id=user_id,
+                    user_id=resolve_user_pk(db, user_id),
                 )
                 db.add(row)
                 db.commit()
@@ -77,7 +78,7 @@ class TranscriptService:
             if session_row is None:
                 session_row = ChatSession(
                     id=session_id,
-                    user_id=user_id,
+                    user_id=resolve_user_pk(db, user_id),
                 )
                 db.add(session_row)
                 db.flush()
@@ -183,6 +184,8 @@ class TranscriptService:
                 return None
             return {
                 "session_id": row.id,
+                # Owner pk (users.id). build_interview_reference matches it
+                # pk==pk against the bound interview_record's user_id.
                 "user_id": row.user_id,
                 "session_type": row.session_type or "general",
                 "interview_id": row.interview_id,
