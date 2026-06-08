@@ -161,7 +161,7 @@ def _get_storage_context(vector_store: MilvusVectorStore) -> StorageContext:
 async def ingest_document(
     file_path: str,
     source_kind: str,
-    user_id: str,
+    user_id: int,
     *,
     document_id: str | None = None,
     upload_id: str | None = None,
@@ -282,7 +282,7 @@ async def ingest_document(
         raise
 
 
-async def ingest_text(text: str, source_kind: str, user_id: str, metadata: dict = None):
+async def ingest_text(text: str, source_kind: str, user_id: int, metadata: dict = None):
     """
     纯文本节点摄取通道。
     P0 安全：强制执行多租户隔离。

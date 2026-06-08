@@ -195,16 +195,14 @@ def process_document_ingestion(self, document_id: str):
             return {"status": "failed", "error": f"Knowledge document not found: {document_id}"}
         # document.user_id is the stable users.id (CLEANUP #2), as is the
         # FileAsset's — compare directly + use it for the pk-namespaced
-        # object_key prefix below. The Milvus / document_chunks index copies key
-        # on the username, so resolve it once for the ingest call.
-        from app.models.user import User
-
+        # object_key prefix below. The Milvus / document_chunks index now keys on
+        # the stable users.id (CLEANUP #2) — which is exactly document.user_id —
+        # so the pk goes straight to the ingest call (no pk->username bridge).
         owner_pk = document.user_id
         if not document.upload or document.upload.user_id != owner_pk:
             raise ValueError("Knowledge upload owner does not match document owner")
         if document.upload.purpose != "knowledge_document":
             raise ValueError("Knowledge document upload has invalid purpose")
-        owner_username = db.query(User.username).filter(User.id == owner_pk).scalar()
         if document.status not in {"processing", "failed"}:
             return {"status": "skipped", "document_id": document_id, "current_status": document.status}
 
@@ -251,7 +249,7 @@ def process_document_ingestion(self, document_id: str):
             ingest_document(
                 local_file_path,
                 document.source_kind,
-                owner_username,
+                owner_pk,
                 document_id=document.id,
                 upload_id=document.upload_id,
                 category=document.category,

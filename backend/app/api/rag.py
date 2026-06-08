@@ -272,7 +272,7 @@ async def delete_knowledge_document(
     # Flush the BM25 cache so the next retrieval doesn't surface
     # snippets from the just-deleted document.
     from app.rag.bm25_cache import invalidate_bm25_cache
-    invalidate_bm25_cache(current_user.username)
+    invalidate_bm25_cache(resolve_user_pk(db, current_user.username))
     return {"status": "success"}
 
 

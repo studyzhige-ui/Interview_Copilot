@@ -20,6 +20,8 @@ from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.retrievers import QueryFusionRetriever
 
 from app.core.config import settings
+from app.core.user_identity import resolve_user_pk
+from app.db.database import SessionLocal
 from app.rag.reranker_registry import build_reranker, resolve_reranker
 from app.rag.bm25_cache import (
     _build_and_cache_bm25 as _build_and_cache_bm25_impl,
@@ -139,9 +141,9 @@ def init_reranker():
 
 
 def _build_and_cache_bm25(
-    user_id: str,
+    user_id: int,
     source_kind: Optional[str],
-    allowed_user_ids: list[str],
+    allowed_user_ids: list[int],
 ):
     """Compatibility wrapper — injects ``_metadata_matches_scope`` from this module."""
     return _build_and_cache_bm25_impl(
@@ -160,13 +162,16 @@ def _split_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _allowed_user_ids(user_id: str, source_kind: Optional[str]) -> list[str]:
-    return [user_id] if user_id else []
+def _allowed_user_ids(user_id: int, source_kind: Optional[str]) -> list[int]:
+    # ``is not None`` (not truthiness): the scope key is now a numeric users.id,
+    # and a hypothetical pk of 0 must still scope to that user, never collapse to
+    # an empty (and thus unscoped-fallback) list.
+    return [user_id] if user_id is not None else []
 
 
 def _metadata_matches_scope(
     metadata: dict[str, Any],
-    allowed_user_ids: list[str],
+    allowed_user_ids: list[int],
     source_kind: Optional[str],
 ) -> bool:
     if allowed_user_ids and metadata.get("user_id") not in allowed_user_ids:
@@ -177,7 +182,7 @@ def _metadata_matches_scope(
 
 
 def _build_metadata_filters(
-    allowed_user_ids: list[str],
+    allowed_user_ids: list[int],
     source_kind: Optional[str],
 ) -> MetadataFilters:
     filter_list = []
@@ -275,14 +280,34 @@ async def query_knowledge_base(
         if min_score is None:
             min_score = settings.RAG_MIN_SCORE
 
+        # Resolve the request principal (username) -> stable users.id once. The
+        # RAG scope key (Milvus node metadata + document_chunks.user_id) is the
+        # pk; everything below filters by it. An unresolved principal means no
+        # accessible corpus -> return empty (never fall through to an unscoped
+        # query, which would leak across tenants).
+        with SessionLocal() as _db:
+            user_pk = resolve_user_pk(_db, user_id)
+        if user_pk is None:
+            logger.warning(
+                "query_knowledge_base: principal %r did not resolve to a users.id; "
+                "returning empty (no unscoped retrieval).", user_id,
+            )
+            return {
+                "answer": "[SYSTEM_EMPTY_WARNING] 知识库中未检索到与该问题高度相关的参考信息。",
+                "context_text": "[SYSTEM_EMPTY_WARNING] 知识库中未检索到与该问题高度相关的参考信息。",
+                "chunks": [],
+                "sources": [],
+            }
+
         # ===== [1] 连接 Milvus 向量引擎（复用单例） =====
         index = _get_milvus_index()
 
         # ===== [2] 构建多租户隔离过滤器 (Milvus MetadataFilter) =====
-        allowed_user_ids = _allowed_user_ids(user_id, source_kind)
+        allowed_user_ids = _allowed_user_ids(user_pk, source_kind)
         logger.info(
-            "元数据过滤器已激活: requested_user_id=%s, allowed_user_ids=%s, source_kind=%s",
+            "元数据过滤器已激活: requested_user_id=%s, user_pk=%s, allowed_user_ids=%s, source_kind=%s",
             user_id,
+            user_pk,
             allowed_user_ids,
             source_kind,
         )
@@ -310,9 +335,9 @@ async def query_knowledge_base(
                 mode="reciprocal_rerank",
             )
 
-        bm25_retriever = _get_cached_bm25(user_id, source_kind, allowed_user_ids)
+        bm25_retriever = _get_cached_bm25(user_pk, source_kind, allowed_user_ids)
         if bm25_retriever is None:
-            bm25_retriever = _build_and_cache_bm25(user_id, source_kind, allowed_user_ids)
+            bm25_retriever = _build_and_cache_bm25(user_pk, source_kind, allowed_user_ids)
 
         if bm25_retriever is not None:
             final_retriever = QueryFusionRetriever(

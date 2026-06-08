@@ -13,11 +13,10 @@ A row is one chunk:
     row), identified by ``source_kind='personal_memory'`` + ``user_id``.
 
 ``user_id`` / ``source_kind`` are denormalised so the keyword + diagnostics
-scoped reads don't need a join. ``user_id`` here is the retrieval-scope
-**username** — it mirrors the Milvus metadata scope key and intentionally stays
-username-keyed even though ``knowledge_documents.user_id`` moved to the stable
-``users.id`` in CLEANUP #2 (the ingestion bridge resolves pk→username when
-writing chunks).
+scoped reads don't need a join. ``user_id`` here is the stable ``users.id`` FK —
+the same value used as the Milvus retrieval-scope key. CLEANUP #2 moved the whole
+RAG scope key from username to ``users.id``; ingestion writes the pk to both the
+Milvus node metadata and this column, and retrieval filters both by the pk.
 """
 import uuid
 from datetime import datetime
@@ -59,7 +58,12 @@ class DocumentChunk(Base):
     # Milvus node id this chunk is indexed under — used to delete the matching
     # vector when the chunk is removed.
     node_id = Column(String, index=True, nullable=True)
-    user_id = Column(String, index=True, nullable=False)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
     source_kind = Column(String, nullable=False)
     chunk_index = Column(Integer, nullable=False, default=0)
     text = Column(Text, nullable=False)

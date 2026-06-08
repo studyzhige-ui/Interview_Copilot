@@ -30,7 +30,7 @@ def write_chunks(
     db: Session,
     *,
     nodes: list[Any],
-    user_id: str,
+    user_id: int,
     source_kind: str,
     document_id: str | None = None,
     metadata: dict | None = None,

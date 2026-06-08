@@ -63,11 +63,11 @@ _bm25_cache: "OrderedDict[str, _BM25CacheEntry]" = OrderedDict()
 _bm25_cache_lock = Lock()
 
 
-def _bm25_cache_key(user_id: str, source_kind: Optional[str]) -> str:
+def _bm25_cache_key(user_id: int, source_kind: Optional[str]) -> str:
     return f"{user_id}|{source_kind or '*'}"
 
 
-def invalidate_bm25_cache(user_id: str) -> None:
+def invalidate_bm25_cache(user_id: int) -> None:
     """Invalidate all cached BM25 indexes for a given user.
 
     Call this after document ingestion to ensure fresh retrieval.
@@ -85,9 +85,9 @@ def invalidate_bm25_cache(user_id: str) -> None:
 
 
 def _get_cached_bm25(
-    user_id: str,
+    user_id: int,
     source_kind: Optional[str],
-    allowed_user_ids: list[str],
+    allowed_user_ids: list[int],
 ) -> Optional[BM25Retriever]:
     """Return a cached BM25 retriever if available and not expired."""
     cache_key = _bm25_cache_key(user_id, source_kind)
@@ -105,9 +105,9 @@ def _get_cached_bm25(
 
 
 def _build_and_cache_bm25(
-    user_id: str,
+    user_id: int,
     source_kind: Optional[str],
-    allowed_user_ids: list[str],
+    allowed_user_ids: list[int],
     *,
     metadata_matches_scope,
 ) -> Optional[BM25Retriever]:

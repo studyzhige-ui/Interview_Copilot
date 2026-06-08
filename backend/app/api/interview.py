@@ -370,6 +370,7 @@ async def save_personal_memory(
     response: Response,
     body: MemorySaveRequest,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     try:
         ingest_fn = ingest_text
@@ -391,7 +392,7 @@ async def save_personal_memory(
         await ingest_fn(
             text=combined_text,
             source_kind="personal_memory",
-            user_id=current_user.username,
+            user_id=resolve_user_pk(db, current_user.username),
             metadata=metadata,
         )
         return {

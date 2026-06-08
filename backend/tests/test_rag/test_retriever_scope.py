@@ -31,10 +31,12 @@ import pytest
 def test_allowed_user_ids_is_strictly_private():
     from app.rag import retriever
 
-    assert retriever._allowed_user_ids("alice", "interview_qa") == ["alice"]
-    assert retriever._allowed_user_ids("alice", "personal_memory") == ["alice"]
-    # Empty user_id → empty allowlist (caller should bail).
-    assert retriever._allowed_user_ids("", "interview_qa") == []
+    # Scope key is the stable users.id pk now (resolved from the username once
+    # at query_knowledge_base). Strictly private: only the caller's own pk.
+    assert retriever._allowed_user_ids(1, "interview_qa") == [1]
+    assert retriever._allowed_user_ids(1, "personal_memory") == [1]
+    # Unresolved principal (resolve_user_pk -> None) → empty allowlist (caller bails).
+    assert retriever._allowed_user_ids(None, "interview_qa") == []
 
 
 def test_metadata_scope_requires_user_and_source_match():
@@ -43,29 +45,29 @@ def test_metadata_scope_requires_user_and_source_match():
     matches = retriever._metadata_matches_scope
 
     assert matches(
-        {"user_id": "alice", "source_kind": "interview_qa"},
-        ["alice"],
+        {"user_id": 1, "source_kind": "interview_qa"},
+        [1],
         "interview_qa",
     )
     # Wrong user
     assert not matches(
-        {"user_id": "bob", "source_kind": "interview_qa"},
-        ["alice"],
+        {"user_id": 2, "source_kind": "interview_qa"},
+        [1],
         "interview_qa",
     )
     # Wrong source_kind
     assert not matches(
-        {"user_id": "alice", "source_kind": "personal_memory"},
-        ["alice"],
+        {"user_id": 1, "source_kind": "personal_memory"},
+        [1],
         "interview_qa",
     )
     # source_kind=None disables source filter, but user_id still enforced.
     assert matches(
-        {"user_id": "alice", "source_kind": "anything"}, ["alice"], None,
+        {"user_id": 1, "source_kind": "anything"}, [1], None,
     )
     # Empty allowed list disables user filter entirely.
     assert matches(
-        {"user_id": "bob", "source_kind": "interview_qa"}, [], "interview_qa",
+        {"user_id": 2, "source_kind": "interview_qa"}, [], "interview_qa",
     )
 
 
@@ -78,29 +80,29 @@ def test_build_metadata_filters_uses_eq_for_single_user():
     from llama_index.core.vector_stores import FilterOperator
     from app.rag import retriever
 
-    flt = retriever._build_metadata_filters(["alice"], "interview_qa")
+    flt = retriever._build_metadata_filters([1], "interview_qa")
     keys = {(f.key, f.operator) for f in flt.filters}
     assert ("user_id", FilterOperator.EQ) in keys
     assert ("source_kind", FilterOperator.EQ) in keys
-    # Find the user_id filter and check the literal value.
+    # Find the user_id filter and check the literal value (the pk).
     user_filter = next(f for f in flt.filters if f.key == "user_id")
-    assert user_filter.value == "alice"
+    assert user_filter.value == 1
 
 
 def test_build_metadata_filters_uses_in_for_multiple_users():
     from llama_index.core.vector_stores import FilterOperator
     from app.rag import retriever
 
-    flt = retriever._build_metadata_filters(["alice", "shared"], "interview_qa")
+    flt = retriever._build_metadata_filters([1, 2], "interview_qa")
     user_filter = next(f for f in flt.filters if f.key == "user_id")
     assert user_filter.operator == FilterOperator.IN
-    assert list(user_filter.value) == ["alice", "shared"]
+    assert list(user_filter.value) == [1, 2]
 
 
 def test_build_metadata_filters_skips_source_when_none():
     from app.rag import retriever
 
-    flt = retriever._build_metadata_filters(["alice"], None)
+    flt = retriever._build_metadata_filters([1], None)
     keys = {f.key for f in flt.filters}
     assert "user_id" in keys
     assert "source_kind" not in keys
@@ -185,7 +187,7 @@ def test_score_passes_no_relaxation_below_threshold():
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _fake_node(user_id: str, source_kind: str, text: str):
+def _fake_node(user_id: int, source_kind: str, text: str):
     """Build a fake retrieved node compatible with the metadata-scope helper."""
     return SimpleNamespace(
         node=SimpleNamespace(
@@ -203,15 +205,15 @@ def test_metadata_scope_blocks_cross_user_leak():
     from app.rag import retriever
 
     candidates = [
-        _fake_node("alice", "interview_qa", "alice's private note"),
-        _fake_node("bob",   "interview_qa", "bob's confidential file"),
-        _fake_node("alice", "interview_qa", "alice's second note"),
-        _fake_node("alice", "official_docs", "wrong source kind"),
+        _fake_node(1, "interview_qa", "alice's private note"),
+        _fake_node(2, "interview_qa", "bob's confidential file"),
+        _fake_node(1, "interview_qa", "alice's second note"),
+        _fake_node(1, "official_docs", "wrong source kind"),
     ]
     survivors = [
         n for n in candidates
         if retriever._metadata_matches_scope(
-            n.node.metadata, ["alice"], "interview_qa"
+            n.node.metadata, [1], "interview_qa"
         )
     ]
     contents = {n.node.get_content() for n in survivors}

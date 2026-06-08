@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from app.models.document_chunk import DocumentChunk
 
 
-def _seed(db, document_id: str, texts: list[str], user_id: str = "u1") -> None:
+def _seed(db, document_id: str, texts: list[str], user_id: int = 1) -> None:
     for i, t in enumerate(texts):
         db.add(DocumentChunk(
             document_id=document_id, user_id=user_id,

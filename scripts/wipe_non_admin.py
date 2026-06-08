@@ -34,13 +34,12 @@ from app.db.database import SessionLocal
 from app.models.user import User
 
 
-# User-scoped tables, split by how ``user_id`` is keyed. After CLEANUP #2 most
-# tables use the stable users.id integer FK; only document_chunks / resume_sections
-# stay on the username string (they mirror the Milvus retrieval-scope key).
+# User-scoped tables, split by how ``user_id`` is keyed. After CLEANUP #2 nearly
+# every table uses the stable users.id integer FK; only resume_sections still
+# mirrors the Milvus retrieval-scope key on the username string (migrated next).
 # chat_messages / interview_qa carry no user_id — they're wiped via a parent-id
 # subquery (handled specially below).
 USERNAME_TABLES = (
-    "document_chunks",
     "resume_sections",
 )
 USER_PK_TABLES = (
@@ -58,6 +57,7 @@ USER_PK_TABLES = (
     "mock_interview_sessions",
     "mock_interview_runtime",
     "chat_sessions",
+    "document_chunks",
 )
 # Order is exception-tolerant (each statement runs in its own savepoint), but we
 # still wipe children before parents for any non-CASCADE FK.
