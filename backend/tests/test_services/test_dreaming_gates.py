@@ -189,6 +189,7 @@ def test_record_quiet_threshold_excludes_active_record(engine_and_session, monke
     old must NOT be selected — they're 'currently being chatted'."""
     from app.models.chat import ChatMessage, ChatSession
     from app.models.interview_record import InterviewRecord
+    from app.models.user import User
     from app.services.memory.dreaming_worker import (
         RECORD_QUIET_HOURS, select_records_for_user,
     )
@@ -196,15 +197,21 @@ def test_record_quiet_threshold_excludes_active_record(engine_and_session, monke
     engine, Session = engine_and_session
     _rebind(monkeypatch, Session)
 
+    # select_records_for_user resolves the username → users.id and filters
+    # InterviewRecord.user_id on that integer pk (CLEANUP #2), so a real
+    # ``users`` row must exist and the records must carry its pk.
+    _seed_user(Session, "alice", last_dreamed_at=None)
+
     now = datetime.utcnow()
     db = Session()
     try:
+        alice_pk = db.query(User.id).filter(User.username == "alice").scalar()
         db.add(InterviewRecord(
-            id="ir_active", user_id="alice", source="upload",
+            id="ir_active", user_id=alice_pk, source="upload",
             status="completed", updated_at=now,
         ))
         db.add(InterviewRecord(
-            id="ir_settled", user_id="alice", source="upload",
+            id="ir_settled", user_id=alice_pk, source="upload",
             status="completed", updated_at=now,
         ))
         # Active record: most recent message is 30min old.

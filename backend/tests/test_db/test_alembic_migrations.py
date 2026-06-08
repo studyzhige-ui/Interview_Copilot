@@ -264,14 +264,15 @@ def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
 
     engine = create_engine(fresh_pg_db)
     with engine.begin() as conn:
-        # mock_interview_sessions.user_id is now a users.id FK (CLEANUP #2), so
-        # seed a users row; interview_records.user_id is still the username.
+        # Both mock_interview_sessions.user_id and interview_records.user_id
+        # are now integer users.id FKs (CLEANUP #2), so seed a users row and
+        # reference its id (1) from both child inserts.
         conn.execute(text(
             "INSERT INTO users (id, username, hashed_password) VALUES (1, 'alice', 'x')"
         ))
         conn.execute(text(
             "INSERT INTO interview_records (id, user_id, source, status) "
-            "VALUES ('ir_cascade', 'alice', 'upload', 'completed')"
+            "VALUES ('ir_cascade', 1, 'upload', 'completed')"
         ))
         conn.execute(text(
             "INSERT INTO interview_qa (id, record_id, order_idx, question, answer) "

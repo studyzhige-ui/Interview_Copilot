@@ -17,6 +17,7 @@ from typing import Any, Iterable
 
 from sqlalchemy.orm import Session
 
+from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.interview_qa import InterviewQA, _generate_qa_id
 from app.models.interview_record import InterviewRecord, _generate_record_id
@@ -97,7 +98,7 @@ class InterviewRecordService:
         try:
             query = db.query(InterviewRecord).filter(InterviewRecord.id == record_id)
             if user_id:
-                query = query.filter(InterviewRecord.user_id == user_id)
+                query = query.filter(InterviewRecord.user_id == resolve_user_pk(db, user_id))
             return query.first()
         finally:
             db.close()
@@ -113,7 +114,7 @@ class InterviewRecordService:
         try:
             return (
                 db.query(InterviewRecord)
-                .filter(InterviewRecord.user_id == user_id)
+                .filter(InterviewRecord.user_id == resolve_user_pk(db, user_id))
                 .order_by(InterviewRecord.created_at.desc())
                 .offset(offset)
                 .limit(limit)
@@ -393,7 +394,7 @@ class InterviewRecordService:
         try:
             record = InterviewRecord(
                 id=_generate_record_id(),
-                user_id=user_id,
+                user_id=resolve_user_pk(db, user_id),
                 source=source,
                 title=title,
                 audio_upload_id=audio_upload_id,

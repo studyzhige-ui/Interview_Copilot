@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core.error_messages import humanize_error
 from app.core.security import get_current_user
+from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
 from app.models.chat import ChatSession, generate_uuid
 from app.models.user import User
@@ -370,7 +371,7 @@ async def get_in_progress_mock(
                     db.query(InterviewRecord)
                     .filter(
                         InterviewRecord.id == record_id,
-                        InterviewRecord.user_id == current_user.username,
+                        InterviewRecord.user_id == resolve_user_pk(db, current_user.username),
                     )
                     .delete(synchronize_session=False)
                 )
@@ -448,7 +449,7 @@ async def abandon_mock_interview(
                 db.query(InterviewRecord)
                 .filter(
                     InterviewRecord.id == record_id,
-                    InterviewRecord.user_id == current_user.username,
+                    InterviewRecord.user_id == resolve_user_pk(db, current_user.username),
                 )
                 .delete(synchronize_session=False)
             )
@@ -715,7 +716,6 @@ async def finish_mock_interview(
     )
 
     now = _dt.utcnow()
-    from app.core.user_identity import resolve_user_pk
     mis = MockInterviewSession(
         user_id=resolve_user_pk(db, current_user.username),
         interview_record_id=record.id,

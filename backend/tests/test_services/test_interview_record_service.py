@@ -15,22 +15,34 @@ from sqlalchemy.pool import StaticPool
 def record_db_session():
     import app.models.interview_qa  # noqa: F401
     import app.models.interview_record  # noqa: F401
+    import app.models.user  # noqa: F401
     from app.db.database import Base
+    from app.models.user import User
 
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+    # ``interview_records.user_id`` is now an integer FK to ``users.id``
+    # (CLEANUP #2); the service resolves the caller's username → pk via
+    # ``resolve_user_pk``, so the ``users`` table must exist here and carry
+    # rows for the usernames these tests use.
     Base.metadata.create_all(
         bind=engine,
         tables=[
+            Base.metadata.tables["users"],
             Base.metadata.tables["interview_records"],
             Base.metadata.tables["interview_qa"],
         ],
     )
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     session = Session()
+    session.add_all([
+        User(username="alice", hashed_password="x"),
+        User(username="bob", hashed_password="x"),
+    ])
+    session.commit()
     try:
         yield session
     finally:
@@ -57,6 +69,7 @@ class _NoCloseSession:
 
 def test_create_for_upload(record_db_session, monkeypatch):
     from app.models.interview_record import InterviewRecord
+    from app.models.user import User
     from app.services.interview import interview_record_service as module
 
     monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
@@ -73,7 +86,10 @@ def test_create_for_upload(record_db_session, monkeypatch):
     assert record.id.startswith("ir_")
     assert record.source == "upload"
     assert record.status == module.STATUS_PENDING
-    assert record.user_id == "alice"
+    # The service resolves the "alice" principal to users.id and stores the
+    # integer pk, not the username string.
+    alice_pk = record_db_session.query(User.id).filter(User.username == "alice").scalar()
+    assert record.user_id == alice_pk
     assert record.resume_text_snapshot == "老的简历内容"
 
     rows = record_db_session.query(InterviewRecord).all()

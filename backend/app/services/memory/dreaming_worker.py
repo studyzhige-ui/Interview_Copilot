@@ -63,6 +63,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.chat import ChatMessage, ChatSession
 from app.models.interview_record import InterviewRecord
@@ -217,7 +218,7 @@ def select_records_for_user(
 
         q = (
             db.query(InterviewRecord)
-            .filter(InterviewRecord.user_id == user_id)
+            .filter(InterviewRecord.user_id == resolve_user_pk(db, user_id))
             .filter(InterviewRecord.status == "completed")
             .filter(
                 or_(
@@ -313,8 +314,10 @@ def dream_for_record(record_id: str) -> dict[str, Any]:
         if record is None:
             summary["skipped_reason"] = "record not found"
             return summary
-        summary["user_id"] = record.user_id
-        user_id = record.user_id
+        # record.user_id is the stable users.id (CLEANUP #2); the memory dispatch
+        # + lock key on the username, so bridge pk -> username here.
+        user_id = db.query(User.username).filter(User.id == record.user_id).scalar()
+        summary["user_id"] = user_id
     finally:
         db.close()
 

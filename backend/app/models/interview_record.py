@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Index, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text
 
 from app.db.database import Base
 
@@ -38,7 +38,12 @@ class InterviewRecord(Base):
     )
 
     id = Column(String, primary_key=True, default=_generate_record_id, index=True)
-    user_id = Column(String, index=True, nullable=False)
+    # Stable users.id FK (CLEANUP #2). The API + record service resolve the
+    # caller's username via resolve_user_pk; the dreaming worker bridges this
+    # back to the username for the memory dispatch (memory keys on username).
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False,
+    )
     source = Column(String, nullable=False)  # "upload" | "mock"
 
     title = Column(String, default="未命名面试")

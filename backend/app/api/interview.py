@@ -19,6 +19,7 @@ from app.services.interview.interview_record_service import (
     STATUS_FAILED,
     interview_record_service,
 )
+from app.core.user_identity import resolve_user_pk
 from app.services.storage_service import upload_file_to_owned_key
 from app.services.uploads.file_asset_service import (
     create_file_asset,
@@ -112,7 +113,6 @@ def list_user_resumes(
     underlying FileAsset.id so MockSetup can pass it to /mock-interview/start
     as ``resume_upload_id`` without extra translation.
     """
-    from app.core.user_identity import resolve_user_pk
     from app.models.file_asset import FileAsset
     from app.models.knowledge import KnowledgeDocument
 
@@ -315,7 +315,7 @@ async def cancel_analysis(
     or deletes the in-flight record before completion."""
     record = (
         db.query(InterviewRecord)
-        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == current_user.username)
+        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == resolve_user_pk(db, current_user.username))
         .first()
     )
     if not record:
@@ -536,7 +536,7 @@ def update_interview_record(
 
     record = (
         db.query(InterviewRecord)
-        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == current_user.username)
+        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == resolve_user_pk(db, current_user.username))
         .first()
     )
     if record is None:
@@ -595,7 +595,7 @@ def delete_interview_record(
 
     record = (
         db.query(InterviewRecord)
-        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == current_user.username)
+        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == resolve_user_pk(db, current_user.username))
         .first()
     )
     if record is None:
@@ -669,7 +669,7 @@ def edit_interview_qa(
         .filter(
             InterviewQA.id == qa_id,
             InterviewQA.record_id == record_id,
-            InterviewRecord.user_id == current_user.username,
+            InterviewRecord.user_id == resolve_user_pk(db, current_user.username),
         )
         .first()
     )
@@ -751,7 +751,7 @@ async def interview_record_events_stream(
                 db.query(InterviewRecord.id)
                 .filter(
                     InterviewRecord.id == record_id,
-                    InterviewRecord.user_id == current_user.username,
+                    InterviewRecord.user_id == resolve_user_pk(db, current_user.username),
                 )
                 .first()
                 is not None

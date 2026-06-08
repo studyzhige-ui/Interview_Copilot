@@ -181,7 +181,8 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
 
     record = db.query(InterviewRecord).filter(InterviewRecord.id == body["record_id"]).first()
     assert record is not None
-    assert record.user_id == "alice"
+    # Route resolves the caller's username → users.id and stores the pk.
+    assert record.user_id == _uid(db, "alice")
     assert record.celery_task_id == "celery-abc"
 
 
@@ -244,7 +245,7 @@ def test_analyze_blocks_already_consumed_audio(client, db: Session):
 def test_cancel_analysis_revokes_celery_task(client, db: Session):
     record = InterviewRecord(
         id="ir_1",
-        user_id="alice",
+        user_id=_uid(db, "alice"),
         source="upload",
         title="t",
         status="pending",
@@ -265,8 +266,13 @@ def test_cancel_analysis_revokes_celery_task(client, db: Session):
 
 
 def test_cancel_analysis_404_for_other_user(client, db: Session):
+    # Scoping is on the integer pk now: bob's record (bob's pk) must look
+    # missing to alice (the overridden principal), not just because the
+    # column type differs.
+    db.add(User(username="bob", hashed_password="x"))
+    db.commit()
     db.add(InterviewRecord(
-        id="ir_bob", user_id="bob", source="upload", title="t", status="pending",
+        id="ir_bob", user_id=_uid(db, "bob"), source="upload", title="t", status="pending",
     ))
     db.commit()
     resp = client.post("/api/v1/analyze/ir_bob/cancel")
@@ -315,9 +321,13 @@ def test_analytics_report_delegates_to_service(client):
 
 
 def test_list_interview_records_returns_user_records(client, db: Session):
+    # list_by_user filters on resolve_user_pk(db, "alice"); seed bob as a
+    # real user so his record carries a distinct pk and is genuinely scoped out.
+    db.add(User(username="bob", hashed_password="x"))
+    db.commit()
     db.add_all([
-        InterviewRecord(id="ir_a", user_id="alice", source="upload", title="A", status="completed"),
-        InterviewRecord(id="ir_b", user_id="bob",   source="upload", title="B", status="completed"),
+        InterviewRecord(id="ir_a", user_id=_uid(db, "alice"), source="upload", title="A", status="completed"),
+        InterviewRecord(id="ir_b", user_id=_uid(db, "bob"),   source="upload", title="B", status="completed"),
     ])
     db.commit()
     resp = client.get("/api/v1/interview-records")
@@ -327,14 +337,16 @@ def test_list_interview_records_returns_user_records(client, db: Session):
 
 
 def test_get_interview_record_404_for_other_user(client, db: Session):
-    db.add(InterviewRecord(id="ir_b", user_id="bob", source="upload", title="B", status="completed"))
+    db.add(User(username="bob", hashed_password="x"))
+    db.commit()
+    db.add(InterviewRecord(id="ir_b", user_id=_uid(db, "bob"), source="upload", title="B", status="completed"))
     db.commit()
     resp = client.get("/api/v1/interview-records/ir_b")
     assert resp.status_code == 404
 
 
 def test_patch_interview_record_updates_title(client, db: Session):
-    db.add(InterviewRecord(id="ir_a", user_id="alice", source="upload", title="old", status="completed"))
+    db.add(InterviewRecord(id="ir_a", user_id=_uid(db, "alice"), source="upload", title="old", status="completed"))
     db.commit()
     resp = client.patch("/api/v1/interview-records/ir_a", json={"title": "new title"})
     assert resp.status_code == 200
@@ -343,7 +355,7 @@ def test_patch_interview_record_updates_title(client, db: Session):
 
 
 def test_patch_interview_record_400_when_empty(client, db: Session):
-    db.add(InterviewRecord(id="ir_a", user_id="alice", source="upload", title="old", status="completed"))
+    db.add(InterviewRecord(id="ir_a", user_id=_uid(db, "alice"), source="upload", title="old", status="completed"))
     db.commit()
     resp = client.patch("/api/v1/interview-records/ir_a", json={})
     assert resp.status_code == 400
@@ -358,7 +370,9 @@ def test_delete_interview_record_cascades_chat_sessions(client, db: Session):
     """
     from app.models.chat import ChatMessage, ChatSession
 
-    db.add(InterviewRecord(id="ir_a", user_id="alice", source="upload", title="t", status="completed"))
+    db.add(InterviewRecord(id="ir_a", user_id=_uid(db, "alice"), source="upload", title="t", status="completed"))
+    # chat_sessions.user_id is still the username string (NOT migrated in
+    # CLEANUP #2) — only interview_records.user_id became the integer pk.
     db.add(ChatSession(
         id="cs_1", user_id="alice", title="debrief",
         session_type="debrief", interview_id="ir_a",
@@ -395,8 +409,10 @@ def test_events_stream_404_when_record_belongs_to_other_user(client, db: Session
     """The owner check is on user_id, not just record_id — pinning
     that a record belonging to a different user looks identical to
     a missing record (no IDOR leakage)."""
+    db.add(User(username="bob", hashed_password="x"))
+    db.commit()
     db.add(InterviewRecord(
-        id="ir_other", user_id="bob", source="upload",
+        id="ir_other", user_id=_uid(db, "bob"), source="upload",
         status="analyzing", title="bob's record",
     ))
     db.commit()
@@ -413,7 +429,7 @@ def test_events_stream_emits_done_for_completed_record(client, db: Session):
     context manager exits cleanly without timing out."""
     import json as _json
     db.add(InterviewRecord(
-        id="ir_done", user_id="alice", source="upload",
+        id="ir_done", user_id=_uid(db, "alice"), source="upload",
         status="completed", title="finished",
         analysis_json=_json.dumps({"overall": {"score": 88, "summary": "well done"}}),
         analyzed_qa_count=5,
@@ -441,7 +457,7 @@ def test_events_stream_emits_error_for_failed_record(client, db: Session):
     which fails synchronously before the stream starts.)"""
     import json as _json
     db.add(InterviewRecord(
-        id="ir_failed", user_id="alice", source="upload",
+        id="ir_failed", user_id=_uid(db, "alice"), source="upload",
         status="failed", title="bad upload",
         error_message="upload corrupted",
     ))
@@ -472,7 +488,7 @@ def test_poll_record_snapshot_returns_plain_dict_not_orm_row(db: Session):
     DetachedInstanceError. Returning a plain dict pins that
     contract so a future edit can't reintroduce the leak."""
     db.add(InterviewRecord(
-        id="ir_snap", user_id="alice", source="upload",
+        id="ir_snap", user_id=_uid(db, "alice"), source="upload",
         status="analyzing", title="snap test",
         analyzed_qa_count=3,
     ))

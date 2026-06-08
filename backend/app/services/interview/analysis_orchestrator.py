@@ -32,7 +32,7 @@ from app.db.database import SessionLocal
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
 from app.models.mock_interview_session import MockInterviewSession
-from app.services.uploads.file_asset_service import get_owned_file_asset
+from app.services.uploads.file_asset_service import get_file_asset
 from app.services.interview.interview_record_service import (
     STATUS_ANALYZING,
     STATUS_COMPLETED,
@@ -150,12 +150,10 @@ class InterviewAnalysisOrchestrator:
             if not record.audio_upload_id:
                 raise RuntimeError(f"Upload record {record_id} has no audio_upload_id")
 
-            # Ownership is resolved + enforced by get_owned_file_asset
-            # (record.user_id is the username; file_assets keys on users.id).
-            upload = get_owned_file_asset(
-                db, file_asset_id=record.audio_upload_id, user_id=record.user_id,
-            )
-            if upload is None:
+            # record.user_id is the stable users.id (CLEANUP #2), as is the
+            # FileAsset's — fetch by id (trusted worker context) + compare pks.
+            upload = get_file_asset(db, record.audio_upload_id)
+            if upload is None or upload.user_id != record.user_id:
                 raise RuntimeError(
                     f"Audio upload {record.audio_upload_id} missing or not owned"
                 )

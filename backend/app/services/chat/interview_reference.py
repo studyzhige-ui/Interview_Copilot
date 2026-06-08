@@ -30,6 +30,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
@@ -65,7 +66,10 @@ def build_interview_reference(interview_id: str, user_id: str) -> str:
     try:
         record = (
             db.query(InterviewRecord)
-            .filter(InterviewRecord.id == interview_id, InterviewRecord.user_id == user_id)
+            .filter(
+                InterviewRecord.id == interview_id,
+                InterviewRecord.user_id == resolve_user_pk(db, user_id),
+            )
             .first()
         )
         if record is None:
