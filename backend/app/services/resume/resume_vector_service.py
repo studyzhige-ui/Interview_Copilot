@@ -27,6 +27,7 @@ from llama_index.vector_stores.milvus import MilvusVectorStore
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.resume_section import ResumeSection
 from app.rag.hybrid import RetrievalChunk
@@ -188,11 +189,17 @@ class ResumeVectorService:
         top_k: int = 5,
     ) -> list[RetrievalChunk]:
         """Vector search for resume sections relevant to a query."""
+        # The resume Milvus scope key is the stable users.id pk; resolve the
+        # request principal once. Unresolved principal -> no accessible sections.
+        with SessionLocal() as _db:
+            user_pk = resolve_user_pk(_db, user_id)
+        if user_pk is None:
+            return []
         _, index = self._get_store_and_index()
         filters = MetadataFilters(
             filters=[
                 MetadataFilter(
-                    key="user_id", value=user_id, operator=FilterOperator.EQ,
+                    key="user_id", value=user_pk, operator=FilterOperator.EQ,
                 ),
             ],
             condition="and",
@@ -207,7 +214,7 @@ class ResumeVectorService:
         allowed_types = set(section_types) if section_types else None
         for node in nodes:
             metadata = dict(node.node.metadata or {})
-            if metadata.get("user_id") != user_id:
+            if metadata.get("user_id") != user_pk:
                 continue
             if allowed_types and metadata.get("section_type") not in allowed_types:
                 continue

@@ -15,16 +15,28 @@ from sqlalchemy.pool import StaticPool
 @pytest.fixture
 def resume_db_session():
     import app.models.resume_section  # noqa: F401 — register on Base
+    import app.models.user  # noqa: F401 — resume_service resolves username->pk
     from app.db.database import Base
+    from app.models.user import User
 
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    Base.metadata.create_all(bind=engine, tables=[Base.metadata.tables["resume_sections"]])
+    Base.metadata.create_all(
+        bind=engine,
+        tables=[
+            Base.metadata.tables["users"],
+            Base.metadata.tables["resume_sections"],
+        ],
+    )
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     session = Session()
+    # resume_service resolves the username principal -> users.id at its boundary,
+    # so seed the user the tests use; otherwise the pk-keyed writes/reads no-op.
+    session.add(User(username="alice", hashed_password="x"))
+    session.commit()
     try:
         yield session
     finally:
@@ -109,9 +121,11 @@ def test_resume_parse_and_store(monkeypatch, resume_db_session):
 def test_format_for_context_filters_by_section_type(monkeypatch, resume_db_session):
     """format_for_context with section_types=[project] should only include project rows."""
     from app.models.resume_section import ResumeSection
+    from app.models.user import User
     from app.services.resume import resume_service as module
 
     monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(resume_db_session))
+    alice_pk = resume_db_session.query(User.id).filter(User.username == "alice").scalar()
 
     for i, (stype, title, content) in enumerate([
         ("summary", "简介", "3年经验"),
@@ -121,7 +135,7 @@ def test_format_for_context_filters_by_section_type(monkeypatch, resume_db_sessi
     ]):
         resume_db_session.add(ResumeSection(
             id=f"rs_{i}",
-            user_id="alice",
+            user_id=alice_pk,
             upload_id="u1",
             section_type=stype,
             title=title,
@@ -176,7 +190,6 @@ def test_reparse_replaces_old_sections(monkeypatch, resume_db_session):
 
 def test_persist_handles_invalid_section_type(monkeypatch, resume_db_session):
     """Unknown section_type values get coerced to 'summary' rather than dropped."""
-    from app.models.resume_section import ResumeSection
     from app.services.resume import resume_service as module
 
     class FakeLLM:
@@ -190,6 +203,6 @@ def test_persist_handles_invalid_section_type(monkeypatch, resume_db_session):
     monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(resume_db_session))
     monkeypatch.setattr(module, "agent_fast_llm", FakeLLM())
 
-    sections = asyncio.run(module.ResumeService().extract_and_store("u", "up", "txt"))
+    sections = asyncio.run(module.ResumeService().extract_and_store("alice", "up", "txt"))
     assert len(sections) == 1
     assert sections[0].section_type == "summary"

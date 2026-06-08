@@ -34,14 +34,11 @@ from app.db.database import SessionLocal
 from app.models.user import User
 
 
-# User-scoped tables, split by how ``user_id`` is keyed. After CLEANUP #2 nearly
-# every table uses the stable users.id integer FK; only resume_sections still
-# mirrors the Milvus retrieval-scope key on the username string (migrated next).
+# Every user-scoped table now keys on the stable users.id integer FK (CLEANUP #2
+# migrated the last of them — document_chunks / resume_sections). The ``users``
+# row itself is matched by its username column (handled separately at the end).
 # chat_messages / interview_qa carry no user_id — they're wiped via a parent-id
 # subquery (handled specially below).
-USERNAME_TABLES = (
-    "resume_sections",
-)
 USER_PK_TABLES = (
     "file_assets",
     "outbox_jobs",
@@ -58,6 +55,7 @@ USER_PK_TABLES = (
     "mock_interview_runtime",
     "chat_sessions",
     "document_chunks",
+    "resume_sections",
 )
 # Order is exception-tolerant (each statement runs in its own savepoint), but we
 # still wipe children before parents for any non-CASCADE FK.
@@ -90,17 +88,17 @@ def _admin_id_and_other_users(db, admin_username: str) -> tuple[int, list[User]]
 def _count_rows_per_table(db, admin_username: str) -> dict[str, int]:
     """For each user-scoped table, count rows that would be deleted.
 
-    NOTE: ``user_id`` is the username VARCHAR on the USERNAME_TABLES and the
-    stable users.id INTEGER on the USER_PK_TABLES — each is compared with the
-    matching predicate. Each count runs in its own implicit savepoint — if one
-    fails (table missing, column mis-typed) we rollback and continue, instead
-    of the whole transaction going into aborted state.
+    NOTE: every user-scoped table compares ``user_id`` against the admin's stable
+    users.id pk; the two child tables join their pk-keyed parent. Each count runs
+    in its own implicit savepoint — if one fails (table missing, column mis-typed)
+    we rollback and continue, instead of the whole transaction going into aborted
+    state.
     """
     admin_pk = db.execute(
         text("SELECT id FROM users WHERE username = :auname"), {"auname": admin_username},
     ).scalar()
 
-    # (table, sql, params) — children-via-parent first, then by key type.
+    # (table, sql, params) — children-via-parent first, then the pk tables.
     queries: list[tuple[str, str, dict]] = [
         ("chat_messages",
          "SELECT COUNT(*) FROM chat_messages cm JOIN chat_sessions cs "
@@ -108,10 +106,6 @@ def _count_rows_per_table(db, admin_username: str) -> dict[str, int]:
         ("interview_qa",
          "SELECT COUNT(*) FROM interview_qa iq JOIN interview_records ir "
          "ON iq.record_id = ir.id WHERE ir.user_id != :apk", {"apk": admin_pk}),
-    ]
-    queries += [
-        (t, f"SELECT COUNT(*) FROM {t} WHERE user_id != :auname", {"auname": admin_username})
-        for t in USERNAME_TABLES
     ]
     queries += [
         (t, f"SELECT COUNT(*) FROM {t} WHERE user_id != :apk", {"apk": admin_pk})
@@ -210,9 +204,9 @@ def _delete_postgres_rows(db, admin_username: str, dry_run: bool) -> None:
     """One transaction; each DELETE runs in its own savepoint so a missing
     table is skipped rather than aborting the whole run.
 
-    ``user_id`` is the username VARCHAR on USERNAME_TABLES and the stable
-    users.id INTEGER on USER_PK_TABLES — each compared with the matching
-    predicate. The ``users`` table itself is filtered on its ``username``.
+    Every user-scoped table compares ``user_id`` against the admin's stable
+    users.id pk; the two child tables join their pk-keyed parent. The ``users``
+    table itself is filtered on its ``username``.
     """
     if dry_run:
         return
@@ -220,7 +214,7 @@ def _delete_postgres_rows(db, admin_username: str, dry_run: bool) -> None:
         text("SELECT id FROM users WHERE username = :auname"), {"auname": admin_username},
     ).scalar()
 
-    # Children-via-parent first, then username tables, then pk tables.
+    # Children-via-parent first, then the pk tables.
     deletes: list[tuple[str, str, dict]] = [
         ("interview_qa",
          "DELETE FROM interview_qa WHERE record_id IN "
@@ -228,10 +222,6 @@ def _delete_postgres_rows(db, admin_username: str, dry_run: bool) -> None:
         ("chat_messages",
          "DELETE FROM chat_messages WHERE session_id IN "
          "(SELECT id FROM chat_sessions WHERE user_id != :apk)", {"apk": admin_pk}),
-    ]
-    deletes += [
-        (t, f"DELETE FROM {t} WHERE user_id != :auname", {"auname": admin_username})
-        for t in USERNAME_TABLES
     ]
     deletes += [
         (t, f"DELETE FROM {t} WHERE user_id != :apk", {"apk": admin_pk})

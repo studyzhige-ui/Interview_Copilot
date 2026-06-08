@@ -19,6 +19,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.resume_section import ResumeSection, _generate_section_id
 from app.rag.embeddings import agent_fast_llm
@@ -71,7 +72,7 @@ class ResumeService:
         try:
             query = db.query(ResumeSection).filter(ResumeSection.upload_id == upload_id)
             if user_id:
-                query = query.filter(ResumeSection.user_id == user_id)
+                query = query.filter(ResumeSection.user_id == resolve_user_pk(db, user_id))
             return query.order_by(ResumeSection.id.asc()).all()
         finally:
             db.close()
@@ -81,7 +82,7 @@ class ResumeService:
         try:
             return (
                 db.query(ResumeSection)
-                .filter(ResumeSection.user_id == user_id)
+                .filter(ResumeSection.user_id == resolve_user_pk(db, user_id))
                 .order_by(ResumeSection.created_at.desc())
                 .all()
             )
@@ -146,10 +147,11 @@ class ResumeService:
         db: Session = SessionLocal()
         persisted: list[ResumeSection] = []
         try:
+            user_pk = resolve_user_pk(db, user_id)
             # Remove old sections for this upload (re-parse scenario)
             db.query(ResumeSection).filter(
                 ResumeSection.upload_id == upload_id,
-                ResumeSection.user_id == user_id,
+                ResumeSection.user_id == user_pk,
             ).delete()
 
             for item in sections_data:
@@ -165,7 +167,7 @@ class ResumeService:
 
                 section = ResumeSection(
                     id=_generate_section_id(),
-                    user_id=user_id,
+                    user_id=user_pk,
                     upload_id=upload_id,
                     section_type=section_type,
                     title=title or section_type,

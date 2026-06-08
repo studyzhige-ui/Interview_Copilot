@@ -510,7 +510,7 @@ def test_resume_section_round_trip(db_session):
     from app.models.resume_section import ResumeSection
 
     section = ResumeSection(
-        user_id="u1",
+        user_id=1,
         upload_id="upl_x",
         section_type="project",
         title="Interview Copilot",
