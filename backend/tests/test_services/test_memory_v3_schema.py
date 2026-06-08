@@ -21,6 +21,7 @@ def engine_and_session():
     import app.models.memory_ability_state  # noqa: F401
     import app.models.memory_audit_logs     # noqa: F401
     import app.models.memory_document       # noqa: F401
+    import app.models.outbox_job            # noqa: F401 — ability upsert enqueues an index job
     import app.models.user                  # noqa: F401
 
     engine = create_engine(
@@ -280,3 +281,47 @@ def test_build_search_text():
     from app.services.memory import memory_ability_state_service as svc
     assert svc.build_search_text("Redis", "穿透") == "Redis\n穿透"
     assert svc.build_search_text("Redis", None) == "Redis"
+
+
+def test_ability_upsert_enqueues_milvus_index_job(seeded):
+    """Each ability upsert queues a durable Milvus re-index in the same tx; the
+    payload carries the username (the search filter key) + the row snapshot."""
+    import json
+
+    from app.models.outbox_job import OutboxJob
+    from app.services.memory import memory_ability_state_service as svc
+
+    svc.upsert("alice", topic="Redis", skill_type="knowledge_topic",
+               mastery_level="weak", summary="s", change_type="patch_realtime")
+    s = seeded()
+    try:
+        jobs = (
+            s.query(OutboxJob)
+            .filter(OutboxJob.job_type == "upsert_memory_ability_index")
+            .all()
+        )
+        assert len(jobs) == 1
+        payload = json.loads(jobs[0].payload_json)
+        assert payload["user_id"] == "alice" and payload["topic"] == "Redis"
+        assert payload["state_id"]
+    finally:
+        s.close()
+
+
+def test_ability_archive_enqueues_delete_index_job(seeded):
+    from app.models.outbox_job import OutboxJob
+    from app.services.memory import memory_ability_state_service as svc
+
+    svc.upsert("alice", topic="TCP", skill_type="knowledge_topic",
+               mastery_level="weak", summary="s", change_type="patch_realtime")
+    svc.archive("alice", topic="TCP", skill_type="knowledge_topic")
+    s = seeded()
+    try:
+        n = (
+            s.query(OutboxJob)
+            .filter(OutboxJob.job_type == "delete_memory_ability_index")
+            .count()
+        )
+        assert n == 1
+    finally:
+        s.close()

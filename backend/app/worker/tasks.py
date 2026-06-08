@@ -541,6 +541,9 @@ def drain_outbox_jobs(self):
     """
     from app.db.database import SessionLocal
     from app.services.uploads.outbox_service import run_due_outbox_jobs
+    # Import for side effect: registers the Milvus ability-index handlers
+    # (upsert/delete_memory_ability_index) before any job is claimed.
+    import app.services.memory.ability_outbox  # noqa: F401
 
     with SessionLocal() as db:
         processed = run_due_outbox_jobs(db)

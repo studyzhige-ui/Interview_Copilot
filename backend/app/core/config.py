@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     MILVUS_HNSW_M: int = 16
     MILVUS_HNSW_EF_CONSTRUCTION: int = 200
     MILVUS_HNSW_EF_SEARCH: int = 64
+    # MEMORY-V3 ability-state hybrid collection — a SEPARATE Milvus collection
+    # from the knowledge RAG one, populated via outbox index jobs and queried
+    # for topic-relevant ability states (parallel to, but distinct from,
+    # knowledge retrieval).
+    MEMORY_ABILITY_MILVUS_COLLECTION: str = "interview_copilot_memory_ability"
+    MEMORY_ABILITY_TOP_K: int = 5
 
     # Hugging Face, model, and framework caches
     CACHE_DIR: str = ""

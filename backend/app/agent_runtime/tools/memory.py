@@ -1,7 +1,9 @@
 """Memory tools for the L2 ReAct agent.
 
 recall_memory  — fetch the v3 memory bundle (user_profile + ability states +
-                 learning_strategy, optionally the full strategy body).
+                 learning_strategy, optionally the full strategy body, and —
+                 with a ``query`` — the most topic-relevant ability states via
+                 Milvus semantic search).
 save_memory    — write into one of the three v3 surfaces: ability_state
                  (per-topic mastery), user_profile, or learning_strategy.
 """
@@ -23,11 +25,20 @@ logger = logging.getLogger(__name__)
 class RecallMemoryArgs(BaseModel):
     """Inspect the user's memory. The user_profile and active ability states are
     always returned; set ``load_strategy`` to also pull the full
-    learning_strategy body (its one-liner is always included)."""
+    learning_strategy body, and ``query`` to additionally retrieve the most
+    topic-relevant ability states by semantic search."""
 
     load_strategy: bool = Field(
         default=False,
         description="Set true to load the full learning_strategy doc body.",
+    )
+    query: str = Field(
+        default="",
+        description=(
+            "Optional. When set, also returns the user's MOST RELEVANT ability "
+            "states for this query (Milvus semantic search), on top of the "
+            "always-included recent set. Use to focus on a specific topic."
+        ),
     )
 
 
@@ -40,6 +51,7 @@ def _disabled_bundle() -> dict[str, Any]:
         ),
         "user_profile": "",
         "ability_states": [],
+        "relevant_abilities": [],
         "learning_strategy_description": "",
         "active_learning_strategy": "",
         "ability_count": 0,
@@ -69,9 +81,17 @@ async def _recall_memory_handler(args: RecallMemoryArgs, ctx: AgentToolContext) 
     bundle = await asyncio.to_thread(load_universal, ctx.user_id)
     if args.load_strategy:
         await attach_active_bodies(bundle, user_id=ctx.user_id, load_strategy=True)
+
+    relevant_abilities: list = []
+    if args.query.strip():
+        from app.services.memory import ability_index
+        relevant_abilities = await asyncio.to_thread(
+            ability_index.search_abilities, ctx.user_id, args.query,
+        )
     return {
         "user_profile": bundle.user_profile_body,
         "ability_states": bundle.ability_states,
+        "relevant_abilities": relevant_abilities,
         "learning_strategy_description": bundle.learning_strategy_description,
         "active_learning_strategy": bundle.active_learning_strategy_body,
         "ability_count": len(bundle.ability_states),

@@ -42,6 +42,34 @@ def build_search_text(topic: str, summary: str | None) -> str:
     return "\n".join(parts)
 
 
+def _enqueue_index_upsert(db: Session, *, user_pk: int, username: str, row) -> None:
+    """Queue a durable Milvus re-index for this ability state, in the caller's
+    transaction. ``payload.user_id`` is the USERNAME — the search filter keys on
+    it — while the outbox row's FK uses the stable pk."""
+    from app.services.uploads.outbox_service import enqueue_job
+
+    enqueue_job(
+        db, user_pk=user_pk, job_type="upsert_memory_ability_index",
+        aggregate_type="memory_ability_state", aggregate_id=row.id,
+        payload={
+            "state_id": row.id, "user_id": username,
+            "search_text": row.search_text or "", "topic": row.topic,
+            "skill_type": row.skill_type, "mastery_level": row.mastery_level,
+            "summary": row.summary or "",
+        },
+    )
+
+
+def _enqueue_index_delete(db: Session, *, user_pk: int, state_id: str) -> None:
+    from app.services.uploads.outbox_service import enqueue_job
+
+    enqueue_job(
+        db, user_pk=user_pk, job_type="delete_memory_ability_index",
+        aggregate_type="memory_ability_state", aggregate_id=state_id,
+        payload={"state_id": state_id},
+    )
+
+
 def _validate(skill_type: str, mastery_level: str) -> None:
     if skill_type not in SKILL_TYPES:
         raise ValueError(f"unknown skill_type {skill_type!r}; expected one of {SKILL_TYPES}")
@@ -234,6 +262,7 @@ def _upsert_inner(
                 f"{topic}/{skill_type} → {mastery_level}",
         db=db,
     )
+    _enqueue_index_upsert(db, user_pk=user_pk, username=username, row=row)
     return row
 
 
@@ -307,6 +336,7 @@ def _archive_row(db: Session, user_pk: int, row, own_db: bool) -> bool:
         memory_ability_state_id=row.id,
         summary=f"archived ability {row.topic}/{row.skill_type}", db=db,
     )
+    _enqueue_index_delete(db, user_pk=user_pk, state_id=row.id)
     if own_db:
         db.commit()
     return True
