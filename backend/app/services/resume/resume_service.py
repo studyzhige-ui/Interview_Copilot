@@ -148,11 +148,16 @@ class ResumeService:
         persisted: list[ResumeSection] = []
         try:
             user_pk = resolve_user_pk(db, user_id)
-            # Remove old sections for this upload (re-parse scenario)
+            # Remove old sections for this upload (re-parse scenario) — from BOTH
+            # Postgres and the Milvus hybrid index, else the old section vectors
+            # orphan in Milvus. The fresh sections are re-indexed by
+            # _vectorize_sections right after.
             db.query(ResumeSection).filter(
                 ResumeSection.upload_id == upload_id,
                 ResumeSection.user_id == user_pk,
             ).delete()
+            from app.services.resume.resume_vector_service import resume_vector_service
+            resume_vector_service.delete_by_upload(upload_id)
 
             for item in sections_data:
                 section_type = str(item.get("section_type") or "summary").strip()

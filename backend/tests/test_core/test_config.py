@@ -18,7 +18,7 @@ from app.core.config import (
 def test_settings_has_required_attributes():
     required = [
         "DATABASE_URL", "APP_DATA_DIR", "DB_DIR", "CHROMA_DB_DIR",
-        "DOCSTORE_DIR", "CACHE_DIR", "LOG_DIR", "EVAL_DIR", "STORAGE_DIR",
+        "CACHE_DIR", "LOG_DIR", "EVAL_DIR", "STORAGE_DIR",
         "EMBEDDING_MODEL", "RERANKER_MODEL", "SECRET_KEY",
         "REDIS_URL", "S3_BUCKET_NAME", "ALGORITHM",
         "ACCESS_TOKEN_EXPIRE_MINUTES", "REFRESH_TOKEN_EXPIRE_MINUTES",
@@ -61,13 +61,12 @@ def test_subdir_field_validator_picks_named_subfolders(monkeypatch):
     """The _fill_data_subdirs validator should map fields to specific subdir names."""
     monkeypatch.setenv("APP_DATA_DIR", str(Path("/tmp/icp-test")))
     # Explicitly clear so the validator uses the default.
-    for v in ["DB_DIR", "CHROMA_DB_DIR", "DOCSTORE_DIR",
+    for v in ["DB_DIR", "CHROMA_DB_DIR",
               "CACHE_DIR", "LOG_DIR", "EVAL_DIR", "STORAGE_DIR"]:
         monkeypatch.delenv(v, raising=False)
     s = Settings()
     assert s.DB_DIR.endswith("databases")
     assert "chroma" in s.CHROMA_DB_DIR
-    assert s.DOCSTORE_DIR.endswith("docstore")
     assert s.CACHE_DIR.endswith("cache")
     assert s.LOG_DIR.endswith("logs")
     assert s.EVAL_DIR.endswith("evaluation")

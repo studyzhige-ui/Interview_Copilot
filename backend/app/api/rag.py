@@ -270,7 +270,7 @@ async def delete_knowledge_document(
         logger.error("Knowledge document deletion failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Failed to delete document: {exc}") from exc
     # The document's Milvus vectors were dropped by hard_delete_knowledge_document
-    # (milvus_hybrid.delete_by_document); BM25 is server-side in Milvus now, so
+    # (milvus_hybrid.delete_by_field); BM25 is server-side in Milvus now, so
     # there's no client-side cache to invalidate.
     return {"status": "success"}
 

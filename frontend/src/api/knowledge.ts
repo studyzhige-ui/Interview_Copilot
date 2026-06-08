@@ -1,12 +1,12 @@
 import { apiClient } from './client';
 import type { KnowledgeDoc, KnowledgeCategory } from '@/types/api';
 
-export type KnowledgeSourceType = 'interview_qa' | 'official_docs' | 'personal_memory';
+export type KnowledgeSourceKind = 'interview_qa' | 'official_docs' | 'personal_memory';
 
 export interface ListKnowledgeQuery {
   category?: string;
   status?: string;
-  source_type?: KnowledgeSourceType;
+  source_kind?: KnowledgeSourceKind;
 }
 
 export async function listKnowledgeDocuments(
@@ -57,7 +57,7 @@ export async function createKnowledgeDocument(payload: {
   upload_id: string;
   title?: string;
   category?: string;
-  source_type?: KnowledgeSourceType;
+  source_kind?: KnowledgeSourceKind;
 }): Promise<KnowledgeDoc> {
   const res = await apiClient.post('/knowledge/documents', payload);
   return res.data?.document;
@@ -78,7 +78,7 @@ export async function deleteKnowledgeDocument(id: string): Promise<void> {
 // One-shot helper: presigned-url → PUT → create-document.
 export async function uploadKnowledgeFile(
   file: File,
-  opts: { title?: string; category?: string; source_type?: KnowledgeSourceType } = {},
+  opts: { title?: string; category?: string; source_kind?: KnowledgeSourceKind } = {},
 ): Promise<KnowledgeDoc> {
   const presign = await createKnowledgeUploadUrl({
     filename: file.name,
@@ -90,6 +90,6 @@ export async function uploadKnowledgeFile(
     upload_id: presign.upload_id,
     title: opts.title ?? file.name,
     category: opts.category,
-    source_type: opts.source_type,
+    source_kind: opts.source_kind,
   });
 }

@@ -58,7 +58,7 @@ export function UploadCards({ initialTitle, analysis, onStart }: Props) {
       let uploadId = '';
       if (k === 'audio') uploadId = (await uploadAudio(f)).upload_id;
       else if (k === 'resume') uploadId = (await uploadResume(f)).upload_id;
-      else uploadId = (await uploadKnowledgeFile(f, { category: 'jd', source_type: 'official_docs' })).id;
+      else uploadId = (await uploadKnowledgeFile(f, { category: 'jd', source_kind: 'official_docs' })).id;
       update(k, { filename: f.name, uploadId, uploading: false });
     } catch {
       update(k, { filename: '', uploadId: undefined, uploading: false });

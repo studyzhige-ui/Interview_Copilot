@@ -41,7 +41,6 @@ class Settings(BaseSettings):
     # Database and vector-store data
     DB_DIR: str = ""
     CHROMA_DB_DIR: str = ""
-    DOCSTORE_DIR: str = ""
     MILVUS_URI: str = "http://localhost:19530"
     MILVUS_COLLECTION: str = "interview_copilot_rag"
     MILVUS_SIMILARITY_METRIC: str = "IP"
@@ -223,7 +222,7 @@ class Settings(BaseSettings):
     REDIS_POOL_SIZE: int = 50
 
     @field_validator(
-        "DB_DIR", "CHROMA_DB_DIR", "DOCSTORE_DIR",
+        "DB_DIR", "CHROMA_DB_DIR",
         "CACHE_DIR", "LOG_DIR", "EVAL_DIR", "STORAGE_DIR",
         mode="before",
     )
@@ -237,7 +236,6 @@ class Settings(BaseSettings):
         field_to_subdir = {
             "DB_DIR": "databases",
             "CHROMA_DB_DIR": str(Path("databases") / "chroma"),
-            "DOCSTORE_DIR": "docstore",
             "CACHE_DIR": "cache",
             "LOG_DIR": "logs",
             "EVAL_DIR": "evaluation",

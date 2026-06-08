@@ -56,8 +56,8 @@ def _write_to_milvus_hybrid(
             "dense": emb,
         })
     if document_id:
-        milvus_hybrid.delete_by_document(document_id)
-    milvus_hybrid.insert(rows)
+        milvus_hybrid.delete_by_field(milvus_hybrid.KNOWLEDGE, "document_id", document_id)
+    milvus_hybrid.insert(milvus_hybrid.KNOWLEDGE, rows)
 
 
 def _table_aware_nodes(document: Document, char_budget: int) -> list:

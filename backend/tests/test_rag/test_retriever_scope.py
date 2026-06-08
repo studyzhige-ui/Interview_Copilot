@@ -86,8 +86,15 @@ def test_scope_expr_filters_by_user_pk():
 def test_scope_expr_adds_source_kind():
     from app.rag import milvus_hybrid
 
-    expr = milvus_hybrid._scope_expr(7, "interview_qa")
+    expr = milvus_hybrid._scope_expr(7, {"source_kind": "interview_qa"})
     assert expr == 'user_id == 7 && source_kind == "interview_qa"'
+
+
+def test_eq_rejects_injection():
+    from app.rag import milvus_hybrid
+
+    with pytest.raises(ValueError):
+        milvus_hybrid._eq("source_kind", 'x" or user_id == 1 or "')
 
 
 # ─────────────────────────────────────────────────────────────────────

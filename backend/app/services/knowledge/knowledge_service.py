@@ -37,7 +37,7 @@ def delete_document_vectors_and_chunks(db: Session, document: KnowledgeDocument)
     from app.services.knowledge.document_chunk_service import delete_document_chunks
 
     delete_document_chunks(db, document.id)
-    milvus_hybrid.delete_by_document(document.id)
+    milvus_hybrid.delete_by_field(milvus_hybrid.KNOWLEDGE, "document_id", document.id)
 
 
 def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> None:

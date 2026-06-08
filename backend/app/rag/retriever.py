@@ -5,16 +5,6 @@ from threading import Lock
 from typing import Optional, Dict, Any
 
 from llama_index.core import Settings
-
-# Cross-version LlamaIndex-Core shim: some versions dropped
-# ``build_metadata_filter_fn``. The resume/ability LlamaIndex Milvus retrieval
-# paths still rely on it, so keep this defensive patch.
-import llama_index.core.vector_stores.utils
-if not hasattr(llama_index.core.vector_stores.utils, "build_metadata_filter_fn"):
-    def _mock_build_metadata_filter_fn(*args, **kwargs):
-        return lambda x: True
-    llama_index.core.vector_stores.utils.build_metadata_filter_fn = _mock_build_metadata_filter_fn
-
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
 
 from app.core.config import settings
@@ -198,11 +188,12 @@ async def query_knowledge_base(
             )
             hits = await asyncio.to_thread(
                 lambda: milvus_hybrid.hybrid_search(
+                    milvus_hybrid.KNOWLEDGE,
                     query_text=query_str,
                     query_dense=query_dense,
                     user_pk=user_pk,
-                    source_kind=source_kind,
                     top_k=settings.FUSION_TOP_K,
+                    filters={"source_kind": source_kind} if source_kind else None,
                 )
             )
             raw_nodes = [

@@ -1,69 +1,39 @@
-"""Milvus ability-state hybrid collection (MEMORY-V3).
+"""Memory ability-state index — Milvus 2.6 native dense + server-side BM25
+hybrid via the shared ``app.rag.milvus_hybrid`` abstraction.
 
-A dedicated Milvus collection holding one vector per ability state — the
-``search_text`` (topic + summary) embedded — so the agent can retrieve a user's
-TOPIC-RELEVANT ability states instead of carrying all of them in every prompt.
-Separate collection + params from the knowledge RAG collection.
-
-Postgres (``memory_ability_states``) stays the fact source; this is an index
-copy maintained asynchronously via outbox jobs (``upsert_memory_ability_index``
-/ ``delete_memory_ability_index``), so a Milvus outage never blocks a memory
-write — it only delays the index update. Write helpers raise on failure (the
-outbox retries); the read helper degrades to an empty list (never breaks a
-turn).
+Postgres ``memory_ability_states`` is the fact source; Milvus holds an
+index-only copy (one row per ability state) scoped by the stable ``users.id``
+pk. Maintained asynchronously via outbox jobs (``upsert_memory_ability_index`` /
+``delete_memory_ability_index``) so a Milvus outage delays the index, never
+blocks a memory write. Write helpers raise on failure (the outbox retries); the
+read helper degrades to an empty list (never breaks a turn) and never issues an
+unscoped query. No LlamaIndex vector store — search text is embedded directly
+and BM25 is computed server-side by Milvus.
 """
 from __future__ import annotations
 
 import logging
-from threading import Lock
 from typing import Any
 
+from llama_index.core import Settings
+
 from app.core.config import settings
+from app.rag import milvus_hybrid
 
 logger = logging.getLogger(__name__)
 
-_store = None   # MilvusVectorStore singleton for the ability collection
-_index = None   # VectorStoreIndex built on top of it
-_lock = Lock()
+_COLL = milvus_hybrid.ABILITY
 
 
-def _init() -> Any:
-    """Lazily build the shared ability-collection store + index."""
-    global _store, _index
-    if _index is not None:
-        return _index
-    with _lock:
-        if _index is not None:
-            return _index
-        from llama_index.core import VectorStoreIndex
-        from llama_index.vector_stores.milvus import MilvusVectorStore
-
-        # Dense HNSW config for this (LlamaIndex-managed) ability collection. The
-        # knowledge collection moved to raw-pymilvus hybrid, so these dicts are
-        # inlined here (same engine/params) rather than shared from rag.retriever.
-        _store = MilvusVectorStore(
-            uri=settings.MILVUS_URI,
-            collection_name=settings.MEMORY_ABILITY_MILVUS_COLLECTION,
-            dim=settings.EMBEDDING_DIM,
-            overwrite=False,
-            similarity_metric=settings.MILVUS_SIMILARITY_METRIC,
-            index_config={
-                "index_type": settings.MILVUS_DENSE_INDEX_TYPE,
-                "metric_type": settings.MILVUS_SIMILARITY_METRIC,
-                "M": settings.MILVUS_HNSW_M,
-                "efConstruction": settings.MILVUS_HNSW_EF_CONSTRUCTION,
-            },
-            search_config={
-                "metric_type": settings.MILVUS_SIMILARITY_METRIC,
-                "params": {"ef": settings.MILVUS_HNSW_EF_SEARCH},
-            },
-        )
-        _index = VectorStoreIndex.from_vector_store(_store)
-        logger.info(
-            "Milvus ability collection ready: %s (dim=%s)",
-            settings.MEMORY_ABILITY_MILVUS_COLLECTION, settings.EMBEDDING_DIM,
-        )
-        return _index
+def _index_text(
+    *, search_text: str, topic: str, skill_type: str, mastery_level: str, summary: str | None,
+) -> str:
+    """Text indexed for BM25 + dense. Prefer the prebuilt ``search_text``;
+    otherwise compose from the structured fields."""
+    if (search_text or "").strip():
+        return search_text.strip()
+    parts = [topic, skill_type, mastery_level, summary]
+    return "\n".join(str(p).strip() for p in parts if p and str(p).strip())
 
 
 def upsert_ability(
@@ -76,47 +46,39 @@ def upsert_ability(
     mastery_level: str,
     summary: str | None = None,
 ) -> None:
-    """Index (or re-index) one ability state. Raises on failure so the outbox
-    job retries."""
-    from llama_index.core import Settings
-    from llama_index.core.schema import TextNode
-
-    _init()
-    text = (search_text or topic or "").strip()
+    """Index (or re-index) one ability state — delete-then-insert by ``state_id``.
+    ``user_id`` is the stable users.id pk. Raises on failure so the outbox retries."""
+    text = _index_text(
+        search_text=search_text, topic=topic, skill_type=skill_type,
+        mastery_level=mastery_level, summary=summary,
+    )
     if not text:
         return
-    # Upsert = delete-then-add by the state id (the node's primary key).
-    try:
-        _store.delete_nodes([state_id])
-    except Exception:  # noqa: BLE001 — first write has nothing to delete
-        pass
-    node = TextNode(
-        id_=state_id,
-        text=text,
-        metadata={
-            "user_id": user_id,
-            "topic": topic,
-            "skill_type": skill_type,
-            "mastery_level": mastery_level,
-            "summary": summary or "",
-        },
-    )
-    node.embedding = Settings.embed_model.get_text_embedding(text)
-    _store.add([node])
+    milvus_hybrid.delete_by_field(_COLL, "id", state_id)
+    milvus_hybrid.insert(_COLL, [{
+        "id": state_id,
+        "user_id": int(user_id),
+        "topic": topic or "",
+        "skill_type": skill_type or "",
+        "mastery_level": mastery_level or "",
+        "summary": summary or "",
+        "text": text,
+        "dense": Settings.embed_model.get_text_embedding(text),
+    }])
 
 
 def delete_ability(state_id: str) -> None:
     """Drop one ability state's index copy. Raises on failure (outbox retries)."""
-    _init()
-    _store.delete_nodes([state_id])
+    milvus_hybrid.delete_by_field(_COLL, "id", state_id)
 
 
 def search_abilities(user_id: str, query: str, top_k: int | None = None) -> list[dict[str, Any]]:
     """Return the user's most topic-relevant ability states for ``query``.
 
     ``user_id`` is the username principal; it's resolved to the stable users.id
-    pk (the ability collection's scope key, CLEANUP #2) before filtering. Read
-    path — degrades to ``[]`` on any Milvus error so a turn never breaks.
+    pk (the Milvus scope key) before filtering. Read path — degrades to ``[]`` on
+    any error (resolve / Milvus) so a turn never breaks, and never issues an
+    unscoped query.
     """
     if not (query or "").strip():
         return []
@@ -124,43 +86,29 @@ def search_abilities(user_id: str, query: str, top_k: int | None = None) -> list
     try:
         from app.core.user_identity import resolve_user_pk
         from app.db.database import SessionLocal
-        from llama_index.core.retrievers import VectorIndexRetriever
-        from llama_index.core.vector_stores import (
-            FilterOperator,
-            MetadataFilter,
-            MetadataFilters,
-        )
 
-        # Resolve the username principal -> the pk the ability collection keys on.
-        # Inside the try so a resolve/db hiccup degrades to [] like any other.
-        with SessionLocal() as _db:
-            user_pk = resolve_user_pk(_db, user_id)
+        with SessionLocal() as db:
+            user_pk = resolve_user_pk(db, user_id)
         if user_pk is None:
             return []
-        index = _init()
-        retriever = VectorIndexRetriever(
-            index=index,
-            similarity_top_k=top_k,
-            filters=MetadataFilters(
-                filters=[MetadataFilter(key="user_id", value=user_pk, operator=FilterOperator.EQ)]
-            ),
+        query_dense = Settings.embed_model.get_query_embedding(query)
+        hits = milvus_hybrid.hybrid_search(
+            _COLL, query_text=query, query_dense=query_dense, user_pk=user_pk, top_k=top_k,
         )
-        nodes = retriever.retrieve(query)
         out: list[dict[str, Any]] = []
-        for n in nodes:
-            m = n.node.metadata or {}
-            if m.get("user_id") != user_pk:  # defence-in-depth on the tenant filter
+        for h in hits:
+            if h.get("user_id") != user_pk:  # defence-in-depth on the tenant filter
                 continue
             out.append({
-                "topic": m.get("topic", ""),
-                "skill_type": m.get("skill_type", ""),
-                "mastery_level": m.get("mastery_level", ""),
-                "summary": m.get("summary", ""),
-                "score": float(n.score) if n.score is not None else 0.0,
+                "topic": h.get("topic", ""),
+                "skill_type": h.get("skill_type", ""),
+                "mastery_level": h.get("mastery_level", ""),
+                "summary": h.get("summary", ""),
+                "score": float(h.get("score", 0.0) or 0.0),
             })
         return out
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("ability_index.search failed user=%s: %s", user_id, exc)
+    except Exception as exc:  # noqa: BLE001 — degrade safely, never break a turn
+        logger.warning("ability search failed for %s: %s", user_id, exc)
         return []
 
 

@@ -37,7 +37,7 @@ class KnowledgeDocument(Base):
     status = Column(String, index=True, default="processing", nullable=False)
     task_id = Column(String, nullable=True)
     chunk_count = Column(Integer, default=0, nullable=False)
-    # Deletes go by document_id (milvus_hybrid.delete_by_document + the
+    # Deletes go by document_id (milvus_hybrid.delete_by_field + the
     # document_chunks rows) — nothing reads node ids back for deletion anymore.
     # ``ref_doc_ids`` records the LlamaIndex ref-doc ids from the last ingest as
     # a diagnostic/audit field; it is NOT read for retrieval or deletion.

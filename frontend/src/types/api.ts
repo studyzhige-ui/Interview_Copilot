@@ -253,7 +253,7 @@ export interface KnowledgeDoc {
   upload_id: string;
   title: string;
   category: string;
-  source_type: string;
+  source_kind: string;
   status: string;
   task_id: string | null;
   chunk_count: number | null;

@@ -60,13 +60,11 @@ def test_delete_handler_calls_index():
 
 
 def test_search_abilities_degrades_to_empty_on_error():
-    """The read path must never break a turn — a Milvus/init failure degrades to
-    an empty list, not an exception."""
+    """The read path must never break a turn — any error (resolve / embed /
+    Milvus hybrid_search) degrades to an empty list, not an exception."""
     from app.services.memory import ability_index
 
-    # resolve succeeds (mocked) so the Milvus _init failure is what's exercised.
-    with patch.object(ability_index, "_init", side_effect=RuntimeError("milvus down")), \
-         patch("app.core.user_identity.resolve_user_pk", return_value=1):
+    with patch("app.core.user_identity.resolve_user_pk", side_effect=RuntimeError("backing store down")):
         assert ability_index.search_abilities("alice", "redis 穿透", top_k=3) == []
 
 
