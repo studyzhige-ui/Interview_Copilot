@@ -1,7 +1,7 @@
 """Tests for the per-user BM25 retriever cache.
 
 Covers:
-  * cache-key isolation across user_id / source_type combinations
+  * cache-key isolation across user_id / source_kind combinations
   * TTL-based expiry on individual entries
   * Per-user invalidation (other users untouched)
   * Build path: when the docstore is empty or no nodes match the scope,
@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import time
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -210,7 +208,7 @@ def test_build_and_cache_bm25_returns_none_when_no_chunks():
 
     with patch("app.db.database.SessionLocal", _fake_sessionlocal([])):
         result = mod._build_and_cache_bm25(
-            user_id="u-empty", source_type=None, allowed_user_ids=["u-empty"],
+            user_id="u-empty", source_kind=None, allowed_user_ids=["u-empty"],
             metadata_matches_scope=lambda *a: True,
         )
     assert result is None
@@ -227,7 +225,7 @@ def test_build_and_cache_bm25_swallows_errors_and_returns_none():
 
     with patch("app.db.database.SessionLocal", _boom):
         result = mod._build_and_cache_bm25(
-            user_id="u-err", source_type=None, allowed_user_ids=["u-err"],
+            user_id="u-err", source_kind=None, allowed_user_ids=["u-err"],
             metadata_matches_scope=lambda *a: True,
         )
     assert result is None
@@ -241,11 +239,11 @@ def test_build_and_cache_bm25_builds_and_caches_from_chunks():
 
     rows = [
         SimpleNamespace(text="redis 缓存穿透 解决方案", node_id="n1", id="dch1",
-                        user_id="alice", source_type="official_docs"),
+                        user_id="alice", source_kind="official_docs"),
     ]
     with patch("app.db.database.SessionLocal", _fake_sessionlocal(rows)):
         result = mod._build_and_cache_bm25(
-            user_id="alice", source_type="official_docs", allowed_user_ids=["alice"],
+            user_id="alice", source_kind="official_docs", allowed_user_ids=["alice"],
             metadata_matches_scope=lambda *a: True,
         )
     assert result is not None

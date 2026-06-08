@@ -168,7 +168,7 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
     soft_time_limit=1140,
 )
 def process_document_ingestion(self, document_id: str):
-    """Download an uploaded document if needed and ingest it into Milvus/Docstore.
+    """Download an uploaded document if needed and ingest it into Milvus.
 
     Idempotency contract:
       * status='ready' with chunks already written → skip
@@ -243,11 +243,11 @@ def process_document_ingestion(self, document_id: str):
                 os.unlink(local_file_path)
             raise
 
-        logger.info("[Task %s] Starting RAG ingestion into Milvus/Docstore.", self.request.id)
+        logger.info("[Task %s] Starting RAG ingestion into Milvus.", self.request.id)
         result = run_async(
             ingest_document(
                 local_file_path,
-                document.source_type,
+                document.source_kind,
                 document.user_id,
                 document_id=document.id,
                 upload_id=document.upload_id,

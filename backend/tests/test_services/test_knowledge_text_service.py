@@ -16,7 +16,7 @@ def _seed(db, document_id: str, texts: list[str], user_id: str = "u1") -> None:
     for i, t in enumerate(texts):
         db.add(DocumentChunk(
             document_id=document_id, user_id=user_id,
-            source_type="official_docs", chunk_index=i, text=t,
+            source_kind="official_docs", chunk_index=i, text=t,
         ))
     db.commit()
 

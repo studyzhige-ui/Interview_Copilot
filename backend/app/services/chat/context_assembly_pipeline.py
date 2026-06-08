@@ -343,7 +343,7 @@ class ContextAssemblyPipeline:
                 budget=self.budget.RETRIEVED_CONTEXT_BUDGET,
             )
             for i, chunk in enumerate(trimmed_chunks, 1):
-                source = chunk.get("source_type") or chunk.get("source") or "knowledge"
+                source = chunk.get("source_kind") or chunk.get("source") or "knowledge"
                 score = chunk.get("score")
                 score_text = f" score={float(score):.3f}" if score is not None else ""
                 retrieved_parts.append(

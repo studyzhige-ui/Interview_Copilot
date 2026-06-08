@@ -63,8 +63,8 @@ _bm25_cache: "OrderedDict[str, _BM25CacheEntry]" = OrderedDict()
 _bm25_cache_lock = Lock()
 
 
-def _bm25_cache_key(user_id: str, source_type: Optional[str]) -> str:
-    return f"{user_id}|{source_type or '*'}"
+def _bm25_cache_key(user_id: str, source_kind: Optional[str]) -> str:
+    return f"{user_id}|{source_kind or '*'}"
 
 
 def invalidate_bm25_cache(user_id: str) -> None:
@@ -86,11 +86,11 @@ def invalidate_bm25_cache(user_id: str) -> None:
 
 def _get_cached_bm25(
     user_id: str,
-    source_type: Optional[str],
+    source_kind: Optional[str],
     allowed_user_ids: list[str],
 ) -> Optional[BM25Retriever]:
     """Return a cached BM25 retriever if available and not expired."""
-    cache_key = _bm25_cache_key(user_id, source_type)
+    cache_key = _bm25_cache_key(user_id, source_kind)
     with _bm25_cache_lock:
         entry = _bm25_cache.get(cache_key)
         if entry is not None and not entry.expired:
@@ -106,14 +106,14 @@ def _get_cached_bm25(
 
 def _build_and_cache_bm25(
     user_id: str,
-    source_type: Optional[str],
+    source_kind: Optional[str],
     allowed_user_ids: list[str],
     *,
     metadata_matches_scope,
 ) -> Optional[BM25Retriever]:
     """Build a BM25 retriever from the Postgres ``document_chunks`` fact table.
 
-    Scoping is done by the SQL filter (user_id IN allowed + source_type), so
+    Scoping is done by the SQL filter (user_id IN allowed + source_kind), so
     ``metadata_matches_scope`` is no longer needed here; it's kept in the
     signature for the caller's compatibility.
     """
@@ -126,22 +126,22 @@ def _build_and_cache_bm25(
         scope_users = allowed_user_ids or [user_id]
         with SessionLocal() as db:
             query = db.query(DocumentChunk).filter(DocumentChunk.user_id.in_(scope_users))
-            if source_type:
-                query = query.filter(DocumentChunk.source_type == source_type)
+            if source_kind:
+                query = query.filter(DocumentChunk.source_kind == source_kind)
             rows = query.order_by(DocumentChunk.created_at.asc()).all()
 
         filtered_nodes = [
             TextNode(
                 text=r.text,
                 id_=r.node_id or r.id,
-                metadata={"user_id": r.user_id, "source_type": r.source_type},
+                metadata={"user_id": r.user_id, "source_kind": r.source_kind},
             )
             for r in rows if r.text
         ]
         if not filtered_nodes:
             logger.warning(
-                "BM25: 目标隔离区域下 chunk 为空。allowed_user_ids=%s source_type=%s",
-                allowed_user_ids, source_type,
+                "BM25: 目标隔离区域下 chunk 为空。allowed_user_ids=%s source_kind=%s",
+                allowed_user_ids, source_kind,
             )
             return None
 
@@ -150,7 +150,7 @@ def _build_and_cache_bm25(
             similarity_top_k=settings.BM25_TOP_K,
         )
 
-        cache_key = _bm25_cache_key(user_id, source_type)
+        cache_key = _bm25_cache_key(user_id, source_kind)
         with _bm25_cache_lock:
             _bm25_cache[cache_key] = _BM25CacheEntry(retriever, len(filtered_nodes))
             _bm25_cache.move_to_end(cache_key)  # MRU on (re)insert

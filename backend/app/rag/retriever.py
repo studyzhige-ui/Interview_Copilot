@@ -140,13 +140,13 @@ def init_reranker():
 
 def _build_and_cache_bm25(
     user_id: str,
-    source_type: Optional[str],
+    source_kind: Optional[str],
     allowed_user_ids: list[str],
 ):
     """Compatibility wrapper — injects ``_metadata_matches_scope`` from this module."""
     return _build_and_cache_bm25_impl(
         user_id=user_id,
-        source_type=source_type,
+        source_kind=source_kind,
         allowed_user_ids=allowed_user_ids,
         metadata_matches_scope=_metadata_matches_scope,
     )
@@ -160,25 +160,25 @@ def _split_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _allowed_user_ids(user_id: str, source_type: Optional[str]) -> list[str]:
+def _allowed_user_ids(user_id: str, source_kind: Optional[str]) -> list[str]:
     return [user_id] if user_id else []
 
 
 def _metadata_matches_scope(
     metadata: dict[str, Any],
     allowed_user_ids: list[str],
-    source_type: Optional[str],
+    source_kind: Optional[str],
 ) -> bool:
     if allowed_user_ids and metadata.get("user_id") not in allowed_user_ids:
         return False
-    if source_type and metadata.get("source_type") != source_type:
+    if source_kind and metadata.get("source_kind") != source_kind:
         return False
     return True
 
 
 def _build_metadata_filters(
     allowed_user_ids: list[str],
-    source_type: Optional[str],
+    source_kind: Optional[str],
 ) -> MetadataFilters:
     filter_list = []
     if len(allowed_user_ids) == 1:
@@ -197,11 +197,11 @@ def _build_metadata_filters(
                 operator=FilterOperator.IN,
             )
         )
-    if source_type:
+    if source_kind:
         filter_list.append(
             MetadataFilter(
-                key="source_type",
-                value=source_type,
+                key="source_kind",
+                value=source_kind,
                 operator=FilterOperator.EQ,
             )
         )
@@ -244,12 +244,12 @@ def _log_top_nodes(label: str, nodes: list[Any], limit: int = 5) -> None:
         metadata = node.node.metadata if getattr(node, "node", None) else {}
         snippet = node.node.get_content().replace("\n", " ")[:100]
         logger.info(
-            "%s #%s score=%s user_id=%s source_type=%s file=%s text=%s",
+            "%s #%s score=%s user_id=%s source_kind=%s file=%s text=%s",
             label,
             idx,
             f"{float(node.score):.4f}" if node.score is not None else "None",
             metadata.get("user_id"),
-            metadata.get("source_type"),
+            metadata.get("source_kind"),
             metadata.get("file_name"),
             snippet,
         )
@@ -262,7 +262,7 @@ def _log_top_nodes(label: str, nodes: list[Any], limit: int = 5) -> None:
 async def query_knowledge_base(
     query_str: str,
     user_id: str,
-    source_type: Optional[str] = None,
+    source_kind: Optional[str] = None,
     min_score: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
@@ -279,12 +279,12 @@ async def query_knowledge_base(
         index = _get_milvus_index()
 
         # ===== [2] 构建多租户隔离过滤器 (Milvus MetadataFilter) =====
-        allowed_user_ids = _allowed_user_ids(user_id, source_type)
+        allowed_user_ids = _allowed_user_ids(user_id, source_kind)
         logger.info(
-            "元数据过滤器已激活: requested_user_id=%s, allowed_user_ids=%s, source_type=%s",
+            "元数据过滤器已激活: requested_user_id=%s, allowed_user_ids=%s, source_kind=%s",
             user_id,
             allowed_user_ids,
-            source_type,
+            source_kind,
         )
 
         # 向量检索器。每个 user_id 单独建 EQ filter，避免部分向量库不支持 IN。
@@ -295,7 +295,7 @@ async def query_knowledge_base(
                 VectorIndexRetriever(
                     index=index,
                     similarity_top_k=settings.VECTOR_TOP_K,
-                    filters=_build_metadata_filters(scope_user_ids, source_type),
+                    filters=_build_metadata_filters(scope_user_ids, source_kind),
                 )
             )
 
@@ -310,9 +310,9 @@ async def query_knowledge_base(
                 mode="reciprocal_rerank",
             )
 
-        bm25_retriever = _get_cached_bm25(user_id, source_type, allowed_user_ids)
+        bm25_retriever = _get_cached_bm25(user_id, source_kind, allowed_user_ids)
         if bm25_retriever is None:
-            bm25_retriever = _build_and_cache_bm25(user_id, source_type, allowed_user_ids)
+            bm25_retriever = _build_and_cache_bm25(user_id, source_kind, allowed_user_ids)
 
         if bm25_retriever is not None:
             final_retriever = QueryFusionRetriever(
@@ -335,7 +335,7 @@ async def query_knowledge_base(
             raw_nodes = [
                 node
                 for node in raw_nodes
-                if _metadata_matches_scope(node.node.metadata, allowed_user_ids, source_type)
+                if _metadata_matches_scope(node.node.metadata, allowed_user_ids, source_kind)
             ]
             _log_top_nodes("RAG raw candidates", raw_nodes)
         except Exception as ret_e:
@@ -396,7 +396,7 @@ async def query_knowledge_base(
                 "text": content,
                 "score": score,
                 "lexical_overlap": overlap,
-                "source_type": n.node.metadata.get("source_type"),
+                "source_kind": n.node.metadata.get("source_kind"),
                 "metadata": n.node.metadata,
             })
             sources.append({

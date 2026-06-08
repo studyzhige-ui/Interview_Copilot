@@ -43,29 +43,29 @@ def test_metadata_scope_requires_user_and_source_match():
     matches = retriever._metadata_matches_scope
 
     assert matches(
-        {"user_id": "alice", "source_type": "interview_qa"},
+        {"user_id": "alice", "source_kind": "interview_qa"},
         ["alice"],
         "interview_qa",
     )
     # Wrong user
     assert not matches(
-        {"user_id": "bob", "source_type": "interview_qa"},
+        {"user_id": "bob", "source_kind": "interview_qa"},
         ["alice"],
         "interview_qa",
     )
-    # Wrong source_type
+    # Wrong source_kind
     assert not matches(
-        {"user_id": "alice", "source_type": "personal_memory"},
+        {"user_id": "alice", "source_kind": "personal_memory"},
         ["alice"],
         "interview_qa",
     )
-    # source_type=None disables source filter, but user_id still enforced.
+    # source_kind=None disables source filter, but user_id still enforced.
     assert matches(
-        {"user_id": "alice", "source_type": "anything"}, ["alice"], None,
+        {"user_id": "alice", "source_kind": "anything"}, ["alice"], None,
     )
     # Empty allowed list disables user filter entirely.
     assert matches(
-        {"user_id": "bob", "source_type": "interview_qa"}, [], "interview_qa",
+        {"user_id": "bob", "source_kind": "interview_qa"}, [], "interview_qa",
     )
 
 
@@ -81,7 +81,7 @@ def test_build_metadata_filters_uses_eq_for_single_user():
     flt = retriever._build_metadata_filters(["alice"], "interview_qa")
     keys = {(f.key, f.operator) for f in flt.filters}
     assert ("user_id", FilterOperator.EQ) in keys
-    assert ("source_type", FilterOperator.EQ) in keys
+    assert ("source_kind", FilterOperator.EQ) in keys
     # Find the user_id filter and check the literal value.
     user_filter = next(f for f in flt.filters if f.key == "user_id")
     assert user_filter.value == "alice"
@@ -103,7 +103,7 @@ def test_build_metadata_filters_skips_source_when_none():
     flt = retriever._build_metadata_filters(["alice"], None)
     keys = {f.key for f in flt.filters}
     assert "user_id" in keys
-    assert "source_type" not in keys
+    assert "source_kind" not in keys
 
 
 def test_build_metadata_filters_empty_when_no_user_no_source():
@@ -185,11 +185,11 @@ def test_score_passes_no_relaxation_below_threshold():
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _fake_node(user_id: str, source_type: str, text: str):
+def _fake_node(user_id: str, source_kind: str, text: str):
     """Build a fake retrieved node compatible with the metadata-scope helper."""
     return SimpleNamespace(
         node=SimpleNamespace(
-            metadata={"user_id": user_id, "source_type": source_type},
+            metadata={"user_id": user_id, "source_kind": source_kind},
             get_content=lambda: text,
         ),
         score=0.9,
@@ -206,7 +206,7 @@ def test_metadata_scope_blocks_cross_user_leak():
         _fake_node("alice", "interview_qa", "alice's private note"),
         _fake_node("bob",   "interview_qa", "bob's confidential file"),
         _fake_node("alice", "interview_qa", "alice's second note"),
-        _fake_node("alice", "official_docs", "wrong source type"),
+        _fake_node("alice", "official_docs", "wrong source kind"),
     ]
     survivors = [
         n for n in candidates
@@ -217,9 +217,9 @@ def test_metadata_scope_blocks_cross_user_leak():
     contents = {n.node.get_content() for n in survivors}
     assert "alice's private note" in contents
     assert "alice's second note" in contents
-    # The cross-user leak and the wrong-source-type node must be gone.
+    # The cross-user leak and the wrong-source-kind node must be gone.
     assert "bob's confidential file" not in contents
-    assert "wrong source type" not in contents
+    assert "wrong source kind" not in contents
 
 
 @pytest.mark.slow

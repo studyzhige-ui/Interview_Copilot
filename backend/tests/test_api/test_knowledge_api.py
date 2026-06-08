@@ -85,14 +85,14 @@ def client(db: Session) -> Iterator[TestClient]:
 
 
 def test_rag_query_delegates_to_retriever(client):
-    async def fake_query(q, source_type=None, user_id=None):
+    async def fake_query(q, source_kind=None, user_id=None):
         assert user_id == "alice"
         return {"response": "answer", "source_nodes": []}
 
     with patch("app.api.rag.query_knowledge_base", side_effect=fake_query):
         resp = client.post(
             "/api/v1/rag/query",
-            json={"query": "what is redis", "source_type": "official_docs"},
+            json={"query": "what is redis", "source_kind": "official_docs"},
         )
     assert resp.status_code == 200
     body = resp.json()
@@ -151,7 +151,7 @@ def test_create_document_404_when_upload_not_owned(client, db: Session):
     db.commit()
     resp = client.post(
         "/api/v1/knowledge/documents",
-        json={"upload_id": "upl_b", "source_type": "interview_qa"},
+        json={"upload_id": "upl_b", "source_kind": "interview_qa"},
     )
     assert resp.status_code == 404
 
@@ -179,7 +179,7 @@ def test_create_document_dispatches_celery_with_document_id(client, db: Session)
                 "upload_id": "upl_a",
                 "title": "Redis Notes",
                 "category": "Backend",
-                "source_type": "interview_qa",
+                "source_kind": "interview_qa",
             },
         )
     assert resp.status_code == 200, resp.text
@@ -208,7 +208,7 @@ def test_create_document_marks_failed_when_dispatch_explodes(client, db: Session
         mock_proc.delay.side_effect = RuntimeError("redis broker offline")
         resp = client.post(
             "/api/v1/knowledge/documents",
-            json={"upload_id": "upl_a", "source_type": "interview_qa"},
+            json={"upload_id": "upl_a", "source_kind": "interview_qa"},
         )
     assert resp.status_code == 503
 
@@ -241,7 +241,7 @@ def test_list_documents_is_user_scoped(client, db: Session):
             upload_id=f"upl_{user}",
             title=f"{user} doc",
             category="默认",
-            source_type="interview_qa",
+            source_kind="interview_qa",
             storage_uri=f"s3://b/uploads/{user}/upl_{user}/{user}.pdf",
             object_key=f"uploads/{user}/upl_{user}/{user}.pdf",
             status="ready",
@@ -267,7 +267,7 @@ def test_list_documents_filters_by_category(client, db: Session):
     ))
     db.add(KnowledgeDocument(
         id="doc_a", user_id="alice", upload_id="upl_a", title="A",
-        category="Redis", source_type="interview_qa",
+        category="Redis", source_kind="interview_qa",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
     db.add(FileAsset(
@@ -282,7 +282,7 @@ def test_list_documents_filters_by_category(client, db: Session):
     ))
     db.add(KnowledgeDocument(
         id="doc_b", user_id="alice", upload_id="upl_b", title="B",
-        category="Java", source_type="interview_qa",
+        category="Java", source_kind="interview_qa",
         storage_uri="s3://b/y", object_key="y", status="ready",
     ))
     db.commit()
@@ -303,7 +303,7 @@ def test_get_document_404_for_other_user(client, db: Session):
     ))
     db.add(KnowledgeDocument(
         id="doc_b", user_id="bob", upload_id="upl_b", title="B",
-        category="默认", source_type="interview_qa",
+        category="默认", source_kind="interview_qa",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
     db.commit()
@@ -319,7 +319,7 @@ def test_patch_document_updates_title_and_category(client, db: Session):
     ))
     db.add(KnowledgeDocument(
         id="doc_a", user_id="alice", upload_id="upl_a", title="old",
-        category="默认", source_type="interview_qa",
+        category="默认", source_kind="interview_qa",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
     db.commit()
@@ -342,7 +342,7 @@ def test_delete_document_calls_hard_delete(client, db: Session):
     ))
     db.add(KnowledgeDocument(
         id="doc_a", user_id="alice", upload_id="upl_a", title="t",
-        category="默认", source_type="interview_qa",
+        category="默认", source_kind="interview_qa",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
     db.commit()
@@ -364,7 +364,7 @@ def test_list_categories_returns_counts(client, db: Session):
         ))
         db.add(KnowledgeDocument(
             id=f"doc_{i}", user_id="alice", upload_id=f"upl_{i}", title=f"t{i}",
-            category=cat, source_type="interview_qa",
+            category=cat, source_kind="interview_qa",
             storage_uri=f"s3://b/{i}", object_key=f"{i}", status="ready",
         ))
     db.commit()

@@ -291,7 +291,7 @@ def test_save_personal_memory_calls_ingest(client):
     assert resp.json()["status"] == "success"
     mock_ingest.assert_awaited_once()
     kwargs = mock_ingest.await_args.kwargs
-    assert kwargs["source_type"] == "personal_memory"
+    assert kwargs["source_kind"] == "personal_memory"
     assert kwargs["user_id"] == "alice"
 
 

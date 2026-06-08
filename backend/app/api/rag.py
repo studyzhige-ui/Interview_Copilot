@@ -16,7 +16,7 @@ from app.schemas.rag import (
     KnowledgeDocumentUpdateRequest,
     KnowledgeUploadRequest,
     QueryRequest,
-    SourceTypeEnum,
+    SourceKindEnum,
 )
 from app.services.knowledge.knowledge_service import default_title, hard_delete_knowledge_document
 from app.services.uploads.file_asset_service import (
@@ -41,11 +41,11 @@ async def api_query_knowledge_base(
 ):
     """Execute a user-scoped RAG query against the configured vector store."""
     try:
-        source_type_val = body.source_type.value if body.source_type else None
+        source_kind_val = body.source_kind.value if body.source_kind else None
 
         result = await query_knowledge_base(
             body.query,
-            source_type=source_type_val,
+            source_kind=source_kind_val,
             user_id=current_user.username,
         )
 
@@ -69,7 +69,7 @@ def _document_payload(document: KnowledgeDocument) -> dict:
         "upload_id": document.upload_id,
         "title": document.title,
         "category": document.category,
-        "source_type": document.source_type,
+        "source_kind": document.source_kind,
         "status": document.status,
         "task_id": document.task_id,
         "chunk_count": document.chunk_count,
@@ -133,7 +133,7 @@ async def create_knowledge_document(
             upload_id=upload.id,
             title=body.title or default_title(upload),
             category=body.category.strip() or "默认",
-            source_type=body.source_type.value,
+            source_kind=body.source_kind.value,
             storage_uri=upload.storage_uri,
             object_key=upload.object_key,
             status="processing",
@@ -188,7 +188,7 @@ async def create_knowledge_document(
 async def list_knowledge_documents(
     category: Optional[str] = None,
     status: Optional[str] = None,
-    source_type: Optional[SourceTypeEnum] = None,
+    source_kind: Optional[SourceKindEnum] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -203,8 +203,8 @@ async def list_knowledge_documents(
         query = query.filter(KnowledgeDocument.category == category)
     if status:
         query = query.filter(KnowledgeDocument.status == status)
-    if source_type:
-        query = query.filter(KnowledgeDocument.source_type == source_type.value)
+    if source_kind:
+        query = query.filter(KnowledgeDocument.source_kind == source_kind.value)
     documents = query.order_by(KnowledgeDocument.updated_at.desc()).all()
     return {"status": "success", "documents": [_document_payload(doc) for doc in documents]}
 

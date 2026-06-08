@@ -26,7 +26,7 @@ class KnowledgeDocument(Base):
     upload_id = Column(String, ForeignKey("file_assets.id"), index=True, nullable=False)
     title = Column(String, nullable=False)
     category = Column(String, index=True, default="默认", nullable=False)
-    source_type = Column(String, index=True, nullable=False)
+    source_kind = Column(String, index=True, nullable=False)
     storage_uri = Column(String, nullable=False)
     object_key = Column(String, nullable=False, index=True)
     status = Column(String, index=True, default="processing", nullable=False)

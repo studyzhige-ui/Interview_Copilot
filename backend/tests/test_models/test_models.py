@@ -313,7 +313,7 @@ def test_knowledge_document_default_values(db_session):
         user_id="u1",
         upload_id="upl_k",
         title="Redis 缓存雪崩",
-        source_type="interview_qa",
+        source_kind="interview_qa",
         storage_uri="s3://bk/k",
         object_key="key-knowledge",
     )

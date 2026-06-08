@@ -10,9 +10,9 @@ the keyword (BM25) source both read this table now.
 A row is one chunk:
   * knowledge-document chunk -> ``document_id`` set (FK to knowledge_documents);
   * personal_memory chunk    -> ``document_id`` NULL (no knowledge_documents
-    row), identified by ``source_type='personal_memory'`` + ``user_id``.
+    row), identified by ``source_kind='personal_memory'`` + ``user_id``.
 
-``user_id`` / ``source_type`` are denormalised so the keyword + diagnostics
+``user_id`` / ``source_kind`` are denormalised so the keyword + diagnostics
 scoped reads don't need a join. (``user_id`` mirrors ``knowledge_documents``'s
 current username key; it migrates to the stable id with that table.)
 """
@@ -40,7 +40,7 @@ class DocumentChunk(Base):
     __tablename__ = "document_chunks"
     __table_args__ = (
         # Keyword (BM25) + diagnostics scoped scan: a user's chunks of a kind.
-        Index("ix_document_chunks_user_source", "user_id", "source_type"),
+        Index("ix_document_chunks_user_source", "user_id", "source_kind"),
         # Ordered reconstruction of one document's chunks.
         Index("ix_document_chunks_doc_order", "document_id", "chunk_index"),
     )
@@ -57,7 +57,7 @@ class DocumentChunk(Base):
     # vector when the chunk is removed.
     node_id = Column(String, index=True, nullable=True)
     user_id = Column(String, index=True, nullable=False)
-    source_type = Column(String, nullable=False)
+    source_kind = Column(String, nullable=False)
     chunk_index = Column(Integer, nullable=False, default=0)
     text = Column(Text, nullable=False)
     # Content hash for idempotency / change detection on re-ingest.

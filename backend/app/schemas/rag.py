@@ -12,7 +12,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
-class SourceTypeEnum(str, Enum):
+class SourceKindEnum(str, Enum):
     """Tag attached to a KnowledgeDocument; restricts /rag/query metadata
     filtering. Stored as a plain string column on the document row."""
     interview_qa = "interview_qa"
@@ -30,7 +30,7 @@ class KnowledgeUploadRequest(BaseModel):
 class KnowledgeDocumentCreateRequest(BaseModel):
     """``POST /knowledge/documents`` — register an uploaded blob as a doc."""
     upload_id: str
-    source_type: SourceTypeEnum = SourceTypeEnum.interview_qa
+    source_kind: SourceKindEnum = SourceKindEnum.interview_qa
     title: Optional[str] = None
     category: str = "默认"
 
@@ -44,11 +44,11 @@ class KnowledgeDocumentUpdateRequest(BaseModel):
 class QueryRequest(BaseModel):
     """``POST /rag/query`` — user question grounded against the KB."""
     query: str = Field(..., description="User question directed at the LLM")
-    source_type: Optional[SourceTypeEnum] = Field(None, description="Optional metadata filter bounds")
+    source_kind: Optional[SourceKindEnum] = Field(None, description="Optional metadata filter bounds")
 
 
 __all__ = [
-    "SourceTypeEnum",
+    "SourceKindEnum",
     "KnowledgeUploadRequest",
     "KnowledgeDocumentCreateRequest",
     "KnowledgeDocumentUpdateRequest",

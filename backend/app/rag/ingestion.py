@@ -74,7 +74,7 @@ def get_optimal_nodes(document: Document) -> list:
     CHUNK_SIZE = 512
     CHUNK_OVERLAP = 64
 
-    source_type = document.metadata.get("source_type", "")
+    source_kind = document.metadata.get("source_kind", "")
     file_name = document.metadata.get("file_name", "").lower()
 
     is_markdown_parsed = document.metadata.get("is_markdown_parsed", False)
@@ -87,7 +87,7 @@ def get_optimal_nodes(document: Document) -> list:
         if (
             is_markdown_parsed
             or file_name.endswith((".md", ".markdown"))
-            or source_type in ["interview_qa", "official_docs"]
+            or source_kind in ["interview_qa", "official_docs"]
         ):
             parser = MarkdownNodeParser()
         elif file_name.endswith((".html", ".htm")):
@@ -125,7 +125,7 @@ def get_optimal_nodes(document: Document) -> list:
     # P0 级红线：阻止 NodeParser 洗掉原文档的 Metadata
     user_id = document.metadata.get("user_id", "")
     for node in final_nodes:
-        node.metadata["source_type"] = source_type
+        node.metadata["source_kind"] = source_kind
         if user_id:
             node.metadata["user_id"] = user_id
 
@@ -160,7 +160,7 @@ def _get_storage_context(vector_store: MilvusVectorStore) -> StorageContext:
 
 async def ingest_document(
     file_path: str,
-    source_type: str,
+    source_kind: str,
     user_id: str,
     *,
     document_id: str | None = None,
@@ -217,7 +217,7 @@ async def ingest_document(
 
         # 挂载元数据
         for index, doc in enumerate(documents):
-            doc.metadata["source_type"] = source_type
+            doc.metadata["source_kind"] = source_kind
             doc.metadata["user_id"] = user_id
             if document_id:
                 doc.metadata["document_id"] = document_id
@@ -260,12 +260,12 @@ async def ingest_document(
         from app.services.knowledge.document_chunk_service import write_chunks
         with SessionLocal() as db:
             chunk_info = write_chunks(
-                db, nodes=all_nodes, user_id=user_id, source_type=source_type,
+                db, nodes=all_nodes, user_id=user_id, source_kind=source_kind,
                 document_id=document_id,
                 metadata={"category": category} if category else None,
             )
 
-        logger.info(f">>> 摄取完成: '{file_path}' (source_type={source_type}, user_id={user_id})")
+        logger.info(f">>> 摄取完成: '{file_path}' (source_kind={source_kind}, user_id={user_id})")
 
         from app.rag.retriever import invalidate_bm25_cache
         invalidate_bm25_cache(user_id)
@@ -282,14 +282,14 @@ async def ingest_document(
         raise
 
 
-async def ingest_text(text: str, source_type: str, user_id: str, metadata: dict = None):
+async def ingest_text(text: str, source_kind: str, user_id: str, metadata: dict = None):
     """
     纯文本节点摄取通道。
     P0 安全：强制执行多租户隔离。
     """
     try:
         final_metadata = metadata or {}
-        final_metadata["source_type"] = source_type
+        final_metadata["source_kind"] = source_kind
         final_metadata["user_id"] = user_id
 
         doc = Document(text=text, metadata=final_metadata)
@@ -307,11 +307,11 @@ async def ingest_text(text: str, source_type: str, user_id: str, metadata: dict 
         from app.services.knowledge.document_chunk_service import write_chunks
         with SessionLocal() as db:
             chunk_info = write_chunks(
-                db, nodes=all_nodes, user_id=user_id, source_type=source_type,
+                db, nodes=all_nodes, user_id=user_id, source_kind=source_kind,
                 document_id=None, metadata=metadata or None,
             )
 
-        logger.info(f"文本摄取完成 (source_type='{source_type}')。")
+        logger.info(f"文本摄取完成 (source_kind='{source_kind}')。")
 
         from app.rag.retriever import invalidate_bm25_cache
         invalidate_bm25_cache(user_id)

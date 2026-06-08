@@ -380,7 +380,7 @@ async def save_personal_memory(
             f"[Improved Answer]\n{body.improved_answer}"
         )
         metadata = {
-            "source_type": "personal_memory",
+            "source_kind": "personal_memory",
             "original_score": body.original_score,
             "last_accessed": datetime.now().isoformat(),
         }
@@ -389,7 +389,7 @@ async def save_personal_memory(
 
         await ingest_fn(
             text=combined_text,
-            source_type="personal_memory",
+            source_kind="personal_memory",
             user_id=current_user.username,
             metadata=metadata,
         )
