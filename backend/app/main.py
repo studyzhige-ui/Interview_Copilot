@@ -40,7 +40,10 @@ import app.models.interview_qa  # Ensure models are registered before table crea
 import app.models.interview_record
 import app.models.knowledge
 import app.models.knowledge_doc
+import app.models.memory_ability_state
 import app.models.memory_audit_log
+import app.models.memory_audit_logs
+import app.models.memory_document
 import app.models.mock_interview_runtime
 import app.models.mock_interview_session
 import app.models.file_asset

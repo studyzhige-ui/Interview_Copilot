@@ -181,6 +181,9 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "strategy_docs",
         "habit_docs",
         "memory_audit_log",
+        "memory_documents",
+        "memory_ability_states",
+        "memory_audit_logs",
         "resumes",
         "resume_sections",
     }

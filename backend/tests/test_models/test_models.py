@@ -107,6 +107,10 @@ def test_all_expected_tables_registered(test_engine):
         "strategy_docs",
         "habit_docs",
         "memory_audit_log",
+        # MEMORY-V3 successor tables (old three dropped in MEM-CUTOVER)
+        "memory_documents",
+        "memory_ability_states",
+        "memory_audit_logs",
         "resume_sections",
     }
     missing = expected - tables

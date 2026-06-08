@@ -6,7 +6,10 @@ from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
 from app.models.knowledge import KnowledgeDocument
 from app.models.knowledge_doc import KnowledgeDoc
+from app.models.memory_ability_state import MemoryAbilityState
 from app.models.memory_audit_log import MemoryAuditLog
+from app.models.memory_audit_logs import MemoryAuditEntry
+from app.models.memory_document import MemoryDocument
 from app.models.mock_interview_runtime import MockInterviewRuntime
 from app.models.mock_interview_session import MockInterviewSession
 from app.models.outbox_job import OutboxJob
@@ -29,7 +32,10 @@ __all__ = [
     "InterviewRecord",
     "KnowledgeDoc",
     "KnowledgeDocument",
+    "MemoryAbilityState",
+    "MemoryAuditEntry",
     "MemoryAuditLog",
+    "MemoryDocument",
     "MockInterviewRuntime",
     "MockInterviewSession",
     "OutboxJob",
