@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import settings
 
@@ -116,6 +116,34 @@ def generate_presigned_get_url(s3_uri: str, expiration: int = 600) -> str:
         Params={"Bucket": bucket, "Key": key},
         ExpiresIn=expiration,
     )
+
+
+def head_object(storage_uri: str) -> dict | None:
+    """Return ``{size_bytes, content_type}`` for a stored object, or ``None``
+    if it doesn't exist. Used by the file-asset confirm step to prove the
+    client actually completed the presigned PUT before a business object
+    consumes the asset. Supports ``s3://`` and ``local://`` URIs.
+    """
+    if is_local_uri(storage_uri):
+        try:
+            local_path = parse_local_uri(storage_uri)
+        except ValueError:
+            return None
+        if not local_path.is_file():
+            return None
+        return {"size_bytes": local_path.stat().st_size, "content_type": None}
+    try:
+        bucket, key = parse_s3_uri(storage_uri)
+        resp = s3_client.head_object(Bucket=bucket, Key=key)
+        return {
+            "size_bytes": resp.get("ContentLength"),
+            "content_type": resp.get("ContentType"),
+        }
+    except (ClientError, BotoCoreError):
+        # Missing key (404) OR a transient storage outage — either way the
+        # object isn't confirmable right now. Caller treats None as "not
+        # present"; the user re-uploads on a genuine outage.
+        return None
 
 
 def delete_s3_object(storage_uri: str) -> None:

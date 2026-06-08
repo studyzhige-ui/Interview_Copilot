@@ -64,6 +64,7 @@ def test_engine():
     # ``app.models.agent_trace`` was removed in alembic 0008
     # (LangSmith covers the per-step trace surface).
     import app.models.chat                 # noqa: F401
+    import app.models.file_asset           # noqa: F401
     import app.models.habit_doc            # noqa: F401
     import app.models.interview_qa         # noqa: F401
     import app.models.interview_record     # noqa: F401
@@ -71,6 +72,7 @@ def test_engine():
     import app.models.knowledge_doc        # noqa: F401
     import app.models.memory_audit_log     # noqa: F401
     import app.models.mock_interview_session  # noqa: F401
+    import app.models.outbox_job           # noqa: F401
     import app.models.resume_section       # noqa: F401
     import app.models.strategy_doc         # noqa: F401
     import app.models.upload               # noqa: F401

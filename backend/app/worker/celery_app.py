@@ -45,6 +45,8 @@ celery_app.conf.update(
         # Catalog refresh is pure outbound HTTP — no GPU, no heavy
         # in-process model. Lands on the light queue alongside dreaming.
         "tasks.refresh_model_catalog": {"queue": "default"},
+        # Outbox drain: object-storage / index cleanup. DB + storage I/O.
+        "tasks.drain_outbox_jobs": {"queue": "default"},
     },
     # ── Reliability ─────────────────────────────────────────────────────
     # Default acks_late=True so a worker crash during a task re-queues the
@@ -91,6 +93,13 @@ celery_app.conf.update(
         "model-catalog-daily-refresh": {
             "task": "tasks.refresh_model_catalog",
             "schedule": crontab(hour=4, minute=0),
+        },
+        # Outbox drain: every minute, process due cross-system cleanup jobs
+        # (delete orphaned objects / failed uploads, and — as later packages
+        # register handlers — Milvus index + memory work).
+        "outbox-drain-every-minute": {
+            "task": "tasks.drain_outbox_jobs",
+            "schedule": crontab(minute="*"),
         },
     },
 )

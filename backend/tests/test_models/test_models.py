@@ -88,6 +88,8 @@ def test_all_expected_tables_registered(test_engine):
     expected = {
         "users",
         "user_uploads",
+        "file_assets",
+        "outbox_jobs",
         "user_model_credentials",
         "user_model_provider_settings",
         "user_model_selections",

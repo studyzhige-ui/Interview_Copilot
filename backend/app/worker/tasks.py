@@ -522,3 +522,28 @@ def refresh_model_catalog_task(self):
             len(empty_vendors), empty_vendors,
         )
     return {"per_vendor": per_vendor, "total": total}
+
+
+@celery_app.task(
+    bind=True,
+    name="tasks.drain_outbox_jobs",
+    # Cleanup work is small and bounded (object deletes, index drops). A short
+    # outer limit keeps a hung external call from pinning the worker.
+    time_limit=120,
+    soft_time_limit=110,
+)
+def drain_outbox_jobs(self):
+    """Process due ``outbox_jobs`` — reliable cross-system side effects.
+
+    Runs every minute (beat). Claims a batch of due jobs and runs each
+    registered handler with retry/backoff. Idempotent and lock-guarded, so
+    overlapping runs are safe.
+    """
+    from app.db.database import SessionLocal
+    from app.services.uploads.outbox_service import run_due_outbox_jobs
+
+    with SessionLocal() as db:
+        processed = run_due_outbox_jobs(db)
+    if processed:
+        logger.info("drain_outbox_jobs: processed %d job(s)", processed)
+    return {"processed": processed}

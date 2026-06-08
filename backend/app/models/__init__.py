@@ -1,4 +1,5 @@
 from app.models.chat import ChatMessage, ChatSession
+from app.models.file_asset import FileAsset
 from app.models.habit_doc import HabitDoc
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
@@ -6,6 +7,7 @@ from app.models.knowledge import KnowledgeDocument
 from app.models.knowledge_doc import KnowledgeDoc
 from app.models.memory_audit_log import MemoryAuditLog
 from app.models.mock_interview_session import MockInterviewSession
+from app.models.outbox_job import OutboxJob
 from app.models.resume_section import ResumeSection
 from app.models.strategy_doc import StrategyDoc
 from app.models.upload import UserUpload
@@ -17,6 +19,7 @@ from app.models.user_model_selections import UserModelSelection
 __all__ = [
     "ChatMessage",
     "ChatSession",
+    "FileAsset",
     "HabitDoc",
     "InterviewQA",
     "InterviewRecord",
@@ -24,11 +27,12 @@ __all__ = [
     "KnowledgeDocument",
     "MemoryAuditLog",
     "MockInterviewSession",
+    "OutboxJob",
     "ResumeSection",
     "StrategyDoc",
-    "UserUpload",
     "User",
     "UserModelCredential",
     "UserModelProviderSettings",
     "UserModelSelection",
+    "UserUpload",
 ]

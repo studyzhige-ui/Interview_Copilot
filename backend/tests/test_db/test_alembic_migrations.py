@@ -164,6 +164,8 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "alembic_version",
         "users",
         "user_uploads",
+        "file_assets",
+        "outbox_jobs",
         "user_model_credentials",
         "user_model_provider_settings",
         "user_model_selections",
