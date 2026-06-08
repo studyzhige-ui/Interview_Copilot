@@ -37,10 +37,10 @@ class KnowledgeDocument(Base):
     status = Column(String, index=True, default="processing", nullable=False)
     task_id = Column(String, nullable=True)
     chunk_count = Column(Integer, default=0, nullable=False)
-    # Milvus node ids live on ``document_chunks.node_id`` (the fact source);
-    # the old write-only ``node_ids`` JSON column was dropped in 0024. Deletes
-    # read the ids back from document_chunks. ``ref_doc_ids`` stays — it's still
-    # read for ref-doc-scoped index cleanup.
+    # Deletes go by document_id (milvus_hybrid.delete_by_document + the
+    # document_chunks rows) — nothing reads node ids back for deletion anymore.
+    # ``ref_doc_ids`` records the LlamaIndex ref-doc ids from the last ingest as
+    # a diagnostic/audit field; it is NOT read for retrieval or deletion.
     ref_doc_ids = Column(Text, default="[]", nullable=False)
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

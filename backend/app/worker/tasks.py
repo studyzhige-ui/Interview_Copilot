@@ -171,12 +171,12 @@ def process_document_ingestion(self, document_id: str):
     """Download an uploaded document if needed and ingest it into Milvus.
 
     Idempotency contract:
-      * status='ready' with chunks already written → skip
-      * status='processing'/'failed' → fresh attempt; existing Milvus rows
-        for ``ref_doc_ids`` (if any) are best-effort deleted first to avoid
-        duplicate chunks on retry. Failure to delete is non-fatal.
+      * status='ready' (already ingested) → skip.
+      * status='processing'/'failed' → fresh attempt. Re-ingest is safe:
+        ``_write_to_milvus_hybrid`` deletes this document's prior Milvus rows
+        (by document_id) before inserting, so a retry never accumulates
+        duplicate chunks.
     """
-    import json
     import os
     import tempfile
 
@@ -205,23 +205,6 @@ def process_document_ingestion(self, document_id: str):
             raise ValueError("Knowledge document upload has invalid purpose")
         if document.status not in {"processing", "failed"}:
             return {"status": "skipped", "document_id": document_id, "current_status": document.status}
-
-        # If this is a retry of a partially-succeeded attempt (we crashed
-        # between Milvus insert and DB commit), log it. A Phase-3 follow-up
-        # will delete stale Milvus rows for ``document.ref_doc_ids`` to avoid
-        # duplicate chunks; for now status-gate is the main reliability win
-        # and duplicates are filtered at query time by document_id.
-        if self.request.retries > 0 and document.ref_doc_ids:
-            stale_count = 0
-            try:
-                stale_count = len(json.loads(document.ref_doc_ids) or [])
-            except json.JSONDecodeError:
-                pass
-            logger.warning(
-                "[Task %s] Retry attempt #%d for document %s; %d stale ref_doc_ids "
-                "from prior attempt may produce duplicates (filtered at query time).",
-                self.request.id, self.request.retries, document_id, stale_count,
-            )
 
         if not document.storage_uri.startswith("s3://"):
             raise ValueError("Knowledge ingestion only accepts owned S3 uploads")

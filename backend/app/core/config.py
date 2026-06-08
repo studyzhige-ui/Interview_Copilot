@@ -118,8 +118,6 @@ class Settings(BaseSettings):
     AGENT_PERSIST_THRESHOLD: int = 50_000      # per-result: offload if > 50K chars
     AGENT_TURN_BUDGET_CHARS: int = 200_000     # per-turn aggregate: spill largest until < 200K
     AGENT_PERSIST_PREVIEW_SIZE: int = 2_000    # preview size (chars) in persisted-output block
-    VECTOR_TOP_K: int = 8
-    BM25_TOP_K: int = 8
     FUSION_TOP_K: int = 6
     RERANK_TOP_N: int = 5
     # Single relevance threshold for RAG retrieval. Applied uniformly with or

@@ -1,11 +1,11 @@
 """``document_chunks``: the Postgres fact source for knowledge-base chunks.
 
-Postgres owns the chunk TEXT (this table). Milvus owns the retrieval INDEX
-(dense vector + — going forward — BM25 sparse). Milvus stores a copy of the
-text only as a BM25/full-text index field; the authoritative chunk text lives
-here. This replaces the LlamaIndex ``PostgresDocumentStore`` as the project's
-chunk store: full-text reconstruction (``read_full_text_from_chunks``) and
-the keyword (BM25) source both read this table now.
+Postgres owns the chunk TEXT (this table); Milvus owns the retrieval INDEX —
+dense vector + native server-side BM25 sparse over the chunk text (see
+``app.rag.milvus_hybrid``). The authoritative chunk text lives here. This
+replaced the LlamaIndex ``PostgresDocumentStore`` as the project's chunk store:
+full-text reconstruction (``read_full_text_from_chunks``) reads this table; BM25
+retrieval is now served by Milvus, not from here.
 
 A row is one chunk:
   * knowledge-document chunk -> ``document_id`` set (FK to knowledge_documents);

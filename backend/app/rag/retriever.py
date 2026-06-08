@@ -4,12 +4,11 @@ import re
 from threading import Lock
 from typing import Optional, Dict, Any
 
-from llama_index.core import VectorStoreIndex
-from llama_index.vector_stores.milvus import MilvusVectorStore
-from llama_index.core.vector_stores import MetadataFilters, MetadataFilter, FilterOperator
-from llama_index.core.retrievers import VectorIndexRetriever
+from llama_index.core import Settings
 
-# 解决跨版本 LlamaIndex-Core 与 BM25 强绑定函数被移除的 Import Bug
+# Cross-version LlamaIndex-Core shim: some versions dropped
+# ``build_metadata_filter_fn``. The resume/ability LlamaIndex Milvus retrieval
+# paths still rely on it, so keep this defensive patch.
 import llama_index.core.vector_stores.utils
 if not hasattr(llama_index.core.vector_stores.utils, "build_metadata_filter_fn"):
     def _mock_build_metadata_filter_fn(*args, **kwargs):
@@ -17,36 +16,13 @@ if not hasattr(llama_index.core.vector_stores.utils, "build_metadata_filter_fn")
     llama_index.core.vector_stores.utils.build_metadata_filter_fn = _mock_build_metadata_filter_fn
 
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
-from llama_index.core.retrievers import QueryFusionRetriever
 
 from app.core.config import settings
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.rag.reranker_registry import build_reranker, resolve_reranker
-from app.rag.bm25_cache import (
-    _build_and_cache_bm25 as _build_and_cache_bm25_impl,
-    _get_cached_bm25,
-)
-
-# Re-exported so other modules and tests can import these via
-# ``app.rag.retriever`` — ingestion.py imports ``invalidate_bm25_cache``
-# from here, and test_bm25_cache.py asserts the re-export identity.
-# They're unused *in this module*, so ``ruff --fix`` strips them as F401;
-# the per-line noqa pins them on purpose. Do NOT delete.
-from app.rag.bm25_cache import (
-    _BM25_CACHE_TTL,  # noqa: F401
-    _BM25CacheEntry,  # noqa: F401
-    _bm25_cache,  # noqa: F401
-    _bm25_cache_key,  # noqa: F401
-    _bm25_cache_lock,  # noqa: F401
-    invalidate_bm25_cache,  # noqa: F401
-)
 
 logger = logging.getLogger(__name__)
-
-MILVUS_URI = settings.MILVUS_URI
-MILVUS_COLLECTION = settings.MILVUS_COLLECTION
-
 
 # ---------------------------------------------------------------------------
 # Module-level singletons with thread-safe lazy initialization
@@ -54,55 +30,6 @@ MILVUS_COLLECTION = settings.MILVUS_COLLECTION
 
 _reranker: Optional[BaseNodePostprocessor] = None
 _reranker_lock = Lock()
-
-_milvus_store: Optional[MilvusVectorStore] = None
-_milvus_index: Optional[VectorStoreIndex] = None
-_milvus_lock = Lock()
-
-
-def _milvus_dense_index_config() -> dict:
-    return {
-        "index_type": settings.MILVUS_DENSE_INDEX_TYPE,
-        "metric_type": settings.MILVUS_SIMILARITY_METRIC,
-        "M": settings.MILVUS_HNSW_M,
-        "efConstruction": settings.MILVUS_HNSW_EF_CONSTRUCTION,
-    }
-
-
-def _milvus_search_config() -> dict:
-    return {
-        "metric_type": settings.MILVUS_SIMILARITY_METRIC,
-        "params": {
-            "ef": settings.MILVUS_HNSW_EF_SEARCH,
-        },
-    }
-
-
-def _get_milvus_index() -> VectorStoreIndex:
-    """Return a shared Milvus VectorStoreIndex, creating it once on first use."""
-    global _milvus_store, _milvus_index
-    if _milvus_index is not None:
-        return _milvus_index
-    with _milvus_lock:
-        if _milvus_index is not None:
-            return _milvus_index
-        _milvus_store = MilvusVectorStore(
-            uri=MILVUS_URI,
-            collection_name=MILVUS_COLLECTION,
-            dim=settings.EMBEDDING_DIM,
-            overwrite=False,
-            similarity_metric=settings.MILVUS_SIMILARITY_METRIC,
-            index_config=_milvus_dense_index_config(),
-            search_config=_milvus_search_config(),
-        )
-        _milvus_index = VectorStoreIndex.from_vector_store(_milvus_store)
-        logger.info(
-            "Milvus VectorStoreIndex singleton created: collection=%s dim=%s metric=%s",
-            MILVUS_COLLECTION,
-            settings.EMBEDDING_DIM,
-            settings.MILVUS_SIMILARITY_METRIC,
-        )
-        return _milvus_index
 
 
 def init_reranker():
@@ -136,31 +63,8 @@ def init_reranker():
 
 
 # ---------------------------------------------------------------------------
-# BM25 cache adapter — see ``app.rag.bm25_cache`` for the implementation.
-# ---------------------------------------------------------------------------
-
-
-def _build_and_cache_bm25(
-    user_id: int,
-    source_kind: Optional[str],
-    allowed_user_ids: list[int],
-):
-    """Compatibility wrapper — injects ``_metadata_matches_scope`` from this module."""
-    return _build_and_cache_bm25_impl(
-        user_id=user_id,
-        source_kind=source_kind,
-        allowed_user_ids=allowed_user_ids,
-        metadata_matches_scope=_metadata_matches_scope,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Helper utilities
 # ---------------------------------------------------------------------------
-
-def _split_csv(value: str) -> list[str]:
-    return [item.strip() for item in value.split(",") if item.strip()]
-
 
 def _allowed_user_ids(user_id: int, source_kind: Optional[str]) -> list[int]:
     # ``is not None`` (not truthiness): the scope key is now a numeric users.id,
@@ -179,38 +83,6 @@ def _metadata_matches_scope(
     if source_kind and metadata.get("source_kind") != source_kind:
         return False
     return True
-
-
-def _build_metadata_filters(
-    allowed_user_ids: list[int],
-    source_kind: Optional[str],
-) -> MetadataFilters:
-    filter_list = []
-    if len(allowed_user_ids) == 1:
-        filter_list.append(
-            MetadataFilter(
-                key="user_id",
-                value=allowed_user_ids[0],
-                operator=FilterOperator.EQ,
-            )
-        )
-    elif len(allowed_user_ids) > 1:
-        filter_list.append(
-            MetadataFilter(
-                key="user_id",
-                value=allowed_user_ids,
-                operator=FilterOperator.IN,
-            )
-        )
-    if source_kind:
-        filter_list.append(
-            MetadataFilter(
-                key="source_kind",
-                value=source_kind,
-                operator=FilterOperator.EQ,
-            )
-        )
-    return MetadataFilters(filters=filter_list, condition="and")
 
 
 def _query_terms(text: str) -> list[str]:
@@ -271,9 +143,9 @@ async def query_knowledge_base(
     min_score: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    混合检索中枢（向量 + BM25 + Reranker + 防幻觉拦截）。
+    混合检索中枢（Milvus 原生 dense + BM25 hybrid + Reranker + 防幻觉拦截）。
 
-    P0 安全：严格通过 MetadataFilter 隔离 user_id。
+    P0 安全：通过 Milvus hybrid_search 的 expr (user_id == pk) 隔离租户。
     防幻觉：使用 Reranker 绝对置信分数截断低质量节点。
     """
     try:
@@ -299,68 +171,58 @@ async def query_knowledge_base(
                 "sources": [],
             }
 
-        # ===== [1] 连接 Milvus 向量引擎（复用单例） =====
-        index = _get_milvus_index()
-
-        # ===== [2] 构建多租户隔离过滤器 (Milvus MetadataFilter) =====
+        # ===== [1] Scope — the Milvus hybrid_search ``expr`` filters by the
+        # stable users.id pk server-side; allowed_user_ids drives the
+        # defence-in-depth post-filter below. =====
         allowed_user_ids = _allowed_user_ids(user_pk, source_kind)
         logger.info(
-            "元数据过滤器已激活: requested_user_id=%s, user_pk=%s, allowed_user_ids=%s, source_kind=%s",
-            user_id,
-            user_pk,
-            allowed_user_ids,
-            source_kind,
+            "RAG hybrid scope: requested_user_id=%s, user_pk=%s, source_kind=%s",
+            user_id, user_pk, source_kind,
         )
 
-        # 向量检索器。每个 user_id 单独建 EQ filter，避免部分向量库不支持 IN。
-        vector_retrievers = []
-        filter_scopes = [[uid] for uid in allowed_user_ids] or [[]]
-        for scope_user_ids in filter_scopes:
-            vector_retrievers.append(
-                VectorIndexRetriever(
-                    index=index,
-                    similarity_top_k=settings.VECTOR_TOP_K,
-                    filters=_build_metadata_filters(scope_user_ids, source_kind),
-                )
-            )
-
-        # ===== [3] BM25 检索器（per-user 缓存） =====
-        if len(vector_retrievers) == 1:
-            final_retriever = vector_retrievers[0]
-        else:
-            final_retriever = QueryFusionRetriever(
-                retrievers=vector_retrievers,
-                similarity_top_k=settings.FUSION_TOP_K,
-                num_queries=1,
-                mode="reciprocal_rerank",
-            )
-
-        bm25_retriever = _get_cached_bm25(user_pk, source_kind, allowed_user_ids)
-        if bm25_retriever is None:
-            bm25_retriever = _build_and_cache_bm25(user_pk, source_kind, allowed_user_ids)
-
-        if bm25_retriever is not None:
-            final_retriever = QueryFusionRetriever(
-                retrievers=[*vector_retrievers, bm25_retriever],
-                similarity_top_k=settings.FUSION_TOP_K,
-                num_queries=1,
-                mode="reciprocal_rerank",
-            )
-            logger.info("BM25 + 向量混合检索启动")
-        else:
-            logger.warning("BM25 不可用，仅使用向量检索。")
-
-        # ===== [4] 检索 + Rerank + 防幻觉拦截 =====
-        logger.info(f"开始检索: {query_str}")
-
+        # ===== [2] Milvus 2.6 native hybrid: dense ANN + server-side BM25,
+        # fused by RRF in one query. Replaces the old dense-only Milvus +
+        # Postgres-sourced BM25 fusion. =====
+        logger.info(f"开始 Milvus hybrid 检索: {query_str}")
         try:
             from llama_index.core import QueryBundle
+            from llama_index.core.schema import NodeWithScore, TextNode
+
+            from app.rag import milvus_hybrid
+
             query_bundle = QueryBundle(query_str)
-            raw_nodes = await final_retriever.aretrieve(query_str)
+            # Embedding + Milvus search are sync/blocking — off the event loop so
+            # the SSE turn doesn't stall other in-flight requests.
+            query_dense = await asyncio.to_thread(
+                Settings.embed_model.get_query_embedding, query_str,
+            )
+            hits = await asyncio.to_thread(
+                lambda: milvus_hybrid.hybrid_search(
+                    query_text=query_str,
+                    query_dense=query_dense,
+                    user_pk=user_pk,
+                    source_kind=source_kind,
+                    top_k=settings.FUSION_TOP_K,
+                )
+            )
             raw_nodes = [
-                node
-                for node in raw_nodes
-                if _metadata_matches_scope(node.node.metadata, allowed_user_ids, source_kind)
+                NodeWithScore(
+                    node=TextNode(
+                        text=h["text"],
+                        id_=h["id"] or "",
+                        metadata={
+                            "user_id": h["user_id"],
+                            "source_kind": h["source_kind"],
+                            "document_id": h["document_id"],
+                        },
+                    ),
+                    score=h["score"],
+                )
+                for h in hits
+                if _metadata_matches_scope(
+                    {"user_id": h["user_id"], "source_kind": h["source_kind"]},
+                    allowed_user_ids, source_kind,
+                )
             ]
             _log_top_nodes("RAG raw candidates", raw_nodes)
         except Exception as ret_e:

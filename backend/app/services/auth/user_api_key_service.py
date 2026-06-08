@@ -143,9 +143,8 @@ _decrypt_cache: "_OrderedDict[tuple[str, str], tuple[str, float]]" = _OrderedDic
 # thread calling ``asyncio.to_thread(resolve_api_key, ...)`` while
 # another thread is over the cap and evicting can race into a
 # ``KeyError`` on move_to_end (the entry it just observed got popped
-# by the eviction loop). Mirrors the explicit-lock pattern in
-# ``app/rag/bm25_cache.py`` where the same composite-op problem
-# applied.
+# by the eviction loop). The fix is the explicit lock held across the
+# whole observe-then-mutate sequence (not just the individual dict ops).
 _decrypt_cache_lock = _Lock()
 
 

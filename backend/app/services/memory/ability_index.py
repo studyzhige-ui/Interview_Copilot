@@ -38,20 +38,25 @@ def _init() -> Any:
         from llama_index.core import VectorStoreIndex
         from llama_index.vector_stores.milvus import MilvusVectorStore
 
-        # Reuse the knowledge collection's HNSW index/search config (same engine,
-        # same params) — only the collection name + the one-node-per-state model
-        # differ. ``knowledge_service`` already imports these across the same
-        # app.services → app.rag boundary.
-        from app.rag.retriever import _milvus_dense_index_config, _milvus_search_config
-
+        # Dense HNSW config for this (LlamaIndex-managed) ability collection. The
+        # knowledge collection moved to raw-pymilvus hybrid, so these dicts are
+        # inlined here (same engine/params) rather than shared from rag.retriever.
         _store = MilvusVectorStore(
             uri=settings.MILVUS_URI,
             collection_name=settings.MEMORY_ABILITY_MILVUS_COLLECTION,
             dim=settings.EMBEDDING_DIM,
             overwrite=False,
             similarity_metric=settings.MILVUS_SIMILARITY_METRIC,
-            index_config=_milvus_dense_index_config(),
-            search_config=_milvus_search_config(),
+            index_config={
+                "index_type": settings.MILVUS_DENSE_INDEX_TYPE,
+                "metric_type": settings.MILVUS_SIMILARITY_METRIC,
+                "M": settings.MILVUS_HNSW_M,
+                "efConstruction": settings.MILVUS_HNSW_EF_CONSTRUCTION,
+            },
+            search_config={
+                "metric_type": settings.MILVUS_SIMILARITY_METRIC,
+                "params": {"ef": settings.MILVUS_HNSW_EF_SEARCH},
+            },
         )
         _index = VectorStoreIndex.from_vector_store(_store)
         logger.info(

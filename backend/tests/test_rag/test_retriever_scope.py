@@ -7,7 +7,7 @@ to a given query*:
 
   * ``_allowed_user_ids`` — strict private-only scoping.
   * ``_metadata_matches_scope`` — node-level visibility check.
-  * ``_build_metadata_filters`` — Milvus MetadataFilter construction.
+  * ``milvus_hybrid._scope_expr`` — the Milvus server-side tenant filter expr.
   * ``_query_terms`` / ``_lexical_overlap`` — Chinese + English term
     extraction and lexical-overlap scoring (debug / source signal only).
   * ``_score_passes`` — single absolute score threshold, no fallback.
@@ -72,47 +72,22 @@ def test_metadata_scope_requires_user_and_source_match():
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Milvus MetadataFilter construction
+# Milvus 2.6 hybrid scope expression (the server-side tenant filter)
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_build_metadata_filters_uses_eq_for_single_user():
-    from llama_index.core.vector_stores import FilterOperator
-    from app.rag import retriever
+def test_scope_expr_filters_by_user_pk():
+    from app.rag import milvus_hybrid
 
-    flt = retriever._build_metadata_filters([1], "interview_qa")
-    keys = {(f.key, f.operator) for f in flt.filters}
-    assert ("user_id", FilterOperator.EQ) in keys
-    assert ("source_kind", FilterOperator.EQ) in keys
-    # Find the user_id filter and check the literal value (the pk).
-    user_filter = next(f for f in flt.filters if f.key == "user_id")
-    assert user_filter.value == 1
+    # Scope key is the stable users.id pk; no source_kind -> user filter only.
+    assert milvus_hybrid._scope_expr(7, None) == "user_id == 7"
 
 
-def test_build_metadata_filters_uses_in_for_multiple_users():
-    from llama_index.core.vector_stores import FilterOperator
-    from app.rag import retriever
+def test_scope_expr_adds_source_kind():
+    from app.rag import milvus_hybrid
 
-    flt = retriever._build_metadata_filters([1, 2], "interview_qa")
-    user_filter = next(f for f in flt.filters if f.key == "user_id")
-    assert user_filter.operator == FilterOperator.IN
-    assert list(user_filter.value) == [1, 2]
-
-
-def test_build_metadata_filters_skips_source_when_none():
-    from app.rag import retriever
-
-    flt = retriever._build_metadata_filters([1], None)
-    keys = {f.key for f in flt.filters}
-    assert "user_id" in keys
-    assert "source_kind" not in keys
-
-
-def test_build_metadata_filters_empty_when_no_user_no_source():
-    from app.rag import retriever
-
-    flt = retriever._build_metadata_filters([], None)
-    assert flt.filters == []
+    expr = milvus_hybrid._scope_expr(7, "interview_qa")
+    assert expr == 'user_id == 7 && source_kind == "interview_qa"'
 
 
 # ─────────────────────────────────────────────────────────────────────

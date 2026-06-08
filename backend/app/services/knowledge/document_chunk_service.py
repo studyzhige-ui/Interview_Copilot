@@ -1,9 +1,9 @@
 """Read/write the ``document_chunks`` Postgres fact table.
 
-This is the project's chunk store — it replaces the LlamaIndex
+This is the project's chunk store — it replaced the LlamaIndex
 ``PostgresDocumentStore`` for the knowledge base. Ingestion writes chunk rows
-here (alongside the Milvus index); full-text reconstruction and the keyword
-(BM25) source read from here.
+here (alongside the Milvus hybrid index); full-text reconstruction reads from
+here. BM25 retrieval is served server-side by Milvus, not from this table.
 """
 from __future__ import annotations
 

@@ -1,7 +1,6 @@
 import os
 import logging
-from llama_index.core import SimpleDirectoryReader, StorageContext, VectorStoreIndex, Document
-from llama_index.vector_stores.milvus import MilvusVectorStore
+from llama_index.core import Document, Settings, SimpleDirectoryReader
 from llama_index.readers.file import PyMuPDFReader
 from llama_index.core.node_parser import (
     CodeSplitter,
@@ -14,28 +13,51 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-MILVUS_URI = settings.MILVUS_URI
-MILVUS_COLLECTION = settings.MILVUS_COLLECTION
 
 
 
+def _node_text(node) -> str:
+    """Extract a node's text (mirrors document_chunk_service so the Milvus
+    ``text`` field and the Postgres fact row carry identical content)."""
+    text = getattr(node, "text", None)
+    if not text and hasattr(node, "get_content"):
+        try:
+            text = node.get_content()
+        except Exception:  # noqa: BLE001
+            text = None
+    return str(text or "")
 
-def _milvus_dense_index_config() -> dict:
-    return {
-        "index_type": settings.MILVUS_DENSE_INDEX_TYPE,
-        "metric_type": settings.MILVUS_SIMILARITY_METRIC,
-        "M": settings.MILVUS_HNSW_M,
-        "efConstruction": settings.MILVUS_HNSW_EF_CONSTRUCTION,
-    }
 
+def _write_to_milvus_hybrid(
+    all_nodes: list, *, user_id: int, source_kind: str, document_id: str | None,
+) -> None:
+    """Embed each node (dense) and insert into the Milvus 2.6 hybrid collection.
 
-def _milvus_search_config() -> dict:
-    return {
-        "metric_type": settings.MILVUS_SIMILARITY_METRIC,
-        "params": {
-            "ef": settings.MILVUS_HNSW_EF_SEARCH,
-        },
-    }
+    The sparse/BM25 vector is computed server-side from ``text`` by the
+    collection's BM25 ``Function`` — we only supply the dense vector + text +
+    scope fields (``user_id`` is the stable users.id pk). Re-ingesting a document
+    replaces its prior chunks first.
+    """
+    from app.rag import milvus_hybrid
+
+    texts = [_node_text(n) for n in all_nodes]
+    embeddings = Settings.embed_model.get_text_embedding_batch(texts, show_progress=True)
+    rows: list[dict] = []
+    for node, text, emb in zip(all_nodes, texts, embeddings):
+        node_id = getattr(node, "node_id", None) or getattr(node, "id_", None)
+        if not node_id:
+            continue
+        rows.append({
+            "id": str(node_id),
+            "user_id": int(user_id),
+            "source_kind": source_kind,
+            "document_id": document_id,
+            "text": text,
+            "dense": emb,
+        })
+    if document_id:
+        milvus_hybrid.delete_by_document(document_id)
+    milvus_hybrid.insert(rows)
 
 
 def _table_aware_nodes(document: Document, char_budget: int) -> list:
@@ -132,32 +154,6 @@ def get_optimal_nodes(document: Document) -> list:
     return final_nodes
 
 
-def _get_milvus_vector_store(overwrite: bool = False) -> MilvusVectorStore:
-    """
-    创建连接到 Milvus Standalone 的 VectorStore 实例。
-    overwrite=True 时会清空并重建 collection。
-    """
-    return MilvusVectorStore(
-        uri=MILVUS_URI,
-        collection_name=MILVUS_COLLECTION,
-        dim=settings.EMBEDDING_DIM,
-        overwrite=overwrite,
-        similarity_metric=settings.MILVUS_SIMILARITY_METRIC,
-        index_config=_milvus_dense_index_config(),
-        search_config=_milvus_search_config(),
-    )
-
-
-def _get_storage_context(vector_store: MilvusVectorStore) -> StorageContext:
-    """Milvus-only storage context.
-
-    Chunk TEXT is the fact source in Postgres ``document_chunks`` (written by
-    ``document_chunk_service`` after the Milvus write) — NOT a LlamaIndex
-    docstore. Milvus holds the retrieval index only.
-    """
-    return StorageContext.from_defaults(vector_store=vector_store)
-
-
 async def ingest_document(
     file_path: str,
     source_kind: str,
@@ -244,15 +240,11 @@ async def ingest_document(
             if category:
                 node.metadata["category"] = category
 
-        # Milvus index (append mode), then the Postgres chunk fact rows.
-        vector_store = _get_milvus_vector_store(overwrite=False)
-        storage_context = _get_storage_context(vector_store)
-
-        logger.info(f">>> 写入 Milvus 索引，共 {len(all_nodes)} 个节点...")
-        VectorStoreIndex(
-            nodes=all_nodes,
-            storage_context=storage_context,
-            show_progress=True,
+        # Milvus 2.6 native dense + server-side BM25 hybrid, then the Postgres
+        # chunk fact rows. Re-ingest replaces this document's prior chunks.
+        logger.info(f">>> 写入 Milvus hybrid 索引，共 {len(all_nodes)} 个节点...")
+        _write_to_milvus_hybrid(
+            all_nodes, user_id=user_id, source_kind=source_kind, document_id=document_id,
         )
 
         # Persist chunk TEXT to Postgres document_chunks — the fact source.
@@ -266,9 +258,6 @@ async def ingest_document(
             )
 
         logger.info(f">>> 摄取完成: '{file_path}' (source_kind={source_kind}, user_id={user_id})")
-
-        from app.rag.retriever import invalidate_bm25_cache
-        invalidate_bm25_cache(user_id)
 
         return {
             "success": True,
@@ -295,11 +284,10 @@ async def ingest_text(text: str, source_kind: str, user_id: int, metadata: dict 
         doc = Document(text=text, metadata=final_metadata)
         all_nodes = get_optimal_nodes(doc)
 
-        vector_store = _get_milvus_vector_store(overwrite=False)
-        storage_context = _get_storage_context(vector_store)
-
-        logger.info(f"纯文本摄取: {len(all_nodes)} 个节点写入 Milvus...")
-        VectorStoreIndex(nodes=all_nodes, storage_context=storage_context)
+        logger.info(f"纯文本摄取: {len(all_nodes)} 个节点写入 Milvus hybrid...")
+        _write_to_milvus_hybrid(
+            all_nodes, user_id=user_id, source_kind=source_kind, document_id=None,
+        )
 
         # Persist to document_chunks (document_id NULL — e.g. personal_memory),
         # so the diagnostics report reads from Postgres, not a docstore.
@@ -312,9 +300,6 @@ async def ingest_text(text: str, source_kind: str, user_id: int, metadata: dict 
             )
 
         logger.info(f"文本摄取完成 (source_kind='{source_kind}')。")
-
-        from app.rag.retriever import invalidate_bm25_cache
-        invalidate_bm25_cache(user_id)
 
         return {
             "success": True,

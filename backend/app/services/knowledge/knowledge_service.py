@@ -3,13 +3,10 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from llama_index.vector_stores.milvus import MilvusVectorStore
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
-from app.rag.retriever import _milvus_dense_index_config, _milvus_search_config
 from app.services.storage_service import delete_s3_object, parse_s3_uri
 
 logger = logging.getLogger(__name__)
@@ -35,22 +32,12 @@ def default_title(upload: FileAsset) -> str:
 
 def delete_document_vectors_and_chunks(db: Session, document: KnowledgeDocument) -> None:
     """Delete a document's chunk facts (Postgres ``document_chunks``) and its
-    Milvus index entries. The chunk rows are the source of the Milvus node ids.
-    """
+    Milvus index entries (the native hybrid collection, keyed by document_id)."""
+    from app.rag import milvus_hybrid
     from app.services.knowledge.document_chunk_service import delete_document_chunks
 
-    node_ids = delete_document_chunks(db, document.id)
-    if node_ids:
-        vector_store = MilvusVectorStore(
-            uri=settings.MILVUS_URI,
-            collection_name=settings.MILVUS_COLLECTION,
-            dim=settings.EMBEDDING_DIM,
-            overwrite=False,
-            similarity_metric=settings.MILVUS_SIMILARITY_METRIC,
-            index_config=_milvus_dense_index_config(),
-            search_config=_milvus_search_config(),
-        )
-        vector_store.delete_nodes(node_ids=node_ids)
+    delete_document_chunks(db, document.id)
+    milvus_hybrid.delete_by_document(document.id)
 
 
 def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> None:
