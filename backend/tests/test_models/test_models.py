@@ -307,7 +307,7 @@ def test_knowledge_document_default_values(db_session):
     assert loaded.category == "默认"
     assert loaded.status == "processing"
     assert loaded.chunk_count == 0
-    assert loaded.node_ids == "[]"
+    assert loaded.ref_doc_ids == "[]"
 
 
 def _make_user(db_session, username: str = "mem_user") -> int:

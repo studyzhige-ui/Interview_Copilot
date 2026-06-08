@@ -302,8 +302,6 @@ def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypat
     ORDER. Pre-fix the wiring was "verified by hand" per the comment
     in mock_interview.py.
     """
-    import json as _json
-
     # Owning session + UserUpload row (the endpoint validates both).
     db.add(ChatSession(
         id="s_mock", user_id="alice", title="模拟面试",
@@ -421,7 +419,6 @@ def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypat
         id = "kdoc_X"
         title = "resume.pdf"
         status = "ready"
-        node_ids = _json.dumps(["n1", "n2"])
         created_at = None
 
     _fake_kdoc[0] = _FakeKDoc()

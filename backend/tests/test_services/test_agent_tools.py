@@ -345,7 +345,6 @@ def test_read_resume_direct_docstore_read(monkeypatch):
       (3) docstore exception path surfaces ``Docstore error: ...``
     """
     import asyncio
-    import json
 
     from app.agent_runtime.tool_registry import AgentToolContext
     from app.agent_runtime.tools.resume import _read_resume_handler, ReadResumeArgs
@@ -358,13 +357,14 @@ def test_read_resume_direct_docstore_read(monkeypatch):
         lambda user_id: [],
     )
 
-    # Fake KnowledgeDocument rows. Branch (1) has node_ids; (2) empty list.
+    # Fake KnowledgeDocument rows. Branch behaviour is driven by the mocked
+    # read_full_text_from_docstore return, not the row (the tool reads status,
+    # title, id, created_at — never node_ids, which was dropped in 0024).
     class _FakeDoc:
-        def __init__(self, *, id, title, status, node_ids, created_at=None):
+        def __init__(self, *, id, title, status, created_at=None):
             self.id = id
             self.title = title
             self.status = status
-            self.node_ids = json.dumps(node_ids)
             self.created_at = created_at
 
     ctx = AgentToolContext(user_id="alice", session_id="s1")
@@ -390,9 +390,7 @@ def test_read_resume_direct_docstore_read(monkeypatch):
 
     # --- Branch 1: chunks present → full_text --------------------------
 
-    _patch_db([_FakeDoc(
-        id="kdoc_X", title="resume.pdf", status="ready", node_ids=["n1", "n2", "n3"],
-    )])
+    _patch_db([_FakeDoc(id="kdoc_X", title="resume.pdf", status="ready")])
     monkeypatch.setattr(
         _TXT,
         lambda doc, **k: ("孙根武\n北京邮电大学\n\n工作经历: ...\n\n技能: Python, Rust", 3),
@@ -406,9 +404,7 @@ def test_read_resume_direct_docstore_read(monkeypatch):
 
     # --- Branch 2: no chunks yet → processing hint ---------------------
 
-    _patch_db([_FakeDoc(
-        id="kdoc_Y", title="resume.pdf", status="processing", node_ids=[],
-    )])
+    _patch_db([_FakeDoc(id="kdoc_Y", title="resume.pdf", status="processing")])
     monkeypatch.setattr(_TXT, lambda doc, **k: ("", 0))
     result = asyncio.run(_read_resume_handler(args, ctx))
     assert result["source"] == "docstore_empty"
@@ -417,9 +413,7 @@ def test_read_resume_direct_docstore_read(monkeypatch):
 
     # --- Branch 3: chunk read returns empty for a ready doc ------------
 
-    _patch_db([_FakeDoc(
-        id="kdoc_Z", title="resume.pdf", status="ready", node_ids=["n1"],
-    )])
+    _patch_db([_FakeDoc(id="kdoc_Z", title="resume.pdf", status="ready")])
     monkeypatch.setattr(_TXT, lambda doc, **k: ("", 0))
     result = asyncio.run(_read_resume_handler(args, ctx))
     assert result["source"] == "docstore_empty"

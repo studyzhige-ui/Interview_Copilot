@@ -89,11 +89,11 @@ def _read_resume_sync(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, 
 
     if raw_resumes:
         # The raw PDF/DOCX lives in the knowledge corpus and was parsed
-        # into chunks (TextNodes) at upload time — the same parser the
-        # RAG retriever uses. ``read_full_text_from_docstore`` reads
-        # those chunks DIRECTLY from PostgresDocumentStore and joins
-        # them in stored order, so the LLM sees the full resume in one
-        # shot. Pre-fix the fallback told the LLM to call
+        # into chunks at upload time — the same parser the RAG retriever
+        # uses. ``read_full_text_from_docstore`` reads those chunks
+        # DIRECTLY from the ``document_chunks`` fact table and joins them
+        # in stored order, so the LLM sees the full resume in one shot.
+        # Pre-fix the fallback told the LLM to call
         # ``search_knowledge`` (which returns ~5 reranked chunks ×
         # 1500 chars — fragmented + filtered). Direct docstore read is
         # the right primitive for "give me the user's resume".

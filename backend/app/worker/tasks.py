@@ -253,7 +253,6 @@ def process_document_ingestion(self, document_id: str):
         if result and result.get("success"):
             document.status = "ready"
             document.chunk_count = int(result.get("chunk_count") or 0)
-            document.node_ids = dump_json_list(result.get("node_ids") or [])
             document.ref_doc_ids = dump_json_list(result.get("ref_doc_ids") or [])
             document.error_message = None
             db.add(document)
