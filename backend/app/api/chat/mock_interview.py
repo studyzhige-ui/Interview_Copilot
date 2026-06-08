@@ -789,20 +789,16 @@ async def _parse_resume_on_demand(db: Session, upload_id: str, user_id: str) -> 
     import os
     import tempfile
 
-    from app.models.upload import UserUpload
     from app.services.storage_service import download_file_from_s3
+    from app.services.uploads.file_asset_service import get_owned_file_asset
     from app.services.voice.file_parser import extract_resume_text
 
-    upload = (
-        db.query(UserUpload)
-        .filter(
-            UserUpload.id == upload_id,
-            UserUpload.user_id == user_id,
-            UserUpload.purpose.in_(("interview_resume", "knowledge_document")),
-        )
-        .first()
-    )
-    if upload is None or not upload.storage_uri:
+    upload = get_owned_file_asset(db, file_asset_id=upload_id, user_id=user_id)
+    if (
+        upload is None
+        or upload.purpose not in ("interview_resume", "knowledge_document")
+        or not upload.storage_uri
+    ):
         return ""
 
     suffix = os.path.splitext(upload.original_filename or "")[1] or ".pdf"

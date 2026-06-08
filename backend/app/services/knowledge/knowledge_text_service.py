@@ -50,7 +50,7 @@ def find_knowledge_doc_by_upload(
     db: Session, upload_id: str, user_id: str,
 ) -> KnowledgeDocument | None:
     """Find the ``KnowledgeDocument`` row that wraps a given
-    ``user_uploads.id``, if any.
+    ``file_assets.id``, if any.
 
     Returns ``None`` when no library row exists for the upload — e.g. a
     direct ``/upload/resume`` that the user never categorized into the

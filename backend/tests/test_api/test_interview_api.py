@@ -24,8 +24,21 @@ from app.api import interview as interview_mod
 from app.core.security import get_current_user
 from app.db.database import Base, get_db
 import app.models  # noqa: F401  — ensure mappers registered
+from app.models.file_asset import FileAsset
 from app.models.interview_record import InterviewRecord
-from app.models.upload import UserUpload
+from app.models.user import User
+
+
+def _uid(db: Session, username: str) -> int:
+    """Resolve a seeded user's integer ``users.id``.
+
+    ``FileAsset.user_id`` is the stable integer PK (not the username); the
+    upload routes look an asset up via ``get_owned_file_asset`` which resolves
+    the request principal's username → ``users.id`` before filtering. Seeded
+    FileAsset rows therefore carry the integer id of a real ``users`` row whose
+    ``username`` is the principal (``alice``).
+    """
+    return db.query(User.id).filter(User.username == username).scalar()
 
 
 @pytest.fixture
@@ -38,6 +51,11 @@ def db(monkeypatch) -> Iterator[Session]:
     Base.metadata.create_all(bind=engine)
     Session_ = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     session = Session_()
+    # ``alice`` is the dependency-overridden current user; the upload routes
+    # resolve that username to this row's integer id, which the seeded
+    # FileAsset rows below reference as ``user_id``.
+    session.add(User(username="alice", hashed_password="x"))
+    session.commit()
 
     # Several interview endpoints (cancel, list, get, delete) call into
     # ``interview_record_service`` which opens its own ``SessionLocal()``
@@ -103,11 +121,12 @@ def test_upload_audio_direct_writes_user_upload(client, db: Session):
     body = resp.json()
     assert body["status"] == "success"
     upload_id = body["upload_id"]
-    row = db.query(UserUpload).filter(UserUpload.id == upload_id).first()
+    row = db.query(FileAsset).filter(FileAsset.id == upload_id).first()
     assert row is not None
-    assert row.user_id == "alice"
+    # Route stores the FK pk, not the username string.
+    assert row.user_id == _uid(db, "alice")
     assert row.purpose == "interview_audio"
-    assert row.status == "uploaded"
+    assert row.upload_status == "uploaded"
 
 
 # ── /analyze ──────────────────────────────────────────────────────────────
@@ -115,23 +134,25 @@ def test_upload_audio_direct_writes_user_upload(client, db: Session):
 
 def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
     db.add_all([
-        UserUpload(
+        FileAsset(
             id="upl_audio",
-            user_id="alice",
+            user_id=_uid(db, "alice"),
             purpose="interview_audio",
             original_filename="a.wav",
             storage_uri="s3://b/uploads/alice/upl_audio/a.wav",
             object_key="uploads/alice/upl_audio/a.wav",
-            status="uploaded",
+            upload_status="uploaded",
+            validation_status="passed",
         ),
-        UserUpload(
+        FileAsset(
             id="upl_resume",
-            user_id="alice",
+            user_id=_uid(db, "alice"),
             purpose="interview_resume",
             original_filename="r.pdf",
             storage_uri="s3://b/uploads/alice/upl_resume/r.pdf",
             object_key="uploads/alice/upl_resume/r.pdf",
-            status="uploaded",
+            upload_status="uploaded",
+            validation_status="passed",
         ),
     ])
     db.commit()
@@ -166,14 +187,15 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
 
 def test_analyze_returns_404_for_missing_audio_upload(client, db: Session):
     db.add(
-        UserUpload(
+        FileAsset(
             id="upl_resume",
-            user_id="alice",
+            user_id=_uid(db, "alice"),
             purpose="interview_resume",
             original_filename="r.pdf",
             storage_uri="s3://b/uploads/alice/upl_resume/r.pdf",
             object_key="uploads/alice/upl_resume/r.pdf",
-            status="uploaded",
+            upload_status="uploaded",
+            validation_status="passed",
         ),
     )
     db.commit()
@@ -186,23 +208,26 @@ def test_analyze_returns_404_for_missing_audio_upload(client, db: Session):
 
 def test_analyze_blocks_already_consumed_audio(client, db: Session):
     db.add_all([
-        UserUpload(
+        FileAsset(
             id="upl_audio",
-            user_id="alice",
+            user_id=_uid(db, "alice"),
             purpose="interview_audio",
             original_filename="a.wav",
             storage_uri="s3://b/x",
             object_key="x",
-            status="consumed",
+            # Already-consumed audio must still drive the 409 path.
+            upload_status="consumed",
+            validation_status="passed",
         ),
-        UserUpload(
+        FileAsset(
             id="upl_resume",
-            user_id="alice",
+            user_id=_uid(db, "alice"),
             purpose="interview_resume",
             original_filename="r.pdf",
             storage_uri="s3://b/y",
             object_key="y",
-            status="uploaded",
+            upload_status="uploaded",
+            validation_status="passed",
         ),
     ])
     db.commit()

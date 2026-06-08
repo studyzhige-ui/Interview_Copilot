@@ -34,29 +34,32 @@ from app.db.database import SessionLocal
 from app.models.user import User
 
 
-# Tables with a ``user_id`` FK. Order doesn't matter because we delete inside
-# a single transaction and Postgres handles FK cascades; we just need to hit
-# every place that contains user-scoped data.
-USER_TABLES = (
-    "user_api_keys",
-    "user_uploads",
+# User-scoped tables, split by how ``user_id`` is keyed (the refactor left
+# business/runtime tables on the username string but moved newer stores to the
+# stable users.id integer FK). chat_messages / interview_qa are wiped via a
+# parent-id subquery (handled specially below).
+USERNAME_TABLES = (
     "knowledge_documents",
-    # ``memory_items`` was dropped by alembic 0003 — the v3 memory
-    # architecture uses ``knowledge_docs / strategy_docs / habit_docs
-    # / user_profile_doc / memory_audit_log`` instead. Those tables
-    # are also user-scoped, so they're listed below.
-    "knowledge_docs",
-    "strategy_docs",
-    "habit_docs",
-    "user_profile_doc",
-    "memory_audit_log",
+    "document_chunks",
     "chat_sessions",
-    "chat_messages",            # FK via chat_sessions.user_id
     "mock_interview_sessions",
+    "mock_interview_runtime",
     "interview_records",
-    "interview_qa",             # FK via interview_records.user_id
     "resume_sections",
 )
+USER_PK_TABLES = (
+    "file_assets",
+    "outbox_jobs",
+    "user_model_credentials",
+    "user_model_provider_settings",
+    "user_model_selections",
+    "memory_documents",
+    "memory_ability_states",
+    "memory_audit_logs",
+    "resumes",
+)
+# Order is exception-tolerant (each statement runs in its own savepoint), but we
+# still wipe children before parents for any non-CASCADE FK.
 
 MILVUS_COLLECTIONS = (
     "interview_copilot_rag",
@@ -86,31 +89,38 @@ def _admin_id_and_other_users(db, admin_username: str) -> tuple[int, list[User]]
 def _count_rows_per_table(db, admin_username: str) -> dict[str, int]:
     """For each user-scoped table, count rows that would be deleted.
 
-    NOTE: in this schema ``<table>.user_id`` is VARCHAR storing the *username*
-    (NOT users.id integer FK). So all comparisons run against the username.
-
-    Each count runs in its own implicit savepoint — if one fails (table
-    missing, column mis-typed) we rollback and continue, instead of the
-    whole transaction going into aborted state.
+    NOTE: ``user_id`` is the username VARCHAR on the USERNAME_TABLES and the
+    stable users.id INTEGER on the USER_PK_TABLES — each is compared with the
+    matching predicate. Each count runs in its own implicit savepoint — if one
+    fails (table missing, column mis-typed) we rollback and continue, instead
+    of the whole transaction going into aborted state.
     """
+    admin_pk = db.execute(
+        text("SELECT id FROM users WHERE username = :auname"), {"auname": admin_username},
+    ).scalar()
+
+    # (table, sql, params) — children-via-parent first, then by key type.
+    queries: list[tuple[str, str, dict]] = [
+        ("chat_messages",
+         "SELECT COUNT(*) FROM chat_messages cm JOIN chat_sessions cs "
+         "ON cm.session_id = cs.id WHERE cs.user_id != :auname", {"auname": admin_username}),
+        ("interview_qa",
+         "SELECT COUNT(*) FROM interview_qa iq JOIN interview_records ir "
+         "ON iq.record_id = ir.id WHERE ir.user_id != :auname", {"auname": admin_username}),
+    ]
+    queries += [
+        (t, f"SELECT COUNT(*) FROM {t} WHERE user_id != :auname", {"auname": admin_username})
+        for t in USERNAME_TABLES
+    ]
+    queries += [
+        (t, f"SELECT COUNT(*) FROM {t} WHERE user_id != :apk", {"apk": admin_pk})
+        for t in USER_PK_TABLES
+    ]
+
     counts: dict[str, int] = {}
-    for table in USER_TABLES:
-        if table == "chat_messages":
-            q = (
-                "SELECT COUNT(*) FROM chat_messages cm "
-                "JOIN chat_sessions cs ON cm.session_id = cs.id "
-                "WHERE cs.user_id != :auname"
-            )
-        elif table == "interview_qa":
-            q = (
-                "SELECT COUNT(*) FROM interview_qa iq "
-                "JOIN interview_records ir ON iq.record_id = ir.id "
-                "WHERE ir.user_id != :auname"
-            )
-        else:
-            q = f"SELECT COUNT(*) FROM {table} WHERE user_id != :auname"
+    for table, q, params in queries:
         try:
-            counts[table] = db.execute(text(q), {"auname": admin_username}).scalar() or 0
+            counts[table] = db.execute(text(q), params).scalar() or 0
         except Exception as exc:
             db.rollback()  # clear aborted state so the NEXT query can run
             counts[table] = -1
@@ -193,49 +203,40 @@ def _delete_milvus_vectors(doc_ids: list[str], dry_run: bool) -> dict[str, int]:
 
 
 def _delete_postgres_rows(db, admin_username: str, dry_run: bool) -> None:
-    """One transaction; Postgres FK cascade handles join tables automatically.
+    """One transaction; each DELETE runs in its own savepoint so a missing
+    table is skipped rather than aborting the whole run.
 
-    Schema quirk: child tables store **username** (VARCHAR) in their
-    ``user_id`` column, not the integer ``users.id``. So we compare on
-    username everywhere — and on the ``users`` table itself we use the actual
-    ``username`` column.
+    ``user_id`` is the username VARCHAR on USERNAME_TABLES and the stable
+    users.id INTEGER on USER_PK_TABLES — each compared with the matching
+    predicate. The ``users`` table itself is filtered on its ``username``.
     """
     if dry_run:
         return
-    # Delete in reverse dependency order so non-CASCADE FKs don't trip.
-    # ``memory_items`` removed (dropped by alembic 0003); v3 memory
-    # tables (knowledge_docs/strategy_docs/habit_docs/user_profile_doc/
-    # memory_audit_log) are user-scoped and included below.
-    for table in (
-        "interview_qa",            # child of interview_records
-        "chat_messages",           # child of chat_sessions
-        "memory_audit_log",
-        "knowledge_docs",
-        "strategy_docs",
-        "habit_docs",
-        "user_profile_doc",
-        "user_api_keys",
-        "user_uploads",
-        "knowledge_documents",
-        "resume_sections",
-        "interview_records",
-        "mock_interview_sessions",
-        "chat_sessions",
-    ):
+    admin_pk = db.execute(
+        text("SELECT id FROM users WHERE username = :auname"), {"auname": admin_username},
+    ).scalar()
+
+    # Children-via-parent first, then username tables, then pk tables.
+    deletes: list[tuple[str, str, dict]] = [
+        ("interview_qa",
+         "DELETE FROM interview_qa WHERE record_id IN "
+         "(SELECT id FROM interview_records WHERE user_id != :auname)", {"auname": admin_username}),
+        ("chat_messages",
+         "DELETE FROM chat_messages WHERE session_id IN "
+         "(SELECT id FROM chat_sessions WHERE user_id != :auname)", {"auname": admin_username}),
+    ]
+    deletes += [
+        (t, f"DELETE FROM {t} WHERE user_id != :auname", {"auname": admin_username})
+        for t in USERNAME_TABLES
+    ]
+    deletes += [
+        (t, f"DELETE FROM {t} WHERE user_id != :apk", {"apk": admin_pk})
+        for t in USER_PK_TABLES
+    ]
+
+    for table, sql, params in deletes:
         try:
-            if table == "chat_messages":
-                db.execute(text(
-                    "DELETE FROM chat_messages WHERE session_id IN "
-                    "(SELECT id FROM chat_sessions WHERE user_id != :auname)"
-                ), {"auname": admin_username})
-            elif table == "interview_qa":
-                db.execute(text(
-                    "DELETE FROM interview_qa WHERE record_id IN "
-                    "(SELECT id FROM interview_records WHERE user_id != :auname)"
-                ), {"auname": admin_username})
-            else:
-                db.execute(text(f"DELETE FROM {table} WHERE user_id != :auname"),
-                           {"auname": admin_username})
+            db.execute(text(sql), params)
         except Exception as exc:
             db.rollback()
             print(f"  (skipping {table} delete: {type(exc).__name__}: {exc})")
@@ -308,16 +309,16 @@ def main() -> None:
     db = SessionLocal()
     try:
         admin_id, others = _admin_id_and_other_users(db, args.admin_username)
-        print(f"\n=== Plan ===")
+        print("\n=== Plan ===")
         print(f"  Keep:    id={admin_id}  username='{args.admin_username}'")
         print(f"  Wipe:    {len(others)} other user(s): "
               f"{[(u.id, u.username) for u in others]}")
 
         pg_counts = _count_rows_per_table(db, args.admin_username)
         print("\n  Postgres rows to delete:")
-        for t in USER_TABLES:
-            if pg_counts[t] >= 0:
-                print(f"    {t:<28} {_human(pg_counts[t]):>8}")
+        for t, n in pg_counts.items():
+            if n >= 0:
+                print(f"    {t:<28} {_human(n):>8}")
         print(f"    {'users':<28} {_human(len(others)):>8}")
 
         non_admin_docs = _non_admin_doc_ids(db, args.admin_username)

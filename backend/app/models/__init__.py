@@ -12,7 +12,6 @@ from app.models.mock_interview_session import MockInterviewSession
 from app.models.outbox_job import OutboxJob
 from app.models.resume import Resume
 from app.models.resume_section import ResumeSection
-from app.models.upload import UserUpload
 from app.models.user import User
 from app.models.user_model_credentials import UserModelCredential
 from app.models.user_model_provider_settings import UserModelProviderSettings
@@ -38,5 +37,4 @@ __all__ = [
     "UserModelCredential",
     "UserModelProviderSettings",
     "UserModelSelection",
-    "UserUpload",
 ]

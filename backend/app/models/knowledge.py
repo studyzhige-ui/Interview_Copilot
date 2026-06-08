@@ -23,7 +23,7 @@ class KnowledgeDocument(Base):
 
     id = Column(String, primary_key=True, default=generate_document_id, index=True)
     user_id = Column(String, index=True, nullable=False)
-    upload_id = Column(String, ForeignKey("user_uploads.id"), index=True, nullable=False)
+    upload_id = Column(String, ForeignKey("file_assets.id"), index=True, nullable=False)
     title = Column(String, nullable=False)
     category = Column(String, index=True, default="默认", nullable=False)
     source_type = Column(String, index=True, nullable=False)
@@ -41,4 +41,4 @@ class KnowledgeDocument(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-    upload = relationship("UserUpload")
+    upload = relationship("FileAsset")

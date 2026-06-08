@@ -12,7 +12,7 @@ Coverage:
     the alembic migrations build.
   * Round-trip insert + query through an in-memory SQLite session for the
     core entities (User, ChatSession+ChatMessage, InterviewRecord +
-    InterviewQA, UserUpload, KnowledgeDocument, MemoryDocument /
+    InterviewQA, FileAsset, KnowledgeDocument, MemoryDocument /
     MemoryAbilityState / MemoryAuditEntry (v3 memory),
     MockInterviewSession, UserModelCredential, ResumeSection).
 """
@@ -87,7 +87,6 @@ def test_all_expected_tables_registered(test_engine):
     tables = set(insp.get_table_names())
     expected = {
         "users",
-        "user_uploads",
         "file_assets",
         "outbox_jobs",
         "user_model_credentials",
@@ -262,17 +261,32 @@ def test_interview_record_status_update(db_session):
     assert loaded.analysis_schema_version == 2
 
 
-def test_user_upload_object_key_unique(db_session):
-    from app.models.upload import UserUpload
+def test_file_asset_object_key_unique(db_session):
+    from app.models.file_asset import FileAsset
 
-    db_session.add(UserUpload(
-        id="upl_a", user_id="u1", purpose="resume",
+    # ``FileAsset.user_id`` is the integer ``users.id`` FK, so seed a real user
+    # and key both assets on its pk. The collision under test is the unique
+    # ``object_key`` index, not the FK.
+    uid = _make_user(db_session, username="fa_owner")
+
+    asset = FileAsset(
+        id="fa_a", user_id=uid, purpose="resume",
         original_filename="cv.pdf", storage_uri="s3://bk/a",
         object_key="key-shared",
-    ))
+    )
+    db_session.add(asset)
     db_session.flush()
-    db_session.add(UserUpload(
-        id="upl_b", user_id="u1", purpose="resume",
+
+    # Defaults applied on insert.
+    loaded = db_session.query(FileAsset).filter(FileAsset.id == "fa_a").first()
+    assert loaded.upload_status == "pending_upload"
+    assert loaded.validation_status == "pending"
+    assert loaded.deleted_at is None
+    assert loaded.id.startswith("fa_")
+
+    # A second row reusing the same object_key violates the unique index.
+    db_session.add(FileAsset(
+        id="fa_b", user_id=uid, purpose="resume",
         original_filename="cv2.pdf", storage_uri="s3://bk/b",
         object_key="key-shared",
     ))
@@ -282,11 +296,14 @@ def test_user_upload_object_key_unique(db_session):
 
 
 def test_knowledge_document_default_values(db_session):
+    from app.models.file_asset import FileAsset
     from app.models.knowledge import KnowledgeDocument
-    from app.models.upload import UserUpload
 
-    db_session.add(UserUpload(
-        id="upl_k", user_id="u1", purpose="knowledge",
+    # The KnowledgeDocument.upload_id FK points at file_assets.id, so the
+    # parent asset is a FileAsset keyed on the integer users.id.
+    uid = _make_user(db_session, username="kdoc_owner")
+    db_session.add(FileAsset(
+        id="upl_k", user_id=uid, purpose="knowledge_document",
         original_filename="doc.pdf", storage_uri="s3://bk/k",
         object_key="key-knowledge",
     ))

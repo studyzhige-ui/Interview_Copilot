@@ -193,7 +193,12 @@ def process_document_ingestion(self, document_id: str):
         document = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
         if document is None:
             return {"status": "failed", "error": f"Knowledge document not found: {document_id}"}
-        if not document.upload or document.upload.user_id != document.user_id:
+        # ``document.user_id`` is the username; the related FileAsset keys on the
+        # stable users.id (and its object_key is pk-namespaced), so resolve once
+        # for the ownership compare + the prefix check below.
+        from app.core.user_identity import resolve_user_pk
+        owner_pk = resolve_user_pk(db, document.user_id)
+        if not document.upload or document.upload.user_id != owner_pk:
             raise ValueError("Knowledge upload owner does not match document owner")
         if document.upload.purpose != "knowledge_document":
             raise ValueError("Knowledge document upload has invalid purpose")
@@ -220,7 +225,7 @@ def process_document_ingestion(self, document_id: str):
         if not document.storage_uri.startswith("s3://"):
             raise ValueError("Knowledge ingestion only accepts owned S3 uploads")
 
-        expected_prefix = f"uploads/{document.user_id}/{document.upload_id}/"
+        expected_prefix = f"uploads/{owner_pk}/{document.upload_id}/"
         if not document.object_key.startswith(expected_prefix):
             raise ValueError("Knowledge upload object key does not match owner prefix")
 

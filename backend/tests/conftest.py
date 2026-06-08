@@ -77,7 +77,6 @@ def test_engine():
     import app.models.outbox_job           # noqa: F401
     import app.models.resume               # noqa: F401
     import app.models.resume_section       # noqa: F401
-    import app.models.upload               # noqa: F401
     import app.models.user                 # noqa: F401
     import app.models.user_model_credentials       # noqa: F401
     import app.models.user_model_provider_settings  # noqa: F401

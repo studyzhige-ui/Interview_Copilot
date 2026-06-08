@@ -20,7 +20,11 @@ from app.services.interview.interview_record_service import (
     interview_record_service,
 )
 from app.services.storage_service import upload_file_to_owned_key
-from app.services.uploads.upload_service import create_owned_upload, get_owned_upload, mark_upload_consumed
+from app.services.uploads.file_asset_service import (
+    create_file_asset,
+    get_owned_file_asset,
+    mark_file_asset_consumed,
+)
 from app.worker.tasks import process_interview_analysis
 
 try:
@@ -70,7 +74,7 @@ async def upload_audio(
         file, purpose="audio_upload",
     )
     try:
-        upload, _ = create_owned_upload(
+        upload, _ = create_file_asset(
             db,
             user_id=current_user.username,
             filename=file.filename,
@@ -85,7 +89,7 @@ async def upload_audio(
     finally:
         body_stream.close()  # drops the temp disk spill if one was created
     upload.storage_uri = storage_uri
-    upload.status = "uploaded"
+    upload.upload_status = "uploaded"
     db.add(upload)
     db.commit()
     return {
@@ -105,15 +109,15 @@ def list_user_resumes(
 
     Source-of-truth for "stored resumes" is the personal library, not previous
     mock-interview uploads. Returns each library doc together with the
-    underlying UserUpload.id so MockSetup can pass it to /mock-interview/start
+    underlying FileAsset.id so MockSetup can pass it to /mock-interview/start
     as ``resume_upload_id`` without extra translation.
     """
+    from app.models.file_asset import FileAsset
     from app.models.knowledge import KnowledgeDocument
-    from app.models.upload import UserUpload
 
     rows = (
-        db.query(KnowledgeDocument, UserUpload)
-        .join(UserUpload, KnowledgeDocument.upload_id == UserUpload.id)
+        db.query(KnowledgeDocument, FileAsset)
+        .join(FileAsset, KnowledgeDocument.upload_id == FileAsset.id)
         .filter(
             KnowledgeDocument.user_id == current_user.username,
             KnowledgeDocument.category == "简历",
@@ -160,7 +164,7 @@ async def upload_resume(
     declared_ext = Path(file.filename or "").suffix.lower()
     body = await validate_upload(file, purpose="resume", declared_ext=declared_ext)
 
-    upload, _ = create_owned_upload(
+    upload, _ = create_file_asset(
         db,
         user_id=current_user.username,
         filename=file.filename,
@@ -169,7 +173,7 @@ async def upload_resume(
     )
     storage_uri = upload_file_to_owned_key(io.BytesIO(body), upload.object_key, file.content_type)
     upload.storage_uri = storage_uri
-    upload.status = "uploaded"
+    upload.upload_status = "uploaded"
     db.add(upload)
     db.commit()
     return {
@@ -194,7 +198,7 @@ async def get_upload_presigned_url(
             detail="不支持的音视频格式。支持: mp3, wav, m4a, flac, ogg, wma, aac, mp4, mkv, avi, mov, webm",
         )
 
-    upload, url_info = create_owned_upload(
+    upload, url_info = create_file_asset(
         db=db,
         user_id=current_user.username,
         filename=request.filename,
@@ -223,20 +227,20 @@ async def analyze_interview_endpoint(
     """Create an InterviewRecord from an uploaded audio file and dispatch the
     unified analysis orchestrator."""
     try:
-        upload = get_owned_upload(
+        upload = get_owned_file_asset(
             db,
-            upload_id=body.upload_id,
+            file_asset_id=body.upload_id,
             user_id=current_user.username,
             purpose="interview_audio",
         )
         if upload is None:
             raise HTTPException(status_code=404, detail="Audio upload not found")
-        if upload.status not in {"pending_upload", "uploaded"}:
+        if upload.upload_status not in {"pending_upload", "uploaded"}:
             raise HTTPException(status_code=409, detail="Audio upload has already been consumed")
 
-        resume_upload = get_owned_upload(
+        resume_upload = get_owned_file_asset(
             db,
-            upload_id=body.resume_upload_id,
+            file_asset_id=body.resume_upload_id,
             user_id=current_user.username,
             purpose="interview_resume",
         )
@@ -275,7 +279,7 @@ async def analyze_interview_endpoint(
             jd_text_snapshot=jd_text,
             db=db,
         )
-        mark_upload_consumed(db, upload)
+        mark_file_asset_consumed(db, upload)
         db.commit()
 
         # Normalize language hint: anything other than the two we explicitly
@@ -338,15 +342,10 @@ def _extract_resume_snapshot(db: Session, resume_upload_id: str, user_id: str) -
     import os
     import tempfile
 
-    from app.models.upload import UserUpload
     from app.services.storage_service import download_file_from_s3
     from app.services.voice.file_parser import extract_resume_text
 
-    upload = (
-        db.query(UserUpload)
-        .filter(UserUpload.id == resume_upload_id, UserUpload.user_id == user_id)
-        .first()
-    )
+    upload = get_owned_file_asset(db, file_asset_id=resume_upload_id, user_id=user_id)
     if upload is None or not upload.storage_uri:
         return ""
     if not upload.storage_uri.startswith("s3://"):

@@ -163,7 +163,6 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     expected_tables = {
         "alembic_version",
         "users",
-        "user_uploads",
         "file_assets",
         "outbox_jobs",
         "user_model_credentials",
@@ -232,7 +231,10 @@ def test_hot_query_composite_indexes_exist(fresh_pg_db, monkeypatch):
     expectations = {
         "chat_sessions": "ix_chat_sessions_user_type_arch",
         "knowledge_documents": "ix_knowledge_docs_user_category",
-        "user_uploads": "ix_user_uploads_user_purpose",
+        # ``user_uploads`` (+ its ix_user_uploads_user_purpose) was dropped in
+        # 0025; the replacement file_assets table carries the equivalent
+        # (user_id, purpose) hot-list composite index (created in 0018).
+        "file_assets": "ix_file_assets_user_purpose",
         "interview_qa": "ix_interview_qa_record_order",
     }
     for table, ix_name in expectations.items():

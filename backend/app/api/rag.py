@@ -19,7 +19,11 @@ from app.schemas.rag import (
     SourceTypeEnum,
 )
 from app.services.knowledge.knowledge_service import default_title, hard_delete_knowledge_document
-from app.services.uploads.upload_service import create_owned_upload, get_owned_upload, mark_upload_consumed
+from app.services.uploads.file_asset_service import (
+    create_file_asset,
+    get_owned_file_asset,
+    mark_file_asset_consumed,
+)
 from app.worker.tasks import process_document_ingestion
 
 logger = logging.getLogger(__name__)
@@ -55,7 +59,7 @@ async def api_query_knowledge_base(
 
 
 def _document_payload(document: KnowledgeDocument) -> dict:
-    # Pull file metadata off the related UserUpload row if it loaded with the
+    # Pull file metadata off the related FileAsset row if it loaded with the
     # document (SQLAlchemy lazy-loads when accessed).
     upload = document.upload
     content_type = upload.content_type if upload else None
@@ -87,7 +91,7 @@ async def create_knowledge_upload_url(
     current_user: User = Depends(get_current_user),
 ):
     """Create an owned knowledge upload and return a presigned upload URL."""
-    upload, url_info = create_owned_upload(
+    upload, url_info = create_file_asset(
         db,
         user_id=current_user.username,
         filename=body.filename,
@@ -113,15 +117,15 @@ async def create_knowledge_document(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        upload = get_owned_upload(
+        upload = get_owned_file_asset(
             db,
-            upload_id=body.upload_id,
+            file_asset_id=body.upload_id,
             user_id=current_user.username,
             purpose="knowledge_document",
         )
         if upload is None:
             raise HTTPException(status_code=404, detail="Upload not found")
-        if upload.status not in {"pending_upload", "uploaded"}:
+        if upload.upload_status not in {"pending_upload", "uploaded"}:
             raise HTTPException(status_code=409, detail="Upload has already been consumed")
 
         document = KnowledgeDocument(
@@ -135,7 +139,7 @@ async def create_knowledge_document(
             status="processing",
         )
         db.add(document)
-        mark_upload_consumed(db, upload)
+        mark_file_asset_consumed(db, upload)
         # Flush so document.id is assigned and the row is visible to the
         # Celery worker when it queries (commit happens below, BEFORE we
         # dispatch — otherwise the worker can race ahead of our commit and

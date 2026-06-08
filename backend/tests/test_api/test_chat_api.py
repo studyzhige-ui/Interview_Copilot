@@ -302,19 +302,28 @@ def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypat
     ORDER. Pre-fix the wiring was "verified by hand" per the comment
     in mock_interview.py.
     """
-    # Owning session + UserUpload row (the endpoint validates both).
+    # Owning session + FileAsset row (the endpoint validates both).
+    from app.models.file_asset import FileAsset
+    from app.models.user import User
+
+    # FileAsset.user_id is the integer users.id FK, so seed the principal row
+    # and key the asset on its pk (the resume-resolution tiers are all stubbed
+    # below, so the asset is a structural seed; we still honour the contract).
+    alice = User(username="alice", hashed_password="x")
+    db.add(alice)
+    db.flush()
     db.add(ChatSession(
         id="s_mock", user_id="alice", title="模拟面试",
         session_type="mock_interview",
     ))
-    from app.models.upload import UserUpload
-    db.add(UserUpload(
-        id="upl_resume", user_id="alice",
+    db.add(FileAsset(
+        id="upl_resume", user_id=alice.id,
         original_filename="r.pdf",
         storage_uri="s3://bucket/r.pdf",
         object_key="r.pdf",
         purpose="knowledge_document",
-        status="ready",
+        upload_status="uploaded",
+        validation_status="passed",
     ))
     db.commit()
 

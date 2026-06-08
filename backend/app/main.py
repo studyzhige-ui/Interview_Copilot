@@ -47,7 +47,6 @@ import app.models.file_asset
 import app.models.outbox_job
 import app.models.resume
 import app.models.resume_section
-import app.models.upload
 import app.models.user
 from app.rag.embeddings import init_rag_settings
 from app.rag.retriever import init_reranker

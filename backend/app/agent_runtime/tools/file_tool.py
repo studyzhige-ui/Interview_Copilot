@@ -56,30 +56,22 @@ def _read_file_sync(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]
 
     # Branch 2: read a user-uploaded file by id / purpose.
     from app.db.database import SessionLocal
-    from app.models.upload import UserUpload
+    from app.services.uploads.file_asset_service import (
+        get_owned_file_asset,
+        list_user_file_assets,
+    )
 
     db = SessionLocal()
     try:
         if args.upload_id:
-            upload = (
-                db.query(UserUpload)
-                .filter(UserUpload.id == args.upload_id, UserUpload.user_id == ctx.user_id)
-                .first()
-            )
-        elif args.purpose:
-            upload = (
-                db.query(UserUpload)
-                .filter(UserUpload.user_id == ctx.user_id, UserUpload.purpose == args.purpose)
-                .order_by(UserUpload.created_at.desc())
-                .first()
+            upload = get_owned_file_asset(
+                db, file_asset_id=args.upload_id, user_id=ctx.user_id,
             )
         else:
-            upload = (
-                db.query(UserUpload)
-                .filter(UserUpload.user_id == ctx.user_id)
-                .order_by(UserUpload.created_at.desc())
-                .first()
+            assets = list_user_file_assets(
+                db, user_id=ctx.user_id, purpose=args.purpose or None,
             )
+            upload = assets[0] if assets else None  # most recent (desc order)
 
         if upload is None:
             return {"error": "No file found", "purpose": args.purpose, "upload_id": args.upload_id}
@@ -164,11 +156,11 @@ async def _write_file_handler(args: WriteFileArgs, ctx: AgentToolContext) -> dic
 
 def _write_file_sync(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, Any]:
     from app.db.database import SessionLocal
-    from app.services.uploads.upload_service import create_owned_upload
+    from app.services.uploads.file_asset_service import create_file_asset
 
     db = SessionLocal()
     try:
-        upload, url_info = create_owned_upload(
+        upload, url_info = create_file_asset(
             db,
             user_id=ctx.user_id,
             filename=args.filename,
@@ -185,8 +177,8 @@ def _write_file_sync(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, An
             content_type=upload.content_type,
         )
 
-        from app.services.uploads.upload_service import mark_upload_consumed
-        mark_upload_consumed(db, upload)
+        from app.services.uploads.file_asset_service import mark_file_asset_consumed
+        mark_file_asset_consumed(db, upload)
         db.commit()
 
         return {

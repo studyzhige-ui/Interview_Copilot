@@ -7,8 +7,8 @@ from llama_index.vector_stores.milvus import MilvusVectorStore
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
-from app.models.upload import UserUpload
 from app.rag.retriever import _milvus_dense_index_config, _milvus_search_config
 from app.services.storage_service import delete_s3_object, parse_s3_uri
 
@@ -29,7 +29,7 @@ def dump_json_list(values: list[str]) -> str:
     return json.dumps(values, ensure_ascii=False)
 
 
-def default_title(upload: UserUpload) -> str:
+def default_title(upload: FileAsset) -> str:
     return Path(upload.original_filename).stem or upload.original_filename
 
 
@@ -54,7 +54,12 @@ def delete_document_vectors_and_chunks(db: Session, document: KnowledgeDocument)
 
 
 def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> None:
-    expected_prefix = f"uploads/{document.user_id}/{document.upload_id}/"
+    from app.core.user_identity import resolve_user_pk
+
+    # object_key is namespaced by the stable users.id (the FileAsset's owner),
+    # while document.user_id is the username — resolve before building the prefix.
+    owner_pk = resolve_user_pk(db, document.user_id)
+    expected_prefix = f"uploads/{owner_pk}/{document.upload_id}/"
     _, storage_key = parse_s3_uri(document.storage_uri)
     if document.object_key != storage_key or not document.object_key.startswith(expected_prefix):
         raise ValueError("Refusing to delete knowledge object outside the owned upload prefix")
