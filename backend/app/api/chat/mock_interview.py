@@ -715,8 +715,9 @@ async def finish_mock_interview(
     )
 
     now = _dt.utcnow()
+    from app.core.user_identity import resolve_user_pk
     mis = MockInterviewSession(
-        user_id=current_user.username,
+        user_id=resolve_user_pk(db, current_user.username),
         interview_record_id=record.id,
         status="finished",
         current_phase=state.get("current_phase"),

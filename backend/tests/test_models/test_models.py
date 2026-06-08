@@ -490,11 +490,12 @@ def test_mock_interview_session_defaults(db_session):
     from app.models.interview_record import InterviewRecord
     from app.models.mock_interview_session import MockInterviewSession
 
+    uid = _make_user(db_session, username="u1")
     rec = InterviewRecord(user_id="u1", source="mock", status="pending")
     db_session.add(rec)
     db_session.flush()
 
-    mis = MockInterviewSession(user_id="u1", interview_record_id=rec.id)
+    mis = MockInterviewSession(user_id=uid, interview_record_id=rec.id)
     db_session.add(mis)
     db_session.flush()
 

@@ -26,7 +26,11 @@ class MockInterviewSession(Base):
     __tablename__ = "mock_interview_sessions"
 
     id = Column(String, primary_key=True, default=_generate_session_id)
-    user_id = Column(String, index=True, nullable=False)
+    # Stable users.id FK; the mock-finish writer resolves the caller's username
+    # via app.core.user_identity.resolve_user_pk.
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False,
+    )
     interview_record_id = Column(
         String,
         ForeignKey("interview_records.id", ondelete="CASCADE"),

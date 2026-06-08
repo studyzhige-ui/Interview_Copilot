@@ -264,6 +264,11 @@ def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
 
     engine = create_engine(fresh_pg_db)
     with engine.begin() as conn:
+        # mock_interview_sessions.user_id is now a users.id FK (CLEANUP #2), so
+        # seed a users row; interview_records.user_id is still the username.
+        conn.execute(text(
+            "INSERT INTO users (id, username, hashed_password) VALUES (1, 'alice', 'x')"
+        ))
         conn.execute(text(
             "INSERT INTO interview_records (id, user_id, source, status) "
             "VALUES ('ir_cascade', 'alice', 'upload', 'completed')"
@@ -275,7 +280,7 @@ def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
         conn.execute(text(
             "INSERT INTO mock_interview_sessions "
             "(id, user_id, interview_record_id, status, current_question_idx) "
-            "VALUES ('mis_x', 'alice', 'ir_cascade', 'finished', 0)"
+            "VALUES ('mis_x', 1, 'ir_cascade', 'finished', 0)"
         ))
 
     # The actual cascade probe. Pre-0009 this would have raised
