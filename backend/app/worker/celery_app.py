@@ -74,8 +74,8 @@ celery_app.conf.update(
     # gate 3: enough new chat activity), then dreams each user's
     # silent records. See ``dreaming_worker`` docstring for full gate
     # logic. This is the ONLY trigger — there's no per-record completion
-    # hook, no per-turn hook (Path B over Path A decision in
-    # docs/v3_memory_refactor_report.md).
+    # hook, no per-turn hook (Path B over Path A decision; see the
+    # ``dreaming_worker`` module docstring).
     #
     # Model catalog refresh (P6-K): daily at 04:00 Asia/Shanghai. Hits
     # every vendor's /v1/models, drops + repopulates the global discovery

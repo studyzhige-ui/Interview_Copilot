@@ -1,13 +1,10 @@
 """Memory subsystem (v3 architecture).
 
-Four memory-doc types stored as markdown blobs, plus the realtime +
-dreaming pipelines that maintain them:
+Three long-term stores + the pipelines that maintain them:
 
-  Docs:
-    user_profile_doc_service  — single doc per user (identity / preferences)
-    knowledge_doc_service     — per-topic understanding ("Redis", "TCP", ...)
-    strategy_doc_service      — single doc, cross-topic answering methodology
-    habit_doc_service         — single doc, stable practice routines + mindset
+  Stores:
+    memory_document_service       — user_profile / learning_strategy markdown docs
+    memory_ability_state_service  — per-topic mastery states
 
   Pipelines:
     realtime_extraction       — async, runs after every chat turn
@@ -17,18 +14,14 @@ dreaming pipelines that maintain them:
   Read entry-points:
     v3_context_loader         — universal + on-demand body loader
 
-The legacy ``MemoryExtractionService`` / ``MemoryVectorService`` /
-multi-row ``memory_items`` path is retired. The Phase-H back-compat
-adapter ``MemoryRetrievalService`` was also deleted once all call sites
-migrated to ``v3_context_loader``.
+The old per-doc-type split (knowledge_doc / strategy_doc / habit_doc /
+user_profile_doc) and the multi-row ``memory_items`` path are retired.
 """
 
 from app.services.memory import (  # noqa: F401
-    habit_doc_service,
-    knowledge_doc_service,
+    memory_ability_state_service,
+    memory_document_service,
     realtime_extraction,
-    strategy_doc_service,
-    user_profile_doc_service,
     v3_context_loader,
 )
 from app.services.memory.compaction_service import (  # noqa: F401
@@ -41,16 +34,13 @@ from app.services.memory.post_turn_maintenance import (  # noqa: F401
 )
 
 __all__ = [
-    # Doc services
-    "habit_doc_service",
-    "knowledge_doc_service",
-    "strategy_doc_service",
-    "user_profile_doc_service",
+    # Stores
+    "memory_document_service",
+    "memory_ability_state_service",
     # Pipelines
     "realtime_extraction",
     "v3_context_loader",
-    # Compaction (conversation → summary summarisation; unrelated to memory v3
-    # but historically lived in this package)
+    # Compaction (conversation → summary; historically lives in this package)
     "CompactionService",
     "compaction_service",
     # Post-turn maintenance

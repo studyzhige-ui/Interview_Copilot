@@ -35,13 +35,10 @@ _setup_llm_tracing()
 from app.db.database import engine
 import app.models.chat
 import app.models.document_chunk
-import app.models.habit_doc
 import app.models.interview_qa  # Ensure models are registered before table creation.
 import app.models.interview_record
 import app.models.knowledge
-import app.models.knowledge_doc
 import app.models.memory_ability_state
-import app.models.memory_audit_log
 import app.models.memory_audit_logs
 import app.models.memory_document
 import app.models.mock_interview_runtime
@@ -50,7 +47,6 @@ import app.models.file_asset
 import app.models.outbox_job
 import app.models.resume
 import app.models.resume_section
-import app.models.strategy_doc
 import app.models.upload
 import app.models.user
 from app.rag.embeddings import init_rag_settings

@@ -42,23 +42,22 @@ def db(monkeypatch) -> Iterator[Session]:
     Base.metadata.create_all(bind=engine)
     Session_ = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
-    # The v3 memory doc services (knowledge_doc / strategy_doc / habit_doc /
-    # user_profile_doc / _single_doc / _audit_log) bypass FastAPI's
+    # The v3 memory services (memory_document_service /
+    # memory_ability_state_service / _memory_audit) bypass FastAPI's
     # ``get_db`` and open their own session via ``SessionLocal()`` imported
     # at module-load time. To keep memory-endpoint tests honest we must
     # rebind every such reference to a sessionmaker that points at THIS
     # in-memory engine — otherwise those endpoints would talk to the real
-    # configured database (or fail with "no such table: knowledge_docs").
-    import app.services.memory._audit_log_service as _audit_mod
+    # configured database (or fail with "no such table: memory_documents").
     import app.services.memory._db_helpers as _helpers_mod
-    import app.services.memory._single_doc_service as _single_mod
-    import app.services.memory.knowledge_doc_service as _kd_mod
-    import app.services.memory.user_profile_doc_service as _up_mod
-    # Includes ``_db_helpers`` because the doc services now route all
+    import app.services.memory._memory_audit as _audit_mod
+    import app.services.memory.memory_ability_state_service as _ability_mod
+    import app.services.memory.memory_document_service as _doc_mod
+    # Includes ``_db_helpers`` because the services route their
     # ``SessionLocal()`` opens through ``_db_helpers.session_scope`` —
-    # rebinding only the doc-service modules' own ``SessionLocal``
-    # leaves the helper's binding pointed at the real configured DB.
-    for _mod in (_audit_mod, _helpers_mod, _single_mod, _kd_mod, _up_mod):
+    # rebinding only the service modules' own ``SessionLocal`` leaves the
+    # helper's binding pointed at the real configured DB.
+    for _mod in (_helpers_mod, _audit_mod, _ability_mod, _doc_mod):
         monkeypatch.setattr(_mod, "SessionLocal", Session_, raising=False)
 
     session = Session_()
@@ -232,21 +231,30 @@ def test_transcript_404_for_other_user(client: TestClient, db: Session):
 
 
 def test_memory_overview_returns_v3_bundle(client: TestClient):
-    """Smoke: /memory/overview returns the 4-doc bundle (empty for a
-    user with no memory yet)."""
+    """Smoke: /memory/overview returns the v3 bundle (user_profile +
+    learning_strategy bodies + active ability states), empty for a user
+    with no memory yet."""
     resp = client.get("/api/v1/memory/overview")
     assert resp.status_code == 200
     body = resp.json()
     assert "user_profile_body" in body
-    assert "knowledge_topics" in body
-    assert "strategy_body" in body
-    assert "habit_body" in body
-    # Fresh user → empty topic list (not None / missing).
-    assert isinstance(body["knowledge_topics"], list)
+    assert "learning_strategy_body" in body
+    assert "ability_states" in body
+    # Fresh user → empty bodies + empty ability list (not None / missing).
+    assert body["user_profile_body"] == ""
+    assert body["learning_strategy_body"] == ""
+    assert isinstance(body["ability_states"], list)
+    assert body["ability_states"] == []
+    # The retired knowledge/strategy/habit doc fields are gone.
+    assert "knowledge_topics" not in body
+    assert "strategy_body" not in body
+    assert "habit_body" not in body
 
 
-def test_memory_knowledge_topic_get_404_when_missing(client: TestClient):
-    resp = client.get("/api/v1/memory/knowledge/topics/does_not_exist")
+def test_memory_ability_state_delete_404_when_missing(client: TestClient):
+    """Archiving a non-existent ability state returns 404 (replaces the
+    retired ``/memory/knowledge/topics/{id}`` route)."""
+    resp = client.delete("/api/v1/memory/ability-states/does_not_exist")
     assert resp.status_code == 404
 
 

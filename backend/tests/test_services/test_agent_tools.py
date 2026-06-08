@@ -111,6 +111,192 @@ def test_result_summary_detects_disabled_payload():
     assert _result_summary({"count": 5}) == "返回 5 条结果"
 
 
+def test_recall_memory_returns_v3_bundle_keys(monkeypatch):
+    """``recall_memory`` must surface the v3 return shape: user_profile +
+    ability_states + learning_strategy_description + active_learning_strategy
+    + ability_count. When ``load_strategy`` is set it pulls the full strategy
+    body via ``attach_active_bodies``."""
+    import asyncio
+
+    from app.agent_runtime.tool_registry import AgentToolContext
+    from app.agent_runtime.tools.memory import RecallMemoryArgs, _recall_memory_handler
+    from app.services.memory.v3_context_loader import V3MemoryContext
+
+    # Privacy gate open.
+    monkeypatch.setattr(
+        "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
+        lambda session_id, user_id: True,
+    )
+
+    bundle = V3MemoryContext(
+        user_profile_body="- 目标：后端岗位",
+        ability_states=[
+            {"topic": "Redis", "skill_type": "knowledge_topic",
+             "mastery_level": "weak", "summary": "穿透没搞懂"},
+        ],
+        learning_strategy_description="先分析根因",
+    )
+    monkeypatch.setattr(
+        "app.services.memory.v3_context_loader.load_universal",
+        lambda user_id: bundle,
+    )
+
+    async def fake_attach(ctx, *, user_id, load_strategy=False):
+        if load_strategy:
+            ctx.active_learning_strategy_body = "- 先分析根因\n- 再给方案"
+        return ctx
+
+    monkeypatch.setattr(
+        "app.services.memory.v3_context_loader.attach_active_bodies", fake_attach,
+    )
+
+    ctx = AgentToolContext(user_id="alice", session_id="s1")
+    out = asyncio.run(_recall_memory_handler(RecallMemoryArgs(load_strategy=True), ctx))
+
+    assert out["user_profile"] == "- 目标：后端岗位"
+    assert out["ability_states"][0]["topic"] == "Redis"
+    assert out["learning_strategy_description"] == "先分析根因"
+    assert "再给方案" in out["active_learning_strategy"]
+    assert out["ability_count"] == 1
+    # No old keys leak.
+    assert "knowledge_topics" not in out
+    assert "strategy_body" not in out
+
+
+def test_recall_memory_disabled_when_global_memory_off(monkeypatch):
+    """Privacy gate: when the global toggle is OFF the handler returns the
+    disabled bundle and reads NO cross-session memory."""
+    import asyncio
+
+    from app.agent_runtime.tool_registry import AgentToolContext
+    from app.agent_runtime.tools.memory import RecallMemoryArgs, _recall_memory_handler
+
+    monkeypatch.setattr(
+        "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
+        lambda session_id, user_id: False,
+    )
+
+    def _boom(*a, **k):  # load_universal must NOT be called when disabled
+        raise AssertionError("load_universal called despite memory toggle OFF")
+
+    monkeypatch.setattr(
+        "app.services.memory.v3_context_loader.load_universal", _boom,
+    )
+
+    ctx = AgentToolContext(user_id="alice", session_id="s1")
+    out = asyncio.run(_recall_memory_handler(RecallMemoryArgs(), ctx))
+    assert out["disabled"] is True
+    assert out["ability_count"] == 0
+
+
+def test_save_memory_routes_target_to_v3_services(monkeypatch):
+    """``save_memory`` dispatches by ``target``:
+      * ability_state → memory_ability_state_service.upsert (topic/skill/level)
+      * user_profile / learning_strategy → memory_document_service.apply_patches
+    """
+    import asyncio
+    from dataclasses import dataclass
+
+    from app.agent_runtime.tool_registry import AgentToolContext
+    from app.agent_runtime.tools.memory import SaveMemoryArgs, _save_memory_handler
+
+    monkeypatch.setattr(
+        "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
+        lambda session_id, user_id: True,
+    )
+    # The handler holds ``user_memory_lock`` — neutralise Redis dependence.
+    import contextlib
+
+    @contextlib.asynccontextmanager
+    async def _noop_lock(user_id, **k):
+        yield
+
+    monkeypatch.setattr(
+        "app.services.memory._user_memory_lock.user_memory_lock", _noop_lock,
+    )
+
+    ability_calls: list[dict] = []
+
+    def fake_upsert(user_id, **kwargs):
+        ability_calls.append({"user_id": user_id, **kwargs})
+        return object()
+
+    monkeypatch.setattr(
+        "app.services.memory.memory_ability_state_service.upsert", fake_upsert,
+    )
+
+    @dataclass
+    class _PR:
+        applied: int = 1
+        dropped: int = 0
+        skipped: int = 0
+
+    doc_calls: list[dict] = []
+
+    def fake_apply(user_id, doc_type, patches, **kwargs):
+        doc_calls.append({"user_id": user_id, "doc_type": doc_type, "patches": patches})
+        return _PR()
+
+    monkeypatch.setattr(
+        "app.services.memory.memory_document_service.apply_patches", fake_apply,
+    )
+
+    ctx = AgentToolContext(user_id="alice", session_id="s1")
+
+    # ── ability_state target ──
+    out = asyncio.run(_save_memory_handler(
+        SaveMemoryArgs(
+            target="ability_state", topic="Redis 缓存穿透",
+            skill_type="knowledge_topic", mastery_level="weak",
+            summary="不懂布隆过滤器",
+        ),
+        ctx,
+    ))
+    assert out["target"] == "ability_state"
+    assert ability_calls and ability_calls[0]["topic"] == "Redis 缓存穿透"
+    assert ability_calls[0]["skill_type"] == "knowledge_topic"
+    assert ability_calls[0]["mastery_level"] == "weak"
+
+    # ── learning_strategy target → doc apply_patches ──
+    out = asyncio.run(_save_memory_handler(
+        SaveMemoryArgs(target="learning_strategy", fact="先分析根因再给方案"),
+        ctx,
+    ))
+    assert out["target"] == "learning_strategy"
+    assert out["applied"] == 1
+    assert doc_calls and doc_calls[-1]["doc_type"] == "learning_strategy"
+    # The fact line is normalised into a markdown bullet patch.
+    assert doc_calls[-1]["patches"][0]["new_line"].startswith("- 先分析根因")
+
+
+def test_save_memory_rejects_unknown_target(monkeypatch):
+    import asyncio
+
+    from app.agent_runtime.tool_registry import AgentToolContext
+    from app.agent_runtime.tools.memory import SaveMemoryArgs, _save_memory_handler
+
+    monkeypatch.setattr(
+        "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
+        lambda session_id, user_id: True,
+    )
+    import contextlib
+
+    @contextlib.asynccontextmanager
+    async def _noop_lock(user_id, **k):
+        yield
+
+    monkeypatch.setattr(
+        "app.services.memory._user_memory_lock.user_memory_lock", _noop_lock,
+    )
+
+    ctx = AgentToolContext(user_id="alice", session_id="s1")
+    out = asyncio.run(_save_memory_handler(
+        SaveMemoryArgs(target="habit", fact="x"), ctx,
+    ))
+    assert "error" in out
+    assert "ability_state" in out["valid"]
+
+
 def test_graceful_fallback_uses_accumulated_blocks():
     """When the agent loop crashes mid-turn, the fallback message
     MUST mention which tools ran and surface any LLM-emitted reasoning
@@ -775,21 +961,21 @@ def test_strategy_context_carries_global_memory_on(monkeypatch):
 
 def test_attach_active_bodies_yields_event_loop_via_to_thread(monkeypatch):
     """``attach_active_bodies`` is invoked via ``asyncio.create_task``
-    in the engine, with the intent that memory body loads run
+    in the engine, with the intent that the strategy-body load runs
     concurrently with the RAG knowledge_task. Pre-fix the function was
     ``async def`` around a fully synchronous body — calling it created
     a coroutine that ran top-to-bottom without ever yielding, so the
     "concurrent" knowledge_task never got loop time until memory
     finished.
 
-    The test detects this by WALL CLOCK rather than just list order
-    (earlier version of this test was tautological — marker_task
-    completed before bodies_task in both broken and fixed code merely
-    because it was scheduled first and yielded at ``sleep(0)``). Here
-    we have ``knowledge_doc_service.load`` block for 50ms per call;
-    with the fix the sleep happens on a worker thread and a concurrent
-    marker can complete in ~0ms, without the fix the main event loop
-    is blocked for the full ~50ms before any other coroutine runs.
+    The v3 loader hydrates a single doc body (learning_strategy) via
+    ``memory_document_service.load`` inside ``asyncio.to_thread``. We make
+    that read block for 50ms; with the fix the sleep happens on a worker
+    thread and a concurrent marker can complete in ~0ms, without the fix the
+    main event loop is blocked for the full ~50ms before any other coroutine
+    runs. The test detects this by WALL CLOCK rather than list order (an
+    order-only check is tautological — the marker is scheduled first and
+    yields at ``sleep(0)`` in both broken and fixed code).
     """
     import asyncio
     import time
@@ -797,48 +983,40 @@ def test_attach_active_bodies_yields_event_loop_via_to_thread(monkeypatch):
         V3MemoryContext, attach_active_bodies,
     )
 
-    BLOCK_SECONDS = 0.05  # 50ms per simulated DB read
+    BLOCK_SECONDS = 0.05  # 50ms simulated DB read
 
-    # ``**_`` swallows the new ``db: Session | None`` kwarg from P1-F
-    # — the test only cares about wall-clock blocking behavior, not
-    # session plumbing.
-    def sleepy_load(user_id, topic=None, **_):
+    # ``**_`` swallows the ``db: Session | None`` kwarg the loader passes —
+    # the test only cares about wall-clock blocking behavior.
+    def sleepy_load(user_id, doc_type, **_):
         time.sleep(BLOCK_SECONDS)
-        return None
+        return "- some strategy body"
 
     monkeypatch.setattr(
-        "app.services.memory.knowledge_doc_service.load",
+        "app.services.memory.memory_document_service.load",
         sleepy_load,
-    )
-    monkeypatch.setattr(
-        "app.services.memory.strategy_doc_service.load",
-        lambda user_id, **_: (time.sleep(BLOCK_SECONDS), "")[1],
-    )
-    monkeypatch.setattr(
-        "app.services.memory.habit_doc_service.load",
-        lambda user_id, **_: (time.sleep(BLOCK_SECONDS), "")[1],
     )
 
     timings: dict[str, float] = {}
 
     async def concurrent_marker(t0: float):
         # If attach_active_bodies properly yields the loop, this
-        # coroutine gets driven during the sleeps and ``marker`` time
+        # coroutine gets driven during the sleep and ``marker`` time
         # registers near zero. If the loop is blocked, marker can't
-        # run until bodies_task finishes — ≥ 4 * BLOCK_SECONDS later.
+        # run until bodies_task finishes — ≥ BLOCK_SECONDS later.
         await asyncio.sleep(0)
         timings["marker"] = time.perf_counter() - t0
 
+    ctx_holder: dict[str, V3MemoryContext] = {}
+
     async def run():
         ctx = V3MemoryContext()
+        ctx_holder["ctx"] = ctx
         t0 = time.perf_counter()
         marker_task = asyncio.create_task(concurrent_marker(t0))
         bodies_task = asyncio.create_task(
             attach_active_bodies(
                 ctx, user_id="alice",
-                topics=["t1", "t2"],   # 2 sleepy_loads
-                load_strategy=True,    # 1 sleepy_load
-                load_habit=True,       # 1 sleepy_load
+                load_strategy=True,    # 1 sleepy_load on a worker thread
             )
         )
         await bodies_task
@@ -847,20 +1025,21 @@ def test_attach_active_bodies_yields_event_loop_via_to_thread(monkeypatch):
 
     asyncio.run(run())
 
-    # With the fix, marker completes in ~0ms (sleeps happen in worker
+    # With the fix, marker completes in ~0ms (sleep happens on a worker
     # thread). Without the fix, marker is blocked until bodies finishes
-    # ~4*BLOCK_SECONDS = 200ms in. Threshold at HALF of the total block
-    # budget gives plenty of headroom for slow CI; on the failure side
-    # we'd see 4x this threshold.
-    threshold = BLOCK_SECONDS * 2  # 100ms — well below 4*BLOCK=200ms
+    # ~BLOCK_SECONDS in. Threshold at HALF the block budget gives plenty
+    # of headroom for slow CI; on the failure side we'd see ~2x this.
+    threshold = BLOCK_SECONDS / 2  # 25ms — well below BLOCK_SECONDS=50ms
     assert timings["marker"] < threshold, (
         f"attach_active_bodies didn't yield the event loop: "
         f"marker completed at {timings['marker']:.3f}s (threshold "
         f"{threshold:.3f}s; bodies_done at {timings['bodies_done']:.3f}s). "
         f"With the fix marker should complete in <10ms; the actual "
         f"value above means the main loop was blocked through the sync "
-        f"DB reads."
+        f"DB read."
     )
+    # And the body actually got hydrated (proves the load_strategy path ran).
+    assert "strategy body" in ctx_holder["ctx"].active_learning_strategy_body
 
 
 def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):

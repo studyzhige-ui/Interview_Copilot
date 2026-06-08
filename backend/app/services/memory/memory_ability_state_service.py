@@ -259,18 +259,7 @@ def archive(
             )
             .first()
         )
-        if row is None:
-            return False
-        row.archived_at = datetime.utcnow()
-        db.add(row)
-        _memory_audit.record(
-            user_pk=user_pk, change_type="user_delete", topic=topic,
-            memory_ability_state_id=row.id, summary=f"archived ability {topic}/{skill_type}",
-            db=db,
-        )
-        if own_db:
-            db.commit()
-        return True
+        return _archive_row(db, user_pk, row, own_db)
     except Exception:
         if own_db:
             db.rollback()
@@ -280,11 +269,55 @@ def archive(
             db.close()
 
 
+def archive_by_id(username: str, state_id: str, *, db: Session | None = None) -> bool:
+    """Retire one active state by its id (user-scoped). Returns True if archived."""
+    own_db = db is None
+    if own_db:
+        db = SessionLocal()
+    try:
+        user_pk = resolve_user_pk(db, username)
+        if user_pk is None:
+            return False
+        row = (
+            db.query(MemoryAbilityState)
+            .filter(
+                MemoryAbilityState.id == state_id,
+                MemoryAbilityState.user_id == user_pk,
+                MemoryAbilityState.archived_at.is_(None),
+            )
+            .first()
+        )
+        return _archive_row(db, user_pk, row, own_db)
+    except Exception:
+        if own_db:
+            db.rollback()
+        raise
+    finally:
+        if own_db and db is not None:
+            db.close()
+
+
+def _archive_row(db: Session, user_pk: int, row, own_db: bool) -> bool:
+    if row is None:
+        return False
+    row.archived_at = datetime.utcnow()
+    db.add(row)
+    _memory_audit.record(
+        user_pk=user_pk, change_type="user_delete", topic=row.topic,
+        memory_ability_state_id=row.id,
+        summary=f"archived ability {row.topic}/{row.skill_type}", db=db,
+    )
+    if own_db:
+        db.commit()
+    return True
+
+
 __all__ = [
     "build_search_text",
     "load_active",
     "list_by_mastery",
     "upsert",
     "archive",
+    "archive_by_id",
     "UnknownUser",
 ]

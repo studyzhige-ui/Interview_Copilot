@@ -141,6 +141,54 @@ def test_document_unknown_user_raises(seeded):
                           [{"op": "add", "new_line": "- x"}], change_type="patch_realtime")
 
 
+def test_document_shared_db_rollback_is_atomic(seeded):
+    """With a caller-owned ``db``, a rollback discards BOTH the doc write and
+    its audit row — the atomicity the dreaming worker relies on."""
+    from app.services.memory import memory_document_service as svc
+    from app.models.memory_audit_logs import MemoryAuditEntry
+    from app.models.memory_document import MemoryDocument
+
+    db = seeded()
+    try:
+        svc.apply_patches("alice", "user_profile",
+                          [{"op": "add", "new_line": "- shared"}],
+                          change_type="patch_realtime", db=db)  # add-only, no commit
+        db.rollback()
+    finally:
+        db.close()
+
+    s = seeded()
+    try:
+        assert s.query(MemoryDocument).count() == 0
+        assert s.query(MemoryAuditEntry).count() == 0
+    finally:
+        s.close()
+
+
+def test_document_apply_retries_once_on_integrity_error(seeded, monkeypatch):
+    """The own-session path retries exactly once on IntegrityError (the
+    first-write race backstop) then commits via the update branch."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.services.memory import memory_document_service as svc
+
+    calls = {"n": 0}
+    real_inner = svc._apply_inner
+
+    def flaky(**kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise IntegrityError("dup", {}, Exception("dup"))
+        return real_inner(**kw)
+
+    monkeypatch.setattr(svc, "_apply_inner", flaky)
+    r = svc.apply_patches("alice", "user_profile",
+                          [{"op": "add", "new_line": "- x"}], change_type="patch_realtime")
+    assert calls["n"] == 2  # raised once, retried once
+    assert r.applied == 1
+    assert "- x" in svc.load("alice", "user_profile")
+
+
 # ── memory_ability_state_service ─────────────────────────────────────────
 
 

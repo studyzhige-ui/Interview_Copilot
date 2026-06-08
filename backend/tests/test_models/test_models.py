@@ -12,8 +12,8 @@ Coverage:
     the alembic migrations build.
   * Round-trip insert + query through an in-memory SQLite session for the
     core entities (User, ChatSession+ChatMessage, InterviewRecord +
-    InterviewQA, UserUpload, KnowledgeDocument, KnowledgeDoc /
-    StrategyDoc / HabitDoc / MemoryAuditLog (v3 memory),
+    InterviewQA, UserUpload, KnowledgeDocument, MemoryDocument /
+    MemoryAbilityState / MemoryAuditEntry (v3 memory),
     MockInterviewSession, UserModelCredential, ResumeSection).
 """
 from __future__ import annotations
@@ -102,12 +102,7 @@ def test_all_expected_tables_registered(test_engine):
         "chat_sessions",
         "chat_messages",
         "resumes",
-        # v3 memory tables (memory_items was retired in 0003)
-        "knowledge_docs",
-        "strategy_docs",
-        "habit_docs",
-        "memory_audit_log",
-        # MEMORY-V3 successor tables (old three dropped in MEM-CUTOVER)
+        # MEMORY-V3 stores (old knowledge/strategy/habit/audit_log dropped in 0023)
         "memory_documents",
         "memory_ability_states",
         "memory_audit_logs",
@@ -124,7 +119,6 @@ def test_user_columns_and_uniques(test_engine):
                      "email_verified", "nickname", "avatar_url", "bio",
                      "created_at", "updated_at"):
         assert required in cols, f"User.{required} missing"
-    uniques = {u["name"] for u in insp.get_indexes("users") if u["unique"]}
     # Index-style uniqueness on username/email.
     assert any("username" in u["column_names"] for u in insp.get_indexes("users")), \
         "username should be indexed"
@@ -316,43 +310,135 @@ def test_knowledge_document_default_values(db_session):
     assert loaded.node_ids == "[]"
 
 
-def test_knowledge_doc_defaults_and_unique_topic(db_session):
-    """v3 memory: one row per (user, topic), with denormalised index fields."""
-    from app.models.knowledge_doc import KnowledgeDoc
+def _make_user(db_session, username: str = "mem_user") -> int:
+    """Seed a users row and return its integer PK (v3 memory tables key on
+    ``users.id``)."""
+    from app.models.user import User
 
-    doc = KnowledgeDoc(
-        user_id="u1",
-        topic="Redis",
-        body="## 已掌握的认知\n\n## 学习进展\n",
-    )
+    u = User(username=username, hashed_password="x")
+    db_session.add(u)
+    db_session.flush()
+    return u.id
+
+
+def test_memory_document_defaults_and_unique_per_doc_type(db_session):
+    """v3 memory: ``memory_documents`` has one row per (user_id, doc_type)
+    with denormalised ``one_liner``; the unique constraint blocks a second
+    row of the same doc_type for the same user."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models.memory_document import MemoryDocument
+
+    uid = _make_user(db_session)
+
+    doc = MemoryDocument(user_id=uid, doc_type="user_profile", body="- 目标：后端")
     db_session.add(doc)
     db_session.flush()
 
-    loaded = db_session.query(KnowledgeDoc).first()
-    assert loaded.mastery_level == "unknown"
-    assert loaded.fact_count == 0
-    assert loaded.one_liner == ""
+    loaded = db_session.query(MemoryDocument).first()
+    assert loaded.doc_type == "user_profile"
+    assert loaded.one_liner == ""          # default
+    assert loaded.body == "- 目标：后端"
+    assert loaded.id.startswith("mdoc_")   # generated id prefix
+
+    # A different doc_type for the same user is allowed.
+    db_session.add(MemoryDocument(user_id=uid, doc_type="learning_strategy", body="x"))
+    db_session.flush()
+
+    # But a duplicate (user_id, doc_type) violates the unique constraint.
+    db_session.add(MemoryDocument(user_id=uid, doc_type="user_profile", body="dup"))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
 
 
-def test_strategy_and_habit_docs_are_singleton_per_user(db_session):
-    """strategy_doc / habit_doc have ``user_id UNIQUE`` so only one row
-    per user can exist."""
+def test_memory_ability_state_defaults_and_active_uniqueness(db_session):
+    """``memory_ability_states`` defaults ``mastery_level='improving'`` and
+    enforces ONE ACTIVE row per (user, topic, skill_type) via the partial
+    unique index (archived rows are excluded, so re-adding after archive is
+    allowed)."""
+    from datetime import datetime
+
     from sqlalchemy.exc import IntegrityError
 
-    from app.models.habit_doc import HabitDoc
-    from app.models.strategy_doc import StrategyDoc
+    from app.models.memory_ability_state import MemoryAbilityState
 
-    db_session.add(StrategyDoc(user_id="u1", body="x"))
+    uid = _make_user(db_session)
+
+    s1 = MemoryAbilityState(user_id=uid, topic="Redis", skill_type="knowledge_topic")
+    db_session.add(s1)
     db_session.flush()
-    db_session.add(StrategyDoc(user_id="u1", body="y"))
-    try:
+
+    loaded = db_session.query(MemoryAbilityState).first()
+    assert loaded.mastery_level == "improving"   # default
+    assert loaded.archived_at is None
+    assert loaded.id.startswith("mas_")
+
+    # A second ACTIVE row for the same (user, topic, skill_type) is rejected.
+    # NB: this flush raises, and the fixture rolls back to the SAVEPOINT —
+    # which also discards ``s1``. So the archive-then-readd check below
+    # re-seeds its own rows rather than relying on ``s1`` surviving.
+    db_session.add(
+        MemoryAbilityState(user_id=uid, topic="Redis", skill_type="knowledge_topic")
+    )
+    with pytest.raises(IntegrityError):
         db_session.flush()
-        raise AssertionError("expected IntegrityError on duplicate user_id")
-    except IntegrityError:
-        db_session.rollback()
+    db_session.rollback()
 
-    db_session.add(HabitDoc(user_id="u1", body="x"))
+    # Seed a fresh live row, archive it, then re-add: the partial index
+    # excludes the archived row, so a new active row for the same key is
+    # allowed (history is preserved).
+    uid2 = _make_user(db_session, username="mem_user_b")
+    live = MemoryAbilityState(user_id=uid2, topic="TCP", skill_type="knowledge_topic")
+    db_session.add(live)
     db_session.flush()
+    live.archived_at = datetime.utcnow()
+    db_session.flush()
+    db_session.add(
+        MemoryAbilityState(user_id=uid2, topic="TCP", skill_type="knowledge_topic",
+                           mastery_level="weak")
+    )
+    db_session.flush()
+    active = db_session.query(MemoryAbilityState).filter(
+        MemoryAbilityState.topic == "TCP",
+        MemoryAbilityState.archived_at.is_(None),
+    ).all()
+    assert len(active) == 1
+    assert active[0].mastery_level == "weak"
+    # Total TCP rows = 1 archived + 1 active.
+    assert db_session.query(MemoryAbilityState).filter(
+        MemoryAbilityState.topic == "TCP"
+    ).count() == 2
+
+
+def test_memory_audit_entry_round_trip_and_unique_idem_key(db_session):
+    """``memory_audit_logs`` is append-only; the ``idempotency_key`` index is
+    unique so a retried job can't double-write an audit row (NULL keys stay
+    distinct)."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models.memory_audit_logs import MemoryAuditEntry
+
+    uid = _make_user(db_session)
+
+    db_session.add_all([
+        MemoryAuditEntry(user_id=uid, change_type="patch_realtime", doc_type="user_profile"),
+        MemoryAuditEntry(user_id=uid, change_type="user_edit"),   # NULL idem key
+        MemoryAuditEntry(user_id=uid, change_type="user_edit"),   # NULL idem key — allowed
+    ])
+    db_session.flush()
+    assert db_session.query(MemoryAuditEntry).count() == 3
+
+    db_session.add(
+        MemoryAuditEntry(user_id=uid, change_type="patch_dreaming", idempotency_key="job-1")
+    )
+    db_session.flush()
+    db_session.add(
+        MemoryAuditEntry(user_id=uid, change_type="patch_dreaming", idempotency_key="job-1")
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
 
 
 # test_agent_run_and_steps_relationship was removed in the audit

@@ -154,17 +154,17 @@ class ConversationEngine:
         differences only kick in inside ``strategy.execute()``.
 
         Flow:
-          1. Universal memory load (fast: ~4 local DB reads, no LLM).
-             Gives the planner the knowledge index + strategy / habit
-             descriptions it needs to make body-load decisions.
+          1. Universal memory load (fast: a few local DB reads, no LLM).
+             Gives the planner the user_profile + ability states + the
+             learning_strategy one-liner it needs to decide whether to
+             load the full strategy body.
           2. Single planner LLM call: rewrites query + decides RAG
-             + picks memory bodies. (Used to be two LLM calls —
-             planner then a separate selection LLM. Merged in the
-             post-Stage-G simplification.)
+             + whether to load the strategy body. (Used to be two LLM
+             calls — planner then a separate selection LLM. Merged in
+             the post-Stage-G simplification.)
           3. Concurrent: RAG retrieval (Milvus + reranker, ~hundreds
-             of ms) // memory body loads (cheap DB reads). Running
-             them as tasks just lets the RAG round-trip overlap with
-             body loads + saves a few tens of ms.
+             of ms) // the optional strategy-body load (cheap DB read).
+             Running them as tasks lets the RAG round-trip overlap.
         """
         # ``ensure_session`` opens a SessionLocal + INSERT — wrap in
         # to_thread so the event loop isn't blocked on the DB round-
@@ -223,9 +223,7 @@ class ConversationEngine:
         query_plan = await plan_query(
             user_message=self.user_message,
             recent_turns=recent_turns,
-            knowledge_index_lines=universal_ctx.knowledge_index_lines,
-            strategy_description=universal_ctx.strategy_description,
-            habit_description=universal_ctx.habit_description,
+            learning_strategy_description=universal_ctx.learning_strategy_description,
             global_memory_on=global_memory_on,
         )
 
@@ -249,22 +247,15 @@ class ConversationEngine:
             if query_plan.needs_knowledge_retrieval and not agent_mode else None
         )
 
-        wants_bodies = bool(
-            query_plan.knowledge_topics
-            or query_plan.load_strategy
-            or query_plan.load_habit
-        )
         bodies_task = (
             asyncio.create_task(
                 attach_active_bodies(
                     universal_ctx,
                     user_id=self.user_id,
-                    topics=query_plan.knowledge_topics,
                     load_strategy=query_plan.load_strategy,
-                    load_habit=query_plan.load_habit,
                 )
             )
-            if wants_bodies else None
+            if query_plan.load_strategy else None
         )
 
         if bodies_task is not None:

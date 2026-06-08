@@ -3,8 +3,8 @@
 Semantics: this is the **cross-session memory** switch — same scope as
 Claude Code's ``isAutoMemoryEnabled``. When off:
 
-  * The v3 memory bundle (user_profile + knowledge / strategy / habit
-    docs) is NOT injected into the LLM prompt.
+  * The v3 memory bundle (user_profile + ability states +
+    learning_strategy) is NOT injected into the LLM prompt.
   * The planner doesn't see the user's memory inventory either, so it
     can't request body loads.
   * Session-local working context (recent_turns, [Record Context] for

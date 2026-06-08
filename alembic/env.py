@@ -12,15 +12,14 @@ sys.path.insert(0, str(BACKEND_DIR))
 from app.core.config import settings
 from app.db.database import Base
 import app.models.chat  # noqa: F401
-import app.models.habit_doc  # noqa: F401 — v3 memory: single doc per user
 import app.models.interview_qa  # noqa: F401
 import app.models.interview_record  # noqa: F401
 import app.models.knowledge  # noqa: F401
-import app.models.knowledge_doc  # noqa: F401 — v3 memory: per-topic
-import app.models.memory_audit_log  # noqa: F401 — v3 memory: audit
+import app.models.memory_ability_state  # noqa: F401 — v3 memory: per-topic mastery
+import app.models.memory_audit_logs  # noqa: F401 — v3 memory: audit trail
+import app.models.memory_document  # noqa: F401 — v3 memory: profile/strategy docs
 import app.models.mock_interview_session  # noqa: F401
 import app.models.resume_section  # noqa: F401
-import app.models.strategy_doc  # noqa: F401 — v3 memory: single doc per user
 import app.models.upload  # noqa: F401
 import app.models.user  # noqa: F401
 

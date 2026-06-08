@@ -131,11 +131,13 @@ def test_gate3_passes_via_message_count(engine_and_session, monkeypatch):
     assert "alice" in out
 
 
-def test_gate3_passes_via_session_count(engine_and_session, monkeypatch):
-    """A user with > NEW_SESSIONS_THRESHOLD new sessions passes even
-    when their message count is far below NEW_MESSAGES_THRESHOLD."""
+def test_gate3_session_count_alone_does_not_trigger(engine_and_session, monkeypatch):
+    """Gate 3 is messages-only now (``NEW_SESSIONS_THRESHOLD`` was dropped).
+    A user with many new debrief SESSIONS but a message count far below
+    ``NEW_MESSAGES_THRESHOLD`` must NOT be selected — a session with no real
+    debrief turns produces no work for the dreamer."""
     from app.services.memory.dreaming_worker import (
-        NEW_SESSIONS_THRESHOLD, select_dreamable_users,
+        NEW_MESSAGES_THRESHOLD, select_dreamable_users,
     )
 
     engine, Session = engine_and_session
@@ -143,8 +145,12 @@ def test_gate3_passes_via_session_count(engine_and_session, monkeypatch):
 
     now = datetime.utcnow()
     _seed_user(Session, "alice", last_dreamed_at=None)
-    # Strictly greater than the threshold.
-    for i in range(NEW_SESSIONS_THRESHOLD + 1):
+    # Many sessions, 1 message each → lots of sessions but total messages
+    # ( = n_sessions ) stays well below NEW_MESSAGES_THRESHOLD. Pre-refactor
+    # a session-count branch would have tripped the gate here; now it must
+    # not. Keep n_sessions strictly < threshold so total messages < threshold.
+    n_sessions = NEW_MESSAGES_THRESHOLD - 10
+    for i in range(n_sessions):
         _seed_chat(
             Session, user_id="alice", session_id=f"s{i}",
             messages=1,
@@ -152,10 +158,13 @@ def test_gate3_passes_via_session_count(engine_and_session, monkeypatch):
             message_created_at=now - timedelta(hours=10),
         )
     out = select_dreamable_users()
-    assert "alice" in out
+    assert "alice" not in out, (
+        "session count alone must NOT trigger dreaming after the gate-3 "
+        "messages-only refactor"
+    )
 
 
-def test_gate3_fails_when_below_both_thresholds(engine_and_session, monkeypatch):
+def test_gate3_fails_when_below_message_threshold(engine_and_session, monkeypatch):
     from app.services.memory.dreaming_worker import select_dreamable_users
 
     engine, Session = engine_and_session

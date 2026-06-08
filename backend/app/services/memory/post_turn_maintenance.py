@@ -3,8 +3,8 @@
 Order of operations:
   1. Compact the conversation into the ``summary`` column via dual-threshold
      trigger (token growth + turns)
-  2. Run realtime memory extraction (v3) — produces patches against
-     knowledge / strategy / habit / user_profile docs.
+  2. Run realtime memory extraction (v3) — writes the user's ability
+     states / user_profile / learning_strategy.
 
 The session-level asyncio lock here is independent of the Redis-backed
 per-user lock used by realtime_extraction. Both are needed:

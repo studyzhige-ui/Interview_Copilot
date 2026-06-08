@@ -1,8 +1,9 @@
 """Tests for diagnostics_report_service report generation.
 
-Personal memories now come from the Postgres ``document_chunks`` fact table via
-``_extract_personal_memories(db, user_id)``; we patch that extractor (and the
-LLM) so these tests cover the report-assembly logic, not the data source.
+The diagnostic input now comes from the active ``memory_ability_states`` via
+``_extract_ability_records(db, user_id)`` (topic mastery + summary); we patch
+that extractor (and the LLM) so these tests cover the report-assembly logic,
+not the data source.
 """
 import json
 
@@ -13,8 +14,8 @@ _SVC = "app.services.analytics.diagnostics_report_service"
 
 
 @pytest.mark.asyncio
-async def test_generate_report_empty_when_no_personal_memories():
-    with patch(f"{_SVC}._extract_personal_memories", return_value=[]):
+async def test_generate_report_empty_when_no_ability_records():
+    with patch(f"{_SVC}._extract_ability_records", return_value=[]):
         from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
         result = await generate_comprehensive_report(limit=20, user_id="u1")
         assert result["status"] == "empty"
@@ -39,7 +40,7 @@ async def test_generate_report_successful_json_parse():
     mock_response = MagicMock()
     mock_response.text = report_json
 
-    with patch(f"{_SVC}._extract_personal_memories", return_value=memories), \
+    with patch(f"{_SVC}._extract_ability_records", return_value=memories), \
          patch(f"{_SVC}.agent_fast_llm") as llm_mock:
         llm_mock.acomplete = AsyncMock(return_value=mock_response)
         from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
@@ -57,7 +58,7 @@ async def test_generate_report_strips_markdown_codeblock():
     mock_response = MagicMock()
     mock_response.text = raw
 
-    with patch(f"{_SVC}._extract_personal_memories", return_value=memories), \
+    with patch(f"{_SVC}._extract_ability_records", return_value=memories), \
          patch(f"{_SVC}.agent_fast_llm") as llm_mock:
         llm_mock.acomplete = AsyncMock(return_value=mock_response)
         from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
@@ -72,7 +73,7 @@ async def test_generate_report_fallback_on_invalid_json():
     mock_response = MagicMock()
     mock_response.text = "这不是合法的 JSON 格式"
 
-    with patch(f"{_SVC}._extract_personal_memories", return_value=memories), \
+    with patch(f"{_SVC}._extract_ability_records", return_value=memories), \
          patch(f"{_SVC}.agent_fast_llm") as llm_mock:
         llm_mock.acomplete = AsyncMock(return_value=mock_response)
         from app.services.analytics.diagnostics_report_service import generate_comprehensive_report

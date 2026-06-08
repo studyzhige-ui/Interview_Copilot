@@ -33,15 +33,15 @@ class User(Base):
     bio = Column(Text, nullable=True)
     # Per-user default for the GLOBAL (cross-session) memory toggle.
     # When False, the LLM does NOT see the v3 memory bundle
-    # (user_profile + knowledge / strategy / habit docs) — only
+    # (user_profile + ability states + learning_strategy) — only
     # session-local context (recent_turns, debrief reference) reaches
     # the prompt. Matches Claude Code's
     # ``isAutoMemoryEnabled`` semantics — global memdir off; per-
     # session context untouched.
     #
     # Storage is unaffected: this is an INJECTION gate. The user's
-    # personalization page can still read user_profile_doc / docs from
-    # the DB directly to render the user's own memory inventory.
+    # personalization page can still read memory_documents /
+    # memory_ability_states directly to render their memory inventory.
     #
     # Opt-in (default False) for new users — they get vanilla chat
     # until they curate their memory and explicitly opt in.
@@ -50,12 +50,6 @@ class User(Base):
     # ``chat_sessions.global_memory_enabled`` column; service code reads the
     # session value first and falls back here.
     global_memory_enabled = Column(Boolean, default=False, nullable=False)
-    # 单文档形式的用户画像。每行一条事实（"- 用户名：卷卷"）。每轮
-    # 抽取时整份加载给 LLM，LLM 输出**补丁列表**（add / update / delete
-    # 各行），后端按补丁原地改，未涉及的行保持字节级不变 —— 杜绝旧的
-    # 多行 user_profile 表带来的语义重复（"User's name" vs "用户名"
-    # 这种同义异 key 的去重难题）。空字符串 = 新用户，还没积累画像。
-    user_profile_doc = Column(Text, default="", nullable=False)
     # When the nightly dreaming worker last consolidated this user's
     # memory docs. NULL = never dreamed. Used as the "cursor" by the
     # autoDream gate logic: the next nightly run only fires for this

@@ -66,13 +66,10 @@ def test_engine():
     import app.models.chat                 # noqa: F401
     import app.models.document_chunk       # noqa: F401
     import app.models.file_asset           # noqa: F401
-    import app.models.habit_doc            # noqa: F401
     import app.models.interview_qa         # noqa: F401
     import app.models.interview_record     # noqa: F401
     import app.models.knowledge            # noqa: F401
-    import app.models.knowledge_doc        # noqa: F401
     import app.models.memory_ability_state # noqa: F401
-    import app.models.memory_audit_log     # noqa: F401
     import app.models.memory_audit_logs    # noqa: F401
     import app.models.memory_document      # noqa: F401
     import app.models.mock_interview_runtime   # noqa: F401
@@ -80,7 +77,6 @@ def test_engine():
     import app.models.outbox_job           # noqa: F401
     import app.models.resume               # noqa: F401
     import app.models.resume_section       # noqa: F401
-    import app.models.strategy_doc         # noqa: F401
     import app.models.upload               # noqa: F401
     import app.models.user                 # noqa: F401
     import app.models.user_model_credentials       # noqa: F401
