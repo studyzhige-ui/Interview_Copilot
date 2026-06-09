@@ -66,12 +66,12 @@ class InterviewQA(Base):
     answer_audio_url = Column(String, nullable=True)
     answer_input_mode = Column(String, nullable=False, default="text")
 
-    # Runtime Director metadata (filled live each turn during mock interview)
-    # — `action`: which of the 7 director actions classified this turn
-    # — `topic`:  snake_case topic tag for coverage tracking / review dedup
-    # — `answer_quality_json`: { level, reason } as prior for finish analyzer
-    # Index on topic is declared in alembic 0009; don't redeclare with index=True
-    # here or autogenerate will produce a duplicate ix.
+    # Optional per-QA classification metadata. Reserved columns: the mock flow
+    # now derives structured QA from conversation_messages at review time and
+    # leaves these null; a future analyzer may populate them. (`action`: turn
+    # kind; `topic`: snake_case coverage tag; `answer_quality_json`:
+    # { level, reason }.) Index on topic is declared in alembic 0009; don't
+    # redeclare with index=True here or autogenerate produces a duplicate ix.
     action = Column(String(32), nullable=True)
     topic = Column(String(80), nullable=True)
     answer_quality_json = Column(JSON, nullable=True)

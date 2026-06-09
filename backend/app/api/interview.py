@@ -507,11 +507,11 @@ def delete_interview_record(
         )
 
     try:
-        # ── (1) Find every chat_session linked to this interview ──────────
+        # ── (1) Find every conversation linked to this interview ──────────
         session_ids = [
             row[0]
             for row in db.query(Conversation.id)
-            .filter(Conversation.interview_id == record_id)
+            .filter(Conversation.subject_id == record_id)
             .all()
         ]
 
@@ -527,13 +527,19 @@ def delete_interview_record(
         # ── (3) DB deletes in safe order ─────────────────────────────────
         if session_ids:
             db.query(ConversationMessage).filter(
-                ConversationMessage.session_id.in_(session_ids)
+                ConversationMessage.conversation_id.in_(session_ids)
             ).delete(synchronize_session=False)
             db.query(Conversation).filter(
                 Conversation.id.in_(session_ids)
             ).delete(synchronize_session=False)
-        # interview_qa + mock_interview_sessions auto-cleaned by their
-        # ON DELETE CASCADE on interview_records.
+        # mock_interview_runtime has ON DELETE CASCADE on interview_records, but
+        # SQLite (tests) doesn't enforce FK cascades — delete it explicitly so
+        # behavior is uniform across Postgres and SQLite (no orphan runtime).
+        from app.models.mock_interview_runtime import MockInterviewRuntime
+        db.query(MockInterviewRuntime).filter(
+            MockInterviewRuntime.interview_record_id == record_id
+        ).delete(synchronize_session=False)
+        # interview_qa auto-cleaned by ON DELETE CASCADE on interview_records.
         db.delete(record)
         db.commit()
         log.info(

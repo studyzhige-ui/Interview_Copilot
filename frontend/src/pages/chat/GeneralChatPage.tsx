@@ -9,7 +9,7 @@
  * needs to manage session-level CRUD (create / rename / delete) plus
  * "which session is selected".
  *
- * Why a dedicated page (instead of a session_type='general' inside the
+ * Why a dedicated page (instead of a type='general' inside the
  * review page): general chat doesn't anchor to an interview record, so
  * the review page's interview-record sidebar was an awkward host. Users
  * also want to leave general chat open while the review page deals
@@ -44,7 +44,7 @@ export function GeneralChatPage() {
   const refresh = useCallback(async (preserveActive = true) => {
     setLoading(true);
     try {
-      const rows = await listChatSessions({ session_type: 'general' });
+      const rows = await listChatSessions({ type: 'general' });
       setSessions(rows);
       if (rows.length === 0) {
         setActiveId(null);
@@ -79,7 +79,7 @@ export function GeneralChatPage() {
     setCreating(true);
     try {
       const created = await createChatSession({
-        session_type: 'general',
+        type: 'general',
         title: `通用对话 ${sessions.length + 1}`,
       });
       // Optimistic prepend — the new session is the most recent so it
@@ -88,7 +88,7 @@ export function GeneralChatPage() {
         {
           session_id: created.session_id,
           title: created.title,
-          session_type: created.session_type,
+          type: created.type,
           state_summary: '',
           turn_count: 0,
           updated_at: new Date().toISOString(),

@@ -74,20 +74,25 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
     db = SessionLocal()
     try:
         row = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
-        if row is not None and row.status == "completed":
+        source = row.source if row is not None else "upload"
+        if row is not None and row.status in ("completed", "review_ready"):
             logger.info(
-                "[Task %s] InterviewRecord %s already completed; skipping re-run.",
-                self.request.id, record_id,
+                "[Task %s] InterviewRecord %s already terminal (%s); skipping re-run.",
+                self.request.id, record_id, row.status,
             )
-            return {"status": "skipped", "record_id": record_id, "reason": "already_completed"}
+            return {"status": "skipped", "record_id": record_id, "reason": "already_terminal"}
     finally:
         db.close()
 
-    # Stash the celery task id so the cancel endpoint can revoke us.
+    is_mock = source == "mock"
+
+    # Stash the celery task id so the cancel endpoint can revoke us. The
+    # in-flight status differs by source (mock → processing_review, so the
+    # record stays out of the review list while the review runs).
     try:
         interview_record_service.set_status(
             record_id,
-            "pending",
+            "processing_review" if is_mock else "pending",
             celery_task_id=self.request.id,
         )
     except Exception:  # noqa: BLE001
@@ -117,7 +122,7 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
                 # (incl. the retry count) is already in the worker log above.
                 interview_record_service.set_status(
                     record_id,
-                    "failed",
+                    "review_failed" if is_mock else "failed",
                     error_message=f"分析失败：{humanize_error(exc)}"[:500],
                 )
             else:
@@ -132,10 +137,12 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
                         .filter(InterviewRecord.id == record_id)
                         .first()
                     )
-                    if rec is not None and rec.status not in {"completed", "failed"}:
+                    if rec is not None and rec.status not in {
+                        "completed", "failed", "review_ready", "review_failed",
+                    }:
                         interview_record_service.set_status(
                             record_id,
-                            "failed",
+                            "review_failed" if is_mock else "failed",
                             error_message=f"分析失败：{humanize_error(exc)}"[:500],
                         )
                 finally:

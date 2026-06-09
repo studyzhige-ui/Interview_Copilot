@@ -74,13 +74,13 @@ def _seed_chat(Session, *, user_id: str, session_id: str, messages: int,
         user_pk = db.query(User.id).filter(User.username == user_id).scalar()
         sess = Conversation(
             id=session_id, user_id=user_pk, title="t",
-            session_type="debrief",
+            type="debrief",
         )
         if session_created_at is not None:
             sess.created_at = session_created_at
         db.add(sess)
         for i in range(messages):
-            m = ConversationMessage(session_id=session_id, seq=i, role="User", content=f"m{i}")
+            m = ConversationMessage(conversation_id=session_id, seq=i, role="User", content=f"m{i}")
             if message_created_at is not None:
                 m.created_at = message_created_at
             db.add(m)
@@ -227,19 +227,19 @@ def test_record_quiet_threshold_excludes_active_record(engine_and_session, monke
         # Active record: most recent message is 30min old.
         db.add(Conversation(
             id="s_active", user_id=alice_pk, title="t",
-            session_type="debrief", interview_id="ir_active",
+            type="debrief", subject_type="interview_record", subject_id="ir_active",
         ))
         db.add(ConversationMessage(
-            session_id="s_active", seq=0, role="User", content="hi",
+            conversation_id="s_active", seq=0, role="User", content="hi",
             created_at=now - timedelta(minutes=30),
         ))
         # Settled record: most recent message is (RECORD_QUIET_HOURS+1) old.
         db.add(Conversation(
             id="s_settled", user_id=alice_pk, title="t",
-            session_type="debrief", interview_id="ir_settled",
+            type="debrief", subject_type="interview_record", subject_id="ir_settled",
         ))
         db.add(ConversationMessage(
-            session_id="s_settled", seq=0, role="User", content="hi",
+            conversation_id="s_settled", seq=0, role="User", content="hi",
             created_at=now - timedelta(hours=RECORD_QUIET_HOURS + 1),
         ))
         db.commit()

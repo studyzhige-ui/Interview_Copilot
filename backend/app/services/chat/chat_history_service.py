@@ -85,13 +85,13 @@ class TranscriptService:
 
             max_seq = (
                 db.query(func.max(ConversationMessage.seq))
-                .filter(ConversationMessage.session_id == session_id)
+                .filter(ConversationMessage.conversation_id == session_id)
                 .scalar()
             )
             next_seq = (max_seq + 1) if max_seq else 1
 
             db.add(ConversationMessage(
-                session_id=session_id, seq=next_seq, role="User",
+                conversation_id=session_id, seq=next_seq, role="User",
                 content=user_msg,
                 content_blocks_json=(
                     json.dumps(user_blocks, ensure_ascii=False)
@@ -100,7 +100,7 @@ class TranscriptService:
                 rewritten_query=rewritten_query,
             ))
             db.add(ConversationMessage(
-                session_id=session_id, seq=next_seq + 1, role="Agent",
+                conversation_id=session_id, seq=next_seq + 1, role="Agent",
                 content=ai_msg,
                 content_blocks_json=(
                     json.dumps(ai_blocks, ensure_ascii=False)
@@ -129,7 +129,7 @@ class TranscriptService:
             rows = (
                 db.query(ConversationMessage)
                 .filter(
-                    ConversationMessage.session_id == session_id,
+                    ConversationMessage.conversation_id == session_id,
                     ConversationMessage.seq > after_seq,
                 )
                 .order_by(ConversationMessage.seq.desc())
@@ -152,7 +152,7 @@ class TranscriptService:
             rows = (
                 db.query(ConversationMessage)
                 .filter(
-                    ConversationMessage.session_id == session_id,
+                    ConversationMessage.conversation_id == session_id,
                     ConversationMessage.seq >= start_seq,
                     ConversationMessage.seq <= end_seq,
                 )
@@ -168,7 +168,7 @@ class TranscriptService:
         try:
             rows = (
                 db.query(ConversationMessage)
-                .filter(ConversationMessage.session_id == session_id)
+                .filter(ConversationMessage.conversation_id == session_id)
                 .order_by(ConversationMessage.seq.asc())
                 .all()
             )
@@ -187,8 +187,9 @@ class TranscriptService:
                 # Owner pk (users.id). build_interview_reference matches it
                 # pk==pk against the bound interview_record's user_id.
                 "user_id": row.user_id,
-                "session_type": row.session_type or "general",
-                "interview_id": row.interview_id,
+                "type": row.type or "general",
+                "subject_type": row.subject_type,
+                "subject_id": row.subject_id,
                 "turn_count": row.turn_count or 0,
                 "compaction_cursor": row.compaction_cursor or 0,
                 "memory_extraction_cursor": row.memory_extraction_cursor or 0,

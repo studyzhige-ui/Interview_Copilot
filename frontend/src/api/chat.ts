@@ -316,8 +316,11 @@ export async function streamChatSSE(
 }
 
 export async function createChatSession(payload: {
-  session_type: 'general' | 'debrief' | 'mock_interview';
-  interview_id?: string;
+  // mock_interview sessions are created by the mock-interview start endpoint,
+  // never here — this only opens general / debrief chats.
+  type: 'general' | 'debrief';
+  /** The interview_record this conversation is about (required for debrief). */
+  subject_id?: string;
   title?: string;
 }): Promise<ChatSessionCreateResp> {
   const res = await apiClient.post('/chat/sessions', payload);
@@ -325,7 +328,7 @@ export async function createChatSession(payload: {
 }
 
 export async function listChatSessions(
-  q: { offset?: number; limit?: number; session_type?: string; interview_id?: string } = {},
+  q: { offset?: number; limit?: number; type?: string; subject_id?: string } = {},
   opts: { signal?: AbortSignal } = {},
 ): Promise<ChatSessionListItem[]> {
   const res = await apiClient.get('/chat/sessions', {

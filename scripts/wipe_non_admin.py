@@ -102,7 +102,7 @@ def _count_rows_per_table(db, admin_username: str) -> dict[str, int]:
     queries: list[tuple[str, str, dict]] = [
         ("conversation_messages",
          "SELECT COUNT(*) FROM conversation_messages cm JOIN conversations cs "
-         "ON cm.session_id = cs.id WHERE cs.user_id != :apk", {"apk": admin_pk}),
+         "ON cm.conversation_id = cs.id WHERE cs.user_id != :apk", {"apk": admin_pk}),
         ("interview_qa",
          "SELECT COUNT(*) FROM interview_qa iq JOIN interview_records ir "
          "ON iq.record_id = ir.id WHERE ir.user_id != :apk", {"apk": admin_pk}),
@@ -220,7 +220,7 @@ def _delete_postgres_rows(db, admin_username: str, dry_run: bool) -> None:
          "DELETE FROM interview_qa WHERE record_id IN "
          "(SELECT id FROM interview_records WHERE user_id != :apk)", {"apk": admin_pk}),
         ("conversation_messages",
-         "DELETE FROM conversation_messages WHERE session_id IN "
+         "DELETE FROM conversation_messages WHERE conversation_id IN "
          "(SELECT id FROM conversations WHERE user_id != :apk)", {"apk": admin_pk}),
     ]
     deletes += [

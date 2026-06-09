@@ -306,9 +306,8 @@ class ContextAssemblyPipeline:
         )
 
         # Auto-inject the interview reference for debrief sessions when the
-        # caller didn't supply one. Mode + interview_id come from their
-        # dedicated columns (session_type / interview_id) — the
-        # mock_interview_state column plays no part in context assembly.
+        # caller didn't supply one. type + the bound record come from their
+        # dedicated columns (type / subject_type / subject_id).
         # ``skip_debrief_autoinject`` lets the lightweight rewrite path bail
         # out before the SQL round-trip.
         if (
@@ -316,20 +315,24 @@ class ContextAssemblyPipeline:
             and not debrief_reference
             and meta is not None
         ):
-            session_type = meta.get("session_type")
-            interview_id = meta.get("interview_id")
-            if session_type == "debrief" and interview_id:
+            conv_type = meta.get("type")
+            record_id = (
+                meta.get("subject_id")
+                if meta.get("subject_type") == "interview_record"
+                else None
+            )
+            if conv_type == "debrief" and record_id:
                 from app.services.chat.interview_reference import build_interview_reference
-                ref = build_interview_reference(interview_id, meta["user_id"])
+                ref = build_interview_reference(record_id, meta["user_id"])
                 if ref:
                     debrief_reference = ref
-            elif interview_id and session_type != "debrief":
-                # Data sanity warning — interview_id set but not a debrief
-                # session. Log so an operator can investigate; don't crash.
+            elif record_id and conv_type != "debrief":
+                # Data sanity warning — a record is bound but the session
+                # isn't a debrief. Log so an operator can investigate.
                 logger.warning(
-                    "session_type=%r has interview_id=%s but isn't debrief; "
+                    "type=%r has subject_id=%s but isn't debrief; "
                     "reference slot stays empty",
-                    session_type, interview_id,
+                    conv_type, record_id,
                 )
 
         # RAG retrieved-context: only knowledge_chunks now. The legacy

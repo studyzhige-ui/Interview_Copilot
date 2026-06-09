@@ -679,7 +679,7 @@ _BATCH_PROMPT_PREFIX = """[硬性约束] 全部输出使用简体中文。即便
 - self_intro / reverse_qa:
     采用单维度宽松打分（结构清晰 / 信息完整 / 表达自然）
 
-如果一道题携带 `prior_quality` 字段（由 Runtime Director 在面试进行时打的标签：weak/partial/good/strong），
+如果一道题携带 `prior_quality` 字段（面试过程中预先标注的质量标签：weak/partial/good/strong），
 **作为参考先验**，但不要直接复制 —— 你看到完整的简历和 JD，可以给更准确的分数。
 """
 
@@ -831,8 +831,8 @@ async def analyze_mock_qa_batched(
     `analyze_interview`."""
     # Normalize incoming entries to the {index, question, answer, phase} shape
     # the rest of this module expects (1-based index, ordered by appearance).
-    # We additionally carry forward Runtime Director metadata (topic + the
-    # in-flight quality label) so the analyzer prompt can surface it to the LLM.
+    # We additionally carry forward any optional per-QA metadata (topic + a
+    # prior quality label, when present) so the analyzer prompt can surface it.
     normalized: list[dict[str, Any]] = []
     for i, pair in enumerate(qa_pairs, start=1):
         if not isinstance(pair, dict):

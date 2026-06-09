@@ -31,7 +31,7 @@ class Conversation(Base):
     __table_args__ = (
         Index(
             "ix_conversations_user_type_arch",
-            "user_id", "session_type", "archived_at",
+            "user_id", "type", "archived_at",
         ),
         Index("ix_conversations_user_updated", "user_id", "updated_at"),
     )
@@ -49,23 +49,18 @@ class Conversation(Base):
     )
     title = Column(String, default="新的面试对话")
     summary = Column(Text, default="")
-    session_type = Column(String, index=True, default="general", nullable=False)
+    # Conversation type: general | debrief | mock_interview.
+    type = Column(String, index=True, default="general", nullable=False)
     # Run mode for general/debrief: "chat" (L1 deterministic) or "agent" (L2
     # ReAct). mock_interview is always chat. Persisted snapshot of the mode the
     # SSE endpoint selects per request.
     mode = Column(String, nullable=False, default="chat")
     # Polymorphic subject binding (weak FK). subject_type whitelist =
     # {interview_record}; general -> NULL, debrief/mock_interview -> the bound
-    # interview_record. Generalizes the legacy ``interview_id`` column (which it
-    # replaces in CLEANUP). The app layer validates existence + ownership.
+    # interview_record. The app layer validates existence + ownership. (The
+    # legacy ``interview_id`` column it replaced was dropped in 0038.)
     subject_type = Column(String, nullable=True)
     subject_id = Column(String, nullable=True)
-    interview_id = Column(
-        String, ForeignKey("interview_records.id"), index=True, nullable=True,
-    )
-    # Mock-interview runtime state JSON (NULL for general / debrief sessions);
-    # serialized via services.chat.mock_interview_state.
-    mock_interview_state = Column(Text, nullable=True)
     # Per-session global-memory override (NULL = use users.global_memory_enabled
     # default). Resolved by services.memory.recall_policy.
     global_memory_enabled = Column(Boolean, nullable=True)
@@ -85,7 +80,7 @@ class Conversation(Base):
 
 class ConversationMessage(Base):
     __tablename__ = "conversation_messages"
-    # uq_conversation_messages_session_seq is a UNIQUE constraint (backed by
+    # uq_conversation_messages_conversation_seq is a UNIQUE constraint (backed by
     # a unique B-tree) that does double duty: guards the concurrent-
     # append race AND serves read-time ``ORDER BY seq`` paginations
     # for the chat-history endpoint. 0001 originally created a
@@ -93,12 +88,17 @@ class ConversationMessage(Base):
     # read path; 0011 drops it (the unique B-tree is just as good for
     # the read direction and halves the per-INSERT index-write cost).
     __table_args__ = (
-        UniqueConstraint("session_id", "seq", name="uq_conversation_messages_session_seq"),
+        UniqueConstraint(
+            "conversation_id", "seq", name="uq_conversation_messages_conversation_seq"
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    session_id = Column(String, ForeignKey("conversations.id"), index=True, nullable=False)
+    conversation_id = Column(
+        String, ForeignKey("conversations.id"), index=True, nullable=False
+    )
     seq = Column(Integer, index=True, nullable=False)
+    # user | assistant | tool | system.
     role = Column(String, nullable=False)
     # Plain-text canonical form — used for session-list preview, memory
     # extraction input, and the read-time fallback when an old row has
@@ -112,6 +112,11 @@ class ConversationMessage(Base):
     # text blocks (Claude Code / Codex folded-card UX).
     content_blocks_json = Column(Text, nullable=True)
     rewritten_query = Column(Text, nullable=True)
+    # Tool-message pairing helpers (RFC §conversation_messages). Optional;
+    # populated on role="tool" turns so a tool_result can be matched back to
+    # its tool_use without re-parsing content_blocks_json.
+    tool_call_id = Column(String, nullable=True)
+    tool_name = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     session = relationship("Conversation", back_populates="messages")

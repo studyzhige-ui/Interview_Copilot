@@ -12,7 +12,6 @@ import {
 } from '@/hooks/useSpeechRecognition';
 import { abandonMockInterview, submitMockAnswer, finishMockInterview, TRANSCRIBE_AVAILABLE, transcribeAudio } from '@/api/mock';
 import { useBlocker, useNavigate } from 'react-router-dom';
-import type { MockQuestion } from '@/types/api';
 import type { VoiceMode } from './MockSetup';
 
 // Web Speech API is reachable on Chrome/Edge **only when the host can reach
@@ -35,8 +34,9 @@ interface Turn {
 }
 
 interface Props {
-  sessionId: string;
-  initialQuestion: MockQuestion;
+  recordId: string;
+  /** The opening / current interviewer line (greeting + question), one string. */
+  initialQuestion: string;
   voiceMode: VoiceMode;
   onFinished: (recordId: string) => void;
   onAbandoned: () => void;
@@ -47,9 +47,9 @@ function fmtDuration(ms: number) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, onAbandoned }: Props) {
+export function MockLive({ recordId, initialQuestion, voiceMode, onFinished, onAbandoned }: Props) {
   const [turns, setTurns] = useState<Turn[]>(
-    initialQuestion.question ? [{ who: 'interviewer', text: initialQuestion.question }] : [],
+    initialQuestion ? [{ who: 'interviewer', text: initialQuestion }] : [],
   );
   const [typing, setTyping] = useState('');
   const [sending, setSending] = useState(false);
@@ -112,34 +112,20 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, on
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [turns]);
 
-  // Speak the opening once on mount when voice is on.
-  //
-  // The backend's ``/answer`` endpoint hands the FE a single
-  // ``interviewer_response`` = ``spoken_response + "\n\n" +
-  // next_question`` so the answer-turn TTS speaks both pieces. But
-  // ``/start`` and ``/question`` return them as SEPARATE
-  // ``spoken_response`` + ``question`` fields. Pre-fix this effect
-  // only spoke ``question``, dropping the spoken pre-amble — so the
-  // resume-from-/question path was audibly inconsistent with the
-  // answer-turn path. Concatenate them here so the opening flow
-  // matches the answer flow's TTS shape.
+  // Speak the opening / current interviewer line once on mount when voice
+  // is on. The backend now returns the interviewer turn as a single natural
+  // utterance (no spoken/question split), so we just speak it verbatim.
   const spokeInitialRef = useRef(false);
   useEffect(() => {
     if (spokeInitialRef.current) return;
     if (!ttsActive) return;
-    if (!initialQuestion.question) return;
+    if (!initialQuestion) return;
     spokeInitialRef.current = true;
-    const parts: string[] = [];
-    if (initialQuestion.spoken_response) parts.push(initialQuestion.spoken_response);
-    parts.push(initialQuestion.question);
-    void tts.speak(parts.join('\n\n'));
-    // tts.speak is stable for the lifetime of the useTts hook + we
-    // gate via spokeInitialRef so the effect is once-only by design.
-    // initialQuestion.question is included so the once-only fire still
-    // happens if the prop arrives async after the first render
-    // (e.g. parent fetches it after mounting MockLive).
+    void tts.speak(initialQuestion);
+    // tts.speak is stable for the lifetime of the useTts hook + we gate via
+    // spokeInitialRef so the effect is once-only by design.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ttsActive, initialQuestion.question]);
+  }, [ttsActive, initialQuestion]);
 
   const pushUserAnswer = async (answer: string) => {
     if (!answer.trim() || finished) return;
@@ -150,10 +136,10 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, on
     const optimisticTurn: Turn = { who: 'me', text: answer };
     setTurns((t) => [...t, optimisticTurn]);
     try {
-      const resp = await submitMockAnswer({ session_id: sessionId, answer });
-      setTurns((t) => [...t, { who: 'interviewer', text: resp.interviewer_response }]);
-      if (ttsActive) void tts.speak(resp.interviewer_response);
-      if (resp.is_finished) {
+      const resp = await submitMockAnswer(recordId, { answer_text: answer });
+      setTurns((t) => [...t, { who: 'interviewer', text: resp.interviewer_message }]);
+      if (ttsActive) void tts.speak(resp.interviewer_message);
+      if (resp.is_ready_to_finish) {
         setFinished(true);
         toast.info('面试已结束，点击右上「结束面试」生成复盘记录');
       }
@@ -261,14 +247,12 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, on
   // ── Navigation lock while interview is in flight ─────────────────────
   // Without this, the user clicking the sidebar away from /mock would
   // unmount MockLive, lose any local UI state (the typing draft, the
-  // mic recording, the TTS queue), and — pre-fix — silently churn the
-  // session: until the in-progress sweeper fix landed, switching tabs
-  // mid-interview could even hard-delete the session's mock_interview_state. The
-  // backend sweeper is now defensive (interview_plan + pending_question
-  // are recognised as "launched") so the resume banner reliably picks
-  // sessions up again — but the user's typing buffer, the running TTS,
-  // and the active mic recorder all die on unmount regardless. So we
-  // intercept navigation HERE and ask before letting the unmount fire.
+  // mic recording, the TTS queue). The run itself survives: it lives in
+  // the mock_interview_runtime row + the conversation messages, so the
+  // resume banner on /mock picks it up again — but the user's typing
+  // buffer, the running TTS, and the active mic recorder all die on
+  // unmount regardless. So we intercept navigation HERE and ask before
+  // letting the unmount fire.
   //
   // We block when:
   //   - interview hasn't finished (debrief generated) yet
@@ -300,7 +284,7 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, on
   const onGenerateDebrief = async () => {
     setFinishing(true);
     try {
-      const r = await finishMockInterview(sessionId);
+      const r = await finishMockInterview(recordId);
       setConfirmingFinish(false);
       onFinished(r.record_id);
     } catch {
@@ -313,7 +297,7 @@ export function MockLive({ sessionId, initialQuestion, voiceMode, onFinished, on
   const onAbandonInterview = async () => {
     setAbandoning(true);
     try {
-      await abandonMockInterview(sessionId);
+      await abandonMockInterview(recordId);
       toast.success('已放弃本次面试，相关记录已删除');
       setConfirmingFinish(false);
       // Reset parent state first, THEN navigate. Without onAbandoned() the

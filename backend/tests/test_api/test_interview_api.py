@@ -337,15 +337,16 @@ def test_delete_interview_record_cascades_conversations(client, db: Session):
     """
     from app.models.chat import ConversationMessage, Conversation
 
-    db.add(InterviewRecord(id="ir_a", user_id=_uid(db, "alice"), source="upload", title="t", status="completed"))
-    # conversations.user_id is still the username string (NOT migrated in
-    # CLEANUP #2) — only interview_records.user_id became the integer pk.
+    alice_pk = _uid(db, "alice")
+    db.add(InterviewRecord(id="ir_a", user_id=alice_pk, source="upload", title="t", status="completed"))
+    # conversations.user_id is the integer users.id FK (CLEANUP #2). The
+    # delete handler finds bound conversations via subject_id == record_id.
     db.add(Conversation(
-        id="cs_1", user_id="alice", title="debrief",
-        session_type="debrief", interview_id="ir_a",
+        id="cs_1", user_id=alice_pk, title="debrief",
+        type="debrief", subject_type="interview_record", subject_id="ir_a",
     ))
-    db.add(ConversationMessage(session_id="cs_1", seq=0, role="user", content="hi"))
-    db.add(ConversationMessage(session_id="cs_1", seq=1, role="assistant", content="hello"))
+    db.add(ConversationMessage(conversation_id="cs_1", seq=0, role="user", content="hi"))
+    db.add(ConversationMessage(conversation_id="cs_1", seq=1, role="assistant", content="hello"))
     db.commit()
 
     # The delete handler no longer touches Milvus (memory_items cascade
@@ -359,7 +360,7 @@ def test_delete_interview_record_cascades_conversations(client, db: Session):
     db.expire_all()
     assert db.get(InterviewRecord, "ir_a") is None
     assert db.get(Conversation, "cs_1") is None
-    assert db.query(ConversationMessage).filter(ConversationMessage.session_id == "cs_1").count() == 0
+    assert db.query(ConversationMessage).filter(ConversationMessage.conversation_id == "cs_1").count() == 0
 
 
 # ── /interview-records/{id}/events (SSE) ─────────────────────────────────

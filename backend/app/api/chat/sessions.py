@@ -24,11 +24,6 @@ from app.schemas.chat import (
     SessionRenameRequest,
 )
 from app.services.chat.chat_history_service import transcript_service
-from app.services.chat.mock_interview_state import (
-    default_mock_state,
-    dump_mock_state,
-    parse_mock_state,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -36,17 +31,15 @@ logger = logging.getLogger(__name__)
 def _session_list_label(row: Conversation) -> str:
     """One-line label for the session-list UI, derived from dedicated columns.
 
-    Prefers the compaction ``summary``; otherwise a type-based label (mock
-    sessions append the current phase, read from ``mock_interview_state``).
+    Prefers the compaction ``summary``; otherwise a type-based label.
     """
     summary = (row.summary or "").strip()
     if summary:
         return summary[:150]
-    session_type = row.session_type or "general"
-    if session_type == "mock_interview":
-        phase = str(parse_mock_state(row.mock_interview_state).get("current_phase") or "").strip()
-        return f"模拟面试 | {phase}" if phase else "模拟面试"
-    if session_type == "debrief":
+    conv_type = row.type or "general"
+    if conv_type == "mock_interview":
+        return "模拟面试"
+    if conv_type == "debrief":
         return "面试复盘"
     return "通用对话"
 
@@ -60,37 +53,37 @@ def create_chat_session(
     db: Session = Depends(get_db),
 ):
     req = request or SessionCreateRequest()
-    session_type = req.session_type if req.session_type in {"general", "debrief", "mock_interview"} else "general"
+    # mock_interview conversations are created by the mock-interview start
+    # endpoint (it owns the atomic record + conversation + runtime creation),
+    # never here. This endpoint only opens general / debrief chats.
+    conv_type = req.type if req.type in {"general", "debrief"} else "general"
 
-    if session_type == "debrief" and req.interview_id:
+    subject_type: str | None = None
+    subject_id: str | None = None
+    if conv_type == "debrief":
+        if not req.subject_id:
+            raise HTTPException(status_code=400, detail="debrief 对话必须绑定面试记录")
         from app.models.interview_record import InterviewRecord
         record = db.query(InterviewRecord).filter(
-            InterviewRecord.id == req.interview_id,
+            InterviewRecord.id == req.subject_id,
             InterviewRecord.user_id == resolve_user_pk(db, current_user.username),
         ).first()
         if record is None:
             raise HTTPException(status_code=404, detail="Interview record not found")
+        subject_type = "interview_record"
+        subject_id = req.subject_id
 
-    default_titles = {
-        "general": "通用对话",
-        "debrief": "面试复盘",
-        "mock_interview": "模拟面试",
-    }
-    title = req.title or default_titles.get(session_type, "新的面试对话")
+    default_titles = {"general": "通用对话", "debrief": "面试复盘"}
+    title = req.title or default_titles.get(conv_type, "新的面试对话")
 
     try:
-        mock_state = (
-            dump_mock_state(default_mock_state(req.interview_id or ""))
-            if session_type == "mock_interview"
-            else None
-        )
         new_session = Conversation(
             id=generate_uuid(),
             user_id=resolve_user_pk(db, current_user.username),
             title=title,
-            session_type=session_type,
-            interview_id=req.interview_id,
-            mock_interview_state=mock_state,
+            type=conv_type,
+            subject_type=subject_type,
+            subject_id=subject_id,
         )
         db.add(new_session)
         db.commit()
@@ -98,15 +91,15 @@ def create_chat_session(
         return SessionCreateResponse(
             session_id=new_session.id,
             title=new_session.title,
-            session_type=new_session.session_type,
+            type=new_session.type,
         )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         db.rollback()
         logger.exception(
-            "create_chat_session failed (user=%s, type=%s, interview_id=%s): %s",
-            current_user.username, session_type, req.interview_id, exc,
+            "create_chat_session failed (user=%s, type=%s, subject_id=%s): %s",
+            current_user.username, conv_type, req.subject_id, exc,
         )
         raise HTTPException(
             status_code=500,
@@ -120,14 +113,14 @@ def list_conversations(
     db: Session = Depends(get_db),
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
-    session_type: str | None = Query(None, description="Filter: general/debrief/mock_interview"),
-    interview_id: str | None = Query(None, description="Filter: tie to a specific interview record"),
+    type: str | None = Query(None, description="Filter: general/debrief/mock_interview"),
+    subject_id: str | None = Query(None, description="Filter: tie to a specific interview record"),
 ):
     q = db.query(Conversation).filter(Conversation.user_id == resolve_user_pk(db, current_user.username))
-    if session_type:
-        q = q.filter(Conversation.session_type == session_type)
-    if interview_id:
-        q = q.filter(Conversation.interview_id == interview_id)
+    if type:
+        q = q.filter(Conversation.type == type)
+    if subject_id:
+        q = q.filter(Conversation.subject_id == subject_id)
     rows = (
         q.order_by(Conversation.updated_at.desc())
         .offset(offset)
@@ -138,7 +131,7 @@ def list_conversations(
         SessionListItem(
             session_id=row.id,
             title=row.title or "新的面试对话",
-            session_type=row.session_type or "general",
+            type=row.type or "general",
             state_summary=_session_list_label(row),
             turn_count=row.turn_count or 0,
             updated_at=row.updated_at.isoformat() if row.updated_at else "",
@@ -161,7 +154,7 @@ def get_chat_history(
 
     rows = (
         db.query(ConversationMessage)
-        .filter(ConversationMessage.session_id == session_id)
+        .filter(ConversationMessage.conversation_id == session_id)
         .order_by(ConversationMessage.seq.desc())
         .offset(offset)
         .limit(limit)
@@ -210,7 +203,7 @@ def delete_chat_session(
         raise HTTPException(status_code=404, detail="Session not found or access denied")
     try:
         db.query(ConversationMessage).filter(
-            ConversationMessage.session_id == session_id
+            ConversationMessage.conversation_id == session_id
         ).delete(synchronize_session=False)
         db.delete(row)
         db.commit()
@@ -242,14 +235,9 @@ def get_full_transcript(
     return {
         "status": "success",
         "session_id": session_id,
-        "session_type": meta["session_type"] if meta else "general",
+        "type": meta["type"] if meta else "general",
         "turn_count": meta["turn_count"] if meta else 0,
         "compaction_cursor": meta["compaction_cursor"] if meta else 0,
-        "mock_interview_state": (
-            parse_mock_state(session_row.mock_interview_state)
-            if (session_row.session_type or "general") == "mock_interview"
-            else {}
-        ),
         "messages": messages,
         "total_messages": len(messages),
     }

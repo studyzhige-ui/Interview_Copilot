@@ -125,7 +125,8 @@ class PostTurnMaintenanceService:
 
     @staticmethod
     def _session_record_id(session_id: str) -> str | None:
-        """Look up the interview_id this session belongs to (if any).
+        """Look up the bound interview_record id (conversations.subject_id)
+        this session belongs to (if any).
         Returns None for general / unbound sessions OR on any lookup
         failure — record_id is purely optional metadata for the audit
         log, so we must never let its lookup poison the extraction path.
@@ -137,7 +138,7 @@ class PostTurnMaintenanceService:
             db = SessionLocal()
             try:
                 row = (
-                    db.query(Conversation.interview_id)
+                    db.query(Conversation.subject_id)
                     .filter(Conversation.id == session_id)
                     .first()
                 )

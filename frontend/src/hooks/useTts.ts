@@ -68,7 +68,7 @@ export function useTts({ enabled, voice }: UseTtsOptions) {
       let url: string | null = null;
       try {
         const res = await apiClient.post(
-          '/chat/mock-interview/tts',
+          '/mock-interviews/tts',
           { text: trimmed, voice },
           { responseType: 'blob' },
         );

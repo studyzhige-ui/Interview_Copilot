@@ -195,8 +195,8 @@ def test_chat_session_with_messages_relationship(db_session):
     db_session.flush()
 
     db_session.add_all([
-        ConversationMessage(session_id="sess-001", seq=1, role="User", content="hi"),
-        ConversationMessage(session_id="sess-001", seq=2, role="Agent", content="hello back"),
+        ConversationMessage(conversation_id="sess-001", seq=1, role="User", content="hi"),
+        ConversationMessage(conversation_id="sess-001", seq=2, role="Agent", content="hello back"),
     ])
     db_session.flush()
 

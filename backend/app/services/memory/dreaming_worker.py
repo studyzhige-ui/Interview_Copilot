@@ -171,7 +171,7 @@ def _count_new_activity_since(
     """Counts of new debrief conversation_messages + conversations for
     ``user_id`` since ``cursor`` (None = all-time). Used by gate 3.
 
-    Only ``session_type == 'debrief'`` counts: dreaming consumes
+    Only ``type == 'debrief'`` counts: dreaming consumes
     exclusively debrief messages (see ``dream_for_record``'s
     ``_load_record_debrief_messages``). A user opening 10 general
     chats without any debrief activity wouldn't produce work for the
@@ -181,15 +181,15 @@ def _count_new_activity_since(
     user_pk = resolve_user_pk(db, user_id)
     msg_q = (
         db.query(ConversationMessage)
-        .join(Conversation, Conversation.id == ConversationMessage.session_id)
+        .join(Conversation, Conversation.id == ConversationMessage.conversation_id)
         .filter(
             Conversation.user_id == user_pk,
-            Conversation.session_type == "debrief",
+            Conversation.type == "debrief",
         )
     )
     sess_q = db.query(Conversation).filter(
         Conversation.user_id == user_pk,
-        Conversation.session_type == "debrief",
+        Conversation.type == "debrief",
     )
     if cursor is not None:
         msg_q = msg_q.filter(ConversationMessage.created_at > cursor)
@@ -276,10 +276,10 @@ def _latest_debrief_message_at(db: Session, record_id: str) -> datetime | None:
     this record. Returns None if there are none."""
     row = (
         db.query(ConversationMessage.created_at)
-        .join(Conversation, Conversation.id == ConversationMessage.session_id)
+        .join(Conversation, Conversation.id == ConversationMessage.conversation_id)
         .filter(
-            Conversation.interview_id == record_id,
-            Conversation.session_type == "debrief",
+            Conversation.subject_id == record_id,
+            Conversation.type == "debrief",
         )
         .order_by(ConversationMessage.created_at.desc())
         .first()
@@ -456,10 +456,10 @@ def _load_record_debrief_messages(db: Session, record_id: str) -> list[dict]:
     this record, ordered by time."""
     rows = (
         db.query(ConversationMessage)
-        .join(Conversation, Conversation.id == ConversationMessage.session_id)
+        .join(Conversation, Conversation.id == ConversationMessage.conversation_id)
         .filter(
-            Conversation.interview_id == record_id,
-            Conversation.session_type == "debrief",
+            Conversation.subject_id == record_id,
+            Conversation.type == "debrief",
         )
         .order_by(ConversationMessage.created_at.asc(), ConversationMessage.seq.asc())
         .all()

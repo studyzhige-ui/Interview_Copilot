@@ -27,7 +27,7 @@ def test_post_turn_maintenance_does_not_advance_cursor_on_failed_extraction(monk
             return {
                 "compaction_cursor": 0,
                 "memory_extraction_cursor": 0,
-                "session_type": "general",
+                "type": "general",
                 "turn_count": 1,
             }
 
@@ -68,7 +68,7 @@ def test_memory_extraction_cursor_independent_of_compaction(monkeypatch):
             return {
                 "compaction_cursor": 20,
                 "memory_extraction_cursor": 5,
-                "session_type": "general",
+                "type": "general",
                 "turn_count": 10,
             }
 
@@ -115,7 +115,7 @@ def test_memory_extraction_cursor_advances_on_success(monkeypatch):
             return {
                 "compaction_cursor": 0,
                 "memory_extraction_cursor": 0,
-                "session_type": "general",
+                "type": "general",
                 "turn_count": 2,
             }
 

@@ -26,13 +26,25 @@ from app.models.interview_transcript import InterviewTranscript, _generate_trans
 logger = logging.getLogger(__name__)
 
 
-# Canonical status values for InterviewRecord.status
+# Canonical status values for InterviewRecord.status.
+# Upload pipeline: pending → transcribing → extracting → analyzing → completed
+#                  (or failed).
+# Mock pipeline:   mock_in_progress → processing_review → review_ready
+#                  (or review_failed). A mock only enters the review list once
+#                  it reaches review_ready.
 STATUS_PENDING = "pending"
 STATUS_TRANSCRIBING = "transcribing"
 STATUS_EXTRACTING = "extracting"
 STATUS_ANALYZING = "analyzing"
 STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
+STATUS_MOCK_IN_PROGRESS = "mock_in_progress"
+STATUS_PROCESSING_REVIEW = "processing_review"
+STATUS_REVIEW_READY = "review_ready"
+STATUS_REVIEW_FAILED = "review_failed"
+
+# Mock states that must NOT appear in the review list (not yet viewable).
+MOCK_HIDDEN_STATUSES = (STATUS_MOCK_IN_PROGRESS, STATUS_PROCESSING_REVIEW)
 
 
 class InterviewRecordService:
@@ -120,11 +132,18 @@ class InterviewRecordService:
         offset: int = 0,
         limit: int = 20,
     ) -> list[InterviewRecord]:
+        """Records for the review list. Mock interviews that haven't reached
+        review_ready (i.e. mock_in_progress / processing_review) are hidden —
+        an unfinished or still-reviewing mock never appears in the list (a
+        review_failed mock DOES appear so the user can retry)."""
         db: Session = SessionLocal()
         try:
             return (
                 db.query(InterviewRecord)
-                .filter(InterviewRecord.user_id == resolve_user_pk(db, user_id))
+                .filter(
+                    InterviewRecord.user_id == resolve_user_pk(db, user_id),
+                    ~InterviewRecord.status.in_(MOCK_HIDDEN_STATUSES),
+                )
                 .order_by(InterviewRecord.created_at.desc())
                 .offset(offset)
                 .limit(limit)
@@ -171,7 +190,7 @@ class InterviewRecordService:
                 row.error_message = error_message
             if celery_task_id is not None:
                 row.celery_task_id = celery_task_id
-            if status == STATUS_COMPLETED:
+            if status in (STATUS_COMPLETED, STATUS_REVIEW_READY):
                 row.completed_at = datetime.utcnow()
             row.updated_at = datetime.utcnow()
             if own_db:
@@ -312,7 +331,7 @@ class InterviewRecordService:
         question, answer, phase, phase_label, question_summary,
         is_follow_up, parent_qa_id, grounding_refs, follow_up_depth,
         source_segment_start, source_segment_end, answer_input_mode,
-        action, topic, answer_quality (Runtime Director metadata).
+        action, topic, answer_quality (optional per-QA classification metadata).
         """
         own_db = db is None
         if own_db:
@@ -345,7 +364,7 @@ class InterviewRecordService:
                     source_segment_start=payload.get("source_segment_start"),
                     source_segment_end=payload.get("source_segment_end"),
                     answer_input_mode=str(payload.get("answer_input_mode") or "text"),
-                    # Runtime Director metadata (mock-source only; upload leaves null)
+                    # Optional per-QA classification metadata (usually null).
                     action=payload.get("action"),
                     topic=payload.get("topic"),
                     answer_quality_json=aq if isinstance(aq, dict) else None,

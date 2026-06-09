@@ -4,9 +4,9 @@ A mock interview is a stateful flow that reuses the conversation message stream
 for its turns. This table holds ONLY the in-flight runtime — where the
 interview is right now (stage, plan, current question) — not the final scored
 QA (that's ``interview_qa``) and not the chat transcript (that's the
-conversation messages). It supersedes both the old
-``conversations.mock_interview_state`` JSON blob (the live runtime) and the
-``mock_interview_sessions`` archive table.
+conversation messages). It is the single home for the live mock runtime
+(superseding the dropped ``conversations.mock_interview_state`` JSON blob and
+the deprecated ``mock_interview_sessions`` archive table).
 
 Lifecycle: the mock-start flow atomically creates an ``interview_records`` row
 (``status="mock_in_progress"``), a ``conversations`` row

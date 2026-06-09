@@ -122,8 +122,9 @@ def test_debrief_reference_auto_inject_fires_only_in_debrief_mode(monkeypatch):
             return {
                 "session_id": session_id,
                 "user_id": "alice",
-                "session_type": self.mode,
-                "interview_id": "ir_42" if self.mode != "general" else None,
+                "type": self.mode,
+                "subject_type": "interview_record" if self.mode != "general" else None,
+                "subject_id": "ir_42" if self.mode != "general" else None,
                 "compaction_cursor": 0,
             }
         def get_recent_turns(self, **_kw):
@@ -164,8 +165,9 @@ def test_summary_comes_from_summary_column(monkeypatch):
             return {
                 "session_id": session_id,
                 "user_id": "alice",
-                "session_type": "general",
-                "interview_id": None,
+                "type": "general",
+                "subject_type": None,
+                "subject_id": None,
                 "turn_count": 0,
                 "compaction_cursor": 0,
                 "memory_extraction_cursor": 0,
