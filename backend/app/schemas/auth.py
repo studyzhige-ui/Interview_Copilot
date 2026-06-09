@@ -123,6 +123,12 @@ class MeResponse(BaseModel):
     global_memory_enabled: bool = False
 
 
+class AvatarSetRequest(BaseModel):
+    """Body for ``POST /me/avatar`` — set the avatar from a confirmed
+    ``file_assets(purpose='avatar')`` upload (presigned flow)."""
+    file_asset_id: str
+
+
 __all__ = [
     "UserCreate",
     "Token",
@@ -132,4 +138,5 @@ __all__ = [
     "ChangePasswordRequest",
     "MeUpdate",
     "MeResponse",
+    "AvatarSetRequest",
 ]

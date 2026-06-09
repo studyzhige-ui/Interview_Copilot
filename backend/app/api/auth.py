@@ -11,14 +11,11 @@ Security model:
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
-import re
-import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError
 from sqlalchemy.orm import Session
@@ -42,7 +39,6 @@ from app.services.storage_service import (
     delete_s3_object,
     generate_presigned_get_url,
     is_local_uri,
-    save_blob_to_local,
 )
 from app.services.auth.token_blacklist_service import is_revoked, revoke
 from app.services.auth.verification_code_service import (
@@ -63,6 +59,7 @@ router = APIRouter()
 # Pydantic models live in app/schemas/auth.py — re-exported here so
 # existing callers (`from app.api.auth import UserCreate`) keep working.
 from app.schemas.auth import (  # noqa: E402, F401
+    AvatarSetRequest,
     ChangePasswordRequest,
     EmailRequest,
     LogoutRequest,
@@ -74,11 +71,11 @@ from app.schemas.auth import (  # noqa: E402, F401
 )
 
 
-# Avatar upload limits.
+# Avatar safety limits — validated at set-time against the uploaded object.
 #   * content-type restricted to four common image MIMEs
-#   * 1 MiB hard cap (browser-served data: URL goes straight into a DB row)
-#   * magic-byte verification — the only way to keep a renamed .php from
-#     landing in our user table with image/png MIME label
+#   * 1 MiB hard cap (matches the file_assets 'avatar' purpose limit)
+#   * magic-byte verification on the object head — keeps a renamed executable
+#     from riding a permissive image/png MIME onto the user row
 _AVATAR_MAX_BYTES = 1024 * 1024
 _AVATAR_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
@@ -523,67 +520,18 @@ def update_me(
     return _serialize_me(current_user)
 
 
-def _avatar_object_key(user: User, content_type: str) -> str:
-    """Per-user, per-upload object key under the avatars/ prefix.
+def _read_object_head(storage_uri: str, n: int = 32) -> bytes:
+    """Read the first ``n`` bytes of an S3 object.
 
-    Including a UUID per upload (instead of a stable name) means a stale
-    presigned URL pointing at the previous avatar can't accidentally serve
-    fresh bytes — when the row updates, the old object key dies on the
-    next ``delete_s3_object`` cleanup.
+    Used to magic-byte-validate an avatar uploaded via the presigned flow: the
+    bytes went straight to object storage, so the server reads the head here to
+    confirm the declared image type matches the real content.
     """
-    ext = {
-        "image/png": ".png",
-        "image/jpeg": ".jpg",
-        "image/webp": ".webp",
-        "image/gif": ".gif",
-    }.get(content_type, ".bin")
-    safe_user = re.sub(r"[^A-Za-z0-9._-]+", "_", user.username).strip("._") or "anon"
-    return f"avatars/{safe_user}/{uuid.uuid4().hex}{ext}"
+    from app.services.storage_service import parse_s3_uri, s3_client
 
-
-def _store_avatar_blob(
-    body: bytes,
-    object_key: str,
-    content_type: str,
-    username: str,
-) -> str:
-    """Persist avatar bytes — S3 preferred, ``local://`` fallback on outage.
-
-    Returns the canonical storage URI (``s3://...`` or ``local://avatars/...``)
-    to be written into ``users.avatar_url``. The two forms are interchangeable
-    downstream: the serializer translates each one to a browser-fetchable
-    URL via :func:`_public_avatar_url`.
-    """
-    # 1) Preferred path: S3 / MinIO. ``upload_file_to_owned_key`` itself
-    # falls back to ``_fallback_local_save`` (returning an absolute path)
-    # on connection / client errors — but that legacy fallback shape is
-    # opaque to our serializer. So we sidestep it: catch the S3 client
-    # exception ourselves and call ``save_blob_to_local`` which returns a
-    # well-formed ``local://`` URI we know how to serve.
-    try:
-        # ``upload_file_to_owned_key`` swallows ClientError + general
-        # Exception and routes both to the legacy local fallback (absolute
-        # path). To detect "did S3 actually work?" cleanly, talk to the
-        # boto3 client directly here.
-        from app.services.storage_service import s3_client, storage_uri_for_key
-        from app.core.config import settings as _s
-        s3_client.upload_fileobj(
-            io.BytesIO(body),
-            _s.S3_BUCKET_NAME,
-            object_key,
-            ExtraArgs={"ContentType": content_type},
-        )
-        return storage_uri_for_key(object_key)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Avatar S3 upload failed for user=%s; falling back to local: %s",
-            username, exc,
-        )
-
-    # 2) Fallback path: write under STORAGE_DIR/avatars/... and record a
-    # ``local://avatars/...`` URI. /api/v1/static/avatars/ mount serves
-    # the bytes to the browser without needing S3 to recover.
-    return save_blob_to_local(body, object_key)
+    bucket, key = parse_s3_uri(storage_uri)
+    obj = s3_client.get_object(Bucket=bucket, Key=key, Range=f"bytes=0-{n - 1}")
+    return obj["Body"].read()
 
 
 def _delete_previous_avatar(previous_uri: str) -> None:
@@ -607,61 +555,85 @@ def _delete_previous_avatar(previous_uri: str) -> None:
 
 @router.post("/me/avatar", response_model=MeResponse)
 @limiter.limit(RATE_UPLOAD)
-async def upload_avatar(
+async def set_avatar(
     request: Request,
     response: Response,
-    file: UploadFile = File(...),
+    body: AvatarSetRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Upload an avatar. Bytes go to S3 if available, otherwise local fallback.
+    """Set the avatar from a confirmed ``file_assets(purpose='avatar')`` upload.
 
-    Either way ``users.avatar_url`` stores an opaque URI (never a base64
-    data: URL); the serializer turns it into a browser-fetchable URL on
-    each /auth/me response.
+    The image was PUT straight to object storage via the unified presigned flow,
+    so there is no server-receives-bytes path. Here we run the image safety check
+    (declared type + size + magic bytes on the object head), then point
+    ``users.avatar_url`` at the asset and mark it consumed. ``avatar_url`` stores
+    the ``s3://`` URI; the serializer turns it into a presigned GET on /auth/me.
     """
-    if file.content_type not in _AVATAR_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"不支持的图片类型：{file.content_type}",
-        )
-    body = await file.read()
-    if len(body) > _AVATAR_MAX_BYTES:
+    from app.services.uploads.file_asset_service import (
+        get_owned_file_asset,
+        mark_file_asset_consumed,
+    )
+
+    asset = get_owned_file_asset(
+        db, file_asset_id=body.file_asset_id,
+        user_id=current_user.username, purpose="avatar",
+    )
+    if asset is None:
+        raise HTTPException(status_code=404, detail="头像文件不存在")
+    if asset.upload_status not in {"uploaded", "consumed"}:
+        raise HTTPException(status_code=409, detail="头像尚未上传完成")
+    if (asset.content_type or "") not in _AVATAR_TYPES:
+        raise HTTPException(status_code=400, detail=f"不支持的图片类型：{asset.content_type}")
+    if asset.size_bytes is not None and asset.size_bytes > _AVATAR_MAX_BYTES:
         raise HTTPException(status_code=413, detail="图片过大（>1MB），请压缩后再试")
-    if not body:
-        raise HTTPException(status_code=400, detail="空文件")
-    if not _matches_magic(file.content_type, body):
-        # Browser said it was image/png but the bytes say otherwise — possibly
-        # a renamed executable / PHP script trying to ride a permissive MIME.
-        raise HTTPException(
-            status_code=400,
-            detail="文件内容与声明的图片类型不匹配，已拒绝",
-        )
+    if not (asset.storage_uri or "").startswith("s3://"):
+        raise HTTPException(status_code=400, detail="头像存储位置无效")
 
-    previous_uri = (current_user.avatar_url or "").strip()
-    object_key = _avatar_object_key(current_user, file.content_type)
-
+    # Magic-byte check on the uploaded bytes (the server never saw them during
+    # the presigned PUT) — keeps a renamed executable from riding a permissive
+    # image MIME into the user row.
     try:
-        # _store_avatar_blob does sync boto3 upload_fileobj — 100-300ms
-        # of TLS handshake + S3 round-trip on every avatar change.
-        # Offload so a single avatar PUT doesn't pin the event-loop
-        # thread and starve all the in-flight SSE streams.
-        new_uri = await asyncio.to_thread(
-            _store_avatar_blob, body, object_key, file.content_type, current_user.username,
-        )
+        head = await asyncio.to_thread(_read_object_head, asset.storage_uri, 32)
     except Exception as exc:  # noqa: BLE001
-        # Both S3 and local-fallback failed (e.g. disk full + S3 down).
-        # That's an actual server problem — surface a 5xx.
-        logger.error("Avatar storage exhausted for user=%s: %s", current_user.username, exc)
+        logger.warning("Avatar head read failed for user=%s: %s", current_user.username, exc)
+        raise HTTPException(status_code=502, detail="无法读取已上传的头像，请重试") from exc
+    if not _matches_magic(asset.content_type, head):
         raise HTTPException(
-            status_code=503,
-            detail="头像存储暂不可用，请稍后再试",
-        ) from exc
+            status_code=400, detail="文件内容与声明的图片类型不匹配，已拒绝",
+        )
 
-    current_user.avatar_url = new_uri
+    # Known gap (deferred): the presigned PUT URL minted at upload-url time has a
+    # 1h TTL and isn't revoked after this validation, so a user could re-PUT bytes
+    # to their OWN key after the magic check passes (self-poisoning only — it only
+    # affects where their own avatar renders). A future hardening would copy the
+    # validated object to an immutable server key or shorten the upload TTL.
+    previous_uri = (current_user.avatar_url or "").strip()
+    current_user.avatar_url = asset.storage_uri
+    mark_file_asset_consumed(db, asset)
     db.add(current_user)
     db.commit()
     db.refresh(current_user)
 
-    _delete_previous_avatar(previous_uri)
+    # Clean up the REPLACED avatar — but never when re-setting the same asset
+    # (previous_uri == new storage_uri), which would delete the bytes we just
+    # pointed at. If the previous avatar was itself a file_asset, soft-delete that
+    # row so it doesn't linger as a 'consumed' asset pointing at deleted bytes.
+    if previous_uri and previous_uri != asset.storage_uri:
+        from app.models.file_asset import FileAsset
+
+        prev = (
+            db.query(FileAsset)
+            .filter(
+                FileAsset.user_id == current_user.id,
+                FileAsset.storage_uri == previous_uri,
+            )
+            .first()
+        )
+        if prev is not None:
+            prev.upload_status = "deleted"
+            prev.deleted_at = datetime.utcnow()
+            db.add(prev)
+            db.commit()
+        _delete_previous_avatar(previous_uri)
     return _serialize_me(current_user)

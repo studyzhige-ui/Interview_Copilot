@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import { uploadFileAsset } from './fileAssets';
 import { tokenStore } from '@/lib/token';
 
 export interface TokenPair {
@@ -106,10 +107,10 @@ export async function updateMe(patch: {
 }
 
 export async function uploadAvatar(file: File): Promise<MeResponse> {
-  const form = new FormData();
-  form.append('file', file);
-  const res = await apiClient.post('/auth/me/avatar', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  // Unified presigned flow (purpose='avatar'): bytes PUT straight to object
+  // storage, then the server validates + sets the avatar from the confirmed
+  // file_asset. No multipart server-receives-bytes path.
+  const fileAssetId = await uploadFileAsset(file, 'avatar');
+  const res = await apiClient.post('/auth/me/avatar', { file_asset_id: fileAssetId });
   return res.data;
 }

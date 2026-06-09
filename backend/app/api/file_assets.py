@@ -39,7 +39,9 @@ _PURPOSE_LIMITS: dict[str, int] = {
     "interview_audio": 500 * 1024 * 1024,
     "jd": 10 * 1024 * 1024,
     "mock_audio_clip": 25 * 1024 * 1024,
-    "avatar": 5 * 1024 * 1024,
+    # Matches the /me/avatar set-time cap so a too-large image is rejected at
+    # upload-url time rather than after a wasted PUT.
+    "avatar": 1 * 1024 * 1024,
     "agent_output": 20 * 1024 * 1024,
 }
 
