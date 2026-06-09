@@ -15,7 +15,7 @@ Claude Code's ``isAutoMemoryEnabled``. When off:
 
 Two tiers of preference (first non-NULL wins):
 
-  1. **Per-session override** — ``chat_sessions.global_memory_enabled``
+  1. **Per-session override** — ``conversations.global_memory_enabled``
      (nullable Boolean column). Set by the toggle next to the "agent"
      button in the chat header. Takes precedence whenever non-NULL
      (even when explicitly set to False).
@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session
 
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
-from app.models.chat import ChatSession
+from app.models.chat import Conversation
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -51,14 +51,14 @@ def is_global_memory_enabled_for_session(session_id: str, user_id: str) -> bool:
     injected into the LLM prompt for this turn.
 
     Resolution order (first non-NULL wins):
-      ``chat_sessions.global_memory_enabled`` →
+      ``conversations.global_memory_enabled`` →
       ``users.global_memory_enabled`` → ``False``.
     """
     db: Session = SessionLocal()
     try:
         session_row = (
-            db.query(ChatSession.global_memory_enabled)
-            .filter(ChatSession.id == session_id)
+            db.query(Conversation.global_memory_enabled)
+            .filter(Conversation.id == session_id)
             .first()
         )
         if session_row is not None and session_row[0] is not None:
@@ -92,7 +92,7 @@ def set_session_global_memory(session_id: str, user_id: str, enabled: bool) -> N
     """
     db: Session = SessionLocal()
     try:
-        row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+        row = db.query(Conversation).filter(Conversation.id == session_id).first()
         if row is None or row.user_id != resolve_user_pk(db, user_id):
             return
         row.global_memory_enabled = bool(enabled)

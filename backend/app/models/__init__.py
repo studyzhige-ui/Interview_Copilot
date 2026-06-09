@@ -1,4 +1,4 @@
-from app.models.chat import ChatMessage, ChatSession
+from app.models.chat import ConversationMessage, Conversation
 from app.models.document_chunk import DocumentChunk
 from app.models.file_asset import FileAsset
 from app.models.interview_qa import InterviewQA
@@ -18,8 +18,8 @@ from app.models.user_model_provider_settings import UserModelProviderSettings
 from app.models.user_model_selections import UserModelSelection
 
 __all__ = [
-    "ChatMessage",
-    "ChatSession",
+    "ConversationMessage",
+    "Conversation",
     "DocumentChunk",
     "FileAsset",
     "InterviewQA",

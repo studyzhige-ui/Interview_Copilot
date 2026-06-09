@@ -20,11 +20,11 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import chat as chat_api
 from app.api import memory as memory_api
-from app.api.chat import sessions as chat_sessions_mod
+from app.api.chat import sessions as conversations_mod
 from app.core.security import get_current_user
 from app.db.database import Base, get_db
 import app.models  # noqa: F401  — ensure mappers registered
-from app.models.chat import ChatMessage, ChatSession
+from app.models.chat import ConversationMessage, Conversation
 from app.models.user import User
 
 
@@ -35,10 +35,10 @@ def _uid(db: Session, username: str) -> int:
     """Seed a ``users`` row for ``username`` (idempotent) and return its
     integer ``users.id``.
 
-    ``chat_sessions.user_id`` is the integer ``users.id`` FK now (CLEANUP #2),
+    ``conversations.user_id`` is the integer ``users.id`` FK now (CLEANUP #2),
     and every chat ownership/scoping path resolves the request principal's
     username → ``users.id`` via ``resolve_user_pk`` before filtering. Seeded
-    ``ChatSession`` rows therefore must carry the integer pk of a real
+    ``Conversation`` rows therefore must carry the integer pk of a real
     ``users`` row, not the username string.
     """
     row = db.query(User).filter(User.username == username).first()
@@ -126,7 +126,7 @@ def test_create_chat_session_defaults_to_general(client: TestClient, db: Session
     assert body["session_type"] == "general"
     assert body["title"] == "通用对话"
     # DB-side effect: row exists, owned by alice's integer pk (not the username).
-    row = db.query(ChatSession).filter(ChatSession.id == body["session_id"]).first()
+    row = db.query(Conversation).filter(Conversation.id == body["session_id"]).first()
     assert row is not None
     assert row.user_id == alice_pk
 
@@ -139,13 +139,13 @@ def test_create_debrief_session_requires_existing_interview(client: TestClient):
     assert resp.status_code == 404
 
 
-def test_list_chat_sessions_is_user_scoped(client: TestClient, db: Session):
+def test_list_conversations_is_user_scoped(client: TestClient, db: Session):
     # Seed BOTH users as real rows so isolation is exercised via DISTINCT
     # integer pks (not a string-vs-int type accident): the list endpoint
-    # filters ChatSession.user_id == resolve_user_pk(db, "alice").
+    # filters Conversation.user_id == resolve_user_pk(db, "alice").
     db.add_all([
-        ChatSession(id="s_a", user_id=_uid(db, "alice"), title="A", session_type="general"),
-        ChatSession(id="s_b", user_id=_uid(db, "bob"),   title="B", session_type="general"),
+        Conversation(id="s_a", user_id=_uid(db, "alice"), title="A", session_type="general"),
+        Conversation(id="s_b", user_id=_uid(db, "bob"),   title="B", session_type="general"),
     ])
     db.commit()
     resp = client.get("/api/v1/chat/sessions")
@@ -155,41 +155,41 @@ def test_list_chat_sessions_is_user_scoped(client: TestClient, db: Session):
 
 
 def test_rename_session_validates_non_empty(client: TestClient, db: Session):
-    db.add(ChatSession(id="s1", user_id=_uid(db, "alice"), title="old", session_type="general"))
+    db.add(Conversation(id="s1", user_id=_uid(db, "alice"), title="old", session_type="general"))
     db.commit()
     resp = client.patch("/api/v1/chat/sessions/s1/title", json={"title": "   "})
     assert resp.status_code == 400
 
 
 def test_rename_session_updates_title(client: TestClient, db: Session):
-    db.add(ChatSession(id="s1", user_id=_uid(db, "alice"), title="old", session_type="general"))
+    db.add(Conversation(id="s1", user_id=_uid(db, "alice"), title="old", session_type="general"))
     db.commit()
     resp = client.patch("/api/v1/chat/sessions/s1/title", json={"title": "new"})
     assert resp.status_code == 200
     db.expire_all()
-    assert db.get(ChatSession,"s1").title == "new"
+    assert db.get(Conversation,"s1").title == "new"
 
 
 def test_rename_session_rejects_other_user(client: TestClient, db: Session):
     # alice (authed principal) and bob are distinct real users → the 404 is a
     # genuine pk mismatch (alice_pk != bob_pk), not an unseeded user → None.
     _uid(db, "alice")
-    db.add(ChatSession(id="s_bob", user_id=_uid(db, "bob"), title="old", session_type="general"))
+    db.add(Conversation(id="s_bob", user_id=_uid(db, "bob"), title="old", session_type="general"))
     db.commit()
     resp = client.patch("/api/v1/chat/sessions/s_bob/title", json={"title": "new"})
     assert resp.status_code == 404
 
 
 def test_delete_session_removes_row_and_messages(client: TestClient, db: Session):
-    db.add(ChatSession(id="s1", user_id=_uid(db, "alice"), title="t", session_type="general"))
-    # chat_messages has NO user_id (keyed via session_id FK) — leave it as-is.
-    db.add(ChatMessage(session_id="s1", seq=1, role="User", content="hi"))
+    db.add(Conversation(id="s1", user_id=_uid(db, "alice"), title="t", session_type="general"))
+    # conversation_messages has NO user_id (keyed via session_id FK) — leave it as-is.
+    db.add(ConversationMessage(session_id="s1", seq=1, role="User", content="hi"))
     db.commit()
     resp = client.delete("/api/v1/chat/sessions/s1")
     assert resp.status_code == 200
     db.expire_all()
-    assert db.get(ChatSession,"s1") is None
-    assert db.query(ChatMessage).filter(ChatMessage.session_id == "s1").count() == 0
+    assert db.get(Conversation,"s1") is None
+    assert db.query(ConversationMessage).filter(ConversationMessage.session_id == "s1").count() == 0
 
 
 # ── /chat/history ─────────────────────────────────────────────────────────
@@ -198,9 +198,9 @@ def test_delete_session_removes_row_and_messages(client: TestClient, db: Session
 def test_history_returns_in_seq_order(client: TestClient, db: Session):
     # 0018 reverted the conversation_id split — messages are scoped only
     # by session_id again.
-    db.add(ChatSession(id="s1", user_id=_uid(db, "alice"), title="t", session_type="general"))
-    db.add(ChatMessage(session_id="s1", seq=1, role="User", content="hi"))
-    db.add(ChatMessage(session_id="s1", seq=2, role="AI", content="hello"))
+    db.add(Conversation(id="s1", user_id=_uid(db, "alice"), title="t", session_type="general"))
+    db.add(ConversationMessage(session_id="s1", seq=1, role="User", content="hi"))
+    db.add(ConversationMessage(session_id="s1", seq=2, role="AI", content="hello"))
     db.commit()
     resp = client.get("/api/v1/chat/history", params={"session_id": "s1"})
     assert resp.status_code == 200
@@ -210,7 +210,7 @@ def test_history_returns_in_seq_order(client: TestClient, db: Session):
 
 def test_history_404_for_other_user(client: TestClient, db: Session):
     _uid(db, "alice")  # authed principal — a distinct real user
-    db.add(ChatSession(id="s_bob", user_id=_uid(db, "bob"), title="t", session_type="general"))
+    db.add(Conversation(id="s_bob", user_id=_uid(db, "bob"), title="t", session_type="general"))
     db.commit()
     resp = client.get("/api/v1/chat/history", params={"session_id": "s_bob"})
     assert resp.status_code == 404
@@ -220,7 +220,7 @@ def test_history_404_for_other_user(client: TestClient, db: Session):
 
 
 def test_transcript_returns_structured_state(client: TestClient, db: Session, monkeypatch):
-    db.add(ChatSession(id="s1", user_id=_uid(db, "alice"), title="t", session_type="debrief"))
+    db.add(Conversation(id="s1", user_id=_uid(db, "alice"), title="t", session_type="debrief"))
     db.commit()
 
     class FakeTranscriptSvc:
@@ -240,7 +240,7 @@ def test_transcript_returns_structured_state(client: TestClient, db: Session, mo
             # when None) so the fake must accept it.
             return [{"seq": 1, "role": "User", "content": "hi", "created_at": "t"}]
 
-    monkeypatch.setattr(chat_sessions_mod, "transcript_service", FakeTranscriptSvc)
+    monkeypatch.setattr(conversations_mod, "transcript_service", FakeTranscriptSvc)
     resp = client.get("/api/v1/chat/transcript", params={"session_id": "s1"})
     assert resp.status_code == 200
     body = resp.json()
@@ -253,7 +253,7 @@ def test_transcript_returns_structured_state(client: TestClient, db: Session, mo
 
 def test_transcript_404_for_other_user(client: TestClient, db: Session):
     _uid(db, "alice")  # authed principal — a distinct real user
-    db.add(ChatSession(id="s_bob", user_id=_uid(db, "bob"), title="t", session_type="general"))
+    db.add(Conversation(id="s_bob", user_id=_uid(db, "bob"), title="t", session_type="general"))
     db.commit()
     resp = client.get("/api/v1/chat/transcript", params={"session_id": "s_bob"})
     assert resp.status_code == 404
@@ -297,7 +297,7 @@ def test_sse_chat_endpoint_streams_chunks(client: TestClient, db: Session, monke
     """Smoke test for the SSE pipeline: dependency-overridden user owns the
     session, the engine yields HarnessEvent text_delta + done, and the
     response is an SSE stream terminated with ``"type": "done"``."""
-    db.add(ChatSession(id="s1", user_id=_uid(db, "alice"), title="t", session_type="general"))
+    db.add(Conversation(id="s1", user_id=_uid(db, "alice"), title="t", session_type="general"))
     db.commit()
 
     async def fake_submit(self):
@@ -333,7 +333,7 @@ def test_mock_start_resolves_resume_from_entity(client: TestClient, db: Session,
     alice = User(username="alice", hashed_password="x")
     db.add(alice)
     db.flush()
-    db.add(ChatSession(
+    db.add(Conversation(
         id="s_mock", user_id=alice.id, title="模拟面试",
         session_type="mock_interview",
     ))
@@ -405,7 +405,7 @@ def test_in_progress_keeps_session_when_brief_launched_but_zero_qa(
 
     # Launched session: brief has run, opening question is sitting in
     # state, user has NOT answered yet.
-    db.add(ChatSession(
+    db.add(Conversation(
         id="s_launched",
         user_id=_uid(db, "alice"),
         title="模拟面试",
@@ -434,7 +434,7 @@ def test_in_progress_keeps_session_when_brief_launched_but_zero_qa(
 
     # The session row must still exist (the sweeper must NOT have
     # deleted it just because qa_history was empty).
-    still_there = db.query(ChatSession).filter(ChatSession.id == "s_launched").first()
+    still_there = db.query(Conversation).filter(Conversation.id == "s_launched").first()
     assert still_there is not None
 
 
@@ -449,7 +449,7 @@ def test_in_progress_still_purges_genuine_stale_shells(
     """
     import json
 
-    db.add(ChatSession(
+    db.add(Conversation(
         id="s_shell",
         user_id=_uid(db, "alice"),
         title="模拟面试",
@@ -468,13 +468,13 @@ def test_in_progress_still_purges_genuine_stale_shells(
 
     # Confirm the genuinely-empty shell IS hard-deleted (so it doesn't
     # keep haunting the resume banner on every page load).
-    purged = db.query(ChatSession).filter(ChatSession.id == "s_shell").first()
+    purged = db.query(Conversation).filter(Conversation.id == "s_shell").first()
     assert purged is None
 
 
 def test_sse_chat_404_for_other_user(client: TestClient, db: Session):
     _uid(db, "alice")  # authed principal — a distinct real user
-    db.add(ChatSession(id="s_bob", user_id=_uid(db, "bob"), title="t", session_type="general"))
+    db.add(Conversation(id="s_bob", user_id=_uid(db, "bob"), title="t", session_type="general"))
     db.commit()
     resp = client.post("/api/v1/chat/sse/s_bob", json={"message": "hi"})
     assert resp.status_code == 404
@@ -493,7 +493,7 @@ def test_sse_chat_emits_error_and_done_when_engine_crashes(
     pins both frames so a future refactor of the except-net can't
     silently drop the terminator.
     """
-    db.add(ChatSession(id="s_boom", user_id=_uid(db, "alice"), title="t", session_type="general"))
+    db.add(Conversation(id="s_boom", user_id=_uid(db, "alice"), title="t", session_type="general"))
     db.commit()
 
     async def boom(self):
@@ -544,7 +544,7 @@ def test_sse_chat_mode_field_picks_strategy(client: TestClient, db: Session, mon
     regression we DO NOT want — so the back-compat default is
     asserted explicitly.
     """
-    db.add(ChatSession(id="s_dispatch", user_id=_uid(db, "alice"), title="t", session_type="general"))
+    db.add(Conversation(id="s_dispatch", user_id=_uid(db, "alice"), title="t", session_type="general"))
     db.commit()
 
     captured: dict[str, str] = {}

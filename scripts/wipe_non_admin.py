@@ -37,8 +37,8 @@ from app.models.user import User
 # Every user-scoped table now keys on the stable users.id integer FK (CLEANUP #2
 # migrated the last of them — document_chunks / resume_sections). The ``users``
 # row itself is matched by its username column (handled separately at the end).
-# chat_messages / interview_qa carry no user_id — they're wiped via a parent-id
-# subquery (handled specially below).
+# conversation_messages / interview_qa carry no user_id — they're wiped via a
+# parent-id subquery (handled specially below).
 USER_PK_TABLES = (
     "file_assets",
     "outbox_jobs",
@@ -53,7 +53,7 @@ USER_PK_TABLES = (
     "interview_records",
     "mock_interview_sessions",
     "mock_interview_runtime",
-    "chat_sessions",
+    "conversations",
     "document_chunks",
     "resume_sections",
 )
@@ -100,8 +100,8 @@ def _count_rows_per_table(db, admin_username: str) -> dict[str, int]:
 
     # (table, sql, params) — children-via-parent first, then the pk tables.
     queries: list[tuple[str, str, dict]] = [
-        ("chat_messages",
-         "SELECT COUNT(*) FROM chat_messages cm JOIN chat_sessions cs "
+        ("conversation_messages",
+         "SELECT COUNT(*) FROM conversation_messages cm JOIN conversations cs "
          "ON cm.session_id = cs.id WHERE cs.user_id != :apk", {"apk": admin_pk}),
         ("interview_qa",
          "SELECT COUNT(*) FROM interview_qa iq JOIN interview_records ir "
@@ -219,9 +219,9 @@ def _delete_postgres_rows(db, admin_username: str, dry_run: bool) -> None:
         ("interview_qa",
          "DELETE FROM interview_qa WHERE record_id IN "
          "(SELECT id FROM interview_records WHERE user_id != :apk)", {"apk": admin_pk}),
-        ("chat_messages",
-         "DELETE FROM chat_messages WHERE session_id IN "
-         "(SELECT id FROM chat_sessions WHERE user_id != :apk)", {"apk": admin_pk}),
+        ("conversation_messages",
+         "DELETE FROM conversation_messages WHERE session_id IN "
+         "(SELECT id FROM conversations WHERE user_id != :apk)", {"apk": admin_pk}),
     ]
     deletes += [
         (t, f"DELETE FROM {t} WHERE user_id != :apk", {"apk": admin_pk})

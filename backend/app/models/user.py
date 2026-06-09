@@ -47,7 +47,7 @@ class User(Base):
     # until they curate their memory and explicitly opt in.
     #
     # A per-session override lives in the
-    # ``chat_sessions.global_memory_enabled`` column; service code reads the
+    # ``conversations.global_memory_enabled`` column; service code reads the
     # session value first and falls back here.
     global_memory_enabled = Column(Boolean, default=False, nullable=False)
     # When the nightly dreaming worker last consolidated this user's

@@ -79,7 +79,7 @@ class ConversationEngine:
         self._retrieval_hit: bool = False
         # Set in submit_message when a phase crashes. Persistence +
         # post-turn maintenance gate on this so error-humanised text
-        # ("系统出了点问题…") doesn't enter chat_messages or feed
+        # ("系统出了点问题…") doesn't enter conversation_messages or feed
         # realtime memory extraction.
         self._turn_status: str = "completed"
 
@@ -116,7 +116,7 @@ class ConversationEngine:
             # net — humanise + emit and let the user see the error,
             # but mark the turn as failed so persistence + post-turn
             # maintenance skip below (avoids writing the humanised
-            # error string into chat_messages as if it were a real
+            # error string into conversation_messages as if it were a real
             # answer, and avoids feeding it to memory extraction).
             self._turn_status = "failed"
             logger.error(
@@ -316,7 +316,7 @@ class ConversationEngine:
 
     async def _persist_turn(self) -> None:
         """Write the user message + assistant message pair to
-        chat_messages, including Claude-Code-style content blocks.
+        conversation_messages, including Claude-Code-style content blocks.
 
         ``transcript_service.append_turn`` is a sync DB transaction
         (opens a SessionLocal, inserts 2 rows, commits). Dispatching

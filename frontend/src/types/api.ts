@@ -101,7 +101,7 @@ export interface ChatSessionCreateResp {
 
 /**
  * Anthropic-style content block. Mirrors the persisted shape in
- * ``chat_messages.content_blocks_json`` (backend Stage-G refactor).
+ * ``conversation_messages.content_blocks_json`` (backend Stage-G refactor).
  *
  * Both L1 chat turns and L2 agent turns now persist this structure:
  *   - L1 chat persists a single ``text`` block per assistant turn.

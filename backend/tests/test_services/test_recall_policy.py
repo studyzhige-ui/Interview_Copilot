@@ -1,7 +1,7 @@
 """Unit tests for the global-memory toggle policy.
 
 The per-session override now lives in the dedicated
-``chat_sessions.global_memory_enabled`` Boolean column (NULL = fall
+``conversations.global_memory_enabled`` Boolean column (NULL = fall
 through to the per-user ``users.global_memory_enabled`` default). These
 tests pin the two-tier resolution and the safety net on the writer.
 """
@@ -15,7 +15,7 @@ from sqlalchemy.pool import StaticPool
 
 @pytest.fixture
 def engine_and_session():
-    """In-memory SQLite engine with users + chat_sessions tables."""
+    """In-memory SQLite engine with users + conversations tables."""
     from app.db.database import Base
     import app.models.chat   # noqa: F401
     import app.models.user   # noqa: F401
@@ -44,9 +44,9 @@ def _seed(Session, *, username="alice", user_default=False, session_override=Non
     """Seed a user + one session ``s1``.
 
     ``user_default`` → ``users.global_memory_enabled``.
-    ``session_override`` → ``chat_sessions.global_memory_enabled`` (None = NULL).
+    ``session_override`` → ``conversations.global_memory_enabled`` (None = NULL).
     """
-    from app.models.chat import ChatSession
+    from app.models.chat import Conversation
     from app.models.user import User
     db = Session()
     try:
@@ -58,10 +58,10 @@ def _seed(Session, *, username="alice", user_default=False, session_override=Non
         )
         db.add(user)
         db.flush()  # assign users.id so the session can key on the integer pk
-        # chat_sessions.user_id is the integer users.id FK now (CLEANUP #2);
+        # conversations.user_id is the integer users.id FK now (CLEANUP #2);
         # the writer's ownership guard resolves the username → pk and compares
         # against this column, so seed the resolved pk (not the username).
-        db.add(ChatSession(
+        db.add(Conversation(
             id="s1",
             user_id=user.id,
             global_memory_enabled=session_override,
@@ -132,7 +132,7 @@ def test_missing_session_degrades_to_false(engine_and_session, monkeypatch):
 
 def test_set_session_writes_column(engine_and_session, monkeypatch):
     """The writer persists the override into the column."""
-    from app.models.chat import ChatSession
+    from app.models.chat import Conversation
     from app.services.memory.recall_policy import set_session_global_memory
 
     engine, Session = engine_and_session
@@ -143,7 +143,7 @@ def test_set_session_writes_column(engine_and_session, monkeypatch):
 
     db = Session()
     try:
-        row = db.query(ChatSession).filter(ChatSession.id == "s1").first()
+        row = db.query(Conversation).filter(Conversation.id == "s1").first()
         assert row.global_memory_enabled is True
     finally:
         db.close()
@@ -152,7 +152,7 @@ def test_set_session_writes_column(engine_and_session, monkeypatch):
 def test_set_session_is_noop_for_wrong_owner(engine_and_session, monkeypatch):
     """Ownership safety net: a write for a session owned by someone else is a
     no-op and leaves the column untouched."""
-    from app.models.chat import ChatSession
+    from app.models.chat import Conversation
     from app.models.user import User
     from app.services.memory.recall_policy import set_session_global_memory
 
@@ -172,7 +172,7 @@ def test_set_session_is_noop_for_wrong_owner(engine_and_session, monkeypatch):
 
     db = Session()
     try:
-        row = db.query(ChatSession).filter(ChatSession.id == "s1").first()
+        row = db.query(Conversation).filter(Conversation.id == "s1").first()
         assert row.global_memory_enabled is None
     finally:
         db.close()

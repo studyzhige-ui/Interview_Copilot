@@ -1,6 +1,6 @@
 """Chat-session CRUD + history + transcript + memory-recall toggle.
 
-Hierarchy (post-0018): an interview_record has N chat_sessions; each
+Hierarchy (post-0018): an interview_record has N conversations; each
 session is a self-contained chat thread. No sub-conversation level.
 """
 
@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
-from app.models.chat import ChatMessage, ChatSession, generate_uuid
+from app.models.chat import ConversationMessage, Conversation, generate_uuid
 from app.models.user import User
 from app.schemas.chat import (
     MessageItem,
@@ -33,7 +33,7 @@ from app.services.chat.mock_interview_state import (
 logger = logging.getLogger(__name__)
 
 
-def _session_list_label(row: ChatSession) -> str:
+def _session_list_label(row: Conversation) -> str:
     """One-line label for the session-list UI, derived from dedicated columns.
 
     Prefers the compaction ``summary``; otherwise a type-based label (mock
@@ -84,7 +84,7 @@ def create_chat_session(
             if session_type == "mock_interview"
             else None
         )
-        new_session = ChatSession(
+        new_session = Conversation(
             id=generate_uuid(),
             user_id=resolve_user_pk(db, current_user.username),
             title=title,
@@ -115,7 +115,7 @@ def create_chat_session(
 
 
 @router.get("/chat/sessions", response_model=List[SessionListItem])
-def list_chat_sessions(
+def list_conversations(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     offset: int = Query(0, ge=0),
@@ -123,13 +123,13 @@ def list_chat_sessions(
     session_type: str | None = Query(None, description="Filter: general/debrief/mock_interview"),
     interview_id: str | None = Query(None, description="Filter: tie to a specific interview record"),
 ):
-    q = db.query(ChatSession).filter(ChatSession.user_id == resolve_user_pk(db, current_user.username))
+    q = db.query(Conversation).filter(Conversation.user_id == resolve_user_pk(db, current_user.username))
     if session_type:
-        q = q.filter(ChatSession.session_type == session_type)
+        q = q.filter(Conversation.session_type == session_type)
     if interview_id:
-        q = q.filter(ChatSession.interview_id == interview_id)
+        q = q.filter(Conversation.interview_id == interview_id)
     rows = (
-        q.order_by(ChatSession.updated_at.desc())
+        q.order_by(Conversation.updated_at.desc())
         .offset(offset)
         .limit(limit)
         .all()
@@ -155,14 +155,14 @@ def get_chat_history(
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
 ):
-    session_row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    session_row = db.query(Conversation).filter(Conversation.id == session_id).first()
     if not session_row or session_row.user_id != resolve_user_pk(db, current_user.username):
         raise HTTPException(status_code=404, detail="Session not found or access denied")
 
     rows = (
-        db.query(ChatMessage)
-        .filter(ChatMessage.session_id == session_id)
-        .order_by(ChatMessage.seq.desc())
+        db.query(ConversationMessage)
+        .filter(ConversationMessage.session_id == session_id)
+        .order_by(ConversationMessage.seq.desc())
         .offset(offset)
         .limit(limit)
         .all()
@@ -191,7 +191,7 @@ def update_session_title(
     new_title = new_title.strip()
     if not new_title:
         raise HTTPException(status_code=400, detail="title 不能为空")
-    row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    row = db.query(Conversation).filter(Conversation.id == session_id).first()
     if not row or row.user_id != resolve_user_pk(db, current_user.username):
         raise HTTPException(status_code=404, detail="Session not found or access denied")
     row.title = new_title
@@ -205,12 +205,12 @@ def delete_chat_session(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    row = db.query(Conversation).filter(Conversation.id == session_id).first()
     if not row or row.user_id != resolve_user_pk(db, current_user.username):
         raise HTTPException(status_code=404, detail="Session not found or access denied")
     try:
-        db.query(ChatMessage).filter(
-            ChatMessage.session_id == session_id
+        db.query(ConversationMessage).filter(
+            ConversationMessage.session_id == session_id
         ).delete(synchronize_session=False)
         db.delete(row)
         db.commit()
@@ -233,7 +233,7 @@ def get_full_transcript(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    session_row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    session_row = db.query(Conversation).filter(Conversation.id == session_id).first()
     if not session_row or session_row.user_id != resolve_user_pk(db, current_user.username):
         raise HTTPException(status_code=404, detail="Session not found or access denied")
 
@@ -272,7 +272,7 @@ def get_session_memory_recall(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    session_row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    session_row = db.query(Conversation).filter(Conversation.id == session_id).first()
     if not session_row or session_row.user_id != resolve_user_pk(db, current_user.username):
         raise HTTPException(status_code=404, detail="Session not found or access denied")
     from app.services.memory.recall_policy import is_global_memory_enabled_for_session
@@ -287,7 +287,7 @@ def set_session_memory_recall(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    session_row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    session_row = db.query(Conversation).filter(Conversation.id == session_id).first()
     if not session_row or session_row.user_id != resolve_user_pk(db, current_user.username):
         raise HTTPException(status_code=404, detail="Session not found or access denied")
     from app.services.memory.recall_policy import set_session_global_memory

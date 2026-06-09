@@ -8,7 +8,7 @@ can accumulate, per the RFC acceptance criterion "巡检脚本能输出可修复
   2. Orphan document chunks    — ``document_chunks`` whose ``document_id`` points
                                  at a deleted ``knowledge_documents`` row, and a
                                  best-effort Postgres-vs-Milvus count drift check.
-  3. Subject-less conversations — ``chat_sessions`` with a non-chat ``mode`` but
+  3. Subject-less conversations — ``conversations`` with a non-chat ``mode`` but
                                  no ``subject_type`` / ``subject_id`` binding.
   4. Dangling memory evidence  — ``memory_ability_states.evidence_refs_json``
                                  pointing at deleted interview QA / records /
@@ -138,7 +138,7 @@ def _milvus_drift(db: Session) -> Finding:
 
 def scan_subjectless_conversations(db: Session) -> list[Finding]:
     rows = _rows(db, """
-        SELECT id FROM chat_sessions
+        SELECT id FROM conversations
         WHERE mode IS NOT NULL AND mode <> 'chat'
           AND (subject_type IS NULL OR subject_id IS NULL)
     """)
@@ -154,8 +154,7 @@ def scan_subjectless_conversations(db: Session) -> list[Finding]:
 _EVIDENCE_TABLE = {
     "interview_qa": "interview_qa",
     "interview_record": "interview_records",
-    "conversation_message": "chat_messages",
-    "chat_message": "chat_messages",
+    "conversation_message": "conversation_messages",
 }
 
 
@@ -179,10 +178,10 @@ def scan_dangling_evidence(db: Session) -> list[Finding]:
             rid = ref.get("id")
             if not table or rid is None:
                 continue
-            # chat_messages.id is Integer — a non-numeric ref id would error the
-            # query (and on Postgres poison the transaction). Skip it as
-            # unverifiable rather than sink the whole check.
-            if table == "chat_messages" and not str(rid).lstrip("-").isdigit():
+            # conversation_messages.id is Integer — a non-numeric ref id would
+            # error the query (and on Postgres poison the transaction). Skip it
+            # as unverifiable rather than sink the whole check.
+            if table == "conversation_messages" and not str(rid).lstrip("-").isdigit():
                 continue
             key = (table, str(rid))
             if key not in exists_cache:

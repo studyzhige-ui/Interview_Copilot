@@ -24,7 +24,7 @@ from app.core.error_messages import humanize_error
 from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
-from app.models.chat import ChatSession, generate_uuid
+from app.models.chat import Conversation, generate_uuid
 from app.models.user import User
 from app.schemas.chat import (
     MockAbandonResp,
@@ -69,9 +69,9 @@ async def start_mock_interview(
     )
     from app.services.resume.resume_service import resume_service
 
-    session = db.query(ChatSession).filter(
-        ChatSession.id == body.session_id,
-        ChatSession.user_id == resolve_user_pk(db, current_user.username),
+    session = db.query(Conversation).filter(
+        Conversation.id == body.session_id,
+        Conversation.user_id == resolve_user_pk(db, current_user.username),
     ).first()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -278,21 +278,21 @@ async def get_in_progress_mock(
     answering, so the resume banner never shows for sessions that have no
     real content to recover.
     """
-    from app.models.chat import ChatMessage
+    from app.models.chat import ConversationMessage
     from app.models.interview_record import InterviewRecord
 
     candidates = (
-        db.query(ChatSession)
+        db.query(Conversation)
         .filter(
-            ChatSession.user_id == resolve_user_pk(db, current_user.username),
-            ChatSession.session_type == "mock_interview",
-            ChatSession.archived_at.is_(None),
+            Conversation.user_id == resolve_user_pk(db, current_user.username),
+            Conversation.session_type == "mock_interview",
+            Conversation.archived_at.is_(None),
         )
-        .order_by(ChatSession.updated_at.desc())
+        .order_by(Conversation.updated_at.desc())
         .all()
     )
 
-    chosen: ChatSession | None = None
+    chosen: Conversation | None = None
     purged = 0
     for sess in candidates:
         try:
@@ -333,7 +333,7 @@ async def get_in_progress_mock(
                     )
                     .delete(synchronize_session=False)
                 )
-            db.query(ChatMessage).filter(ChatMessage.session_id == sess.id).delete(
+            db.query(ConversationMessage).filter(ConversationMessage.session_id == sess.id).delete(
                 synchronize_session=False
             )
             db.delete(sess)
@@ -384,15 +384,15 @@ async def abandon_mock_interview(
 ):
     """Hard-delete an in-progress mock session (+ any draft record / chat
     messages). Per user spec, abandon means "this never happened"."""
-    from app.models.chat import ChatMessage
+    from app.models.chat import ConversationMessage
     from app.models.interview_record import InterviewRecord
 
     session = (
-        db.query(ChatSession)
+        db.query(Conversation)
         .filter(
-            ChatSession.id == session_id,
-            ChatSession.user_id == resolve_user_pk(db, current_user.username),
-            ChatSession.session_type == "mock_interview",
+            Conversation.id == session_id,
+            Conversation.user_id == resolve_user_pk(db, current_user.username),
+            Conversation.session_type == "mock_interview",
         )
         .first()
     )
@@ -412,8 +412,8 @@ async def abandon_mock_interview(
                 .delete(synchronize_session=False)
             )
 
-        db.query(ChatMessage).filter(
-            ChatMessage.session_id == session_id
+        db.query(ConversationMessage).filter(
+            ConversationMessage.session_id == session_id
         ).delete(synchronize_session=False)
 
         db.delete(session)
@@ -442,9 +442,9 @@ async def get_current_question(
 ):
     """Return what the interviewer is currently waiting on. Backed by
     ``state.pending_question`` + ``state.pending_response`` — no LLM call."""
-    session = db.query(ChatSession).filter(
-        ChatSession.id == session_id,
-        ChatSession.user_id == resolve_user_pk(db, current_user.username),
+    session = db.query(Conversation).filter(
+        Conversation.id == session_id,
+        Conversation.user_id == resolve_user_pk(db, current_user.username),
     ).first()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -496,9 +496,9 @@ async def submit_mock_answer(
         summarize_history,
     )
 
-    session = db.query(ChatSession).filter(
-        ChatSession.id == body.session_id,
-        ChatSession.user_id == resolve_user_pk(db, current_user.username),
+    session = db.query(Conversation).filter(
+        Conversation.id == body.session_id,
+        Conversation.user_id == resolve_user_pk(db, current_user.username),
     ).first()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -645,9 +645,9 @@ async def finish_mock_interview(
     )
     from app.worker.tasks import process_interview_analysis
 
-    session = db.query(ChatSession).filter(
-        ChatSession.id == session_id,
-        ChatSession.user_id == resolve_user_pk(db, current_user.username),
+    session = db.query(Conversation).filter(
+        Conversation.id == session_id,
+        Conversation.user_id == resolve_user_pk(db, current_user.username),
     ).first()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -693,7 +693,7 @@ async def finish_mock_interview(
     session.mock_interview_state = dump_mock_state(state)
     session.archived_at = now
 
-    debrief_session = ChatSession(
+    debrief_session = Conversation(
         id=generate_uuid(),
         user_id=resolve_user_pk(db, current_user.username),
         title=f"复盘: {session.title or '模拟面试'}",

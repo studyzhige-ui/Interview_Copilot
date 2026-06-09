@@ -22,7 +22,7 @@ auto-captured by ``wrap_openai`` in ``core/llm_tracing.py``). The
 former ``agent_runs`` + ``agent_steps`` persistence was deleted in
 the audit cleanup — LangSmith covers the same surface with a UI for
 free, and the user-facing tool cards still come from
-``chat_messages.content_blocks_json``.
+``conversation_messages.content_blocks_json``.
 """
 from __future__ import annotations
 
@@ -282,7 +282,7 @@ class AgentLoopStrategy:
         # call automatically). User-facing tool cards come from the
         # ``content_blocks_json`` chain we build below in ``blocks``
         # and hand back via ``result.assistant_blocks`` for the
-        # engine to persist on ``chat_messages``.
+        # engine to persist on ``conversation_messages``.
 
         # Build the agent's context through the SAME shared pipeline as L1
         # chat (one SLOT_ORDER, no separate agent assembler). L2 differs only

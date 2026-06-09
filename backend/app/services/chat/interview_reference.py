@@ -7,7 +7,7 @@ without manually copying transcripts or analysis into every prompt the user
 writes. Two engineering options were considered:
 
   A) **Snapshot on chat creation.** When the debrief chat is created, denormalize
-     the interview's analysis + transcript into the ``ChatSession`` row.
+     the interview's analysis + transcript into the ``Conversation`` row.
      Pros: zero per-turn cost. Cons: stale if the user edits a Q&A afterwards.
 
   B) **Lazy fetch per turn.** The context-assembly pipeline reads the chat's

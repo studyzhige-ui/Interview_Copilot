@@ -37,7 +37,7 @@ Cursor + concurrency
 ``users.last_dreamed_at`` is the per-user cursor that drives gate 1.
 ``interview_records.last_dreamed_at`` is the per-record cursor that
 makes ``dream_for_record`` idempotent (re-running it after a successful
-dream is a no-op until the record gets new chat_messages).
+dream is a no-op until the record gets new conversation_messages).
 
 The work itself runs under ``user_memory_lock_sync`` (sync because
 Celery is sync). Realtime extraction holds the async sibling lock.
@@ -65,7 +65,7 @@ from sqlalchemy.orm import Session
 
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
-from app.models.chat import ChatMessage, ChatSession
+from app.models.chat import ConversationMessage, Conversation
 from app.models.interview_record import InterviewRecord
 from app.models.user import User
 from app.rag.embeddings import agent_fast_llm
@@ -113,7 +113,7 @@ def select_dreamable_users(*, limit: int = 200) -> list[str]:
     ``USER_MIN_HOURS_SINCE_LAST_DREAM`` ago.
 
     Gate 3 (volume): since the cursor, the user has accumulated
-    ``>= NEW_MESSAGES_THRESHOLD`` new debrief chat_messages. NULL cursor →
+    ``>= NEW_MESSAGES_THRESHOLD`` new debrief conversation_messages. NULL cursor →
     all history counts, so a new user with real activity passes naturally.
 
     Gates 2 (scan throttle) and 4 (Redis lock) live elsewhere:
@@ -168,7 +168,7 @@ def select_dreamable_users(*, limit: int = 200) -> list[str]:
 def _count_new_activity_since(
     db: Session, user_id: str, cursor: datetime | None,
 ) -> dict[str, int]:
-    """Counts of new debrief chat_messages + chat_sessions for
+    """Counts of new debrief conversation_messages + conversations for
     ``user_id`` since ``cursor`` (None = all-time). Used by gate 3.
 
     Only ``session_type == 'debrief'`` counts: dreaming consumes
@@ -180,20 +180,20 @@ def _count_new_activity_since(
     """
     user_pk = resolve_user_pk(db, user_id)
     msg_q = (
-        db.query(ChatMessage)
-        .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+        db.query(ConversationMessage)
+        .join(Conversation, Conversation.id == ConversationMessage.session_id)
         .filter(
-            ChatSession.user_id == user_pk,
-            ChatSession.session_type == "debrief",
+            Conversation.user_id == user_pk,
+            Conversation.session_type == "debrief",
         )
     )
-    sess_q = db.query(ChatSession).filter(
-        ChatSession.user_id == user_pk,
-        ChatSession.session_type == "debrief",
+    sess_q = db.query(Conversation).filter(
+        Conversation.user_id == user_pk,
+        Conversation.session_type == "debrief",
     )
     if cursor is not None:
-        msg_q = msg_q.filter(ChatMessage.created_at > cursor)
-        sess_q = sess_q.filter(ChatSession.created_at > cursor)
+        msg_q = msg_q.filter(ConversationMessage.created_at > cursor)
+        sess_q = sess_q.filter(Conversation.created_at > cursor)
     return {"messages": msg_q.count(), "sessions": sess_q.count()}
 
 
@@ -272,16 +272,16 @@ def bump_user_last_dreamed_at(
 
 
 def _latest_debrief_message_at(db: Session, record_id: str) -> datetime | None:
-    """Most recent ChatMessage timestamp across all debrief sessions of
+    """Most recent ConversationMessage timestamp across all debrief sessions of
     this record. Returns None if there are none."""
     row = (
-        db.query(ChatMessage.created_at)
-        .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+        db.query(ConversationMessage.created_at)
+        .join(Conversation, Conversation.id == ConversationMessage.session_id)
         .filter(
-            ChatSession.interview_id == record_id,
-            ChatSession.session_type == "debrief",
+            Conversation.interview_id == record_id,
+            Conversation.session_type == "debrief",
         )
-        .order_by(ChatMessage.created_at.desc())
+        .order_by(ConversationMessage.created_at.desc())
         .first()
     )
     return row[0] if row else None
@@ -452,16 +452,16 @@ def _load_snapshot_for_dream(user_id: str, *, db: Session) -> dict[str, Any]:
 
 
 def _load_record_debrief_messages(db: Session, record_id: str) -> list[dict]:
-    """Concatenate all ChatMessage rows under all debrief sessions of
+    """Concatenate all ConversationMessage rows under all debrief sessions of
     this record, ordered by time."""
     rows = (
-        db.query(ChatMessage)
-        .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+        db.query(ConversationMessage)
+        .join(Conversation, Conversation.id == ConversationMessage.session_id)
         .filter(
-            ChatSession.interview_id == record_id,
-            ChatSession.session_type == "debrief",
+            Conversation.interview_id == record_id,
+            Conversation.session_type == "debrief",
         )
-        .order_by(ChatMessage.created_at.asc(), ChatMessage.seq.asc())
+        .order_by(ConversationMessage.created_at.asc(), ConversationMessage.seq.asc())
         .all()
     )
     return [

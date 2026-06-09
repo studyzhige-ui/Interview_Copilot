@@ -1,16 +1,16 @@
 """Chat-session and chat-message storage service.
 
-Manages persistent chat history (``ChatSession`` / ``ChatMessage`` rows) —
+Manages persistent chat history (``Conversation`` / ``ConversationMessage`` rows) —
 sessions, recent turns, full transcripts, cursor advancement.
 
-Hierarchy (post-0018): an ``interview_record`` has many ``chat_sessions``;
+Hierarchy (post-0018): an ``interview_record`` has many ``conversations``;
 each session IS the chat thread (its own ``summary`` compaction,
-its own monotonic ``chat_messages.seq``). The earlier "session → many
+its own monotonic ``conversation_messages.seq``). The earlier "session → many
 conversations" hierarchy from 0015/0017 was reverted — multi-thread
 brainstorming now lives as siblings under the same record.
 
 Content blocks (Stage G refactor — Anthropic Claude Code style):
-  Each ChatMessage carries TWO representations of the assistant turn:
+  Each ConversationMessage carries TWO representations of the assistant turn:
     * ``content``               — plain text preview (used by session
                                   list UI, memory extraction)
     * ``content_blocks_json``   — JSON ``[BetaContentBlock, ...]`` so the
@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
-from app.models.chat import ChatMessage, ChatSession, generate_uuid
+from app.models.chat import ConversationMessage, Conversation, generate_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +40,9 @@ class TranscriptService:
     def ensure_session(self, session_id: str, user_id: str) -> str:
         db: Session = SessionLocal()
         try:
-            row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+            row = db.query(Conversation).filter(Conversation.id == session_id).first()
             if row is None:
-                row = ChatSession(
+                row = Conversation(
                     id=session_id or generate_uuid(),
                     user_id=resolve_user_pk(db, user_id),
                 )
@@ -74,9 +74,9 @@ class TranscriptService:
         """
         db: Session = SessionLocal()
         try:
-            session_row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+            session_row = db.query(Conversation).filter(Conversation.id == session_id).first()
             if session_row is None:
-                session_row = ChatSession(
+                session_row = Conversation(
                     id=session_id,
                     user_id=resolve_user_pk(db, user_id),
                 )
@@ -84,13 +84,13 @@ class TranscriptService:
                 db.flush()
 
             max_seq = (
-                db.query(func.max(ChatMessage.seq))
-                .filter(ChatMessage.session_id == session_id)
+                db.query(func.max(ConversationMessage.seq))
+                .filter(ConversationMessage.session_id == session_id)
                 .scalar()
             )
             next_seq = (max_seq + 1) if max_seq else 1
 
-            db.add(ChatMessage(
+            db.add(ConversationMessage(
                 session_id=session_id, seq=next_seq, role="User",
                 content=user_msg,
                 content_blocks_json=(
@@ -99,7 +99,7 @@ class TranscriptService:
                 ),
                 rewritten_query=rewritten_query,
             ))
-            db.add(ChatMessage(
+            db.add(ConversationMessage(
                 session_id=session_id, seq=next_seq + 1, role="Agent",
                 content=ai_msg,
                 content_blocks_json=(
@@ -127,12 +127,12 @@ class TranscriptService:
         db: Session = SessionLocal()
         try:
             rows = (
-                db.query(ChatMessage)
+                db.query(ConversationMessage)
                 .filter(
-                    ChatMessage.session_id == session_id,
-                    ChatMessage.seq > after_seq,
+                    ConversationMessage.session_id == session_id,
+                    ConversationMessage.seq > after_seq,
                 )
-                .order_by(ChatMessage.seq.desc())
+                .order_by(ConversationMessage.seq.desc())
                 .limit(max_turns * 2)
                 .all()
             )
@@ -150,13 +150,13 @@ class TranscriptService:
         db: Session = SessionLocal()
         try:
             rows = (
-                db.query(ChatMessage)
+                db.query(ConversationMessage)
                 .filter(
-                    ChatMessage.session_id == session_id,
-                    ChatMessage.seq >= start_seq,
-                    ChatMessage.seq <= end_seq,
+                    ConversationMessage.session_id == session_id,
+                    ConversationMessage.seq >= start_seq,
+                    ConversationMessage.seq <= end_seq,
                 )
-                .order_by(ChatMessage.seq.asc())
+                .order_by(ConversationMessage.seq.asc())
                 .all()
             )
             return [self._message_to_dict(row) for row in rows]
@@ -167,9 +167,9 @@ class TranscriptService:
         db: Session = SessionLocal()
         try:
             rows = (
-                db.query(ChatMessage)
-                .filter(ChatMessage.session_id == session_id)
-                .order_by(ChatMessage.seq.asc())
+                db.query(ConversationMessage)
+                .filter(ConversationMessage.session_id == session_id)
+                .order_by(ConversationMessage.seq.asc())
                 .all()
             )
             return [self._message_to_dict(row) for row in rows]
@@ -179,7 +179,7 @@ class TranscriptService:
     def get_session_meta(self, session_id: str) -> dict | None:
         db: Session = SessionLocal()
         try:
-            row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+            row = db.query(Conversation).filter(Conversation.id == session_id).first()
             if row is None:
                 return None
             return {
@@ -200,7 +200,7 @@ class TranscriptService:
     def update_session_fields(self, session_id: str, **kwargs) -> None:
         db: Session = SessionLocal()
         try:
-            row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+            row = db.query(Conversation).filter(Conversation.id == session_id).first()
             if row is None:
                 return
             for key, value in kwargs.items():
@@ -216,7 +216,7 @@ class TranscriptService:
             db.close()
 
     @staticmethod
-    def _message_to_dict(row: ChatMessage) -> dict:
+    def _message_to_dict(row: ConversationMessage) -> dict:
         """Serialize one row. ``blocks`` is always populated — either
         parsed from ``content_blocks_json`` or synthesised as a single
         text block from ``content`` (read-time backfill for legacy rows
@@ -229,7 +229,7 @@ class TranscriptService:
                     blocks = parsed
             except (json.JSONDecodeError, TypeError):
                 logger.warning(
-                    "chat_messages id=%s has unparseable content_blocks_json; "
+                    "conversation_messages id=%s has unparseable content_blocks_json; "
                     "falling back to single-text-block synthesis",
                     row.id,
                 )

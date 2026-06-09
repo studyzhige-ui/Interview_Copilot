@@ -5,7 +5,7 @@ for its turns. This table holds ONLY the in-flight runtime — where the
 interview is right now (stage, plan, current question) — not the final scored
 QA (that's ``interview_qa``) and not the chat transcript (that's the
 conversation messages). It supersedes both the old
-``chat_sessions.mock_interview_state`` JSON blob (the live runtime) and the
+``conversations.mock_interview_state`` JSON blob (the live runtime) and the
 ``mock_interview_sessions`` archive table.
 
 Lifecycle: the mock-start flow atomically creates an ``interview_records`` row
@@ -56,7 +56,7 @@ class MockInterviewRuntime(Base):
         nullable=False,
     )
     conversation_id = Column(
-        String, ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=True,
+        String, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=True,
     )
     # Runtime status: in_progress (live) → processing_review → completed,
     # or review_failed if scoring errors out.

@@ -37,7 +37,7 @@ from app.core.rate_limit import RATE_EXPENSIVE, limiter
 from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
-from app.models.chat import ChatSession
+from app.models.chat import Conversation
 from app.models.user import User
 from app.schemas.chat import SSEChatRequest
 
@@ -72,7 +72,7 @@ async def sse_chat_endpoint(
     # testing later shows this is a real bottleneck, the right fix is
     # to open a fresh ``SessionLocal()`` inside ``to_thread`` rather
     # than reusing ``db``.
-    row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    row = db.query(Conversation).filter(Conversation.id == session_id).first()
     if not row or row.user_id != resolve_user_pk(db, current_user.username):
         raise HTTPException(status_code=404, detail="Session not found or access denied")
 

@@ -11,7 +11,7 @@ Coverage:
   * column / index / FK / unique-constraint definitions match the schema
     the alembic migrations build.
   * Round-trip insert + query through an in-memory SQLite session for the
-    core entities (User, ChatSession+ChatMessage, InterviewRecord +
+    core entities (User, Conversation+ConversationMessage, InterviewRecord +
     InterviewQA, FileAsset, KnowledgeDocument, MemoryDocument /
     MemoryAbilityState / MemoryAuditEntry (v3 memory),
     MockInterviewSession, UserModelCredential, ResumeSection).
@@ -98,8 +98,8 @@ def test_all_expected_tables_registered(test_engine):
         "interview_qa",
         "mock_interview_sessions",
         "mock_interview_runtime",
-        "chat_sessions",
-        "chat_messages",
+        "conversations",
+        "conversation_messages",
         "resumes",
         # MEMORY-V3 stores (old knowledge/strategy/habit/audit_log dropped in 0023)
         "memory_documents",
@@ -141,9 +141,9 @@ def test_interview_qa_foreign_key_to_record(test_engine):
 
 def test_chat_message_foreign_key_to_session(test_engine):
     insp = inspect(test_engine)
-    fks = insp.get_foreign_keys("chat_messages")
+    fks = insp.get_foreign_keys("conversation_messages")
     targets = {fk["referred_table"] for fk in fks}
-    assert "chat_sessions" in targets
+    assert "conversations" in targets
 
 
 def test_mock_session_cascades_from_interview_record(test_engine):
@@ -188,19 +188,19 @@ def test_user_unique_username_violates(db_session):
 
 
 def test_chat_session_with_messages_relationship(db_session):
-    from app.models.chat import ChatSession, ChatMessage
+    from app.models.chat import Conversation, ConversationMessage
 
-    session = ChatSession(id="sess-001", user_id="user1", title="测试会话")
+    session = Conversation(id="sess-001", user_id="user1", title="测试会话")
     db_session.add(session)
     db_session.flush()
 
     db_session.add_all([
-        ChatMessage(session_id="sess-001", seq=1, role="User", content="hi"),
-        ChatMessage(session_id="sess-001", seq=2, role="Agent", content="hello back"),
+        ConversationMessage(session_id="sess-001", seq=1, role="User", content="hi"),
+        ConversationMessage(session_id="sess-001", seq=2, role="Agent", content="hello back"),
     ])
     db_session.flush()
 
-    loaded = db_session.query(ChatSession).filter(ChatSession.id == "sess-001").first()
+    loaded = db_session.query(Conversation).filter(Conversation.id == "sess-001").first()
     assert len(loaded.messages) == 2
     # relationship order_by=seq → first msg is the user msg
     assert loaded.messages[0].seq == 1

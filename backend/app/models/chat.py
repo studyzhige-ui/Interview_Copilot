@@ -21,8 +21,8 @@ def generate_uuid() -> str:
     return str(uuid.uuid4())
 
 
-class ChatSession(Base):
-    __tablename__ = "chat_sessions"
+class Conversation(Base):
+    __tablename__ = "conversations"
     # Production composite indexes — declared here so ORM is the single
     # source of truth and ``alembic revision --autogenerate`` doesn't
     # generate spurious DROP INDEX statements for them. See alembic
@@ -30,10 +30,10 @@ class ChatSession(Base):
     # (user_updated).
     __table_args__ = (
         Index(
-            "ix_chat_sessions_user_type_arch",
+            "ix_conversations_user_type_arch",
             "user_id", "session_type", "archived_at",
         ),
-        Index("ix_chat_sessions_user_updated", "user_id", "updated_at"),
+        Index("ix_conversations_user_updated", "user_id", "updated_at"),
     )
 
     id = Column(String, primary_key=True, default=generate_uuid, index=True)
@@ -77,27 +77,27 @@ class ChatSession(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     messages = relationship(
-        "ChatMessage",
+        "ConversationMessage",
         back_populates="session",
-        order_by="ChatMessage.seq",
+        order_by="ConversationMessage.seq",
     )
 
 
-class ChatMessage(Base):
-    __tablename__ = "chat_messages"
-    # uq_chat_messages_session_seq is a UNIQUE constraint (backed by
+class ConversationMessage(Base):
+    __tablename__ = "conversation_messages"
+    # uq_conversation_messages_session_seq is a UNIQUE constraint (backed by
     # a unique B-tree) that does double duty: guards the concurrent-
     # append race AND serves read-time ``ORDER BY seq`` paginations
     # for the chat-history endpoint. 0001 originally created a
-    # separate non-unique ``ix_chat_messages_session_seq`` for the
+    # separate non-unique ``ix_conversation_messages_session_seq`` for the
     # read path; 0011 drops it (the unique B-tree is just as good for
     # the read direction and halves the per-INSERT index-write cost).
     __table_args__ = (
-        UniqueConstraint("session_id", "seq", name="uq_chat_messages_session_seq"),
+        UniqueConstraint("session_id", "seq", name="uq_conversation_messages_session_seq"),
     )
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    session_id = Column(String, ForeignKey("chat_sessions.id"), index=True, nullable=False)
+    session_id = Column(String, ForeignKey("conversations.id"), index=True, nullable=False)
     seq = Column(Integer, index=True, nullable=False)
     role = Column(String, nullable=False)
     # Plain-text canonical form — used for session-list preview, memory
@@ -114,4 +114,4 @@ class ChatMessage(Base):
     rewritten_query = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    session = relationship("ChatSession", back_populates="messages")
+    session = relationship("Conversation", back_populates="messages")

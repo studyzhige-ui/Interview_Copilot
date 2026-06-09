@@ -385,7 +385,7 @@ export async function deleteChatSession(sessionId: string): Promise<void> {
 
 
 // ── Global-memory toggle (per-session override + per-user default) ───────
-// The per-session value lives in the ``chat_sessions.global_memory_enabled``
+// The per-session value lives in the ``conversations.global_memory_enabled``
 // column (see backend recall_policy). The GET endpoint resolves the effective
 // value: per-session override → user-level default → False, so the switch UI
 // never lies about what the next turn will inject.

@@ -1,6 +1,6 @@
 """Mock-interview session-state serialization helpers.
 
-The ``chat_sessions.mock_interview_state`` column holds the mock-interview
+The ``conversations.mock_interview_state`` column holds the mock-interview
 runtime state as a JSON blob (NULL for non-mock sessions). These helpers
 serialize / deserialize it. ``general`` and ``debrief`` sessions do NOT use
 this column — their identity lives in dedicated columns (``session_type`` /

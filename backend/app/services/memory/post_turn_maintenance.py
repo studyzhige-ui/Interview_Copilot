@@ -131,14 +131,14 @@ class PostTurnMaintenanceService:
         log, so we must never let its lookup poison the extraction path.
         """
         from app.db.database import SessionLocal
-        from app.models.chat import ChatSession
+        from app.models.chat import Conversation
 
         try:
             db = SessionLocal()
             try:
                 row = (
-                    db.query(ChatSession.interview_id)
-                    .filter(ChatSession.id == session_id)
+                    db.query(Conversation.interview_id)
+                    .filter(Conversation.id == session_id)
                     .first()
                 )
                 return row[0] if row and row[0] else None

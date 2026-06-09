@@ -328,24 +328,24 @@ def test_patch_interview_record_400_when_empty(client, db: Session):
     assert resp.status_code == 400
 
 
-def test_delete_interview_record_cascades_chat_sessions(client, db: Session):
+def test_delete_interview_record_cascades_conversations(client, db: Session):
     """Deleting an interview record nukes its chat sessions + messages too.
 
     The legacy detach mode (keep chats, NULL out interview_id) was removed —
     in practice it produced confusing orphan sessions, and the user expressed
     they wanted a clean wipe when removing an interview.
     """
-    from app.models.chat import ChatMessage, ChatSession
+    from app.models.chat import ConversationMessage, Conversation
 
     db.add(InterviewRecord(id="ir_a", user_id=_uid(db, "alice"), source="upload", title="t", status="completed"))
-    # chat_sessions.user_id is still the username string (NOT migrated in
+    # conversations.user_id is still the username string (NOT migrated in
     # CLEANUP #2) — only interview_records.user_id became the integer pk.
-    db.add(ChatSession(
+    db.add(Conversation(
         id="cs_1", user_id="alice", title="debrief",
         session_type="debrief", interview_id="ir_a",
     ))
-    db.add(ChatMessage(session_id="cs_1", seq=0, role="user", content="hi"))
-    db.add(ChatMessage(session_id="cs_1", seq=1, role="assistant", content="hello"))
+    db.add(ConversationMessage(session_id="cs_1", seq=0, role="user", content="hi"))
+    db.add(ConversationMessage(session_id="cs_1", seq=1, role="assistant", content="hello"))
     db.commit()
 
     # The delete handler no longer touches Milvus (memory_items cascade
@@ -358,8 +358,8 @@ def test_delete_interview_record_cascades_chat_sessions(client, db: Session):
 
     db.expire_all()
     assert db.get(InterviewRecord, "ir_a") is None
-    assert db.get(ChatSession, "cs_1") is None
-    assert db.query(ChatMessage).filter(ChatMessage.session_id == "cs_1").count() == 0
+    assert db.get(Conversation, "cs_1") is None
+    assert db.query(ConversationMessage).filter(ConversationMessage.session_id == "cs_1").count() == 0
 
 
 # ── /interview-records/{id}/events (SSE) ─────────────────────────────────

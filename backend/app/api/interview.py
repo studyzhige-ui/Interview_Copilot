@@ -460,9 +460,9 @@ def delete_interview_record(
 
     Removes, in order:
 
-      1. **chat_messages** for every session linked to this interview
+      1. **conversation_messages** for every session linked to this interview
          (the FK has no ON DELETE CASCADE, so we have to be explicit).
-      2. **chat_sessions** linked to this interview (``interview_id == X``).
+      2. **conversations** linked to this interview (``interview_id == X``).
       3. **interview_qa** + **mock_interview_sessions** (auto via FK
          ON DELETE CASCADE on ``interview_records``).
       4. The **interview_record** row itself.
@@ -484,7 +484,7 @@ def delete_interview_record(
     import logging
 
     log = logging.getLogger(__name__)
-    from app.models.chat import ChatMessage, ChatSession
+    from app.models.chat import ConversationMessage, Conversation
     from app.models.interview_record import InterviewRecord
 
     record = (
@@ -510,8 +510,8 @@ def delete_interview_record(
         # ── (1) Find every chat_session linked to this interview ──────────
         session_ids = [
             row[0]
-            for row in db.query(ChatSession.id)
-            .filter(ChatSession.interview_id == record_id)
+            for row in db.query(Conversation.id)
+            .filter(Conversation.interview_id == record_id)
             .all()
         ]
 
@@ -526,11 +526,11 @@ def delete_interview_record(
 
         # ── (3) DB deletes in safe order ─────────────────────────────────
         if session_ids:
-            db.query(ChatMessage).filter(
-                ChatMessage.session_id.in_(session_ids)
+            db.query(ConversationMessage).filter(
+                ConversationMessage.session_id.in_(session_ids)
             ).delete(synchronize_session=False)
-            db.query(ChatSession).filter(
-                ChatSession.id.in_(session_ids)
+            db.query(Conversation).filter(
+                Conversation.id.in_(session_ids)
             ).delete(synchronize_session=False)
         # interview_qa + mock_interview_sessions auto-cleaned by their
         # ON DELETE CASCADE on interview_records.

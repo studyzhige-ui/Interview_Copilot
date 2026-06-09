@@ -175,8 +175,8 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "interview_qa",
         "mock_interview_sessions",
         "mock_interview_runtime",
-        "chat_sessions",
-        "chat_messages",
+        "conversations",
+        "conversation_messages",
         "memory_documents",
         "memory_ability_states",
         "memory_audit_logs",
@@ -230,7 +230,7 @@ def test_hot_query_composite_indexes_exist(fresh_pg_db, monkeypatch):
     # with the table in 0003; only the still-relevant composite indexes
     # are asserted here.
     expectations = {
-        "chat_sessions": "ix_chat_sessions_user_type_arch",
+        "conversations": "ix_conversations_user_type_arch",
         "knowledge_documents": "ix_knowledge_docs_user_category",
         # ``user_uploads`` (+ its ix_user_uploads_user_purpose) was dropped in
         # 0025; the replacement file_assets table carries the equivalent
