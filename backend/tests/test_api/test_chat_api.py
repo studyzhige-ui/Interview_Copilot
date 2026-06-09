@@ -10,7 +10,6 @@ shared ``db_session`` fixture in ``tests/conftest.py`` references the missing
 from __future__ import annotations
 
 from typing import Iterator
-from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
@@ -21,11 +20,33 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import chat as chat_api
 from app.api import memory as memory_api
-from app.api.chat import sessions as chat_sessions_mod
+from app.api.chat import sessions as conversations_mod
 from app.core.security import get_current_user
 from app.db.database import Base, get_db
 import app.models  # noqa: F401  — ensure mappers registered
-from app.models.chat import ChatMessage, ChatSession
+from app.models.chat import ConversationMessage, Conversation
+from app.models.user import User
+
+
+# ── Helpers ─────────────────────────────────────────────────────────────
+
+
+def _uid(db: Session, username: str) -> int:
+    """Seed a ``users`` row for ``username`` (idempotent) and return its
+    integer ``users.id``.
+
+    ``conversations.user_id`` is the integer ``users.id`` FK now (CLEANUP #2),
+    and every chat ownership/scoping path resolves the request principal's
+    username → ``users.id`` via ``resolve_user_pk`` before filtering. Seeded
+    ``Conversation`` rows therefore must carry the integer pk of a real
+    ``users`` row, not the username string.
+    """
+    row = db.query(User).filter(User.username == username).first()
+    if row is None:
+        row = User(username=username, hashed_password="x")
+        db.add(row)
+        db.commit()
+    return row.id
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
@@ -43,23 +64,22 @@ def db(monkeypatch) -> Iterator[Session]:
     Base.metadata.create_all(bind=engine)
     Session_ = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
-    # The v3 memory doc services (knowledge_doc / strategy_doc / habit_doc /
-    # user_profile_doc / _single_doc / _audit_log) bypass FastAPI's
+    # The v3 memory services (memory_document_service /
+    # memory_ability_state_service / _memory_audit) bypass FastAPI's
     # ``get_db`` and open their own session via ``SessionLocal()`` imported
     # at module-load time. To keep memory-endpoint tests honest we must
     # rebind every such reference to a sessionmaker that points at THIS
     # in-memory engine — otherwise those endpoints would talk to the real
-    # configured database (or fail with "no such table: knowledge_docs").
-    import app.services.memory._audit_log_service as _audit_mod
+    # configured database (or fail with "no such table: memory_documents").
     import app.services.memory._db_helpers as _helpers_mod
-    import app.services.memory._single_doc_service as _single_mod
-    import app.services.memory.knowledge_doc_service as _kd_mod
-    import app.services.memory.user_profile_doc_service as _up_mod
-    # Includes ``_db_helpers`` because the doc services now route all
+    import app.services.memory._memory_audit as _audit_mod
+    import app.services.memory.memory_ability_state_service as _ability_mod
+    import app.services.memory.memory_document_service as _doc_mod
+    # Includes ``_db_helpers`` because the services route their
     # ``SessionLocal()`` opens through ``_db_helpers.session_scope`` —
-    # rebinding only the doc-service modules' own ``SessionLocal``
-    # leaves the helper's binding pointed at the real configured DB.
-    for _mod in (_audit_mod, _helpers_mod, _single_mod, _kd_mod, _up_mod):
+    # rebinding only the service modules' own ``SessionLocal`` leaves the
+    # helper's binding pointed at the real configured DB.
+    for _mod in (_helpers_mod, _audit_mod, _ability_mod, _doc_mod):
         monkeypatch.setattr(_mod, "SessionLocal", Session_, raising=False)
 
     session = Session_()
@@ -99,29 +119,33 @@ def client(db: Session) -> Iterator[TestClient]:
 
 
 def test_create_chat_session_defaults_to_general(client: TestClient, db: Session):
+    alice_pk = _uid(db, "alice")  # endpoint resolves "alice" → this pk on insert
     resp = client.post("/api/v1/chat/sessions", json={})
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["session_type"] == "general"
+    assert body["type"] == "general"
     assert body["title"] == "通用对话"
-    # DB-side effect: row exists.
-    row = db.query(ChatSession).filter(ChatSession.id == body["session_id"]).first()
+    # DB-side effect: row exists, owned by alice's integer pk (not the username).
+    row = db.query(Conversation).filter(Conversation.id == body["session_id"]).first()
     assert row is not None
-    assert row.user_id == "alice"
+    assert row.user_id == alice_pk
 
 
 def test_create_debrief_session_requires_existing_interview(client: TestClient):
     resp = client.post(
         "/api/v1/chat/sessions",
-        json={"session_type": "debrief", "interview_id": "ir_missing"},
+        json={"type": "debrief", "subject_id": "ir_missing"},
     )
     assert resp.status_code == 404
 
 
-def test_list_chat_sessions_is_user_scoped(client: TestClient, db: Session):
+def test_list_conversations_is_user_scoped(client: TestClient, db: Session):
+    # Seed BOTH users as real rows so isolation is exercised via DISTINCT
+    # integer pks (not a string-vs-int type accident): the list endpoint
+    # filters Conversation.user_id == resolve_user_pk(db, "alice").
     db.add_all([
-        ChatSession(id="s_a", user_id="alice", title="A", session_type="general"),
-        ChatSession(id="s_b", user_id="bob",   title="B", session_type="general"),
+        Conversation(id="s_a", user_id=_uid(db, "alice"), title="A", type="general"),
+        Conversation(id="s_b", user_id=_uid(db, "bob"),   title="B", type="general"),
     ])
     db.commit()
     resp = client.get("/api/v1/chat/sessions")
@@ -131,37 +155,41 @@ def test_list_chat_sessions_is_user_scoped(client: TestClient, db: Session):
 
 
 def test_rename_session_validates_non_empty(client: TestClient, db: Session):
-    db.add(ChatSession(id="s1", user_id="alice", title="old", session_type="general"))
+    db.add(Conversation(id="s1", user_id=_uid(db, "alice"), title="old", type="general"))
     db.commit()
     resp = client.patch("/api/v1/chat/sessions/s1/title", json={"title": "   "})
     assert resp.status_code == 400
 
 
 def test_rename_session_updates_title(client: TestClient, db: Session):
-    db.add(ChatSession(id="s1", user_id="alice", title="old", session_type="general"))
+    db.add(Conversation(id="s1", user_id=_uid(db, "alice"), title="old", type="general"))
     db.commit()
     resp = client.patch("/api/v1/chat/sessions/s1/title", json={"title": "new"})
     assert resp.status_code == 200
     db.expire_all()
-    assert db.get(ChatSession,"s1").title == "new"
+    assert db.get(Conversation,"s1").title == "new"
 
 
 def test_rename_session_rejects_other_user(client: TestClient, db: Session):
-    db.add(ChatSession(id="s_bob", user_id="bob", title="old", session_type="general"))
+    # alice (authed principal) and bob are distinct real users → the 404 is a
+    # genuine pk mismatch (alice_pk != bob_pk), not an unseeded user → None.
+    _uid(db, "alice")
+    db.add(Conversation(id="s_bob", user_id=_uid(db, "bob"), title="old", type="general"))
     db.commit()
     resp = client.patch("/api/v1/chat/sessions/s_bob/title", json={"title": "new"})
     assert resp.status_code == 404
 
 
 def test_delete_session_removes_row_and_messages(client: TestClient, db: Session):
-    db.add(ChatSession(id="s1", user_id="alice", title="t", session_type="general"))
-    db.add(ChatMessage(session_id="s1", seq=1, role="User", content="hi"))
+    db.add(Conversation(id="s1", user_id=_uid(db, "alice"), title="t", type="general"))
+    # conversation_messages has NO user_id (keyed via session_id FK) — leave it as-is.
+    db.add(ConversationMessage(conversation_id="s1", seq=1, role="User", content="hi"))
     db.commit()
     resp = client.delete("/api/v1/chat/sessions/s1")
     assert resp.status_code == 200
     db.expire_all()
-    assert db.get(ChatSession,"s1") is None
-    assert db.query(ChatMessage).filter(ChatMessage.session_id == "s1").count() == 0
+    assert db.get(Conversation,"s1") is None
+    assert db.query(ConversationMessage).filter(ConversationMessage.conversation_id == "s1").count() == 0
 
 
 # ── /chat/history ─────────────────────────────────────────────────────────
@@ -170,9 +198,9 @@ def test_delete_session_removes_row_and_messages(client: TestClient, db: Session
 def test_history_returns_in_seq_order(client: TestClient, db: Session):
     # 0018 reverted the conversation_id split — messages are scoped only
     # by session_id again.
-    db.add(ChatSession(id="s1", user_id="alice", title="t", session_type="general"))
-    db.add(ChatMessage(session_id="s1", seq=1, role="User", content="hi"))
-    db.add(ChatMessage(session_id="s1", seq=2, role="AI", content="hello"))
+    db.add(Conversation(id="s1", user_id=_uid(db, "alice"), title="t", type="general"))
+    db.add(ConversationMessage(conversation_id="s1", seq=1, role="User", content="hi"))
+    db.add(ConversationMessage(conversation_id="s1", seq=2, role="AI", content="hello"))
     db.commit()
     resp = client.get("/api/v1/chat/history", params={"session_id": "s1"})
     assert resp.status_code == 200
@@ -181,7 +209,8 @@ def test_history_returns_in_seq_order(client: TestClient, db: Session):
 
 
 def test_history_404_for_other_user(client: TestClient, db: Session):
-    db.add(ChatSession(id="s_bob", user_id="bob", title="t", session_type="general"))
+    _uid(db, "alice")  # authed principal — a distinct real user
+    db.add(Conversation(id="s_bob", user_id=_uid(db, "bob"), title="t", type="general"))
     db.commit()
     resp = client.get("/api/v1/chat/history", params={"session_id": "s_bob"})
     assert resp.status_code == 404
@@ -191,7 +220,7 @@ def test_history_404_for_other_user(client: TestClient, db: Session):
 
 
 def test_transcript_returns_structured_state(client: TestClient, db: Session, monkeypatch):
-    db.add(ChatSession(id="s1", user_id="alice", title="t", session_type="debrief"))
+    db.add(Conversation(id="s1", user_id=_uid(db, "alice"), title="t", type="debrief"))
     db.commit()
 
     class FakeTranscriptSvc:
@@ -200,8 +229,7 @@ def test_transcript_returns_structured_state(client: TestClient, db: Session, mo
             return {
                 "turn_count": 2,
                 "compaction_cursor": 4,
-                "session_state": '{"mode": "debrief", "summary": "focus on redis"}',
-                "session_type": "debrief",
+                "type": "debrief",
                 "current_conversation_id": "s1",
             }
 
@@ -212,18 +240,18 @@ def test_transcript_returns_structured_state(client: TestClient, db: Session, mo
             # when None) so the fake must accept it.
             return [{"seq": 1, "role": "User", "content": "hi", "created_at": "t"}]
 
-    monkeypatch.setattr(chat_sessions_mod, "transcript_service", FakeTranscriptSvc)
+    monkeypatch.setattr(conversations_mod, "transcript_service", FakeTranscriptSvc)
     resp = client.get("/api/v1/chat/transcript", params={"session_id": "s1"})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["session_type"] == "debrief"
+    assert body["type"] == "debrief"
     assert body["compaction_cursor"] == 4
-    assert body["session_state"]["summary"] == "focus on redis"
     assert body["total_messages"] == 1
 
 
 def test_transcript_404_for_other_user(client: TestClient, db: Session):
-    db.add(ChatSession(id="s_bob", user_id="bob", title="t", session_type="general"))
+    _uid(db, "alice")  # authed principal — a distinct real user
+    db.add(Conversation(id="s_bob", user_id=_uid(db, "bob"), title="t", type="general"))
     db.commit()
     resp = client.get("/api/v1/chat/transcript", params={"session_id": "s_bob"})
     assert resp.status_code == 404
@@ -233,21 +261,30 @@ def test_transcript_404_for_other_user(client: TestClient, db: Session):
 
 
 def test_memory_overview_returns_v3_bundle(client: TestClient):
-    """Smoke: /memory/overview returns the 4-doc bundle (empty for a
-    user with no memory yet)."""
+    """Smoke: /memory/overview returns the v3 bundle (user_profile +
+    learning_strategy bodies + active ability states), empty for a user
+    with no memory yet."""
     resp = client.get("/api/v1/memory/overview")
     assert resp.status_code == 200
     body = resp.json()
     assert "user_profile_body" in body
-    assert "knowledge_topics" in body
-    assert "strategy_body" in body
-    assert "habit_body" in body
-    # Fresh user → empty topic list (not None / missing).
-    assert isinstance(body["knowledge_topics"], list)
+    assert "learning_strategy_body" in body
+    assert "ability_states" in body
+    # Fresh user → empty bodies + empty ability list (not None / missing).
+    assert body["user_profile_body"] == ""
+    assert body["learning_strategy_body"] == ""
+    assert isinstance(body["ability_states"], list)
+    assert body["ability_states"] == []
+    # The retired knowledge/strategy/habit doc fields are gone.
+    assert "knowledge_topics" not in body
+    assert "strategy_body" not in body
+    assert "habit_body" not in body
 
 
-def test_memory_knowledge_topic_get_404_when_missing(client: TestClient):
-    resp = client.get("/api/v1/memory/knowledge/topics/does_not_exist")
+def test_memory_ability_state_delete_404_when_missing(client: TestClient):
+    """Archiving a non-existent ability state returns 404 (replaces the
+    retired ``/memory/knowledge/topics/{id}`` route)."""
+    resp = client.delete("/api/v1/memory/ability-states/does_not_exist")
     assert resp.status_code == 404
 
 
@@ -258,7 +295,7 @@ def test_sse_chat_endpoint_streams_chunks(client: TestClient, db: Session, monke
     """Smoke test for the SSE pipeline: dependency-overridden user owns the
     session, the engine yields HarnessEvent text_delta + done, and the
     response is an SSE stream terminated with ``"type": "done"``."""
-    db.add(ChatSession(id="s1", user_id="alice", title="t", session_type="general"))
+    db.add(Conversation(id="s1", user_id=_uid(db, "alice"), title="t", type="general"))
     db.commit()
 
     async def fake_submit(self):
@@ -282,286 +319,213 @@ def test_sse_chat_endpoint_streams_chunks(client: TestClient, db: Session, monke
     assert '"type": "done"' in body
 
 
-def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypatch):
-    """``start_mock_interview`` tries three resume-resolution tiers
-    in a load-bearing order: ``resume_sections`` (structured) →
-    ``KnowledgeDocument`` docstore (chunks already parsed at library-
-    upload time) → ``_parse_resume_on_demand`` (last-resort S3 +
-    LlamaParse, ~8s). A future contributor swapping that order would
-    silently regress mock_start latency (or quality).
-
-    This test wires a call-recorder into each tier and drives three
-    scenarios; the recorder asserts both WHICH tiers ran AND in WHAT
-    ORDER. Pre-fix the wiring was "verified by hand" per the comment
-    in mock_interview.py.
-    """
+def _seed_started_mock(db: Session, *, username="alice", record_id="ir_m", conv_id="c_m"):
+    """Seed a started mock: record(mock_in_progress) + conversation + opening
+    message + runtime(in_progress), as the start endpoint would have."""
     import json as _json
 
-    # Owning session + UserUpload row (the endpoint validates both).
-    db.add(ChatSession(
-        id="s_mock", user_id="alice", title="模拟面试",
-        session_type="mock_interview",
+    from app.models.interview_record import InterviewRecord
+    from app.models.mock_interview_runtime import MockInterviewRuntime
+
+    pk = _uid(db, username)
+    db.add(InterviewRecord(
+        id=record_id, user_id=pk, source="mock", title="模拟面试",
+        status="mock_in_progress",
+        resume_text_snapshot="三年后端经验", jd_text_snapshot="JD",
     ))
-    from app.models.upload import UserUpload
-    db.add(UserUpload(
-        id="upl_resume", user_id="alice",
-        original_filename="r.pdf",
-        storage_uri="s3://bucket/r.pdf",
-        object_key="r.pdf",
-        purpose="knowledge_document",
-        status="ready",
+    db.add(Conversation(
+        id=conv_id, user_id=pk, title="模拟面试", type="mock_interview",
+        subject_type="interview_record", subject_id=record_id,
+    ))
+    db.add(ConversationMessage(
+        conversation_id=conv_id, seq=1, role="assistant", content="请做个自我介绍",
+    ))
+    db.add(MockInterviewRuntime(
+        id="mir_m", user_id=pk, interview_record_id=record_id, conversation_id=conv_id,
+        status="in_progress", current_stage_key="self_intro",
+        plan_json=_json.dumps({"stages": [
+            {"key": "self_intro", "title": "自我介绍"},
+            {"key": "candidate_questions", "title": "反问"},
+        ]}),
     ))
     db.commit()
-
-    calls: list[str] = []
-
-    # Stub each tier so we can assert ordering without paying their
-    # real cost.
-    def fake_sections(upload_id, user_id):
-        calls.append("sections")
-        return []  # forces tier 2/3
-
-    def fake_format(sections, **kw):
-        return "(formatted) " + " ".join(s.title for s in sections)
-
-    def fake_find_kdoc(db_, upload_id, user_id):
-        calls.append("find_kdoc")
-        # ``has_kdoc`` driven by scenario below.
-        return _fake_kdoc[0]
-
-    def fake_docstore_read(doc, **k):
-        calls.append("docstore")
-        return ("docstore text", 3)
-
-    async def fake_reparse(db_, upload_id, user_id):
-        calls.append("reparse")
-        return "reparsed text"
-
-    monkeypatch.setattr(
-        "app.services.resume.resume_service.resume_service.get_sections_by_upload",
-        fake_sections,
-    )
-    monkeypatch.setattr(
-        "app.services.resume.resume_service.resume_service.format_for_context",
-        fake_format,
-    )
-    monkeypatch.setattr(
-        "app.services.knowledge.knowledge_text_service.find_knowledge_doc_by_upload",
-        fake_find_kdoc,
-    )
-    monkeypatch.setattr(
-        "app.services.knowledge.knowledge_text_service.read_full_text_from_docstore",
-        fake_docstore_read,
-    )
-    monkeypatch.setattr(
-        "app.api.chat.mock_interview._parse_resume_on_demand",
-        fake_reparse,
-    )
-
-    # Stub generate_brief so the endpoint doesn't make a real LLM call.
-    from app.services.interview.mock_interview_service import InterviewBrief
-    fake_brief = InterviewBrief(
-        interview_plan={"phases": [
-            {"phase": "self_intro", "budget": 1, "goal": "x",
-             "suggested_topics": [], "difficulty": "warm_up"},
-        ]},
-        opening_spoken="你好",
-        opening_question="请简单做个自我介绍",
-        min_turns=3, target_turns=5, max_turns=8,
-    )
-    async def fake_generate_brief(**kwargs):
-        return fake_brief
-    monkeypatch.setattr(
-        "app.services.interview.mock_interview_service.generate_brief",
-        fake_generate_brief,
-    )
-    # build_prefix / prefix_hash are deterministic pure functions —
-    # let them run for real; they don't hit external services.
-
-    # ── Scenario A: sections-tier hit (no kdoc lookup, no reparse) ──
-    _fake_kdoc = [None]  # sentinel — not consulted in scenario A
-    monkeypatch.setattr(
-        "app.services.resume.resume_service.resume_service.get_sections_by_upload",
-        lambda u, n: (calls.append("sections"), [
-            # Non-empty so tier 1 wins.
-            type("S", (), {"section_type": "summary", "title": "X", "content": "y"})()
-        ])[1],
-    )
-    resp = client.post(
-        "/api/v1/chat/mock-interview/start",
-        json={
-            "session_id": "s_mock",
-            "resume_upload_id": "upl_resume",
-            "jd_text": "JD content",
-            "interviewer_style": "professional",
-            "voice_mode": "hybrid",
-        },
-    )
-    assert resp.status_code == 200, resp.text
-    assert calls == ["sections"], (
-        f"sections tier should be the only one consulted when "
-        f"resume_sections is non-empty; got calls={calls}"
-    )
-
-    # ── Scenario B: sections empty + kdoc present → docstore wins ──
-    calls.clear()
-    monkeypatch.setattr(
-        "app.services.resume.resume_service.resume_service.get_sections_by_upload",
-        fake_sections,  # returns []
-    )
-
-    class _FakeKDoc:
-        id = "kdoc_X"
-        title = "resume.pdf"
-        status = "ready"
-        node_ids = _json.dumps(["n1", "n2"])
-        created_at = None
-
-    _fake_kdoc[0] = _FakeKDoc()
-    # Reset session_state since the first scenario already initialized.
-    s = db.query(ChatSession).filter(ChatSession.id == "s_mock").first()
-    s.session_state = None
-    db.commit()
-
-    resp = client.post(
-        "/api/v1/chat/mock-interview/start",
-        json={
-            "session_id": "s_mock",
-            "resume_upload_id": "upl_resume",
-            "jd_text": "JD content",
-            "interviewer_style": "professional",
-            "voice_mode": "hybrid",
-        },
-    )
-    assert resp.status_code == 200, resp.text
-    # Sections checked first, fails → docstore tier consulted and wins.
-    # ``reparse`` must NOT be called (that's the whole point of the
-    # docstore tier — it saved the 8-second LlamaParse round-trip).
-    assert "sections" in calls and "find_kdoc" in calls and "docstore" in calls, (
-        f"expected sections+find_kdoc+docstore to all be consulted; "
-        f"got calls={calls}"
-    )
-    assert "reparse" not in calls, (
-        f"reparse tier ran even though docstore returned text; "
-        f"the perf optimization is silently broken. calls={calls}"
-    )
-    # Order check: sections BEFORE find_kdoc BEFORE docstore (load-
-    # bearing tier priority — parsed/cleaned > raw chunks > re-parse).
-    assert calls.index("sections") < calls.index("find_kdoc") < calls.index("docstore")
-
-    # ── Scenario C: nothing → reparse fallback ──
-    calls.clear()
-    _fake_kdoc[0] = None  # no library doc either
-    s = db.query(ChatSession).filter(ChatSession.id == "s_mock").first()
-    s.session_state = None
-    db.commit()
-
-    resp = client.post(
-        "/api/v1/chat/mock-interview/start",
-        json={
-            "session_id": "s_mock",
-            "resume_upload_id": "upl_resume",
-            "jd_text": "JD content",
-            "interviewer_style": "professional",
-            "voice_mode": "hybrid",
-        },
-    )
-    assert resp.status_code == 200, resp.text
-    # All three tiers consulted in order; reparse is the only one
-    # that produces output.
-    assert "sections" in calls
-    assert "find_kdoc" in calls
-    assert "reparse" in calls
-    assert calls.index("sections") < calls.index("find_kdoc") < calls.index("reparse")
+    return record_id, conv_id
 
 
-def test_in_progress_keeps_session_when_brief_launched_but_zero_qa(
-    client: TestClient, db: Session,
+def test_mock_start_creates_record_conversation_runtime(
+    client: TestClient, db: Session, monkeypatch,
 ):
-    """Pre-fix sweeper bug: ``qa_history=[]`` was treated as "stale
-    shell" and hard-deleted. But a user who started a mock and saw the
-    AI's opening question without answering yet ALSO has
-    ``qa_history=[]`` — and that session was being purged out from
-    under them. Switching tabs mid-opening lost the whole interview.
+    """``POST /mock-interviews/start`` atomically creates the record
+    (mock_in_progress), the bound conversation, the runtime (in_progress) and
+    the opening interviewer message — resolving resume context from the
+    personal ``resumes`` entity. No pre-created chat session is required."""
+    from app.models.interview_record import InterviewRecord
+    from app.models.mock_interview_runtime import MockInterviewRuntime
+    from app.models.resume import Resume
 
-    Post-fix: a session is only "stale" when the brief was NEVER
-    launched (no ``interview_plan`` and no ``pending_question``).
-    Sessions with a launched brief but no answers yet are PRESERVED
-    and surfaced via the resume banner.
-    """
-    import json
-
-    # Launched session: brief has run, opening question is sitting in
-    # state, user has NOT answered yet.
-    db.add(ChatSession(
-        id="s_launched",
-        user_id="alice",
-        title="模拟面试",
-        session_type="mock_interview",
-        session_state=json.dumps({
-            "schema_version": 2,
-            "interview_plan": {
-                "phases": [{"phase": "self_intro", "budget": 1, "goal": "x"}],
-            },
-            "pending_question": "先简单做个自我介绍吧",
-            "qa_history": [],
-            "is_finished": False,
-        }),
+    pk = _uid(db, "alice")
+    db.add(Resume(
+        id="rsm_1", user_id=pk, title="我的简历", is_default=True,
+        raw_text_snapshot="三年后端开发经验，主导过推荐系统项目", parse_status="ready",
     ))
     db.commit()
+    # No parsed sections → falls back to the entity's raw_text_snapshot.
+    monkeypatch.setattr(
+        "app.services.resume.resume_service.resume_service.get_sections_by_resume",
+        lambda resume_id, user_id=None: [],
+    )
 
-    resp = client.get("/api/v1/chat/mock-interview/in-progress")
+    resp = client.post(
+        "/api/v1/mock-interviews/start",
+        json={"resume_id": "rsm_1", "jd_text": "JD content", "interviewer_style": "professional"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["interview_record_id"] and body["conversation_id"] and body["runtime_id"]
+    assert body["current_stage_key"] == "self_intro"
+    assert "自我介绍" in body["current_question"]
+    assert [p["key"] for p in body["plan_phases"]][0] == "self_intro"
+
+    # The resume entity's raw_text_snapshot was frozen onto the record.
+    record = db.query(InterviewRecord).filter(
+        InterviewRecord.id == body["interview_record_id"]
+    ).first()
+    assert record is not None and record.status == "mock_in_progress"
+    assert "推荐系统" in (record.resume_text_snapshot or "")
+    # Runtime exists and is in_progress, pointed at the opening message.
+    rt = db.query(MockInterviewRuntime).filter(
+        MockInterviewRuntime.id == body["runtime_id"]
+    ).first()
+    assert rt is not None and rt.status == "in_progress"
+    assert rt.current_question_message_id is not None
+
+
+def test_mock_answer_appends_messages_and_advances(
+    client: TestClient, db: Session, monkeypatch,
+):
+    """``POST /mock-interviews/{id}/answer`` persists the candidate's answer,
+    generates the next interviewer line, persists it, and advances the runtime
+    stage — without any Director/retry machinery."""
+    from app.models.mock_interview_runtime import MockInterviewRuntime
+    from app.services.interview.mock_interview_service import NextTurn
+
+    record_id, conv_id = _seed_started_mock(db)
+
+    async def fake_next_turn(**kwargs):
+        return NextTurn(
+            interviewer_message="好的。讲讲你最近的项目？",
+            next_stage_key="candidate_questions",
+            is_ready_to_finish=False,
+        )
+
+    monkeypatch.setattr(
+        "app.services.interview.mock_interview_service.generate_next_turn",
+        fake_next_turn,
+    )
+
+    resp = client.post(
+        f"/api/v1/mock-interviews/{record_id}/answer",
+        json={"answer_text": "我叫小王，三年后端。"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["interviewer_message"].startswith("好的")
+    assert body["current_stage_key"] == "candidate_questions"
+    assert body["is_ready_to_finish"] is False
+
+    # The user answer + the new assistant line are both persisted (opening + 2).
+    msgs = (
+        db.query(ConversationMessage)
+        .filter(ConversationMessage.conversation_id == conv_id)
+        .order_by(ConversationMessage.seq)
+        .all()
+    )
+    assert [m.role for m in msgs] == ["assistant", "user", "assistant"]
+    rt = db.query(MockInterviewRuntime).filter(
+        MockInterviewRuntime.interview_record_id == record_id
+    ).first()
+    assert rt.current_stage_key == "candidate_questions"
+
+
+def test_mock_finish_transitions_to_processing_review_and_dispatches(
+    client: TestClient, db: Session, monkeypatch,
+):
+    """``finish`` flips the record to processing_review and dispatches the
+    review task; the record drops out of the review list until review_ready."""
+    from app.models.interview_record import InterviewRecord
+
+    record_id, conv_id = _seed_started_mock(db)
+    # Finish requires at least one answered turn.
+    db.add(ConversationMessage(conversation_id=conv_id, seq=2, role="user", content="我的回答"))
+    db.commit()
+
+    dispatched: dict = {}
+
+    class _FakeAsyncResult:
+        id = "task_123"
+
+    def fake_delay(rid):
+        dispatched["record_id"] = rid
+        return _FakeAsyncResult()
+
+    monkeypatch.setattr("app.worker.tasks.process_interview_analysis.delay", fake_delay)
+
+    resp = client.post(f"/api/v1/mock-interviews/{record_id}/finish")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body == {"status": "processing_review", "record_id": record_id}
+    assert dispatched["record_id"] == record_id
+
+    db.expire_all()
+    assert db.get(InterviewRecord, record_id).status == "processing_review"
+
+
+def test_mock_abandon_deletes_everything(client: TestClient, db: Session):
+    """``DELETE /mock-interviews/{id}`` removes the conversation + messages +
+    runtime + draft record for an unfinished mock."""
+    from app.models.interview_record import InterviewRecord
+    from app.models.mock_interview_runtime import MockInterviewRuntime
+
+    record_id, conv_id = _seed_started_mock(db)
+
+    resp = client.delete(f"/api/v1/mock-interviews/{record_id}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"status": "deleted", "record_id": record_id}
+
+    db.expire_all()
+    assert db.get(InterviewRecord, record_id) is None
+    assert db.get(Conversation, conv_id) is None
+    assert db.query(MockInterviewRuntime).filter(
+        MockInterviewRuntime.interview_record_id == record_id
+    ).first() is None
+    assert db.query(ConversationMessage).filter(
+        ConversationMessage.conversation_id == conv_id
+    ).count() == 0
+
+
+def test_in_progress_returns_active_runtime(client: TestClient, db: Session):
+    """``GET /mock-interviews/in-progress`` surfaces the user's active runtime
+    for the resume banner."""
+    record_id, conv_id = _seed_started_mock(db)
+    resp = client.get("/api/v1/mock-interviews/in-progress")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["has_in_progress"] is True, (
-        "session with launched brief but zero Q&A must be surfaced as "
-        "in-progress; pre-fix it was being silently hard-deleted"
-    )
-    assert body["session_id"] == "s_launched"
-    assert body["qa_count"] == 0
-
-    # The session row must still exist (the sweeper must NOT have
-    # deleted it just because qa_history was empty).
-    still_there = db.query(ChatSession).filter(ChatSession.id == "s_launched").first()
-    assert still_there is not None
+    assert body["has_in_progress"] is True
+    assert body["record_id"] == record_id
+    assert body["conversation_id"] == conv_id
+    assert body["current_stage_key"] == "self_intro"
 
 
-def test_in_progress_still_purges_genuine_stale_shells(
-    client: TestClient, db: Session,
-):
-    """The "stale shell" purge has to stay alive for the originally
-    intended case: a session row that was created but never reached
-    brief-generation (plan LLM crashed, tab closed mid-startup). Those
-    rows have neither ``interview_plan`` nor ``pending_question`` —
-    truly empty shells, nothing for the user to resume.
-    """
-    import json
-
-    db.add(ChatSession(
-        id="s_shell",
-        user_id="alice",
-        title="模拟面试",
-        session_type="mock_interview",
-        # No interview_plan, no pending_question, no qa_history — the
-        # session got created by /chat/sessions but the subsequent
-        # /chat/mock-interview/start call never completed.
-        session_state=json.dumps({"schema_version": 2}),
-    ))
-    db.commit()
-
-    resp = client.get("/api/v1/chat/mock-interview/in-progress")
+def test_in_progress_false_when_no_active_runtime(client: TestClient, db: Session):
+    _uid(db, "alice")
+    resp = client.get("/api/v1/mock-interviews/in-progress")
     assert resp.status_code == 200
-    body = resp.json()
-    assert body["has_in_progress"] is False
-
-    # Confirm the genuinely-empty shell IS hard-deleted (so it doesn't
-    # keep haunting the resume banner on every page load).
-    purged = db.query(ChatSession).filter(ChatSession.id == "s_shell").first()
-    assert purged is None
+    assert resp.json()["has_in_progress"] is False
 
 
 def test_sse_chat_404_for_other_user(client: TestClient, db: Session):
-    db.add(ChatSession(id="s_bob", user_id="bob", title="t", session_type="general"))
+    _uid(db, "alice")  # authed principal — a distinct real user
+    db.add(Conversation(id="s_bob", user_id=_uid(db, "bob"), title="t", type="general"))
     db.commit()
     resp = client.post("/api/v1/chat/sse/s_bob", json={"message": "hi"})
     assert resp.status_code == 404
@@ -580,7 +544,7 @@ def test_sse_chat_emits_error_and_done_when_engine_crashes(
     pins both frames so a future refactor of the except-net can't
     silently drop the terminator.
     """
-    db.add(ChatSession(id="s_boom", user_id="alice", title="t", session_type="general"))
+    db.add(Conversation(id="s_boom", user_id=_uid(db, "alice"), title="t", type="general"))
     db.commit()
 
     async def boom(self):
@@ -607,8 +571,12 @@ def test_sse_chat_emits_error_and_done_when_engine_crashes(
         "missing done terminator — FE reader loop hangs forever; "
         "body=%r" % body[:500]
     )
-    # The raw exception message must propagate so debugging is possible.
-    assert "simulated_engine_crash" in body
+    # The user-facing error frame is HUMANIZED: the raw exception text
+    # (``simulated_engine_crash``) must NOT leak to the client — it goes to
+    # the server log instead. This is the point of routing the last-resort
+    # net through ``humanize_error`` (no raw ``Error code: 402 - {...}``
+    # dumps reaching the chat panel).
+    assert "simulated_engine_crash" not in body
 
 
 def test_sse_chat_mode_field_picks_strategy(client: TestClient, db: Session, monkeypatch):
@@ -627,7 +595,7 @@ def test_sse_chat_mode_field_picks_strategy(client: TestClient, db: Session, mon
     regression we DO NOT want — so the back-compat default is
     asserted explicitly.
     """
-    db.add(ChatSession(id="s_dispatch", user_id="alice", title="t", session_type="general"))
+    db.add(Conversation(id="s_dispatch", user_id=_uid(db, "alice"), title="t", type="general"))
     db.commit()
 
     captured: dict[str, str] = {}

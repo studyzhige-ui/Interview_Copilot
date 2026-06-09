@@ -1,28 +1,26 @@
-"""Tool result persistence — preserves large outputs instead of truncating.
+"""Stage A — offload oversized tool results instead of truncating them.
 
-Design reference:
-  - Hermes Agent ``tools/tool_result_storage.py`` (3-layer defense)
-  - Claude Code ``src/utils/toolResultStorage.ts`` (persist + aggregate budget)
+When a tool result is too large to keep inline, the full output is written to
+local storage and the in-context copy is replaced with a short preview + the
+file path; the model reads the rest on demand via ``read_file`` (itself never
+offloaded, to avoid a persist→read loop). Unlike the lossy Phase-1 summaries,
+this is recoverable — the full bytes stay on disk.
 
-Defense against context-window overflow operates at three levels:
+Three levels of defense against context-window overflow:
 
-1. **Per-tool output cap** (inside ToolEntry): Each tool declares
-   ``max_result_chars``.  The registry truncates at this level, but
-   the persistence layer below can override it for large results.
+1. **Per-tool output cap** (``ToolEntry.max_result_chars``): the registry
+   truncates at this level, but the per-result step below can override it.
 
-2. **Per-result persistence** (``maybe_persist_result``): After a tool
-   returns, if the serialised output exceeds the persistence threshold,
-   the full content is written to local storage (under ``data/agent-results/
-   {session_id}/{tool_call_id}.txt``).  The in-context content is replaced
-   with a preview + file-path reference.  The model can use ``read_file``
-   to access the full output on demand.
+2. **Per-result persistence** (``maybe_persist_result``): if a single result
+   exceeds ``AGENT_PERSIST_THRESHOLD``, write the full content to
+   ``{APP_DATA_DIR}/agent-results/{session_id}/{tool_call_id}.txt`` and replace
+   the in-context content with a preview + path (read back via
+   ``resolve_persisted_path`` + ``read_file``).
 
-3. **Per-turn aggregate budget** (``enforce_turn_budget``): After all
-   tool results in a single assistant turn are collected, if the total
-   chars exceed ``AGENT_TURN_BUDGET_CHARS`` (default 100K), the largest
-   non-persisted results are spilled to disk until the aggregate is
-   under budget.  This catches cases where many medium-sized results
-   combine to overflow context.
+3. **Per-turn aggregate budget** (``enforce_turn_budget``): if all tool
+   results in one assistant turn together exceed ``AGENT_TURN_BUDGET_CHARS``,
+   spill the largest non-persisted results until under budget — catching many
+   medium results that combine to overflow.
 """
 
 import logging
@@ -32,12 +30,11 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# XML-style tags used by Hermes and Claude Code for persisted output blocks.
+# XML-style tags marking a persisted-output block in the message stream.
 PERSISTED_OUTPUT_TAG = "<persisted-output>"
 PERSISTED_OUTPUT_CLOSING_TAG = "</persisted-output>"
 
-# Tools whose output should NEVER be persisted (prevents read→persist loop).
-# Claude Code: FileReadTool.maxResultSizeChars = Infinity
+# Tools whose output is never offloaded (would create a persist→read loop).
 _NEVER_PERSIST_TOOLS: frozenset[str] = frozenset({"read_file"})
 
 
@@ -101,13 +98,13 @@ def _build_persisted_message(
     return msg
 
 
-# ── Layer 2: Per-result persistence ──────────────────────────────────────
+# ── Per-result persistence ───────────────────────────────────────────────
 
 def resolve_threshold(tool_name: str) -> int | float:
     """Resolve the effective persistence threshold for a tool.
 
     - Tools in ``_NEVER_PERSIST_TOOLS`` → ``inf`` (never persisted).
-    - Otherwise → ``settings.AGENT_PERSIST_THRESHOLD`` (default 30K).
+    - Otherwise → ``settings.AGENT_PERSIST_THRESHOLD``.
     """
     if tool_name in _NEVER_PERSIST_TOOLS:
         return float("inf")
@@ -122,7 +119,7 @@ def maybe_persist_result(
     *,
     threshold: int | float | None = None,
 ) -> str:
-    """Layer 2: persist an oversized tool result to local storage.
+    """Persist an oversized tool result to local storage.
 
     If the content exceeds the threshold, write it to disk and return
     a ``<persisted-output>`` replacement with a preview and file path.
@@ -162,13 +159,13 @@ def maybe_persist_result(
         )
 
 
-# ── Layer 3: Per-turn aggregate budget ───────────────────────────────────
+# ── Per-turn aggregate budget ────────────────────────────────────────────
 
 def enforce_turn_budget(
     tool_messages: list[dict],
     session_id: str,
 ) -> list[dict]:
-    """Layer 3: enforce aggregate character budget across all tool results in a turn.
+    """Enforce the aggregate character budget across all tool results in a turn.
 
     If total chars exceed ``AGENT_TURN_BUDGET_CHARS``, persist the
     largest non-persisted results first until under budget.
@@ -224,3 +221,24 @@ def enforce_turn_budget(
 def is_persisted_content(content: str) -> bool:
     """Check if content has already been replaced by a persisted-output block."""
     return content.startswith(PERSISTED_OUTPUT_TAG)
+
+
+def resolve_persisted_path(session_id: str, path_str: str) -> Path | None:
+    """Resolve *path_str* to a persisted-result file confined to *session_id*.
+
+    Read-back companion to :func:`maybe_persist_result`. Returns the resolved
+    path only when it lives inside this session's ``agent-results`` directory
+    and is an existing file — otherwise ``None``. Both sides are resolved to
+    absolute paths and checked with ``relative_to``, which blocks path
+    traversal, so a tool can only read back files this session actually
+    persisted (never arbitrary disk locations).
+    """
+    if not path_str:
+        return None
+    base = _storage_dir(session_id).resolve()
+    try:
+        target = Path(path_str).resolve()
+        target.relative_to(base)
+    except (ValueError, OSError):
+        return None
+    return target if target.is_file() else None

@@ -13,7 +13,7 @@ Pick **one** path:
 After either path completes, you'll have a working register / login /
 chat / mock-interview / analysis flow.
 
-Optional add-ons (real email, LLM tracing, Sentry, web search) and the
+Optional add-ons (real email, LLM tracing, web search) and the
 full gotcha collection live at the end:
 **[Optional add-ons](#optional-add-ons)** · **[Common gotchas](#common-gotchas)**.
 
@@ -288,19 +288,6 @@ TAVILY_API_KEY=tvly-...
 
 Restart. Agent mode's `web_search` tool is now active. The model decides
 on its own when to use it (function calling).
-
-### Sentry — error tracking
-
-Sign up <https://sentry.io>, create a Python (FastAPI) project, copy
-DSN to `.env`:
-
-```ini
-SENTRY_DSN=https://...@...ingest.us.sentry.io/...
-SENTRY_ENVIRONMENT=prod
-```
-
-Frontend has its own DSN in `frontend/.env.production` as
-`VITE_SENTRY_DSN`.
 
 ### Per-user model selection (Models page)
 

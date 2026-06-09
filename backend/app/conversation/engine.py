@@ -29,8 +29,6 @@ import time
 import traceback
 from typing import AsyncGenerator
 
-import openai
-
 from app.conversation.events import HarnessEvent
 from app.conversation.strategy import (
     ExecutionStrategy,
@@ -38,6 +36,7 @@ from app.conversation.strategy import (
     StrategyResult,
 )
 from app.core.background_tasks import safe_background_task
+from app.core.error_messages import humanize_error
 from app.conversation.query_planner import plan_query
 from app.rag.knowledge_retriever import knowledge_retriever
 from app.services.chat.chat_history_service import transcript_service
@@ -80,7 +79,7 @@ class ConversationEngine:
         self._retrieval_hit: bool = False
         # Set in submit_message when a phase crashes. Persistence +
         # post-turn maintenance gate on this so error-humanised text
-        # ("系统出了点问题…") doesn't enter chat_messages or feed
+        # ("系统出了点问题…") doesn't enter conversation_messages or feed
         # realtime memory extraction.
         self._turn_status: str = "completed"
 
@@ -117,7 +116,7 @@ class ConversationEngine:
             # net — humanise + emit and let the user see the error,
             # but mark the turn as failed so persistence + post-turn
             # maintenance skip below (avoids writing the humanised
-            # error string into chat_messages as if it were a real
+            # error string into conversation_messages as if it were a real
             # answer, and avoids feeding it to memory extraction).
             self._turn_status = "failed"
             logger.error(
@@ -155,17 +154,17 @@ class ConversationEngine:
         differences only kick in inside ``strategy.execute()``.
 
         Flow:
-          1. Universal memory load (fast: ~4 local DB reads, no LLM).
-             Gives the planner the knowledge index + strategy / habit
-             descriptions it needs to make body-load decisions.
+          1. Universal memory load (fast: a few local DB reads, no LLM).
+             Gives the planner the user_profile + ability states + the
+             learning_strategy one-liner it needs to decide whether to
+             load the full strategy body.
           2. Single planner LLM call: rewrites query + decides RAG
-             + picks memory bodies. (Used to be two LLM calls —
-             planner then a separate selection LLM. Merged in the
-             post-Stage-G simplification.)
+             + whether to load the strategy body. (Used to be two LLM
+             calls — planner then a separate selection LLM. Merged in
+             the post-Stage-G simplification.)
           3. Concurrent: RAG retrieval (Milvus + reranker, ~hundreds
-             of ms) // memory body loads (cheap DB reads). Running
-             them as tasks just lets the RAG round-trip overlap with
-             body loads + saves a few tens of ms.
+             of ms) // the optional strategy-body load (cheap DB read).
+             Running them as tasks lets the RAG round-trip overlap.
         """
         # ``ensure_session`` opens a SessionLocal + INSERT — wrap in
         # to_thread so the event loop isn't blocked on the DB round-
@@ -194,9 +193,8 @@ class ConversationEngine:
         # bodies. Per Stage-H semantics, the toggle is the cross-
         # session memory gate (analog of Claude Code's
         # ``isAutoMemoryEnabled``). Session-local context
-        # (recent_turns + session_state + debrief reference) still
-        # flows in normally — debrief reference is interview-bound
-        # material, not "memory".
+        # (recent_turns + debrief reference) still flows in normally —
+        # debrief reference is interview-bound material, not "memory".
         if global_memory_on:
             # load_universal is sync (opens 1 session via session_scope
             # post-P1-F). Dispatching to a worker thread keeps the
@@ -207,23 +205,16 @@ class ConversationEngine:
         else:
             universal_ctx = V3MemoryContext()  # truly empty bundle
 
-        # Step 2: planner LLM. Inputs are STRUCTURED — session_state +
-        # recent_turns come straight from transcript_service, no
-        # pre-rendered string wrapper. The planner builds its own
-        # prompt internally with the user message at the end (LLMs
-        # attend more to the tail of the context).
+        # Step 2: planner LLM. Inputs are STRUCTURED — recent_turns comes
+        # straight from transcript_service, no pre-rendered string wrapper.
+        # The planner builds its own prompt internally with the user message
+        # at the end (LLMs attend more to the tail of the context).
         meta = await asyncio.to_thread(
             transcript_service.get_session_meta, self.session_id,
         )
         if meta is None:
-            session_state: dict = {}
             recent_turns: list[dict] = []
         else:
-            from app.services.chat.session_state import parse_session_state
-            session_state = parse_session_state(
-                meta["session_state"],
-                meta.get("session_type", "general"),
-            )
             recent_turns = await asyncio.to_thread(
                 transcript_service.get_recent_turns,
                 self.session_id, 20, meta["compaction_cursor"],
@@ -231,15 +222,20 @@ class ConversationEngine:
 
         query_plan = await plan_query(
             user_message=self.user_message,
-            session_state=session_state,
             recent_turns=recent_turns,
-            knowledge_index_lines=universal_ctx.knowledge_index_lines,
-            strategy_description=universal_ctx.strategy_description,
-            habit_description=universal_ctx.habit_description,
+            learning_strategy_description=universal_ctx.learning_strategy_description,
             global_memory_on=global_memory_on,
         )
 
         # Step 3: concurrent RAG + memory body loads.
+        #
+        # L2 (agent) mode skips engine-side RAG: the agent retrieves knowledge
+        # on demand via the ``search_knowledge`` tool, so injecting it here
+        # would be redundant and double-pay the Milvus + rerank cost. It also
+        # lengthens the cache-stable prompt prefix — RAG chunks were the
+        # per-turn-variable part of the agent's grounding. L1 (chat) keeps it.
+        # ``query_plan`` is left intact so memory-body loads below still fire.
+        agent_mode = self.strategy.name == "agent"
         knowledge_task = (
             asyncio.create_task(
                 knowledge_retriever.retrieve(
@@ -248,25 +244,18 @@ class ConversationEngine:
                     user_id=self.user_id,
                 )
             )
-            if query_plan.needs_knowledge_retrieval else None
+            if query_plan.needs_knowledge_retrieval and not agent_mode else None
         )
 
-        wants_bodies = bool(
-            query_plan.knowledge_topics
-            or query_plan.load_strategy
-            or query_plan.load_habit
-        )
         bodies_task = (
             asyncio.create_task(
                 attach_active_bodies(
                     universal_ctx,
                     user_id=self.user_id,
-                    topics=query_plan.knowledge_topics,
                     load_strategy=query_plan.load_strategy,
-                    load_habit=query_plan.load_habit,
                 )
             )
-            if wants_bodies else None
+            if query_plan.load_strategy else None
         )
 
         if bodies_task is not None:
@@ -327,7 +316,7 @@ class ConversationEngine:
 
     async def _persist_turn(self) -> None:
         """Write the user message + assistant message pair to
-        chat_messages, including Claude-Code-style content blocks.
+        conversation_messages, including Claude-Code-style content blocks.
 
         ``transcript_service.append_turn`` is a sync DB transaction
         (opens a SessionLocal, inserts 2 rows, commits). Dispatching
@@ -405,33 +394,12 @@ class ConversationEngine:
     def _humanize_exc(exc: Exception) -> str:
         """Translate an upstream exception into actionable Chinese.
 
-        Shared by both L1 chat and L2 agent paths so user-visible
-        errors look the same regardless of which strategy crashed.
-        Full traceback still goes to the backend log via the caller's
-        ``logger.error(...)``.
+        Delegates to the shared :func:`humanize_error` so L1 chat, L2
+        agent, the SSE last-resort net, and this engine all surface
+        identical wording. Full traceback still goes to the backend log
+        via the caller's ``logger.error(...)``.
         """
-        if isinstance(exc, openai.AuthenticationError):
-            return (
-                "当前模型的密钥无效或已失效。请到「模型」页面，找到对应厂商卡片，"
-                "重新配置 API 密钥后再试。"
-            )
-        if isinstance(exc, openai.RateLimitError):
-            return "模型厂商当前限流（请求过于频繁），请稍等几秒后重试。"
-        if isinstance(exc, openai.APIConnectionError):
-            return "无法连接到模型服务，请检查网络或稍后再试。"
-        if isinstance(exc, openai.APITimeoutError):
-            return "模型响应超时，请重试一次。"
-        if isinstance(exc, openai.BadRequestError):
-            try:
-                detail = (exc.body or {}).get("error", {}).get("message", "")
-            except Exception:  # noqa: BLE001
-                detail = ""
-            if detail:
-                return f"请求被模型拒绝：{detail}"
-            return "请求被模型拒绝（可能是上下文过长或参数不合规）。"
-        return (
-            "系统出了点问题，请稍后再试。如果反复发生，请把这次操作的时间告诉运维。"
-        )
+        return humanize_error(exc)
 
     # ── Helpers ───────────────────────────────────────────────────
 

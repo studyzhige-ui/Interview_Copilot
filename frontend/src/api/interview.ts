@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import { uploadFileAsset } from './fileAssets';
 import type {
   AnalyzeDispatchResp,
   InterviewRecordDetail,
@@ -38,23 +39,19 @@ export async function getInterviewSummary(id: string): Promise<string | null> {
 }
 
 export async function uploadAudio(file: File): Promise<{ upload_id: string; filename: string }> {
-  const fd = new FormData();
-  fd.append('file', file);
-  const res = await apiClient.post('/upload/audio/direct', fd);
-  return res.data;
+  // Unified presigned flow (purpose='interview_audio') — no server-receives-bytes
+  // direct upload. Returns the confirmed file_asset id as upload_id.
+  const fileAssetId = await uploadFileAsset(file, 'interview_audio');
+  return { upload_id: fileAssetId, filename: file.name };
 }
 
-export async function uploadResume(file: File): Promise<{ upload_id: string; filename: string }> {
-  const fd = new FormData();
-  fd.append('file', file);
-  const res = await apiClient.post('/upload/resume/direct', fd);
-  return res.data;
-}
-
+/** A personal resume the user can pick as interview context (the first-class
+ *  `resumes` entity — NOT a knowledge document). */
 export interface StoredResume {
-  upload_id: string;
-  filename: string;
-  size_bytes: number | null;
+  resume_id: string;
+  title: string;
+  is_default: boolean;
+  parse_status: string;
   created_at: string;
 }
 
@@ -64,12 +61,16 @@ export async function listStoredResumes(): Promise<StoredResume[]> {
 }
 
 /** Dispatch a unified analysis on an uploaded audio file. Returns the new
- *  `record_id` of the InterviewRecord — subscribe to SSE to follow progress. */
+ *  `record_id` of the InterviewRecord — subscribe to SSE to follow progress.
+ *  Resume context is optional: either a personal resume (`resume_id`) or an
+ *  ad-hoc file uploaded for this interview (`resume_file_asset_id`). JD is a
+ *  snapshot only — `jd_text` or `jd_file_asset_id` (never a knowledge doc). */
 export async function startAnalyze(payload: {
   upload_id: string;
-  resume_upload_id: string;
+  resume_id?: string;
+  resume_file_asset_id?: string;
   jd_text?: string;
-  jd_upload_id?: string;
+  jd_file_asset_id?: string;
   /** WhisperX language hint. ``"zh"`` / ``"en"`` force the decoder
    *  (much more accurate on monolingual audio). ``"auto"`` lets Whisper
    *  detect per clip — only use for genuinely mixed recordings. */
@@ -101,10 +102,11 @@ export async function updateInterviewRecord(
 
 export async function deleteInterviewRecord(
   id: string,
-  opts: { cascadeChats?: boolean } = {},
+  /** Also delete the knowledge documents this interview's QAs published. */
+  opts: { cascadeKnowledge?: boolean } = {},
 ): Promise<void> {
   await apiClient.delete(`/interview-records/${encodeURIComponent(id)}`, {
-    params: opts.cascadeChats ? { cascade_chats: true } : undefined,
+    params: opts.cascadeKnowledge ? { cascade_knowledge: true } : undefined,
   });
 }
 
@@ -116,5 +118,25 @@ export async function editInterviewQA(
   await apiClient.patch(
     `/interview-records/${encodeURIComponent(recordId)}/qa/${encodeURIComponent(qaId)}`,
     patch,
+  );
+}
+
+/** Publish a QA's improved answer to the knowledge base (source_kind=improved_qa). */
+export async function saveQAToKnowledge(
+  recordId: string,
+  qaId: string,
+  opts: { category?: string } = {},
+): Promise<{ document_id: string; saved_document_id: string }> {
+  const res = await apiClient.post(
+    `/interview-records/${encodeURIComponent(recordId)}/qa/${encodeURIComponent(qaId)}/save-to-knowledge`,
+    { category: opts.category },
+  );
+  return res.data;
+}
+
+/** Remove the knowledge document previously saved from this QA. */
+export async function unsaveQAFromKnowledge(recordId: string, qaId: string): Promise<void> {
+  await apiClient.delete(
+    `/interview-records/${encodeURIComponent(recordId)}/qa/${encodeURIComponent(qaId)}/save-to-knowledge`,
   );
 }

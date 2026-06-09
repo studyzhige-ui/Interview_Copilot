@@ -1,86 +1,80 @@
 import { apiClient } from './client';
-import type {
-  MockAnswerResp,
-  MockFinishResp,
-  MockQuestion,
-  MockStartResp,
-} from '@/types/api';
+import type { MockAnswerResp, MockFinishResp, MockStartResp } from '@/types/api';
 
 export async function startMockInterview(payload: {
-  session_id: string;
-  resume_upload_id?: string;
-  jd_upload_id?: string;
+  /** Personal resume entity (resumes.id) to use as context. */
+  resume_id?: string;
+  /** Freshly-uploaded resume file asset (file_assets.id). */
+  resume_file_asset_id?: string;
+  /** JD text — pasted or parsed inline. JD is never a knowledge document. */
   jd_text?: string;
+  jd_file_asset_id?: string;
+  plan_template_key?: string;
   interviewer_style?: 'friendly' | 'professional' | 'rigorous' | 'pressure';
   voice_mode?: 'text' | 'voice' | 'hybrid';
 }): Promise<MockStartResp> {
-  const res = await apiClient.post('/chat/mock-interview/start', payload);
+  const res = await apiClient.post('/mock-interviews/start', payload);
   return res.data;
 }
 
-export async function getMockCurrentQuestion(sessionId: string): Promise<MockQuestion> {
-  const res = await apiClient.get('/chat/mock-interview/question', { params: { session_id: sessionId } });
-  return res.data;
-}
-
-export async function submitMockAnswer(payload: {
-  session_id: string;
-  answer: string;
-}): Promise<MockAnswerResp> {
-  const res = await apiClient.post('/chat/mock-interview/answer', payload);
-  return res.data;
-}
-
-export async function finishMockInterview(sessionId: string): Promise<MockFinishResp> {
+export async function submitMockAnswer(
+  recordId: string,
+  payload: { answer_text: string; answer_audio_file_asset_id?: string },
+): Promise<MockAnswerResp> {
   const res = await apiClient.post(
-    '/chat/mock-interview/finish',
-    null,
-    { params: { session_id: sessionId } },
+    `/mock-interviews/${encodeURIComponent(recordId)}/answer`,
+    payload,
   );
   return res.data;
 }
 
-// transcribe endpoint shipped — backend POST /chat/mock-interview/transcribe
+export async function finishMockInterview(recordId: string): Promise<MockFinishResp> {
+  const res = await apiClient.post(`/mock-interviews/${encodeURIComponent(recordId)}/finish`);
+  return res.data;
+}
+
+export async function retryMockReview(recordId: string): Promise<MockFinishResp> {
+  const res = await apiClient.post(
+    `/mock-interviews/${encodeURIComponent(recordId)}/retry-review`,
+  );
+  return res.data;
+}
+
+// transcribe endpoint shipped — backend POST /mock-interviews/transcribe
 export const TRANSCRIBE_AVAILABLE = true;
 
 export async function transcribeAudio(blob: Blob): Promise<string> {
   const fd = new FormData();
   fd.append('file', blob, 'answer.webm');
-  const res = await apiClient.post('/chat/mock-interview/transcribe', fd);
+  const res = await apiClient.post('/mock-interviews/transcribe', fd);
   return res.data?.text ?? '';
 }
 
 export interface InProgressMock {
   has_in_progress: boolean;
-  session_id?: string;
+  record_id?: string;
+  conversation_id?: string;
+  runtime_id?: string;
   title?: string;
-  current_phase?: string | null;
-  current_question_idx?: number;
-  qa_count?: number;
+  current_stage_key?: string | null;
+  /** The last interviewer line — what the candidate is answering. */
+  current_question?: string | null;
   last_activity_at?: string | null;
 }
 
 export async function getInProgressMock(): Promise<InProgressMock> {
-  const res = await apiClient.get('/chat/mock-interview/in-progress');
+  const res = await apiClient.get('/mock-interviews/in-progress');
   return res.data;
 }
 
-/** ``MockAbandonResp`` from the backend — mirrored in
- *  ``backend/app/schemas/chat.py::MockAbandonResp``. We surface the
- *  shape so future call sites can read the confirmation without
- *  another round-trip; existing callers can keep ignoring the
- *  resolved value (await abandonMockInterview(...)). */
+/** ``MockAbandonResp`` from the backend (``DELETE /mock-interviews/{id}``). */
 export interface AbandonMockResp {
   status: 'deleted';
-  session_id: string;
+  record_id: string;
 }
 
-export async function abandonMockInterview(
-  sessionId: string,
-): Promise<AbandonMockResp> {
-  const res = await apiClient.post('/chat/mock-interview/abandon', null, {
-    params: { session_id: sessionId },
-  });
+export async function abandonMockInterview(recordId: string): Promise<AbandonMockResp> {
+  const res = await apiClient.delete(`/mock-interviews/${encodeURIComponent(recordId)}`);
   return res.data;
 }
 
@@ -88,6 +82,6 @@ export async function abandonMockInterview(
 export async function parseJdForMock(file: File): Promise<{ text: string; filename: string }> {
   const fd = new FormData();
   fd.append('file', file);
-  const res = await apiClient.post('/chat/mock-interview/parse-jd', fd);
+  const res = await apiClient.post('/mock-interviews/parse-jd', fd);
   return { text: res.data?.text ?? '', filename: res.data?.filename ?? file.name };
 }

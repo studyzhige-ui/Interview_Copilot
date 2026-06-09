@@ -185,7 +185,7 @@ python scripts/init_models.py                        # 总共约 5GB，支持字
 |---|---|
 | `auth/` | email、token_blacklist、user_api_key、user_provider_settings、verification_code |
 | `resume/` | resume_service、resume_vector_service |
-| `knowledge/` | knowledge_service、knowledge_text_service |
+| `knowledge/` | knowledge_service、document_chunk_service |
 | `uploads/` | file_validation、upload_service |
 | `analytics/` | diagnostics_report_service、telemetry_service |
 | `interview/` | analysis_orchestrator、interview_record_service、mock_interview_service |
@@ -226,14 +226,14 @@ CDN"的时候才用得到。
 
 ## 技术栈
 
-- **API**：FastAPI 0.135、SQLAlchemy 2、Pydantic v2、slowapi（限流）、Sentry SDK
+- **API**：FastAPI 0.135、SQLAlchemy 2、Pydantic v2、slowapi（限流）
 - **后台任务**：Celery 5 + Redis（队列 / 缓存 / 黑名单）
 - **存储**：PostgreSQL 15、Milvus 2.5（向量）、MinIO（S3 兼容）
 - **AI**：LlamaIndex、BGE-M3 + BGE-Reranker-v2-m3、WhisperX、Pyannote
 - **LLM**：任意 OpenAI 兼容 API（默认 DeepSeek）
 - **前端**：React 18、Vite 5、Tailwind、zustand、react-virtual
 - **基础设施**：Docker Compose、nginx
-- **观测**：Sentry（错误）、LangSmith（LLM trace，按需启用）
+- **观测**：LangSmith（LLM trace，按需启用）
 
 ---
 

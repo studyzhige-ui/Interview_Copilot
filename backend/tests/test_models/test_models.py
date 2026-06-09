@@ -11,10 +11,10 @@ Coverage:
   * column / index / FK / unique-constraint definitions match the schema
     the alembic migrations build.
   * Round-trip insert + query through an in-memory SQLite session for the
-    core entities (User, ChatSession+ChatMessage, InterviewRecord +
-    InterviewQA, UserUpload, KnowledgeDocument, KnowledgeDoc /
-    StrategyDoc / HabitDoc / MemoryAuditLog (v3 memory),
-    MockInterviewSession, UserAPIKey, ResumeSection).
+    core entities (User, Conversation+ConversationMessage, InterviewRecord +
+    InterviewQA, FileAsset, KnowledgeDocument, MemoryDocument /
+    MemoryAbilityState / MemoryAuditEntry (v3 memory),
+    MockInterviewRuntime, UserModelCredential, ResumeSection).
 """
 from __future__ import annotations
 
@@ -87,19 +87,23 @@ def test_all_expected_tables_registered(test_engine):
     tables = set(insp.get_table_names())
     expected = {
         "users",
-        "user_uploads",
-        "user_api_keys",
+        "file_assets",
+        "outbox_jobs",
+        "user_model_credentials",
+        "user_model_provider_settings",
+        "user_model_selections",
         "knowledge_documents",
+        "document_chunks",
         "interview_records",
         "interview_qa",
-        "mock_interview_sessions",
-        "chat_sessions",
-        "chat_messages",
-        # v3 memory tables (memory_items was retired in 0003)
-        "knowledge_docs",
-        "strategy_docs",
-        "habit_docs",
-        "memory_audit_log",
+        "mock_interview_runtime",
+        "conversations",
+        "conversation_messages",
+        "resumes",
+        # MEMORY-V3 stores (old knowledge/strategy/habit/audit_log dropped in 0023)
+        "memory_documents",
+        "memory_ability_states",
+        "memory_audit_logs",
         "resume_sections",
     }
     missing = expected - tables
@@ -113,17 +117,16 @@ def test_user_columns_and_uniques(test_engine):
                      "email_verified", "nickname", "avatar_url", "bio",
                      "created_at", "updated_at"):
         assert required in cols, f"User.{required} missing"
-    uniques = {u["name"] for u in insp.get_indexes("users") if u["unique"]}
     # Index-style uniqueness on username/email.
     assert any("username" in u["column_names"] for u in insp.get_indexes("users")), \
         "username should be indexed"
 
 
-def test_user_api_key_unique_constraint(test_engine):
+def test_user_model_credential_unique_constraint(test_engine):
     insp = inspect(test_engine)
-    uqs = insp.get_unique_constraints("user_api_keys")
+    uqs = insp.get_unique_constraints("user_model_credentials")
     names = {u["name"] for u in uqs}
-    assert "uq_user_api_keys_user_provider" in names, \
+    assert "uq_user_model_credentials_user_provider" in names, \
         f"Missing unique (user_id, provider): {uqs}"
 
 
@@ -137,14 +140,14 @@ def test_interview_qa_foreign_key_to_record(test_engine):
 
 def test_chat_message_foreign_key_to_session(test_engine):
     insp = inspect(test_engine)
-    fks = insp.get_foreign_keys("chat_messages")
+    fks = insp.get_foreign_keys("conversation_messages")
     targets = {fk["referred_table"] for fk in fks}
-    assert "chat_sessions" in targets
+    assert "conversations" in targets
 
 
-def test_mock_session_cascades_from_interview_record(test_engine):
+def test_mock_runtime_cascades_from_interview_record(test_engine):
     insp = inspect(test_engine)
-    fks = insp.get_foreign_keys("mock_interview_sessions")
+    fks = insp.get_foreign_keys("mock_interview_runtime")
     assert any(fk["referred_table"] == "interview_records" for fk in fks)
 
 
@@ -184,19 +187,19 @@ def test_user_unique_username_violates(db_session):
 
 
 def test_chat_session_with_messages_relationship(db_session):
-    from app.models.chat import ChatSession, ChatMessage
+    from app.models.chat import Conversation, ConversationMessage
 
-    session = ChatSession(id="sess-001", user_id="user1", title="测试会话")
+    session = Conversation(id="sess-001", user_id="user1", title="测试会话")
     db_session.add(session)
     db_session.flush()
 
     db_session.add_all([
-        ChatMessage(session_id="sess-001", seq=1, role="User", content="hi"),
-        ChatMessage(session_id="sess-001", seq=2, role="Agent", content="hello back"),
+        ConversationMessage(conversation_id="sess-001", seq=1, role="User", content="hi"),
+        ConversationMessage(conversation_id="sess-001", seq=2, role="Agent", content="hello back"),
     ])
     db_session.flush()
 
-    loaded = db_session.query(ChatSession).filter(ChatSession.id == "sess-001").first()
+    loaded = db_session.query(Conversation).filter(Conversation.id == "sess-001").first()
     assert len(loaded.messages) == 2
     # relationship order_by=seq → first msg is the user msg
     assert loaded.messages[0].seq == 1
@@ -212,7 +215,6 @@ def test_interview_record_with_qa_rows(db_session):
         source="upload",
         title="t",
         status="completed",
-        transcript="面试官:你好",
         analysis_json='{"schema_version": 2}',
     )
     db_session.add(record)
@@ -257,17 +259,32 @@ def test_interview_record_status_update(db_session):
     assert loaded.analysis_schema_version == 2
 
 
-def test_user_upload_object_key_unique(db_session):
-    from app.models.upload import UserUpload
+def test_file_asset_object_key_unique(db_session):
+    from app.models.file_asset import FileAsset
 
-    db_session.add(UserUpload(
-        id="upl_a", user_id="u1", purpose="resume",
+    # ``FileAsset.user_id`` is the integer ``users.id`` FK, so seed a real user
+    # and key both assets on its pk. The collision under test is the unique
+    # ``object_key`` index, not the FK.
+    uid = _make_user(db_session, username="fa_owner")
+
+    asset = FileAsset(
+        id="fa_a", user_id=uid, purpose="resume",
         original_filename="cv.pdf", storage_uri="s3://bk/a",
         object_key="key-shared",
-    ))
+    )
+    db_session.add(asset)
     db_session.flush()
-    db_session.add(UserUpload(
-        id="upl_b", user_id="u1", purpose="resume",
+
+    # Defaults applied on insert.
+    loaded = db_session.query(FileAsset).filter(FileAsset.id == "fa_a").first()
+    assert loaded.upload_status == "pending_upload"
+    assert loaded.validation_status == "pending"
+    assert loaded.deleted_at is None
+    assert loaded.id.startswith("fa_")
+
+    # A second row reusing the same object_key violates the unique index.
+    db_session.add(FileAsset(
+        id="fa_b", user_id=uid, purpose="resume",
         original_filename="cv2.pdf", storage_uri="s3://bk/b",
         object_key="key-shared",
     ))
@@ -277,11 +294,14 @@ def test_user_upload_object_key_unique(db_session):
 
 
 def test_knowledge_document_default_values(db_session):
+    from app.models.file_asset import FileAsset
     from app.models.knowledge import KnowledgeDocument
-    from app.models.upload import UserUpload
 
-    db_session.add(UserUpload(
-        id="upl_k", user_id="u1", purpose="knowledge",
+    # The KnowledgeDocument.file_asset_id FK points at file_assets.id, so the
+    # parent asset is a FileAsset keyed on the integer users.id.
+    uid = _make_user(db_session, username="kdoc_owner")
+    db_session.add(FileAsset(
+        id="upl_k", user_id=uid, purpose="knowledge_document",
         original_filename="doc.pdf", storage_uri="s3://bk/k",
         object_key="key-knowledge",
     ))
@@ -289,9 +309,9 @@ def test_knowledge_document_default_values(db_session):
 
     doc = KnowledgeDocument(
         user_id="u1",
-        upload_id="upl_k",
+        file_asset_id="upl_k",
         title="Redis 缓存雪崩",
-        source_type="interview_qa",
+        source_kind="user_upload",
         storage_uri="s3://bk/k",
         object_key="key-knowledge",
     )
@@ -302,46 +322,138 @@ def test_knowledge_document_default_values(db_session):
     assert loaded.category == "默认"
     assert loaded.status == "processing"
     assert loaded.chunk_count == 0
-    assert loaded.node_ids == "[]"
+    assert loaded.ref_doc_ids == "[]"
 
 
-def test_knowledge_doc_defaults_and_unique_topic(db_session):
-    """v3 memory: one row per (user, topic), with denormalised index fields."""
-    from app.models.knowledge_doc import KnowledgeDoc
+def _make_user(db_session, username: str = "mem_user") -> int:
+    """Seed a users row and return its integer PK (v3 memory tables key on
+    ``users.id``)."""
+    from app.models.user import User
 
-    doc = KnowledgeDoc(
-        user_id="u1",
-        topic="Redis",
-        body="## 已掌握的认知\n\n## 学习进展\n",
-    )
+    u = User(username=username, hashed_password="x")
+    db_session.add(u)
+    db_session.flush()
+    return u.id
+
+
+def test_memory_document_defaults_and_unique_per_doc_type(db_session):
+    """v3 memory: ``memory_documents`` has one row per (user_id, doc_type)
+    with denormalised ``one_liner``; the unique constraint blocks a second
+    row of the same doc_type for the same user."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models.memory_document import MemoryDocument
+
+    uid = _make_user(db_session)
+
+    doc = MemoryDocument(user_id=uid, doc_type="user_profile", body="- 目标：后端")
     db_session.add(doc)
     db_session.flush()
 
-    loaded = db_session.query(KnowledgeDoc).first()
-    assert loaded.mastery_level == "unknown"
-    assert loaded.fact_count == 0
-    assert loaded.one_liner == ""
+    loaded = db_session.query(MemoryDocument).first()
+    assert loaded.doc_type == "user_profile"
+    assert loaded.one_liner == ""          # default
+    assert loaded.body == "- 目标：后端"
+    assert loaded.id.startswith("mdoc_")   # generated id prefix
+
+    # A different doc_type for the same user is allowed.
+    db_session.add(MemoryDocument(user_id=uid, doc_type="learning_strategy", body="x"))
+    db_session.flush()
+
+    # But a duplicate (user_id, doc_type) violates the unique constraint.
+    db_session.add(MemoryDocument(user_id=uid, doc_type="user_profile", body="dup"))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
 
 
-def test_strategy_and_habit_docs_are_singleton_per_user(db_session):
-    """strategy_doc / habit_doc have ``user_id UNIQUE`` so only one row
-    per user can exist."""
+def test_memory_ability_state_defaults_and_active_uniqueness(db_session):
+    """``memory_ability_states`` defaults ``mastery_level='improving'`` and
+    enforces ONE ACTIVE row per (user, topic, skill_type) via the partial
+    unique index (archived rows are excluded, so re-adding after archive is
+    allowed)."""
+    from datetime import datetime
+
     from sqlalchemy.exc import IntegrityError
 
-    from app.models.habit_doc import HabitDoc
-    from app.models.strategy_doc import StrategyDoc
+    from app.models.memory_ability_state import MemoryAbilityState
 
-    db_session.add(StrategyDoc(user_id="u1", body="x"))
+    uid = _make_user(db_session)
+
+    s1 = MemoryAbilityState(user_id=uid, topic="Redis", skill_type="knowledge_topic")
+    db_session.add(s1)
     db_session.flush()
-    db_session.add(StrategyDoc(user_id="u1", body="y"))
-    try:
+
+    loaded = db_session.query(MemoryAbilityState).first()
+    assert loaded.mastery_level == "improving"   # default
+    assert loaded.archived_at is None
+    assert loaded.id.startswith("mas_")
+
+    # A second ACTIVE row for the same (user, topic, skill_type) is rejected.
+    # NB: this flush raises, and the fixture rolls back to the SAVEPOINT —
+    # which also discards ``s1``. So the archive-then-readd check below
+    # re-seeds its own rows rather than relying on ``s1`` surviving.
+    db_session.add(
+        MemoryAbilityState(user_id=uid, topic="Redis", skill_type="knowledge_topic")
+    )
+    with pytest.raises(IntegrityError):
         db_session.flush()
-        raise AssertionError("expected IntegrityError on duplicate user_id")
-    except IntegrityError:
-        db_session.rollback()
+    db_session.rollback()
 
-    db_session.add(HabitDoc(user_id="u1", body="x"))
+    # Seed a fresh live row, archive it, then re-add: the partial index
+    # excludes the archived row, so a new active row for the same key is
+    # allowed (history is preserved).
+    uid2 = _make_user(db_session, username="mem_user_b")
+    live = MemoryAbilityState(user_id=uid2, topic="TCP", skill_type="knowledge_topic")
+    db_session.add(live)
     db_session.flush()
+    live.archived_at = datetime.utcnow()
+    db_session.flush()
+    db_session.add(
+        MemoryAbilityState(user_id=uid2, topic="TCP", skill_type="knowledge_topic",
+                           mastery_level="weak")
+    )
+    db_session.flush()
+    active = db_session.query(MemoryAbilityState).filter(
+        MemoryAbilityState.topic == "TCP",
+        MemoryAbilityState.archived_at.is_(None),
+    ).all()
+    assert len(active) == 1
+    assert active[0].mastery_level == "weak"
+    # Total TCP rows = 1 archived + 1 active.
+    assert db_session.query(MemoryAbilityState).filter(
+        MemoryAbilityState.topic == "TCP"
+    ).count() == 2
+
+
+def test_memory_audit_entry_round_trip_and_unique_idem_key(db_session):
+    """``memory_audit_logs`` is append-only; the ``idempotency_key`` index is
+    unique so a retried job can't double-write an audit row (NULL keys stay
+    distinct)."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models.memory_audit_logs import MemoryAuditEntry
+
+    uid = _make_user(db_session)
+
+    db_session.add_all([
+        MemoryAuditEntry(user_id=uid, change_type="patch_realtime", doc_type="user_profile"),
+        MemoryAuditEntry(user_id=uid, change_type="user_edit"),   # NULL idem key
+        MemoryAuditEntry(user_id=uid, change_type="user_edit"),   # NULL idem key — allowed
+    ])
+    db_session.flush()
+    assert db_session.query(MemoryAuditEntry).count() == 3
+
+    db_session.add(
+        MemoryAuditEntry(user_id=uid, change_type="patch_dreaming", idempotency_key="job-1")
+    )
+    db_session.flush()
+    db_session.add(
+        MemoryAuditEntry(user_id=uid, change_type="patch_dreaming", idempotency_key="job-1")
+    )
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
 
 
 # test_agent_run_and_steps_relationship was removed in the audit
@@ -350,16 +462,21 @@ def test_strategy_and_habit_docs_are_singleton_per_user(db_session):
 # instrumentation already captures every LLM call with full trace.
 
 
-def test_user_api_key_uniqueness(db_session):
-    from app.models.user_api_key import UserAPIKey
+def test_user_model_credential_uniqueness(db_session):
+    from app.models.user import User
+    from app.models.user_model_credentials import UserModelCredential
 
-    db_session.add(UserAPIKey(
-        user_id="u1", provider="openai",
+    user = User(username="u1", email="u1@example.com", hashed_password="x")
+    db_session.add(user)
+    db_session.flush()
+
+    db_session.add(UserModelCredential(
+        user_id=user.id, provider="openai",
         key_ciphertext="aaa", key_masked="sk-****abcd",
     ))
     db_session.flush()
-    db_session.add(UserAPIKey(
-        user_id="u1", provider="openai",
+    db_session.add(UserModelCredential(
+        user_id=user.id, provider="openai",
         key_ciphertext="bbb", key_masked="sk-****xyzw",
     ))
     with pytest.raises(IntegrityError):
@@ -367,21 +484,22 @@ def test_user_api_key_uniqueness(db_session):
     db_session.rollback()
 
 
-def test_mock_interview_session_defaults(db_session):
+def test_mock_runtime_defaults(db_session):
     from app.models.interview_record import InterviewRecord
-    from app.models.mock_interview_session import MockInterviewSession
+    from app.models.mock_interview_runtime import MockInterviewRuntime
 
-    rec = InterviewRecord(user_id="u1", source="mock", status="pending")
+    uid = _make_user(db_session, username="u1")
+    rec = InterviewRecord(user_id="u1", source="mock", status="mock_in_progress")
     db_session.add(rec)
     db_session.flush()
 
-    mis = MockInterviewSession(user_id="u1", interview_record_id=rec.id)
-    db_session.add(mis)
+    runtime = MockInterviewRuntime(user_id=uid, interview_record_id=rec.id)
+    db_session.add(runtime)
     db_session.flush()
 
-    loaded = db_session.query(MockInterviewSession).first()
+    loaded = db_session.query(MockInterviewRuntime).first()
     assert loaded.status == "in_progress"
-    assert loaded.current_question_idx == 0
+    assert loaded.stage_index == 0
     assert loaded.interviewer_style == "professional"
     assert loaded.voice_mode == "hybrid"
 
@@ -390,8 +508,8 @@ def test_resume_section_round_trip(db_session):
     from app.models.resume_section import ResumeSection
 
     section = ResumeSection(
-        user_id="u1",
-        upload_id="upl_x",
+        user_id=1,
+        resume_id="rsm_x",
         section_type="project",
         title="Interview Copilot",
         content="Built a multi-tenant RAG over BM25+vector.",

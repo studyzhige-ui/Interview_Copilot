@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.rate_limit import RATE_EXPENSIVE, RATE_UPLOAD, limiter
 from app.core.security import get_current_user
+from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
@@ -16,10 +17,14 @@ from app.schemas.rag import (
     KnowledgeDocumentUpdateRequest,
     KnowledgeUploadRequest,
     QueryRequest,
-    SourceTypeEnum,
+    SourceKindEnum,
 )
 from app.services.knowledge.knowledge_service import default_title, hard_delete_knowledge_document
-from app.services.uploads.upload_service import create_owned_upload, get_owned_upload, mark_upload_consumed
+from app.services.uploads.file_asset_service import (
+    create_file_asset,
+    get_owned_file_asset,
+    mark_file_asset_consumed,
+)
 from app.worker.tasks import process_document_ingestion
 
 logger = logging.getLogger(__name__)
@@ -37,11 +42,11 @@ async def api_query_knowledge_base(
 ):
     """Execute a user-scoped RAG query against the configured vector store."""
     try:
-        source_type_val = body.source_type.value if body.source_type else None
+        source_kind_val = body.source_kind.value if body.source_kind else None
 
         result = await query_knowledge_base(
             body.query,
-            source_type=source_type_val,
+            source_kind=source_kind_val,
             user_id=current_user.username,
         )
 
@@ -55,17 +60,17 @@ async def api_query_knowledge_base(
 
 
 def _document_payload(document: KnowledgeDocument) -> dict:
-    # Pull file metadata off the related UserUpload row if it loaded with the
+    # Pull file metadata off the related FileAsset row if it loaded with the
     # document (SQLAlchemy lazy-loads when accessed).
     upload = document.upload
     content_type = upload.content_type if upload else None
     size_bytes = upload.size_bytes if upload else None
     return {
         "id": document.id,
-        "upload_id": document.upload_id,
+        "upload_id": document.file_asset_id,
         "title": document.title,
         "category": document.category,
-        "source_type": document.source_type,
+        "source_kind": document.source_kind,
         "status": document.status,
         "task_id": document.task_id,
         "chunk_count": document.chunk_count,
@@ -87,7 +92,7 @@ async def create_knowledge_upload_url(
     current_user: User = Depends(get_current_user),
 ):
     """Create an owned knowledge upload and return a presigned upload URL."""
-    upload, url_info = create_owned_upload(
+    upload, url_info = create_file_asset(
         db,
         user_id=current_user.username,
         filename=body.filename,
@@ -113,29 +118,29 @@ async def create_knowledge_document(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        upload = get_owned_upload(
+        upload = get_owned_file_asset(
             db,
-            upload_id=body.upload_id,
+            file_asset_id=body.upload_id,
             user_id=current_user.username,
             purpose="knowledge_document",
         )
         if upload is None:
             raise HTTPException(status_code=404, detail="Upload not found")
-        if upload.status not in {"pending_upload", "uploaded"}:
+        if upload.upload_status not in {"pending_upload", "uploaded"}:
             raise HTTPException(status_code=409, detail="Upload has already been consumed")
 
         document = KnowledgeDocument(
-            user_id=current_user.username,
-            upload_id=upload.id,
+            user_id=resolve_user_pk(db, current_user.username),
+            file_asset_id=upload.id,
             title=body.title or default_title(upload),
             category=body.category.strip() or "默认",
-            source_type=body.source_type.value,
+            source_kind=body.source_kind.value,
             storage_uri=upload.storage_uri,
             object_key=upload.object_key,
             status="processing",
         )
         db.add(document)
-        mark_upload_consumed(db, upload)
+        mark_file_asset_consumed(db, upload)
         # Flush so document.id is assigned and the row is visible to the
         # Celery worker when it queries (commit happens below, BEFORE we
         # dispatch — otherwise the worker can race ahead of our commit and
@@ -184,7 +189,7 @@ async def create_knowledge_document(
 async def list_knowledge_documents(
     category: Optional[str] = None,
     status: Optional[str] = None,
-    source_type: Optional[SourceTypeEnum] = None,
+    source_kind: Optional[SourceKindEnum] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -193,14 +198,17 @@ async def list_knowledge_documents(
     query = (
         db.query(KnowledgeDocument)
         .options(selectinload(KnowledgeDocument.upload))
-        .filter(KnowledgeDocument.user_id == current_user.username)
+        .filter(
+            KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username),
+            KnowledgeDocument.deleted_at.is_(None),
+        )
     )
     if category:
         query = query.filter(KnowledgeDocument.category == category)
     if status:
         query = query.filter(KnowledgeDocument.status == status)
-    if source_type:
-        query = query.filter(KnowledgeDocument.source_type == source_type.value)
+    if source_kind:
+        query = query.filter(KnowledgeDocument.source_kind == source_kind.value)
     documents = query.order_by(KnowledgeDocument.updated_at.desc()).all()
     return {"status": "success", "documents": [_document_payload(doc) for doc in documents]}
 
@@ -213,7 +221,11 @@ async def get_knowledge_document(
 ):
     document = (
         db.query(KnowledgeDocument)
-        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == current_user.username)
+        .filter(
+            KnowledgeDocument.id == document_id,
+            KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username),
+            KnowledgeDocument.deleted_at.is_(None),
+        )
         .first()
     )
     if document is None:
@@ -230,7 +242,7 @@ async def update_knowledge_document(
 ):
     document = (
         db.query(KnowledgeDocument)
-        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == current_user.username)
+        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username))
         .first()
     )
     if document is None:
@@ -253,7 +265,7 @@ async def delete_knowledge_document(
 ):
     document = (
         db.query(KnowledgeDocument)
-        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == current_user.username)
+        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username))
         .first()
     )
     if document is None:
@@ -264,10 +276,9 @@ async def delete_knowledge_document(
         db.rollback()
         logger.error("Knowledge document deletion failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Failed to delete document: {exc}") from exc
-    # Flush the BM25 cache so the next retrieval doesn't surface
-    # snippets from the just-deleted document.
-    from app.rag.bm25_cache import invalidate_bm25_cache
-    invalidate_bm25_cache(current_user.username)
+    # The document's Milvus vectors were dropped by hard_delete_knowledge_document
+    # (milvus_hybrid.delete_by_field); BM25 is server-side in Milvus now, so
+    # there's no client-side cache to invalidate.
     return {"status": "success"}
 
 
@@ -278,7 +289,10 @@ async def list_knowledge_categories(
 ):
     rows = (
         db.query(KnowledgeDocument.category, func.count(KnowledgeDocument.id))
-        .filter(KnowledgeDocument.user_id == current_user.username)
+        .filter(
+            KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username),
+            KnowledgeDocument.deleted_at.is_(None),
+        )
         .group_by(KnowledgeDocument.category)
         .order_by(KnowledgeDocument.category.asc())
         .all()

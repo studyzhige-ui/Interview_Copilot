@@ -3,8 +3,11 @@
   file_validation   — magic-byte validator for audio / resume / JD
                       uploads; streams large files via
                       SpooledTemporaryFile, enforces size caps
-  upload_service    — create presigned upload URL + UserUpload row;
-                      thin wrapper around storage_service
+  file_asset_service — create presigned upload URL + FileAsset row,
+                      confirm/consume lifecycle; thin wrapper around
+                      storage_service
+  outbox_service    — reliable cross-system side effects (object cleanup,
+                      Milvus index maintenance) drained by the worker
 
 The shared boto3 wrapper ``storage_service`` lives at services/ root
 (not here) because it has 8 cross-domain importers — auth uploads

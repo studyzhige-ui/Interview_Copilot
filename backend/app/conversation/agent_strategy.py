@@ -22,11 +22,12 @@ auto-captured by ``wrap_openai`` in ``core/llm_tracing.py``). The
 former ``agent_runs`` + ``agent_steps`` persistence was deleted in
 the audit cleanup — LangSmith covers the same surface with a UI for
 free, and the user-facing tool cards still come from
-``chat_messages.content_blocks_json``.
+``conversation_messages.content_blocks_json``.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from typing import Any, AsyncGenerator
@@ -53,6 +54,7 @@ from app.agent_runtime.tool_result_storage import (
 from app.conversation.events import HarnessEvent
 from app.conversation.strategy import StrategyContext, StrategyResult
 from app.core.config import settings
+from app.core.error_messages import humanize_error
 from app.core.model_registry import build_async_openai_client_for_role
 
 # Trigger tool self-registration on first import.
@@ -61,66 +63,29 @@ import app.agent_runtime.tools  # noqa: F401
 logger = logging.getLogger(__name__)
 
 
-SYSTEM_PROMPT = """你是 Interview Copilot 的执行 Agent，帮助用户完成面试准备相关的复杂任务。
+SYSTEM_PROMPT = """你是 Interview Copilot 的执行 Agent，通过调用工具帮助用户完成面试准备相关的复杂任务。
 
-# 工作原则
+# 能力
+- 分析岗位要求（JD）与用户能力之间的差距
+- 基于面试历史识别薄弱环节，制定学习计划
+- 检索互联网与知识库，获取面经、公司信息、技术资料
+- 将重要结论沉淀到记忆（仅当全局记忆开启），并可导出分析报告与学习笔记为文件
 
-## 1. 先想清楚再调工具，不要盲调
-- 收到用户问题，先判断：用户的问题真的需要工具吗？需要哪个？
-- **工具是数据增强，不是知识替代**。你的训练知识本身就涵盖了大量信息（公司、技术栈、框架对比、最佳实践、面经常见题……）。能直接答的就直接答，工具只用于补充你不知道的、时效性强的、用户私有的数据。
-- 「我想做 agent 开发，哪些公司在招」→ 即使 search_jobs 返回 0 条，也要用你训练数据里的知识列出 OpenAI / Anthropic / Cognition / Adept / Sierra / Imbue 等，配上每家的方向特点。**不要**因为工具没数据就不答了。
-- 「帮我分析这道题」→ 直接答，不用调任何工具
-- 「我之前讨论过的 Redis 你还记得吗」→ 调 recall_memory（关闭全局记忆时此工具不会出现在你的 manifest 里）
-- 反例（不要做）：一收到问题就并发调 read_resume + read_interview_history + recall_memory + search_jobs。这样既慢又浪费 token，还会让用户看到一堆「0 条结果」的卡片。
+# 工具使用原则
+- 先判断再调用：先想清楚问题是否需要工具、需要哪个，不要一上来就并发调用多个工具。
+- 工具是数据增强，不是知识替代：能用自身知识直接回答的（公司、技术栈、框架对比、最佳实践、常见面试题等）直接回答；工具只用于补充时效性强的、用户私有的、你不掌握的数据。
+- 主动组合：单个工具结果不足时，主动用其它工具补全后再作答。
+- 尊重工具状态：工具返回 disabled 时不再调用；工具未出现在 manifest 中即表示该功能未启用，不要假装会用。
 
-## 2. 工具失败 ≠ 任务失败 —— 永远要给用户有用的答复
-
-工具会因为各种原因失败或返回空：
-- 用户还没上传简历 / 没有面试历史 / 知识库为空
-- 外部 API 没配密钥（search_jobs、web_search）
-- 网络问题、限流
-
-**绝对不要**因为工具失败就放弃。正确做法：
-- 基于你已知的领域知识 + 部分工具结果，给用户一个**还不错的回答**
-- 用**友善的语气**说明哪些信息缺失，提供具体的下一步建议
-- 例如 search_jobs 返回 0 条 → 用你自己掌握的"哪些公司招 agent 开发"知识答题，并友善提示「Lever 公司列表配上后可以拉到实时职位」
-
-## 3. 失败信息的友好转译
-
-- ❌ "工具调用失败，请重试"  ← 用户看了一脸懵
-- ✅ "我没找到你的简历的结构化版本，但看到资料库里有一份 PDF —— 我可以基于通用建议先答，或者你可以告诉我你的背景关键词（学校 / 工作经验 / 技术栈），我能更精准。"
-
-- ❌ "No resume found"  ← 直译报错
-- ✅ "看起来还没上传过简历。上传到「资料库 → 文件」之后我能给更个性化的分析。先从通用角度聊聊？"
-
-## 4. 工具返回 disabled / 工具不可见 / 工具失败时的处理
-
-- 工具返回 `{"disabled": true, "reason": ...}`：尊重它，不要再调，按用户本会话上下文继续
-- 工具不在你的 manifest 里：说明该功能未启用，不要假装会用
-- 工具抛错：先看 error 信息，常见原因（无数据、未配置）友好转译给用户
-
-## 5. 关于工具组合
-
-如果一个工具结果不够，**主动**用其它工具补：
-- read_resume 说"有 PDF 但没解析"→ 调 search_knowledge 带"工作经历"/"教育背景"查 PDF 内容
-- search_jobs 返回 0 条 → 试 web_search 用「AI Agent 工程师 招聘」等关键词
-- read_url 拿到 JD → 配合 read_resume / search_knowledge 做差距分析
-
-## 6. 你能做的事
-
-- 分析岗位要求（JD）与用户能力的差距
-- 基于面试历史识别薄弱环节并制定学习计划
-- 搜索互联网获取面经、公司信息、技术资料
-- 从知识库检索八股文和技术文档
-- 把重要结论 save_memory 存起来（仅当全局记忆开启）
-- 导出结构化的分析报告和学习笔记为文件
+# 错误处理
+- 工具失败或返回空不等于任务失败：结合已有领域知识与部分工具结果，仍要给出有用的回答。
+- 友好转译失败：不直接抛出技术报错，也不以「失败，请重试」收尾；说明缺少了哪些信息，并给出具体的下一步建议。
 
 # 输出规则
-
-- 用结构化的、可执行的建议
-- 不要编造工具没返回的数据
-- 不要以「我失败了，请重试」结尾 —— 永远给用户**至少一个可以立刻做的下一步**
-- 如果用户问的是知识 / 概念问题，直接答，不要绕一大圈调工具
+- 给出结构化、可执行的建议。
+- 不编造工具未返回的数据。
+- 知识 / 概念类问题直接回答，不绕弯调工具。
+- 始终为用户留下至少一个可以立刻执行的下一步。
 """
 
 
@@ -195,6 +160,79 @@ def _build_graceful_fallback(
     return body or "执行过程中断，请稍后重试。"
 
 
+# Repeated identical tool calls (same tool + same args) are steered with a soft
+# nudge at these counts — never a hard stop (the step valve is the only hard
+# limit). Replaces the old per-tool hard cap.
+_REPEAT_NUDGE_SOFT = 3
+_REPEAT_NUDGE_FIRM = 6
+
+
+def _repeat_call_nudge(tool_name: str, count: int) -> str:
+    """Soft-steer message when a tool is re-called with identical arguments."""
+    base = (
+        f"Note: `{tool_name}` has now been called {count} times with identical "
+        f"arguments — repeating it rarely yields new information."
+    )
+    if count >= _REPEAT_NUDGE_FIRM:
+        return (
+            base + " Stop repeating it: change the arguments, try a different "
+            "tool, or give your final answer based on what you already have."
+        )
+    return (
+        base + " Consider changing the arguments, trying a different tool, or "
+        "answering with what you have."
+    )
+
+
+def _reconstruct_history_messages(turns: list[dict]) -> list[dict[str, Any]]:
+    """Rebuild prior conversation turns as real OpenAI messages, including the
+    agent's tool roundtrips (like Claude Code keeps the full message stream).
+
+    Each persisted Agent turn carries Anthropic-style ``blocks`` (text /
+    tool_use / tool_result). We reconstruct them into an ``assistant`` message
+    (text + ``tool_calls``) followed by one ``tool`` message per tool_result —
+    so on the next turn the agent sees what it already called, not just the
+    final text. User turns become plain ``user`` messages. (orphaned pairs are
+    repaired by ``compress()``'s sanitize before the first LLM call.)
+    """
+    messages: list[dict[str, Any]] = []
+    for turn in turns:
+        role = turn.get("role")
+        if role == "User":
+            messages.append({"role": "user", "content": turn.get("content", "")})
+            continue
+        if role != "Agent":
+            continue
+        text_parts: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
+        tool_messages: list[dict[str, Any]] = []
+        for block in turn.get("blocks") or []:
+            btype = block.get("type")
+            if btype == "text":
+                text_parts.append(str(block.get("text") or ""))
+            elif btype == "tool_use":
+                tool_calls.append({
+                    "id": block.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name", ""),
+                        "arguments": json.dumps(block.get("input") or {}, ensure_ascii=False),
+                    },
+                })
+            elif btype == "tool_result":
+                tool_messages.append({
+                    "role": "tool",
+                    "tool_call_id": block.get("tool_use_id", ""),
+                    "content": str(block.get("content") or ""),
+                })
+        assistant: dict[str, Any] = {"role": "assistant", "content": "".join(text_parts)}
+        if tool_calls:
+            assistant["tool_calls"] = tool_calls
+        messages.append(assistant)
+        messages.extend(tool_messages)
+    return messages
+
+
 class AgentLoopStrategy:
     """The L2 ReAct execution strategy."""
 
@@ -244,46 +282,38 @@ class AgentLoopStrategy:
         # call automatically). User-facing tool cards come from the
         # ``content_blocks_json`` chain we build below in ``blocks``
         # and hand back via ``result.assistant_blocks`` for the
-        # engine to persist on ``chat_messages``.
+        # engine to persist on ``conversation_messages``.
 
-        # Render the full AssembledContext so the agent sees memory +
-        # debrief reference + RAG chunks + session state + recent
-        # turns. The system_prompt slot is suppressed here — the agent
-        # has its own SYSTEM_PROMPT loaded as a separate message —
-        # but every other SLOT_ORDER slot reaches the LLM.
+        # Build the agent's context through the SAME shared pipeline as L1
+        # chat (one SLOT_ORDER, no separate agent assembler). L2 differs only
+        # in the system-prompt slot: it carries the agent's SYSTEM_PROMPT +
+        # the tool manifest — tools ARE part of the system prompt. SLOT_ORDER
+        # owns the cache-stable ordering: the stable prefix (system / summary /
+        # recent turns) precedes the per-turn grounding (memory / RAG) inside
+        # the system block, so a grounding change can't evict the cached
+        # prefix — no manual multi-message split needed.
+        #
+        # ``current_input`` is skipped here and sent as the user message
+        # instead, so the model has a user turn to answer and the loop can
+        # append assistant/tool turns after it.
         from app.services.chat.context_assembly_pipeline import prompt_renderer
-        grounding_text = (
-            prompt_renderer.render_answer_prompt(ctx.assembled, system_prompt="")
-            if ctx.assembled is not None else "No context."
-        )
-
-        # Three system messages in cache-friendly order: stable →
-        # less-stable → per-turn. DeepSeek's prompt cache (the L1/L2
-        # default provider) hashes the prefix as a single contiguous
-        # span IMPLICITLY — a per-turn change in the grounding text
-        # would otherwise invalidate the cached tokens for the manifest
-        # too, costing 800-2000 cached-token misses per turn. Splitting
-        # into separate messages lets DeepSeek reuse the SYSTEM_PROMPT
-        # + manifest prefix across every turn in a session.
-        #
-        # Order is load-bearing: the cache prefix only extends as far
-        # as the longest stable run. Putting the stable manifest
-        # before the per-turn grounding ensures the manifest tokens
-        # are inside the cacheable prefix even when grounding_text
-        # changes byte-by-byte across turns.
-        #
-        # NB for Anthropic: Claude requires EXPLICIT ``cache_control``
-        # markers per content block to actually cache. The message
-        # boundary split alone does nothing for Claude. If we add an
-        # Anthropic backend, the manifest message needs a
-        # ``cache_control: {"type": "ephemeral"}`` annotation —
-        # tracked as a follow-up.
+        agent_system_prompt = f"{SYSTEM_PROMPT}\n\nAvailable tools:\n{manifest_text}"
+        history_messages: list[dict[str, Any]] = []
+        if ctx.assembled is not None:
+            # L2 skips the flattened [Recent Turns] slot — prior turns are
+            # spliced in as REAL messages (with tool roundtrips) instead, so the
+            # agent sees its own tool history. current_input becomes the user msg.
+            system_block = prompt_renderer.render_answer_prompt(
+                ctx.assembled,
+                system_prompt=agent_system_prompt,
+                skip_fields={"current_input", "recent_turns"},
+            )
+            history_messages = _reconstruct_history_messages(ctx.assembled.recent_turns)
+        else:
+            system_block = agent_system_prompt
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "system", "content": f"Available tools:\n{manifest_text}"},
-            {"role": "system", "content": (
-                f"Conversation context:\n{grounding_text or 'No context.'}"
-            )},
+            {"role": "system", "content": system_block},
+            *history_messages,
             {"role": "user", "content": ctx.user_message},
         ]
 
@@ -310,19 +340,29 @@ class AgentLoopStrategy:
                     final_answer = event.data.get("content", "")
                 yield event
         except Exception as exc:
-            # Don't end on a dead "请稍后重试" — that throws away every
-            # tool call the user just watched run. If we have any
-            # accumulated text or tool results, render a graceful
-            # partial-answer fallback referencing them. The LLM can't
-            # be called again from inside an except block (the client
-            # might be in a bad state), but we can deterministically
-            # build a message that's strictly better than a generic
-            # "I failed".
+            logger.error("AgentLoopStrategy crashed: %s", exc)
+            # Surface the failure to the LIVE stream as an actionable error.
+            # THE BUG this fixes: pre-fix the except only built a fallback
+            # into ``result`` (persisted) and never *yielded* anything, so a
+            # clean API failure — e.g. a 402 "insufficient balance" on the
+            # very first LLM call — left the user staring at an empty turn
+            # with no idea what broke or how to fix it. ``humanize_error``
+            # is the same translator the L1 chat path uses via the engine,
+            # so the wording is identical regardless of which path failed.
+            yield HarnessEvent.error(
+                humanize_error(exc),
+                step=budget.steps,
+                elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
+            )
+            # Still build the graceful partial answer for the PERSISTED
+            # transcript so the tool work the user watched isn't lost on
+            # reload. We deliberately don't re-raise: re-raising would route
+            # through the engine's last-resort catch (a second error event)
+            # and skip persistence of this partial answer.
             final_answer = _build_graceful_fallback(
                 blocks=blocks,
                 error_message=str(exc),
             )
-            logger.error("AgentLoopStrategy crashed: %s", exc)
 
         # Ensure a trailing text block exists (so the persisted message
         # always carries a final answer, even when the loop ended on
@@ -382,9 +422,11 @@ class AgentLoopStrategy:
 
             budget.consume_step()
 
-            # Layer 1 + 2 of the compactor (pre-LLM pruning + token warning)
-            messages[:] = compactor.pre_llm_compact(messages, budget.prompt_tokens)
-            if compactor.is_at_blocking_limit(budget.prompt_tokens):
+            # Proactive compaction: self-measure the prompt, run the cheap
+            # pre-pass if it's over the threshold, and stop cleanly if the
+            # result still sits at the blocking limit (a doomed LLM call).
+            messages[:], at_blocking_limit = await compactor.compress(messages)
+            if at_blocking_limit:
                 budget.stop_reason = "context_window_exhausted"
                 yield HarnessEvent.error(
                     "上下文窗口即将耗尽，停止执行。请缩小目标范围后重试。",
@@ -487,7 +529,7 @@ class AgentLoopStrategy:
             )
 
         async def _on_context_too_long() -> bool:
-            messages[:], should_retry = compactor.on_context_too_long(messages)
+            messages[:], should_retry = await compactor.on_context_too_long(messages)
             if should_retry:
                 budget.refund_step()
             return should_retry
@@ -606,6 +648,8 @@ class AgentLoopStrategy:
         messages.append(assistant_msg)
 
         turn_tool_messages: list[dict[str, Any]] = []
+        nudge_repeat = 0
+        nudge_tool = ""
 
         for tc in tool_calls_acc:
             tool_name = tc.name
@@ -634,10 +678,7 @@ class AgentLoopStrategy:
             )
 
             observation: dict[str, Any]
-            if budget.tool_usage[tool_name] >= settings.AGENT_MAX_CALLS_PER_TOOL:
-                observation = {"error": "tool_call_limit_exceeded", "tool_name": tool_name}
-                tool_error = True
-            elif tool_name not in registry:
+            if tool_name not in registry:
                 observation = {"error": "unknown_tool", "tool_name": tool_name}
                 tool_error = True
             else:
@@ -661,12 +702,15 @@ class AgentLoopStrategy:
                     observation = {"error": "tool_execution_failed", "detail": str(exc)}
                     tool_error = True
 
-            budget.consume_tool_call(tool_name)
+            signature = f"{tool_name}\x00{tc.arguments}"
+            repeat_count = budget.consume_tool_call(tool_name, signature)
+            if repeat_count in (_REPEAT_NUDGE_SOFT, _REPEAT_NUDGE_FIRM):
+                nudge_repeat, nudge_tool = repeat_count, tool_name
             latency_ms = round((time.perf_counter() - tool_started) * 1000, 2)
 
             # Persist large tool results to disk; the LLM context only
             # keeps a small preview pointer. maybe_persist_result does
-            # sync file_path.write_text() for content >30KB — offload
+            # sync file_path.write_text() for oversized content — offload
             # so a chatty agent step doesn't stall the loop on disk I/O.
             result_text = safe_json_dumps(observation)
             result_text = await asyncio.to_thread(
@@ -722,6 +766,16 @@ class AgentLoopStrategy:
 
         if turn_tool_messages:
             enforce_turn_budget(turn_tool_messages, ctx.session_id)
+
+        # Repeated identical tool calls: steer the model with a soft nudge
+        # appended AFTER the tool results (never a hard stop — the step valve
+        # is the only hard limit). Placed after the results so the
+        # assistant(tool_calls)→tool→tool pairing stays intact.
+        if nudge_repeat:
+            messages.append({
+                "role": "user",
+                "content": _repeat_call_nudge(nudge_tool, nudge_repeat),
+            })
 
 
 __all__ = ["AgentLoopStrategy"]

@@ -1,14 +1,11 @@
 """Unit tests for the global-memory toggle policy.
 
-Stage-H renamed the toggle from ``memory_recall_default`` /
-``memory_recall_enabled`` to ``global_memory_enabled``. In-flight
-session_state JSON rows still carry the legacy key — these tests pin
-the back-compat read shim so a future "the new key is canonical, who
-needs the old one" cleanup doesn't silently break those sessions.
+The per-session override now lives in the dedicated
+``conversations.global_memory_enabled`` Boolean column (NULL = fall
+through to the per-user ``users.global_memory_enabled`` default). These
+tests pin the two-tier resolution and the safety net on the writer.
 """
 from __future__ import annotations
-
-import json
 
 import pytest
 from sqlalchemy import create_engine
@@ -18,7 +15,7 @@ from sqlalchemy.pool import StaticPool
 
 @pytest.fixture
 def engine_and_session():
-    """In-memory SQLite engine with users + chat_sessions tables."""
+    """In-memory SQLite engine with users + conversations tables."""
     from app.db.database import Base
     import app.models.chat   # noqa: F401
     import app.models.user   # noqa: F401
@@ -43,137 +40,139 @@ def _rebind(monkeypatch, Session):
     monkeypatch.setattr(recall_mod, "SessionLocal", Session, raising=False)
 
 
-def _seed(Session, *, username="alice", user_default=False, session_state=None):
-    from app.models.chat import ChatSession
+def _seed(Session, *, username="alice", user_default=False, session_override=None):
+    """Seed a user + one session ``s1``.
+
+    ``user_default`` → ``users.global_memory_enabled``.
+    ``session_override`` → ``conversations.global_memory_enabled`` (None = NULL).
+    """
+    from app.models.chat import Conversation
     from app.models.user import User
     db = Session()
     try:
-        db.add(User(
+        user = User(
             username=username,
             email=f"{username}@e.com",
             hashed_password="x",
             global_memory_enabled=user_default,
-        ))
-        db.add(ChatSession(
+        )
+        db.add(user)
+        db.flush()  # assign users.id so the session can key on the integer pk
+        # conversations.user_id is the integer users.id FK now (CLEANUP #2);
+        # the writer's ownership guard resolves the username → pk and compares
+        # against this column, so seed the resolved pk (not the username).
+        db.add(Conversation(
             id="s1",
-            user_id=username,
-            session_state=(
-                json.dumps(session_state) if session_state is not None else "{}"
-            ),
+            user_id=user.id,
+            global_memory_enabled=session_override,
         ))
         db.commit()
     finally:
         db.close()
 
 
-def test_legacy_session_state_key_is_honoured(engine_and_session, monkeypatch):
-    """A pre-Stage-H session that stored ``memory_recall_enabled`` in
-    its session_state JSON must still return that value — Stage-H
-    promised an opt-in back-compat shim, this test pins it."""
-    from app.services.memory.recall_policy import (
-        is_global_memory_enabled_for_session,
-    )
+def test_session_override_on_wins_over_user_default_off(engine_and_session, monkeypatch):
+    """A per-session override of True wins even when the user default is False."""
+    from app.services.memory.recall_policy import is_global_memory_enabled_for_session
 
     engine, Session = engine_and_session
     _rebind(monkeypatch, Session)
-    _seed(
-        Session,
-        user_default=False,                            # user-level says OFF
-        session_state={"memory_recall_enabled": True}, # legacy override says ON
-    )
-
-    # Session-level override wins, and the legacy key MUST still be
-    # read — otherwise the user's per-session "memory on" choice
-    # silently regresses after the upgrade.
-    assert is_global_memory_enabled_for_session("s1", "alice") is True
-
-
-def test_legacy_session_state_off_overrides_user_default_on(engine_and_session, monkeypatch):
-    """The legacy key must DOWN-grade as well as UP-grade — a buggy
-    implementation that returned ``None`` for explicit-false values
-    would silently flip user_default=True back ON for everyone with
-    an old session-level OFF override. Symmetric to
-    ``test_legacy_session_state_key_is_honoured`` (which pinned the
-    True override winning); this pins the False override winning.
-    """
-    from app.services.memory.recall_policy import (
-        is_global_memory_enabled_for_session,
-    )
-
-    engine, Session = engine_and_session
-    _rebind(monkeypatch, Session)
-    _seed(
-        Session,
-        user_default=True,                              # user-level says ON
-        session_state={"memory_recall_enabled": False}, # legacy override says OFF
-    )
-
-    assert is_global_memory_enabled_for_session("s1", "alice") is False
-
-
-def test_new_key_takes_precedence_over_legacy(engine_and_session, monkeypatch):
-    """When both keys are present (mid-migration edge case) the
-    canonical ``global_memory_enabled`` wins."""
-    from app.services.memory.recall_policy import (
-        is_global_memory_enabled_for_session,
-    )
-
-    engine, Session = engine_and_session
-    _rebind(monkeypatch, Session)
-    _seed(
-        Session,
-        user_default=False,
-        session_state={
-            "global_memory_enabled": False,   # canonical
-            "memory_recall_enabled": True,    # stale legacy
-        },
-    )
-
-    # Canonical key wins; legacy is ignored when both are present.
-    assert is_global_memory_enabled_for_session("s1", "alice") is False
-
-
-def test_user_default_used_when_session_has_no_override(engine_and_session, monkeypatch):
-    """Falls through to ``users.global_memory_enabled`` when neither
-    JSON key is present."""
-    from app.services.memory.recall_policy import (
-        is_global_memory_enabled_for_session,
-    )
-
-    engine, Session = engine_and_session
-    _rebind(monkeypatch, Session)
-    _seed(
-        Session,
-        user_default=True,
-        session_state={},   # no override
-    )
+    _seed(Session, user_default=False, session_override=True)
 
     assert is_global_memory_enabled_for_session("s1", "alice") is True
 
 
-def test_set_session_writes_canonical_key_and_drops_legacy(engine_and_session, monkeypatch):
-    """When we OWN the write, drop the legacy key — no point carrying
-    both forever."""
-    from app.models.chat import ChatSession
+def test_session_override_off_wins_over_user_default_on(engine_and_session, monkeypatch):
+    """The override must DOWN-grade too — an explicit-False session override
+    wins over a True user default. Guards against a buggy implementation that
+    treats False the same as NULL and silently flips memory back ON."""
+    from app.services.memory.recall_policy import is_global_memory_enabled_for_session
+
+    engine, Session = engine_and_session
+    _rebind(monkeypatch, Session)
+    _seed(Session, user_default=True, session_override=False)
+
+    assert is_global_memory_enabled_for_session("s1", "alice") is False
+
+
+def test_user_default_used_when_session_override_is_null(engine_and_session, monkeypatch):
+    """Falls through to ``users.global_memory_enabled`` when the session column
+    is NULL."""
+    from app.services.memory.recall_policy import is_global_memory_enabled_for_session
+
+    engine, Session = engine_and_session
+    _rebind(monkeypatch, Session)
+    _seed(Session, user_default=True, session_override=None)
+
+    assert is_global_memory_enabled_for_session("s1", "alice") is True
+
+
+def test_defaults_to_false_when_both_unset(engine_and_session, monkeypatch):
+    """Opt-in by design: NULL session override + False user default → False."""
+    from app.services.memory.recall_policy import is_global_memory_enabled_for_session
+
+    engine, Session = engine_and_session
+    _rebind(monkeypatch, Session)
+    _seed(Session, user_default=False, session_override=None)
+
+    assert is_global_memory_enabled_for_session("s1", "alice") is False
+
+
+def test_missing_session_degrades_to_false(engine_and_session, monkeypatch):
+    """An unknown session id must not raise — it returns False (skip injection,
+    keep answering)."""
+    from app.services.memory.recall_policy import is_global_memory_enabled_for_session
+
+    engine, Session = engine_and_session
+    _rebind(monkeypatch, Session)
+    _seed(Session, user_default=False, session_override=None)
+
+    assert is_global_memory_enabled_for_session("does-not-exist", "alice") is False
+
+
+def test_set_session_writes_column(engine_and_session, monkeypatch):
+    """The writer persists the override into the column."""
+    from app.models.chat import Conversation
     from app.services.memory.recall_policy import set_session_global_memory
 
     engine, Session = engine_and_session
     _rebind(monkeypatch, Session)
-    _seed(
-        Session,
-        session_state={"memory_recall_enabled": True, "other": "keep me"},
-    )
+    _seed(Session, session_override=None)
 
-    set_session_global_memory("s1", "alice", enabled=False)
+    set_session_global_memory("s1", "alice", enabled=True)
 
     db = Session()
     try:
-        row = db.query(ChatSession).filter(ChatSession.id == "s1").first()
-        state = json.loads(row.session_state)
-        assert state["global_memory_enabled"] is False
-        # Legacy key removed by the write.
-        assert "memory_recall_enabled" not in state
-        # Unrelated keys preserved.
-        assert state["other"] == "keep me"
+        row = db.query(Conversation).filter(Conversation.id == "s1").first()
+        assert row.global_memory_enabled is True
+    finally:
+        db.close()
+
+
+def test_set_session_is_noop_for_wrong_owner(engine_and_session, monkeypatch):
+    """Ownership safety net: a write for a session owned by someone else is a
+    no-op and leaves the column untouched."""
+    from app.models.chat import Conversation
+    from app.models.user import User
+    from app.services.memory.recall_policy import set_session_global_memory
+
+    engine, Session = engine_and_session
+    _rebind(monkeypatch, Session)
+    _seed(Session, session_override=None)
+    # Seed mallory as a distinct real user so the no-op is driven by a genuine
+    # pk mismatch (alice_pk != mallory_pk), not by an unseeded user → None.
+    seed_db = Session()
+    try:
+        seed_db.add(User(username="mallory", email="mallory@e.com", hashed_password="x"))
+        seed_db.commit()
+    finally:
+        seed_db.close()
+
+    set_session_global_memory("s1", "mallory", enabled=True)
+
+    db = Session()
+    try:
+        row = db.query(Conversation).filter(Conversation.id == "s1").first()
+        assert row.global_memory_enabled is None
     finally:
         db.close()

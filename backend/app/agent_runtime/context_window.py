@@ -7,8 +7,8 @@ Design reference:
   - Claude Code ``calculateTokenWarningState`` (query.ts L634):
         effectiveWindow = contextWindow - min(maxOutputTokens, 20_000)
         blockingLimit   = effectiveWindow - 3_000
-  - Claude Code autocompact threshold:
-        autocompactThreshold = effectiveWindow - 13_000
+  - Cheap pre-pass threshold (mirrors Claude Code's autocompact buffer):
+        cheap_prepass_threshold = effectiveWindow - 13_000
 
 All functions are pure — no side effects, no I/O.
 """
@@ -28,8 +28,10 @@ _MAX_OUTPUT_RESERVE = 20_000
 # Token Warning blocking buffer — refuse LLM call when this close to limit.
 _BLOCKING_BUFFER = 3_000
 
-# Autocompact trigger buffer — begin pre-LLM pruning at this margin.
-_AUTOCOMPACT_BUFFER = 13_000
+# Cheap pre-pass trigger buffer — begin the zero-LLM dedup/summarize/truncate
+# pre-pass at this margin below the effective window. (Claude Code's value for
+# its autocompact buffer; kept configurable. NOT the LLM-summary trigger.)
+_CHEAP_PREPASS_BUFFER = 13_000
 
 # Tail protection: minimum token budget reserved for recent tool results
 # that should never be pruned.  Replaces old fixed-count protection.
@@ -56,10 +58,12 @@ def get_blocking_limit(profile: ModelProfile) -> int:
     return get_effective_window(profile) - _BLOCKING_BUFFER
 
 
-def get_autocompact_threshold(profile: ModelProfile) -> int:
-    """Token count at which pre-LLM pruning should activate.
+def get_cheap_prepass_threshold(profile: ModelProfile) -> int:
+    """Token count at which the cheap, zero-LLM pre-pass should activate.
 
-    Claude Code autocompact threshold: effective - 13_000.
+    Mirrors Claude Code's autocompact buffer (effective - 13_000), but this
+    gates the cheap dedup/summarize/truncate pre-pass — NOT the LLM
+    summarization phase (the codebase reserves "autocompact" for that).
     Below this threshold, pruning is skipped for performance.
     """
-    return get_effective_window(profile) - _AUTOCOMPACT_BUFFER
+    return get_effective_window(profile) - _CHEAP_PREPASS_BUFFER

@@ -47,7 +47,7 @@ class ProviderDefaults:
 
     # Environment-variable name the system reads as a FALLBACK when the
     # user hasn't saved their key via the UI. Per-user encrypted keys
-    # (``user_api_keys`` table) take priority over this env var — see
+    # (``user_model_credentials`` table) take priority over this env var — see
     # ``resolve_api_key`` in ``model_registry``.
     api_key_env: str
 

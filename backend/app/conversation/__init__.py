@@ -22,7 +22,7 @@ Design mirrors Claude Code's two-tier architecture:
 Both strategies receive the assembled context + a HarnessEvent emitter,
 yield events back, and report the final assistant blocks (Claude-Code
 ``BetaContentBlock`` shape) so the engine can persist a uniform
-``content_blocks_json`` to chat_messages.
+``content_blocks_json`` to conversation_messages.
 """
 
 from app.conversation.agent_strategy import AgentLoopStrategy

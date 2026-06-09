@@ -186,7 +186,7 @@ on either path — see `docs/providers.md`.
 |---|---|
 | `auth/` | email, token_blacklist, user_api_key, user_provider_settings, verification_code |
 | `resume/` | resume_service, resume_vector_service |
-| `knowledge/` | knowledge_service, knowledge_text_service |
+| `knowledge/` | knowledge_service, document_chunk_service |
 | `uploads/` | file_validation, upload_service |
 | `analytics/` | diagnostics_report_service, telemetry_service |
 | `interview/` | analysis_orchestrator, interview_record_service, mock_interview_service |
@@ -227,14 +227,14 @@ you want a public hostname with free SSL/CDN for the SPA.
 
 ## Tech stack
 
-- **API**: FastAPI 0.135, SQLAlchemy 2, Pydantic v2, slowapi (rate limit), Sentry SDK
+- **API**: FastAPI 0.135, SQLAlchemy 2, Pydantic v2, slowapi (rate limit)
 - **Background**: Celery 5 + Redis (queue / cache / blacklist)
 - **Storage**: PostgreSQL 15, Milvus 2.5 (vector), MinIO (S3-compat)
 - **AI**: LlamaIndex, BGE-M3 + BGE-Reranker-v2-m3, WhisperX, Pyannote
 - **LLM**: Any OpenAI-compatible API (DeepSeek default)
 - **Frontend**: React 18, Vite 5, Tailwind, zustand, react-virtual
 - **Infra**: Docker Compose, nginx
-- **Observability**: Sentry (errors), LangSmith (LLM traces — opt-in)
+- **Observability**: LangSmith (LLM traces — opt-in)
 
 ---
 

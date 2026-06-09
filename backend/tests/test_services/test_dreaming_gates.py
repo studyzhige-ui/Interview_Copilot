@@ -59,18 +59,28 @@ def _seed_user(Session, username: str, *, last_dreamed_at: datetime | None):
 def _seed_chat(Session, *, user_id: str, session_id: str, messages: int,
                session_created_at: datetime | None = None,
                message_created_at: datetime | None = None):
-    from app.models.chat import ChatMessage, ChatSession
+    """Seed a debrief session (+ messages) owned by ``user_id`` (a username).
+
+    ``conversations.user_id`` is the integer ``users.id`` FK now (CLEANUP #2),
+    and gate 3's ``_count_new_activity_since`` filters on
+    ``Conversation.user_id == resolve_user_pk(db, username)``. So resolve the
+    username → pk here (the ``users`` row is seeded by ``_seed_user`` first)
+    and store the integer pk on the session.
+    """
+    from app.models.chat import ConversationMessage, Conversation
+    from app.models.user import User
     db = Session()
     try:
-        sess = ChatSession(
-            id=session_id, user_id=user_id, title="t",
-            session_type="debrief",
+        user_pk = db.query(User.id).filter(User.username == user_id).scalar()
+        sess = Conversation(
+            id=session_id, user_id=user_pk, title="t",
+            type="debrief",
         )
         if session_created_at is not None:
             sess.created_at = session_created_at
         db.add(sess)
         for i in range(messages):
-            m = ChatMessage(session_id=session_id, seq=i, role="User", content=f"m{i}")
+            m = ConversationMessage(conversation_id=session_id, seq=i, role="User", content=f"m{i}")
             if message_created_at is not None:
                 m.created_at = message_created_at
             db.add(m)
@@ -131,11 +141,13 @@ def test_gate3_passes_via_message_count(engine_and_session, monkeypatch):
     assert "alice" in out
 
 
-def test_gate3_passes_via_session_count(engine_and_session, monkeypatch):
-    """A user with > NEW_SESSIONS_THRESHOLD new sessions passes even
-    when their message count is far below NEW_MESSAGES_THRESHOLD."""
+def test_gate3_session_count_alone_does_not_trigger(engine_and_session, monkeypatch):
+    """Gate 3 is messages-only now (``NEW_SESSIONS_THRESHOLD`` was dropped).
+    A user with many new debrief SESSIONS but a message count far below
+    ``NEW_MESSAGES_THRESHOLD`` must NOT be selected — a session with no real
+    debrief turns produces no work for the dreamer."""
     from app.services.memory.dreaming_worker import (
-        NEW_SESSIONS_THRESHOLD, select_dreamable_users,
+        NEW_MESSAGES_THRESHOLD, select_dreamable_users,
     )
 
     engine, Session = engine_and_session
@@ -143,8 +155,12 @@ def test_gate3_passes_via_session_count(engine_and_session, monkeypatch):
 
     now = datetime.utcnow()
     _seed_user(Session, "alice", last_dreamed_at=None)
-    # Strictly greater than the threshold.
-    for i in range(NEW_SESSIONS_THRESHOLD + 1):
+    # Many sessions, 1 message each → lots of sessions but total messages
+    # ( = n_sessions ) stays well below NEW_MESSAGES_THRESHOLD. Pre-refactor
+    # a session-count branch would have tripped the gate here; now it must
+    # not. Keep n_sessions strictly < threshold so total messages < threshold.
+    n_sessions = NEW_MESSAGES_THRESHOLD - 10
+    for i in range(n_sessions):
         _seed_chat(
             Session, user_id="alice", session_id=f"s{i}",
             messages=1,
@@ -152,10 +168,13 @@ def test_gate3_passes_via_session_count(engine_and_session, monkeypatch):
             message_created_at=now - timedelta(hours=10),
         )
     out = select_dreamable_users()
-    assert "alice" in out
+    assert "alice" not in out, (
+        "session count alone must NOT trigger dreaming after the gate-3 "
+        "messages-only refactor"
+    )
 
 
-def test_gate3_fails_when_below_both_thresholds(engine_and_session, monkeypatch):
+def test_gate3_fails_when_below_message_threshold(engine_and_session, monkeypatch):
     from app.services.memory.dreaming_worker import select_dreamable_users
 
     engine, Session = engine_and_session
@@ -178,8 +197,9 @@ def test_gate3_fails_when_below_both_thresholds(engine_and_session, monkeypatch)
 def test_record_quiet_threshold_excludes_active_record(engine_and_session, monkeypatch):
     """A record whose latest debrief message is < RECORD_QUIET_HOURS
     old must NOT be selected — they're 'currently being chatted'."""
-    from app.models.chat import ChatMessage, ChatSession
+    from app.models.chat import ConversationMessage, Conversation
     from app.models.interview_record import InterviewRecord
+    from app.models.user import User
     from app.services.memory.dreaming_worker import (
         RECORD_QUIET_HOURS, select_records_for_user,
     )
@@ -187,33 +207,39 @@ def test_record_quiet_threshold_excludes_active_record(engine_and_session, monke
     engine, Session = engine_and_session
     _rebind(monkeypatch, Session)
 
+    # select_records_for_user resolves the username → users.id and filters
+    # InterviewRecord.user_id on that integer pk (CLEANUP #2), so a real
+    # ``users`` row must exist and the records must carry its pk.
+    _seed_user(Session, "alice", last_dreamed_at=None)
+
     now = datetime.utcnow()
     db = Session()
     try:
+        alice_pk = db.query(User.id).filter(User.username == "alice").scalar()
         db.add(InterviewRecord(
-            id="ir_active", user_id="alice", source="upload",
+            id="ir_active", user_id=alice_pk, source="upload",
             status="completed", updated_at=now,
         ))
         db.add(InterviewRecord(
-            id="ir_settled", user_id="alice", source="upload",
+            id="ir_settled", user_id=alice_pk, source="upload",
             status="completed", updated_at=now,
         ))
         # Active record: most recent message is 30min old.
-        db.add(ChatSession(
-            id="s_active", user_id="alice", title="t",
-            session_type="debrief", interview_id="ir_active",
+        db.add(Conversation(
+            id="s_active", user_id=alice_pk, title="t",
+            type="debrief", subject_type="interview_record", subject_id="ir_active",
         ))
-        db.add(ChatMessage(
-            session_id="s_active", seq=0, role="User", content="hi",
+        db.add(ConversationMessage(
+            conversation_id="s_active", seq=0, role="User", content="hi",
             created_at=now - timedelta(minutes=30),
         ))
         # Settled record: most recent message is (RECORD_QUIET_HOURS+1) old.
-        db.add(ChatSession(
-            id="s_settled", user_id="alice", title="t",
-            session_type="debrief", interview_id="ir_settled",
+        db.add(Conversation(
+            id="s_settled", user_id=alice_pk, title="t",
+            type="debrief", subject_type="interview_record", subject_id="ir_settled",
         ))
-        db.add(ChatMessage(
-            session_id="s_settled", seq=0, role="User", content="hi",
+        db.add(ConversationMessage(
+            conversation_id="s_settled", seq=0, role="User", content="hi",
             created_at=now - timedelta(hours=RECORD_QUIET_HOURS + 1),
         ))
         db.commit()

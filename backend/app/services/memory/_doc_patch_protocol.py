@@ -2,10 +2,9 @@
 
 Why generic
 -----------
-``user_profile_doc_service`` invented this protocol for a single-doc-per-user
-case. The new memory architecture (knowledge / strategy / habit / dreaming)
-all need the same defensive update pattern, against documents that may be
-markdown blobs with section headers + bullet lines.
+The memory document service (the user_profile / learning_strategy docs) and the
+dreaming worker both need the same defensive update pattern, against documents
+that may be markdown blobs with section headers + bullet lines.
 
 Protocol shape
 --------------

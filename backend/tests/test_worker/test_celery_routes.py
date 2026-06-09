@@ -32,7 +32,6 @@ def test_light_tasks_route_to_default_queue():
     routes = celery_app.conf.task_routes
     light = [
         "tasks.process_document_ingestion",
-        "tasks.dream_for_record",
         "tasks.dream_for_user",
         "tasks.scan_and_dream_batch",
     ]

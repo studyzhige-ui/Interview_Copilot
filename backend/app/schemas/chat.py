@@ -5,152 +5,29 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-# ── Mock-interview Director action enum ──────────────────────────────────
-# Must match the seven keys in
-# ``app/services/mock_interview_service.py:DISPLAY_INTENT``. Mirrored 1:1 by
-# the frontend ``MockDirectorAction`` union in
-# ``frontend/src/types/api.ts``. Adding a new action requires updating all
-# three sites — the Literal here will refuse new strings at response time so
-# the BE can't silently emit an action the FE doesn't render.
-MockDirectorAction = Literal[
-    "follow_up",
-    "new_question",
-    "transition",
-    "hint",
-    "clarify",
-    "reverse_answer",
-    "finish",
-]
-
-
-class MockPhaseProgress(BaseModel):
-    """v6 phase progress — populated on every Director turn (no Optional)."""
-    current_phase: str
-    turn_count: int
-    max_turns: int
-    follow_up_depth: int
-
-
-class MockPlanPhase(BaseModel):
-    """One row of the interview plan returned by /start. Mirrored
-    1:1 by ``MockPlanPhase`` in ``frontend/src/types/api.ts``."""
-    phase_id: str
-    phase_name: str
-    question_count: int
-
-
-class MockQuestion(BaseModel):
-    """The interviewer's current ask. Returned by /start
-    (``current_question`` field) and by /question (top-level).
-
-    Discriminated by ``done``: when True only ``message`` is meaningful;
-    when False the live-question fields are populated. We keep the
-    other fields as Optional rather than using a proper TypeScript-
-    style discriminated union — the FE pattern is
-    ``q.done ? renderDone(q) : renderLive(q)`` and Optional matches
-    that consumer shape without forcing every caller to type-narrow.
-    """
-    done: bool
-    message: str | None = None
-    question: str | None = None
-    phase_id: str | None = None
-    phase_name: str | None = None
-    question_idx: int | None = None
-    total_questions_in_phase: int | None = None
-    spoken_response: str | None = None
-
-
-class MockStartResp(BaseModel):
-    """Wire-format for ``POST /chat/mock-interview/start``.
-
-    Mirrored 1:1 by ``MockStartResp`` in ``frontend/src/types/api.ts``.
-    """
-    status: str
-    plan_phases: list[MockPlanPhase]
-    current_question: MockQuestion
-
-
-class MockInProgressResp(BaseModel):
-    """Wire-format for ``GET /chat/mock-interview/in-progress``.
-
-    Discriminated by ``has_in_progress``: when False all other fields
-    are None / absent. The frontend ``MockEntry.resumeInProgress``
-    consumer branches on this flag.
-    """
-    has_in_progress: bool
-    session_id: str | None = None
-    title: str | None = None
-    current_phase: str | None = None
-    current_question_idx: int | None = None
-    qa_count: int | None = None
-    last_activity_at: str | None = None
-
-
-class MockFinishResp(BaseModel):
-    """Wire-format response for ``POST /chat/mock-interview/finish``.
-
-    Mirrored 1:1 by ``MockFinishResp`` in ``frontend/src/types/api.ts``.
-    """
-    status: Literal["analyzing"]
-    record_id: str
-    debrief_session_id: str
-    task_id: str
-
-
-class MockParseJdResp(BaseModel):
-    """Wire-format for ``POST /chat/mock-interview/parse-jd``."""
-    text: str
-    filename: str | None = None
-    chars: int
-
-
-class MockTranscribeResp(BaseModel):
-    """Wire-format for ``POST /chat/mock-interview/transcribe``."""
-    text: str
-    language: str
-    duration_sec: float
-
-
-class MockAbandonResp(BaseModel):
-    """Wire-format response for ``POST /chat/mock-interview/abandon``."""
-    status: Literal["deleted"]
-    session_id: str
-
-
-class MockAnswerResp(BaseModel):
-    """Wire-format response for ``POST /chat/mock-interview/answer``.
-
-    Mirrored 1:1 by ``MockAnswerResp`` in ``frontend/src/types/api.ts``.
-    The TS type is hand-written, so renaming a field here without
-    updating it ships a runtime bug that typecheck cannot catch. The
-    cross-cutting fix would be an openapi-generated TS client; until
-    that lands, treat both files as the contract.
-    """
-    interviewer_response: str
-    spoken_response: str
-    next_question: str
-    action: MockDirectorAction
-    display_intent: str
-    is_finished: bool
-    phase_progress: MockPhaseProgress
+# ── Generic chat session DTOs ────────────────────────────────────────────
 
 
 class SessionCreateRequest(BaseModel):
-    session_type: str = "general"  # "general" | "debrief" | "mock_interview"
-    interview_id: str | None = None
+    # general | debrief (mock_interview sessions are created by the
+    # mock-interview start endpoint, never here).
+    type: str = "general"
+    # The interview_record this conversation is about (required for debrief).
+    # Bound as subject_type="interview_record", subject_id=<this>.
+    subject_id: str | None = None
     title: str | None = None
 
 
 class SessionCreateResponse(BaseModel):
     session_id: str
     title: str
-    session_type: str
+    type: str
 
 
 class SessionListItem(BaseModel):
     session_id: str
     title: str
-    session_type: str
+    type: str
     state_summary: str
     turn_count: int
     updated_at: str
@@ -167,37 +44,118 @@ class SSEChatRequest(BaseModel):
     message: str
     # Execution strategy. ``chat`` runs the L1 chat pipeline (planner →
     # answer LLM, no tool use). ``agent`` runs the L2 ReAct loop with
-    # the full tool registry (search_jobs, web_search, read_url,
-    # search_knowledge, read_resume, read_interview_history, read_file,
-    # write_file, recall_memory, save_memory).
-    #
-    # Default ``chat`` for back-compat: any pre-existing client that
-    # doesn't send the field continues to land on the chat path. The
-    # frontend's AGENT pill MUST pass ``"agent"`` here — without that
-    # plumbing the tool registry never reaches the LLM and "AGENT mode"
-    # is purely decorative.
+    # the full tool registry. Default ``chat`` for back-compat. agent mode
+    # is only valid for general/debrief conversations, never mock_interview.
     mode: Literal["chat", "agent"] = Field(default="chat")
-
-
-class MockStartRequest(BaseModel):
-    session_id: str
-    resume_upload_id: str | None = None
-    jd_upload_id: str | None = None
-    # User-pasted JD text. Wins over jd_upload_id if both present.
-    jd_text: str | None = None
-    # Interviewer persona for tone. Depth is inferred from JD seniority.
-    interviewer_style: str = "professional"   # friendly|professional|rigorous|pressure
-    # Interaction mode. 'hybrid' = AI TTS + user types or speaks freely.
-    voice_mode: str = "hybrid"                # text|voice|hybrid
 
 
 class SessionRenameRequest(BaseModel):
     title: str
 
 
+# ── Mock-interview DTOs ──────────────────────────────────────────────────
+# Target architecture (RFC §6.4): the start endpoint owns creation of the
+# interview_record + conversation + mock_interview_runtime; subsequent calls
+# address the run by ``record_id``. No "Runtime Director" — the next
+# interviewer line is generated from plan_json + current stage + message
+# history. Mirrored 1:1 by the TS interfaces in frontend/src/types/api.ts.
+
+
+class MockStage(BaseModel):
+    """One stage of the (frozen) interview plan, for the progress UI."""
+    key: str
+    title: str
+
+
+class MockStartRequest(BaseModel):
+    # Personal resume entity (resumes.id) OR a freshly-uploaded resume file
+    # asset (file_assets.id). Both optional; at most one is used.
+    resume_id: str | None = None
+    resume_file_asset_id: str | None = None
+    # JD as pasted/parsed text OR an uploaded JD file asset.
+    jd_text: str | None = None
+    jd_file_asset_id: str | None = None
+    # Frozen plan template for this run (phase-1: only "general").
+    plan_template_key: str = "general"
+    # Interviewer persona for tone. Depth is inferred from JD seniority.
+    interviewer_style: str = "professional"   # friendly|professional|rigorous|pressure
+    # Interaction mode. 'hybrid' = AI TTS + user types or speaks freely.
+    voice_mode: str = "hybrid"                # text|voice|hybrid
+
+
+class MockStartResp(BaseModel):
+    """``POST /mock-interviews/start`` — atomic create + opening line."""
+    interview_record_id: str
+    conversation_id: str
+    runtime_id: str
+    current_stage_key: str
+    # The opening interviewer message (greeting + first question), one string.
+    current_question: str
+    plan_phases: list[MockStage]
+
+
 class MockAnswerRequest(BaseModel):
-    session_id: str
-    answer: str
+    answer_text: str
+    # Optional voice answer clip (file_assets.id, purpose="mock_audio_clip").
+    answer_audio_file_asset_id: str | None = None
+
+
+class MockAnswerResp(BaseModel):
+    """``POST /mock-interviews/{record_id}/answer`` — next interviewer line."""
+    interviewer_message: str
+    current_stage_key: str
+    is_ready_to_finish: bool
+
+
+class MockFinishResp(BaseModel):
+    """``POST /mock-interviews/{record_id}/finish`` — enter review."""
+    status: Literal["processing_review"]
+    record_id: str
+
+
+class MockRetryReviewResp(BaseModel):
+    """``POST /mock-interviews/{record_id}/retry-review``."""
+    status: Literal["processing_review"]
+    record_id: str
+
+
+class MockAbandonResp(BaseModel):
+    """``DELETE /mock-interviews/{record_id}`` — abandon an unfinished run."""
+    status: Literal["deleted"]
+    record_id: str
+
+
+class MockInProgressResp(BaseModel):
+    """``GET /mock-interviews/in-progress`` — resume banner.
+
+    Discriminated by ``has_in_progress``: when False all other fields are
+    None. Sourced from the user's most recent in_progress
+    ``mock_interview_runtime`` row.
+    """
+    has_in_progress: bool
+    record_id: str | None = None
+    conversation_id: str | None = None
+    runtime_id: str | None = None
+    title: str | None = None
+    current_stage_key: str | None = None
+    # The last interviewer line (what the candidate is answering) — lets the
+    # frontend re-seed the live view on resume without a history round-trip.
+    current_question: str | None = None
+    last_activity_at: str | None = None
+
+
+class MockParseJdResp(BaseModel):
+    """``POST /mock-interviews/parse-jd``."""
+    text: str
+    filename: str | None = None
+    chars: int
+
+
+class MockTranscribeResp(BaseModel):
+    """``POST /mock-interviews/transcribe``."""
+    text: str
+    language: str
+    duration_sec: float
 
 
 class TTSRequest(BaseModel):
@@ -213,23 +171,17 @@ __all__ = [
     "MessageItem",
     "SSEChatRequest",
     "SessionRenameRequest",
-    # Mock-interview request DTOs
+    # Mock-interview DTOs (mirrored 1:1 by frontend/src/types/api.ts)
+    "MockStage",
     "MockStartRequest",
-    "MockAnswerRequest",
-    "TTSRequest",
-    # Mock-interview response DTOs (all surfaced for ``from
-    # app.schemas.chat import *`` compatibility + IDE auto-import).
-    # Mirrored 1:1 by the corresponding TS interfaces in
-    # frontend/src/types/api.ts.
-    "MockDirectorAction",
-    "MockPhaseProgress",
-    "MockPlanPhase",
-    "MockQuestion",
     "MockStartResp",
-    "MockInProgressResp",
+    "MockAnswerRequest",
     "MockAnswerResp",
     "MockFinishResp",
+    "MockRetryReviewResp",
     "MockAbandonResp",
+    "MockInProgressResp",
     "MockParseJdResp",
     "MockTranscribeResp",
+    "TTSRequest",
 ]

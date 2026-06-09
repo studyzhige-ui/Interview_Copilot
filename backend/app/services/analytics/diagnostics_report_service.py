@@ -11,34 +11,32 @@ per-interview transcript scoring in
 
 import json
 import logging
-import os
 from typing import Any
 
-from llama_index.core.storage.docstore import SimpleDocumentStore
-
-from app.core.config import settings
 from app.rag.embeddings import agent_fast_llm
 
 logger = logging.getLogger(__name__)
 
 
-def _extract_personal_memories(docstore: Any, user_id: str) -> list[dict[str, Any]]:
-    memories: list[dict[str, Any]] = []
-    docs = getattr(docstore, "docs", {}) or {}
-    for _, doc in docs.items():
-        metadata = getattr(doc, "metadata", {}) or {}
-        if metadata.get("source_type") != "personal_memory":
-            continue
-        if metadata.get("user_id") != user_id:
-            continue
-        memories.append(
+# Mastery → a rough 0-10 competence score for the diagnostic input.
+_MASTERY_SCORE = {"weak": 3.0, "improving": 5.0, "stable": 7.5, "strong": 9.0}
+
+
+def _extract_ability_records(db: Any, user_id: str) -> list[dict[str, Any]]:
+    """Read a user's active ability states (memory_ability_states) as the
+    diagnostic input — topic mastery + summary, newest evidence first."""
+    from app.services.memory import memory_ability_state_service
+
+    records: list[dict[str, Any]] = []
+    for s in memory_ability_state_service.load_active(user_id, db=db):
+        records.append(
             {
-                "content": getattr(doc, "text", ""),
-                "score": float(metadata.get("original_score", 10.0)),
-                "time": metadata.get("last_accessed", ""),
+                "content": f"[{s.topic}] ({s.skill_type}) {s.summary or ''}".strip(),
+                "score": _MASTERY_SCORE.get(s.mastery_level or "", 5.0),
+                "time": s.last_evidence_at.isoformat() if s.last_evidence_at else "",
             }
         )
-    return memories
+    return records
 
 
 def _clean_json_text(raw: str) -> str:
@@ -57,22 +55,18 @@ async def generate_comprehensive_report(limit: int = 20, user_id: str | None = N
         return {"status": "empty", "message": "missing user id"}
 
     try:
-        docstore = None
-        if os.path.exists(settings.DOCSTORE_DIR):
-            docstore = SimpleDocumentStore.from_persist_dir(settings.DOCSTORE_DIR)
-        else:
-            return {"status": "empty", "message": "底层缓存为空"}
+        from app.db.database import SessionLocal
+        with SessionLocal() as db:
+            ability_records = _extract_ability_records(db, user_id=user_id)
+        if not ability_records:
+            return {"status": "empty", "message": "暂无能力状态数据"}
 
-        personal_memories = _extract_personal_memories(docstore, user_id=user_id)
-        if not personal_memories:
-            return {"status": "empty", "message": "暂无人格记忆特征数据"}
-
-        personal_memories.sort(key=lambda x: x["time"], reverse=True)
-        records = personal_memories[:limit]
+        ability_records.sort(key=lambda x: x["time"], reverse=True)
+        records = ability_records[:limit]
         structured_payload = json.dumps(records, ensure_ascii=False)
 
         sys_prompt = f"""
-你是一位资深技术面试官，请根据候选人的历史错题与复盘记录输出结构化诊断。
+你是一位资深技术面试官，请根据候选人各主题的能力状态输出结构化诊断。
 必须输出 JSON 对象，严格遵循字段：
 {{
   "overall_evaluation": "string",

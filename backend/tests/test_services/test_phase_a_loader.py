@@ -1,11 +1,19 @@
-"""Phase A regression tests — strategy/habit description-only loading.
+"""v3 context-loader tests (``app.services.memory.v3_context_loader``).
 
-Verifies:
-  * universal pass exposes ``strategy_description`` / ``habit_description``,
-    NOT full bodies
-  * selection LLM decisions for strategy/habit body load are honoured
-  * single_doc service derives a non-empty one_liner from a populated body
-  * V3MemoryContext.render() never includes a body the LLM didn't request
+The loader assembles the memory bundle injected into every chat turn:
+
+  * ``load_universal``       — the cheap every-turn pass: user_profile FULL
+                               body + active ability states (compact) +
+                               learning_strategy one-liner.
+  * ``attach_active_bodies`` — hydrates the full learning_strategy body only
+                               when the planner asks (``load_strategy=True``).
+  * ``V3MemoryContext.render`` — renders the bundle to markdown, omitting the
+                               strategy *detail* section unless the body loaded.
+
+The services open their own ``SessionLocal`` internally, so — like the other
+v3 memory tests — we run on a dedicated in-memory engine and rebind every
+service's ``SessionLocal`` to it, then seed a ``users`` row (the services
+resolve a username → ``users.id``).
 """
 from __future__ import annotations
 
@@ -20,11 +28,10 @@ from sqlalchemy.pool import StaticPool
 @pytest.fixture
 def engine_and_session():
     from app.db.database import Base
-    import app.models.habit_doc       # noqa: F401
-    import app.models.knowledge_doc   # noqa: F401
-    import app.models.memory_audit_log  # noqa: F401
-    import app.models.strategy_doc    # noqa: F401
-    import app.models.user            # noqa: F401
+    import app.models.memory_ability_state  # noqa: F401
+    import app.models.memory_audit_logs     # noqa: F401
+    import app.models.memory_document       # noqa: F401
+    import app.models.user                  # noqa: F401
 
     engine = create_engine(
         "sqlite://",
@@ -40,355 +47,180 @@ def engine_and_session():
         engine.dispose()
 
 
-def _rebind(monkeypatch, Session):
-    import app.services.memory._audit_log_service as audit_mod
+@pytest.fixture
+def seeded(engine_and_session, monkeypatch):
+    """Rebind service SessionLocals to the test engine and seed one user.
+
+    Rebinds ``_db_helpers`` too because ``load_universal`` /
+    ``attach_active_bodies`` route their reads through
+    ``_db_helpers.session_scope`` — rebinding only the doc/ability service
+    modules would leave the helper's binding pointed at the real DB.
+    """
+    _engine, Session = engine_and_session
     import app.services.memory._db_helpers as helpers_mod
-    import app.services.memory._single_doc_service as single_mod
-    import app.services.memory.knowledge_doc_service as kd_mod
-    import app.services.memory.user_profile_doc_service as up_mod
-    # Includes ``_db_helpers`` because the doc services now route all
-    # ``SessionLocal()`` opens through ``_db_helpers.session_scope`` —
-    # rebinding only the doc-service modules' own ``SessionLocal``
-    # leaves the helper's binding pointed at the real configured DB.
-    for mod in (audit_mod, helpers_mod, single_mod, kd_mod, up_mod):
+    import app.services.memory._memory_audit as audit_mod
+    import app.services.memory.memory_ability_state_service as ability_mod
+    import app.services.memory.memory_document_service as doc_mod
+    for mod in (helpers_mod, audit_mod, ability_mod, doc_mod):
         monkeypatch.setattr(mod, "SessionLocal", Session, raising=False)
 
-
-# ── single_doc one_liner derivation ───────────────────────────────────
-
-
-def test_load_all_accepts_db_kwarg(engine_and_session, monkeypatch):
-    """``knowledge_doc_service.load_all`` must accept ``db: Session |
-    None`` so the ``/memory/overview`` endpoint (and any future
-    orchestrator) can share one session across all four memory reads.
-    Before P1-J this function was the only doc-service reader without
-    the kwarg.
-    """
-    from app.services.memory import knowledge_doc_service
-
-    _, Session = engine_and_session
-    _rebind(monkeypatch, Session)
-
-    # Without db: helper opens + closes a fresh session internally.
-    rows = knowledge_doc_service.load_all("alice")
-    assert rows == []
-
-    # With db: shared session, helper doesn't close it.
-    shared = Session()
-    try:
-        rows2 = knowledge_doc_service.load_all("alice", db=shared)
-        assert rows2 == []
-        # Session is still usable after the call.
-        assert shared.is_active
-    finally:
-        shared.close()
+    from app.models.user import User
+    s = Session()
+    s.add(User(username="alice", hashed_password="x"))
+    s.commit()
+    s.close()
+    return Session
 
 
-def test_load_universal_opens_exactly_one_db_session(engine_and_session, monkeypatch):
-    """``load_universal`` MUST share a single ``SessionLocal()`` across
-    all four universal-pass reads (user_profile + knowledge_index +
-    strategy_description + habit_description). Pre-fix each service
-    opened its own — 4 connections per turn just for the universal
-    pass, scaling worse in ``attach_active_bodies``.
+# ── load_universal: user_profile body + ability states + strategy one-liner ─
 
-    Counts every ``SessionLocal()`` invocation via a wrapper and
-    asserts exactly 1 — a regression that reverts the plumbing would
-    bump the count back to 4 and fail loudly.
-    """
+
+def test_load_universal_returns_profile_abilities_and_strategy_oneliner(seeded):
     from app.services.memory import (
-        habit_doc_service, knowledge_doc_service,
-        strategy_doc_service, user_profile_doc_service,
+        memory_ability_state_service,
+        memory_document_service,
         v3_context_loader,
     )
 
-    _, Session = engine_and_session
-    _rebind(monkeypatch, Session)
-
-    call_count = {"n": 0}
-    real_session = Session
-
-    def _counting_factory(*args, **kwargs):
-        call_count["n"] += 1
-        return real_session(*args, **kwargs)
-
-    # Patch the helper's binding (and every doc service's, just to be
-    # safe — the helper is the only consumer post P1-F, but if a
-    # future change reverts to per-service opens we want the count
-    # invariant to catch it).
-    import app.services.memory._db_helpers as helpers_mod
-    monkeypatch.setattr(helpers_mod, "SessionLocal", _counting_factory)
-    monkeypatch.setattr(user_profile_doc_service, "SessionLocal", _counting_factory)
-    monkeypatch.setattr(knowledge_doc_service, "SessionLocal", _counting_factory)
-    import app.services.memory._single_doc_service as single_mod
-    monkeypatch.setattr(single_mod, "SessionLocal", _counting_factory)
-
-    v3_context_loader.load_universal("alice")
-
-    # Acceptable upper bound: 1 (the goal). Strictly assert it.
-    assert call_count["n"] == 1, (
-        f"load_universal should open EXACTLY 1 SessionLocal across "
-        f"its 4 service calls; got {call_count['n']}. A regression "
-        f"that drops the shared-session plumbing brings this back "
-        f"to 4 — silently regressing perf without breaking behavior."
-    )
-
-
-def test_memory_overview_opens_exactly_one_db_session(engine_and_session, monkeypatch):
-    """``/memory/overview`` endpoint MUST share a single ``SessionLocal()``
-    across its 4 doc-service reads (user_profile + knowledge.load_all
-    + strategy + habit). Pre-P1-J each opened its own — 4 connections
-    per page load for the user-facing endpoint, mirroring the agent
-    side's pre-P1-F behavior.
-
-    Same counter pattern as
-    ``test_load_universal_opens_exactly_one_db_session``: a future
-    refactor that drops ``db=db`` from any of the 4 calls bumps the
-    counter back to 4 and this test fails loudly.
-    """
-    from app.api.memory import memory_overview
-    from app.services.memory import (
-        habit_doc_service, knowledge_doc_service,
-        strategy_doc_service, user_profile_doc_service,
-    )
-
-    _, Session = engine_and_session
-    _rebind(monkeypatch, Session)
-
-    call_count = {"n": 0}
-    real_session = Session
-
-    def _counting_factory(*args, **kwargs):
-        call_count["n"] += 1
-        return real_session(*args, **kwargs)
-
-    import app.services.memory._db_helpers as helpers_mod
-    monkeypatch.setattr(helpers_mod, "SessionLocal", _counting_factory)
-    monkeypatch.setattr(user_profile_doc_service, "SessionLocal", _counting_factory)
-    monkeypatch.setattr(knowledge_doc_service, "SessionLocal", _counting_factory)
-    import app.services.memory._single_doc_service as single_mod
-    monkeypatch.setattr(single_mod, "SessionLocal", _counting_factory)
-
-    # Fake current_user — the endpoint only reads ``.username``.
-    class _FakeUser:
-        username = "alice"
-
-    memory_overview(current_user=_FakeUser())
-
-    assert call_count["n"] == 1, (
-        f"/memory/overview should open EXACTLY 1 SessionLocal across "
-        f"its 4 service calls; got {call_count['n']}. A regression "
-        f"that drops ``db=db`` from any call would bring this back to "
-        f"4 — silently regressing the user-facing perf gain from P1-J."
-    )
-
-
-def test_strategy_apply_patches_populates_one_liner(engine_and_session, monkeypatch):
-    """A patch run that adds a real bullet must leave a non-empty
-    one_liner on the row so universal pass has something to show."""
-    from app.models.strategy_doc import StrategyDoc
-    from app.services.memory import strategy_doc_service
-
-    engine, Session = engine_and_session
-    _rebind(monkeypatch, Session)
-
-    result = strategy_doc_service.apply_patches(
-        user_id="alice",
-        patches=[{
-            "op": "add",
-            "section": "已内化",
-            "new_line": "- 先分析根因后给方案",
-        }],
+    memory_document_service.apply_patches(
+        "alice", "user_profile",
+        [{"op": "add", "new_line": "- 目标：后端岗位"}],
         change_type="patch_realtime",
     )
-    assert result.applied == 1
-
-    db = Session()
-    try:
-        row = db.query(StrategyDoc).filter(StrategyDoc.user_id == "alice").first()
-        assert row is not None
-        assert row.one_liner            # non-empty
-        assert "先分析根因后给方案" in row.one_liner
-    finally:
-        db.close()
-
-
-def test_strategy_load_description_returns_one_liner_only(engine_and_session, monkeypatch):
-    """``load_description`` must return the one_liner, NOT the full body."""
-    from app.services.memory import strategy_doc_service
-
-    engine, Session = engine_and_session
-    _rebind(monkeypatch, Session)
-
-    strategy_doc_service.apply_patches(
-        user_id="alice",
-        patches=[{"op": "add", "section": "已内化", "new_line": "- 先分析根因"}],
+    memory_document_service.apply_patches(
+        "alice", "learning_strategy",
+        [{"op": "add", "new_line": "- 先讲思路再写代码"}],
         change_type="patch_realtime",
     )
-    desc = strategy_doc_service.load_description("alice")
-    assert desc
-    # The full body has "## 已内化" headers in it; description should NOT.
-    assert "##" not in desc
-
-
-# ── universal pass exposes descriptions, not bodies ──────────────────
-
-
-def test_load_universal_no_strategy_or_habit_body(engine_and_session, monkeypatch):
-    """Phase A: load_universal MUST NOT return strategy_body or
-    habit_body fields (they were renamed to descriptions)."""
-    from app.models.user import User
-    from app.services.memory import (
-        habit_doc_service, strategy_doc_service, v3_context_loader,
+    memory_ability_state_service.upsert(
+        "alice", topic="Redis 缓存穿透", skill_type="knowledge_topic",
+        mastery_level="weak", summary="不懂布隆过滤器", change_type="patch_realtime",
     )
 
-    engine, Session = engine_and_session
-    _rebind(monkeypatch, Session)
+    ctx = v3_context_loader.load_universal("alice")
 
-    db = Session()
-    db.add(User(username="alice", email="a@e.com", hashed_password="x"))
-    db.commit()
-    db.close()
+    # user_profile is the FULL body.
+    assert "后端岗位" in ctx.user_profile_body
+    # ability states are compact per-topic dicts.
+    assert len(ctx.ability_states) == 1
+    state = ctx.ability_states[0]
+    assert state["topic"] == "Redis 缓存穿透"
+    assert state["skill_type"] == "knowledge_topic"
+    assert state["mastery_level"] == "weak"
+    assert state["summary"] == "不懂布隆过滤器"
+    # learning_strategy is the one-liner ONLY, not the full body...
+    assert ctx.learning_strategy_description
+    assert "先讲思路" in ctx.learning_strategy_description
+    # ...and the on-demand full body is NOT loaded by the universal pass.
+    assert ctx.active_learning_strategy_body == ""
 
-    strategy_doc_service.apply_patches(
-        user_id="alice",
-        patches=[{"op": "add", "section": "已内化", "new_line": "- 策略A"}],
-        change_type="patch_realtime",
-    )
-    habit_doc_service.apply_patches(
-        user_id="alice",
-        patches=[{"op": "add", "section": "稳定的练习节奏", "new_line": "- 节奏B"}],
+
+def test_load_universal_empty_for_user_with_no_memory(seeded):
+    from app.services.memory import v3_context_loader
+
+    ctx = v3_context_loader.load_universal("alice")
+    assert ctx.user_profile_body == ""
+    assert ctx.ability_states == []
+    assert ctx.learning_strategy_description == ""
+    assert ctx.active_learning_strategy_body == ""
+
+
+# ── attach_active_bodies honours an explicit planner decision ────────────
+
+
+def test_attach_active_bodies_loads_strategy_when_asked(seeded):
+    """When the planner says load_strategy=True, the full learning_strategy
+    body must end up in ``active_learning_strategy_body``. Deterministic —
+    no LLM call inside the loader."""
+    from app.services.memory import memory_document_service, v3_context_loader
+
+    memory_document_service.apply_patches(
+        "alice", "learning_strategy",
+        [{"op": "add", "new_line": "- STAR 法已内化"}],
         change_type="patch_realtime",
     )
 
     ctx = v3_context_loader.load_universal("alice")
-    # Description fields present:
-    assert ctx.strategy_description
-    assert ctx.habit_description
-    # Active bodies NOT loaded by universal pass:
-    assert ctx.active_strategy_body == ""
-    assert ctx.active_habit_body == ""
-    # And the old "*_body" attrs are gone:
-    assert not hasattr(ctx, "strategy_body")
-    assert not hasattr(ctx, "habit_body")
+    assert ctx.active_learning_strategy_body == ""  # not loaded by universal pass
+
+    ctx = asyncio.run(v3_context_loader.attach_active_bodies(
+        ctx, user_id="alice", load_strategy=True,
+    ))
+    assert "STAR" in ctx.active_learning_strategy_body
 
 
-# ── attach_active_bodies honours explicit planner decisions ──────────
+def test_attach_active_bodies_skips_strategy_when_not_asked(seeded):
+    """load_strategy=False (the default) must leave the body empty even when
+    a learning_strategy doc exists."""
+    from app.services.memory import memory_document_service, v3_context_loader
 
-
-def test_attach_active_bodies_loads_strategy_when_asked(engine_and_session, monkeypatch):
-    """When the planner explicitly says load_strategy=True, the
-    strategy body must end up in active_strategy_body. After the
-    planner-merge refactor this is deterministic — no LLM call inside
-    the loader."""
-    from app.models.user import User
-    from app.services.memory import (
-        strategy_doc_service, habit_doc_service, v3_context_loader,
-    )
-
-    engine, Session = engine_and_session
-    _rebind(monkeypatch, Session)
-
-    db = Session()
-    db.add(User(username="alice", email="a@e.com", hashed_password="x"))
-    db.commit()
-    db.close()
-
-    strategy_doc_service.apply_patches(
-        user_id="alice",
-        patches=[{"op": "add", "section": "已内化", "new_line": "- STAR 法已内化"}],
-        change_type="patch_realtime",
-    )
-    habit_doc_service.apply_patches(
-        user_id="alice",
-        patches=[{"op": "add", "section": "稳定的练习节奏", "new_line": "- 每周一三五"}],
+    memory_document_service.apply_patches(
+        "alice", "learning_strategy",
+        [{"op": "add", "new_line": "- 不该被加载的正文"}],
         change_type="patch_realtime",
     )
 
     ctx = v3_context_loader.load_universal("alice")
     ctx = asyncio.run(v3_context_loader.attach_active_bodies(
-        ctx,
-        user_id="alice",
-        topics=[],
-        load_strategy=True,
-        load_habit=False,
+        ctx, user_id="alice", load_strategy=False,
     ))
-    assert "STAR" in ctx.active_strategy_body
-    assert ctx.active_habit_body == ""
+    assert ctx.active_learning_strategy_body == ""
 
 
-# ── render output reflects what's loaded ─────────────────────────────
+# ── render output reflects what's loaded ─────────────────────────────────
 
 
-def test_render_omits_body_sections_when_not_active(engine_and_session, monkeypatch):
-    """Render must NOT print '# 答题策略详情' when active_strategy_body is empty."""
+def test_render_includes_profile_abilities_and_strategy_oneliner():
+    """render() shows the user_profile, the ability lines, and the strategy
+    OVERVIEW (one-liner) — but NOT the strategy detail section when the full
+    body wasn't loaded."""
     from app.services.memory.v3_context_loader import V3MemoryContext
 
     ctx = V3MemoryContext(
         user_profile_body="- 用户：alice",
-        strategy_description="2 条；首条：先分析根因",
-        habit_description="",
-        active_strategy_body="",
-        active_habit_body="",
+        ability_states=[
+            {"topic": "Redis", "skill_type": "knowledge_topic",
+             "mastery_level": "weak", "summary": "穿透没搞懂"},
+        ],
+        learning_strategy_description="先分析根因",
+        active_learning_strategy_body="",
     )
     out = ctx.render()
-    # Description block is in the universal pass:
-    assert "答题策略 doc" in out
-    # But the detail section is NOT, since the body wasn't loaded:
-    assert "答题策略详情" not in out
-    assert "学习习惯与心态详情" not in out
+    assert "用户画像" in out
+    assert "alice" in out
+    # Ability line rendered with the mastery label (weak → 弱).
+    assert "能力状态" in out
+    assert "Redis" in out
+    assert "弱" in out
+    assert "穿透没搞懂" in out
+    # Strategy OVERVIEW (one-liner) present...
+    assert "学习策略概览" in out
+    assert "先分析根因" in out
+    # ...but the strategy DETAIL section is NOT, since the body wasn't loaded.
+    assert "学习策略详情" not in out
 
 
-# ── L1: index format ↔ extractor round-trip ──────────────────────────
+def test_render_prefers_full_strategy_body_over_oneliner_when_loaded():
+    """Once the full learning_strategy body is attached, render() must show
+    the detail section (not just the overview one-liner)."""
+    from app.services.memory.v3_context_loader import V3MemoryContext
 
-
-def test_list_index_lines_round_trips_through_extract_topic_name(engine_and_session, monkeypatch):
-    """``query_planner._extract_topic_names`` parses topic names out of
-    ``knowledge_doc_service.list_index_lines`` output. The two are
-    silently coupled by string format — if either drifts, the planner
-    would silently reject every topic the LLM suggested (``t in
-    valid_topics`` would always fail). Lock the contract with a
-    round-trip test (originally review L1, kept after the planner
-    merge moved the extractor).
-    """
-    from app.models.knowledge_doc import KnowledgeDoc
-    from app.conversation.query_planner import _extract_topic_names
-    from app.services.memory import knowledge_doc_service
-
-    engine, Session = engine_and_session
-    _rebind(monkeypatch, Session)
-
-    # Seed three topics with varying mastery + dates so the format
-    # exercises all conditional branches in list_index_lines.
-    from datetime import datetime
-    db = Session()
-    try:
-        db.add_all([
-            KnowledgeDoc(
-                user_id="alice", topic="Redis", body="## 已掌握的认知\n- x\n",
-                one_liner="caching", mastery_level="strong", fact_count=8,
-                last_discussed_at=datetime(2026, 5, 21),
-            ),
-            KnowledgeDoc(
-                user_id="alice", topic="Postgres", body="## 已掌握的认知\n- y\n",
-                one_liner="networking", mastery_level="progressing", fact_count=3,
-                last_discussed_at=None,
-            ),
-            KnowledgeDoc(
-                user_id="alice", topic="系统设计", body="## 已掌握的认知\n- z\n",
-                one_liner="", mastery_level=None, fact_count=1,
-                last_discussed_at=datetime(2026, 4, 10),
-            ),
-        ])
-        db.commit()
-    finally:
-        db.close()
-
-    lines = knowledge_doc_service.list_index_lines("alice", max_topics=10)
-    assert len(lines) == 3
-    extracted = _extract_topic_names(lines)
-    # Every produced line MUST yield a topic name, and the round-trip
-    # set must match what we put in.
-    assert len(extracted) == 3, (
-        f"Some index lines didn't round-trip: {list(zip(lines, extracted))}"
+    ctx = V3MemoryContext(
+        user_profile_body="- 用户：alice",
+        ability_states=[],
+        learning_strategy_description="先分析根因",
+        active_learning_strategy_body="- 先分析根因\n- 再给方案",
     )
-    assert set(extracted) == {"Redis", "Postgres", "系统设计"}
+    out = ctx.render()
+    assert "学习策略详情" in out
+    assert "再给方案" in out
+    # When the full body is shown the overview header is suppressed.
+    assert "学习策略概览" not in out
+
+
+def test_render_omits_empty_sections():
+    """An entirely empty context renders to an empty string (no stray
+    headers)."""
+    from app.services.memory.v3_context_loader import V3MemoryContext
+
+    assert V3MemoryContext().render() == ""

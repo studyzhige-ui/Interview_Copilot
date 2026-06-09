@@ -5,33 +5,6 @@ from celery.signals import worker_process_init
 from app.core.config import settings
 
 
-# ── Sentry (per-worker) ─────────────────────────────────────────────────
-# Each Celery worker process runs in its own interpreter, so we have to
-# init the SDK after fork — the worker_process_init signal handler below
-# does that. We only call sentry_sdk.init when SENTRY_DSN is configured.
-def _init_sentry_for_worker() -> None:
-    if not settings.SENTRY_DSN:
-        return
-    try:
-        import sentry_sdk
-        from sentry_sdk.integrations.celery import CeleryIntegration
-        from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
-        from sentry_sdk.integrations.redis import RedisIntegration
-    except ImportError:
-        return
-    sentry_sdk.init(
-        dsn=settings.SENTRY_DSN,
-        environment=settings.SENTRY_ENVIRONMENT,
-        release=settings.SENTRY_RELEASE or None,
-        traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
-        integrations=[
-            CeleryIntegration(monitor_beat_tasks=False),
-            SqlalchemyIntegration(),
-            RedisIntegration(),
-        ],
-        send_default_pii=False,
-    )
-
 celery_app = Celery(
     "interview_copilot_worker",
     broker=settings.REDIS_URL,
@@ -45,6 +18,11 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="Asia/Shanghai",
     enable_utc=True,
+    # Opt into the Celery 6.0 default explicitly (silences the
+    # CPendingDeprecationWarning): keep retrying the broker connection during
+    # worker startup so a transient Redis hiccup at boot doesn't abort the
+    # worker. This is the forward-compatible fix — no Celery major-version bump.
+    broker_connection_retry_on_startup=True,
     task_track_started=True,
     task_time_limit=3600,        # Hard kill at 60 min (transcription headroom).
     task_soft_time_limit=3540,   # 1 min before hard kill, raise SoftTimeLimitExceeded
@@ -66,12 +44,15 @@ celery_app.conf.update(
         "tasks.process_interview_analysis": {"queue": "transcription"},
         # ── Light: LLM / embedding / DB only ──
         "tasks.process_document_ingestion": {"queue": "default"},
-        "tasks.dream_for_record": {"queue": "default"},
+        # Resume parse (LLM sectioning + S3 download + embed) is light.
+        "tasks.process_resume_parse": {"queue": "default"},
         "tasks.dream_for_user": {"queue": "default"},
         "tasks.scan_and_dream_batch": {"queue": "default"},
         # Catalog refresh is pure outbound HTTP — no GPU, no heavy
         # in-process model. Lands on the light queue alongside dreaming.
         "tasks.refresh_model_catalog": {"queue": "default"},
+        # Outbox drain: object-storage / index cleanup. DB + storage I/O.
+        "tasks.drain_outbox_jobs": {"queue": "default"},
     },
     # ── Reliability ─────────────────────────────────────────────────────
     # Default acks_late=True so a worker crash during a task re-queues the
@@ -99,8 +80,8 @@ celery_app.conf.update(
     # gate 3: enough new chat activity), then dreams each user's
     # silent records. See ``dreaming_worker`` docstring for full gate
     # logic. This is the ONLY trigger — there's no per-record completion
-    # hook, no per-turn hook (Path B over Path A decision in
-    # docs/v3_memory_refactor_report.md).
+    # hook, no per-turn hook (Path B over Path A decision; see the
+    # ``dreaming_worker`` module docstring).
     #
     # Model catalog refresh (P6-K): daily at 04:00 Asia/Shanghai. Hits
     # every vendor's /v1/models, drops + repopulates the global discovery
@@ -118,6 +99,13 @@ celery_app.conf.update(
         "model-catalog-daily-refresh": {
             "task": "tasks.refresh_model_catalog",
             "schedule": crontab(hour=4, minute=0),
+        },
+        # Outbox drain: every minute, process due cross-system cleanup jobs
+        # (delete orphaned objects / failed uploads, and — as later packages
+        # register handlers — Milvus index + memory work).
+        "outbox-drain-every-minute": {
+            "task": "tasks.drain_outbox_jobs",
+            "schedule": crontab(minute="*"),
         },
     },
 )
@@ -166,9 +154,7 @@ def init_worker_models(**kwargs):
     import logging
 
     logger = logging.getLogger(__name__)
-    # Sentry first so any subsequent init failure gets reported.
-    _init_sentry_for_worker()
-    # LangSmith next — must run BEFORE any LLM client is created (init_rag_settings
+    # LangSmith — must run BEFORE any LLM client is created (init_rag_settings
     # constructs them). No-op when LANGSMITH_TRACING isn't set in .env.
     from app.core.llm_tracing import setup_llm_tracing
     setup_llm_tracing()

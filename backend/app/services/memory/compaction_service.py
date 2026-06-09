@@ -1,8 +1,11 @@
-"""Session-state compaction service.
+"""Conversation summary compaction service.
 
-Compresses old conversation turns into a session_state summary using a
-dual-threshold trigger (token growth + turn count) — adapts to
-conversation density better than a fixed modulo cadence.
+Compresses old conversation turns into the session's ``summary`` column using
+a dual-threshold trigger (token growth + turn count) — adapts to conversation
+density better than a fixed modulo cadence. This is the assembly-time (outer)
+trigger of the same autocompact mechanism the L2 loop runs inline; both fold
+the conversation into one ``summary`` rendered via the [Context Summary] slot
+(see plan §8 — the two will fully merge under D1).
 """
 
 import logging
@@ -10,16 +13,15 @@ import logging
 from app.rag.embeddings import agent_fast_llm
 from app.services.chat.chat_history_service import transcript_service
 from app.services.chat.context_assembly_pipeline import count_tokens
-from app.services.chat.session_state import dump_session_state, parse_session_state
 from app.services.memory._json_payload import _extract_json_payload
 
 logger = logging.getLogger(__name__)
 
 
 class CompactionService:
-    """Compresses old conversation turns into a session_state summary.
+    """Compresses old conversation turns into the session's ``summary`` column.
 
-    Dual-threshold trigger (Claude Code Session Memory pattern):
+    Dual-threshold trigger:
       - Token growth ≥ COMPACT_MIN_TOKEN_GROWTH AND turns ≥ COMPACT_MIN_TURNS
       - OR turns ≥ COMPACT_MAX_TURNS (hard cap, fires regardless of token count)
 
@@ -27,7 +29,7 @@ class CompactionService:
     not adapt to conversation density — heavy sessions (long RAG analysis)
     waited too long while lightweight sessions (short Q&A) triggered too early.
 
-    Summary uses a structured 4-section template (Claude Code / Hermes style)
+    The summary uses the structured 6-section template (``COMPACTION_PROMPT``)
     instead of the old flat 300-char blob.
     """
 
@@ -35,7 +37,7 @@ class CompactionService:
     COMPACT_MIN_TOKEN_GROWTH = 6_000  # pending tokens since last compact
     COMPACT_MIN_TURNS = 4             # minimum turns between compactions
     COMPACT_MAX_TURNS = 15            # hard cap — always compact at this point
-    SESSION_STATE_MAX_TOKENS = 2_500  # raised from 1500 for structured summaries
+    SUMMARY_MAX_TOKENS = 2_500  # cap on the stored 6-section summary
 
     COMPACTION_PROMPT = """你是一个对话摘要助手。
 你的输出会被注入到一段独立的对话中，让一个**不同的**助手能够无缝接续当前对话。
@@ -126,47 +128,57 @@ class CompactionService:
             session_id, turns_since_compact, pending_tokens,
         )
 
-        session_state = parse_session_state(
-            meta["session_state"],
-            meta.get("session_type", "general"),
+        old_summary = meta.get("summary", "")
+        conversation = "\n".join(
+            f"{item['role']}: {item['content']}" for item in pending
         )
-        old_summary = session_state.get("summary", "")
+        new_summary = await summarize_conversation(old_summary, conversation)
+        if not new_summary:
+            return False  # LLM / parse failure (already logged)
 
-        prompt = self.COMPACTION_PROMPT.format(
-            old_summary=old_summary or "(无)",
-            new_conversation="\n".join(
-                f"{item['role']}: {item['content']}" for item in pending
-            ),
+        await asyncio.to_thread(
+            transcript_service.update_session_fields,
+            session_id,
+            summary=new_summary,
+            compaction_cursor=pending[-1]["seq"],
         )
-        try:
-            response = await agent_fast_llm.acomplete(
-                prompt,
-                response_format={"type": "json_object"},
-            )
-            payload = _extract_json_payload(str(response.text))
-            new_summary = str(payload.get("summary", "")).strip()
+        logger.info(
+            "Compaction completed for session %s: summary=%d tokens",
+            session_id, count_tokens(new_summary),
+        )
+        return True
 
-            if count_tokens(new_summary) > self.SESSION_STATE_MAX_TOKENS:
-                new_summary = new_summary[:1200]
 
-            session_state["summary"] = new_summary
-            await asyncio.to_thread(
-                transcript_service.update_session_fields,
-                session_id,
-                session_state=dump_session_state(session_state),
-                compaction_cursor=pending[-1]["seq"],
-            )
-            logger.info(
-                "Compaction completed for session %s: summary=%d tokens",
-                session_id, count_tokens(new_summary),
-            )
-            return True
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Compaction failed for session %s: %s", session_id, exc)
-            return False
+async def summarize_conversation(old_summary: str, conversation: str) -> str:
+    """The single LLM summarization core — used by BOTH the outer post-turn
+    compaction (assembly-time trigger, ``compact_if_needed``) and the inner
+    loop autocompact (loop-time trigger, ``QueryLoopCompactor.autocompact``).
+    One function, two call sites, one 6-section summary.
+
+    Iteratively updates ``old_summary`` with ``conversation`` (the formatted
+    new turns / messages). Returns the new, capped summary; ``""`` on LLM or
+    parse failure (logged).
+    """
+    prompt = CompactionService.COMPACTION_PROMPT.format(
+        old_summary=old_summary or "(无)",
+        new_conversation=conversation,
+    )
+    try:
+        response = await agent_fast_llm.acomplete(
+            prompt, response_format={"type": "json_object"},
+        )
+        new_summary = str(
+            _extract_json_payload(str(response.text)).get("summary", "")
+        ).strip()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Conversation summarization failed: %s", exc)
+        return ""
+    if count_tokens(new_summary) > CompactionService.SUMMARY_MAX_TOKENS:
+        new_summary = new_summary[:1200]
+    return new_summary
 
 
 compaction_service = CompactionService()
 
 
-__all__ = ["CompactionService", "compaction_service"]
+__all__ = ["CompactionService", "compaction_service", "summarize_conversation"]

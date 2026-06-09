@@ -1,4 +1,4 @@
-"""CRUD helpers for the ``user_provider_settings`` table (P6-M).
+"""CRUD helpers for the ``user_model_provider_settings`` table.
 
 One row per (user, provider) when the user has overridden anything
 about how the system talks to that vendor. Missing row = use defaults
@@ -18,8 +18,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
-from app.models.user_provider_settings import UserProviderSettings
+from app.models.user_model_provider_settings import UserModelProviderSettings
 from app.services.model_sources.providers import (
     PROVIDERS,
     ProviderDefaults,
@@ -48,7 +49,7 @@ class ResolvedProviderSettings:
     organization_id: str | None
     extra_headers_json: str | None
     api_key_env: str
-    has_user_api_key: bool               # whether user_api_keys[provider] exists
+    has_user_api_key: bool               # whether user_model_credentials[provider] exists
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -58,9 +59,9 @@ class ResolvedProviderSettings:
 
 
 def _session(db: Session | None) -> Session:
-    """Context-manager-friendly session. Pass-through if the caller
-    already opened one; otherwise mint a fresh one. Mirrors the
-    pattern in user_api_key_service."""
+    """Context-manager-friendly session. Pass-through (nullcontext) when the
+    caller already opened one; otherwise mint a fresh ``SessionLocal()`` that
+    closes on ``__exit__``."""
     if db is not None:
         # Caller manages lifecycle.
         from contextlib import nullcontext
@@ -68,24 +69,33 @@ def _session(db: Session | None) -> Session:
     return SessionLocal()
 
 
-def _get_row(db: Session, user_id: str, provider: str) -> UserProviderSettings | None:
+def _get_row(
+    db: Session, user_pk: int | None, provider: str,
+) -> UserModelProviderSettings | None:
+    if user_pk is None:
+        return None
     return (
-        db.query(UserProviderSettings)
+        db.query(UserModelProviderSettings)
         .filter(
-            UserProviderSettings.user_id == user_id,
-            UserProviderSettings.provider == provider,
+            UserModelProviderSettings.user_id == user_pk,
+            UserModelProviderSettings.provider == provider,
         )
         .first()
     )
 
 
-def _has_user_api_key(db: Session, user_id: str, provider: str) -> bool:
-    """Cheap existence check. Reuses the encrypted-key table without
+def _has_user_credential(db: Session, user_pk: int | None, provider: str) -> bool:
+    """Cheap existence check. Reuses the encrypted-credential table without
     decrypting — we only need to know IF a key exists, not the value."""
-    from app.models.user_api_key import UserAPIKey
+    if user_pk is None:
+        return False
+    from app.models.user_model_credentials import UserModelCredential
     return (
-        db.query(UserAPIKey.id)
-        .filter(UserAPIKey.user_id == user_id, UserAPIKey.provider == provider)
+        db.query(UserModelCredential.id)
+        .filter(
+            UserModelCredential.user_id == user_pk,
+            UserModelCredential.provider == provider,
+        )
         .first()
     ) is not None
 
@@ -104,8 +114,11 @@ def resolve_provider_settings(
     if defaults is None:
         return None
     with _session(db) as s:
-        row = _get_row(s, user_id, provider)
-        return _resolve_one(defaults, row, has_key=_has_user_api_key(s, user_id, provider))
+        user_pk = resolve_user_pk(s, user_id)
+        row = _get_row(s, user_pk, provider)
+        return _resolve_one(
+            defaults, row, has_key=_has_user_credential(s, user_pk, provider),
+        )
 
 
 def resolve_all_provider_settings(
@@ -118,18 +131,19 @@ def resolve_all_provider_settings(
     in a single round trip.
     """
     with _session(db) as s:
+        user_pk = resolve_user_pk(s, user_id)
         rows_by_provider = {
             row.provider: row
-            for row in s.query(UserProviderSettings)
-            .filter(UserProviderSettings.user_id == user_id)
+            for row in s.query(UserModelProviderSettings)
+            .filter(UserModelProviderSettings.user_id == user_pk)
             .all()
         }
         # Existence check for ALL providers in one query (per-provider
         # query would be N+1).
-        from app.models.user_api_key import UserAPIKey
+        from app.models.user_model_credentials import UserModelCredential
         keys_present = {
-            row[0] for row in s.query(UserAPIKey.provider)
-            .filter(UserAPIKey.user_id == user_id)
+            row[0] for row in s.query(UserModelCredential.provider)
+            .filter(UserModelCredential.user_id == user_pk)
             .all()
         }
         return [
@@ -140,7 +154,7 @@ def resolve_all_provider_settings(
 
 def _resolve_one(
     defaults: ProviderDefaults,
-    row: UserProviderSettings | None,
+    row: UserModelProviderSettings | None,
     *,
     has_key: bool,
 ) -> ResolvedProviderSettings:
@@ -194,11 +208,14 @@ def upsert_settings(
         raise ValueError(f"unknown provider: {provider}")
 
     with _session(db) as s:
-        row = _get_row(s, user_id, provider)
+        user_pk = resolve_user_pk(s, user_id)
+        if user_pk is None:
+            raise ValueError(f"unknown user: {user_id}")
+        row = _get_row(s, user_pk, provider)
         if row is None:
-            row = UserProviderSettings(
+            row = UserModelProviderSettings(
                 id=str(uuid.uuid4()),
-                user_id=user_id,
+                user_id=user_pk,
                 provider=provider,
                 enabled=defaults.enabled_by_default,
             )
@@ -219,7 +236,7 @@ def upsert_settings(
         s.refresh(row)
         # Re-read key existence — could have changed if another request
         # raced. Cheap, so just include.
-        has_key = _has_user_api_key(s, user_id, provider)
+        has_key = _has_user_credential(s, user_pk, provider)
     return _resolve_one(defaults, row, has_key=has_key)
 
 
@@ -230,12 +247,13 @@ def delete_settings(
     defaults. Returns ``True`` if a row was deleted, ``False`` if there
     was nothing to delete.
 
-    Does NOT touch ``user_api_keys`` — the user keeps their encrypted
+    Does NOT touch ``user_model_credentials`` — the user keeps their encrypted
     key. Use the existing ``DELETE /models/api-keys/{provider}``
     endpoint for that.
     """
     with _session(db) as s:
-        row = _get_row(s, user_id, provider)
+        user_pk = resolve_user_pk(s, user_id)
+        row = _get_row(s, user_pk, provider)
         if row is None:
             return False
         s.delete(row)

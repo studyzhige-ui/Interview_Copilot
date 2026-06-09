@@ -7,15 +7,18 @@ EXISTENCE. The UX layer in this file decides:
   2. Which models float to the top of each vendor's card
   3. Which models get hidden as redundant variants
 
-Two paths produce a (display_name, tier_rank, hidden) decision per
+Three paths produce a (display_name, tier_rank, hidden) decision per
 entry:
 
-  HAND-CURATED — for vendors where the auto rule produces wrong order:
-    * Anthropic — must respect marketing tier (Opus > Sonnet > Haiku
-      regardless of release date)
-    * NVIDIA NIM — hosts hundreds of OSS models; need to feature the
-      handful users actually want (DeepSeek V4 / Llama 3.3 / Qwen3
-      Coder / etc) above the long tail
+  HAND-CURATED — NVIDIA NIM only: it hosts hundreds of OSS models, so we
+    feature the handful users actually want (DeepSeek V4 / Llama 3.3 /
+    Qwen3 Coder / etc) above the long tail.
+
+  ANTHROPIC AUTO (``_anthropic_tier_rank``) — Claude ids use a DASH
+    version (``claude-opus-4-8`` = v4.8) the generic parser can't read,
+    and tier (opus/sonnet/haiku) sets the within-version order. Ranked
+    formulaically (version-primary, Opus > Sonnet > Haiku tiebreak) so
+    new Claude releases self-rank with no hand-editing.
 
   AUTO-DERIVED — every other vendor (OpenAI / Gemini / DeepSeek /
   Moonshot / Zhipu / Qwen / Xiaomi). Display name comes from a
@@ -266,28 +269,49 @@ def _auto_tier_rank(provider: str, model_id: str) -> int:
     return max(rank, 100)
 
 
+# ── Anthropic auto tier_rank ─────────────────────────────────────────
+# Anthropic gets its own auto path (not hand-curated, not the generic
+# rule). Its ids are ``claude-<tier>-<major>-<minor>`` with a DASH
+# between major and minor (``claude-opus-4-8`` = v4.8), and the product
+# tier (opus/sonnet/haiku) sets the within-version order. The generic
+# ``_parse_version`` can't read the dash-version — it would see only the
+# major and drop the ``.8`` — so without this a freshly-released Opus 4.8
+# would sink to the bottom of the card. Keeping it formulaic means new
+# Claude releases rank correctly with ZERO hand-editing.
+
+_ANTHROPIC_TIER_ORDER: dict[str, int] = {"opus": 0, "sonnet": 1, "haiku": 2}
+_ANTHROPIC_RE = re.compile(r"claude-(opus|sonnet|haiku)-(\d+)-(\d+)")
+
+
+def _anthropic_tier_rank(model_id: str) -> int:
+    """Rank Anthropic models: newest version first, then Opus > Sonnet >
+    Haiku within the same version.
+
+    Handles ``claude-<tier>-<major>-<minor>`` with or without a trailing
+    ``-YYYYMMDD`` date alias (``claude-opus-4-5-20251101``). Version always
+    dominates — the 0/1/2 tier tiebreak can never cross a version boundary
+    (version gaps are 100 / 1000).
+    """
+    m = _ANTHROPIC_RE.search(model_id)
+    if not m:
+        return 9000  # unrecognized Claude id — sink, but above the 9999 floor
+    tier, major, minor = m.group(1), int(m.group(2)), int(m.group(3))
+    return 10000 - major * 1000 - minor * 100 + _ANTHROPIC_TIER_ORDER[tier]
+
+
 # ── Hand-curated overrides ───────────────────────────────────────────
 #
-# ONLY for vendors where auto-derivation produces wrong order:
-#   * Anthropic — must respect Opus > Sonnet > Haiku marketing tier
-#     (vendor's release date ordering doesn't capture this)
-#   * NVIDIA NIM — needs hot models featured above the long tail
+# ONLY for vendors where neither auto path produces the right order:
+#   * NVIDIA NIM — needs hot models featured above the long tail of
+#     hundreds of OSS models
 #
-# Everything else flows through auto-derivation.
+# Anthropic now flows through ``_anthropic_tier_rank`` (version-primary,
+# Opus > Sonnet > Haiku tiebreak) so new Claude releases self-rank; a
+# targeted override here still wins if one is ever needed (e.g. to hide
+# a model). Everything else flows through generic auto-derivation.
 
 
 CURATED: dict[tuple[str, str], ModelOverride] = {
-
-    # ── Anthropic — marketing tier (Opus > Sonnet > Haiku) ──────────
-    # Vendor ships display_name natively so we don't override that;
-    # only set tier_rank to enforce the product hierarchy.
-    ("anthropic", "claude-opus-4-7"):              ModelOverride(tier_rank=1),
-    ("anthropic", "claude-sonnet-4-6"):            ModelOverride(tier_rank=2),
-    ("anthropic", "claude-opus-4-6"):              ModelOverride(tier_rank=3),
-    ("anthropic", "claude-haiku-4-5-20251001"):    ModelOverride(tier_rank=4),
-    ("anthropic", "claude-opus-4-5-20251101"):     ModelOverride(tier_rank=5),
-    ("anthropic", "claude-sonnet-4-5-20250929"):   ModelOverride(tier_rank=6),
-    ("anthropic", "claude-opus-4-1-20250805"):     ModelOverride(tier_rank=10),
 
     # ── NVIDIA NIM — hot models featured; long tail at default 999 ──
     # NIM hosts hundreds of third-party OSS models; only the
@@ -355,6 +379,8 @@ def apply_overrides(
         ov = CURATED.get((e.provider, e.model))
         if ov is not None:
             return ov.tier_rank
+        if e.provider == "anthropic":
+            return _anthropic_tier_rank(e.model)
         return _auto_tier_rank(e.provider, e.model)
 
     out.sort(key=_rank)

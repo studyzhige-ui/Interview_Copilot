@@ -2,6 +2,7 @@ import asyncio
 import logging
 import threading
 
+from app.core.error_messages import humanize_error
 from app.db.database import SessionLocal
 from app.models.knowledge import KnowledgeDocument
 from app.worker.celery_app import celery_app
@@ -73,20 +74,25 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
     db = SessionLocal()
     try:
         row = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
-        if row is not None and row.status == "completed":
+        source = row.source if row is not None else "upload"
+        if row is not None and row.status in ("completed", "review_ready"):
             logger.info(
-                "[Task %s] InterviewRecord %s already completed; skipping re-run.",
-                self.request.id, record_id,
+                "[Task %s] InterviewRecord %s already terminal (%s); skipping re-run.",
+                self.request.id, record_id, row.status,
             )
-            return {"status": "skipped", "record_id": record_id, "reason": "already_completed"}
+            return {"status": "skipped", "record_id": record_id, "reason": "already_terminal"}
     finally:
         db.close()
 
-    # Stash the celery task id so the cancel endpoint can revoke us.
+    is_mock = source == "mock"
+
+    # Stash the celery task id so the cancel endpoint can revoke us. The
+    # in-flight status differs by source (mock → processing_review, so the
+    # record stays out of the review list while the review runs).
     try:
         interview_record_service.set_status(
             record_id,
-            "pending",
+            "processing_review" if is_mock else "pending",
             celery_task_id=self.request.id,
         )
     except Exception:  # noqa: BLE001
@@ -112,13 +118,12 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
         is_final_attempt = retries_left == 0
         try:
             if is_final_attempt:
+                # Humanize the user-facing message — the raw exception
+                # (incl. the retry count) is already in the worker log above.
                 interview_record_service.set_status(
                     record_id,
-                    "failed",
-                    error_message=(
-                        f"Analysis exhausted {self.max_retries} retries. "
-                        f"Last error: {type(exc).__name__}: {exc}"
-                    )[:500],
+                    "review_failed" if is_mock else "failed",
+                    error_message=f"分析失败：{humanize_error(exc)}"[:500],
                 )
             else:
                 # Mid-retry: only force-write if status is still in an
@@ -132,15 +137,13 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
                         .filter(InterviewRecord.id == record_id)
                         .first()
                     )
-                    if rec is not None and rec.status not in {"completed", "failed"}:
+                    if rec is not None and rec.status not in {
+                        "completed", "failed", "review_ready", "review_failed",
+                    }:
                         interview_record_service.set_status(
                             record_id,
-                            "failed",
-                            error_message=(
-                                f"Attempt {self.request.retries + 1} crashed before "
-                                f"orchestrator could record state. "
-                                f"{type(exc).__name__}: {exc}"
-                            )[:500],
+                            "review_failed" if is_mock else "failed",
+                            error_message=f"分析失败：{humanize_error(exc)}"[:500],
                         )
                 finally:
                     row.close()
@@ -172,15 +175,15 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
     soft_time_limit=1140,
 )
 def process_document_ingestion(self, document_id: str):
-    """Download an uploaded document if needed and ingest it into Milvus/Docstore.
+    """Download an uploaded document if needed and ingest it into Milvus.
 
     Idempotency contract:
-      * status='ready' with chunks already written → skip
-      * status='processing'/'failed' → fresh attempt; existing Milvus rows
-        for ``ref_doc_ids`` (if any) are best-effort deleted first to avoid
-        duplicate chunks on retry. Failure to delete is non-fatal.
+      * status='ready' (already ingested) → skip.
+      * status='processing'/'failed' → fresh attempt. Re-ingest is safe:
+        ``_write_to_milvus_hybrid`` deletes this document's prior Milvus rows
+        (by document_id) before inserting, so a retry never accumulates
+        duplicate chunks.
     """
-    import json
     import os
     import tempfile
 
@@ -197,34 +200,23 @@ def process_document_ingestion(self, document_id: str):
         document = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
         if document is None:
             return {"status": "failed", "error": f"Knowledge document not found: {document_id}"}
-        if not document.upload or document.upload.user_id != document.user_id:
+        # document.user_id is the stable users.id (CLEANUP #2), as is the
+        # FileAsset's — compare directly + use it for the pk-namespaced
+        # object_key prefix below. The Milvus / document_chunks index now keys on
+        # the stable users.id (CLEANUP #2) — which is exactly document.user_id —
+        # so the pk goes straight to the ingest call (no pk->username bridge).
+        owner_pk = document.user_id
+        if not document.upload or document.upload.user_id != owner_pk:
             raise ValueError("Knowledge upload owner does not match document owner")
         if document.upload.purpose != "knowledge_document":
             raise ValueError("Knowledge document upload has invalid purpose")
         if document.status not in {"processing", "failed"}:
             return {"status": "skipped", "document_id": document_id, "current_status": document.status}
 
-        # If this is a retry of a partially-succeeded attempt (we crashed
-        # between Milvus insert and DB commit), log it. A Phase-3 follow-up
-        # will delete stale Milvus rows for ``document.ref_doc_ids`` to avoid
-        # duplicate chunks; for now status-gate is the main reliability win
-        # and duplicates are filtered at query time by document_id.
-        if self.request.retries > 0 and document.ref_doc_ids:
-            stale_count = 0
-            try:
-                stale_count = len(json.loads(document.ref_doc_ids) or [])
-            except json.JSONDecodeError:
-                pass
-            logger.warning(
-                "[Task %s] Retry attempt #%d for document %s; %d stale ref_doc_ids "
-                "from prior attempt may produce duplicates (filtered at query time).",
-                self.request.id, self.request.retries, document_id, stale_count,
-            )
-
         if not document.storage_uri.startswith("s3://"):
             raise ValueError("Knowledge ingestion only accepts owned S3 uploads")
 
-        expected_prefix = f"uploads/{document.user_id}/{document.upload_id}/"
+        expected_prefix = f"uploads/{owner_pk}/{document.file_asset_id}/"
         if not document.object_key.startswith(expected_prefix):
             raise ValueError("Knowledge upload object key does not match owner prefix")
 
@@ -242,14 +234,14 @@ def process_document_ingestion(self, document_id: str):
                 os.unlink(local_file_path)
             raise
 
-        logger.info("[Task %s] Starting RAG ingestion into Milvus/Docstore.", self.request.id)
+        logger.info("[Task %s] Starting RAG ingestion into Milvus.", self.request.id)
         result = run_async(
             ingest_document(
                 local_file_path,
-                document.source_type,
-                document.user_id,
+                document.source_kind,
+                owner_pk,
                 document_id=document.id,
-                upload_id=document.upload_id,
+                upload_id=document.file_asset_id,
                 category=document.category,
             )
         )
@@ -257,8 +249,8 @@ def process_document_ingestion(self, document_id: str):
         if result and result.get("success"):
             document.status = "ready"
             document.chunk_count = int(result.get("chunk_count") or 0)
-            document.node_ids = dump_json_list(result.get("node_ids") or [])
             document.ref_doc_ids = dump_json_list(result.get("ref_doc_ids") or [])
+            document.content_text = result.get("content_text")
             document.error_message = None
             db.add(document)
             db.commit()
@@ -284,10 +276,9 @@ def process_document_ingestion(self, document_id: str):
             try:
                 if is_final_attempt:
                     document.status = "failed"
-                    document.error_message = (
-                        f"Ingestion exhausted {self.max_retries} retries. "
-                        f"Last error: {type(exc).__name__}: {exc}"
-                    )[:500]
+                    # Humanize the terminal user-facing message (e.g. a 402
+                    # balance error during embedding); raw detail is logged.
+                    document.error_message = f"导入失败：{humanize_error(exc)}"[:500]
                 else:
                     # Don't mark as terminal "failed" mid-retry — leave
                     # status='processing' (the prior set_status from line
@@ -317,41 +308,104 @@ def process_document_ingestion(self, document_id: str):
         db.close()
 
 
-# ══════════════════════════════════════════════════════════════════════
-# Memory dreaming tasks
-# ══════════════════════════════════════════════════════════════════════
-
-
 @celery_app.task(
     bind=True,
-    name="tasks.dream_for_record",
+    name="tasks.process_resume_parse",
     autoretry_for=(ConnectionError, TimeoutError, OSError),
     retry_backoff=True,
     retry_backoff_max=120,
     retry_jitter=True,
-    max_retries=2,
+    max_retries=3,
     acks_late=True,
     time_limit=600,
     soft_time_limit=540,
 )
-def dream_for_record_task(self, record_id: str):
-    """Run one dreaming pass for a single interview record.
+def process_resume_parse(self, resume_id: str):
+    """Parse a personal ``resumes`` entity into ``resume_sections`` + index them.
 
-    Idempotent: ``dream_for_record`` re-checks ``last_dreamed_at`` under
-    the per-user lock, so a double-fire is harmless (the second run
-    sees no new content and bumps the cursor without an LLM call).
+    Resolves the resume's text (``raw_text_snapshot``, else extracted from its
+    ``file_asset``), runs the LLM sectioner, persists sections keyed by
+    ``resume_id``, and vectorizes each into the resume Milvus collection. Sets
+    ``resumes.parse_status`` ready/failed. Idempotent: ``extract_and_store``
+    delete-then-inserts by ``resume_id``.
     """
-    from app.services.memory.dreaming_worker import dream_for_record
+    import os
+    import tempfile
 
-    summary = dream_for_record(record_id)
-    if summary.get("error"):
-        # RuntimeError is NOT in autoretry_for above (which only covers
-        # transient network errors). This raise therefore terminates
-        # the task without a Celery-level retry — soft failures (LLM
-        # timeout / hard_failure) rely on the next nightly scan to
-        # reconsider the record, NOT immediate Celery retry.
-        raise RuntimeError(f"dream failed: {summary['error']}")
-    return summary
+    from app.models.resume import Resume
+    from app.services.resume.resume_service import resume_service
+    from app.services.uploads.file_asset_service import get_file_asset
+
+    db = SessionLocal()
+    try:
+        resume = db.query(Resume).filter(Resume.id == resume_id).first()
+        if resume is None:
+            return {"status": "missing", "resume_id": resume_id}
+        text = (resume.raw_text_snapshot or "").strip()
+        owner_pk = resume.user_id
+        file_asset_id = resume.file_asset_id
+    finally:
+        db.close()
+
+    # Extract text from the source file_asset when no snapshot was supplied.
+    if not text and file_asset_id:
+        db = SessionLocal()
+        try:
+            fa = get_file_asset(db, file_asset_id)
+            storage_uri = fa.storage_uri if fa and fa.user_id == owner_pk else None
+            object_key = fa.object_key if fa else ""
+        finally:
+            db.close()
+        if storage_uri and storage_uri.startswith("s3://"):
+            from app.services.storage_service import download_file_from_s3
+            from app.services.voice.file_parser import extract_resume_text
+
+            _, ext = os.path.splitext(object_key or "")
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=ext or ".pdf")
+            os.close(tmp_fd)
+            try:
+                download_file_from_s3(storage_uri, tmp_path)
+                text = (extract_resume_text(tmp_path) or "").strip()
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+
+    try:
+        if text:
+            run_async(resume_service.extract_and_store(
+                user_pk=owner_pk, resume_id=resume_id, resume_text=text,
+            ))
+        db = SessionLocal()
+        try:
+            resume = db.query(Resume).filter(Resume.id == resume_id).first()
+            if resume is not None:
+                if text and not (resume.raw_text_snapshot or "").strip():
+                    resume.raw_text_snapshot = text[:20000]
+                resume.parse_status = "ready" if text else "failed"
+                resume.parse_error = None if text else "No extractable resume text"
+                db.add(resume)
+                db.commit()
+        finally:
+            db.close()
+        return {"status": "ready" if text else "failed", "resume_id": resume_id}
+    except Exception as exc:  # noqa: BLE001
+        db = SessionLocal()
+        try:
+            resume = db.query(Resume).filter(Resume.id == resume_id).first()
+            if resume is not None:
+                resume.parse_status = "failed"
+                resume.parse_error = f"解析失败：{humanize_error(exc)}"[:500]
+                db.add(resume)
+                db.commit()
+        finally:
+            db.close()
+        logger.error("Resume parse failed for %s: %s", resume_id, exc)
+        raise
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Memory dreaming tasks
+# ══════════════════════════════════════════════════════════════════════
 
 
 @celery_app.task(
@@ -406,60 +460,51 @@ def scan_and_dream_batch_task(self):
     soft_time_limit=1140,
 )
 def dream_for_user_task(self, user_id: str):
-    """Run all of a user's pending dreams + bump cursor.
+    """Enqueue a persistent dreaming job per silent record + bump the user cursor.
 
-    Per-record dream is delegated to ``dream_for_record`` (synchronous;
-    no separate Celery dispatch — we want the cursor bump to happen
-    AFTER all this user's records are processed, atomically observable
-    from the user's perspective). If any individual record fails, log
-    and continue — partial progress is better than re-doing finished
-    records on the next batch.
+    Per-record dreaming runs as an ``extract_memory_dreaming`` outbox job
+    (drained every minute, retried with backoff, idempotent via the record's
+    ``last_dreamed_at`` re-check), so a slow/failing LLM call on one record
+    never blocks the others and survives a worker crash. The user cursor is
+    bumped to scan-start right after enqueuing — the per-record cursor advances
+    atomically inside each job. Pinning to scan-start (not "now") means any chat
+    message arriving during processing isn't dropped from the next nightly's
+    gate-3 count (review found this as M1).
     """
     from datetime import datetime
+    from app.core.user_identity import resolve_user_pk
+    from app.db.database import SessionLocal
+    from app.services.memory import extraction_jobs
     from app.services.memory.dreaming_worker import (
         bump_user_last_dreamed_at,
-        dream_for_record,
         select_records_for_user,
     )
 
-    # Snapshot scan-start time BEFORE the per-record loop. The cursor
-    # is bumped to THIS timestamp at the end, not to "now after the
-    # dream finished" — otherwise any chat message arriving during the
-    # multi-minute dream loop would have created_at < bump_time and
-    # silently get dropped from the next nightly's gate-3 count.
-    # Review found this as M1.
     scan_started_at = datetime.utcnow()
-
     records = select_records_for_user(user_id, limit=50)
-    summary = {"user_id": user_id, "candidates": len(records), "dreamed": 0, "errors": 0}
-    for rec in records:
-        try:
-            r = dream_for_record(rec.id)
-            if r.get("error"):
-                summary["errors"] += 1
-                logger.warning(
-                    "dream_for_user: record %s for user %s failed: %s",
-                    rec.id, user_id, r["error"],
-                )
-            else:
-                summary["dreamed"] += 1
-        except Exception as exc:  # noqa: BLE001
-            summary["errors"] += 1
-            logger.exception(
-                "dream_for_user: record %s for user %s crashed: %s",
-                rec.id, user_id, exc,
-            )
-    # Bump cursor unconditionally — gate 3 (volume) is what guards
-    # against firing this task in the first place. Whether or not each
-    # individual record produced patches, the "consolidation pass for
-    # this user" has happened and the next nightly should wait for new
-    # activity before firing again.
+    enqueued = 0
+    db = SessionLocal()
+    try:
+        user_pk = resolve_user_pk(db, user_id)
+        if user_pk is not None:
+            for rec in records:
+                if extraction_jobs.enqueue_dreaming(db, user_pk=user_pk, record_id=rec.id) is not None:
+                    enqueued += 1
+            db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+    # Bump cursor unconditionally — gate 3 (volume) guards against firing this
+    # task in the first place; the consolidation pass for this user has been
+    # scheduled, so the next nightly waits for new activity before firing again.
     bump_user_last_dreamed_at(user_id, at=scan_started_at)
     logger.info(
-        "dream_for_user: user=%s candidates=%d dreamed=%d errors=%d",
-        user_id, summary["candidates"], summary["dreamed"], summary["errors"],
+        "dream_for_user: user=%s candidates=%d enqueued=%d",
+        user_id, len(records), enqueued,
     )
-    return summary
+    return {"user_id": user_id, "candidates": len(records), "enqueued": enqueued}
 
 
 # ── Daily model catalog refresh (P6-K) ─────────────────────────────────
@@ -527,3 +572,33 @@ def refresh_model_catalog_task(self):
             len(empty_vendors), empty_vendors,
         )
     return {"per_vendor": per_vendor, "total": total}
+
+
+@celery_app.task(
+    bind=True,
+    name="tasks.drain_outbox_jobs",
+    # Cleanup work is small and bounded (object deletes, index drops). A short
+    # outer limit keeps a hung external call from pinning the worker.
+    time_limit=120,
+    soft_time_limit=110,
+)
+def drain_outbox_jobs(self):
+    """Process due ``outbox_jobs`` — reliable cross-system side effects.
+
+    Runs every minute (beat). Claims a batch of due jobs and runs each
+    registered handler with retry/backoff. Idempotent and lock-guarded, so
+    overlapping runs are safe.
+    """
+    from app.db.database import SessionLocal
+    from app.services.uploads.outbox_service import run_due_outbox_jobs
+    # Import for side effect: register the handlers before any job is claimed —
+    # Milvus ability-index (upsert/delete_memory_ability_index) and the memory
+    # extraction jobs (extract_memory_realtime / extract_memory_dreaming).
+    import app.services.memory.ability_outbox  # noqa: F401
+    import app.services.memory.extraction_jobs  # noqa: F401
+
+    with SessionLocal() as db:
+        processed = run_due_outbox_jobs(db)
+    if processed:
+        logger.info("drain_outbox_jobs: processed %d job(s)", processed)
+    return {"processed": processed}

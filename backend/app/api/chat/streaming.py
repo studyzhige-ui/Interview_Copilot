@@ -35,8 +35,9 @@ from sqlalchemy.orm import Session
 
 from app.core.rate_limit import RATE_EXPENSIVE, limiter
 from app.core.security import get_current_user
+from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
-from app.models.chat import ChatSession
+from app.models.chat import Conversation
 from app.models.user import User
 from app.schemas.chat import SSEChatRequest
 
@@ -71,8 +72,8 @@ async def sse_chat_endpoint(
     # testing later shows this is a real bottleneck, the right fix is
     # to open a fresh ``SessionLocal()`` inside ``to_thread`` rather
     # than reusing ``db``.
-    row = db.query(ChatSession).filter(ChatSession.id == session_id).first()
-    if not row or row.user_id != current_user.username:
+    row = db.query(Conversation).filter(Conversation.id == session_id).first()
+    if not row or row.user_id != resolve_user_pk(db, current_user.username):
         raise HTTPException(status_code=404, detail="Session not found or access denied")
 
     # Lazy import so cold-startup doesn't pay the conversation-engine
@@ -103,10 +104,13 @@ async def sse_chat_endpoint(
                 yield f"data: {event.to_json()}\n\n"
         except Exception as exc:  # noqa: BLE001 — last-resort net so the stream always closes
             logger.error("SSE pipeline failed: %s", exc)
-            # Fall back to a hand-rolled error+done so the client
-            # always gets a terminator.
+            # Fall back to a hand-rolled error+done so the client always
+            # gets a terminator. Use the shared humanizer so even this
+            # last-resort path shows an actionable message, never a raw
+            # ``Error code: 402 - {...}`` dump.
             from app.conversation.events import HarnessEvent
-            yield f"data: {HarnessEvent.error(str(exc)).to_json()}\n\n"
+            from app.core.error_messages import humanize_error
+            yield f"data: {HarnessEvent.error(humanize_error(exc)).to_json()}\n\n"
             yield f"data: {HarnessEvent.done(step=0, elapsed_ms=0).to_json()}\n\n"
 
     return StreamingResponse(

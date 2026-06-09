@@ -6,7 +6,7 @@ S3 or Redis.
 from __future__ import annotations
 
 from typing import Iterator
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -19,8 +19,22 @@ from app.api import rag as rag_mod
 from app.core.security import get_current_user
 from app.db.database import Base, get_db
 import app.models  # noqa: F401  — register mappers
+from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
-from app.models.upload import UserUpload
+from app.models.user import User
+
+
+def _uid(db: Session, username: str) -> int:
+    """Resolve a seeded user's integer ``users.id``.
+
+    ``FileAsset.user_id`` is the stable integer PK (not the username), and the
+    route looks an asset up via ``get_owned_file_asset`` which resolves the
+    request principal's username → ``users.id`` before filtering. So every
+    seeded ``FileAsset`` must carry the integer id of a real ``users`` row whose
+    ``username`` matches the principal (``alice``) / the other-user case
+    (``bob``). This helper returns that id.
+    """
+    return db.query(User.id).filter(User.username == username).scalar()
 
 
 @pytest.fixture
@@ -33,6 +47,14 @@ def db() -> Iterator[Session]:
     Base.metadata.create_all(bind=engine)
     Session_ = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     session = Session_()
+    # Seed the principals the route resolves usernames against. ``alice`` is the
+    # dependency-overridden current user; ``bob`` is the foreign-owner case used
+    # by the IDOR / 404 tests. FileAsset rows below reference their integer ids.
+    session.add_all([
+        User(username="alice", hashed_password="x"),
+        User(username="bob", hashed_password="x"),
+    ])
+    session.commit()
     try:
         yield session
     finally:
@@ -63,14 +85,14 @@ def client(db: Session) -> Iterator[TestClient]:
 
 
 def test_rag_query_delegates_to_retriever(client):
-    async def fake_query(q, source_type=None, user_id=None):
+    async def fake_query(q, source_kind=None, user_id=None):
         assert user_id == "alice"
         return {"response": "answer", "source_nodes": []}
 
     with patch("app.api.rag.query_knowledge_base", side_effect=fake_query):
         resp = client.post(
             "/api/v1/rag/query",
-            json={"query": "what is redis", "source_type": "official_docs"},
+            json={"query": "what is redis", "source_kind": "user_upload"},
         )
     assert resp.status_code == 200
     body = resp.json()
@@ -93,7 +115,7 @@ def test_rag_query_500_on_retriever_error(client):
 def test_create_upload_url_creates_user_upload(client, db: Session):
     fake_url_info = {"upload_url": "https://upload", "storage_uri": "s3://b/k"}
     with patch(
-        "app.services.uploads.upload_service.generate_presigned_upload_url_for_key",
+        "app.services.uploads.file_asset_service.generate_presigned_upload_url_for_key",
         return_value=fake_url_info,
     ):
         resp = client.post(
@@ -103,10 +125,12 @@ def test_create_upload_url_creates_user_upload(client, db: Session):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     upload_id = body["upload_id"]
-    assert upload_id.startswith("upl_")
-    row = db.query(UserUpload).filter(UserUpload.id == upload_id).first()
+    assert upload_id.startswith("fa_")
+    row = db.query(FileAsset).filter(FileAsset.id == upload_id).first()
     assert row is not None
-    assert row.user_id == "alice"
+    # The service resolves the principal "alice" to its integer users.id for
+    # the FK, so the stored row keys on the pk — not the username string.
+    assert row.user_id == _uid(db, "alice")
     assert row.purpose == "knowledge_document"
 
 
@@ -114,32 +138,34 @@ def test_create_upload_url_creates_user_upload(client, db: Session):
 
 
 def test_create_document_404_when_upload_not_owned(client, db: Session):
-    db.add(UserUpload(
+    db.add(FileAsset(
         id="upl_b",
-        user_id="bob",
+        user_id=_uid(db, "bob"),
         purpose="knowledge_document",
         original_filename="r.pdf",
         storage_uri="s3://b/uploads/bob/upl_b/r.pdf",
         object_key="uploads/bob/upl_b/r.pdf",
-        status="uploaded",
+        upload_status="uploaded",
+        validation_status="passed",
     ))
     db.commit()
     resp = client.post(
         "/api/v1/knowledge/documents",
-        json={"upload_id": "upl_b", "source_type": "interview_qa"},
+        json={"upload_id": "upl_b", "source_kind": "user_upload"},
     )
     assert resp.status_code == 404
 
 
 def test_create_document_dispatches_celery_with_document_id(client, db: Session):
-    db.add(UserUpload(
+    db.add(FileAsset(
         id="upl_a",
-        user_id="alice",
+        user_id=_uid(db, "alice"),
         purpose="knowledge_document",
         original_filename="redis.pdf",
         storage_uri="s3://b/uploads/alice/upl_a/redis.pdf",
         object_key="uploads/alice/upl_a/redis.pdf",
-        status="uploaded",
+        upload_status="uploaded",
+        validation_status="passed",
     ))
     db.commit()
 
@@ -153,7 +179,7 @@ def test_create_document_dispatches_celery_with_document_id(client, db: Session)
                 "upload_id": "upl_a",
                 "title": "Redis Notes",
                 "category": "Backend",
-                "source_type": "interview_qa",
+                "source_kind": "user_upload",
             },
         )
     assert resp.status_code == 200, resp.text
@@ -166,14 +192,15 @@ def test_create_document_dispatches_celery_with_document_id(client, db: Session)
 
 
 def test_create_document_marks_failed_when_dispatch_explodes(client, db: Session):
-    db.add(UserUpload(
+    db.add(FileAsset(
         id="upl_a",
-        user_id="alice",
+        user_id=_uid(db, "alice"),
         purpose="knowledge_document",
         original_filename="r.pdf",
         storage_uri="s3://b/uploads/alice/upl_a/r.pdf",
         object_key="uploads/alice/upl_a/r.pdf",
-        status="uploaded",
+        upload_status="uploaded",
+        validation_status="passed",
     ))
     db.commit()
 
@@ -181,13 +208,15 @@ def test_create_document_marks_failed_when_dispatch_explodes(client, db: Session
         mock_proc.delay.side_effect = RuntimeError("redis broker offline")
         resp = client.post(
             "/api/v1/knowledge/documents",
-            json={"upload_id": "upl_a", "source_type": "interview_qa"},
+            json={"upload_id": "upl_a", "source_kind": "user_upload"},
         )
     assert resp.status_code == 503
 
     # The document row should now exist with status='failed' so the UI
     # surfaces a real error rather than a forever-processing row.
-    rows = db.query(KnowledgeDocument).filter(KnowledgeDocument.user_id == "alice").all()
+    rows = db.query(KnowledgeDocument).filter(
+        KnowledgeDocument.user_id == _uid(db, "alice")
+    ).all()
     assert len(rows) == 1
     assert rows[0].status == "failed"
     assert "redis broker offline" in (rows[0].error_message or "")
@@ -198,22 +227,23 @@ def test_create_document_marks_failed_when_dispatch_explodes(client, db: Session
 
 def test_list_documents_is_user_scoped(client, db: Session):
     for user in ("alice", "bob"):
-        db.add(UserUpload(
+        db.add(FileAsset(
             id=f"upl_{user}",
-            user_id=user,
+            user_id=_uid(db, user),
             purpose="knowledge_document",
             original_filename=f"{user}.pdf",
             storage_uri=f"s3://b/uploads/{user}/upl_{user}/{user}.pdf",
             object_key=f"uploads/{user}/upl_{user}/{user}.pdf",
-            status="consumed",
+            upload_status="consumed",
+            validation_status="passed",
         ))
         db.add(KnowledgeDocument(
             id=f"doc_{user}",
-            user_id=user,
-            upload_id=f"upl_{user}",
+            user_id=_uid(db, user),
+            file_asset_id=f"upl_{user}",
             title=f"{user} doc",
             category="默认",
-            source_type="interview_qa",
+            source_kind="user_upload",
             storage_uri=f"s3://b/uploads/{user}/upl_{user}/{user}.pdf",
             object_key=f"uploads/{user}/upl_{user}/{user}.pdf",
             status="ready",
@@ -227,32 +257,34 @@ def test_list_documents_is_user_scoped(client, db: Session):
 
 
 def test_list_documents_filters_by_category(client, db: Session):
-    db.add(UserUpload(
+    db.add(FileAsset(
         id="upl_a",
-        user_id="alice",
+        user_id=_uid(db, "alice"),
         purpose="knowledge_document",
         original_filename="r.pdf",
         storage_uri="s3://b/x",
         object_key="x",
-        status="consumed",
+        upload_status="consumed",
+        validation_status="passed",
     ))
     db.add(KnowledgeDocument(
-        id="doc_a", user_id="alice", upload_id="upl_a", title="A",
-        category="Redis", source_type="interview_qa",
+        id="doc_a", user_id=_uid(db, "alice"), file_asset_id="upl_a", title="A",
+        category="Redis", source_kind="user_upload",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
-    db.add(UserUpload(
+    db.add(FileAsset(
         id="upl_b",
-        user_id="alice",
+        user_id=_uid(db, "alice"),
         purpose="knowledge_document",
         original_filename="r.pdf",
         storage_uri="s3://b/y",
         object_key="y",
-        status="consumed",
+        upload_status="consumed",
+        validation_status="passed",
     ))
     db.add(KnowledgeDocument(
-        id="doc_b", user_id="alice", upload_id="upl_b", title="B",
-        category="Java", source_type="interview_qa",
+        id="doc_b", user_id=_uid(db, "alice"), file_asset_id="upl_b", title="B",
+        category="Java", source_kind="user_upload",
         storage_uri="s3://b/y", object_key="y", status="ready",
     ))
     db.commit()
@@ -266,14 +298,14 @@ def test_list_documents_filters_by_category(client, db: Session):
 
 
 def test_get_document_404_for_other_user(client, db: Session):
-    db.add(UserUpload(
-        id="upl_b", user_id="bob", purpose="knowledge_document",
+    db.add(FileAsset(
+        id="upl_b", user_id=_uid(db, "bob"), purpose="knowledge_document",
         original_filename="r.pdf", storage_uri="s3://b/x",
-        object_key="x", status="consumed",
+        object_key="x", upload_status="consumed", validation_status="passed",
     ))
     db.add(KnowledgeDocument(
-        id="doc_b", user_id="bob", upload_id="upl_b", title="B",
-        category="默认", source_type="interview_qa",
+        id="doc_b", user_id=_uid(db, "bob"), file_asset_id="upl_b", title="B",
+        category="默认", source_kind="user_upload",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
     db.commit()
@@ -282,14 +314,14 @@ def test_get_document_404_for_other_user(client, db: Session):
 
 
 def test_patch_document_updates_title_and_category(client, db: Session):
-    db.add(UserUpload(
-        id="upl_a", user_id="alice", purpose="knowledge_document",
+    db.add(FileAsset(
+        id="upl_a", user_id=_uid(db, "alice"), purpose="knowledge_document",
         original_filename="r.pdf", storage_uri="s3://b/x",
-        object_key="x", status="consumed",
+        object_key="x", upload_status="consumed", validation_status="passed",
     ))
     db.add(KnowledgeDocument(
-        id="doc_a", user_id="alice", upload_id="upl_a", title="old",
-        category="默认", source_type="interview_qa",
+        id="doc_a", user_id=_uid(db, "alice"), file_asset_id="upl_a", title="old",
+        category="默认", source_kind="user_upload",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
     db.commit()
@@ -305,14 +337,14 @@ def test_patch_document_updates_title_and_category(client, db: Session):
 
 
 def test_delete_document_calls_hard_delete(client, db: Session):
-    db.add(UserUpload(
-        id="upl_a", user_id="alice", purpose="knowledge_document",
+    db.add(FileAsset(
+        id="upl_a", user_id=_uid(db, "alice"), purpose="knowledge_document",
         original_filename="r.pdf", storage_uri="s3://b/x",
-        object_key="x", status="consumed",
+        object_key="x", upload_status="consumed", validation_status="passed",
     ))
     db.add(KnowledgeDocument(
-        id="doc_a", user_id="alice", upload_id="upl_a", title="t",
-        category="默认", source_type="interview_qa",
+        id="doc_a", user_id=_uid(db, "alice"), file_asset_id="upl_a", title="t",
+        category="默认", source_kind="user_upload",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
     db.commit()
@@ -322,19 +354,55 @@ def test_delete_document_calls_hard_delete(client, db: Session):
     mock_del.assert_called_once()
 
 
+def test_hard_delete_guard_uses_pk_namespaced_prefix(db: Session, monkeypatch):
+    """Regression for CLEANUP #2: hard_delete builds the object-key prefix from
+    ``document.user_id`` (the users.id pk). A pk-namespaced key must pass the
+    guard, a foreign one must be refused. The route test above mocks
+    ``hard_delete``, so this is the only thing pinning the prefix logic — a stale
+    ``resolve_user_pk(pk-as-username)`` would yield ``uploads/None/...`` and 500
+    every real delete."""
+    from app.services.knowledge import knowledge_service as ks
+
+    uid = _uid(db, "alice")
+    monkeypatch.setattr(ks, "delete_document_vectors_and_chunks", lambda db, d: None)
+    monkeypatch.setattr(ks, "delete_s3_object", lambda uri: None)
+
+    ok = KnowledgeDocument(
+        id="kdoc_ok", user_id=uid, file_asset_id="fa_ok", title="r", category="默认",
+        source_kind="user_upload", storage_uri=f"s3://b/uploads/{uid}/fa_ok/r.pdf",
+        object_key=f"uploads/{uid}/fa_ok/r.pdf", status="ready",
+    )
+    db.add(ok)
+    db.commit()
+    monkeypatch.setattr(ks, "parse_s3_uri", lambda uri: ("b", f"uploads/{uid}/fa_ok/r.pdf"))
+    ks.hard_delete_knowledge_document(db, ok)  # pk-prefixed key → guard passes
+    assert ok.status == "deleting"
+
+    foreign = KnowledgeDocument(
+        id="kdoc_bad", user_id=uid, file_asset_id="fa_bad", title="x", category="c",
+        source_kind="user_upload", storage_uri="s3://b/uploads/999/fa_bad/x.pdf",
+        object_key="uploads/999/fa_bad/x.pdf", status="ready",
+    )
+    db.add(foreign)
+    db.commit()
+    monkeypatch.setattr(ks, "parse_s3_uri", lambda uri: ("b", "uploads/999/fa_bad/x.pdf"))
+    with pytest.raises(ValueError):
+        ks.hard_delete_knowledge_document(db, foreign)
+
+
 # ── /knowledge/categories ─────────────────────────────────────────────────
 
 
 def test_list_categories_returns_counts(client, db: Session):
     for i, cat in enumerate(["Redis", "Redis", "Java"]):
-        db.add(UserUpload(
-            id=f"upl_{i}", user_id="alice", purpose="knowledge_document",
+        db.add(FileAsset(
+            id=f"upl_{i}", user_id=_uid(db, "alice"), purpose="knowledge_document",
             original_filename=f"r{i}.pdf", storage_uri=f"s3://b/{i}",
-            object_key=f"{i}", status="consumed",
+            object_key=f"{i}", upload_status="consumed", validation_status="passed",
         ))
         db.add(KnowledgeDocument(
-            id=f"doc_{i}", user_id="alice", upload_id=f"upl_{i}", title=f"t{i}",
-            category=cat, source_type="interview_qa",
+            id=f"doc_{i}", user_id=_uid(db, "alice"), file_asset_id=f"upl_{i}", title=f"t{i}",
+            category=cat, source_kind="user_upload",
             storage_uri=f"s3://b/{i}", object_key=f"{i}", status="ready",
         ))
     db.commit()

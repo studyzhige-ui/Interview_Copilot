@@ -7,10 +7,10 @@ to a given query*:
 
   * ``_allowed_user_ids`` — strict private-only scoping.
   * ``_metadata_matches_scope`` — node-level visibility check.
-  * ``_build_metadata_filters`` — Milvus MetadataFilter construction.
+  * ``milvus_hybrid._scope_expr`` — the Milvus server-side tenant filter expr.
   * ``_query_terms`` / ``_lexical_overlap`` — Chinese + English term
-    extraction and fallback overlap.
-  * ``_score_passes`` — reranker-vs-retriever score threshold.
+    extraction and lexical-overlap scoring (debug / source signal only).
+  * ``_score_passes`` — single absolute score threshold, no fallback.
 
 Plus a behavioural assertion that *user A's query never returns user B's
 documents* by routing fake nodes through the same filter helpers used by
@@ -31,10 +31,12 @@ import pytest
 def test_allowed_user_ids_is_strictly_private():
     from app.rag import retriever
 
-    assert retriever._allowed_user_ids("alice", "interview_qa") == ["alice"]
-    assert retriever._allowed_user_ids("alice", "personal_memory") == ["alice"]
-    # Empty user_id → empty allowlist (caller should bail).
-    assert retriever._allowed_user_ids("", "interview_qa") == []
+    # Scope key is the stable users.id pk now (resolved from the username once
+    # at query_knowledge_base). Strictly private: only the caller's own pk.
+    assert retriever._allowed_user_ids(1, "interview_qa") == [1]
+    assert retriever._allowed_user_ids(1, "personal_memory") == [1]
+    # Unresolved principal (resolve_user_pk -> None) → empty allowlist (caller bails).
+    assert retriever._allowed_user_ids(None, "interview_qa") == []
 
 
 def test_metadata_scope_requires_user_and_source_match():
@@ -43,74 +45,56 @@ def test_metadata_scope_requires_user_and_source_match():
     matches = retriever._metadata_matches_scope
 
     assert matches(
-        {"user_id": "alice", "source_type": "interview_qa"},
-        ["alice"],
+        {"user_id": 1, "source_kind": "interview_qa"},
+        [1],
         "interview_qa",
     )
     # Wrong user
     assert not matches(
-        {"user_id": "bob", "source_type": "interview_qa"},
-        ["alice"],
+        {"user_id": 2, "source_kind": "interview_qa"},
+        [1],
         "interview_qa",
     )
-    # Wrong source_type
+    # Wrong source_kind
     assert not matches(
-        {"user_id": "alice", "source_type": "personal_memory"},
-        ["alice"],
+        {"user_id": 1, "source_kind": "personal_memory"},
+        [1],
         "interview_qa",
     )
-    # source_type=None disables source filter, but user_id still enforced.
+    # source_kind=None disables source filter, but user_id still enforced.
     assert matches(
-        {"user_id": "alice", "source_type": "anything"}, ["alice"], None,
+        {"user_id": 1, "source_kind": "anything"}, [1], None,
     )
     # Empty allowed list disables user filter entirely.
     assert matches(
-        {"user_id": "bob", "source_type": "interview_qa"}, [], "interview_qa",
+        {"user_id": 2, "source_kind": "interview_qa"}, [], "interview_qa",
     )
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Milvus MetadataFilter construction
+# Milvus 2.6 hybrid scope expression (the server-side tenant filter)
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_build_metadata_filters_uses_eq_for_single_user():
-    from llama_index.core.vector_stores import FilterOperator
-    from app.rag import retriever
+def test_scope_expr_filters_by_user_pk():
+    from app.rag import milvus_hybrid
 
-    flt = retriever._build_metadata_filters(["alice"], "interview_qa")
-    keys = {(f.key, f.operator) for f in flt.filters}
-    assert ("user_id", FilterOperator.EQ) in keys
-    assert ("source_type", FilterOperator.EQ) in keys
-    # Find the user_id filter and check the literal value.
-    user_filter = next(f for f in flt.filters if f.key == "user_id")
-    assert user_filter.value == "alice"
+    # Scope key is the stable users.id pk; no source_kind -> user filter only.
+    assert milvus_hybrid._scope_expr(7, None) == "user_id == 7"
 
 
-def test_build_metadata_filters_uses_in_for_multiple_users():
-    from llama_index.core.vector_stores import FilterOperator
-    from app.rag import retriever
+def test_scope_expr_adds_source_kind():
+    from app.rag import milvus_hybrid
 
-    flt = retriever._build_metadata_filters(["alice", "shared"], "interview_qa")
-    user_filter = next(f for f in flt.filters if f.key == "user_id")
-    assert user_filter.operator == FilterOperator.IN
-    assert list(user_filter.value) == ["alice", "shared"]
+    expr = milvus_hybrid._scope_expr(7, {"source_kind": "interview_qa"})
+    assert expr == 'user_id == 7 && source_kind == "interview_qa"'
 
 
-def test_build_metadata_filters_skips_source_when_none():
-    from app.rag import retriever
+def test_eq_rejects_injection():
+    from app.rag import milvus_hybrid
 
-    flt = retriever._build_metadata_filters(["alice"], None)
-    keys = {f.key for f in flt.filters}
-    assert "user_id" in keys
-    assert "source_type" not in keys
-
-
-def test_build_metadata_filters_empty_when_no_user_no_source():
-    from app.rag import retriever
-
-    flt = retriever._build_metadata_filters([], None)
-    assert flt.filters == []
+    with pytest.raises(ValueError):
+        milvus_hybrid._eq("source_kind", 'x" or user_id == 1 or "')
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -162,21 +146,22 @@ def test_lexical_overlap_zero_for_empty_query():
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_score_passes_with_reranker_uses_strict_threshold():
+def test_score_passes_meets_threshold():
     from app.rag import retriever
 
-    assert retriever._score_passes(0.6, min_score=0.5, used_reranker=True)
-    assert not retriever._score_passes(0.3, min_score=0.5, used_reranker=True)
+    assert retriever._score_passes(0.6, min_score=0.5)
+    assert not retriever._score_passes(0.3, min_score=0.5)
 
 
-def test_score_passes_without_reranker_uses_relaxed_fallback():
-    """Without a reranker, RRF / vector scores live on a much smaller scale;
-    the helper should consult ``RAG_FALLBACK_MIN_SCORE`` instead of the
-    stricter rerank threshold."""
+def test_score_passes_no_relaxation_below_threshold():
+    """No fallback: the same RAG_MIN_SCORE applies whether or not a reranker
+    ran. A low RRF / vector score (0.03) that used to slip through the old
+    ``RAG_FALLBACK_MIN_SCORE`` relaxation is now rejected — retrieval returns
+    an empty result instead of admitting a low-relevance chunk."""
     from app.rag import retriever
 
-    assert retriever._score_passes(0.03, min_score=0.5, used_reranker=False)
-    assert not retriever._score_passes(None, min_score=0.5, used_reranker=False)
+    assert not retriever._score_passes(0.03, min_score=0.5)
+    assert not retriever._score_passes(None, min_score=0.5)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -184,11 +169,11 @@ def test_score_passes_without_reranker_uses_relaxed_fallback():
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _fake_node(user_id: str, source_type: str, text: str):
+def _fake_node(user_id: int, source_kind: str, text: str):
     """Build a fake retrieved node compatible with the metadata-scope helper."""
     return SimpleNamespace(
         node=SimpleNamespace(
-            metadata={"user_id": user_id, "source_type": source_type},
+            metadata={"user_id": user_id, "source_kind": source_kind},
             get_content=lambda: text,
         ),
         score=0.9,
@@ -202,23 +187,23 @@ def test_metadata_scope_blocks_cross_user_leak():
     from app.rag import retriever
 
     candidates = [
-        _fake_node("alice", "interview_qa", "alice's private note"),
-        _fake_node("bob",   "interview_qa", "bob's confidential file"),
-        _fake_node("alice", "interview_qa", "alice's second note"),
-        _fake_node("alice", "official_docs", "wrong source type"),
+        _fake_node(1, "interview_qa", "alice's private note"),
+        _fake_node(2, "interview_qa", "bob's confidential file"),
+        _fake_node(1, "interview_qa", "alice's second note"),
+        _fake_node(1, "official_docs", "wrong source kind"),
     ]
     survivors = [
         n for n in candidates
         if retriever._metadata_matches_scope(
-            n.node.metadata, ["alice"], "interview_qa"
+            n.node.metadata, [1], "interview_qa"
         )
     ]
     contents = {n.node.get_content() for n in survivors}
     assert "alice's private note" in contents
     assert "alice's second note" in contents
-    # The cross-user leak and the wrong-source-type node must be gone.
+    # The cross-user leak and the wrong-source-kind node must be gone.
     assert "bob's confidential file" not in contents
-    assert "wrong source type" not in contents
+    assert "wrong source kind" not in contents
 
 
 @pytest.mark.slow

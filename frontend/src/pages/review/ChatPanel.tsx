@@ -4,7 +4,7 @@
  * Two scope shapes:
  *
  *  1. **Review (debrief) mode** — caller passes ``interviewId``. The panel
- *     fetches its own session list (``session_type='debrief', interview_id``)
+ *     fetches its own session list (``type='debrief', subject_id``)
  *     and renders a dropdown for new / rename / delete + active-session
  *     selection. Auto-selects the most recent session; auto-creates
  *     "会话 1" the first time the user opens a record with no sessions.
@@ -51,8 +51,8 @@ import type {
 
 interface Props {
   /** Review/debrief mode: bind to this interview record. ChatPanel will
-   *  maintain its own session list filtered by (session_type=debrief,
-   *  interview_id=interviewId). Mutually exclusive with ``sessionId``. */
+   *  maintain its own session list filtered by (type=debrief,
+   *  subject_id=interviewId). Mutually exclusive with ``sessionId``. */
   interviewId?: string | null;
   /** External mode: caller manages the session list and tells ChatPanel
    *  exactly which session to drive. Mutually exclusive with ``interviewId``. */
@@ -175,7 +175,7 @@ export function ChatPanel({
   // user's AGENT pill resets to CHAT every time they refresh, and the
   // backend silently downgrades the strategy back to L1. We key by
   // session_id so a chat session and an agent session can co-exist.
-  // (Backend session_state would be the more "correct" home for this
+  // (A backend column would be the more "correct" home for this
   // but the round-trip cost isn't worth it for a boolean.)
   const modeStorageKey = activeSessionId ? `chat-mode:${activeSessionId}` : null;
   const [mode, setModeState] = useState<Mode>(() => {
@@ -208,10 +208,10 @@ export function ChatPanel({
   const [uploading, setUploading] = useState(false);
 
   // ── Global-memory toggle (per-session resolved value) ────────────────
-  // The button reflects the effective per-session value (session_state
-  // override → user-level default → False). Toggling writes the
-  // override into session_state so this session diverges from the
-  // user-level default for subsequent turns.
+  // The button reflects the effective per-session value (the
+  // global_memory_enabled column override → user-level default →
+  // False). Toggling writes the override into that column so this
+  // session diverges from the user-level default for subsequent turns.
   const [globalMemoryOn, setGlobalMemoryOn] = useState(false);
   const [togglingMemory, setTogglingMemory] = useState(false);
 
@@ -335,7 +335,7 @@ export function ChatPanel({
     (async () => {
       try {
         const rows = await listChatSessions(
-          { session_type: sessionType, interview_id: interviewId },
+          { type: sessionType, subject_id: interviewId },
           { signal: controller.signal },
         );
         if (!alive) return;
@@ -353,15 +353,15 @@ export function ChatPanel({
         // ``createChatSession`` does not take an AbortSignal — the
         // post is fast (~30ms) and idempotent enough at this scope.
         const created = await createChatSession({
-          session_type: sessionType,
-          interview_id: interviewId,
+          type: sessionType,
+          subject_id: interviewId,
           title: '会话 1',
         });
         if (!alive) return;
         setSessions([{
           session_id: created.session_id,
           title: created.title,
-          session_type: created.session_type,
+          type: created.type,
           state_summary: '',
           turn_count: 0,
           updated_at: new Date().toISOString(),
@@ -491,14 +491,14 @@ export function ChatPanel({
     setCreating(true);
     try {
       const created = await createChatSession({
-        session_type: sessionType,
-        interview_id: interviewId,
+        type: sessionType,
+        subject_id: interviewId,
         title: `会话 ${sessions.length + 1}`,
       });
       setSessions((s) => [{
         session_id: created.session_id,
         title: created.title,
-        session_type: created.session_type,
+        type: created.type,
         state_summary: '',
         turn_count: 0,
         updated_at: new Date().toISOString(),
@@ -565,7 +565,7 @@ export function ChatPanel({
     const added: Attachment[] = [];
     for (const f of Array.from(files)) {
       try {
-        const doc = await uploadKnowledgeFile(f, { category: 'chat_attachment', source_type: 'official_docs' });
+        const doc = await uploadKnowledgeFile(f, { category: 'chat_attachment', source_kind: 'user_upload' });
         added.push({ doc_id: doc.id, filename: f.name });
       } catch {
         if (isMounted.current) toast.error(`附件上传失败：${f.name}`);

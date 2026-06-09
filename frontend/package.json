@@ -13,7 +13,6 @@
     "test:run": "vitest run"
   },
   "dependencies": {
-    "@sentry/react": "^8.40.0",
     "@tanstack/react-virtual": "^3.10.8",
     "axios": "^1.7.7",
     "lucide-react": "^0.456.0",

@@ -3,23 +3,27 @@ import { useNavigate } from 'react-router-dom';
 import { MockSetup, type InterviewerStyle, type VoiceMode } from './MockSetup';
 import { MockLive } from './MockLive';
 import { toast } from '@/store/uiStore';
-import { createChatSession } from '@/api/chat';
 import {
   abandonMockInterview,
   getInProgressMock,
-  getMockCurrentQuestion,
   startMockInterview,
 } from '@/api/mock';
-import type { MockQuestion } from '@/types/api';
 
 type Stage =
   | { kind: 'setup' }
-  | { kind: 'live'; sessionId: string; question: MockQuestion; voiceMode: VoiceMode };
+  | {
+      kind: 'live';
+      recordId: string;
+      conversationId: string;
+      currentQuestion: string;
+      voiceMode: VoiceMode;
+    };
 
 interface InProgressBanner {
-  sessionId: string;
+  recordId: string;
+  conversationId: string;
+  currentQuestion: string;
   title: string;
-  qaCount: number;
   lastActivityAt: string | null;
 }
 
@@ -34,11 +38,12 @@ export function MockPage() {
     let alive = true;
     getInProgressMock()
       .then((r) => {
-        if (!alive || !r.has_in_progress || !r.session_id) return;
+        if (!alive || !r.has_in_progress || !r.record_id) return;
         setInProgress({
-          sessionId: r.session_id,
+          recordId: r.record_id,
+          conversationId: r.conversation_id ?? '',
+          currentQuestion: r.current_question ?? '',
           title: r.title ?? '模拟面试',
-          qaCount: r.qa_count ?? 0,
           lastActivityAt: r.last_activity_at ?? null,
         });
       })
@@ -50,42 +55,22 @@ export function MockPage() {
     };
   }, [stage.kind]);
 
-  const resumeInProgress = async () => {
+  const resumeInProgress = () => {
     if (!inProgress) return;
-    setStarting(true);
-    try {
-      const q = await getMockCurrentQuestion(inProgress.sessionId);
-      // Race-safety: the backend's ``/question`` endpoint returns
-      // ``{done: true, message}`` (no ``question`` / ``phase_id``)
-      // when the session has flipped to finished between when the
-      // resume banner queried ``/in-progress`` and now. The MockLive
-      // child reads ``initialQuestion.question`` and would otherwise
-      // try to TTS-speak ``undefined``. Bail back to setup + clear the
-      // stale banner so the next render shows a clean slate.
-      if (q.done) {
-        toast.info('该面试已结束，正在为你刷新页面');
-        setInProgress(null);
-        setStage({ kind: 'setup' });
-        return;
-      }
-      setStage({
-        kind: 'live',
-        sessionId: inProgress.sessionId,
-        question: q,
-        voiceMode: 'hybrid',
-      });
-      setInProgress(null);
-    } catch {
-      toast.error('恢复面试失败');
-    } finally {
-      setStarting(false);
-    }
+    setStage({
+      kind: 'live',
+      recordId: inProgress.recordId,
+      conversationId: inProgress.conversationId,
+      currentQuestion: inProgress.currentQuestion,
+      voiceMode: 'hybrid',
+    });
+    setInProgress(null);
   };
 
   const discardInProgress = async () => {
     if (!inProgress) return;
     try {
-      await abandonMockInterview(inProgress.sessionId);
+      await abandonMockInterview(inProgress.recordId);
     } catch {
       /* non-fatal */
     }
@@ -93,28 +78,24 @@ export function MockPage() {
   };
 
   const handleReady = async (payload: {
-    resume_upload_id: string;
+    resume_id: string;
     jd_text: string;
     interviewer_style: InterviewerStyle;
     voice_mode: VoiceMode;
   }) => {
     setStarting(true);
     try {
-      const session = await createChatSession({
-        session_type: 'mock_interview',
-        title: '模拟面试',
-      });
       const started = await startMockInterview({
-        session_id: session.session_id,
-        resume_upload_id: payload.resume_upload_id,
-        jd_text: payload.jd_text,
+        resume_id: payload.resume_id || undefined,
+        jd_text: payload.jd_text || undefined,
         interviewer_style: payload.interviewer_style,
         voice_mode: payload.voice_mode,
       });
       setStage({
         kind: 'live',
-        sessionId: session.session_id,
-        question: started.current_question,
+        recordId: started.interview_record_id,
+        conversationId: started.conversation_id,
+        currentQuestion: started.current_question,
         voiceMode: payload.voice_mode,
       });
     } catch {
@@ -155,8 +136,8 @@ export function MockPage() {
   }
   return (
     <MockLive
-      sessionId={stage.sessionId}
-      initialQuestion={stage.question}
+      recordId={stage.recordId}
+      initialQuestion={stage.currentQuestion}
       voiceMode={stage.voiceMode}
       onFinished={onFinished}
       onAbandoned={onAbandoned}
@@ -183,7 +164,7 @@ function ResumeBanner({
         <div className="flex-1 min-w-0">
           <div className="text-sm font-semibold text-amber-900">你有一个未完成的模拟面试</div>
           <div className="text-xs text-amber-800 mt-0.5">
-            {banner.title} · 已答 {banner.qaCount} 题 · 最后活动 {whenLabel}
+            {banner.title} · 最后活动 {whenLabel}
           </div>
         </div>
         <button

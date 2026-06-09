@@ -2,7 +2,7 @@
 
 Wraps :func:`app.rag.knowledge_retriever.KnowledgeRetriever.retrieve`
 for the L2 agent. Since the planner-merge refactor RAG no longer
-splits by ``source_type`` — the BGE reranker is authoritative — so
+splits by ``source_kind`` — the BGE reranker is authoritative — so
 the tool has a single ``query`` argument and searches everything.
 """
 
@@ -36,7 +36,7 @@ async def _search_knowledge_handler(
         for chunk in result.chunks[:5]:
             chunks.append({
                 "text": chunk.get("text", "")[:1500],
-                "source": chunk.get("source_type", "knowledge"),
+                "source": chunk.get("source_kind", "knowledge"),
                 "score": (
                     round(float(chunk.get("score", 0)), 3)
                     if chunk.get("score") is not None else None

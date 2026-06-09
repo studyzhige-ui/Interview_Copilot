@@ -1,13 +1,12 @@
 import asyncio
 import json
-from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.rate_limit import RATE_EXPENSIVE, RATE_UPLOAD, limiter
+from app.core.rate_limit import RATE_EXPENSIVE, limiter
 from app.core.security import get_current_user
 from app.db.database import SessionLocal, get_db
 from app.models.interview_qa import InterviewQA
@@ -19,14 +18,12 @@ from app.services.interview.interview_record_service import (
     STATUS_FAILED,
     interview_record_service,
 )
-from app.services.storage_service import upload_file_to_owned_key
-from app.services.uploads.upload_service import create_owned_upload, get_owned_upload, mark_upload_consumed
+from app.core.user_identity import resolve_user_pk
+from app.services.uploads.file_asset_service import (
+    get_owned_file_asset,
+    mark_file_asset_consumed,
+)
 from app.worker.tasks import process_interview_analysis
-
-try:
-    from app.rag.ingestion import ingest_text
-except ModuleNotFoundError:
-    ingest_text = None
 
 
 router = APIRouter()
@@ -37,63 +34,9 @@ from app.schemas.interview import (  # noqa: E402, F401
     AnalyzeRequest,
     InterviewRecordListItem,
     InterviewRecordUpdateRequest,
-    MemorySaveRequest,
-    PresignedUrlRequest,
     QAEditRequest,
+    SaveQARequest,
 )
-
-
-@router.post("/upload/audio/direct")
-@limiter.limit(RATE_UPLOAD)
-async def upload_audio(
-    request: Request,
-    response: Response,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    from app.services.uploads.file_validation import validate_upload_stream
-    from app.services.voice.file_parser import validate_media_format
-
-    # Cheap extension check first (rejects obviously-wrong filenames before
-    # we read any bytes). validate_upload_stream then enforces the real
-    # magic-byte check + progressive size ceiling.
-    if not validate_media_format(file.filename or ""):
-        raise HTTPException(
-            status_code=400,
-            detail="不支持的音视频格式。支持: mp3, wav, m4a, flac, ogg, wma, aac, mp4, mkv, avi, mov, webm",
-        )
-    # Streaming validation — never loads the 500 MB body into RAM.
-    # Spool rolls to disk past 1 MiB; we hand the file-like directly
-    # to S3 upload_fileobj below.
-    _detected, _size, body_stream = await validate_upload_stream(
-        file, purpose="audio_upload",
-    )
-    try:
-        upload, _ = create_owned_upload(
-            db,
-            user_id=current_user.username,
-            filename=file.filename,
-            purpose="interview_audio",
-            content_type=file.content_type,
-        )
-        # boto3.upload_fileobj reads via .read() in chunks; SpooledTemporaryFile
-        # supports that natively. No bytes-into-memory copy.
-        storage_uri = upload_file_to_owned_key(
-            body_stream, upload.object_key, file.content_type,
-        )
-    finally:
-        body_stream.close()  # drops the temp disk spill if one was created
-    upload.storage_uri = storage_uri
-    upload.status = "uploaded"
-    db.add(upload)
-    db.commit()
-    return {
-        "status": "success",
-        "upload_id": upload.id,
-        "storage_uri": upload.storage_uri,
-        "filename": upload.original_filename,
-    }
 
 
 @router.get("/uploads/resumes")
@@ -101,113 +44,26 @@ def list_user_resumes(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List the user's library resumes (KnowledgeDocument with category='简历').
+    """List the user's personal resumes — the first-class ``resumes`` entity.
 
-    Source-of-truth for "stored resumes" is the personal library, not previous
-    mock-interview uploads. Returns each library doc together with the
-    underlying UserUpload.id so MockSetup can pass it to /mock-interview/start
-    as ``resume_upload_id`` without extra translation.
+    MockSetup / analyze setup pass the returned ``resume_id`` to start a mock or
+    dispatch an analysis. Resumes are a personal-profile asset and are NOT
+    knowledge documents.
     """
-    from app.models.knowledge import KnowledgeDocument
-    from app.models.upload import UserUpload
+    from app.services.resume import resume_entity_service
 
-    rows = (
-        db.query(KnowledgeDocument, UserUpload)
-        .join(UserUpload, KnowledgeDocument.upload_id == UserUpload.id)
-        .filter(
-            KnowledgeDocument.user_id == current_user.username,
-            KnowledgeDocument.category == "简历",
-        )
-        .order_by(KnowledgeDocument.created_at.desc())
-        .limit(50)
-        .all()
-    )
+    resumes = resume_entity_service.list_resumes(db, user_id=current_user.username)
     return {
         "resumes": [
             {
-                "upload_id": u.id,
-                "filename": d.title or u.original_filename,
-                "size_bytes": u.size_bytes,
-                "created_at": d.created_at.isoformat() if d.created_at else "",
-                "doc_id": d.id,
+                "resume_id": r.id,
+                "title": r.title,
+                "is_default": bool(r.is_default),
+                "parse_status": r.parse_status,
+                "created_at": r.created_at.isoformat() if r.created_at else "",
             }
-            for (d, u) in rows
+            for r in resumes
         ],
-    }
-
-
-@router.post("/upload/resume/direct")
-@limiter.limit(RATE_UPLOAD)
-async def upload_resume(
-    request: Request,
-    response: Response,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Upload a resume file for interview analysis context."""
-    import io
-    from pathlib import Path
-
-    from app.services.uploads.file_validation import validate_upload
-    from app.services.voice.file_parser import validate_resume_format
-
-    if not validate_resume_format(file.filename or ""):
-        raise HTTPException(
-            status_code=400,
-            detail="不支持的简历格式。支持: pdf, docx, txt, md",
-        )
-    declared_ext = Path(file.filename or "").suffix.lower()
-    body = await validate_upload(file, purpose="resume", declared_ext=declared_ext)
-
-    upload, _ = create_owned_upload(
-        db,
-        user_id=current_user.username,
-        filename=file.filename,
-        purpose="interview_resume",
-        content_type=file.content_type,
-    )
-    storage_uri = upload_file_to_owned_key(io.BytesIO(body), upload.object_key, file.content_type)
-    upload.storage_uri = storage_uri
-    upload.status = "uploaded"
-    db.add(upload)
-    db.commit()
-    return {
-        "status": "success",
-        "upload_id": upload.id,
-        "storage_uri": upload.storage_uri,
-        "filename": upload.original_filename,
-    }
-
-
-@router.post("/upload/audio")
-async def get_upload_presigned_url(
-    request: PresignedUrlRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    from app.services.voice.file_parser import validate_media_format
-
-    if not validate_media_format(request.filename):
-        raise HTTPException(
-            status_code=400,
-            detail="不支持的音视频格式。支持: mp3, wav, m4a, flac, ogg, wma, aac, mp4, mkv, avi, mov, webm",
-        )
-
-    upload, url_info = create_owned_upload(
-        db=db,
-        user_id=current_user.username,
-        filename=request.filename,
-        purpose="interview_audio",
-        content_type=request.content_type,
-        size_bytes=request.size_bytes,
-    )
-    return {
-        "status": "success",
-        "upload_id": upload.id,
-        "upload_url": url_info["upload_url"],
-        "storage_uri": upload.storage_uri,
-        "filename": upload.original_filename,
     }
 
 
@@ -223,59 +79,88 @@ async def analyze_interview_endpoint(
     """Create an InterviewRecord from an uploaded audio file and dispatch the
     unified analysis orchestrator."""
     try:
-        upload = get_owned_upload(
+        upload = get_owned_file_asset(
             db,
-            upload_id=body.upload_id,
+            file_asset_id=body.upload_id,
             user_id=current_user.username,
             purpose="interview_audio",
         )
         if upload is None:
             raise HTTPException(status_code=404, detail="Audio upload not found")
-        if upload.status not in {"pending_upload", "uploaded"}:
+        if upload.upload_status not in {"pending_upload", "uploaded"}:
             raise HTTPException(status_code=409, detail="Audio upload has already been consumed")
 
-        resume_upload = get_owned_upload(
-            db,
-            upload_id=body.resume_upload_id,
-            user_id=current_user.username,
-            purpose="interview_resume",
-        )
-        if resume_upload is None:
-            raise HTTPException(status_code=404, detail="Resume upload not found")
-
-        jd_text = (body.jd_text or "").strip()
-        if not jd_text and body.jd_upload_id:
-            from app.services.knowledge.knowledge_text_service import load_knowledge_text
-            try:
-                jd_text = load_knowledge_text(db, body.jd_upload_id, current_user.username) or ""
-            except Exception:  # noqa: BLE001
-                jd_text = ""
-
-        # Extract resume text for the snapshot. Failures are non-fatal —
-        # orchestrator falls back to empty context.
-        # ``_extract_resume_snapshot`` downloads from S3 + parses (PDF/
-        # DOCX) — 100-1000ms of sync I/O + CPU. Offload so the analyze
-        # endpoint doesn't pin the event-loop thread while one user
-        # uploads a slow resume.
+        # Resume context: a personal resume entity (resume_id) OR an ad-hoc file
+        # uploaded just for this interview (resume_file_asset_id). Both snapshot
+        # their text onto the record so history never re-reads them. Optional.
+        resume_id: Optional[str] = None
+        resume_file_asset_id: Optional[str] = None
+        resume_source = "none"
+        resume_title_snapshot: Optional[str] = None
         resume_text = ""
-        try:
-            resume_text = await asyncio.to_thread(
-                _extract_resume_snapshot, db, resume_upload.id, current_user.username,
+        if body.resume_id:
+            from app.services.resume import resume_entity_service
+
+            resume = resume_entity_service.get_owned_resume(
+                db, resume_id=body.resume_id, user_id=current_user.username,
             )
-        except Exception as exc:  # noqa: BLE001
-            import logging
-            logging.getLogger(__name__).warning("Resume snapshot extraction failed: %s", exc)
+            if resume is None:
+                raise HTTPException(status_code=404, detail="Resume not found")
+            resume_id = resume.id
+            resume_source = "personal_resume"
+            resume_title_snapshot = resume.title
+            resume_text = resume.raw_text_snapshot or ""
+        elif body.resume_file_asset_id:
+            resume_upload = get_owned_file_asset(
+                db, file_asset_id=body.resume_file_asset_id,
+                user_id=current_user.username, purpose="resume",
+            )
+            if resume_upload is None:
+                raise HTTPException(status_code=404, detail="Resume upload not found")
+            resume_file_asset_id = resume_upload.id
+            resume_source = "context_upload"
+            # _extract_resume_snapshot downloads + parses (sync I/O + CPU);
+            # offload so the endpoint doesn't pin the event loop. Non-fatal.
+            try:
+                resume_text = await asyncio.to_thread(
+                    _extract_resume_snapshot, db, resume_upload.id, current_user.username,
+                )
+            except Exception as exc:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).warning("Resume snapshot extraction failed: %s", exc)
+
+        # JD context: direct text wins; else extract from a jd file_asset. JD is
+        # never a knowledge document — it only lives as a snapshot on the record.
+        jd_text = (body.jd_text or "").strip()
+        jd_file_asset_id: Optional[str] = None
+        if not jd_text and body.jd_file_asset_id:
+            jd_upload = get_owned_file_asset(
+                db, file_asset_id=body.jd_file_asset_id,
+                user_id=current_user.username, purpose="jd",
+            )
+            if jd_upload is not None:
+                jd_file_asset_id = jd_upload.id
+                try:
+                    jd_text = await asyncio.to_thread(
+                        _extract_resume_snapshot, db, jd_upload.id, current_user.username,
+                    ) or ""
+                except Exception:  # noqa: BLE001
+                    jd_text = ""
 
         record = interview_record_service.create_for_upload(
             user_id=current_user.username,
             title=f"面试录音 {upload.original_filename or upload.id}",
-            audio_upload_id=upload.id,
-            resume_upload_id=resume_upload.id,
+            audio_file_asset_id=upload.id,
+            resume_id=resume_id,
+            resume_file_asset_id=resume_file_asset_id,
+            resume_source=resume_source,
+            resume_title_snapshot=resume_title_snapshot,
+            jd_file_asset_id=jd_file_asset_id,
             resume_text_snapshot=resume_text,
             jd_text_snapshot=jd_text,
             db=db,
         )
-        mark_upload_consumed(db, upload)
+        mark_file_asset_consumed(db, upload)
         db.commit()
 
         # Normalize language hint: anything other than the two we explicitly
@@ -310,7 +195,7 @@ async def cancel_analysis(
     or deletes the in-flight record before completion."""
     record = (
         db.query(InterviewRecord)
-        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == current_user.username)
+        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == resolve_user_pk(db, current_user.username))
         .first()
     )
     if not record:
@@ -333,20 +218,15 @@ async def cancel_analysis(
     return {"status": "cancelled", "revoked": revoked, "record_id": record_id}
 
 
-def _extract_resume_snapshot(db: Session, resume_upload_id: str, user_id: str) -> str:
-    """Download the resume file and return its plain text (truncated)."""
+def _extract_resume_snapshot(db: Session, file_asset_id: str, user_id: str) -> str:
+    """Download a resume/JD file asset and return its plain text (truncated)."""
     import os
     import tempfile
 
-    from app.models.upload import UserUpload
     from app.services.storage_service import download_file_from_s3
     from app.services.voice.file_parser import extract_resume_text
 
-    upload = (
-        db.query(UserUpload)
-        .filter(UserUpload.id == resume_upload_id, UserUpload.user_id == user_id)
-        .first()
-    )
+    upload = get_owned_file_asset(db, file_asset_id=file_asset_id, user_id=user_id)
     if upload is None or not upload.storage_uri:
         return ""
     if not upload.storage_uri.startswith("s3://"):
@@ -361,45 +241,6 @@ def _extract_resume_snapshot(db: Session, resume_upload_id: str, user_id: str) -
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
-
-
-@router.post("/memory/save")
-@limiter.limit(RATE_EXPENSIVE)
-async def save_personal_memory(
-    request: Request,
-    response: Response,
-    body: MemorySaveRequest,
-    current_user: User = Depends(get_current_user),
-):
-    try:
-        ingest_fn = ingest_text
-        if ingest_fn is None:
-            from app.rag.ingestion import ingest_text as ingest_fn
-
-        combined_text = (
-            f"[Question]\n{body.question}\n\n"
-            f"[Improved Answer]\n{body.improved_answer}"
-        )
-        metadata = {
-            "source_type": "personal_memory",
-            "original_score": body.original_score,
-            "last_accessed": datetime.now().isoformat(),
-        }
-        if body.tags:
-            metadata["tags"] = ", ".join(body.tags)
-
-        await ingest_fn(
-            text=combined_text,
-            source_type="personal_memory",
-            user_id=current_user.username,
-            metadata=metadata,
-        )
-        return {
-            "status": "success",
-            "message": f"Saved personal memory with baseline score {body.original_score}.",
-        }
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/analytics/report")
@@ -455,18 +296,22 @@ def get_interview_record(
         except json.JSONDecodeError:
             analysis = None
     qa_rows = interview_record_service.list_qa(record_id)
+    transcript = interview_record_service.get_transcript_payload(record_id)
     return {
         "id": record.id,
         "source": record.source,
         "title": record.title,
         "tag": record.tag,
+        "category": record.category,
         "status": record.status,
         "analyzed_qa_count": record.analyzed_qa_count,
-        "audio_upload_id": record.audio_upload_id,
-        "resume_upload_id": record.resume_upload_id,
-        "jd_upload_id": record.jd_upload_id,
-        "transcript": record.transcript,
-        "transcript_segments": _safe_json_loads(record.transcript_segments_json),
+        "audio_file_asset_id": record.audio_file_asset_id,
+        "resume_id": record.resume_id,
+        "resume_file_asset_id": record.resume_file_asset_id,
+        "resume_source": record.resume_source,
+        "jd_file_asset_id": record.jd_file_asset_id,
+        "transcript": transcript["text"],
+        "transcript_segments": _safe_json_loads(transcript["segments_json"]),
         "interview_plan": _safe_json_loads(record.interview_plan),
         "analysis": analysis,
         "qa": [_serialize_qa(qa) for qa in qa_rows],
@@ -508,6 +353,7 @@ def _serialize_qa(qa: InterviewQA) -> dict:
         "source_segment_start": qa.source_segment_start,
         "source_segment_end": qa.source_segment_end,
         "analyzed_at": qa.analyzed_at.isoformat() if qa.analyzed_at else None,
+        "saved_document_id": qa.saved_document_id,
     }
 
 
@@ -536,7 +382,7 @@ def update_interview_record(
 
     record = (
         db.query(InterviewRecord)
-        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == current_user.username)
+        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == resolve_user_pk(db, current_user.username))
         .first()
     )
     if record is None:
@@ -559,6 +405,7 @@ def update_interview_record(
 @router.delete("/interview-records/{record_id}")
 def delete_interview_record(
     record_id: str,
+    cascade_knowledge: bool = Query(False),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -566,11 +413,12 @@ def delete_interview_record(
 
     Removes, in order:
 
-      1. **chat_messages** for every session linked to this interview
+      1. **conversation_messages** for every session linked to this interview
          (the FK has no ON DELETE CASCADE, so we have to be explicit).
-      2. **chat_sessions** linked to this interview (``interview_id == X``).
-      3. **interview_qa** + **mock_interview_sessions** (auto via FK
-         ON DELETE CASCADE on ``interview_records``).
+      2. **conversations** bound to this interview (``subject_id == X``).
+      3. **mock_interview_runtime** (explicit — SQLite doesn't enforce the FK
+         cascade) and **interview_qa** (auto via ON DELETE CASCADE on
+         ``interview_records``).
       4. The **interview_record** row itself.
 
     Designed for "I want this interview gone — no leftover chat history."
@@ -590,23 +438,34 @@ def delete_interview_record(
     import logging
 
     log = logging.getLogger(__name__)
-    from app.models.chat import ChatMessage, ChatSession
+    from app.models.chat import ConversationMessage, Conversation
     from app.models.interview_record import InterviewRecord
 
     record = (
         db.query(InterviewRecord)
-        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == current_user.username)
+        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == resolve_user_pk(db, current_user.username))
         .first()
     )
     if record is None:
         raise HTTPException(status_code=404, detail="Interview record not found")
 
+    # ── Optional cascade: also remove the improved_qa knowledge documents this
+    # interview's QAs published (RFC §10.3 — the user may opt in). ────────────
+    removed_docs = 0
+    if cascade_knowledge:
+        from app.services.knowledge.qa_publish_service import (
+            delete_saved_qa_docs_for_record,
+        )
+        removed_docs = delete_saved_qa_docs_for_record(
+            db, user_pk=record.user_id, record_id=record_id,
+        )
+
     try:
-        # ── (1) Find every chat_session linked to this interview ──────────
+        # ── (1) Find every conversation linked to this interview ──────────
         session_ids = [
             row[0]
-            for row in db.query(ChatSession.id)
-            .filter(ChatSession.interview_id == record_id)
+            for row in db.query(Conversation.id)
+            .filter(Conversation.subject_id == record_id)
             .all()
         ]
 
@@ -621,14 +480,20 @@ def delete_interview_record(
 
         # ── (3) DB deletes in safe order ─────────────────────────────────
         if session_ids:
-            db.query(ChatMessage).filter(
-                ChatMessage.session_id.in_(session_ids)
+            db.query(ConversationMessage).filter(
+                ConversationMessage.conversation_id.in_(session_ids)
             ).delete(synchronize_session=False)
-            db.query(ChatSession).filter(
-                ChatSession.id.in_(session_ids)
+            db.query(Conversation).filter(
+                Conversation.id.in_(session_ids)
             ).delete(synchronize_session=False)
-        # interview_qa + mock_interview_sessions auto-cleaned by their
-        # ON DELETE CASCADE on interview_records.
+        # mock_interview_runtime has ON DELETE CASCADE on interview_records, but
+        # SQLite (tests) doesn't enforce FK cascades — delete it explicitly so
+        # behavior is uniform across Postgres and SQLite (no orphan runtime).
+        from app.models.mock_interview_runtime import MockInterviewRuntime
+        db.query(MockInterviewRuntime).filter(
+            MockInterviewRuntime.interview_record_id == record_id
+        ).delete(synchronize_session=False)
+        # interview_qa auto-cleaned by ON DELETE CASCADE on interview_records.
         db.delete(record)
         db.commit()
         log.info(
@@ -639,6 +504,7 @@ def delete_interview_record(
             "status": "success",
             "id": record_id,
             "deleted_sessions": len(session_ids),
+            "deleted_knowledge_docs": removed_docs,
         }
     except HTTPException:
         raise
@@ -669,7 +535,7 @@ def edit_interview_qa(
         .filter(
             InterviewQA.id == qa_id,
             InterviewQA.record_id == record_id,
-            InterviewRecord.user_id == current_user.username,
+            InterviewRecord.user_id == resolve_user_pk(db, current_user.username),
         )
         .first()
     )
@@ -688,6 +554,91 @@ def edit_interview_qa(
     db.commit()
     db.refresh(qa)
     return {"status": "success", "qa": _serialize_qa(qa)}
+
+
+@router.post("/interview-records/{record_id}/qa/{qa_id}/save-to-knowledge")
+@limiter.limit(RATE_EXPENSIVE)
+async def save_qa_to_knowledge_endpoint(
+    request: Request,
+    response: Response,
+    record_id: str,
+    qa_id: str,
+    body: SaveQARequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Publish a QA's improved answer to the knowledge base (RFC §6.9).
+
+    Creates/refreshes a ``knowledge_documents(source_kind='improved_qa')`` from
+    question + improved_answer, indexes it, and backfills ``saved_document_id``.
+    """
+    user_pk = resolve_user_pk(db, current_user.username)
+    qa = (
+        db.query(InterviewQA)
+        .join(InterviewRecord, InterviewQA.record_id == InterviewRecord.id)
+        .filter(
+            InterviewQA.id == qa_id,
+            InterviewQA.record_id == record_id,
+            InterviewRecord.user_id == user_pk,
+        )
+        .first()
+    )
+    if qa is None:
+        raise HTTPException(status_code=404, detail="QA row not found")
+    if not (qa.improved_answer or "").strip():
+        raise HTTPException(status_code=400, detail="该题暂无改进回答，无法保存到知识库")
+    record = (
+        db.query(InterviewRecord)
+        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == user_pk)
+        .first()
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail="Interview record not found")
+    from app.services.knowledge.qa_publish_service import (
+        DEFAULT_CATEGORY,
+        save_qa_to_knowledge,
+    )
+    try:
+        doc = await save_qa_to_knowledge(
+            db, user_pk=user_pk, qa=qa, record=record,
+            category=(body.category or "").strip() or DEFAULT_CATEGORY,
+        )
+    except Exception as exc:  # noqa: BLE001
+        from app.core.error_messages import humanize_error
+        raise HTTPException(
+            status_code=500, detail=f"保存到知识库失败：{humanize_error(exc)}",
+        ) from exc
+    return {
+        "status": "success",
+        "document_id": doc.id,
+        "saved_document_id": qa.saved_document_id,
+    }
+
+
+@router.delete("/interview-records/{record_id}/qa/{qa_id}/save-to-knowledge")
+def unsave_qa_from_knowledge_endpoint(
+    record_id: str,
+    qa_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Remove the knowledge document previously saved from this QA."""
+    user_pk = resolve_user_pk(db, current_user.username)
+    qa = (
+        db.query(InterviewQA)
+        .join(InterviewRecord, InterviewQA.record_id == InterviewRecord.id)
+        .filter(
+            InterviewQA.id == qa_id,
+            InterviewQA.record_id == record_id,
+            InterviewRecord.user_id == user_pk,
+        )
+        .first()
+    )
+    if qa is None:
+        raise HTTPException(status_code=404, detail="QA row not found")
+    from app.services.knowledge.qa_publish_service import unsave_qa_from_knowledge
+    removed = unsave_qa_from_knowledge(db, user_pk=user_pk, qa=qa)
+    return {"status": "success", "removed": removed}
 
 
 # ── Status → progress mapping for SSE (record.status is lower-case ENUM) ──
@@ -751,7 +702,7 @@ async def interview_record_events_stream(
                 db.query(InterviewRecord.id)
                 .filter(
                     InterviewRecord.id == record_id,
-                    InterviewRecord.user_id == current_user.username,
+                    InterviewRecord.user_id == resolve_user_pk(db, current_user.username),
                 )
                 .first()
                 is not None

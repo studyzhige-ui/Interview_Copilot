@@ -12,7 +12,7 @@
 两条路任选一条走完，都会得到一个能注册 / 登录 / 聊天 / 模拟面试 /
 分析的完整流程。
 
-可选增强（真发邮件、LLM trace、Sentry、网页搜索）和**完整坑点合集**
+可选增强（真发邮件、LLM trace、网页搜索）和**完整坑点合集**
 在文档末尾：
 **[可选增强](#可选增强)** · **[常见坑点](#常见坑点)**。
 
@@ -273,17 +273,6 @@ TAVILY_API_KEY=tvly-...
 
 重启。Agent 模式的 `web_search` 工具激活，模型用 function calling
 自己决定何时调用。
-
-### Sentry —— 错误监控
-
-<https://sentry.io> 注册，创建 Python (FastAPI) 项目，复制 DSN：
-
-```ini
-SENTRY_DSN=https://...@...ingest.us.sentry.io/...
-SENTRY_ENVIRONMENT=prod
-```
-
-前端 DSN 单独在 `frontend/.env.production` 的 `VITE_SENTRY_DSN`。
 
 ### 用户级模型路由（「模型」页）
 

@@ -44,9 +44,6 @@ backend.
    to "Production" or both):
    ```
    VITE_API_BASE              https://api.your-domain.com/api/v1
-   VITE_SENTRY_DSN            <your sentry dsn or leave empty>
-   VITE_SENTRY_ENVIRONMENT    prod
-   VITE_SENTRY_TRACES_SAMPLE  0.1
    ```
 5. Trigger first deploy. Subsequent commits to `main` auto-deploy.
 

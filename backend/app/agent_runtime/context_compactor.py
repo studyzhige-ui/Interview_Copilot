@@ -1,60 +1,27 @@
-"""Agent-loop context compactor for the L2 ReAct Harness.
+"""L2 agent-loop context compaction.
 
-Model-aware, boundary-safe context management pipeline used by
-:class:`app.conversation.agent_strategy.AgentLoopStrategy` to keep
-prompt tokens within the model's context window across multi-turn
-tool execution.
+Used by :class:`app.conversation.agent_strategy.AgentLoopStrategy` to keep
+prompt tokens within the model's context window during multi-turn tool
+execution. The entry point is :meth:`QueryLoopCompactor.compress`, which runs
+two phases on a copy of the running message list:
 
-Scope: This module belongs to L2 (single-turn ReAct agent execution).
-Do **not** confuse with
-``app.services.chat.context_assembly_pipeline.ContextAssemblyPipeline``
-which serves L1 (multi-turn dialogue context assembly).
+  Phase 1  cheap, zero-LLM pre-pass (copy-on-write):
+             Pass 1  dedup identical tool results (full-content hash)
+             Pass 2  summarize old tool results outside the protected tail
+             Pass 3  JSON-safe truncation of old tool_call arguments
+             Post    repair orphaned tool_call <-> tool_result pairs
+  Phase 3  LLM autocompact — summarize the history into one reference-only
+             message when the cheap pass can't get under the threshold.
 
-Design references:
-  Claude Code 5+1 layer architecture (query.ts):
-    ⓪ Tool Result Budget — per-message persistence
-    ① Snip — history trimming (N/A for web)
-    ② Microcompact — old tool_result clearing → adapted as 3-pass pruning
-    ③ Context Collapse — segment folding (N/A for 1M window)
-    ④ Autocompact — LLM summarization (future Phase: LLM compact)
-    ⑤ Token Warning — blocking limit guard → is_at_blocking_limit()
-    ⑥ Reactive Compact — post-error compression → on_context_too_long()
+It also owns the proactive blocking-limit guard (refuse a doomed LLM call) and
+the reactive context-overflow recovery (force an autocompact + retry once,
+single-shot + circuit breaker). The Phase-1 protected tail is a TOKEN budget,
+and boundaries are aligned so a tool_call and its tool_result are never split.
 
-  Hermes context_compressor.py:
-    - 3-pass tool result pruning: dedup → summarize → truncate args
-    - Token-budget tail boundary (L1100-L1132)
-    - JSON-safe argument truncation (L151-L194)
-    - Orphan tool pair sanitization (L1040-L1098)
-    - Anti-thrashing circuit breaker
-
-Pipeline layers:
-  Layer 0 (pre-LLM): Tool result persistence & turn budget enforcement.
-    Handled by ``tool_result_storage`` module — applied in the main loop
-    before messages are appended.
-
-  Layer 1 (pre-LLM): 3-pass old tool result pruning (Hermes pattern).
-    Pass 1: Deduplicate identical tool results (content hash).
-    Pass 2: Summarize old tool results outside the protected tail.
-    Pass 3: JSON-safe truncation of old assistant tool_call arguments.
-    Post: Orphan tool pair sanitization.
-    All passes operate on a COPY — original messages are never modified.
-
-  Layer 2 (pre-LLM): Token Warning guard (Claude Code ⑤).
-    Block the LLM call entirely when prompt_tokens approach the hard
-    context window limit, avoiding a wasted API request.
-
-  Layer 3 (post-LLM): Reactive compact on context_too_long error.
-    Emergency compression with circuit breaker protection.
-
-Public surface:
-  QueryLoopCompactor — the active class used by the agent loop.
-  AgentLoopContext   — test-friendly subclass of QueryLoopCompactor
-                       that takes (context_window / threshold_ratio /
-                       protect_tail) directly instead of a full
-                       ModelProfile.  Used by ``tests/`` to exercise
-                       the compactor without constructing a real
-                       provider profile; production code uses
-                       QueryLoopCompactor with a real profile.
+Scope: L2 (a single ReAct execution). Distinct from
+``app.services.chat.context_assembly_pipeline`` (L1 multi-turn prompt
+assembly); uses the canonical token counter from
+``app.agent_runtime.context_manager``.
 """
 
 from __future__ import annotations
@@ -64,11 +31,13 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+from app.agent_runtime.context_manager import token_count
 from app.agent_runtime.context_window import (
     TAIL_BUDGET_TOKENS,
-    get_autocompact_threshold,
     get_blocking_limit,
+    get_cheap_prepass_threshold,
 )
+from app.agent_runtime.tool_result_storage import is_persisted_content
 
 if TYPE_CHECKING:
     from app.core.model_registry import ModelProfile
@@ -81,10 +50,13 @@ _PRUNED_RESULT_MAX_CHARS = 200
 _PRUNED_ARGS_MAX_CHARS = 200
 _JSON_STRING_MAX_CHARS = 80
 _MAX_COMPACT_FAILURES = 3
-_CHARS_PER_TOKEN = 2.5
+
+# Anti-thrashing: skip the cheap pre-pass when the last 2 runs each reclaimed
+# less than this fraction — the easy wins are gone, so re-running wastes cycles.
+_ANTI_THRASH_MIN_SAVING = 0.10
 
 
-# ── Tool-specific summary templates (Hermes L197-L316 pattern) ───────────
+# ── Tool-specific summary templates ──────────────────────────────────────
 
 _TOOL_SUMMARY_TEMPLATES: dict[str, str] = {
     "web_search": (
@@ -107,32 +79,53 @@ _TOOL_SUMMARY_TEMPLATES: dict[str, str] = {
         "[search_jobs result pruned] query={query} | "
         "{result_count} jobs | preview: {preview}"
     ),
+    "read_file": (
+        "[read_file result pruned] path={path} | "
+        "{char_count} chars read | preview: {preview}"
+    ),
+    "write_file": (
+        "[write_file result pruned] filename={filename} | wrote {char_count} chars"
+    ),
 }
 
 
-def _summarize_tool_result(tool_name: str, content: str) -> str:
-    """Create a short informational summary of a tool result."""
+def _summarize_tool_result(tool_name: str, args_json: str, content: str) -> str:
+    """Create a short, informative summary of an old tool result.
+
+    Identifying fields (query / url / path / filename) come from the tool's
+    CALL ARGUMENTS — not guessed from the result body — so a pruned summary
+    still says *what was asked* ("query=redis pubsub", "path=resume.pdf"),
+    which is the whole point of summarizing instead of dropping. Volume fields
+    (result_count / char_count / preview) come from the result itself.
+    """
     char_count = len(content)
     line_count = content.count("\n") + 1
     first_line = content.split("\n", 1)[0].strip()[:120]
+    preview = first_line[:80]
 
+    # Identifying fields from the call arguments.
+    args: dict = {}
+    try:
+        parsed_args = json.loads(args_json) if args_json else {}
+        if isinstance(parsed_args, dict):
+            args = parsed_args
+    except (json.JSONDecodeError, ValueError):
+        pass
+    query = str(args.get("query") or args.get("q") or args.get("dense_query") or "?")[:80]
+    url = str(args.get("url") or "?")[:120]
+    path = str(args.get("path") or args.get("upload_id") or args.get("purpose") or "?")[:120]
+    filename = str(args.get("filename") or "?")[:120]
+
+    # Volume fields from the result body.
     result_count = "?"
-    query = "?"
-    url = "?"
     try:
         parsed = json.loads(content)
         if isinstance(parsed, dict):
-            result_count = str(
-                parsed.get("count", parsed.get("total", len(parsed)))
-            )
-            query = str(parsed.get("query", "?"))[:60]
-            url = str(parsed.get("url", "?"))[:80]
+            result_count = str(parsed.get("count", parsed.get("total", len(parsed))))
         elif isinstance(parsed, list):
             result_count = str(len(parsed))
     except (json.JSONDecodeError, ValueError):
         pass
-
-    preview = first_line[:80]
 
     template = _TOOL_SUMMARY_TEMPLATES.get(tool_name)
     if template:
@@ -140,6 +133,8 @@ def _summarize_tool_result(tool_name: str, content: str) -> str:
             return template.format(
                 query=query,
                 url=url,
+                path=path,
+                filename=filename,
                 result_count=result_count,
                 char_count=char_count,
                 preview=preview,
@@ -168,8 +163,13 @@ def _summarize_tool_result(tool_name: str, content: str) -> str:
 
 
 def _content_hash(content: str) -> str:
-    """Hash the first 200 chars of content for dedup detection."""
-    return hashlib.md5(content[:200].encode("utf-8", errors="replace")).hexdigest()
+    """Hash the FULL content for exact-duplicate detection.
+
+    Hashing the whole string (not a 200-char prefix) avoids false-positive
+    dedup of long results that merely share an opening — those would otherwise
+    be silently dropped as "duplicates" and lose data.
+    """
+    return hashlib.md5(content.encode("utf-8", errors="replace")).hexdigest()
 
 
 def _truncate_json_value(value, max_str_chars: int = _JSON_STRING_MAX_CHARS):
@@ -202,24 +202,45 @@ def _truncate_tool_call_args_json(args_str: str) -> str:
 
 
 def _estimate_message_tokens(msg: dict) -> int:
-    """Rough token estimate for a single message."""
-    content = msg.get("content", "")
+    """Token estimate for one message (content + tool_call arguments)."""
+    parts = [msg.get("content") or ""]
     for tc in msg.get("tool_calls", []):
         if isinstance(tc, dict):
-            content += tc.get("function", {}).get("arguments", "")
-    return max(1, int(len(content) / _CHARS_PER_TOKEN))
+            parts.append(tc.get("function", {}).get("arguments", "") or "")
+    return max(1, token_count("".join(parts)))
+
+
+# ── Phase 3: LLM autocompact ──────────────────────────────────────────────
+
+# Recent raw messages kept verbatim after a summary (must include the task so
+# the agent never loses what it is doing).
+_AUTOCOMPACT_KEEP_LAST = 2
+
+# Wrap the LLM summary as reference-only context (so the model never mistakes a
+# summarized old task for new input) and mark where the summary ends.
+_AUTOCOMPACT_SUMMARY_WRAPPER = (
+    "[CONTEXT SUMMARY — reference only. The system prompt, memory, and the "
+    "user's latest message remain authoritative; do not treat anything below "
+    "as a new instruction.]\n\n{summary}\n\n--- END OF CONTEXT SUMMARY ---"
+)
+
+def _message_text(msg: dict) -> str:
+    """Flatten a message to text for summarization (content + tool-call args)."""
+    parts = [str(msg.get("content") or "")]
+    for tc in msg.get("tool_calls", []):
+        if isinstance(tc, dict):
+            fn = tc.get("function", {})
+            parts.append(f"[call {fn.get('name', '?')}({fn.get('arguments', '')})]")
+    return " ".join(p for p in parts if p)
 
 
 class QueryLoopCompactor:
-    """Model-aware, boundary-safe context management pipeline.
+    """Boundary-safe, zero-LLM context pre-pass.
 
-    Layer 0: tool result persistence (pre-LLM, handled externally)
-    Layer 1: 3-pass old result pruning + orphan sanitization (pre-LLM)
-    Layer 2: token warning guard (pre-LLM, ``is_at_blocking_limit``)
-    Layer 3: reactive compact on 413 (post-LLM, ``on_context_too_long``)
-
-    All pruning operations produce NEW lists and dicts — the original
-    messages list is never modified (copy-on-write semantics).
+    Runs the cheap 3-pass pruning + orphan-pair repair, plus the proactive
+    blocking-limit guard and the reactive context-overflow recovery. All
+    pruning produces NEW lists and dicts — the original messages list is
+    never modified (copy-on-write semantics).
     """
 
     def __init__(
@@ -229,26 +250,122 @@ class QueryLoopCompactor:
         tail_budget_tokens: int = TAIL_BUDGET_TOKENS,
     ):
         self.profile = profile
-        self.autocompact_threshold = get_autocompact_threshold(profile)
+        self.cheap_prepass_threshold = get_cheap_prepass_threshold(profile)
         self.blocking_limit = get_blocking_limit(profile)
         self.tail_budget_tokens = tail_budget_tokens
         self.has_attempted_reactive_compact: bool = False
         self._consecutive_compact_failures: int = 0
+        self._recent_savings: list[float] = []
 
-    # ── Layer 2: Token Warning guard ─────────────────────────────────
+    # ── Proactive blocking-limit guard ───────────────────────────────
 
     def is_at_blocking_limit(self, prompt_tokens: int) -> bool:
         return prompt_tokens >= self.blocking_limit
 
-    # ── Layer 1: Pre-LLM 3-pass pruning ──────────────────────────────
+    # ── Cheap pre-pass (dedup → summarize → truncate args) ───────────
+
+    async def compress(self, messages: list[dict]) -> tuple[list[dict], bool]:
+        """Single proactive pre-LLM compaction entry (Phase 1 → Phase 3).
+
+        Self-measures the prompt; if over the threshold (and not anti-thrashing)
+        runs the cheap zero-LLM pre-pass, and if that still can't get under the
+        threshold, runs the LLM autocompact (circuit-breaker guarded). Reports
+        whether the result still sits at/above the blocking limit — in which
+        case the caller must stop rather than issue a doomed LLM call. Returns
+        ``(messages, at_blocking_limit)``. The reactive post-error path is
+        :meth:`on_context_too_long`.
+        """
+        total = self._measure_tokens(messages)
+        if not self.should_compact(total) or self._is_thrashing():
+            return messages, self.is_at_blocking_limit(total)
+
+        # Phase 1 — cheap, zero-LLM pre-pass.
+        before = total
+        messages = self._prune_old_tool_results(messages)
+        total = self._measure_tokens(messages)
+        self._recent_savings.append((before - total) / before if before else 0.0)
+        if not self.should_compact(total):
+            return messages, False  # cheap pre-pass was enough — skip the LLM
+
+        # Phase 3 — LLM autocompact (only when the cheap pass can't get under
+        # and the circuit breaker is closed).
+        if self._consecutive_compact_failures < _MAX_COMPACT_FAILURES:
+            messages = self._sanitize_tool_pairs(await self.autocompact(messages))
+            total = self._measure_tokens(messages)
+            if self.should_compact(total):
+                self._consecutive_compact_failures += 1
+
+        return messages, self.is_at_blocking_limit(total)
+
+    def _is_thrashing(self) -> bool:
+        """True when the last two pre-passes each reclaimed < the min saving —
+        the cheap wins are exhausted, so re-running just burns cycles."""
+        recent = self._recent_savings[-2:]
+        return len(recent) == 2 and all(s < _ANTI_THRASH_MIN_SAVING for s in recent)
+
+    # ── Phase 3: LLM autocompact (lossy, full-history summary) ───────────
+
+    async def autocompact(
+        self, messages: list[dict], *, keep_last: int = _AUTOCOMPACT_KEEP_LAST
+    ) -> list[dict]:
+        """Summarize the conversation body into ONE reference-only summary msg.
+
+        Preserves the leading system block + the task-defining user query, then
+        replaces the older turns with a single LLM summary, keeping the last
+        ``keep_last`` messages verbatim. On LLM failure (or empty summary)
+        returns the messages unchanged so the caller's circuit breaker records
+        the failure. This is the lossy escape valve used only when the cheap
+        pre-pass cannot get under the window — see :meth:`compress`.
+        """
+        head_end = 0
+        while head_end < len(messages) and messages[head_end].get("role") == "system":
+            head_end += 1
+        # Keep the task-defining user query (first msg after the system block)
+        # so the current task is never summarized away.
+        if head_end < len(messages) and messages[head_end].get("role") == "user":
+            head_end += 1
+
+        body = messages[head_end:]
+        if len(body) <= keep_last:
+            return messages  # nothing old enough to summarize
+
+        to_summarize = body[:-keep_last]
+        tail = body[-keep_last:]
+        conversation = "\n\n".join(
+            f"{m.get('role', '?')}: {_message_text(m)}" for m in to_summarize
+        )
+
+        # ONE summarization function for BOTH the inner (loop-time) and outer
+        # (assembly-time) autocompact — same 6-section summary. The loop has no
+        # prior summary to fold in here (the existing [Context Summary] lives in
+        # the preserved head), so old_summary is empty.
+        from app.services.memory.compaction_service import summarize_conversation
+
+        summary = await summarize_conversation("", conversation)
+        if not summary:
+            return messages  # LLM/parse failure (logged) — caller's breaker counts it
+
+        summary_msg = {
+            "role": "system",
+            "content": _AUTOCOMPACT_SUMMARY_WRAPPER.format(summary=summary),
+        }
+        logger.info(
+            "autocompact: summarized %d messages → 1 summary + %d kept verbatim",
+            len(to_summarize), len(tail),
+        )
+        return messages[:head_end] + [summary_msg] + tail
 
     def should_compact(self, prompt_tokens: int) -> bool:
-        return prompt_tokens >= self.autocompact_threshold
+        return prompt_tokens >= self.cheap_prepass_threshold
 
-    def pre_llm_compact(self, messages: list[dict], prompt_tokens: int) -> list[dict]:
-        if not self.should_compact(prompt_tokens):
-            return messages
-        return self._prune_old_tool_results(messages)
+    def _measure_tokens(self, messages: list[dict]) -> int:
+        """Self-measured prompt size: sum of per-message token estimates.
+
+        Used instead of the API's lagging ``usage.prompt_tokens`` (one LLM call
+        behind, and zero on the first iteration) so compaction triggers on the
+        message list we are actually about to send.
+        """
+        return sum(_estimate_message_tokens(m) for m in messages)
 
     def _prune_old_tool_results(self, messages: list[dict]) -> list[dict]:
         result = list(messages)
@@ -258,7 +375,7 @@ class QueryLoopCompactor:
         result = self._sanitize_tool_pairs(result)
         return result
 
-    # ── Tail boundary (Hermes L1100-L1132 pattern) ───────────────────
+    # ── Protected-tail boundary (token budget) ───────────────────────
 
     def _find_tail_boundary(self, messages: list[dict]) -> int:
         if not messages:
@@ -309,7 +426,7 @@ class QueryLoopCompactor:
         for i in tool_indices:
             msg = messages[i]
             content = msg.get("content", "")
-            tool_name = self._find_tool_name(messages, msg.get("tool_call_id", ""))
+            tool_name = self._find_tool_call(messages, msg.get("tool_call_id", ""))[0]
             sig = (tool_name, _content_hash(content))
             sig_to_indices.setdefault(sig, []).append(i)
 
@@ -358,13 +475,20 @@ class QueryLoopCompactor:
         for i, msg in enumerate(messages):
             if i in prune_set:
                 content = msg.get("content", "")
-                if len(content) > _PRUNED_RESULT_MAX_CHARS:
-                    tool_name = self._find_tool_name(
+                # Skip Stage-A offloaded results: they're recoverable (full
+                # bytes on disk) and the <persisted-output> block carries the
+                # path the model reads back with. Lossy-summarizing would
+                # destroy that path, so leave persisted blocks untouched.
+                if (
+                    len(content) > _PRUNED_RESULT_MAX_CHARS
+                    and not is_persisted_content(content)
+                ):
+                    tool_name, tool_args = self._find_tool_call(
                         messages, msg.get("tool_call_id", "")
                     )
                     msg = {
                         **msg,
-                        "content": _summarize_tool_result(tool_name, content),
+                        "content": _summarize_tool_result(tool_name, tool_args, content),
                     }
                     pruned_count += 1
             pruned.append(msg)
@@ -427,7 +551,7 @@ class QueryLoopCompactor:
             )
         return result
 
-    # ── Orphan tool pair sanitization (Hermes L1040-L1098) ───────────
+    # ── Orphan tool-pair sanitization ────────────────────────────────
 
     @staticmethod
     def _sanitize_tool_pairs(messages: list[dict]) -> list[dict]:
@@ -477,12 +601,19 @@ class QueryLoopCompactor:
             )
         return result
 
-    # ── Layer 3: Reactive compact on context_too_long ────────────────
+    # ── Reactive compact on context-overflow error ───────────────────
 
-    def on_context_too_long(
+    async def on_context_too_long(
         self,
         messages: list[dict],
     ) -> tuple[list[dict], bool]:
+        """Reactive recovery: the LLM call actually returned a context-overflow
+        error. The proactive cheap pre-pass already failed, so force an
+        aggressive LLM autocompact (keep only the most recent message) and
+        signal a single retry. Single-shot per overflow
+        (``has_attempted_reactive_compact``) + circuit breaker prevent a death
+        spiral. Returns ``(messages, should_retry)``.
+        """
         if self.has_attempted_reactive_compact:
             logger.warning(
                 "Reactive compact already attempted — refusing retry to prevent loop"
@@ -499,16 +630,15 @@ class QueryLoopCompactor:
 
         self.has_attempted_reactive_compact = True
         self._consecutive_compact_failures += 1
-        messages = self._prune_old_tool_results(messages)
+        messages = self._sanitize_tool_pairs(
+            await self.autocompact(messages, keep_last=1)
+        )
         logger.info(
-            "Reactive compact applied (failure count: %d/%d) — will retry LLM call",
+            "Reactive autocompact applied (failure count: %d/%d) — will retry LLM call",
             self._consecutive_compact_failures,
             _MAX_COMPACT_FAILURES,
         )
         return messages, True
-
-    def reset_reactive_flag(self) -> None:
-        self.has_attempted_reactive_compact = False
 
     def reset_circuit_breaker(self) -> None:
         if self._consecutive_compact_failures > 0:
@@ -522,114 +652,21 @@ class QueryLoopCompactor:
     # ── Helpers ──────────────────────────────────────────────────────
 
     @staticmethod
-    def _find_tool_name(messages: list[dict], tool_call_id: str) -> str:
+    def _find_tool_call(messages: list[dict], tool_call_id: str) -> tuple[str, str]:
+        """Return ``(tool_name, arguments_json)`` for a tool_call_id.
+
+        Lets Pass-2 summaries describe a result by its actual call arguments
+        (query / url / path) rather than guessing from the result body. Falls
+        back to ``("unknown", "")`` for orphaned ids.
+        """
         if not tool_call_id:
-            return "unknown"
+            return "unknown", ""
         for msg in reversed(messages):
             for tc in msg.get("tool_calls", []):
                 if isinstance(tc, dict) and tc.get("id") == tool_call_id:
-                    return tc.get("function", {}).get("name", "unknown")
-        return "unknown"
+                    fn = tc.get("function", {})
+                    return fn.get("name", "unknown"), fn.get("arguments", "") or ""
+        return "unknown", ""
 
 
-# ── Fixed-kwarg compactor (was previously named ContextPipeline) ─────────
-# Reproduces the pre-refactor knobs:
-#   - blocking_limit = context_window - 3_000 (no output reservation)
-#   - threshold      = int(context_window * threshold_ratio)
-#   - protect_tail   = fixed message count (not token budget)
-
-_COMPAT_TOKEN_WARNING_BUFFER = 3_000
-
-
-class AgentLoopContext(QueryLoopCompactor):
-    """Fixed-kwarg compactor (``context_window`` / ``threshold_ratio`` / ``protect_tail``).
-
-    Disambiguated from the L1 :class:`ContextAssemblyPipeline` (multi-turn
-    dialogue context assembly).
-    """
-
-    def __init__(
-        self,
-        *,
-        threshold_ratio: float = 0.65,
-        context_window: int = 1_000_000,
-        protect_tail: int = 4,
-    ):
-        from app.core.model_registry import ModelProfile
-
-        profile = ModelProfile(
-            id="legacy-compat",
-            provider="deepseek",
-            display_name="Legacy Compat",
-            model="deepseek-v4-pro",
-            api_base="https://api.deepseek.com",
-            api_key_env="DEEPSEEK_API_KEY",
-            context_window=context_window,
-            max_output_tokens=0,
-        )
-        super().__init__(
-            profile=profile,
-            tail_budget_tokens=999_999_999,
-        )
-        self.autocompact_threshold = int(context_window * threshold_ratio)
-        self.blocking_limit = context_window - _COMPAT_TOKEN_WARNING_BUFFER
-        self._protect_tail_count = protect_tail
-
-    def _find_tail_boundary(self, messages: list[dict]) -> int:
-        """Override: use fixed message count (legacy behavior)."""
-        tool_indices = [
-            i for i, m in enumerate(messages)
-            if m.get("role") == "tool"
-        ]
-        if len(tool_indices) <= self._protect_tail_count:
-            return len(messages)
-
-        protected_start = tool_indices[-self._protect_tail_count]
-        return self._align_boundary_forward(messages, protected_start)
-
-    def _pass3_truncate_args(self, messages: list[dict]) -> list[dict]:
-        """Override: fixed message count + raw char truncation (legacy)."""
-        assistant_tc_indices = [
-            i for i, m in enumerate(messages)
-            if m.get("role") == "assistant" and m.get("tool_calls")
-        ]
-        if len(assistant_tc_indices) <= self._protect_tail_count:
-            return messages
-
-        truncate_set = set(assistant_tc_indices[: -self._protect_tail_count])
-
-        result = []
-        truncated_count = 0
-        for i, msg in enumerate(messages):
-            if i in truncate_set:
-                tool_calls = msg.get("tool_calls", [])
-                new_tool_calls = []
-                for tc in tool_calls:
-                    if not isinstance(tc, dict):
-                        new_tool_calls.append(tc)
-                        continue
-                    func = tc.get("function", {})
-                    args_str = func.get("arguments", "")
-                    if len(args_str) > _PRUNED_ARGS_MAX_CHARS:
-                        tc = {
-                            **tc,
-                            "function": {
-                                **func,
-                                "arguments": args_str[:_PRUNED_ARGS_MAX_CHARS] + "...[truncated]",
-                            },
-                        }
-                        truncated_count += 1
-                    new_tool_calls.append(tc)
-                if new_tool_calls != tool_calls:
-                    msg = {**msg, "tool_calls": new_tool_calls}
-            result.append(msg)
-
-        if truncated_count > 0:
-            logger.info(
-                "Pass 3 (truncate args): truncated %d old tool_call arguments",
-                truncated_count,
-            )
-        return result
-
-
-__all__ = ["QueryLoopCompactor", "AgentLoopContext"]
+__all__ = ["QueryLoopCompactor"]

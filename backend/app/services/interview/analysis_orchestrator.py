@@ -29,15 +29,19 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
+from app.models.chat import Conversation, ConversationMessage
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
-from app.models.mock_interview_session import MockInterviewSession
-from app.models.upload import UserUpload
+from app.models.interview_transcript import InterviewTranscript
+from app.services.uploads.file_asset_service import get_file_asset
 from app.services.interview.interview_record_service import (
     STATUS_ANALYZING,
     STATUS_COMPLETED,
     STATUS_EXTRACTING,
     STATUS_FAILED,
+    STATUS_PROCESSING_REVIEW,
+    STATUS_REVIEW_FAILED,
+    STATUS_REVIEW_READY,
     STATUS_TRANSCRIBING,
     interview_record_service,
 )
@@ -68,6 +72,15 @@ class InterviewAnalysisOrchestrator:
         finally:
             db.close()
 
+        # Status vocabulary differs by source: a mock moves through the
+        # review states (processing_review → review_ready / review_failed),
+        # an upload through the analysis states (analyzing → completed /
+        # failed). Everything else in the pipeline is shared.
+        is_mock = source == "mock"
+        in_flight_status = STATUS_PROCESSING_REVIEW if is_mock else STATUS_ANALYZING
+        done_status = STATUS_REVIEW_READY if is_mock else STATUS_COMPLETED
+        fail_status = STATUS_REVIEW_FAILED if is_mock else STATUS_FAILED
+
         try:
             if source == "upload":
                 transcript = await self._stage_transcribe(record_id, language=language)
@@ -75,12 +88,14 @@ class InterviewAnalysisOrchestrator:
             else:  # mock
                 qa_pairs = self._load_mock_qa(record_id)
                 transcript = self._compose_transcript_from_qa(qa_pairs)
-                interview_record_service.set_transcript(record_id, transcript=transcript)
+                interview_record_service.set_transcript(
+                    record_id, transcript=transcript, provider="mock_composed",
+                )
 
             # Persist QA shells (so SSE can show "X of Y analyzed" early on)
             self._persist_qa_shells(record_id, qa_pairs)
 
-            interview_record_service.set_status(record_id, STATUS_ANALYZING)
+            interview_record_service.set_status(record_id, in_flight_status)
 
             # Branch on source:
             #   upload: noisy ASR transcript → 3-stage MapReduce pipeline
@@ -119,13 +134,13 @@ class InterviewAnalysisOrchestrator:
                     "debrief_summary generation failed for %s (non-fatal): %s",
                     record_id, exc,
                 )
-            interview_record_service.set_status(record_id, STATUS_COMPLETED)
-            return {"status": "completed", "record_id": record_id}
+            interview_record_service.set_status(record_id, done_status)
+            return {"status": done_status, "record_id": record_id}
 
         except Exception as exc:
             logger.exception("Orchestrator failed for %s: %s", record_id, exc)
             interview_record_service.set_status(
-                record_id, STATUS_FAILED, error_message=str(exc)
+                record_id, fail_status, error_message=str(exc)
             )
             raise
 
@@ -147,18 +162,16 @@ class InterviewAnalysisOrchestrator:
             record = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
             if record is None:
                 raise RuntimeError(f"Record {record_id} disappeared mid-pipeline")
-            if not record.audio_upload_id:
-                raise RuntimeError(f"Upload record {record_id} has no audio_upload_id")
+            if not record.audio_file_asset_id:
+                raise RuntimeError(f"Upload record {record_id} has no audio_file_asset_id")
 
-            upload = (
-                db.query(UserUpload)
-                .filter(UserUpload.id == record.audio_upload_id)
-                .first()
-            )
-            if upload is None:
-                raise RuntimeError(f"Audio upload {record.audio_upload_id} missing")
-            if upload.user_id != record.user_id:
-                raise RuntimeError("Audio upload owner mismatch")
+            # record.user_id is the stable users.id (CLEANUP #2), as is the
+            # FileAsset's — fetch by id (trusted worker context) + compare pks.
+            upload = get_file_asset(db, record.audio_file_asset_id)
+            if upload is None or upload.user_id != record.user_id:
+                raise RuntimeError(
+                    f"Audio upload {record.audio_file_asset_id} missing or not owned"
+                )
 
             storage_uri = upload.storage_uri
         finally:
@@ -177,7 +190,10 @@ class InterviewAnalysisOrchestrator:
 
         try:
             transcript = await transcribe_media(local_path, language=language)
-            interview_record_service.set_transcript(record_id, transcript=transcript)
+            interview_record_service.set_transcript(
+                record_id, transcript=transcript,
+                provider="local_whisperx", language=language,
+            )
             return transcript
         finally:
             if is_temp and local_path and os.path.exists(local_path):
@@ -198,45 +214,60 @@ class InterviewAnalysisOrchestrator:
     # ── Mock-specific helpers ─────────────────────────────────────────
 
     def _load_mock_qa(self, record_id: str) -> list[dict[str, Any]]:
-        """Read the mock interview's qa_buffer and normalize entries for the
-        downstream pipeline. Carries the Runtime Director metadata
-        (action / topic / answer_quality) forward so QA rows are richer than
-        the upload path's bare Q/A pairs and so the finish-time analyzer can
-        use answer_quality as a scoring prior."""
+        """Parse structured Q&A pairs out of the mock conversation's messages.
+
+        The mock interview's process lives in ``conversation_messages`` (the
+        target architecture — no qa_buffer blob). Each interviewer
+        (``assistant``) line is a question; the next candidate (``user``) line
+        is its answer. The trailing unanswered question (if any) is dropped.
+        These bare pairs feed the same scoring back-half as the upload path.
+        """
         db = SessionLocal()
         try:
-            mis = (
-                db.query(MockInterviewSession)
-                .filter(MockInterviewSession.interview_record_id == record_id)
+            conv = (
+                db.query(Conversation)
+                .filter(
+                    Conversation.subject_id == record_id,
+                    Conversation.type == "mock_interview",
+                )
+                .order_by(Conversation.created_at.asc())
                 .first()
             )
-            if mis is None or not mis.qa_buffer_json:
+            if conv is None:
                 return []
-            try:
-                buf = json.loads(mis.qa_buffer_json)
-            except json.JSONDecodeError:
-                return []
-            if not isinstance(buf, list):
-                return []
-            normalized: list[dict[str, Any]] = []
-            for entry in buf:
-                if not isinstance(entry, dict):
-                    continue
-                aq = entry.get("answer_quality")
-                normalized.append({
-                    "question": str(entry.get("question") or ""),
-                    "answer": str(entry.get("answer") or ""),
-                    "phase": str(entry.get("phase_id") or entry.get("phase") or "technical"),
-                    "is_follow_up": bool(entry.get("is_follow_up") or entry.get("action") == "follow_up"),
-                    "topic": str(entry.get("topic") or "") or None,
-                    "action": str(entry.get("action") or "") or None,
-                    "answer_quality": aq if isinstance(aq, dict) else None,
-                    # Legacy grounding_refs left for back-compat (always empty for v6 mock)
-                    "grounding_refs": list(entry.get("grounding_refs") or []),
-                })
-            return normalized
+            rows = (
+                db.query(ConversationMessage)
+                .filter(ConversationMessage.conversation_id == conv.id)
+                .order_by(ConversationMessage.seq.asc())
+                .all()
+            )
         finally:
             db.close()
+
+        qa_pairs: list[dict[str, Any]] = []
+        pending_q: str | None = None
+        for r in rows:
+            role = (r.role or "").lower()
+            content = (r.content or "").strip()
+            if role.startswith(("assistant", "agent")):
+                # New interviewer line. If a prior question is still
+                # unanswered (two interviewer lines in a row), the latest wins.
+                pending_q = content or pending_q
+            elif role.startswith(("user", "candidate")):
+                if pending_q:
+                    qa_pairs.append({
+                        "question": pending_q,
+                        "answer": content,
+                        "phase": "technical",
+                        "is_follow_up": False,
+                        "topic": None,
+                        "action": None,
+                        "answer_quality": None,
+                        "grounding_refs": [],
+                    })
+                    pending_q = None
+            # system / tool roles are ignored
+        return qa_pairs
 
     @staticmethod
     def _compose_transcript_from_qa(qa_pairs: list[dict[str, Any]]) -> str:
@@ -374,7 +405,14 @@ class InterviewAnalysisOrchestrator:
                 return
             title = (rec.title or "").strip()
             tag = (rec.tag or "").strip()
-            transcript = (rec.transcript or "").strip()
+            transcript = ""
+            if rec.transcript_id:
+                tr = (
+                    db.query(InterviewTranscript)
+                    .filter(InterviewTranscript.id == rec.transcript_id)
+                    .first()
+                )
+                transcript = (tr.text if tr and tr.text else "").strip()
             analysis_json = rec.analysis_json or ""
             qa_rows = (
                 db.query(InterviewQA)

@@ -7,11 +7,11 @@ without manually copying transcripts or analysis into every prompt the user
 writes. Two engineering options were considered:
 
   A) **Snapshot on chat creation.** When the debrief chat is created, denormalize
-     the interview's analysis + transcript into ``ChatSession.session_state``.
+     the interview's analysis + transcript into the ``Conversation`` row.
      Pros: zero per-turn cost. Cons: stale if the user edits a Q&A afterwards.
 
   B) **Lazy fetch per turn.** The context-assembly pipeline reads the chat's
-     ``session_state['interview_id']`` on each query, joins on InterviewRecord,
+     ``interview_id`` column on each query, joins on InterviewRecord,
      builds a compact manifest, fills the dedicated ``debrief_reference`` slot.
      Pros: always fresh; honors QA edits via ``PATCH /interview-records/{id}/qa/{idx}``;
      no schema migration. Cons: ~1 SQL roundtrip per turn (≈1ms).
@@ -54,8 +54,13 @@ _TRANSCRIPT_HARD_CAP_CHARS = 2400
 _PER_QUESTION_TAKE = 12
 
 
-def build_interview_reference(interview_id: str, user_id: str) -> str:
+def build_interview_reference(interview_id: str, owner_pk: int) -> str:
     """Return a compact markdown reference for the given interview record.
+
+    ``owner_pk`` is the stable users.id of the session owner. A debrief chat
+    session and its bound interview_record always belong to the same user, so we
+    match ``InterviewRecord.user_id == owner_pk`` directly (pk==pk) — context
+    assembly passes the chat session's owner pk straight through.
 
     Empty string if the record doesn't exist, doesn't belong to the user, or
     has no usable data. Empty is fine — caller (the pipeline) just skips the
@@ -65,7 +70,10 @@ def build_interview_reference(interview_id: str, user_id: str) -> str:
     try:
         record = (
             db.query(InterviewRecord)
-            .filter(InterviewRecord.id == interview_id, InterviewRecord.user_id == user_id)
+            .filter(
+                InterviewRecord.id == interview_id,
+                InterviewRecord.user_id == owner_pk,
+            )
             .first()
         )
         if record is None:
@@ -158,11 +166,12 @@ def _render(record: InterviewRecord, qa_rows: list[InterviewQA]) -> str:
     # 退化到截断转录，保证最低限度的对话上下文。
     if (record.debrief_summary or "").strip():
         lines.append(f"## 本次面试浓缩摘要\n{record.debrief_summary.strip()}")
-    elif record.transcript:
-        full = record.transcript.strip()
-        if len(full) <= _TRANSCRIPT_HARD_CAP_CHARS:
+    else:
+        from app.services.interview.interview_record_service import interview_record_service
+        full = interview_record_service.get_transcript_text(record.id).strip()
+        if full and len(full) <= _TRANSCRIPT_HARD_CAP_CHARS:
             lines.append(f"## 原始转录（debrief_summary 缺失，回退到全文，{len(full)} 字符）\n{full}")
-        else:
+        elif full:
             head = full[:_TRANSCRIPT_HARD_CAP_CHARS]
             lines.append(
                 f"## 原始转录（debrief_summary 缺失，节选前 {_TRANSCRIPT_HARD_CAP_CHARS}/{len(full)} 字符）\n{head}"
@@ -177,15 +186,17 @@ def _render(record: InterviewRecord, qa_rows: list[InterviewQA]) -> str:
         lines.append(f"## 候选人简历全文\n{resume_snapshot}")
 
     # Upload pointers — tell the model what was provided. Actual file bodies
-    # are reachable via /upload/audio/direct or /knowledge/documents if a tool
-    # needs them; this is just disclosure.
+    # are reachable via the file-assets API if a tool needs them; this is just
+    # disclosure.
     upload_bits = []
-    if record.audio_upload_id:
-        upload_bits.append(f"- 音视频文件已上传 (upload_id={record.audio_upload_id})")
-    if record.resume_upload_id:
-        upload_bits.append(f"- 简历已上传 (upload_id={record.resume_upload_id})")
-    if record.jd_upload_id:
-        upload_bits.append(f"- 岗位 JD 已上传 (document_id={record.jd_upload_id})")
+    if record.audio_file_asset_id:
+        upload_bits.append(f"- 音视频文件已上传 (file_asset_id={record.audio_file_asset_id})")
+    if record.resume_id:
+        upload_bits.append(f"- 使用个人简历 (resume_id={record.resume_id})")
+    if record.resume_file_asset_id:
+        upload_bits.append(f"- 简历已上传 (file_asset_id={record.resume_file_asset_id})")
+    if record.jd_file_asset_id:
+        upload_bits.append(f"- 岗位 JD 已上传 (file_asset_id={record.jd_file_asset_id})")
     if upload_bits:
         lines.append("## 关联文件\n" + "\n".join(upload_bits))
 

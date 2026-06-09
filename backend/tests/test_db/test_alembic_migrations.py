@@ -131,25 +131,14 @@ def test_migration_chain_has_no_gaps_and_one_head():
         for d in downs:
             assert d in revision_ids, f"{rev.revision} points at missing {d}"
 
-    # Migration count is asserted explicitly so an accidentally-deleted
-    # version file shows up as a test failure rather than a silent
-    # corruption of the chain. The current chain is:
-    #   0001_baseline → 0002_memory_v3 → 0003_drop_memory_items
-    #                 → 0004_user_last_dreamed_at
-    #                 → 0005_single_doc_one_liner
-    #                 → 0006_chat_message_content_blocks
-    #                 → 0007_global_memory_rename
-    #                 → 0008_drop_agent_trace
-    #                 → 0009_add_record_cascade
-    #                 → 0010_orm_alembic_drift_fixup
-    #                 → 0011_drop_dup_chat_seq_idx
-    #                 → 0012_user_model_selection
-    #                 → 0013_user_provider_settings
-    # Bump this number whenever a new forward migration lands.
+    # Every on-disk version file must be part of the single linear chain:
+    # no orphan revision, no accidentally-deleted middle file. Comparing the
+    # file count to the walked-chain length catches both and stays correct as
+    # new migrations land — no magic number to bump each package.
     on_disk = [p for p in VERSIONS_DIR.glob("*.py") if not p.name.startswith("_")]
-    assert len(on_disk) == 13, (
-        f"Expected 13 migration files (baseline + 12 evolutions), "
-        f"found {len(on_disk)}"
+    assert len(on_disk) == len(revisions), (
+        f"On-disk version files ({len(on_disk)}) don't match the walked chain "
+        f"length ({len(revisions)}) — orphan or deleted migration?"
     )
 
 
@@ -174,19 +163,23 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     expected_tables = {
         "alembic_version",
         "users",
-        "user_uploads",
-        "user_api_keys",
-        "user_provider_settings",
+        "file_assets",
+        "outbox_jobs",
+        "user_model_credentials",
+        "user_model_provider_settings",
+        "user_model_selections",
         "knowledge_documents",
+        "document_chunks",
         "interview_records",
+        "interview_transcripts",
         "interview_qa",
-        "mock_interview_sessions",
-        "chat_sessions",
-        "chat_messages",
-        "knowledge_docs",
-        "strategy_docs",
-        "habit_docs",
-        "memory_audit_log",
+        "mock_interview_runtime",
+        "conversations",
+        "conversation_messages",
+        "memory_documents",
+        "memory_ability_states",
+        "memory_audit_logs",
+        "resumes",
         "resume_sections",
     }
     missing = expected_tables - tables
@@ -200,6 +193,8 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     legacy = {
         "interviews", "transcripts", "analysis_results", "interview_states",
         "memory_items", "agent_runs", "agent_steps",
+        # mock_interview_sessions dropped in 0040 (CLEANUP) — runtime + interview_qa replace it.
+        "mock_interview_sessions",
     }
     leftover = legacy & tables
     assert not leftover, f"Legacy tables still present: {leftover}"
@@ -210,8 +205,10 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         from sqlalchemy import text
 
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0013_user_provider_settings", (
-            f"Head should be 0013_user_provider_settings, got {version!r}"
+        from alembic.script import ScriptDirectory
+        expected_head = ScriptDirectory.from_config(cfg).get_current_head()
+        assert version == expected_head, (
+            f"DB should be at the script head {expected_head!r}, got {version!r}"
         )
 
     engine.dispose()
@@ -234,9 +231,12 @@ def test_hot_query_composite_indexes_exist(fresh_pg_db, monkeypatch):
     # with the table in 0003; only the still-relevant composite indexes
     # are asserted here.
     expectations = {
-        "chat_sessions": "ix_chat_sessions_user_type_arch",
+        "conversations": "ix_conversations_user_type_arch",
         "knowledge_documents": "ix_knowledge_docs_user_category",
-        "user_uploads": "ix_user_uploads_user_purpose",
+        # ``user_uploads`` (+ its ix_user_uploads_user_purpose) was dropped in
+        # 0025; the replacement file_assets table carries the equivalent
+        # (user_id, purpose) hot-list composite index (created in 0018).
+        "file_assets": "ix_file_assets_user_purpose",
         "interview_qa": "ix_interview_qa_record_order",
     }
     for table, ix_name in expectations.items():
@@ -252,10 +252,12 @@ def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
 
     Verify behaviourally (not just via inspector): insert one parent
     interview_records row + one interview_qa child + one
-    mock_interview_sessions child, delete the parent, and assert
+    mock_interview_runtime child, delete the parent, and assert
     that both children disappear without any IntegrityError. Without
     the cascade, the parent delete would either raise or leave
     orphan children — both are regressions worth pinning.
+    (mock_interview_sessions was dropped in 0040; the runtime row is the
+    surviving mock child of interview_records.)
     """
     from alembic import command
     from sqlalchemy import create_engine, text
@@ -266,18 +268,27 @@ def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
 
     engine = create_engine(fresh_pg_db)
     with engine.begin() as conn:
+        # Both mock_interview_runtime.user_id and interview_records.user_id are
+        # integer users.id FKs (CLEANUP #2), so seed a users row and reference
+        # its id (1) from both child inserts.
+        conn.execute(text(
+            "INSERT INTO users (id, username, hashed_password) VALUES (1, 'alice', 'x')"
+        ))
         conn.execute(text(
             "INSERT INTO interview_records (id, user_id, source, status) "
-            "VALUES ('ir_cascade', 'alice', 'upload', 'completed')"
+            "VALUES ('ir_cascade', 1, 'upload', 'completed')"
         ))
         conn.execute(text(
             "INSERT INTO interview_qa (id, record_id, order_idx, question, answer) "
             "VALUES ('qa_x', 'ir_cascade', 0, 'q?', 'a.')"
         ))
         conn.execute(text(
-            "INSERT INTO mock_interview_sessions "
-            "(id, user_id, interview_record_id, status, current_question_idx) "
-            "VALUES ('mis_x', 'alice', 'ir_cascade', 'finished', 0)"
+            "INSERT INTO mock_interview_runtime "
+            "(id, user_id, interview_record_id, status, stage_index, "
+            "plan_template_key, interviewer_style, voice_mode, "
+            "started_at, last_activity_at, updated_at) "
+            "VALUES ('mir_x', 1, 'ir_cascade', 'completed', 0, "
+            "'general', 'professional', 'hybrid', NOW(), NOW(), NOW())"
         ))
 
     # The actual cascade probe. Pre-0009 this would have raised
@@ -289,11 +300,11 @@ def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
         qa_left = conn.execute(text(
             "SELECT count(*) FROM interview_qa WHERE record_id = 'ir_cascade'"
         )).scalar()
-        mis_left = conn.execute(text(
-            "SELECT count(*) FROM mock_interview_sessions "
+        runtime_left = conn.execute(text(
+            "SELECT count(*) FROM mock_interview_runtime "
             "WHERE interview_record_id = 'ir_cascade'"
         )).scalar()
     assert qa_left == 0, f"interview_qa not cascaded — {qa_left} orphan rows"
-    assert mis_left == 0, f"mock_interview_sessions not cascaded — {mis_left} orphan rows"
+    assert runtime_left == 0, f"mock_interview_runtime not cascaded — {runtime_left} orphan rows"
 
     engine.dispose()

@@ -8,7 +8,7 @@ Why this script exists
   1. **JWT signing** (HS256) — every access/refresh token is signed with
      this key. Anyone who knows it can forge tokens for any user.
   2. **Fernet encryption** of user-stored third-party API keys — the
-     ciphertexts live in the ``user_api_keys`` table. Anyone who knows the
+     ciphertexts live in the ``user_model_credentials`` table. Anyone who knows the
      key can decrypt all of them.
 
 Because of (2), the key cannot be auto-rotated on every restart: changing

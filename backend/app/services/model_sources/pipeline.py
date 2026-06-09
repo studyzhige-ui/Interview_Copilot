@@ -7,7 +7,7 @@ orchestrates them.
 
   refresh_catalog():
     For each spec in vendors.ALL_SPECS:
-      resolve api_base + api_key (user_api_keys → env fallback)
+      resolve api_base + api_key (user_model_credentials → env fallback)
       fetch_one_vendor(spec) — runs the spec's chat_filter + sort
       apply_overrides() — curated UX layer (display name / tier / hide)
       on success: persist to Redis (per-provider key + LKG sentinel)
@@ -255,7 +255,7 @@ async def _load_all_from_lkg() -> dict[str, list[ModelEntry]]:
 
 def _resolve_key_for_provider(provider: str, user_id: str | None) -> str:
     """API-key resolution priority for fetching /v1/models:
-       1) user_api_keys[user_id, provider] (encrypted DB row, P4-E)
+       1) user_model_credentials[user_id, provider] (encrypted DB row, P4-E)
        2) env var named by ProviderDefaults.api_key_env (P6-L)
     """
     defaults = get_provider_defaults(provider)

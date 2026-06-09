@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 import pytest
@@ -19,7 +18,7 @@ from app.core.config import (
 def test_settings_has_required_attributes():
     required = [
         "DATABASE_URL", "APP_DATA_DIR", "DB_DIR", "CHROMA_DB_DIR",
-        "DOCSTORE_DIR", "CACHE_DIR", "LOG_DIR", "EVAL_DIR", "STORAGE_DIR",
+        "CACHE_DIR", "LOG_DIR", "EVAL_DIR", "STORAGE_DIR",
         "EMBEDDING_MODEL", "RERANKER_MODEL", "SECRET_KEY",
         "REDIS_URL", "S3_BUCKET_NAME", "ALGORITHM",
         "ACCESS_TOKEN_EXPIRE_MINUTES", "REFRESH_TOKEN_EXPIRE_MINUTES",
@@ -62,13 +61,12 @@ def test_subdir_field_validator_picks_named_subfolders(monkeypatch):
     """The _fill_data_subdirs validator should map fields to specific subdir names."""
     monkeypatch.setenv("APP_DATA_DIR", str(Path("/tmp/icp-test")))
     # Explicitly clear so the validator uses the default.
-    for v in ["DB_DIR", "CHROMA_DB_DIR", "DOCSTORE_DIR",
+    for v in ["DB_DIR", "CHROMA_DB_DIR",
               "CACHE_DIR", "LOG_DIR", "EVAL_DIR", "STORAGE_DIR"]:
         monkeypatch.delenv(v, raising=False)
     s = Settings()
     assert s.DB_DIR.endswith("databases")
     assert "chroma" in s.CHROMA_DB_DIR
-    assert s.DOCSTORE_DIR.endswith("docstore")
     assert s.CACHE_DIR.endswith("cache")
     assert s.LOG_DIR.endswith("logs")
     assert s.EVAL_DIR.endswith("evaluation")
@@ -78,10 +76,6 @@ def test_subdir_field_validator_picks_named_subfolders(monkeypatch):
 # ── RAG numeric sanity ───────────────────────────────────────────────────
 def test_rag_score_thresholds_are_valid():
     assert 0 < settings.RAG_MIN_SCORE <= 1.0
-    assert 0 < settings.RAG_FALLBACK_MIN_SCORE <= settings.RAG_MIN_SCORE
-    assert 0 < settings.RAG_LEXICAL_FALLBACK_MIN_OVERLAP <= 1.0
-    assert settings.VECTOR_TOP_K > 0
-    assert settings.BM25_TOP_K > 0
     assert settings.FUSION_TOP_K > 0
     assert settings.RERANK_TOP_N > 0
 
@@ -98,7 +92,7 @@ def test_validate_production_safety_dev_uses_info_for_bundled_creds(caplog):
         DATABASE_URL="postgresql://postgres:postgres@localhost:5432/x",
         AWS_ACCESS_KEY_ID="minioadmin",
         AWS_SECRET_ACCESS_KEY="minioadmin",
-        SENTRY_ENVIRONMENT="local",
+        ENVIRONMENT="local",
     )
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="app.core.config"):
@@ -120,7 +114,7 @@ def test_validate_production_safety_prod_emits_error_per_finding(caplog):
         DATABASE_URL="postgresql://postgres:postgres@localhost:5432/x",
         AWS_ACCESS_KEY_ID="minioadmin",
         AWS_SECRET_ACCESS_KEY="minioadmin",
-        SENTRY_ENVIRONMENT="prod",
+        ENVIRONMENT="prod",
         # TRUSTED_PROXIES set to a sane prod value so this test only
         # exercises the DB / MinIO findings — the TRUSTED_PROXIES
         # finding has its own dedicated test below.
@@ -149,7 +143,7 @@ def test_validate_production_safety_secret_key_raises_in_prod():
         DATABASE_URL="postgresql://prod_user:strong_pw@db:5432/x",
         AWS_ACCESS_KEY_ID="rotated",
         AWS_SECRET_ACCESS_KEY="rotated",
-        SENTRY_ENVIRONMENT="production",
+        ENVIRONMENT="production",
     )
     with pytest.raises(RuntimeError, match="SECRET_KEY"):
         _validate_production_safety(s)
@@ -162,7 +156,7 @@ def test_validate_production_safety_secret_key_always_warns(caplog):
         DATABASE_URL="postgresql://prod_user:strong_pw@db:5432/x",
         AWS_ACCESS_KEY_ID="rotated_id",
         AWS_SECRET_ACCESS_KEY="rotated_secret",
-        SENTRY_ENVIRONMENT="local",
+        ENVIRONMENT="local",
     )
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="app.core.config"):
@@ -177,7 +171,7 @@ def test_validate_production_safety_clean_settings_emit_nothing(caplog):
         DATABASE_URL="postgresql://prod_user:strong_pw@db:5432/x",
         AWS_ACCESS_KEY_ID="AKIA_ROTATED",
         AWS_SECRET_ACCESS_KEY="rotated_secret_xyz",
-        SENTRY_ENVIRONMENT="prod",
+        ENVIRONMENT="prod",
         TRUSTED_PROXIES="127.0.0.1",
     )
     caplog.clear()
@@ -201,7 +195,7 @@ def test_validate_production_safety_warns_on_empty_trusted_proxies_in_prod(caplo
         DATABASE_URL="postgresql://prod_user:strong_pw@db:5432/x",
         AWS_ACCESS_KEY_ID="AKIA_ROTATED",
         AWS_SECRET_ACCESS_KEY="rotated_secret_xyz",
-        SENTRY_ENVIRONMENT="prod",
+        ENVIRONMENT="prod",
         TRUSTED_PROXIES="",
     )
     caplog.clear()
@@ -212,7 +206,7 @@ def test_validate_production_safety_warns_on_empty_trusted_proxies_in_prod(caplo
 
 
 def test_validate_production_safety_dev_silent_on_empty_trusted_proxies(caplog):
-    """Dev (SENTRY_ENVIRONMENT=local) must NOT warn about empty
+    """Dev (ENVIRONMENT=local) must NOT warn about empty
     TRUSTED_PROXIES — direct-connect doesn't need the rewrite, and
     nagging on every local startup would train developers to
     ignore the warning."""
@@ -221,7 +215,7 @@ def test_validate_production_safety_dev_silent_on_empty_trusted_proxies(caplog):
         DATABASE_URL="postgresql://prod_user:strong_pw@db:5432/x",
         AWS_ACCESS_KEY_ID="AKIA_ROTATED",
         AWS_SECRET_ACCESS_KEY="rotated_secret_xyz",
-        SENTRY_ENVIRONMENT="local",
+        ENVIRONMENT="local",
         TRUSTED_PROXIES="",
     )
     caplog.clear()
@@ -240,7 +234,7 @@ def test_validate_production_safety_treats_prod_aliases_as_prodlike(caplog, env)
         DATABASE_URL="postgresql://postgres:postgres@db:5432/x",
         AWS_ACCESS_KEY_ID="rotated",
         AWS_SECRET_ACCESS_KEY="rotated",
-        SENTRY_ENVIRONMENT=env,
+        ENVIRONMENT=env,
         TRUSTED_PROXIES="127.0.0.1",
     )
     caplog.clear()

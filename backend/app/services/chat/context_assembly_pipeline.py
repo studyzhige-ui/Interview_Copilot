@@ -5,23 +5,24 @@ slots, then rendering them in a single authoritative order. Slot
 ordering is chosen for prompt-cache friendliness — most-stable
 content at the top, per-turn content at the bottom.
 
-Slots (post Stage-G refactor, in order from most → least stable):
+Slots, in order from most → least cache-stable:
 
-  1. (System Prompt)       caller-supplied (chat vs RAG vs agent prompt);
-                           rendered raw with no [Tag] header.
+  1. (System Prompt)       caller-supplied (chat / RAG / agent prompt; the
+                           agent's includes the tool manifest). Rendered raw,
+                           no [Tag] header.
   2. [Record Context]      debrief sessions only — interview reference
-                           manifest (resume + JD + analysis summary).
-                           Stable for the duration of one debrief.
-  3. [Memory]              v3 memory bundle. user_profile is ALWAYS the
-                           first sub-section (enforced by
-                           ``V3MemoryContext.render``); other
-                           sub-sections (knowledge index, descriptions,
-                           active bodies) follow.
-  4. [Retrieved Context]   RAG knowledge chunks only — no longer mixed
-                           with memory items.
-  5. [Session State]       parsed session_state JSON.
-  6. [Recent Turns]        most recent user↔agent dialogue pairs.
+                           manifest (resume + JD + analysis summary). Stable
+                           for the duration of one debrief.
+  3. [Context Summary]     compaction summary (from the ``summary`` column);
+                           changes only when a compaction fires.
+  4. [Recent Turns]        most recent user↔agent dialogue pairs (append-only).
+  5. [Memory]              v3 memory bundle (per-turn-variable grounding);
+                           user_profile is ALWAYS the first sub-section.
+  6. [Retrieved Context]   RAG knowledge chunks (per-turn-variable grounding).
   7. [Current Query]       the user's standalone (rewritten) question.
+
+Per-turn-variable grounding (memory + RAG) sits near the tail so a grounding
+change can't invalidate the cached stable prefix (summary + recent turns).
 
 A single :data:`SLOT_ORDER` constant is the SOLE place that decides
 slot ordering — both the answer-prompt renderer and the lightweight
@@ -36,33 +37,18 @@ execution (different problem, different file).
 """
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Callable
 
-import tiktoken
-
+from app.agent_runtime.context_manager import token_count as count_tokens
 from app.services.chat.chat_history_service import transcript_service
-from app.services.chat.session_state import (
-    default_session_state_for_type,
-    parse_session_state,
-)
 
 logger = logging.getLogger(__name__)
 
-try:
-    _tokenizer = tiktoken.get_encoding("cl100k_base")
-except Exception:  # noqa: BLE001
-    _tokenizer = None
-
-
-def count_tokens(text: str) -> int:
-    if not text:
-        return 0
-    if _tokenizer is None:
-        return len(text.encode("utf-8")) // 3
-    return len(_tokenizer.encode(text))
+# ``count_tokens`` is the canonical tokenizer, defined once in
+# app.agent_runtime.context_manager and re-exported here (imported above)
+# under its historical name so existing callers stay unchanged.
 
 
 # ── Token budget ─────────────────────────────────────────────────────────
@@ -102,6 +88,11 @@ class AssembledContext:
     # [Record Context] — interview reference for debrief sessions.
     debrief_reference: str = ""
 
+    # [Context Summary] — compaction summary carried across turns
+    # (sourced from the session's ``summary`` column). Semi-stable: only
+    # changes when a compaction fires, so it sits in the cache-stable prefix.
+    summary: str = ""
+
     # [Memory] — v3 memory bundle (user_profile first, then index /
     # descriptions / active bodies, in the order V3MemoryContext.render
     # produces).
@@ -109,9 +100,6 @@ class AssembledContext:
 
     # [Retrieved Context] — RAG knowledge chunks only.
     retrieved_context: str = ""
-
-    # [Session State] — session_state dict (rendered as JSON).
-    session_state: dict = field(default_factory=dict)
 
     # [Recent Turns] — list of {seq, role, content} message dicts.
     recent_turns: list[dict] = field(default_factory=list)
@@ -132,12 +120,6 @@ class AssembledContext:
 _SlotRenderer = Callable[[AssembledContext], str] | None
 
 
-def _render_session_state(ctx: AssembledContext) -> str:
-    if not ctx.session_state:
-        return ""
-    return json.dumps(ctx.session_state, ensure_ascii=False, indent=2)
-
-
 def _render_recent_turns(ctx: AssembledContext) -> str:
     if not ctx.recent_turns:
         return ""
@@ -146,12 +128,15 @@ def _render_recent_turns(ctx: AssembledContext) -> str:
 
 SLOT_ORDER: list[tuple[str, str | None, _SlotRenderer]] = [
     # field_name,              tag (None = no header),    custom renderer
+    # Cache-stable prefix first (system / record / summary / recent turns),
+    # then the per-turn-variable grounding (memory + RAG), then the query —
+    # so a per-turn grounding change can't invalidate the cached prefix.
     ("system_prompt",           None,                      None),
     ("debrief_reference",      "[Record Context]",        None),
+    ("summary",                "[Context Summary]",       None),
+    ("recent_turns",           "[Recent Turns]",          _render_recent_turns),
     ("memory_block",           "[Memory]",                None),
     ("retrieved_context",      "[Retrieved Context]",     None),
-    ("session_state",          "[Session State]",         _render_session_state),
-    ("recent_turns",           "[Recent Turns]",          _render_recent_turns),
     ("current_input",          "[Current Query]",         None),
 ]
 
@@ -177,17 +162,23 @@ class PromptRenderer:
         ctx: AssembledContext,
         *,
         system_prompt: str,
+        skip_fields: set[str] | frozenset[str] = frozenset(),
     ) -> str:
-        """Full answer prompt — every populated slot in order."""
+        """Render every populated slot in SLOT_ORDER into one prompt string.
+
+        ``skip_fields`` lets a messages-based caller (the L2 agent) omit a slot
+        it renders separately — e.g. ``{"current_input"}`` so the query becomes
+        a user message instead of trailing the system block.
+        """
         ctx.system_prompt = system_prompt.strip()
-        return self._render(ctx, skip_fields=set())
+        return self._render(ctx, skip_fields=set(skip_fields))
 
     def render_context_text(self, ctx: AssembledContext) -> str:
         """Lightweight rendering for the query-planner / rewriter input.
 
         Drops system rules + memory + retrieved context — the planner
-        doesn't need them to do pronoun resolution. Includes session
-        state + recent turns + current query.
+        doesn't need them to do pronoun resolution. Includes the summary +
+        recent turns + current query.
         """
         return self._render(ctx, skip_fields=_REWRITE_SKIP_FIELDS)
 
@@ -257,8 +248,8 @@ class ContextAssemblyPipeline:
 
     # ── Public API ────────────────────────────────────────────────────
     # ``assemble_rewrite_context`` was retired with the planner merge
-    # — the planner now reads session_state + recent_turns directly
-    # via ``transcript_service`` instead of going through this pipeline
+    # — the planner now reads recent_turns directly via
+    # ``transcript_service`` instead of going through this pipeline
     # (which was over-fitted to producing pre-rendered prompt strings).
 
     def assemble_answer_context(
@@ -302,13 +293,8 @@ class ContextAssemblyPipeline:
     ) -> AssembledContext:
         meta = transcript_service.get_session_meta(session_id)
         if meta is None:
-            session_state = default_session_state_for_type("general")
             recent_turns: list[dict] = []
         else:
-            session_state = parse_session_state(
-                meta["session_state"],
-                meta.get("session_type", "general"),
-            )
             recent_turns = transcript_service.get_recent_turns(
                 session_id=session_id,
                 max_turns=self.DEFAULT_RECENT_TURNS,
@@ -319,33 +305,34 @@ class ContextAssemblyPipeline:
             trim_messages(self._sanitize(recent_turns), self.budget.RECENT_TURNS_BUDGET)
         )
 
-        # Auto-inject interview reference for debrief sessions when the
-        # caller didn't supply one. Strictly mode-bound: never fires
-        # for general / mock_interview sessions.
-        # ``skip_debrief_autoinject`` lets the lightweight rewrite
-        # path bail out before the SQL round-trip — the planner LLM
-        # doesn't benefit from seeing the interview manifest.
+        # Auto-inject the interview reference for debrief sessions when the
+        # caller didn't supply one. type + the bound record come from their
+        # dedicated columns (type / subject_type / subject_id).
+        # ``skip_debrief_autoinject`` lets the lightweight rewrite path bail
+        # out before the SQL round-trip.
         if (
             not skip_debrief_autoinject
             and not debrief_reference
             and meta is not None
         ):
-            mode = session_state.get("mode")
-            interview_id = session_state.get("interview_id")
-            if mode == "debrief" and interview_id:
+            conv_type = meta.get("type")
+            record_id = (
+                meta.get("subject_id")
+                if meta.get("subject_type") == "interview_record"
+                else None
+            )
+            if conv_type == "debrief" and record_id:
                 from app.services.chat.interview_reference import build_interview_reference
-                ref = build_interview_reference(interview_id, meta["user_id"])
+                ref = build_interview_reference(record_id, meta["user_id"])
                 if ref:
                     debrief_reference = ref
-            elif interview_id and mode != "debrief":
-                # Data sanity warning — interview_id is set but mode
-                # isn't debrief. Likely a stale write or a typo
-                # ("debriefing" / "Debrief" / etc.). Log so an
-                # operator can investigate; don't crash.
+            elif record_id and conv_type != "debrief":
+                # Data sanity warning — a record is bound but the session
+                # isn't a debrief. Log so an operator can investigate.
                 logger.warning(
-                    "session_state has interview_id=%s but mode=%r "
-                    "(expected 'debrief'); reference slot will stay empty",
-                    interview_id, mode,
+                    "type=%r has subject_id=%s but isn't debrief; "
+                    "reference slot stays empty",
+                    conv_type, record_id,
                 )
 
         # RAG retrieved-context: only knowledge_chunks now. The legacy
@@ -359,7 +346,7 @@ class ContextAssemblyPipeline:
                 budget=self.budget.RETRIEVED_CONTEXT_BUDGET,
             )
             for i, chunk in enumerate(trimmed_chunks, 1):
-                source = chunk.get("source_type") or chunk.get("source") or "knowledge"
+                source = chunk.get("source_kind") or chunk.get("source") or "knowledge"
                 score = chunk.get("score")
                 score_text = f" score={float(score):.3f}" if score is not None else ""
                 retrieved_parts.append(
@@ -369,9 +356,9 @@ class ContextAssemblyPipeline:
 
         ctx = AssembledContext(
             debrief_reference=debrief_reference,
+            summary=str((meta or {}).get("summary") or ""),
             memory_block=memory_block,
             retrieved_context=retrieved_context,
-            session_state=session_state,
             recent_turns=cleaned_turns,
             current_input=current_query,
         )
@@ -394,6 +381,10 @@ class ContextAssemblyPipeline:
                     "seq": message.get("seq", 0),
                     "role": role,
                     "content": content,
+                    # Anthropic-style blocks (text / tool_use / tool_result)
+                    # kept so the L2 agent can reconstruct prior tool roundtrips
+                    # as real messages. L1 ignores them (renders content text).
+                    "blocks": message.get("blocks") or [{"type": "text", "text": content}],
                 }
             )
         return sanitized

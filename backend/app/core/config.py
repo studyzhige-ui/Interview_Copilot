@@ -41,7 +41,6 @@ class Settings(BaseSettings):
     # Database and vector-store data
     DB_DIR: str = ""
     CHROMA_DB_DIR: str = ""
-    DOCSTORE_DIR: str = ""
     MILVUS_URI: str = "http://localhost:19530"
     MILVUS_COLLECTION: str = "interview_copilot_rag"
     MILVUS_SIMILARITY_METRIC: str = "IP"
@@ -49,6 +48,12 @@ class Settings(BaseSettings):
     MILVUS_HNSW_M: int = 16
     MILVUS_HNSW_EF_CONSTRUCTION: int = 200
     MILVUS_HNSW_EF_SEARCH: int = 64
+    # MEMORY-V3 ability-state hybrid collection — a SEPARATE Milvus collection
+    # from the knowledge RAG one, populated via outbox index jobs and queried
+    # for topic-relevant ability states (parallel to, but distinct from,
+    # knowledge retrieval).
+    MEMORY_ABILITY_MILVUS_COLLECTION: str = "interview_copilot_memory_ability"
+    MEMORY_ABILITY_TOP_K: int = 5
 
     # Hugging Face, model, and framework caches
     CACHE_DIR: str = ""
@@ -100,27 +105,24 @@ class Settings(BaseSettings):
     #   "none"     — never diarize; transcripts come back single-speaker.
     DIARIZATION_MODE: str = "auto"
     DIARIZATION_MODEL_ID: str = "pyannote-community/speaker-diarization-community-1"
-    AGENT_MAX_STEPS: int = 25
+    AGENT_MAX_STEPS: int = 80  # hard safety-valve — the ONLY hard stop (no time budget)
     AGENT_TOOL_TIMEOUT_SECONDS: int = 30
     AGENT_TEMPERATURE: float = 0.2
-    AGENT_MAX_RUNTIME_SECONDS: int = 180
     AGENT_MAX_TOTAL_TOKENS: int = 200000  # observability only, not a hard stop
     AGENT_MAX_RESPONSE_TOKENS: int = 4096
     AGENT_MAX_TOOL_CALLS: int = 50  # observability only, not a hard stop
-    AGENT_MAX_CALLS_PER_TOOL: int = 8
     AGENT_TOOL_SCHEMA_STRICT: bool = True
     AGENT_MAX_TOOL_ARG_CHARS: int = 4000
-    # Tool result persistence thresholds (Hermes/Claude Code pattern)
-    AGENT_PERSIST_THRESHOLD: int = 30_000      # per-result: persist if > 30K chars
-    AGENT_TURN_BUDGET_CHARS: int = 100_000     # per-turn aggregate: spill largest until < 100K
-    AGENT_PERSIST_PREVIEW_SIZE: int = 1_500    # preview size in persisted-output block
-    VECTOR_TOP_K: int = 8
-    BM25_TOP_K: int = 8
+    # Stage A — tool-result offload thresholds.
+    AGENT_PERSIST_THRESHOLD: int = 50_000      # per-result: offload if > 50K chars
+    AGENT_TURN_BUDGET_CHARS: int = 200_000     # per-turn aggregate: spill largest until < 200K
+    AGENT_PERSIST_PREVIEW_SIZE: int = 2_000    # preview size (chars) in persisted-output block
     FUSION_TOP_K: int = 6
     RERANK_TOP_N: int = 5
+    # Single relevance threshold for RAG retrieval. Applied uniformly with or
+    # without a reranker — nothing clearing it means an empty result, never a
+    # relaxed second pass (see rag/retriever._score_passes).
     RAG_MIN_SCORE: float = 0.5
-    RAG_FALLBACK_MIN_SCORE: float = 0.02
-    RAG_LEXICAL_FALLBACK_MIN_OVERLAP: float = 0.35
     # Memory v2 settings (MEMORY_MILVUS_COLLECTION / MEMORY_*_TOP_K /
     # MEMORY_BACKFILL_ON_STARTUP) were removed in the audit cleanup —
     # the v3 memory architecture uses markdown docs, not vectors. See
@@ -139,15 +141,12 @@ class Settings(BaseSettings):
     # ``/v1/models`` (no hardcoded chat model). Only ``NVIDIA_API_KEY``
     # above is required to enable the provider.
 
-    # ── Observability (Sentry) ──────────────────────────────────────────
-    # Empty DSN disables Sentry entirely (default for local dev). For prod
-    # set the DSN from your Sentry project settings; sample rate controls
-    # what fraction of transactions get traced (0.0–1.0). Errors are always
-    # captured regardless of the sample rate.
-    SENTRY_DSN: str = ""
-    SENTRY_ENVIRONMENT: str = "local"          # "local" / "staging" / "prod"
-    SENTRY_TRACES_SAMPLE_RATE: float = 0.1     # 10% of transactions
-    SENTRY_RELEASE: str = ""                   # optional: git SHA / app version
+    # ── Deployment environment ──────────────────────────────────────────
+    # Drives production-safety validation (see _validate_production_safety):
+    # "staging" / "prod" / "production" turn a placeholder SECRET_KEY into a
+    # fatal startup error and enable other prod-only checks. Default "local"
+    # keeps dev convenient.
+    ENVIRONMENT: str = "local"                 # "local" / "staging" / "prod"
 
     # Security and JWT.
     # No in-code default — keys must come from .env (or environment). An empty
@@ -155,7 +154,7 @@ class Settings(BaseSettings):
     # operator notices instead of silently inheriting a placeholder.
     SECRET_KEY: str = ""
     # Comma-separated list of OLD secrets retained during a key-rotation grace
-    # period. Encrypted user_api_keys ciphertexts encrypted under any of these
+    # period. Encrypted user_model_credentials ciphertexts encrypted under any of these
     # can still be decrypted (MultiFernet); new writes always use SECRET_KEY.
     # Move keys here when rotating, then drop them once all stored payloads
     # have been lazily re-encrypted (or after a hard cutoff).
@@ -223,7 +222,7 @@ class Settings(BaseSettings):
     REDIS_POOL_SIZE: int = 50
 
     @field_validator(
-        "DB_DIR", "CHROMA_DB_DIR", "DOCSTORE_DIR",
+        "DB_DIR", "CHROMA_DB_DIR",
         "CACHE_DIR", "LOG_DIR", "EVAL_DIR", "STORAGE_DIR",
         mode="before",
     )
@@ -237,7 +236,6 @@ class Settings(BaseSettings):
         field_to_subdir = {
             "DB_DIR": "databases",
             "CHROMA_DB_DIR": str(Path("databases") / "chroma"),
-            "DOCSTORE_DIR": "docstore",
             "CACHE_DIR": "cache",
             "LOG_DIR": "logs",
             "EVAL_DIR": "evaluation",
@@ -258,7 +256,7 @@ _INSECURE_SECRET_KEYS = {
 def _validate_production_safety(s: "Settings") -> None:
     """Audit settings for known-insecure defaults.
 
-    Behaviour by ``SENTRY_ENVIRONMENT``:
+    Behaviour by ``ENVIRONMENT``:
       * ``local`` (default) — single INFO line listing bundled creds still
         in use. Dev convenience wins; SECRET_KEY still gets a WARNING
         because a placeholder key breaks JWT/Fernet even on localhost.
@@ -276,7 +274,7 @@ def _validate_production_safety(s: "Settings") -> None:
 
     Then drop the printed value into ``.env`` as ``SECRET_KEY=...``.
     """
-    is_prodlike = (s.SENTRY_ENVIRONMENT or "local").strip().lower() in {"staging", "prod", "production"}
+    is_prodlike = (s.ENVIRONMENT or "local").strip().lower() in {"staging", "prod", "production"}
     findings: list[tuple[str, str]] = []
     secret_finding: tuple[str, str] | None = None
 
@@ -332,7 +330,7 @@ def _validate_production_safety(s: "Settings") -> None:
             # JWTs and read every Fernet-encrypted user API key.
             raise RuntimeError(
                 f"[FATAL] {name} is set to an insecure default in "
-                f"production ({s.SENTRY_ENVIRONMENT!r}). Refusing to "
+                f"production ({s.ENVIRONMENT!r}). Refusing to "
                 f"start. {hint}"
             )
         logger.warning(

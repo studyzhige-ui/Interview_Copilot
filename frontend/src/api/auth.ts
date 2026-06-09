@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import { uploadFileAsset } from './fileAssets';
 import { tokenStore } from '@/lib/token';
 
 export interface TokenPair {
@@ -51,6 +52,24 @@ export async function login(username: string, password: string): Promise<TokenPa
   return res.data;
 }
 
+/**
+ * Change the current user's password. On success the backend bumps the
+ * user's `token_version`, so EVERY existing access + refresh token
+ * (including the one this request used) is immediately invalidated — the
+ * caller must clear local tokens and send the user back to /auth to log in
+ * with the new password. No new token pair is returned by design.
+ */
+export async function changePassword(
+  oldPassword: string,
+  newPassword: string,
+): Promise<{ status: string; message: string }> {
+  const res = await apiClient.post('/auth/change-password', {
+    old_password: oldPassword,
+    new_password: newPassword,
+  });
+  return res.data;
+}
+
 export interface MeResponse {
   username: string;
   email: string | null;
@@ -88,10 +107,10 @@ export async function updateMe(patch: {
 }
 
 export async function uploadAvatar(file: File): Promise<MeResponse> {
-  const form = new FormData();
-  form.append('file', file);
-  const res = await apiClient.post('/auth/me/avatar', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  // Unified presigned flow (purpose='avatar'): bytes PUT straight to object
+  // storage, then the server validates + sets the avatar from the confirmed
+  // file_asset. No multipart server-receives-bytes path.
+  const fileAssetId = await uploadFileAsset(file, 'avatar');
+  const res = await apiClient.post('/auth/me/avatar', { file_asset_id: fileAssetId });
   return res.data;
 }

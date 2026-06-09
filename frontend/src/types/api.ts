@@ -46,6 +46,8 @@ export interface InterviewQA {
   source_segment_start?: number | null;
   source_segment_end?: number | null;
   analyzed_at?: string | null;
+  /** knowledge_documents.id when this QA's improved answer was saved (else null). */
+  saved_document_id?: string | null;
 }
 
 export interface InterviewAnalysis {
@@ -66,9 +68,12 @@ export interface InterviewAnalysis {
 
 export interface InterviewRecordDetail extends InterviewRecordListItem {
   analyzed_qa_count: number;
-  audio_upload_id: string | null;
-  resume_upload_id: string | null;
-  jd_upload_id: string | null;
+  category: string | null;
+  audio_file_asset_id: string | null;
+  resume_id: string | null;
+  resume_file_asset_id: string | null;
+  resume_source: string | null;
+  jd_file_asset_id: string | null;
   transcript: string | null;
   transcript_segments: unknown;
   interview_plan: unknown;
@@ -82,7 +87,7 @@ export interface InterviewRecordDetail extends InterviewRecordListItem {
 export interface ChatSessionListItem {
   session_id: string;
   title: string;
-  session_type: string;
+  type: string;
   state_summary: string;
   turn_count: number;
   updated_at: string;
@@ -91,12 +96,12 @@ export interface ChatSessionListItem {
 export interface ChatSessionCreateResp {
   session_id: string;
   title: string;
-  session_type: string;
+  type: string;
 }
 
 /**
  * Anthropic-style content block. Mirrors the persisted shape in
- * ``chat_messages.content_blocks_json`` (backend Stage-G refactor).
+ * ``conversation_messages.content_blocks_json`` (backend Stage-G refactor).
  *
  * Both L1 chat turns and L2 agent turns now persist this structure:
  *   - L1 chat persists a single ``text`` block per assistant turn.
@@ -158,93 +163,46 @@ export interface ChatMessageItem {
 export interface ChatTranscriptResp {
   status: 'success';
   session_id: string;
-  session_type: string;
+  type: string;
   turn_count: number;
   compaction_cursor: number;
-  session_state: Record<string, unknown>;
   messages: ChatMessageItem[];
   total_messages: number;
 }
 
-export interface MockPlanPhase {
-  phase_id: string;
-  phase_name: string;
-  question_count: number;
+/** One business stage of the (frozen) interview plan, for the progress UI.
+ *  Mirrors ``app.schemas.chat.MockStage``. */
+export interface MockStage {
+  key: string;
+  title: string;
 }
 
-export interface MockQuestion {
-  // ``done`` is set on EVERY return path (start, /question both
-  // branches) so it's required. Everything else is gated by the
-  // ``done`` flag: when ``done === true`` the backend returns just
-  // ``{done, message}``; when ``done === false`` all the live-question
-  // fields are present. Callers should branch on ``done`` first (see
-  // ``MockPage.resumeInProgress``) — TypeScript would let us model
-  // this as a discriminated union, but the existing
-  // ``q.done ? ... : ...`` consumer pattern works fine with
-  // optional fields and avoids the union-narrowing boilerplate.
-  done: boolean;
-  /** Set when ``done === true`` — the human-readable "interview
-   *  finished" message. Empty / absent otherwise. */
-  message?: string;
-  // Live-question fields — all present when ``done === false``,
-  // absent when ``done === true``.
-  question?: string;
-  phase_id?: string;
-  phase_name?: string;
-  question_idx?: number;
-  total_questions_in_phase?: number;
-  // v6 director attaches the spoken pre-amble for the upcoming
-  // question so the TTS layer can speak it alongside the question.
-  spoken_response?: string;
-}
-
+/** ``POST /mock-interviews/start``. The start endpoint owns creation of the
+ *  record + conversation + runtime and returns the opening interviewer line. */
 export interface MockStartResp {
-  status: string;
-  plan_phases: MockPlanPhase[];
-  current_question: MockQuestion;
+  interview_record_id: string;
+  conversation_id: string;
+  runtime_id: string;
+  current_stage_key: string;
+  /** The opening interviewer message (greeting + first question), one string. */
+  current_question: string;
+  plan_phases: MockStage[];
 }
 
-export type MockDirectorAction =
-  | 'follow_up'
-  | 'new_question'
-  | 'transition'
-  | 'hint'
-  | 'clarify'
-  | 'reverse_answer'
-  | 'finish';
-
+/** ``POST /mock-interviews/{record_id}/answer`` — one interviewer line.
+ *  No Runtime Director: the server generates the next turn from the plan +
+ *  current stage + message history in a single LLM call. */
 export interface MockAnswerResp {
-  // Concatenated spoken_response + next_question for the TTS layer and
-  // any existing single-bubble UI. New code should prefer the split
-  // fields below.
-  interviewer_response: string;
-  // v6 Runtime Director output. The backend emits all four
-  // unconditionally on every successful answer turn (see
-  // ``mock_interview.py`` answer endpoint). Pre-fix the type lied
-  // about this with ``?`` markers; tightening so callers don't have
-  // to optional-chain through known-present fields.
-  spoken_response: string;
-  next_question: string;
-  action: MockDirectorAction;
-  display_intent: string;
-  is_finished: boolean;
-  phase_progress: {
-    current_phase: string;
-    // v6 renamed: turn_count + max_turns + follow_up_depth. Old keys
-    // (question_idx / total_answered) are gone — see Mock UI for the
-    // new progress chip. The backend writes all three on every turn,
-    // so they're required here.
-    turn_count: number;
-    max_turns: number;
-    follow_up_depth: number;
-  };
+  interviewer_message: string;
+  current_stage_key: string;
+  is_ready_to_finish: boolean;
 }
 
+/** ``POST /mock-interviews/{record_id}/finish`` and ``/retry-review`` — the
+ *  record enters review; it appears in the review list only at review_ready. */
 export interface MockFinishResp {
-  status: 'analyzing';
+  status: 'processing_review';
   record_id: string;
-  debrief_session_id: string;
-  task_id: string;
 }
 
 export interface KnowledgeDoc {
@@ -252,7 +210,7 @@ export interface KnowledgeDoc {
   upload_id: string;
   title: string;
   category: string;
-  source_type: string;
+  source_kind: string;
   status: string;
   task_id: string | null;
   chunk_count: number | null;

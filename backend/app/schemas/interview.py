@@ -1,41 +1,34 @@
 """Pydantic schemas for interview / upload / debrief HTTP endpoints.
 
 Mirrors the request / response shapes used by ``app/api/interview.py``
-(audio upload, analysis, memory-save, InterviewRecord CRUD, QA edits).
+(audio upload, analysis, InterviewRecord CRUD, QA edits).
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Optional
 
 from pydantic import BaseModel, Field
 
 
-class PresignedUrlRequest(BaseModel):
-    """``POST /upload/audio/presigned`` request body."""
-    filename: str
-    content_type: Optional[str] = None
-    size_bytes: Optional[int] = None
-
-
 class AnalyzeRequest(BaseModel):
-    """``POST /interview/analyze`` request body."""
+    """``POST /interview/analyze`` request body.
+
+    Resume context is optional and comes from EITHER a personal resume entity
+    (``resume_id``) or an ad-hoc file uploaded just for this interview
+    (``resume_file_asset_id``, a file_assets.id). JD is a snapshot only —
+    direct ``jd_text`` or a ``jd_file_asset_id`` (file_assets.id, purpose='jd');
+    JD never becomes a knowledge document.
+    """
     upload_id: str
-    resume_upload_id: str
+    resume_id: Optional[str] = None
+    resume_file_asset_id: Optional[str] = None
     jd_text: Optional[str] = None
-    jd_upload_id: Optional[str] = None  # KnowledgeDocument id; if set, text is loaded server-side
+    jd_file_asset_id: Optional[str] = None
     # ISO-639-1 language hint for WhisperX. ``"zh"`` / ``"en"`` force the
     # decoder, ``"auto"`` lets Whisper detect per-clip (slower, occasionally
     # picks the wrong one — only worth it for genuinely mixed audio).
     # Default matches the UI default of Simplified Chinese transcription.
     language: str = "zh"
-
-
-class MemorySaveRequest(BaseModel):
-    """``POST /memory/save`` — persist an improved-answer card to long-term memory."""
-    question: str
-    improved_answer: str
-    original_score: float
-    tags: Optional[List[str]] = Field(default_factory=list)
 
 
 class InterviewRecordListItem(BaseModel):
@@ -62,11 +55,18 @@ class QAEditRequest(BaseModel):
     improved_answer: Optional[str] = None
 
 
+class SaveQARequest(BaseModel):
+    """``POST /interview-records/{record_id}/qa/{qa_id}/save-to-knowledge``.
+
+    Publishes the QA's improved answer as a knowledge_documents(improved_qa).
+    """
+    category: Optional[str] = Field(default=None, max_length=80)
+
+
 __all__ = [
-    "PresignedUrlRequest",
     "AnalyzeRequest",
-    "MemorySaveRequest",
     "InterviewRecordListItem",
     "InterviewRecordUpdateRequest",
     "QAEditRequest",
+    "SaveQARequest",
 ]

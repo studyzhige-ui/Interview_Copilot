@@ -109,7 +109,7 @@ Pyannote 会回退到 `torchaudio`，工作正常。
 
 ### `slowapi` 没装
 
-后端日志说 `SENTRY_DSN is set but ...` 或 `slowapi not installed`。
+后端日志说 `slowapi not installed`。
 
 **修复**：
 ```bash
@@ -403,4 +403,4 @@ docker compose logs <服务名>
 - 模式（lite / full / hybrid）
 - 日志里的精确报错（不要截图）
 - `docker compose ps` 输出
-- `pip list | grep -E "(fastapi|sqlalchemy|llama-index|whisperx|sentry-sdk)"` 输出
+- `pip list | grep -E "(fastapi|sqlalchemy|llama-index|whisperx)"` 输出

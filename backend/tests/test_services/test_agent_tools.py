@@ -111,6 +111,192 @@ def test_result_summary_detects_disabled_payload():
     assert _result_summary({"count": 5}) == "返回 5 条结果"
 
 
+def test_recall_memory_returns_v3_bundle_keys(monkeypatch):
+    """``recall_memory`` must surface the v3 return shape: user_profile +
+    ability_states + learning_strategy_description + active_learning_strategy
+    + ability_count. When ``load_strategy`` is set it pulls the full strategy
+    body via ``attach_active_bodies``."""
+    import asyncio
+
+    from app.agent_runtime.tool_registry import AgentToolContext
+    from app.agent_runtime.tools.memory import RecallMemoryArgs, _recall_memory_handler
+    from app.services.memory.v3_context_loader import V3MemoryContext
+
+    # Privacy gate open.
+    monkeypatch.setattr(
+        "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
+        lambda session_id, user_id: True,
+    )
+
+    bundle = V3MemoryContext(
+        user_profile_body="- 目标：后端岗位",
+        ability_states=[
+            {"topic": "Redis", "skill_type": "knowledge_topic",
+             "mastery_level": "weak", "summary": "穿透没搞懂"},
+        ],
+        learning_strategy_description="先分析根因",
+    )
+    monkeypatch.setattr(
+        "app.services.memory.v3_context_loader.load_universal",
+        lambda user_id: bundle,
+    )
+
+    async def fake_attach(ctx, *, user_id, load_strategy=False):
+        if load_strategy:
+            ctx.active_learning_strategy_body = "- 先分析根因\n- 再给方案"
+        return ctx
+
+    monkeypatch.setattr(
+        "app.services.memory.v3_context_loader.attach_active_bodies", fake_attach,
+    )
+
+    ctx = AgentToolContext(user_id="alice", session_id="s1")
+    out = asyncio.run(_recall_memory_handler(RecallMemoryArgs(load_strategy=True), ctx))
+
+    assert out["user_profile"] == "- 目标：后端岗位"
+    assert out["ability_states"][0]["topic"] == "Redis"
+    assert out["learning_strategy_description"] == "先分析根因"
+    assert "再给方案" in out["active_learning_strategy"]
+    assert out["ability_count"] == 1
+    # No old keys leak.
+    assert "knowledge_topics" not in out
+    assert "strategy_body" not in out
+
+
+def test_recall_memory_disabled_when_global_memory_off(monkeypatch):
+    """Privacy gate: when the global toggle is OFF the handler returns the
+    disabled bundle and reads NO cross-session memory."""
+    import asyncio
+
+    from app.agent_runtime.tool_registry import AgentToolContext
+    from app.agent_runtime.tools.memory import RecallMemoryArgs, _recall_memory_handler
+
+    monkeypatch.setattr(
+        "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
+        lambda session_id, user_id: False,
+    )
+
+    def _boom(*a, **k):  # load_universal must NOT be called when disabled
+        raise AssertionError("load_universal called despite memory toggle OFF")
+
+    monkeypatch.setattr(
+        "app.services.memory.v3_context_loader.load_universal", _boom,
+    )
+
+    ctx = AgentToolContext(user_id="alice", session_id="s1")
+    out = asyncio.run(_recall_memory_handler(RecallMemoryArgs(), ctx))
+    assert out["disabled"] is True
+    assert out["ability_count"] == 0
+
+
+def test_save_memory_routes_target_to_v3_services(monkeypatch):
+    """``save_memory`` dispatches by ``target``:
+      * ability_state → memory_ability_state_service.upsert (topic/skill/level)
+      * user_profile / learning_strategy → memory_document_service.apply_patches
+    """
+    import asyncio
+    from dataclasses import dataclass
+
+    from app.agent_runtime.tool_registry import AgentToolContext
+    from app.agent_runtime.tools.memory import SaveMemoryArgs, _save_memory_handler
+
+    monkeypatch.setattr(
+        "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
+        lambda session_id, user_id: True,
+    )
+    # The handler holds ``user_memory_lock`` — neutralise Redis dependence.
+    import contextlib
+
+    @contextlib.asynccontextmanager
+    async def _noop_lock(user_id, **k):
+        yield
+
+    monkeypatch.setattr(
+        "app.services.memory._user_memory_lock.user_memory_lock", _noop_lock,
+    )
+
+    ability_calls: list[dict] = []
+
+    def fake_upsert(user_id, **kwargs):
+        ability_calls.append({"user_id": user_id, **kwargs})
+        return object()
+
+    monkeypatch.setattr(
+        "app.services.memory.memory_ability_state_service.upsert", fake_upsert,
+    )
+
+    @dataclass
+    class _PR:
+        applied: int = 1
+        dropped: int = 0
+        skipped: int = 0
+
+    doc_calls: list[dict] = []
+
+    def fake_apply(user_id, doc_type, patches, **kwargs):
+        doc_calls.append({"user_id": user_id, "doc_type": doc_type, "patches": patches})
+        return _PR()
+
+    monkeypatch.setattr(
+        "app.services.memory.memory_document_service.apply_patches", fake_apply,
+    )
+
+    ctx = AgentToolContext(user_id="alice", session_id="s1")
+
+    # ── ability_state target ──
+    out = asyncio.run(_save_memory_handler(
+        SaveMemoryArgs(
+            target="ability_state", topic="Redis 缓存穿透",
+            skill_type="knowledge_topic", mastery_level="weak",
+            summary="不懂布隆过滤器",
+        ),
+        ctx,
+    ))
+    assert out["target"] == "ability_state"
+    assert ability_calls and ability_calls[0]["topic"] == "Redis 缓存穿透"
+    assert ability_calls[0]["skill_type"] == "knowledge_topic"
+    assert ability_calls[0]["mastery_level"] == "weak"
+
+    # ── learning_strategy target → doc apply_patches ──
+    out = asyncio.run(_save_memory_handler(
+        SaveMemoryArgs(target="learning_strategy", fact="先分析根因再给方案"),
+        ctx,
+    ))
+    assert out["target"] == "learning_strategy"
+    assert out["applied"] == 1
+    assert doc_calls and doc_calls[-1]["doc_type"] == "learning_strategy"
+    # The fact line is normalised into a markdown bullet patch.
+    assert doc_calls[-1]["patches"][0]["new_line"].startswith("- 先分析根因")
+
+
+def test_save_memory_rejects_unknown_target(monkeypatch):
+    import asyncio
+
+    from app.agent_runtime.tool_registry import AgentToolContext
+    from app.agent_runtime.tools.memory import SaveMemoryArgs, _save_memory_handler
+
+    monkeypatch.setattr(
+        "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
+        lambda session_id, user_id: True,
+    )
+    import contextlib
+
+    @contextlib.asynccontextmanager
+    async def _noop_lock(user_id, **k):
+        yield
+
+    monkeypatch.setattr(
+        "app.services.memory._user_memory_lock.user_memory_lock", _noop_lock,
+    )
+
+    ctx = AgentToolContext(user_id="alice", session_id="s1")
+    out = asyncio.run(_save_memory_handler(
+        SaveMemoryArgs(target="habit", fact="x"), ctx,
+    ))
+    assert "error" in out
+    assert "ability_state" in out["valid"]
+
+
 def test_graceful_fallback_uses_accumulated_blocks():
     """When the agent loop crashes mid-turn, the fallback message
     MUST mention which tools ran and surface any LLM-emitted reasoning
@@ -145,132 +331,88 @@ def test_graceful_fallback_handles_empty_blocks():
     assert "network_timeout" in msg
 
 
-def test_read_resume_direct_docstore_read(monkeypatch):
-    """When the user has a resume PDF in ``knowledge_documents`` (but
-    no parsed ``resume_sections`` row yet), ``read_resume`` reads the
-    full document text DIRECTLY from the LlamaIndex PostgresDocumentStore
-    via the row's ``node_ids``. Pre-fix the tool told the LLM to use
-    search_knowledge (which returns ~5 reranked chunks of 1500 chars —
-    fragmented and partial). Direct read returns the full resume text.
+def test_read_resume_reads_personal_entity(monkeypatch):
+    """``read_resume`` reads the user's default personal ``resumes`` entity:
+    structured ``resume_sections`` first, else the entity's
+    ``raw_text_snapshot``. Resumes are a personal entity — never knowledge
+    documents, so there is no knowledge-chunk / docstore fallback.
 
     Covers three branches:
-      (1) full_text returned when docstore yields nodes
-      (2) docstore_empty hint when node_ids is empty (still processing)
-      (3) docstore exception path surfaces ``Docstore error: ...``
+      (1) parsed sections present → structured result
+      (2) no sections → raw_text_snapshot fallback (source='raw_text_snapshot')
+      (3) no resumes at all → raw_resume_available=False + error
     """
     import asyncio
-    import json
-    from types import SimpleNamespace
+    from contextlib import contextmanager
 
     from app.agent_runtime.tool_registry import AgentToolContext
     from app.agent_runtime.tools.resume import _read_resume_handler, ReadResumeArgs
 
-    # --- Common stubs -----------------------------------------------------
+    # ``read_resume`` opens ``with SessionLocal() as db`` and passes db straight
+    # to the (stubbed) entity service — a dummy context manager is enough.
+    @contextmanager
+    def _fake_session():
+        yield object()
+    monkeypatch.setattr("app.db.database.SessionLocal", _fake_session)
 
-    # resume_service.get_sections_by_user returns [] so we always enter Tier 2.
-    monkeypatch.setattr(
-        "app.services.resume.resume_service.resume_service.get_sections_by_user",
-        lambda user_id: [],
-    )
+    class _Resume:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
 
-    # Fake KnowledgeDocument rows. Branch (1) has node_ids; (2) empty list.
-    class _FakeDoc:
-        def __init__(self, *, id, title, status, node_ids, created_at=None):
-            self.id = id
+    class _Section:
+        def __init__(self, section_type, title, content):
+            self.section_type = section_type
             self.title = title
-            self.status = status
-            self.node_ids = json.dumps(node_ids)
-            self.created_at = created_at
+            self.content = content
 
     ctx = AgentToolContext(user_id="alice", session_id="s1")
     args = ReadResumeArgs(section_types=[])
 
-    def _patch_db(doc_rows):
-        """Stub SessionLocal so the query returns the given doc_rows."""
-        class _Q:
-            def __init__(self, rows): self.rows = rows
-            def filter(self, *a, **k): return self
-            def order_by(self, *a, **k): return self
-            def all(self): return self.rows
-        class _Db:
-            def __init__(self, rows): self.rows = rows
-            def query(self, *a, **k): return _Q(self.rows)
-            def close(self): pass
-        monkeypatch.setattr(
-            "app.db.database.SessionLocal",
-            lambda: _Db(doc_rows),
-        )
-
-    # --- Branch 1: docstore yields nodes → full_text -------------------
-
-    _patch_db([_FakeDoc(
-        id="kdoc_X", title="resume.pdf", status="ready",
-        node_ids=["n1", "n2", "n3"],
-    )])
-
-    class _FakeDocstore:
-        def __init__(self, mapping): self.mapping = mapping
-        def get_document(self, nid):
-            text = self.mapping.get(nid)
-            return SimpleNamespace(text=text) if text else None
-
-    fake_store = _FakeDocstore({
-        "n1": "孙根武\n北京邮电大学",
-        "n2": "工作经历: ...",
-        "n3": "技能: Python, Rust",
-    })
+    default_resume = _Resume(
+        id="rsm_1", title="我的简历", is_default=True,
+        parse_status="ready", raw_text_snapshot="三年后端开发经验，主导推荐系统",
+    )
     monkeypatch.setattr(
-        "llama_index.storage.docstore.postgres.PostgresDocumentStore.from_uri",
-        classmethod(lambda cls, uri: fake_store),
+        "app.services.resume.resume_entity_service.list_resumes",
+        lambda db, *, user_id: [default_resume],
     )
 
-    result = asyncio.run(_read_resume_handler(args, ctx))
-    assert result["source"] == "docstore_direct"
-    assert result["node_count"] == 3
-    assert "孙根武" in result["full_text"]
-    assert "工作经历" in result["full_text"]
-    assert "技能" in result["full_text"]
-    # Ordering preserved (n1 before n2 before n3).
-    assert result["full_text"].index("孙根武") < result["full_text"].index("工作经历")
-
-    # --- Branch 2: empty node_ids → processing hint -------------------
-
-    _patch_db([_FakeDoc(
-        id="kdoc_Y", title="resume.pdf", status="processing",
-        node_ids=[],
-    )])
-    result = asyncio.run(_read_resume_handler(args, ctx))
-    assert result["source"] == "docstore_empty"
-    assert result["status"] == "processing"
-    assert "processing" in result["hint"].lower()
-
-    # --- Branch 3: docstore.from_uri raises → friendly error hint -----
-    # NB: post-refactor, the exception is swallowed + logged inside
-    # ``read_full_text_from_docstore`` (the shared helper) rather than
-    # propagating up to the tool handler. That's the right separation
-    # of concerns — the raw exception message ("simulated_db_down" or
-    # similar) stays in server logs and does NOT leak into the LLM-
-    # facing hint string. The user-facing branch detection is
-    # unchanged: still ``source=docstore_empty`` with a hint.
-
-    _patch_db([_FakeDoc(
-        id="kdoc_Z", title="resume.pdf", status="ready",
-        node_ids=["n1"],
-    )])
-    def _boom(cls, uri):
-        raise RuntimeError("simulated_db_down")
+    # --- Branch 1: parsed sections present → structured result ---------
     monkeypatch.setattr(
-        "llama_index.storage.docstore.postgres.PostgresDocumentStore.from_uri",
-        classmethod(_boom),
+        "app.services.resume.resume_service.resume_service.get_sections_by_resume",
+        lambda resume_id, user_id=None: [
+            _Section("summary", "简介", "三年后端开发经验"),
+            _Section("project", "推荐系统", "协同过滤推荐"),
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.resume.resume_service.resume_service.format_for_context",
+        lambda sections, **k: "[summary] 简介\n三年后端开发经验",
     )
     result = asyncio.run(_read_resume_handler(args, ctx))
-    assert result["source"] == "docstore_empty"
-    # Hint mentions status + the no-readable-nodes signal. Raw
-    # exception text is intentionally NOT in the hint.
-    assert "status=ready" in result["hint"]
-    assert "no readable nodes" in result["hint"]
-    # The user-facing string should not leak raw infrastructure errors.
-    assert "simulated_db_down" not in result["hint"]
+    assert result["resume_id"] == "rsm_1"
+    assert result["section_count"] == 2
+    assert result["sections"][0]["type"] == "summary"
+    assert "简介" in result["formatted_text"]
+
+    # --- Branch 2: no sections → raw_text_snapshot fallback ------------
+    monkeypatch.setattr(
+        "app.services.resume.resume_service.resume_service.get_sections_by_resume",
+        lambda resume_id, user_id=None: [],
+    )
+    result = asyncio.run(_read_resume_handler(args, ctx))
+    assert result["source"] == "raw_text_snapshot"
+    assert result["raw_resume_available"] is True
+    assert "推荐系统" in result["full_text"]
+
+    # --- Branch 3: no resumes at all → no-resume error ----------------
+    monkeypatch.setattr(
+        "app.services.resume.resume_entity_service.list_resumes",
+        lambda db, *, user_id: [],
+    )
+    result = asyncio.run(_read_resume_handler(args, ctx))
+    assert result["raw_resume_available"] is False
+    assert "error" in result
 
 
 def test_tool_start_and_tool_done_carry_tool_call_id():
@@ -422,73 +564,82 @@ def test_reasoning_content_roundtrips_into_next_assistant_message(monkeypatch):
     assert tool_calls_acc[0].name == "search_jobs"
 
 
-def test_agent_messages_split_manifest_from_grounding_for_prompt_cache():
-    """The agent's system messages MUST be three separate entries:
-    SYSTEM_PROMPT (stable, slot 0) → manifest (stable per session,
-    slot 1) → grounding (per-turn, slot 2). DeepSeek / Anthropic prompt
-    caches hash the prefix as a single contiguous span; a per-turn
-    change to grounding text would invalidate the cached manifest
-    tokens too if they shared a system message. Splitting saves
-    800-2000 cached tokens per agent turn.
-
-    This test reads the actual messages array the strategy constructs,
-    so a future contributor merging them back into one message will
-    silently regress and this test fails loudly.
-    """
-    import asyncio
-    from types import SimpleNamespace
-
+def test_agent_system_block_keeps_manifest_before_grounding_for_prompt_cache():
+    """The agent renders its context through the SHARED pipeline (one
+    SLOT_ORDER, no separate assembler). The tool manifest is part of the
+    system prompt and, together with the stable prefix (summary / recent
+    turns), precedes the per-turn grounding (memory / RAG) inside the system
+    block — so a grounding change can't evict the cached prefix. The query is
+    NOT in the system block (it's sent as the user message)."""
     from app.agent_runtime.tool_registry import registry
-    from app.conversation.agent_strategy import (
-        AgentLoopStrategy,
-        SYSTEM_PROMPT,
+    from app.conversation.agent_strategy import SYSTEM_PROMPT
+    from app.services.chat.context_assembly_pipeline import (
+        AssembledContext,
+        prompt_renderer,
     )
 
-    # Inspect the message-construction logic without running the LLM.
-    # We mirror the construction by calling registry.format_manifest
-    # the same way the strategy does. The order check matters more
-    # than the exact text.
     manifest = registry.format_manifest()
-    grounding = "Recent turns: [{user: 'hi'}]"
+    ctx = AssembledContext(
+        summary="prior summary",
+        memory_block="# Memory bundle",
+        retrieved_context="[K1] some chunk",
+        recent_turns=[{"role": "User", "content": "earlier"}],
+        current_input="the user query",
+    )
+    system_block = prompt_renderer.render_answer_prompt(
+        ctx,
+        system_prompt=f"{SYSTEM_PROMPT}\n\nAvailable tools:\n{manifest}",
+        skip_fields={"current_input"},
+    )
 
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": f"Available tools:\n{manifest}"},
-        {"role": "system", "content": f"Conversation context:\n{grounding}"},
-        {"role": "user", "content": "test"},
+    # Manifest is part of the system prompt and precedes the grounding.
+    assert "Available tools:" in system_block
+    assert system_block.index("Available tools:") < system_block.index("[Memory]")
+    # Stable prefix (summary, recent turns) precedes the per-turn grounding.
+    assert system_block.index("[Context Summary]") < system_block.index("[Memory]")
+    assert system_block.index("[Recent Turns]") < system_block.index("[Retrieved Context]")
+    # The query is rendered as the user message, not wedged in the system block.
+    assert "the user query" not in system_block
+
+
+def test_reconstruct_history_messages_rebuilds_tool_roundtrips():
+    """Prior agent turns reload as real messages incl. tool_calls + tool results
+    (so the agent sees its own tool history, Claude-Code style)."""
+    from app.conversation.agent_strategy import _reconstruct_history_messages
+
+    turns = [
+        {"role": "User", "content": "find redis stuff",
+         "blocks": [{"type": "text", "text": "find redis stuff"}]},
+        {"role": "Agent", "content": "Here's what I found.", "blocks": [
+            {"type": "text", "text": "Let me search."},
+            {"type": "tool_use", "id": "tc1", "name": "search_knowledge",
+             "input": {"query": "redis"}},
+            {"type": "tool_result", "tool_use_id": "tc1", "content": "redis docs ..."},
+            {"type": "text", "text": "Here's what I found."},
+        ]},
     ]
-    # Sanity checks on the cache-friendly shape:
-    assert messages[0]["content"] == SYSTEM_PROMPT
-    assert messages[1]["content"].startswith("Available tools:")
-    assert "Conversation context:" not in messages[1]["content"], (
-        "tool manifest must NOT be wedged into the per-turn grounding "
-        "message — that defeats prompt cache reuse"
-    )
-    assert messages[2]["content"].startswith("Conversation context:")
-    assert "Available tools:" not in messages[2]["content"]
 
-    # The actual strategy builds this same shape — verify by reading the
-    # source. Brittle but cheap; catches a copy-paste regression.
-    import inspect
-    src = inspect.getsource(AgentLoopStrategy.execute)
-    assert "Available tools:" in src
-    assert "Conversation context:" in src
-    # The two strings must appear in separate ``{"role": "system"...}``
-    # entries. If a future refactor concatenates them into one f-string
-    # again, this regex catches the regression.
-    import re
-    # Match the system messages section. Each message must end before
-    # the next ``{"role"`` begins.
-    matches = re.findall(
-        r'\{"role":\s*"system",\s*"content":[^}]+\}',
-        src,
-        re.DOTALL,
-    )
-    # SYSTEM_PROMPT, manifest, grounding = at least 3 system messages
-    assert len(matches) >= 3, (
-        f"expected ≥3 system messages in execute() for cache-friendly "
-        f"prefix; found {len(matches)}: {[m[:80] for m in matches]}"
-    )
+    msgs = _reconstruct_history_messages(turns)
+
+    assert msgs[0] == {"role": "user", "content": "find redis stuff"}
+    asst = msgs[1]
+    assert asst["role"] == "assistant"
+    assert asst["tool_calls"][0]["id"] == "tc1"
+    assert asst["tool_calls"][0]["function"]["name"] == "search_knowledge"
+    assert "redis" in asst["tool_calls"][0]["function"]["arguments"]
+    assert msgs[2] == {"role": "tool", "tool_call_id": "tc1", "content": "redis docs ..."}
+
+
+def test_reconstruct_history_messages_legacy_text_only():
+    """A turn with only a text block (legacy / L1) reconstructs without tool_calls."""
+    from app.conversation.agent_strategy import _reconstruct_history_messages
+
+    turns = [
+        {"role": "Agent", "content": "plain answer",
+         "blocks": [{"type": "text", "text": "plain answer"}]},
+    ]
+    msgs = _reconstruct_history_messages(turns)
+    assert msgs == [{"role": "assistant", "content": "plain answer"}]
 
 
 def test_tool_call_id_propagates_from_strategy_to_sse_events(monkeypatch):
@@ -535,7 +686,6 @@ def test_tool_call_id_propagates_from_strategy_to_sse_events(monkeypatch):
     budget.consume_step()
     messages: list[dict] = []
     blocks: list[dict] = []
-    trace: list[dict] = []
     KNOWN_TC_ID = "call_xyz_42"
     tool_calls_acc = [
         _ToolCallAccumulator(id=KNOWN_TC_ID, name="recall_memory", arguments="{}"),
@@ -636,7 +786,6 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
         {"role": "user", "content": "u"},
     ]
     blocks: list[dict] = []
-    trace: list[dict] = []
     tool_calls_acc = [
         _ToolCallAccumulator(id="call_1", name="recall_memory", arguments="{}"),
     ]
@@ -800,21 +949,21 @@ def test_strategy_context_carries_global_memory_on(monkeypatch):
 
 def test_attach_active_bodies_yields_event_loop_via_to_thread(monkeypatch):
     """``attach_active_bodies`` is invoked via ``asyncio.create_task``
-    in the engine, with the intent that memory body loads run
+    in the engine, with the intent that the strategy-body load runs
     concurrently with the RAG knowledge_task. Pre-fix the function was
     ``async def`` around a fully synchronous body — calling it created
     a coroutine that ran top-to-bottom without ever yielding, so the
     "concurrent" knowledge_task never got loop time until memory
     finished.
 
-    The test detects this by WALL CLOCK rather than just list order
-    (earlier version of this test was tautological — marker_task
-    completed before bodies_task in both broken and fixed code merely
-    because it was scheduled first and yielded at ``sleep(0)``). Here
-    we have ``knowledge_doc_service.load`` block for 50ms per call;
-    with the fix the sleep happens on a worker thread and a concurrent
-    marker can complete in ~0ms, without the fix the main event loop
-    is blocked for the full ~50ms before any other coroutine runs.
+    The v3 loader hydrates a single doc body (learning_strategy) via
+    ``memory_document_service.load`` inside ``asyncio.to_thread``. We make
+    that read block for 50ms; with the fix the sleep happens on a worker
+    thread and a concurrent marker can complete in ~0ms, without the fix the
+    main event loop is blocked for the full ~50ms before any other coroutine
+    runs. The test detects this by WALL CLOCK rather than list order (an
+    order-only check is tautological — the marker is scheduled first and
+    yields at ``sleep(0)`` in both broken and fixed code).
     """
     import asyncio
     import time
@@ -822,48 +971,40 @@ def test_attach_active_bodies_yields_event_loop_via_to_thread(monkeypatch):
         V3MemoryContext, attach_active_bodies,
     )
 
-    BLOCK_SECONDS = 0.05  # 50ms per simulated DB read
+    BLOCK_SECONDS = 0.05  # 50ms simulated DB read
 
-    # ``**_`` swallows the new ``db: Session | None`` kwarg from P1-F
-    # — the test only cares about wall-clock blocking behavior, not
-    # session plumbing.
-    def sleepy_load(user_id, topic=None, **_):
+    # ``**_`` swallows the ``db: Session | None`` kwarg the loader passes —
+    # the test only cares about wall-clock blocking behavior.
+    def sleepy_load(user_id, doc_type, **_):
         time.sleep(BLOCK_SECONDS)
-        return None
+        return "- some strategy body"
 
     monkeypatch.setattr(
-        "app.services.memory.knowledge_doc_service.load",
+        "app.services.memory.memory_document_service.load",
         sleepy_load,
-    )
-    monkeypatch.setattr(
-        "app.services.memory.strategy_doc_service.load",
-        lambda user_id, **_: (time.sleep(BLOCK_SECONDS), "")[1],
-    )
-    monkeypatch.setattr(
-        "app.services.memory.habit_doc_service.load",
-        lambda user_id, **_: (time.sleep(BLOCK_SECONDS), "")[1],
     )
 
     timings: dict[str, float] = {}
 
     async def concurrent_marker(t0: float):
         # If attach_active_bodies properly yields the loop, this
-        # coroutine gets driven during the sleeps and ``marker`` time
+        # coroutine gets driven during the sleep and ``marker`` time
         # registers near zero. If the loop is blocked, marker can't
-        # run until bodies_task finishes — ≥ 4 * BLOCK_SECONDS later.
+        # run until bodies_task finishes — ≥ BLOCK_SECONDS later.
         await asyncio.sleep(0)
         timings["marker"] = time.perf_counter() - t0
 
+    ctx_holder: dict[str, V3MemoryContext] = {}
+
     async def run():
         ctx = V3MemoryContext()
+        ctx_holder["ctx"] = ctx
         t0 = time.perf_counter()
         marker_task = asyncio.create_task(concurrent_marker(t0))
         bodies_task = asyncio.create_task(
             attach_active_bodies(
                 ctx, user_id="alice",
-                topics=["t1", "t2"],   # 2 sleepy_loads
-                load_strategy=True,    # 1 sleepy_load
-                load_habit=True,       # 1 sleepy_load
+                load_strategy=True,    # 1 sleepy_load on a worker thread
             )
         )
         await bodies_task
@@ -872,20 +1013,21 @@ def test_attach_active_bodies_yields_event_loop_via_to_thread(monkeypatch):
 
     asyncio.run(run())
 
-    # With the fix, marker completes in ~0ms (sleeps happen in worker
+    # With the fix, marker completes in ~0ms (sleep happens on a worker
     # thread). Without the fix, marker is blocked until bodies finishes
-    # ~4*BLOCK_SECONDS = 200ms in. Threshold at HALF of the total block
-    # budget gives plenty of headroom for slow CI; on the failure side
-    # we'd see 4x this threshold.
-    threshold = BLOCK_SECONDS * 2  # 100ms — well below 4*BLOCK=200ms
+    # ~BLOCK_SECONDS in. Threshold at HALF the block budget gives plenty
+    # of headroom for slow CI; on the failure side we'd see ~2x this.
+    threshold = BLOCK_SECONDS / 2  # 25ms — well below BLOCK_SECONDS=50ms
     assert timings["marker"] < threshold, (
         f"attach_active_bodies didn't yield the event loop: "
         f"marker completed at {timings['marker']:.3f}s (threshold "
         f"{threshold:.3f}s; bodies_done at {timings['bodies_done']:.3f}s). "
         f"With the fix marker should complete in <10ms; the actual "
         f"value above means the main loop was blocked through the sync "
-        f"DB reads."
+        f"DB read."
     )
+    # And the body actually got hydrated (proves the load_strategy path ran).
+    assert "strategy body" in ctx_holder["ctx"].active_learning_strategy_body
 
 
 def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
@@ -923,10 +1065,9 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
     # Stub the budget compactor so the loop reaches the LLM-stream call.
     class _StubCompactor:
         def __init__(self, profile=None): self.profile = profile
-        def pre_llm_compact(self, messages, _): return messages
-        def is_at_blocking_limit(self, _): return False
+        async def compress(self, messages): return messages, False
         def reset_circuit_breaker(self): pass
-        def on_context_too_long(self, messages): return messages, False
+        async def on_context_too_long(self, messages): return messages, False
     monkeypatch.setattr(
         "app.conversation.agent_strategy.QueryLoopCompactor",
         _StubCompactor,
@@ -967,3 +1108,75 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
     assert "simulated_llm_failure" in result.final_answer
     # The dead headline must NOT come back.
     assert not result.final_answer.startswith("Agent 执行失败")
+
+
+def test_strategy_crash_yields_humanized_error_event(monkeypatch):
+    """THE FIX: a crash in the inner loop must YIELD an actionable error
+    event to the LIVE stream — not just persist a fallback into ``result``.
+
+    Pre-fix the except branch only set ``result.final_answer`` (persisted)
+    and yielded nothing, so a clean API failure — e.g. a 402 "insufficient
+    balance" on the very first LLM call — showed the user an empty turn with
+    no explanation. This pins that the user now gets the actionable balance
+    message live, and that it routes through the shared ``humanize_error``.
+    """
+    import asyncio
+
+    from app.conversation.agent_strategy import AgentLoopStrategy
+    from app.core.error_messages import MSG_BALANCE
+    from app.conversation.strategy import StrategyContext, StrategyResult
+
+    class _StubProfile:
+        model = "stub"
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.build_async_openai_client_for_role",
+        lambda role, user_id=None: (object(), _StubProfile()),
+    )
+
+    class _StubCompactor:
+        def __init__(self, profile=None): self.profile = profile
+        async def compress(self, messages): return messages, False
+        def reset_circuit_breaker(self): pass
+        async def on_context_too_long(self, messages): return messages, False
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.QueryLoopCompactor",
+        _StubCompactor,
+    )
+    monkeypatch.setattr(
+        "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
+        lambda sid, uid: True,
+    )
+
+    # DeepSeek-style 402 insufficient-balance error on the first LLM call.
+    class _Boom402(Exception):
+        status_code = 402
+        def __str__(self):
+            return "Error code: 402 - Insufficient account balance"
+    async def boom(*args, **kwargs):
+        raise _Boom402()
+    monkeypatch.setattr(AgentLoopStrategy, "_call_llm_stream", boom)
+
+    strategy = AgentLoopStrategy()
+    ctx = StrategyContext(
+        user_id="alice", session_id="s1",
+        user_message="任何输入都会触发 402",
+        assembled=None,
+    )
+    result = StrategyResult()
+
+    async def drain():
+        events = []
+        async for ev in strategy.execute(ctx, result):
+            events.append(ev)
+        return events
+
+    events = asyncio.run(drain())
+
+    error_events = [e for e in events if e.type.value == "error"]
+    assert error_events, (
+        "crash did not yield an error event — the user would see nothing"
+    )
+    assert error_events[-1].data["error"] == MSG_BALANCE, (
+        f"error event should carry the actionable balance message, got "
+        f"{error_events[-1].data['error']!r}"
+    )

@@ -12,8 +12,7 @@ interview record and can synthesise these multi-session patterns.
 Trigger model (Path B — single entry, nightly cron)
 ====================================================
 After deliberation we picked **Path B over Path A (per-turn hook)**.
-Reasoning is captured in docs/v3_memory_refactor_report.md but the
-short version: post-turn hook + "nightly only" time window are
+The short version: post-turn hook + "nightly only" time window are
 contradictory (users don't chat at 03:00); since we have Celery Beat
 and Claude Code's per-turn-hook constraint doesn't apply to us, a
 nightly batch is the right fit for an interview-prep tool.
@@ -24,8 +23,7 @@ nightly batch is the right fit for an interview-prep tool.
        ↓ for each user, check 4 gates (per ``select_dreamable_users``):
        │    1. time:   NOW - users.last_dreamed_at >= 24h
        │    2. (no scan throttle — cron fires at most once per day)
-       │    3. volume: new messages >= NEW_MESSAGES_THRESHOLD
-       │              OR new chat_sessions > NEW_SESSIONS_THRESHOLD
+       │    3. volume: new debrief messages >= NEW_MESSAGES_THRESHOLD
        │    4. lock:   user_memory_lock_sync acquired
        ↓ for each user that passes:
   select_records_for_user(user_id)
@@ -39,7 +37,7 @@ Cursor + concurrency
 ``users.last_dreamed_at`` is the per-user cursor that drives gate 1.
 ``interview_records.last_dreamed_at`` is the per-record cursor that
 makes ``dream_for_record`` idempotent (re-running it after a successful
-dream is a no-op until the record gets new chat_messages).
+dream is a no-op until the record gets new conversation_messages).
 
 The work itself runs under ``user_memory_lock_sync`` (sync because
 Celery is sync). Realtime extraction holds the async sibling lock.
@@ -59,25 +57,21 @@ revert a newer state.
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
-from app.models.chat import ChatMessage, ChatSession
+from app.models.chat import ConversationMessage, Conversation
 from app.models.interview_record import InterviewRecord
 from app.models.user import User
 from app.rag.embeddings import agent_fast_llm
-from app.services.memory import (
-    habit_doc_service,
-    knowledge_doc_service,
-    strategy_doc_service,
-    user_profile_doc_service,
-)
+from app.services.memory import memory_ability_state_service, memory_document_service
+from app.services.memory._dispatch import dispatch_memory_patches
+from app.services.memory._extraction_common import format_ability_index, parse_json_patches
 from app.services.memory._user_memory_lock import user_memory_lock_sync
 from app.services.memory.prompts import DREAMING_PROMPT
 
@@ -92,11 +86,12 @@ logger = logging.getLogger(__name__)
 # dreams if the operator ran an ad-hoc batch.
 USER_MIN_HOURS_SINCE_LAST_DREAM = 24
 
-# Gate 3 (OR'd) — minimum new chat activity since users.last_dreamed_at
-# before we bother to dream. Below this the LLM call is unlikely to
-# discover anything new, so we save the budget for an active user.
+# Gate 3 — minimum new debrief messages since users.last_dreamed_at before
+# we bother to dream. Below this the LLM call is unlikely to discover
+# anything new, so we save the budget for an active user. Messages are the
+# sole gate signal now (the old session-count branch was dropped — a session
+# with no debrief turns produces no work for the dreamer).
 NEW_MESSAGES_THRESHOLD = 50
-NEW_SESSIONS_THRESHOLD = 3   # strictly greater than, not >=
 
 # Per-record gate — a record's last chat message must be at least this
 # old before dreaming considers it. Avoids dreaming a record while the
@@ -117,11 +112,9 @@ def select_dreamable_users(*, limit: int = 200) -> list[str]:
     (``last_dreamed_at IS NULL``) OR was last dreamed more than
     ``USER_MIN_HOURS_SINCE_LAST_DREAM`` ago.
 
-    Gate 3 (volume): since the cursor, the user has accumulated EITHER
-    ``>= NEW_MESSAGES_THRESHOLD`` new chat_messages OR
-    ``> NEW_SESSIONS_THRESHOLD`` new chat_sessions. OR semantics — either
-    is sufficient. NULL cursor → all history counts, so a new user with
-    real activity passes naturally.
+    Gate 3 (volume): since the cursor, the user has accumulated
+    ``>= NEW_MESSAGES_THRESHOLD`` new debrief conversation_messages. NULL cursor →
+    all history counts, so a new user with real activity passes naturally.
 
     Gates 2 (scan throttle) and 4 (Redis lock) live elsewhere:
       - Gate 2 isn't needed because cron fires at most once per day,
@@ -157,11 +150,14 @@ def select_dreamable_users(*, limit: int = 200) -> list[str]:
         out: list[str] = []
         for username, cursor in users:
             counts = _count_new_activity_since(db, username, cursor)
-            if (
-                counts["messages"] >= NEW_MESSAGES_THRESHOLD
-                or counts["sessions"] > NEW_SESSIONS_THRESHOLD
-            ):
+            # Gate 3 is messages-only now. ``counts["sessions"]`` is still
+            # computed for the log line below but no longer affects selection.
+            if counts["messages"] >= NEW_MESSAGES_THRESHOLD:
                 out.append(username)
+                logger.info(
+                    "dreaming select: user=%s new_messages=%d new_sessions=%d -> dream",
+                    username, counts["messages"], counts["sessions"],
+                )
                 if len(out) >= limit:
                     break
         return out
@@ -172,31 +168,32 @@ def select_dreamable_users(*, limit: int = 200) -> list[str]:
 def _count_new_activity_since(
     db: Session, user_id: str, cursor: datetime | None,
 ) -> dict[str, int]:
-    """Counts of new debrief chat_messages + chat_sessions for
+    """Counts of new debrief conversation_messages + conversations for
     ``user_id`` since ``cursor`` (None = all-time). Used by gate 3.
 
-    Only ``session_type == 'debrief'`` counts: dreaming consumes
+    Only ``type == 'debrief'`` counts: dreaming consumes
     exclusively debrief messages (see ``dream_for_record``'s
     ``_load_record_debrief_messages``). A user opening 10 general
     chats without any debrief activity wouldn't produce work for the
     dreamer, so they shouldn't trip the gate either (review found
     this as M2 — was dispatching empty Celery tasks).
     """
+    user_pk = resolve_user_pk(db, user_id)
     msg_q = (
-        db.query(ChatMessage)
-        .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+        db.query(ConversationMessage)
+        .join(Conversation, Conversation.id == ConversationMessage.conversation_id)
         .filter(
-            ChatSession.user_id == user_id,
-            ChatSession.session_type == "debrief",
+            Conversation.user_id == user_pk,
+            Conversation.type == "debrief",
         )
     )
-    sess_q = db.query(ChatSession).filter(
-        ChatSession.user_id == user_id,
-        ChatSession.session_type == "debrief",
+    sess_q = db.query(Conversation).filter(
+        Conversation.user_id == user_pk,
+        Conversation.type == "debrief",
     )
     if cursor is not None:
-        msg_q = msg_q.filter(ChatMessage.created_at > cursor)
-        sess_q = sess_q.filter(ChatSession.created_at > cursor)
+        msg_q = msg_q.filter(ConversationMessage.created_at > cursor)
+        sess_q = sess_q.filter(Conversation.created_at > cursor)
     return {"messages": msg_q.count(), "sessions": sess_q.count()}
 
 
@@ -222,7 +219,7 @@ def select_records_for_user(
 
         q = (
             db.query(InterviewRecord)
-            .filter(InterviewRecord.user_id == user_id)
+            .filter(InterviewRecord.user_id == resolve_user_pk(db, user_id))
             .filter(InterviewRecord.status == "completed")
             .filter(
                 or_(
@@ -275,16 +272,16 @@ def bump_user_last_dreamed_at(
 
 
 def _latest_debrief_message_at(db: Session, record_id: str) -> datetime | None:
-    """Most recent ChatMessage timestamp across all debrief sessions of
+    """Most recent ConversationMessage timestamp across all debrief sessions of
     this record. Returns None if there are none."""
     row = (
-        db.query(ChatMessage.created_at)
-        .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+        db.query(ConversationMessage.created_at)
+        .join(Conversation, Conversation.id == ConversationMessage.conversation_id)
         .filter(
-            ChatSession.interview_id == record_id,
-            ChatSession.session_type == "debrief",
+            Conversation.subject_id == record_id,
+            Conversation.type == "debrief",
         )
-        .order_by(ChatMessage.created_at.desc())
+        .order_by(ConversationMessage.created_at.desc())
         .first()
     )
     return row[0] if row else None
@@ -318,8 +315,10 @@ def dream_for_record(record_id: str) -> dict[str, Any]:
         if record is None:
             summary["skipped_reason"] = "record not found"
             return summary
-        summary["user_id"] = record.user_id
-        user_id = record.user_id
+        # record.user_id is the stable users.id (CLEANUP #2); the memory dispatch
+        # + lock key on the username, so bridge pk -> username here.
+        user_id = db.query(User.username).filter(User.id == record.user_id).scalar()
+        summary["user_id"] = user_id
     finally:
         db.close()
 
@@ -353,16 +352,14 @@ def dream_for_record(record_id: str) -> dict[str, Any]:
                 summary["skipped_reason"] = "no debrief messages"
                 return summary
 
-            snapshot = _load_snapshot_for_dream(
-                user_id, _topics_mentioned_in_messages(user_id, messages),
-            )
+            # Snapshot reads share the worker's db so they're consistent with
+            # the writes that follow in the same transaction.
+            snapshot = _load_snapshot_for_dream(user_id, db=db)
             prompt = DREAMING_PROMPT.format(
                 record_id=record_id,
                 user_profile=snapshot["user_profile"] or "（空）",
-                knowledge_index="\n".join(snapshot["knowledge_index"]) or "（暂无主题）",
-                knowledge_active_bodies=snapshot["active_bodies"] or "（无相关主题主体）",
-                strategy_body=snapshot["strategy"] or "（空）",
-                habit_body=snapshot["habit"] or "（空）",
+                learning_strategy=snapshot["learning_strategy"] or "（空）",
+                ability_index="\n".join(snapshot["ability_index"]) or "（暂无能力状态）",
                 record_messages=_format_record_messages(messages),
                 record_debrief_summary=(record.debrief_summary or "（无客观摘要）"),
             )
@@ -375,7 +372,7 @@ def dream_for_record(record_id: str) -> dict[str, Any]:
                     prompt,
                     response_format={"type": "json_object"},
                 ))
-                patches = _parse_json_patches(str(response.text))
+                patches = parse_json_patches(str(response.text))
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "dreaming: LLM call failed record=%s user=%s: %s",
@@ -386,20 +383,21 @@ def dream_for_record(record_id: str) -> dict[str, Any]:
 
             # Dispatch patches. Pass the worker's db so patches + the
             # last_dreamed_at cursor bump commit in a SINGLE transaction.
-            # If we used per-service own-sessions and crashed before the
+            # If we used a service-owned session and crashed before the
             # cursor bump, the next scan would re-dream the same record
             # → duplicate LLM call. Atomic commit eliminates that wasted-
             # work window. The exact-line-match patch protocol still
             # bounds the damage if a duplicate dream slips through.
-            applied, dropped, skipped = _dispatch_dream_patches(
-                db=db,
+            dispatched = dispatch_memory_patches(
                 user_id=user_id,
-                record_id=record_id,
                 patches=patches,
+                change_type="patch_dreaming",
+                source_interview_record_id=record_id,
+                db=db,
             )
-            summary["applied"] = applied
-            summary["dropped"] = dropped
-            summary["skipped"] = skipped
+            summary["applied"] = dispatched.applied
+            summary["dropped"] = dispatched.dropped
+            summary["skipped"] = dispatched.skipped
 
             # Bump cursor. Always — even when patches=0, so we don't
             # repeatedly process a quiet record.
@@ -428,73 +426,24 @@ def dream_for_record(record_id: str) -> dict[str, Any]:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def _load_snapshot_for_dream(user_id: str, mentioned_topics: list[str]) -> dict[str, Any]:
-    """Same as realtime_extraction snapshot but also loads the body of
-    knowledge_doc topics that came up in the record's conversation —
-    dreaming may patch them, so it needs to see their current state.
+def _load_snapshot_for_dream(user_id: str, *, db: Session) -> dict[str, Any]:
+    """Read the memory artifacts the dreaming prompt needs, sharing the
+    worker's ``db`` so the snapshot is consistent with the writes that
+    follow in the same transaction.
+
+    Mirrors ``realtime_extraction._load_snapshot``: the two markdown docs
+    plus an ability index built from the active ability states. There is no
+    "load full bodies for mentioned topics" step anymore — ability summaries
+    ARE the per-topic content the LLM patches against.
     """
-    knowledge_index = knowledge_doc_service.list_index_lines(user_id, max_topics=50)
-
-    active_bodies: list[str] = []
-    for topic in mentioned_topics:
-        doc = knowledge_doc_service.load(user_id, topic)
-        if doc and (doc.body or "").strip():
-            active_bodies.append(f"### {topic}\n{doc.body}")
-
+    user_profile = memory_document_service.load(user_id, "user_profile", db=db)
+    learning_strategy = memory_document_service.load(user_id, "learning_strategy", db=db)
+    states = memory_ability_state_service.load_active(user_id, db=db)
     return {
-        "user_profile": user_profile_doc_service.load(user_id),
-        "knowledge_index": knowledge_index,
-        "active_bodies": "\n\n".join(active_bodies),
-        "strategy": strategy_doc_service.load(user_id),
-        "habit": habit_doc_service.load(user_id),
+        "user_profile": (user_profile or "").strip(),
+        "learning_strategy": (learning_strategy or "").strip(),
+        "ability_index": format_ability_index(states),
     }
-
-
-def _topics_mentioned_in_messages(user_id: str, messages: list[dict]) -> list[str]:
-    """Return the user's existing topics that appear in the message text.
-
-    Pre-loading bodies for these topics into the dreaming prompt lets
-    the LLM produce ``match_line`` patches against the real current
-    body rather than hallucinating against an empty body.
-
-    Filters:
-      * Topic name must be at least 3 characters to count as a hit.
-        Otherwise short ones (``"C"``, ``"Go"``, ``"AI"``) would match
-        substrings of unrelated words (``"Go" in "google"``) and load
-        many irrelevant topic bodies, blowing the dreaming prompt's
-        token budget.
-      * For multi-byte topics (CJK ≥ 3 chars) substring is fine.
-      * For ASCII topics (latin letters), require word-boundary match
-        so ``"TCP"`` matches ``"TCP/IP"`` but not part of a longer
-        word that happens to contain those letters.
-    """
-    text = "\n".join(str(m.get("content") or "") for m in messages)
-    if not text.strip():
-        return []
-    topics = knowledge_doc_service.load_all(user_id)
-    hits: list[str] = []
-    for d in topics:
-        if not d.topic or len(d.topic) < 3:
-            continue
-        if _topic_in_text(d.topic, text):
-            hits.append(d.topic)
-    return hits
-
-
-def _topic_in_text(topic: str, text: str) -> bool:
-    """Word-aware substring check for topic name in conversation text."""
-    if not topic or not text:
-        return False
-    # ASCII-only topic → word boundary required to avoid false positives
-    # like "Go" matching "google".
-    if all(ord(c) < 128 for c in topic):
-        # \b doesn't always work for symbol-containing topics like
-        # "C#" — fall back to a literal substring with surrounding
-        # boundary chars on either side.
-        pattern = r"(?:^|[^A-Za-z0-9])" + re.escape(topic) + r"(?:$|[^A-Za-z0-9])"
-        return re.search(pattern, text) is not None
-    # CJK / mixed-script topic — plain substring is fine.
-    return topic in text
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -503,16 +452,16 @@ def _topic_in_text(topic: str, text: str) -> bool:
 
 
 def _load_record_debrief_messages(db: Session, record_id: str) -> list[dict]:
-    """Concatenate all ChatMessage rows under all debrief sessions of
+    """Concatenate all ConversationMessage rows under all debrief sessions of
     this record, ordered by time."""
     rows = (
-        db.query(ChatMessage)
-        .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+        db.query(ConversationMessage)
+        .join(Conversation, Conversation.id == ConversationMessage.conversation_id)
         .filter(
-            ChatSession.interview_id == record_id,
-            ChatSession.session_type == "debrief",
+            Conversation.subject_id == record_id,
+            Conversation.type == "debrief",
         )
-        .order_by(ChatMessage.created_at.asc(), ChatMessage.seq.asc())
+        .order_by(ConversationMessage.created_at.asc(), ConversationMessage.seq.asc())
         .all()
     )
     return [
@@ -587,165 +536,8 @@ def _format_record_messages(messages: list[dict]) -> str:
     return "\n".join(kept)
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Patch parsing (shared form with realtime)
-# ──────────────────────────────────────────────────────────────────────
-
-
-# Anchored on ``[{ ... }]`` — see realtime_extraction._JSON_ARRAY_RE.
-_JSON_ARRAY_RE = re.compile(r"\[\s*\{[\s\S]*\}\s*\]", re.MULTILINE)
-
-
-def _parse_json_patches(raw_text: str) -> list[dict[str, Any]]:
-    text = (raw_text or "").strip()
-    if not text:
-        return []
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        m = _JSON_ARRAY_RE.search(text)
-        if not m:
-            logger.warning("dreaming: cannot parse LLM output: %s", text[:200])
-            return []
-        try:
-            parsed = json.loads(m.group(0))
-        except json.JSONDecodeError as exc:
-            logger.warning("dreaming: nested JSON parse failed: %s", exc)
-            return []
-
-    if isinstance(parsed, dict):
-        for key in ("patches", "items", "memories", "result"):
-            if isinstance(parsed.get(key), list):
-                return parsed[key]
-        return []
-    if isinstance(parsed, list):
-        return parsed
-    return []
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Dispatch
-# ──────────────────────────────────────────────────────────────────────
-
-
-_VALID_DOC_TYPES = {"knowledge", "strategy", "habit", "user_profile"}
-
-
-def _dispatch_dream_patches(
-    *,
-    db: Session,
-    user_id: str,
-    record_id: str,
-    patches: list[dict[str, Any]],
-) -> tuple[int, int, int]:
-    """Apply patches via per-type services within ``db``'s transaction.
-
-    All writes share ``db`` so the caller can commit them atomically
-    with the ``last_dreamed_at`` cursor bump.
-
-    Returns (total_applied, total_dropped, total_skipped). Per-service
-    exceptions are caught + logged; other services still run.
-    """
-    buckets: dict[str, list[dict[str, Any]]] = {
-        "knowledge": [],
-        "strategy": [],
-        "habit": [],
-        "user_profile": [],
-    }
-    for p in patches:
-        if not isinstance(p, dict):
-            continue
-        dt = str(p.get("doc_type") or "").strip().lower()
-        if dt not in _VALID_DOC_TYPES:
-            continue
-        buckets[dt].append(p)
-
-    applied = dropped = skipped = 0
-
-    if buckets["knowledge"]:
-        by_topic: dict[str, list[dict[str, Any]]] = {}
-        for p in buckets["knowledge"]:
-            topic = str(p.get("topic") or "").strip()
-            if not topic:
-                continue
-            by_topic.setdefault(topic, []).append(p)
-        for topic, plist in by_topic.items():
-            try:
-                r = knowledge_doc_service.apply_patches(
-                    user_id=user_id,
-                    topic=topic,
-                    patches=plist,
-                    change_type="patch_dreaming",
-                    source_record_id=record_id,
-                    db=db,
-                )
-                applied += r.applied
-                dropped += r.dropped
-                skipped += r.skipped
-            except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "dreaming dispatch knowledge user=%s topic=%s: %s",
-                    user_id, topic, exc,
-                )
-
-    if buckets["strategy"]:
-        try:
-            r = strategy_doc_service.apply_patches(
-                user_id=user_id,
-                patches=buckets["strategy"],
-                change_type="patch_dreaming",
-                source_record_id=record_id,
-                db=db,
-            )
-            applied += r.applied
-            dropped += r.dropped
-            skipped += r.skipped
-        except Exception as exc:  # noqa: BLE001
-            logger.error("dreaming dispatch strategy user=%s: %s", user_id, exc)
-
-    if buckets["habit"]:
-        try:
-            r = habit_doc_service.apply_patches(
-                user_id=user_id,
-                patches=buckets["habit"],
-                change_type="patch_dreaming",
-                source_record_id=record_id,
-                db=db,
-            )
-            applied += r.applied
-            dropped += r.dropped
-            skipped += r.skipped
-        except Exception as exc:  # noqa: BLE001
-            logger.error("dreaming dispatch habit user=%s: %s", user_id, exc)
-
-    if buckets["user_profile"]:
-        # user_profile shares the dreaming transaction (checkpoint 3 fix):
-        # patches + audit row land with the cursor bump in one commit,
-        # so a crash between the two cannot leave the user_profile mutated
-        # but the cursor un-bumped (which would cause the next nightly
-        # scan to re-apply the same patches).
-        try:
-            stats = user_profile_doc_service.apply_patches(
-                user_id, buckets["user_profile"],
-                change_type="patch_dreaming",
-                source_record_id=record_id,
-                db=db,
-            )
-            applied += stats.get("applied", 0)
-            dropped += stats.get("dropped", 0)
-            skipped += stats.get("skipped", 0)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("dreaming dispatch user_profile user=%s: %s", user_id, exc)
-
-    return applied, dropped, skipped
-
-
 __all__ = [
     "NEW_MESSAGES_THRESHOLD",
-    "NEW_SESSIONS_THRESHOLD",
     "RECORD_QUIET_HOURS",
     "USER_MIN_HOURS_SINCE_LAST_DREAM",
     "bump_user_last_dreamed_at",
