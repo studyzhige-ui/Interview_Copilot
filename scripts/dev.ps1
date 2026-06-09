@@ -35,7 +35,8 @@
 .PARAMETER FrontendPort
     vite 端口（默认 5173，被占用自动顺延）。
 .PARAMETER Workers
-    uvicorn worker 数（默认 1，>1 时自动关 --reload）。
+    uvicorn worker 数（默认 1）。本脚本是“启动器”，不开热重载；开发时想热重载，
+    在另一个终端自己跑：uvicorn app.main:app --reload --reload-dir app（在 backend/ 下）。
 .PARAMETER SkipDocker
     跳过 docker compose up -d。
 .PARAMETER SkipMigration
@@ -261,21 +262,23 @@ $jobs   = @()
 $colors = @{}
 
 if ($RunBackend) {
-    $modeText = if ($Workers -gt 1) { "$Workers workers (no reload)" } else { '1 worker + reload' }
+    $modeText = if ($Workers -gt 1) { "$Workers workers" } else { '1 worker' }
     Say 'API' "uvicorn @ port $ApiPort  -  $modeText" Green
     $uvJob = Start-Job -Name 'uvicorn' -ScriptBlock {
         param($dir, $port, $workers)
         Set-Location $dir
         $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'
         [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+        # This is a LAUNCHER, not a dev-reload tool — deliberately NO --reload.
+        # Each reload re-runs the FastAPI lifespan, which re-loads the embedding
+        # + reranker models (slow + GPU churn, and on a single GPU the overlap
+        # with the old process can OOM/hang). For hot reload while developing,
+        # run in a SEPARATE terminal (from backend/):
+        #     uvicorn app.main:app --reload --reload-dir app --port 8080
         if ($workers -gt 1) {
             & python -m uvicorn app.main:app --workers $workers --port $port --host 0.0.0.0 2>&1
         } else {
-            # --reload-dir app: only watch source (backend/app), NOT tests /
-            # scripts / alembic / data — each reload re-runs the lifespan, which
-            # re-loads the embedding + reranker models, so we don't want a
-            # test/script edit to churn the GPU. (Editing app code still reloads.)
-            & python -m uvicorn app.main:app --reload --reload-dir app --port $port 2>&1
+            & python -m uvicorn app.main:app --port $port 2>&1
         }
     } -ArgumentList $backendDir, $ApiPort, $Workers
     $jobs += $uvJob; $colors[$uvJob.Name] = 'Green'
