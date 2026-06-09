@@ -1,7 +1,7 @@
 import { apiClient } from './client';
 import type { KnowledgeDoc, KnowledgeCategory } from '@/types/api';
 
-export type KnowledgeSourceKind = 'interview_qa' | 'official_docs' | 'personal_memory';
+export type KnowledgeSourceKind = 'user_upload' | 'improved_qa' | 'manual_text';
 
 export interface ListKnowledgeQuery {
   category?: string;

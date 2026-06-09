@@ -298,7 +298,7 @@ def test_knowledge_document_default_values(db_session):
     from app.models.file_asset import FileAsset
     from app.models.knowledge import KnowledgeDocument
 
-    # The KnowledgeDocument.upload_id FK points at file_assets.id, so the
+    # The KnowledgeDocument.file_asset_id FK points at file_assets.id, so the
     # parent asset is a FileAsset keyed on the integer users.id.
     uid = _make_user(db_session, username="kdoc_owner")
     db_session.add(FileAsset(
@@ -310,9 +310,9 @@ def test_knowledge_document_default_values(db_session):
 
     doc = KnowledgeDocument(
         user_id="u1",
-        upload_id="upl_k",
+        file_asset_id="upl_k",
         title="Redis 缓存雪崩",
-        source_kind="interview_qa",
+        source_kind="user_upload",
         storage_uri="s3://bk/k",
         object_key="key-knowledge",
     )

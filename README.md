@@ -186,7 +186,7 @@ on either path — see `docs/providers.md`.
 |---|---|
 | `auth/` | email, token_blacklist, user_api_key, user_provider_settings, verification_code |
 | `resume/` | resume_service, resume_vector_service |
-| `knowledge/` | knowledge_service, knowledge_text_service |
+| `knowledge/` | knowledge_service, document_chunk_service |
 | `uploads/` | file_validation, upload_service |
 | `analytics/` | diagnostics_report_service, telemetry_service |
 | `interview/` | analysis_orchestrator, interview_record_service, mock_interview_service |

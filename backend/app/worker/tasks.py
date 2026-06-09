@@ -209,7 +209,7 @@ def process_document_ingestion(self, document_id: str):
         if not document.storage_uri.startswith("s3://"):
             raise ValueError("Knowledge ingestion only accepts owned S3 uploads")
 
-        expected_prefix = f"uploads/{owner_pk}/{document.upload_id}/"
+        expected_prefix = f"uploads/{owner_pk}/{document.file_asset_id}/"
         if not document.object_key.startswith(expected_prefix):
             raise ValueError("Knowledge upload object key does not match owner prefix")
 
@@ -234,7 +234,7 @@ def process_document_ingestion(self, document_id: str):
                 document.source_kind,
                 owner_pk,
                 document_id=document.id,
-                upload_id=document.upload_id,
+                upload_id=document.file_asset_id,
                 category=document.category,
             )
         )
@@ -243,6 +243,7 @@ def process_document_ingestion(self, document_id: str):
             document.status = "ready"
             document.chunk_count = int(result.get("chunk_count") or 0)
             document.ref_doc_ids = dump_json_list(result.get("ref_doc_ids") or [])
+            document.content_text = result.get("content_text")
             document.error_message = None
             db.add(document)
             db.commit()

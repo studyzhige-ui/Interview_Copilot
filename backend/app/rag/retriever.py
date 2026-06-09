@@ -14,6 +14,31 @@ from app.rag.reranker_registry import build_reranker, resolve_reranker
 
 logger = logging.getLogger(__name__)
 
+# Knowledge-document states that mean "no longer a valid read source".
+_KB_DELETED_STATES = {"deleting", "delete_failed", "deleted"}
+
+
+def _live_document_ids(document_ids: set[str]) -> set[str]:
+    """Of the given ``knowledge_documents`` ids, return those still LIVE (not
+    soft-deleted / deleting). RAG safety net: a chunk whose document was deleted
+    must not resurface even if its Milvus vector lingers (delete lag/failure)."""
+    from app.models.knowledge import KnowledgeDocument
+
+    if not document_ids:
+        return set()
+    with SessionLocal() as db:
+        rows = (
+            db.query(KnowledgeDocument.id)
+            .filter(
+                KnowledgeDocument.id.in_(document_ids),
+                KnowledgeDocument.deleted_at.is_(None),
+                ~KnowledgeDocument.status.in_(_KB_DELETED_STATES),
+            )
+            .all()
+        )
+    return {r[0] for r in rows}
+
+
 # ---------------------------------------------------------------------------
 # Module-level singletons with thread-safe lazy initialization
 # ---------------------------------------------------------------------------
@@ -196,6 +221,18 @@ async def query_knowledge_base(
                     filters={"source_kind": source_kind} if source_kind else None,
                 )
             )
+            # Exclude personal_memory from KB RAG (RFC: not a knowledge doc;
+            # pending MEMORY-V3 migration to ability states), and drop any hit
+            # whose knowledge document was deleted (safety net for a lagging /
+            # failed Milvus delete).
+            hits = [h for h in hits if h.get("source_kind") != "personal_memory"]
+            _doc_ids = {h.get("document_id") for h in hits if h.get("document_id")}
+            if _doc_ids:
+                _live = await asyncio.to_thread(_live_document_ids, _doc_ids)
+                hits = [
+                    h for h in hits
+                    if not h.get("document_id") or h["document_id"] in _live
+                ]
             raw_nodes = [
                 NodeWithScore(
                     node=TextNode(

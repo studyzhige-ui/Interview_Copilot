@@ -109,7 +109,7 @@ def get_optimal_nodes(document: Document) -> list:
         if (
             is_markdown_parsed
             or file_name.endswith((".md", ".markdown"))
-            or source_kind in ["interview_qa", "official_docs"]
+            or source_kind == "improved_qa"  # saved QA content_text is Markdown
         ):
             parser = MarkdownNodeParser()
         elif file_name.endswith((".html", ".htm")):
@@ -259,11 +259,15 @@ async def ingest_document(
 
         logger.info(f">>> 摄取完成: '{file_path}' (source_kind={source_kind}, user_id={user_id})")
 
+        # Denormalised document body for knowledge_documents.content_text
+        # (display / reindex). Chunks remain the chunk-level fact source.
+        full_text = "\n\n".join((d.text or "") for d in documents)[:200000]
         return {
             "success": True,
             "chunk_count": chunk_info["chunk_count"],
             "node_ids": chunk_info["node_ids"],
             "ref_doc_ids": list({node.ref_doc_id for node in all_nodes if node.ref_doc_id}),
+            "content_text": full_text,
         }
 
     except Exception as e:

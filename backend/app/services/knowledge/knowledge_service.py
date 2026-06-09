@@ -41,22 +41,30 @@ def delete_document_vectors_and_chunks(db: Session, document: KnowledgeDocument)
 
 
 def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> None:
-    # document.user_id is the stable users.id (CLEANUP #2) — the FileAsset's
-    # owner — and object_key is namespaced by it, so use it directly.
-    owner_pk = document.user_id
-    expected_prefix = f"uploads/{owner_pk}/{document.upload_id}/"
-    _, storage_key = parse_s3_uri(document.storage_uri)
-    if document.object_key != storage_key or not document.object_key.startswith(expected_prefix):
-        raise ValueError("Refusing to delete knowledge object outside the owned upload prefix")
+    # Fileless docs (improved_qa / manual_text) have no S3 object — only chunks +
+    # Milvus index to drop. File docs validate the owned-prefix before any delete.
+    has_object = bool(document.file_asset_id and document.storage_uri and document.object_key)
+    if has_object:
+        # document.user_id is the stable users.id (CLEANUP #2) — the FileAsset's
+        # owner — and object_key is namespaced by it, so use it directly.
+        owner_pk = document.user_id
+        expected_prefix = f"uploads/{owner_pk}/{document.file_asset_id}/"
+        _, storage_key = parse_s3_uri(document.storage_uri)
+        if document.object_key != storage_key or not document.object_key.startswith(expected_prefix):
+            raise ValueError("Refusing to delete knowledge object outside the owned upload prefix")
 
+    # Mark deleted FIRST so RAG / list read paths exclude this doc immediately,
+    # even before the (async-ish) chunk + Milvus deletes below complete.
     document.status = "deleting"
+    document.deleted_at = datetime.utcnow()
     document.updated_at = datetime.utcnow()
     db.add(document)
     db.commit()
 
     try:
         delete_document_vectors_and_chunks(db, document)
-        delete_s3_object(document.storage_uri)
+        if has_object:
+            delete_s3_object(document.storage_uri)
     except Exception as exc:
         document.status = "delete_failed"
         document.error_message = str(exc)

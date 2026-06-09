@@ -62,6 +62,9 @@ def write_chunks(
                 text=text,
                 text_hash=hashlib.sha256(text.encode("utf-8")).hexdigest() if text else None,
                 metadata_json=meta_str,
+                # Callers write Milvus before persisting chunks, so the index is
+                # already live by the time the fact rows land.
+                index_status="indexed",
             )
         )
         if node_id:
@@ -72,10 +75,18 @@ def write_chunks(
 
 
 def read_document_text(db: Session, document_id: str, *, max_chars: int = 20000) -> tuple[str, int]:
-    """Concatenate a document's chunks in order. Returns (text, chunk_count)."""
+    """Concatenate a document's live chunks in order. Returns (text, chunk_count).
+
+    Excludes soft-deleted chunks (``deleted_at`` / ``index_status='deleted'``) so
+    a delete/update is reflected in reads immediately.
+    """
     rows = (
         db.query(DocumentChunk.text)
-        .filter(DocumentChunk.document_id == document_id)
+        .filter(
+            DocumentChunk.document_id == document_id,
+            DocumentChunk.deleted_at.is_(None),
+            DocumentChunk.index_status != "deleted",
+        )
         .order_by(DocumentChunk.chunk_index.asc())
         .all()
     )

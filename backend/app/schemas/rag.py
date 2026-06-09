@@ -13,11 +13,18 @@ from pydantic import BaseModel, Field
 
 
 class SourceKindEnum(str, Enum):
-    """Tag attached to a KnowledgeDocument; restricts /rag/query metadata
-    filtering. Stored as a plain string column on the document row."""
-    interview_qa = "interview_qa"
-    official_docs = "official_docs"
-    personal_memory = "personal_memory"
+    """KnowledgeDocument system source kind (RFC §5.1). ``personal_memory`` is
+    NOT a knowledge-document kind — it lives only as ``document_chunks`` and is
+    excluded from knowledge read paths (pending MEMORY-V3 migration to ability
+    states), so it is intentionally not a member here.
+
+    - ``user_upload``: a user-uploaded file (题库/官方文档/面经/笔记…).
+    - ``improved_qa``: a QA improved-answer the user saved from an interview.
+    - ``manual_text``: a directly pasted/hand-written doc (reserved).
+    """
+    user_upload = "user_upload"
+    improved_qa = "improved_qa"
+    manual_text = "manual_text"
 
 
 class KnowledgeUploadRequest(BaseModel):
@@ -29,8 +36,8 @@ class KnowledgeUploadRequest(BaseModel):
 
 class KnowledgeDocumentCreateRequest(BaseModel):
     """``POST /knowledge/documents`` — register an uploaded blob as a doc."""
-    upload_id: str
-    source_kind: SourceKindEnum = SourceKindEnum.interview_qa
+    upload_id: str  # the file_assets.id of the confirmed upload
+    source_kind: SourceKindEnum = SourceKindEnum.user_upload
     title: Optional[str] = None
     category: str = "默认"
 

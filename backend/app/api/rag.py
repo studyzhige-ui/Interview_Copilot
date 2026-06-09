@@ -67,7 +67,7 @@ def _document_payload(document: KnowledgeDocument) -> dict:
     size_bytes = upload.size_bytes if upload else None
     return {
         "id": document.id,
-        "upload_id": document.upload_id,
+        "upload_id": document.file_asset_id,
         "title": document.title,
         "category": document.category,
         "source_kind": document.source_kind,
@@ -131,7 +131,7 @@ async def create_knowledge_document(
 
         document = KnowledgeDocument(
             user_id=resolve_user_pk(db, current_user.username),
-            upload_id=upload.id,
+            file_asset_id=upload.id,
             title=body.title or default_title(upload),
             category=body.category.strip() or "默认",
             source_kind=body.source_kind.value,
@@ -198,7 +198,10 @@ async def list_knowledge_documents(
     query = (
         db.query(KnowledgeDocument)
         .options(selectinload(KnowledgeDocument.upload))
-        .filter(KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username))
+        .filter(
+            KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username),
+            KnowledgeDocument.deleted_at.is_(None),
+        )
     )
     if category:
         query = query.filter(KnowledgeDocument.category == category)
@@ -218,7 +221,11 @@ async def get_knowledge_document(
 ):
     document = (
         db.query(KnowledgeDocument)
-        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username))
+        .filter(
+            KnowledgeDocument.id == document_id,
+            KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username),
+            KnowledgeDocument.deleted_at.is_(None),
+        )
         .first()
     )
     if document is None:
@@ -282,7 +289,10 @@ async def list_knowledge_categories(
 ):
     rows = (
         db.query(KnowledgeDocument.category, func.count(KnowledgeDocument.id))
-        .filter(KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username))
+        .filter(
+            KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username),
+            KnowledgeDocument.deleted_at.is_(None),
+        )
         .group_by(KnowledgeDocument.category)
         .order_by(KnowledgeDocument.category.asc())
         .all()

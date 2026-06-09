@@ -4,8 +4,8 @@ Postgres owns the chunk TEXT (this table); Milvus owns the retrieval INDEX —
 dense vector + native server-side BM25 sparse over the chunk text (see
 ``app.rag.milvus_hybrid``). The authoritative chunk text lives here. This
 replaced the LlamaIndex ``PostgresDocumentStore`` as the project's chunk store:
-full-text reconstruction (``read_full_text_from_chunks``) reads this table; BM25
-retrieval is now served by Milvus, not from here.
+full-text reconstruction (``document_chunk_service.read_document_text``) reads
+this table; BM25 retrieval is now served by Milvus, not from here.
 
 A row is one chunk:
   * knowledge-document chunk -> ``document_id`` set (FK to knowledge_documents);
@@ -70,6 +70,14 @@ class DocumentChunk(Base):
     # Content hash for idempotency / change detection on re-ingest.
     text_hash = Column(String, nullable=True)
     metadata_json = Column(Text, nullable=True)
+    # Index lifecycle: pending -> indexed (Milvus written) / failed / deleted.
+    index_status = Column(String, nullable=False, default="pending")
+    # Optional BM25/full-text external index reference (reserved).
+    lexical_index_id = Column(String, nullable=True)
+    # Soft delete — read paths exclude deleted_at IS NOT NULL / index_status=
+    # 'deleted' immediately, so a not-yet-completed Milvus delete can't leak a
+    # removed chunk back into RAG context.
+    deleted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,

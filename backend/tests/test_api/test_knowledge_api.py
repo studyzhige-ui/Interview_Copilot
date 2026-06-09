@@ -92,7 +92,7 @@ def test_rag_query_delegates_to_retriever(client):
     with patch("app.api.rag.query_knowledge_base", side_effect=fake_query):
         resp = client.post(
             "/api/v1/rag/query",
-            json={"query": "what is redis", "source_kind": "official_docs"},
+            json={"query": "what is redis", "source_kind": "user_upload"},
         )
     assert resp.status_code == 200
     body = resp.json()
@@ -151,7 +151,7 @@ def test_create_document_404_when_upload_not_owned(client, db: Session):
     db.commit()
     resp = client.post(
         "/api/v1/knowledge/documents",
-        json={"upload_id": "upl_b", "source_kind": "interview_qa"},
+        json={"upload_id": "upl_b", "source_kind": "user_upload"},
     )
     assert resp.status_code == 404
 
@@ -179,7 +179,7 @@ def test_create_document_dispatches_celery_with_document_id(client, db: Session)
                 "upload_id": "upl_a",
                 "title": "Redis Notes",
                 "category": "Backend",
-                "source_kind": "interview_qa",
+                "source_kind": "user_upload",
             },
         )
     assert resp.status_code == 200, resp.text
@@ -208,7 +208,7 @@ def test_create_document_marks_failed_when_dispatch_explodes(client, db: Session
         mock_proc.delay.side_effect = RuntimeError("redis broker offline")
         resp = client.post(
             "/api/v1/knowledge/documents",
-            json={"upload_id": "upl_a", "source_kind": "interview_qa"},
+            json={"upload_id": "upl_a", "source_kind": "user_upload"},
         )
     assert resp.status_code == 503
 
@@ -240,10 +240,10 @@ def test_list_documents_is_user_scoped(client, db: Session):
         db.add(KnowledgeDocument(
             id=f"doc_{user}",
             user_id=_uid(db, user),
-            upload_id=f"upl_{user}",
+            file_asset_id=f"upl_{user}",
             title=f"{user} doc",
             category="默认",
-            source_kind="interview_qa",
+            source_kind="user_upload",
             storage_uri=f"s3://b/uploads/{user}/upl_{user}/{user}.pdf",
             object_key=f"uploads/{user}/upl_{user}/{user}.pdf",
             status="ready",
@@ -268,8 +268,8 @@ def test_list_documents_filters_by_category(client, db: Session):
         validation_status="passed",
     ))
     db.add(KnowledgeDocument(
-        id="doc_a", user_id=_uid(db, "alice"), upload_id="upl_a", title="A",
-        category="Redis", source_kind="interview_qa",
+        id="doc_a", user_id=_uid(db, "alice"), file_asset_id="upl_a", title="A",
+        category="Redis", source_kind="user_upload",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
     db.add(FileAsset(
@@ -283,8 +283,8 @@ def test_list_documents_filters_by_category(client, db: Session):
         validation_status="passed",
     ))
     db.add(KnowledgeDocument(
-        id="doc_b", user_id=_uid(db, "alice"), upload_id="upl_b", title="B",
-        category="Java", source_kind="interview_qa",
+        id="doc_b", user_id=_uid(db, "alice"), file_asset_id="upl_b", title="B",
+        category="Java", source_kind="user_upload",
         storage_uri="s3://b/y", object_key="y", status="ready",
     ))
     db.commit()
@@ -304,8 +304,8 @@ def test_get_document_404_for_other_user(client, db: Session):
         object_key="x", upload_status="consumed", validation_status="passed",
     ))
     db.add(KnowledgeDocument(
-        id="doc_b", user_id=_uid(db, "bob"), upload_id="upl_b", title="B",
-        category="默认", source_kind="interview_qa",
+        id="doc_b", user_id=_uid(db, "bob"), file_asset_id="upl_b", title="B",
+        category="默认", source_kind="user_upload",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
     db.commit()
@@ -320,8 +320,8 @@ def test_patch_document_updates_title_and_category(client, db: Session):
         object_key="x", upload_status="consumed", validation_status="passed",
     ))
     db.add(KnowledgeDocument(
-        id="doc_a", user_id=_uid(db, "alice"), upload_id="upl_a", title="old",
-        category="默认", source_kind="interview_qa",
+        id="doc_a", user_id=_uid(db, "alice"), file_asset_id="upl_a", title="old",
+        category="默认", source_kind="user_upload",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
     db.commit()
@@ -343,8 +343,8 @@ def test_delete_document_calls_hard_delete(client, db: Session):
         object_key="x", upload_status="consumed", validation_status="passed",
     ))
     db.add(KnowledgeDocument(
-        id="doc_a", user_id=_uid(db, "alice"), upload_id="upl_a", title="t",
-        category="默认", source_kind="interview_qa",
+        id="doc_a", user_id=_uid(db, "alice"), file_asset_id="upl_a", title="t",
+        category="默认", source_kind="user_upload",
         storage_uri="s3://b/x", object_key="x", status="ready",
     ))
     db.commit()
@@ -368,7 +368,7 @@ def test_hard_delete_guard_uses_pk_namespaced_prefix(db: Session, monkeypatch):
     monkeypatch.setattr(ks, "delete_s3_object", lambda uri: None)
 
     ok = KnowledgeDocument(
-        id="kdoc_ok", user_id=uid, upload_id="fa_ok", title="r", category="默认",
+        id="kdoc_ok", user_id=uid, file_asset_id="fa_ok", title="r", category="默认",
         source_kind="user_upload", storage_uri=f"s3://b/uploads/{uid}/fa_ok/r.pdf",
         object_key=f"uploads/{uid}/fa_ok/r.pdf", status="ready",
     )
@@ -379,7 +379,7 @@ def test_hard_delete_guard_uses_pk_namespaced_prefix(db: Session, monkeypatch):
     assert ok.status == "deleting"
 
     foreign = KnowledgeDocument(
-        id="kdoc_bad", user_id=uid, upload_id="fa_bad", title="x", category="c",
+        id="kdoc_bad", user_id=uid, file_asset_id="fa_bad", title="x", category="c",
         source_kind="user_upload", storage_uri="s3://b/uploads/999/fa_bad/x.pdf",
         object_key="uploads/999/fa_bad/x.pdf", status="ready",
     )
@@ -401,8 +401,8 @@ def test_list_categories_returns_counts(client, db: Session):
             object_key=f"{i}", upload_status="consumed", validation_status="passed",
         ))
         db.add(KnowledgeDocument(
-            id=f"doc_{i}", user_id=_uid(db, "alice"), upload_id=f"upl_{i}", title=f"t{i}",
-            category=cat, source_kind="interview_qa",
+            id=f"doc_{i}", user_id=_uid(db, "alice"), file_asset_id=f"upl_{i}", title=f"t{i}",
+            category=cat, source_kind="user_upload",
             storage_uri=f"s3://b/{i}", object_key=f"{i}", status="ready",
         ))
     db.commit()
