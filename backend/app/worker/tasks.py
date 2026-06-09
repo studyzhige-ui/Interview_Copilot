@@ -410,38 +410,6 @@ def process_resume_parse(self, resume_id: str):
 
 @celery_app.task(
     bind=True,
-    name="tasks.dream_for_record",
-    autoretry_for=(ConnectionError, TimeoutError, OSError),
-    retry_backoff=True,
-    retry_backoff_max=120,
-    retry_jitter=True,
-    max_retries=2,
-    acks_late=True,
-    time_limit=600,
-    soft_time_limit=540,
-)
-def dream_for_record_task(self, record_id: str):
-    """Run one dreaming pass for a single interview record.
-
-    Idempotent: ``dream_for_record`` re-checks ``last_dreamed_at`` under
-    the per-user lock, so a double-fire is harmless (the second run
-    sees no new content and bumps the cursor without an LLM call).
-    """
-    from app.services.memory.dreaming_worker import dream_for_record
-
-    summary = dream_for_record(record_id)
-    if summary.get("error"):
-        # RuntimeError is NOT in autoretry_for above (which only covers
-        # transient network errors). This raise therefore terminates
-        # the task without a Celery-level retry — soft failures (LLM
-        # timeout / hard_failure) rely on the next nightly scan to
-        # reconsider the record, NOT immediate Celery retry.
-        raise RuntimeError(f"dream failed: {summary['error']}")
-    return summary
-
-
-@celery_app.task(
-    bind=True,
     name="tasks.scan_and_dream_batch",
     time_limit=900,
     soft_time_limit=840,
@@ -492,60 +460,51 @@ def scan_and_dream_batch_task(self):
     soft_time_limit=1140,
 )
 def dream_for_user_task(self, user_id: str):
-    """Run all of a user's pending dreams + bump cursor.
+    """Enqueue a persistent dreaming job per silent record + bump the user cursor.
 
-    Per-record dream is delegated to ``dream_for_record`` (synchronous;
-    no separate Celery dispatch — we want the cursor bump to happen
-    AFTER all this user's records are processed, atomically observable
-    from the user's perspective). If any individual record fails, log
-    and continue — partial progress is better than re-doing finished
-    records on the next batch.
+    Per-record dreaming runs as an ``extract_memory_dreaming`` outbox job
+    (drained every minute, retried with backoff, idempotent via the record's
+    ``last_dreamed_at`` re-check), so a slow/failing LLM call on one record
+    never blocks the others and survives a worker crash. The user cursor is
+    bumped to scan-start right after enqueuing — the per-record cursor advances
+    atomically inside each job. Pinning to scan-start (not "now") means any chat
+    message arriving during processing isn't dropped from the next nightly's
+    gate-3 count (review found this as M1).
     """
     from datetime import datetime
+    from app.core.user_identity import resolve_user_pk
+    from app.db.database import SessionLocal
+    from app.services.memory import extraction_jobs
     from app.services.memory.dreaming_worker import (
         bump_user_last_dreamed_at,
-        dream_for_record,
         select_records_for_user,
     )
 
-    # Snapshot scan-start time BEFORE the per-record loop. The cursor
-    # is bumped to THIS timestamp at the end, not to "now after the
-    # dream finished" — otherwise any chat message arriving during the
-    # multi-minute dream loop would have created_at < bump_time and
-    # silently get dropped from the next nightly's gate-3 count.
-    # Review found this as M1.
     scan_started_at = datetime.utcnow()
-
     records = select_records_for_user(user_id, limit=50)
-    summary = {"user_id": user_id, "candidates": len(records), "dreamed": 0, "errors": 0}
-    for rec in records:
-        try:
-            r = dream_for_record(rec.id)
-            if r.get("error"):
-                summary["errors"] += 1
-                logger.warning(
-                    "dream_for_user: record %s for user %s failed: %s",
-                    rec.id, user_id, r["error"],
-                )
-            else:
-                summary["dreamed"] += 1
-        except Exception as exc:  # noqa: BLE001
-            summary["errors"] += 1
-            logger.exception(
-                "dream_for_user: record %s for user %s crashed: %s",
-                rec.id, user_id, exc,
-            )
-    # Bump cursor unconditionally — gate 3 (volume) is what guards
-    # against firing this task in the first place. Whether or not each
-    # individual record produced patches, the "consolidation pass for
-    # this user" has happened and the next nightly should wait for new
-    # activity before firing again.
+    enqueued = 0
+    db = SessionLocal()
+    try:
+        user_pk = resolve_user_pk(db, user_id)
+        if user_pk is not None:
+            for rec in records:
+                if extraction_jobs.enqueue_dreaming(db, user_pk=user_pk, record_id=rec.id) is not None:
+                    enqueued += 1
+            db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+    # Bump cursor unconditionally — gate 3 (volume) guards against firing this
+    # task in the first place; the consolidation pass for this user has been
+    # scheduled, so the next nightly waits for new activity before firing again.
     bump_user_last_dreamed_at(user_id, at=scan_started_at)
     logger.info(
-        "dream_for_user: user=%s candidates=%d dreamed=%d errors=%d",
-        user_id, summary["candidates"], summary["dreamed"], summary["errors"],
+        "dream_for_user: user=%s candidates=%d enqueued=%d",
+        user_id, len(records), enqueued,
     )
-    return summary
+    return {"user_id": user_id, "candidates": len(records), "enqueued": enqueued}
 
 
 # ── Daily model catalog refresh (P6-K) ─────────────────────────────────
@@ -632,9 +591,11 @@ def drain_outbox_jobs(self):
     """
     from app.db.database import SessionLocal
     from app.services.uploads.outbox_service import run_due_outbox_jobs
-    # Import for side effect: registers the Milvus ability-index handlers
-    # (upsert/delete_memory_ability_index) before any job is claimed.
+    # Import for side effect: register the handlers before any job is claimed —
+    # Milvus ability-index (upsert/delete_memory_ability_index) and the memory
+    # extraction jobs (extract_memory_realtime / extract_memory_dreaming).
     import app.services.memory.ability_outbox  # noqa: F401
+    import app.services.memory.extraction_jobs  # noqa: F401
 
     with SessionLocal() as db:
         processed = run_due_outbox_jobs(db)

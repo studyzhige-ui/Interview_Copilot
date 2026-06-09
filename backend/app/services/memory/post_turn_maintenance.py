@@ -3,15 +3,15 @@
 Order of operations:
   1. Compact the conversation into the ``summary`` column via dual-threshold
      trigger (token growth + turns)
-  2. Run realtime memory extraction (v3) — writes the user's ability
-     states / user_profile / learning_strategy.
+  2. Enqueue a persistent ``extract_memory_realtime`` outbox job for the new
+     messages. The JOB (not this service) runs the LLM extraction, writes the
+     ability states / user_profile / learning_strategy, and advances the
+     ``memory_extraction_cursor`` on success — see ``extraction_jobs``.
 
-The session-level asyncio lock here is independent of the Redis-backed
-per-user lock used by realtime_extraction. Both are needed:
-  * asyncio lock prevents two overlapping turns on the same session
-    from doing the same work (cheap, in-process).
-  * per-user Redis lock prevents this session's extraction from
-    racing against the dreaming worker for the same user.
+The session-level asyncio lock here prevents two overlapping turns on the same
+session from enqueuing duplicate work (cheap, in-process). The per-user Redis
+lock that serializes extraction against the dreaming worker is held by the job
+itself, not by this service.
 """
 
 import asyncio
@@ -22,7 +22,7 @@ from app.services.memory.compaction_service import (
     CompactionService,
     compaction_service,
 )
-from app.services.memory import realtime_extraction
+from app.services.memory import extraction_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +33,8 @@ class PostTurnMaintenanceService:
     Responsibilities (in order):
     1. Compact the conversation into the ``summary`` column via dual-threshold
      trigger (token growth + turns)
-    2. Realtime memory extraction (strong signals only — see
-       ``realtime_extraction`` module)
+    2. Enqueue the realtime memory-extraction job for the new messages (the
+       job does the extraction — see ``extraction_jobs`` / ``realtime_extraction``)
     """
 
     def __init__(self, compaction: CompactionService):
@@ -103,25 +103,20 @@ class PostTurnMaintenanceService:
         # If the session is bound to an interview_record, propagate the
         # source so audit log entries can be traced back to the record.
         record_id = await asyncio.to_thread(self._session_record_id, session_id)
+        upto_seq = max(m["seq"] for m in pending_messages)
 
-        result = await realtime_extraction.extract_and_apply(
+        # Realtime extraction runs as a persistent ``extract_memory_realtime``
+        # outbox job, not inline: the job does the LLM call + dispatch + cursor
+        # advance atomically and is retried with backoff on failure, so a model
+        # hiccup never blocks this turn-maintenance task and the
+        # memory_extraction_cursor only advances when the job succeeds.
+        await asyncio.to_thread(
+            extraction_jobs.enqueue_realtime_extraction,
             session_id=session_id,
             user_id=user_id,
-            new_messages=pending_messages,
             record_id=record_id,
+            upto_seq=upto_seq,
         )
-
-        # Advance the memory_extraction_cursor only on success
-        # (None = LLM/dispatch hard failure → hold cursor, retry next
-        # turn). A success with zero patches still advances — it just
-        # means there were no strong signals to extract.
-        if result is not None and result.error is None:
-            max_seq = max(m["seq"] for m in pending_messages)
-            await asyncio.to_thread(
-                transcript_service.update_session_fields,
-                session_id,
-                memory_extraction_cursor=max_seq,
-            )
 
     @staticmethod
     def _session_record_id(session_id: str) -> str | None:

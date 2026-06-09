@@ -245,29 +245,6 @@ def test_cancel_analysis_404_for_other_user(client, db: Session):
     assert resp.status_code == 404
 
 
-# ── /memory/save ──────────────────────────────────────────────────────────
-
-
-def test_save_personal_memory_calls_ingest(client, db):
-    alice_pk = _uid(db, "alice")
-    with patch("app.api.interview.ingest_text", new_callable=AsyncMock) as mock_ingest:
-        resp = client.post(
-            "/api/v1/memory/save",
-            json={
-                "question": "what is a distributed lock",
-                "improved_answer": "use redlock or redisson",
-                "original_score": 4.0,
-                "tags": ["redis"],
-            },
-        )
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "success"
-    mock_ingest.assert_awaited_once()
-    kwargs = mock_ingest.await_args.kwargs
-    assert kwargs["source_kind"] == "personal_memory"
-    assert kwargs["user_id"] == alice_pk
-
-
 # ── /analytics/report ─────────────────────────────────────────────────────
 
 

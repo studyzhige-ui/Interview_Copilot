@@ -6,10 +6,11 @@ Three long-term stores + the pipelines that maintain them:
     memory_document_service       — user_profile / learning_strategy markdown docs
     memory_ability_state_service  — per-topic mastery states
 
-  Pipelines:
-    realtime_extraction       — async, runs after every chat turn
-    dreaming_worker           — sync Celery, per-record nightly synthesis
-    post_turn_maintenance     — wires realtime_extraction into the QA loop
+  Pipelines (both run as persistent outbox jobs — see extraction_jobs):
+    realtime_extraction       — per-turn extraction core (run_realtime_extraction)
+    dreaming_worker           — per-record cross-session synthesis core
+    extraction_jobs           — outbox glue: enqueue + handlers for the two jobs
+    post_turn_maintenance     — enqueues the realtime job after each QA turn
 
   Read entry-points:
     v3_context_loader         — universal + on-demand body loader
@@ -19,6 +20,7 @@ user_profile_doc) and the multi-row ``memory_items`` path are retired.
 """
 
 from app.services.memory import (  # noqa: F401
+    extraction_jobs,
     memory_ability_state_service,
     memory_document_service,
     realtime_extraction,

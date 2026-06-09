@@ -1,11 +1,11 @@
 """Pydantic schemas for interview / upload / debrief HTTP endpoints.
 
 Mirrors the request / response shapes used by ``app/api/interview.py``
-(audio upload, analysis, memory-save, InterviewRecord CRUD, QA edits).
+(audio upload, analysis, InterviewRecord CRUD, QA edits).
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -29,14 +29,6 @@ class AnalyzeRequest(BaseModel):
     # picks the wrong one — only worth it for genuinely mixed audio).
     # Default matches the UI default of Simplified Chinese transcription.
     language: str = "zh"
-
-
-class MemorySaveRequest(BaseModel):
-    """``POST /memory/save`` — persist an improved-answer card to long-term memory."""
-    question: str
-    improved_answer: str
-    original_score: float
-    tags: Optional[List[str]] = Field(default_factory=list)
 
 
 class InterviewRecordListItem(BaseModel):
@@ -73,7 +65,6 @@ class SaveQARequest(BaseModel):
 
 __all__ = [
     "AnalyzeRequest",
-    "MemorySaveRequest",
     "InterviewRecordListItem",
     "InterviewRecordUpdateRequest",
     "QAEditRequest",

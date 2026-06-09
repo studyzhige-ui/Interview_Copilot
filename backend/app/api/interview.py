@@ -1,6 +1,5 @@
 import asyncio
 import json
-from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -26,11 +25,6 @@ from app.services.uploads.file_asset_service import (
 )
 from app.worker.tasks import process_interview_analysis
 
-try:
-    from app.rag.ingestion import ingest_text
-except ModuleNotFoundError:
-    ingest_text = None
-
 
 router = APIRouter()
 
@@ -40,7 +34,6 @@ from app.schemas.interview import (  # noqa: E402, F401
     AnalyzeRequest,
     InterviewRecordListItem,
     InterviewRecordUpdateRequest,
-    MemorySaveRequest,
     QAEditRequest,
     SaveQARequest,
 )
@@ -248,46 +241,6 @@ def _extract_resume_snapshot(db: Session, file_asset_id: str, user_id: str) -> s
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
-
-
-@router.post("/memory/save")
-@limiter.limit(RATE_EXPENSIVE)
-async def save_personal_memory(
-    request: Request,
-    response: Response,
-    body: MemorySaveRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    try:
-        ingest_fn = ingest_text
-        if ingest_fn is None:
-            from app.rag.ingestion import ingest_text as ingest_fn
-
-        combined_text = (
-            f"[Question]\n{body.question}\n\n"
-            f"[Improved Answer]\n{body.improved_answer}"
-        )
-        metadata = {
-            "source_kind": "personal_memory",
-            "original_score": body.original_score,
-            "last_accessed": datetime.now().isoformat(),
-        }
-        if body.tags:
-            metadata["tags"] = ", ".join(body.tags)
-
-        await ingest_fn(
-            text=combined_text,
-            source_kind="personal_memory",
-            user_id=resolve_user_pk(db, current_user.username),
-            metadata=metadata,
-        )
-        return {
-            "status": "success",
-            "message": f"Saved personal memory with baseline score {body.original_score}.",
-        }
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/analytics/report")

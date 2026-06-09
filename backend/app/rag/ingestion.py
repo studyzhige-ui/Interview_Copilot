@@ -282,8 +282,10 @@ async def ingest_text(
     """纯文本节点摄取通道。P0 安全：强制执行多租户隔离。
 
     ``document_id`` ties the chunks + Milvus rows to a ``knowledge_documents``
-    row (e.g. improved_qa). When NULL the chunks are document-less
-    (``personal_memory``).
+    row (e.g. improved_qa) and is always set by the live callers. The
+    document-less (NULL) path is retained only as defensive infrastructure —
+    the former ``personal_memory`` writer was removed in MEMORY-V3 (long-term
+    user state now lives in memory_ability_states, not the knowledge base).
     """
     try:
         final_metadata = metadata or {}
