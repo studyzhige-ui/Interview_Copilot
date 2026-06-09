@@ -41,6 +41,13 @@ class UserModelCredential(Base):
     provider = Column(String(64), nullable=False)
     key_ciphertext = Column(Text, nullable=False)
     key_masked = Column(String(32), nullable=False, default="")
+    # Validation state (RFC §5.2). ``status``: active | invalid | unverified —
+    # a freshly-set key is ``active``. ``last_validated_at`` /
+    # ``last_validation_error`` are populated by the provider key-validation
+    # flow when a credential is verified against the provider.
+    status = Column(String(16), nullable=False, default="active")
+    last_validated_at = Column(DateTime, nullable=True)
+    last_validation_error = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,

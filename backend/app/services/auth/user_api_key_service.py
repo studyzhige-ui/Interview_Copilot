@@ -239,11 +239,16 @@ def set_user_api_key(
                 provider=provider,
                 key_ciphertext=ciphertext,
                 key_masked=masked,
+                status="active",
             )
             s.add(row)
         else:
             row.key_ciphertext = ciphertext
             row.key_masked = masked
+            # A freshly-set / rotated key is active + not-yet-revalidated.
+            row.status = "active"
+            row.last_validated_at = None
+            row.last_validation_error = None
         s.commit()
     _cache_put((user_id, provider), plaintext)
     return {"provider": provider, "masked": masked, "set": True}
@@ -288,7 +293,10 @@ def list_user_api_keys(user_id: str, *, db: Session | None = None) -> dict[str, 
             .filter(UserModelCredential.user_id == user_pk)
             .all()
         )
-        return {r.provider: {"set": True, "masked": r.key_masked} for r in rows}
+        return {
+            r.provider: {"set": True, "masked": r.key_masked, "status": r.status}
+            for r in rows
+        }
 
 
 def get_user_api_key_plaintext(
