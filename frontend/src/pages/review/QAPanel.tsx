@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { ChevronRight, FileText, Pencil } from 'lucide-react';
+import { ChevronRight, FileText, Pencil, BookmarkPlus, BookmarkCheck } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Pill } from '@/components/ui/Pill';
-import { editInterviewQA } from '@/api/interview';
+import { editInterviewQA, saveQAToKnowledge, unsaveQAFromKnowledge } from '@/api/interview';
 import { toast } from '@/store/uiStore';
 import type {
   InterviewAnalysis,
@@ -372,6 +372,8 @@ function QAItem({ qa, recordId }: { qa: InterviewQA; recordId: string }) {
   const [editingA, setEditingA] = useState(false);
   const [question, setQuestion] = useState(qa.question);
   const [answer, setAnswer] = useState(qa.answer);
+  const [savedDocId, setSavedDocId] = useState<string | null>(qa.saved_document_id ?? null);
+  const [savingKb, setSavingKb] = useState(false);
 
   const saveQ = async () => {
     setEditingQ(false);
@@ -388,6 +390,25 @@ function QAItem({ qa, recordId }: { qa: InterviewQA; recordId: string }) {
       await editInterviewQA(recordId, qa.id, { answer });
       toast.success('答案已保存');
     } catch { toast.error('保存失败'); setAnswer(qa.answer); }
+  };
+
+  const toggleKb = async () => {
+    setSavingKb(true);
+    try {
+      if (savedDocId) {
+        await unsaveQAFromKnowledge(recordId, qa.id);
+        setSavedDocId(null);
+        toast.success('已从知识库移除');
+      } else {
+        const r = await saveQAToKnowledge(recordId, qa.id);
+        setSavedDocId(r.saved_document_id);
+        toast.success('已保存到知识库');
+      }
+    } catch {
+      toast.error(savedDocId ? '移除失败' : '保存到知识库失败');
+    } finally {
+      setSavingKb(false);
+    }
   };
 
   const hasImproved = !!qa.improved_answer && qa.improved_answer.trim().length > 0;
@@ -486,11 +507,30 @@ function QAItem({ qa, recordId }: { qa: InterviewQA; recordId: string }) {
           )}
         </button>
         {openS && (
-          <div className="mt-3 p-4 rounded-xl bg-primary-50 border border-primary-100 text-stone-800 text-sm leading-[1.75] whitespace-pre-wrap">
-            {hasImproved ? qa.improved_answer : (
-              <span className="text-stone-500 italic">LLM 优化回答尚未生成</span>
+          <>
+            <div className="mt-3 p-4 rounded-xl bg-primary-50 border border-primary-100 text-stone-800 text-sm leading-[1.75] whitespace-pre-wrap">
+              {hasImproved ? qa.improved_answer : (
+                <span className="text-stone-500 italic">LLM 优化回答尚未生成</span>
+              )}
+            </div>
+            {hasImproved && (
+              <button
+                type="button"
+                onClick={toggleKb}
+                disabled={savingKb}
+                className={[
+                  'mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] transition-colors',
+                  savedDocId
+                    ? 'bg-success-50 text-success-700 hover:bg-success-100'
+                    : 'bg-primary-50 text-primary-700 hover:bg-primary-100',
+                  savingKb ? 'opacity-60 cursor-wait' : '',
+                ].join(' ')}
+              >
+                {savedDocId ? <BookmarkCheck size={14} /> : <BookmarkPlus size={14} />}
+                {savedDocId ? '已保存到知识库 · 点击移除' : '保存到知识库'}
+              </button>
             )}
-          </div>
+          </>
         )}
       </div>
     </article>

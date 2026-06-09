@@ -275,32 +275,42 @@ async def ingest_document(
         raise
 
 
-async def ingest_text(text: str, source_kind: str, user_id: int, metadata: dict = None):
-    """
-    纯文本节点摄取通道。
-    P0 安全：强制执行多租户隔离。
+async def ingest_text(
+    text: str, source_kind: str, user_id: int,
+    metadata: dict = None, *, document_id: str | None = None,
+):
+    """纯文本节点摄取通道。P0 安全：强制执行多租户隔离。
+
+    ``document_id`` ties the chunks + Milvus rows to a ``knowledge_documents``
+    row (e.g. improved_qa). When NULL the chunks are document-less
+    (``personal_memory``).
     """
     try:
         final_metadata = metadata or {}
         final_metadata["source_kind"] = source_kind
         final_metadata["user_id"] = user_id
+        if document_id:
+            final_metadata["document_id"] = document_id
 
         doc = Document(text=text, metadata=final_metadata)
         all_nodes = get_optimal_nodes(doc)
+        for node in all_nodes:
+            if document_id:
+                node.metadata["document_id"] = document_id
 
         logger.info(f"纯文本摄取: {len(all_nodes)} 个节点写入 Milvus hybrid...")
         _write_to_milvus_hybrid(
-            all_nodes, user_id=user_id, source_kind=source_kind, document_id=None,
+            all_nodes, user_id=user_id, source_kind=source_kind, document_id=document_id,
         )
 
-        # Persist to document_chunks (document_id NULL — e.g. personal_memory),
-        # so the diagnostics report reads from Postgres, not a docstore.
+        # Persist to document_chunks. document_id NULL for personal_memory;
+        # set for improved_qa (so the doc owns its chunks + delete-by-id works).
         from app.db.database import SessionLocal
         from app.services.knowledge.document_chunk_service import write_chunks
         with SessionLocal() as db:
             chunk_info = write_chunks(
                 db, nodes=all_nodes, user_id=user_id, source_kind=source_kind,
-                document_id=None, metadata=metadata or None,
+                document_id=document_id, metadata=metadata or None,
             )
 
         logger.info(f"文本摄取完成 (source_kind='{source_kind}')。")

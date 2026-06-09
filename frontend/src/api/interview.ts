@@ -101,10 +101,11 @@ export async function updateInterviewRecord(
 
 export async function deleteInterviewRecord(
   id: string,
-  opts: { cascadeChats?: boolean } = {},
+  /** Also delete the knowledge documents this interview's QAs published. */
+  opts: { cascadeKnowledge?: boolean } = {},
 ): Promise<void> {
   await apiClient.delete(`/interview-records/${encodeURIComponent(id)}`, {
-    params: opts.cascadeChats ? { cascade_chats: true } : undefined,
+    params: opts.cascadeKnowledge ? { cascade_knowledge: true } : undefined,
   });
 }
 
@@ -116,5 +117,25 @@ export async function editInterviewQA(
   await apiClient.patch(
     `/interview-records/${encodeURIComponent(recordId)}/qa/${encodeURIComponent(qaId)}`,
     patch,
+  );
+}
+
+/** Publish a QA's improved answer to the knowledge base (source_kind=improved_qa). */
+export async function saveQAToKnowledge(
+  recordId: string,
+  qaId: string,
+  opts: { category?: string } = {},
+): Promise<{ document_id: string; saved_document_id: string }> {
+  const res = await apiClient.post(
+    `/interview-records/${encodeURIComponent(recordId)}/qa/${encodeURIComponent(qaId)}/save-to-knowledge`,
+    { category: opts.category },
+  );
+  return res.data;
+}
+
+/** Remove the knowledge document previously saved from this QA. */
+export async function unsaveQAFromKnowledge(recordId: string, qaId: string): Promise<void> {
+  await apiClient.delete(
+    `/interview-records/${encodeURIComponent(recordId)}/qa/${encodeURIComponent(qaId)}/save-to-knowledge`,
   );
 }

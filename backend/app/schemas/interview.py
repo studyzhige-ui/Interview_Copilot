@@ -70,6 +70,14 @@ class QAEditRequest(BaseModel):
     improved_answer: Optional[str] = None
 
 
+class SaveQARequest(BaseModel):
+    """``POST /interview-records/{record_id}/qa/{qa_id}/save-to-knowledge``.
+
+    Publishes the QA's improved answer as a knowledge_documents(improved_qa).
+    """
+    category: Optional[str] = Field(default=None, max_length=80)
+
+
 __all__ = [
     "PresignedUrlRequest",
     "AnalyzeRequest",
@@ -77,4 +85,5 @@ __all__ = [
     "InterviewRecordListItem",
     "InterviewRecordUpdateRequest",
     "QAEditRequest",
+    "SaveQARequest",
 ]

@@ -45,6 +45,7 @@ from app.schemas.interview import (  # noqa: E402, F401
     MemorySaveRequest,
     PresignedUrlRequest,
     QAEditRequest,
+    SaveQARequest,
 )
 
 
@@ -486,6 +487,7 @@ def _serialize_qa(qa: InterviewQA) -> dict:
         "source_segment_start": qa.source_segment_start,
         "source_segment_end": qa.source_segment_end,
         "analyzed_at": qa.analyzed_at.isoformat() if qa.analyzed_at else None,
+        "saved_document_id": qa.saved_document_id,
     }
 
 
@@ -537,6 +539,7 @@ def update_interview_record(
 @router.delete("/interview-records/{record_id}")
 def delete_interview_record(
     record_id: str,
+    cascade_knowledge: bool = Query(False),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -579,6 +582,17 @@ def delete_interview_record(
     if record is None:
         raise HTTPException(status_code=404, detail="Interview record not found")
 
+    # ── Optional cascade: also remove the improved_qa knowledge documents this
+    # interview's QAs published (RFC §10.3 — the user may opt in). ────────────
+    removed_docs = 0
+    if cascade_knowledge:
+        from app.services.knowledge.qa_publish_service import (
+            delete_saved_qa_docs_for_record,
+        )
+        removed_docs = delete_saved_qa_docs_for_record(
+            db, user_pk=record.user_id, record_id=record_id,
+        )
+
     try:
         # ── (1) Find every chat_session linked to this interview ──────────
         session_ids = [
@@ -617,6 +631,7 @@ def delete_interview_record(
             "status": "success",
             "id": record_id,
             "deleted_sessions": len(session_ids),
+            "deleted_knowledge_docs": removed_docs,
         }
     except HTTPException:
         raise
@@ -666,6 +681,91 @@ def edit_interview_qa(
     db.commit()
     db.refresh(qa)
     return {"status": "success", "qa": _serialize_qa(qa)}
+
+
+@router.post("/interview-records/{record_id}/qa/{qa_id}/save-to-knowledge")
+@limiter.limit(RATE_EXPENSIVE)
+async def save_qa_to_knowledge_endpoint(
+    request: Request,
+    response: Response,
+    record_id: str,
+    qa_id: str,
+    body: SaveQARequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Publish a QA's improved answer to the knowledge base (RFC §6.9).
+
+    Creates/refreshes a ``knowledge_documents(source_kind='improved_qa')`` from
+    question + improved_answer, indexes it, and backfills ``saved_document_id``.
+    """
+    user_pk = resolve_user_pk(db, current_user.username)
+    qa = (
+        db.query(InterviewQA)
+        .join(InterviewRecord, InterviewQA.record_id == InterviewRecord.id)
+        .filter(
+            InterviewQA.id == qa_id,
+            InterviewQA.record_id == record_id,
+            InterviewRecord.user_id == user_pk,
+        )
+        .first()
+    )
+    if qa is None:
+        raise HTTPException(status_code=404, detail="QA row not found")
+    if not (qa.improved_answer or "").strip():
+        raise HTTPException(status_code=400, detail="该题暂无改进回答，无法保存到知识库")
+    record = (
+        db.query(InterviewRecord)
+        .filter(InterviewRecord.id == record_id, InterviewRecord.user_id == user_pk)
+        .first()
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail="Interview record not found")
+    from app.services.knowledge.qa_publish_service import (
+        DEFAULT_CATEGORY,
+        save_qa_to_knowledge,
+    )
+    try:
+        doc = await save_qa_to_knowledge(
+            db, user_pk=user_pk, qa=qa, record=record,
+            category=(body.category or "").strip() or DEFAULT_CATEGORY,
+        )
+    except Exception as exc:  # noqa: BLE001
+        from app.core.error_messages import humanize_error
+        raise HTTPException(
+            status_code=500, detail=f"保存到知识库失败：{humanize_error(exc)}",
+        ) from exc
+    return {
+        "status": "success",
+        "document_id": doc.id,
+        "saved_document_id": qa.saved_document_id,
+    }
+
+
+@router.delete("/interview-records/{record_id}/qa/{qa_id}/save-to-knowledge")
+def unsave_qa_from_knowledge_endpoint(
+    record_id: str,
+    qa_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Remove the knowledge document previously saved from this QA."""
+    user_pk = resolve_user_pk(db, current_user.username)
+    qa = (
+        db.query(InterviewQA)
+        .join(InterviewRecord, InterviewQA.record_id == InterviewRecord.id)
+        .filter(
+            InterviewQA.id == qa_id,
+            InterviewQA.record_id == record_id,
+            InterviewRecord.user_id == user_pk,
+        )
+        .first()
+    )
+    if qa is None:
+        raise HTTPException(status_code=404, detail="QA row not found")
+    from app.services.knowledge.qa_publish_service import unsave_qa_from_knowledge
+    removed = unsave_qa_from_knowledge(db, user_pk=user_pk, qa=qa)
+    return {"status": "success", "removed": removed}
 
 
 # ── Status → progress mapping for SSE (record.status is lower-case ENUM) ──

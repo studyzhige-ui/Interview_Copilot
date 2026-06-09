@@ -46,6 +46,8 @@ export interface InterviewQA {
   source_segment_start?: number | null;
   source_segment_end?: number | null;
   analyzed_at?: string | null;
+  /** knowledge_documents.id when this QA's improved answer was saved (else null). */
+  saved_document_id?: string | null;
 }
 
 export interface InterviewAnalysis {
