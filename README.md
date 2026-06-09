@@ -11,7 +11,7 @@
 > against any OpenAI-compatible provider (DeepSeek, OpenAI, Anthropic, Qwen,
 > Moonshot, Zhipu, Xiaomi MiMo, NVIDIA Catalog, …).
 
-📖 [Getting started](docs/getting-started.md) · 🛠 [Provider catalog](docs/providers.md) · 🩹 [Troubleshooting](docs/troubleshooting.md)
+📖 [Getting started](docs/getting-started.md)
 
 ## Screenshots
 
@@ -159,7 +159,8 @@ python scripts/init_models.py                        # ~5 GB total, supports byt
 [docs/getting-started.md](docs/getting-started.md)**
 
 A third **Hybrid** mode (cloud ASR + local diarization) is a 2-line edit
-on either path — see `docs/providers.md`.
+on either path — see the "Hybrid mode" add-on in
+[docs/getting-started.md](docs/getting-started.md).
 
 ---
 
@@ -204,24 +205,14 @@ on either path — see `docs/providers.md`.
 - **`alembic/versions/`** — DB migrations (squashed to a single baseline + a few incremental adds)
 - **`nginx/conf.d/`** — Reverse-proxy configs (dev + production)
 - **`scripts/`** — setup / start / stop / init_models / refresh_models / wipe_non_admin / migrate_avatars
-- **`docs/`** — getting-started · providers · postgres-tuning · troubleshooting · deploy-cloudflare-pages (each with a `zh/` mirror)
+- **`docs/`** — getting-started (with a `zh/` mirror)
 - **`.github/workflows/`** — CI (backend tests, ruff, frontend build)
 
 ---
 
-## Documentation
-
-| Topic | English | 中文 |
-|---|---|---|
-| Quick start, end-to-end | [getting-started.md](docs/getting-started.md) | [zh/getting-started.md](docs/zh/getting-started.md) |
-| Provider catalog (LLM / embed / rerank / ASR) | [providers.md](docs/providers.md) | [zh/providers.md](docs/zh/providers.md) |
-| Postgres tuning at scale | [postgres-tuning.md](docs/postgres-tuning.md) | [zh/postgres-tuning.md](docs/zh/postgres-tuning.md) |
-| Troubleshooting | [troubleshooting.md](docs/troubleshooting.md) | [zh/troubleshooting.md](docs/zh/troubleshooting.md) |
-| Deploy the frontend on Cloudflare Pages *(advanced / optional)* | [deploy-cloudflare-pages.md](docs/deploy-cloudflare-pages.md) | [zh/deploy-cloudflare-pages.md](docs/zh/deploy-cloudflare-pages.md) |
-
-The Cloudflare doc is **optional**. Local dev needs nothing of the sort —
-`docker compose up` + `npm run dev` is enough. You only reach for it if
-you want a public hostname with free SSL/CDN for the SPA.
+Full step-by-step setup — both paths, with expected outputs, optional
+add-ons (SMTP / LangSmith / Tavily / Hybrid mode), and a long gotchas list:
+[getting-started.md](docs/getting-started.md) · [中文](docs/zh/getting-started.md).
 
 ---
 
@@ -229,7 +220,7 @@ you want a public hostname with free SSL/CDN for the SPA.
 
 - **API**: FastAPI 0.135, SQLAlchemy 2, Pydantic v2, slowapi (rate limit)
 - **Background**: Celery 5 + Redis (queue / cache / blacklist)
-- **Storage**: PostgreSQL 15, Milvus 2.5 (vector), MinIO (S3-compat)
+- **Storage**: PostgreSQL 15, Milvus 2.6 (vector), MinIO (S3-compat)
 - **AI**: LlamaIndex, BGE-M3 + BGE-Reranker-v2-m3, WhisperX, Pyannote
 - **LLM**: Any OpenAI-compatible API (DeepSeek default)
 - **Frontend**: React 18, Vite 5, Tailwind, zustand, react-virtual

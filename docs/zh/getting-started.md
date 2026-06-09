@@ -348,7 +348,7 @@ torch + whisperx 会跟你 base 里别的项目互踩。
 
 Key 解析顺序：
 
-1. `user_api_keys` 表里 `(user, provider)` —— 「模型」页设置的
+1. `user_model_credentials` 表里 `(user, provider)` —— 「模型」页设置的
 2. fallback 到 `os.environ[provider.api_key_env]`
 
 DB 里的错 key **会覆盖** `.env` 里的对 key。两种处理：「模型」页删
@@ -419,7 +419,8 @@ python -c "from alembic.config import CommandLine; CommandLine().main(['upgrade'
 
 ### 还有别的
 
-→ **[troubleshooting.md](troubleshooting.md)** 长版。
+→ 卡住的话，开个 GitHub issue，附上后端日志尾部（启动序列 + 报错的接口）
+和脱敏后的 `.env`，一般就能定位。
 
 ---
 

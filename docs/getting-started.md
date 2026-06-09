@@ -367,7 +367,7 @@ projects share your base interpreter.
 
 Key resolution order:
 
-1. `user_api_keys` row for `(user, provider)` — set via the Models page
+1. `user_model_credentials` row for `(user, provider)` — set via the Models page
 2. fall back to `os.environ[provider.api_key_env]`
 
 A wrong DB-side key beats a valid `.env` key. Either delete the entry
@@ -449,7 +449,9 @@ overrides).
 
 ### Anything else
 
-→ **[troubleshooting.md](troubleshooting.md)** for the long-form list.
+→ Open a GitHub issue with the backend log tail (the startup sequence +
+the failing endpoint) and your `.env` with keys redacted — that's usually
+enough to pin it down.
 
 ---
 

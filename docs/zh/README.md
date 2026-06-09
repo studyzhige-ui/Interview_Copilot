@@ -11,7 +11,7 @@
 > （DeepSeek、OpenAI、Anthropic、阿里 Qwen、月之暗面、智谱、小米 MiMo、
 > NVIDIA Catalog ……）。
 
-📖 [新手上路](getting-started.md) · 🛠 [Provider 目录](providers.md) · 🩹 [排错](troubleshooting.md)
+📖 [新手上路](getting-started.md)
 
 ## 截图
 
@@ -158,7 +158,7 @@ python scripts/init_models.py                        # 总共约 5GB，支持字
 [docs/zh/getting-started.md](getting-started.md)**
 
 第三种 **Hybrid** 模式（云端 ASR + 本地说话人分离）任何一条路上改 2
-行 env 就能切，详见 `docs/zh/providers.md`。
+行 env 就能切，详见 [getting-started.md](getting-started.md) 里的 “Hybrid mode” 一节。
 
 ---
 
@@ -203,24 +203,15 @@ python scripts/init_models.py                        # 总共约 5GB，支持字
 - **`alembic/versions/`** —— 数据库迁移（squash 为单一基线 + 少量增量）
 - **`nginx/conf.d/`** —— 反向代理配置（dev + production）
 - **`scripts/`** —— setup / start / stop / init_models / refresh_models / wipe_non_admin / migrate_avatars
-- **`docs/`** —— getting-started · providers · postgres-tuning · troubleshooting · deploy-cloudflare-pages（每个都有 `zh/` 中文版）
+- **`docs/`** —— getting-started（含 `zh/` 中文版）
 - **`.github/workflows/`** —— CI（后端测试、ruff、前端构建）
 
 ---
 
 ## 文档
 
-| 主题 | English | 中文 |
-|---|---|---|
-| 完整上手 | [getting-started.md](../getting-started.md) | [getting-started.md](getting-started.md) |
-| Provider 目录（LLM / embed / rerank / ASR） | [providers.md](../providers.md) | [providers.md](providers.md) |
-| Postgres 性能调优 | [postgres-tuning.md](../postgres-tuning.md) | [postgres-tuning.md](postgres-tuning.md) |
-| 排错 | [troubleshooting.md](../troubleshooting.md) | [troubleshooting.md](troubleshooting.md) |
-| Cloudflare Pages 部署 *（进阶 / 可选）* | [deploy-cloudflare-pages.md](../deploy-cloudflare-pages.md) | [deploy-cloudflare-pages.md](deploy-cloudflare-pages.md) |
-
-Cloudflare 那一篇是 **可选** 的。本地开发完全不需要 ——
-`docker compose up` + `npm run dev` 足够。只有想要"公网域名 + 免费 SSL +
-CDN"的时候才用得到。
+完整上手（两条路线、预期输出、可选项 SMTP / LangSmith / Tavily / Hybrid、
+以及坑点清单）：[getting-started.md](getting-started.md) · [English](../getting-started.md)。
 
 ---
 
@@ -228,7 +219,7 @@ CDN"的时候才用得到。
 
 - **API**：FastAPI 0.135、SQLAlchemy 2、Pydantic v2、slowapi（限流）
 - **后台任务**：Celery 5 + Redis（队列 / 缓存 / 黑名单）
-- **存储**：PostgreSQL 15、Milvus 2.5（向量）、MinIO（S3 兼容）
+- **存储**：PostgreSQL 15、Milvus 2.6（向量）、MinIO（S3 兼容）
 - **AI**：LlamaIndex、BGE-M3 + BGE-Reranker-v2-m3、WhisperX、Pyannote
 - **LLM**：任意 OpenAI 兼容 API（默认 DeepSeek）
 - **前端**：React 18、Vite 5、Tailwind、zustand、react-virtual
