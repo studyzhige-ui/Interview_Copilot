@@ -47,23 +47,35 @@ class InterviewRecord(Base):
     source = Column(String, nullable=False)  # "upload" | "mock"
 
     title = Column(String, default="未命名面试")
+    # Primary interview category (后端/算法/系统设计…) for list filtering/display.
+    category = Column(String, nullable=True)
     tag = Column(String(32), nullable=True)
 
-    # Upload references
-    audio_upload_id = Column(String, nullable=True)
-    resume_upload_id = Column(String, nullable=True)
-    resume_doc_id = Column(String, nullable=True)       # if resume was picked from library
-    jd_upload_id = Column(String, nullable=True)
+    # File-asset references (all → file_assets.id). Renamed from the legacy
+    # *_upload_id naming when the upload domain unified on file_assets.
+    audio_file_asset_id = Column(String, nullable=True)
+    # Ad-hoc resume file uploaded just for THIS interview's context (NOT a
+    # personal `resumes` entity). See resume_source to disambiguate.
+    resume_file_asset_id = Column(String, nullable=True)
+    jd_file_asset_id = Column(String, nullable=True)
 
-    # Snapshots (immutable; survive source file deletion)
+    # Personal-resume linkage. ``resume_id`` references the `resumes` entity
+    # used as context; ``resume_source`` records where the resume came from.
+    # History reads the *_snapshot fields below — never re-reads `resumes`, so
+    # editing/deleting a personal resume can't rewrite a past interview.
+    resume_id = Column(String, ForeignKey("resumes.id", ondelete="SET NULL"), nullable=True)
+    resume_source = Column(String, nullable=True)  # personal_resume | context_upload | none
+    resume_title_snapshot = Column(String, nullable=True)
+
+    # Snapshots (immutable; survive source file/resume deletion)
     resume_text_snapshot = Column(Text, nullable=True)
     jd_text_snapshot = Column(Text, nullable=True)
-    resume_structured_json = Column(Text, nullable=True)  # ResumeEvidence with ref_ids
-    jd_structured_json = Column(Text, nullable=True)      # JDRequirements with ref_ids
+    resume_structured_snapshot_json = Column(Text, nullable=True)  # ResumeEvidence w/ ref_ids
+    jd_structured_json = Column(Text, nullable=True)               # JDRequirements w/ ref_ids
 
-    # Raw material
-    transcript = Column(Text, nullable=True)
-    transcript_segments_json = Column(Text, nullable=True)  # WhisperX timestamped segments
+    # Current transcript reference — full text/segments live in the dedicated
+    # interview_transcripts table (soft ref; the hard FK is on that table).
+    transcript_id = Column(String, index=True, nullable=True)
     interview_plan = Column(Text, nullable=True)            # generate_plan() output (mock only)
 
     # Top-level analysis result (per-question rows in interview_qa)
@@ -77,7 +89,9 @@ class InterviewRecord(Base):
     # 后被取消的 record）。
     debrief_summary = Column(Text, nullable=True)
 
-    # Status & progress
+    # Status & progress. Upload: pending→transcribing→analyzing→completed/failed.
+    # Mock (wired in CONVERSATION-MOCK): mock_in_progress→processing_review→
+    # review_ready/review_failed; cancelled on abandon.
     status = Column(String, index=True, default="pending", nullable=False)
     analyzed_qa_count = Column(Integer, nullable=False, default=0)
     celery_task_id = Column(String, nullable=True)

@@ -3,7 +3,8 @@ import { Upload, FileText, Briefcase, CheckCircle2, Mic, FileUp, ClipboardPaste,
 import { Btn } from '@/components/ui/Btn';
 import { Spinner } from '@/components/ui/Spinner';
 import { toast } from '@/store/uiStore';
-import { listStoredResumes, uploadResume, type StoredResume } from '@/api/interview';
+import { listStoredResumes, type StoredResume } from '@/api/interview';
+import { createResumeFromFile } from '@/api/resumes';
 import { parseJdForMock } from '@/api/mock';
 
 export type InterviewerStyle = 'friendly' | 'professional' | 'rigorous' | 'pressure';
@@ -11,7 +12,7 @@ export type VoiceMode = 'text' | 'voice' | 'hybrid';
 
 interface Props {
   onReady: (payload: {
-    resume_upload_id: string;
+    resume_id: string;
     jd_text: string;
     interviewer_style: InterviewerStyle;
     voice_mode: VoiceMode;
@@ -72,7 +73,7 @@ export function MockSetup({ onReady, starting }: Props) {
   const pickExistingResume = (r: StoredResume) => {
     setCards((c) => ({
       ...c,
-      resume: { filename: r.filename, uploadId: r.upload_id, uploading: false },
+      resume: { filename: r.title, uploadId: r.resume_id, uploading: false },
     }));
   };
 
@@ -82,12 +83,21 @@ export function MockSetup({ onReady, starting }: Props) {
   const onResume = async (f: File) => {
     update('resume', { filename: f.name, uploading: true });
     try {
-      const r = await uploadResume(f);
-      update('resume', { uploadId: r.upload_id, uploading: false });
-      toast.success('简历已上传');
-    } catch {
+      // Saves a NEW personal resume entity (parsed into sections server-side);
+      // its id is what the mock uses as resume context.
+      const r = await createResumeFromFile(f);
+      update('resume', { uploadId: r.id, uploading: false });
+      toast.success('简历已保存');
+    } catch (e) {
       update('resume', empty);
-      toast.error('简历上传失败');
+      const status = (e as { response?: { status?: number } })?.response?.status;
+      if (status === 409) {
+        // Two-active-resume limit hit — guide the user to pick an existing one.
+        toast.error('已有两份简历，请从"选已有"中选择，或在个人信息中管理');
+        setResumeMode('existing');
+      } else {
+        toast.error('简历上传失败');
+      }
     }
   };
 
@@ -171,7 +181,7 @@ export function MockSetup({ onReady, starting }: Props) {
             loading={starting}
             onClick={() =>
               onReady({
-                resume_upload_id: cards.resume.uploadId!,
+                resume_id: cards.resume.uploadId!,
                 jd_text: jdText.trim(),
                 interviewer_style: style,
                 voice_mode: voiceMode,
@@ -285,15 +295,15 @@ function ResumeCard({
             <select
               value={state.uploadId ?? ''}
               onChange={(e) => {
-                const r = storedResumes.find((x) => x.upload_id === e.target.value);
+                const r = storedResumes.find((x) => x.resume_id === e.target.value);
                 if (r) onPickExisting(r);
               }}
               className="w-full px-3 py-2.5 bg-white border border-stone-300 rounded-lg text-[14px] text-stone-800 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
             >
               <option value="">— 选一份简历 —</option>
               {storedResumes.map((r) => (
-                <option key={r.upload_id} value={r.upload_id}>
-                  {r.filename} · {(r.created_at || '').slice(0, 10)}
+                <option key={r.resume_id} value={r.resume_id}>
+                  {r.title}{r.is_default ? '（默认）' : ''} · {(r.created_at || '').slice(0, 10)}
                 </option>
               ))}
             </select>

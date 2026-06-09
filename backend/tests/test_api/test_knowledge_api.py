@@ -368,7 +368,7 @@ def test_hard_delete_guard_uses_pk_namespaced_prefix(db: Session, monkeypatch):
     monkeypatch.setattr(ks, "delete_s3_object", lambda uri: None)
 
     ok = KnowledgeDocument(
-        id="kdoc_ok", user_id=uid, upload_id="fa_ok", title="r", category="简历",
+        id="kdoc_ok", user_id=uid, upload_id="fa_ok", title="r", category="默认",
         source_kind="user_upload", storage_uri=f"s3://b/uploads/{uid}/fa_ok/r.pdf",
         object_key=f"uploads/{uid}/fa_ok/r.pdf", status="ready",
     )

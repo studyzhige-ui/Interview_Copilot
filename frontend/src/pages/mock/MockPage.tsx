@@ -93,7 +93,7 @@ export function MockPage() {
   };
 
   const handleReady = async (payload: {
-    resume_upload_id: string;
+    resume_id: string;
     jd_text: string;
     interviewer_style: InterviewerStyle;
     voice_mode: VoiceMode;
@@ -106,7 +106,7 @@ export function MockPage() {
       });
       const started = await startMockInterview({
         session_id: session.session_id,
-        resume_upload_id: payload.resume_upload_id,
+        resume_id: payload.resume_id,
         jd_text: payload.jd_text,
         interviewer_style: payload.interviewer_style,
         voice_mode: payload.voice_mode,

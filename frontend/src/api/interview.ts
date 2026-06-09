@@ -44,17 +44,13 @@ export async function uploadAudio(file: File): Promise<{ upload_id: string; file
   return res.data;
 }
 
-export async function uploadResume(file: File): Promise<{ upload_id: string; filename: string }> {
-  const fd = new FormData();
-  fd.append('file', file);
-  const res = await apiClient.post('/upload/resume/direct', fd);
-  return res.data;
-}
-
+/** A personal resume the user can pick as interview context (the first-class
+ *  `resumes` entity — NOT a knowledge document). */
 export interface StoredResume {
-  upload_id: string;
-  filename: string;
-  size_bytes: number | null;
+  resume_id: string;
+  title: string;
+  is_default: boolean;
+  parse_status: string;
   created_at: string;
 }
 
@@ -64,12 +60,16 @@ export async function listStoredResumes(): Promise<StoredResume[]> {
 }
 
 /** Dispatch a unified analysis on an uploaded audio file. Returns the new
- *  `record_id` of the InterviewRecord — subscribe to SSE to follow progress. */
+ *  `record_id` of the InterviewRecord — subscribe to SSE to follow progress.
+ *  Resume context is optional: either a personal resume (`resume_id`) or an
+ *  ad-hoc file uploaded for this interview (`resume_file_asset_id`). JD is a
+ *  snapshot only — `jd_text` or `jd_file_asset_id` (never a knowledge doc). */
 export async function startAnalyze(payload: {
   upload_id: string;
-  resume_upload_id: string;
+  resume_id?: string;
+  resume_file_asset_id?: string;
   jd_text?: string;
-  jd_upload_id?: string;
+  jd_file_asset_id?: string;
   /** WhisperX language hint. ``"zh"`` / ``"en"`` force the decoder
    *  (much more accurate on monolingual audio). ``"auto"`` lets Whisper
    *  detect per clip — only use for genuinely mixed recordings. */

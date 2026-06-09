@@ -171,6 +171,7 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "knowledge_documents",
         "document_chunks",
         "interview_records",
+        "interview_transcripts",
         "interview_qa",
         "mock_interview_sessions",
         "mock_interview_runtime",

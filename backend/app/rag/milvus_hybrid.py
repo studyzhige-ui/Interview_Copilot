@@ -69,7 +69,7 @@ KNOWLEDGE = HybridCollection(
 RESUME = HybridCollection(
     name=settings.RESUME_MILVUS_COLLECTION,
     scalars=(
-        _Scalar("upload_id"),
+        _Scalar("resume_id"),
         _Scalar("section_type"),
         _Scalar("title", max_length=_TEXT_MAX),
     ),

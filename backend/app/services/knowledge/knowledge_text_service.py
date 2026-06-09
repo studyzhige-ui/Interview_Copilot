@@ -6,9 +6,10 @@ concatenated in chunk order. The slow path (download from S3 → re-parse) is a
 fallback for documents that have no chunks yet (ingestion still running /
 failed). The fast path resolves in ~5-50 ms vs. an 8-10 s re-parse.
 
-Used by:
-  - ``/chat/mock-interview/start``  for both resume and JD text
-  - ``/analyze``                    via load_knowledge_text for JD
+NOTE: RESUME-INTERVIEW removed the resume/JD-from-knowledge coupling, so
+``load_knowledge_text`` / ``find_knowledge_doc_by_upload`` currently have no
+callers — they are pending consolidation in KNOWLEDGE-CHUNKS, which moves
+full-text reads onto ``knowledge_documents.content_text`` / ``document_chunks``.
 """
 from __future__ import annotations
 

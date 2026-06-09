@@ -26,10 +26,17 @@ class ResumeSection(Base):
         index=True,
         nullable=False,
     )
-    upload_id = Column(String, index=True, nullable=False)
-    section_type = Column(String, index=True, nullable=False)  # "summary"|"project"|"education"|"skill"
+    # Owning resume entity (RFC §5.1: sections hang off resume_id, not upload_id).
+    resume_id = Column(
+        String,
+        ForeignKey("resumes.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    section_type = Column(String, index=True, nullable=False)  # summary|project|experience|education|skill|other
     title = Column(String, nullable=False)
     content = Column(Text, nullable=False)
     metadata_json = Column(Text, nullable=True)
+    order_idx = Column(Integer, nullable=False, default=0)  # display / concat order
     embedding_status = Column(String, default="pending", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

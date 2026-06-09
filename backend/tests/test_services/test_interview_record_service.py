@@ -15,6 +15,7 @@ from sqlalchemy.pool import StaticPool
 def record_db_session():
     import app.models.interview_qa  # noqa: F401
     import app.models.interview_record  # noqa: F401
+    import app.models.interview_transcript  # noqa: F401
     import app.models.user  # noqa: F401
     from app.db.database import Base
     from app.models.user import User
@@ -27,13 +28,15 @@ def record_db_session():
     # ``interview_records.user_id`` is now an integer FK to ``users.id``
     # (CLEANUP #2); the service resolves the caller's username → pk via
     # ``resolve_user_pk``, so the ``users`` table must exist here and carry
-    # rows for the usernames these tests use.
+    # rows for the usernames these tests use. Transcripts now live in their
+    # own ``interview_transcripts`` table (RESUME-INTERVIEW split).
     Base.metadata.create_all(
         bind=engine,
         tables=[
             Base.metadata.tables["users"],
             Base.metadata.tables["interview_records"],
             Base.metadata.tables["interview_qa"],
+            Base.metadata.tables["interview_transcripts"],
         ],
     )
     Session = sessionmaker(bind=engine, expire_on_commit=False)
@@ -78,7 +81,7 @@ def test_create_for_upload(record_db_session, monkeypatch):
     record = service.create_for_upload(
         user_id="alice",
         title="My Interview",
-        audio_upload_id="upload_123",
+        audio_file_asset_id="upload_123",
         resume_text_snapshot="老的简历内容",
         db=record_db_session,
     )
@@ -139,7 +142,9 @@ def test_set_status_set_transcript_set_analysis(record_db_session, monkeypatch):
         .filter(InterviewRecord.id == record.id)
         .first()
     )
-    assert refreshed.transcript == "Q: ...\nA: ..."
+    # Transcript now lives in interview_transcripts; the record points at it.
+    assert refreshed.transcript_id is not None
+    assert service.get_transcript_text(record.id, db=record_db_session) == "Q: ...\nA: ..."
     assert refreshed.status == module.STATUS_COMPLETED
     assert refreshed.completed_at is not None
     parsed = json.loads(refreshed.analysis_json)

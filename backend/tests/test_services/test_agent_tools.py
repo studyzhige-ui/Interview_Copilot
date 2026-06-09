@@ -331,104 +331,88 @@ def test_graceful_fallback_handles_empty_blocks():
     assert "network_timeout" in msg
 
 
-def test_read_resume_direct_chunk_read(monkeypatch):
-    """When the user has a resume PDF in ``knowledge_documents`` (but
-    no parsed ``resume_sections`` row yet), ``read_resume`` reads the
-    full document text DIRECTLY from the Postgres ``document_chunks`` fact
-    table via ``read_full_text_from_chunks``. Pre-fix the tool told the LLM
-    to use search_knowledge (~5 reranked 1500-char chunks — fragmented);
-    the direct read returns the full resume text.
+def test_read_resume_reads_personal_entity(monkeypatch):
+    """``read_resume`` reads the user's default personal ``resumes`` entity:
+    structured ``resume_sections`` first, else the entity's
+    ``raw_text_snapshot``. Resumes are a personal entity — never knowledge
+    documents, so there is no knowledge-chunk / docstore fallback.
 
     Covers three branches:
-      (1) source='chunks_direct' when the chunks reconstruct full text
-      (2) source='chunks_empty' processing hint when no chunks yet
-      (3) chunks empty for a ready doc → hint says "no readable chunks"
+      (1) parsed sections present → structured result
+      (2) no sections → raw_text_snapshot fallback (source='raw_text_snapshot')
+      (3) no resumes at all → raw_resume_available=False + error
     """
     import asyncio
+    from contextlib import contextmanager
 
     from app.agent_runtime.tool_registry import AgentToolContext
     from app.agent_runtime.tools.resume import _read_resume_handler, ReadResumeArgs
 
-    # --- Common stubs -----------------------------------------------------
+    # ``read_resume`` opens ``with SessionLocal() as db`` and passes db straight
+    # to the (stubbed) entity service — a dummy context manager is enough.
+    @contextmanager
+    def _fake_session():
+        yield object()
+    monkeypatch.setattr("app.db.database.SessionLocal", _fake_session)
 
-    # resume_service.get_sections_by_user returns [] so we always enter Tier 2.
-    monkeypatch.setattr(
-        "app.services.resume.resume_service.resume_service.get_sections_by_user",
-        lambda user_id: [],
-    )
+    class _Resume:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
 
-    # Tier 2 resolves the username → users.id via ``resolve_user_pk`` (a real
-    # ``db.query(User.id)...scalar()``) before filtering ``KnowledgeDocument``.
-    # The fake ``_Db`` below has no ``.scalar()``; the tool imports
-    # ``resolve_user_pk`` locally from ``app.core.user_identity`` at call time,
-    # so patch it at that source module.
-    monkeypatch.setattr(
-        "app.core.user_identity.resolve_user_pk",
-        lambda db, username: 1,
-    )
-
-    # Fake KnowledgeDocument rows. Branch behaviour is driven by the mocked
-    # read_full_text_from_chunks return, not the row (the tool reads status,
-    # title, id, created_at — never node_ids, which was dropped in 0024).
-    class _FakeDoc:
-        def __init__(self, *, id, title, status, created_at=None):
-            self.id = id
+    class _Section:
+        def __init__(self, section_type, title, content):
+            self.section_type = section_type
             self.title = title
-            self.status = status
-            self.created_at = created_at
+            self.content = content
 
     ctx = AgentToolContext(user_id="alice", session_id="s1")
     args = ReadResumeArgs(section_types=[])
 
-    def _patch_db(doc_rows):
-        """Stub SessionLocal so the query returns the given doc_rows."""
-        class _Q:
-            def __init__(self, rows): self.rows = rows
-            def filter(self, *a, **k): return self
-            def order_by(self, *a, **k): return self
-            def all(self): return self.rows
-        class _Db:
-            def __init__(self, rows): self.rows = rows
-            def query(self, *a, **k): return _Q(self.rows)
-            def close(self): pass
-        monkeypatch.setattr(
-            "app.db.database.SessionLocal",
-            lambda: _Db(doc_rows),
-        )
-
-    _TXT = "app.services.knowledge.knowledge_text_service.read_full_text_from_chunks"
-
-    # --- Branch 1: chunks present → full_text --------------------------
-
-    _patch_db([_FakeDoc(id="kdoc_X", title="resume.pdf", status="ready")])
+    default_resume = _Resume(
+        id="rsm_1", title="我的简历", is_default=True,
+        parse_status="ready", raw_text_snapshot="三年后端开发经验，主导推荐系统",
+    )
     monkeypatch.setattr(
-        _TXT,
-        lambda doc, **k: ("孙根武\n北京邮电大学\n\n工作经历: ...\n\n技能: Python, Rust", 3),
+        "app.services.resume.resume_entity_service.list_resumes",
+        lambda db, *, user_id: [default_resume],
+    )
+
+    # --- Branch 1: parsed sections present → structured result ---------
+    monkeypatch.setattr(
+        "app.services.resume.resume_service.resume_service.get_sections_by_resume",
+        lambda resume_id, user_id=None: [
+            _Section("summary", "简介", "三年后端开发经验"),
+            _Section("project", "推荐系统", "协同过滤推荐"),
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.resume.resume_service.resume_service.format_for_context",
+        lambda sections, **k: "[summary] 简介\n三年后端开发经验",
     )
     result = asyncio.run(_read_resume_handler(args, ctx))
-    assert result["source"] == "chunks_direct"
-    assert result["node_count"] == 3
-    assert "孙根武" in result["full_text"]
-    assert "技能" in result["full_text"]
-    assert result["full_text"].index("孙根武") < result["full_text"].index("工作经历")
+    assert result["resume_id"] == "rsm_1"
+    assert result["section_count"] == 2
+    assert result["sections"][0]["type"] == "summary"
+    assert "简介" in result["formatted_text"]
 
-    # --- Branch 2: no chunks yet → processing hint ---------------------
-
-    _patch_db([_FakeDoc(id="kdoc_Y", title="resume.pdf", status="processing")])
-    monkeypatch.setattr(_TXT, lambda doc, **k: ("", 0))
+    # --- Branch 2: no sections → raw_text_snapshot fallback ------------
+    monkeypatch.setattr(
+        "app.services.resume.resume_service.resume_service.get_sections_by_resume",
+        lambda resume_id, user_id=None: [],
+    )
     result = asyncio.run(_read_resume_handler(args, ctx))
-    assert result["source"] == "chunks_empty"
-    assert result["status"] == "processing"
-    assert "processing" in result["hint"].lower()
+    assert result["source"] == "raw_text_snapshot"
+    assert result["raw_resume_available"] is True
+    assert "推荐系统" in result["full_text"]
 
-    # --- Branch 3: chunk read returns empty for a ready doc ------------
-
-    _patch_db([_FakeDoc(id="kdoc_Z", title="resume.pdf", status="ready")])
-    monkeypatch.setattr(_TXT, lambda doc, **k: ("", 0))
+    # --- Branch 3: no resumes at all → no-resume error ----------------
+    monkeypatch.setattr(
+        "app.services.resume.resume_entity_service.list_resumes",
+        lambda db, *, user_id: [],
+    )
     result = asyncio.run(_read_resume_handler(args, ctx))
-    assert result["source"] == "chunks_empty"
-    assert "status=ready" in result["hint"]
-    assert "no readable chunks" in result["hint"]
+    assert result["raw_resume_available"] is False
+    assert "error" in result
 
 
 def test_tool_start_and_tool_done_carry_tool_call_id():

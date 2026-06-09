@@ -66,9 +66,12 @@ export interface InterviewAnalysis {
 
 export interface InterviewRecordDetail extends InterviewRecordListItem {
   analyzed_qa_count: number;
-  audio_upload_id: string | null;
-  resume_upload_id: string | null;
-  jd_upload_id: string | null;
+  category: string | null;
+  audio_file_asset_id: string | null;
+  resume_id: string | null;
+  resume_file_asset_id: string | null;
+  resume_source: string | null;
+  jd_file_asset_id: string | null;
   transcript: string | null;
   transcript_segments: unknown;
   interview_plan: unknown;

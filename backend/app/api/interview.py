@@ -106,82 +106,26 @@ def list_user_resumes(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List the user's library resumes (KnowledgeDocument with category='简历').
+    """List the user's personal resumes — the first-class ``resumes`` entity.
 
-    Source-of-truth for "stored resumes" is the personal library, not previous
-    mock-interview uploads. Returns each library doc together with the
-    underlying FileAsset.id so MockSetup can pass it to /mock-interview/start
-    as ``resume_upload_id`` without extra translation.
+    MockSetup / analyze setup pass the returned ``resume_id`` to start a mock or
+    dispatch an analysis. Resumes are a personal-profile asset and are NOT
+    knowledge documents.
     """
-    from app.models.file_asset import FileAsset
-    from app.models.knowledge import KnowledgeDocument
+    from app.services.resume import resume_entity_service
 
-    rows = (
-        db.query(KnowledgeDocument, FileAsset)
-        .join(FileAsset, KnowledgeDocument.upload_id == FileAsset.id)
-        .filter(
-            KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username),
-            KnowledgeDocument.category == "简历",
-        )
-        .order_by(KnowledgeDocument.created_at.desc())
-        .limit(50)
-        .all()
-    )
+    resumes = resume_entity_service.list_resumes(db, user_id=current_user.username)
     return {
         "resumes": [
             {
-                "upload_id": u.id,
-                "filename": d.title or u.original_filename,
-                "size_bytes": u.size_bytes,
-                "created_at": d.created_at.isoformat() if d.created_at else "",
-                "doc_id": d.id,
+                "resume_id": r.id,
+                "title": r.title,
+                "is_default": bool(r.is_default),
+                "parse_status": r.parse_status,
+                "created_at": r.created_at.isoformat() if r.created_at else "",
             }
-            for (d, u) in rows
+            for r in resumes
         ],
-    }
-
-
-@router.post("/upload/resume/direct")
-@limiter.limit(RATE_UPLOAD)
-async def upload_resume(
-    request: Request,
-    response: Response,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Upload a resume file for interview analysis context."""
-    import io
-    from pathlib import Path
-
-    from app.services.uploads.file_validation import validate_upload
-    from app.services.voice.file_parser import validate_resume_format
-
-    if not validate_resume_format(file.filename or ""):
-        raise HTTPException(
-            status_code=400,
-            detail="不支持的简历格式。支持: pdf, docx, txt, md",
-        )
-    declared_ext = Path(file.filename or "").suffix.lower()
-    body = await validate_upload(file, purpose="resume", declared_ext=declared_ext)
-
-    upload, _ = create_file_asset(
-        db,
-        user_id=current_user.username,
-        filename=file.filename,
-        purpose="interview_resume",
-        content_type=file.content_type,
-    )
-    storage_uri = upload_file_to_owned_key(io.BytesIO(body), upload.object_key, file.content_type)
-    upload.storage_uri = storage_uri
-    upload.upload_status = "uploaded"
-    db.add(upload)
-    db.commit()
-    return {
-        "status": "success",
-        "upload_id": upload.id,
-        "storage_uri": upload.storage_uri,
-        "filename": upload.original_filename,
     }
 
 
@@ -239,43 +183,72 @@ async def analyze_interview_endpoint(
         if upload.upload_status not in {"pending_upload", "uploaded"}:
             raise HTTPException(status_code=409, detail="Audio upload has already been consumed")
 
-        resume_upload = get_owned_file_asset(
-            db,
-            file_asset_id=body.resume_upload_id,
-            user_id=current_user.username,
-            purpose="interview_resume",
-        )
-        if resume_upload is None:
-            raise HTTPException(status_code=404, detail="Resume upload not found")
-
-        jd_text = (body.jd_text or "").strip()
-        if not jd_text and body.jd_upload_id:
-            from app.services.knowledge.knowledge_text_service import load_knowledge_text
-            try:
-                jd_text = load_knowledge_text(db, body.jd_upload_id, current_user.username) or ""
-            except Exception:  # noqa: BLE001
-                jd_text = ""
-
-        # Extract resume text for the snapshot. Failures are non-fatal —
-        # orchestrator falls back to empty context.
-        # ``_extract_resume_snapshot`` downloads from S3 + parses (PDF/
-        # DOCX) — 100-1000ms of sync I/O + CPU. Offload so the analyze
-        # endpoint doesn't pin the event-loop thread while one user
-        # uploads a slow resume.
+        # Resume context: a personal resume entity (resume_id) OR an ad-hoc file
+        # uploaded just for this interview (resume_file_asset_id). Both snapshot
+        # their text onto the record so history never re-reads them. Optional.
+        resume_id: Optional[str] = None
+        resume_file_asset_id: Optional[str] = None
+        resume_source = "none"
+        resume_title_snapshot: Optional[str] = None
         resume_text = ""
-        try:
-            resume_text = await asyncio.to_thread(
-                _extract_resume_snapshot, db, resume_upload.id, current_user.username,
+        if body.resume_id:
+            from app.services.resume import resume_entity_service
+
+            resume = resume_entity_service.get_owned_resume(
+                db, resume_id=body.resume_id, user_id=current_user.username,
             )
-        except Exception as exc:  # noqa: BLE001
-            import logging
-            logging.getLogger(__name__).warning("Resume snapshot extraction failed: %s", exc)
+            if resume is None:
+                raise HTTPException(status_code=404, detail="Resume not found")
+            resume_id = resume.id
+            resume_source = "personal_resume"
+            resume_title_snapshot = resume.title
+            resume_text = resume.raw_text_snapshot or ""
+        elif body.resume_file_asset_id:
+            resume_upload = get_owned_file_asset(
+                db, file_asset_id=body.resume_file_asset_id,
+                user_id=current_user.username, purpose="resume",
+            )
+            if resume_upload is None:
+                raise HTTPException(status_code=404, detail="Resume upload not found")
+            resume_file_asset_id = resume_upload.id
+            resume_source = "context_upload"
+            # _extract_resume_snapshot downloads + parses (sync I/O + CPU);
+            # offload so the endpoint doesn't pin the event loop. Non-fatal.
+            try:
+                resume_text = await asyncio.to_thread(
+                    _extract_resume_snapshot, db, resume_upload.id, current_user.username,
+                )
+            except Exception as exc:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).warning("Resume snapshot extraction failed: %s", exc)
+
+        # JD context: direct text wins; else extract from a jd file_asset. JD is
+        # never a knowledge document — it only lives as a snapshot on the record.
+        jd_text = (body.jd_text or "").strip()
+        jd_file_asset_id: Optional[str] = None
+        if not jd_text and body.jd_file_asset_id:
+            jd_upload = get_owned_file_asset(
+                db, file_asset_id=body.jd_file_asset_id,
+                user_id=current_user.username, purpose="jd",
+            )
+            if jd_upload is not None:
+                jd_file_asset_id = jd_upload.id
+                try:
+                    jd_text = await asyncio.to_thread(
+                        _extract_resume_snapshot, db, jd_upload.id, current_user.username,
+                    ) or ""
+                except Exception:  # noqa: BLE001
+                    jd_text = ""
 
         record = interview_record_service.create_for_upload(
             user_id=current_user.username,
             title=f"面试录音 {upload.original_filename or upload.id}",
-            audio_upload_id=upload.id,
-            resume_upload_id=resume_upload.id,
+            audio_file_asset_id=upload.id,
+            resume_id=resume_id,
+            resume_file_asset_id=resume_file_asset_id,
+            resume_source=resume_source,
+            resume_title_snapshot=resume_title_snapshot,
+            jd_file_asset_id=jd_file_asset_id,
             resume_text_snapshot=resume_text,
             jd_text_snapshot=jd_text,
             db=db,
@@ -338,15 +311,15 @@ async def cancel_analysis(
     return {"status": "cancelled", "revoked": revoked, "record_id": record_id}
 
 
-def _extract_resume_snapshot(db: Session, resume_upload_id: str, user_id: str) -> str:
-    """Download the resume file and return its plain text (truncated)."""
+def _extract_resume_snapshot(db: Session, file_asset_id: str, user_id: str) -> str:
+    """Download a resume/JD file asset and return its plain text (truncated)."""
     import os
     import tempfile
 
     from app.services.storage_service import download_file_from_s3
     from app.services.voice.file_parser import extract_resume_text
 
-    upload = get_owned_file_asset(db, file_asset_id=resume_upload_id, user_id=user_id)
+    upload = get_owned_file_asset(db, file_asset_id=file_asset_id, user_id=user_id)
     if upload is None or not upload.storage_uri:
         return ""
     if not upload.storage_uri.startswith("s3://"):
@@ -456,18 +429,22 @@ def get_interview_record(
         except json.JSONDecodeError:
             analysis = None
     qa_rows = interview_record_service.list_qa(record_id)
+    transcript = interview_record_service.get_transcript_payload(record_id)
     return {
         "id": record.id,
         "source": record.source,
         "title": record.title,
         "tag": record.tag,
+        "category": record.category,
         "status": record.status,
         "analyzed_qa_count": record.analyzed_qa_count,
-        "audio_upload_id": record.audio_upload_id,
-        "resume_upload_id": record.resume_upload_id,
-        "jd_upload_id": record.jd_upload_id,
-        "transcript": record.transcript,
-        "transcript_segments": _safe_json_loads(record.transcript_segments_json),
+        "audio_file_asset_id": record.audio_file_asset_id,
+        "resume_id": record.resume_id,
+        "resume_file_asset_id": record.resume_file_asset_id,
+        "resume_source": record.resume_source,
+        "jd_file_asset_id": record.jd_file_asset_id,
+        "transcript": transcript["text"],
+        "transcript_segments": _safe_json_loads(transcript["segments_json"]),
         "interview_plan": _safe_json_loads(record.interview_plan),
         "analysis": analysis,
         "qa": [_serialize_qa(qa) for qa in qa_rows],

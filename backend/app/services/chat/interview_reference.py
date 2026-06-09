@@ -166,11 +166,12 @@ def _render(record: InterviewRecord, qa_rows: list[InterviewQA]) -> str:
     # 退化到截断转录，保证最低限度的对话上下文。
     if (record.debrief_summary or "").strip():
         lines.append(f"## 本次面试浓缩摘要\n{record.debrief_summary.strip()}")
-    elif record.transcript:
-        full = record.transcript.strip()
-        if len(full) <= _TRANSCRIPT_HARD_CAP_CHARS:
+    else:
+        from app.services.interview.interview_record_service import interview_record_service
+        full = interview_record_service.get_transcript_text(record.id).strip()
+        if full and len(full) <= _TRANSCRIPT_HARD_CAP_CHARS:
             lines.append(f"## 原始转录（debrief_summary 缺失，回退到全文，{len(full)} 字符）\n{full}")
-        else:
+        elif full:
             head = full[:_TRANSCRIPT_HARD_CAP_CHARS]
             lines.append(
                 f"## 原始转录（debrief_summary 缺失，节选前 {_TRANSCRIPT_HARD_CAP_CHARS}/{len(full)} 字符）\n{head}"
@@ -185,15 +186,17 @@ def _render(record: InterviewRecord, qa_rows: list[InterviewQA]) -> str:
         lines.append(f"## 候选人简历全文\n{resume_snapshot}")
 
     # Upload pointers — tell the model what was provided. Actual file bodies
-    # are reachable via /upload/audio/direct or /knowledge/documents if a tool
-    # needs them; this is just disclosure.
+    # are reachable via the file-assets API if a tool needs them; this is just
+    # disclosure.
     upload_bits = []
-    if record.audio_upload_id:
-        upload_bits.append(f"- 音视频文件已上传 (upload_id={record.audio_upload_id})")
-    if record.resume_upload_id:
-        upload_bits.append(f"- 简历已上传 (upload_id={record.resume_upload_id})")
-    if record.jd_upload_id:
-        upload_bits.append(f"- 岗位 JD 已上传 (document_id={record.jd_upload_id})")
+    if record.audio_file_asset_id:
+        upload_bits.append(f"- 音视频文件已上传 (file_asset_id={record.audio_file_asset_id})")
+    if record.resume_id:
+        upload_bits.append(f"- 使用个人简历 (resume_id={record.resume_id})")
+    if record.resume_file_asset_id:
+        upload_bits.append(f"- 简历已上传 (file_asset_id={record.resume_file_asset_id})")
+    if record.jd_file_asset_id:
+        upload_bits.append(f"- 岗位 JD 已上传 (file_asset_id={record.jd_file_asset_id})")
     if upload_bits:
         lines.append("## 关联文件\n" + "\n".join(upload_bits))
 

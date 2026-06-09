@@ -18,11 +18,19 @@ class PresignedUrlRequest(BaseModel):
 
 
 class AnalyzeRequest(BaseModel):
-    """``POST /interview/analyze`` request body."""
+    """``POST /interview/analyze`` request body.
+
+    Resume context is optional and comes from EITHER a personal resume entity
+    (``resume_id``) or an ad-hoc file uploaded just for this interview
+    (``resume_file_asset_id``, a file_assets.id). JD is a snapshot only —
+    direct ``jd_text`` or a ``jd_file_asset_id`` (file_assets.id, purpose='jd');
+    JD never becomes a knowledge document.
+    """
     upload_id: str
-    resume_upload_id: str
+    resume_id: Optional[str] = None
+    resume_file_asset_id: Optional[str] = None
     jd_text: Optional[str] = None
-    jd_upload_id: Optional[str] = None  # KnowledgeDocument id; if set, text is loaded server-side
+    jd_file_asset_id: Optional[str] = None
     # ISO-639-1 language hint for WhisperX. ``"zh"`` / ``"en"`` force the
     # decoder, ``"auto"`` lets Whisper detect per-clip (slower, occasionally
     # picks the wrong one — only worth it for genuinely mixed audio).

@@ -9,8 +9,8 @@ server-side by Milvus from the ``text`` field.
 
 Workflow:
   1. ``upsert_section`` — delete-then-insert one section's hybrid row.
-  2. ``delete_by_upload`` — keep the index in sync when a section set is
-     re-parsed (old upload rows dropped before the fresh ones are re-indexed).
+  2. ``delete_by_resume`` — keep the index in sync when a section set is
+     re-parsed (old resume rows dropped before the fresh ones are re-indexed).
   3. ``backfill_pending`` — (re)index sections whose ``embedding_status != ready``.
   4. ``retrieve`` — dense + BM25 hybrid search, pk-scoped.
 """
@@ -50,7 +50,7 @@ class ResumeVectorService:
         return {
             "id": section.id,
             "user_id": int(section.user_id),
-            "upload_id": section.upload_id or "",
+            "resume_id": section.resume_id or "",
             "section_type": section.section_type or "",
             "title": section.title or "",
             "text": text,
@@ -69,9 +69,9 @@ class ResumeVectorService:
             db.flush()
         return True
 
-    def delete_by_upload(self, upload_id: str) -> None:
-        """Drop every section index row for one upload (re-parse / upload delete)."""
-        milvus_hybrid.delete_by_field(_COLL, "upload_id", upload_id)
+    def delete_by_resume(self, resume_id: str) -> None:
+        """Drop every section index row for one resume (re-parse / resume delete)."""
+        milvus_hybrid.delete_by_field(_COLL, "resume_id", resume_id)
 
     def backfill_pending(self) -> int:
         """Batch (re)index all sections not yet marked ``ready``."""
@@ -141,7 +141,7 @@ class ResumeVectorService:
                 metadata={
                     "section_id": h["id"],
                     "user_id": h["user_id"],
-                    "upload_id": h.get("upload_id"),
+                    "resume_id": h.get("resume_id"),
                     "section_type": h.get("section_type"),
                     "title": h.get("title"),
                 },

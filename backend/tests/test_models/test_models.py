@@ -216,7 +216,6 @@ def test_interview_record_with_qa_rows(db_session):
         source="upload",
         title="t",
         status="completed",
-        transcript="面试官:你好",
         analysis_json='{"schema_version": 2}',
     )
     db_session.add(record)
@@ -511,7 +510,7 @@ def test_resume_section_round_trip(db_session):
 
     section = ResumeSection(
         user_id=1,
-        upload_id="upl_x",
+        resume_id="rsm_x",
         section_type="project",
         title="Interview Copilot",
         content="Built a multi-tenant RAG over BM25+vector.",

@@ -181,9 +181,10 @@ class SSEChatRequest(BaseModel):
 
 class MockStartRequest(BaseModel):
     session_id: str
-    resume_upload_id: str | None = None
-    jd_upload_id: str | None = None
-    # User-pasted JD text. Wins over jd_upload_id if both present.
+    # Personal resume entity to use as context (resumes.id). Optional.
+    resume_id: str | None = None
+    # JD text — pasted directly or parsed inline via /parse-jd. JD is never a
+    # knowledge document, so there is no jd document id here.
     jd_text: str | None = None
     # Interviewer persona for tone. Depth is inferred from JD seniority.
     interviewer_style: str = "professional"   # friendly|professional|rigorous|pressure

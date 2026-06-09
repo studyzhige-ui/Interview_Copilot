@@ -39,6 +39,8 @@ celery_app.conf.update(
         "tasks.process_interview_analysis": {"queue": "transcription"},
         # ── Light: LLM / embedding / DB only ──
         "tasks.process_document_ingestion": {"queue": "default"},
+        # Resume parse (LLM sectioning + S3 download + embed) is light.
+        "tasks.process_resume_parse": {"queue": "default"},
         "tasks.dream_for_record": {"queue": "default"},
         "tasks.dream_for_user": {"queue": "default"},
         "tasks.scan_and_dream_batch": {"queue": "default"},

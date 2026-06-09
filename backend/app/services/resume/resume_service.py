@@ -53,27 +53,30 @@ PARSE_PROMPT = """你是一个简历解析助手。请将以下简历文本拆�
 class ResumeService:
     async def extract_and_store(
         self,
-        user_id: str,
-        upload_id: str,
+        *,
+        user_pk: int,
+        resume_id: str,
         resume_text: str,
     ) -> list[ResumeSection]:
-        """Parse resume text into sections, store them, and trigger vectorization."""
+        """Parse a resume entity's text into typed sections, persist them
+        (keyed by ``resume_id``), and index each into the resume Milvus
+        collection. ``user_pk`` is the stable users.id (redundant scope key)."""
         sections_data = await self._parse_with_llm(resume_text)
-        sections = self._persist_sections(user_id, upload_id, sections_data)
+        sections = self._persist_sections(user_pk, resume_id, sections_data)
         self._vectorize_sections(sections)
         return sections
 
-    def get_sections_by_upload(
+    def get_sections_by_resume(
         self,
-        upload_id: str,
+        resume_id: str,
         user_id: str | None = None,
     ) -> list[ResumeSection]:
         db: Session = SessionLocal()
         try:
-            query = db.query(ResumeSection).filter(ResumeSection.upload_id == upload_id)
+            query = db.query(ResumeSection).filter(ResumeSection.resume_id == resume_id)
             if user_id:
                 query = query.filter(ResumeSection.user_id == resolve_user_pk(db, user_id))
-            return query.order_by(ResumeSection.id.asc()).all()
+            return query.order_by(ResumeSection.order_idx.asc()).all()
         finally:
             db.close()
 
@@ -139,27 +142,26 @@ class ResumeService:
 
     def _persist_sections(
         self,
-        user_id: str,
-        upload_id: str,
+        user_pk: int,
+        resume_id: str,
         sections_data: list[dict[str, Any]],
     ) -> list[ResumeSection]:
-        valid_types = {"summary", "project", "education", "skill"}
+        valid_types = {"summary", "project", "experience", "education", "skill", "other"}
         db: Session = SessionLocal()
         persisted: list[ResumeSection] = []
         try:
-            user_pk = resolve_user_pk(db, user_id)
-            # Remove old sections for this upload (re-parse scenario) — from BOTH
+            # Remove old sections for this resume (re-parse scenario) — from BOTH
             # Postgres and the Milvus hybrid index, else the old section vectors
             # orphan in Milvus. The fresh sections are re-indexed by
             # _vectorize_sections right after.
             db.query(ResumeSection).filter(
-                ResumeSection.upload_id == upload_id,
+                ResumeSection.resume_id == resume_id,
                 ResumeSection.user_id == user_pk,
             ).delete()
             from app.services.resume.resume_vector_service import resume_vector_service
-            resume_vector_service.delete_by_upload(upload_id)
+            resume_vector_service.delete_by_resume(resume_id)
 
-            for item in sections_data:
+            for order_idx, item in enumerate(sections_data):
                 section_type = str(item.get("section_type") or "summary").strip()
                 if section_type not in valid_types:
                     section_type = "summary"
@@ -173,11 +175,12 @@ class ResumeService:
                 section = ResumeSection(
                     id=_generate_section_id(),
                     user_id=user_pk,
-                    upload_id=upload_id,
+                    resume_id=resume_id,
                     section_type=section_type,
                     title=title or section_type,
                     content=content,
                     metadata_json=metadata_json,
+                    order_idx=order_idx,
                     embedding_status="pending",
                 )
                 db.add(section)

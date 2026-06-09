@@ -321,26 +321,15 @@ def test_sse_chat_endpoint_streams_chunks(client: TestClient, db: Session, monke
     assert '"type": "done"' in body
 
 
-def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypatch):
-    """``start_mock_interview`` tries three resume-resolution tiers
-    in a load-bearing order: ``resume_sections`` (structured) →
-    ``KnowledgeDocument`` docstore (chunks already parsed at library-
-    upload time) → ``_parse_resume_on_demand`` (last-resort S3 +
-    LlamaParse, ~8s). A future contributor swapping that order would
-    silently regress mock_start latency (or quality).
-
-    This test wires a call-recorder into each tier and drives three
-    scenarios; the recorder asserts both WHICH tiers ran AND in WHAT
-    ORDER. Pre-fix the wiring was "verified by hand" per the comment
-    in mock_interview.py.
+def test_mock_start_resolves_resume_from_entity(client: TestClient, db: Session, monkeypatch):
+    """``start_mock_interview`` resolves resume context from the personal
+    ``resumes`` entity (``resume_id``): structured ``resume_sections`` first,
+    else the entity's ``raw_text_snapshot``. Resumes are a personal entity —
+    there is no knowledge-chunk / docstore / reparse fallback anymore.
     """
-    # Owning session + FileAsset row (the endpoint validates both).
-    from app.models.file_asset import FileAsset
+    from app.models.resume import Resume
     from app.models.user import User
 
-    # FileAsset.user_id is the integer users.id FK, so seed the principal row
-    # and key the asset on its pk (the resume-resolution tiers are all stubbed
-    # below, so the asset is a structural seed; we still honour the contract).
     alice = User(username="alice", hashed_password="x")
     db.add(alice)
     db.flush()
@@ -348,63 +337,20 @@ def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypat
         id="s_mock", user_id=alice.id, title="模拟面试",
         session_type="mock_interview",
     ))
-    db.add(FileAsset(
-        id="upl_resume", user_id=alice.id,
-        original_filename="r.pdf",
-        storage_uri="s3://bucket/r.pdf",
-        object_key="r.pdf",
-        purpose="knowledge_document",
-        upload_status="uploaded",
-        validation_status="passed",
+    db.add(Resume(
+        id="rsm_1", user_id=alice.id, title="我的简历", is_default=True,
+        raw_text_snapshot="三年后端开发经验，主导过推荐系统项目", parse_status="ready",
     ))
     db.commit()
 
-    calls: list[str] = []
-
-    # Stub each tier so we can assert ordering without paying their
-    # real cost.
-    def fake_sections(upload_id, user_id):
-        calls.append("sections")
-        return []  # forces tier 2/3
-
-    def fake_format(sections, **kw):
-        return "(formatted) " + " ".join(s.title for s in sections)
-
-    def fake_find_kdoc(db_, upload_id, user_id):
-        calls.append("find_kdoc")
-        # ``has_kdoc`` driven by scenario below.
-        return _fake_kdoc[0]
-
-    def fake_docstore_read(doc, **k):
-        calls.append("docstore")
-        return ("docstore text", 3)
-
-    async def fake_reparse(db_, upload_id, user_id):
-        calls.append("reparse")
-        return "reparsed text"
-
+    # No parsed sections → falls back to the entity's raw_text_snapshot.
     monkeypatch.setattr(
-        "app.services.resume.resume_service.resume_service.get_sections_by_upload",
-        fake_sections,
-    )
-    monkeypatch.setattr(
-        "app.services.resume.resume_service.resume_service.format_for_context",
-        fake_format,
-    )
-    monkeypatch.setattr(
-        "app.services.knowledge.knowledge_text_service.find_knowledge_doc_by_upload",
-        fake_find_kdoc,
-    )
-    monkeypatch.setattr(
-        "app.services.knowledge.knowledge_text_service.read_full_text_from_chunks",
-        fake_docstore_read,
-    )
-    monkeypatch.setattr(
-        "app.api.chat.mock_interview._parse_resume_on_demand",
-        fake_reparse,
+        "app.services.resume.resume_service.resume_service.get_sections_by_resume",
+        lambda resume_id, user_id=None: [],
     )
 
-    # Stub generate_brief so the endpoint doesn't make a real LLM call.
+    # Stub generate_brief so the endpoint doesn't make a real LLM call, and
+    # capture the resume_context that reached it.
     from app.services.interview.mock_interview_service import InterviewBrief
     fake_brief = InterviewBrief(
         interview_plan={"phases": [
@@ -415,109 +361,30 @@ def test_mock_start_resume_tier_order(client: TestClient, db: Session, monkeypat
         opening_question="请简单做个自我介绍",
         min_turns=3, target_turns=5, max_turns=8,
     )
+    captured: dict = {}
+
     async def fake_generate_brief(**kwargs):
+        captured.update(kwargs)
         return fake_brief
+
     monkeypatch.setattr(
         "app.services.interview.mock_interview_service.generate_brief",
         fake_generate_brief,
     )
-    # build_prefix / prefix_hash are deterministic pure functions —
-    # let them run for real; they don't hit external services.
 
-    # ── Scenario A: sections-tier hit (no kdoc lookup, no reparse) ──
-    _fake_kdoc = [None]  # sentinel — not consulted in scenario A
-    monkeypatch.setattr(
-        "app.services.resume.resume_service.resume_service.get_sections_by_upload",
-        lambda u, n: (calls.append("sections"), [
-            # Non-empty so tier 1 wins.
-            type("S", (), {"section_type": "summary", "title": "X", "content": "y"})()
-        ])[1],
-    )
     resp = client.post(
         "/api/v1/chat/mock-interview/start",
         json={
             "session_id": "s_mock",
-            "resume_upload_id": "upl_resume",
+            "resume_id": "rsm_1",
             "jd_text": "JD content",
             "interviewer_style": "professional",
             "voice_mode": "hybrid",
         },
     )
     assert resp.status_code == 200, resp.text
-    assert calls == ["sections"], (
-        f"sections tier should be the only one consulted when "
-        f"resume_sections is non-empty; got calls={calls}"
-    )
-
-    # ── Scenario B: sections empty + kdoc present → docstore wins ──
-    calls.clear()
-    monkeypatch.setattr(
-        "app.services.resume.resume_service.resume_service.get_sections_by_upload",
-        fake_sections,  # returns []
-    )
-
-    class _FakeKDoc:
-        id = "kdoc_X"
-        title = "resume.pdf"
-        status = "ready"
-        created_at = None
-
-    _fake_kdoc[0] = _FakeKDoc()
-    # Reset mock_interview_state since the first scenario already initialized.
-    s = db.query(ChatSession).filter(ChatSession.id == "s_mock").first()
-    s.mock_interview_state = None
-    db.commit()
-
-    resp = client.post(
-        "/api/v1/chat/mock-interview/start",
-        json={
-            "session_id": "s_mock",
-            "resume_upload_id": "upl_resume",
-            "jd_text": "JD content",
-            "interviewer_style": "professional",
-            "voice_mode": "hybrid",
-        },
-    )
-    assert resp.status_code == 200, resp.text
-    # Sections checked first, fails → docstore tier consulted and wins.
-    # ``reparse`` must NOT be called (that's the whole point of the
-    # docstore tier — it saved the 8-second LlamaParse round-trip).
-    assert "sections" in calls and "find_kdoc" in calls and "docstore" in calls, (
-        f"expected sections+find_kdoc+docstore to all be consulted; "
-        f"got calls={calls}"
-    )
-    assert "reparse" not in calls, (
-        f"reparse tier ran even though docstore returned text; "
-        f"the perf optimization is silently broken. calls={calls}"
-    )
-    # Order check: sections BEFORE find_kdoc BEFORE docstore (load-
-    # bearing tier priority — parsed/cleaned > raw chunks > re-parse).
-    assert calls.index("sections") < calls.index("find_kdoc") < calls.index("docstore")
-
-    # ── Scenario C: nothing → reparse fallback ──
-    calls.clear()
-    _fake_kdoc[0] = None  # no library doc either
-    s = db.query(ChatSession).filter(ChatSession.id == "s_mock").first()
-    s.mock_interview_state = None
-    db.commit()
-
-    resp = client.post(
-        "/api/v1/chat/mock-interview/start",
-        json={
-            "session_id": "s_mock",
-            "resume_upload_id": "upl_resume",
-            "jd_text": "JD content",
-            "interviewer_style": "professional",
-            "voice_mode": "hybrid",
-        },
-    )
-    assert resp.status_code == 200, resp.text
-    # All three tiers consulted in order; reparse is the only one
-    # that produces output.
-    assert "sections" in calls
-    assert "find_kdoc" in calls
-    assert "reparse" in calls
-    assert calls.index("sections") < calls.index("find_kdoc") < calls.index("reparse")
+    # The resume entity's raw_text_snapshot reached the brief as resume_context.
+    assert "推荐系统" in (captured.get("resume_context") or "")
 
 
 def test_in_progress_keeps_session_when_brief_launched_but_zero_qa(

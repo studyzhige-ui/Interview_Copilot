@@ -102,72 +102,36 @@ async def start_mock_interview(
     _mark("begin")
 
     logger.info(
-        "mock_start: user=%s session=%s resume=%s jd_upload=%s jd_text_len=%d style=%s voice=%s",
+        "mock_start: user=%s session=%s resume_id=%s jd_text_len=%d style=%s voice=%s",
         current_user.username, body.session_id,
-        body.resume_upload_id, body.jd_upload_id,
+        body.resume_id,
         len(body.jd_text or ""),
         body.interviewer_style, body.voice_mode,
     )
 
-    # Resume text resolution. Three tiers, fastest first:
-    #
-    #   1. ``resume_sections`` — the dedicated structured-parsing table
-    #      used by older flows. Hot when present.
-    #
-    #   2. ``document_chunks`` — when the resume was added to the
-    #      library, ingestion ALREADY parsed the PDF into chunks (in
-    #      Postgres ``document_chunks``). We just read them back and
-    #      concatenate — no S3 round-trip, no LlamaParse call.
-    #      Resolves in ~5-50 ms.
-    #
-    #   3. ``_parse_resume_on_demand`` — last-resort cold path. S3
-    #      download + LlamaParse fresh parse. The historical default,
-    #      which is why mock_start used to take 8-10 seconds on every
-    #      fresh resume (the LlamaParse round-trip alone is 7-8 s on
-    #      a typical 2-page CV). Now only fires when the upload has
-    #      neither parsed sections NOR a library row.
-    #
-    # **Tier order is load-bearing** — sections > chunks > reparse.
-    # A future contributor swapping these will silently regress mock
-    # interview quality (sections are structured/cleaned; chunks are
-    # raw concatenated text). The helper-level pieces are pinned by
-    # ``tests/test_services/test_knowledge_text_service.py`` (chunks
-    # priority over reparse) but the THIS-FILE wiring is verified by
-    # hand right now — add an integration test if you change this
-    # block.
+    # Resume context: the user's personal resume entity (``resume_id``). Prefer
+    # the structured ``resume_sections``; fall back to the entity's
+    # ``raw_text_snapshot``. Resumes are a personal entity — never knowledge
+    # documents, so there is no knowledge-chunk / docstore fallback here.
     resume_context = ""
     resume_source = "none"
-    if body.resume_upload_id:
+    if body.resume_id:
         try:
-            sections = resume_service.get_sections_by_upload(
-                body.resume_upload_id, current_user.username,
+            from app.services.resume import resume_entity_service
+
+            resume = resume_entity_service.get_owned_resume(
+                db, resume_id=body.resume_id, user_id=current_user.username,
             )
-            if sections:
-                resume_context = resume_service.format_for_context(sections)
-                resume_source = "sections"
-            else:
-                from app.services.knowledge.knowledge_text_service import (
-                    find_knowledge_doc_by_upload,
-                    read_full_text_from_chunks,
-                )
-                kdoc = find_knowledge_doc_by_upload(
-                    db, body.resume_upload_id, current_user.username,
-                )
-                if kdoc is not None:
-                    text, node_count = read_full_text_from_chunks(kdoc)
-                    if node_count > 0:
-                        resume_context = text
-                        resume_source = "chunks"
-                if not resume_context:
-                    resume_context = await _parse_resume_on_demand(
-                        db, body.resume_upload_id, current_user.username,
-                    )
-                    resume_source = "reparsed" if resume_context else "none"
+            if resume is not None:
+                sections = resume_service.get_sections_by_resume(resume.id)
+                if sections:
+                    resume_context = resume_service.format_for_context(sections)
+                    resume_source = "sections"
+                elif (resume.raw_text_snapshot or "").strip():
+                    resume_context = resume.raw_text_snapshot.strip()
+                    resume_source = "raw_text"
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Resume context load failed (tier reached=%s): %s",
-                resume_source, exc,
-            )
+            logger.warning("Resume context load failed: %s", exc)
             resume_context = ""
     _mark("resume_done")
     logger.info(
@@ -175,14 +139,8 @@ async def start_mock_interview(
         len(resume_context), resume_source,
     )
 
+    # JD context: pasted or parsed text only. JD never becomes a knowledge document.
     jd_context = (body.jd_text or "").strip()
-    if not jd_context and body.jd_upload_id:
-        from app.services.knowledge.knowledge_text_service import load_knowledge_text
-        try:
-            jd_context = load_knowledge_text(db, body.jd_upload_id, current_user.username)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("JD load failed: %s", exc)
-            jd_context = ""
     _mark("jd_done")
     logger.info("mock_start: jd_context_chars=%d", len(jd_context))
 
@@ -782,39 +740,6 @@ def _phase_budget(state: dict, phase: str) -> int:
             except (TypeError, ValueError):
                 return 1
     return 1
-
-
-async def _parse_resume_on_demand(db: Session, upload_id: str, user_id: str) -> str:
-    """Download a resume upload (or knowledge_document) and return its plain
-    text, truncated."""
-    import os
-    import tempfile
-
-    from app.services.storage_service import download_file_from_s3
-    from app.services.uploads.file_asset_service import get_owned_file_asset
-    from app.services.voice.file_parser import extract_resume_text
-
-    upload = get_owned_file_asset(db, file_asset_id=upload_id, user_id=user_id)
-    if (
-        upload is None
-        or upload.purpose not in ("interview_resume", "knowledge_document")
-        or not upload.storage_uri
-    ):
-        return ""
-
-    suffix = os.path.splitext(upload.original_filename or "")[1] or ".pdf"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
-        local_path = tf.name
-    try:
-        download_file_from_s3(upload.storage_uri, local_path)
-        resume_text = extract_resume_text(local_path) or ""
-    finally:
-        try:
-            os.unlink(local_path)
-        except OSError:
-            pass
-
-    return resume_text[:8000]
 
 
 # ── Stateless JD parsing ───────────────────────────────────────────────

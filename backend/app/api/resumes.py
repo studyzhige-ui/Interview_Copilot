@@ -6,6 +6,8 @@ personal-profile asset — they never enter the knowledge base.
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -17,7 +19,23 @@ from app.models.resume import Resume
 from app.models.user import User
 from app.services.resume import resume_entity_service
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+def _dispatch_resume_parse(resume: Resume) -> None:
+    """Best-effort: parse the resume into ``resume_sections`` + index them
+    (RFC §6.5). The entity is already persisted; a dispatch failure just
+    leaves ``parse_status`` for a later retry."""
+    if not (resume.file_asset_id or (resume.raw_text_snapshot or "").strip()):
+        return
+    try:
+        from app.worker.tasks import process_resume_parse
+
+        process_resume_parse.delay(resume.id)
+    except Exception:  # noqa: BLE001
+        logger.warning("resume parse dispatch failed for %s", resume.id)
 
 
 class ResumeCreateRequest(BaseModel):
@@ -79,6 +97,7 @@ def create_resume(
         )
     except resume_entity_service.ResumeLimitError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    _dispatch_resume_parse(resume)
     return _serialize(resume)
 
 
@@ -103,6 +122,7 @@ def replace_resume(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    _dispatch_resume_parse(resume)
     return _serialize(resume)
 
 

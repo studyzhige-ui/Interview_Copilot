@@ -147,7 +147,7 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
         FileAsset(
             id="upl_resume",
             user_id=_uid(db, "alice"),
-            purpose="interview_resume",
+            purpose="resume",
             original_filename="r.pdf",
             storage_uri="s3://b/uploads/alice/upl_resume/r.pdf",
             object_key="uploads/alice/upl_resume/r.pdf",
@@ -166,7 +166,7 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
             "/api/v1/analyze",
             json={
                 "upload_id": "upl_audio",
-                "resume_upload_id": "upl_resume",
+                "resume_file_asset_id": "upl_resume",
                 "jd_text": "looking for Redis expert",
             },
         )
@@ -191,7 +191,7 @@ def test_analyze_returns_404_for_missing_audio_upload(client, db: Session):
         FileAsset(
             id="upl_resume",
             user_id=_uid(db, "alice"),
-            purpose="interview_resume",
+            purpose="resume",
             original_filename="r.pdf",
             storage_uri="s3://b/uploads/alice/upl_resume/r.pdf",
             object_key="uploads/alice/upl_resume/r.pdf",
@@ -202,7 +202,7 @@ def test_analyze_returns_404_for_missing_audio_upload(client, db: Session):
     db.commit()
     resp = client.post(
         "/api/v1/analyze",
-        json={"upload_id": "nope", "resume_upload_id": "upl_resume"},
+        json={"upload_id": "nope", "resume_file_asset_id": "upl_resume"},
     )
     assert resp.status_code == 404
 
@@ -223,7 +223,7 @@ def test_analyze_blocks_already_consumed_audio(client, db: Session):
         FileAsset(
             id="upl_resume",
             user_id=_uid(db, "alice"),
-            purpose="interview_resume",
+            purpose="resume",
             original_filename="r.pdf",
             storage_uri="s3://b/y",
             object_key="y",
@@ -234,7 +234,7 @@ def test_analyze_blocks_already_consumed_audio(client, db: Session):
     db.commit()
     resp = client.post(
         "/api/v1/analyze",
-        json={"upload_id": "upl_audio", "resume_upload_id": "upl_resume"},
+        json={"upload_id": "upl_audio", "resume_file_asset_id": "upl_resume"},
     )
     assert resp.status_code == 409
 

@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 from app.db.database import SessionLocal
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
+from app.models.interview_transcript import InterviewTranscript
 from app.models.mock_interview_session import MockInterviewSession
 from app.services.uploads.file_asset_service import get_file_asset
 from app.services.interview.interview_record_service import (
@@ -75,7 +76,9 @@ class InterviewAnalysisOrchestrator:
             else:  # mock
                 qa_pairs = self._load_mock_qa(record_id)
                 transcript = self._compose_transcript_from_qa(qa_pairs)
-                interview_record_service.set_transcript(record_id, transcript=transcript)
+                interview_record_service.set_transcript(
+                    record_id, transcript=transcript, provider="mock_composed",
+                )
 
             # Persist QA shells (so SSE can show "X of Y analyzed" early on)
             self._persist_qa_shells(record_id, qa_pairs)
@@ -147,15 +150,15 @@ class InterviewAnalysisOrchestrator:
             record = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
             if record is None:
                 raise RuntimeError(f"Record {record_id} disappeared mid-pipeline")
-            if not record.audio_upload_id:
-                raise RuntimeError(f"Upload record {record_id} has no audio_upload_id")
+            if not record.audio_file_asset_id:
+                raise RuntimeError(f"Upload record {record_id} has no audio_file_asset_id")
 
             # record.user_id is the stable users.id (CLEANUP #2), as is the
             # FileAsset's — fetch by id (trusted worker context) + compare pks.
-            upload = get_file_asset(db, record.audio_upload_id)
+            upload = get_file_asset(db, record.audio_file_asset_id)
             if upload is None or upload.user_id != record.user_id:
                 raise RuntimeError(
-                    f"Audio upload {record.audio_upload_id} missing or not owned"
+                    f"Audio upload {record.audio_file_asset_id} missing or not owned"
                 )
 
             storage_uri = upload.storage_uri
@@ -175,7 +178,10 @@ class InterviewAnalysisOrchestrator:
 
         try:
             transcript = await transcribe_media(local_path, language=language)
-            interview_record_service.set_transcript(record_id, transcript=transcript)
+            interview_record_service.set_transcript(
+                record_id, transcript=transcript,
+                provider="local_whisperx", language=language,
+            )
             return transcript
         finally:
             if is_temp and local_path and os.path.exists(local_path):
@@ -372,7 +378,14 @@ class InterviewAnalysisOrchestrator:
                 return
             title = (rec.title or "").strip()
             tag = (rec.tag or "").strip()
-            transcript = (rec.transcript or "").strip()
+            transcript = ""
+            if rec.transcript_id:
+                tr = (
+                    db.query(InterviewTranscript)
+                    .filter(InterviewTranscript.id == rec.transcript_id)
+                    .first()
+                )
+                transcript = (tr.text if tr and tr.text else "").strip()
             analysis_json = rec.analysis_json or ""
             qa_rows = (
                 db.query(InterviewQA)

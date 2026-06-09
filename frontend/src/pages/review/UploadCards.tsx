@@ -3,8 +3,8 @@ import { Upload, FileText, Briefcase, Mic2, CheckCircle2, Loader2, Play, Tag } f
 import { Btn } from '@/components/ui/Btn';
 import { Spinner } from '@/components/ui/Spinner';
 import { toast } from '@/store/uiStore';
-import { startAnalyze, updateInterviewRecord, uploadAudio, uploadResume } from '@/api/interview';
-import { uploadKnowledgeFile } from '@/api/knowledge';
+import { startAnalyze, updateInterviewRecord, uploadAudio } from '@/api/interview';
+import { uploadFileAsset } from '@/api/fileAssets';
 import type { AnalysisProgress } from './AnalysisRunner';
 
 interface SlotState {
@@ -56,9 +56,12 @@ export function UploadCards({ initialTitle, analysis, onStart }: Props) {
     update(k, { filename: f.name, uploading: true });
     try {
       let uploadId = '';
+      // Audio stays on the legacy upload endpoint for now; resume + JD go
+      // through the unified presigned file-asset flow. JD is an ad-hoc snapshot
+      // source (purpose='jd') and never enters the knowledge base.
       if (k === 'audio') uploadId = (await uploadAudio(f)).upload_id;
-      else if (k === 'resume') uploadId = (await uploadResume(f)).upload_id;
-      else uploadId = (await uploadKnowledgeFile(f, { category: 'jd', source_kind: 'official_docs' })).id;
+      else if (k === 'resume') uploadId = await uploadFileAsset(f, 'resume');
+      else uploadId = await uploadFileAsset(f, 'jd');
       update(k, { filename: f.name, uploadId, uploading: false });
     } catch {
       update(k, { filename: '', uploadId: undefined, uploading: false });
@@ -74,8 +77,8 @@ export function UploadCards({ initialTitle, analysis, onStart }: Props) {
     try {
       const r = await startAnalyze({
         upload_id: slots.audio.uploadId!,
-        resume_upload_id: slots.resume.uploadId!,
-        jd_upload_id: slots.jd.uploadId,
+        resume_file_asset_id: slots.resume.uploadId!,
+        jd_file_asset_id: slots.jd.uploadId,
         language,
       });
       onStart({

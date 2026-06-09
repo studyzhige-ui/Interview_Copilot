@@ -8,8 +8,9 @@ import type {
 
 export async function startMockInterview(payload: {
   session_id: string;
-  resume_upload_id?: string;
-  jd_upload_id?: string;
+  /** Personal resume entity (resumes.id) to use as context. */
+  resume_id?: string;
+  /** JD text — pasted or parsed inline. JD is never a knowledge document. */
   jd_text?: string;
   interviewer_style?: 'friendly' | 'professional' | 'rigorous' | 'pressure';
   voice_mode?: 'text' | 'voice' | 'hybrid';

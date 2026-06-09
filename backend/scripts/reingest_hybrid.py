@@ -7,7 +7,7 @@ metadata/schema survives.
 
 Fact sources (Postgres is authoritative — this NEVER reads the old Milvus rows):
   * knowledge → document_chunks            (id=node_id, text, source_kind, document_id)
-  * resume    → resume_sections            (id, content, upload_id, section_type, title)
+  * resume    → resume_sections            (id, content, resume_id, section_type, title)
   * ability   → memory_ability_states      (id, search_text|topic+..+summary), archived_at IS NULL
 
 ``--drop`` recreates the collection from scratch (clean schema). Safe on an empty
