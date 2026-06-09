@@ -247,7 +247,7 @@ def delete_settings(
     defaults. Returns ``True`` if a row was deleted, ``False`` if there
     was nothing to delete.
 
-    Does NOT touch ``user_api_keys`` — the user keeps their encrypted
+    Does NOT touch ``user_model_credentials`` — the user keeps their encrypted
     key. Use the existing ``DELETE /models/api-keys/{provider}``
     endpoint for that.
     """

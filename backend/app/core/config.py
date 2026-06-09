@@ -154,7 +154,7 @@ class Settings(BaseSettings):
     # operator notices instead of silently inheriting a placeholder.
     SECRET_KEY: str = ""
     # Comma-separated list of OLD secrets retained during a key-rotation grace
-    # period. Encrypted user_api_keys ciphertexts encrypted under any of these
+    # period. Encrypted user_model_credentials ciphertexts encrypted under any of these
     # can still be decrypted (MultiFernet); new writes always use SECRET_KEY.
     # Move keys here when rotating, then drop them once all stored payloads
     # have been lazily re-encrypted (or after a hard cutoff).

@@ -24,7 +24,7 @@ rotate without invalidating every stored key:
 
 Resolution order at request time (``resolve_api_key``)
 ------------------------------------------------------
-  1. user_api_keys row for (user_id, provider) — encrypted DB storage
+  1. user_model_credentials row for (user_id, provider) — encrypted DB storage
   2. OS env var ``profile.api_key_env`` — legacy .env path
 First non-empty wins. Existing call sites that don't pass user_id keep
 working (they only see #2).
