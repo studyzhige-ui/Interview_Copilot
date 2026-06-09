@@ -8,7 +8,6 @@ from app.models.memory_ability_state import MemoryAbilityState
 from app.models.memory_audit_logs import MemoryAuditEntry
 from app.models.memory_document import MemoryDocument
 from app.models.mock_interview_runtime import MockInterviewRuntime
-from app.models.mock_interview_session import MockInterviewSession
 from app.models.outbox_job import OutboxJob
 from app.models.resume import Resume
 from app.models.resume_section import ResumeSection
@@ -29,7 +28,6 @@ __all__ = [
     "MemoryAuditEntry",
     "MemoryDocument",
     "MockInterviewRuntime",
-    "MockInterviewSession",
     "OutboxJob",
     "Resume",
     "ResumeSection",

@@ -14,7 +14,7 @@ Coverage:
     core entities (User, Conversation+ConversationMessage, InterviewRecord +
     InterviewQA, FileAsset, KnowledgeDocument, MemoryDocument /
     MemoryAbilityState / MemoryAuditEntry (v3 memory),
-    MockInterviewSession, UserModelCredential, ResumeSection).
+    MockInterviewRuntime, UserModelCredential, ResumeSection).
 """
 from __future__ import annotations
 
@@ -96,7 +96,6 @@ def test_all_expected_tables_registered(test_engine):
         "document_chunks",
         "interview_records",
         "interview_qa",
-        "mock_interview_sessions",
         "mock_interview_runtime",
         "conversations",
         "conversation_messages",
@@ -146,9 +145,9 @@ def test_chat_message_foreign_key_to_session(test_engine):
     assert "conversations" in targets
 
 
-def test_mock_session_cascades_from_interview_record(test_engine):
+def test_mock_runtime_cascades_from_interview_record(test_engine):
     insp = inspect(test_engine)
-    fks = insp.get_foreign_keys("mock_interview_sessions")
+    fks = insp.get_foreign_keys("mock_interview_runtime")
     assert any(fk["referred_table"] == "interview_records" for fk in fks)
 
 
@@ -485,22 +484,22 @@ def test_user_model_credential_uniqueness(db_session):
     db_session.rollback()
 
 
-def test_mock_interview_session_defaults(db_session):
+def test_mock_runtime_defaults(db_session):
     from app.models.interview_record import InterviewRecord
-    from app.models.mock_interview_session import MockInterviewSession
+    from app.models.mock_interview_runtime import MockInterviewRuntime
 
     uid = _make_user(db_session, username="u1")
-    rec = InterviewRecord(user_id="u1", source="mock", status="pending")
+    rec = InterviewRecord(user_id="u1", source="mock", status="mock_in_progress")
     db_session.add(rec)
     db_session.flush()
 
-    mis = MockInterviewSession(user_id=uid, interview_record_id=rec.id)
-    db_session.add(mis)
+    runtime = MockInterviewRuntime(user_id=uid, interview_record_id=rec.id)
+    db_session.add(runtime)
     db_session.flush()
 
-    loaded = db_session.query(MockInterviewSession).first()
+    loaded = db_session.query(MockInterviewRuntime).first()
     assert loaded.status == "in_progress"
-    assert loaded.current_question_idx == 0
+    assert loaded.stage_index == 0
     assert loaded.interviewer_style == "professional"
     assert loaded.voice_mode == "hybrid"
 

@@ -6,7 +6,7 @@ interview is right now (stage, plan, current question) — not the final scored
 QA (that's ``interview_qa``) and not the chat transcript (that's the
 conversation messages). It is the single home for the live mock runtime
 (superseding the dropped ``conversations.mock_interview_state`` JSON blob and
-the deprecated ``mock_interview_sessions`` archive table).
+the ``mock_interview_sessions`` archive table, dropped in migration 0040).
 
 Lifecycle: the mock-start flow atomically creates an ``interview_records`` row
 (``status="mock_in_progress"``), a ``conversations`` row

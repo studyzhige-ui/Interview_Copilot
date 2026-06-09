@@ -42,7 +42,6 @@ import app.models.memory_ability_state
 import app.models.memory_audit_logs
 import app.models.memory_document
 import app.models.mock_interview_runtime
-import app.models.mock_interview_session
 import app.models.file_asset
 import app.models.outbox_job
 import app.models.resume

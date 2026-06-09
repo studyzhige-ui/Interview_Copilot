@@ -19,7 +19,6 @@ import app.models.knowledge  # noqa: F401
 import app.models.memory_ability_state  # noqa: F401 — v3 memory: per-topic mastery
 import app.models.memory_audit_logs  # noqa: F401 — v3 memory: audit trail
 import app.models.memory_document  # noqa: F401 — v3 memory: profile/strategy docs
-import app.models.mock_interview_session  # noqa: F401
 import app.models.resume_section  # noqa: F401
 import app.models.user  # noqa: F401
 

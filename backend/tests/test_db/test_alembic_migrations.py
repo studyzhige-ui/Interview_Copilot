@@ -173,7 +173,6 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "interview_records",
         "interview_transcripts",
         "interview_qa",
-        "mock_interview_sessions",
         "mock_interview_runtime",
         "conversations",
         "conversation_messages",
@@ -194,6 +193,8 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     legacy = {
         "interviews", "transcripts", "analysis_results", "interview_states",
         "memory_items", "agent_runs", "agent_steps",
+        # mock_interview_sessions dropped in 0040 (CLEANUP) — runtime + interview_qa replace it.
+        "mock_interview_sessions",
     }
     leftover = legacy & tables
     assert not leftover, f"Legacy tables still present: {leftover}"
@@ -251,10 +252,12 @@ def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
 
     Verify behaviourally (not just via inspector): insert one parent
     interview_records row + one interview_qa child + one
-    mock_interview_sessions child, delete the parent, and assert
+    mock_interview_runtime child, delete the parent, and assert
     that both children disappear without any IntegrityError. Without
     the cascade, the parent delete would either raise or leave
     orphan children — both are regressions worth pinning.
+    (mock_interview_sessions was dropped in 0040; the runtime row is the
+    surviving mock child of interview_records.)
     """
     from alembic import command
     from sqlalchemy import create_engine, text
@@ -265,9 +268,9 @@ def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
 
     engine = create_engine(fresh_pg_db)
     with engine.begin() as conn:
-        # Both mock_interview_sessions.user_id and interview_records.user_id
-        # are now integer users.id FKs (CLEANUP #2), so seed a users row and
-        # reference its id (1) from both child inserts.
+        # Both mock_interview_runtime.user_id and interview_records.user_id are
+        # integer users.id FKs (CLEANUP #2), so seed a users row and reference
+        # its id (1) from both child inserts.
         conn.execute(text(
             "INSERT INTO users (id, username, hashed_password) VALUES (1, 'alice', 'x')"
         ))
@@ -280,9 +283,12 @@ def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
             "VALUES ('qa_x', 'ir_cascade', 0, 'q?', 'a.')"
         ))
         conn.execute(text(
-            "INSERT INTO mock_interview_sessions "
-            "(id, user_id, interview_record_id, status, current_question_idx) "
-            "VALUES ('mis_x', 1, 'ir_cascade', 'finished', 0)"
+            "INSERT INTO mock_interview_runtime "
+            "(id, user_id, interview_record_id, status, stage_index, "
+            "plan_template_key, interviewer_style, voice_mode, "
+            "started_at, last_activity_at, updated_at) "
+            "VALUES ('mir_x', 1, 'ir_cascade', 'completed', 0, "
+            "'general', 'professional', 'hybrid', NOW(), NOW(), NOW())"
         ))
 
     # The actual cascade probe. Pre-0009 this would have raised
@@ -294,11 +300,11 @@ def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
         qa_left = conn.execute(text(
             "SELECT count(*) FROM interview_qa WHERE record_id = 'ir_cascade'"
         )).scalar()
-        mis_left = conn.execute(text(
-            "SELECT count(*) FROM mock_interview_sessions "
+        runtime_left = conn.execute(text(
+            "SELECT count(*) FROM mock_interview_runtime "
             "WHERE interview_record_id = 'ir_cascade'"
         )).scalar()
     assert qa_left == 0, f"interview_qa not cascaded — {qa_left} orphan rows"
-    assert mis_left == 0, f"mock_interview_sessions not cascaded — {mis_left} orphan rows"
+    assert runtime_left == 0, f"mock_interview_runtime not cascaded — {runtime_left} orphan rows"
 
     engine.dispose()

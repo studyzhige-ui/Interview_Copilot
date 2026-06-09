@@ -51,7 +51,6 @@ USER_PK_TABLES = (
     "resumes",
     "knowledge_documents",
     "interview_records",
-    "mock_interview_sessions",
     "mock_interview_runtime",
     "conversations",
     "document_chunks",

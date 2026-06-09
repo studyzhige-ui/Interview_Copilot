@@ -415,9 +415,10 @@ def delete_interview_record(
 
       1. **conversation_messages** for every session linked to this interview
          (the FK has no ON DELETE CASCADE, so we have to be explicit).
-      2. **conversations** linked to this interview (``interview_id == X``).
-      3. **interview_qa** + **mock_interview_sessions** (auto via FK
-         ON DELETE CASCADE on ``interview_records``).
+      2. **conversations** bound to this interview (``subject_id == X``).
+      3. **mock_interview_runtime** (explicit — SQLite doesn't enforce the FK
+         cascade) and **interview_qa** (auto via ON DELETE CASCADE on
+         ``interview_records``).
       4. The **interview_record** row itself.
 
     Designed for "I want this interview gone — no leftover chat history."

@@ -1,7 +1,7 @@
 /**
  * Minimal TTS hook for the mock-interview interviewer voice.
  *
- * Sends interviewer text to POST /chat/mock-interview/tts which fronts
+ * Sends interviewer text to POST /mock-interviews/tts which fronts
  * edge-tts on the backend and returns audio/mpeg bytes. We blob-URL the
  * response and play through a single shared <audio> element so a new utterance
  * cancels the previous one (real interviewers don't talk over themselves).
