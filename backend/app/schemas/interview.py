@@ -10,13 +10,6 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
-class PresignedUrlRequest(BaseModel):
-    """``POST /upload/audio/presigned`` request body."""
-    filename: str
-    content_type: Optional[str] = None
-    size_bytes: Optional[int] = None
-
-
 class AnalyzeRequest(BaseModel):
     """``POST /interview/analyze`` request body.
 
@@ -79,7 +72,6 @@ class SaveQARequest(BaseModel):
 
 
 __all__ = [
-    "PresignedUrlRequest",
     "AnalyzeRequest",
     "MemorySaveRequest",
     "InterviewRecordListItem",

@@ -3,11 +3,11 @@ import json
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.rate_limit import RATE_EXPENSIVE, RATE_UPLOAD, limiter
+from app.core.rate_limit import RATE_EXPENSIVE, limiter
 from app.core.security import get_current_user
 from app.db.database import SessionLocal, get_db
 from app.models.interview_qa import InterviewQA
@@ -20,9 +20,7 @@ from app.services.interview.interview_record_service import (
     interview_record_service,
 )
 from app.core.user_identity import resolve_user_pk
-from app.services.storage_service import upload_file_to_owned_key
 from app.services.uploads.file_asset_service import (
-    create_file_asset,
     get_owned_file_asset,
     mark_file_asset_consumed,
 )
@@ -43,63 +41,9 @@ from app.schemas.interview import (  # noqa: E402, F401
     InterviewRecordListItem,
     InterviewRecordUpdateRequest,
     MemorySaveRequest,
-    PresignedUrlRequest,
     QAEditRequest,
     SaveQARequest,
 )
-
-
-@router.post("/upload/audio/direct")
-@limiter.limit(RATE_UPLOAD)
-async def upload_audio(
-    request: Request,
-    response: Response,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    from app.services.uploads.file_validation import validate_upload_stream
-    from app.services.voice.file_parser import validate_media_format
-
-    # Cheap extension check first (rejects obviously-wrong filenames before
-    # we read any bytes). validate_upload_stream then enforces the real
-    # magic-byte check + progressive size ceiling.
-    if not validate_media_format(file.filename or ""):
-        raise HTTPException(
-            status_code=400,
-            detail="不支持的音视频格式。支持: mp3, wav, m4a, flac, ogg, wma, aac, mp4, mkv, avi, mov, webm",
-        )
-    # Streaming validation — never loads the 500 MB body into RAM.
-    # Spool rolls to disk past 1 MiB; we hand the file-like directly
-    # to S3 upload_fileobj below.
-    _detected, _size, body_stream = await validate_upload_stream(
-        file, purpose="audio_upload",
-    )
-    try:
-        upload, _ = create_file_asset(
-            db,
-            user_id=current_user.username,
-            filename=file.filename,
-            purpose="interview_audio",
-            content_type=file.content_type,
-        )
-        # boto3.upload_fileobj reads via .read() in chunks; SpooledTemporaryFile
-        # supports that natively. No bytes-into-memory copy.
-        storage_uri = upload_file_to_owned_key(
-            body_stream, upload.object_key, file.content_type,
-        )
-    finally:
-        body_stream.close()  # drops the temp disk spill if one was created
-    upload.storage_uri = storage_uri
-    upload.upload_status = "uploaded"
-    db.add(upload)
-    db.commit()
-    return {
-        "status": "success",
-        "upload_id": upload.id,
-        "storage_uri": upload.storage_uri,
-        "filename": upload.original_filename,
-    }
 
 
 @router.get("/uploads/resumes")
@@ -127,37 +71,6 @@ def list_user_resumes(
             }
             for r in resumes
         ],
-    }
-
-
-@router.post("/upload/audio")
-async def get_upload_presigned_url(
-    request: PresignedUrlRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    from app.services.voice.file_parser import validate_media_format
-
-    if not validate_media_format(request.filename):
-        raise HTTPException(
-            status_code=400,
-            detail="不支持的音视频格式。支持: mp3, wav, m4a, flac, ogg, wma, aac, mp4, mkv, avi, mov, webm",
-        )
-
-    upload, url_info = create_file_asset(
-        db=db,
-        user_id=current_user.username,
-        filename=request.filename,
-        purpose="interview_audio",
-        content_type=request.content_type,
-        size_bytes=request.size_bytes,
-    )
-    return {
-        "status": "success",
-        "upload_id": upload.id,
-        "upload_url": url_info["upload_url"],
-        "storage_uri": upload.storage_uri,
-        "filename": upload.original_filename,
     }
 
 

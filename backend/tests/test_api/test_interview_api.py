@@ -9,7 +9,6 @@ the missing ``app.models.interview`` module.
 """
 from __future__ import annotations
 
-from io import BytesIO
 from typing import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -94,39 +93,6 @@ def client(db: Session) -> Iterator[TestClient]:
     app.dependency_overrides[get_current_user] = fake_user
     app.dependency_overrides[get_db] = fake_db
     return TestClient(app)
-
-
-# ── /upload/audio/direct ──────────────────────────────────────────────────
-
-
-def test_upload_audio_direct_rejects_bad_extension(client):
-    """Server-side format guard fires before we touch storage."""
-    resp = client.post(
-        "/api/v1/upload/audio/direct",
-        files={"file": ("note.txt", BytesIO(b"hello"), "text/plain")},
-    )
-    assert resp.status_code == 400
-
-
-def test_upload_audio_direct_writes_user_upload(client, db: Session):
-    with patch(
-        "app.api.interview.upload_file_to_owned_key",
-        return_value="s3://bucket/uploads/alice/upl_x/clip.wav",
-    ):
-        resp = client.post(
-            "/api/v1/upload/audio/direct",
-            files={"file": ("clip.wav", BytesIO(b"RIFFxxxxWAVE"), "audio/wav")},
-        )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["status"] == "success"
-    upload_id = body["upload_id"]
-    row = db.query(FileAsset).filter(FileAsset.id == upload_id).first()
-    assert row is not None
-    # Route stores the FK pk, not the username string.
-    assert row.user_id == _uid(db, "alice")
-    assert row.purpose == "interview_audio"
-    assert row.upload_status == "uploaded"
 
 
 # ── /analyze ──────────────────────────────────────────────────────────────

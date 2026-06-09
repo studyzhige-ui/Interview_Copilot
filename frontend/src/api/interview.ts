@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import { uploadFileAsset } from './fileAssets';
 import type {
   AnalyzeDispatchResp,
   InterviewRecordDetail,
@@ -38,10 +39,10 @@ export async function getInterviewSummary(id: string): Promise<string | null> {
 }
 
 export async function uploadAudio(file: File): Promise<{ upload_id: string; filename: string }> {
-  const fd = new FormData();
-  fd.append('file', file);
-  const res = await apiClient.post('/upload/audio/direct', fd);
-  return res.data;
+  // Unified presigned flow (purpose='interview_audio') — no server-receives-bytes
+  // direct upload. Returns the confirmed file_asset id as upload_id.
+  const fileAssetId = await uploadFileAsset(file, 'interview_audio');
+  return { upload_id: fileAssetId, filename: file.name };
 }
 
 /** A personal resume the user can pick as interview context (the first-class
