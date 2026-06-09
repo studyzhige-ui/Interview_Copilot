@@ -18,6 +18,11 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="Asia/Shanghai",
     enable_utc=True,
+    # Opt into the Celery 6.0 default explicitly (silences the
+    # CPendingDeprecationWarning): keep retrying the broker connection during
+    # worker startup so a transient Redis hiccup at boot doesn't abort the
+    # worker. This is the forward-compatible fix — no Celery major-version bump.
+    broker_connection_retry_on_startup=True,
     task_track_started=True,
     task_time_limit=3600,        # Hard kill at 60 min (transcription headroom).
     task_soft_time_limit=3540,   # 1 min before hard kill, raise SoftTimeLimitExceeded

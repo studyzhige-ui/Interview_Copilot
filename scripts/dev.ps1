@@ -271,7 +271,11 @@ if ($RunBackend) {
         if ($workers -gt 1) {
             & python -m uvicorn app.main:app --workers $workers --port $port --host 0.0.0.0 2>&1
         } else {
-            & python -m uvicorn app.main:app --reload --port $port 2>&1
+            # --reload-dir app: only watch source (backend/app), NOT tests /
+            # scripts / alembic / data — each reload re-runs the lifespan, which
+            # re-loads the embedding + reranker models, so we don't want a
+            # test/script edit to churn the GPU. (Editing app code still reloads.)
+            & python -m uvicorn app.main:app --reload --reload-dir app --port $port 2>&1
         }
     } -ArgumentList $backendDir, $ApiPort, $Workers
     $jobs += $uvJob; $colors[$uvJob.Name] = 'Green'
