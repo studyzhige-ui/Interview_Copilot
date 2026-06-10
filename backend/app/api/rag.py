@@ -19,6 +19,10 @@ from app.schemas.rag import (
     QueryRequest,
     SourceKindEnum,
 )
+from app.services.knowledge.document_formats import (
+    UnsupportedDocumentFormat,
+    validate_knowledge_document_format,
+)
 from app.services.knowledge.knowledge_service import default_title, hard_delete_knowledge_document
 from app.services.uploads.file_asset_service import (
     create_file_asset,
@@ -137,6 +141,14 @@ async def create_knowledge_document(
             raise HTTPException(status_code=404, detail="Upload not found")
         if upload.upload_status not in {"pending_upload", "uploaded"}:
             raise HTTPException(status_code=409, detail="Upload has already been consumed")
+
+        # Format whitelist (ingestion §4.1.2) — the authoritative gate. The
+        # bytes never traverse the API (presigned upload), so this checks the
+        # declared extension/content_type before any worker work is dispatched.
+        try:
+            validate_knowledge_document_format(upload.original_filename, upload.content_type)
+        except UnsupportedDocumentFormat as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         document = KnowledgeDocument(
             user_id=resolve_user_pk(db, current_user.username),

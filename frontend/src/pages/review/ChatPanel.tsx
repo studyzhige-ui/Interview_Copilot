@@ -42,7 +42,7 @@ import {
   setSessionGlobalMemory,
   streamChatSSE,
 } from '@/api/chat';
-import { uploadKnowledgeFile } from '@/api/knowledge';
+import { KNOWLEDGE_ACCEPT, uploadKnowledgeFile } from '@/api/knowledge';
 import { getModelsRuntime, updateModelsRuntime, getModelsCatalog } from '@/api/models';
 import { SourceCards, linkifyCitations } from '@/components/chat/SourceCards';
 import type {
@@ -1141,6 +1141,7 @@ export function ChatPanel({
           <input
             ref={fileRef}
             type="file"
+            accept={KNOWLEDGE_ACCEPT}
             multiple
             hidden
             onChange={(e) => {

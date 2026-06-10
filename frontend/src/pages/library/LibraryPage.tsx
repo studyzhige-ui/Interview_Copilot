@@ -12,6 +12,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Spinner } from '@/components/ui/Spinner';
 import { toast } from '@/store/uiStore';
 import {
+  KNOWLEDGE_ACCEPT,
   deleteKnowledgeDocument,
   listKnowledgeCategories,
   listKnowledgeDocuments,
@@ -316,6 +317,7 @@ function FilesSection() {
           <input
             ref={fileRef}
             type="file"
+            accept={KNOWLEDGE_ACCEPT}
             hidden
             onChange={(e) => {
               const f = e.target.files?.[0];

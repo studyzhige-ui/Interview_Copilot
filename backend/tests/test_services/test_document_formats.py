@@ -1,0 +1,73 @@
+"""Tests for the knowledge-document format whitelist (ingestion §4.1.2)."""
+from __future__ import annotations
+
+import pytest
+
+from app.services.knowledge.document_formats import (
+    ALLOWED_KNOWLEDGE_EXTENSIONS,
+    UnsupportedDocumentFormat,
+    accept_attribute,
+    validate_knowledge_document_format,
+)
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "redis.pdf", "notes.docx", "deck.pptx", "data.xlsx",
+        "page.html", "page.htm", "readme.md", "guide.markdown", "log.txt",
+        "rows.csv", "rows.tsv", "config.json",
+        "main.py", "App.java", "engine.cpp", "kernel.c",
+        "UPPER.PDF",  # case-insensitive
+    ],
+)
+def test_allowed_formats_pass(filename):
+    ext = validate_knowledge_document_format(filename)
+    assert ext in ALLOWED_KNOWLEDGE_EXTENSIONS
+
+
+@pytest.mark.parametrize("filename", ["scan.png", "photo.jpg", "img.jpeg", "x.tiff", "y.bmp", "z.webp"])
+def test_deferred_images_rejected_with_coming_later_hint(filename):
+    with pytest.raises(UnsupportedDocumentFormat) as exc:
+        validate_knowledge_document_format(filename)
+    # Specific message, not the generic one.
+    assert "即将支持" in str(exc.value)
+
+
+@pytest.mark.parametrize("filename", ["old.doc", "slides.ppt", "sheet.xls"])
+def test_deferred_legacy_office_rejected(filename):
+    with pytest.raises(UnsupportedDocumentFormat) as exc:
+        validate_knowledge_document_format(filename)
+    assert "即将支持" in str(exc.value)
+
+
+@pytest.mark.parametrize("filename", ["malware.exe", "archive.zip", "movie.mkv", "noext"])
+def test_unknown_formats_rejected_generic(filename):
+    with pytest.raises(UnsupportedDocumentFormat):
+        validate_knowledge_document_format(filename)
+
+
+def test_no_extension_rejected():
+    with pytest.raises(UnsupportedDocumentFormat) as exc:
+        validate_knowledge_document_format("plainname")
+    assert "无法识别" in str(exc.value)
+
+
+def test_audio_video_content_type_rejected_even_with_ok_ext():
+    """An obvious content_type conflict (AV) is rejected regardless of ext."""
+    with pytest.raises(UnsupportedDocumentFormat) as exc:
+        validate_knowledge_document_format("track.pdf", content_type="audio/mpeg")
+    assert "音视频" in str(exc.value)
+
+
+def test_generic_octet_stream_content_type_is_allowed():
+    """The common generic content_type must NOT trigger a false rejection."""
+    ext = validate_knowledge_document_format("redis.pdf", content_type="application/octet-stream")
+    assert ext == ".pdf"
+
+
+def test_accept_attribute_lists_allowed_extensions():
+    accept = accept_attribute()
+    assert ".pdf" in accept and ".json" in accept and ".py" in accept
+    # Deferred formats are NOT advertised in the accept hint.
+    assert ".png" not in accept and ".doc," not in accept

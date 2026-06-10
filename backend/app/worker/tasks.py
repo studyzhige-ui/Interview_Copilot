@@ -213,6 +213,29 @@ def process_document_ingestion(self, document_id: str):
         if document.status not in {"processing", "failed"}:
             return {"status": "skipped", "document_id": document_id, "current_status": document.status}
 
+        # Defensive format re-check (ingestion §4.1.2) — the API already
+        # gated this, but a stale dispatch or a direct DB insert must not
+        # reach the parser with an unsupported format. A format error is
+        # permanent, so mark failed and return WITHOUT raising (no retry).
+        from app.services.knowledge.document_formats import (
+            UnsupportedDocumentFormat,
+            validate_knowledge_document_format,
+        )
+        try:
+            validate_knowledge_document_format(
+                document.upload.original_filename, document.upload.content_type,
+            )
+        except UnsupportedDocumentFormat as exc:
+            document.status = "failed"
+            document.error_message = str(exc)[:500]
+            db.add(document)
+            db.commit()
+            logger.warning(
+                "[Task %s] Rejected unsupported knowledge format: %s",
+                self.request.id, exc,
+            )
+            return {"status": "failed", "error": str(exc), "document_id": document_id}
+
         if not document.storage_uri.startswith("s3://"):
             raise ValueError("Knowledge ingestion only accepts owned S3 uploads")
 

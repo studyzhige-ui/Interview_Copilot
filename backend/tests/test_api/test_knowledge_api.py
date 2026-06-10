@@ -167,6 +167,53 @@ def test_create_document_404_when_upload_not_owned(client, db: Session):
     assert resp.status_code == 404
 
 
+def test_create_document_rejects_unsupported_format(client, db: Session):
+    """The §4.1.2 whitelist gate: an unsupported extension is rejected with a
+    400 before any document row is created or worker dispatched."""
+    db.add(FileAsset(
+        id="upl_x",
+        user_id=_uid(db, "alice"),
+        purpose="knowledge_document",
+        original_filename="malware.exe",
+        storage_uri="s3://b/uploads/alice/upl_x/malware.exe",
+        object_key="uploads/alice/upl_x/malware.exe",
+        upload_status="uploaded",
+        validation_status="passed",
+    ))
+    db.commit()
+    with patch("app.api.rag.process_document_ingestion") as mock_proc:
+        resp = client.post(
+            "/api/v1/knowledge/documents",
+            json={"upload_id": "upl_x", "source_kind": "user_upload"},
+        )
+    assert resp.status_code == 400
+    # No worker dispatch and no document row for a rejected format.
+    mock_proc.delay.assert_not_called()
+    assert db.query(KnowledgeDocument).count() == 0
+
+
+def test_create_document_rejects_deferred_format_with_hint(client, db: Session):
+    """Images / legacy Office are in the target whitelist but deferred (B4);
+    they get a specific 'coming later' message, still a 400 for now."""
+    db.add(FileAsset(
+        id="upl_img",
+        user_id=_uid(db, "alice"),
+        purpose="knowledge_document",
+        original_filename="scan.png",
+        storage_uri="s3://b/uploads/alice/upl_img/scan.png",
+        object_key="uploads/alice/upl_img/scan.png",
+        upload_status="uploaded",
+        validation_status="passed",
+    ))
+    db.commit()
+    resp = client.post(
+        "/api/v1/knowledge/documents",
+        json={"upload_id": "upl_img", "source_kind": "user_upload"},
+    )
+    assert resp.status_code == 400
+    assert "png" in resp.json()["detail"]
+
+
 def test_create_document_dispatches_celery_with_document_id(client, db: Session):
     db.add(FileAsset(
         id="upl_a",
