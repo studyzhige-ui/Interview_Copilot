@@ -211,4 +211,6 @@ E1 故意"行为不变"先立骨架与模式；E2/E3 才真正扩格式能力；
 
 E1 把现有解析器包进 `ParseResult(markdown + page_map)` 这一目标契约。对**单 Document** 的格式（txt/md/docx/html/json/csv 经 `SimpleDirectoryReader`）行为等价。对**多页 PDF**（现 PyMuPDF 每页一个 Document），改为**合并为单 markdown + page_map**（对齐 §4.1.4 规则 10：页码靠 `page_map` 而非硬切每页）。`page_start/page_end` 的实际写入仍保持现状（暂为空，B1 列可空）——把 `page_map` → chunk 页码的映射留待后续轮次，本轮只是产出 `page_map` 供将来用。
 
-**第二处已知 delta（多 sheet XLSX）**：无 LlamaCloud key 时 `.xlsx` 走默认 `PandasExcelReader`，多 sheet 会返回每 sheet 一个 Document；E1 合并为单 markdown，使 `_table_aware_nodes` 用 sheet-1 首行作所有 sheet 的重复表头。影响窄（仅"无 key + 多 sheet xlsx"），且 `PandasExcelReader` 行本身是 `列: 值` 自描述、实际检索影响有限。**E3 的 `XlsxParser`（openpyxl）正式按 sheet 解析时修复**；E1 接受此合并为已知 delta。单 sheet xlsx、csv（`PandasCSVReader` 恒单 Document）无差异。
+**第二处已知 delta（多 sheet XLSX）**：无 LlamaCloud key 时 `.xlsx` 走默认 `PandasExcelReader`，多 sheet 会返回每 sheet 一个 Document；E1 合并为单 markdown，使 `_table_aware_nodes` 用 sheet-1 首行作所有 sheet 的重复表头。影响窄（仅"无 key + 多 sheet xlsx"），且 `PandasExcelReader` 行本身是 `列: 值` 自描述、实际检索影响有限。单 sheet xlsx、csv（`PandasCSVReader` 恒单 Document）无差异。
+
+**E2 校正**：`.xlsx` **不**纳入 Docling 一等格式——因为 `get_optimal_nodes` 按文件名把 `.xlsx` 路由到 `_table_aware_nodes`（早于 markdown 分支），Docling 输出的 markdown 表会被 table 切块误读（`|---|` 分隔行成垃圾行），比 E1 的 `PandasExcelReader` 自描述行更差。故 xlsx 维持轻量路径，此 delta 仍待 **E4**（chunk 策略注册表能正确处理 markdown 表，或让 xlsx 走 markdown 切块）一并修复。即 E2 只改了它所解析格式（pdf/docx/pptx/html）的 parse 层表示，未触及 xlsx 的 chunk 层路由。

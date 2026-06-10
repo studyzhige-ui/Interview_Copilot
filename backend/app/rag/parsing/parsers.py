@@ -9,6 +9,7 @@ and LlamaIndex's default ``SimpleDirectoryReader`` for everything else. Docling
 from __future__ import annotations
 
 import os
+from threading import Lock
 
 from app.core.config import settings
 
@@ -69,11 +70,18 @@ class LlamaParseParser:
 
 
 _docling_converter = None
+# Docling reuses one pipeline per converter and its convert() is NOT thread-safe;
+# ingestion runs in a THREADED Celery pool (worker-light: --pool=threads
+# --concurrency=4), so this lock guards lazy construction AND serializes convert()
+# across threads. Serializing the (heavy, background) parse is an acceptable cost;
+# non-Docling parses don't take this lock.
+_docling_lock = Lock()
 
 
 def _get_docling_converter():
-    """Lazily build a single Docling ``DocumentConverter`` (model weights load on
-    the first convert, so reuse one across the worker process)."""
+    """Build/return the cached Docling converter (model weights load on first
+    convert). The caller holds ``_docling_lock`` — the converter is shared and
+    docling's convert() isn't safe to run concurrently on it."""
     global _docling_converter
     if _docling_converter is None:
         from docling.document_converter import DocumentConverter
@@ -86,21 +94,28 @@ class DoclingParser:
     """First-class LOCAL parser → Markdown (peer to LlamaParse). Available only
     when the ``docling`` package is installed (the registry gates on that and
     degrades to LlamaParse / lightweight when it isn't). No OCR this round —
-    scanned PDFs / images are a later round."""
+    scanned PDFs / images are a later round.
+
+    xlsx is intentionally NOT claimed yet: Docling would emit a Markdown table,
+    but the chunk stage routes ``.xlsx`` to the table splitter by filename
+    (before the markdown branch), so xlsx stays on the lightweight path until E4
+    handles Markdown tables. pdf/docx/pptx/html route to MarkdownNodeParser."""
 
     id = "docling"
     tier = TIER_FIRST_CLASS
-    _EXTS = {".pdf", ".docx", ".pptx", ".xlsx", ".html", ".htm"}
+    _EXTS = {".pdf", ".docx", ".pptx", ".html", ".htm"}
 
     def supports(self, ext: str) -> bool:
         return ext in self._EXTS
 
     def parse(self, file_path: str) -> ParseResult:
-        result = _get_docling_converter().convert(file_path)
-        markdown = result.document.export_to_markdown()
-        # Per-page char spans aren't readily recoverable from the exported
-        # Markdown, so page_map stays empty (best-effort, deferred like the other
-        # parsers); the structured Markdown itself is what downstream consumes.
+        with _docling_lock:  # serialize: Docling convert() isn't thread-safe
+            converter = _get_docling_converter()
+            result = converter.convert(file_path)
+            markdown = result.document.export_to_markdown()
+        # page_map is empty: Docling's exported Markdown exposes no per-page char
+        # spans, so page_count reads 0 here (unlike PyMuPDF, which maps per page).
+        # Accurate Docling page provenance is deferred to the page_start/end round.
         return ParseResult(markdown=markdown, parser_id=self.id, is_markdown=True, page_map=[])
 
 

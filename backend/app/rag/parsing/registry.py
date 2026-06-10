@@ -60,6 +60,11 @@ def _candidates(ext: str) -> list:
     is the floor)."""
     first_class = _first_class_parsers()
     primary_id = (settings.PARSER_PROVIDER or "docling").strip().lower()
+    if primary_id not in ("docling", "llamaparse"):
+        logger.warning(
+            "unknown PARSER_PROVIDER=%r; using insertion order for first-class parsers",
+            primary_id,
+        )
 
     ordered: list = []
     if primary_id in first_class:

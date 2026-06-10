@@ -71,8 +71,11 @@ def test_candidates_degrade_to_lightweight_when_no_first_class(monkeypatch):
 def test_candidates_docling_primary(monkeypatch):
     _knobs(monkeypatch, key=False, docling=True, provider="docling")
     assert _ids(".pdf") == ["docling", "pymupdf", "simple_reader"]
-    assert _ids(".xlsx") == ["docling", "simple_reader"]   # docling handles xlsx
+    assert _ids(".html") == ["docling", "simple_reader"]   # docling handles html
     assert _ids(".txt") == ["simple_reader"]               # docling doesn't claim txt
+    # xlsx stays on the lightweight path (docling->markdown-table would misroute
+    # through the table splitter; deferred to E4).
+    assert _ids(".xlsx") == ["simple_reader"]
 
 
 def test_candidates_llamaparse_primary_docling_fallback(monkeypatch):
@@ -81,8 +84,10 @@ def test_candidates_llamaparse_primary_docling_fallback(monkeypatch):
     # pdf: LlamaParse primary (cloud), Docling the document-level fallback.
     assert _ids(".pdf") == ["llamaparse", "docling", "pymupdf", "simple_reader"]
     assert _ids(".docx") == ["llamaparse", "docling", "simple_reader"]
-    # xlsx: LlamaParse doesn't claim it -> Docling (the other first-class) leads.
-    assert _ids(".xlsx") == ["docling", "simple_reader"]
+    # html: LlamaParse doesn't claim it -> Docling (the other first-class) leads.
+    assert _ids(".html") == ["docling", "simple_reader"]
+    # xlsx: neither first-class claims it -> lightweight only.
+    assert _ids(".xlsx") == ["simple_reader"]
 
 
 def test_candidates_docling_primary_with_llama_fallback(monkeypatch):
@@ -174,15 +179,66 @@ def test_parse_document_all_empty_raises(monkeypatch):
 def test_docling_parser_supports_structured_formats():
     p = DoclingParser()
     assert p.tier == TIER_FIRST_CLASS
-    assert p.supports(".pdf") and p.supports(".docx") and p.supports(".xlsx") and p.supports(".html")
-    assert not p.supports(".txt") and not p.supports(".png")  # txt -> default reader; images deferred
+    assert p.supports(".pdf") and p.supports(".docx") and p.supports(".pptx")
+    assert p.supports(".html") and p.supports(".htm")
+    # txt -> default reader; xlsx kept on lightweight path (E4); images / legacy
+    # office (.xls) deferred.
+    assert not p.supports(".txt")
+    assert not p.supports(".xlsx")
+    assert not p.supports(".xls")
+    assert not p.supports(".png")
+
+
+def test_parser_provider_normalized(monkeypatch):
+    """PARSER_PROVIDER tolerates case / whitespace / empty (-> default docling)."""
+    monkeypatch.setattr(reg, "_has_llama_cloud", lambda: True)
+    monkeypatch.setattr(reg, "_docling_available", lambda: True)
+    for value in ("  DOCLING  ", "Docling", ""):
+        monkeypatch.setattr(settings, "PARSER_PROVIDER", value)
+        assert _ids(".pdf")[0] == "docling", value
+
+
+def test_unknown_parser_provider_warns_and_uses_insertion_order(monkeypatch, caplog):
+    import logging
+    _knobs(monkeypatch, key=True, docling=True, provider="doclng")  # typo
+    with caplog.at_level(logging.WARNING):
+        ids = _ids(".pdf")
+    assert "unknown PARSER_PROVIDER" in caplog.text
+    # insertion order: llamaparse registered before docling -> llamaparse leads.
+    assert ids[0] == "llamaparse"
+
+
+def test_htm_routes_through_docling_when_primary(monkeypatch):
+    _knobs(monkeypatch, key=False, docling=True, provider="docling")
+    assert _ids(".htm") == ["docling", "simple_reader"]
+
+
+def test_xls_legacy_office_not_parsed_by_first_class(monkeypatch):
+    """Legacy .xls (deferred) isn't claimed by any first-class parser."""
+    _knobs(monkeypatch, key=True, docling=True, provider="docling")
+    assert _ids(".xls") == ["simple_reader"]
+
+
+def test_docling_parse_holds_lock_during_convert(monkeypatch):
+    """DoclingParser serializes convert() under _docling_lock (Docling's
+    convert() isn't thread-safe and ingestion runs in a threaded pool)."""
+    held = {}
+
+    class _LockCheckingConverter:
+        def convert(self, file_path):
+            held["locked_during_convert"] = parsers._docling_lock.locked()
+            return SimpleNamespace(document=SimpleNamespace(
+                export_to_markdown=lambda: "ok", pages={}))
+
+    monkeypatch.setattr(parsers, "_get_docling_converter", lambda: _LockCheckingConverter())
+    DoclingParser().parse("x.pdf")
+    assert held["locked_during_convert"] is True
 
 
 def test_docling_parser_exports_markdown(monkeypatch):
     """DoclingParser converts via the cached converter and returns its Markdown
     (converter mocked so no model download)."""
     class _FakeDoc:
-        pages = {1: object()}
         def export_to_markdown(self):
             return "# Title\n\nbody text"
 
