@@ -24,18 +24,15 @@ ALLOWED_KNOWLEDGE_EXTENSIONS = frozenset({
     ".py", ".java", ".cpp", ".c",
     # Image documents → on-demand OCR (Docling RapidOCR / LlamaParse cloud), §4.1.2.
     ".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp",
-})
-
-# In the §4.1.2 target whitelist but pending their parser package: legacy Office
-# needs LibreOffice/headless soffice for the local conversion path. Rejected now
-# with a specific "coming later" message rather than a generic error.
-DEFERRED_KNOWLEDGE_EXTENSIONS = frozenset({
+    # Legacy Office → LlamaParse direct, or LibreOffice→OOXML→Docling (§4.1.3).
+    # Business-allowed; the parse layer returns a friendly error if the server
+    # has neither LlamaParse configured nor LibreOffice installed.
     ".doc", ".ppt", ".xls",
 })
 
 # Shown in the generic rejection message.
 SUPPORTED_FORMATS_HINT = (
-    "PDF、Word(.docx)、PPT(.pptx)、Excel(.xlsx)、Markdown、HTML、"
+    "PDF、Word(.docx/.doc)、PPT(.pptx/.ppt)、Excel(.xlsx/.xls)、Markdown、HTML、"
     "文本(.txt)、CSV/TSV、JSON、代码文件(.py/.java/.cpp/.c)、"
     "图片(.png/.jpg/.jpeg/.tiff/.bmp/.webp)"
 )
@@ -67,11 +64,6 @@ def validate_knowledge_document_format(
         raise UnsupportedDocumentFormat("知识库不支持音视频文件，请上传文档类文件。")
     if not ext:
         raise UnsupportedDocumentFormat("无法识别文件类型，请上传带扩展名的受支持文档。")
-    if ext in DEFERRED_KNOWLEDGE_EXTENSIONS:
-        raise UnsupportedDocumentFormat(
-            f"暂不支持旧版 Office 格式 {ext}（即将支持）；"
-            f"请转换为现代格式（.docx/.pptx/.xlsx）或 {SUPPORTED_FORMATS_HINT} 后上传。"
-        )
     if ext not in ALLOWED_KNOWLEDGE_EXTENSIONS:
         raise UnsupportedDocumentFormat(
             f"不支持的文件格式 {ext}。支持：{SUPPORTED_FORMATS_HINT}。"
@@ -81,7 +73,6 @@ def validate_knowledge_document_format(
 
 __all__ = [
     "ALLOWED_KNOWLEDGE_EXTENSIONS",
-    "DEFERRED_KNOWLEDGE_EXTENSIONS",
     "SUPPORTED_FORMATS_HINT",
     "UnsupportedDocumentFormat",
     "validate_knowledge_document_format",

@@ -34,11 +34,12 @@ def test_image_formats_now_allowed(filename):
 
 
 @pytest.mark.parametrize("filename", ["old.doc", "slides.ppt", "sheet.xls"])
-def test_deferred_legacy_office_rejected(filename):
-    """Legacy Office stays deferred until the LibreOffice conversion path."""
-    with pytest.raises(UnsupportedDocumentFormat) as exc:
-        validate_knowledge_document_format(filename)
-    assert "旧版 Office" in str(exc.value) and "即将支持" in str(exc.value)
+def test_legacy_office_now_allowed(filename):
+    """Legacy Office is business-allowed now (LlamaParse direct, or a server-side
+    LibreOffice→OOXML conversion); the parse layer gives a friendly error if the
+    server can do neither, but the whitelist no longer rejects the upload."""
+    ext = validate_knowledge_document_format(filename)
+    assert ext in ALLOWED_KNOWLEDGE_EXTENSIONS
 
 
 @pytest.mark.parametrize("filename", ["malware.exe", "archive.zip", "movie.mkv", "noext"])

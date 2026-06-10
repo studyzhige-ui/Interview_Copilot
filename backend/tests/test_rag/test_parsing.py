@@ -214,10 +214,8 @@ def test_htm_routes_through_docling_when_primary(monkeypatch):
     assert _ids(".htm") == ["docling", "beautifulsoup", "simple_reader"]
 
 
-def test_xls_legacy_office_not_parsed_by_first_class(monkeypatch):
-    """Legacy .xls (deferred) isn't claimed by any first-class parser."""
-    _knobs(monkeypatch, key=True, docling=True, provider="docling")
-    assert _ids(".xls") == ["simple_reader"]
+# (Legacy .xls/.doc/.ppt routing is covered by the F2 section below —
+# test_candidates_legacy_office_first_class_only / _via_llamaparse_direct / etc.)
 
 
 # ── E3: per-format lightweight fallback matrix ───────────────────────────────
@@ -509,3 +507,64 @@ def test_parse_document_image_no_first_class_raises_friendly(monkeypatch):
     _knobs(monkeypatch, key=False, docling=False, provider="docling")
     with pytest.raises(EmptyContentError):
         reg.parse_document("scan.tiff")
+
+
+# ── F2: legacy Office (.doc/.ppt/.xls) ───────────────────────────────────────
+
+
+def test_llamaparse_supports_legacy_office():
+    from app.rag.parsing.parsers import LlamaParseParser
+    p = LlamaParseParser()
+    assert p.supports(".doc") and p.supports(".ppt") and p.supports(".xls")
+
+
+def test_candidates_legacy_office_first_class_only(monkeypatch):
+    """Legacy office is binary: first-class-only — NO lightweight, NO SimpleReader
+    text catch-all (a raw .doc/.xls read is garbage). Docling doesn't claim legacy
+    formats, so with a key it's [llamaparse]; without any first-class it's empty."""
+    _knobs(monkeypatch, key=True, docling=True, provider="llamaparse")
+    assert _ids(".doc") == ["llamaparse"]   # docling doesn't claim legacy office
+    assert _ids(".xls") == ["llamaparse"]
+    _knobs(monkeypatch, key=False, docling=True, provider="docling")
+    assert _ids(".ppt") == []               # no first-class for legacy, no catch-all
+
+
+def test_parse_legacy_office_via_llamaparse_direct(monkeypatch):
+    """When LlamaParse is available it parses legacy office directly — no
+    LibreOffice conversion, so legacy_conversion_used is absent."""
+    _knobs(monkeypatch, key=True, docling=False, provider="llamaparse")
+    monkeypatch.setattr(
+        parsers.LlamaParseParser, "parse",
+        lambda self, fp: ParseResult(markdown="legacy text", parser_id="llamaparse", is_markdown=True),
+    )
+    out = reg.parse_document("old.doc")
+    assert out.parser_id == "llamaparse" and out.markdown == "legacy text"
+    assert "legacy_conversion_used" not in out.parser_profile
+
+
+def test_parse_legacy_office_no_parser_raises_friendly(monkeypatch):
+    """No LlamaParse AND no LibreOffice → a friendly error that names the fixes
+    (install LibreOffice / convert to OOXML / configure LlamaParse)."""
+    from app.rag.cleaning import EmptyContentError
+    _knobs(monkeypatch, key=False, docling=False, provider="docling")
+    monkeypatch.setattr(reg.shutil, "which", lambda _name: None)  # no soffice on PATH
+    with pytest.raises(EmptyContentError) as exc:
+        reg.parse_document("old.xls")
+    msg = str(exc.value)
+    assert "LibreOffice" in msg and ".xlsx" in msg  # .xls → suggested target .xlsx
+
+
+def test_parse_legacy_office_converts_via_libreoffice(monkeypatch):
+    """No LlamaParse but soffice present → convert to OOXML, parse the converted
+    file via the modern candidates, and stamp legacy_conversion_used."""
+    _knobs(monkeypatch, key=False, docling=False, provider="docling")
+    monkeypatch.setattr(reg.shutil, "which", lambda _name: "/usr/bin/soffice")
+    # Stub the conversion (no real LibreOffice here) → a fake .docx path.
+    monkeypatch.setattr(reg, "_soffice_convert",
+                        lambda soffice, fp, target, outdir: "/tmp/converted.docx")
+    # Stub the modern .docx parse so the test doesn't touch a real file.
+    monkeypatch.setattr(parsers.DocxParser, "parse",
+                        lambda self, fp: ParseResult(markdown="converted body", parser_id="python_docx"))
+    out = reg.parse_document("old.doc")
+    assert out.markdown == "converted body"
+    assert out.parser_profile["legacy_conversion_used"] is True

@@ -192,10 +192,10 @@ def test_create_document_rejects_unsupported_format(client, db: Session):
     assert db.query(KnowledgeDocument).count() == 0
 
 
-def test_create_document_rejects_deferred_format_with_hint(client, db: Session):
-    """Legacy Office is in the target whitelist but still deferred (needs the
-    LibreOffice path); it gets a specific 'coming later' message, a 400 for now.
-    (Images moved to allowed once OCR landed.)"""
+def test_create_document_accepts_legacy_office(client, db: Session):
+    """Legacy Office (.doc/.ppt/.xls) is business-allowed now (LlamaParse direct
+    or a server-side LibreOffice conversion handle it at parse time) — the upload
+    is accepted + dispatched, no longer rejected with a 400."""
     db.add(FileAsset(
         id="upl_legacy",
         user_id=_uid(db, "alice"),
@@ -207,12 +207,16 @@ def test_create_document_rejects_deferred_format_with_hint(client, db: Session):
         validation_status="passed",
     ))
     db.commit()
-    resp = client.post(
-        "/api/v1/knowledge/documents",
-        json={"upload_id": "upl_legacy", "source_kind": "user_upload"},
-    )
-    assert resp.status_code == 400
-    assert "doc" in resp.json()["detail"]
+    fake_task = MagicMock()
+    fake_task.id = "task-legacy"
+    with patch("app.api.rag.process_document_ingestion") as mock_proc:
+        mock_proc.delay.return_value = fake_task
+        resp = client.post(
+            "/api/v1/knowledge/documents",
+            json={"upload_id": "upl_legacy", "source_kind": "user_upload"},
+        )
+    assert resp.status_code == 200, resp.text
+    mock_proc.delay.assert_called_once()
 
 
 def test_create_document_dispatches_celery_with_document_id(client, db: Session):

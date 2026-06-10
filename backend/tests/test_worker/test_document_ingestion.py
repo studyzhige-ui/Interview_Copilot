@@ -87,24 +87,26 @@ def test_worker_rejects_unsupported_format_without_retry(worker_db, monkeypatch)
         db.close()
 
 
-def test_worker_rejects_deferred_format(worker_db, monkeypatch):
+def test_worker_rejects_unsupported_format(worker_db, monkeypatch):
+    """The worker's defensive format re-check rejects an unsupported extension
+    before running ingest. (Images + legacy Office are all allowed now, so the
+    rejection path is exercised with a genuinely out-of-scope format.)"""
     from app.worker.tasks import process_document_ingestion
 
     import app.rag.ingestion as ingestion_mod
     monkeypatch.setattr(
         ingestion_mod, "ingest_document",
-        lambda *a, **k: pytest.fail("ingest_document must not run for a deferred format"),
+        lambda *a, **k: pytest.fail("ingest_document must not run for a rejected format"),
     )
 
-    # Legacy Office is still deferred (images now OCR-ingest, so .png is allowed).
-    doc_id = _seed_doc(worker_db, filename="old.doc")
+    doc_id = _seed_doc(worker_db, filename="malware.exe")
     result = process_document_ingestion.apply(args=[doc_id]).get()
 
     assert result["status"] == "failed"
     db = worker_db()
     try:
         doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == doc_id).first()
-        assert "即将支持" in (doc.error_message or "")
+        assert "不支持的文件格式" in (doc.error_message or "")
     finally:
         db.close()
 

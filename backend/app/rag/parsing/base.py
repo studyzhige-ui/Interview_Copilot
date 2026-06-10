@@ -24,6 +24,16 @@ TIER_LIGHTWEIGHT = "lightweight"
 # for them — a raw-bytes read of a .tiff/.bmp yields binary garbage) agree.
 IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"})
 
+# Legacy binary Office (§4.1.3 matrix): LlamaParse parses them directly; the
+# local path converts to modern OOXML via LibreOffice/headless soffice, then
+# hands the result to the normal parsers. Like images they have NO text
+# catch-all (a raw-bytes read of a .doc/.xls is garbage), and the orchestration
+# layer owns the conversion + the friendly "install LibreOffice / use LlamaParse"
+# error when soffice is absent.
+LEGACY_OFFICE_EXTS = frozenset({".doc", ".ppt", ".xls"})
+# legacy ext -> the modern OOXML extension LibreOffice converts it to.
+LEGACY_OFFICE_TARGET = {".doc": ".docx", ".ppt": ".pptx", ".xls": ".xlsx"}
+
 
 @dataclass(frozen=True)
 class PageSpan:

@@ -6,12 +6,12 @@ export type KnowledgeSourceKind = 'user_upload' | 'improved_qa' | 'manual_text';
 /**
  * ``accept`` hint for knowledge-document file inputs — UX only; the backend
  * ``POST /knowledge/documents`` whitelist (services/knowledge/document_formats.py)
- * is the authoritative gate. Keep in sync with ALLOWED_KNOWLEDGE_EXTENSIONS;
- * images now OCR via Docling/LlamaParse. Legacy Office (.doc/.ppt/.xls) is still
- * omitted until its LibreOffice conversion path lands.
+ * is the authoritative gate. Keep in sync with ALLOWED_KNOWLEDGE_EXTENSIONS.
+ * Images OCR via Docling/LlamaParse; legacy Office (.doc/.ppt/.xls) parses via
+ * LlamaParse or a server-side LibreOffice conversion (friendly error if neither).
  */
 export const KNOWLEDGE_ACCEPT =
-  '.pdf,.docx,.pptx,.xlsx,.html,.htm,.md,.markdown,.txt,.csv,.tsv,.json,.py,.java,.cpp,.c,.png,.jpg,.jpeg,.tiff,.bmp,.webp';
+  '.pdf,.docx,.pptx,.xlsx,.html,.htm,.md,.markdown,.txt,.csv,.tsv,.json,.py,.java,.cpp,.c,.png,.jpg,.jpeg,.tiff,.bmp,.webp,.doc,.ppt,.xls';
 
 export interface ListKnowledgeQuery {
   category?: string;

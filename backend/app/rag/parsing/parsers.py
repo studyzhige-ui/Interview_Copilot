@@ -13,7 +13,14 @@ from threading import Lock
 
 from app.core.config import settings
 
-from .base import IMAGE_EXTS, ParseResult, PageSpan, TIER_FIRST_CLASS, TIER_LIGHTWEIGHT
+from .base import (
+    IMAGE_EXTS,
+    LEGACY_OFFICE_EXTS,
+    ParseResult,
+    PageSpan,
+    TIER_FIRST_CLASS,
+    TIER_LIGHTWEIGHT,
+)
 
 
 def _join_documents(docs: list) -> tuple[str, list[PageSpan]]:
@@ -53,13 +60,14 @@ def _read_text(file_path: str) -> str:
 
 class LlamaParseParser:
     """First-class cloud parser → Markdown. Available only when a LlamaCloud key
-    is configured (the registry gates on that). Claims images too — LlamaParse
-    does cloud OCR on them (plan §4.1.3 matrix), so when it's the primary parser
-    images go to the cloud instead of local RapidOCR."""
+    is configured (the registry gates on that). Claims images (cloud OCR) and
+    legacy Office (.doc/.ppt/.xls, parsed directly) too — so when LlamaParse is
+    the primary parser those go to the cloud instead of local RapidOCR / the
+    LibreOffice conversion path (plan §4.1.3 matrix)."""
 
     id = "llamaparse"
     tier = TIER_FIRST_CLASS
-    _EXTS = {".pdf", ".pptx", ".docx"} | IMAGE_EXTS
+    _EXTS = {".pdf", ".pptx", ".docx"} | IMAGE_EXTS | LEGACY_OFFICE_EXTS
 
     def supports(self, ext: str) -> bool:
         return ext in self._EXTS
