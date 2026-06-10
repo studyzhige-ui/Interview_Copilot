@@ -244,7 +244,7 @@ function FilesSection() {
       await refresh();
     } catch (e) {
       // Surface the backend's specific message (e.g. the format-whitelist
-      // "coming later" hint) instead of a generic failure.
+      // rejection or a parser-level friendly error) instead of a generic failure.
       toast.error(extractErr(e, '上传失败'));
     } finally {
       setUploading(false);

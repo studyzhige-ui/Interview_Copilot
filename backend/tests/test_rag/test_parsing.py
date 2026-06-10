@@ -183,8 +183,9 @@ def test_docling_parser_supports_structured_formats():
     assert p.supports(".html") and p.supports(".htm")
     # Images now route to Docling (on-demand OCR), §4.1.3.
     assert p.supports(".png") and p.supports(".jpg") and p.supports(".webp")
-    # txt -> default reader; xlsx kept on lightweight path (E4); legacy office
-    # (.xls/.doc/.ppt) deferred until the LibreOffice conversion path.
+    # txt -> default reader; xlsx kept on lightweight path; legacy office
+    # (.xls/.doc/.ppt) isn't claimed by Docling — the registry routes it via
+    # LlamaParse / LibreOffice in _parse_legacy_office.
     assert not p.supports(".txt")
     assert not p.supports(".xlsx")
     assert not p.supports(".xls")

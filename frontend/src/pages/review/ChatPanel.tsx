@@ -583,7 +583,7 @@ export function ChatPanel({
         added.push({ doc_id: doc.id, filename: f.name });
       } catch (e) {
         // Surface the backend's specific message (e.g. the format-whitelist
-        // "coming later" hint) instead of a generic failure.
+        // rejection or a parser-level friendly error) instead of a generic failure.
         if (isMounted.current) toast.error(extractErr(e, `附件上传失败：${f.name}`));
       }
     }
