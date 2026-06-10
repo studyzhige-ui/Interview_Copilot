@@ -68,10 +68,19 @@ def test_table_branch_splitter_id_and_chunk_type(monkeypatch):
     assert all(n.metadata["chunk_type"] == "table" for n in nodes)
 
 
-# NB: the code branch (.py/.java/.cpp/.c → CodeSplitter) isn't unit-tested
-# here because CodeSplitter needs the optional ``tree_sitter`` package, absent
-# in the test env. Its splitter_id/chunk_type assignment mirrors the other
-# branches (verified by inspection). See requirements note re tree_sitter.
+def test_code_branch_splitter_id_and_chunk_type(monkeypatch):
+    """Code files use CodeSplitter with an explicitly-built tree-sitter Parser
+    (the get_parser isinstance workaround)."""
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    doc = Document(
+        text="def f():\n    return 1\n\nclass A:\n    pass\n",
+        metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "m.py"},
+    )
+    nodes = ingestion.get_optimal_nodes(doc)
+    assert nodes
+    assert all(n.metadata["splitter_id"] == "code" for n in nodes)
+    assert all(n.metadata["chunk_type"] == "code" for n in nodes)
 
 
 def test_token_count_stamped_per_node_on_multi_node_doc(monkeypatch):

@@ -87,6 +87,23 @@ def _write_to_milvus_hybrid(
     milvus_hybrid.insert(milvus_hybrid.KNOWLEDGE, rows)
 
 
+def _code_splitter(language: str) -> "CodeSplitter":
+    """Build a CodeSplitter with an explicitly-constructed tree-sitter Parser.
+
+    ``tree_sitter_language_pack.get_parser()`` returns the pack's own bundled
+    Parser type, which fails LlamaIndex CodeSplitter's
+    ``isinstance(_, tree_sitter.Parser)`` check. Building the Parser ourselves
+    from the pack's Language + the pip ``tree_sitter`` satisfies it and keeps
+    AST-aware code chunking working."""
+    from tree_sitter import Parser
+    from tree_sitter_language_pack import get_language
+
+    parser = Parser(get_language(language))
+    return CodeSplitter(
+        language=language, chunk_lines=40, chunk_lines_overlap=5, parser=parser,
+    )
+
+
 def _table_aware_nodes(document: Document, char_budget: int) -> list:
     """Split CSV/XLSX-extracted text into row-group chunks, repeating the
     header in each chunk so a single retrieved chunk stays self-describing."""
@@ -151,13 +168,13 @@ def get_optimal_nodes(document: Document) -> list:
             parser = JSONNodeParser()
             splitter_id, chunk_type = "json", "text"
         elif file_name.endswith(".py"):
-            parser = CodeSplitter(language="python", chunk_lines=40, chunk_lines_overlap=5)
+            parser = _code_splitter("python")
             splitter_id, chunk_type = "code", "code"
         elif file_name.endswith(".java"):
-            parser = CodeSplitter(language="java", chunk_lines=40, chunk_lines_overlap=5)
+            parser = _code_splitter("java")
             splitter_id, chunk_type = "code", "code"
         elif file_name.endswith(".cpp") or file_name.endswith(".c"):
-            parser = CodeSplitter(language="cpp", chunk_lines=40, chunk_lines_overlap=5)
+            parser = _code_splitter("cpp")
             splitter_id, chunk_type = "code", "code"
         else:
             parser = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)

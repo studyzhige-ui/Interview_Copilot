@@ -73,6 +73,12 @@ pypdf==6.9.2
 pymupdf==1.27.2.2
 llama-parse==0.6.94
 python-docx>=1.1.0
+# AST-aware code-file chunking (.py/.java/.cpp/.c via LlamaIndex CodeSplitter).
+# The pack's get_parser() returns its own bundled Parser type which fails
+# CodeSplitter's isinstance(_, tree_sitter.Parser) check, so ingestion builds
+# the Parser from get_language() + tree_sitter directly (see _code_splitter).
+tree-sitter==0.25.2
+tree-sitter-language-pack==1.8.1
 
 # Audio Transcription
 faster-whisper==1.2.1
