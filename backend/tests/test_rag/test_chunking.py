@@ -310,3 +310,62 @@ def test_mid_sentence_qa_marker_does_not_trigger(monkeypatch):
 
     assert nodes
     assert all(n.metadata["splitter_profile"]["qa_regex_hit"] is False for n in nodes)
+
+
+def test_qa_preamble_kept_as_own_chunk(monkeypatch):
+    """Text before the first question marker is preserved as its own leading
+    chunk — QA grouping drops nothing."""
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    text = (
+        "本文档是一份面试题库整理。\n"
+        "问题：什么是索引？\n答案：加速查询的数据结构。\n"
+        "问题：什么是事务？\n答案：一组原子操作。\n"
+    )
+    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
+    nodes = ingestion.get_optimal_nodes(doc)
+
+    assert len(nodes) == 3  # preamble + two Q/A groups
+    assert "面试题库整理" in nodes[0].get_content()
+    assert "索引" in nodes[1].get_content() and "事务" in nodes[2].get_content()
+    assert all(n.metadata["splitter_profile"]["qa_regex_hit"] is True for n in nodes)
+
+
+def test_qa_mixed_answer_markers_grouped(monkeypatch):
+    """答案：/答：/A: all count as answer markers toward the pairing trigger."""
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    text = "问题：甲是什么？\n答：是甲。\n问题：乙是什么？\n答案：是乙。\n"
+    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
+    nodes = ingestion.get_optimal_nodes(doc)
+
+    assert len(nodes) == 2
+    assert all(n.metadata["splitter_profile"]["qa_regex_hit"] is True for n in nodes)
+
+
+def test_oversize_qa_group_routes_through_secondary_gate(monkeypatch):
+    """An oversize Q/A group does not bypass the downstream oversize gate — it is
+    still secondary-split, and the resulting sub-nodes keep qa_regex_hit=True."""
+    # Report every node as oversize so each QA group hits the secondary splitter.
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: 5000)
+    calls = {"split": 0}
+    real_get = ingestion.SentenceSplitter.get_nodes_from_documents
+
+    def _counting(self, docs, **kw):
+        calls["split"] += 1
+        return real_get(self, docs, **kw)
+
+    monkeypatch.setattr(ingestion.SentenceSplitter, "get_nodes_from_documents", _counting)
+
+    text = (
+        "问题：什么是缓存击穿？\n答案：热点 key 失效后大量请求打到数据库。\n"
+        "问题：什么是缓存雪崩？\n答案：大量 key 在同一时刻集中失效。\n"
+    )
+    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
+    nodes = ingestion.get_optimal_nodes(doc)
+
+    # _qa_aware_nodes builds TextNodes directly, so every SentenceSplitter call
+    # here comes from the oversize gate re-splitting the QA groups.
+    assert calls["split"] >= 1
+    assert nodes
+    assert all(n.metadata["splitter_profile"]["qa_regex_hit"] is True for n in nodes)

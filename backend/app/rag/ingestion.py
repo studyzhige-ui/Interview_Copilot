@@ -158,7 +158,8 @@ def _table_aware_nodes(document: Document, char_budget: int) -> list:
 
 # Explicit Q/A prefix markers (plan §4.3 "最保守 QA 正则"). Anchored to line
 # start (re.MULTILINE) so a mid-sentence "问题：" never matches; both half- and
-# full-width colons. Longest alternative first so "问题"/"答案" win over "问"/"答".
+# full-width colons. Longest alternative first only avoids a backtrack ("问题："
+# also matches via "问" + backtrack on the colon) — clarity, not correctness.
 _QA_Q_RE = re.compile(r"^[ \t]*(?:问题|问|Q)[:：]", re.MULTILINE)
 _QA_A_RE = re.compile(r"^[ \t]*(?:答案|答|A)[:：]", re.MULTILINE)
 
@@ -179,6 +180,9 @@ def _qa_aware_nodes(document: Document) -> list | None:
 
     text = document.text or ""
     q_starts = [m.start() for m in _QA_Q_RE.finditer(text)]
+    # A single question isn't a bank — require ≥2 questions (so an incidental
+    # line-start "问题：" can't reshape a doc) AND ≥1 answer (a bare question
+    # list is rule-3 "hint only", never a forced split).
     if len(q_starts) < 2 or not _QA_A_RE.search(text):
         return None
 
@@ -188,11 +192,8 @@ def _qa_aware_nodes(document: Document) -> list | None:
         spans.append(head)
     for i, start in enumerate(q_starts):
         end = q_starts[i + 1] if i + 1 < len(q_starts) else len(text)
-        seg = text[start:end].strip()
-        if seg:
-            spans.append(seg)
-    if not spans:
-        return None
+        # Each span begins at a marker match, so .strip() is always non-empty.
+        spans.append(text[start:end].strip())
     return [TextNode(text=s, metadata=dict(document.metadata)) for s in spans]
 
 
