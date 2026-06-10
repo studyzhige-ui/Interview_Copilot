@@ -13,7 +13,7 @@ to exercise:
   * RAG routing (dense/sparse backfill + drop when RAG off)
   * the single ``load_strategy`` memory decision
   * global_memory_on=False privacy gate (memory section omitted + forced off)
-  * conservative fallback on parse / vendor failure
+  * failure fallback → original-question retrieval flagged planner_failed
   * the prompt-assembly order: user_message ends up exactly ONCE at the end.
 """
 import asyncio
@@ -331,8 +331,8 @@ def test_plan_query_drops_dense_sparse_when_rag_off(monkeypatch):
 
 
 def test_plan_query_falls_back_on_non_json_response(monkeypatch):
-    """LLM returns plain prose with no JSON → planner returns its
-    conservative fallback (no RAG, no memory bodies)."""
+    """LLM returns plain prose with no JSON → planner falls back to retrieving
+    with the ORIGINAL question (retrieval plan §2.1), flagged planner_failed."""
     from app.conversation import query_planner as planner
 
     _patch_llm(monkeypatch, _FakeLLM("sorry I cannot answer right now."))
@@ -341,12 +341,17 @@ def test_plan_query_falls_back_on_non_json_response(monkeypatch):
         user_message="Tell me about Redis caching.",
         recent_turns=[{"role": "User", "content": "earlier discussed concurrency"}],
     ))
-    assert plan.needs_knowledge_retrieval is False
+    assert plan.needs_knowledge_retrieval is True
+    assert plan.planner_failed is True
+    assert plan.dense_query == "Tell me about Redis caching."
+    assert "Redis" in plan.sparse_query
+    # Memory bodies stay off — can't be decided without the planner.
     assert plan.load_strategy is False
 
 
 def test_plan_query_falls_back_when_llm_raises(monkeypatch):
-    """An async exception inside the LLM call must be caught silently."""
+    """An async exception inside the LLM call → original-question fallback
+    retrieval (not silent give-up), flagged planner_failed for trace."""
     from app.conversation import query_planner as planner
 
     class BoomLLM:
@@ -359,17 +364,19 @@ def test_plan_query_falls_back_when_llm_raises(monkeypatch):
         user_message="anything",
         recent_turns=[],
     ))
-    # Conservative fallback — DO NOT trigger RAG on the LLM failure.
-    assert plan.needs_knowledge_retrieval is False
+    assert plan.needs_knowledge_retrieval is True
+    assert plan.planner_failed is True
+    assert plan.dense_query == "anything"
     assert plan.load_strategy is False
 
 
-def test_plan_query_falls_back_on_invalid_pydantic_payload(monkeypatch):
-    """Valid JSON but unparseable shape → fallback rather than crash."""
+def test_plan_query_valid_json_unknown_fields_defaults_no_retrieval(monkeypatch):
+    """Valid JSON whose shape doesn't match → pydantic fills defaults
+    (needs_knowledge_retrieval=False). This is a SUCCESSFUL parse with
+    conservative defaults, NOT the failure fallback — so planner_failed
+    stays False (no original-question retrieval)."""
     from app.conversation import query_planner as planner
 
-    # Pydantic will accept this and just default everything to False.
-    # Confirm we don't crash and behavior is conservative.
     bad = json.dumps({"some_unknown_field": "value"})
     _patch_llm(monkeypatch, _FakeLLM(bad))
 
@@ -378,7 +385,42 @@ def test_plan_query_falls_back_on_invalid_pydantic_payload(monkeypatch):
         recent_turns=[],
     ))
     assert plan.needs_knowledge_retrieval is False
+    assert plan.planner_failed is False
     assert plan.load_strategy is False
+
+
+def test_plan_query_success_path_never_sets_planner_failed(monkeypatch):
+    """planner_failed is a runtime-only flag (set by the fallback) — a normal
+    LLM response must never surface it as True, even if the model injects it."""
+    from app.conversation import query_planner as planner
+
+    payload = {
+        "needs_knowledge_retrieval": True,
+        "dense_query": "x",
+        "sparse_query": "x",
+        "load_strategy": False,
+        "planner_failed": True,   # model tries to inject — must be ignored
+    }
+    _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
+
+    plan = asyncio.run(planner.plan_query(user_message="x", recent_turns=[]))
+    assert plan.planner_failed is False
+
+
+def test_planner_prompt_schema_omits_planner_failed(monkeypatch):
+    """The LLM output schema must NOT advertise planner_failed — it's a
+    runtime flag, not a model decision."""
+    from app.conversation import query_planner as planner
+
+    fake = _FakeLLM(json.dumps({
+        "needs_knowledge_retrieval": False, "dense_query": "",
+        "sparse_query": "", "load_strategy": False,
+    }))
+    _patch_llm(monkeypatch, fake)
+
+    asyncio.run(planner.plan_query(user_message="hi", recent_turns=[]))
+    sent_prompt = fake.calls[0][0][0]
+    assert "planner_failed" not in sent_prompt
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -386,16 +428,19 @@ def test_plan_query_falls_back_on_invalid_pydantic_payload(monkeypatch):
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_fallback_query_plan_returns_conservative_defaults():
-    """The fallback is conservative — no RAG, no memory bodies — so
-    an LLM hiccup doesn't accidentally trigger an expensive turn
-    against the user's intent."""
+def test_fallback_query_plan_retrieves_with_original_question():
+    """The fallback retrieves with the original question (retrieval plan
+    §2.1) rather than giving up — a planner hiccup shouldn't silently drop
+    a question the user may need answered from their knowledge base. It is
+    flagged planner_failed so fallback_rate stays observable; memory bodies
+    stay off."""
     from app.conversation.query_planner import fallback_query_plan
 
     plan = fallback_query_plan("How does HNSW work?")
-    assert plan.needs_knowledge_retrieval is False
-    assert plan.dense_query == ""
-    assert plan.sparse_query == ""
+    assert plan.needs_knowledge_retrieval is True
+    assert plan.planner_failed is True
+    assert plan.dense_query == "How does HNSW work?"
+    assert "HNSW" in plan.sparse_query
     assert plan.load_strategy is False
 
 

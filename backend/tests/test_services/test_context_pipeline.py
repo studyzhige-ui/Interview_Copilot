@@ -1,8 +1,10 @@
 """SLOT_ORDER + renderer contract tests for the context pipeline."""
 from app.services.chat.context_assembly_pipeline import (
     AssembledContext,
+    ContextAssemblyPipeline,
     PromptRenderer,
     SLOT_ORDER,
+    TokenBudget,
 )
 
 
@@ -186,6 +188,131 @@ def test_summary_comes_from_summary_column(monkeypatch):
     rendered = pipeline.renderer.render_answer_prompt(ctx, system_prompt="rules")
     assert "[Context Summary]" in rendered
     assert "聚焦 redis 缓存" in rendered
+
+
+# ── [K#] numbering + sources building (context assembly is the sole owner) ──
+
+
+def _chunk(node_id: str, text: str, **over) -> dict:
+    base = {
+        "chunk_id": f"dch_{node_id}",
+        "node_id": node_id,
+        "document_id": "kdoc_1",
+        "document_title": "Redis 面试题",
+        "file_name": "redis.pdf",
+        "category": "面试题库",
+        "source_kind": "user_upload",
+        "page_start": None,
+        "page_end": None,
+        "section_title": None,
+        "heading_path": None,
+        "chunk_index": 0,
+        "score": 0.87,
+        "score_source": "reranker",
+        "text": text,
+    }
+    base.update(over)
+    return base
+
+
+def test_build_retrieved_context_numbers_and_aligns_sources():
+    pipeline = ContextAssemblyPipeline()
+    chunks = [
+        _chunk("n1", "Redis 缓存击穿……", page_start=3, page_end=3, chunk_index=12),
+        _chunk("n2", "缓存穿透……", section_title="缓存异常场景", chunk_index=4, score=0.82),
+    ]
+    text, sources = pipeline._build_retrieved_context(chunks)
+
+    # [K#] refs are 1-based and contiguous, in rank order.
+    assert text.startswith("[K1]")
+    assert "[K2]" in text
+    assert [s["ref"] for s in sources] == ["K1", "K2"]
+    # Header carries the lightweight provenance hint.
+    assert 'title="Redis 面试题"' in text
+    assert "page=3" in text
+    assert 'section="缓存异常场景"' in text
+    assert "chunk=12" in text
+    assert "score=0.870" in text
+    # Sources align 1:1 and carry the full §2.7 schema.
+    s1 = sources[0]
+    assert s1["chunk_id"] == "dch_n1"
+    assert s1["node_id"] == "n1"
+    assert s1["document_title"] == "Redis 面试题"
+    assert s1["file_name"] == "redis.pdf"
+    assert s1["page_start"] == 3
+    assert s1["score_source"] == "reranker"
+    assert s1["text_preview"].startswith("Redis 缓存击穿")
+
+
+def test_build_retrieved_context_page_range_header():
+    pipeline = ContextAssemblyPipeline()
+    text, _ = pipeline._build_retrieved_context(
+        [_chunk("n1", "x", page_start=3, page_end=5)]
+    )
+    assert "page=3-5" in text
+
+
+def test_build_retrieved_context_empty():
+    pipeline = ContextAssemblyPipeline()
+    assert pipeline._build_retrieved_context([]) == ("", [])
+    assert pipeline._build_retrieved_context(None) == ("", [])
+
+
+def test_build_retrieved_context_skips_blank_text_chunks():
+    pipeline = ContextAssemblyPipeline()
+    text, sources = pipeline._build_retrieved_context(
+        [_chunk("n1", ""), _chunk("n2", "real content")]
+    )
+    # The blank chunk takes no ref; the next real chunk is K1, not K2.
+    assert [s["ref"] for s in sources] == ["K1"]
+    assert sources[0]["node_id"] == "n2"
+
+
+def test_build_retrieved_context_truncates_single_oversized_chunk():
+    budget = TokenBudget()
+    budget.RETRIEVED_CONTEXT_BUDGET = 20
+    pipeline = ContextAssemblyPipeline(budget=budget)
+    big = "缓存 " * 200
+    text, sources = pipeline._build_retrieved_context([_chunk("n1", big)])
+
+    assert len(sources) == 1
+    assert sources[0].get("truncated") is True
+
+
+def test_build_retrieved_context_stops_at_budget():
+    budget = TokenBudget()
+    budget.RETRIEVED_CONTEXT_BUDGET = 30
+    pipeline = ContextAssemblyPipeline(budget=budget)
+    chunks = [_chunk(f"n{i}", "缓存雪崩的解决方案包括过期时间随机化。" * 2) for i in range(5)]
+    _, sources = pipeline._build_retrieved_context(chunks)
+
+    # First chunk always lands; later chunks stop once the budget is hit.
+    assert 1 <= len(sources) < 5
+
+
+def test_assemble_answer_context_populates_sources(monkeypatch):
+    from app.services.chat import context_assembly_pipeline as pipeline_mod
+    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
+
+    class FakeTranscript:
+        def get_session_meta(self, session_id):
+            return {
+                "user_id": "alice", "type": "general", "subject_type": None,
+                "subject_id": None, "compaction_cursor": 0, "summary": "",
+            }
+
+        def get_recent_turns(self, **_kw):
+            return []
+
+    monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
+    pipeline = ContextAssemblyPipeline()
+
+    ctx = pipeline.assemble_answer_context(
+        session_id="s", current_query="q",
+        knowledge_chunks=[_chunk("n1", "Redis 缓存击穿……")],
+    )
+    assert ctx.sources and ctx.sources[0]["ref"] == "K1"
+    assert "[K1]" in ctx.retrieved_context
 
 
 # Note: ``assemble_rewrite_context`` was retired with the planner

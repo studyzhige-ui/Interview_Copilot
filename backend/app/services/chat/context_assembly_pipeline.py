@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from app.agent_runtime.context_manager import token_count as count_tokens
+from app.agent_runtime.context_manager import truncate_to_tokens
 from app.services.chat.chat_history_service import transcript_service
 
 logger = logging.getLogger(__name__)
@@ -106,6 +107,12 @@ class AssembledContext:
 
     # [Current Query] — the user's (rewritten) standalone question.
     current_input: str = ""
+
+    # Final citation sources, aligned 1:1 with the [K#] refs inside
+    # ``retrieved_context``. Built HERE (the sole [K#] owner) over the
+    # budget-trimmed chunks, so a ref can never point at a chunk that
+    # didn't make the cut (retrieval plan §2.7). Empty for non-RAG turns.
+    sources: list[dict] = field(default_factory=list)
 
     # Computed at the end of _assemble for telemetry / token-budget logging.
     context_text: str = ""
@@ -219,19 +226,6 @@ def trim_messages(messages: list[dict], budget: int) -> list[dict]:
     return messages[cutoff_index:]
 
 
-def trim_items(items: list[dict], *, content_key: str, budget: int) -> list[dict]:
-    """Keep items in order until the token budget is exhausted."""
-    selected: list[dict] = []
-    total = 0
-    for item in items:
-        tokens = count_tokens(str(item.get(content_key) or ""))
-        if selected and total + tokens > budget:
-            break
-        selected.append(item)
-        total += tokens
-    return selected
-
-
 # ── Pipeline ─────────────────────────────────────────────────────────────
 
 
@@ -337,22 +331,9 @@ class ContextAssemblyPipeline:
 
         # RAG retrieved-context: only knowledge_chunks now. The legacy
         # "memories mixed into retrieved_context" path is gone — memory
-        # has its own dedicated slot.
-        retrieved_parts: list[str] = []
-        if knowledge_chunks:
-            trimmed_chunks = trim_items(
-                knowledge_chunks,
-                content_key="text",
-                budget=self.budget.RETRIEVED_CONTEXT_BUDGET,
-            )
-            for i, chunk in enumerate(trimmed_chunks, 1):
-                source = chunk.get("source_kind") or chunk.get("source") or "knowledge"
-                score = chunk.get("score")
-                score_text = f" score={float(score):.3f}" if score is not None else ""
-                retrieved_parts.append(
-                    f"[K{i}] [{source}{score_text}] {chunk.get('text', '')}"
-                )
-        retrieved_context = "\n\n".join(retrieved_parts)
+        # has its own dedicated slot. This is also the SOLE place that
+        # assigns [K#] refs + builds the final sources array.
+        retrieved_context, sources = self._build_retrieved_context(knowledge_chunks)
 
         ctx = AssembledContext(
             debrief_reference=debrief_reference,
@@ -361,10 +342,102 @@ class ContextAssemblyPipeline:
             retrieved_context=retrieved_context,
             recent_turns=cleaned_turns,
             current_input=current_query,
+            sources=sources,
         )
         ctx.context_text = self.renderer.render_context_text(ctx)
         ctx.total_tokens = count_tokens(ctx.context_text)
         return ctx
+
+    # ── [K#] + sources (the sole owner of citation numbering) ──────────
+
+    def _build_retrieved_context(
+        self, chunks: list[dict] | None,
+    ) -> tuple[str, list[dict]]:
+        """Number the budget-trimmed chunks [K1], [K2], … and build the
+        sources array aligned 1:1 with those refs.
+
+        Whole chunks are added in rank order until the token budget is hit;
+        a single chunk that alone exceeds the budget is truncated (and its
+        source flagged ``truncated``). Because only chunks that actually land
+        in [Retrieved Context] get a ref, the model can never be handed a
+        [K#] whose source was trimmed away (retrieval plan §2.7).
+        """
+        if not chunks:
+            return "", []
+        budget = self.budget.RETRIEVED_CONTEXT_BUDGET
+        parts: list[str] = []
+        sources: list[dict] = []
+        used = 0
+        for chunk in chunks:
+            text = str(chunk.get("text") or "")
+            if not text:
+                continue
+            tokens = count_tokens(text)
+            truncated = False
+            if used and used + tokens > budget:
+                break  # whole-chunk budget exhausted — stop appending
+            if tokens > budget:
+                text = truncate_to_tokens(text, budget)
+                tokens = count_tokens(text)
+                truncated = True
+            used += tokens
+            ref = f"K{len(sources) + 1}"
+            parts.append(f"{self._context_header(ref, chunk)}\n{text}")
+            sources.append(self._build_source(ref, chunk, text, truncated))
+        return "\n\n".join(parts), sources
+
+    @staticmethod
+    def _context_header(ref: str, chunk: dict) -> str:
+        """Lightweight source hint shown in-context — full provenance lives
+        in the sources array. e.g. ``[K1] title="Redis 面试题" page=3 chunk=12
+        score=0.873``."""
+        segments = [f"[{ref}]"]
+        title = chunk.get("document_title")
+        if title:
+            segments.append(f'title="{title}"')
+        page_start = chunk.get("page_start")
+        page_end = chunk.get("page_end")
+        if page_start is not None:
+            if page_end is not None and page_end != page_start:
+                segments.append(f"page={page_start}-{page_end}")
+            else:
+                segments.append(f"page={page_start}")
+        section = chunk.get("section_title")
+        if section:
+            segments.append(f'section="{section}"')
+        chunk_index = chunk.get("chunk_index")
+        if chunk_index is not None:
+            segments.append(f"chunk={chunk_index}")
+        score = chunk.get("score")
+        if score is not None:
+            segments.append(f"score={float(score):.3f}")
+        return " ".join(segments)
+
+    @staticmethod
+    def _build_source(ref: str, chunk: dict, rendered_text: str, truncated: bool) -> dict:
+        """One sources-array entry — the retrieval plan §2.7 source schema.
+        ``text_preview`` is for the source-card UI, not the answer prompt."""
+        source = {
+            "ref": ref,
+            "chunk_id": chunk.get("chunk_id"),
+            "node_id": chunk.get("node_id"),
+            "document_id": chunk.get("document_id"),
+            "document_title": chunk.get("document_title"),
+            "file_name": chunk.get("file_name"),
+            "category": chunk.get("category"),
+            "source_kind": chunk.get("source_kind"),
+            "page_start": chunk.get("page_start"),
+            "page_end": chunk.get("page_end"),
+            "section_title": chunk.get("section_title"),
+            "heading_path": chunk.get("heading_path"),
+            "chunk_index": chunk.get("chunk_index"),
+            "score": chunk.get("score"),
+            "score_source": chunk.get("score_source"),
+            "text_preview": rendered_text[:200],
+        }
+        if truncated:
+            source["truncated"] = True
+        return source
 
     @staticmethod
     def _sanitize(messages: list[dict]) -> list[dict]:
@@ -412,6 +485,5 @@ __all__ = [
     "context_pipeline",
     "count_tokens",
     "prompt_renderer",
-    "trim_items",
     "trim_messages",
 ]

@@ -34,3 +34,20 @@ def token_count(text: str) -> int:
     if _tokenizer is None:
         return len(text.encode("utf-8")) // 3
     return len(_tokenizer.encode(text))
+
+
+def truncate_to_tokens(text: str, budget: int) -> str:
+    """Cut *text* to at most *budget* tokens, same tokenizer as ``token_count``.
+
+    Degraded mode mirrors ``token_count``'s byte heuristic (~3 bytes/token)
+    so budget semantics stay consistent whether or not tiktoken loaded.
+    """
+    if not text or budget <= 0:
+        return ""
+    if _tokenizer is None:
+        raw = text.encode("utf-8")[: budget * 3]
+        return raw.decode("utf-8", errors="ignore")
+    tokens = _tokenizer.encode(text)
+    if len(tokens) <= budget:
+        return text
+    return _tokenizer.decode(tokens[:budget])

@@ -80,8 +80,28 @@ def _count_tokens(text: str) -> int:
 DIRECT_SYSTEM_PROMPT = """You are Interview Copilot, a concise technical interview assistant.
 Use the provided session state and memories only when relevant. If context is insufficient, say what is missing."""
 
+# L1 RAG answer contract (generation plan §2.2): names the only citable slot,
+# requires [K#] citations for retrieved-knowledge claims, defines partial-
+# answer / refusal behaviour, and forbids leaking internal retrieval details.
 RAG_SYSTEM_RULES = """You are Interview Copilot, a concise technical interview assistant.
-Use retrieved knowledge as evidence and avoid inventing sources."""
+
+Context rules:
+- [Retrieved Context] is the only citable knowledge evidence.
+- [Memory], [Recent Turns], and [Record Context] can help understand the user and conversation, but they are not citable knowledge sources.
+- Use retrieved evidence only when it is relevant to the user's current question.
+- Do not invent sources, document names, pages, or citation ids.
+
+Answer rules:
+- For factual claims based on retrieved knowledge, cite the supporting chunk with [K#].
+- If multiple chunks support the same point, cite all relevant ids like [K1][K3].
+- If the retrieved context is insufficient, say what is missing.
+- If only part of the question is supported, answer that part and clearly mark the unsupported part.
+- If no retrieved evidence is relevant, do not pretend it is supported.
+- Never mention internal retrieval, planner failure, reranking, or system implementation details to the user.
+
+Style:
+- Answer in Chinese unless the user asks otherwise.
+- Be concise, structured, and interview-oriented."""
 
 
 class ChatPipelineStrategy:
@@ -132,6 +152,16 @@ class ChatPipelineStrategy:
         # behaviour. The agent strategy is the one that uses ``text``
         # as a terminator marker, but it only fires after a tool-loop
         # cycle, not after deltas (no double-render risk there).
+        # Post-generation citation check (RAG turns only) — regex, no LLM
+        # second pass. Logs warnings for unknown / missing [K#]; the answer
+        # text is never rewritten (generation plan §2.5). Only runs when the
+        # turn actually had citable sources, so direct chat never warns.
+        if ctx.sources:
+            from app.services.chat.citation import validate_citations
+            validate_citations(
+                final_answer, ctx.sources, retrieval_hit=ctx.retrieval_hit,
+            )
+
         result.final_answer = final_answer
         result.assistant_blocks = [{"type": "text", "text": final_answer}]
         result.steps_used = 1

@@ -13,6 +13,7 @@ from typing import Any
 
 class HarnessEventType(str, Enum):
     STATUS = "status"
+    SOURCES = "sources"
     TOOL_START = "tool_start"
     TOOL_DONE = "tool_done"
     TEXT = "text"
@@ -35,6 +36,21 @@ class HarnessEvent:
     @classmethod
     def status(cls, message: str, *, step: int = 0, elapsed_ms: float = 0.0) -> "HarnessEvent":
         return cls(type=HarnessEventType.STATUS, data={"message": message}, step=step, elapsed_ms=elapsed_ms)
+
+    @classmethod
+    def sources(
+        cls, sources: list[dict[str, Any]], *, step: int = 0, elapsed_ms: float = 0.0,
+    ) -> "HarnessEvent":
+        """The turn's final citation sources (L1 RAG only), aligned 1:1 with
+        the ``[K#]`` refs inside [Retrieved Context]. Emitted once, BEFORE
+        generation starts, so the frontend can mount source cards while the
+        answer streams. Old frontends skip unknown event types."""
+        return cls(
+            type=HarnessEventType.SOURCES,
+            data={"sources": sources},
+            step=step,
+            elapsed_ms=elapsed_ms,
+        )
 
     @classmethod
     def tool_start(

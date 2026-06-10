@@ -107,6 +107,15 @@ class ConversationEngine:
             elapsed_ms=self._elapsed_ms(),
         )
 
+        # L1 RAG citation sources — emitted ONCE before generation streams so
+        # the frontend can mount source cards while the answer arrives. Only
+        # fires when retrieval produced citable chunks (empty for direct chat
+        # / agent turns). Old frontends skip the unknown event type.
+        if self._ctx and self._ctx.sources:
+            yield HarnessEvent.sources(
+                self._ctx.sources, step=0, elapsed_ms=self._elapsed_ms(),
+            )
+
         try:
             async for event in self.strategy.execute(self._ctx, self._result):
                 yield event
@@ -242,6 +251,7 @@ class ConversationEngine:
                     dense_query=query_plan.dense_query or self.user_message,
                     sparse_query=query_plan.sparse_query,
                     user_id=self.user_id,
+                    planner_failed=query_plan.planner_failed,
                 )
             )
             if query_plan.needs_knowledge_retrieval and not agent_mode else None
@@ -306,6 +316,11 @@ class ConversationEngine:
             v3_memory_block=v3_memory_block,
             rewritten_query=None,
             needs_knowledge_retrieval=query_plan.needs_knowledge_retrieval,
+            # Final [K#] sources from context assembly (engine forwards them
+            # to the SSE sources event + message persistence below).
+            sources=assembled.sources,
+            retrieval_hit=self._retrieval_hit,
+            planner_failed=query_plan.planner_failed,
             # Cached so the agent strategy doesn't re-query the DB for
             # the same boolean — engine already resolved it for the
             # universal-load gate above.
@@ -335,6 +350,11 @@ class ConversationEngine:
         ai_blocks = self._result.assistant_blocks or [
             {"type": "text", "text": self._result.final_answer},
         ]
+        # Persist the RAG sources alongside the answer so a reloaded history
+        # turn can re-resolve [K#] source cards. The frontend (and the block
+        # renderer) skip the unknown "sources" block when rendering the body.
+        if self._ctx and self._ctx.sources:
+            ai_blocks = [*ai_blocks, {"type": "sources", "sources": self._ctx.sources}]
         await asyncio.to_thread(
             transcript_service.append_turn,
             session_id=self.session_id,

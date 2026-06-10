@@ -43,6 +43,16 @@ class StrategyContext:
     rewritten_query: str | None = None
     needs_knowledge_retrieval: bool = False
 
+    # ── Retrieval provenance + state (L1 RAG) ─────────────────────
+    # ``sources`` is the final citation array built by context assembly,
+    # aligned 1:1 with the [K#] refs in the prompt. The chat strategy reads
+    # it for the post-generation citation check; the engine forwards it to
+    # the SSE ``sources`` event + message persistence. Empty for non-RAG /
+    # agent turns.
+    sources: list[dict] = field(default_factory=list)
+    retrieval_hit: bool = False
+    planner_failed: bool = False
+
     # Global memory toggle resolved ONCE by the engine in ``_prepare``.
     # The agent strategy uses this to gate the recall_memory /
     # save_memory tools out of the manifest. Pre-fix the engine read

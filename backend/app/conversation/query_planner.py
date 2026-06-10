@@ -27,6 +27,10 @@ Output (:class:`QueryPlan`):
       user_profile body and the active ability states are always loaded by the
       universal pass — they're cheap — so the planner makes no decision about
       them.)
+
+  planner_failed (bool)
+      Runtime flag set ONLY by the failure fallback (planner crashed →
+      original-question retrieval). Never part of the LLM's JSON schema.
 """
 from __future__ import annotations
 
@@ -51,6 +55,12 @@ class QueryPlan(BaseModel):
 
     # ── Memory body selection ─────────────────────────────────────
     load_strategy: bool = False
+
+    # ── Runtime flags (NEVER part of the LLM's output schema) ─────
+    # Set by the failure fallback only — an LLM-emitted value would be
+    # noise (retrieval plan §2.1). The engine forwards it into the
+    # turn's RetrievalState.
+    planner_failed: bool = False
 
 
 def _extract_json_payload(raw_text: str) -> dict:
@@ -81,14 +91,24 @@ def _format_recent_turns(recent_turns: list[dict]) -> str:
 
 
 def fallback_query_plan(user_message: str) -> QueryPlan:
-    """Conservative fallback used when the planner LLM fails: no RAG, no body
-    loads. The universal pass (user_profile + ability states + strategy
-    one-liner) is always loaded by the engine regardless."""
+    """Fallback when the planner LLM fails: retrieve with the ORIGINAL
+    question instead of giving up (retrieval plan §2.1) — the candidates
+    still pass the reranker + threshold, so a useless retrieval costs
+    latency, while skipping it loses answers. Memory body loads stay off
+    (can't be decided without the planner).
+
+    ``planner_failed=True`` is stamped so the engine can mark the turn's
+    retrieval state and fallback_rate stays observable — a persistently
+    failing planner makes EVERY message (incl. casual chat) pay an
+    embedding + Milvus + rerank round-trip, which must show up in trace,
+    never silently.
+    """
     return QueryPlan(
-        needs_knowledge_retrieval=False,
-        dense_query="",
-        sparse_query="",
+        needs_knowledge_retrieval=True,
+        dense_query=user_message,
+        sparse_query=_keyword_query(user_message),
         load_strategy=False,
+        planner_failed=True,
     )
 
 
@@ -161,6 +181,9 @@ async def plan_query(
         )
         payload = _extract_json_payload(str(response.text))
         plan = QueryPlan(**payload)
+        # planner_failed is a runtime flag owned by the failure fallback — a
+        # successful parse must never let the model set it.
+        plan.planner_failed = False
 
         if plan.needs_knowledge_retrieval:
             if not plan.dense_query.strip():
@@ -176,7 +199,10 @@ async def plan_query(
             plan.load_strategy = False
         return plan
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Query planner failed, using conservative fallback: %s", exc)
+        logger.warning(
+            "Query planner failed, falling back to original-question "
+            "retrieval (planner_failed=True): %s", exc,
+        )
         return fallback_query_plan(user_message)
 
 
