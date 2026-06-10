@@ -44,7 +44,10 @@ def enqueue_milvus_delete(db: Session, *, user_pk: int, document_id: str) -> Non
     """Queue a reliable Milvus row delete for a document (caller commits).
 
     Idempotency-keyed per document so duplicate enqueues coalesce: a document is
-    deleted once, so a single delete job per ``document_id`` is sufficient.
+    deleted once, so a single delete job per ``document_id`` is sufficient. No
+    payload — delete only needs ``document_id``; ``source_kind`` is for the
+    rebuild jobs (upsert/reindex, C2+) that re-select facts, so carrying it here
+    would be an unread key.
     """
     enqueue_job(
         db,

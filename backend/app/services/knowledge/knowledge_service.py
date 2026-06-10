@@ -52,7 +52,7 @@ def delete_document_vectors_and_chunks(db: Session, document: KnowledgeDocument)
             document.id, exc,
         )
         enqueue_milvus_delete(db, user_pk=document.user_id, document_id=document.id)
-        db.commit()
+        db.commit()  # facts already committed above; this persists just the retry job
 
 
 def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> None:

@@ -82,6 +82,29 @@ def test_delete_queues_outbox_when_milvus_fails(db_session, monkeypatch):
     assert len(jobs) == 1 and jobs[0].job_type == "milvus_delete_document"
 
 
+def test_enqueue_then_drain_runs_registered_handler(db_session, monkeypatch):
+    """End-to-end through the real outbox loop: enqueue → run_due_outbox_jobs
+    runs the REGISTERED handler → job reaches 'succeeded' and delete_by_field is
+    called. The direct-handler tests above can't exercise the claim/run/status
+    lifecycle this does."""
+    import app.services.knowledge.knowledge_outbox  # noqa: F401 — registers handler
+    from app.services.uploads.outbox_service import run_due_outbox_jobs
+
+    calls = []
+    import app.rag.milvus_hybrid as mh
+    monkeypatch.setattr(mh, "delete_by_field", lambda coll, field, value: calls.append((field, value)))
+
+    ko.enqueue_milvus_delete(db_session, user_pk=1, document_id="kdoc_drain")
+    db_session.commit()
+
+    processed = run_due_outbox_jobs(db_session)
+
+    assert processed >= 1
+    assert calls == [("document_id", "kdoc_drain")]
+    job = db_session.query(OutboxJob).filter(OutboxJob.aggregate_id == "kdoc_drain").first()
+    assert job.status == "succeeded"
+
+
 def test_delete_no_outbox_when_milvus_succeeds(db_session, monkeypatch):
     from app.services.knowledge import knowledge_service as ks
 
