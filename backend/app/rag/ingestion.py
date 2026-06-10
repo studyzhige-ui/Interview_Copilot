@@ -239,7 +239,7 @@ def _heading_annotations(node, splitter_id: str) -> tuple[list[str] | None, str 
     ``MarkdownNodeParser`` stamps ``header_path`` like ``/Cache/Redis/`` (the
     ANCESTOR heading chain). We parse that into ``heading_path`` and read the
     node's own leading ``# `` line as ``section_title``. Gated to the markdown
-    splitter: for any other branch (code/html/json/table/sentence) we return
+    splitter: for any other branch (code/json/table/sentence) we return
     ``(None, None)`` — otherwise a ``# `` Python/shell comment on a code chunk's
     first line would be mistaken for a heading. Best-effort, never guesses."""
     if splitter_id != "markdown":

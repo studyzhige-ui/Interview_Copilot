@@ -142,6 +142,10 @@ class TableSplitter:
         return file_name.endswith((".csv", ".tsv", ".xlsx", ".xls"))
 
     def split(self, document: Document) -> tuple[list, bool]:
+        # CHUNK_SIZE*2 is a CHARACTER budget here (rows are short); the doubling
+        # is a rough token→char allowance, not a token count. The oversize gate
+        # back in ingestion re-splits by real tokens, so this only sets row-group
+        # granularity. Don't "fix" this to a token count.
         return _table_aware_nodes(document, CHUNK_SIZE * 2), False
 
 
