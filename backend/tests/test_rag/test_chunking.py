@@ -9,6 +9,43 @@ from __future__ import annotations
 from llama_index.core import Document
 
 from app.rag import ingestion
+from app.rag.chunking import select_splitter
+
+
+# ── E4: select_splitter strategy selection ──────────────────────────────────
+
+
+def test_select_splitter_by_content_type():
+    """The registry maps each content type to its strategy (first match wins,
+    sentence is the catch-all floor)."""
+    assert select_splitter("d.csv", "", False).id == "table"
+    assert select_splitter("d.tsv", "", False).id == "table"
+    assert select_splitter("d.xlsx", "", False).id == "table"
+    assert select_splitter("d.xls", "", False).id == "table"
+    assert select_splitter("n.md", "", False).id == "markdown"
+    assert select_splitter("n.markdown", "", False).id == "markdown"
+    assert select_splitter("x", "improved_qa", False).id == "markdown"  # saved QA is md
+    assert select_splitter("x", "", True).id == "markdown"  # parser emitted markdown
+    assert select_splitter("d.json", "", False).id == "json"
+    assert select_splitter("m.py", "", False).id == "code"
+    assert select_splitter("m.java", "", False).id == "code"
+    assert select_splitter("m.cpp", "", False).id == "code"
+    assert select_splitter("m.c", "", False).id == "code"
+    assert select_splitter("notes.txt", "", False).id == "sentence"
+    assert select_splitter("unknown.xyz", "", False).id == "sentence"
+    assert select_splitter("", "", False).id == "sentence"  # floor, never empty
+
+
+def test_select_splitter_html_has_no_html_strategy():
+    """E4 seam fix (plan §4.1.3 / chunking module docstring): there is NO HTML
+    chunking strategy. HTML reaches chunking as Markdown from the parse stage
+    (HtmlParser/Docling) → markdown strategy; a stray plain-text HTML (lightweight
+    failure) falls to the sentence floor — never HTMLNodeParser, which would
+    yield zero nodes from tag-stripped text and silently lose the document."""
+    assert select_splitter("page.html", "", True).id == "markdown"   # parsed → md
+    assert select_splitter("page.htm", "", True).id == "markdown"
+    assert select_splitter("page.html", "", False).id == "sentence"  # plain-text floor
+    assert select_splitter("page.htm", "", False).id == "sentence"
 
 
 def test_token_count_stamped_on_every_node(monkeypatch):

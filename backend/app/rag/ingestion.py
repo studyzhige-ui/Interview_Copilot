@@ -3,14 +3,9 @@ import logging
 import re
 import time
 from llama_index.core import Document, Settings
-from llama_index.core.node_parser import (
-    CodeSplitter,
-    HTMLNodeParser,
-    JSONNodeParser,
-    MarkdownNodeParser,
-    SentenceSplitter,
-)
+from llama_index.core.node_parser import SentenceSplitter
 from app.core.config import settings
+from app.rag.chunking import CHUNK_OVERLAP, CHUNK_SIZE, select_splitter
 from app.rag.cleaning import EmptyContentError, clean_text
 from app.rag.embedding_tokenizer import count_tokens as count_embedding_tokens
 
@@ -262,88 +257,6 @@ def _heading_annotations(node, splitter_id: str) -> tuple[list[str] | None, str 
     return heading_path, section_title
 
 
-def _code_splitter(language: str) -> CodeSplitter:
-    """Build a CodeSplitter with an explicitly-constructed tree-sitter Parser.
-
-    ``tree_sitter_language_pack.get_parser()`` returns the pack's own bundled
-    Parser type, which fails LlamaIndex CodeSplitter's
-    ``isinstance(_, tree_sitter.Parser)`` check. Building the Parser ourselves
-    from the pack's Language + the pip ``tree_sitter`` satisfies it and keeps
-    AST-aware code chunking working."""
-    from tree_sitter import Parser
-    from tree_sitter_language_pack import get_language
-
-    parser = Parser(get_language(language))
-    return CodeSplitter(
-        language=language, chunk_lines=40, chunk_lines_overlap=5, parser=parser,
-    )
-
-
-def _table_aware_nodes(document: Document, char_budget: int) -> list:
-    """Split CSV/XLSX-extracted text into row-group chunks, repeating the
-    header in each chunk so a single retrieved chunk stays self-describing."""
-    from llama_index.core.schema import TextNode
-
-    lines = [ln for ln in (document.text or "").splitlines() if ln.strip()]
-    if not lines:
-        return []
-    header = lines[0]
-    body = lines[1:] or [header]
-    nodes: list = []
-    buf: list[str] = []
-    size = len(header)
-    for row in body:
-        if buf and size + len(row) > char_budget:
-            nodes.append(TextNode(text=header + "\n" + "\n".join(buf), metadata=dict(document.metadata)))
-            buf, size = [], len(header)
-        buf.append(row)
-        size += len(row) + 1
-    if buf:
-        nodes.append(TextNode(text=header + "\n" + "\n".join(buf), metadata=dict(document.metadata)))
-    return nodes
-
-
-# Explicit Q/A prefix markers (plan §4.3 "最保守 QA 正则"). Anchored to line
-# start (re.MULTILINE) so a mid-sentence "问题：" never matches; both half- and
-# full-width colons. Longest alternative first only avoids a backtrack ("问题："
-# also matches via "问" + backtrack on the colon) — clarity, not correctness.
-_QA_Q_RE = re.compile(r"^[ \t]*(?:问题|问|Q)[:：]", re.MULTILINE)
-_QA_A_RE = re.compile(r"^[ \t]*(?:答案|答|A)[:：]", re.MULTILINE)
-
-
-def _qa_aware_nodes(document: Document) -> list | None:
-    """Most-conservative QA-prefix grouping for PLAIN TEXT (plan §4.3, rule 2).
-
-    A plain-text question bank using explicit ``Q:``/``A:`` (or ``问题：``/
-    ``答案：``) prefixes would otherwise be cut between a question and its answer
-    by ``SentenceSplitter``. ONLY when the text shows a real paired structure
-    (≥2 question markers AND ≥1 answer marker) do we split at question
-    boundaries so each Q-and-its-A stays in one chunk; the downstream oversize
-    gate still re-splits any group that is too long. Returns ``None`` when
-    there is no clear QA structure — the caller then falls back to the sentence
-    splitter (never guesses, and structured parsers are never overridden since
-    this only runs on the plain-text branch)."""
-    from llama_index.core.schema import TextNode
-
-    text = document.text or ""
-    q_starts = [m.start() for m in _QA_Q_RE.finditer(text)]
-    # A single question isn't a bank — require ≥2 questions (so an incidental
-    # line-start "问题：" can't reshape a doc) AND ≥1 answer (a bare question
-    # list is rule-3 "hint only", never a forced split).
-    if len(q_starts) < 2 or not _QA_A_RE.search(text):
-        return None
-
-    spans: list[str] = []
-    head = text[: q_starts[0]].strip()
-    if head:  # preamble before the first question — keep it, drop nothing
-        spans.append(head)
-    for i, start in enumerate(q_starts):
-        end = q_starts[i + 1] if i + 1 < len(q_starts) else len(text)
-        # Each span begins at a marker match, so .strip() is always non-empty.
-        spans.append(text[start:end].strip())
-    return [TextNode(text=s, metadata=dict(document.metadata)) for s in spans]
-
-
 def get_optimal_nodes(document: Document) -> list:
     """
     自适应切块引擎：基于文档类型和内容结构智能选择切分策略。
@@ -351,63 +264,16 @@ def get_optimal_nodes(document: Document) -> list:
     对于 Markdown/JSON 等结构化文档，先按语义结构切分，再用 SentenceSplitter
     做二次兜底，防止单个 chunk 超过 Embedding 模型的最大 token 限制。
     """
-    # BGE-M3 最大支持 8192 tokens，但推荐 chunk 在 512 tokens 以内
-    # 以获得最佳的 embedding 语义密度。
-    CHUNK_SIZE = 512
-    CHUNK_OVERLAP = 64
-
     source_kind = document.metadata.get("source_kind", "")
     file_name = document.metadata.get("file_name", "").lower()
-
     is_markdown_parsed = document.metadata.get("is_markdown_parsed", False)
-    qa_regex_hit = False
 
-    # Tabular files (CSV / XLSX): split by row groups and repeat the header in
-    # every chunk so a retrieved chunk is independently understandable.
-    # splitter_id / chunk_type are diagnostic annotations (plan §4.4.3/§4.4.2).
-    if file_name.endswith((".csv", ".tsv", ".xlsx", ".xls")):
-        nodes = _table_aware_nodes(document, CHUNK_SIZE * 2)
-        splitter_id, chunk_type = "table", "table"
-    else:
-        parser = None
-        if (
-            is_markdown_parsed
-            or file_name.endswith((".md", ".markdown"))
-            or source_kind == "improved_qa"  # saved QA content_text is Markdown
-        ):
-            parser = MarkdownNodeParser()
-            splitter_id, chunk_type = "markdown", "text"
-        elif file_name.endswith((".html", ".htm")):
-            # HTML-aware: keeps heading/section/list/table/code structure,
-            # drops script/style/nav noise.
-            parser = HTMLNodeParser()
-            splitter_id, chunk_type = "html", "text"
-        elif file_name.endswith(".json"):
-            parser = JSONNodeParser()
-            splitter_id, chunk_type = "json", "text"
-        elif file_name.endswith(".py"):
-            parser = _code_splitter("python")
-            splitter_id, chunk_type = "code", "code"
-        elif file_name.endswith(".java"):
-            parser = _code_splitter("java")
-            splitter_id, chunk_type = "code", "code"
-        elif file_name.endswith(".cpp") or file_name.endswith(".c"):
-            parser = _code_splitter("cpp")
-            splitter_id, chunk_type = "code", "code"
-        else:
-            # Plain text: try the most-conservative QA-prefix grouping first so a
-            # question stays with its answer; fall back to the sentence splitter
-            # when there's no clear Q/A structure (plan §4.3, never guesses).
-            splitter_id, chunk_type = "sentence", "text"
-            qa_nodes = _qa_aware_nodes(document)
-            if qa_nodes is not None:
-                nodes = qa_nodes
-                qa_regex_hit = True
-            else:
-                parser = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
-
-        if parser is not None:
-            nodes = parser.get_nodes_from_documents([document])
+    # Pick the content-type chunking strategy (Phase E4). The strategy produces
+    # the primary nodes + whether the conservative QA grouping fired; the
+    # oversize gate + annotation below are shared across all strategies.
+    splitter = select_splitter(file_name, source_kind, is_markdown_parsed)
+    nodes, qa_regex_hit = splitter.split(document)
+    splitter_id, chunk_type = splitter.id, splitter.chunk_type
 
     # 二次兜底：对超长 chunk 做再切分，确保不超过 embedding 模型 max_seq_length。
     # 超长判定使用真实 embedding tokenizer（plan §4.3），不再用 len(text) 字符估算。
