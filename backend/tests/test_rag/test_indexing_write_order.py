@@ -25,11 +25,13 @@ from app.rag import ingestion
 class _FakeEmbed:
     embed_batch_size = 8
 
-    def __init__(self, vectors):
-        self._vectors = vectors
+    def __init__(self, dim=4):
+        self._dim = dim
 
     def get_text_embedding_batch(self, texts, show_progress=False):
-        return self._vectors
+        # One vector per text so the count always matches (works for any number
+        # of chunks the real splitter produces in the end-to-end test).
+        return [[0.1] * self._dim for _ in texts]
 
 
 @pytest.fixture
@@ -51,16 +53,16 @@ def index_db(monkeypatch):
         engine.dispose()
 
 
-def _use_embed(monkeypatch, vectors, dim=4):
+def _use_embed(monkeypatch, dim=4):
     monkeypatch.setattr(
         er, "resolve_embedding",
         lambda: er.ResolvedEmbedding("local", er.PROVIDERS["local"], "BAAI/bge-m3", dim),
     )
-    monkeypatch.setattr(ingestion, "Settings", SimpleNamespace(embed_model=_FakeEmbed(vectors)))
+    monkeypatch.setattr(ingestion, "Settings", SimpleNamespace(embed_model=_FakeEmbed(dim)))
 
 
 def test_index_nodes_writes_pending_before_milvus_then_indexed(index_db, monkeypatch):
-    _use_embed(monkeypatch, [[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]])
+    _use_embed(monkeypatch)
 
     import app.rag.milvus_hybrid as mh
     monkeypatch.setattr(mh, "delete_by_field", lambda *a, **k: None)
@@ -97,7 +99,7 @@ def test_index_nodes_writes_pending_before_milvus_then_indexed(index_db, monkeyp
 
 
 def test_index_nodes_milvus_failure_leaves_pending_facts(index_db, monkeypatch):
-    _use_embed(monkeypatch, [[0.1, 0.2, 0.3, 0.4]])
+    _use_embed(monkeypatch)
 
     import app.rag.milvus_hybrid as mh
     monkeypatch.setattr(mh, "delete_by_field", lambda *a, **k: None)
@@ -117,5 +119,54 @@ def test_index_nodes_milvus_failure_leaves_pending_facts(index_db, monkeypatch):
         rows = db.query(DocumentChunk).filter(DocumentChunk.document_id == "d2").all()
         assert len(rows) == 1
         assert rows[0].index_status == "pending"
+    finally:
+        db.close()
+
+
+def test_reingest_replacement_is_idempotent(index_db, monkeypatch):
+    """Re-ingesting the same document_id replaces (not accumulates) its chunks
+    and Milvus rows — the worker's stated re-ingest idempotency contract."""
+    _use_embed(monkeypatch)
+    import app.rag.milvus_hybrid as mh
+    deletes: list = []
+    monkeypatch.setattr(mh, "delete_by_field",
+                        lambda coll, field, value: deletes.append((field, value)))
+    monkeypatch.setattr(mh, "insert", lambda coll, rows: None)
+
+    first = [TextNode(text="v1 a", id_="a1"), TextNode(text="v1 b", id_="a2")]
+    ingestion._index_nodes(first, user_id=1, source_kind="user_upload", document_id="dup")
+    second = [TextNode(text="v2 only", id_="b1")]
+    ingestion._index_nodes(second, user_id=1, source_kind="user_upload", document_id="dup")
+
+    db = index_db()
+    try:
+        rows = db.query(DocumentChunk).filter(DocumentChunk.document_id == "dup").all()
+        assert len(rows) == 1  # replaced, not 2+1 accumulated
+        assert rows[0].text == "v2 only"
+        assert rows[0].index_status == "indexed"
+    finally:
+        db.close()
+    # Each ingest deleted this document's prior Milvus rows before inserting.
+    assert deletes == [("document_id", "dup"), ("document_id", "dup")]
+
+
+async def test_ingest_text_end_to_end_marks_indexed(index_db, monkeypatch):
+    """A real ingest_text entry (improved_qa) runs the full pipeline and leaves
+    indexed facts — validates _index_nodes wiring through a live entry point."""
+    _use_embed(monkeypatch)
+    import app.rag.milvus_hybrid as mh
+    monkeypatch.setattr(mh, "delete_by_field", lambda *a, **k: None)
+    monkeypatch.setattr(mh, "insert", lambda coll, rows: None)
+
+    result = await ingestion.ingest_text(
+        "## 问题\n什么是缓存击穿？\n## 答案\n热点 key 失效。",
+        "improved_qa", user_id=1, document_id="qa1",
+    )
+
+    assert result["success"] and result["node_ids"]
+    db = index_db()
+    try:
+        rows = db.query(DocumentChunk).filter(DocumentChunk.document_id == "qa1").all()
+        assert rows and all(r.index_status == "indexed" for r in rows)
     finally:
         db.close()

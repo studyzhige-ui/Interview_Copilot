@@ -173,9 +173,14 @@ def _index_nodes(
         all_nodes, texts, embeddings,
         user_id=user_id, source_kind=source_kind, document_id=document_id,
     )
-    # Phase 3: flip the now-live rows to indexed.
+    # Phase 3: flip the now-live rows to indexed. Mark by document_id on the
+    # live path; node_ids is only for the document-less path (so the unused key
+    # isn't passed when document_id is present).
     with SessionLocal() as db:
-        mark_chunks_indexed(db, document_id=document_id, node_ids=chunk_info["node_ids"])
+        if document_id:
+            mark_chunks_indexed(db, document_id=document_id)
+        else:
+            mark_chunks_indexed(db, node_ids=chunk_info["node_ids"])
     return chunk_info
 
 
