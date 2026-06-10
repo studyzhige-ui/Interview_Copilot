@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
 import { SourceCards, linkifyCitations } from './SourceCards';
@@ -49,6 +49,17 @@ describe('linkifyCitations', () => {
     const out = linkifyCitations('[K1] then [K2] then [K1]', new Set(['K1', 'K2']));
     expect(out).toBe('[K1](#cite-K1) then [K2](#cite-K2) then [K1](#cite-K1)');
   });
+
+  it('leaves [K#] inside an inline code span untouched', () => {
+    const out = linkifyCitations('use the `[K1]` token but cite [K1]', new Set(['K1']));
+    expect(out).toBe('use the `[K1]` token but cite [K1](#cite-K1)');
+  });
+
+  it('leaves [K#] inside a fenced code block untouched', () => {
+    const md = '```\narr[K1]\n```\nsee [K1]';
+    const out = linkifyCitations(md, new Set(['K1']));
+    expect(out).toBe('```\narr[K1]\n```\nsee [K1](#cite-K1)');
+  });
 });
 
 describe('SourceCards', () => {
@@ -79,5 +90,21 @@ describe('SourceCards', () => {
   it('renders nothing for an empty list', () => {
     const { container } = render(<SourceCards sources={[]} />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('highlights + scrolls to the card matching highlightRef', () => {
+    // jsdom has no scrollIntoView — stub so the highlight effect doesn't throw.
+    const scrollSpy = vi.fn();
+    Element.prototype.scrollIntoView = scrollSpy;
+    render(
+      <SourceCards
+        sources={[makeSource({ ref: 'K1' }), makeSource({ ref: 'K2', document_title: '笔记' })]}
+        highlightRef="K2"
+      />,
+    );
+    expect(scrollSpy).toHaveBeenCalled();
+    // The active card carries the ring highlight; the other does not.
+    expect(screen.getByText('K2').closest('.ring-1')).not.toBeNull();
+    expect(screen.getByText('K1').closest('.ring-1')).toBeNull();
   });
 });

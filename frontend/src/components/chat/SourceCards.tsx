@@ -10,25 +10,30 @@ import { useEffect, useRef } from 'react';
 import { FileText } from 'lucide-react';
 import type { Source } from '@/types/api';
 
-/** Matches a bare ``[K1]`` citation token NOT already a markdown link
- *  (negative lookahead on ``(`` avoids mangling ``[K1](url)``). */
-const CITE_TOKEN = /\[(K\d+)\](?!\()/g;
+/**
+ * One alternation pass: a fenced code block / inline code span, OR a bare
+ * ``[K1]`` citation token not already a markdown link (the ``(?!\()``
+ * lookahead avoids mangling ``[K1](url)``). The code branch is captured so
+ * it can be passed through verbatim — that's how we leave code untouched.
+ */
+const CODE_OR_CITE = /(```[\s\S]*?```|`[^`]*`)|\[(K\d+)\](?!\()/g;
 
 /**
  * Turn bare ``[K#]`` tokens into in-page citation links
  * (``[K1](#cite-K1)``) so MarkdownBody can render them as click targets.
  * Only refs that actually have a source are linkified — a stray ``[K9]``
- * the model invented stays plain text. Safe inside code spans/fences:
- * markdown renders the link syntax there literally, not as a link.
+ * the model invented stays plain text. Code spans / fenced blocks are left
+ * untouched (a ``[K1]`` inside code keeps rendering as ``[K1]``).
  */
 export function linkifyCitations(markdown: string, validRefs: Set<string>): string {
   if (!markdown || validRefs.size === 0) return markdown;
-  return markdown.replace(CITE_TOKEN, (whole, ref: string) =>
-    validRefs.has(ref) ? `[${ref}](#cite-${ref})` : whole,
-  );
+  return markdown.replace(CODE_OR_CITE, (whole, code: string | undefined, ref: string) => {
+    if (code !== undefined) return code;   // inside code — pass through verbatim
+    return validRefs.has(ref) ? `[${ref}](#cite-${ref})` : whole;
+  });
 }
 
-function _pageLabel(s: Source): string | null {
+function pageLabel(s: Source): string | null {
   if (s.page_start == null) return null;
   if (s.page_end != null && s.page_end !== s.page_start) {
     return `p.${s.page_start}-${s.page_end}`;
@@ -58,7 +63,7 @@ export function SourceCards({
       </div>
       <div className="space-y-1.5">
         {sources.map((s) => {
-          const page = _pageLabel(s);
+          const page = pageLabel(s);
           const active = s.ref === highlightRef;
           return (
             <div
