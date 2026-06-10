@@ -124,9 +124,37 @@ def _scope_expr(user_pk: int, filters: Optional[dict[str, Any]] = None) -> str:
     return expr
 
 
+def _assert_collection_dim(client: Any, name: str) -> None:
+    """Fail loud if an existing collection's dense dim != ``EMBEDDING_DIM``
+    (plan §4.5.1): a changed embedding model/dim must not silently write into an
+    index built for a different dim. Best-effort — if the dim can't be
+    introspected we log and proceed rather than block a working index on a
+    describe-schema quirk."""
+    from app.rag.embedding_registry import EmbeddingValidationError
+
+    try:
+        desc = client.describe_collection(name)
+        fields = desc.get("fields", []) if isinstance(desc, dict) else []
+        dense_dim = None
+        for f in fields:
+            if f.get("name") == _DENSE_FIELD:
+                dense_dim = (f.get("params") or {}).get("dim")
+                break
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not introspect %s dense dim for validation: %s", name, exc)
+        return
+    if dense_dim is not None and int(dense_dim) != settings.EMBEDDING_DIM:
+        raise EmbeddingValidationError(
+            f"Milvus collection {name!r} 的向量维度为 {int(dense_dim)}，与配置 "
+            f"EMBEDDING_DIM={settings.EMBEDDING_DIM} 不一致。更换 embedding 模型或维度后，"
+            f"必须重建该 collection（drop + reingest）。"
+        )
+
+
 def ensure_collection(coll: HybridCollection) -> None:
     """Create the collection (common fields + domain scalars + BM25 function +
-    dense/sparse indexes) once. Idempotent."""
+    dense/sparse indexes) once. Idempotent. An already-existing collection has
+    its dense dim validated against ``EMBEDDING_DIM`` on first use (§4.5.1)."""
     from pymilvus import DataType, Function, FunctionType
 
     client = _get_client()
@@ -134,6 +162,7 @@ def ensure_collection(coll: HybridCollection) -> None:
         return
     with _ensure_lock:
         if client.has_collection(coll.name):
+            _assert_collection_dim(client, coll.name)
             _ensured.add(coll.name)
             return
         schema = client.create_schema(auto_id=False, enable_dynamic_field=False)

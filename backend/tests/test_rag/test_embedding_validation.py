@@ -1,0 +1,78 @@
+"""B6 / INGEST-EMBEDDING: pre-write embedding validation + blank filtering.
+
+``_embed_texts`` must fail the whole document (EmbeddingValidationError) on a
+dim or count mismatch BEFORE any index write, and emit an observability profile
+on success. ``_drop_blank_nodes`` removes empty/whitespace chunks so the Milvus
+index and the Postgres fact rows stay in sync (plan §4.5.2/§4.5.3/§4.5.4).
+"""
+from __future__ import annotations
+
+import pytest
+from llama_index.core import Settings
+from llama_index.core.schema import TextNode
+
+import app.rag.embedding_registry as er
+from app.rag import ingestion
+from app.rag.embedding_registry import EmbeddingValidationError
+
+
+class _FakeEmbed:
+    embed_batch_size = 8
+
+    def __init__(self, vectors):
+        self._vectors = vectors
+
+    def get_text_embedding_batch(self, texts, show_progress=False):
+        return self._vectors
+
+
+def _use_fake_embed(monkeypatch, vectors, dim):
+    """Pin resolve_embedding() (so the test ignores real .env) and install a
+    duck-typed embed model. We set Settings._embed_model directly: the public
+    setter validates BaseEmbedding, but the getter returns the backing field
+    as-is, so a plain fake works without subclassing."""
+    monkeypatch.setattr(
+        er, "resolve_embedding",
+        lambda: er.ResolvedEmbedding("local", er.PROVIDERS["local"], "BAAI/bge-m3", dim),
+    )
+    monkeypatch.setattr(Settings, "_embed_model", _FakeEmbed(vectors))
+
+
+def test_embed_texts_success_builds_profile(monkeypatch):
+    _use_fake_embed(monkeypatch, [[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]], dim=4)
+    embeddings, profile = ingestion._embed_texts(["a", "b"])
+
+    assert len(embeddings) == 2
+    assert profile["embedding_provider"] == "local"
+    assert profile["embedding_model"] == "BAAI/bge-m3"
+    assert profile["embedding_dim"] == 4
+    assert profile["embedding_chunk_count"] == 2
+    assert profile["embedding_batch_size"] == 8
+    assert "embedding_duration_ms" in profile
+
+
+def test_embed_texts_dim_mismatch_raises(monkeypatch):
+    # model returns 3-dim vectors but config expects 4 → permanent failure.
+    _use_fake_embed(monkeypatch, [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]], dim=4)
+    with pytest.raises(EmbeddingValidationError):
+        ingestion._embed_texts(["a", "b"])
+
+
+def test_embed_texts_count_mismatch_raises(monkeypatch):
+    # 2 texts but only 1 vector back → abort, never write a partial index.
+    _use_fake_embed(monkeypatch, [[0.1, 0.2, 0.3, 0.4]], dim=4)
+    with pytest.raises(EmbeddingValidationError):
+        ingestion._embed_texts(["a", "b"])
+
+
+def test_drop_blank_nodes_filters_empty_and_whitespace():
+    nodes = [TextNode(text="real content"), TextNode(text="   \n\t  "), TextNode(text="")]
+    kept = ingestion._drop_blank_nodes(nodes)
+
+    assert len(kept) == 1
+    assert kept[0].get_content() == "real content"
+
+
+def test_drop_blank_nodes_keeps_all_when_none_blank():
+    nodes = [TextNode(text="a"), TextNode(text="b")]
+    assert len(ingestion._drop_blank_nodes(nodes)) == 2

@@ -1,6 +1,7 @@
 import os
 import logging
 import re
+import time
 from llama_index.core import Document, Settings, SimpleDirectoryReader
 from llama_index.readers.file import PyMuPDFReader
 from llama_index.core.node_parser import (
@@ -56,6 +57,58 @@ def _node_text(node) -> str:
     return str(text or "")
 
 
+def _drop_blank_nodes(all_nodes: list) -> list:
+    """Drop chunks whose text is empty / whitespace-only before embedding (plan
+    §4.5.2): some providers reject empty input, and a blank chunk carries no
+    retrievable signal. Filtering here (before BOTH Milvus and Postgres writes)
+    keeps the index and the fact rows in sync. Warns with the dropped count."""
+    kept = [n for n in all_nodes if _node_text(n).strip()]
+    dropped = len(all_nodes) - len(kept)
+    if dropped:
+        logger.warning("Dropped %d blank/whitespace chunk(s) before embedding.", dropped)
+    return kept
+
+
+def _embed_texts(texts: list[str]) -> tuple[list, dict]:
+    """Embed chunk texts and validate the result before any index write (plan
+    §4.5.2/§4.5.3). Returns ``(embeddings, embedding_profile)``.
+
+    Raises :class:`EmbeddingValidationError` (permanent, non-retryable) when the
+    vector count != chunk count or any vector's dim != ``EMBEDDING_DIM`` — so a
+    misconfigured model fails the whole document loudly instead of writing a
+    partial / dimension-mismatched index. The profile is observability only
+    (plan §4.5.4); it rides into ``metadata_json``, never into Milvus scalars.
+    """
+    from app.rag.embedding_registry import EmbeddingValidationError, resolve_embedding
+
+    cfg = resolve_embedding()
+    batch_size = getattr(Settings.embed_model, "embed_batch_size", None)
+    t0 = time.perf_counter()
+    embeddings = Settings.embed_model.get_text_embedding_batch(texts, show_progress=True)
+    duration_ms = int((time.perf_counter() - t0) * 1000)
+
+    if len(embeddings) != len(texts):
+        raise EmbeddingValidationError(
+            f"向量数量({len(embeddings)})与文本块数量({len(texts)})不一致，已中止入库以避免部分索引。"
+        )
+    for emb in embeddings:
+        if len(emb) != cfg.dim:
+            raise EmbeddingValidationError(
+                f"向量维度({len(emb)})与配置 EMBEDDING_DIM({cfg.dim})不一致；"
+                f"请确认 embedding 模型与配置匹配，或重建索引。"
+            )
+
+    profile = {
+        "embedding_provider": cfg.provider_id,
+        "embedding_model": cfg.model,
+        "embedding_dim": cfg.dim,
+        "embedding_batch_size": batch_size,
+        "embedding_duration_ms": duration_ms,
+        "embedding_chunk_count": len(texts),
+    }
+    return embeddings, profile
+
+
 def _write_to_milvus_hybrid(
     all_nodes: list, *, user_id: int, source_kind: str, document_id: str | None,
 ) -> None:
@@ -64,12 +117,16 @@ def _write_to_milvus_hybrid(
     The sparse/BM25 vector is computed server-side from ``text`` by the
     collection's BM25 ``Function`` — we only supply the dense vector + text +
     scope fields (``user_id`` is the stable users.id pk). Re-ingesting a document
-    replaces its prior chunks first.
+    replaces its prior chunks first. The embedding is validated (dim + count)
+    before any delete/insert, and its observability profile is stamped onto each
+    node so ``write_chunks`` persists it in ``metadata_json``.
     """
     from app.rag import milvus_hybrid
 
     texts = [_node_text(n) for n in all_nodes]
-    embeddings = Settings.embed_model.get_text_embedding_batch(texts, show_progress=True)
+    embeddings, embedding_profile = _embed_texts(texts)
+    for node in all_nodes:
+        node.metadata["embedding_profile"] = embedding_profile
     rows: list[dict] = []
     for node, text, emb in zip(all_nodes, texts, embeddings):
         node_id = getattr(node, "node_id", None) or getattr(node, "id_", None)
@@ -397,6 +454,10 @@ async def ingest_document(
             nodes = get_optimal_nodes(doc)
             all_nodes.extend(nodes)
 
+        all_nodes = _drop_blank_nodes(all_nodes)
+        if not all_nodes:
+            raise EmptyContentError("内容切分后没有可索引的有效文本块。")
+
         for node in all_nodes:
             if document_id:
                 node.metadata["document_id"] = document_id
@@ -471,7 +532,9 @@ async def ingest_text(
             final_metadata["cleaning_profile"] = profile.as_dict()
 
         doc = Document(text=text, metadata=final_metadata)
-        all_nodes = get_optimal_nodes(doc)
+        all_nodes = _drop_blank_nodes(get_optimal_nodes(doc))
+        if not all_nodes:
+            raise EmptyContentError("内容切分后没有可索引的有效文本块。")
         for node in all_nodes:
             if document_id:
                 node.metadata["document_id"] = document_id

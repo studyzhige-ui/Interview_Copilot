@@ -116,6 +116,7 @@ def test_write_chunks_builds_metadata_json_from_node_diagnostics(db_session):
             "chunk_type": "text", "splitter_id": "markdown",
             "section_title": "缓存击穿", "heading_path": ["缓存", "异常"],
             "cleaning_profile": {"char_out": 2},
+            "embedding_profile": {"embedding_provider": "local", "embedding_dim": 1024},
             "category": "面试题库",   # must NOT leak into metadata_json
             "user_id": 1,             # scope field, not diagnostic
         }),
@@ -132,6 +133,7 @@ def test_write_chunks_builds_metadata_json_from_node_diagnostics(db_session):
     assert meta1["section_title"] == "缓存击穿"
     assert meta1["heading_path"] == ["缓存", "异常"]
     assert meta1["cleaning_profile"] == {"char_out": 2}
+    assert meta1["embedding_profile"] == {"embedding_provider": "local", "embedding_dim": 1024}
     assert "category" not in meta1   # INGEST-CLEANUP
     assert "user_id" not in meta1    # scope field, not a diagnostic
     # No diagnostics → NULL, not "{}".

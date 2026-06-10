@@ -188,6 +188,7 @@ def process_document_ingestion(self, document_id: str):
     import tempfile
 
     from app.rag.cleaning import EmptyContentError
+    from app.rag.embedding_registry import EmbeddingValidationError
     from app.rag.ingestion import ingest_document
     from app.services.knowledge.document_formats import (
         UnsupportedDocumentFormat,
@@ -276,10 +277,11 @@ def process_document_ingestion(self, document_id: str):
         logger.warning("[Task %s] Document was empty or unparseable.", self.request.id)
         return {"status": "failed", "error": "Empty or unparseable document"}
 
-    except (UnsupportedDocumentFormat, EmptyContentError) as exc:
-        # Permanent content/format error (unsupported format or S0 cleaning
-        # left no usable text) — friendly Chinese message, NO retry. document
-        # is guaranteed bound here (raised after the None check above).
+    except (UnsupportedDocumentFormat, EmptyContentError, EmbeddingValidationError) as exc:
+        # Permanent content/format/embedding error (unsupported format, S0
+        # cleaning left no usable text, or a dimension/count mismatch that no
+        # retry can fix) — friendly Chinese message, NO retry. document is
+        # guaranteed bound here (raised after the None check above).
         document.status = "failed"
         document.error_message = str(exc)[:500]
         db.add(document)

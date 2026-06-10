@@ -48,6 +48,17 @@ ProviderKind = Literal[
 ]
 
 
+class EmbeddingValidationError(Exception):
+    """Embedding-output / index dimension or count integrity failure (plan §4.5).
+
+    A permanent (non-retryable) ingest error: a returned vector's dim != the
+    configured ``EMBEDDING_DIM``, the vector count != the chunk count, or an
+    existing Milvus collection's dim differs from ``EMBEDDING_DIM``. The message
+    is user-facing — the worker surfaces it like ``EmptyContentError`` — and
+    retrying never helps: fix the model/config or rebuild the index.
+    """
+
+
 @dataclass(frozen=True)
 class EmbeddingProvider:
     kind: ProviderKind
@@ -216,6 +227,7 @@ def build_embedding() -> Any:
 
 __all__ = [
     "EmbeddingProvider",
+    "EmbeddingValidationError",
     "PROVIDERS",
     "ResolvedEmbedding",
     "resolve_embedding",
