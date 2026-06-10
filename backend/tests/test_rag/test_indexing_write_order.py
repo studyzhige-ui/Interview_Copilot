@@ -98,7 +98,11 @@ def test_index_nodes_writes_pending_before_milvus_then_indexed(index_db, monkeyp
         db.close()
 
 
-def test_index_nodes_milvus_failure_leaves_pending_facts(index_db, monkeypatch):
+def test_index_nodes_milvus_failure_queues_upsert_keeps_pending(index_db, monkeypatch):
+    """C2: a Milvus write failure does NOT fail the import — it keeps the pending
+    facts, queues a milvus_upsert_document retry, and reports indexed=False so the
+    caller leaves the document 'processing'."""
+    from app.models.outbox_job import OutboxJob
     _use_embed(monkeypatch)
 
     import app.rag.milvus_hybrid as mh
@@ -110,15 +114,15 @@ def test_index_nodes_milvus_failure_leaves_pending_facts(index_db, monkeypatch):
     monkeypatch.setattr(mh, "insert", boom)
 
     nodes = [TextNode(text="a", id_="n1")]
-    with pytest.raises(RuntimeError):
-        ingestion._index_nodes(nodes, user_id=1, source_kind="user_upload", document_id="d2")
+    info = ingestion._index_nodes(nodes, user_id=1, source_kind="user_upload", document_id="d2")
 
-    # Pending facts survive the Milvus failure — recoverable, not half-indexed.
+    assert info["indexed"] is False
     db = index_db()
     try:
         rows = db.query(DocumentChunk).filter(DocumentChunk.document_id == "d2").all()
-        assert len(rows) == 1
-        assert rows[0].index_status == "pending"
+        assert len(rows) == 1 and rows[0].index_status == "pending"  # facts kept, not indexed
+        jobs = db.query(OutboxJob).filter(OutboxJob.aggregate_id == "d2").all()
+        assert len(jobs) == 1 and jobs[0].job_type == "milvus_upsert_document"
     finally:
         db.close()
 
@@ -148,6 +152,68 @@ def test_reingest_replacement_is_idempotent(index_db, monkeypatch):
         db.close()
     # Each ingest deleted this document's prior Milvus rows before inserting.
     assert deletes == [("document_id", "dup"), ("document_id", "dup")]
+
+
+def test_reindex_document_rebuilds_from_live_facts(index_db, monkeypatch):
+    """reindex_document reads LIVE chunks (skips deleted), re-embeds, replaces the
+    document's Milvus rows, and flips its pending chunks to indexed."""
+    _use_embed(monkeypatch)
+    import app.rag.milvus_hybrid as mh
+    captured: dict = {}
+    monkeypatch.setattr(mh, "delete_by_field", lambda coll, field, value: None)
+    monkeypatch.setattr(mh, "insert", lambda coll, rows: captured.__setitem__("rows", rows))
+
+    db = index_db()
+    try:
+        db.add_all([
+            DocumentChunk(document_id="rd", node_id="n1", user_id=1,
+                          source_kind="user_upload", chunk_index=0, text="alpha",
+                          index_status="pending"),
+            DocumentChunk(document_id="rd", node_id="n2", user_id=1,
+                          source_kind="user_upload", chunk_index=1, text="beta",
+                          index_status="pending"),
+            DocumentChunk(document_id="rd", node_id="n3", user_id=1,
+                          source_kind="user_upload", chunk_index=2, text="gone",
+                          index_status="deleted"),
+        ])
+        db.commit()
+    finally:
+        db.close()
+
+    db2 = index_db()
+    try:
+        n = ingestion.reindex_document(db2, "rd")
+    finally:
+        db2.close()
+
+    assert n == 2  # only the 2 live chunks
+    assert {r["id"] for r in captured["rows"]} == {"n1", "n2"}  # deleted excluded
+    db3 = index_db()
+    try:
+        indexed = db3.query(DocumentChunk).filter(
+            DocumentChunk.document_id == "rd",
+            DocumentChunk.index_status == "indexed",
+        ).count()
+        assert indexed == 2  # pending → indexed
+    finally:
+        db3.close()
+
+
+def test_reindex_document_no_live_chunks_clears_milvus(index_db, monkeypatch):
+    _use_embed(monkeypatch)
+    import app.rag.milvus_hybrid as mh
+    deletes: list = []
+    monkeypatch.setattr(mh, "delete_by_field", lambda coll, field, value: deletes.append(value))
+    monkeypatch.setattr(mh, "insert", lambda coll, rows: pytest.fail("must not insert with no live chunks"))
+
+    db = index_db()
+    try:
+        n = ingestion.reindex_document(db, "empty_doc")
+    finally:
+        db.close()
+
+    assert n == 0
+    assert deletes == ["empty_doc"]  # rows cleared, nothing inserted
 
 
 async def test_ingest_text_end_to_end_marks_indexed(index_db, monkeypatch):

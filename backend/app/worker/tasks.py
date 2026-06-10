@@ -260,15 +260,26 @@ def process_document_ingestion(self, document_id: str):
         )
 
         if result and result.get("success"):
-            document.status = "ready"
             document.chunk_count = int(result.get("chunk_count") or 0)
             document.ref_doc_ids = dump_json_list(result.get("ref_doc_ids") or [])
             document.content_text = result.get("content_text")
-            document.error_message = None
+            if result.get("indexed", True):
+                document.status = "ready"
+                document.error_message = None
+                db.add(document)
+                db.commit()
+                logger.info("[Task %s] Document ingestion completed.", self.request.id)
+                return {"status": "success", "document_id": document_id}
+            # Facts are saved but the Milvus write was queued for outbox retry
+            # (Milvus was down). Stay 'processing' until the index lands — the
+            # milvus_upsert_document handler flips this to ready (or to failed if
+            # its retries exhaust), so the doc never stalls (plan §4.6.3 / C2).
+            document.status = "processing"
+            document.error_message = "向量索引暂时不可用，正在后台重试，稍后可用。"
             db.add(document)
             db.commit()
-            logger.info("[Task %s] Document ingestion completed.", self.request.id)
-            return {"status": "success", "document_id": document_id}
+            logger.warning("[Task %s] Facts saved; Milvus write queued for retry.", self.request.id)
+            return {"status": "indexing_queued", "document_id": document_id}
 
         document.status = "failed"
         document.error_message = "Empty or unparseable document"
@@ -619,7 +630,8 @@ def drain_outbox_jobs(self):
     # Import for side effect: register the handlers before any job is claimed —
     # Milvus ability-index (upsert/delete_memory_ability_index), the memory
     # extraction jobs (extract_memory_realtime / extract_memory_dreaming), and
-    # the Milvus knowledge-index jobs (milvus_delete_document).
+    # the Milvus knowledge-index jobs (milvus_delete_document /
+    # milvus_upsert_document).
     import app.services.knowledge.knowledge_outbox  # noqa: F401
     import app.services.memory.ability_outbox  # noqa: F401
     import app.services.memory.extraction_jobs  # noqa: F401

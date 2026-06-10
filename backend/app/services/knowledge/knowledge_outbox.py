@@ -25,6 +25,40 @@ from app.services.uploads.outbox_service import enqueue_job, register_handler
 logger = logging.getLogger(__name__)
 
 JOB_MILVUS_DELETE = "milvus_delete_document"
+JOB_MILVUS_UPSERT = "milvus_upsert_document"
+
+
+def _handle_milvus_upsert(db: Session, job: OutboxJob) -> None:
+    """Rebuild a document's Milvus rows from its live Postgres facts and graduate
+    it to ``ready`` (plan §4.6.3 / C2). Enqueued when the ingest-time Milvus
+    write failed — the facts are already committed ``pending`` and the document
+    is left ``processing`` until this lands.
+
+    On the attempt that would exhaust the job (``max_attempts``), mark the
+    document ``failed`` before re-raising, so a prolonged Milvus outage resolves
+    to a terminal state instead of stranding the doc in ``processing`` forever.
+    """
+    from app.rag.ingestion import reindex_document
+    from app.services.knowledge.knowledge_service import (
+        mark_document_index_failed,
+        mark_document_indexed_ready,
+    )
+
+    document_id = job.aggregate_id
+    if not document_id:
+        logger.warning("%s: job %s has no aggregate_id (document_id)", JOB_MILVUS_UPSERT, job.id)
+        return
+    try:
+        reindex_document(db, document_id)  # rebuild Milvus + flip chunks indexed
+    except Exception:
+        # attempts is incremented AFTER the handler raises, so this attempt is
+        # the last one exactly when attempts + 1 >= max_attempts.
+        if job.attempts + 1 >= job.max_attempts:
+            mark_document_index_failed(
+                db, document_id, "向量索引多次重试仍失败，请稍后重新导入该文档。",
+            )
+        raise
+    mark_document_indexed_ready(db, document_id)
 
 
 def _handle_milvus_delete(db: Session, job: OutboxJob) -> None:
@@ -59,4 +93,19 @@ def enqueue_milvus_delete(db: Session, *, user_pk: int, document_id: str) -> Non
     )
 
 
+def enqueue_milvus_upsert(db: Session, *, user_pk: int, document_id: str) -> None:
+    """Queue a Milvus index (re)build for a document whose ingest-time write
+    failed (caller commits). No idempotency_key — unlike delete this is
+    repeatable across re-ingests, and the handler (rebuild-from-facts) is itself
+    idempotent, so an occasional duplicate run is harmless."""
+    enqueue_job(
+        db,
+        user_pk=user_pk,
+        job_type=JOB_MILVUS_UPSERT,
+        aggregate_type="knowledge_document",
+        aggregate_id=document_id,
+    )
+
+
+register_handler(JOB_MILVUS_UPSERT, _handle_milvus_upsert)
 register_handler(JOB_MILVUS_DELETE, _handle_milvus_delete)

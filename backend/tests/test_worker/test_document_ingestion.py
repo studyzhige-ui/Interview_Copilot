@@ -140,6 +140,41 @@ def test_worker_marks_failed_on_empty_after_cleaning_without_retry(worker_db, mo
         db.close()
 
 
+def test_worker_keeps_processing_when_index_queued(worker_db, monkeypatch):
+    """C2: when ingest reports indexed=False (the Milvus write was queued for
+    outbox retry because Milvus was down), the worker saves the facts but keeps
+    the document 'processing' — NOT 'ready' — until the index lands."""
+    from app.worker.tasks import process_document_ingestion
+
+    import app.services.storage_service as storage_mod
+    monkeypatch.setattr(
+        storage_mod, "download_file_from_s3",
+        lambda uri, path: open(path, "w", encoding="utf-8").close(),
+    )
+
+    async def _queued(*a, **k):
+        return {
+            "success": True, "indexed": False, "chunk_count": 2,
+            "node_ids": ["n1", "n2"], "ref_doc_ids": [], "content_text": "body",
+        }
+
+    import app.rag.ingestion as ingestion_mod
+    monkeypatch.setattr(ingestion_mod, "ingest_document", _queued)
+
+    doc_id = _seed_doc(worker_db, filename="notes.txt")
+    result = process_document_ingestion.apply(args=[doc_id]).get()
+
+    assert result["status"] == "indexing_queued"
+    db = worker_db()
+    try:
+        doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == doc_id).first()
+        assert doc.status == "processing"   # not 'ready' until the index lands
+        assert doc.chunk_count == 2          # facts are saved
+        assert "重试" in (doc.error_message or "")
+    finally:
+        db.close()
+
+
 def test_worker_marks_failed_on_embedding_validation_without_retry(worker_db, monkeypatch):
     """A dimension/count mismatch (EmbeddingValidationError) is a permanent
     config error: friendly message surfaced via str(exc), no retry (B6 §4.5.3)."""

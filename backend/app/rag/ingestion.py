@@ -140,6 +140,39 @@ def _insert_milvus_rows(
     milvus_hybrid.insert(milvus_hybrid.KNOWLEDGE, rows)
 
 
+def reindex_document(db, document_id: str) -> int:
+    """Rebuild one document's Milvus rows from its LIVE Postgres chunks (plan
+    §4.6.3) — the fact source, never the old Milvus rows. Re-embeds chunk text
+    with the current model, replaces the document's rows (delete-by-id then
+    insert, so a retry is idempotent), and flips any ``pending`` chunks to
+    ``indexed``. Returns the row count written; 0 means no live chunks remain,
+    in which case the document's Milvus rows are simply cleared.
+
+    Used by the Milvus upsert/reindex outbox handlers and the reingest script.
+    """
+    from app.rag import milvus_hybrid
+    from app.services.knowledge.document_chunk_service import (
+        mark_chunks_indexed,
+        read_indexable_chunks,
+    )
+
+    chunks = read_indexable_chunks(db, document_id)
+    if not chunks:
+        milvus_hybrid.delete_by_field(milvus_hybrid.KNOWLEDGE, "document_id", document_id)
+        return 0
+    texts = [(c.text or "") for c in chunks]
+    embeddings, _profile = _embed_texts(texts)
+    # Chunks carry .node_id / .text, so _insert_milvus_rows treats them as nodes;
+    # user_id / source_kind are uniform per document.
+    _insert_milvus_rows(
+        chunks, texts, embeddings,
+        user_id=int(chunks[0].user_id), source_kind=chunks[0].source_kind or "",
+        document_id=document_id,
+    )
+    mark_chunks_indexed(db, document_id=document_id)
+    return len(chunks)
+
+
 def _index_nodes(
     all_nodes: list, *, user_id: int, source_kind: str, document_id: str | None,
 ) -> dict:
@@ -149,10 +182,13 @@ def _index_nodes(
       embed + validate  →  write facts as ``pending``  →  Milvus rows  →  mark ``indexed``
 
     Embedding (dim/count) is validated FIRST, so a bad embedding fails the whole
-    document before any row is written. Facts land as ``pending`` before Milvus;
-    if the Milvus write then fails, the committed pending facts are recoverable
-    by a reingest/reindex instead of leaving a Milvus/Postgres inconsistency.
-    Returns the ``write_chunks`` summary (chunk_count + node_ids).
+    document before any row is written. Facts land as ``pending`` before Milvus.
+    If the Milvus write then fails (outage), the committed pending facts are kept
+    and a ``milvus_upsert_document`` outbox job is queued to retry the index
+    write (§4.6.0 #6); ``chunk_info["indexed"]`` is ``False`` so the caller
+    leaves the document ``processing`` until the index lands (the upsert handler
+    flips it ready, or failed if the retries exhaust). Returns the
+    ``write_chunks`` summary (chunk_count + node_ids + indexed).
     """
     from app.db.database import SessionLocal
     from app.services.knowledge.document_chunk_service import mark_chunks_indexed, write_chunks
@@ -168,11 +204,26 @@ def _index_nodes(
             db, nodes=all_nodes, user_id=user_id, source_kind=source_kind,
             document_id=document_id, index_status="pending",
         )
-    # Phase 2: Milvus rows. A failure here leaves the pending facts for reindex.
-    _insert_milvus_rows(
-        all_nodes, texts, embeddings,
-        user_id=user_id, source_kind=source_kind, document_id=document_id,
-    )
+    # Phase 2: Milvus rows. On failure, keep the pending facts and queue a
+    # reliable upsert retry rather than failing the import.
+    try:
+        _insert_milvus_rows(
+            all_nodes, texts, embeddings,
+            user_id=user_id, source_kind=source_kind, document_id=document_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — queue retry, don't fail the import
+        if not document_id:
+            raise  # no document_id to key the retry on (defensive NULL path)
+        logger.warning(
+            "Milvus write failed for document %s; queuing upsert retry: %s",
+            document_id, exc,
+        )
+        from app.services.knowledge.knowledge_outbox import enqueue_milvus_upsert
+        with SessionLocal() as db:
+            enqueue_milvus_upsert(db, user_pk=user_id, document_id=document_id)
+            db.commit()
+        chunk_info["indexed"] = False
+        return chunk_info
     # Phase 3: flip the now-live rows to indexed. Mark by document_id on the
     # live path; node_ids is only for the document-less path (so the unused key
     # isn't passed when document_id is present).
@@ -181,6 +232,7 @@ def _index_nodes(
             mark_chunks_indexed(db, document_id=document_id)
         else:
             mark_chunks_indexed(db, node_ids=chunk_info["node_ids"])
+    chunk_info["indexed"] = True
     return chunk_info
 
 
@@ -518,6 +570,7 @@ async def ingest_document(
         full_text = "\n\n".join((d.text or "") for d in documents)[:200000]
         return {
             "success": True,
+            "indexed": chunk_info.get("indexed", True),
             "chunk_count": chunk_info["chunk_count"],
             "node_ids": chunk_info["node_ids"],
             "ref_doc_ids": list({node.ref_doc_id for node in all_nodes if node.ref_doc_id}),
@@ -582,6 +635,7 @@ async def ingest_text(
 
         return {
             "success": True,
+            "indexed": chunk_info.get("indexed", True),
             "chunk_count": chunk_info["chunk_count"],
             "node_ids": chunk_info["node_ids"],
             "ref_doc_ids": list({node.ref_doc_id for node in all_nodes if node.ref_doc_id}),

@@ -136,6 +136,23 @@ def mark_chunks_indexed(
     return updated
 
 
+def read_indexable_chunks(db: Session, document_id: str) -> list[DocumentChunk]:
+    """A document's LIVE chunks in chunk order — the fact source a Milvus rebuild
+    reads from (plan §4.6.3: rebuild from Postgres facts, never reverse-infer
+    from old Milvus rows). Excludes soft-deleted chunks (``deleted_at`` /
+    ``index_status='deleted'``) so a rebuild never re-indexes removed content."""
+    return (
+        db.query(DocumentChunk)
+        .filter(
+            DocumentChunk.document_id == document_id,
+            DocumentChunk.deleted_at.is_(None),
+            DocumentChunk.index_status != "deleted",
+        )
+        .order_by(DocumentChunk.chunk_index.asc())
+        .all()
+    )
+
+
 def read_document_text(db: Session, document_id: str, *, max_chars: int = 20000) -> tuple[str, int]:
     """Concatenate a document's live chunks in order. Returns (text, chunk_count).
 

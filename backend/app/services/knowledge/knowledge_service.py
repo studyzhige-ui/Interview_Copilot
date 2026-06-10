@@ -55,6 +55,34 @@ def delete_document_vectors_and_chunks(db: Session, document: KnowledgeDocument)
         db.commit()  # facts already committed above; this persists just the retry job
 
 
+def mark_document_indexed_ready(db: Session, document_id: str) -> None:
+    """The async Milvus index write landed — graduate an index-queued document
+    to ``ready`` (plan §4.6.3 / C2). Only flips a doc still in ``processing`` so
+    a delete that happened while the upsert was queued is never resurrected."""
+    doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+    if doc is None or doc.status != "processing":
+        return
+    doc.status = "ready"
+    doc.error_message = None
+    doc.updated_at = datetime.utcnow()
+    db.add(doc)
+    db.commit()
+
+
+def mark_document_index_failed(db: Session, document_id: str, message: str) -> None:
+    """The async Milvus index retries were exhausted — terminal failure so an
+    index-queued document never stays ``processing`` forever. Only flips a doc
+    still in ``processing`` (leaves a concurrent delete alone)."""
+    doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+    if doc is None or doc.status != "processing":
+        return
+    doc.status = "failed"
+    doc.error_message = message[:500]
+    doc.updated_at = datetime.utcnow()
+    db.add(doc)
+    db.commit()
+
+
 def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> None:
     # Fileless docs (improved_qa / manual_text) have no S3 object — only chunks +
     # Milvus index to drop. File docs validate the owned-prefix before any delete.
