@@ -83,7 +83,6 @@ def _seed_chunk(
     metadata_json: str | None = None,
     page_start: int | None = None,
     page_end: int | None = None,
-    token_count: int | None = None,
 ) -> DocumentChunk:
     chunk = DocumentChunk(
         document_id=doc.id,
@@ -98,7 +97,6 @@ def _seed_chunk(
         metadata_json=metadata_json,
         page_start=page_start,
         page_end=page_end,
-        token_count=token_count,
     )
     db.add(chunk)
     db.commit()
@@ -110,11 +108,10 @@ def test_hydrate_preserves_input_order_and_attributes(db: Session):
     doc = _seed_doc(db, uid)
     _seed_chunk(
         db, doc, uid, "n1", chunk_index=0,
-        page_start=3, page_end=4, token_count=128,
+        page_start=3, page_end=4,
         metadata_json=json.dumps({
             "section_title": "异常场景",
             "heading_path": ["缓存", "异常场景"],
-            "chunk_type": "text",
         }),
     )
     _seed_chunk(db, doc, uid, "n2", chunk_index=1, text="缓存穿透是查询不存在的数据。")
@@ -127,20 +124,15 @@ def test_hydrate_preserves_input_order_and_attributes(db: Session):
     assert c1["chunk_id"].startswith("dch_")
     assert c1["document_title"] == "Redis 笔记 1"
     assert c1["file_name"] == "redis-1.pdf"
-    assert c1["content_type"] == "application/pdf"
-    assert c1["size_bytes"] == 1234
     assert c1["category"] == "默认"
     assert c1["source_kind"] == "user_upload"
     assert c1["chunk_index"] == 0
     assert c1["section_title"] == "异常场景"
     assert c1["heading_path"] == ["缓存", "异常场景"]
-    assert c1["chunk_type"] == "text"
     assert c1["text"] == "Redis 缓存雪崩可以通过过期时间随机化缓解。"
-    assert c1["text_hash"] == "h-n1"
     # Phase-B provenance columns now flow through hydration.
     assert c1["page_start"] == 3
     assert c1["page_end"] == 4
-    assert c1["token_count"] == 128
 
 
 def test_hydrate_drops_dead_chunks_and_documents(db: Session):
@@ -181,8 +173,6 @@ def test_hydrate_fileless_document(db: Session):
 
     out = hydrate_chunks(db, ["n-qa"])
     assert out[0]["file_name"] is None
-    assert out[0]["content_type"] is None
-    assert out[0]["size_bytes"] is None
     assert out[0]["document_title"] == "Redis 笔记 3"
 
 

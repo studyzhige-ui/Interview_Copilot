@@ -2,10 +2,10 @@
 
 Single home for the retrieval-state shape and its fixed enums
 (``empty_reason``, ``score_source``) — the retriever produces it, the engine
-forwards it, telemetry/trace and the evaluation runners consume it. Defined
-ONCE here so online metrics and offline eval reports share identical values
-(docs/zh/rag-evaluation-optimization-plan.md §2.4); do not redeclare these
-strings elsewhere.
+forwards it, and telemetry/trace (plus the planned offline evaluation runners)
+consume it. Defined ONCE here so online metrics and offline eval reports share
+identical values (docs/zh/rag-evaluation-optimization-plan.md §2.4); do not
+redeclare these strings elsewhere.
 
 This replaces the old ``[SYSTEM_EMPTY_WARNING]`` sentinel-string protocol:
 emptiness is now an explicit ``retrieval_hit=False`` + ``empty_reason`` pair

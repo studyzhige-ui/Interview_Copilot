@@ -3,8 +3,8 @@
 Milvus rows carry only the index copy (user_id / source_kind / document_id /
 text); everything the answer page shows — document title, file name, page
 span, chunk index — comes from the Postgres fact tables. This module is the
-single hydrate + live-check step shared by the L1 retriever, the L2
-``search_knowledge`` tool and the evaluation runners.
+single hydrate + live-check step shared by the L1 retriever and the L2
+``search_knowledge`` tool (and the planned offline evaluation runners).
 
 Live check (the read-path safety net for lagging/failed Milvus deletes):
 
@@ -84,22 +84,16 @@ def hydrate_chunks(db: Session, node_ids: list[str]) -> list[dict[str, Any]]:
             "document_id": chunk.document_id,
             "document_title": doc.title,
             "file_name": asset.original_filename if asset else None,
-            "content_type": asset.content_type if asset else None,
-            "size_bytes": asset.size_bytes if asset else None,
             "category": doc.category,
             "source_kind": chunk.source_kind,
-            # Page span / token_count: best-effort provenance columns (Phase B
-            # migration 0041). NULL for page-less formats / not-yet-recomputed
-            # chunks.
+            # Page span: best-effort provenance columns (Phase B migration
+            # 0041). NULL for page-less formats.
             "page_start": chunk.page_start,
             "page_end": chunk.page_end,
-            "token_count": chunk.token_count,
             "chunk_index": chunk.chunk_index,
             "section_title": meta.get("section_title"),
             "heading_path": meta.get("heading_path"),
-            "chunk_type": meta.get("chunk_type"),
             "text": chunk.text,
-            "text_hash": chunk.text_hash,
         }
     return [by_node[nid] for nid in node_ids if nid in by_node]
 
