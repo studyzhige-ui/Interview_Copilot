@@ -105,3 +105,22 @@ def test_reingest_explicit_document_ids(reingest_db, monkeypatch):
     n = rh.reingest_knowledge(document_ids=["d1", "dX"])
     assert calls == ["d1", "dX"]  # explicit ids used as-is (no DB resolution)
     assert n == 2
+
+
+def test_reingest_by_user_with_no_documents(reingest_db, monkeypatch):
+    _seed(reingest_db, [
+        dict(id="d1", user_id=1, title="t", source_kind="user_upload", status="ready"),
+    ])
+    calls = _patch_reindex(monkeypatch)
+    import scripts.reingest_hybrid as rh
+
+    n = rh.reingest_knowledge(user_id=999)  # user with no docs
+    assert calls == [] and n == 0  # nothing resolved → no reindex calls
+
+
+def test_category_without_user_is_rejected(monkeypatch):
+    """--category alone must error (not silently fall through to a full reingest)."""
+    import scripts.reingest_hybrid as rh
+    monkeypatch.setattr("sys.argv", ["reingest_hybrid.py", "--category", "面试题库"])
+    with pytest.raises(SystemExit):
+        rh.main()

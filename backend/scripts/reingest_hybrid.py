@@ -4,6 +4,9 @@ metadata/schema survives.
 
     python backend/scripts/reingest_hybrid.py --drop                # all 3
     python backend/scripts/reingest_hybrid.py --drop --only resume  # one
+    python backend/scripts/reingest_hybrid.py --document <id>       # one knowledge doc
+    python backend/scripts/reingest_hybrid.py --user <id>           # a user's docs
+    python backend/scripts/reingest_hybrid.py --user <id> --category <name>
 
 Fact sources (Postgres is authoritative — this NEVER reads the old Milvus rows):
   * knowledge → document_chunks            (id=node_id, text, source_kind, document_id)
@@ -58,6 +61,10 @@ def reingest_knowledge(
     (``deleted_at IS NULL``); ``category`` is read from there, not from Milvus.
     A document is the unit, so the defensive document-less (NULL) chunk path is
     intentionally out of scope here.
+
+    Embedding is per-document (not one whole-collection batch) so this can reuse
+    the single rebuild path; the throughput trade-off is fine for a low-frequency
+    ops / disaster-recovery tool. Progress is printed per document.
     """
     from app.models.knowledge import KnowledgeDocument
     from app.rag.ingestion import reindex_document
@@ -72,8 +79,10 @@ def reingest_knowledge(
                 q = q.filter(KnowledgeDocument.category == category)
             document_ids = [r[0] for r in q.all()]
         total = 0
-        for doc_id in document_ids:
-            total += reindex_document(db, doc_id)
+        for i, doc_id in enumerate(document_ids, 1):
+            n = reindex_document(db, doc_id)
+            total += n
+            print(f"    [{i}/{len(document_ids)}] {doc_id}: {n} chunk(s)")
         return total
     finally:
         db.close()
@@ -141,6 +150,11 @@ def main() -> None:
     p.add_argument("--user", type=int, help="reingest all of a user's live knowledge documents")
     p.add_argument("--category", help="with --user, restrict to this knowledge category")
     args = p.parse_args()
+
+    # --category only filters within a --user scope; reject it alone so an
+    # operator never silently triggers a full reingest when they meant a subset.
+    if args.category and args.user is None:
+        p.error("--category requires --user")
 
     # Subset reingest targets only the knowledge collection from Postgres facts;
     # it never drops a collection (that's the full disaster-recovery path).
