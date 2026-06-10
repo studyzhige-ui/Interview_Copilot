@@ -69,7 +69,7 @@ def pipeline(monkeypatch):
     """
     ctl = SimpleNamespace(
         hits=[], user_pk=1, search_exc=None, hydrated=None,
-        hits_by_sparse=None, search_calls=[],
+        hits_by_sparse=None, search_calls=[], fail_on_sparse=None,
     )
 
     monkeypatch.setattr(
@@ -86,6 +86,8 @@ def pipeline(monkeypatch):
         ctl.search_calls.append({"query_text": query_text, "top_k": top_k})
         if ctl.search_exc is not None:
             raise ctl.search_exc
+        if ctl.fail_on_sparse is not None and query_text == ctl.fail_on_sparse:
+            raise RuntimeError(f"milvus down for {query_text!r}")
         if ctl.hits_by_sparse is not None:
             return list(ctl.hits_by_sparse.get(query_text, []))
         return list(ctl.hits)
@@ -304,6 +306,47 @@ async def test_empty_sub_queries_falls_back_to_single(pipeline):
     # Empty sub-queries collapse to a single top-level pass.
     assert len(pipeline.search_calls) == 1
     assert pipeline.search_calls[0]["top_k"] == settings.FUSION_TOP_K
+
+
+async def test_sub_queries_fallback_keeps_higher_scored_dup(pipeline):
+    """Multi-query + reranker down: the merged pool is sorted by score before
+    dedup, so the higher-scored copy of a cross-sub-query dup survives and
+    carries through as the fallback score (§2.6 retention rule)."""
+    pipeline.hits_by_sparse = {
+        "low kw": [_hit("n1", "dup chunk", 0.02)],
+        "high kw": [_hit("n1", "dup chunk", 0.05)],  # same chunk, higher score
+    }
+    pipeline.set_reranker(_RaisingReranker())
+
+    result = await _run(
+        dense_query="overall", sparse_query="overall kw",
+        sub_queries=[
+            {"dense_query": "a", "sparse_query": "low kw"},
+            {"dense_query": "b", "sparse_query": "high kw"},
+        ],
+    )
+
+    assert result.state.fallback_used is True
+    assert [c["node_id"] for c in result.chunks] == ["n1"]
+    assert result.chunks[0]["score_source"] == "retriever_fallback"
+    # The higher-scored (0.05) copy won the dedup, not the spec-order-first.
+    assert result.chunks[0]["score"] == pytest.approx(0.05)
+
+
+async def test_one_sub_query_milvus_failure_degrades_whole_turn(pipeline):
+    """gather propagates a single sub-query's Milvus failure → the whole turn
+    degrades to milvus_unavailable (no partial-success semantics)."""
+    pipeline.hits_by_sparse = {"ok kw": [_hit("n1", "x", 0.03)]}
+    pipeline.fail_on_sparse = "bad kw"
+    pipeline.set_reranker(_ScoringReranker([0.9]))
+
+    result = await _run(sub_queries=[
+        {"dense_query": "a", "sparse_query": "ok kw"},
+        {"dense_query": "b", "sparse_query": "bad kw"},
+    ])
+
+    assert result.chunks == []
+    assert result.state.empty_reason == "milvus_unavailable"
 
 
 def test_retrieval_specs_helper():

@@ -126,8 +126,9 @@ def _normalized_text_hash(text: str) -> str:
 
 
 def _dedup_hits(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Deterministic pre-rerank dedup, keeping the first (higher-RRF) copy:
-    same Milvus row id → drop; same normalised full text → drop."""
+    """Deterministic pre-rerank dedup, keeping the FIRST copy: same Milvus row
+    id → drop; same normalised full text → drop. Callers pass score-descending
+    hits, so "first" is the higher-scored copy (the §2.6 retention rule)."""
     seen_ids: set[str] = set()
     seen_hashes: set[str] = set()
     out: list[dict[str, Any]] = []
@@ -313,7 +314,12 @@ async def query_knowledge_base(
         return _empty(EMPTY_NO_CANDIDATES)
 
     # ===== [2] Deterministic dedup (id → normalised text hash). Also folds
-    # the same chunk hit by multiple sub-queries into one candidate. =====
+    # the same chunk hit by multiple sub-queries into one candidate.
+    # Stable-sort by score desc FIRST so the higher-scored copy wins the
+    # dedup (§2.6 retention rule); spec order is the tiebreak. No-op for a
+    # single query (already RRF-descending). Matters only on the reranker-
+    # fallback path, where this RRF score is the final score. =====
+    hits.sort(key=lambda h: h.get("score") or 0.0, reverse=True)
     hits = _dedup_hits(hits)
 
     from llama_index.core import QueryBundle
