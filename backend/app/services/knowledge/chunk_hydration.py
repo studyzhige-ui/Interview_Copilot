@@ -66,6 +66,9 @@ def hydrate_chunks(db: Session, node_ids: list[str]) -> list[dict[str, Any]]:
         .filter(
             DocumentChunk.node_id.in_(node_ids),
             DocumentChunk.deleted_at.is_(None),
+            # 'pending' chunks aren't filtered here on purpose: Milvus gates
+            # recall, and its insert is atomic, so a pending (not-yet-indexed or
+            # index-queued) chunk has no Milvus row to recall in the first place.
             DocumentChunk.index_status != "deleted",
             KnowledgeDocument.deleted_at.is_(None),
             ~KnowledgeDocument.status.in_(KB_DEAD_DOC_STATES),

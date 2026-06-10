@@ -9,6 +9,7 @@ write failure queues ``milvus_upsert_document`` (facts already pending, doc left
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -22,6 +23,26 @@ from app.services.knowledge import knowledge_outbox as ko
 def _job(document_id, *, attempts=0, max_attempts=5):
     return SimpleNamespace(id="j", aggregate_id=document_id, attempts=attempts,
                            max_attempts=max_attempts)
+
+
+def _upsert_job_row(db, document_id):
+    return db.query(OutboxJob).filter(
+        OutboxJob.aggregate_id == document_id,
+        OutboxJob.job_type == "milvus_upsert_document",
+    ).first()
+
+
+def _doc_row(db, document_id):
+    return db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+
+
+def _make_due(db, document_id):
+    """Clear an upsert job's backoff so the next drain re-claims it."""
+    job = _upsert_job_row(db, document_id)
+    job.next_run_at = datetime.utcnow() - timedelta(seconds=1)
+    job.locked_at = None
+    db.add(job)
+    db.commit()
 
 
 def test_handle_milvus_delete_deletes_by_document_id(monkeypatch):
@@ -209,3 +230,95 @@ def test_enqueue_milvus_upsert_is_repeatable(db_session):
         OutboxJob.job_type == "milvus_upsert_document",
     ).all()
     assert len(jobs) == 2  # no idempotency_key — re-ingest can re-queue
+
+
+# ── C2 end-to-end through the REAL outbox runner (claim / attempts++ / status) ─
+
+
+def test_upsert_drain_persistent_failure_ends_dead_and_doc_failed(db_session, monkeypatch):
+    """Drive the real run_due_outbox_jobs lifecycle: a persistently-failing
+    upsert increments attempts 1→5; the job goes 'dead' and the document goes
+    'failed' on the SAME (5th) drain — the off-by-one boundary — with the doc
+    kept 'processing' on runs 1–4."""
+    import app.services.knowledge.knowledge_outbox  # noqa: F401 — registers handler
+    from app.services.uploads.outbox_service import run_due_outbox_jobs
+    import app.rag.ingestion as ing
+
+    _seed_doc(db_session, "kdoc_e2e")  # status=processing
+    def _boom(db, doc_id):
+        raise RuntimeError("milvus down")
+    monkeypatch.setattr(ing, "reindex_document", _boom)
+    ko.enqueue_milvus_upsert(db_session, user_pk=1, document_id="kdoc_e2e")
+    db_session.commit()
+
+    for run in range(1, 6):
+        _make_due(db_session, "kdoc_e2e")
+        run_due_outbox_jobs(db_session)
+        if run < 5:
+            assert _upsert_job_row(db_session, "kdoc_e2e").status == "failed", f"run {run}"
+            assert _doc_row(db_session, "kdoc_e2e").status == "processing", f"run {run}"
+        else:
+            assert _upsert_job_row(db_session, "kdoc_e2e").status == "dead"
+            assert _doc_row(db_session, "kdoc_e2e").status == "failed"
+
+
+def test_upsert_drain_recovers_to_ready(db_session, monkeypatch):
+    """Fail once, then succeed: the document graduates 'processing' → 'ready'
+    through the real runner (the primary recovery path C2 exists for)."""
+    import app.services.knowledge.knowledge_outbox  # noqa: F401
+    from app.services.uploads.outbox_service import run_due_outbox_jobs
+    import app.rag.ingestion as ing
+
+    _seed_doc(db_session, "kdoc_rec")
+    calls = {"n": 0}
+    def _flaky(db, doc_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("milvus blip")
+        return 2
+    monkeypatch.setattr(ing, "reindex_document", _flaky)
+    ko.enqueue_milvus_upsert(db_session, user_pk=1, document_id="kdoc_rec")
+    db_session.commit()
+
+    run_due_outbox_jobs(db_session)  # attempt 1: fails
+    assert _doc_row(db_session, "kdoc_rec").status == "processing"
+
+    _make_due(db_session, "kdoc_rec")
+    run_due_outbox_jobs(db_session)  # attempt 2: succeeds
+    assert _upsert_job_row(db_session, "kdoc_rec").status == "succeeded"
+    assert _doc_row(db_session, "kdoc_rec").status == "ready"
+
+
+def test_upsert_drain_does_not_resurrect_hard_deleted_doc(db_session, monkeypatch):
+    """Delete-race end-to-end with the REAL reindex_document: a doc deleted while
+    its upsert was queued reads 0 live chunks → Milvus is cleared and the doc
+    stays 'deleting' (never resurrected to ready)."""
+    import app.services.knowledge.knowledge_outbox  # noqa: F401
+    from app.services.knowledge.document_chunk_service import delete_document_chunks
+    from app.services.uploads.outbox_service import run_due_outbox_jobs
+
+    _seed_doc(db_session, "kdoc_race")  # processing
+    db_session.add(DocumentChunk(
+        document_id="kdoc_race", node_id="n1", user_id=1, source_kind="user_upload",
+        chunk_index=0, text="x", index_status="pending",
+    ))
+    db_session.commit()
+    ko.enqueue_milvus_upsert(db_session, user_pk=1, document_id="kdoc_race")
+    db_session.commit()
+
+    # The delete happens while the upsert is queued: mark deleting + hard-delete
+    # the chunks (mirrors hard_delete_knowledge_document's order).
+    doc = _doc_row(db_session, "kdoc_race")
+    doc.status = "deleting"
+    db_session.add(doc)
+    db_session.commit()
+    delete_document_chunks(db_session, "kdoc_race")
+
+    deletes: list = []
+    import app.rag.milvus_hybrid as mh
+    monkeypatch.setattr(mh, "delete_by_field", lambda coll, field, value: deletes.append(value))
+
+    run_due_outbox_jobs(db_session)
+
+    assert _doc_row(db_session, "kdoc_race").status == "deleting"  # NOT resurrected
+    assert deletes == ["kdoc_race"]  # 0 live chunks → Milvus cleared

@@ -143,8 +143,8 @@ def _insert_milvus_rows(
 def reindex_document(db, document_id: str) -> int:
     """Rebuild one document's Milvus rows from its LIVE Postgres chunks (plan
     §4.6.3) — the fact source, never the old Milvus rows. Re-embeds chunk text
-    with the current model, replaces the document's rows (delete-by-id then
-    insert, so a retry is idempotent), and flips any ``pending`` chunks to
+    with the current model, replaces the document's rows (delete-by-document_id
+    then insert, so a retry is idempotent), and flips any ``pending`` chunks to
     ``indexed``. Returns the row count written; 0 means no live chunks remain,
     in which case the document's Milvus rows are simply cleared.
 
