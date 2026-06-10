@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from app.core.config import settings
 from app.models.document_chunk import DocumentChunk
 from app.models.knowledge import KnowledgeDocument
 
@@ -88,6 +89,47 @@ def test_node_consistency_skips_when_milvus_unreachable(db_session, monkeypatch)
     f = {x.name: x for x in cs._milvus_node_consistency(db_session)}
     names = ("missing_in_milvus", "stale_in_milvus", "metadata_mismatch", "dimension_mismatch")
     assert all(f[n].count == 0 and "skipped" in f[n].note for n in names)
+
+
+def test_node_consistency_reports_metadata_mismatch(db_session, monkeypatch):
+    _seed_indexed(db_session, "d1", ["n1"])
+
+    monkeypatch.setattr("app.rag.milvus_hybrid._get_client",
+                        lambda: SimpleNamespace(has_collection=lambda name: True))
+    monkeypatch.setattr(cs, "_collection_dim_finding",
+                        lambda client: cs.Finding("dimension_mismatch", 0, note="ok"))
+    # same node_id but a different user_id scalar → metadata mismatch.
+    monkeypatch.setattr(cs, "_scan_milvus_rows", lambda client: {
+        "n1": {"document_id": "d1", "user_id": 2, "source_kind": "user_upload"},
+    })
+
+    f = {x.name: x for x in cs._milvus_node_consistency(db_session)}
+    assert f["metadata_mismatch"].count == 1 and "n1" in f["metadata_mismatch"].sample_ids
+    assert f["missing_in_milvus"].count == 0 and f["stale_in_milvus"].count == 0
+
+
+def test_node_consistency_collection_not_created(db_session, monkeypatch):
+    monkeypatch.setattr("app.rag.milvus_hybrid._get_client",
+                        lambda: SimpleNamespace(has_collection=lambda name: False))
+
+    f = {x.name: x for x in cs._milvus_node_consistency(db_session)}
+    names = ("missing_in_milvus", "stale_in_milvus", "metadata_mismatch", "dimension_mismatch")
+    assert all(f[n].count == 0 and "not created" in f[n].note for n in names)
+
+
+def test_collection_dim_finding_detects_mismatch():
+    fake = SimpleNamespace(describe_collection=lambda name: {
+        "fields": [{"name": "dense", "params": {"dim": settings.EMBEDDING_DIM + 256}}],
+    })
+    f = cs._collection_dim_finding(fake)
+    assert f.name == "dimension_mismatch" and f.count == 1
+
+
+def test_collection_dim_finding_ok_when_matches():
+    fake = SimpleNamespace(describe_collection=lambda name: {
+        "fields": [{"name": "dense", "params": {"dim": settings.EMBEDDING_DIM}}],
+    })
+    assert cs._collection_dim_finding(fake).count == 0
 
 
 def test_node_consistency_excludes_pending_from_missing(db_session, monkeypatch):

@@ -6,8 +6,10 @@ can accumulate, per the RFC acceptance criterion "巡检脚本能输出可修复
   1. Orphan file assets        — uploaded/consumed ``file_assets`` no business
                                  row references, plus stale ``pending_upload``.
   2. Orphan document chunks    — ``document_chunks`` whose ``document_id`` points
-                                 at a deleted ``knowledge_documents`` row, and a
-                                 best-effort Postgres-vs-Milvus count drift check.
+                                 at a deleted ``knowledge_documents`` row, plus a
+                                 best-effort node_id-level Postgres<->Milvus check
+                                 (missing_in_milvus / stale_in_milvus /
+                                 metadata_mismatch / dimension_mismatch).
   3. Subject-less conversations — ``conversations`` with a non-chat ``mode`` but
                                  no ``subject_type`` / ``subject_id`` binding.
   4. Dangling memory evidence  — ``memory_ability_states.evidence_refs_json``
@@ -125,6 +127,8 @@ def _diff_pg_milvus(
     """
     pg_ids, mv_ids = set(pg_indexed), set(milvus_rows)
     missing = sorted(pg_ids - mv_ids)
+    # A NULL document_id is intentionally stale (an ownerless vector): live
+    # KNOWLEDGE rows always carry a document_id, so this only flags genuine junk.
     stale = sorted(mid for mid, r in milvus_rows.items() if r.get("document_id") not in live_doc_ids)
     mismatch = sorted(
         nid for nid in (pg_ids & mv_ids)
@@ -135,8 +139,10 @@ def _diff_pg_milvus(
 
 
 def _scan_milvus_rows(client) -> dict[str, dict]:
-    """All knowledge Milvus rows keyed by id: ``{document_id, user_id, source_kind}``.
-    Paginates so a large collection is fully covered (not a sampled subset)."""
+    """All knowledge Milvus rows keyed by id. Values are the raw pymilvus row
+    objects (accessed via ``.get(...)``, so _diff_pg_milvus treats them and the
+    plain-dict test fixtures the same). Paginates so a large collection is fully
+    covered (not a sampled subset)."""
     from app.core.config import settings
 
     out: dict[str, dict] = {}
