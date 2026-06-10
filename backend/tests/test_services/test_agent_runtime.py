@@ -6,7 +6,7 @@ covers the lower-layer building blocks the strategy depends on.
 
 Covers:
   - AgentBudget: Hermes-style steps+timeout limits, correct refund semantics
-  - QueryLoopCompactor: cheap zero-LLM context pre-pass + reactive recovery
+  - QueryLoopCompactor: unconditional microcompact + threshold LLM autocompact
   - tool_result_storage: 3-layer persistence
   - HarnessEvent: SSE event serialization
   - retry_utils: error classification and backoff
@@ -192,55 +192,181 @@ def _profile(context_window: int = 1_000_000, max_output_tokens: int = 0):
     )
 
 
-def test_context_pipeline_prune():
-    """Prunes old tool results (Pass 2: summarize) outside the token-budget tail."""
-    from app.agent_runtime.context_compactor import QueryLoopCompactor
-
-    # tail_budget=280 protects the last two results (B/C*500 ≈125 tok each)
-    # but not the oldest (A*500 ≈63 tok). See token costs in the module.
-    pipeline = QueryLoopCompactor(profile=_profile(), tail_budget_tokens=280)
-
-    messages = [
-        {"role": "system", "content": "system prompt"},
-        {"role": "user", "content": "hello"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "web_search", "arguments": "{}"}}
-        ]},
-        {"role": "tool", "tool_call_id": "c1", "content": "A" * 500},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c2", "function": {"name": "read_url", "arguments": "{}"}}
-        ]},
-        {"role": "tool", "tool_call_id": "c2", "content": "B" * 500},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c3", "function": {"name": "search_knowledge", "arguments": "{}"}}
-        ]},
-        {"role": "tool", "tool_call_id": "c3", "content": "C" * 500},
-    ]
-
-    pruned = pipeline._prune_old_tool_results(messages)
-    assert len(pruned) == len(messages)
-
-    # Oldest tool result (c1) summarized
-    tool_c1 = [m for m in pruned if m.get("tool_call_id") == "c1"][0]
-    assert "result pruned" in tool_c1["content"]
-
-    # Last two tool results protected
-    tool_c2 = [m for m in pruned if m.get("tool_call_id") == "c2"][0]
-    assert tool_c2["content"] == "B" * 500
-    tool_c3 = [m for m in pruned if m.get("tool_call_id") == "c3"][0]
-    assert tool_c3["content"] == "C" * 500
-
-
 async def _stub_autocompact(self, messages, *, keep_last=2):
-    """No-op autocompact — isolates compress() tests from the LLM (the LLM
-    summary path is covered by test_autocompact_*)."""
+    """No-op autocompact — isolates compress() tests from the LLM."""
     return messages
 
 
-def test_compress_runs_prepass_over_threshold(monkeypatch):
-    """compress() self-measures the prompt and runs the cheap pre-pass only
-    when the measured total exceeds the pre-pass threshold; the protected tail
-    is never pruned. (autocompact stubbed — its LLM path is tested separately.)"""
+# ── Microcompact (unconditional, keep-last-N) ────────────────────────────
+
+
+def test_microcompact_clears_old_keeps_recent():
+    """Microcompact keeps the last 5 compactable results, clears the rest."""
+    from app.agent_runtime.context_compactor import QueryLoopCompactor, _CLEARED_CONTENT
+
+    pipeline = QueryLoopCompactor(profile=_profile())
+    messages = [{"role": "system", "content": "sys"}]
+    # 7 compactable tool results → should keep last 5, clear first 2
+    for i in range(7):
+        messages.append({"role": "assistant", "content": "", "tool_calls": [
+            {"id": f"c{i}", "function": {"name": "web_search", "arguments": "{}"}}
+        ]})
+        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"})
+
+    result = pipeline._microcompact(messages)
+
+    # First 2 cleared
+    assert [m for m in result if m.get("tool_call_id") == "c0"][0]["content"] == _CLEARED_CONTENT
+    assert [m for m in result if m.get("tool_call_id") == "c1"][0]["content"] == _CLEARED_CONTENT
+    # Last 5 kept
+    for i in range(2, 7):
+        assert [m for m in result if m.get("tool_call_id") == f"c{i}"][0]["content"] == f"result_{i}"
+
+
+def test_microcompact_skips_non_compactable_tools():
+    """Non-compactable tools are never cleared, regardless of position."""
+    from app.agent_runtime.context_compactor import QueryLoopCompactor
+
+    pipeline = QueryLoopCompactor(profile=_profile())
+    messages = [{"role": "system", "content": "sys"}]
+    # 6 compactable + 1 non-compactable tool
+    for i in range(6):
+        messages.append({"role": "assistant", "content": "", "tool_calls": [
+            {"id": f"c{i}", "function": {"name": "web_search", "arguments": "{}"}}
+        ]})
+        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"})
+    # Insert a non-compactable tool result at the beginning (oldest)
+    messages.insert(1, {"role": "assistant", "content": "", "tool_calls": [
+        {"id": "nc1", "function": {"name": "some_custom_tool", "arguments": "{}"}}
+    ]})
+    messages.insert(2, {"role": "tool", "tool_call_id": "nc1", "content": "non-compactable result"})
+
+    result = pipeline._microcompact(messages)
+
+    # Non-compactable result preserved regardless
+    nc = [m for m in result if m.get("tool_call_id") == "nc1"][0]
+    assert nc["content"] == "non-compactable result"
+
+
+def test_microcompact_skips_persisted_results():
+    """Persisted (<persisted-output>) results are never cleared."""
+    from app.agent_runtime.context_compactor import QueryLoopCompactor
+    from app.agent_runtime.tool_result_storage import PERSISTED_OUTPUT_TAG
+
+    persisted = (
+        f"{PERSISTED_OUTPUT_TAG}\n"
+        "Full output saved to: /data/agent-results/sess/c0.txt\n"
+        "</persisted-output>"
+    )
+    pipeline = QueryLoopCompactor(profile=_profile())
+    messages = [{"role": "system", "content": "sys"}]
+    # 7 compactable results, first one is persisted
+    for i in range(7):
+        content = persisted if i == 0 else f"result_{i}"
+        messages.append({"role": "assistant", "content": "", "tool_calls": [
+            {"id": f"c{i}", "function": {"name": "web_search", "arguments": "{}"}}
+        ]})
+        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": content})
+
+    result = pipeline._microcompact(messages)
+
+    # Persisted result (c0) preserved
+    c0 = [m for m in result if m.get("tool_call_id") == "c0"][0]
+    assert PERSISTED_OUTPUT_TAG in c0["content"]
+
+
+def test_microcompact_noop_when_under_keep_limit():
+    """No clearing when total compactable results <= _KEEP_RECENT."""
+    from app.agent_runtime.context_compactor import QueryLoopCompactor
+
+    pipeline = QueryLoopCompactor(profile=_profile())
+    messages = [{"role": "system", "content": "sys"}]
+    for i in range(3):
+        messages.append({"role": "assistant", "content": "", "tool_calls": [
+            {"id": f"c{i}", "function": {"name": "web_search", "arguments": "{}"}}
+        ]})
+        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"})
+
+    result = pipeline._microcompact(messages)
+
+    # All kept — no change
+    for i in range(3):
+        assert [m for m in result if m.get("tool_call_id") == f"c{i}"][0]["content"] == f"result_{i}"
+
+
+def test_microcompact_copy_on_write():
+    """Microcompact does not modify the original messages list."""
+    from app.agent_runtime.context_compactor import QueryLoopCompactor, _CLEARED_CONTENT
+
+    pipeline = QueryLoopCompactor(profile=_profile())
+    messages = [{"role": "system", "content": "sys"}]
+    for i in range(7):
+        messages.append({"role": "assistant", "content": "", "tool_calls": [
+            {"id": f"c{i}", "function": {"name": "web_search", "arguments": "{}"}}
+        ]})
+        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"})
+
+    result = pipeline._microcompact(messages)
+
+    # Original unchanged
+    assert messages[2]["content"] == "result_0"
+    # Pruned copy changed
+    assert [m for m in result if m.get("tool_call_id") == "c0"][0]["content"] == _CLEARED_CONTENT
+
+
+def test_microcompact_skips_already_cleared():
+    """Already-cleared results don't count toward the keep limit."""
+    from app.agent_runtime.context_compactor import QueryLoopCompactor, _CLEARED_CONTENT
+
+    pipeline = QueryLoopCompactor(profile=_profile())
+    messages = [{"role": "system", "content": "sys"}]
+    for i in range(8):
+        content = _CLEARED_CONTENT if i < 2 else f"result_{i}"
+        messages.append({"role": "assistant", "content": "", "tool_calls": [
+            {"id": f"c{i}", "function": {"name": "web_search", "arguments": "{}"}}
+        ]})
+        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": content})
+
+    result = pipeline._microcompact(messages)
+
+    # c0, c1 were already cleared — stay cleared
+    assert [m for m in result if m.get("tool_call_id") == "c0"][0]["content"] == _CLEARED_CONTENT
+    # 6 live results (c2..c7), keep last 5 → clear c2 only
+    assert [m for m in result if m.get("tool_call_id") == "c2"][0]["content"] == _CLEARED_CONTENT
+    assert [m for m in result if m.get("tool_call_id") == "c3"][0]["content"] == "result_3"
+
+
+# ── compress() integration ───────────────────────────────────────────────
+
+
+def test_compress_runs_microcompact_unconditionally(monkeypatch):
+    """compress() runs microcompact even when total is under threshold."""
+    import asyncio
+
+    from app.agent_runtime.context_compactor import QueryLoopCompactor, _CLEARED_CONTENT
+
+    monkeypatch.setattr(QueryLoopCompactor, "autocompact", _stub_autocompact)
+
+    messages = [{"role": "system", "content": "sys"}]
+    for i in range(7):
+        messages.append({"role": "assistant", "content": "", "tool_calls": [
+            {"id": f"c{i}", "function": {"name": "web_search", "arguments": "{}"}}
+        ]})
+        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"})
+
+    # Huge window → well under threshold, but microcompact still runs
+    pipeline = QueryLoopCompactor(
+        profile=_profile(context_window=1_000_000, max_output_tokens=0),
+    )
+    result, at_blocking = asyncio.run(pipeline.compress(messages))
+
+    assert [m for m in result if m.get("tool_call_id") == "c0"][0]["content"] == _CLEARED_CONTENT
+    assert [m for m in result if m.get("tool_call_id") == "c6"][0]["content"] == "result_6"
+    assert at_blocking is False
+
+
+def test_compress_flags_blocking_limit(monkeypatch):
+    """compress() returns at_blocking_limit=True when prompt exceeds limit."""
     import asyncio
 
     from app.agent_runtime.context_compactor import QueryLoopCompactor
@@ -252,37 +378,21 @@ def test_compress_runs_prepass_over_threshold(monkeypatch):
         {"role": "assistant", "content": "", "tool_calls": [
             {"id": "c1", "function": {"name": "web_search", "arguments": "{}"}}
         ]},
-        {"role": "tool", "tool_call_id": "c1", "content": "A" * 500},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c2", "function": {"name": "read_url", "arguments": "{}"}}
-        ]},
-        {"role": "tool", "tool_call_id": "c2", "content": "B" * 500},
+        {"role": "tool", "tool_call_id": "c1", "content": "B" * 500},
     ]
-    # Measured total ≈ 191 tokens (A*500=63, B*500=125, plus a few small msgs).
-
-    # Threshold (300) above the measured total → no pruning, not blocking.
-    low_pressure = QueryLoopCompactor(
-        profile=_profile(context_window=13_300, max_output_tokens=0),
-        tail_budget_tokens=150,
+    # Tiny window: blocking_limit = 3_100 - 3_000 = 100; measured total > 100.
+    pipeline = QueryLoopCompactor(
+        profile=_profile(context_window=3_100, max_output_tokens=0),
     )
-    result, at_blocking = asyncio.run(low_pressure.compress(messages))
-    assert [m for m in result if m.get("tool_call_id") == "c1"][0]["content"] == "A" * 500
-    assert at_blocking is False
+    _, at_blocking = asyncio.run(pipeline.compress(messages))
+    assert at_blocking is True
 
-    # Threshold (100) below the measured total → prune c1, protect c2; not blocking.
-    high_pressure = QueryLoopCompactor(
-        profile=_profile(context_window=13_100, max_output_tokens=0),
-        tail_budget_tokens=150,
-    )
-    result, at_blocking = asyncio.run(high_pressure.compress(messages))
-    assert "result pruned" in [m for m in result if m.get("tool_call_id") == "c1"][0]["content"]
-    assert [m for m in result if m.get("tool_call_id") == "c2"][0]["content"] == "B" * 500
-    assert at_blocking is False
+
+# ── Autocompact (LLM, threshold-gated) ───────────────────────────────────
 
 
 def test_autocompact_summarizes_body_keeps_head_and_tail(monkeypatch):
-    """autocompact replaces the old turns with one reference-only summary,
-    preserving the leading system block + task query + the last keep_last msgs."""
+    """autocompact replaces old turns with one reference-only summary."""
     import asyncio
 
     from app.agent_runtime.context_compactor import QueryLoopCompactor
@@ -294,10 +404,8 @@ def test_autocompact_summarizes_body_keeps_head_and_tail(monkeypatch):
         async def acomplete(self, prompt, response_format=None):
             return _StubResponse()
 
-    # Stub the LLM that summarize_conversation() calls inside the
-    # compaction_service module.
     import sys
-    import app.services.memory.compaction_service  # noqa: F401  (ensure loaded)
+    import app.services.memory.compaction_service  # noqa: F401
     monkeypatch.setattr(
         sys.modules["app.services.memory.compaction_service"],
         "agent_fast_llm",
@@ -319,22 +427,19 @@ def test_autocompact_summarizes_body_keeps_head_and_tail(monkeypatch):
 
     result = asyncio.run(pipeline.autocompact(messages, keep_last=2))
 
-    # Leading system block + task query preserved
     assert result[0]["content"] == "SYS"
     assert result[1]["content"] == "MANIFEST"
     assert result[2]["content"] == "the task"
-    # A reference-only summary message was inserted
     assert any(
         "SUMMARY_BODY" in m["content"] and "END OF CONTEXT SUMMARY" in m["content"]
         for m in result
     )
-    # Last 2 messages preserved verbatim; net shorter
     assert result[-2:] == messages[-2:]
     assert len(result) < len(messages)
 
 
-def test_autocompact_noop_when_nothing_to_summarize(monkeypatch):
-    """autocompact returns messages unchanged when the body is within keep_last."""
+def test_autocompact_noop_when_nothing_to_summarize():
+    """autocompact returns messages unchanged when body is within keep_last."""
     import asyncio
 
     from app.agent_runtime.context_compactor import QueryLoopCompactor
@@ -349,88 +454,6 @@ def test_autocompact_noop_when_nothing_to_summarize(monkeypatch):
     assert result == messages
 
 
-def test_compress_anti_thrash_skips_after_low_savings(monkeypatch):
-    """compress() stops re-running the pre-pass once the last 2 runs each
-    reclaimed <10% — the cheap wins are exhausted."""
-    import asyncio
-
-    from app.agent_runtime.context_compactor import QueryLoopCompactor
-
-    monkeypatch.setattr(QueryLoopCompactor, "autocompact", _stub_autocompact)
-
-    # threshold = 13_010 - 13_000 = 10 (always compact); a huge tail protects
-    # every message, so pruning reclaims ~nothing and savings stay at 0.
-    pipeline = QueryLoopCompactor(
-        profile=_profile(context_window=13_010, max_output_tokens=0),
-        tail_budget_tokens=10_000,
-    )
-    messages = [
-        {"role": "system", "content": "system prompt here"},
-        {"role": "user", "content": "a question"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "web_search", "arguments": "{}"}}
-        ]},
-        {"role": "tool", "tool_call_id": "c1", "content": "unique result " + "X" * 300},
-    ]
-
-    asyncio.run(pipeline.compress(messages))
-    asyncio.run(pipeline.compress(messages))
-    assert len(pipeline._recent_savings) == 2
-    assert all(s < 0.10 for s in pipeline._recent_savings)
-    assert pipeline._is_thrashing() is True
-
-    # 3rd call: anti-thrash skips the pre-pass → no new saving recorded.
-    asyncio.run(pipeline.compress(messages))
-    assert len(pipeline._recent_savings) == 2  # unchanged — pre-pass skipped
-
-
-def test_compress_flags_blocking_limit(monkeypatch):
-    """compress() returns at_blocking_limit=True when even the pruned prompt
-    still exceeds the blocking limit (the degenerate 'cannot fit' case)."""
-    import asyncio
-
-    from app.agent_runtime.context_compactor import QueryLoopCompactor
-
-    monkeypatch.setattr(QueryLoopCompactor, "autocompact", _stub_autocompact)
-
-    messages = [
-        {"role": "system", "content": "sys"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "web_search", "arguments": "{}"}}
-        ]},
-        {"role": "tool", "tool_call_id": "c1", "content": "B" * 500},
-    ]
-    # Tiny window: blocking_limit = 3_100 - 3_000 = 100; measured total > 100.
-    pipeline = QueryLoopCompactor(
-        profile=_profile(context_window=3_100, max_output_tokens=0),
-        tail_budget_tokens=1,
-    )
-    _, at_blocking = asyncio.run(pipeline.compress(messages))
-    assert at_blocking is True
-
-
-def test_context_pipeline_reactive_compact_prevents_loop():
-    """Reactive compact refuses retry on the second attempt (Claude Code pattern)."""
-    import asyncio
-
-    from app.agent_runtime.context_compactor import QueryLoopCompactor
-
-    pipeline = QueryLoopCompactor(profile=_profile())
-    messages = [
-        {"role": "system", "content": "sys"},
-        {"role": "tool", "tool_call_id": "c1", "content": "X" * 500},
-    ]
-
-    # First attempt: should succeed (autocompact no-ops on this tiny body)
-    result, should_retry = asyncio.run(pipeline.on_context_too_long(messages))
-    assert should_retry is True
-    assert pipeline.has_attempted_reactive_compact is True
-
-    # Second attempt: should refuse (prevent infinite loop)
-    result, should_retry = asyncio.run(pipeline.on_context_too_long(messages))
-    assert should_retry is False
-
-
 # ── Blocking-limit guard ──────────────────────────────────────────────────
 
 def test_token_warning_blocks_at_limit():
@@ -441,16 +464,9 @@ def test_token_warning_blocks_at_limit():
         profile=_profile(context_window=100_000, max_output_tokens=0)
     )
 
-    # Well below limit → no block
     assert pipeline.is_at_blocking_limit(50_000) is False
-
-    # Just below buffer → no block
     assert pipeline.is_at_blocking_limit(96_999) is False
-
-    # At blocking limit (context_window - 3000)
     assert pipeline.is_at_blocking_limit(97_000) is True
-
-    # Over blocking limit
     assert pipeline.is_at_blocking_limit(100_000) is True
 
 
@@ -466,10 +482,12 @@ def test_token_warning_default_1m_window():
     assert pipeline.is_at_blocking_limit(997_000) is True
 
 
-# ── Circuit breaker ───────────────────────────────────────────────────────
+# ── Reactive compact + circuit breaker ───────────────────────────────────
 
-def test_circuit_breaker_blocks_after_max_failures():
-    """Circuit breaker blocks after 3 consecutive compact failures."""
+def test_reactive_compact_prevents_loop():
+    """Reactive compact refuses retry on the second attempt."""
+    import asyncio
+
     from app.agent_runtime.context_compactor import QueryLoopCompactor
 
     pipeline = QueryLoopCompactor(profile=_profile())
@@ -478,18 +496,36 @@ def test_circuit_breaker_blocks_after_max_failures():
         {"role": "tool", "tool_call_id": "c1", "content": "X" * 500},
     ]
 
-    # Manually set failure count to max
-    pipeline._consecutive_compact_failures = 3
+    result, should_retry = asyncio.run(pipeline.on_context_too_long(messages))
+    assert should_retry is True
+    assert pipeline.has_attempted_reactive_compact is True
 
-    # Should refuse even on first attempt (circuit breaker open)
-    import asyncio
     result, should_retry = asyncio.run(pipeline.on_context_too_long(messages))
     assert should_retry is False
-    assert pipeline.has_attempted_reactive_compact is False  # didn't even try
+
+
+def test_circuit_breaker_blocks_after_max_failures():
+    """Circuit breaker blocks after 3 consecutive compact failures."""
+    import asyncio
+
+    from app.agent_runtime.context_compactor import QueryLoopCompactor
+
+    pipeline = QueryLoopCompactor(profile=_profile())
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "tool", "tool_call_id": "c1", "content": "X" * 500},
+    ]
+    pipeline._consecutive_compact_failures = 3
+
+    result, should_retry = asyncio.run(pipeline.on_context_too_long(messages))
+    assert should_retry is False
+    assert pipeline.has_attempted_reactive_compact is False
 
 
 def test_circuit_breaker_increments_on_compact():
     """Each reactive compact increments the failure counter."""
+    import asyncio
+
     from app.agent_runtime.context_compactor import QueryLoopCompactor
 
     pipeline = QueryLoopCompactor(profile=_profile())
@@ -499,7 +535,6 @@ def test_circuit_breaker_increments_on_compact():
     ]
 
     assert pipeline._consecutive_compact_failures == 0
-    import asyncio
     asyncio.run(pipeline.on_context_too_long(messages))
     assert pipeline._consecutive_compact_failures == 1
 
@@ -515,346 +550,10 @@ def test_circuit_breaker_resets_on_success():
     assert pipeline._consecutive_compact_failures == 0
 
 
-# ── Copy-on-write ─────────────────────────────────────────────────────────
-
-def test_prune_does_not_modify_original():
-    """Pruning operations must not modify the original messages list."""
-    from app.agent_runtime.context_compactor import QueryLoopCompactor
-
-    pipeline = QueryLoopCompactor(profile=_profile(), tail_budget_tokens=150)
-
-    original_content = "A" * 500
-    messages = [
-        {"role": "system", "content": "sys"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "web_search", "arguments": "{" + "x" * 500 + "}"}}
-        ]},
-        {"role": "tool", "tool_call_id": "c1", "content": original_content},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c2", "function": {"name": "read_url", "arguments": "{}"}}
-        ]},
-        {"role": "tool", "tool_call_id": "c2", "content": "B" * 500},
-    ]
-
-    # Keep references to originals
-    original_messages_copy = [dict(m) for m in messages]
-
-    pruned = pipeline._prune_old_tool_results(messages)
-
-    # Original list should be unchanged
-    assert len(messages) == len(original_messages_copy)
-    assert messages[2]["content"] == original_content  # not modified
-    # Pruned list should be different
-    assert "result pruned" in pruned[2]["content"]
-
-
-# ── Pass 1: dedup ─────────────────────────────────────────────────────────
-
-def test_pass1_dedup_removes_duplicates():
-    """Pass 1 removes duplicate tool results, keeping the last occurrence."""
-    from app.agent_runtime.context_compactor import QueryLoopCompactor
-
-    pipeline = QueryLoopCompactor(profile=_profile())
-
-    # Same tool, same content → duplicate
-    messages = [
-        {"role": "system", "content": "sys"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "read_file", "arguments": '{"path": "a.py"}'}}
-        ]},
-        {"role": "tool", "tool_call_id": "c1", "content": "file content here"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c2", "function": {"name": "read_file", "arguments": '{"path": "a.py"}'}}
-        ]},
-        {"role": "tool", "tool_call_id": "c2", "content": "file content here"},
-    ]
-
-    result = pipeline._pass1_dedup(messages)
-
-    # First occurrence (c1) should be replaced
-    tool_c1 = [m for m in result if m.get("tool_call_id") == "c1"][0]
-    assert "[Duplicate result removed" in tool_c1["content"]
-
-    # Last occurrence (c2) should be kept
-    tool_c2 = [m for m in result if m.get("tool_call_id") == "c2"][0]
-    assert tool_c2["content"] == "file content here"
-
-
-def test_pass1_dedup_different_content_not_removed():
-    """Pass 1 does NOT remove results with different content."""
-    from app.agent_runtime.context_compactor import QueryLoopCompactor
-
-    pipeline = QueryLoopCompactor(profile=_profile())
-
-    messages = [
-        {"role": "system", "content": "sys"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "web_search", "arguments": '{"q": "redis"}'}}
-        ]},
-        {"role": "tool", "tool_call_id": "c1", "content": "Redis result 1"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c2", "function": {"name": "web_search", "arguments": '{"q": "kafka"}'}}
-        ]},
-        {"role": "tool", "tool_call_id": "c2", "content": "Kafka result 2"},
-    ]
-
-    result = pipeline._pass1_dedup(messages)
-
-    # Different content → both kept
-    tool_c1 = [m for m in result if m.get("tool_call_id") == "c1"][0]
-    assert tool_c1["content"] == "Redis result 1"
-    tool_c2 = [m for m in result if m.get("tool_call_id") == "c2"][0]
-    assert tool_c2["content"] == "Kafka result 2"
-
-
-# ── Pass 3: JSON-safe argument truncation ─────────────────────────────────
-
-def test_pass3_truncate_args():
-    """Pass 3 truncates old tool_call arguments, keeping the output valid JSON."""
-    import json
-
-    from app.agent_runtime.context_compactor import QueryLoopCompactor
-
-    pipeline = QueryLoopCompactor(profile=_profile(), tail_budget_tokens=100)
-
-    large_args = '{"content": "' + "X" * 1000 + '"}'
-    messages = [
-        {"role": "system", "content": "sys"},
-        # Old assistant message with large args (should be truncated)
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "write_file", "arguments": large_args}}
-        ]},
-        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
-        # Recent assistant message (protected)
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c2", "function": {"name": "write_file", "arguments": large_args}}
-        ]},
-        {"role": "tool", "tool_call_id": "c2", "content": "ok"},
-    ]
-
-    result = pipeline._pass3_truncate_args(messages)
-
-    # Old args (c1) truncated but still valid JSON (raw-char slicing would 400 the API)
-    old_args = result[1]["tool_calls"][0]["function"]["arguments"]
-    assert len(old_args) < len(large_args)
-    assert "...[truncated]" in json.loads(old_args)["content"]
-
-    # Protected args (c2) unchanged
-    new_args = result[3]["tool_calls"][0]["function"]["arguments"]
-    assert new_args == large_args
-
-
-def test_full_3pass_pipeline():
-    """Full pipeline: dedup + summarize + JSON-safe truncate args."""
-    import json
-
-    from app.agent_runtime.context_compactor import QueryLoopCompactor
-
-    pipeline = QueryLoopCompactor(profile=_profile(), tail_budget_tokens=130)
-
-    large_args = '{"content": "' + "Y" * 1000 + '"}'
-    messages = [
-        {"role": "system", "content": "sys"},
-        # Duplicate pair (same tool + same content)
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "read_file", "arguments": large_args}}
-        ]},
-        {"role": "tool", "tool_call_id": "c1", "content": "same content " + "Z" * 500},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c2", "function": {"name": "read_file", "arguments": large_args}}
-        ]},
-        {"role": "tool", "tool_call_id": "c2", "content": "same content " + "Z" * 500},
-        # Unique result (protected tail)
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c3", "function": {"name": "web_search", "arguments": '{"q": "test"}'}}
-        ]},
-        {"role": "tool", "tool_call_id": "c3", "content": "search results"},
-    ]
-
-    result = pipeline._prune_old_tool_results(messages)
-
-    # c1: deduped (pass 1)
-    assert "[Duplicate result removed" in result[2]["content"]
-
-    # c2: summarized (pass 2) — read_file template still contains "result pruned"
-    assert "result pruned" in result[4]["content"]
-
-    # c3: protected (tail)
-    assert result[6]["content"] == "search results"
-
-    # c1 assistant args: JSON-safe truncated (old, outside tail)
-    c1_args = json.loads(result[1]["tool_calls"][0]["function"]["arguments"])
-    assert "...[truncated]" in c1_args["content"]
-
-    # c3 assistant args: protected (short, never truncated)
-    c3_args = result[5]["tool_calls"][0]["function"]["arguments"]
-    assert c3_args == '{"q": "test"}'
-
-
-# ── Pass 2: args-aware summaries + persisted-skip ─────────────────────────
-
-def test_pass2_summary_uses_call_args():
-    """Pass-2 summaries pull identifiers (query/url) from the call ARGS, not
-    the result body — so a pruned summary still says what was asked."""
-    from app.agent_runtime.context_compactor import QueryLoopCompactor
-
-    pipeline = QueryLoopCompactor(profile=_profile(), tail_budget_tokens=1)
-    messages = [
-        {"role": "system", "content": "sys"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "web_search", "arguments": '{"query": "redis pubsub"}'}}
-        ]},
-        # Result body is plain text with no "query" field — the old code would
-        # have summarized it as "query=?"; the rewrite reads it from the args.
-        {"role": "tool", "tool_call_id": "c1", "content": "plain search output " + "X" * 500},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c2", "function": {"name": "read_url", "arguments": "{}"}}
-        ]},
-        {"role": "tool", "tool_call_id": "c2", "content": "Z" * 500},
-    ]
-
-    result = pipeline._prune_old_tool_results(messages)
-
-    c1 = [m for m in result if m.get("tool_call_id") == "c1"][0]
-    assert "result pruned" in c1["content"]
-    assert "redis pubsub" in c1["content"]  # query came from the call args
-
-
-def test_pass2_skips_persisted_results():
-    """Pass 2 leaves Stage-A offloaded (<persisted-output>) results intact —
-    they're recoverable and lossy-summarizing would destroy the file path."""
-    from app.agent_runtime.context_compactor import QueryLoopCompactor
-    from app.agent_runtime.tool_result_storage import PERSISTED_OUTPUT_TAG
-
-    persisted = (
-        f"{PERSISTED_OUTPUT_TAG}\n"
-        "This tool result was too large.\n"
-        "Full output saved to: /data/agent-results/sess/c1.txt\n"
-        "Use the read_file tool with the path above.\n\n"
-        + "preview line\n" * 40
-        + "</persisted-output>"
-    )
-    pipeline = QueryLoopCompactor(profile=_profile(), tail_budget_tokens=1)
-    messages = [
-        {"role": "system", "content": "sys"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "web_search", "arguments": "{}"}}
-        ]},
-        {"role": "tool", "tool_call_id": "c1", "content": persisted},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c2", "function": {"name": "read_url", "arguments": "{}"}}
-        ]},
-        {"role": "tool", "tool_call_id": "c2", "content": "Z" * 500},
-    ]
-
-    result = pipeline._prune_old_tool_results(messages)
-
-    c1 = [m for m in result if m.get("tool_call_id") == "c1"][0]
-    # Persisted block preserved (path intact), NOT lossy-summarized.
-    assert PERSISTED_OUTPUT_TAG in c1["content"]
-    assert "agent-results/sess/c1.txt" in c1["content"]
-
-
-# ── Base-class coverage: token-budget tail + JSON-safety ──────────────────
-
-def test_find_tail_boundary_token_budget():
-    """_find_tail_boundary protects a token-budget worth of recent messages."""
-    from app.agent_runtime.context_compactor import QueryLoopCompactor
-
-    # Five tool results (~125 tok each); budget 300 protects ~the last two.
-    messages = [{"role": "system", "content": "sys"}]
-    for i in range(5):
-        messages.append({"role": "assistant", "content": "", "tool_calls": [
-            {"id": f"c{i}", "function": {"name": "web_search", "arguments": "{}"}}
-        ]})
-        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": "B" * 500})
-
-    pipeline = QueryLoopCompactor(profile=_profile(), tail_budget_tokens=300)
-    boundary = pipeline._find_tail_boundary(messages)
-
-    # Boundary lands on an assistant-with-tool_calls (never mid-pair)
-    assert messages[boundary]["role"] == "assistant"
-    assert messages[boundary].get("tool_calls")
-    # The two newest tool results are protected; the oldest are prunable
-    tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-    assert tool_indices[-1] >= boundary
-    assert tool_indices[-2] >= boundary
-    assert tool_indices[0] < boundary
-
-
-def test_align_boundary_forward_never_splits_pair():
-    """_align_boundary_forward walks a tool boundary back to its assistant call."""
-    from app.agent_runtime.context_compactor import QueryLoopCompactor
-
-    messages = [
-        {"role": "system", "content": "sys"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "web_search", "arguments": "{}"}}
-        ]},
-        {"role": "tool", "tool_call_id": "c1", "content": "r1"},
-    ]
-    # A boundary pointing at the tool result (index 2) must move back to the
-    # assistant (index 1) so the call/result pair is never split.
-    aligned = QueryLoopCompactor._align_boundary_forward(messages, 2)
-    assert aligned == 1
-
-
-def test_pass3_truncate_args_json_safe():
-    """Pass 3 output parses as JSON; long strings + big arrays are collapsed."""
-    import json
-
-    from app.agent_runtime.context_compactor import QueryLoopCompactor
-
-    pipeline = QueryLoopCompactor(profile=_profile(), tail_budget_tokens=1)
-
-    big = '{"content": "' + "X" * 1000 + '", "items": [1, 2, 3, 4, 5, 6]}'
-    messages = [
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "write_file", "arguments": big}}
-        ]},
-        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c2", "function": {"name": "noop", "arguments": "{}"}}
-        ]},
-        {"role": "tool", "tool_call_id": "c2", "content": "ok"},
-    ]
-
-    result = pipeline._pass3_truncate_args(messages)
-    args = result[0]["tool_calls"][0]["function"]["arguments"]
-    parsed = json.loads(args)  # must parse — production-critical
-    assert "...[truncated]" in parsed["content"]
-    assert len(parsed["items"]) <= 4  # first 3 + "...and N more items"
-
-
-def test_pass3_truncate_args_invalid_json_fallback():
-    """Pass 3 falls back to bounded raw truncation for non-JSON arguments."""
-    from app.agent_runtime.context_compactor import QueryLoopCompactor
-
-    pipeline = QueryLoopCompactor(profile=_profile(), tail_budget_tokens=1)
-
-    bad_args = "not json " + "Q" * 500
-    messages = [
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "write_file", "arguments": bad_args}}
-        ]},
-        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c2", "function": {"name": "noop", "arguments": "{}"}}
-        ]},
-        {"role": "tool", "tool_call_id": "c2", "content": "ok"},
-    ]
-
-    result = pipeline._pass3_truncate_args(messages)
-    args = result[0]["tool_calls"][0]["function"]["arguments"]
-    assert args.endswith("...[truncated]")
-    assert len(args) < len(bad_args)
-
-
 def test_should_compact_absolute_threshold():
     """should_compact uses the absolute effective-window threshold (not a ratio)."""
     from app.agent_runtime.context_compactor import QueryLoopCompactor
 
-    # context_window=13_050, max_output=0 → threshold = 13_050 - 13_000 = 50
     pipeline = QueryLoopCompactor(
         profile=_profile(context_window=13_050, max_output_tokens=0)
     )
