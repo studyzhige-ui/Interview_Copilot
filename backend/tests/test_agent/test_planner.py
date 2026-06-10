@@ -326,7 +326,8 @@ def test_plan_query_drops_dense_sparse_when_rag_off(monkeypatch):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Failure → fallback (conservative: no RAG, no body loads)
+# Failure → fallback (retrieve with the ORIGINAL question, flagged
+# planner_failed; memory bodies stay off)
 # ─────────────────────────────────────────────────────────────────────
 
 

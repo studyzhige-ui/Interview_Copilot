@@ -18,12 +18,15 @@ Wire format (Stage-G — unified across chat + agent paths):
     frontend dispatches on ``event.type``:
 
       status / text_delta / text / error / done   — emitted by both
+      sources                                     — L1 RAG only, once
+                                                    before generation
       tool_start / tool_done / budget             — agent-mode only
 
     L1 (chat) uses ``mode="chat"``; the engine instantiates
-    :class:`ChatPipelineStrategy` and only the status / text_delta /
-    text / error / done events fire. L2 (agent) uses ``mode="agent"``
-    and gets the tool / budget events on top.
+    :class:`ChatPipelineStrategy` and fires status / text_delta / text /
+    error / done, plus a single ``sources`` event on RAG turns (the L1
+    [K#] citation sources). L2 (agent) uses ``mode="agent"`` and gets the
+    tool / budget events on top.
 """
 from __future__ import annotations
 

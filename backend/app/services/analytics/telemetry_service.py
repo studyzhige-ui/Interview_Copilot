@@ -32,6 +32,9 @@ async def log_interaction_metrics(
     retrieval_attempted: bool,
     retrieval_hit: bool,
     stop_reason: str | None = None,
+    planner_failed: bool = False,
+    fallback_used: bool = False,
+    empty_reason: str | None = None,
 ):
     """Persist interaction metrics without affecting the API response path.
 
@@ -39,6 +42,11 @@ async def log_interaction_metrics(
     reason) and is None for L1 chat turns — kept so log post-mortems
     can correlate a tail-latency outlier with its budget exhaust
     reason. LangSmith covers the rest of the per-step trace surface.
+
+    The RAG degradation fields mirror the turn's RetrievalState so online
+    sampling can aggregate planner_failure_rate / reranker fallback_rate /
+    empty_reason without a second trace path (evaluation plan §3.3.6 —
+    field names kept identical to the offline trace schema).
     """
     try:
         timestamp = datetime.now().isoformat()
@@ -52,6 +60,9 @@ async def log_interaction_metrics(
             "total_tokens": prompt_tokens + completion_tokens,
             "retrieval_attempted": retrieval_attempted,
             "retrieval_hit": retrieval_hit,
+            "planner_failed": planner_failed,
+            "fallback_used": fallback_used,
+            "empty_reason": empty_reason,
             "stop_reason": stop_reason,
         }
 

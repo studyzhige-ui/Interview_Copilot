@@ -21,6 +21,7 @@ from llama_index.core import Settings
 from app.conversation.events import HarnessEvent
 from app.conversation.strategy import StrategyContext, StrategyResult
 from app.rag.embeddings import agent_fast_llm
+from app.services.chat.citation import validate_citations
 from app.services.chat.context_assembly_pipeline import (
     AssembledContext,
     PromptRenderer,
@@ -157,7 +158,6 @@ class ChatPipelineStrategy:
         # text is never rewritten (generation plan §2.5). Only runs when the
         # turn actually had citable sources, so direct chat never warns.
         if ctx.sources:
-            from app.services.chat.citation import validate_citations
             validate_citations(
                 final_answer, ctx.sources, retrieval_hit=ctx.retrieval_hit,
             )

@@ -74,9 +74,15 @@ class ConversationEngine:
         self._result = StrategyResult()
         # Set during _prepare; consumed by _fire_telemetry. Distinct
         # signals: "did we try retrieval at all" vs "did retrieval
-        # surface anything useful".
+        # surface anything useful". The three RAG-state fields below are
+        # read straight off the turn's RetrievalState (single source of
+        # truth) so fallback_rate / planner_failure_rate / empty_reason
+        # are observable in metrics.jsonl (retrieval plan §2.1/§2.5/§2.7).
         self._retrieval_attempted: bool = False
         self._retrieval_hit: bool = False
+        self._planner_failed: bool = False
+        self._fallback_used: bool = False
+        self._empty_reason: str | None = None
         # Set in submit_message when a phase crashes. Persistence +
         # post-turn maintenance gate on this so error-humanised text
         # ("系统出了点问题…") doesn't enter conversation_messages or feed
@@ -276,9 +282,17 @@ class ConversationEngine:
         knowledge_result = await knowledge_task if knowledge_task else None
         knowledge_chunks = knowledge_result.chunks if knowledge_result else []
 
+        # RetrievalState is the single source of truth for the turn's RAG
+        # flags. When retrieval ran, read everything off it (the facade
+        # already stamped planner_failed onto it); when it didn't (direct
+        # chat / agent mode), planner_failed still comes from the plan.
         self._retrieval_attempted = knowledge_task is not None
-        self._retrieval_hit = bool(
-            knowledge_result and getattr(knowledge_result, "retrieval_hit", False)
+        _state = knowledge_result.state if knowledge_result is not None else None
+        self._retrieval_hit = bool(_state and _state.retrieval_hit)
+        self._fallback_used = bool(_state and _state.fallback_used)
+        self._empty_reason = _state.empty_reason if _state else None
+        self._planner_failed = (
+            _state.planner_failed if _state is not None else query_plan.planner_failed
         )
 
         v3_memory_block = v3_memory.render()
@@ -320,7 +334,7 @@ class ConversationEngine:
             # to the SSE sources event + message persistence below).
             sources=assembled.sources,
             retrieval_hit=self._retrieval_hit,
-            planner_failed=query_plan.planner_failed,
+            planner_failed=self._planner_failed,
             # Cached so the agent strategy doesn't re-query the DB for
             # the same boolean — engine already resolved it for the
             # universal-load gate above.
@@ -389,6 +403,12 @@ class ConversationEngine:
                 completion_tokens=self._result.completion_tokens,
                 retrieval_attempted=self._retrieval_attempted,
                 retrieval_hit=self._retrieval_hit,
+                # RAG degradation signals (retrieval plan §2.1/§2.5/§2.7) —
+                # so a persistently failing planner or reranker shows up as
+                # fallback_rate / planner_failure_rate instead of silently.
+                planner_failed=self._planner_failed,
+                fallback_used=self._fallback_used,
+                empty_reason=self._empty_reason,
                 # L2 strategy populates this with its budget stop reason;
                 # None on L1. Pulled from result so the post-mortem trail
                 # covers both paths.
