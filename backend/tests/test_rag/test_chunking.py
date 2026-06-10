@@ -83,6 +83,67 @@ def test_code_branch_splitter_id_and_chunk_type(monkeypatch):
     assert all(n.metadata["chunk_type"] == "code" for n in nodes)
 
 
+def test_c_file_uses_cpp_grammar(monkeypatch):
+    """.c reuses the cpp grammar (existing behaviour) and still splits."""
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    doc = Document(
+        text="#include <stdio.h>\nint main(void) {\n    return 0;\n}\n",
+        metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "m.c"},
+    )
+    nodes = ingestion.get_optimal_nodes(doc)
+    assert nodes
+    assert all(n.metadata["splitter_id"] == "code" for n in nodes)
+
+
+# ── B4c: heading provenance + splitter_profile ──────────────────────────
+
+
+def test_markdown_heading_path_and_section_title(monkeypatch):
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    md = "# Cache\n## Redis\n### Avalanche\n热点 key 失效后大量请求打到数据库。\n"
+    doc = Document(
+        text=md, metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "q.md"},
+    )
+    nodes = ingestion.get_optimal_nodes(doc)
+    target = [n for n in nodes if "Avalanche" in n.get_content()]
+    assert target, "expected a node for the ### Avalanche section"
+    n = target[0]
+    # header_path "/Cache/Redis/" → ancestor chain; own heading → section_title.
+    assert n.metadata.get("heading_path") == ["Cache", "Redis"]
+    assert n.metadata.get("section_title") == "Avalanche"
+
+
+def test_plain_text_has_no_heading_annotations(monkeypatch):
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    doc = Document(
+        text="just prose with no markdown headers at all",
+        metadata={"source_kind": "user_upload", "user_id": 1},
+    )
+    nodes = ingestion.get_optimal_nodes(doc)
+    assert nodes
+    for n in nodes:
+        assert "heading_path" not in n.metadata
+        assert "section_title" not in n.metadata
+
+
+def test_splitter_profile_stamped(monkeypatch):
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    doc = Document(
+        text="plain prose", metadata={"source_kind": "user_upload", "user_id": 1},
+    )
+    nodes = ingestion.get_optimal_nodes(doc)
+    assert nodes
+    for n in nodes:
+        sp = n.metadata["splitter_profile"]
+        assert sp["chunk_size"] == 512
+        assert sp["chunk_overlap"] == 64
+        assert sp["tokenizer"] == "embedding"
+
+
 def test_token_count_stamped_per_node_on_multi_node_doc(monkeypatch):
     """A long doc splits into several nodes; each carries its OWN token_count
     (not the parent's), per the post-split stamping loop."""

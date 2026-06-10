@@ -30,14 +30,14 @@ def _node_text(node: Any) -> str:
 # metadata_json (plan §4.4.2/§4.4.3). NOT including category — that lives on
 # knowledge_documents and is hydrated from there (INGEST-CLEANUP). Warnings
 # are not a top-level key — they live inside their owning profile dict
-# (cleaning_profile.warnings now; parser_profile / splitter_profile later).
-# parser_* / ocr_used producers land in B5; splitter_profile + section_title /
-# heading_path in B4c.
+# (cleaning_profile.warnings; parser_profile / splitter_profile later).
+# parser_* / ocr_used producers land in B5.
 _METADATA_JSON_KEYS = (
     "section_title",
     "heading_path",
     "chunk_type",
     "splitter_id",
+    "splitter_profile",
     "parser_id",
     "parser_profile",
     "ocr_used",

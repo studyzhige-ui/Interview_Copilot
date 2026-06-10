@@ -1,5 +1,6 @@
 import os
 import logging
+import re
 from llama_index.core import Document, Settings, SimpleDirectoryReader
 from llama_index.readers.file import PyMuPDFReader
 from llama_index.core.node_parser import (
@@ -87,7 +88,30 @@ def _write_to_milvus_hybrid(
     milvus_hybrid.insert(milvus_hybrid.KNOWLEDGE, rows)
 
 
-def _code_splitter(language: str) -> "CodeSplitter":
+_MD_HEADER_RE = re.compile(r"^#{1,6}\s+(.+)")
+
+
+def _heading_annotations(node) -> tuple[list[str] | None, str | None]:
+    """Best-effort heading provenance for a chunk (plan §4.4.2).
+
+    ``MarkdownNodeParser`` stamps ``header_path`` like ``/Cache/Redis/`` (the
+    ANCESTOR heading chain). We parse that into ``heading_path`` and read the
+    node's own leading ``# `` line as ``section_title``. Non-markdown nodes
+    have neither → both None (best-effort, never guesses)."""
+    meta = getattr(node, "metadata", None) or {}
+    heading_path = None
+    raw = meta.get("header_path")
+    if raw and raw.strip("/"):
+        heading_path = [p for p in raw.split("/") if p]
+    section_title = None
+    first_line = node.get_content().lstrip().split("\n", 1)[0]
+    m = _MD_HEADER_RE.match(first_line)
+    if m:
+        section_title = m.group(1).strip()
+    return heading_path, section_title
+
+
+def _code_splitter(language: str) -> CodeSplitter:
     """Build a CodeSplitter with an explicitly-constructed tree-sitter Parser.
 
     ``tree_sitter_language_pack.get_parser()`` returns the pack's own bundled
@@ -197,10 +221,16 @@ def get_optimal_nodes(document: Document) -> list:
             final_nodes.append(node)
 
     # P0 级红线：阻止 NodeParser 洗掉原文档的 Metadata。同时落 token_count
-    # （embedding tokenizer 口径）和诊断标注（splitter_id/chunk_type/
-    # cleaning_profile），供 document_chunks 列与 metadata_json 持久化。
+    # （embedding tokenizer 口径）和诊断/溯源标注（splitter_id/chunk_type/
+    # splitter_profile/cleaning_profile/heading_path/section_title），供
+    # document_chunks 列与 metadata_json 持久化。
     user_id = document.metadata.get("user_id", "")
     cleaning_profile = document.metadata.get("cleaning_profile")
+    splitter_profile = {
+        "chunk_size": CHUNK_SIZE,
+        "chunk_overlap": CHUNK_OVERLAP,
+        "tokenizer": "embedding",
+    }
     for node in final_nodes:
         node.metadata["source_kind"] = source_kind
         if user_id:
@@ -208,8 +238,14 @@ def get_optimal_nodes(document: Document) -> list:
         node.metadata["token_count"] = count_embedding_tokens(node.get_content())
         node.metadata["splitter_id"] = splitter_id
         node.metadata["chunk_type"] = chunk_type
+        node.metadata["splitter_profile"] = splitter_profile
         if cleaning_profile is not None:
             node.metadata["cleaning_profile"] = cleaning_profile
+        heading_path, section_title = _heading_annotations(node)
+        if heading_path:
+            node.metadata["heading_path"] = heading_path
+        if section_title:
+            node.metadata["section_title"] = section_title
 
     return final_nodes
 
