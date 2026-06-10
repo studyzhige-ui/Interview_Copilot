@@ -10,10 +10,12 @@ from types import SimpleNamespace
 
 import pytest
 
+import app.rag.parsing.parsers as parsers
 import app.rag.parsing.registry as reg
+from app.core.config import settings
 from app.rag.parsing import ParseResult
 from app.rag.parsing.base import TIER_FIRST_CLASS, TIER_LIGHTWEIGHT
-from app.rag.parsing.parsers import _join_documents
+from app.rag.parsing.parsers import DoclingParser, _join_documents
 
 
 def test_join_documents_single_doc():
@@ -48,18 +50,51 @@ def test_join_documents_skips_empty_segment_without_offset_drift():
     assert md[page_map[1].char_start:page_map[1].char_end] == "cc"  # span indexes the join
 
 
-def test_candidates_without_key_have_no_llamaparse(monkeypatch):
-    monkeypatch.setattr(reg, "_has_llama_cloud", lambda: False)
-    assert [p.id for p in reg._candidates(".pdf")] == ["pymupdf", "simple_reader"]
-    assert [p.id for p in reg._candidates(".txt")] == ["simple_reader"]
+def _knobs(monkeypatch, *, key: bool, docling: bool, provider: str):
+    """Control the three selection knobs deterministically (E2)."""
+    monkeypatch.setattr(reg, "_has_llama_cloud", lambda: key)
+    monkeypatch.setattr(reg, "_docling_available", lambda: docling)
+    monkeypatch.setattr(settings, "PARSER_PROVIDER", provider)
 
 
-def test_candidates_with_key_prefer_llamaparse(monkeypatch):
-    monkeypatch.setattr(reg, "_has_llama_cloud", lambda: True)
-    assert reg._candidates(".pdf")[0].id == "llamaparse"
-    assert reg._candidates(".docx")[0].id == "llamaparse"
-    # a format LlamaParse doesn't support still only gets the default reader.
-    assert [p.id for p in reg._candidates(".txt")] == ["simple_reader"]
+def _ids(ext):
+    return [p.id for p in reg._candidates(ext)]
+
+
+def test_candidates_degrade_to_lightweight_when_no_first_class(monkeypatch):
+    _knobs(monkeypatch, key=False, docling=False, provider="docling")
+    assert _ids(".pdf") == ["pymupdf", "simple_reader"]
+    assert _ids(".xlsx") == ["simple_reader"]
+    assert _ids(".txt") == ["simple_reader"]
+
+
+def test_candidates_docling_primary(monkeypatch):
+    _knobs(monkeypatch, key=False, docling=True, provider="docling")
+    assert _ids(".pdf") == ["docling", "pymupdf", "simple_reader"]
+    assert _ids(".xlsx") == ["docling", "simple_reader"]   # docling handles xlsx
+    assert _ids(".txt") == ["simple_reader"]               # docling doesn't claim txt
+
+
+def test_candidates_llamaparse_primary_docling_fallback(monkeypatch):
+    # The local config: key set + docling installed + PARSER_PROVIDER=llamaparse.
+    _knobs(monkeypatch, key=True, docling=True, provider="llamaparse")
+    # pdf: LlamaParse primary (cloud), Docling the document-level fallback.
+    assert _ids(".pdf") == ["llamaparse", "docling", "pymupdf", "simple_reader"]
+    assert _ids(".docx") == ["llamaparse", "docling", "simple_reader"]
+    # xlsx: LlamaParse doesn't claim it -> Docling (the other first-class) leads.
+    assert _ids(".xlsx") == ["docling", "simple_reader"]
+
+
+def test_candidates_docling_primary_with_llama_fallback(monkeypatch):
+    _knobs(monkeypatch, key=True, docling=True, provider="docling")
+    assert _ids(".pdf") == ["docling", "llamaparse", "pymupdf", "simple_reader"]
+
+
+def test_candidates_selected_primary_unavailable_degrades(monkeypatch):
+    # PARSER_PROVIDER=docling but docling not installed, with a key present.
+    _knobs(monkeypatch, key=True, docling=False, provider="docling")
+    assert _ids(".pdf") == ["llamaparse", "pymupdf", "simple_reader"]  # falls to the available first-class
+    assert _ids(".xlsx") == ["simple_reader"]  # llamaparse can't, docling absent
 
 
 class _FakeParser:
@@ -131,3 +166,54 @@ def test_parse_document_all_empty_raises(monkeypatch):
     ])
     with pytest.raises(EmptyContentError):
         reg.parse_document("x.pdf")
+
+
+# ── E2: Docling first-class parser ───────────────────────────────────────────
+
+
+def test_docling_parser_supports_structured_formats():
+    p = DoclingParser()
+    assert p.tier == TIER_FIRST_CLASS
+    assert p.supports(".pdf") and p.supports(".docx") and p.supports(".xlsx") and p.supports(".html")
+    assert not p.supports(".txt") and not p.supports(".png")  # txt -> default reader; images deferred
+
+
+def test_docling_parser_exports_markdown(monkeypatch):
+    """DoclingParser converts via the cached converter and returns its Markdown
+    (converter mocked so no model download)."""
+    class _FakeDoc:
+        pages = {1: object()}
+        def export_to_markdown(self):
+            return "# Title\n\nbody text"
+
+    class _FakeConverter:
+        def convert(self, file_path):
+            return SimpleNamespace(document=_FakeDoc())
+
+    monkeypatch.setattr(parsers, "_get_docling_converter", lambda: _FakeConverter())
+
+    result = DoclingParser().parse("doc.pdf")
+    assert result.markdown == "# Title\n\nbody text"
+    assert result.parser_id == "docling"
+    assert result.is_markdown is True
+
+
+def test_docling_failure_falls_back_through_registry(monkeypatch):
+    """A Docling convert failure degrades to the next candidate (no crash)."""
+    _knobs(monkeypatch, key=False, docling=True, provider="docling")
+
+    class _BoomConverter:
+        def convert(self, file_path):
+            raise RuntimeError("docling model load failed")
+
+    monkeypatch.setattr(parsers, "_get_docling_converter", lambda: _BoomConverter())
+    # Real candidate list (docling first), but docling.parse() raises -> registry
+    # records the warning and falls through to PyMuPDF/SimpleReader. Stub those so
+    # the test doesn't touch real files.
+    monkeypatch.setattr(parsers.PyMuPDFParser, "parse",
+                        lambda self, fp: ParseResult(markdown="pdf text", parser_id="pymupdf"))
+
+    out = reg.parse_document("x.pdf")
+    assert out.parser_id == "pymupdf"
+    assert out.parser_profile["fallback_used"] is True
+    assert any("docling" in w for w in out.parser_profile["warnings"])

@@ -122,6 +122,12 @@ ocr_used / page_count / char_count / duration_ms / error_code
 
 - `ingest_document` 内联的 `extractor_map` + `SimpleDirectoryReader` 解析段 → 改调 `parse_document()`，旧逻辑删除，不新旧并存。
 
+#### Docling 部署说明（E2 实测）
+
+- **依赖足迹**：`docling==2.100.0` 增量拉 `docling-core` / `docling-ibm-models` / `docling-parse`(编译 wheel) / `accelerate`；torch / transformers / pydantic / beautifulsoup4 / tqdm 已在环境中。布局/表格**模型权重在首次 `convert()` 时从 HuggingFace 下载**(运行时成本，非安装时)。
+- **平台**：开发机 Python 3.13 / Windows(`docling_parse` 有 cp313-win wheel)；**Linux worker 镜像需各自验证 wheel + 首次 convert 的模型拉取**(建议镜像构建期预热模型，避免首个文档导入时阻塞)。
+- **降级**：Docling 不可用(未装 / import 失败 / convert 抛错)时，解析器 registry 自动退到 LlamaParse(若配 key) / 轻量兜底；`PARSER_PROVIDER=docling` 选中但不可用也照样降级。E1/E2 用 mock 验证编排与降级，**真实 convert + 模型下载留待部署 worker 验证**。
+
 ### 2.2 Chunk（策略注册表）
 
 `get_optimal_nodes` 的 if/elif → 按内容类型的 `Splitter` 策略：

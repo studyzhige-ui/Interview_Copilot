@@ -135,6 +135,12 @@ class Settings(BaseSettings):
     # S0 conservative ingest cleaning (plan §4.2) — switchable per
     # INGEST-CLEANING. Off = parsed text is chunked verbatim.
     RAG_CLEANING_ENABLED: bool = True
+    # Primary first-class document parser (Phase E). "docling" (local, no key)
+    # or "llamaparse" (cloud, needs LLAMA_CLOUD_API_KEY); whichever isn't primary
+    # is the document-level fallback when available. Unsupported formats fall to
+    # the per-format lightweight parsers. Default local-first so a fresh deploy
+    # works without a cloud key.
+    PARSER_PROVIDER: str = "docling"
     # Memory v2 settings (MEMORY_MILVUS_COLLECTION / MEMORY_*_TOP_K /
     # MEMORY_BACKFILL_ON_STARTUP) were removed in the audit cleanup —
     # the v3 memory architecture uses markdown docs, not vectors. See

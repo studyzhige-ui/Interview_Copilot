@@ -16,9 +16,11 @@ import time
 from app.core.config import settings
 
 from .base import ParseResult
-from .parsers import LlamaParseParser, PyMuPDFParser, SimpleReaderParser
+from .parsers import DoclingParser, LlamaParseParser, PyMuPDFParser, SimpleReaderParser
 
 logger = logging.getLogger(__name__)
+
+_docling_available_cache: bool | None = None
 
 
 def _has_llama_cloud() -> bool:
@@ -26,15 +28,45 @@ def _has_llama_cloud() -> bool:
     return bool(key and key.strip() and not key.startswith("your_"))
 
 
-def _candidates(ext: str) -> list:
-    """Ordered parser candidates for an extension (E1): first-class LlamaParse
-    (when a key is set) -> per-format lightweight -> default reader. Returning a
-    list (not a single parser) is what gives document-level fallback."""
-    out: list = []
+def _docling_available() -> bool:
+    """Whether the Docling package is importable (cached). The registry skips
+    Docling when it isn't, so a deployment without it degrades gracefully."""
+    global _docling_available_cache
+    if _docling_available_cache is None:
+        try:
+            import docling.document_converter  # noqa: F401
+            _docling_available_cache = True
+        except Exception:  # noqa: BLE001 — any import/init issue -> treat as unavailable
+            _docling_available_cache = False
+    return _docling_available_cache
+
+
+def _first_class_parsers() -> dict:
+    """Available first-class parsers by id, gated on key (LlamaParse) /
+    installability (Docling) — peers, deployment config picks the primary."""
+    out: dict = {}
     if _has_llama_cloud():
-        llama = LlamaParseParser()
-        if llama.supports(ext):
-            out.append(llama)
+        out["llamaparse"] = LlamaParseParser()
+    if _docling_available():
+        out["docling"] = DoclingParser()
+    return out
+
+
+def _candidates(ext: str) -> list:
+    """Ordered parser candidates for an extension: the PARSER_PROVIDER-selected
+    first-class parser first, then the OTHER first-class as document-level
+    fallback, then per-format lightweight, then the default reader. Any tier
+    being unavailable simply drops out — the list is never empty (SimpleReader
+    is the floor)."""
+    first_class = _first_class_parsers()
+    primary_id = (settings.PARSER_PROVIDER or "docling").strip().lower()
+
+    ordered: list = []
+    if primary_id in first_class:
+        ordered.append(first_class.pop(primary_id))
+    ordered.extend(first_class.values())  # the remaining first-class as fallback
+
+    out = [p for p in ordered if p.supports(ext)]
     if ext == ".pdf":
         out.append(PyMuPDFParser())
     out.append(SimpleReaderParser())  # default reader + final fallback

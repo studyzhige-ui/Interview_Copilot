@@ -68,6 +68,42 @@ class LlamaParseParser:
         )
 
 
+_docling_converter = None
+
+
+def _get_docling_converter():
+    """Lazily build a single Docling ``DocumentConverter`` (model weights load on
+    the first convert, so reuse one across the worker process)."""
+    global _docling_converter
+    if _docling_converter is None:
+        from docling.document_converter import DocumentConverter
+
+        _docling_converter = DocumentConverter()
+    return _docling_converter
+
+
+class DoclingParser:
+    """First-class LOCAL parser → Markdown (peer to LlamaParse). Available only
+    when the ``docling`` package is installed (the registry gates on that and
+    degrades to LlamaParse / lightweight when it isn't). No OCR this round —
+    scanned PDFs / images are a later round."""
+
+    id = "docling"
+    tier = TIER_FIRST_CLASS
+    _EXTS = {".pdf", ".docx", ".pptx", ".xlsx", ".html", ".htm"}
+
+    def supports(self, ext: str) -> bool:
+        return ext in self._EXTS
+
+    def parse(self, file_path: str) -> ParseResult:
+        result = _get_docling_converter().convert(file_path)
+        markdown = result.document.export_to_markdown()
+        # Per-page char spans aren't readily recoverable from the exported
+        # Markdown, so page_map stays empty (best-effort, deferred like the other
+        # parsers); the structured Markdown itself is what downstream consumes.
+        return ParseResult(markdown=markdown, parser_id=self.id, is_markdown=True, page_map=[])
+
+
 class PyMuPDFParser:
     """Lightweight PDF text extraction (no cloud, no OCR)."""
 
