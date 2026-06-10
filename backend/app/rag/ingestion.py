@@ -11,6 +11,7 @@ from llama_index.core.node_parser import (
 )
 from app.core.config import settings
 from app.rag.cleaning import EmptyContentError, clean_text
+from app.rag.embedding_tokenizer import count_tokens as count_embedding_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -152,14 +153,13 @@ def get_optimal_nodes(document: Document) -> list:
 
         nodes = parser.get_nodes_from_documents([document])
 
-    # 二次兜底：对超长 chunk 做再切分，确保不超过 embedding 模型 max_seq_length
+    # 二次兜底：对超长 chunk 做再切分，确保不超过 embedding 模型 max_seq_length。
+    # 超长判定使用真实 embedding tokenizer（plan §4.3），不再用 len(text) 字符估算。
     secondary_splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
     final_nodes = []
     for node in nodes:
         text = node.get_content()
-        # 粗略估算：1 个中文字符 ≈ 1.5 tokens，1 英文单词 ≈ 1.3 tokens
-        estimated_tokens = len(text)  # 按字符数做保守估计
-        if estimated_tokens > CHUNK_SIZE * 2:
+        if count_embedding_tokens(text) > CHUNK_SIZE * 2:
             sub_nodes = secondary_splitter.get_nodes_from_documents(
                 [Document(text=text, metadata=node.metadata)]
             )
@@ -167,12 +167,14 @@ def get_optimal_nodes(document: Document) -> list:
         else:
             final_nodes.append(node)
 
-    # P0 级红线：阻止 NodeParser 洗掉原文档的 Metadata
+    # P0 级红线：阻止 NodeParser 洗掉原文档的 Metadata。同时落 token_count
+    # （embedding tokenizer 口径），供 document_chunks.token_count 持久化。
     user_id = document.metadata.get("user_id", "")
     for node in final_nodes:
         node.metadata["source_kind"] = source_kind
         if user_id:
             node.metadata["user_id"] = user_id
+        node.metadata["token_count"] = count_embedding_tokens(node.get_content())
 
     return final_nodes
 
