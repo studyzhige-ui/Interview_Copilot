@@ -708,6 +708,12 @@ class AgentLoopStrategy:
                 nudge_repeat, nudge_tool = repeat_count, tool_name
             latency_ms = round((time.perf_counter() - tool_started) * 1000, 2)
 
+            logger.info(
+                "tool_metric | tool=%s latency_ms=%.1f is_error=%s result_chars=%d step=%d",
+                tool_name, latency_ms, tool_error,
+                len(safe_json_dumps(observation)), budget.steps,
+            )
+
             # Persist large tool results to disk; the LLM context only
             # keeps a small preview pointer. maybe_persist_result does
             # sync file_path.write_text() for oversized content — offload

@@ -6,11 +6,14 @@ splits by ``source_kind`` — the BGE reranker is authoritative — so
 the tool has a single ``query`` argument and searches everything.
 """
 
+import logging
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from app.agent_runtime.tool_registry import AgentToolContext, ToolEntry, registry
+
+logger = logging.getLogger(__name__)
 
 
 class SearchKnowledgeArgs(BaseModel):
@@ -23,13 +26,17 @@ class SearchKnowledgeArgs(BaseModel):
 async def _search_knowledge_handler(
     args: SearchKnowledgeArgs, ctx: AgentToolContext,
 ) -> dict[str, Any]:
-    from app.rag.knowledge_retriever import knowledge_retriever
+    try:
+        from app.rag.knowledge_retriever import knowledge_retriever
 
-    result = await knowledge_retriever.retrieve(
-        dense_query=args.query,
-        sparse_query=args.query,
-        user_id=ctx.user_id,
-    )
+        result = await knowledge_retriever.retrieve(
+            dense_query=args.query,
+            sparse_query=args.query,
+            user_id=ctx.user_id,
+        )
+    except Exception as exc:
+        logger.warning("search_knowledge failed: %s", exc)
+        return {"error": f"Knowledge retrieval failed: {exc}", "query": args.query}
 
     chunks = []
     if result and result.chunks:
@@ -37,8 +44,6 @@ async def _search_knowledge_handler(
             chunks.append({
                 "text": chunk.get("text", "")[:1500],
                 "source": chunk.get("source_kind", "knowledge"),
-                # Hydrated provenance — lets the agent name the document it
-                # is quoting instead of an anonymous "knowledge" blob.
                 "document_title": chunk.get("document_title"),
                 "chunk_id": chunk.get("chunk_id"),
                 "score": (
@@ -66,6 +71,6 @@ registry.register(ToolEntry(
     ),
     args_model=SearchKnowledgeArgs,
     handler=_search_knowledge_handler,
-    max_result_chars=10000,
+    max_result_chars=10_000,
     emoji="📚",
 ))

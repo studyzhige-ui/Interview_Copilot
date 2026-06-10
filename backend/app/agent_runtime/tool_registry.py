@@ -49,31 +49,37 @@ class ToolEntry:
 
 # ── Schema generation (Pydantic → OpenAI function calling) ───────────────
 
+def _clean_schema(obj: Any) -> Any:
+    """Recursively strip Pydantic-specific keys from a JSON Schema object.
+
+    OpenAI strict mode rejects ``title`` on property schemas and
+    ``description`` on non-root objects.  The old code only popped
+    ``title`` one level deep, leaving nested Pydantic models dirty.
+    """
+    if isinstance(obj, dict):
+        obj.pop("title", None)
+        if "properties" not in obj:
+            obj.pop("description", None)
+        for val in obj.values():
+            _clean_schema(val)
+    elif isinstance(obj, list):
+        for item in obj:
+            _clean_schema(item)
+    return obj
+
+
 def _pydantic_to_openai_schema(name: str, description: str, model: type[BaseModel]) -> dict[str, Any]:
     """Convert a Pydantic model to an OpenAI function-calling tool schema."""
     json_schema = model.model_json_schema()
 
-    # Clean up Pydantic-specific keys that OpenAI strict mode rejects
-    def _clean(obj: Any) -> Any:
-        if isinstance(obj, dict):
-            obj.pop("title", None)
-            obj.pop("description", None) if "properties" not in obj else None
-            for val in obj.values():
-                _clean(val)
-        elif isinstance(obj, list):
-            for item in obj:
-                _clean(item)
-        return obj
-
     properties = json_schema.get("properties", {})
     required = json_schema.get("required", list(properties.keys()))
 
-    # Clean nested schemas
+    # Recursively clean Pydantic-specific keys that OpenAI strict mode
+    # rejects (title on leaf schemas, description on non-root objects).
     cleaned_props = {}
     for prop_name, prop_schema in properties.items():
-        cleaned = dict(prop_schema)
-        cleaned.pop("title", None)
-        cleaned_props[prop_name] = cleaned
+        cleaned_props[prop_name] = _clean_schema(dict(prop_schema))
 
     schema: dict[str, Any] = {
         "type": "function",
@@ -133,18 +139,16 @@ class ToolRegistry:
         self._ensure_default_tools_loaded()
         return self._entries.get(name)
 
-    def available_tools(self, toolset: str = "default") -> list[ToolEntry]:
-        """Return tools belonging to *toolset* (or all if ``"*"``).
-
-        Tools whose ``check_fn`` returns ``False`` are excluded.
-        """
+    def _iter_available(
+        self, *, exclude: set[str] | None = None,
+    ) -> list[ToolEntry]:
+        """Return entries passing check_fn and not in *exclude*."""
         self._ensure_default_tools_loaded()
+        exclude = exclude or set()
         entries = []
         for entry in self._entries.values():
-            if toolset != "*" and entry.toolset != toolset and entry.toolset != "default":
-                # Include tools from "default" toolset in all toolsets
-                if toolset != "default":
-                    continue
+            if entry.name in exclude:
+                continue
             if entry.check_fn is not None and not entry.check_fn():
                 continue
             entries.append(entry)
@@ -152,11 +156,10 @@ class ToolRegistry:
 
     def get_openai_schemas(
         self,
-        toolset: str = "default",
         *,
         exclude: set[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Build OpenAI function-calling schemas for the specified toolset.
+        """Build OpenAI function-calling schemas for available tools.
 
         ``exclude`` removes tools by name AFTER the ``check_fn`` filter.
         The agent strategy uses this to hide memory tools when the
@@ -165,18 +168,10 @@ class ToolRegistry:
         :meth:`format_manifest` so the LLM never sees a tool in the
         manifest that's missing from the schemas (or vice versa).
         """
-        self._ensure_default_tools_loaded()
-        exclude = exclude or set()
-        schemas = []
-        for entry in self._entries.values():
-            if entry.name in exclude:
-                continue
-            if entry.check_fn is not None and not entry.check_fn():
-                continue
-            schemas.append(
-                _pydantic_to_openai_schema(entry.name, entry.description, entry.args_model)
-            )
-        return schemas
+        return [
+            _pydantic_to_openai_schema(e.name, e.description, e.args_model)
+            for e in self._iter_available(exclude=exclude)
+        ]
 
     def format_manifest(self, *, exclude: set[str] | None = None) -> str:
         """Human-readable tool manifest for the system prompt.
@@ -185,15 +180,11 @@ class ToolRegistry:
         :meth:`get_openai_schemas` so the schemas and the manifest
         always agree about which tools the LLM is allowed to call.
         """
-        self._ensure_default_tools_loaded()
-        exclude = exclude or set()
         manifest = []
-        for entry in self._entries.values():
-            if entry.name in exclude:
-                continue
-            if entry.check_fn is not None and not entry.check_fn():
-                continue
-            schema = _pydantic_to_openai_schema(entry.name, entry.description, entry.args_model)
+        for entry in self._iter_available(exclude=exclude):
+            schema = _pydantic_to_openai_schema(
+                entry.name, entry.description, entry.args_model,
+            )
             manifest.append({
                 "name": entry.name,
                 "description": entry.description,

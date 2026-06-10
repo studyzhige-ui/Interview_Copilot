@@ -4,11 +4,14 @@ Wraps ResumeService to read the user's parsed resume sections.
 """
 
 import asyncio
+import logging
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from app.agent_runtime.tool_registry import AgentToolContext, ToolEntry, registry
+
+logger = logging.getLogger(__name__)
 
 
 class ReadResumeArgs(BaseModel):
@@ -36,6 +39,14 @@ def _read_resume_sync(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, 
       3. else a "not parsed yet / no resume" hint — but NEVER claim "no resume"
          when one demonstrably exists.
     """
+    try:
+        return _read_resume_inner(args, ctx)
+    except Exception as exc:
+        logger.warning("read_resume failed: %s", exc)
+        return {"error": f"Failed to read resume: {exc}", "section_count": 0}
+
+
+def _read_resume_inner(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, Any]:
     from app.db.database import SessionLocal
     from app.services.resume import resume_entity_service
     from app.services.resume.resume_service import resume_service
@@ -51,7 +62,6 @@ def _read_resume_sync(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, 
                     "「个人信息 → 我的简历」。"
                 ),
             }
-        # Default resume is canonical; fall back to the first active one.
         primary = next((r for r in resumes if r.is_default), resumes[0])
         primary_id = primary.id
         primary_title = primary.title
@@ -83,7 +93,6 @@ def _read_resume_sync(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, 
             "formatted_text": formatted[:8000],
         }
 
-    # No parsed sections yet — fall back to the entity's raw text snapshot.
     if primary_raw:
         return {
             "resume_id": primary_id,

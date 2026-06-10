@@ -1180,3 +1180,366 @@ def test_strategy_crash_yields_humanized_error_event(monkeypatch):
         f"error event should carry the actionable balance message, got "
         f"{error_events[-1].data['error']!r}"
     )
+
+
+# ── Batch-1 tool overhaul tests ─────────────────────────────────────────
+
+
+class TestSearchJobsCheckFn:
+    """search_jobs must be hidden from the manifest when LEVER_SITES is empty."""
+
+    def test_jobs_hidden_when_lever_sites_empty(self, monkeypatch):
+        monkeypatch.setattr("app.core.config.settings.LEVER_SITES", "")
+        from app.agent_runtime.tools.jobs import _jobs_available
+        assert _jobs_available() is False
+
+    def test_jobs_visible_when_lever_sites_set(self, monkeypatch):
+        monkeypatch.setattr("app.core.config.settings.LEVER_SITES", "acme-corp")
+        from app.agent_runtime.tools.jobs import _jobs_available
+        assert _jobs_available() is True
+
+    def test_handler_returns_error_when_no_sites(self, monkeypatch):
+        monkeypatch.setattr("app.core.config.settings.LEVER_SITES", "")
+        from app.agent_runtime.tool_registry import AgentToolContext
+        from app.agent_runtime.tools.jobs import SearchJobsArgs, _search_jobs_handler
+        ctx = AgentToolContext(user_id="alice", session_id="s1")
+        result = asyncio.run(_search_jobs_handler(
+            SearchJobsArgs(keywords="backend"), ctx,
+        ))
+        assert "error" in result
+        assert result["count"] == 0
+
+
+class TestSearchJobsErrorHandling:
+    """search_jobs must catch httpx errors gracefully."""
+
+    def test_per_site_timeout_skipped_gracefully(self, monkeypatch):
+        """Per-site timeouts are caught and skipped — result is empty, not an error."""
+        import httpx as _httpx
+
+        monkeypatch.setattr("app.core.config.settings.LEVER_SITES", "acme")
+        monkeypatch.setattr("app.core.config.settings.LEVER_API_BASE", "https://api.lever.co/v0")
+
+        class _TimeoutClient(_httpx.AsyncClient):
+            async def get(self, *a, **kw):
+                raise _httpx.TimeoutException("timed out")
+
+        monkeypatch.setattr("httpx.AsyncClient", _TimeoutClient)
+
+        from app.agent_runtime.tool_registry import AgentToolContext
+        from app.agent_runtime.tools.jobs import SearchJobsArgs, _search_jobs_handler
+        ctx = AgentToolContext(user_id="alice", session_id="s1")
+        result = asyncio.run(_search_jobs_handler(
+            SearchJobsArgs(keywords="backend"), ctx,
+        ))
+        assert result["count"] == 0
+        assert result["jobs"] == []
+
+    def test_unexpected_error_returns_error_dict(self, monkeypatch):
+        """Non-httpx exceptions (e.g. JSON decode, network) are caught at outer level."""
+        monkeypatch.setattr("app.core.config.settings.LEVER_SITES", "acme")
+        monkeypatch.setattr("app.core.config.settings.LEVER_API_BASE", "https://api.lever.co/v0")
+
+        class _BrokenClient:
+            async def __aenter__(self):
+                raise OSError("DNS resolution failed")
+            async def __aexit__(self, *a):
+                pass
+
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _BrokenClient())
+
+        from app.agent_runtime.tool_registry import AgentToolContext
+        from app.agent_runtime.tools.jobs import SearchJobsArgs, _search_jobs_handler
+        ctx = AgentToolContext(user_id="alice", session_id="s1")
+        result = asyncio.run(_search_jobs_handler(
+            SearchJobsArgs(keywords="backend"), ctx,
+        ))
+        assert "error" in result
+
+
+class TestReadUrlImprovements:
+    """read_url improvements: size limit, content limit, injection marker."""
+
+    def test_external_content_notice_prepended(self, monkeypatch):
+        """read_url must prepend a prompt-injection defense marker."""
+        import httpx as _httpx
+
+        class _FakeResponse:
+            status_code = 200
+            url = "https://example.com"
+            headers = {"content-type": "text/plain"}
+            text = "Hello world"
+            content = b"Hello world"
+
+        class _FakeClient:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                pass
+            async def get(self, *a, **kw):
+                return _FakeResponse()
+
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _FakeClient())
+        monkeypatch.setattr(
+            "app.agent_runtime.tools.web._validate_safe_url",
+            lambda url: None,
+        )
+
+        from app.agent_runtime.tool_registry import AgentToolContext
+        from app.agent_runtime.tools.web import ReadUrlArgs, _read_url_handler
+        ctx = AgentToolContext(user_id="alice", session_id="s1")
+        result = asyncio.run(_read_url_handler(ReadUrlArgs(url="https://example.com"), ctx))
+        assert "error" not in result
+        assert result["content"].startswith("[External web content below")
+        assert "Hello world" in result["content"]
+
+    def test_oversized_response_rejected(self, monkeypatch):
+        """HTTP responses exceeding _MAX_HTTP_BYTES must be refused."""
+        import httpx as _httpx
+
+        class _FakeResponse:
+            status_code = 200
+            url = "https://example.com/huge"
+            headers = {"content-type": "text/html"}
+            text = "x" * 100
+            content = b"x" * (6 * 1024 * 1024)  # 6 MB > 5 MB limit
+
+        class _FakeClient:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                pass
+            async def get(self, *a, **kw):
+                return _FakeResponse()
+
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _FakeClient())
+        monkeypatch.setattr(
+            "app.agent_runtime.tools.web._validate_safe_url",
+            lambda url: None,
+        )
+
+        from app.agent_runtime.tool_registry import AgentToolContext
+        from app.agent_runtime.tools.web import ReadUrlArgs, _read_url_handler
+        ctx = AgentToolContext(user_id="alice", session_id="s1")
+        result = asyncio.run(_read_url_handler(ReadUrlArgs(url="https://example.com/huge"), ctx))
+        assert "error" in result
+        assert "too large" in result["error"].lower()
+
+    def test_content_truncated_at_max_chars(self, monkeypatch):
+        """Content exceeding _MAX_CONTENT_CHARS must be truncated."""
+        from app.agent_runtime.tools.web import _MAX_CONTENT_CHARS
+
+        class _FakeResponse:
+            status_code = 200
+            url = "https://example.com/long"
+            headers = {"content-type": "text/plain"}
+            text = "A" * (_MAX_CONTENT_CHARS + 10_000)
+            content = text.encode()
+
+        class _FakeClient:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                pass
+            async def get(self, *a, **kw):
+                return _FakeResponse()
+
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _FakeClient())
+        monkeypatch.setattr(
+            "app.agent_runtime.tools.web._validate_safe_url",
+            lambda url: None,
+        )
+
+        from app.agent_runtime.tool_registry import AgentToolContext
+        from app.agent_runtime.tools.web import ReadUrlArgs, _read_url_handler
+        ctx = AgentToolContext(user_id="alice", session_id="s1")
+        result = asyncio.run(_read_url_handler(ReadUrlArgs(url="https://example.com/long"), ctx))
+        assert result["truncated"] is True
+        assert result["char_count"] == _MAX_CONTENT_CHARS
+
+    def test_html_noise_tags_stripped(self, monkeypatch):
+        """HTML noise tags (nav, footer, script) must be stripped."""
+        from app.agent_runtime.tools.web import _html_to_markdown
+        html = """
+        <html><body>
+        <nav><a href="/">Home</a><a href="/about">About</a></nav>
+        <main><p>Important article content here.</p></main>
+        <footer>Copyright 2024</footer>
+        <script>alert('xss')</script>
+        </body></html>
+        """
+        md = _html_to_markdown(html)
+        assert "Important article content" in md
+        assert "alert" not in md
+        assert "Copyright" not in md
+
+
+class TestWebSearchErrorHandling:
+    """web_search must catch network errors gracefully."""
+
+    def test_timeout_returns_error_dict(self, monkeypatch):
+        import httpx as _httpx
+        import os
+        monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+
+        class _TimeoutClient:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                pass
+            async def post(self, *a, **kw):
+                raise _httpx.TimeoutException("timed out")
+
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _TimeoutClient())
+
+        from app.agent_runtime.tool_registry import AgentToolContext
+        from app.agent_runtime.tools.web import WebSearchArgs, _web_search_handler
+        ctx = AgentToolContext(user_id="alice", session_id="s1")
+        result = asyncio.run(_web_search_handler(
+            WebSearchArgs(query="test"), ctx,
+        ))
+        assert "error" in result
+        assert "timed out" in result["error"].lower()
+
+
+class TestKnowledgeErrorHandling:
+    """search_knowledge must catch retrieval errors."""
+
+    def test_retrieval_error_returns_error_dict(self, monkeypatch):
+        async def _boom(**kw):
+            raise RuntimeError("Milvus connection lost")
+
+        monkeypatch.setattr(
+            "app.rag.knowledge_retriever.knowledge_retriever.retrieve",
+            lambda **kw: _boom(**kw),
+        )
+
+        from app.agent_runtime.tool_registry import AgentToolContext
+        from app.agent_runtime.tools.knowledge import (
+            SearchKnowledgeArgs, _search_knowledge_handler,
+        )
+        ctx = AgentToolContext(user_id="alice", session_id="s1")
+        result = asyncio.run(_search_knowledge_handler(
+            SearchKnowledgeArgs(query="redis"), ctx,
+        ))
+        assert "error" in result
+        assert "redis" in result["query"]
+
+
+class TestInterviewHistoryErrorHandling:
+    """read_interview_history must catch DB errors."""
+
+    def test_db_error_returns_error_dict(self, monkeypatch):
+        def _boom(*a, **kw):
+            raise RuntimeError("DB connection refused")
+
+        monkeypatch.setattr(
+            "app.services.interview.interview_record_service.interview_record_service.list_by_user",
+            _boom,
+        )
+
+        from app.agent_runtime.tool_registry import AgentToolContext
+        from app.agent_runtime.tools.interview_history import (
+            ReadInterviewHistoryArgs, _read_interview_history_handler,
+        )
+        ctx = AgentToolContext(user_id="alice", session_id="s1")
+        result = asyncio.run(_read_interview_history_handler(
+            ReadInterviewHistoryArgs(), ctx,
+        ))
+        assert "error" in result
+
+
+class TestResumeErrorHandling:
+    """read_resume must catch service errors."""
+
+    def test_service_error_returns_error_dict(self, monkeypatch):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _fake_session():
+            yield object()
+        monkeypatch.setattr("app.db.database.SessionLocal", _fake_session)
+
+        def _boom(db, *, user_id):
+            raise RuntimeError("DB unavailable")
+        monkeypatch.setattr(
+            "app.services.resume.resume_entity_service.list_resumes",
+            _boom,
+        )
+
+        from app.agent_runtime.tool_registry import AgentToolContext
+        from app.agent_runtime.tools.resume import ReadResumeArgs, _read_resume_handler
+        ctx = AgentToolContext(user_id="alice", session_id="s1")
+        result = asyncio.run(_read_resume_handler(ReadResumeArgs(), ctx))
+        assert "error" in result
+        assert result["section_count"] == 0
+
+
+class TestToolMetrics:
+    """Tool execution must emit structured metrics via logger."""
+
+    @pytest.mark.asyncio
+    async def test_tool_metric_logged(self, monkeypatch):
+        """_execute_tools must log tool_metric with latency and error status."""
+        import logging
+
+        async def fake_dispatch(name, args, ctx):
+            return {"ok": True}
+
+        monkeypatch.setattr(
+            "app.agent_runtime.tool_registry.registry.dispatch",
+            fake_dispatch,
+        )
+        monkeypatch.setattr(
+            "app.conversation.agent_strategy.maybe_persist_result",
+            lambda content, **k: content,
+        )
+        monkeypatch.setattr(
+            "app.conversation.agent_strategy.enforce_turn_budget",
+            lambda *a, **k: None,
+        )
+
+        from app.agent_runtime.react_agent import AgentBudget
+        from app.conversation.agent_strategy import AgentLoopStrategy, _ToolCallAccumulator
+        from app.conversation.strategy import StrategyContext
+
+        strategy = AgentLoopStrategy()
+        ctx = StrategyContext(
+            user_id="alice", session_id="s1",
+            user_message="test", assembled=None,
+        )
+        budget = AgentBudget(started_at=0.0)
+        budget.consume_step()
+
+        events = []
+        records: list[logging.LogRecord] = []
+        handler = logging.Handler()
+        handler.emit = lambda r: records.append(r)
+        handler.setLevel(logging.DEBUG)
+        target_logger = logging.getLogger("app.conversation.agent_strategy")
+        old_level = target_logger.level
+        old_disabled = target_logger.disabled
+        target_logger.setLevel(logging.DEBUG)
+        target_logger.disabled = False
+        target_logger.addHandler(handler)
+        try:
+            async for _ in strategy._execute_tools(
+                ctx=ctx, messages=[], blocks=[],
+                tool_calls_acc=[
+                    _ToolCallAccumulator(id="call_1", name="recall_memory", arguments="{}"),
+                ],
+                assistant_content="", reasoning_content="",
+                budget=budget,
+            ):
+                pass
+        finally:
+            target_logger.removeHandler(handler)
+            target_logger.setLevel(old_level)
+            target_logger.disabled = old_disabled
+
+        metric_lines = [r for r in records if "tool_metric" in r.getMessage()]
+        assert len(metric_lines) == 1
+        msg = metric_lines[0].getMessage()
+        assert "recall_memory" in msg
+        assert "latency_ms=" in msg
+        assert "is_error=False" in msg

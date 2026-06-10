@@ -39,6 +39,7 @@ from app.core.background_tasks import safe_background_task
 from app.core.error_messages import humanize_error
 from app.conversation.query_planner import plan_query
 from app.rag.knowledge_retriever import knowledge_retriever
+from app.rag.retrieval_state import EMPTY_PLANNER_NO_RETRIEVAL
 from app.services.chat.chat_history_service import transcript_service
 from app.services.chat.context_assembly_pipeline import context_pipeline
 from app.services.memory.post_turn_maintenance import post_turn_maintenance_service
@@ -291,7 +292,11 @@ class ConversationEngine:
         _state = knowledge_result.state if knowledge_result is not None else None
         self._retrieval_hit = bool(_state and _state.retrieval_hit)
         self._fallback_used = bool(_state and _state.fallback_used)
-        self._empty_reason = _state.empty_reason if _state else None
+        self._empty_reason = (
+            _state.empty_reason if _state
+            else EMPTY_PLANNER_NO_RETRIEVAL if not self._retrieval_attempted
+            else None
+        )
         self._planner_failed = (
             _state.planner_failed if _state is not None else query_plan.planner_failed
         )
