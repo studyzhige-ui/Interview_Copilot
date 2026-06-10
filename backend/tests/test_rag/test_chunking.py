@@ -23,6 +23,20 @@ def test_token_count_stamped_on_every_node(monkeypatch):
         assert node.metadata["token_count"] == len(node.get_content().split())
 
 
+def test_token_count_stamped_per_node_on_multi_node_doc(monkeypatch):
+    """A long doc splits into several nodes; each carries its OWN token_count
+    (not the parent's), per the post-split stamping loop."""
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    big = " ".join(f"word{i}" for i in range(1200))
+    doc = Document(text=big, metadata={"source_kind": "user_upload", "user_id": 1})
+    nodes = ingestion.get_optimal_nodes(doc)
+
+    assert len(nodes) >= 2
+    for node in nodes:
+        assert node.metadata["token_count"] == len(node.get_content().split())
+
+
 def test_oversize_gate_uses_embedding_tokenizer(monkeypatch):
     """A node the tokenizer reports as oversize (> CHUNK_SIZE*2 = 1024) is
     secondary-split; the char length is irrelevant to the decision."""

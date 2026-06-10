@@ -87,12 +87,9 @@ def test_reset_cache_forces_reload(monkeypatch):
 def test_load_tokenizer_returns_none_for_remote_provider(monkeypatch):
     """A non-local embedding provider has no local tokenizer to load."""
     from types import SimpleNamespace
-    monkeypatch.setattr(
-        et, "resolve_embedding",
-        lambda: SimpleNamespace(provider=SimpleNamespace(kind="openai_compat"), model="x"),
-        raising=False,
-    )
-    # _load_tokenizer imports resolve_embedding from embedding_registry; patch there.
+
+    # _load_tokenizer imports resolve_embedding from embedding_registry, so
+    # that is the binding to patch.
     import app.rag.embedding_registry as reg
     monkeypatch.setattr(
         reg, "resolve_embedding",
