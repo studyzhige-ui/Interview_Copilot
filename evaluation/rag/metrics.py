@@ -35,9 +35,15 @@ def content_coverage(expected_content: str, chunk_text: str) -> float:
     """Fraction of ``expected_content``'s character 3-grams present in
     ``chunk_text`` (normalized). 1.0 = fully covered, 0.0 = none / empty
     expectation. Symmetric to the §3.3.1 ``content_coverage`` contract."""
-    expected = _char_ngrams(expected_content)
-    if not expected:
+    norm_expected = _normalize(expected_content)
+    if not norm_expected:
         return 0.0
+    # Too short for 3-grams (the n-gram set would be the whole string, which a
+    # tokenized chunk never contains) → fall back to substring containment so a
+    # tiny expected_content isn't spuriously scored 0.
+    if len(norm_expected) <= _NGRAM_N:
+        return 1.0 if norm_expected in _normalize(chunk_text) else 0.0
+    expected = _char_ngrams(expected_content)
     actual = _char_ngrams(chunk_text)
     return len(expected & actual) / len(expected)
 
@@ -110,6 +116,13 @@ def gold_chunk_best_rank(scores: Sequence[tuple[bool, float]]) -> Optional[int]:
         if strong:
             return idx + 1
     return None
+
+
+def gold_chunk_found(scores: Sequence[tuple[bool, float]]) -> bool:
+    """Whether any STRONG gold chunk appears anywhere in the ranking (plan
+    §3.3.1 ``gold_chunk_found``) — the boolean companion to
+    ``gold_chunk_best_rank``."""
+    return gold_chunk_best_rank(scores) is not None
 
 
 def rerank_survival_rate(
@@ -195,7 +208,7 @@ def percentile(values: Sequence[float], p: float) -> Optional[float]:
 __all__ = [
     "content_coverage", "relevance_scores",
     "hit_at_k", "recall_at_k", "precision_at_k", "mrr_at_k", "ndcg_at_k",
-    "gold_chunk_best_rank", "rerank_survival_rate",
+    "gold_chunk_best_rank", "gold_chunk_found", "rerank_survival_rate",
     "contains_all_terms", "answer_completeness",
     "mean", "rate", "percentile",
 ]

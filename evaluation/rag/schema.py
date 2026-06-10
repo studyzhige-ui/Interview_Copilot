@@ -159,6 +159,10 @@ class GenerationGold:
         _require(row, ("id", "query", "query_type", "expected_chunk_ids",
                        "expected_content", "reference_answer_points"), ctx)
         _check_query_type(row, ctx)
+        # End-to-end gold must name >=1 chunk to expect recalled + cited (symmetric
+        # with RetrievalGold — _require's truthiness check lets [] through).
+        if not row.get("expected_chunk_ids"):
+            raise DatasetError(f"{ctx} (id={row.get('id')!r}): expected_chunk_ids needs >=1 id")
         return cls(
             id=row["id"], query=row["query"], query_type=row["query_type"],
             expected_chunk_ids=list(row["expected_chunk_ids"]),
@@ -223,14 +227,13 @@ def base_detail(*, sample_id: str, query_type: str, status: str, trace_id: str,
                 latency_ms: float, **extra: Any) -> dict[str, Any]:
     """Build a runner detail row carrying the §3.2 required fields plus ``extra``.
     Every runner's detail JSONL row must start from this so cross-runner trace
-    correlation + grouping work uniformly."""
-    row = {
-        "sample_id": sample_id,
-        "query_type": query_type,
-        "status": status,
-        "trace_id": trace_id,
-        "latency_ms": latency_ms,
+    correlation + grouping work uniformly. Keyed off DETAIL_REQUIRED_FIELDS so the
+    contract has a single source of truth (no drift between the constant and here)."""
+    values = {
+        "sample_id": sample_id, "query_type": query_type, "status": status,
+        "trace_id": trace_id, "latency_ms": latency_ms,
     }
+    row = {field_name: values[field_name] for field_name in DETAIL_REQUIRED_FIELDS}
     row.update(extra)
     return row
 

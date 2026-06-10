@@ -102,6 +102,17 @@ def test_generation_gold_valid(tmp_path):
     assert g.expected_citation_required is True
 
 
+def test_generation_gold_requires_chunk_ids(tmp_path):
+    """Empty expected_chunk_ids is rejected (symmetric with RetrievalGold)."""
+    p = _write(tmp_path, "gen.jsonl", [{
+        "id": "g", "query": "q", "query_type": "single_query",
+        "expected_chunk_ids": [], "expected_content": "x",
+        "reference_answer_points": ["p"],
+    }])
+    with pytest.raises(s.DatasetError):
+        s.load_dataset("generation", p)
+
+
 def test_bad_case_valid_and_enum_checks(tmp_path):
     good = _write(tmp_path, "bad.jsonl", [{
         "id": "bad_001", "query": "q", "query_type": "single_query",

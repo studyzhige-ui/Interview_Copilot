@@ -60,8 +60,10 @@ Common flags (planned): `--limit N`, `--sample N`, `--seed N`, `--with-ragas`,
 
 - **Done:** package scaffold; dataset + detail/trace `schema.py` (reusing the
   single `empty_reason` enum from `app.rag.retrieval_state`); pure `metrics.py`
-  for all six metric families (retrieval / planner / generation / citation /
-  ingestion / trace aggregation); unit tests for the pure core.
+  for retrieval (§3.3.1), planner (§3.3.2) and generation (§3.3.3) metrics, plus
+  the generic `mean`/`rate`/`percentile` aggregators — the building blocks the
+  citation/ingestion/trace rollups (§3.3.4–§3.3.6) will compose once their
+  runners produce the per-sample flags. Unit tests for the pure core.
 - **Remaining (need the live stack / real gold data, so they're follow-ups):**
   the five runners + `cli.py` + `report.py` + bad-case backflow; and building the
   real gold datasets, which requires importing fixture docs into Postgres + Milvus

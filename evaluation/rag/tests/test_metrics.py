@@ -85,6 +85,17 @@ def test_gold_chunk_best_rank_strong_only():
     assert m.gold_chunk_best_rank([(False, 0.9)]) is None
 
 
+def test_gold_chunk_found():
+    assert m.gold_chunk_found([(False, 1.0), (True, 1.0)]) is True
+    assert m.gold_chunk_found([(False, 0.9)]) is False  # coverage-only, no strong
+
+
+def test_content_coverage_short_expected_uses_substring():
+    # <=3-char expected can't 3-gram; substring fallback avoids a spurious 0.
+    assert m.content_coverage("AI", "what is AI really") == 1.0
+    assert m.content_coverage("AI", "no match here") == 0.0
+
+
 def test_rerank_survival_rate():
     rin = [(True, 1.0), (False, 0.0), (True, 1.0)]   # 2 relevant in
     rout = [(True, 1.0), (False, 0.0)]                # 1 relevant out
