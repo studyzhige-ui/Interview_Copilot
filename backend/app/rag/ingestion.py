@@ -91,13 +91,17 @@ def _write_to_milvus_hybrid(
 _MD_HEADER_RE = re.compile(r"^#{1,6}\s+(.+)")
 
 
-def _heading_annotations(node) -> tuple[list[str] | None, str | None]:
-    """Best-effort heading provenance for a chunk (plan §4.4.2).
+def _heading_annotations(node, splitter_id: str) -> tuple[list[str] | None, str | None]:
+    """Best-effort heading provenance for a MARKDOWN chunk (plan §4.4.2).
 
     ``MarkdownNodeParser`` stamps ``header_path`` like ``/Cache/Redis/`` (the
     ANCESTOR heading chain). We parse that into ``heading_path`` and read the
-    node's own leading ``# `` line as ``section_title``. Non-markdown nodes
-    have neither → both None (best-effort, never guesses)."""
+    node's own leading ``# `` line as ``section_title``. Gated to the markdown
+    splitter: for any other branch (code/html/json/table/sentence) we return
+    ``(None, None)`` — otherwise a ``# `` Python/shell comment on a code chunk's
+    first line would be mistaken for a heading. Best-effort, never guesses."""
+    if splitter_id != "markdown":
+        return None, None
     meta = getattr(node, "metadata", None) or {}
     heading_path = None
     raw = meta.get("header_path")
@@ -226,6 +230,12 @@ def get_optimal_nodes(document: Document) -> list:
     # document_chunks 列与 metadata_json 持久化。
     user_id = document.metadata.get("user_id", "")
     cleaning_profile = document.metadata.get("cleaning_profile")
+    # splitter_profile records the SentenceSplitter sizing regime — the secondary
+    # oversize gate (CHUNK_SIZE*2) + fallback re-split that EVERY branch passes
+    # through, stamped uniformly. The primary splitter's true identity is in
+    # splitter_id; for the code (chunk_lines) and table (char_budget) branches
+    # these chunk_size/overlap values describe the fallback regime, not the
+    # primary boundaries.
     splitter_profile = {
         "chunk_size": CHUNK_SIZE,
         "chunk_overlap": CHUNK_OVERLAP,
@@ -241,7 +251,7 @@ def get_optimal_nodes(document: Document) -> list:
         node.metadata["splitter_profile"] = splitter_profile
         if cleaning_profile is not None:
             node.metadata["cleaning_profile"] = cleaning_profile
-        heading_path, section_title = _heading_annotations(node)
+        heading_path, section_title = _heading_annotations(node, splitter_id)
         if heading_path:
             node.metadata["heading_path"] = heading_path
         if section_title:

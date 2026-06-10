@@ -100,6 +100,8 @@ def test_c_file_uses_cpp_grammar(monkeypatch):
 
 
 def test_markdown_heading_path_and_section_title(monkeypatch):
+    # Depends on the MarkdownNodeParser.header_path contract (ancestor chain,
+    # "/"-joined) — pinned to llama-index-core==0.14.19.
     monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
 
     md = "# Cache\n## Redis\n### Avalanche\n热点 key 失效后大量请求打到数据库。\n"
@@ -142,6 +144,55 @@ def test_splitter_profile_stamped(monkeypatch):
         assert sp["chunk_size"] == 512
         assert sp["chunk_overlap"] == 64
         assert sp["tokenizer"] == "embedding"
+
+
+def test_splitter_profile_stamped_on_table_and_code_paths(monkeypatch):
+    """splitter_profile records the secondary SentenceSplitter regime and is
+    stamped UNIFORMLY on every branch (table/code included) — even though those
+    branches' primary splitter uses different params. splitter_id carries the
+    true primary identity; this pins that documented behaviour."""
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+    expected = {"chunk_size": 512, "chunk_overlap": 64, "tokenizer": "embedding"}
+
+    csv = Document(
+        text="name,score\nalice,90\nbob,80",
+        metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "d.csv"},
+    )
+    csv_nodes = ingestion.get_optimal_nodes(csv)
+    assert csv_nodes
+    for n in csv_nodes:
+        assert n.metadata["splitter_id"] == "table"
+        assert n.metadata["splitter_profile"] == expected
+
+    code = Document(
+        text="def f():\n    return 1\n",
+        metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "m.py"},
+    )
+    code_nodes = ingestion.get_optimal_nodes(code)
+    assert code_nodes
+    for n in code_nodes:
+        assert n.metadata["splitter_id"] == "code"
+        assert n.metadata["splitter_profile"] == expected
+
+
+def test_non_markdown_hash_first_line_is_not_a_section_title(monkeypatch):
+    """A non-markdown chunk whose first line starts with '# ' (e.g. a Python or
+    shell comment) must NOT be mistaken for a heading. Heading provenance is
+    gated to the markdown splitter, so 'never guesses' holds for code/text."""
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    # No file_name → sentence splitter; first line is a hash-comment the bare
+    # regex would otherwise capture as section_title.
+    doc = Document(
+        text="# TODO refactor this\nsome following prose line",
+        metadata={"source_kind": "user_upload", "user_id": 1},
+    )
+    nodes = ingestion.get_optimal_nodes(doc)
+    assert nodes
+    for n in nodes:
+        assert n.metadata["splitter_id"] == "sentence"
+        assert "section_title" not in n.metadata
+        assert "heading_path" not in n.metadata
 
 
 def test_token_count_stamped_per_node_on_multi_node_doc(monkeypatch):
