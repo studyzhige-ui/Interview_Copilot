@@ -32,20 +32,16 @@ class EmptyContentError(ValueError):
 
 @dataclass
 class CleaningProfile:
+    """Lightweight diagnostic from one S0 pass — consumed for logging. (Not
+    persisted: the metadata_json restructure that lands per-chunk diagnostics
+    is B4; until then the only observable output is the cleaned text + logged
+    warnings.)"""
+
     char_in: int
     char_out: int
     removed_control_chars: int = 0
     replacement_char_count: int = 0
     warnings: list[str] = field(default_factory=list)
-
-    def as_dict(self) -> dict:
-        return {
-            "char_in": self.char_in,
-            "char_out": self.char_out,
-            "removed_control_chars": self.removed_control_chars,
-            "replacement_char_count": self.replacement_char_count,
-            "warnings": self.warnings,
-        }
 
 
 def _strip_control_chars(text: str) -> tuple[str, int]:

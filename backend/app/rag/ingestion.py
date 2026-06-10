@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 
 def _clean_documents(documents: list) -> list:
     """Apply S0 cleaning (plan §4.2) to each parsed document, keeping only
-    those with usable text. The cleaning profile is stamped onto metadata so
-    the chunking stage can persist it as diagnostic ``metadata_json``. Raises
+    those with usable text. Quality warnings are logged (not persisted —
+    per-chunk diagnostic metadata_json lands in B4). Raises
     :class:`EmptyContentError` when no usable text remains anywhere."""
     if not settings.RAG_CLEANING_ENABLED:
         return documents
@@ -28,16 +28,15 @@ def _clean_documents(documents: list) -> list:
         if not cleaned:
             logger.warning("S0 cleaning emptied a document segment; dropping it.")
             continue
+        if profile.warnings:
+            logger.warning("S0 cleaning warnings: %s", profile.warnings)
         doc.set_content(cleaned)
-        doc.metadata["cleaning_profile"] = profile.as_dict()
         kept.append(doc)
     if not kept:
         raise EmptyContentError(
             "文档清洗后没有可用文本，请确认文件内容非空且为可读文本。"
         )
     return kept
-
-
 
 
 def _node_text(node) -> str:
@@ -328,8 +327,9 @@ async def ingest_text(
             cleaned, profile = clean_text(text)
             if not cleaned:
                 raise EmptyContentError("内容清洗后为空，无法入库。")
+            if profile.warnings:
+                logger.warning("S0 cleaning warnings: %s", profile.warnings)
             text = cleaned
-            final_metadata["cleaning_profile"] = profile.as_dict()
 
         doc = Document(text=text, metadata=final_metadata)
         all_nodes = get_optimal_nodes(doc)

@@ -220,22 +220,11 @@ def process_document_ingestion(self, document_id: str):
 
         # Defensive format re-check (ingestion §4.1.2) — the API already
         # gated this, but a stale dispatch or a direct DB insert must not
-        # reach the parser with an unsupported format. A format error is
-        # permanent, so mark failed and return WITHOUT raising (no retry).
-        try:
-            validate_knowledge_document_format(
-                document.upload.original_filename, document.upload.content_type,
-            )
-        except UnsupportedDocumentFormat as exc:
-            document.status = "failed"
-            document.error_message = str(exc)[:500]
-            db.add(document)
-            db.commit()
-            logger.warning(
-                "[Task %s] Rejected unsupported knowledge format: %s",
-                self.request.id, exc,
-            )
-            return {"status": "failed", "error": str(exc), "document_id": document_id}
+        # reach the parser with an unsupported format. Raises
+        # UnsupportedDocumentFormat (a permanent error) handled below.
+        validate_knowledge_document_format(
+            document.upload.original_filename, document.upload.content_type,
+        )
 
         if not document.storage_uri.startswith("s3://"):
             raise ValueError("Knowledge ingestion only accepts owned S3 uploads")
@@ -288,14 +277,15 @@ def process_document_ingestion(self, document_id: str):
         logger.warning("[Task %s] Document was empty or unparseable.", self.request.id)
         return {"status": "failed", "error": "Empty or unparseable document"}
 
-    except EmptyContentError as exc:
-        # Permanent content error (S0 cleaning left no usable text) — friendly
-        # message, no retry (mirrors the format-rejection handling above).
+    except (UnsupportedDocumentFormat, EmptyContentError) as exc:
+        # Permanent content/format error (unsupported format or S0 cleaning
+        # left no usable text) — friendly Chinese message, NO retry. document
+        # is guaranteed bound here (raised after the None check above).
         document.status = "failed"
         document.error_message = str(exc)[:500]
         db.add(document)
         db.commit()
-        logger.warning("[Task %s] Empty after S0 cleaning: %s", self.request.id, exc)
+        logger.warning("[Task %s] Permanent ingest rejection: %s", self.request.id, exc)
         return {"status": "failed", "error": str(exc), "document_id": document_id}
 
     except Exception as exc:

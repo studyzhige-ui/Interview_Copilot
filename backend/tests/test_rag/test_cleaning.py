@@ -47,6 +47,23 @@ def test_nfc_normalization_is_applied():
     assert len(out) == 1
 
 
+def test_uses_nfc_not_aggressive_nfkc():
+    """Must be SAFE NFC, not NFKC — full-width / ligatures / superscripts that
+    NFKC would fold must survive unchanged (plan §4.2 '默认只做安全规范化')."""
+    for s in ("Ａ", "ﬁ", "²", "Ⅳ", "①"):
+        out, _ = clean_text(s)
+        assert out == s, f"{s!r} was folded — looks like NFKC, not NFC"
+
+
+def test_preserves_format_chars_emoji_zwj_and_rtl():
+    """Cf format chars (emoji ZWJ, RTL marks) are NOT control chars and must
+    be kept — removing them would corrupt emoji sequences / bidi text."""
+    family = "👨‍👩‍👧"  # ZWJ-joined family emoji
+    rtl = "abc‏دef"  # RLM
+    assert clean_text(family)[0] == family
+    assert clean_text(rtl)[0] == rtl
+
+
 def test_mojibake_warning_on_high_replacement_ratio():
     out, profile = clean_text("��������x")
     assert profile.replacement_char_count == 8
@@ -88,7 +105,7 @@ class _FakeDoc:
         self.text = value
 
 
-def test_clean_documents_drops_empty_segments_and_stamps_profile():
+def test_clean_documents_drops_empty_segments():
     from app.rag import ingestion
 
     docs = [_FakeDoc("  real content  "), _FakeDoc("   \x00  ")]
@@ -96,7 +113,9 @@ def test_clean_documents_drops_empty_segments_and_stamps_profile():
 
     assert len(kept) == 1
     assert kept[0].text == "real content"
-    assert "cleaning_profile" in kept[0].metadata
+    # Method A: the cleaning profile is logged, NOT stamped onto metadata
+    # (no DB landing path yet — that's B4's metadata_json restructure).
+    assert "cleaning_profile" not in kept[0].metadata
 
 
 def test_clean_documents_raises_when_all_empty():
@@ -115,3 +134,12 @@ def test_clean_documents_noop_when_disabled(monkeypatch):
     # Untouched: no cleaning, no drop, no profile stamp.
     assert kept[0].text == "   raw   "
     assert "cleaning_profile" not in kept[0].metadata
+
+
+async def test_ingest_text_raises_empty_content_on_whitespace():
+    """The text ingest path (improved_qa / manual_text) enforces the same
+    empty protection — whitespace-only content raises before any DB/Milvus."""
+    from app.rag.ingestion import ingest_text
+
+    with pytest.raises(EmptyContentError):
+        await ingest_text("   \n\t  ", source_kind="manual_text", user_id=1)
