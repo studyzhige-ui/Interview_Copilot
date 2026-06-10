@@ -69,6 +69,14 @@ class DocumentChunk(Base):
     text = Column(Text, nullable=False)
     # Content hash for idempotency / change detection on re-ingest.
     text_hash = Column(String, nullable=True)
+    # Best-effort page provenance from the parser page_map (Phase B). NULL for
+    # page-less formats (md / html / txt) and until the parser supplies a map.
+    page_start = Column(Integer, nullable=True)
+    page_end = Column(Integer, nullable=True)
+    # Real token count via the EMBEDDING tokenizer — chunk-size / embedding
+    # observability and oversize detection, NOT the cl100k LLM-prompt budget.
+    # NULL until the chunking stage computes it.
+    token_count = Column(Integer, nullable=True)
     metadata_json = Column(Text, nullable=True)
     # Index lifecycle: pending -> indexed (Milvus written) / failed / deleted.
     index_status = Column(String, nullable=False, default="pending")

@@ -52,6 +52,10 @@ def write_chunks(
     for idx, node in enumerate(nodes):
         text = _node_text(node)
         node_id = getattr(node, "node_id", None) or getattr(node, "id_", None)
+        # Best-effort provenance the chunking/parser stages stamp onto the
+        # node (Phase B). Absent today → NULL columns; filled once the
+        # parser page_map + embedding-tokenizer count land.
+        node_meta = getattr(node, "metadata", None) or {}
         db.add(
             DocumentChunk(
                 document_id=document_id,
@@ -61,6 +65,9 @@ def write_chunks(
                 chunk_index=idx,
                 text=text,
                 text_hash=hashlib.sha256(text.encode("utf-8")).hexdigest() if text else None,
+                page_start=node_meta.get("page_start"),
+                page_end=node_meta.get("page_end"),
+                token_count=node_meta.get("token_count"),
                 metadata_json=meta_str,
                 # Callers write Milvus before persisting chunks, so the index is
                 # already live by the time the fact rows land.

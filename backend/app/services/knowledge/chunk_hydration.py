@@ -85,13 +85,12 @@ def hydrate_chunks(db: Session, node_ids: list[str]) -> list[dict[str, Any]]:
             "size_bytes": asset.size_bytes if asset else None,
             "category": doc.category,
             "source_kind": chunk.source_kind,
-            # Page span / token_count are doc-contract source fields whose
-            # columns land with the Phase-B ingestion migration. Explicit None
-            # (not getattr) so a future column-name mismatch fails loud when
-            # Phase B wires the real values in.
-            "page_start": None,
-            "page_end": None,
-            "token_count": None,
+            # Page span / token_count: best-effort provenance columns (Phase B
+            # migration 0041). NULL for page-less formats / not-yet-recomputed
+            # chunks.
+            "page_start": chunk.page_start,
+            "page_end": chunk.page_end,
+            "token_count": chunk.token_count,
             "chunk_index": chunk.chunk_index,
             "section_title": meta.get("section_title"),
             "heading_path": meta.get("heading_path"),

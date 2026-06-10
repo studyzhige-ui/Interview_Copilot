@@ -80,3 +80,26 @@ def test_write_chunks_sets_indexed_status(db_session):
     assert len(rows) == 2
     assert all(r.index_status == "indexed" for r in rows)
     assert all(r.text_hash for r in rows)
+
+
+def test_write_chunks_persists_provenance_from_node_metadata(db_session):
+    """page_start/page_end/token_count are lifted off each node's metadata
+    (Phase B); a node without them leaves the columns NULL."""
+    from app.services.knowledge.document_chunk_service import write_chunks
+
+    nodes = [
+        SimpleNamespace(text="with prov", id_="p1", metadata={
+            "page_start": 2, "page_end": 3, "token_count": 96,
+        }),
+        SimpleNamespace(text="no prov", id_="p2"),  # no metadata attr
+    ]
+    write_chunks(
+        db_session, nodes=nodes, user_id=1, source_kind="user_upload",
+        document_id="kdoc_prov",
+    )
+    rows = {
+        r.node_id: r for r in db_session.query(DocumentChunk)
+        .filter(DocumentChunk.document_id == "kdoc_prov").all()
+    }
+    assert (rows["p1"].page_start, rows["p1"].page_end, rows["p1"].token_count) == (2, 3, 96)
+    assert (rows["p2"].page_start, rows["p2"].page_end, rows["p2"].token_count) == (None, None, None)
