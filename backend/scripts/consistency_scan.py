@@ -101,36 +101,123 @@ def scan_orphan_chunks(db: Session) -> list[Finding]:
         note="document_chunks.document_id -> deleted knowledge_documents",
     ))
 
-    # Best-effort: Postgres chunk count vs Milvus entity count. A positive drift
-    # (Milvus > Postgres) suggests deleted-but-still-indexed vectors.
-    findings.append(_milvus_drift(db))
+    # node_id-level Postgres <-> Milvus consistency (plan §4.6.3) — replaces the
+    # old count-only drift so the two scan semantics don't coexist (INGEST-CLEANUP).
+    findings.extend(_milvus_node_consistency(db))
     return findings
 
 
-def _milvus_drift(db: Session) -> Finding:
+def _diff_pg_milvus(
+    pg_indexed: dict[str, dict], milvus_rows: dict[str, dict], live_doc_ids: set,
+) -> tuple[list[str], list[str], list[str]]:
+    """Pure set/field diff (no I/O, so it's fully unit-testable).
+
+    ``pg_indexed`` = the live *indexed* chunks that SHOULD be in Milvus, and
+    ``milvus_rows`` = what IS in Milvus, both keyed by node_id with
+    ``{document_id, user_id, source_kind}`` values. Returns
+    ``(missing_in_milvus, stale_in_milvus, metadata_mismatch)`` node-id lists:
+      * missing  — a live indexed chunk has no Milvus row.
+      * stale    — a Milvus row whose document_id is no longer a live document.
+      * mismatch — a node_id in both whose scope scalars disagree.
+    A ``pending`` chunk (in the two-phase window / queued upsert) is not counted
+    missing: only ``indexed`` chunks are expected in Milvus; and its Milvus row,
+    if any, points at a live document so it isn't stale either.
+    """
+    pg_ids, mv_ids = set(pg_indexed), set(milvus_rows)
+    missing = sorted(pg_ids - mv_ids)
+    stale = sorted(mid for mid, r in milvus_rows.items() if r.get("document_id") not in live_doc_ids)
+    mismatch = sorted(
+        nid for nid in (pg_ids & mv_ids)
+        if any(str(pg_indexed[nid].get(k)) != str(milvus_rows[nid].get(k))
+               for k in ("document_id", "user_id", "source_kind"))
+    )
+    return missing, stale, mismatch
+
+
+def _scan_milvus_rows(client) -> dict[str, dict]:
+    """All knowledge Milvus rows keyed by id: ``{document_id, user_id, source_kind}``.
+    Paginates so a large collection is fully covered (not a sampled subset)."""
+    from app.core.config import settings
+
+    out: dict[str, dict] = {}
+    iterator = client.query_iterator(
+        collection_name=settings.MILVUS_COLLECTION,
+        batch_size=1000,
+        filter="user_id >= 0",  # matches every row (user_id is the int pk scope)
+        output_fields=["id", "document_id", "user_id", "source_kind"],
+    )
     try:
-        from pymilvus import Collection, connections, utility
+        while True:
+            batch = iterator.next()
+            if not batch:
+                break
+            for r in batch:
+                out[str(r.get("id"))] = r
+    finally:
+        iterator.close()
+    return out
 
-        from app.core.config import settings
 
-        pg_count = _rows(db, "SELECT COUNT(*) FROM document_chunks")[0][0]
-        connections.connect(alias="scan", uri=settings.MILVUS_URI)
-        try:
-            if not utility.has_collection(settings.MILVUS_COLLECTION, using="scan"):
-                return Finding("milvus_chunk_drift", 0, note="knowledge collection not created yet")
-            col = Collection(settings.MILVUS_COLLECTION, using="scan")
-            col.flush()
-            milvus_count = col.num_entities
-        finally:
-            connections.disconnect("scan")
-        drift = milvus_count - pg_count
+def _collection_dim_finding(client) -> Finding:
+    """dimension_mismatch: an existing collection's dense dim vs EMBEDDING_DIM."""
+    from app.core.config import settings
+
+    desc = client.describe_collection(settings.MILVUS_COLLECTION)
+    dim = None
+    for f in (desc.get("fields", []) if isinstance(desc, dict) else []):
+        if f.get("name") == "dense":
+            dim = (f.get("params") or {}).get("dim")
+            break
+    if dim is not None and int(dim) != settings.EMBEDDING_DIM:
         return Finding(
-            "milvus_chunk_drift", max(0, drift),
-            note=f"milvus={milvus_count} postgres={pg_count} "
-                 f"(positive drift -> likely orphan vectors)",
+            "dimension_mismatch", 1,
+            note=f"milvus dim={int(dim)} != EMBEDDING_DIM={settings.EMBEDDING_DIM} — rebuild required",
         )
+    return Finding("dimension_mismatch", 0, note=f"dim matches EMBEDDING_DIM={settings.EMBEDDING_DIM}")
+
+
+def _milvus_node_consistency(db: Session) -> list[Finding]:
+    """node_id-level Postgres<->Milvus checks: missing_in_milvus / stale_in_milvus
+    / metadata_mismatch / dimension_mismatch (plan §4.6.3). Baseline is the live
+    *indexed* chunks under live documents — what Milvus should mirror."""
+    from app.core.config import settings
+
+    pg_rows = _rows(db, """
+        SELECT dc.node_id, dc.document_id, dc.user_id, dc.source_kind
+        FROM document_chunks dc
+        JOIN knowledge_documents kd ON dc.document_id = kd.id
+        WHERE dc.index_status = 'indexed' AND dc.deleted_at IS NULL
+          AND kd.deleted_at IS NULL AND dc.node_id IS NOT NULL
+    """)
+    pg_indexed = {
+        str(r[0]): {"document_id": r[1], "user_id": r[2], "source_kind": r[3]} for r in pg_rows
+    }
+    live_doc_ids = {
+        r[0] for r in _rows(db, "SELECT id FROM knowledge_documents WHERE deleted_at IS NULL")
+    }
+
+    names = ("missing_in_milvus", "stale_in_milvus", "metadata_mismatch", "dimension_mismatch")
+    try:
+        from app.rag import milvus_hybrid
+
+        client = milvus_hybrid._get_client()
+        if not client.has_collection(settings.MILVUS_COLLECTION):
+            return [Finding(n, 0, note="knowledge collection not created yet") for n in names]
+        dim_finding = _collection_dim_finding(client)
+        milvus_rows = _scan_milvus_rows(client)
     except Exception as exc:  # noqa: BLE001 — Milvus optional for the scan
-        return Finding("milvus_chunk_drift", 0, note=f"skipped (Milvus unreachable: {exc})")
+        return [Finding(n, 0, note=f"skipped (Milvus unreachable: {exc})") for n in names]
+
+    missing, stale, mismatch = _diff_pg_milvus(pg_indexed, milvus_rows, live_doc_ids)
+    return [
+        Finding("missing_in_milvus", len(missing), missing[:_SAMPLE],
+                note="live indexed chunk has no Milvus row"),
+        Finding("stale_in_milvus", len(stale), stale[:_SAMPLE],
+                note="Milvus row -> non-live document (orphan vector)"),
+        Finding("metadata_mismatch", len(mismatch), mismatch[:_SAMPLE],
+                note="Milvus scope scalar != Postgres chunk"),
+        dim_finding,
+    ]
 
 
 # ── 3. Subject-less conversations ────────────────────────────────────────
