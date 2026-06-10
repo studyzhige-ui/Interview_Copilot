@@ -15,7 +15,7 @@ import time
 
 from app.core.config import settings
 
-from .base import ParseResult
+from .base import DocumentParser, ParseResult
 from .parsers import (
     DoclingParser,
     DocxParser,
@@ -47,7 +47,7 @@ _LIGHTWEIGHT: dict[str, type] = {
 }
 
 
-def _lightweight_for(ext: str):
+def _lightweight_for(ext: str) -> DocumentParser | None:
     cls = _LIGHTWEIGHT.get(ext)
     return cls() if cls is not None else None
 

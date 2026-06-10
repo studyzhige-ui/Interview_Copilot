@@ -185,7 +185,8 @@ class SimpleReaderParser:
 
 
 class DocxParser:
-    """Lightweight DOCX → paragraph text (python-docx; no styles/tables)."""
+    """Lightweight DOCX → paragraph text (python-docx). Body paragraphs only —
+    no styles, tables, headers, or footers (the first-class parsers cover those)."""
 
     id = "python_docx"
     tier = TIER_LIGHTWEIGHT
@@ -241,13 +242,12 @@ class XlsxParser:
 
         workbook = load_workbook(file_path, read_only=True, data_only=True)
         try:
-            blocks: list[str] = []
+            lines: list[str] = []
             for sheet in workbook.worksheets:
                 rows = list(sheet.iter_rows(values_only=True))
                 if not rows:
                     continue
                 header = [str(c) if c is not None else "" for c in rows[0]]
-                lines = []
                 for row in rows[1:]:
                     cells = [
                         f"{header[i]}: {value}"
@@ -256,16 +256,19 @@ class XlsxParser:
                     ]
                     if cells:
                         lines.append(" | ".join(cells))
-                if lines:
-                    blocks.append(f"[{sheet.title}]\n" + "\n".join(lines))
         finally:
             workbook.close()
-        return ParseResult(markdown="\n\n".join(blocks), parser_id=self.id, is_markdown=False)
+        # No sheet marker: every row already self-describes (header: value), so
+        # rows from different sheets stay correct without a "[Sheet]" line that
+        # the table splitter would mis-promote to a repeated header.
+        return ParseResult(markdown="\n".join(lines), parser_id=self.id, is_markdown=False)
 
 
 class HtmlParser:
-    """Lightweight HTML → main text (BeautifulSoup), dropping script/style/nav
-    noise (plan §4.1.3)."""
+    """Lightweight HTML → Markdown (BeautifulSoup drops script/style/nav noise,
+    then markdownify keeps heading/list/table structure). Emits Markdown
+    (``is_markdown=True``) so the chunk stage uses MarkdownNodeParser — feeding
+    HTMLNodeParser tag-stripped text yields zero nodes (silent content loss)."""
 
     id = "beautifulsoup"
     tier = TIER_LIGHTWEIGHT
@@ -275,13 +278,15 @@ class HtmlParser:
 
     def parse(self, file_path: str) -> ParseResult:
         from bs4 import BeautifulSoup
+        from markdownify import markdownify
 
         soup = BeautifulSoup(_read_text(file_path), "html.parser")
-        for tag in soup(["script", "style", "nav", "header", "footer"]):
+        # Drop only navigation/script/style noise (plan §4.1.3) — not <header>/
+        # <footer>, which semantic pages often use for real body content.
+        for tag in soup(["script", "style", "nav"]):
             tag.decompose()
-        text = soup.get_text(separator="\n")
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-        return ParseResult(markdown="\n".join(lines), parser_id=self.id, is_markdown=False)
+        markdown = markdownify(str(soup)).strip()
+        return ParseResult(markdown=markdown, parser_id=self.id, is_markdown=True)
 
 
 class TextParser:

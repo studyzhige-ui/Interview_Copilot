@@ -254,6 +254,15 @@ def test_docx_parser_extracts_paragraphs(tmp_path):
     assert result.parser_id == "python_docx" and result.is_markdown is False
 
 
+def test_docx_parser_raises_on_corrupt_file(tmp_path):
+    """A non-docx file makes DocxParser raise, so parse_document's except catches
+    it and tries the next candidate (lightweight failure degrades gracefully)."""
+    path = tmp_path / "fake.docx"
+    path.write_text("this is not a docx", encoding="utf-8")
+    with pytest.raises(Exception):
+        parsers.DocxParser().parse(str(path))
+
+
 def test_pptx_parser_extracts_slide_text(tmp_path):
     from pptx import Presentation
     from pptx.util import Inches
@@ -281,8 +290,17 @@ def test_xlsx_parser_self_describing_rows(tmp_path):
 
     result = parsers.XlsxParser().parse(str(path))
     assert "name: alice" in result.markdown and "score: 90" in result.markdown
-    assert "[Data]" in result.markdown
     assert result.parser_id == "openpyxl"
+
+
+def test_xlsx_parser_empty_workbook_yields_empty(tmp_path):
+    """An empty / header-only workbook yields no text → parse_document moves on."""
+    from openpyxl import Workbook
+    path = tmp_path / "empty.xlsx"
+    wb = Workbook()
+    wb.active.append(["just", "headers"])  # header row only, no data rows
+    wb.save(str(path))
+    assert parsers.XlsxParser().parse(str(path)).markdown == ""
 
 
 def test_xlsx_parser_multi_sheet_keeps_per_sheet_headers(tmp_path):
@@ -301,22 +319,48 @@ def test_xlsx_parser_multi_sheet_keeps_per_sheet_headers(tmp_path):
     wb.save(str(path))
 
     result = parsers.XlsxParser().parse(str(path))
-    assert "alpha: 1" in result.markdown   # S1 uses its own header
-    assert "beta: 2" in result.markdown    # S2 uses ITS own header, not S1's
+    assert "alpha: 1" in result.markdown   # S1 row self-describes with S1's header
+    assert "beta: 2" in result.markdown    # S2 row self-describes with S2's header
 
 
-def test_html_parser_drops_script_style_nav(tmp_path):
+def test_html_parser_to_markdown_drops_noise(tmp_path):
     path = tmp_path / "h.html"
     path.write_text(
         "<html><head><style>.x{color:red}</style></head>"
-        "<body><nav>menu links</nav><p>Real content</p>"
+        "<body><nav>menu links</nav><h1>Heading</h1><p>Real content</p>"
         "<script>var a=1;</script></body></html>",
         encoding="utf-8",
     )
     result = parsers.HtmlParser().parse(str(path))
-    assert "Real content" in result.markdown
+    assert result.is_markdown is True   # Markdown -> MarkdownNodeParser (not HTMLNodeParser)
+    assert "Real content" in result.markdown and "Heading" in result.markdown
     assert "menu links" not in result.markdown
     assert "var a=1" not in result.markdown and "color:red" not in result.markdown
+
+
+def test_html_parse_to_chunks_keeps_content(tmp_path, monkeypatch):
+    """E2E seam: HtmlParser output must chunk to >=1 node with the content
+    intact — guards the HTMLNodeParser-on-tag-stripped-text -> 0 nodes silent
+    data loss (Docling-unavailable HTML fallback path)."""
+    from llama_index.core import Document
+    from app.rag import ingestion
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    path = tmp_path / "p.html"
+    path.write_text(
+        "<html><body><h1>Cache</h1><p>Redis avalanche detail.</p></body></html>",
+        encoding="utf-8",
+    )
+    result = parsers.HtmlParser().parse(path.__fspath__())
+    doc = Document(text=result.markdown, metadata={
+        "source_kind": "user_upload", "user_id": 1, "file_name": "p.html",
+        "is_markdown_parsed": result.is_markdown,
+    })
+    nodes = ingestion.get_optimal_nodes(doc)
+
+    assert nodes, "HTML chunked to zero nodes — content lost"
+    joined = " ".join(n.get_content() for n in nodes)
+    assert "Redis avalanche detail" in joined
 
 
 def test_text_parser_reads_with_encoding_detection(tmp_path):
