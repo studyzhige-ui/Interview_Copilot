@@ -141,7 +141,7 @@ class Settings(BaseSettings):
     # the per-format lightweight parsers. Default local-first so a fresh deploy
     # works without a cloud key.
     PARSER_PROVIDER: str = "docling"
-    # On-demand OCR for the Docling parser (plan §4.1.3/§4.1.5): scanned PDFs
+    # On-demand OCR for the Docling parser (plan §4.1.3/§4.1.4): scanned PDFs
     # (pages with no text layer) and image documents. Effective only when an OCR
     # engine (rapidocr-onnxruntime) is importable — if it isn't, Docling is built
     # with do_ocr=False so text PDFs still parse instead of failing on a missing

@@ -18,6 +18,12 @@ from typing import Protocol, runtime_checkable
 TIER_FIRST_CLASS = "first_class"
 TIER_LIGHTWEIGHT = "lightweight"
 
+# Image documents are first-class-OCR only: the §4.1.3 matrix gives them NO
+# lightweight fallback. Canonical home for the set so the parsers (which claim
+# them) and the registry (which must NOT append the SimpleReader text catch-all
+# for them — a raw-bytes read of a .tiff/.bmp yields binary garbage) agree.
+IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"})
+
 
 @dataclass(frozen=True)
 class PageSpan:

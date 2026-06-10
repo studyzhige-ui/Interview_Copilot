@@ -13,7 +13,7 @@ from threading import Lock
 
 from app.core.config import settings
 
-from .base import ParseResult, PageSpan, TIER_FIRST_CLASS, TIER_LIGHTWEIGHT
+from .base import IMAGE_EXTS, ParseResult, PageSpan, TIER_FIRST_CLASS, TIER_LIGHTWEIGHT
 
 
 def _join_documents(docs: list) -> tuple[str, list[PageSpan]]:
@@ -59,10 +59,7 @@ class LlamaParseParser:
 
     id = "llamaparse"
     tier = TIER_FIRST_CLASS
-    _EXTS = {
-        ".pdf", ".pptx", ".docx",
-        ".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp",
-    }
+    _EXTS = {".pdf", ".pptx", ".docx"} | IMAGE_EXTS
 
     def supports(self, ext: str) -> bool:
         return ext in self._EXTS
@@ -114,7 +111,7 @@ def _ocr_available() -> bool:
 def _ocr_enabled() -> bool:
     """OCR runs only when configured on (RAG_OCR_ENABLED) AND the engine is
     installed. On-demand within Docling: only scanned PDF pages (no text layer)
-    and image documents actually OCR (plan §4.1.5 rule 6)."""
+    and image documents actually OCR (plan §4.1.4: OCR 按需触发)."""
     return bool(settings.RAG_OCR_ENABLED) and _ocr_available()
 
 
@@ -169,8 +166,7 @@ class DoclingParser:
 
     id = "docling"
     tier = TIER_FIRST_CLASS
-    _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"}
-    _EXTS = {".pdf", ".docx", ".pptx", ".html", ".htm"} | _IMAGE_EXTS
+    _EXTS = {".pdf", ".docx", ".pptx", ".html", ".htm"} | IMAGE_EXTS
 
     def supports(self, ext: str) -> bool:
         return ext in self._EXTS
@@ -184,8 +180,8 @@ class DoclingParser:
         # ocr_used is best-effort: an image document IS OCR (its only text
         # source), so it's True when OCR is active; for text formats we don't
         # claim OCR even though Docling may OCR scanned PDF pages — there's no
-        # precise per-document signal, so we never over-report (plan §4.1.5 r.10).
-        ocr_used = ext in self._IMAGE_EXTS and _ocr_enabled()
+        # precise per-document signal, so we never over-report (plan §4.1.4 r.10).
+        ocr_used = ext in IMAGE_EXTS and _ocr_enabled()
         # page_map is empty: Docling's exported Markdown exposes no per-page char
         # spans, so page_count reads 0 here (unlike PyMuPDF, which maps per page).
         # Accurate Docling page provenance is deferred to the page_start/end round.

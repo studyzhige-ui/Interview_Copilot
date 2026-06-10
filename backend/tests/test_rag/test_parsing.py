@@ -485,15 +485,27 @@ def test_docling_image_not_marked_ocr_when_disabled(monkeypatch):
     assert DoclingParser().parse("scan.jpg").ocr_used is False
 
 
-def test_candidates_image_first_class_no_lightweight(monkeypatch):
-    """Images route to the first-class parser(s); there is NO dedicated
-    lightweight (plan §4.1.3 matrix), so without a first-class only the
-    SimpleReader catch-all remains."""
+def test_candidates_image_first_class_only_no_text_catchall(monkeypatch):
+    """Images are first-class-OCR only (plan §4.1.3 matrix): NO dedicated
+    lightweight AND NO SimpleReader text catch-all — a raw-bytes read of a
+    .tiff/.bmp by SimpleDirectoryReader is binary garbage. So with no first-class
+    the candidate list is EMPTY (→ friendly EmptyContentError), never garbage."""
     _knobs(monkeypatch, key=False, docling=True, provider="docling")
-    assert _ids(".png") == ["docling", "simple_reader"]
+    assert _ids(".png") == ["docling"]
     # key + both first-class: LlamaParse primary, Docling the doc-level fallback.
     _knobs(monkeypatch, key=True, docling=True, provider="llamaparse")
-    assert _ids(".jpg") == ["llamaparse", "docling", "simple_reader"]
-    # No first-class at all → image has no dedicated lightweight, only catch-all.
+    assert _ids(".jpg") == ["llamaparse", "docling"]
+    # No first-class at all → empty candidate list (no text catch-all for images).
     _knobs(monkeypatch, key=False, docling=False, provider="docling")
-    assert _ids(".webp") == ["simple_reader"]
+    assert _ids(".webp") == []
+    assert _ids(".tiff") == []
+
+
+def test_parse_document_image_no_first_class_raises_friendly(monkeypatch):
+    """A no-first-class deploy can't parse an image (no text fallback) → the
+    friendly EmptyContentError, never silently-indexed garbage. parse_document
+    raises on the empty candidate list without ever opening the file."""
+    from app.rag.cleaning import EmptyContentError
+    _knobs(monkeypatch, key=False, docling=False, provider="docling")
+    with pytest.raises(EmptyContentError):
+        reg.parse_document("scan.tiff")

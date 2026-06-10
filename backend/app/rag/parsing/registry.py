@@ -15,7 +15,7 @@ import time
 
 from app.core.config import settings
 
-from .base import DocumentParser, ParseResult
+from .base import IMAGE_EXTS, DocumentParser, ParseResult
 from .parsers import (
     DoclingParser,
     DocxParser,
@@ -104,7 +104,14 @@ def _candidates(ext: str) -> list:
     lightweight = _lightweight_for(ext)
     if lightweight is not None:
         out.append(lightweight)
-    out.append(SimpleReaderParser())  # default reader + final fallback
+    # Images are first-class-OCR only (§4.1.3 matrix: no lightweight fallback).
+    # The SimpleReader text catch-all must NOT run on them: SimpleDirectoryReader
+    # reads an unmapped image (.tiff/.bmp) as raw bytes → binary garbage that
+    # passes the emptiness gate and gets indexed. So for images the list is
+    # first-class-only; with none available it's empty → parse_document raises
+    # the friendly EmptyContentError.
+    if ext not in IMAGE_EXTS:
+        out.append(SimpleReaderParser())  # default reader + final fallback
     return out
 
 
