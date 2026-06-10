@@ -20,7 +20,16 @@ import remarkGfm from 'remark-gfm';
  * ~10 visible bubbles this is a 10× reduction in react-markdown work
  * per streaming turn.
  */
-function MarkdownBodyImpl({ source }: { source: string }) {
+function MarkdownBodyImpl({
+  source, onCiteClick,
+}: {
+  source: string;
+  /** When set, anchors of the form ``#cite-K1`` render as a clickable
+   *  citation badge (instead of an external link) and invoke this with the
+   *  ref. Used by the chat bubble to map [K#] → source card; generic
+   *  callers omit it and nothing changes. */
+  onCiteClick?: (ref: string) => void;
+}) {
   return (
     <div className="md-body break-words">
       <ReactMarkdown
@@ -56,21 +65,38 @@ function MarkdownBodyImpl({ source }: { source: string }) {
               {children}
             </blockquote>
           ),
-          a: ({ children, href }) => (
-            // ``noopener`` blocks window.opener tabnabbing — modern
-            // browsers infer it from ``noreferrer`` but legacy ones
-            // (some webview wrappers, older Safari) don't, so spell it
-            // out. ``noreferrer`` keeps the Referer header off so the
-            // link target can't fingerprint the user via referer.
-            <a
-              href={href}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="text-primary-600 underline underline-offset-2 hover:text-primary-700"
-            >
-              {children}
-            </a>
-          ),
+          a: ({ children, href }) => {
+            // In-page citation anchor (``#cite-K1``) → a non-navigating
+            // badge that maps the [K#] back to its source card.
+            const cite = href?.match(/^#cite-(K\d+)$/);
+            if (cite && onCiteClick) {
+              const ref = cite[1];
+              return (
+                <button
+                  type="button"
+                  onClick={() => onCiteClick(ref)}
+                  className="align-baseline inline-flex items-center px-1 mx-0.5 rounded bg-primary-100 text-primary-700 text-[11px] font-mono hover:bg-primary-200"
+                >
+                  {children}
+                </button>
+              );
+            }
+            return (
+              // ``noopener`` blocks window.opener tabnabbing — modern
+              // browsers infer it from ``noreferrer`` but legacy ones
+              // (some webview wrappers, older Safari) don't, so spell it
+              // out. ``noreferrer`` keeps the Referer header off so the
+              // link target can't fingerprint the user via referer.
+              <a
+                href={href}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="text-primary-600 underline underline-offset-2 hover:text-primary-700"
+              >
+                {children}
+              </a>
+            );
+          },
           hr: () => <hr className="my-2 border-stone-200" />,
         }}
       >

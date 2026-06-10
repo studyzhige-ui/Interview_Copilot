@@ -44,9 +44,10 @@ import {
 } from '@/api/chat';
 import { uploadKnowledgeFile } from '@/api/knowledge';
 import { getModelsRuntime, updateModelsRuntime, getModelsCatalog } from '@/api/models';
+import { SourceCards, linkifyCitations } from '@/components/chat/SourceCards';
 import type {
   ChatMessageItem, ChatSessionListItem, ContentBlock,
-  ModelProfile, ModelRole, ToolUseBlock, ToolResultBlock,
+  ModelProfile, ModelRole, Source, ToolUseBlock, ToolResultBlock,
 } from '@/types/api';
 
 interface Props {
@@ -77,6 +78,9 @@ interface UIMessage {
   /** Anthropic-style block chain for assistant turns. When present,
    *  the renderer uses these and ignores ``content``. */
   blocks?: ContentBlock[];
+  /** L1 RAG citation sources for the turn — drives the source-card panel
+   *  and [K#] resolution. Absent for user / system / non-RAG turns. */
+  sources?: Source[];
 }
 interface Attachment { doc_id: string; filename: string; }
 
@@ -98,6 +102,10 @@ interface SessionRuntime {
    *  currently being built. Becomes the assistant UIMessage's ``blocks``
    *  on ``finalize``. */
   inflightBlocks: ContentBlock[];
+  /** Streaming-only state — RAG sources from the ``sources`` SSE event
+   *  (arrives before the first token). Attached to the assistant message
+   *  on ``finalize``. */
+  inflightSources: Source[];
   status: string;
   streaming: boolean;
   hidePartialBar: boolean;
@@ -111,7 +119,12 @@ function toUI(m: ChatMessageItem): UIMessage {
   // so the renderer can branch uniformly.
   if (r === 'user') return { role: 'user', content: m.content };
   if (r === 'assistant' || r === 'agent' || r === 'ai' || r === 'bot') {
-    return { role: 'assistant', content: m.content, blocks: m.blocks };
+    // The persisted RAG sources ride in a ``{type:"sources"}`` block —
+    // lift it out so the source-card panel can consume it (BlockChain
+    // skips it when rendering the answer body).
+    const sourcesBlock = m.blocks?.find((b) => b.type === 'sources');
+    const sources = sourcesBlock?.type === 'sources' ? sourcesBlock.sources : undefined;
+    return { role: 'assistant', content: m.content, blocks: m.blocks, sources };
   }
   return { role: 'system', content: m.content };
 }
@@ -280,6 +293,7 @@ export function ChatPanel({
     } else {
       r = {
         abort: null, messages: [], partial: '', inflightBlocks: [],
+        inflightSources: [],
         status: '', streaming: false, hidePartialBar: false,
         loadedHistory: false,
       };
@@ -595,6 +609,7 @@ export function ChatPanel({
     r.messages.push({ role: 'user', content: payload });
     r.partial = '';
     r.inflightBlocks = [];
+    r.inflightSources = [];
     r.status = '';
     r.hidePartialBar = false;
     r.streaming = true;
@@ -630,12 +645,14 @@ export function ChatPanel({
           role: 'assistant',
           content: lastText?.text ?? '',
           blocks: rt.inflightBlocks,
+          sources: rt.inflightSources.length ? rt.inflightSources : undefined,
         });
       } else if (errMsg) {
         rt.messages.push({ role: 'system', content: `（连接中断：${errMsg}）` });
       }
       rt.partial = '';
       rt.inflightBlocks = [];
+      rt.inflightSources = [];
       rt.status = '';
       rt.streaming = false;
       rt.hidePartialBar = false;
@@ -647,6 +664,14 @@ export function ChatPanel({
         const rt = getRuntime(sid);
         rt.status = status;
         rt.streaming = true;
+        bump();
+      },
+      onSources: (sources) => {
+        // Arrives once before the first token (L1 RAG only). Stash on the
+        // runtime so the source-card panel + [K#] resolve as the answer
+        // streams; finalize() attaches it to the assistant message.
+        const rt = getRuntime(sid);
+        rt.inflightSources = sources;
         bump();
       },
       onTextDelta: (delta) => {
@@ -791,6 +816,7 @@ export function ChatPanel({
   const messages = activeRuntime?.messages ?? [];
   const partial = activeRuntime?.partial ?? '';
   const inflightBlocks = activeRuntime?.inflightBlocks ?? [];
+  const inflightSources = activeRuntime?.inflightSources ?? [];
   const statusHint = activeRuntime?.status ?? '';
   const streaming = !!activeRuntime?.streaming;
   const hidePartialBar = !!activeRuntime?.hidePartialBar;
@@ -1021,7 +1047,7 @@ export function ChatPanel({
                 style={{ position: 'absolute', top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` }}
               >
                 <div className="pb-3">
-                  <Bubble role={m.role} content={m.content} blocks={m.blocks} />
+                  <Bubble role={m.role} content={m.content} blocks={m.blocks} sources={m.sources} />
                 </div>
               </div>
             );
@@ -1047,6 +1073,12 @@ export function ChatPanel({
                   {statusHint || 'AI 正在生成…'}
                 </span>
               ) : null}
+              {/* Sources arrive before the first token — show the panel
+                  early so the user sees provenance as the answer streams.
+                  [K#] become clickable once the turn finalizes. */}
+              {inflightSources.length > 0 && (
+                <SourceCards sources={inflightSources} />
+              )}
               <button
                 onClick={() => { if (activeRuntime) { activeRuntime.hidePartialBar = true; bump(); } }}
                 className="ml-2 text-[11px] text-stone-400 hover:text-stone-600"
@@ -1216,12 +1248,21 @@ export function ChatPanel({
  * = []`` swaps in a fresh array — so the message's ``blocks`` ref
  * never changes after creation.
  */
-const Bubble = memo(function Bubble({ role, content, blocks }: {
+const Bubble = memo(function Bubble({ role, content, blocks, sources }: {
   role: UIMessage['role'];
   content: string;
   blocks?: ContentBlock[];
+  sources?: Source[];
 }) {
   const mine = role === 'user';
+  // Clicking a [K#] badge highlights + scrolls to its source card.
+  const [highlightRef, setHighlightRef] = useState<string | null>(null);
+  const citeRefs = useMemo(
+    () => (sources && sources.length ? new Set(sources.map((s) => s.ref)) : null),
+    [sources],
+  );
+  const onCiteClick = useCallback((ref: string) => setHighlightRef(ref), []);
+  const cite = citeRefs ? onCiteClick : undefined;
   return (
     <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
       <div
@@ -1237,9 +1278,15 @@ const Bubble = memo(function Bubble({ role, content, blocks }: {
         {mine ? (
           <span className="whitespace-pre-wrap">{content}</span>
         ) : blocks && blocks.length > 0 ? (
-          <BlockChain blocks={blocks} />
+          <BlockChain blocks={blocks} citeRefs={citeRefs} onCiteClick={cite} />
         ) : (
-          <MarkdownBody source={content} />
+          <MarkdownBody
+            source={citeRefs ? linkifyCitations(content, citeRefs) : content}
+            onCiteClick={cite}
+          />
+        )}
+        {!mine && sources && sources.length > 0 && (
+          <SourceCards sources={sources} highlightRef={highlightRef} />
         )}
       </div>
     </div>
@@ -1252,7 +1299,13 @@ const Bubble = memo(function Bubble({ role, content, blocks }: {
  * card (Claude-Code style) so a ReAct turn reads as: text → [🔧 card]
  * → text → [🔧 card] → final text.
  */
-function BlockChain({ blocks }: { blocks: ContentBlock[] }) {
+function BlockChain({ blocks, citeRefs, onCiteClick }: {
+  blocks: ContentBlock[];
+  /** When set, [K#] tokens in text blocks become clickable citation
+   *  badges resolving to ``onCiteClick``. Agent turns omit both. */
+  citeRefs?: Set<string> | null;
+  onCiteClick?: (ref: string) => void;
+}) {
   const out: React.ReactNode[] = [];
   let i = 0;
   while (i < blocks.length) {
@@ -1260,7 +1313,10 @@ function BlockChain({ blocks }: { blocks: ContentBlock[] }) {
     if (b.type === 'text') {
       out.push(
         <div key={`b${i}`} className="prose-block">
-          <MarkdownBody source={b.text} />
+          <MarkdownBody
+            source={citeRefs ? linkifyCitations(b.text, citeRefs) : b.text}
+            onCiteClick={onCiteClick}
+          />
         </div>
       );
       i += 1;

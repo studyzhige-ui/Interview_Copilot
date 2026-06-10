@@ -4,6 +4,7 @@ import type {
   ChatSessionListItem,
   ChatMessageItem,
   ChatTranscriptResp,
+  Source,
 } from '@/types/api';
 
 /**
@@ -26,6 +27,8 @@ import type {
  *
  * Event types we expect:
  *   - status      data.message   transient progress hint
+ *   - sources     data.sources   L1 RAG [K#] citation sources (once, before
+ *                                generation; absent for direct chat / agent)
  *   - text_delta  data.delta     incremental token (THE new "chunk")
  *   - text        data.content   step-final consolidated text (agent only;
  *                                L1 chat is delta-only and never emits this)
@@ -44,6 +47,7 @@ import type {
 /** Mirrors HarnessEventType in backend/app/agent_runtime/harness_events.py. */
 export type HarnessEventType =
   | 'status'
+  | 'sources'
   | 'text_delta'
   | 'text'
   | 'tool_start'
@@ -119,6 +123,10 @@ export interface BudgetInfo {
 export interface StreamChatHandlers {
   /** Transient "正在生成…" pings. Safe to ignore — UI sugar only. */
   onStatus?: (message: string) => void;
+  /** L1 RAG citation sources for the turn — fired once before generation.
+   *  Store them on the in-flight assistant message so [K#] resolves to a
+   *  source card. Never fires for direct chat / agent turns. */
+  onSources?: (sources: Source[]) => void;
   /** Incremental token. Append to your in-flight assistant buffer. */
   onTextDelta?: (delta: string, step: number) => void;
   /** Agent-mode step boundary: the LLM's text response for this step
@@ -243,6 +251,11 @@ export async function streamChatSSE(
         switch (evt.type) {
           case 'status':
             handlers.onStatus?.(String(data.message ?? ''));
+            break;
+          case 'sources':
+            handlers.onSources?.(
+              Array.isArray(data.sources) ? (data.sources as Source[]) : [],
+            );
             break;
           case 'text_delta':
             handlers.onTextDelta?.(String(data.delta ?? ''), step);

@@ -116,7 +116,43 @@ export interface ChatSessionCreateResp {
 export type ContentBlock =
   | TextBlock
   | ToolUseBlock
-  | ToolResultBlock;
+  | ToolResultBlock
+  | SourcesBlock;
+
+/**
+ * One RAG citation source — mirrors the backend §2.7 source schema built by
+ * ContextAssemblyPipeline._build_source. ``ref`` is the ``K#`` token the
+ * answer cites; the rest is hydrated provenance for the source card.
+ */
+export interface Source {
+  ref: string;
+  chunk_id: string | null;
+  node_id: string | null;
+  document_id: string | null;
+  document_title: string | null;
+  file_name: string | null;
+  category: string | null;
+  source_kind: string | null;
+  page_start: number | null;
+  page_end: number | null;
+  section_title: string | null;
+  heading_path: string[] | null;
+  chunk_index: number | null;
+  score: number | null;
+  score_source: string | null;
+  text_preview: string;
+  truncated?: boolean;
+}
+
+/**
+ * Persisted L1 RAG sources, carried in ``content_blocks_json`` so a reloaded
+ * history turn can re-resolve its [K#] cards. Skipped by the body renderer
+ * (BlockChain) — the source-card UI consumes it separately.
+ */
+export interface SourcesBlock {
+  type: 'sources';
+  sources: Source[];
+}
 
 export interface TextBlock {
   type: 'text';
