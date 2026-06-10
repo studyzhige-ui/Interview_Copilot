@@ -581,8 +581,10 @@ export function ChatPanel({
       try {
         const doc = await uploadKnowledgeFile(f, { category: 'chat_attachment', source_kind: 'user_upload' });
         added.push({ doc_id: doc.id, filename: f.name });
-      } catch {
-        if (isMounted.current) toast.error(`附件上传失败：${f.name}`);
+      } catch (e) {
+        // Surface the backend's specific message (e.g. the format-whitelist
+        // "coming later" hint) instead of a generic failure.
+        if (isMounted.current) toast.error(extractErr(e, `附件上传失败：${f.name}`));
       }
     }
     // Bail before touching state if the user navigated away during

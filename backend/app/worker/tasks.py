@@ -188,6 +188,10 @@ def process_document_ingestion(self, document_id: str):
     import tempfile
 
     from app.rag.ingestion import ingest_document
+    from app.services.knowledge.document_formats import (
+        UnsupportedDocumentFormat,
+        validate_knowledge_document_format,
+    )
     from app.services.knowledge.knowledge_service import dump_json_list
     from app.services.storage_service import download_file_from_s3
 
@@ -217,10 +221,6 @@ def process_document_ingestion(self, document_id: str):
         # gated this, but a stale dispatch or a direct DB insert must not
         # reach the parser with an unsupported format. A format error is
         # permanent, so mark failed and return WITHOUT raising (no retry).
-        from app.services.knowledge.document_formats import (
-            UnsupportedDocumentFormat,
-            validate_knowledge_document_format,
-        )
         try:
             validate_knowledge_document_format(
                 document.upload.original_filename, document.upload.content_type,

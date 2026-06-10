@@ -1,0 +1,108 @@
+"""Worker-level test for the format defense-in-depth in
+``process_document_ingestion`` (ingestion §4.1.2).
+
+A document that bypassed the API gate (stale dispatch / direct DB insert)
+with an unsupported format must be marked ``failed`` and NOT retried, and
+must never reach the parser. The validator itself is unit-tested in
+test_document_formats; this pins the worker's no-retry handling.
+"""
+from __future__ import annotations
+
+from typing import Iterator
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.db.database import Base
+import app.models  # noqa: F401 — register mappers
+from app.models.file_asset import FileAsset
+from app.models.knowledge import KnowledgeDocument
+
+
+@pytest.fixture
+def worker_db(monkeypatch) -> Iterator[sessionmaker]:
+    """Isolated in-memory DB whose sessionmaker replaces the worker's
+    ``SessionLocal`` — the task opens/closes its OWN session on this engine,
+    so it can't disturb a seed session."""
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    Maker = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    import app.worker.tasks as tasks_mod
+    monkeypatch.setattr(tasks_mod, "SessionLocal", Maker)
+    try:
+        yield Maker
+    finally:
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
+def _seed_doc(maker: sessionmaker, *, filename: str, status: str = "processing") -> str:
+    db: Session = maker()
+    try:
+        asset = FileAsset(
+            id="fa_w1", user_id=1, purpose="knowledge_document",
+            original_filename=filename,
+            object_key="uploads/1/fa_w1/" + filename,
+            storage_uri="s3://b/uploads/1/fa_w1/" + filename,
+            upload_status="uploaded",
+        )
+        doc = KnowledgeDocument(
+            id="kdoc_w1", user_id=1, file_asset_id="fa_w1",
+            title="t", source_kind="user_upload", status=status,
+            storage_uri=asset.storage_uri, object_key=asset.object_key,
+        )
+        db.add_all([asset, doc])
+        db.commit()
+        return doc.id
+    finally:
+        db.close()
+
+
+def test_worker_rejects_unsupported_format_without_retry(worker_db, monkeypatch):
+    from app.worker.tasks import process_document_ingestion
+
+    # If the parser is ever reached, fail loudly — the format gate must
+    # short-circuit before download/ingest.
+    import app.rag.ingestion as ingestion_mod
+    monkeypatch.setattr(
+        ingestion_mod, "ingest_document",
+        lambda *a, **k: pytest.fail("ingest_document must not run for a rejected format"),
+    )
+
+    doc_id = _seed_doc(worker_db, filename="malware.exe")
+    result = process_document_ingestion.apply(args=[doc_id]).get()
+
+    assert result["status"] == "failed"
+    # Permanent failure persisted with the friendly Chinese message.
+    db = worker_db()
+    try:
+        doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == doc_id).first()
+        assert doc.status == "failed"
+        assert doc.error_message and "不支持" in doc.error_message
+    finally:
+        db.close()
+
+
+def test_worker_rejects_deferred_format(worker_db, monkeypatch):
+    from app.worker.tasks import process_document_ingestion
+
+    import app.rag.ingestion as ingestion_mod
+    monkeypatch.setattr(
+        ingestion_mod, "ingest_document",
+        lambda *a, **k: pytest.fail("ingest_document must not run for a deferred format"),
+    )
+
+    doc_id = _seed_doc(worker_db, filename="scan.png")
+    result = process_document_ingestion.apply(args=[doc_id]).get()
+
+    assert result["status"] == "failed"
+    db = worker_db()
+    try:
+        doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == doc_id).first()
+        assert "即将支持" in (doc.error_message or "")
+    finally:
+        db.close()

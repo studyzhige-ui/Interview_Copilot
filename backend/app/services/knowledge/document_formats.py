@@ -32,7 +32,7 @@ DEFERRED_KNOWLEDGE_EXTENSIONS = frozenset({
     ".doc", ".ppt", ".xls",
 })
 
-# Shown in the generic rejection + reused by the frontend ``accept`` builder.
+# Shown in the generic rejection message.
 SUPPORTED_FORMATS_HINT = (
     "PDF、Word(.docx)、PPT(.pptx)、Excel(.xlsx)、Markdown、HTML、"
     "文本(.txt)、CSV/TSV、JSON、代码文件(.py/.java/.cpp/.c)"
@@ -77,17 +77,10 @@ def validate_knowledge_document_format(
     return ext
 
 
-def accept_attribute() -> str:
-    """Comma-joined extension list for the frontend ``<input accept>`` (UX
-    hint only). Sorted for stable output."""
-    return ",".join(sorted(ALLOWED_KNOWLEDGE_EXTENSIONS))
-
-
 __all__ = [
     "ALLOWED_KNOWLEDGE_EXTENSIONS",
     "DEFERRED_KNOWLEDGE_EXTENSIONS",
     "SUPPORTED_FORMATS_HINT",
     "UnsupportedDocumentFormat",
     "validate_knowledge_document_format",
-    "accept_attribute",
 ]

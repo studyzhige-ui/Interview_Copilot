@@ -11,6 +11,7 @@ import { Modal } from '@/components/ui/Modal';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Spinner } from '@/components/ui/Spinner';
 import { toast } from '@/store/uiStore';
+import { extractErr } from '@/api/client';
 import {
   KNOWLEDGE_ACCEPT,
   deleteKnowledgeDocument,
@@ -241,8 +242,10 @@ function FilesSection() {
       await uploadKnowledgeFile(file, { category });
       toast.success(`已上传到「${category}」，正在后台处理`);
       await refresh();
-    } catch {
-      toast.error('上传失败');
+    } catch (e) {
+      // Surface the backend's specific message (e.g. the format-whitelist
+      // "coming later" hint) instead of a generic failure.
+      toast.error(extractErr(e, '上传失败'));
     } finally {
       setUploading(false);
     }

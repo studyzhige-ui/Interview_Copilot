@@ -6,7 +6,6 @@ import pytest
 from app.services.knowledge.document_formats import (
     ALLOWED_KNOWLEDGE_EXTENSIONS,
     UnsupportedDocumentFormat,
-    accept_attribute,
     validate_knowledge_document_format,
 )
 
@@ -66,8 +65,8 @@ def test_generic_octet_stream_content_type_is_allowed():
     assert ext == ".pdf"
 
 
-def test_accept_attribute_lists_allowed_extensions():
-    accept = accept_attribute()
-    assert ".pdf" in accept and ".json" in accept and ".py" in accept
-    # Deferred formats are NOT advertised in the accept hint.
-    assert ".png" not in accept and ".doc," not in accept
+def test_content_type_does_not_rescue_unsupported_extension():
+    """content_type only REJECTS (AV) — it never RESCUES: an unsupported ext
+    is still rejected even with a benign content_type."""
+    with pytest.raises(UnsupportedDocumentFormat):
+        validate_knowledge_document_format("malware.exe", content_type="text/plain")
