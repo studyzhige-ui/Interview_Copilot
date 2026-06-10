@@ -55,6 +55,25 @@ def test_markdown_splitter_id_and_chunk_type(monkeypatch):
     assert all(n.metadata["chunk_type"] == "text" for n in nodes)
 
 
+def test_table_branch_splitter_id_and_chunk_type(monkeypatch):
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    doc = Document(
+        text="name,score\nalice,90\nbob,80",
+        metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "data.csv"},
+    )
+    nodes = ingestion.get_optimal_nodes(doc)
+    assert nodes
+    assert all(n.metadata["splitter_id"] == "table" for n in nodes)
+    assert all(n.metadata["chunk_type"] == "table" for n in nodes)
+
+
+# NB: the code branch (.py/.java/.cpp/.c → CodeSplitter) isn't unit-tested
+# here because CodeSplitter needs the optional ``tree_sitter`` package, absent
+# in the test env. Its splitter_id/chunk_type assignment mirrors the other
+# branches (verified by inspection). See requirements note re tree_sitter.
+
+
 def test_token_count_stamped_per_node_on_multi_node_doc(monkeypatch):
     """A long doc splits into several nodes; each carries its OWN token_count
     (not the parent's), per the post-split stamping loop."""
