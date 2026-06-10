@@ -106,3 +106,35 @@ def test_worker_rejects_deferred_format(worker_db, monkeypatch):
         assert "即将支持" in (doc.error_message or "")
     finally:
         db.close()
+
+
+def test_worker_marks_failed_on_empty_after_cleaning_without_retry(worker_db, monkeypatch):
+    """EmptyContentError from ingest (S0 cleaning left no usable text) is a
+    permanent failure: friendly message, no retry."""
+    from app.rag.cleaning import EmptyContentError
+    from app.worker.tasks import process_document_ingestion
+
+    # Get past the download (no real S3) so ingest is reached.
+    import app.services.storage_service as storage_mod
+    monkeypatch.setattr(
+        storage_mod, "download_file_from_s3",
+        lambda uri, path: open(path, "w", encoding="utf-8").close(),
+    )
+
+    async def _empty(*a, **k):
+        raise EmptyContentError("文档清洗后没有可用文本，请确认文件内容非空且为可读文本。")
+
+    import app.rag.ingestion as ingestion_mod
+    monkeypatch.setattr(ingestion_mod, "ingest_document", _empty)
+
+    doc_id = _seed_doc(worker_db, filename="notes.txt")
+    result = process_document_ingestion.apply(args=[doc_id]).get()
+
+    assert result["status"] == "failed"
+    db = worker_db()
+    try:
+        doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == doc_id).first()
+        assert doc.status == "failed"
+        assert "可用文本" in (doc.error_message or "")
+    finally:
+        db.close()

@@ -10,8 +10,32 @@ from llama_index.core.node_parser import (
     SentenceSplitter,
 )
 from app.core.config import settings
+from app.rag.cleaning import EmptyContentError, clean_text
 
 logger = logging.getLogger(__name__)
+
+
+def _clean_documents(documents: list) -> list:
+    """Apply S0 cleaning (plan §4.2) to each parsed document, keeping only
+    those with usable text. The cleaning profile is stamped onto metadata so
+    the chunking stage can persist it as diagnostic ``metadata_json``. Raises
+    :class:`EmptyContentError` when no usable text remains anywhere."""
+    if not settings.RAG_CLEANING_ENABLED:
+        return documents
+    kept: list = []
+    for doc in documents:
+        cleaned, profile = clean_text(doc.text or "")
+        if not cleaned:
+            logger.warning("S0 cleaning emptied a document segment; dropping it.")
+            continue
+        doc.set_content(cleaned)
+        doc.metadata["cleaning_profile"] = profile.as_dict()
+        kept.append(doc)
+    if not kept:
+        raise EmptyContentError(
+            "文档清洗后没有可用文本，请确认文件内容非空且为可读文本。"
+        )
+    return kept
 
 
 
@@ -226,6 +250,11 @@ async def ingest_document(
             if _has_llama_cloud and doc.metadata.get("file_name", "").endswith((".pdf", ".pptx", ".docx")):
                 doc.metadata["is_markdown_parsed"] = True
 
+        # S0 conservative cleaning (plan §4.2) before chunking. Drop segments
+        # that clean to nothing (e.g. a blank page); fail the whole import only
+        # if no usable text remains anywhere.
+        documents = _clean_documents(documents)
+
         # 自适应切块
         all_nodes = []
         for doc in documents:
@@ -293,6 +322,14 @@ async def ingest_text(
         final_metadata["user_id"] = user_id
         if document_id:
             final_metadata["document_id"] = document_id
+
+        # S0 cleaning (plan §4.2) — same conservative pass as file ingest.
+        if settings.RAG_CLEANING_ENABLED:
+            cleaned, profile = clean_text(text)
+            if not cleaned:
+                raise EmptyContentError("内容清洗后为空，无法入库。")
+            text = cleaned
+            final_metadata["cleaning_profile"] = profile.as_dict()
 
         doc = Document(text=text, metadata=final_metadata)
         all_nodes = get_optimal_nodes(doc)

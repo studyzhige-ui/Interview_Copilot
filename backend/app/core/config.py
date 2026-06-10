@@ -132,6 +132,9 @@ class Settings(BaseSettings):
     # RRF-ordered top-N without it: RRF scores are ~1/60-scale and would
     # never clear a cross-encoder threshold (see rag/retriever._score_passes).
     RAG_MIN_SCORE: float = 0.5
+    # S0 conservative ingest cleaning (plan §4.2) — switchable per
+    # INGEST-CLEANING. Off = parsed text is chunked verbatim.
+    RAG_CLEANING_ENABLED: bool = True
     # Memory v2 settings (MEMORY_MILVUS_COLLECTION / MEMORY_*_TOP_K /
     # MEMORY_BACKFILL_ON_STARTUP) were removed in the audit cleanup —
     # the v3 memory architecture uses markdown docs, not vectors. See

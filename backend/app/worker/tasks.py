@@ -187,6 +187,7 @@ def process_document_ingestion(self, document_id: str):
     import os
     import tempfile
 
+    from app.rag.cleaning import EmptyContentError
     from app.rag.ingestion import ingest_document
     from app.services.knowledge.document_formats import (
         UnsupportedDocumentFormat,
@@ -286,6 +287,16 @@ def process_document_ingestion(self, document_id: str):
         db.commit()
         logger.warning("[Task %s] Document was empty or unparseable.", self.request.id)
         return {"status": "failed", "error": "Empty or unparseable document"}
+
+    except EmptyContentError as exc:
+        # Permanent content error (S0 cleaning left no usable text) — friendly
+        # message, no retry (mirrors the format-rejection handling above).
+        document.status = "failed"
+        document.error_message = str(exc)[:500]
+        db.add(document)
+        db.commit()
+        logger.warning("[Task %s] Empty after S0 cleaning: %s", self.request.id, exc)
+        return {"status": "failed", "error": str(exc), "document_id": document_id}
 
     except Exception as exc:
         # Distinguish mid-retry vs final-attempt the same way
