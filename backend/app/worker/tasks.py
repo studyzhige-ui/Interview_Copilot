@@ -180,9 +180,9 @@ def process_document_ingestion(self, document_id: str):
     Idempotency contract:
       * status='ready' (already ingested) → skip.
       * status='processing'/'failed' → fresh attempt. Re-ingest is safe:
-        ``_write_to_milvus_hybrid`` deletes this document's prior Milvus rows
-        (by document_id) before inserting, so a retry never accumulates
-        duplicate chunks.
+        ``_index_nodes`` replaces this document's prior chunks (write_chunks
+        deletes by document_id) and Milvus rows (delete-by-document_id before
+        insert), so a retry never accumulates duplicate chunks.
     """
     import os
     import tempfile

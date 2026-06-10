@@ -65,7 +65,9 @@ def test_read_document_text_excludes_soft_deleted(db_session):
     assert "soft deleted" not in text and "marked deleted" not in text
 
 
-def test_write_chunks_sets_indexed_status(db_session):
+def test_write_chunks_defaults_to_pending(db_session):
+    """Two-phase write (§4.6.3): facts land as ``pending`` — the caller flips
+    them to ``indexed`` only after the Milvus rows are written."""
     from app.services.knowledge.document_chunk_service import write_chunks
 
     nodes = [
@@ -78,8 +80,40 @@ def test_write_chunks_sets_indexed_status(db_session):
     assert info["chunk_count"] == 2
     rows = db_session.query(DocumentChunk).filter(DocumentChunk.document_id == "kdoc_w").all()
     assert len(rows) == 2
-    assert all(r.index_status == "indexed" for r in rows)
+    assert all(r.index_status == "pending" for r in rows)
     assert all(r.text_hash for r in rows)
+
+
+def test_mark_chunks_indexed_by_document_id(db_session):
+    from app.services.knowledge.document_chunk_service import mark_chunks_indexed, write_chunks
+
+    nodes = [SimpleNamespace(text="a", id_="n1"), SimpleNamespace(text="b", id_="n2")]
+    write_chunks(db_session, nodes=nodes, user_id=1, source_kind="user_upload",
+                 document_id="kdoc_mi")
+    updated = mark_chunks_indexed(db_session, document_id="kdoc_mi")
+    assert updated == 2
+    rows = db_session.query(DocumentChunk).filter(DocumentChunk.document_id == "kdoc_mi").all()
+    assert all(r.index_status == "indexed" for r in rows)
+
+
+def test_mark_chunks_indexed_by_node_ids_only_touches_pending(db_session):
+    """The document-less path marks by node_id; a 'deleted' row is never
+    resurrected (only 'pending' rows flip)."""
+    from app.services.knowledge.document_chunk_service import mark_chunks_indexed
+
+    db_session.add_all([
+        DocumentChunk(document_id=None, node_id="p1", user_id=1, source_kind="manual_text",
+                      chunk_index=0, text="pending one", index_status="pending"),
+        DocumentChunk(document_id=None, node_id="d1", user_id=1, source_kind="manual_text",
+                      chunk_index=1, text="already deleted", index_status="deleted"),
+    ])
+    db_session.commit()
+
+    updated = mark_chunks_indexed(db_session, node_ids=["p1", "d1"])
+    assert updated == 1  # only the pending one
+    by_node = {r.node_id: r for r in db_session.query(DocumentChunk).all()}
+    assert by_node["p1"].index_status == "indexed"
+    assert by_node["d1"].index_status == "deleted"  # untouched
 
 
 def test_write_chunks_persists_provenance_from_node_metadata(db_session):

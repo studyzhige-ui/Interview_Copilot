@@ -61,6 +61,7 @@ def write_chunks(
     user_id: int,
     source_kind: str,
     document_id: str | None = None,
+    index_status: str = "pending",
     commit: bool = True,
 ) -> dict[str, Any]:
     """Persist LlamaIndex ``nodes`` as ``document_chunks`` rows.
@@ -70,6 +71,11 @@ def write_chunks(
     provenance (page/token columns + diagnostic metadata_json) is lifted off
     each node's metadata, stamped by the parser / cleaning / chunking stages.
     Returns the chunk + node-id summary the worker stores on the document.
+
+    Facts are written ``pending`` by default (plan §4.6.3 two-phase write): the
+    caller writes facts first, then Milvus rows, then flips the rows to
+    ``indexed`` via :func:`mark_chunks_indexed`. A Milvus failure then leaves
+    recoverable pending facts rather than a Milvus/Postgres inconsistency.
     """
     if document_id is not None:
         db.query(DocumentChunk).filter(
@@ -94,9 +100,7 @@ def write_chunks(
                 page_end=node_meta.get("page_end"),
                 token_count=node_meta.get("token_count"),
                 metadata_json=_chunk_metadata_json(node_meta),
-                # Callers write Milvus before persisting chunks, so the index is
-                # already live by the time the fact rows land.
-                index_status="indexed",
+                index_status=index_status,
             )
         )
         if node_id:
@@ -104,6 +108,32 @@ def write_chunks(
     if commit:
         db.commit()
     return {"chunk_count": len(nodes), "node_ids": node_ids}
+
+
+def mark_chunks_indexed(
+    db: Session,
+    *,
+    document_id: str | None = None,
+    node_ids: list[str] | None = None,
+    commit: bool = True,
+) -> int:
+    """Flip a document's freshly-written chunks from ``pending`` to ``indexed``
+    after the Milvus rows land (plan §4.6.3 phase 3). Targets by ``document_id``
+    (the live path) or by ``node_ids`` (the document-less path). Only ``pending``
+    rows are touched, so it never resurrects a ``deleted`` chunk. Returns the
+    number of rows updated.
+    """
+    q = db.query(DocumentChunk).filter(DocumentChunk.index_status == "pending")
+    if document_id is not None:
+        q = q.filter(DocumentChunk.document_id == document_id)
+    elif node_ids:
+        q = q.filter(DocumentChunk.node_id.in_(node_ids))
+    else:
+        return 0
+    updated = q.update({DocumentChunk.index_status: "indexed"}, synchronize_session=False)
+    if commit:
+        db.commit()
+    return updated
 
 
 def read_document_text(db: Session, document_id: str, *, max_chars: int = 20000) -> tuple[str, int]:

@@ -80,23 +80,22 @@ def test_drop_blank_nodes_keeps_all_when_none_blank():
     assert len(ingestion._drop_blank_nodes(nodes)) == 2
 
 
-def test_write_to_milvus_stamps_profile_but_keeps_it_out_of_rows(monkeypatch):
-    """embedding_profile is stamped onto each node (so write_chunks persists it
-    in metadata_json) but must NOT leak into the Milvus row payload — §4.5.4
-    says observability is diagnostic only, never a Milvus scalar."""
-    _use_fake_embed(monkeypatch, [[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]], dim=4)
-
+def test_insert_milvus_rows_payload_has_only_index_fields(monkeypatch):
+    """The Milvus row payload carries only scope + text + dense; diagnostic
+    fields like embedding_profile never become Milvus scalars (§4.5.4). The
+    profile-on-node stamping is covered by the _index_nodes order tests."""
     import app.rag.milvus_hybrid as mh
     captured: dict = {}
     monkeypatch.setattr(mh, "delete_by_field", lambda *a, **k: None)
     monkeypatch.setattr(mh, "insert", lambda coll, rows: captured.__setitem__("rows", rows))
 
-    nodes = [TextNode(text="alpha", id_="n1"), TextNode(text="beta", id_="n2")]
-    ingestion._write_to_milvus_hybrid(
-        nodes, user_id=1, source_kind="user_upload", document_id="doc1",
+    nodes = [TextNode(text="alpha", id_="n1", metadata={"embedding_profile": {"x": 1}}),
+             TextNode(text="beta", id_="n2")]
+    ingestion._insert_milvus_rows(
+        nodes, ["alpha", "beta"], [[0.1, 0.2], [0.3, 0.4]],
+        user_id=1, source_kind="user_upload", document_id="doc1",
     )
 
-    assert all("embedding_profile" in n.metadata for n in nodes)
     assert captured["rows"]
     for row in captured["rows"]:
         assert set(row) == {"id", "user_id", "source_kind", "document_id", "text", "dense"}

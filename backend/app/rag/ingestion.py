@@ -109,24 +109,19 @@ def _embed_texts(texts: list[str]) -> tuple[list, dict]:
     return embeddings, profile
 
 
-def _write_to_milvus_hybrid(
-    all_nodes: list, *, user_id: int, source_kind: str, document_id: str | None,
+def _insert_milvus_rows(
+    all_nodes: list, texts: list[str], embeddings: list,
+    *, user_id: int, source_kind: str, document_id: str | None,
 ) -> None:
-    """Embed each node (dense) and insert into the Milvus 2.6 hybrid collection.
-
-    The sparse/BM25 vector is computed server-side from ``text`` by the
-    collection's BM25 ``Function`` — we only supply the dense vector + text +
-    scope fields (``user_id`` is the stable users.id pk). Re-ingesting a document
-    replaces its prior chunks first. The embedding is validated (dim + count)
-    before any delete/insert, and its observability profile is stamped onto each
-    node so ``write_chunks`` persists it in ``metadata_json``.
+    """Insert the (precomputed) dense vectors into the Milvus 2.6 hybrid
+    collection. The sparse/BM25 vector is produced server-side from ``text`` by
+    the collection's BM25 ``Function`` — we supply only dense + text + scope
+    fields (``user_id`` is the stable users.id pk). Re-ingesting a document
+    replaces its prior rows first. Embedding + validation happen earlier in
+    :func:`_index_nodes`; this is purely the index write (phase 2).
     """
     from app.rag import milvus_hybrid
 
-    texts = [_node_text(n) for n in all_nodes]
-    embeddings, embedding_profile = _embed_texts(texts)
-    for node in all_nodes:
-        node.metadata["embedding_profile"] = embedding_profile
     rows: list[dict] = []
     for node, text, emb in zip(all_nodes, texts, embeddings):
         node_id = getattr(node, "node_id", None) or getattr(node, "id_", None)
@@ -143,6 +138,45 @@ def _write_to_milvus_hybrid(
     if document_id:
         milvus_hybrid.delete_by_field(milvus_hybrid.KNOWLEDGE, "document_id", document_id)
     milvus_hybrid.insert(milvus_hybrid.KNOWLEDGE, rows)
+
+
+def _index_nodes(
+    all_nodes: list, *, user_id: int, source_kind: str, document_id: str | None,
+) -> dict:
+    """Document-atomic two-phase write (plan §4.6.3), shared by both ingest
+    paths so they keep identical Milvus/Postgres semantics:
+
+      embed + validate  →  write facts as ``pending``  →  Milvus rows  →  mark ``indexed``
+
+    Embedding (dim/count) is validated FIRST, so a bad embedding fails the whole
+    document before any row is written. Facts land as ``pending`` before Milvus;
+    if the Milvus write then fails, the committed pending facts are recoverable
+    by a reingest/reindex instead of leaving a Milvus/Postgres inconsistency.
+    Returns the ``write_chunks`` summary (chunk_count + node_ids).
+    """
+    from app.db.database import SessionLocal
+    from app.services.knowledge.document_chunk_service import mark_chunks_indexed, write_chunks
+
+    texts = [_node_text(n) for n in all_nodes]
+    embeddings, embedding_profile = _embed_texts(texts)
+    for node in all_nodes:
+        node.metadata["embedding_profile"] = embedding_profile
+
+    # Phase 1: facts first, as pending (replacement happens here).
+    with SessionLocal() as db:
+        chunk_info = write_chunks(
+            db, nodes=all_nodes, user_id=user_id, source_kind=source_kind,
+            document_id=document_id, index_status="pending",
+        )
+    # Phase 2: Milvus rows. A failure here leaves the pending facts for reindex.
+    _insert_milvus_rows(
+        all_nodes, texts, embeddings,
+        user_id=user_id, source_kind=source_kind, document_id=document_id,
+    )
+    # Phase 3: flip the now-live rows to indexed.
+    with SessionLocal() as db:
+        mark_chunks_indexed(db, document_id=document_id, node_ids=chunk_info["node_ids"])
+    return chunk_info
 
 
 _MD_HEADER_RE = re.compile(r"^#{1,6}\s+(.+)")
@@ -464,21 +498,13 @@ async def ingest_document(
             if upload_id:
                 node.metadata["upload_id"] = upload_id
 
-        # Milvus 2.6 native dense + server-side BM25 hybrid, then the Postgres
-        # chunk fact rows. Re-ingest replaces this document's prior chunks.
-        logger.info(f">>> 写入 Milvus hybrid 索引，共 {len(all_nodes)} 个节点...")
-        _write_to_milvus_hybrid(
+        # Two-phase document-atomic write (§4.6.3): facts pending → Milvus →
+        # indexed. Postgres document_chunks is the fact source; Milvus is the
+        # rebuildable index copy.
+        logger.info(f">>> 索引 {len(all_nodes)} 个节点 (pending→Milvus→indexed)...")
+        chunk_info = _index_nodes(
             all_nodes, user_id=user_id, source_kind=source_kind, document_id=document_id,
         )
-
-        # Persist chunk TEXT to Postgres document_chunks — the fact source.
-        from app.db.database import SessionLocal
-        from app.services.knowledge.document_chunk_service import write_chunks
-        with SessionLocal() as db:
-            chunk_info = write_chunks(
-                db, nodes=all_nodes, user_id=user_id, source_kind=source_kind,
-                document_id=document_id,
-            )
 
         logger.info(f">>> 摄取完成: '{file_path}' (source_kind={source_kind}, user_id={user_id})")
 
@@ -539,20 +565,13 @@ async def ingest_text(
             if document_id:
                 node.metadata["document_id"] = document_id
 
-        logger.info(f"纯文本摄取: {len(all_nodes)} 个节点写入 Milvus hybrid...")
-        _write_to_milvus_hybrid(
+        # Two-phase document-atomic write (§4.6.3), shared with file ingest:
+        # facts pending → Milvus → indexed. document_id NULL only on the
+        # defensive document-less path; set for improved_qa etc.
+        logger.info(f"纯文本摄取: 索引 {len(all_nodes)} 个节点 (pending→Milvus→indexed)...")
+        chunk_info = _index_nodes(
             all_nodes, user_id=user_id, source_kind=source_kind, document_id=document_id,
         )
-
-        # Persist to document_chunks. document_id NULL for personal_memory;
-        # set for improved_qa (so the doc owns its chunks + delete-by-id works).
-        from app.db.database import SessionLocal
-        from app.services.knowledge.document_chunk_service import write_chunks
-        with SessionLocal() as db:
-            chunk_info = write_chunks(
-                db, nodes=all_nodes, user_id=user_id, source_kind=source_kind,
-                document_id=document_id,
-            )
 
         logger.info(f"文本摄取完成 (source_kind='{source_kind}')。")
 
