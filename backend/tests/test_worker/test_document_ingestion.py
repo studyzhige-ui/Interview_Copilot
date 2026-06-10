@@ -96,7 +96,8 @@ def test_worker_rejects_deferred_format(worker_db, monkeypatch):
         lambda *a, **k: pytest.fail("ingest_document must not run for a deferred format"),
     )
 
-    doc_id = _seed_doc(worker_db, filename="scan.png")
+    # Legacy Office is still deferred (images now OCR-ingest, so .png is allowed).
+    doc_id = _seed_doc(worker_db, filename="old.doc")
     result = process_document_ingestion.apply(args=[doc_id]).get()
 
     assert result["status"] == "failed"

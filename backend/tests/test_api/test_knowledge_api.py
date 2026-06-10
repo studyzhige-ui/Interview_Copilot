@@ -193,25 +193,26 @@ def test_create_document_rejects_unsupported_format(client, db: Session):
 
 
 def test_create_document_rejects_deferred_format_with_hint(client, db: Session):
-    """Images / legacy Office are in the target whitelist but deferred (B4);
-    they get a specific 'coming later' message, still a 400 for now."""
+    """Legacy Office is in the target whitelist but still deferred (needs the
+    LibreOffice path); it gets a specific 'coming later' message, a 400 for now.
+    (Images moved to allowed once OCR landed.)"""
     db.add(FileAsset(
-        id="upl_img",
+        id="upl_legacy",
         user_id=_uid(db, "alice"),
         purpose="knowledge_document",
-        original_filename="scan.png",
-        storage_uri="s3://b/uploads/alice/upl_img/scan.png",
-        object_key="uploads/alice/upl_img/scan.png",
+        original_filename="old.doc",
+        storage_uri="s3://b/uploads/alice/upl_legacy/old.doc",
+        object_key="uploads/alice/upl_legacy/old.doc",
         upload_status="uploaded",
         validation_status="passed",
     ))
     db.commit()
     resp = client.post(
         "/api/v1/knowledge/documents",
-        json={"upload_id": "upl_img", "source_kind": "user_upload"},
+        json={"upload_id": "upl_legacy", "source_kind": "user_upload"},
     )
     assert resp.status_code == 400
-    assert "png" in resp.json()["detail"]
+    assert "doc" in resp.json()["detail"]
 
 
 def test_create_document_dispatches_celery_with_document_id(client, db: Session):

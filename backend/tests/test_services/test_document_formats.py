@@ -26,18 +26,19 @@ def test_allowed_formats_pass(filename):
 
 
 @pytest.mark.parametrize("filename", ["scan.png", "photo.jpg", "img.jpeg", "x.tiff", "y.bmp", "z.webp"])
-def test_deferred_images_rejected_with_coming_later_hint(filename):
-    with pytest.raises(UnsupportedDocumentFormat) as exc:
-        validate_knowledge_document_format(filename)
-    # Specific message, not the generic one.
-    assert "即将支持" in str(exc.value)
+def test_image_formats_now_allowed(filename):
+    """Images are OCR-ingested (Docling RapidOCR / LlamaParse cloud) as of the
+    OCR round — they moved out of the deferred set into the whitelist."""
+    ext = validate_knowledge_document_format(filename)
+    assert ext in ALLOWED_KNOWLEDGE_EXTENSIONS
 
 
 @pytest.mark.parametrize("filename", ["old.doc", "slides.ppt", "sheet.xls"])
 def test_deferred_legacy_office_rejected(filename):
+    """Legacy Office stays deferred until the LibreOffice conversion path."""
     with pytest.raises(UnsupportedDocumentFormat) as exc:
         validate_knowledge_document_format(filename)
-    assert "即将支持" in str(exc.value)
+    assert "旧版 Office" in str(exc.value) and "即将支持" in str(exc.value)
 
 
 @pytest.mark.parametrize("filename", ["malware.exe", "archive.zip", "movie.mkv", "noext"])

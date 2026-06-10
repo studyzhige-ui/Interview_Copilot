@@ -181,12 +181,13 @@ def test_docling_parser_supports_structured_formats():
     assert p.tier == TIER_FIRST_CLASS
     assert p.supports(".pdf") and p.supports(".docx") and p.supports(".pptx")
     assert p.supports(".html") and p.supports(".htm")
-    # txt -> default reader; xlsx kept on lightweight path (E4); images / legacy
-    # office (.xls) deferred.
+    # Images now route to Docling (on-demand OCR), §4.1.3.
+    assert p.supports(".png") and p.supports(".jpg") and p.supports(".webp")
+    # txt -> default reader; xlsx kept on lightweight path (E4); legacy office
+    # (.xls/.doc/.ppt) deferred until the LibreOffice conversion path.
     assert not p.supports(".txt")
     assert not p.supports(".xlsx")
     assert not p.supports(".xls")
-    assert not p.supports(".png")
 
 
 def test_parser_provider_normalized(monkeypatch):
@@ -425,3 +426,74 @@ def test_docling_failure_falls_back_through_registry(monkeypatch):
     assert out.parser_id == "pymupdf"
     assert out.parser_profile["fallback_used"] is True
     assert any("docling" in w for w in out.parser_profile["warnings"])
+
+
+# ── F1: OCR + image documents ────────────────────────────────────────────────
+
+
+def test_llamaparse_supports_images():
+    """LlamaParse claims images too (cloud OCR) so they route to it when it's
+    the primary parser (plan §4.1.3 image matrix)."""
+    from app.rag.parsing.parsers import LlamaParseParser
+    p = LlamaParseParser()
+    assert p.supports(".pdf") and p.supports(".docx")
+    assert p.supports(".png") and p.supports(".jpeg") and p.supports(".tiff")
+
+
+def test_ocr_enabled_requires_flag_and_engine(monkeypatch):
+    """OCR runs only when RAG_OCR_ENABLED AND the engine is importable — so a
+    deploy without rapidocr still parses text PDFs (do_ocr=False)."""
+    monkeypatch.setattr(parsers, "_ocr_available", lambda: True)
+    monkeypatch.setattr(settings, "RAG_OCR_ENABLED", True)
+    assert parsers._ocr_enabled() is True
+    # Flag off → disabled even with the engine present.
+    monkeypatch.setattr(settings, "RAG_OCR_ENABLED", False)
+    assert parsers._ocr_enabled() is False
+    # Engine missing → disabled even with the flag on (graceful degradation).
+    monkeypatch.setattr(settings, "RAG_OCR_ENABLED", True)
+    monkeypatch.setattr(parsers, "_ocr_available", lambda: False)
+    assert parsers._ocr_enabled() is False
+
+
+def _fake_docling(monkeypatch, markdown="text"):
+    class _FakeConverter:
+        def convert(self, file_path):
+            return SimpleNamespace(document=SimpleNamespace(
+                export_to_markdown=lambda: markdown))
+    monkeypatch.setattr(parsers, "_get_docling_converter", lambda: _FakeConverter())
+
+
+def test_docling_stamps_ocr_used_for_image_when_ocr_active(monkeypatch):
+    """An image IS OCR (its only text source) → ocr_used=True when OCR active;
+    a text format is NOT marked OCR even with OCR active (never over-reports)."""
+    _fake_docling(monkeypatch, markdown="OCR'd text")
+    monkeypatch.setattr(parsers, "_ocr_enabled", lambda: True)
+
+    img = DoclingParser().parse("scan.png")
+    assert img.ocr_used is True and img.markdown == "OCR'd text"
+    assert img.parser_id == "docling" and img.is_markdown is True
+
+    pdf = DoclingParser().parse("doc.pdf")
+    assert pdf.ocr_used is False  # text format, no over-report
+
+
+def test_docling_image_not_marked_ocr_when_disabled(monkeypatch):
+    """OCR off/unavailable → an image isn't marked ocr_used (the convert yields
+    whatever text it can; empty would degrade to the registry's friendly error)."""
+    _fake_docling(monkeypatch, markdown="x")
+    monkeypatch.setattr(parsers, "_ocr_enabled", lambda: False)
+    assert DoclingParser().parse("scan.jpg").ocr_used is False
+
+
+def test_candidates_image_first_class_no_lightweight(monkeypatch):
+    """Images route to the first-class parser(s); there is NO dedicated
+    lightweight (plan §4.1.3 matrix), so without a first-class only the
+    SimpleReader catch-all remains."""
+    _knobs(monkeypatch, key=False, docling=True, provider="docling")
+    assert _ids(".png") == ["docling", "simple_reader"]
+    # key + both first-class: LlamaParse primary, Docling the doc-level fallback.
+    _knobs(monkeypatch, key=True, docling=True, provider="llamaparse")
+    assert _ids(".jpg") == ["llamaparse", "docling", "simple_reader"]
+    # No first-class at all → image has no dedicated lightweight, only catch-all.
+    _knobs(monkeypatch, key=False, docling=False, provider="docling")
+    assert _ids(".webp") == ["simple_reader"]

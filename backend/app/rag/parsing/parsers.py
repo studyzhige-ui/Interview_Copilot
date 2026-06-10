@@ -53,11 +53,16 @@ def _read_text(file_path: str) -> str:
 
 class LlamaParseParser:
     """First-class cloud parser → Markdown. Available only when a LlamaCloud key
-    is configured (the registry gates on that)."""
+    is configured (the registry gates on that). Claims images too — LlamaParse
+    does cloud OCR on them (plan §4.1.3 matrix), so when it's the primary parser
+    images go to the cloud instead of local RapidOCR."""
 
     id = "llamaparse"
     tier = TIER_FIRST_CLASS
-    _EXTS = {".pdf", ".pptx", ".docx"}
+    _EXTS = {
+        ".pdf", ".pptx", ".docx",
+        ".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp",
+    }
 
     def supports(self, ext: str) -> bool:
         return ext in self._EXTS
@@ -90,46 +95,104 @@ _docling_converter = None
 # non-Docling parses don't take this lock.
 _docling_lock = Lock()
 
+_ocr_available_cache: bool | None = None
+
+
+def _ocr_available() -> bool:
+    """Whether the OCR engine (rapidocr-onnxruntime) is importable (cached).
+
+    Docling OCR is gated on this so a deploy WITHOUT the engine still parses
+    text PDFs (do_ocr=False) instead of failing on a missing engine — the same
+    graceful-degradation contract the registry gives Docling itself."""
+    global _ocr_available_cache
+    if _ocr_available_cache is None:
+        from importlib.util import find_spec
+        _ocr_available_cache = find_spec("rapidocr_onnxruntime") is not None
+    return _ocr_available_cache
+
+
+def _ocr_enabled() -> bool:
+    """OCR runs only when configured on (RAG_OCR_ENABLED) AND the engine is
+    installed. On-demand within Docling: only scanned PDF pages (no text layer)
+    and image documents actually OCR (plan §4.1.5 rule 6)."""
+    return bool(settings.RAG_OCR_ENABLED) and _ocr_available()
+
 
 def _get_docling_converter():
     """Build/return the cached Docling converter (model weights load on first
     convert). The caller holds ``_docling_lock`` — the converter is shared and
-    docling's convert() isn't safe to run concurrently on it."""
+    docling's convert() isn't safe to run concurrently on it.
+
+    OCR (RapidOCR) is wired for PDF + image inputs only when ``_ocr_enabled()``;
+    otherwise the converter is built with ``do_ocr=False`` so text PDFs still
+    parse without the OCR engine present. Construction is lazy (RapidOcrOptions
+    is a plain options object — the engine imports at convert time, not here)."""
     global _docling_converter
     if _docling_converter is None:
-        from docling.document_converter import DocumentConverter
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import (
+            PdfPipelineOptions,
+            RapidOcrOptions,
+        )
+        from docling.document_converter import (
+            DocumentConverter,
+            ImageFormatOption,
+            PdfFormatOption,
+        )
 
-        _docling_converter = DocumentConverter()
+        pdf_opts = PdfPipelineOptions(
+            do_ocr=_ocr_enabled(),
+            ocr_options=RapidOcrOptions(),  # onnxruntime-based, deployment-light
+        )
+        _docling_converter = DocumentConverter(format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_opts),
+            InputFormat.IMAGE: ImageFormatOption(pipeline_options=pdf_opts),
+        })
     return _docling_converter
 
 
 class DoclingParser:
     """First-class LOCAL parser → Markdown (peer to LlamaParse). Available only
     when the ``docling`` package is installed (the registry gates on that and
-    degrades to LlamaParse / lightweight when it isn't). No OCR this round —
-    scanned PDFs / images are a later round.
+    degrades to LlamaParse / lightweight when it isn't).
 
-    xlsx is intentionally NOT claimed yet: Docling would emit a Markdown table,
-    but the chunk stage routes ``.xlsx`` to the table splitter by filename
-    (before the markdown branch), so xlsx stays on the lightweight path until E4
-    handles Markdown tables. pdf/docx/pptx/html route to MarkdownNodeParser."""
+    Handles scanned PDFs and image documents via on-demand RapidOCR when
+    ``RAG_OCR_ENABLED`` and the engine is installed (plan §4.1.3); without the
+    engine, text PDFs still parse (do_ocr=False) and an image yields empty text
+    → the registry's friendly EmptyContentError (images have no lightweight
+    fallback, per the §4.1.3 matrix).
+
+    xlsx is intentionally NOT claimed: Docling would emit a Markdown table, but
+    the chunk stage routes ``.xlsx`` to the table splitter by filename (before
+    the markdown branch), so xlsx stays on the lightweight path. pdf/docx/pptx/
+    html and OCR'd images route to MarkdownNodeParser."""
 
     id = "docling"
     tier = TIER_FIRST_CLASS
-    _EXTS = {".pdf", ".docx", ".pptx", ".html", ".htm"}
+    _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"}
+    _EXTS = {".pdf", ".docx", ".pptx", ".html", ".htm"} | _IMAGE_EXTS
 
     def supports(self, ext: str) -> bool:
         return ext in self._EXTS
 
     def parse(self, file_path: str) -> ParseResult:
+        ext = os.path.splitext(file_path)[1].lower()
         with _docling_lock:  # serialize: Docling convert() isn't thread-safe
             converter = _get_docling_converter()
             result = converter.convert(file_path)
             markdown = result.document.export_to_markdown()
+        # ocr_used is best-effort: an image document IS OCR (its only text
+        # source), so it's True when OCR is active; for text formats we don't
+        # claim OCR even though Docling may OCR scanned PDF pages — there's no
+        # precise per-document signal, so we never over-report (plan §4.1.5 r.10).
+        ocr_used = ext in self._IMAGE_EXTS and _ocr_enabled()
         # page_map is empty: Docling's exported Markdown exposes no per-page char
         # spans, so page_count reads 0 here (unlike PyMuPDF, which maps per page).
         # Accurate Docling page provenance is deferred to the page_start/end round.
-        return ParseResult(markdown=markdown, parser_id=self.id, is_markdown=True, page_map=[])
+        return ParseResult(
+            markdown=markdown, parser_id=self.id, is_markdown=True,
+            ocr_used=ocr_used, page_map=[],
+        )
 
 
 class PyMuPDFParser:

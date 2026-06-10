@@ -88,6 +88,14 @@ charset-normalizer==3.3.2
 # install. Verify the wheels + first-convert model fetch on the (Linux) worker
 # image; if Docling is absent/unusable the parser registry degrades gracefully.
 docling==2.100.0
+# OCR engine for Docling (scanned PDFs + image documents, ingestion §4.1.3).
+# RapidOCR over EasyOCR/Tesseract: it runs on onnxruntime (already pulled by the
+# stack), needs NO system binary (unlike Tesseract) and ships small cross-platform
+# wheels — the lightest deployment footprint. OCR is gated on this import being
+# present (parsing.parsers._ocr_available): a deploy WITHOUT it still parses text
+# PDFs (do_ocr=False). Like Docling, the OCR model weights download on first use —
+# verify the wheel install + first-OCR model fetch on the (Linux) worker image.
+rapidocr-onnxruntime==1.2.3
 # AST-aware code-file chunking (.py/.java/.cpp/.c via LlamaIndex CodeSplitter).
 # The pack's get_parser() returns its own bundled Parser type which fails
 # CodeSplitter's isinstance(_, tree_sitter.Parser) check, so ingestion builds
