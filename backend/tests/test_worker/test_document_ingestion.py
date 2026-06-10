@@ -138,3 +138,36 @@ def test_worker_marks_failed_on_empty_after_cleaning_without_retry(worker_db, mo
         assert "可用文本" in (doc.error_message or "")
     finally:
         db.close()
+
+
+def test_worker_marks_failed_on_embedding_validation_without_retry(worker_db, monkeypatch):
+    """A dimension/count mismatch (EmbeddingValidationError) is a permanent
+    config error: friendly message surfaced via str(exc), no retry (B6 §4.5.3)."""
+    from app.rag.embedding_registry import EmbeddingValidationError
+    from app.worker.tasks import process_document_ingestion
+
+    import app.services.storage_service as storage_mod
+    monkeypatch.setattr(
+        storage_mod, "download_file_from_s3",
+        lambda uri, path: open(path, "w", encoding="utf-8").close(),
+    )
+
+    async def _dim_mismatch(*a, **k):
+        raise EmbeddingValidationError(
+            "向量维度(3)与配置 EMBEDDING_DIM(1024)不一致；请确认 embedding 模型与配置匹配，或重建索引。"
+        )
+
+    import app.rag.ingestion as ingestion_mod
+    monkeypatch.setattr(ingestion_mod, "ingest_document", _dim_mismatch)
+
+    doc_id = _seed_doc(worker_db, filename="notes.txt")
+    result = process_document_ingestion.apply(args=[doc_id]).get()
+
+    assert result["status"] == "failed"
+    db = worker_db()
+    try:
+        doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == doc_id).first()
+        assert doc.status == "failed"
+        assert "维度" in (doc.error_message or "")
+    finally:
+        db.close()

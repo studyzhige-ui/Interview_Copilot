@@ -140,12 +140,15 @@ def _assert_collection_dim(client: Any, name: str) -> None:
             if f.get("name") == _DENSE_FIELD:
                 dense_dim = (f.get("params") or {}).get("dim")
                 break
+        # int() lives inside the try so a non-numeric dim degrades to
+        # best-effort (log + proceed) rather than throwing uncaught.
+        dense_dim = int(dense_dim) if dense_dim is not None else None
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not introspect %s dense dim for validation: %s", name, exc)
         return
-    if dense_dim is not None and int(dense_dim) != settings.EMBEDDING_DIM:
+    if dense_dim is not None and dense_dim != settings.EMBEDDING_DIM:
         raise EmbeddingValidationError(
-            f"Milvus collection {name!r} 的向量维度为 {int(dense_dim)}，与配置 "
+            f"Milvus collection {name!r} 的向量维度为 {dense_dim}，与配置 "
             f"EMBEDDING_DIM={settings.EMBEDDING_DIM} 不一致。更换 embedding 模型或维度后，"
             f"必须重建该 collection（drop + reingest）。"
         )
@@ -206,6 +209,35 @@ def ensure_collection(coll: HybridCollection) -> None:
             "Created Milvus hybrid collection %s (dense dim=%s + server-side BM25 sparse)",
             coll.name, settings.EMBEDDING_DIM,
         )
+
+
+def validate_existing_dims(*colls: HybridCollection) -> None:
+    """Startup dim guard (plan §4.5.1): for each collection that ALREADY exists,
+    assert its dense dim == ``EMBEDDING_DIM``. Called once at RAG init so a
+    changed embedding model/dim fails loud at boot — including read-only
+    deployments that never reach the write-path ``ensure_collection`` guard.
+
+    Does NOT create absent collections (no eager-create side effect). Best-effort
+    on connectivity: if Milvus is unreachable we log and return (the write-path
+    guard still fires before any insert); only a real dim mismatch on a
+    reachable, existing collection raises ``EmbeddingValidationError``.
+    """
+    try:
+        client = _get_client()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Skipping startup dim validation; Milvus client unavailable: %s", exc)
+        return
+    for coll in colls:
+        try:
+            exists = client.has_collection(coll.name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Skipping startup dim validation for %s; Milvus unreachable: %s",
+                coll.name, exc,
+            )
+            return
+        if exists:
+            _assert_collection_dim(client, coll.name)  # raises on a real mismatch
 
 
 def insert(coll: HybridCollection, rows: list[dict[str, Any]]) -> None:
@@ -295,6 +327,7 @@ __all__ = [
     "RESUME",
     "ABILITY",
     "ensure_collection",
+    "validate_existing_dims",
     "insert",
     "delete",
     "delete_by_field",

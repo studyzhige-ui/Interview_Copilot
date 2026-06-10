@@ -47,6 +47,15 @@ def init_rag_settings():
         logger.error("Failed to initialize embedding (fatal): %s", e)
         raise
 
+    # Startup dim guard (plan §4.5.1): fail loud at boot if an existing Milvus
+    # collection's dense dim no longer matches EMBEDDING_DIM (model/dim changed
+    # without a rebuild). Best-effort on connectivity; raises on a real mismatch.
+    from app.rag import milvus_hybrid
+
+    milvus_hybrid.validate_existing_dims(
+        milvus_hybrid.KNOWLEDGE, milvus_hybrid.RESUME, milvus_hybrid.ABILITY,
+    )
+
     # Primary LLM: resolve eagerly (warm + validated) when the model catalog is
     # populated. When the catalog is COLD — a fresh environment before
     # ``scripts/refresh_models.py`` / the daily Celery beat has seeded it — do

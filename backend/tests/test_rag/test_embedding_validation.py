@@ -7,12 +7,14 @@ index and the Postgres fact rows stay in sync (plan §4.5.2/§4.5.3/§4.5.4).
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
-from llama_index.core import Settings
 from llama_index.core.schema import TextNode
 
 import app.rag.embedding_registry as er
 from app.rag import ingestion
+from app.rag.cleaning import EmptyContentError
 from app.rag.embedding_registry import EmbeddingValidationError
 
 
@@ -28,14 +30,14 @@ class _FakeEmbed:
 
 def _use_fake_embed(monkeypatch, vectors, dim):
     """Pin resolve_embedding() (so the test ignores real .env) and install a
-    duck-typed embed model. We set Settings._embed_model directly: the public
-    setter validates BaseEmbedding, but the getter returns the backing field
-    as-is, so a plain fake works without subclassing."""
+    duck-typed embed model on the module-level ``Settings`` symbol that
+    ingestion uses — matches the test_retriever_pipeline pattern and avoids
+    depending on llama-index internals."""
     monkeypatch.setattr(
         er, "resolve_embedding",
         lambda: er.ResolvedEmbedding("local", er.PROVIDERS["local"], "BAAI/bge-m3", dim),
     )
-    monkeypatch.setattr(Settings, "_embed_model", _FakeEmbed(vectors))
+    monkeypatch.setattr(ingestion, "Settings", SimpleNamespace(embed_model=_FakeEmbed(vectors)))
 
 
 def test_embed_texts_success_builds_profile(monkeypatch):
@@ -76,3 +78,36 @@ def test_drop_blank_nodes_filters_empty_and_whitespace():
 def test_drop_blank_nodes_keeps_all_when_none_blank():
     nodes = [TextNode(text="a"), TextNode(text="b")]
     assert len(ingestion._drop_blank_nodes(nodes)) == 2
+
+
+def test_write_to_milvus_stamps_profile_but_keeps_it_out_of_rows(monkeypatch):
+    """embedding_profile is stamped onto each node (so write_chunks persists it
+    in metadata_json) but must NOT leak into the Milvus row payload — §4.5.4
+    says observability is diagnostic only, never a Milvus scalar."""
+    _use_fake_embed(monkeypatch, [[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]], dim=4)
+
+    import app.rag.milvus_hybrid as mh
+    captured: dict = {}
+    monkeypatch.setattr(mh, "delete_by_field", lambda *a, **k: None)
+    monkeypatch.setattr(mh, "insert", lambda coll, rows: captured.__setitem__("rows", rows))
+
+    nodes = [TextNode(text="alpha", id_="n1"), TextNode(text="beta", id_="n2")]
+    ingestion._write_to_milvus_hybrid(
+        nodes, user_id=1, source_kind="user_upload", document_id="doc1",
+    )
+
+    assert all("embedding_profile" in n.metadata for n in nodes)
+    assert captured["rows"]
+    for row in captured["rows"]:
+        assert set(row) == {"id", "user_id", "source_kind", "document_id", "text", "dense"}
+
+
+async def test_ingest_text_all_blank_raises_empty(monkeypatch):
+    """When chunking yields only blank nodes, ingest_text fails the document
+    (EmptyContentError) before any index/fact write."""
+    monkeypatch.setattr(
+        ingestion, "get_optimal_nodes",
+        lambda doc: [TextNode(text="   "), TextNode(text="")],
+    )
+    with pytest.raises(EmptyContentError):
+        await ingestion.ingest_text("some real source text", "manual_text", user_id=1)
