@@ -40,9 +40,18 @@ import re
 
 from pydantic import BaseModel
 
+from app.core.config import settings
 from app.rag.embeddings import agent_fast_llm
 
 logger = logging.getLogger(__name__)
+
+
+class SubQuery(BaseModel):
+    """One leg of a multi-intent question (retrieval plan §2.1). A flat list —
+    no nesting. dense for vector retrieval, sparse for BM25."""
+
+    dense_query: str = ""
+    sparse_query: str = ""
 
 
 class QueryPlan(BaseModel):
@@ -52,6 +61,9 @@ class QueryPlan(BaseModel):
     needs_knowledge_retrieval: bool = False
     dense_query: str = ""
     sparse_query: str = ""
+    # Only for clearly multi-intent questions ("explain A and B, compare C").
+    # Empty for normal single questions. Capped at MAX_SUB_QUERIES.
+    sub_queries: list[SubQuery] = []
 
     # ── Memory body selection ─────────────────────────────────────
     load_strategy: bool = False
@@ -151,6 +163,7 @@ async def plan_query(
         '  "needs_knowledge_retrieval": true | false,\n'
         '  "dense_query": "<natural-language query for semantic vector retrieval>",\n'
         '  "sparse_query": "<short keyword query for BM25>",\n'
+        '  "sub_queries": [{"dense_query": "...", "sparse_query": "..."}],\n'
         f"{memory_output_keys}"
         "}\n"
         "\n"
@@ -162,7 +175,12 @@ async def plan_query(
         "  the copilot itself.\n"
         "- When generating dense_query / sparse_query, resolve any pronouns or\n"
         "  follow-up references using [Recent Turns]. Leave both empty when\n"
-        "  needs_knowledge_retrieval=false."
+        "  needs_knowledge_retrieval=false.\n"
+        "- sub_queries: ONLY when the question has multiple distinct intents\n"
+        "  (e.g. 'explain A and B, then compare C'). Emit one entry per\n"
+        "  independent intent; keep dense_query/sparse_query as the overall\n"
+        "  question. For a normal single question, return an empty list — do\n"
+        "  NOT split a single complex question or a follow-up."
     )
 
     parts: list[str] = [system_prompt]
@@ -190,9 +208,17 @@ async def plan_query(
                 plan.dense_query = user_message
             if not plan.sparse_query.strip():
                 plan.sparse_query = _keyword_query(user_message)
+            # Drop empty sub-queries and enforce the defensive hard cap
+            # (the engine/retriever cap too, but keep the plan itself clean).
+            valid_subs = [
+                sq for sq in plan.sub_queries
+                if sq.dense_query.strip() or sq.sparse_query.strip()
+            ]
+            plan.sub_queries = valid_subs[:settings.MAX_SUB_QUERIES]
         else:
             plan.dense_query = ""
             plan.sparse_query = ""
+            plan.sub_queries = []
 
         # Recall-off contract guard.
         if not global_memory_on:
@@ -208,6 +234,7 @@ async def plan_query(
 
 __all__ = [
     "QueryPlan",
+    "SubQuery",
     "fallback_query_plan",
     "plan_query",
 ]

@@ -257,6 +257,7 @@ class ConversationEngine:
                     dense_query=query_plan.dense_query or self.user_message,
                     sparse_query=query_plan.sparse_query,
                     user_id=self.user_id,
+                    sub_queries=[sq.model_dump() for sq in query_plan.sub_queries],
                     planner_failed=query_plan.planner_failed,
                 )
             )

@@ -223,6 +223,99 @@ def test_plan_query_prompt_includes_strategy_oneliner_when_memory_on(monkeypatch
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Multi-sub-query split
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_plan_query_parses_sub_queries(monkeypatch):
+    from app.conversation import query_planner as planner
+
+    payload = {
+        "needs_knowledge_retrieval": True,
+        "dense_query": "Redis 雪崩和击穿的区别与解决方案",
+        "sparse_query": "Redis 雪崩 击穿",
+        "sub_queries": [
+            {"dense_query": "Redis 缓存雪崩怎么解决", "sparse_query": "Redis 缓存雪崩"},
+            {"dense_query": "Redis 缓存击穿怎么解决", "sparse_query": "Redis 缓存击穿"},
+        ],
+        "load_strategy": False,
+    }
+    _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
+
+    plan = asyncio.run(planner.plan_query(
+        user_message="雪崩和击穿分别怎么解决？", recent_turns=[],
+    ))
+    assert len(plan.sub_queries) == 2
+    assert plan.sub_queries[0].dense_query == "Redis 缓存雪崩怎么解决"
+    assert plan.sub_queries[1].sparse_query == "Redis 缓存击穿"
+
+
+def test_plan_query_drops_empty_sub_queries(monkeypatch):
+    from app.conversation import query_planner as planner
+
+    payload = {
+        "needs_knowledge_retrieval": True,
+        "dense_query": "x", "sparse_query": "x",
+        "sub_queries": [
+            {"dense_query": "real", "sparse_query": "real"},
+            {"dense_query": "", "sparse_query": ""},   # empty → dropped
+        ],
+        "load_strategy": False,
+    }
+    _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
+
+    plan = asyncio.run(planner.plan_query(user_message="x", recent_turns=[]))
+    assert len(plan.sub_queries) == 1
+    assert plan.sub_queries[0].dense_query == "real"
+
+
+def test_plan_query_caps_sub_queries_at_max(monkeypatch):
+    from app.conversation import query_planner as planner
+    from app.core.config import settings
+
+    payload = {
+        "needs_knowledge_retrieval": True,
+        "dense_query": "x", "sparse_query": "x",
+        "sub_queries": [
+            {"dense_query": f"q{i}", "sparse_query": f"kw{i}"} for i in range(8)
+        ],
+        "load_strategy": False,
+    }
+    _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
+
+    plan = asyncio.run(planner.plan_query(user_message="x", recent_turns=[]))
+    assert len(plan.sub_queries) == settings.MAX_SUB_QUERIES
+
+
+def test_plan_query_clears_sub_queries_when_rag_off(monkeypatch):
+    from app.conversation import query_planner as planner
+
+    payload = {
+        "needs_knowledge_retrieval": False,
+        "dense_query": "", "sparse_query": "",
+        "sub_queries": [{"dense_query": "stray", "sparse_query": "stray"}],
+        "load_strategy": False,
+    }
+    _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
+
+    plan = asyncio.run(planner.plan_query(user_message="hi", recent_turns=[]))
+    assert plan.sub_queries == []
+
+
+def test_planner_prompt_advertises_sub_queries(monkeypatch):
+    from app.conversation import query_planner as planner
+
+    fake = _FakeLLM(json.dumps({
+        "needs_knowledge_retrieval": False, "dense_query": "",
+        "sparse_query": "", "load_strategy": False,
+    }))
+    _patch_llm(monkeypatch, fake)
+
+    asyncio.run(planner.plan_query(user_message="hi", recent_turns=[]))
+    assert "sub_queries" in fake.calls[0][0][0]
+
+
+# ─────────────────────────────────────────────────────────────────────
 # Privacy gate
 # ─────────────────────────────────────────────────────────────────────
 

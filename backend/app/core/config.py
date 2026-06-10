@@ -120,6 +120,12 @@ class Settings(BaseSettings):
     # Pre-rerank hybrid candidate count (Milvus RRF output). 12 gives the
     # cross-encoder a real choice space (retrieval plan §2.3).
     FUSION_TOP_K: int = 12
+    # Per-sub-query candidate budget for a multi-intent turn — smaller than
+    # FUSION_TOP_K so the merged pool stays bounded before the unified rerank.
+    SUB_QUERY_FUSION_TOP_K: int = 6
+    # Defensive hard cap on planner-emitted sub-queries (not a product limit;
+    # bounds the embedding/Milvus/rerank fan-out if the LLM over-splits).
+    MAX_SUB_QUERIES: int = 4
     RERANK_TOP_N: int = 5
     # Reranker-score relevance threshold — reranker branch ONLY. The
     # retriever-fallback branch (remote reranker transport failure) returns

@@ -24,10 +24,13 @@ class KnowledgeRetriever:
         sparse_query: str,
         user_id: str,
         source_kind: str | None = None,
+        sub_queries: list[dict] | None = None,
         planner_failed: bool = False,
     ) -> RetrievalResult:
         """Run one retrieval pass against the user's knowledge corpus.
 
+        ``sub_queries`` (planner multi-intent split) fan out into separate
+        retrievals merged under one rerank — see ``query_knowledge_base``.
         ``planner_failed`` is the engine-side flag (planner LLM crashed →
         original-question fallback retrieval); the retriever itself can't
         know it, so the facade stamps it onto the state here.
@@ -37,6 +40,7 @@ class KnowledgeRetriever:
             sparse_query=sparse_query,
             user_id=user_id,
             source_kind=source_kind,
+            sub_queries=sub_queries,
         )
         result.state.planner_failed = planner_failed
         return result

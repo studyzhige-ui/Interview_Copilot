@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import pytest
 from llama_index.core.schema import NodeWithScore
 
+from app.core.config import settings
 from app.rag import retriever
 from app.rag.reranker_registry import RerankerUnavailableError
 from app.rag.retrieval_state import RetrievalResult, RetrievalState
@@ -66,7 +67,10 @@ def pipeline(monkeypatch):
     Defaults: principal resolves to pk=1, hydrate mirrors the requested node
     ids (all live), no reranker installed (tests set one explicitly).
     """
-    ctl = SimpleNamespace(hits=[], user_pk=1, search_exc=None, hydrated=None)
+    ctl = SimpleNamespace(
+        hits=[], user_pk=1, search_exc=None, hydrated=None,
+        hits_by_sparse=None, search_calls=[],
+    )
 
     monkeypatch.setattr(
         retriever, "Settings", SimpleNamespace(embed_model=_FakeEmbed()),
@@ -79,8 +83,11 @@ def pipeline(monkeypatch):
 
     def fake_search(coll, *, query_text, query_dense, user_pk, top_k, filters=None):
         ctl.last_query_text = query_text
+        ctl.search_calls.append({"query_text": query_text, "top_k": top_k})
         if ctl.search_exc is not None:
             raise ctl.search_exc
+        if ctl.hits_by_sparse is not None:
+            return list(ctl.hits_by_sparse.get(query_text, []))
         return list(ctl.hits)
 
     monkeypatch.setattr(milvus_hybrid, "hybrid_search", fake_search)
@@ -230,6 +237,87 @@ async def test_sparse_query_drives_bm25_input(pipeline):
     await _run(dense_query="自然语言完整问题", sparse_query="关键词 串")
 
     assert pipeline.last_query_text == "关键词 串"
+
+
+async def test_single_query_uses_fusion_top_k(pipeline):
+    pipeline.hits = [_hit("n1", "a", 0.03)]
+    pipeline.set_reranker(_ScoringReranker([0.9]))
+
+    await _run()
+
+    # One Milvus pass at the single-query budget.
+    assert len(pipeline.search_calls) == 1
+    assert pipeline.search_calls[0]["top_k"] == settings.FUSION_TOP_K
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Multi-sub-query map-reduce
+# ─────────────────────────────────────────────────────────────────────
+
+
+async def test_sub_queries_fan_out_merge_and_dedup(pipeline):
+    """Each sub-query is one Milvus pass at the smaller budget; the merged
+    pool is deduped, then a single rerank picks the final top-N."""
+    pipeline.hits_by_sparse = {
+        "雪崩 kw": [_hit("n1", "雪崩内容", 0.03)],
+        "击穿 kw": [_hit("n2", "击穿内容", 0.03), _hit("n1", "雪崩内容", 0.02)],  # n1 dup
+    }
+    pipeline.set_reranker(_ScoringReranker([0.9, 0.8]))
+
+    result = await _run(
+        dense_query="缓存雪崩和击穿的区别",
+        sparse_query="缓存 雪崩 击穿",
+        sub_queries=[
+            {"dense_query": "缓存雪崩怎么解决", "sparse_query": "雪崩 kw"},
+            {"dense_query": "缓存击穿怎么解决", "sparse_query": "击穿 kw"},
+        ],
+    )
+
+    # Two sub-query passes, each at the per-sub-query budget.
+    assert len(pipeline.search_calls) == 2
+    assert {c["top_k"] for c in pipeline.search_calls} == {settings.SUB_QUERY_FUSION_TOP_K}
+    assert {c["query_text"] for c in pipeline.search_calls} == {"雪崩 kw", "击穿 kw"}
+    # n1 hit by both sub-queries → deduped to one candidate; 2 unique total.
+    assert [c["node_id"] for c in result.chunks] == ["n1", "n2"]
+    assert result.state.retrieval_hit is True
+
+
+async def test_sub_queries_capped_at_max(pipeline):
+    pipeline.hits = [_hit("n1", "a", 0.03)]
+    pipeline.set_reranker(_ScoringReranker([0.9]))
+
+    # More sub-queries supplied than MAX_SUB_QUERIES — fan-out is capped.
+    await _run(sub_queries=[
+        {"dense_query": f"q{i}", "sparse_query": f"kw{i}"}
+        for i in range(settings.MAX_SUB_QUERIES + 2)
+    ])
+
+    assert len(pipeline.search_calls) == settings.MAX_SUB_QUERIES
+
+
+async def test_empty_sub_queries_falls_back_to_single(pipeline):
+    pipeline.hits = [_hit("n1", "a", 0.03)]
+    pipeline.set_reranker(_ScoringReranker([0.9]))
+
+    await _run(sub_queries=[])
+
+    # Empty sub-queries collapse to a single top-level pass.
+    assert len(pipeline.search_calls) == 1
+    assert pipeline.search_calls[0]["top_k"] == settings.FUSION_TOP_K
+
+
+def test_retrieval_specs_helper():
+    """Unit-level: spec building caps, blank-side fallback, single fallback."""
+    specs = retriever._retrieval_specs("D", "S", None)
+    assert specs == [("D", "S")]
+    specs = retriever._retrieval_specs("D", "S", [])
+    assert specs == [("D", "S")]
+    # Blank dense side falls back to sparse; blank sub-query dropped.
+    specs = retriever._retrieval_specs("D", "S", [
+        {"dense_query": "a", "sparse_query": ""},
+        {"dense_query": "", "sparse_query": ""},
+    ])
+    assert specs == [("a", "a")]
 
 
 # ─────────────────────────────────────────────────────────────────────

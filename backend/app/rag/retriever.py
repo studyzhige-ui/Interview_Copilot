@@ -192,6 +192,51 @@ def _empty(reason: str, *, fallback_used: bool = False) -> RetrievalResult:
     )
 
 
+async def _gather_hits(
+    dense_q: str, sparse_q: str, user_pk: int,
+    source_kind: Optional[str], top_k: int,
+) -> list[dict[str, Any]]:
+    """One Milvus hybrid pass (dense ANN on the dense query's embedding +
+    server-side BM25 on the sparse query), tenant-scoped. Embedding + search
+    are sync/blocking — dispatched off the event loop. Raises on a Milvus
+    failure so the caller can map it to ``milvus_unavailable``."""
+    from app.rag import milvus_hybrid
+
+    query_dense = await asyncio.to_thread(
+        Settings.embed_model.get_query_embedding, dense_q,
+    )
+    hits = await asyncio.to_thread(
+        lambda: milvus_hybrid.hybrid_search(
+            milvus_hybrid.KNOWLEDGE,
+            query_text=sparse_q,
+            query_dense=query_dense,
+            user_pk=user_pk,
+            top_k=top_k,
+            filters={"source_kind": source_kind} if source_kind else None,
+        )
+    )
+    return [h for h in hits if _hit_in_scope(h, user_pk, source_kind)]
+
+
+def _retrieval_specs(
+    dense_q: str, sparse_q: str, sub_queries: Optional[list[dict]],
+) -> list[tuple[str, str]]:
+    """Build the (dense, sparse) query specs to fan out over.
+
+    Multi-sub-query turns retrieve each sub-query separately (map-reduce);
+    a single-intent turn uses one top-level spec. Sub-queries are capped at
+    ``MAX_SUB_QUERIES`` (defensive — the planner already limits them) and a
+    blank side falls back to the other. Malformed/empty sub-queries collapse
+    to the single top-level spec."""
+    specs: list[tuple[str, str]] = []
+    for sq in (sub_queries or [])[: settings.MAX_SUB_QUERIES]:
+        sd = (sq.get("dense_query") or sq.get("sparse_query") or "").strip()
+        ss = (sq.get("sparse_query") or sq.get("dense_query") or "").strip()
+        if sd:
+            specs.append((sd, ss))
+    return specs or [(dense_q, sparse_q)]
+
+
 # ---------------------------------------------------------------------------
 # Core retrieval function
 # ---------------------------------------------------------------------------
@@ -202,12 +247,20 @@ async def query_knowledge_base(
     sparse_query: str,
     user_id: str,
     source_kind: Optional[str] = None,
+    sub_queries: Optional[list[dict]] = None,
 ) -> RetrievalResult:
     """混合检索中枢（Milvus 原生 dense + BM25 hybrid + Reranker + hydrate）。
 
     P0 安全：通过 Milvus hybrid_search 的 expr (user_id == pk) 隔离租户。
     防幻觉：reranker 绝对置信分数截断低质量节点（fallback 分支除外，见
     ``_score_passes``）。返回的 chunk 文本以 Postgres facts 为准。
+
+    ``sub_queries`` (planner-detected multi-intent turns): each
+    ``{dense_query, sparse_query}`` is retrieved separately with a smaller
+    candidate budget (``SUB_QUERY_FUSION_TOP_K``); the merged, deduped pool
+    goes through ONE unified rerank keyed on the top-level ``dense_query``
+    (retrieval plan §2.3/§2.5). A single-intent turn uses one top-level pass
+    with ``FUSION_TOP_K``.
     """
     min_score = settings.RAG_MIN_SCORE
 
@@ -233,38 +286,34 @@ async def query_knowledge_base(
         return _empty(EMPTY_PRINCIPAL_UNRESOLVED)
 
     # ===== [1] Milvus 2.6 native hybrid: dense ANN on the dense query's
-    # embedding + server-side BM25 on the sparse query, fused by RRF. =====
+    # embedding + server-side BM25 on the sparse query, fused by RRF. For a
+    # multi-intent turn each sub-query is one pass (smaller budget), run
+    # concurrently and merged into a single candidate pool. =====
+    specs = _retrieval_specs(dense_q, sparse_q, sub_queries)
+    per_query_top_k = (
+        settings.SUB_QUERY_FUSION_TOP_K if len(specs) > 1 else settings.FUSION_TOP_K
+    )
     logger.info(
-        "RAG hybrid retrieval: user_pk=%s dense=%r sparse=%r source_kind=%s",
-        user_pk, dense_q[:80], sparse_q[:80], source_kind,
+        "RAG hybrid retrieval: user_pk=%s specs=%d top_k=%d source_kind=%s",
+        user_pk, len(specs), per_query_top_k, source_kind,
     )
     try:
-        from app.rag import milvus_hybrid
-
-        # Embedding + Milvus search are sync/blocking — off the event loop so
-        # the SSE turn doesn't stall other in-flight requests.
-        query_dense = await asyncio.to_thread(
-            Settings.embed_model.get_query_embedding, dense_q,
-        )
-        hits = await asyncio.to_thread(
-            lambda: milvus_hybrid.hybrid_search(
-                milvus_hybrid.KNOWLEDGE,
-                query_text=sparse_q,
-                query_dense=query_dense,
-                user_pk=user_pk,
-                top_k=settings.FUSION_TOP_K,
-                filters={"source_kind": source_kind} if source_kind else None,
-            )
-        )
+        # Concurrent fan-out: each spec's embed + Milvus round-trip overlaps
+        # the others (capped at MAX_SUB_QUERIES, so bounded).
+        per_spec_hits = await asyncio.gather(*[
+            _gather_hits(d, s, user_pk, source_kind, per_query_top_k)
+            for d, s in specs
+        ])
     except Exception as exc:  # noqa: BLE001 — degraded search → empty, not a crash
         logger.error("RAG hybrid search unavailable: %s", exc)
         return _empty(EMPTY_MILVUS_UNAVAILABLE)
 
-    hits = [h for h in hits if _hit_in_scope(h, user_pk, source_kind)]
+    hits = [h for spec_hits in per_spec_hits for h in spec_hits]
     if not hits:
         return _empty(EMPTY_NO_CANDIDATES)
 
-    # ===== [2] Deterministic dedup (id → normalised text hash). =====
+    # ===== [2] Deterministic dedup (id → normalised text hash). Also folds
+    # the same chunk hit by multiple sub-queries into one candidate. =====
     hits = _dedup_hits(hits)
 
     from llama_index.core import QueryBundle
