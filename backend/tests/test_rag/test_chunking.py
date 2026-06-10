@@ -152,7 +152,8 @@ def test_splitter_profile_stamped_on_table_and_code_paths(monkeypatch):
     branches' primary splitter uses different params. splitter_id carries the
     true primary identity; this pins that documented behaviour."""
     monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-    expected = {"chunk_size": 512, "chunk_overlap": 64, "tokenizer": "embedding"}
+    expected = {"chunk_size": 512, "chunk_overlap": 64, "tokenizer": "embedding",
+                "qa_regex_hit": False}
 
     csv = Document(
         text="name,score\nalice,90\nbob,80",
@@ -232,3 +233,80 @@ def test_oversize_gate_uses_embedding_tokenizer(monkeypatch):
     # never have tripped the old len(text) > 1024 gate).
     assert calls["split"] >= 1
     assert nodes
+
+
+# ── B4d: most-conservative QA-prefix grouping (plan §4.3 rule 2) ─────────────
+
+
+def test_qa_prefix_pairs_kept_in_same_chunk(monkeypatch):
+    """A plain-text question bank with paired 问题：/答案： prefixes splits at
+    question boundaries, so each question stays in one chunk with its answer."""
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    text = (
+        "问题：什么是缓存击穿？\n答案：热点 key 失效后大量请求打到数据库。\n"
+        "问题：什么是缓存雪崩？\n答案：大量 key 在同一时刻集中失效。\n"
+    )
+    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
+    nodes = ingestion.get_optimal_nodes(doc)
+
+    assert len(nodes) == 2
+    first = nodes[0].get_content()
+    assert "缓存击穿" in first and "打到数据库" in first  # Q and its A together
+    second = nodes[1].get_content()
+    assert "缓存雪崩" in second and "集中失效" in second
+    for n in nodes:
+        assert n.metadata["splitter_id"] == "sentence"
+        assert n.metadata["splitter_profile"]["qa_regex_hit"] is True
+
+
+def test_qa_english_prefixes_grouped(monkeypatch):
+    """The English Q:/A: form (half-width colon) triggers the same grouping."""
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    text = "Q: What is a B-tree?\nA: A balanced search tree.\nQ: What is a heap?\nA: A tree-based priority queue.\n"
+    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
+    nodes = ingestion.get_optimal_nodes(doc)
+
+    assert len(nodes) == 2
+    assert "B-tree" in nodes[0].get_content() and "balanced" in nodes[0].get_content()
+    assert all(n.metadata["splitter_profile"]["qa_regex_hit"] is True for n in nodes)
+
+
+def test_single_qa_pair_does_not_trigger_grouping(monkeypatch):
+    """A lone Q/A marker (one question) is NOT treated as a bank — falls back to
+    the sentence splitter so an incidental "问题：" line can't reshape a doc."""
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    text = "问题：只有一个问题。\n答案：所以不触发分组。"
+    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
+    nodes = ingestion.get_optimal_nodes(doc)
+
+    assert nodes
+    assert all(n.metadata["splitter_profile"]["qa_regex_hit"] is False for n in nodes)
+
+
+def test_question_list_without_answers_does_not_trigger(monkeypatch):
+    """Numbered/bare questions with no answer markers stay rule-3 'hint only' —
+    no forced QA split (requires ≥1 answer marker)."""
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    text = "问题：第一题？\n问题：第二题？\n问题：第三题？\n"
+    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
+    nodes = ingestion.get_optimal_nodes(doc)
+
+    assert nodes
+    assert all(n.metadata["splitter_profile"]["qa_regex_hit"] is False for n in nodes)
+
+
+def test_mid_sentence_qa_marker_does_not_trigger(monkeypatch):
+    """A 问题：/答案： that appears mid-line (not at a line start) must not match
+    the line-anchored regex, so ordinary prose is never reshaped."""
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    text = "前言里讨论了一个问题：到底是什么。后面又给出答案：其实就是这样。再次提到问题：依旧如此。"
+    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
+    nodes = ingestion.get_optimal_nodes(doc)
+
+    assert nodes
+    assert all(n.metadata["splitter_profile"]["qa_regex_hit"] is False for n in nodes)

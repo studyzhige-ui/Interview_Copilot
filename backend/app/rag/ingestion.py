@@ -156,6 +156,46 @@ def _table_aware_nodes(document: Document, char_budget: int) -> list:
     return nodes
 
 
+# Explicit Q/A prefix markers (plan §4.3 "最保守 QA 正则"). Anchored to line
+# start (re.MULTILINE) so a mid-sentence "问题：" never matches; both half- and
+# full-width colons. Longest alternative first so "问题"/"答案" win over "问"/"答".
+_QA_Q_RE = re.compile(r"^[ \t]*(?:问题|问|Q)[:：]", re.MULTILINE)
+_QA_A_RE = re.compile(r"^[ \t]*(?:答案|答|A)[:：]", re.MULTILINE)
+
+
+def _qa_aware_nodes(document: Document) -> list | None:
+    """Most-conservative QA-prefix grouping for PLAIN TEXT (plan §4.3, rule 2).
+
+    A plain-text question bank using explicit ``Q:``/``A:`` (or ``问题：``/
+    ``答案：``) prefixes would otherwise be cut between a question and its answer
+    by ``SentenceSplitter``. ONLY when the text shows a real paired structure
+    (≥2 question markers AND ≥1 answer marker) do we split at question
+    boundaries so each Q-and-its-A stays in one chunk; the downstream oversize
+    gate still re-splits any group that is too long. Returns ``None`` when
+    there is no clear QA structure — the caller then falls back to the sentence
+    splitter (never guesses, and structured parsers are never overridden since
+    this only runs on the plain-text branch)."""
+    from llama_index.core.schema import TextNode
+
+    text = document.text or ""
+    q_starts = [m.start() for m in _QA_Q_RE.finditer(text)]
+    if len(q_starts) < 2 or not _QA_A_RE.search(text):
+        return None
+
+    spans: list[str] = []
+    head = text[: q_starts[0]].strip()
+    if head:  # preamble before the first question — keep it, drop nothing
+        spans.append(head)
+    for i, start in enumerate(q_starts):
+        end = q_starts[i + 1] if i + 1 < len(q_starts) else len(text)
+        seg = text[start:end].strip()
+        if seg:
+            spans.append(seg)
+    if not spans:
+        return None
+    return [TextNode(text=s, metadata=dict(document.metadata)) for s in spans]
+
+
 def get_optimal_nodes(document: Document) -> list:
     """
     自适应切块引擎：基于文档类型和内容结构智能选择切分策略。
@@ -172,6 +212,7 @@ def get_optimal_nodes(document: Document) -> list:
     file_name = document.metadata.get("file_name", "").lower()
 
     is_markdown_parsed = document.metadata.get("is_markdown_parsed", False)
+    qa_regex_hit = False
 
     # Tabular files (CSV / XLSX): split by row groups and repeat the header in
     # every chunk so a retrieved chunk is independently understandable.
@@ -180,6 +221,7 @@ def get_optimal_nodes(document: Document) -> list:
         nodes = _table_aware_nodes(document, CHUNK_SIZE * 2)
         splitter_id, chunk_type = "table", "table"
     else:
+        parser = None
         if (
             is_markdown_parsed
             or file_name.endswith((".md", ".markdown"))
@@ -205,10 +247,19 @@ def get_optimal_nodes(document: Document) -> list:
             parser = _code_splitter("cpp")
             splitter_id, chunk_type = "code", "code"
         else:
-            parser = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+            # Plain text: try the most-conservative QA-prefix grouping first so a
+            # question stays with its answer; fall back to the sentence splitter
+            # when there's no clear Q/A structure (plan §4.3, never guesses).
             splitter_id, chunk_type = "sentence", "text"
+            qa_nodes = _qa_aware_nodes(document)
+            if qa_nodes is not None:
+                nodes = qa_nodes
+                qa_regex_hit = True
+            else:
+                parser = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
 
-        nodes = parser.get_nodes_from_documents([document])
+        if parser is not None:
+            nodes = parser.get_nodes_from_documents([document])
 
     # 二次兜底：对超长 chunk 做再切分，确保不超过 embedding 模型 max_seq_length。
     # 超长判定使用真实 embedding tokenizer（plan §4.3），不再用 len(text) 字符估算。
@@ -235,11 +286,14 @@ def get_optimal_nodes(document: Document) -> list:
     # through, stamped uniformly. The primary splitter's true identity is in
     # splitter_id; for the code (chunk_lines) and table (char_budget) branches
     # these chunk_size/overlap values describe the fallback regime, not the
-    # primary boundaries.
+    # primary boundaries. qa_regex_hit records whether the conservative QA-prefix
+    # grouping fired (plan §4.4.3 "正则命中"); only ever True on the plain-text
+    # branch, truthfully False everywhere else.
     splitter_profile = {
         "chunk_size": CHUNK_SIZE,
         "chunk_overlap": CHUNK_OVERLAP,
         "tokenizer": "embedding",
+        "qa_regex_hit": qa_regex_hit,
     }
     for node in final_nodes:
         node.metadata["source_kind"] = source_kind
