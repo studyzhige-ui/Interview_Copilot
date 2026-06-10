@@ -151,6 +151,8 @@ def test_write_chunks_builds_metadata_json_from_node_diagnostics(db_session):
             "section_title": "缓存击穿", "heading_path": ["缓存", "异常"],
             "cleaning_profile": {"char_out": 2},
             "embedding_profile": {"embedding_provider": "local", "embedding_dim": 1024},
+            "parser_id": "pymupdf", "parser_profile": {"tier": "lightweight"},
+            "ocr_used": False,        # a False boolean state must be kept (not dropped as null)
             "category": "面试题库",   # must NOT leak into metadata_json
             "user_id": 1,             # scope field, not diagnostic
         }),
@@ -168,6 +170,9 @@ def test_write_chunks_builds_metadata_json_from_node_diagnostics(db_session):
     assert meta1["heading_path"] == ["缓存", "异常"]
     assert meta1["cleaning_profile"] == {"char_out": 2}
     assert meta1["embedding_profile"] == {"embedding_provider": "local", "embedding_dim": 1024}
+    assert meta1["parser_id"] == "pymupdf"
+    assert meta1["parser_profile"] == {"tier": "lightweight"}
+    assert meta1["ocr_used"] is False   # False kept (is-not-None guard), not dropped
     assert "category" not in meta1   # INGEST-CLEANUP
     assert "user_id" not in meta1    # scope field, not a diagnostic
     # No diagnostics → NULL, not "{}".

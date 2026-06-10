@@ -64,7 +64,10 @@ def parse_document(file_path: str) -> ParseResult:
         if not result.markdown.strip():
             warnings.append(f"{parser.id}: empty output")
             continue
-        result.warnings = warnings
+        # Merge this parser's own warnings (its channel) with the cross-attempt
+        # failure/empty warnings; warnings live inside the owning profile, never
+        # as a separate top-level key.
+        merged = warnings + list(result.warnings)
         result.parser_profile = {
             "tier": parser.tier,
             "fallback_used": idx > 0,
@@ -72,8 +75,8 @@ def parse_document(file_path: str) -> ParseResult:
             "char_count": len(result.markdown),
             "duration_ms": int((time.perf_counter() - t0) * 1000),
         }
-        if warnings:
-            result.parser_profile["warnings"] = warnings
+        if merged:
+            result.parser_profile["warnings"] = merged
         logger.info("parsed %s via %s (fallback=%s)", file_path, parser.id, idx > 0)
         return result
 

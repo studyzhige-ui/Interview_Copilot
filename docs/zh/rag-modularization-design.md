@@ -66,8 +66,8 @@
 ```python
 class DocumentParser(Protocol):
     id: str                  # "llamaparse" | "docling" | "pymupdf" | "python_docx" | ...
-    tier: Literal["first_class", "lightweight"]
-    def supports(self, ext: str, content_type: str) -> bool
+    tier: str                # "first_class" | "lightweight"
+    def supports(self, ext: str) -> bool          # E1: ext only; content_type if E3 needs it
     def parse(self, file_path: str) -> ParseResult
 
 @dataclass
@@ -83,8 +83,9 @@ class ParseResult:
 #### 解析编排（parser orchestration 层，§4.1.1）
 
 ```
-resolve_parsers(ext, content_type) -> 有序候选列表：
+_candidates(ext) -> 有序候选列表：
     [主一等(若可用且支持), 另一等(若已装/配置且支持), 该格式的轻量兜底]
+    （私有,单一调用方 parse_document；E2 加 Docling、E3 加轻量矩阵时扩展此处）
 
 parse_document(file_path):
     for parser in 候选:
@@ -169,7 +170,7 @@ class Splitter(Protocol):
 - `embedding_registry`：`PROVIDERS` catalog → `resolve_embedding()` → `build_embedding()`。
 - `reranker_registry`：同形 + `RerankerUnavailableError`。
 - `milvus_hybrid`：config 驱动的 `HybridCollection`。
-- → `parsing`：解析器 catalog → `resolve_parsers()` → 编排；`splitter`：`SPLITTERS` + `select_splitter()`。
+- → `parsing`：解析器候选 → `_candidates()`(私有,单一调用方)→ `parse_document()` 编排；`splitter`：`SPLITTERS` + `select_splitter()`。
 
 ---
 
@@ -202,4 +203,6 @@ E1 故意"行为不变"先立骨架与模式；E2/E3 才真正扩格式能力；
 
 ### 7.1 E1 的 ParseResult 契约说明（实现细节）
 
-E1 把现有解析器包进 `ParseResult(markdown + page_map)` 这一目标契约。对**单 Document** 的格式（txt/md/docx/html/json/csv 经 `SimpleDirectoryReader`）行为等价。对**多页 PDF**（现 PyMuPDF 每页一个 Document），改为**合并为单 markdown + page_map**（对齐 §4.1.4 规则 10：页码靠 `page_map` 而非硬切每页）。`page_start/page_end` 的实际写入仍保持现状（暂为空，B1 列可空）——把 `page_map` → chunk 页码的映射留待后续轮次，本轮只是产出 `page_map` 供将来用。这是 E1 唯一的良性行为差异。
+E1 把现有解析器包进 `ParseResult(markdown + page_map)` 这一目标契约。对**单 Document** 的格式（txt/md/docx/html/json/csv 经 `SimpleDirectoryReader`）行为等价。对**多页 PDF**（现 PyMuPDF 每页一个 Document），改为**合并为单 markdown + page_map**（对齐 §4.1.4 规则 10：页码靠 `page_map` 而非硬切每页）。`page_start/page_end` 的实际写入仍保持现状（暂为空，B1 列可空）——把 `page_map` → chunk 页码的映射留待后续轮次，本轮只是产出 `page_map` 供将来用。
+
+**第二处已知 delta（多 sheet XLSX）**：无 LlamaCloud key 时 `.xlsx` 走默认 `PandasExcelReader`，多 sheet 会返回每 sheet 一个 Document；E1 合并为单 markdown，使 `_table_aware_nodes` 用 sheet-1 首行作所有 sheet 的重复表头。影响窄（仅"无 key + 多 sheet xlsx"），且 `PandasExcelReader` 行本身是 `列: 值` 自描述、实际检索影响有限。**E3 的 `XlsxParser`（openpyxl）正式按 sheet 解析时修复**；E1 接受此合并为已知 delta。单 sheet xlsx、csv（`PandasCSVReader` 恒单 Document）无差异。

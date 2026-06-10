@@ -34,6 +34,20 @@ def test_join_documents_multi_page_records_spans():
     assert page_map[1].char_start == len("page one") + 2  # after the "\n\n"
 
 
+def test_join_documents_skips_empty_segment_without_offset_drift():
+    """An empty middle segment is dropped: it neither emits a page span nor
+    advances the cursor, so the next span's char_start still indexes the join."""
+    docs = [
+        SimpleNamespace(text="aa", metadata={}),
+        SimpleNamespace(text="", metadata={}),   # dropped
+        SimpleNamespace(text="cc", metadata={}),
+    ]
+    md, page_map = _join_documents(docs)
+    assert md == "aa\n\ncc"
+    assert len(page_map) == 2
+    assert md[page_map[1].char_start:page_map[1].char_end] == "cc"  # span indexes the join
+
+
 def test_candidates_without_key_have_no_llamaparse(monkeypatch):
     monkeypatch.setattr(reg, "_has_llama_cloud", lambda: False)
     assert [p.id for p in reg._candidates(".pdf")] == ["pymupdf", "simple_reader"]
@@ -75,6 +89,17 @@ def test_parse_document_uses_first_success(monkeypatch):
     assert out.parser_profile["char_count"] == len("ok text")
     assert out.parser_profile["tier"] == TIER_FIRST_CLASS
     assert "duration_ms" in out.parser_profile
+    assert "warnings" not in out.parser_profile  # clean parse carries no warnings key
+
+
+def test_parse_document_merges_parser_own_warnings(monkeypatch):
+    """A parser's own ParseResult.warnings are surfaced in parser_profile."""
+    result = ParseResult(markdown="ok", parser_id="p", warnings=["low text quality"])
+    monkeypatch.setattr(reg, "_candidates",
+                        lambda ext: [_FakeParser("p", TIER_FIRST_CLASS, result=result)])
+
+    out = reg.parse_document("x.pdf")
+    assert out.parser_profile["warnings"] == ["low text quality"]
 
 
 def test_parse_document_falls_back_on_failure(monkeypatch):

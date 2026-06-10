@@ -22,7 +22,9 @@ TIER_LIGHTWEIGHT = "lightweight"
 @dataclass(frozen=True)
 class PageSpan:
     """A page's character span within ``ParseResult.markdown`` — best-effort
-    page provenance. Empty for formats with no page concept."""
+    page provenance. Empty for formats with no page concept. The per-span
+    fields are produced now but consumed by a later round that maps them to
+    ``page_start``/``page_end`` (design §7.1); E1 only uses ``len(page_map)``."""
     page: int
     char_start: int
     char_end: int
@@ -43,6 +45,8 @@ class ParseResult:
     is_markdown: bool = False          # output is structured Markdown -> MarkdownNodeParser
     ocr_used: bool = False
     page_map: list[PageSpan] = field(default_factory=list)
+    # A parser's own warnings channel; the orchestration merges these into
+    # parser_profile["warnings"] (warnings live inside the owning profile).
     warnings: list[str] = field(default_factory=list)
     parser_profile: dict = field(default_factory=dict)
 
@@ -52,7 +56,11 @@ class DocumentParser(Protocol):
     """A replaceable parser. ``id`` identifies it (also stamped as parser_id),
     ``tier`` places it in the fallback matrix, ``supports`` gates by extension,
     and ``parse`` produces a :class:`ParseResult`. A parser raises on failure;
-    the orchestration records the warning and tries the next candidate."""
+    the orchestration records the warning and tries the next candidate.
+
+    ``supports`` takes only the extension — E1 selects by ext (matching the old
+    extractor map); a ``content_type`` arg can be added if the lightweight
+    matrix (E3) ever needs it."""
 
     id: str
     tier: str
