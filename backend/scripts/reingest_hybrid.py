@@ -41,33 +41,40 @@ def _drop(coll: milvus_hybrid.HybridCollection) -> None:
         print(f"  {coll.name} absent (nothing to drop)")
 
 
-def reingest_knowledge() -> int:
-    from app.models.document_chunk import DocumentChunk
+def reingest_knowledge(
+    *, document_ids: list[str] | None = None, user_id: int | None = None,
+    category: str | None = None,
+) -> int:
+    """Rebuild knowledge Milvus rows from the Postgres facts, at the requested
+    granularity (plan §4.6.3): a single ``document_ids`` set, all of a
+    ``user_id``'s documents (optionally a ``category`` within it), or — when no
+    filter is given — every live document (disaster recovery).
+
+    All granularities funnel through ``ingestion.reindex_document`` (one rebuild-
+    from-facts path, not a second one): it reads each document's LIVE chunks
+    (soft-deleted excluded — so a deleted document is never re-indexed),
+    re-embeds with dim/count validation, replaces that document's rows, and flips
+    its chunks to ``indexed``. Targets are resolved from ``knowledge_documents``
+    (``deleted_at IS NULL``); ``category`` is read from there, not from Milvus.
+    A document is the unit, so the defensive document-less (NULL) chunk path is
+    intentionally out of scope here.
+    """
+    from app.models.knowledge import KnowledgeDocument
+    from app.rag.ingestion import reindex_document
 
     db = SessionLocal()
     try:
-        chunks = db.query(DocumentChunk).all()
-        rows = []
-        for ch in chunks:
-            text = (ch.text or "").strip()
-            if not text:
-                continue
-            rows.append({
-                "id": str(ch.node_id or ch.id),
-                "user_id": int(ch.user_id),
-                "source_kind": ch.source_kind or "",
-                "document_id": ch.document_id,
-                "text": text,
-            })
-        if not rows:
-            return 0
-        embs = Settings.embed_model.get_text_embedding_batch(
-            [r["text"] for r in rows], show_progress=True,
-        )
-        for r, e in zip(rows, embs):
-            r["dense"] = e
-        milvus_hybrid.insert(milvus_hybrid.KNOWLEDGE, rows)
-        return len(rows)
+        if document_ids is None:
+            q = db.query(KnowledgeDocument.id).filter(KnowledgeDocument.deleted_at.is_(None))
+            if user_id is not None:
+                q = q.filter(KnowledgeDocument.user_id == user_id)
+            if category is not None:
+                q = q.filter(KnowledgeDocument.category == category)
+            document_ids = [r[0] for r in q.all()]
+        total = 0
+        for doc_id in document_ids:
+            total += reindex_document(db, doc_id)
+        return total
     finally:
         db.close()
 
@@ -129,7 +136,26 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--drop", action="store_true", help="drop + recreate the collection(s) first")
     p.add_argument("--only", choices=sorted(_TARGETS), help="reingest just one collection")
+    # Knowledge-only subset reingest (plan §4.6.3 document/user/category dims).
+    p.add_argument("--document", help="reingest one knowledge document by id")
+    p.add_argument("--user", type=int, help="reingest all of a user's live knowledge documents")
+    p.add_argument("--category", help="with --user, restrict to this knowledge category")
     args = p.parse_args()
+
+    # Subset reingest targets only the knowledge collection from Postgres facts;
+    # it never drops a collection (that's the full disaster-recovery path).
+    if args.document or args.user is not None:
+        print("Loading embedding model...")
+        Settings.embed_model = build_embedding()
+        if args.document:
+            n = reingest_knowledge(document_ids=[args.document])
+            print(f"reingested document {args.document}: {n} chunk(s)")
+        else:
+            n = reingest_knowledge(user_id=args.user, category=args.category)
+            scope = f"user {args.user}" + (f" / category {args.category}" if args.category else "")
+            print(f"reingested {scope}: {n} chunk(s)")
+        print("\nDone.")
+        return
 
     targets = [args.only] if args.only else list(_TARGETS)
     print("Loading embedding model...")
