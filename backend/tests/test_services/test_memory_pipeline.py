@@ -59,14 +59,10 @@ def test_post_turn_enqueues_realtime_job(monkeypatch):
         def update_session_fields(self, session_id, **kwargs):
             updates.append(kwargs)
 
-    class FakeCompaction:
-        async def compact_if_needed(self, session_id):
-            return False
-
     def fake_enqueue(*, session_id, user_id, record_id, upto_seq):
         calls.append({"session_id": session_id, "user_id": user_id, "upto_seq": upto_seq})
 
-    service = module.PostTurnMaintenanceService(compaction=FakeCompaction())
+    service = module.PostTurnMaintenanceService()
     monkeypatch.setattr(module, "transcript_service", FakeTranscriptService())
     monkeypatch.setattr(module.extraction_jobs, "enqueue_realtime_extraction", fake_enqueue)
     asyncio.run(service.run("s1", "alice"))
@@ -92,11 +88,7 @@ def test_post_turn_no_job_when_no_pending(monkeypatch):
         def update_session_fields(self, session_id, **kwargs):
             pass
 
-    class FakeCompaction:
-        async def compact_if_needed(self, session_id):
-            return False
-
-    service = module.PostTurnMaintenanceService(compaction=FakeCompaction())
+    service = module.PostTurnMaintenanceService()
     monkeypatch.setattr(module, "transcript_service", FakeTranscriptService())
     monkeypatch.setattr(
         module.extraction_jobs, "enqueue_realtime_extraction",
@@ -115,18 +107,10 @@ def test_post_turn_no_job_when_memory_disabled(monkeypatch):
         def get_session_meta(self, session_id):
             return {"compaction_cursor": 0, "memory_extraction_cursor": 0,
                     "type": "general", "turn_count": 1}
-
         def get_recent_turns(self, session_id, max_turns, after_seq):
             return [{"seq": 1, "role": "User", "content": "q"}]
 
-        def update_session_fields(self, session_id, **kwargs):
-            pass
-
-    class FakeCompaction:
-        async def compact_if_needed(self, session_id):
-            return False
-
-    service = module.PostTurnMaintenanceService(compaction=FakeCompaction())
+    service = module.PostTurnMaintenanceService()
     monkeypatch.setattr(module, "transcript_service", FakeTranscriptService())
     monkeypatch.setattr(
         module.extraction_jobs, "enqueue_realtime_extraction",

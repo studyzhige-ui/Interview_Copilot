@@ -1,4 +1,6 @@
 """SLOT_ORDER + renderer contract tests for the context pipeline."""
+import asyncio
+
 from app.services.chat.context_assembly_pipeline import (
     AssembledContext,
     ContextAssemblyPipeline,
@@ -129,29 +131,29 @@ def test_debrief_reference_auto_inject_fires_only_in_debrief_mode(monkeypatch):
                 "subject_id": "ir_42" if self.mode != "general" else None,
                 "compaction_cursor": 0,
             }
-        def get_recent_turns(self, **_kw):
+        def get_turns_after(self, session_id, after_seq=0):
             return []
 
     pipeline = ContextAssemblyPipeline()
 
     # Case 1 — debrief mode: auto-inject fires.
     monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript("debrief"))
-    ctx = pipeline.assemble_answer_context(session_id="s1", current_query="q")
+    ctx = asyncio.run(pipeline.assemble_answer_context(session_id="s1", current_query="q"))
     assert ctx.debrief_reference == "[Manifest for ir_42]"
     assert ("ir_42", "alice") in fetch_calls
     fetch_calls.clear()
 
     # Case 2 — general mode: no fetch, slot stays empty.
     monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript("general"))
-    ctx = pipeline.assemble_answer_context(session_id="s2", current_query="q")
+    ctx = asyncio.run(pipeline.assemble_answer_context(session_id="s2", current_query="q"))
     assert ctx.debrief_reference == ""
     assert fetch_calls == []
 
     # Case 3 — caller-supplied wins, no fetch even in debrief.
     monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript("debrief"))
-    ctx = pipeline.assemble_answer_context(
+    ctx = asyncio.run(pipeline.assemble_answer_context(
         session_id="s1", current_query="q", debrief_reference="[Custom]"
-    )
+    ))
     assert ctx.debrief_reference == "[Custom]"
     assert fetch_calls == []
 
@@ -176,18 +178,141 @@ def test_summary_comes_from_summary_column(monkeypatch):
                 "summary": "## 当前状态\n聚焦 redis 缓存",      # dedicated column
             }
 
-        def get_recent_turns(self, **_kw):
+        def get_turns_after(self, session_id, after_seq=0):
             return []
 
     pipeline = ContextAssemblyPipeline()
     monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
 
-    ctx = pipeline.assemble_answer_context(session_id="s", current_query="q")
+    ctx = asyncio.run(pipeline.assemble_answer_context(session_id="s", current_query="q"))
     assert ctx.summary == "## 当前状态\n聚焦 redis 缓存"
 
     rendered = pipeline.renderer.render_answer_prompt(ctx, system_prompt="rules")
     assert "[Context Summary]" in rendered
     assert "聚焦 redis 缓存" in rendered
+
+
+# ── Full-history context (no fixed window) ────────────────────────────
+
+
+def test_assemble_loads_all_turns_after_cursor(monkeypatch):
+    """The pipeline loads ALL turns after the compaction cursor, not a
+    fixed 20-turn window. This is the incremental-append model."""
+    from app.services.chat import context_assembly_pipeline as pipeline_mod
+    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
+
+    turns = [
+        {"seq": i, "role": "User" if i % 2 else "Agent", "content": f"msg {i}"}
+        for i in range(1, 51)  # 50 messages — well beyond the old 20-turn cap
+    ]
+
+    class FakeTranscript:
+        def get_session_meta(self, session_id):
+            return {
+                "user_id": "alice", "type": "general", "subject_type": None,
+                "subject_id": None, "compaction_cursor": 0, "summary": "",
+            }
+        def get_turns_after(self, session_id, after_seq=0):
+            return [t for t in turns if t["seq"] > after_seq]
+
+    monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
+    pipeline = ContextAssemblyPipeline()
+    ctx = asyncio.run(pipeline.assemble_answer_context(session_id="s", current_query="q"))
+
+    # All 50 messages should be present (after sanitize + repair_pairs
+    # drops the leading Agent and trailing User if needed).
+    assert len(ctx.recent_turns) >= 48
+
+
+# ── Threshold-based compaction ─────────────────────────────────────────
+
+
+def test_threshold_compaction_fires_and_advances_cursor(monkeypatch):
+    """When assembled context exceeds the threshold, compaction fires:
+    old turns are summarized, cursor advances, and only protected tail
+    turns remain verbatim."""
+    from app.services.chat import context_assembly_pipeline as pipeline_mod
+    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline, TokenBudget
+
+    updates: list[dict] = []
+
+    # Build turns that exceed the threshold.
+    big_content = "x " * 500  # ~500 tokens each
+    turns = []
+    for i in range(1, 21):
+        role = "User" if i % 2 == 1 else "Agent"
+        turns.append({"seq": i, "role": role, "content": big_content})
+
+    class FakeTranscript:
+        def get_session_meta(self, session_id):
+            return {
+                "user_id": "alice", "type": "general", "subject_type": None,
+                "subject_id": None, "compaction_cursor": 0, "summary": "",
+            }
+        def get_turns_after(self, session_id, after_seq=0):
+            return [t for t in turns if t["seq"] > after_seq]
+        def update_session_fields(self, session_id, **kwargs):
+            updates.append(kwargs)
+
+    # Stub summarize_conversation to return a fixed summary.
+    import app.services.memory.compaction_service as cs_mod
+    monkeypatch.setattr(cs_mod, "summarize_conversation",
+        lambda old, conv: asyncio.coroutine(lambda: "COMPRESSED SUMMARY")(old, conv)
+    )
+    # Use a proper async stub
+    async def fake_summarize(old, conv):
+        return "COMPRESSED SUMMARY"
+    monkeypatch.setattr(cs_mod, "summarize_conversation", fake_summarize)
+
+    monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
+
+    # Use a tiny threshold so compaction triggers.
+    budget = TokenBudget()
+    budget.MODEL_CONTEXT_WINDOW = 2_000
+    budget.COMPRESS_THRESHOLD_RATIO = 0.5  # 1000 tokens threshold
+    pipeline = ContextAssemblyPipeline(budget=budget)
+
+    ctx = asyncio.run(pipeline.assemble_answer_context(session_id="s", current_query="q"))
+
+    # Compaction should have fired — cursor advanced, summary updated.
+    assert len(updates) == 1
+    assert "summary" in updates[0]
+    assert updates[0]["summary"] == "COMPRESSED SUMMARY"
+    assert "compaction_cursor" in updates[0]
+    # Protected tail (COMPRESS_PROTECT_LAST_N=4) should remain.
+    assert len(ctx.recent_turns) <= budget.COMPRESS_PROTECT_LAST_N
+    assert ctx.summary == "COMPRESSED SUMMARY"
+
+
+def test_no_compaction_when_under_threshold(monkeypatch):
+    """Short conversations should pass through without compaction."""
+    from app.services.chat import context_assembly_pipeline as pipeline_mod
+    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
+
+    updates: list[dict] = []
+    turns = [
+        {"seq": 1, "role": "User", "content": "hi"},
+        {"seq": 2, "role": "Agent", "content": "hello"},
+    ]
+
+    class FakeTranscript:
+        def get_session_meta(self, session_id):
+            return {
+                "user_id": "alice", "type": "general", "subject_type": None,
+                "subject_id": None, "compaction_cursor": 0, "summary": "",
+            }
+        def get_turns_after(self, session_id, after_seq=0):
+            return [t for t in turns if t["seq"] > after_seq]
+        def update_session_fields(self, session_id, **kwargs):
+            updates.append(kwargs)
+
+    monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
+    pipeline = ContextAssemblyPipeline()
+    ctx = asyncio.run(pipeline.assemble_answer_context(session_id="s", current_query="q"))
+
+    assert len(ctx.recent_turns) == 2
+    assert updates == []  # no compaction triggered
+    assert ctx.summary == ""
 
 
 # ── [K#] numbering + sources building (context assembly is the sole owner) ──
@@ -301,16 +426,16 @@ def test_assemble_answer_context_populates_sources(monkeypatch):
                 "subject_id": None, "compaction_cursor": 0, "summary": "",
             }
 
-        def get_recent_turns(self, **_kw):
+        def get_turns_after(self, session_id, after_seq=0):
             return []
 
     monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
     pipeline = ContextAssemblyPipeline()
 
-    ctx = pipeline.assemble_answer_context(
+    ctx = asyncio.run(pipeline.assemble_answer_context(
         session_id="s", current_query="q",
         knowledge_chunks=[_chunk("n1", "Redis 缓存击穿……")],
-    )
+    ))
     assert ctx.sources and ctx.sources[0]["ref"] == "K1"
     assert "[K1]" in ctx.retrieved_context
 

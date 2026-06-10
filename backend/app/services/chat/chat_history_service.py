@@ -141,6 +141,33 @@ class TranscriptService:
         finally:
             db.close()
 
+    def get_turns_after(
+        self,
+        session_id: str,
+        after_seq: int = 0,
+    ) -> list[dict]:
+        """Load ALL messages after a compaction cursor — no count cap.
+
+        Used by the context assembly pipeline to implement the
+        incremental-append model (full history in context, compress at
+        threshold).  ``get_recent_turns`` is kept for callers that only
+        need a bounded window (planner, memory extraction).
+        """
+        db: Session = SessionLocal()
+        try:
+            rows = (
+                db.query(ConversationMessage)
+                .filter(
+                    ConversationMessage.conversation_id == session_id,
+                    ConversationMessage.seq > after_seq,
+                )
+                .order_by(ConversationMessage.seq.asc())
+                .all()
+            )
+            return [self._message_to_dict(row) for row in rows]
+        finally:
+            db.close()
+
     def get_messages_in_range(
         self,
         session_id: str,

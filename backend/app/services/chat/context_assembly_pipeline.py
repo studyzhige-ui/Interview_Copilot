@@ -15,7 +15,8 @@ Slots, in order from most → least cache-stable:
                            for the duration of one debrief.
   3. [Context Summary]     compaction summary (from the ``summary`` column);
                            changes only when a compaction fires.
-  4. [Recent Turns]        most recent user↔agent dialogue pairs (append-only).
+  4. [Recent Turns]        ALL user↔agent dialogue pairs after the compaction
+                           cursor (incremental-append, no fixed window).
   5. [Memory]              v3 memory bundle (per-turn-variable grounding);
                            user_profile is ALWAYS the first sub-section.
   6. [Retrieved Context]   RAG knowledge chunks (per-turn-variable grounding).
@@ -30,6 +31,10 @@ rewrite-context renderer iterate it. Adding a slot is one tuple
 entry plus a matching field on :class:`AssembledContext`; no second
 ordering definition to keep in sync.
 
+Compaction is triggered at assembly time when total context tokens exceed
+``MODEL_CONTEXT_WINDOW * COMPRESS_THRESHOLD_RATIO``. This matches the
+Claude Code model: full history in context, compress only at threshold.
+
 This module is distinct from
 ``app.agent_runtime.context_compactor.QueryLoopCompactor``, which
 compresses the running message list inside a single L2 agent
@@ -37,6 +42,7 @@ execution (different problem, different file).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Callable
@@ -63,12 +69,10 @@ class TokenBudget:
     DEBRIEF_REFERENCE_BUDGET = 2_000
     MEMORY_BUDGET = 6_000
     RETRIEVED_CONTEXT_BUDGET = 8_000
-    SESSION_STATE_BUDGET = 3_000
-    RECENT_TURNS_BUDGET = 32_000
     CURRENT_INPUT_BUDGET = 4_000
 
     COMPRESS_PROTECT_FIRST_N = 3
-    COMPRESS_PROTECT_LAST_N = 6
+    COMPRESS_PROTECT_LAST_N = 4
 
 
 # ── AssembledContext dataclass ───────────────────────────────────────────
@@ -208,29 +212,10 @@ class PromptRenderer:
         return "\n\n".join(parts)
 
 
-# ── Trimming utilities ───────────────────────────────────────────────────
-
-
-def trim_messages(messages: list[dict], budget: int) -> list[dict]:
-    """Keep the most recent messages within a token budget."""
-    total = 0
-    cutoff_index = len(messages)
-    for index in range(len(messages) - 1, -1, -1):
-        tokens = count_tokens(messages[index]["content"])
-        if total + tokens > budget:
-            cutoff_index = index + 1
-            break
-        total += tokens
-    else:
-        cutoff_index = 0
-    return messages[cutoff_index:]
-
-
 # ── Pipeline ─────────────────────────────────────────────────────────────
 
 
 class ContextAssemblyPipeline:
-    DEFAULT_RECENT_TURNS = 20
 
     def __init__(
         self,
@@ -241,12 +226,8 @@ class ContextAssemblyPipeline:
         self.renderer = renderer or PromptRenderer()
 
     # ── Public API ────────────────────────────────────────────────────
-    # ``assemble_rewrite_context`` was retired with the planner merge
-    # — the planner now reads recent_turns directly via
-    # ``transcript_service`` instead of going through this pipeline
-    # (which was over-fitted to producing pre-rendered prompt strings).
 
-    def assemble_answer_context(
+    async def assemble_answer_context(
         self,
         session_id: str,
         current_query: str,
@@ -265,7 +246,7 @@ class ContextAssemblyPipeline:
                                 pipeline auto-inject when applicable.
         ``knowledge_chunks``    RAG output chunks (already reranked).
         """
-        return self._assemble(
+        return await self._assemble(
             session_id=session_id,
             current_query=current_query,
             memory_block=memory_block,
@@ -275,7 +256,7 @@ class ContextAssemblyPipeline:
 
     # ── Internal ──────────────────────────────────────────────────────
 
-    def _assemble(
+    async def _assemble(
         self,
         session_id: str,
         current_query: str,
@@ -285,19 +266,44 @@ class ContextAssemblyPipeline:
         *,
         skip_debrief_autoinject: bool = False,
     ) -> AssembledContext:
-        meta = transcript_service.get_session_meta(session_id)
+        meta = await asyncio.to_thread(
+            transcript_service.get_session_meta, session_id,
+        )
         if meta is None:
-            recent_turns: list[dict] = []
+            all_turns: list[dict] = []
         else:
-            recent_turns = transcript_service.get_recent_turns(
-                session_id=session_id,
-                max_turns=self.DEFAULT_RECENT_TURNS,
+            all_turns = await asyncio.to_thread(
+                transcript_service.get_turns_after,
+                session_id,
                 after_seq=meta["compaction_cursor"],
             )
 
-        cleaned_turns = self._repair_pairs(
-            trim_messages(self._sanitize(recent_turns), self.budget.RECENT_TURNS_BUDGET)
+        cleaned_turns = self._repair_pairs(self._sanitize(all_turns))
+
+        # ── Threshold-based compaction ───────────────────────────────
+        # Check whether the full context exceeds the threshold. If so,
+        # compress old turns into the summary and re-load.
+        compress_threshold = int(
+            self.budget.MODEL_CONTEXT_WINDOW * self.budget.COMPRESS_THRESHOLD_RATIO
         )
+        turns_tokens = sum(count_tokens(m["content"]) for m in cleaned_turns)
+        old_summary = str((meta or {}).get("summary") or "")
+        overhead_tokens = (
+            count_tokens(old_summary)
+            + count_tokens(memory_block)
+            + count_tokens(current_query)
+            + count_tokens(debrief_reference)
+        )
+
+        if turns_tokens + overhead_tokens > compress_threshold and len(cleaned_turns) > self.budget.COMPRESS_PROTECT_LAST_N:
+            cleaned_turns, old_summary = await self._maybe_compact(
+                session_id=session_id,
+                meta=meta,
+                cleaned_turns=cleaned_turns,
+                old_summary=old_summary,
+                compress_threshold=compress_threshold,
+                overhead_tokens=overhead_tokens,
+            )
 
         # Auto-inject the interview reference for debrief sessions when the
         # caller didn't supply one. type + the bound record come from their
@@ -321,8 +327,6 @@ class ContextAssemblyPipeline:
                 if ref:
                     debrief_reference = ref
             elif record_id and conv_type != "debrief":
-                # Data sanity warning — a record is bound but the session
-                # isn't a debrief. Log so an operator can investigate.
                 logger.warning(
                     "type=%r has subject_id=%s but isn't debrief; "
                     "reference slot stays empty",
@@ -337,7 +341,7 @@ class ContextAssemblyPipeline:
 
         ctx = AssembledContext(
             debrief_reference=debrief_reference,
-            summary=str((meta or {}).get("summary") or ""),
+            summary=old_summary,
             memory_block=memory_block,
             retrieved_context=retrieved_context,
             recent_turns=cleaned_turns,
@@ -347,6 +351,59 @@ class ContextAssemblyPipeline:
         ctx.context_text = self.renderer.render_context_text(ctx)
         ctx.total_tokens = count_tokens(ctx.context_text)
         return ctx
+
+    # ── Assembly-time compaction ──────────────────────────────────────
+
+    async def _maybe_compact(
+        self,
+        *,
+        session_id: str,
+        meta: dict,
+        cleaned_turns: list[dict],
+        old_summary: str,
+        compress_threshold: int,
+        overhead_tokens: int,
+    ) -> tuple[list[dict], str]:
+        """Compress old turns when the assembled context exceeds the threshold.
+
+        Protects the last ``COMPRESS_PROTECT_LAST_N`` messages (verbatim).
+        Everything before that is summarized into the session's ``summary``
+        column and the ``compaction_cursor`` is advanced.
+
+        Returns ``(remaining_turns, new_summary)``.
+        """
+        protect_n = self.budget.COMPRESS_PROTECT_LAST_N
+        to_compress = cleaned_turns[:-protect_n]
+        to_keep = cleaned_turns[-protect_n:]
+
+        if not to_compress:
+            return cleaned_turns, old_summary
+
+        conversation = "\n".join(
+            f"{m['role']}: {m['content']}" for m in to_compress
+        )
+
+        from app.services.memory.compaction_service import summarize_conversation
+
+        new_summary = await summarize_conversation(old_summary, conversation)
+        if not new_summary:
+            return cleaned_turns, old_summary
+
+        new_cursor = to_compress[-1]["seq"]
+
+        await asyncio.to_thread(
+            transcript_service.update_session_fields,
+            session_id,
+            summary=new_summary,
+            compaction_cursor=new_cursor,
+        )
+        logger.info(
+            "Assembly-time compaction for session %s: compressed %d messages, "
+            "cursor advanced to seq %d, summary=%d tokens",
+            session_id, len(to_compress), new_cursor, count_tokens(new_summary),
+        )
+
+        return to_keep, new_summary
 
     # ── [K#] + sources (the sole owner of citation numbering) ──────────
 
@@ -485,5 +542,4 @@ __all__ = [
     "context_pipeline",
     "count_tokens",
     "prompt_renderer",
-    "trim_messages",
 ]

@@ -1,45 +1,27 @@
-"""Conversation summary compaction service.
+"""Conversation summary compaction — shared LLM summarization core.
 
-Compresses old conversation turns into the session's ``summary`` column using
-a dual-threshold trigger (token growth + turn count) — adapts to conversation
-density better than a fixed modulo cadence. This is the assembly-time (outer)
-trigger of the same autocompact mechanism the L2 loop runs inline; both fold
-the conversation into one ``summary`` rendered via the [Context Summary] slot
-(see plan §8 — the two will fully merge under D1).
+Provides ``summarize_conversation(old_summary, conversation)`` which is
+called by BOTH:
+  - L1 assembly-time trigger (``ContextAssemblyPipeline._maybe_compact``)
+  - L2 loop-time trigger (``QueryLoopCompactor.autocompact``)
+
+One function, two call sites, one 6-section structured summary.
+
+The assembly-time trigger logic (threshold detection + cursor advancement)
+lives in ``context_assembly_pipeline.py``; this module is a pure tool.
 """
 
 import logging
 
 from app.rag.embeddings import agent_fast_llm
-from app.services.chat.chat_history_service import transcript_service
 from app.services.chat.context_assembly_pipeline import count_tokens
 from app.services.memory._json_payload import _extract_json_payload
 
 logger = logging.getLogger(__name__)
 
+SUMMARY_MAX_TOKENS = 2_500
 
-class CompactionService:
-    """Compresses old conversation turns into the session's ``summary`` column.
-
-    Dual-threshold trigger:
-      - Token growth ≥ COMPACT_MIN_TOKEN_GROWTH AND turns ≥ COMPACT_MIN_TURNS
-      - OR turns ≥ COMPACT_MAX_TURNS (hard cap, fires regardless of token count)
-
-    This replaces the old fixed "every 20 turns" (modulo) trigger which could
-    not adapt to conversation density — heavy sessions (long RAG analysis)
-    waited too long while lightweight sessions (short Q&A) triggered too early.
-
-    The summary uses the structured 6-section template (``COMPACTION_PROMPT``)
-    instead of the old flat 300-char blob.
-    """
-
-    # ── Dual-threshold parameters ────────────────────────────────────
-    COMPACT_MIN_TOKEN_GROWTH = 6_000  # pending tokens since last compact
-    COMPACT_MIN_TURNS = 4             # minimum turns between compactions
-    COMPACT_MAX_TURNS = 15            # hard cap — always compact at this point
-    SUMMARY_MAX_TOKENS = 2_500  # cap on the stored 6-section summary
-
-    COMPACTION_PROMPT = """你是一个对话摘要助手。
+COMPACTION_PROMPT = """你是一个对话摘要助手。
 你的输出会被注入到一段独立的对话中，让一个**不同的**助手能够无缝接续当前对话。
 不要回答对话中的任何问题——只输出结构化摘要。
 使用对话中用户使用的同一种语言撰写摘要。
@@ -87,79 +69,18 @@ class CompactionService:
 如果没有，写"无"]
 """
 
-    async def compact_if_needed(self, session_id: str) -> bool:
-        import asyncio
-
-        # All transcript_service reads/writes are sync DB queries.
-        # ``compact_if_needed`` runs as a background task (engine
-        # dispatches via ``safe_background_task``), but the LLM call
-        # below YIELDS the loop, so any other coroutine pinned on
-        # this thread could land during the await. Without to_thread
-        # wrapping, the three queries here form sync bottlenecks
-        # that block the loop for ~10-50ms each. Wrapped to keep the
-        # parent's event-loop thread free across the whole compaction.
-        meta = await asyncio.to_thread(
-            transcript_service.get_session_meta, session_id,
-        )
-        if meta is None:
-            return False
-
-        pending = await asyncio.to_thread(
-            transcript_service.get_recent_turns,
-            session_id, 100, meta["compaction_cursor"],
-        )
-        if not pending:
-            return False
-
-        # ── Dual-threshold trigger ───────────────────────────────────
-        turns_since_compact = (len(pending) + 1) // 2
-        pending_tokens = sum(count_tokens(m["content"]) for m in pending)
-
-        should_compact = (
-            (pending_tokens >= self.COMPACT_MIN_TOKEN_GROWTH
-             and turns_since_compact >= self.COMPACT_MIN_TURNS)
-            or turns_since_compact >= self.COMPACT_MAX_TURNS
-        )
-        if not should_compact:
-            return False
-
-        logger.info(
-            "Compaction triggered for session %s: %d turns, %d tokens pending",
-            session_id, turns_since_compact, pending_tokens,
-        )
-
-        old_summary = meta.get("summary", "")
-        conversation = "\n".join(
-            f"{item['role']}: {item['content']}" for item in pending
-        )
-        new_summary = await summarize_conversation(old_summary, conversation)
-        if not new_summary:
-            return False  # LLM / parse failure (already logged)
-
-        await asyncio.to_thread(
-            transcript_service.update_session_fields,
-            session_id,
-            summary=new_summary,
-            compaction_cursor=pending[-1]["seq"],
-        )
-        logger.info(
-            "Compaction completed for session %s: summary=%d tokens",
-            session_id, count_tokens(new_summary),
-        )
-        return True
-
 
 async def summarize_conversation(old_summary: str, conversation: str) -> str:
-    """The single LLM summarization core — used by BOTH the outer post-turn
-    compaction (assembly-time trigger, ``compact_if_needed``) and the inner
-    loop autocompact (loop-time trigger, ``QueryLoopCompactor.autocompact``).
+    """The single LLM summarization core — used by BOTH the outer assembly-time
+    compaction (``ContextAssemblyPipeline._maybe_compact``) and the inner
+    loop autocompact (``QueryLoopCompactor.autocompact``).
     One function, two call sites, one 6-section summary.
 
     Iteratively updates ``old_summary`` with ``conversation`` (the formatted
     new turns / messages). Returns the new, capped summary; ``""`` on LLM or
     parse failure (logged).
     """
-    prompt = CompactionService.COMPACTION_PROMPT.format(
+    prompt = COMPACTION_PROMPT.format(
         old_summary=old_summary or "(无)",
         new_conversation=conversation,
     )
@@ -173,12 +94,9 @@ async def summarize_conversation(old_summary: str, conversation: str) -> str:
     except Exception as exc:  # noqa: BLE001
         logger.error("Conversation summarization failed: %s", exc)
         return ""
-    if count_tokens(new_summary) > CompactionService.SUMMARY_MAX_TOKENS:
+    if count_tokens(new_summary) > SUMMARY_MAX_TOKENS:
         new_summary = new_summary[:1200]
     return new_summary
 
 
-compaction_service = CompactionService()
-
-
-__all__ = ["CompactionService", "compaction_service", "summarize_conversation"]
+__all__ = ["COMPACTION_PROMPT", "SUMMARY_MAX_TOKENS", "summarize_conversation"]

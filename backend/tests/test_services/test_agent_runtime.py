@@ -294,9 +294,8 @@ def test_autocompact_summarizes_body_keeps_head_and_tail(monkeypatch):
         async def acomplete(self, prompt, response_format=None):
             return _StubResponse()
 
-    # The ``compaction_service`` singleton shadows the module of the same name
-    # in the package namespace, so reach the real module via sys.modules to
-    # stub the LLM that summarize_conversation() calls.
+    # Stub the LLM that summarize_conversation() calls inside the
+    # compaction_service module.
     import sys
     import app.services.memory.compaction_service  # noqa: F401  (ensure loaded)
     monkeypatch.setattr(

@@ -27,8 +27,7 @@ from app.services.memory import (  # noqa: F401
     v3_context_loader,
 )
 from app.services.memory.compaction_service import (  # noqa: F401
-    CompactionService,
-    compaction_service,
+    summarize_conversation,
 )
 from app.services.memory.post_turn_maintenance import (  # noqa: F401
     PostTurnMaintenanceService,
@@ -43,8 +42,7 @@ __all__ = [
     "realtime_extraction",
     "v3_context_loader",
     # Compaction (conversation → summary; historically lives in this package)
-    "CompactionService",
-    "compaction_service",
+    "summarize_conversation",
     # Post-turn maintenance
     "PostTurnMaintenanceService",
     "post_turn_maintenance_service",
