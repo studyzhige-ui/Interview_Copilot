@@ -1,24 +1,18 @@
-"""Tests for user-scoped retrieval logic in ``app.rag.retriever``.
+"""Tests for the user-scoped retrieval primitives in ``app.rag.retriever``.
 
-The full RAG pipeline (Milvus + Reranker) is integration territory and
-lives under ``@pytest.mark.slow``. These unit tests focus on the
-scope-gating primitives that decide *which user's nodes are visible
-to a given query*:
+The full RAG pipeline (Milvus + reranker + hydrate) is integration territory
+and lives under ``@pytest.mark.slow``. These unit tests cover the pure
+helpers that gate scope, dedup and scoring:
 
-  * ``_allowed_user_ids`` — strict private-only scoping.
-  * ``_metadata_matches_scope`` — node-level visibility check.
+  * ``_hit_in_scope`` — tenant (+ optional source_kind) defence-in-depth.
   * ``milvus_hybrid._scope_expr`` — the Milvus server-side tenant filter expr.
-  * ``_query_terms`` / ``_lexical_overlap`` — Chinese + English term
-    extraction and lexical-overlap scoring (debug / source signal only).
-  * ``_score_passes`` — single absolute score threshold, no fallback.
-
-Plus a behavioural assertion that *user A's query never returns user B's
-documents* by routing fake nodes through the same filter helpers used by
-``query_knowledge_base``.
+  * ``_dedup_hits`` / ``_normalized_text_hash`` — deterministic dedup.
+  * ``_score_passes`` — reranker-branch score gate (the retriever-fallback
+    branch deliberately skips it — RRF scores are ~1/60-scale).
+  * ``RetrievalState`` / ``RetrievalResult`` — the structured-state contract
+    that replaced the ``[SYSTEM_EMPTY_WARNING]`` sentinel protocol.
 """
 from __future__ import annotations
-
-from types import SimpleNamespace
 
 import pytest
 
@@ -28,47 +22,39 @@ import pytest
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_allowed_user_ids_is_strictly_private():
+def test_hit_in_scope_enforces_tenant():
     from app.rag import retriever
 
-    # Scope key is the stable users.id pk now (resolved from the username once
-    # at query_knowledge_base). Strictly private: only the caller's own pk.
-    assert retriever._allowed_user_ids(1, "interview_qa") == [1]
-    assert retriever._allowed_user_ids(1, "personal_memory") == [1]
-    # Unresolved principal (resolve_user_pk -> None) → empty allowlist (caller bails).
-    assert retriever._allowed_user_ids(None, "interview_qa") == []
+    assert retriever._hit_in_scope({"user_id": 1, "source_kind": "user_upload"}, 1)
+    # Cross-user leak must never survive, even past the server-side expr.
+    assert not retriever._hit_in_scope({"user_id": 2, "source_kind": "user_upload"}, 1)
+    # Missing user_id on the hit fails closed.
+    assert not retriever._hit_in_scope({"source_kind": "user_upload"}, 1)
 
 
-def test_metadata_scope_requires_user_and_source_match():
+def test_hit_in_scope_optional_source_kind():
     from app.rag import retriever
 
-    matches = retriever._metadata_matches_scope
+    hit = {"user_id": 1, "source_kind": "improved_qa"}
+    # Default: no source filter — the reranker is the relevance authority.
+    assert retriever._hit_in_scope(hit, 1, None)
+    assert retriever._hit_in_scope(hit, 1, "improved_qa")
+    assert not retriever._hit_in_scope(hit, 1, "user_upload")
 
-    assert matches(
-        {"user_id": 1, "source_kind": "interview_qa"},
-        [1],
-        "interview_qa",
-    )
-    # Wrong user
-    assert not matches(
-        {"user_id": 2, "source_kind": "interview_qa"},
-        [1],
-        "interview_qa",
-    )
-    # Wrong source_kind
-    assert not matches(
-        {"user_id": 1, "source_kind": "personal_memory"},
-        [1],
-        "interview_qa",
-    )
-    # source_kind=None disables source filter, but user_id still enforced.
-    assert matches(
-        {"user_id": 1, "source_kind": "anything"}, [1], None,
-    )
-    # Empty allowed list disables user filter entirely.
-    assert matches(
-        {"user_id": 2, "source_kind": "interview_qa"}, [], "interview_qa",
-    )
+
+def test_hit_in_scope_blocks_cross_user_leak():
+    """User A's query must never surface user B's chunks even if they slip
+    through the vector-store filter."""
+    from app.rag import retriever
+
+    candidates = [
+        {"user_id": 1, "source_kind": "user_upload", "text": "alice's note"},
+        {"user_id": 2, "source_kind": "user_upload", "text": "bob's secret"},
+        {"user_id": 1, "source_kind": "improved_qa", "text": "alice's QA"},
+    ]
+    survivors = [h for h in candidates if retriever._hit_in_scope(h, 1)]
+    texts = {h["text"] for h in survivors}
+    assert texts == {"alice's note", "alice's QA"}
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -98,51 +84,47 @@ def test_eq_rejects_injection():
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Lexical overlap & query terms
+# Deterministic dedup
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_query_terms_extracts_english_and_chinese():
+def test_normalized_text_hash_collapses_whitespace():
     from app.rag import retriever
 
-    terms = retriever._query_terms("Redis 雪崩 击穿 cache penetration")
-    # English tokens lowercased; Chinese kept as 2-char runs.
-    assert "redis" in terms
-    assert "cache" in terms
-    assert "penetration" in terms
-    assert "雪崩" in terms
-    assert "击穿" in terms
+    a = retriever._normalized_text_hash("Redis  缓存\n雪崩")
+    b = retriever._normalized_text_hash("Redis 缓存 雪崩")
+    assert a == b
+    assert a != retriever._normalized_text_hash("Redis 缓存 击穿")
 
 
-def test_query_terms_dedupes():
+def test_dedup_hits_drops_same_id_keeps_first():
     from app.rag import retriever
 
-    terms = retriever._query_terms("redis redis redis")
-    assert terms == ["redis"]
+    hits = [
+        {"id": "n1", "text": "first copy", "score": 0.9},
+        {"id": "n1", "text": "ignored duplicate", "score": 0.5},
+        {"id": "n2", "text": "second", "score": 0.4},
+    ]
+    out = retriever._dedup_hits(hits)
+    assert [h["id"] for h in out] == ["n1", "n2"]
+    # Hits arrive in RRF order — the first (better-ranked) copy survives.
+    assert out[0]["text"] == "first copy"
 
 
-def test_lexical_overlap_high_for_close_query():
+def test_dedup_hits_drops_same_normalized_text_across_rows():
     from app.rag import retriever
 
-    query = "Redis 雪崩 击穿 穿透"
-    content = "Redis 缓存雪崩、缓存击穿、缓存穿透分别是什么？"
-    assert retriever._lexical_overlap(query, content) >= 0.75
-
-
-def test_lexical_overlap_low_for_unrelated():
-    from app.rag import retriever
-
-    assert retriever._lexical_overlap("Kafka rebalance protocol", "今天天气真好") < 0.3
-
-
-def test_lexical_overlap_zero_for_empty_query():
-    from app.rag import retriever
-
-    assert retriever._lexical_overlap("", "anything") == 0.0
+    hits = [
+        {"id": "n1", "text": "Redis 缓存雪崩", "score": 0.9},
+        {"id": "n2", "text": " Redis  缓存雪崩 ", "score": 0.8},  # same text, other row
+        {"id": "n3", "text": "完全不同的内容", "score": 0.7},
+    ]
+    out = retriever._dedup_hits(hits)
+    assert [h["id"] for h in out] == ["n1", "n3"]
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Score threshold
+# Score gate (reranker branch only)
 # ─────────────────────────────────────────────────────────────────────
 
 
@@ -153,11 +135,10 @@ def test_score_passes_meets_threshold():
     assert not retriever._score_passes(0.3, min_score=0.5)
 
 
-def test_score_passes_no_relaxation_below_threshold():
-    """No fallback: the same RAG_MIN_SCORE applies whether or not a reranker
-    ran. A low RRF / vector score (0.03) that used to slip through the old
-    ``RAG_FALLBACK_MIN_SCORE`` relaxation is now rejected — retrieval returns
-    an empty result instead of admitting a low-relevance chunk."""
+def test_score_passes_rejects_none_and_rrf_scale():
+    """The gate itself stays strict — RRF-scale scores (~0.03) never pass.
+    The retriever's FALLBACK branch bypasses this gate entirely instead of
+    relaxing it (score scales must not be mixed)."""
     from app.rag import retriever
 
     assert not retriever._score_passes(0.03, min_score=0.5)
@@ -165,45 +146,59 @@ def test_score_passes_no_relaxation_below_threshold():
 
 
 # ─────────────────────────────────────────────────────────────────────
-# End-to-end scope leak guard
+# Structured retrieval-state contract
 # ─────────────────────────────────────────────────────────────────────
 
 
-def _fake_node(user_id: int, source_kind: str, text: str):
-    """Build a fake retrieved node compatible with the metadata-scope helper."""
-    return SimpleNamespace(
-        node=SimpleNamespace(
-            metadata={"user_id": user_id, "source_kind": source_kind},
-            get_content=lambda: text,
-        ),
-        score=0.9,
+def test_retrieval_state_defaults_and_dict_shape():
+    from app.rag.retrieval_state import RetrievalState
+
+    state = RetrievalState()
+    assert state.retrieval_hit is False
+    assert state.empty_reason is None
+    assert state.planner_failed is False
+    assert state.fallback_used is False
+    assert set(state.to_dict()) == {
+        "retrieval_hit", "empty_reason", "planner_failed", "fallback_used",
+    }
+
+
+def test_empty_reason_enum_is_frozen():
+    """The six fixed values shared by online trace and offline eval —
+    additions belong in retrieval_state.py + the evaluation plan, nowhere else."""
+    from app.rag import retrieval_state as rs
+
+    assert rs.EMPTY_REASONS == {
+        "planner_no_retrieval",
+        "no_candidates",
+        "all_below_threshold",
+        "all_filtered_live_check",
+        "milvus_unavailable",
+        "principal_unresolved",
+    }
+
+
+def test_score_source_enum_values():
+    from app.rag import retrieval_state as rs
+
+    assert rs.SCORE_SOURCE_RERANKER == "reranker"
+    assert rs.SCORE_SOURCE_RETRIEVER_FALLBACK == "retriever_fallback"
+
+
+def test_retrieval_result_hit_property():
+    from app.rag.retrieval_state import RetrievalResult, RetrievalState
+
+    assert RetrievalResult().retrieval_hit is False
+    hit = RetrievalResult(
+        chunks=[{"chunk_id": "dch_x"}],
+        state=RetrievalState(retrieval_hit=True),
     )
+    assert hit.retrieval_hit is True
 
 
-def test_metadata_scope_blocks_cross_user_leak():
-    """The post-retrieval scope filter (same logic that ``query_knowledge_base``
-    applies to ``raw_nodes``) must drop nodes belonging to another user even
-    if they slip through the vector store filter."""
-    from app.rag import retriever
-
-    candidates = [
-        _fake_node(1, "interview_qa", "alice's private note"),
-        _fake_node(2, "interview_qa", "bob's confidential file"),
-        _fake_node(1, "interview_qa", "alice's second note"),
-        _fake_node(1, "official_docs", "wrong source kind"),
-    ]
-    survivors = [
-        n for n in candidates
-        if retriever._metadata_matches_scope(
-            n.node.metadata, [1], "interview_qa"
-        )
-    ]
-    contents = {n.node.get_content() for n in survivors}
-    assert "alice's private note" in contents
-    assert "alice's second note" in contents
-    # The cross-user leak and the wrong-source-kind node must be gone.
-    assert "bob's confidential file" not in contents
-    assert "wrong source kind" not in contents
+# ─────────────────────────────────────────────────────────────────────
+# Integration marker
+# ─────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.slow

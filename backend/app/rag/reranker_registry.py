@@ -108,16 +108,29 @@ def list_providers() -> list[dict[str, Any]]:
     ]
 
 
-# ── Remote rerank postprocessor (unchanged) ────────────────────────────
+# ── Remote rerank postprocessor ────────────────────────────────────────
+
+
+class RerankerUnavailableError(RuntimeError):
+    """Remote reranker transport failure / unusable response.
+
+    Raised instead of silently passing candidates through: the retriever
+    catches this and takes its EXPLICIT fallback path — unranked RRF top-N,
+    ``score_source=retriever_fallback``, and no reranker-score threshold.
+    The old silent pass-through kept RRF-scale scores (~1/60) that then hit
+    ``RAG_MIN_SCORE``, which filtered every fallback result (retrieval plan
+    §2.5).
+    """
 
 
 class RemoteAPIRerank(BaseNodePostprocessor):
     """Generic OpenAI-style ``/rerank`` postprocessor.
 
-    Posts the candidate node texts to the provider, takes back the sorted
-    indices + scores, and returns the top-N as ``NodeWithScore``. Falls
-    back to passing the input through (no re-ranking) on transport error
-    so a flaky upstream doesn't kill the whole RAG turn.
+    Posts the candidate node texts to the provider and returns the top-N as
+    ``NodeWithScore`` in provider order. Raises
+    :class:`RerankerUnavailableError` on transport error or an unusable
+    response body so the caller can take its explicit fallback path instead
+    of mixing RRF-scale scores into the reranker-score contract.
     """
 
     api_base: str = Field()
@@ -156,19 +169,18 @@ class RemoteAPIRerank(BaseNodePostprocessor):
                 resp.raise_for_status()
                 body = resp.json()
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Remote rerank failed (%s); returning unranked top-N: %s",
-                self.model, exc,
-            )
-            return nodes[: self.top_n]
+            raise RerankerUnavailableError(
+                f"remote rerank ({self.model}) failed: {exc}"
+            ) from exc
 
         # Cohere v2 / SiliconFlow / Jina shape: {"results": [{"index": i,
         # "relevance_score": s, ...}, ...]} sorted desc. DashScope wraps
         # in {"output": {"results": [...]}}.
         results = body.get("results") or body.get("output", {}).get("results") or []
         if not results:
-            logger.warning("Remote rerank returned no results; passing through")
-            return nodes[: self.top_n]
+            raise RerankerUnavailableError(
+                f"remote rerank ({self.model}) returned no results"
+            )
 
         out: list[NodeWithScore] = []
         for r in results[: self.top_n]:
@@ -178,6 +190,13 @@ class RemoteAPIRerank(BaseNodePostprocessor):
                 continue
             n = nodes[idx]
             out.append(NodeWithScore(node=n.node, score=float(score) if score is not None else n.score))
+        if not out:
+            # Every returned index was unusable — same contract as "no
+            # results": raise so the caller takes its explicit fallback path
+            # instead of mislabelling this as an all-below-threshold empty.
+            raise RerankerUnavailableError(
+                f"remote rerank ({self.model}) returned unusable indices"
+            )
         return out
 
 
@@ -232,6 +251,7 @@ __all__ = [
     "RerankerProvider",
     "PROVIDERS",
     "ResolvedReranker",
+    "RerankerUnavailableError",
     "resolve_reranker",
     "list_providers",
     "build_reranker",

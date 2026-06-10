@@ -1,25 +1,19 @@
 """Single-shot RAG retrieval facade.
 
 Wraps :func:`app.rag.retriever.query_knowledge_base` so the conversation
-engine and the L2 agent's knowledge tool can call retrieval the same
-way. After the planner-merge refactor we no longer split by
-``source_kind`` — the BGE reranker is the authoritative relevance
-filter and a pre-rerank metadata split was a heuristic that mostly got
-in the way (a user asking about Redis avalanche may benefit from both
-interview-question and official-docs chunks).
+engine and the L2 agent's knowledge tool call retrieval the same way.
+Deliberately thin: the dense/sparse pair are REAL separate inputs now
+(dense drives the embedding, sparse drives BM25 — either falls back to the
+other when blank, so a single-query caller passes the same string twice),
+and the facade stamps planner state onto the returned
+:class:`~app.rag.retrieval_state.RetrievalState`.
+
+``source_kind=None`` (the default) searches every source the user has — the
+reranker decides which chunks survive. Pass an explicit ``source_kind`` only
+when a caller has a hard reason to scope to one corpus.
 """
-from dataclasses import dataclass, field
-from typing import Any
-
+from app.rag.retrieval_state import RetrievalResult
 from app.rag.retriever import query_knowledge_base
-
-
-@dataclass
-class KnowledgeRetrievalResult:
-    context_text: str = ""
-    chunks: list[dict[str, Any]] = field(default_factory=list)
-    sources: list[dict[str, Any]] = field(default_factory=list)
-    retrieval_hit: bool = False
 
 
 class KnowledgeRetriever:
@@ -30,36 +24,22 @@ class KnowledgeRetriever:
         sparse_query: str,
         user_id: str,
         source_kind: str | None = None,
-    ) -> KnowledgeRetrievalResult:
+        planner_failed: bool = False,
+    ) -> RetrievalResult:
         """Run one retrieval pass against the user's knowledge corpus.
 
-        ``source_kind=None`` (the default) searches every source the
-        user has — the reranker decides which chunks survive. Pass an
-        explicit ``source_kind`` only when a caller has a hard reason
-        to scope to one corpus (e.g. an admin tool inspecting just the
-        official-docs index).
+        ``planner_failed`` is the engine-side flag (planner LLM crashed →
+        original-question fallback retrieval); the retriever itself can't
+        know it, so the facade stamps it onto the state here.
         """
-        query = sparse_query or dense_query
         result = await query_knowledge_base(
-            query_str=query,
-            source_kind=source_kind,
+            dense_query=dense_query,
+            sparse_query=sparse_query,
             user_id=user_id,
+            source_kind=source_kind,
         )
-        context_text = result.get("context_text") or result.get("answer") or ""
-        chunks: list[dict[str, Any]] = []
-        for chunk in result.get("chunks", []):
-            if source_kind and not chunk.get("source_kind"):
-                chunk["source_kind"] = source_kind
-            chunks.append(chunk)
-        return KnowledgeRetrievalResult(
-            context_text=context_text,
-            chunks=chunks,
-            sources=result.get("sources", []),
-            retrieval_hit=(
-                "[SYSTEM_EMPTY_WARNING]" not in context_text
-                if context_text else False
-            ),
-        )
+        result.state.planner_failed = planner_failed
+        return result
 
 
 knowledge_retriever = KnowledgeRetriever()

@@ -85,9 +85,18 @@ def client(db: Session) -> Iterator[TestClient]:
 
 
 def test_rag_query_delegates_to_retriever(client):
-    async def fake_query(q, source_kind=None, user_id=None):
+    from app.rag.retrieval_state import RetrievalResult, RetrievalState
+
+    async def fake_query(*, dense_query, sparse_query, user_id=None, source_kind=None):
         assert user_id == "alice"
-        return {"response": "answer", "source_nodes": []}
+        # The diagnostic endpoint passes the single query as BOTH inputs.
+        assert dense_query == "what is redis"
+        assert sparse_query == "what is redis"
+        assert source_kind == "user_upload"
+        return RetrievalResult(
+            chunks=[{"chunk_id": "dch_1", "node_id": "n1", "text": "redis", "score": 0.9}],
+            state=RetrievalState(retrieval_hit=True),
+        )
 
     with patch("app.api.rag.query_knowledge_base", side_effect=fake_query):
         resp = client.post(
@@ -97,7 +106,9 @@ def test_rag_query_delegates_to_retriever(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "success"
-    assert body["data"]["response"] == "answer"
+    assert body["data"]["chunks"][0]["chunk_id"] == "dch_1"
+    assert body["data"]["retrieval_state"]["retrieval_hit"] is True
+    assert body["data"]["retrieval_state"]["empty_reason"] is None
 
 
 def test_rag_query_500_on_retriever_error(client):

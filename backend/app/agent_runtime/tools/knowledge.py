@@ -37,6 +37,10 @@ async def _search_knowledge_handler(
             chunks.append({
                 "text": chunk.get("text", "")[:1500],
                 "source": chunk.get("source_kind", "knowledge"),
+                # Hydrated provenance — lets the agent name the document it
+                # is quoting instead of an anonymous "knowledge" blob.
+                "document_title": chunk.get("document_title"),
+                "chunk_id": chunk.get("chunk_id"),
                 "score": (
                     round(float(chunk.get("score", 0)), 3)
                     if chunk.get("score") is not None else None

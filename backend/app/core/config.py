@@ -117,11 +117,14 @@ class Settings(BaseSettings):
     AGENT_PERSIST_THRESHOLD: int = 50_000      # per-result: offload if > 50K chars
     AGENT_TURN_BUDGET_CHARS: int = 200_000     # per-turn aggregate: spill largest until < 200K
     AGENT_PERSIST_PREVIEW_SIZE: int = 2_000    # preview size (chars) in persisted-output block
-    FUSION_TOP_K: int = 6
+    # Pre-rerank hybrid candidate count (Milvus RRF output). 12 gives the
+    # cross-encoder a real choice space (retrieval plan §2.3).
+    FUSION_TOP_K: int = 12
     RERANK_TOP_N: int = 5
-    # Single relevance threshold for RAG retrieval. Applied uniformly with or
-    # without a reranker — nothing clearing it means an empty result, never a
-    # relaxed second pass (see rag/retriever._score_passes).
+    # Reranker-score relevance threshold — reranker branch ONLY. The
+    # retriever-fallback branch (remote reranker transport failure) returns
+    # RRF-ordered top-N without it: RRF scores are ~1/60-scale and would
+    # never clear a cross-encoder threshold (see rag/retriever._score_passes).
     RAG_MIN_SCORE: float = 0.5
     # Memory v2 settings (MEMORY_MILVUS_COLLECTION / MEMORY_*_TOP_K /
     # MEMORY_BACKFILL_ON_STARTUP) were removed in the audit cleanup —

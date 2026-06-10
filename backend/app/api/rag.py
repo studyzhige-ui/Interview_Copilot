@@ -40,19 +40,28 @@ async def api_query_knowledge_base(
     body: QueryRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Execute a user-scoped RAG query against the configured vector store."""
+    """Execute a user-scoped RAG query against the configured vector store.
+
+    Diagnostic endpoint: returns the hydrated chunks + structured
+    retrieval_state. ``[K#]`` numbering / final sources are NOT produced
+    here — context assembly owns those on the chat path.
+    """
     try:
         source_kind_val = body.source_kind.value if body.source_kind else None
 
         result = await query_knowledge_base(
-            body.query,
+            dense_query=body.query,
+            sparse_query=body.query,
             source_kind=source_kind_val,
             user_id=current_user.username,
         )
 
         return {
             "status": "success",
-            "data": result,
+            "data": {
+                "chunks": result.chunks,
+                "retrieval_state": result.state.to_dict(),
+            },
         }
     except Exception as exc:  # noqa: BLE001
         logger.error("RAG query API failed: %s", exc)

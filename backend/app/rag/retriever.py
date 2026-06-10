@@ -1,8 +1,37 @@
+"""Core RAG retrieval: Milvus hybrid search → dedup → rerank → hydrate.
+
+One retrieval pass (:func:`query_knowledge_base`):
+
+  1. Resolve the request principal to the stable ``users.id`` pk — the ONLY
+     Milvus pre-filter (P0 tenant boundary, server-side ``user_id == pk``).
+  2. Milvus 2.6 native hybrid search: dense ANN on the ``dense_query``
+     embedding + server-side BM25 on ``sparse_query``, fused by RRF. The two
+     queries are real separate inputs — the planner writes a natural-language
+     dense query and a keyword sparse query (retrieval plan §2.1/§2.3).
+  3. Deterministic dedup (Milvus row id, then normalised-text hash). One
+     hybrid search cannot repeat a primary key, so this mainly guards the
+     multi-sub-query merge path; it is cheap either way.
+  4. Cross-encoder rerank with the top-level dense query. A remote reranker
+     transport failure takes the EXPLICIT fallback path: unranked RRF top-N,
+     ``score_source=retriever_fallback``, and NO reranker-score threshold —
+     RRF scores live on a ~1/60 scale, so ``RAG_MIN_SCORE=0.5`` would
+     silently filter every one of them (retrieval plan §2.5).
+  5. Postgres hydrate + live check for the final top-N via
+     :func:`app.services.knowledge.chunk_hydration.hydrate_chunks` —
+     Postgres text is the fact source; chunks of deleted/deleting documents
+     drop out here.
+
+Returns :class:`~app.rag.retrieval_state.RetrievalResult`: hydrated chunks in
+rank order plus a structured :class:`RetrievalState`. The old
+``[SYSTEM_EMPTY_WARNING]`` sentinel-string protocol is gone. The ``[K#]``
+numbering and the final sources array are context assembly's job — NOT
+produced here (retrieval plan §2.7).
+"""
 import asyncio
+import hashlib
 import logging
-import re
 from threading import Lock
-from typing import Optional, Dict, Any
+from typing import Any, Optional
 
 from llama_index.core import Settings
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
@@ -10,33 +39,24 @@ from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from app.core.config import settings
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
-from app.rag.reranker_registry import build_reranker, resolve_reranker
+from app.rag.reranker_registry import (
+    RerankerUnavailableError,
+    build_reranker,
+    resolve_reranker,
+)
+from app.rag.retrieval_state import (
+    EMPTY_ALL_BELOW_THRESHOLD,
+    EMPTY_ALL_FILTERED_LIVE_CHECK,
+    EMPTY_MILVUS_UNAVAILABLE,
+    EMPTY_NO_CANDIDATES,
+    EMPTY_PRINCIPAL_UNRESOLVED,
+    SCORE_SOURCE_RERANKER,
+    SCORE_SOURCE_RETRIEVER_FALLBACK,
+    RetrievalResult,
+    RetrievalState,
+)
 
 logger = logging.getLogger(__name__)
-
-# Knowledge-document states that mean "no longer a valid read source".
-_KB_DELETED_STATES = {"deleting", "delete_failed", "deleted"}
-
-
-def _live_document_ids(document_ids: set[str]) -> set[str]:
-    """Of the given ``knowledge_documents`` ids, return those still LIVE (not
-    soft-deleted / deleting). RAG safety net: a chunk whose document was deleted
-    must not resurface even if its Milvus vector lingers (delete lag/failure)."""
-    from app.models.knowledge import KnowledgeDocument
-
-    if not document_ids:
-        return set()
-    with SessionLocal() as db:
-        rows = (
-            db.query(KnowledgeDocument.id)
-            .filter(
-                KnowledgeDocument.id.in_(document_ids),
-                KnowledgeDocument.deleted_at.is_(None),
-                ~KnowledgeDocument.status.in_(_KB_DELETED_STATES),
-            )
-            .all()
-        )
-    return {r[0] for r in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -78,50 +98,59 @@ def init_reranker():
 
 
 # ---------------------------------------------------------------------------
-# Helper utilities
+# Pure helpers
 # ---------------------------------------------------------------------------
 
-def _allowed_user_ids(user_id: int, source_kind: Optional[str]) -> list[int]:
-    # ``is not None`` (not truthiness): the scope key is now a numeric users.id,
-    # and a hypothetical pk of 0 must still scope to that user, never collapse to
-    # an empty (and thus unscoped-fallback) list.
-    return [user_id] if user_id is not None else []
-
-
-def _metadata_matches_scope(
-    metadata: dict[str, Any],
-    allowed_user_ids: list[int],
-    source_kind: Optional[str],
+def _hit_in_scope(
+    hit: dict[str, Any], user_pk: int, source_kind: Optional[str] = None,
 ) -> bool:
-    if allowed_user_ids and metadata.get("user_id") not in allowed_user_ids:
+    """Defence-in-depth tenant check on a Milvus hit.
+
+    The server-side expr already filters ``user_id == pk``; a row from
+    another tenant must never survive even if that expr were wrong. With
+    ``source_kind=None`` (the default) only the tenant check applies.
+    Fails closed on a missing ``user_id``.
+    """
+    if hit.get("user_id") != user_pk:
         return False
-    if source_kind and metadata.get("source_kind") != source_kind:
+    if source_kind and hit.get("source_kind") != source_kind:
         return False
     return True
 
 
-def _query_terms(text: str) -> list[str]:
-    normalized = text.lower()
-    terms = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]{2,}", normalized)
-    return list(dict.fromkeys(terms))
+def _normalized_text_hash(text: str) -> str:
+    """Exact hash over whitespace-collapsed text — dedup rule 3 (deterministic;
+    deliberately NO semantic similarity)."""
+    collapsed = " ".join((text or "").split())
+    return hashlib.sha256(collapsed.encode("utf-8")).hexdigest()
 
 
-def _lexical_overlap(query: str, content: str) -> float:
-    terms = _query_terms(query)
-    if not terms:
-        return 0.0
-    normalized = content.lower()
-    hits = sum(1 for term in terms if term in normalized)
-    return hits / len(terms)
+def _dedup_hits(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deterministic pre-rerank dedup, keeping the first (higher-RRF) copy:
+    same Milvus row id → drop; same normalised full text → drop."""
+    seen_ids: set[str] = set()
+    seen_hashes: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for hit in hits:
+        hit_id = hit.get("id")
+        if hit_id and hit_id in seen_ids:
+            continue
+        text_hash = _normalized_text_hash(hit.get("text", ""))
+        if text_hash in seen_hashes:
+            continue
+        if hit_id:
+            seen_ids.add(hit_id)
+        seen_hashes.add(text_hash)
+        out.append(hit)
+    return out
 
 
 def _score_passes(score: Optional[float], min_score: float) -> bool:
-    """A node clears the bar iff its score meets ``min_score``.
+    """Reranker-score gate — applies ONLY to the reranker branch.
 
-    One threshold, no relaxation: the same ``RAG_MIN_SCORE`` applies whether or
-    not a reranker ran. RAG holds the line — if nothing clears the bar the
-    caller returns an empty result rather than admitting low-relevance chunks
-    (宁缺毋滥). There is deliberately no second-pass score/lexical fallback.
+    The retriever-fallback branch (remote reranker unavailable) returns
+    RRF-ordered top-N WITHOUT this threshold: RRF scores are ~1/60-scale
+    and would never clear a cross-encoder threshold like 0.5.
     """
     if score is None:
         return False
@@ -136,15 +165,31 @@ def _log_top_nodes(label: str, nodes: list[Any], limit: int = 5) -> None:
         metadata = node.node.metadata if getattr(node, "node", None) else {}
         snippet = node.node.get_content().replace("\n", " ")[:100]
         logger.info(
-            "%s #%s score=%s user_id=%s source_kind=%s file=%s text=%s",
+            "%s #%s score=%s user_id=%s source_kind=%s document_id=%s text=%s",
             label,
             idx,
             f"{float(node.score):.4f}" if node.score is not None else "None",
             metadata.get("user_id"),
             metadata.get("source_kind"),
-            metadata.get("file_name"),
+            metadata.get("document_id"),
             snippet,
         )
+
+
+def _hydrate_node_ids(node_ids: list[str]) -> list[dict[str, Any]]:
+    """Sync hydrate + live check (runs in a worker thread)."""
+    from app.services.knowledge.chunk_hydration import hydrate_chunks
+
+    with SessionLocal() as db:
+        return hydrate_chunks(db, node_ids)
+
+
+def _empty(reason: str, *, fallback_used: bool = False) -> RetrievalResult:
+    return RetrievalResult(
+        state=RetrievalState(
+            retrieval_hit=False, empty_reason=reason, fallback_used=fallback_used,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -152,183 +197,168 @@ def _log_top_nodes(label: str, nodes: list[Any], limit: int = 5) -> None:
 # ---------------------------------------------------------------------------
 
 async def query_knowledge_base(
-    query_str: str,
+    *,
+    dense_query: str,
+    sparse_query: str,
     user_id: str,
     source_kind: Optional[str] = None,
-    min_score: Optional[float] = None,
-) -> Dict[str, Any]:
-    """
-    混合检索中枢（Milvus 原生 dense + BM25 hybrid + Reranker + 防幻觉拦截）。
+) -> RetrievalResult:
+    """混合检索中枢（Milvus 原生 dense + BM25 hybrid + Reranker + hydrate）。
 
     P0 安全：通过 Milvus hybrid_search 的 expr (user_id == pk) 隔离租户。
-    防幻觉：使用 Reranker 绝对置信分数截断低质量节点。
+    防幻觉：reranker 绝对置信分数截断低质量节点（fallback 分支除外，见
+    ``_score_passes``）。返回的 chunk 文本以 Postgres facts 为准。
     """
-    try:
-        if min_score is None:
-            min_score = settings.RAG_MIN_SCORE
+    min_score = settings.RAG_MIN_SCORE
 
-        # Resolve the request principal (username) -> stable users.id once. The
-        # RAG scope key (Milvus node metadata + document_chunks.user_id) is the
-        # pk; everything below filters by it. An unresolved principal means no
-        # accessible corpus -> return empty (never fall through to an unscoped
-        # query, which would leak across tenants).
-        with SessionLocal() as _db:
-            user_pk = resolve_user_pk(_db, user_id)
-        if user_pk is None:
-            logger.warning(
-                "query_knowledge_base: principal %r did not resolve to a users.id; "
-                "returning empty (no unscoped retrieval).", user_id,
-            )
-            return {
-                "answer": "[SYSTEM_EMPTY_WARNING] 知识库中未检索到与该问题高度相关的参考信息。",
-                "context_text": "[SYSTEM_EMPTY_WARNING] 知识库中未检索到与该问题高度相关的参考信息。",
-                "chunks": [],
-                "sources": [],
-            }
+    # Either query may be blank (planner fallback / single-query L2 caller
+    # passing one string) — each side falls back to the other.
+    dense_q = (dense_query or sparse_query or "").strip()
+    sparse_q = (sparse_query or dense_query or "").strip()
+    if not dense_q:
+        # Deliberate reuse of no_candidates (the frozen enum has no
+        # "no query" value; live callers never send a fully blank pair).
+        return _empty(EMPTY_NO_CANDIDATES)
 
-        # ===== [1] Scope — the Milvus hybrid_search ``expr`` filters by the
-        # stable users.id pk server-side; allowed_user_ids drives the
-        # defence-in-depth post-filter below. =====
-        allowed_user_ids = _allowed_user_ids(user_pk, source_kind)
-        logger.info(
-            "RAG hybrid scope: requested_user_id=%s, user_pk=%s, source_kind=%s",
-            user_id, user_pk, source_kind,
+    # Resolve the request principal (username) -> stable users.id once. An
+    # unresolved principal means no accessible corpus -> return empty (never
+    # fall through to an unscoped query, which would leak across tenants).
+    with SessionLocal() as _db:
+        user_pk = resolve_user_pk(_db, user_id)
+    if user_pk is None:
+        logger.warning(
+            "query_knowledge_base: principal %r did not resolve to a users.id; "
+            "returning empty (no unscoped retrieval).", user_id,
         )
+        return _empty(EMPTY_PRINCIPAL_UNRESOLVED)
 
-        # ===== [2] Milvus 2.6 native hybrid: dense ANN + server-side BM25,
-        # fused by RRF in one query. Replaces the old dense-only Milvus +
-        # Postgres-sourced BM25 fusion. =====
-        logger.info(f"开始 Milvus hybrid 检索: {query_str}")
+    # ===== [1] Milvus 2.6 native hybrid: dense ANN on the dense query's
+    # embedding + server-side BM25 on the sparse query, fused by RRF. =====
+    logger.info(
+        "RAG hybrid retrieval: user_pk=%s dense=%r sparse=%r source_kind=%s",
+        user_pk, dense_q[:80], sparse_q[:80], source_kind,
+    )
+    try:
+        from app.rag import milvus_hybrid
+
+        # Embedding + Milvus search are sync/blocking — off the event loop so
+        # the SSE turn doesn't stall other in-flight requests.
+        query_dense = await asyncio.to_thread(
+            Settings.embed_model.get_query_embedding, dense_q,
+        )
+        hits = await asyncio.to_thread(
+            lambda: milvus_hybrid.hybrid_search(
+                milvus_hybrid.KNOWLEDGE,
+                query_text=sparse_q,
+                query_dense=query_dense,
+                user_pk=user_pk,
+                top_k=settings.FUSION_TOP_K,
+                filters={"source_kind": source_kind} if source_kind else None,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — degraded search → empty, not a crash
+        logger.error("RAG hybrid search unavailable: %s", exc)
+        return _empty(EMPTY_MILVUS_UNAVAILABLE)
+
+    hits = [h for h in hits if _hit_in_scope(h, user_pk, source_kind)]
+    if not hits:
+        return _empty(EMPTY_NO_CANDIDATES)
+
+    # ===== [2] Deterministic dedup (id → normalised text hash). =====
+    hits = _dedup_hits(hits)
+
+    from llama_index.core import QueryBundle
+    from llama_index.core.schema import NodeWithScore, TextNode
+
+    raw_nodes = [
+        NodeWithScore(
+            node=TextNode(
+                text=h["text"],
+                id_=h["id"] or "",
+                metadata={
+                    "user_id": h["user_id"],
+                    "source_kind": h["source_kind"],
+                    "document_id": h["document_id"],
+                },
+            ),
+            score=h["score"],
+        )
+        for h in hits
+    ]
+    _log_top_nodes("RAG raw candidates", raw_nodes)
+
+    # ===== [3] Rerank (cross-encoder), query = the top-level dense query.
+    #
+    # ``postprocess_nodes`` is synchronous regardless of backend (local HF
+    # cross-encoder = torch ops; remote = blocking httpx) — dispatch to a
+    # worker thread so concurrent turns keep making progress.
+    fallback_used = False
+    if _reranker is None:
+        # init_reranker() is fail-loud at startup; reaching here means it was
+        # never called (defensive). Take the explicit fallback path.
+        logger.warning("Reranker not initialised; using RRF-order fallback")
+        fallback_used = True
+        processed_nodes = raw_nodes
+    else:
         try:
-            from llama_index.core import QueryBundle
-            from llama_index.core.schema import NodeWithScore, TextNode
-
-            from app.rag import milvus_hybrid
-
-            query_bundle = QueryBundle(query_str)
-            # Embedding + Milvus search are sync/blocking — off the event loop so
-            # the SSE turn doesn't stall other in-flight requests.
-            query_dense = await asyncio.to_thread(
-                Settings.embed_model.get_query_embedding, query_str,
-            )
-            hits = await asyncio.to_thread(
-                lambda: milvus_hybrid.hybrid_search(
-                    milvus_hybrid.KNOWLEDGE,
-                    query_text=query_str,
-                    query_dense=query_dense,
-                    user_pk=user_pk,
-                    top_k=settings.FUSION_TOP_K,
-                    filters={"source_kind": source_kind} if source_kind else None,
-                )
-            )
-            # Exclude personal_memory from KB RAG (RFC: not a knowledge doc;
-            # pending MEMORY-V3 migration to ability states), and drop any hit
-            # whose knowledge document was deleted (safety net for a lagging /
-            # failed Milvus delete).
-            hits = [h for h in hits if h.get("source_kind") != "personal_memory"]
-            _doc_ids = {h.get("document_id") for h in hits if h.get("document_id")}
-            if _doc_ids:
-                _live = await asyncio.to_thread(_live_document_ids, _doc_ids)
-                hits = [
-                    h for h in hits
-                    if not h.get("document_id") or h["document_id"] in _live
-                ]
-            raw_nodes = [
-                NodeWithScore(
-                    node=TextNode(
-                        text=h["text"],
-                        id_=h["id"] or "",
-                        metadata={
-                            "user_id": h["user_id"],
-                            "source_kind": h["source_kind"],
-                            "document_id": h["document_id"],
-                        },
-                    ),
-                    score=h["score"],
-                )
-                for h in hits
-                if _metadata_matches_scope(
-                    {"user_id": h["user_id"], "source_kind": h["source_kind"]},
-                    allowed_user_ids, source_kind,
-                )
-            ]
-            _log_top_nodes("RAG raw candidates", raw_nodes)
-        except Exception as ret_e:
-            logger.error(f"节点召回失败: {ret_e}")
-            raw_nodes = []
-
-        # Reranker 交叉注意力重排序.
-        #
-        # ``postprocess_nodes`` is synchronous regardless of which
-        # reranker backend is active: the local HF cross-encoder runs
-        # CPU/GPU-bound torch ops; the remote API rerank
-        # (``RemoteAPIRerank._postprocess_nodes``) uses ``httpx.Client``
-        # with a 15s timeout. Either way, calling it inline from an
-        # async retriever blocks the WHOLE event loop until the call
-        # returns. ``asyncio.to_thread`` dispatches to a worker thread
-        # so every other in-flight request can keep making progress
-        # while reranking runs — typically saves 100-2000ms of
-        # head-of-line blocking per concurrent turn.
-        used_reranker = bool(_reranker and raw_nodes)
-        if used_reranker:
             processed_nodes = await asyncio.to_thread(
-                _reranker.postprocess_nodes, raw_nodes, query_bundle,
+                _reranker.postprocess_nodes, raw_nodes, QueryBundle(dense_q),
             )
-        else:
+        except RerankerUnavailableError as exc:
+            logger.warning(
+                "Reranker unavailable; falling back to RRF order: %s", exc,
+            )
+            fallback_used = True
             processed_nodes = raw_nodes
-        _log_top_nodes("RAG processed candidates", processed_nodes)
+    _log_top_nodes("RAG processed candidates", processed_nodes)
 
-        # 绝对分数阈值拦截：统一使用 RAG_MIN_SCORE，不因缺少 reranker 而放宽。
-        # 过滤后无命中即返回空结果（宁缺毋滥），不再做词面覆盖 / 低分二次放行。
+    # ===== [4] Score gate + final top-N. The fallback branch skips the
+    # reranker-score threshold (different scale) and is labelled so it can
+    # never be mistaken for reranker output. =====
+    if fallback_used:
+        valid_nodes = processed_nodes[: settings.RERANK_TOP_N]
+        score_source = SCORE_SOURCE_RETRIEVER_FALLBACK
+    else:
         valid_nodes = [
             node for node in processed_nodes
             if _score_passes(node.score, min_score)
-        ]
-        valid_nodes = valid_nodes[:settings.RERANK_TOP_N]
-
+        ][: settings.RERANK_TOP_N]
+        score_source = SCORE_SOURCE_RERANKER
         if not valid_nodes:
-            logger.warning(f"防幻觉拦截触发：所有节点得分低于阈值 ({min_score})")
-            return {
-                "answer": "[SYSTEM_EMPTY_WARNING] 知识库中未检索到与该问题高度相关的参考信息。",
-                "context_text": "[SYSTEM_EMPTY_WARNING] 知识库中未检索到与该问题高度相关的参考信息。",
-                "chunks": [],
-                "sources": []
-            }
+            logger.warning("防幻觉拦截触发：所有节点得分低于阈值 (%s)", min_score)
+            return _empty(EMPTY_ALL_BELOW_THRESHOLD)
 
-        logger.info(f"通过阈值过滤: {len(valid_nodes)} 个节点 (阈值={min_score})")
+    # Light post-rerank dedup by node id — guards fallback/anomalous paths.
+    seen: set[str] = set()
+    ranked_node_ids: list[str] = []
+    score_by_node: dict[str, float] = {}
+    for node in valid_nodes:
+        node_id = node.node.node_id
+        if not node_id or node_id in seen:
+            continue
+        seen.add(node_id)
+        ranked_node_ids.append(node_id)
+        score_by_node[node_id] = float(node.score) if node.score is not None else 0.0
 
-        # ===== [5] 封装结果 =====
-        sources = []
-        texts = []
-        chunks = []
-        for n in valid_nodes:
-            score = float(n.score) if n.score is not None else 0.0
-            content = n.node.get_content().strip()
-            overlap = _lexical_overlap(query_str, content)
-            texts.append(f"[RAG Score: {score:.3f} | Lexical Overlap: {overlap:.2f}] {content}")
-            chunks.append({
-                "id": n.node.node_id,
-                "text": content,
-                "score": score,
-                "lexical_overlap": overlap,
-                "source_kind": n.node.metadata.get("source_kind"),
-                "metadata": n.node.metadata,
-            })
-            sources.append({
-                "score": score,
-                "lexical_overlap": overlap,
-                "score_source": "reranker" if used_reranker else "retriever",
-                "text": content,
-                "metadata": n.node.metadata
-            })
+    # ===== [5] Postgres hydrate + live check (fact text + provenance). =====
+    hydrated = await asyncio.to_thread(_hydrate_node_ids, ranked_node_ids)
+    if not hydrated:
+        logger.warning(
+            "RAG live check dropped all %d candidates (stale Milvus rows?)",
+            len(ranked_node_ids),
+        )
+        return _empty(EMPTY_ALL_FILTERED_LIVE_CHECK, fallback_used=fallback_used)
 
-        return {
-            "answer": "\n\n".join(texts),
-            "context_text": "\n\n".join(texts),
-            "chunks": chunks,
-            "sources": sources
-        }
+    chunks: list[dict[str, Any]] = []
+    for chunk in hydrated:
+        chunk["score"] = score_by_node.get(chunk["node_id"], 0.0)
+        chunk["score_source"] = score_source
+        chunks.append(chunk)
 
-    except Exception as e:
-        logger.error(f"检索引擎异常: {e}")
-        raise
+    logger.info(
+        "RAG retrieval done: %d chunks (score_source=%s)", len(chunks), score_source,
+    )
+    return RetrievalResult(
+        chunks=chunks,
+        state=RetrievalState(retrieval_hit=True, fallback_used=fallback_used),
+    )
