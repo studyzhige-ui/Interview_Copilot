@@ -31,13 +31,28 @@ def default_title(upload: FileAsset) -> str:
 
 
 def delete_document_vectors_and_chunks(db: Session, document: KnowledgeDocument) -> None:
-    """Delete a document's chunk facts (Postgres ``document_chunks``) and its
-    Milvus index entries (the native hybrid collection, keyed by document_id)."""
+    """Delete a document's chunk facts (Postgres ``document_chunks``) then its
+    Milvus index rows (keyed by document_id).
+
+    Facts go first — the read path is correct the moment they're gone. If the
+    Milvus delete fails (outage), it's queued as a ``milvus_delete_document``
+    outbox job for reliable retry rather than raising or leaking un-cleaned
+    vectors (plan §4.6.3). Visibility is already decided by Postgres state, so
+    the queued cleanup never makes a deleted document reappear."""
     from app.rag import milvus_hybrid
     from app.services.knowledge.document_chunk_service import delete_document_chunks
+    from app.services.knowledge.knowledge_outbox import enqueue_milvus_delete
 
     delete_document_chunks(db, document.id)
-    milvus_hybrid.delete_by_field(milvus_hybrid.KNOWLEDGE, "document_id", document.id)
+    try:
+        milvus_hybrid.delete_by_field(milvus_hybrid.KNOWLEDGE, "document_id", document.id)
+    except Exception as exc:  # noqa: BLE001 — queue a reliable retry, don't fail the delete
+        logger.warning(
+            "Milvus delete failed for document %s; queuing outbox retry: %s",
+            document.id, exc,
+        )
+        enqueue_milvus_delete(db, user_pk=document.user_id, document_id=document.id)
+        db.commit()
 
 
 def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> None:
