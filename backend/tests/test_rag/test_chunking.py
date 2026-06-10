@@ -131,6 +131,33 @@ def test_plain_text_has_no_heading_annotations(monkeypatch):
         assert "section_title" not in n.metadata
 
 
+def test_parser_provenance_carried_to_chunks(monkeypatch):
+    """Parse-stage fields (parser_id / parser_profile / ocr_used) on the document
+    metadata are carried onto every chunk (E1, so they land in metadata_json)."""
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    doc = Document(text="some parsed prose", metadata={
+        "source_kind": "user_upload", "user_id": 1,
+        "parser_id": "pymupdf", "parser_profile": {"tier": "lightweight"}, "ocr_used": False,
+    })
+    nodes = ingestion.get_optimal_nodes(doc)
+    assert nodes
+    for n in nodes:
+        assert n.metadata["parser_id"] == "pymupdf"
+        assert n.metadata["parser_profile"] == {"tier": "lightweight"}
+        assert n.metadata["ocr_used"] is False
+
+
+def test_plain_text_chunks_have_no_parser_fields(monkeypatch):
+    """ingest_text-style docs (no file parse) carry no parser_* fields."""
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    doc = Document(text="raw text", metadata={"source_kind": "manual_text", "user_id": 1})
+    for n in ingestion.get_optimal_nodes(doc):
+        assert "parser_id" not in n.metadata
+        assert "parser_profile" not in n.metadata
+
+
 def test_splitter_profile_stamped(monkeypatch):
     monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
 

@@ -2,8 +2,7 @@ import os
 import logging
 import re
 import time
-from llama_index.core import Document, Settings, SimpleDirectoryReader
-from llama_index.readers.file import PyMuPDFReader
+from llama_index.core import Document, Settings
 from llama_index.core.node_parser import (
     CodeSplitter,
     HTMLNodeParser,
@@ -430,6 +429,12 @@ def get_optimal_nodes(document: Document) -> list:
     # document_chunks 列与 metadata_json 持久化。
     user_id = document.metadata.get("user_id", "")
     cleaning_profile = document.metadata.get("cleaning_profile")
+    # Parse-stage provenance (Phase E) — carried from the document metadata to
+    # every chunk so it lands in metadata_json (the parser_id/parser_profile/
+    # ocr_used producers B4 reserved). Absent on the ingest_text path (no file).
+    parser_id = document.metadata.get("parser_id")
+    parser_profile = document.metadata.get("parser_profile")
+    ocr_used = document.metadata.get("ocr_used")
     # splitter_profile records the SentenceSplitter sizing regime — the secondary
     # oversize gate (CHUNK_SIZE*2) + fallback re-split that EVERY branch passes
     # through, stamped uniformly. The primary splitter's true identity is in
@@ -454,6 +459,12 @@ def get_optimal_nodes(document: Document) -> list:
         node.metadata["splitter_profile"] = splitter_profile
         if cleaning_profile is not None:
             node.metadata["cleaning_profile"] = cleaning_profile
+        if parser_id:
+            node.metadata["parser_id"] = parser_id
+        if parser_profile:
+            node.metadata["parser_profile"] = parser_profile
+        if ocr_used is not None:
+            node.metadata["ocr_used"] = ocr_used
         heading_path, section_title = _heading_annotations(node, splitter_id)
         if heading_path:
             node.metadata["heading_path"] = heading_path
@@ -481,63 +492,37 @@ async def ingest_document(
 
         logger.info(f"开始解析文件: {file_path}")
 
-        # 动态文件提取器
-        extractor_map = {}
+        # Parse stage (Phase E): one ParseResult from the parser registry, which
+        # owns parser selection / fallback / error translation — this path no
+        # longer binds to LlamaParse / PyMuPDF / SimpleDirectoryReader directly.
+        # Empty / unparseable input raises EmptyContentError inside parse_document.
+        from app.rag.parsing import parse_document
 
-        _has_llama_cloud = (
-            settings.LLAMA_CLOUD_API_KEY
-            and settings.LLAMA_CLOUD_API_KEY.strip()
-            and not settings.LLAMA_CLOUD_API_KEY.startswith("your_")
-        )
+        result = parse_document(file_path)
 
-        if _has_llama_cloud:
-            logger.info("检测到 LlamaCloud 密钥，启用 LlamaParse 解析器...")
-            import nest_asyncio
-            nest_asyncio.apply()
-            from llama_parse import LlamaParse
+        metadata: dict = {
+            "source_kind": source_kind,
+            "user_id": user_id,
+            "file_name": os.path.basename(file_path),  # drives splitter selection
+            "parser_id": result.parser_id,
+            "parser_profile": result.parser_profile,
+            "ocr_used": result.ocr_used,
+        }
+        if document_id:
+            metadata["document_id"] = document_id
+        if upload_id:
+            metadata["upload_id"] = upload_id
+        if result.is_markdown:
+            metadata["is_markdown_parsed"] = True
+        # category is NOT stamped onto chunks/metadata_json — it's a
+        # knowledge_documents field, hydrated from there (INGEST-CLEANUP).
+        doc = Document(text=result.markdown, metadata=metadata)
+        if document_id:
+            doc.id_ = document_id
 
-            parser = LlamaParse(
-                result_type="markdown",
-                language="ch_sim",
-                api_key=settings.LLAMA_CLOUD_API_KEY,
-                num_workers=2
-            )
-            extractor_map[".pdf"] = parser
-            extractor_map[".pptx"] = parser
-            extractor_map[".docx"] = parser
-        else:
-            logger.info("未配置 LlamaCloud 密钥，使用 PyMuPDF 解析。")
-            extractor_map[".pdf"] = PyMuPDFReader()
-
-        reader = SimpleDirectoryReader(
-            input_files=[file_path],
-            file_extractor=extractor_map
-        )
-        documents = reader.load_data()
-
-        if not documents:
-            logger.warning(f"文件解析结果为空: {file_path}")
-            return False
-
-        # 挂载元数据
-        for index, doc in enumerate(documents):
-            doc.metadata["source_kind"] = source_kind
-            doc.metadata["user_id"] = user_id
-            if document_id:
-                doc.metadata["document_id"] = document_id
-                doc.id_ = document_id if len(documents) == 1 else f"{document_id}:{index}"
-            if upload_id:
-                doc.metadata["upload_id"] = upload_id
-            # category is NOT stamped onto chunks/metadata_json — it's a
-            # knowledge_documents field, hydrated from there (INGEST-CLEANUP).
-
-            if _has_llama_cloud and doc.metadata.get("file_name", "").endswith((".pdf", ".pptx", ".docx")):
-                doc.metadata["is_markdown_parsed"] = True
-
-        # S0 conservative cleaning (plan §4.2) before chunking. Drop segments
-        # that clean to nothing (e.g. a blank page); fail the whole import only
-        # if no usable text remains anywhere.
-        documents = _clean_documents(documents)
+        # S0 conservative cleaning (plan §4.2) before chunking; raises
+        # EmptyContentError if no usable text remains.
+        documents = _clean_documents([doc])
 
         # 自适应切块
         all_nodes = []
