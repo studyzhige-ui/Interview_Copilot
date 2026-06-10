@@ -64,18 +64,18 @@ def _ids(ext):
 def test_candidates_degrade_to_lightweight_when_no_first_class(monkeypatch):
     _knobs(monkeypatch, key=False, docling=False, provider="docling")
     assert _ids(".pdf") == ["pymupdf", "simple_reader"]
-    assert _ids(".xlsx") == ["simple_reader"]
-    assert _ids(".txt") == ["simple_reader"]
+    assert _ids(".xlsx") == ["openpyxl", "simple_reader"]
+    assert _ids(".txt") == ["text", "simple_reader"]
 
 
 def test_candidates_docling_primary(monkeypatch):
     _knobs(monkeypatch, key=False, docling=True, provider="docling")
     assert _ids(".pdf") == ["docling", "pymupdf", "simple_reader"]
-    assert _ids(".html") == ["docling", "simple_reader"]   # docling handles html
-    assert _ids(".txt") == ["simple_reader"]               # docling doesn't claim txt
-    # xlsx stays on the lightweight path (docling->markdown-table would misroute
-    # through the table splitter; deferred to E4).
-    assert _ids(".xlsx") == ["simple_reader"]
+    assert _ids(".html") == ["docling", "beautifulsoup", "simple_reader"]  # docling first-class
+    assert _ids(".txt") == ["text", "simple_reader"]       # docling doesn't claim txt
+    # xlsx not first-class (docling->markdown-table would misroute the table
+    # splitter; deferred to E4) -> dedicated openpyxl lightweight.
+    assert _ids(".xlsx") == ["openpyxl", "simple_reader"]
 
 
 def test_candidates_llamaparse_primary_docling_fallback(monkeypatch):
@@ -83,11 +83,11 @@ def test_candidates_llamaparse_primary_docling_fallback(monkeypatch):
     _knobs(monkeypatch, key=True, docling=True, provider="llamaparse")
     # pdf: LlamaParse primary (cloud), Docling the document-level fallback.
     assert _ids(".pdf") == ["llamaparse", "docling", "pymupdf", "simple_reader"]
-    assert _ids(".docx") == ["llamaparse", "docling", "simple_reader"]
+    assert _ids(".docx") == ["llamaparse", "docling", "python_docx", "simple_reader"]
     # html: LlamaParse doesn't claim it -> Docling (the other first-class) leads.
-    assert _ids(".html") == ["docling", "simple_reader"]
-    # xlsx: neither first-class claims it -> lightweight only.
-    assert _ids(".xlsx") == ["simple_reader"]
+    assert _ids(".html") == ["docling", "beautifulsoup", "simple_reader"]
+    # xlsx: neither first-class claims it -> dedicated openpyxl lightweight.
+    assert _ids(".xlsx") == ["openpyxl", "simple_reader"]
 
 
 def test_candidates_docling_primary_with_llama_fallback(monkeypatch):
@@ -99,7 +99,7 @@ def test_candidates_selected_primary_unavailable_degrades(monkeypatch):
     # PARSER_PROVIDER=docling but docling not installed, with a key present.
     _knobs(monkeypatch, key=True, docling=False, provider="docling")
     assert _ids(".pdf") == ["llamaparse", "pymupdf", "simple_reader"]  # falls to the available first-class
-    assert _ids(".xlsx") == ["simple_reader"]  # llamaparse can't, docling absent
+    assert _ids(".xlsx") == ["openpyxl", "simple_reader"]  # no first-class -> dedicated lightweight
 
 
 class _FakeParser:
@@ -210,13 +210,121 @@ def test_unknown_parser_provider_warns_and_uses_insertion_order(monkeypatch, cap
 
 def test_htm_routes_through_docling_when_primary(monkeypatch):
     _knobs(monkeypatch, key=False, docling=True, provider="docling")
-    assert _ids(".htm") == ["docling", "simple_reader"]
+    assert _ids(".htm") == ["docling", "beautifulsoup", "simple_reader"]
 
 
 def test_xls_legacy_office_not_parsed_by_first_class(monkeypatch):
     """Legacy .xls (deferred) isn't claimed by any first-class parser."""
     _knobs(monkeypatch, key=True, docling=True, provider="docling")
     assert _ids(".xls") == ["simple_reader"]
+
+
+# ── E3: per-format lightweight fallback matrix ───────────────────────────────
+
+
+def test_candidates_include_dedicated_lightweight(monkeypatch):
+    """Each format gets its dedicated lightweight parser before the SimpleReader
+    catch-all; uncovered formats (json) get only SimpleReader."""
+    _knobs(monkeypatch, key=False, docling=False, provider="docling")
+    assert _ids(".pdf") == ["pymupdf", "simple_reader"]
+    assert _ids(".docx") == ["python_docx", "simple_reader"]
+    assert _ids(".pptx") == ["python_pptx", "simple_reader"]
+    assert _ids(".xlsx") == ["openpyxl", "simple_reader"]
+    assert _ids(".html") == ["beautifulsoup", "simple_reader"]
+    assert _ids(".csv") == ["text", "simple_reader"]
+    assert _ids(".txt") == ["text", "simple_reader"]
+    assert _ids(".json") == ["simple_reader"]
+
+
+def test_candidates_first_class_then_lightweight_then_catchall(monkeypatch):
+    _knobs(monkeypatch, key=False, docling=True, provider="docling")
+    assert _ids(".docx") == ["docling", "python_docx", "simple_reader"]
+
+
+def test_docx_parser_extracts_paragraphs(tmp_path):
+    import docx
+    path = tmp_path / "d.docx"
+    document = docx.Document()
+    document.add_paragraph("Hello world")
+    document.add_paragraph("Second para")
+    document.save(str(path))
+
+    result = parsers.DocxParser().parse(str(path))
+    assert "Hello world" in result.markdown and "Second para" in result.markdown
+    assert result.parser_id == "python_docx" and result.is_markdown is False
+
+
+def test_pptx_parser_extracts_slide_text(tmp_path):
+    from pptx import Presentation
+    from pptx.util import Inches
+    path = tmp_path / "s.pptx"
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
+    box.text_frame.text = "Slide content here"
+    prs.save(str(path))
+
+    result = parsers.PptxParser().parse(str(path))
+    assert "Slide content here" in result.markdown
+    assert result.parser_id == "python_pptx"
+
+
+def test_xlsx_parser_self_describing_rows(tmp_path):
+    from openpyxl import Workbook
+    path = tmp_path / "x.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.append(["name", "score"])
+    ws.append(["alice", 90])
+    wb.save(str(path))
+
+    result = parsers.XlsxParser().parse(str(path))
+    assert "name: alice" in result.markdown and "score: 90" in result.markdown
+    assert "[Data]" in result.markdown
+    assert result.parser_id == "openpyxl"
+
+
+def test_xlsx_parser_multi_sheet_keeps_per_sheet_headers(tmp_path):
+    """Multi-sheet workbook: each sheet's rows self-describe with its OWN header
+    (the E1 multi-sheet delta is neutralized by self-describing rows)."""
+    from openpyxl import Workbook
+    path = tmp_path / "m.xlsx"
+    wb = Workbook()
+    s1 = wb.active
+    s1.title = "S1"
+    s1.append(["alpha"])
+    s1.append([1])
+    s2 = wb.create_sheet("S2")
+    s2.append(["beta"])
+    s2.append([2])
+    wb.save(str(path))
+
+    result = parsers.XlsxParser().parse(str(path))
+    assert "alpha: 1" in result.markdown   # S1 uses its own header
+    assert "beta: 2" in result.markdown    # S2 uses ITS own header, not S1's
+
+
+def test_html_parser_drops_script_style_nav(tmp_path):
+    path = tmp_path / "h.html"
+    path.write_text(
+        "<html><head><style>.x{color:red}</style></head>"
+        "<body><nav>menu links</nav><p>Real content</p>"
+        "<script>var a=1;</script></body></html>",
+        encoding="utf-8",
+    )
+    result = parsers.HtmlParser().parse(str(path))
+    assert "Real content" in result.markdown
+    assert "menu links" not in result.markdown
+    assert "var a=1" not in result.markdown and "color:red" not in result.markdown
+
+
+def test_text_parser_reads_with_encoding_detection(tmp_path):
+    path = tmp_path / "t.txt"
+    path.write_text("héllo wörld 缓存", encoding="utf-8")
+    result = parsers.TextParser().parse(str(path))
+    assert "héllo wörld 缓存" in result.markdown
+    assert result.parser_id == "text"
 
 
 def test_docling_parse_holds_lock_during_convert(monkeypatch):

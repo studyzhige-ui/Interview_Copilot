@@ -16,11 +16,40 @@ import time
 from app.core.config import settings
 
 from .base import ParseResult
-from .parsers import DoclingParser, LlamaParseParser, PyMuPDFParser, SimpleReaderParser
+from .parsers import (
+    DoclingParser,
+    DocxParser,
+    HtmlParser,
+    LlamaParseParser,
+    PptxParser,
+    PyMuPDFParser,
+    SimpleReaderParser,
+    TextParser,
+    XlsxParser,
+)
 
 logger = logging.getLogger(__name__)
 
 _docling_available_cache: bool | None = None
+
+# Per-format lightweight parser (plan §4.1.3) — the controlled fallback after the
+# first-class tier. Formats not listed fall to SimpleReader (json / md / unknown).
+_LIGHTWEIGHT: dict[str, type] = {
+    ".pdf": PyMuPDFParser,
+    ".docx": DocxParser,
+    ".pptx": PptxParser,
+    ".xlsx": XlsxParser,
+    ".html": HtmlParser,
+    ".htm": HtmlParser,
+    ".txt": TextParser,
+    ".csv": TextParser,
+    ".tsv": TextParser,
+}
+
+
+def _lightweight_for(ext: str):
+    cls = _LIGHTWEIGHT.get(ext)
+    return cls() if cls is not None else None
 
 
 def _has_llama_cloud() -> bool:
@@ -72,8 +101,9 @@ def _candidates(ext: str) -> list:
     ordered.extend(first_class.values())  # the remaining first-class as fallback
 
     out = [p for p in ordered if p.supports(ext)]
-    if ext == ".pdf":
-        out.append(PyMuPDFParser())
+    lightweight = _lightweight_for(ext)
+    if lightweight is not None:
+        out.append(lightweight)
     out.append(SimpleReaderParser())  # default reader + final fallback
     return out
 

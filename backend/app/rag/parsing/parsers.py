@@ -38,6 +38,19 @@ def _join_documents(docs: list) -> tuple[str, list[PageSpan]]:
     return "\n\n".join(parts), page_map
 
 
+def _read_text(file_path: str) -> str:
+    """Read a text file with encoding detection (charset-normalizer), falling
+    back to UTF-8 with replacement — the ingest text is always normalized to a
+    str (plan §4.1.3: TXT/HTML/CSV encoding detection)."""
+    from charset_normalizer import from_path
+
+    best = from_path(file_path).best()
+    if best is not None:
+        return str(best)
+    with open(file_path, encoding="utf-8", errors="replace") as fh:
+        return fh.read()
+
+
 class LlamaParseParser:
     """First-class cloud parser → Markdown. Available only when a LlamaCloud key
     is configured (the registry gates on that)."""
@@ -163,3 +176,124 @@ class SimpleReaderParser:
             markdown=markdown, parser_id=self.id,
             is_markdown=ext in self._MARKDOWN_EXTS, page_map=page_map,
         )
+
+
+# ── Per-format lightweight parsers (Phase E3) ────────────────────────────────
+# Controlled, known-behaviour extractors used when no first-class parser is
+# available/supports the format (plan §4.1.3) — they replace LlamaIndex's default
+# readers for these formats so parse quality + failure behaviour is explicit.
+
+
+class DocxParser:
+    """Lightweight DOCX → paragraph text (python-docx; no styles/tables)."""
+
+    id = "python_docx"
+    tier = TIER_LIGHTWEIGHT
+
+    def supports(self, ext: str) -> bool:
+        return ext == ".docx"
+
+    def parse(self, file_path: str) -> ParseResult:
+        import docx
+
+        document = docx.Document(file_path)
+        text = "\n\n".join(p.text for p in document.paragraphs if p.text.strip())
+        return ParseResult(markdown=text, parser_id=self.id, is_markdown=False)
+
+
+class PptxParser:
+    """Lightweight PPTX → per-slide text (python-pptx)."""
+
+    id = "python_pptx"
+    tier = TIER_LIGHTWEIGHT
+
+    def supports(self, ext: str) -> bool:
+        return ext == ".pptx"
+
+    def parse(self, file_path: str) -> ParseResult:
+        from pptx import Presentation
+
+        slides: list[str] = []
+        for slide in Presentation(file_path).slides:
+            parts = [
+                shape.text for shape in slide.shapes
+                if shape.has_text_frame and shape.text.strip()
+            ]
+            if parts:
+                slides.append("\n".join(parts))
+        return ParseResult(markdown="\n\n".join(slides), parser_id=self.id, is_markdown=False)
+
+
+class XlsxParser:
+    """Lightweight XLSX → per-sheet self-describing rows (openpyxl). Each cell is
+    emitted as ``header: value`` so a row is understandable on its own — this
+    keeps multi-sheet workbooks correct even though the chunk stage currently
+    routes .xlsx to the table splitter (the proper table-aware routing is E4)."""
+
+    id = "openpyxl"
+    tier = TIER_LIGHTWEIGHT
+
+    def supports(self, ext: str) -> bool:
+        return ext == ".xlsx"
+
+    def parse(self, file_path: str) -> ParseResult:
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(file_path, read_only=True, data_only=True)
+        try:
+            blocks: list[str] = []
+            for sheet in workbook.worksheets:
+                rows = list(sheet.iter_rows(values_only=True))
+                if not rows:
+                    continue
+                header = [str(c) if c is not None else "" for c in rows[0]]
+                lines = []
+                for row in rows[1:]:
+                    cells = [
+                        f"{header[i]}: {value}"
+                        for i, value in enumerate(row)
+                        if value is not None and i < len(header)
+                    ]
+                    if cells:
+                        lines.append(" | ".join(cells))
+                if lines:
+                    blocks.append(f"[{sheet.title}]\n" + "\n".join(lines))
+        finally:
+            workbook.close()
+        return ParseResult(markdown="\n\n".join(blocks), parser_id=self.id, is_markdown=False)
+
+
+class HtmlParser:
+    """Lightweight HTML → main text (BeautifulSoup), dropping script/style/nav
+    noise (plan §4.1.3)."""
+
+    id = "beautifulsoup"
+    tier = TIER_LIGHTWEIGHT
+
+    def supports(self, ext: str) -> bool:
+        return ext in (".html", ".htm")
+
+    def parse(self, file_path: str) -> ParseResult:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(_read_text(file_path), "html.parser")
+        for tag in soup(["script", "style", "nav", "header", "footer"]):
+            tag.decompose()
+        text = soup.get_text(separator="\n")
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        return ParseResult(markdown="\n".join(lines), parser_id=self.id, is_markdown=False)
+
+
+class TextParser:
+    """Lightweight TXT / CSV / TSV → encoding-detected text (charset-normalizer).
+    CSV/TSV stays raw so the chunk stage's table splitter keeps the header row."""
+
+    id = "text"
+    tier = TIER_LIGHTWEIGHT
+    _EXTS = {".txt", ".csv", ".tsv"}
+
+    def supports(self, ext: str) -> bool:
+        return ext in self._EXTS
+
+    def parse(self, file_path: str) -> ParseResult:
+        return ParseResult(markdown=_read_text(file_path), parser_id=self.id, is_markdown=False)
