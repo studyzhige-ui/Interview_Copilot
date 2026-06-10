@@ -103,3 +103,36 @@ def test_write_chunks_persists_provenance_from_node_metadata(db_session):
     }
     assert (rows["p1"].page_start, rows["p1"].page_end, rows["p1"].token_count) == (2, 3, 96)
     assert (rows["p2"].page_start, rows["p2"].page_end, rows["p2"].token_count) == (None, None, None)
+
+
+def test_write_chunks_builds_metadata_json_from_node_diagnostics(db_session):
+    """metadata_json is per-chunk, built from the node's diagnostic keys;
+    category is NEVER written there (it lives on knowledge_documents)."""
+    import json
+    from app.services.knowledge.document_chunk_service import write_chunks
+
+    nodes = [
+        SimpleNamespace(text="c1", id_="n1", metadata={
+            "chunk_type": "text", "splitter_id": "markdown",
+            "section_title": "缓存击穿", "heading_path": ["缓存", "异常"],
+            "cleaning_profile": {"char_out": 2},
+            "category": "面试题库",   # must NOT leak into metadata_json
+            "user_id": 1,             # scope field, not diagnostic
+        }),
+        SimpleNamespace(text="c2", id_="n2", metadata={}),  # no diagnostics
+    ]
+    write_chunks(db_session, nodes=nodes, user_id=1, source_kind="user_upload", document_id="kdoc_m")
+    rows = {
+        r.node_id: r for r in db_session.query(DocumentChunk)
+        .filter(DocumentChunk.document_id == "kdoc_m").all()
+    }
+    meta1 = json.loads(rows["n1"].metadata_json)
+    assert meta1["chunk_type"] == "text"
+    assert meta1["splitter_id"] == "markdown"
+    assert meta1["section_title"] == "缓存击穿"
+    assert meta1["heading_path"] == ["缓存", "异常"]
+    assert meta1["cleaning_profile"] == {"char_out": 2}
+    assert "category" not in meta1   # INGEST-CLEANUP
+    assert "user_id" not in meta1    # scope field, not a diagnostic
+    # No diagnostics → NULL, not "{}".
+    assert rows["n2"].metadata_json is None

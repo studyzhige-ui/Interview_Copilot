@@ -255,7 +255,6 @@ def process_document_ingestion(self, document_id: str):
                 owner_pk,
                 document_id=document.id,
                 upload_id=document.file_asset_id,
-                category=document.category,
             )
         )
 

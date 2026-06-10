@@ -80,7 +80,7 @@ async def save_qa_to_knowledge(
 
     result = await ingest_text(
         text=content_text, source_kind="improved_qa", user_id=user_pk,
-        metadata={"category": category}, document_id=doc.id,
+        document_id=doc.id,
     )
     doc.chunk_count = int(result.get("chunk_count") or 0) if result else 0
     db.add(doc)

@@ -23,6 +23,38 @@ def test_token_count_stamped_on_every_node(monkeypatch):
         assert node.metadata["token_count"] == len(node.get_content().split())
 
 
+def test_diagnostic_annotations_stamped(monkeypatch):
+    """Plain text → sentence splitter → splitter_id/chunk_type stamped, and a
+    document-level cleaning_profile propagates to every chunk node."""
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    doc = Document(
+        text="some plain prose about caching",
+        metadata={"source_kind": "user_upload", "user_id": 1,
+                  "cleaning_profile": {"char_out": 30}},
+    )
+    nodes = ingestion.get_optimal_nodes(doc)
+
+    assert nodes
+    for node in nodes:
+        assert node.metadata["splitter_id"] == "sentence"
+        assert node.metadata["chunk_type"] == "text"
+        assert node.metadata["cleaning_profile"] == {"char_out": 30}
+
+
+def test_markdown_splitter_id_and_chunk_type(monkeypatch):
+    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+
+    doc = Document(
+        text="# Title\nbody text",
+        metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "notes.md"},
+    )
+    nodes = ingestion.get_optimal_nodes(doc)
+    assert nodes
+    assert all(n.metadata["splitter_id"] == "markdown" for n in nodes)
+    assert all(n.metadata["chunk_type"] == "text" for n in nodes)
+
+
 def test_token_count_stamped_per_node_on_multi_node_doc(monkeypatch):
     """A long doc splits into several nodes; each carries its OWN token_count
     (not the parent's), per the post-split stamping loop."""

@@ -113,9 +113,10 @@ def test_clean_documents_drops_empty_segments():
 
     assert len(kept) == 1
     assert kept[0].text == "real content"
-    # Method A: the cleaning profile is logged, NOT stamped onto metadata
-    # (no DB landing path yet — that's B4's metadata_json restructure).
-    assert "cleaning_profile" not in kept[0].metadata
+    # B4b: the cleaning profile IS stamped now (it lands in metadata_json via
+    # get_optimal_nodes + write_chunks).
+    assert "cleaning_profile" in kept[0].metadata
+    assert kept[0].metadata["cleaning_profile"]["char_out"] == len("real content")
 
 
 def test_clean_documents_raises_when_all_empty():

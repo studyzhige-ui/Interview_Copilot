@@ -32,6 +32,9 @@ def _clean_documents(documents: list) -> list:
         if profile.warnings:
             logger.warning("S0 cleaning warnings: %s", profile.warnings)
         doc.set_content(cleaned)
+        # Document-level diagnostic; propagates to every chunk's node.metadata
+        # (parsers copy doc metadata) and lands in document_chunks.metadata_json.
+        doc.metadata["cleaning_profile"] = profile.as_dict()
         kept.append(doc)
     if not kept:
         raise EmptyContentError(
@@ -127,8 +130,10 @@ def get_optimal_nodes(document: Document) -> list:
 
     # Tabular files (CSV / XLSX): split by row groups and repeat the header in
     # every chunk so a retrieved chunk is independently understandable.
+    # splitter_id / chunk_type are diagnostic annotations (plan §4.4.3/§4.4.2).
     if file_name.endswith((".csv", ".tsv", ".xlsx", ".xls")):
         nodes = _table_aware_nodes(document, CHUNK_SIZE * 2)
+        splitter_id, chunk_type = "table", "table"
     else:
         if (
             is_markdown_parsed
@@ -136,20 +141,27 @@ def get_optimal_nodes(document: Document) -> list:
             or source_kind == "improved_qa"  # saved QA content_text is Markdown
         ):
             parser = MarkdownNodeParser()
+            splitter_id, chunk_type = "markdown", "text"
         elif file_name.endswith((".html", ".htm")):
             # HTML-aware: keeps heading/section/list/table/code structure,
             # drops script/style/nav noise.
             parser = HTMLNodeParser()
+            splitter_id, chunk_type = "html", "text"
         elif file_name.endswith(".json"):
             parser = JSONNodeParser()
+            splitter_id, chunk_type = "json", "text"
         elif file_name.endswith(".py"):
             parser = CodeSplitter(language="python", chunk_lines=40, chunk_lines_overlap=5)
+            splitter_id, chunk_type = "code", "code"
         elif file_name.endswith(".java"):
             parser = CodeSplitter(language="java", chunk_lines=40, chunk_lines_overlap=5)
+            splitter_id, chunk_type = "code", "code"
         elif file_name.endswith(".cpp") or file_name.endswith(".c"):
             parser = CodeSplitter(language="cpp", chunk_lines=40, chunk_lines_overlap=5)
+            splitter_id, chunk_type = "code", "code"
         else:
             parser = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+            splitter_id, chunk_type = "sentence", "text"
 
         nodes = parser.get_nodes_from_documents([document])
 
@@ -168,13 +180,19 @@ def get_optimal_nodes(document: Document) -> list:
             final_nodes.append(node)
 
     # P0 级红线：阻止 NodeParser 洗掉原文档的 Metadata。同时落 token_count
-    # （embedding tokenizer 口径），供 document_chunks.token_count 持久化。
+    # （embedding tokenizer 口径）和诊断标注（splitter_id/chunk_type/
+    # cleaning_profile），供 document_chunks 列与 metadata_json 持久化。
     user_id = document.metadata.get("user_id", "")
+    cleaning_profile = document.metadata.get("cleaning_profile")
     for node in final_nodes:
         node.metadata["source_kind"] = source_kind
         if user_id:
             node.metadata["user_id"] = user_id
         node.metadata["token_count"] = count_embedding_tokens(node.get_content())
+        node.metadata["splitter_id"] = splitter_id
+        node.metadata["chunk_type"] = chunk_type
+        if cleaning_profile is not None:
+            node.metadata["cleaning_profile"] = cleaning_profile
 
     return final_nodes
 
@@ -186,7 +204,6 @@ async def ingest_document(
     *,
     document_id: str | None = None,
     upload_id: str | None = None,
-    category: str | None = None,
 ):
     """
     文档摄取入口：解析文件 → 自适应切块 → 写入 Milvus 索引 + Postgres document_chunks。
@@ -245,8 +262,8 @@ async def ingest_document(
                 doc.id_ = document_id if len(documents) == 1 else f"{document_id}:{index}"
             if upload_id:
                 doc.metadata["upload_id"] = upload_id
-            if category:
-                doc.metadata["category"] = category
+            # category is NOT stamped onto chunks/metadata_json — it's a
+            # knowledge_documents field, hydrated from there (INGEST-CLEANUP).
 
             if _has_llama_cloud and doc.metadata.get("file_name", "").endswith((".pdf", ".pptx", ".docx")):
                 doc.metadata["is_markdown_parsed"] = True
@@ -267,8 +284,6 @@ async def ingest_document(
                 node.metadata["document_id"] = document_id
             if upload_id:
                 node.metadata["upload_id"] = upload_id
-            if category:
-                node.metadata["category"] = category
 
         # Milvus 2.6 native dense + server-side BM25 hybrid, then the Postgres
         # chunk fact rows. Re-ingest replaces this document's prior chunks.
@@ -284,7 +299,6 @@ async def ingest_document(
             chunk_info = write_chunks(
                 db, nodes=all_nodes, user_id=user_id, source_kind=source_kind,
                 document_id=document_id,
-                metadata={"category": category} if category else None,
             )
 
         logger.info(f">>> 摄取完成: '{file_path}' (source_kind={source_kind}, user_id={user_id})")
@@ -307,7 +321,7 @@ async def ingest_document(
 
 async def ingest_text(
     text: str, source_kind: str, user_id: int,
-    metadata: dict = None, *, document_id: str | None = None,
+    *, document_id: str | None = None,
 ):
     """纯文本节点摄取通道。P0 安全：强制执行多租户隔离。
 
@@ -316,11 +330,15 @@ async def ingest_text(
     document-less (NULL) path is retained only as defensive infrastructure —
     the former ``personal_memory`` writer was removed in MEMORY-V3 (long-term
     user state now lives in memory_ability_states, not the knowledge base).
+
+    category is intentionally NOT taken/stamped here — it's a
+    knowledge_documents field hydrated from there (INGEST-CLEANUP).
     """
     try:
-        final_metadata = metadata or {}
-        final_metadata["source_kind"] = source_kind
-        final_metadata["user_id"] = user_id
+        final_metadata: dict = {
+            "source_kind": source_kind,
+            "user_id": user_id,
+        }
         if document_id:
             final_metadata["document_id"] = document_id
 
@@ -332,6 +350,7 @@ async def ingest_text(
             if profile.warnings:
                 logger.warning("S0 cleaning warnings: %s", profile.warnings)
             text = cleaned
+            final_metadata["cleaning_profile"] = profile.as_dict()
 
         doc = Document(text=text, metadata=final_metadata)
         all_nodes = get_optimal_nodes(doc)
@@ -351,7 +370,7 @@ async def ingest_text(
         with SessionLocal() as db:
             chunk_info = write_chunks(
                 db, nodes=all_nodes, user_id=user_id, source_kind=source_kind,
-                document_id=document_id, metadata=metadata or None,
+                document_id=document_id,
             )
 
         logger.info(f"文本摄取完成 (source_kind='{source_kind}')。")

@@ -26,6 +26,30 @@ def _node_text(node: Any) -> str:
     return str(text or "")
 
 
+# Diagnostic / provenance fields lifted off node.metadata into the chunk's
+# metadata_json (plan §4.4.2/§4.4.3). NOT including category — that lives on
+# knowledge_documents and is hydrated from there (INGEST-CLEANUP).
+_METADATA_JSON_KEYS = (
+    "section_title",
+    "heading_path",
+    "chunk_type",
+    "splitter_id",
+    "parser_id",
+    "parser_profile",
+    "ocr_used",
+    "cleaning_profile",
+    "warnings",
+)
+
+
+def _chunk_metadata_json(node_meta: dict) -> str | None:
+    """Build a chunk's ``metadata_json`` from the diagnostic keys present on
+    its node — per chunk, not a blanket dict. Returns None when nothing
+    diagnostic is present (keeps the column NULL rather than ``{}``)."""
+    payload = {k: node_meta[k] for k in _METADATA_JSON_KEYS if node_meta.get(k) is not None}
+    return json.dumps(payload, ensure_ascii=False) if payload else None
+
+
 def write_chunks(
     db: Session,
     *,
@@ -33,28 +57,25 @@ def write_chunks(
     user_id: int,
     source_kind: str,
     document_id: str | None = None,
-    metadata: dict | None = None,
     commit: bool = True,
 ) -> dict[str, Any]:
     """Persist LlamaIndex ``nodes`` as ``document_chunks`` rows.
 
     Idempotent per document: when ``document_id`` is set, any existing chunks
-    for it are replaced (re-ingest produces a fresh chunk set). Returns the
-    chunk + node-id summary the worker stores on the KnowledgeDocument.
+    for it are replaced (re-ingest produces a fresh chunk set). Per-chunk
+    provenance (page/token columns + diagnostic metadata_json) is lifted off
+    each node's metadata, stamped by the parser / cleaning / chunking stages.
+    Returns the chunk + node-id summary the worker stores on the document.
     """
     if document_id is not None:
         db.query(DocumentChunk).filter(
             DocumentChunk.document_id == document_id,
         ).delete(synchronize_session=False)
 
-    meta_str = json.dumps(metadata, ensure_ascii=False) if metadata else None
     node_ids: list[str] = []
     for idx, node in enumerate(nodes):
         text = _node_text(node)
         node_id = getattr(node, "node_id", None) or getattr(node, "id_", None)
-        # Best-effort provenance the chunking/parser stages stamp onto the
-        # node (Phase B). Absent today → NULL columns; filled once the
-        # parser page_map + embedding-tokenizer count land.
         node_meta = getattr(node, "metadata", None) or {}
         db.add(
             DocumentChunk(
@@ -68,7 +89,7 @@ def write_chunks(
                 page_start=node_meta.get("page_start"),
                 page_end=node_meta.get("page_end"),
                 token_count=node_meta.get("token_count"),
-                metadata_json=meta_str,
+                metadata_json=_chunk_metadata_json(node_meta),
                 # Callers write Milvus before persisting chunks, so the index is
                 # already live by the time the fact rows land.
                 index_status="indexed",
