@@ -149,6 +149,15 @@ def _get_docling_converter():
             do_ocr=_ocr_enabled(),
             ocr_options=RapidOcrOptions(),  # onnxruntime-based, deployment-light
         )
+        # Load layout/table models from the managed data/cache/docling/models
+        # folder when pre-downloaded there (`docling-tools models download -o
+        # <that path>`) — keeps all local models under one root. When absent,
+        # leave artifacts_path unset so Docling falls back to its own download
+        # (works where HuggingFace is reachable; degrades gracefully otherwise).
+        from app.core.hf_runtime import DOCLING_CACHE_DIR
+        models_dir = DOCLING_CACHE_DIR / "models"
+        if models_dir.is_dir() and any(models_dir.iterdir()):
+            pdf_opts.artifacts_path = models_dir
         _docling_converter = DocumentConverter(format_options={
             InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_opts),
             InputFormat.IMAGE: ImageFormatOption(pipeline_options=pdf_opts),

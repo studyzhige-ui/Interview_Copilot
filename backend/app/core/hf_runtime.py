@@ -7,6 +7,9 @@ from app.core.config import settings
 HF_CACHE_DIR = Path(settings.CACHE_DIR) / "huggingface"
 LOCAL_MODELS_DIR = Path(settings.CACHE_DIR) / "models"
 TORCH_CACHE_DIR = Path(settings.CACHE_DIR) / "torch"
+# Docling's layout/table models otherwise default to ~/.cache/docling; keep them
+# under the same managed data/cache root as every other downloaded model.
+DOCLING_CACHE_DIR = Path(settings.CACHE_DIR) / "docling"
 DEAD_PROXY_MARKERS = ("127.0.0.1:9", "localhost:9")
 PROXY_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "GIT_HTTP_PROXY", "GIT_HTTPS_PROXY")
 
@@ -15,6 +18,7 @@ def prepare_hf_runtime() -> Path:
     HF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     LOCAL_MODELS_DIR.mkdir(parents=True, exist_ok=True)
     TORCH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    DOCLING_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     for key in PROXY_KEYS:
         value = os.getenv(key, "")
@@ -25,6 +29,10 @@ def prepare_hf_runtime() -> Path:
     os.environ["HUGGINGFACE_HUB_CACHE"] = str(HF_CACHE_DIR)
     os.environ["TORCH_HOME"] = str(TORCH_CACHE_DIR)
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    # Route Docling's own model cache + CLI download to the managed root too
+    # (docling reads this via its DOCLING_ env prefix). The parser ALSO sets
+    # artifacts_path at convert time so loading works regardless of import order.
+    os.environ.setdefault("DOCLING_CACHE_DIR", str(DOCLING_CACHE_DIR))
 
     warnings.filterwarnings(
         "ignore",
