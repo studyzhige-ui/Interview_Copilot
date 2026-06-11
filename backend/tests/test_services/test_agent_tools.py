@@ -1518,9 +1518,7 @@ class TestToolMetrics:
         handler.setLevel(logging.DEBUG)
         target_logger = logging.getLogger("app.conversation.agent_strategy")
         old_level = target_logger.level
-        old_disabled = target_logger.disabled
         target_logger.setLevel(logging.DEBUG)
-        target_logger.disabled = False
         target_logger.addHandler(handler)
         try:
             async for _ in strategy._execute_tools(
@@ -1535,7 +1533,6 @@ class TestToolMetrics:
         finally:
             target_logger.removeHandler(handler)
             target_logger.setLevel(old_level)
-            target_logger.disabled = old_disabled
 
         metric_lines = [r for r in records if "tool_metric" in r.getMessage()]
         assert len(metric_lines) == 1
