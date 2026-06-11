@@ -8,15 +8,12 @@
 # User-local prompt scratchpad (not project content)
 docs/prompts/
 
-# Local RAG quality harness — the OLD top-level evaluation/ files use a
-# hand-curated 835-row golden dataset scraped from copyrighted PDFs; kept off
-# GitHub for that reason. The NEW evaluation/rag/ subsystem (Phase D) is
-# version-controlled CODE, but its gold datasets embed fixture content (same
-# copyright caution) so evaluation/rag/datasets/ stays local; run-output reports
-# live under data/evaluation/ (ignored via data/).
-evaluation/*
-!evaluation/rag/
-evaluation/rag/datasets/
+# Local RAG quality harness — uses a hand-curated 835-row golden dataset
+# scraped from copyrighted PDFs; kept off GitHub for that reason. The
+# harness itself runs locally via scripts/ + the bundled golden_dataset.jsonl.
+# The new evaluation/rag/ subsystem (Phase D) also stays local (code + datasets)
+# per user preference — eval is a local testing asset, not committed.
+evaluation/
 .venv/
 env/
 venv/
