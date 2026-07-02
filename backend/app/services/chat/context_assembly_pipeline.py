@@ -47,14 +47,14 @@ import logging
 from dataclasses import dataclass, field
 from typing import Callable
 
-from app.agent_runtime.context_manager import token_count as count_tokens
-from app.agent_runtime.context_manager import truncate_to_tokens
+from app.core.tokens import token_count as count_tokens
+from app.core.tokens import truncate_to_tokens
 from app.services.chat.chat_history_service import transcript_service
 
 logger = logging.getLogger(__name__)
 
 # ``count_tokens`` is the canonical tokenizer, defined once in
-# app.agent_runtime.context_manager and re-exported here (imported above)
+# app.core.tokens and re-exported here (imported above)
 # under its historical name so existing callers stay unchanged.
 
 

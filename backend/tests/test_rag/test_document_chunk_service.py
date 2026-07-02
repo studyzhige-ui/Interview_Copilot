@@ -22,7 +22,7 @@ def _seed(db, document_id, texts, user_id=1, **extra):
 
 
 def test_read_document_text_concatenates_in_order(db_session):
-    from app.services.knowledge.document_chunk_service import read_document_text
+    from app.rag.document_chunk_service import read_document_text
 
     _seed(db_session, "kdoc_1", ["孙根武\n北京邮电大学", "工作经历: Acme", "技能: Python"])
     text, count = read_document_text(db_session, "kdoc_1")
@@ -31,14 +31,14 @@ def test_read_document_text_concatenates_in_order(db_session):
 
 
 def test_read_document_text_empty_when_no_chunks(db_session):
-    from app.services.knowledge.document_chunk_service import read_document_text
+    from app.rag.document_chunk_service import read_document_text
 
     text, count = read_document_text(db_session, "kdoc_missing")
     assert text == "" and count == 0
 
 
 def test_read_document_text_truncates_at_max_chars(db_session):
-    from app.services.knowledge.document_chunk_service import read_document_text
+    from app.rag.document_chunk_service import read_document_text
 
     _seed(db_session, "kdoc_big", ["A" * 30000])
     text, count = read_document_text(db_session, "kdoc_big", max_chars=100)
@@ -48,7 +48,7 @@ def test_read_document_text_truncates_at_max_chars(db_session):
 def test_read_document_text_excludes_soft_deleted(db_session):
     """Soft-deleted chunks (deleted_at / index_status='deleted') are excluded
     immediately so a delete/update is reflected in reads at once."""
-    from app.services.knowledge.document_chunk_service import read_document_text
+    from app.rag.document_chunk_service import read_document_text
 
     db_session.add_all([
         DocumentChunk(document_id="kdoc_d", user_id=1, source_kind="user_upload",
@@ -68,7 +68,7 @@ def test_read_document_text_excludes_soft_deleted(db_session):
 def test_write_chunks_defaults_to_pending(db_session):
     """Two-phase write (§4.6.3): facts land as ``pending`` — the caller flips
     them to ``indexed`` only after the Milvus rows are written."""
-    from app.services.knowledge.document_chunk_service import write_chunks
+    from app.rag.document_chunk_service import write_chunks
 
     nodes = [
         SimpleNamespace(text="chunk a", id_="n1"),
@@ -85,7 +85,7 @@ def test_write_chunks_defaults_to_pending(db_session):
 
 
 def test_mark_chunks_indexed_by_document_id(db_session):
-    from app.services.knowledge.document_chunk_service import mark_chunks_indexed, write_chunks
+    from app.rag.document_chunk_service import mark_chunks_indexed, write_chunks
 
     nodes = [SimpleNamespace(text="a", id_="n1"), SimpleNamespace(text="b", id_="n2")]
     write_chunks(db_session, nodes=nodes, user_id=1, source_kind="user_upload",
@@ -99,7 +99,7 @@ def test_mark_chunks_indexed_by_document_id(db_session):
 def test_mark_chunks_indexed_by_node_ids_only_touches_pending(db_session):
     """The document-less path marks by node_id; a 'deleted' row is never
     resurrected (only 'pending' rows flip)."""
-    from app.services.knowledge.document_chunk_service import mark_chunks_indexed
+    from app.rag.document_chunk_service import mark_chunks_indexed
 
     db_session.add_all([
         DocumentChunk(document_id=None, node_id="p1", user_id=1, source_kind="manual_text",
@@ -119,7 +119,7 @@ def test_mark_chunks_indexed_by_node_ids_only_touches_pending(db_session):
 def test_write_chunks_persists_provenance_from_node_metadata(db_session):
     """page_start/page_end/token_count are lifted off each node's metadata
     (Phase B); a node without them leaves the columns NULL."""
-    from app.services.knowledge.document_chunk_service import write_chunks
+    from app.rag.document_chunk_service import write_chunks
 
     nodes = [
         SimpleNamespace(text="with prov", id_="p1", metadata={
@@ -143,7 +143,7 @@ def test_write_chunks_builds_metadata_json_from_node_diagnostics(db_session):
     """metadata_json is per-chunk, built from the node's diagnostic keys;
     category is NEVER written there (it lives on knowledge_documents)."""
     import json
-    from app.services.knowledge.document_chunk_service import write_chunks
+    from app.rag.document_chunk_service import write_chunks
 
     nodes = [
         SimpleNamespace(text="c1", id_="n1", metadata={

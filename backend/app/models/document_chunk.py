@@ -4,7 +4,7 @@ Postgres owns the chunk TEXT (this table); Milvus owns the retrieval INDEX —
 dense vector + native server-side BM25 sparse over the chunk text (see
 ``app.rag.milvus_hybrid``). The authoritative chunk text lives here. This
 replaced the LlamaIndex ``PostgresDocumentStore`` as the project's chunk store:
-full-text reconstruction (``document_chunk_service.read_document_text``) reads
+full-text reconstruction (``app.rag.document_chunk_service.read_document_text``) reads
 this table; BM25 retrieval is now served by Milvus, not from here.
 
 A row is one chunk:

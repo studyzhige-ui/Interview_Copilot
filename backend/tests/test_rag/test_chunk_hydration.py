@@ -1,4 +1,4 @@
-"""Tests for ``app.services.knowledge.chunk_hydration`` — the Postgres
+"""Tests for ``app.rag.chunk_hydration`` — the Postgres
 hydrate + live-check step that turns Milvus node ids into fully-attributed
 chunk dicts.
 
@@ -19,7 +19,7 @@ from app.models.document_chunk import DocumentChunk
 from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
-from app.services.knowledge.chunk_hydration import hydrate_chunks
+from app.rag.chunk_hydration import hydrate_chunks
 
 
 @pytest.fixture

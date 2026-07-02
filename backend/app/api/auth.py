@@ -1,7 +1,7 @@
 """Auth + profile + avatar endpoints.
 
 Security model:
-- Stateless JWT with ``jti`` claim for revocation (see token_blacklist_service).
+- Stateless JWT with ``jti`` claim for revocation (see app.core.token_blacklist).
 - Refresh rotates: each /refresh call invalidates the consumed refresh
   token's jti so stealing one ticket only buys until first rotation.
 - /logout revokes both presented tokens (access via Authorization header,
@@ -37,7 +37,7 @@ from app.core.security import (
 from app.db.database import get_db
 from app.models.user import User
 from app.services.auth import avatar_service, user_account_service
-from app.services.auth.token_blacklist_service import is_revoked, revoke
+from app.core.token_blacklist import is_revoked, revoke
 from app.services.auth.verification_code_service import (
     CodeError,
     assert_ip_not_locked,

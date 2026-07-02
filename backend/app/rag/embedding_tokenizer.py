@@ -2,7 +2,7 @@
 
 Chunk ``token_count``, oversize detection and pre-embedding length protection
 must use the EMBEDDING model's tokenizer — NOT the cl100k LLM-prompt
-tokenizer in ``agent_runtime.context_manager`` (that one sizes the answer
+tokenizer in ``app.core.tokens`` (that one sizes the answer
 prompt budget; mixing the two was the bug §4.3 calls out).
 
 Only the local HF embedding ships a local tokenizer. Remote providers

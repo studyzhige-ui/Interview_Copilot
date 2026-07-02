@@ -294,7 +294,7 @@ def test_upsert_drain_does_not_resurrect_hard_deleted_doc(db_session, monkeypatc
     its upsert was queued reads 0 live chunks → Milvus is cleared and the doc
     stays 'deleting' (never resurrected to ready)."""
     import app.services.knowledge.knowledge_outbox  # noqa: F401
-    from app.services.knowledge.document_chunk_service import delete_document_chunks
+    from app.rag.document_chunk_service import delete_document_chunks
     from app.services.uploads.outbox_service import run_due_outbox_jobs
 
     _seed_doc(db_session, "kdoc_race")  # processing

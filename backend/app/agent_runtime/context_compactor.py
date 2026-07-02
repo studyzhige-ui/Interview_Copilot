@@ -20,7 +20,7 @@ compactable tool types, position-based keep-last-N, unconditional execution.
 Scope: L2 (a single ReAct execution).  Distinct from
 ``app.services.chat.context_assembly_pipeline`` (L1 multi-turn prompt
 assembly); uses the canonical token counter from
-``app.agent_runtime.context_manager``.
+``app.core.tokens``.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from app.agent_runtime.context_manager import token_count
+from app.core.tokens import token_count
 from app.agent_runtime.context_window import (
     get_blocking_limit,
     get_cheap_prepass_threshold,

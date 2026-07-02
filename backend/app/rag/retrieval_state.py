@@ -66,7 +66,7 @@ class RetrievalResult:
     """One retrieval pass: hydrated top-N chunks + structured state.
 
     ``chunks`` are fully attributed dicts hydrated from Postgres facts (see
-    ``app.services.knowledge.chunk_hydration``), in final rank order. The
+    ``app.rag.chunk_hydration``), in final rank order. The
     ``[K#]`` numbering and the final sources array are NOT assigned here —
     context assembly owns those, on the post-budget-trim chunk list
     (retrieval plan §2.7).

@@ -17,7 +17,7 @@ One retrieval pass (:func:`query_knowledge_base`):
      RRF scores live on a ~1/60 scale, so ``RAG_MIN_SCORE=0.5`` would
      silently filter every one of them (retrieval plan §2.5).
   5. Postgres hydrate + live check for the final top-N via
-     :func:`app.services.knowledge.chunk_hydration.hydrate_chunks` —
+     :func:`app.rag.chunk_hydration.hydrate_chunks` —
      Postgres text is the fact source; chunks of deleted/deleting documents
      drop out here.
 
@@ -179,7 +179,7 @@ def _log_top_nodes(label: str, nodes: list[Any], limit: int = 5) -> None:
 
 def _hydrate_node_ids(node_ids: list[str]) -> list[dict[str, Any]]:
     """Sync hydrate + live check (runs in a worker thread)."""
-    from app.services.knowledge.chunk_hydration import hydrate_chunks
+    from app.rag.chunk_hydration import hydrate_chunks
 
     with SessionLocal() as db:
         return hydrate_chunks(db, node_ids)

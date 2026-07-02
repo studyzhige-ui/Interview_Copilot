@@ -40,7 +40,7 @@ def delete_document_vectors_and_chunks(db: Session, document: KnowledgeDocument)
     vectors (plan §4.6.3). Visibility is already decided by Postgres state, so
     the queued cleanup never makes a deleted document reappear."""
     from app.rag import milvus_hybrid
-    from app.services.knowledge.document_chunk_service import delete_document_chunks
+    from app.rag.document_chunk_service import delete_document_chunks
     from app.services.knowledge.knowledge_outbox import enqueue_milvus_delete
 
     delete_document_chunks(db, document.id)

@@ -1,7 +1,7 @@
-"""Tests for the canonical token helpers in ``app.agent_runtime.context_manager``."""
+"""Tests for the canonical token helpers in ``app.core.tokens``."""
 from __future__ import annotations
 
-from app.agent_runtime import context_manager as cm
+from app.core import tokens as cm
 
 
 def test_token_count_empty_is_zero():

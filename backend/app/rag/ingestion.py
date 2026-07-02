@@ -145,7 +145,7 @@ def reindex_document(db, document_id: str) -> int:
     Used by the Milvus upsert/reindex outbox handlers and the reingest script.
     """
     from app.rag import milvus_hybrid
-    from app.services.knowledge.document_chunk_service import (
+    from app.rag.document_chunk_service import (
         mark_chunks_indexed,
         read_indexable_chunks,
     )
@@ -185,7 +185,7 @@ def _index_nodes(
     ``write_chunks`` summary (chunk_count + node_ids + indexed).
     """
     from app.db.database import SessionLocal
-    from app.services.knowledge.document_chunk_service import mark_chunks_indexed, write_chunks
+    from app.rag.document_chunk_service import mark_chunks_indexed, write_chunks
 
     texts = [_node_text(n) for n in all_nodes]
     embeddings, embedding_profile = _embed_texts(texts)
@@ -212,6 +212,9 @@ def _index_nodes(
             "Milvus write failed for document %s; queuing upsert retry: %s",
             document_id, exc,
         )
+        # Deliberate upward seam (rag → services.knowledge): the outbox is the
+        # cross-system reliability layer, and enqueueing the retry job is the
+        # only thing this pipeline needs from it — only on this failure path.
         from app.services.knowledge.knowledge_outbox import enqueue_milvus_upsert
         with SessionLocal() as db:
             enqueue_milvus_upsert(db, user_pk=user_id, document_id=document_id)
