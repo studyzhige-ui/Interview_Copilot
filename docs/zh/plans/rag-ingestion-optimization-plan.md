@@ -26,8 +26,8 @@
 - `backend/app/services/knowledge/document_chunk_service.py`: Postgres chunk 事实表写入和读取。
 - `backend/app/models/document_chunk.py`: `document_chunks` ORM。
 - `backend/app/worker/tasks.py`: Celery ingestion task。
-- `backend/scripts/reingest_hybrid.py`: 从 Postgres 事实源重建 Milvus hybrid collection。
-- `backend/scripts/consistency_scan.py`: 只读一致性巡检。
+- `scripts/reingest_hybrid.py`: 从 Postgres 事实源重建 Milvus hybrid collection。
+- `scripts/consistency_scan.py`: 只读一致性巡检。
 
 当前优点:
 
@@ -440,7 +440,7 @@ document_id
 
 source schema 权威位置:
 
-- source schema 以 `docs/zh/rag-retrieval-optimization-plan.md` 的“source 返回结构”为唯一权威。
+- source schema 以 `docs/zh/plans/rag-retrieval-optimization-plan.md` 的“source 返回结构”为唯一权威。
 - 建库阶段只保证 hydrate 所需事实字段可取: `document_chunks.id/node_id/chunk_index/page_start/page_end/metadata_json/token_count/text_hash`、`knowledge_documents.title/category/source_kind/status/deleted_at/file_asset_id`、`file_assets.original_filename/content_type/size_bytes`。
 - `ref=K#`、`score`、`score_source`、最终 sources 数组只在检索/上下文组装阶段生成，不在建库阶段生成。
 
@@ -546,7 +546,7 @@ embedding_error_code
 - `dense` 使用 HNSW，当前参数来自 `MILVUS_DENSE_INDEX_TYPE=HNSW`、`MILVUS_HNSW_M=16`、`MILVUS_HNSW_EF_CONSTRUCTION=200`、`MILVUS_HNSW_EF_SEARCH=64`。
 - `sparse` 使用 Milvus server-side BM25 function + `SPARSE_INVERTED_INDEX`。
 - metadata filter 通过 Milvus scalar expr 完成，当前强制 `user_id == users.id`，可额外过滤 `source_kind`。
-- 重建脚本 `backend/scripts/reingest_hybrid.py` 可从 Postgres facts 重建 knowledge/resume/ability 三个 collection。
+- 重建脚本 `scripts/reingest_hybrid.py` 可从 Postgres facts 重建 knowledge/resume/ability 三个 collection。
 - 当前知识库重导入是文档级 replacement: 按 `document_id` 删除旧 Milvus rows，再插入新 rows；Postgres `document_chunks` 也按 `document_id` 删除旧 chunks 后写入新 chunks。
 
 索引类型:
@@ -884,10 +884,10 @@ payload_json = {"source_kind": "..."}
 
 后续链路见:
 
-1. `docs/zh/rag-retrieval-optimization-plan.md`
-2. `docs/zh/rag-generation-optimization-plan.md`
-3. `docs/zh/rag-production-optimization-plan.md`
-4. `docs/zh/rag-evaluation-optimization-plan.md`
+1. `docs/zh/plans/rag-retrieval-optimization-plan.md`
+2. `docs/zh/plans/rag-generation-optimization-plan.md`
+3. `docs/zh/plans/rag-production-optimization-plan.md`
+4. `docs/zh/plans/rag-evaluation-optimization-plan.md`
 
 ## 7. 决策记录
 
@@ -911,7 +911,7 @@ payload_json = {"source_kind": "..."}
 下面内容可作为交给 Claude/其他 Agent 的执行提示基础。
 
 ```text
-请基于 docs/zh/rag-ingestion-optimization-plan.md 中已经确认的决策，改造 Interview Copilot 的 RAG 建库链路。
+请基于 docs/zh/plans/rag-ingestion-optimization-plan.md 中已经确认的决策，改造 Interview Copilot 的 RAG 建库链路。
 
 执行原则:
 1. Postgres document_chunks 是 chunk 事实源，Milvus 只是索引副本。

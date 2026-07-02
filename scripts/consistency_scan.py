@@ -17,18 +17,25 @@ can accumulate, per the RFC acceptance criterion "巡检脚本能输出可修复
                                  conversation messages.
 
 NOTHING is mutated — the script only reports ids so an operator (or a future
-repair job) can act. Run from the ``backend/`` directory:
-``PYTHONPATH=. python -m scripts.consistency_scan``.
+repair job) can act. Run from the project root:
+``python scripts/consistency_scan.py``.
 """
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from sqlalchemy import text
-from sqlalchemy.orm import Session
+# Make the ``app`` package importable. Two layouts: repo (<root>/backend/app,
+# script at <root>/scripts/) and docker image (/app/app, script at /app/scripts/).
+_parent = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_parent / "backend" if (_parent / "backend" / "app").is_dir() else _parent))
 
-from app.db.database import SessionLocal
+from sqlalchemy import text  # noqa: E402
+from sqlalchemy.orm import Session  # noqa: E402
+
+from app.db.database import SessionLocal  # noqa: E402
 
 _SAMPLE = 20  # ids to show per finding
 

@@ -53,6 +53,10 @@ WORKDIR /app
 COPY --chown=app:app backend/ ./
 COPY --chown=app:app alembic.ini /app/alembic.ini
 COPY --chown=app:app alembic/ /app/alembic/
+# Operator scripts that must be runnable inside the container (reingest /
+# consistency scan). They live at scripts/ in the repo; their sys.path shim
+# handles both the repo layout (backend/app) and this image layout (/app/app).
+COPY --chown=app:app scripts/consistency_scan.py scripts/reingest_hybrid.py /app/scripts/
 
 # Entrypoint creates /app/data if missing, chowns it (handles the case
 # where docker-compose bind-mounts a host dir owned by root or some other

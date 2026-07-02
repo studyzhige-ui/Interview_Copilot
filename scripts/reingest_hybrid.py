@@ -2,11 +2,11 @@
 fact sources. Use after deploying the hybrid migration so no stale dense-only
 metadata/schema survives.
 
-    python backend/scripts/reingest_hybrid.py --drop                # all 3
-    python backend/scripts/reingest_hybrid.py --drop --only resume  # one
-    python backend/scripts/reingest_hybrid.py --document <id>       # one knowledge doc
-    python backend/scripts/reingest_hybrid.py --user <id>           # a user's docs
-    python backend/scripts/reingest_hybrid.py --user <id> --category <name>
+    python scripts/reingest_hybrid.py --drop                # all 3
+    python scripts/reingest_hybrid.py --drop --only resume  # one
+    python scripts/reingest_hybrid.py --document <id>       # one knowledge doc
+    python scripts/reingest_hybrid.py --user <id>           # a user's docs
+    python scripts/reingest_hybrid.py --user <id> --category <name>
 
 Fact sources (Postgres is authoritative — this NEVER reads the old Milvus rows):
   * knowledge → document_chunks            (id=node_id, text, source_kind, document_id)
@@ -23,9 +23,10 @@ import argparse
 import sys
 from pathlib import Path
 
-# Make the backend package importable when run as a standalone script.
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+# Make the ``app`` package importable. Two layouts: repo (<root>/backend/app,
+# script at <root>/scripts/) and docker image (/app/app, script at /app/scripts/).
+_parent = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_parent / "backend" if (_parent / "backend" / "app").is_dir() else _parent))
 
 from llama_index.core import Settings  # noqa: E402
 

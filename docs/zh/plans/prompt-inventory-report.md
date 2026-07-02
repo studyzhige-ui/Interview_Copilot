@@ -73,7 +73,7 @@
 - 固定规则仅要求使用检索知识作为证据并避免编造来源。
 - 动态输入在 P01 基础上增加 `[Retrieved Context]`，每个 chunk 标记为 `[K#]`。
 - 当前规则没有明确要求输出 `[K#]` 引用、证据不足时的部分回答格式、禁止把 memory 当作可引用来源。
-- `docs/zh/rag-generation-optimization-plan.md` 已记录此问题和目标 prompt，但当前源码尚未落实该完整版本。
+- `docs/zh/plans/rag-generation-optimization-plan.md` 已记录此问题和目标 prompt，但当前源码尚未落实该完整版本。
 
 #### P03 L2 执行 Agent
 

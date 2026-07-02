@@ -1,0 +1,26 @@
+# Project metadata + tool configuration.
+#
+# Dependencies stay in requirements.txt (pip install -r) — this project is
+# deployed as an app, not published as a package, so there is no build
+# backend here. This file exists so tool config (pytest today, linters
+# tomorrow) lives in one standard place instead of scattered ini files.
+
+[project]
+name = "interview-copilot"
+version = "0.1.0"
+description = "AI interview copilot — mock interviews, review analysis, RAG knowledge base, and long-term memory"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["backend"]
+testpaths = ["backend/tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "slow: marks tests that require significant time (e.g. model loading)",
+    "integration: marks tests that require external services (DB, Milvus, Redis)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:sqlalchemy",
+    "ignore:datetime.datetime.utcnow:DeprecationWarning",
+]
