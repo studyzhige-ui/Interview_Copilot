@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.rate_limit import RATE_DEFAULT, limiter
@@ -17,6 +16,7 @@ from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.resume import Resume
 from app.models.user import User
+from app.schemas.resumes import ResumeCreateRequest, ResumeResponse
 from app.services.resume import resume_entity_service
 
 logger = logging.getLogger(__name__)
@@ -36,24 +36,6 @@ def _dispatch_resume_parse(resume: Resume) -> None:
         process_resume_parse.delay(resume.id)
     except Exception:  # noqa: BLE001
         logger.warning("resume parse dispatch failed for %s", resume.id)
-
-
-class ResumeCreateRequest(BaseModel):
-    file_asset_id: str | None = None
-    title: str | None = Field(default=None, max_length=200)
-    raw_text_snapshot: str | None = None
-    make_default: bool | None = None
-
-
-class ResumeResponse(BaseModel):
-    id: str
-    title: str
-    is_default: bool
-    parse_status: str
-    file_asset_id: str | None
-    has_text: bool
-    created_at: str
-    updated_at: str
 
 
 def _serialize(r: Resume) -> ResumeResponse:

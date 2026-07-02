@@ -53,6 +53,10 @@ class SessionRenameRequest(BaseModel):
     title: str
 
 
+class MemoryRecallToggleBody(BaseModel):
+    enabled: bool
+
+
 # ── Mock-interview DTOs ──────────────────────────────────────────────────
 # Target architecture (RFC §6.4): the start endpoint owns creation of the
 # interview_record + conversation + mock_interview_runtime; subsequent calls
@@ -171,6 +175,7 @@ __all__ = [
     "MessageItem",
     "SSEChatRequest",
     "SessionRenameRequest",
+    "MemoryRecallToggleBody",
     # Mock-interview DTOs (mirrored 1:1 by frontend/src/types/api.ts)
     "MockStage",
     "MockStartRequest",

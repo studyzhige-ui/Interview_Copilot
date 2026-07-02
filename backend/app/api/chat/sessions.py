@@ -8,7 +8,6 @@ import logging
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
@@ -17,6 +16,7 @@ from app.db.database import get_db
 from app.models.chat import ConversationMessage, Conversation, generate_uuid
 from app.models.user import User
 from app.schemas.chat import (
+    MemoryRecallToggleBody,
     MessageItem,
     SessionCreateRequest,
     SessionCreateResponse,
@@ -248,10 +248,6 @@ def get_full_transcript(
 # default → False via ``recall_policy``. Frontend uses GET to render the
 # switch and POST to
 # flip it. The interview_fact recall path checks this on every turn.
-
-
-class MemoryRecallToggleBody(BaseModel):
-    enabled: bool
 
 
 @router.get("/chat/sessions/{session_id}/memory-recall")

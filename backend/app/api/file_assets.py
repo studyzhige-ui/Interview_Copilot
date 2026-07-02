@@ -15,13 +15,17 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.rate_limit import RATE_UPLOAD, limiter
 from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.user import User
+from app.schemas.file_assets import (
+    ConfirmResponse,
+    UploadUrlRequest,
+    UploadUrlResponse,
+)
 from app.services.uploads.file_asset_service import (
     confirm_file_asset,
     create_file_asset,
@@ -44,27 +48,6 @@ _PURPOSE_LIMITS: dict[str, int] = {
     "avatar": 1 * 1024 * 1024,
     "agent_output": 20 * 1024 * 1024,
 }
-
-
-class UploadUrlRequest(BaseModel):
-    purpose: str
-    filename: str = Field(..., min_length=1, max_length=255)
-    content_type: str | None = None
-    size_bytes: int | None = Field(default=None, ge=0)
-
-
-class UploadUrlResponse(BaseModel):
-    file_asset_id: str
-    upload_url: str
-    storage_uri: str
-    filename: str
-
-
-class ConfirmResponse(BaseModel):
-    file_asset_id: str
-    upload_status: str
-    validation_status: str
-    validation_error: str | None = None
 
 
 @router.post("/file-assets/upload-url", response_model=UploadUrlResponse)

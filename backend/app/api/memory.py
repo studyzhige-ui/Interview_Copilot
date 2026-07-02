@@ -18,7 +18,6 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
@@ -26,17 +25,11 @@ from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
 from app.models.memory_audit_logs import CHANGE_TYPES, MemoryAuditEntry
 from app.models.user import User
+from app.schemas.memory import DocBodyRequest
 from app.services.memory import memory_ability_state_service, memory_document_service
 from app.services.memory._user_memory_lock import user_memory_lock_sync
 
 router = APIRouter(tags=["memory"])
-
-
-# ── Schemas ────────────────────────────────────────────────────────────
-
-
-class DocBodyRequest(BaseModel):
-    body: str = Field("", description="Full new body markdown.")
 
 
 def _ability_payload(s) -> dict:
