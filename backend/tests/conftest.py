@@ -36,7 +36,10 @@ for module_name in _MAYBE_MISSING:
 
 
 # ── Test-safe env defaults — set BEFORE app.core.config gets imported ─────
-os.environ.setdefault("DATABASE_URL", "sqlite:///./test_unit.db")
+# In-memory URL: it only exists so app.core.config validates; every test that
+# touches a DB uses the fixtures below. A file path here would litter the
+# repo with stray ``test_unit.db`` files whenever something connects.
+os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("DEEPSEEK_API_KEY", "test-key-not-real")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-prod")
 
@@ -57,31 +60,10 @@ def test_engine():
     )
 
     from app.db.database import Base
-    # Import every model module so its Base.metadata side-effect registers it.
-    # Keep this list in sync with backend/app/models/*.py — see ``ls`` for the
-    # source of truth. ``app.models.interview`` was removed in alembic 0007;
-    # ``interview_record`` + ``interview_qa`` replace it.
-    # ``app.models.agent_trace`` was removed in alembic 0008
-    # (LangSmith covers the per-step trace surface).
-    import app.models.chat                 # noqa: F401
-    import app.models.document_chunk       # noqa: F401
-    import app.models.file_asset           # noqa: F401
-    import app.models.interview_qa         # noqa: F401
-    import app.models.interview_record     # noqa: F401
-    import app.models.interview_transcript # noqa: F401
-    import app.models.knowledge            # noqa: F401
-    import app.models.memory_ability_state # noqa: F401
-    import app.models.memory_audit_logs    # noqa: F401
-    import app.models.memory_document      # noqa: F401
-    import app.models.mock_interview_runtime   # noqa: F401
-    import app.models.outbox_job           # noqa: F401
-    import app.models.resume               # noqa: F401
-    import app.models.resume_section       # noqa: F401
-    import app.models.session_task         # noqa: F401
-    import app.models.user                 # noqa: F401
-    import app.models.user_model_credentials       # noqa: F401
-    import app.models.user_model_provider_settings  # noqa: F401
-    import app.models.user_model_selections         # noqa: F401
+    # app.models.__init__ imports every model module, so this single import
+    # registers all tables on Base.metadata. New models only need to be added
+    # to app/models/__init__.py (alembic/env.py relies on the same package).
+    import app.models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     yield engine

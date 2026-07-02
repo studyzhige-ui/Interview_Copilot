@@ -1,26 +1,15 @@
 from logging.config import fileConfig
-from pathlib import Path
-import sys
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-BACKEND_DIR = PROJECT_ROOT / "backend"
-sys.path.insert(0, str(BACKEND_DIR))
-
+# ``app`` is importable because alembic.ini sets
+# ``prepend_sys_path = %(here)s/backend`` — no manual sys.path edits here.
 from app.core.config import settings
 from app.db.database import Base
-import app.models.chat  # noqa: F401
-import app.models.file_asset  # noqa: F401
-import app.models.interview_qa  # noqa: F401
-import app.models.interview_record  # noqa: F401
-import app.models.knowledge  # noqa: F401
-import app.models.memory_ability_state  # noqa: F401 — v3 memory: per-topic mastery
-import app.models.memory_audit_logs  # noqa: F401 — v3 memory: audit trail
-import app.models.memory_document  # noqa: F401 — v3 memory: profile/strategy docs
-import app.models.resume_section  # noqa: F401
-import app.models.user  # noqa: F401
+# app.models.__init__ imports every model module, so autogenerate sees the
+# complete metadata (a partial list here would diff missing tables as drops).
+import app.models  # noqa: F401
 
 config = context.config
 
