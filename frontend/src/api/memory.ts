@@ -27,15 +27,19 @@ import type {
 
 // ── Overview ───────────────────────────────────────────────────────────
 
-export async function getMemoryOverview(): Promise<MemoryOverviewResp> {
-  const res = await apiClient.get('/memory/overview');
+export async function getMemoryOverview(
+  opts: { signal?: AbortSignal } = {},
+): Promise<MemoryOverviewResp> {
+  const res = await apiClient.get('/memory/overview', { signal: opts.signal });
   return res.data;
 }
 
 // ── knowledge_doc ──────────────────────────────────────────────────────
 
-export async function listKnowledgeTopics(): Promise<KnowledgeTopicSummary[]> {
-  const res = await apiClient.get('/memory/knowledge/topics');
+export async function listKnowledgeTopics(
+  opts: { signal?: AbortSignal } = {},
+): Promise<KnowledgeTopicSummary[]> {
+  const res = await apiClient.get('/memory/knowledge/topics', { signal: opts.signal });
   return res.data?.topics ?? [];
 }
 
@@ -98,8 +102,10 @@ export async function editHabitDoc(body: string): Promise<void> {
 
 // ── user_profile_doc (read-only) ───────────────────────────────────────
 
-export async function getUserProfileDoc(): Promise<string> {
-  const res = await apiClient.get('/memory/user-profile');
+export async function getUserProfileDoc(
+  opts: { signal?: AbortSignal } = {},
+): Promise<string> {
+  const res = await apiClient.get('/memory/user-profile', { signal: opts.signal });
   return String(res.data?.body ?? '');
 }
 

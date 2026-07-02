@@ -21,7 +21,7 @@ import {
   uploadKnowledgeFile,
 } from '@/api/knowledge';
 import type { KnowledgeCategory, KnowledgeDoc } from '@/types/api';
-import { MemoryTab } from './MemoryTab';
+import { MemoryTab } from './memory/MemoryTab';
 
 type TopTab = 'files' | 'memory';
 
