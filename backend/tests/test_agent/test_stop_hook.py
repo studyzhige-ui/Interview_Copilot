@@ -12,7 +12,7 @@ class TestCheckIncompleteTasks:
         with patch(
             "app.db.database.SessionLocal",
         ) as mock_sl, patch(
-            "app.services.task_service.list_incomplete",
+            "app.services.chat.session_task_service.list_incomplete",
             return_value=[],
         ):
             mock_sl.return_value.close = MagicMock()
@@ -28,7 +28,7 @@ class TestCheckIncompleteTasks:
         with patch(
             "app.db.database.SessionLocal",
         ) as mock_sl, patch(
-            "app.services.task_service.list_incomplete",
+            "app.services.chat.session_task_service.list_incomplete",
             return_value=incomplete,
         ):
             mock_sl.return_value.close = MagicMock()

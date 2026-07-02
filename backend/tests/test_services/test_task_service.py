@@ -2,7 +2,7 @@
 import pytest
 
 from app.models.session_task import SessionTask
-from app.services.task_service import (
+from app.services.chat.session_task_service import (
     count_incomplete,
     create_task,
     delete_task,

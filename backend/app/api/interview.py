@@ -223,7 +223,7 @@ def _extract_resume_snapshot(db: Session, file_asset_id: str, user_id: str) -> s
     import os
     import tempfile
 
-    from app.services.storage_service import download_file_from_s3
+    from app.core.storage import download_file_from_s3
     from app.services.voice.file_parser import extract_resume_text
 
     upload = get_owned_file_asset(db, file_asset_id=file_asset_id, user_id=user_id)

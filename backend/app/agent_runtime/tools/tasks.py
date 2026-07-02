@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from app.agent_runtime.tool_registry import AgentToolContext, ToolEntry, registry
 from app.db.database import SessionLocal
-from app.services import task_service
+from app.services.chat import session_task_service
 
 
 # ── Pydantic arg models ─────────────────────────────────────────────────
@@ -51,7 +51,7 @@ async def _handle_task_create(args: TaskCreateArgs, ctx: AgentToolContext) -> di
     def _sync():
         db = SessionLocal()
         try:
-            return task_service.create_task(
+            return session_task_service.create_task(
                 db, ctx.session_id, subject=args.subject, description=args.description,
             )
         finally:
@@ -64,7 +64,7 @@ async def _handle_task_update(args: TaskUpdateArgs, ctx: AgentToolContext) -> di
     def _sync():
         db = SessionLocal()
         try:
-            result = task_service.update_task(
+            result = session_task_service.update_task(
                 db, ctx.session_id, args.task_id,
                 status=args.status,
                 subject=args.subject,
@@ -83,7 +83,7 @@ async def _handle_task_get(args: TaskGetArgs, ctx: AgentToolContext) -> dict[str
     def _sync():
         db = SessionLocal()
         try:
-            result = task_service.get_task(db, ctx.session_id, args.task_id)
+            result = session_task_service.get_task(db, ctx.session_id, args.task_id)
             if result is None:
                 return {"error": f"task {args.task_id} not found"}
             return result
@@ -97,7 +97,7 @@ async def _handle_task_list(args: TaskListArgs, ctx: AgentToolContext) -> dict[s
     def _sync():
         db = SessionLocal()
         try:
-            tasks = task_service.list_tasks(db, ctx.session_id)
+            tasks = session_task_service.list_tasks(db, ctx.session_id)
             return {"tasks": tasks, "total": len(tasks)}
         finally:
             db.close()

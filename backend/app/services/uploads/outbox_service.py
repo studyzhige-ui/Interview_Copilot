@@ -148,7 +148,7 @@ def run_due_outbox_jobs(db: Session, *, limit: int = 50) -> int:
 
 def _handle_delete_object(db: Session, job: OutboxJob) -> None:
     """Delete an object-storage blob (s3:// or local://). Missing is success."""
-    from app.services.storage_service import delete_local_uri, delete_s3_object, is_local_uri
+    from app.core.storage import delete_local_uri, delete_s3_object, is_local_uri
 
     payload = json.loads(job.payload_json) if job.payload_json else {}
     storage_uri = payload.get("storage_uri")

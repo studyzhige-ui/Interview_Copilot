@@ -34,7 +34,7 @@ from app.core.security import (
 )
 from app.db.database import get_db
 from app.models.user import User
-from app.services.storage_service import (
+from app.core.storage import (
     delete_local_uri,
     delete_s3_object,
     generate_presigned_get_url,
@@ -527,7 +527,7 @@ def _read_object_head(storage_uri: str, n: int = 32) -> bytes:
     bytes went straight to object storage, so the server reads the head here to
     confirm the declared image type matches the real content.
     """
-    from app.services.storage_service import parse_s3_uri, s3_client
+    from app.core.storage import parse_s3_uri, s3_client
 
     bucket, key = parse_s3_uri(storage_uri)
     obj = s3_client.get_object(Bucket=bucket, Key=key, Range=f"bytes=0-{n - 1}")

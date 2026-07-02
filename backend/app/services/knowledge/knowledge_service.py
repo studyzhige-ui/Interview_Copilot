@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
-from app.services.storage_service import delete_s3_object, parse_s3_uri
+from app.core.storage import delete_s3_object, parse_s3_uri
 
 logger = logging.getLogger(__name__)
 

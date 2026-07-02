@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.core.user_identity import resolve_user_pk
 from app.models.file_asset import FileAsset, generate_file_asset_id
-from app.services.storage_service import (
+from app.core.storage import (
     build_owned_object_key,
     generate_presigned_upload_url_for_key,
     head_object,

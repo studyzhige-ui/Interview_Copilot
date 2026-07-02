@@ -180,7 +180,7 @@ class InterviewAnalysisOrchestrator:
         local_path = storage_uri
         is_temp = False
         if storage_uri and storage_uri.startswith("s3://"):
-            from app.services.storage_service import download_file_from_s3
+            from app.core.storage import download_file_from_s3
 
             _, ext = os.path.splitext(storage_uri)
             tmp_fd, local_path = tempfile.mkstemp(suffix=ext)

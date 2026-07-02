@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 from app.db.database import SessionLocal
 from app.models.user import User
-from app.services.storage_service import (
+from app.core.storage import (
     save_blob_to_local,
     s3_client,
     storage_uri_for_key,

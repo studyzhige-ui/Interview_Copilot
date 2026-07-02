@@ -44,7 +44,7 @@ async def api_model_catalog(
     without it. Invalidated by /models/api-keys writes (see upsert/delete
     handlers below).
     """
-    from app.services.cache_service import cached
+    from app.core.cache import cached
 
     async def _build():
         selection = get_runtime_selection(user_id=current_user.username)
@@ -93,7 +93,7 @@ async def refresh_model_catalog(
     catalog wrapper is invalidated so this user sees fresh entries
     on their very next read.
     """
-    from app.services.cache_service import invalidate
+    from app.core.cache import invalidate
     from app.core.model_registry import repopulate_profile_cache
 
     grouped = await refresh_catalog()
@@ -217,7 +217,7 @@ async def upsert_my_api_key(
     The plaintext is dropped after encryption; subsequent GETs only see the
     masked form. To replace, just PUT again — it overwrites.
     """
-    from app.services.cache_service import invalidate
+    from app.core.cache import invalidate
     from app.services.auth.user_api_key_service import set_user_api_key
     try:
         result = set_user_api_key(
@@ -246,7 +246,7 @@ async def delete_my_api_key(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from app.services.cache_service import invalidate
+    from app.core.cache import invalidate
     from app.services.auth.user_api_key_service import delete_user_api_key
     deleted = delete_user_api_key(current_user.username, provider, db=db)
     from app.core.model_registry import clear_llm_cache_for_provider
@@ -341,7 +341,7 @@ async def api_update_provider_settings(
     client cache for the provider is cleared so the next chat call
     rebuilds with the new api_base / headers.
     """
-    from app.services.cache_service import invalidate
+    from app.core.cache import invalidate
     from app.services.auth.user_provider_settings_service import (
         SettingsPatch, upsert_settings,
     )
@@ -378,7 +378,7 @@ async def api_delete_provider_settings(
     Does NOT remove the user's encrypted API key for that provider —
     use ``DELETE /models/api-keys/{provider}`` for that.
     """
-    from app.services.cache_service import invalidate
+    from app.core.cache import invalidate
     from app.services.auth.user_provider_settings_service import delete_settings
 
     deleted = delete_settings(current_user.username, provider)
@@ -405,7 +405,7 @@ async def api_update_model_runtime(
     if not updates:
         raise HTTPException(status_code=400, detail="No model role update provided")
 
-    from app.services.cache_service import invalidate
+    from app.core.cache import invalidate
     try:
         for role, profile_id in updates.items():
             validate_role_update(role, profile_id, user_id=current_user.username)

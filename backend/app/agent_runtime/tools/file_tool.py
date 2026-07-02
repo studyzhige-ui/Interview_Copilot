@@ -121,7 +121,7 @@ def _read_upload_content(upload) -> str:
 
     if storage_uri.startswith("s3://"):
         try:
-            from app.services.storage_service import s3_client, parse_s3_uri
+            from app.core.storage import s3_client, parse_s3_uri
             bucket, key = parse_s3_uri(storage_uri)
             response = s3_client.get_object(Bucket=bucket, Key=key)
             raw = response["Body"].read()
@@ -169,7 +169,7 @@ def _write_file_sync(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, An
             size_bytes=len(args.content.encode("utf-8")),
         )
 
-        from app.services.storage_service import upload_file_to_owned_key
+        from app.core.storage import upload_file_to_owned_key
         file_obj = io.BytesIO(args.content.encode("utf-8"))
         upload_file_to_owned_key(
             file_obj,

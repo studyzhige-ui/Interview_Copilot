@@ -57,7 +57,8 @@ celery_app.conf.update(
     # ── Reliability ─────────────────────────────────────────────────────
     # Default acks_late=True so a worker crash during a task re-queues the
     # message instead of silently dropping it. Tasks MUST be idempotent
-    # under this flag — see worker/tasks.py for status-gated guards.
+    # under this flag — see the modules under worker/tasks/ for the
+    # status-gated guards.
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     # Avoid thundering-herd on transient backend outages.

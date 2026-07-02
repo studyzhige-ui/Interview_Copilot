@@ -31,7 +31,7 @@ def worker_db(monkeypatch) -> Iterator[sessionmaker]:
     )
     Base.metadata.create_all(bind=engine)
     Maker = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    import app.worker.tasks as tasks_mod
+    import app.worker.tasks.ingestion as tasks_mod
     monkeypatch.setattr(tasks_mod, "SessionLocal", Maker)
     try:
         yield Maker
@@ -118,7 +118,7 @@ def test_worker_marks_failed_on_empty_after_cleaning_without_retry(worker_db, mo
     from app.worker.tasks import process_document_ingestion
 
     # Get past the download (no real S3) so ingest is reached.
-    import app.services.storage_service as storage_mod
+    import app.core.storage as storage_mod
     monkeypatch.setattr(
         storage_mod, "download_file_from_s3",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),
@@ -149,7 +149,7 @@ def test_worker_keeps_processing_when_index_queued(worker_db, monkeypatch):
     the document 'processing' — NOT 'ready' — until the index lands."""
     from app.worker.tasks import process_document_ingestion
 
-    import app.services.storage_service as storage_mod
+    import app.core.storage as storage_mod
     monkeypatch.setattr(
         storage_mod, "download_file_from_s3",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),
@@ -184,7 +184,7 @@ def test_worker_marks_failed_on_embedding_validation_without_retry(worker_db, mo
     from app.rag.embedding_registry import EmbeddingValidationError
     from app.worker.tasks import process_document_ingestion
 
-    import app.services.storage_service as storage_mod
+    import app.core.storage as storage_mod
     monkeypatch.setattr(
         storage_mod, "download_file_from_s3",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),

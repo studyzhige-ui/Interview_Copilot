@@ -251,7 +251,7 @@ def test_patch_happy_path_saves_and_invalidates(client, monkeypatch):
     )
     fake_dns = [(0, 0, 0, "", ("8.8.8.8", 0))]
     with patch("app.core.ssrf.socket.getaddrinfo", return_value=fake_dns), \
-         patch("app.services.cache_service.invalidate", side_effect=fake_invalidate):
+         patch("app.core.cache.invalidate", side_effect=fake_invalidate):
         resp = client.patch(
             "/api/v1/models/providers/openai",
             json={
@@ -290,7 +290,7 @@ def test_patch_clear_via_empty_string(client, monkeypatch):
         "app.services.auth.user_provider_settings_service.upsert_settings", fake_upsert,
     )
     monkeypatch.setattr("app.core.model_registry.clear_llm_cache_for_provider", lambda *_: None)
-    with patch("app.services.cache_service.invalidate", side_effect=fake_invalidate):
+    with patch("app.core.cache.invalidate", side_effect=fake_invalidate):
         resp = client.patch(
             "/api/v1/models/providers/openai",
             json={"api_base_override": ""},
@@ -315,7 +315,7 @@ def test_delete_provider_settings_clears_cache(client, monkeypatch):
     async def fake_invalidate(*_a, **_kw):
         return None
 
-    with patch("app.services.cache_service.invalidate", side_effect=fake_invalidate):
+    with patch("app.core.cache.invalidate", side_effect=fake_invalidate):
         resp = client.delete("/api/v1/models/providers/openai")
     assert resp.status_code == 200
     assert resp.json()["status"] == "deleted"
@@ -333,7 +333,7 @@ def test_delete_provider_settings_noop_when_no_row(client, monkeypatch):
     async def fake_invalidate(*_a, **_kw):
         return None
 
-    with patch("app.services.cache_service.invalidate", side_effect=fake_invalidate):
+    with patch("app.core.cache.invalidate", side_effect=fake_invalidate):
         resp = client.delete("/api/v1/models/providers/openai")
     assert resp.status_code == 200
     assert resp.json()["status"] == "noop"

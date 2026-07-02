@@ -188,7 +188,7 @@ app.add_middleware(
 
 # ─── Local-fallback static files (avatars only) ──────────────────────────
 # When S3 / MinIO is unreachable an avatar upload falls back to writing the
-# bytes under ``STORAGE_DIR/avatars/...`` (see storage_service.save_blob_to_local).
+# bytes under ``STORAGE_DIR/avatars/...`` (see app.core.storage.save_blob_to_local).
 # Those files need to be browser-readable; we mount JUST the avatars/
 # sub-tree as a public static route. Other STORAGE_DIR contents (resumes,
 # JDs, knowledge documents) stay off-bus — they're private and only the

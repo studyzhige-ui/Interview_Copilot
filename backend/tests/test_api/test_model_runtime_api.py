@@ -74,7 +74,7 @@ def test_models_catalog_returns_selection_and_profiles(client, monkeypatch):
     async def fake_cached(name, ttl, loader):
         return await loader()
 
-    with patch("app.services.cache_service.cached", side_effect=fake_cached):
+    with patch("app.core.cache.cached", side_effect=fake_cached):
         resp = client.get("/api/v1/models/catalog")
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -148,7 +148,7 @@ def test_update_runtime_validates_and_persists(client, monkeypatch):
     monkeypatch.setattr(model_runtime_mod, "update_runtime_selection", fake_update)
     monkeypatch.setattr(model_runtime_mod, "refresh_primary_llm", fake_refresh)
 
-    with patch("app.services.cache_service.invalidate", side_effect=fake_invalidate):
+    with patch("app.core.cache.invalidate", side_effect=fake_invalidate):
         resp = client.put("/api/v1/models/runtime", json={"agent": "p_new"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -191,7 +191,7 @@ def test_upsert_api_key_invalidates_caches(client, monkeypatch):
         "app.services.auth.user_api_key_service.set_user_api_key",
         return_value={"provider": "openai"},
     ) as set_key, \
-         patch("app.services.cache_service.invalidate", side_effect=fake_invalidate), \
+         patch("app.core.cache.invalidate", side_effect=fake_invalidate), \
          patch("app.core.model_registry.clear_llm_cache_for_provider") as clear_cache:
         resp = client.put(
             "/api/v1/models/api-keys/openai",
@@ -222,7 +222,7 @@ def test_delete_api_key_reports_status(client):
 
     with patch(
         "app.services.auth.user_api_key_service.delete_user_api_key", return_value=True,
-    ), patch("app.services.cache_service.invalidate", side_effect=fake_invalidate), \
+    ), patch("app.core.cache.invalidate", side_effect=fake_invalidate), \
        patch("app.core.model_registry.clear_llm_cache_for_provider"):
         resp = client.delete("/api/v1/models/api-keys/openai")
     assert resp.status_code == 200

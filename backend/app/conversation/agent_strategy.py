@@ -540,12 +540,12 @@ class AgentLoopStrategy:
     async def _check_incomplete_tasks(session_id: str) -> list[dict[str, Any]]:
         """Return incomplete tasks for *session_id*, or [] if none."""
         from app.db.database import SessionLocal
-        from app.services import task_service
+        from app.services.chat import session_task_service
 
         def _sync() -> list[dict[str, Any]]:
             db = SessionLocal()
             try:
-                return task_service.list_incomplete(db, session_id)
+                return session_task_service.list_incomplete(db, session_id)
             finally:
                 db.close()
 
