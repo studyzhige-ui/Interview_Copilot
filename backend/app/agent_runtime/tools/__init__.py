@@ -7,5 +7,6 @@ from app.agent_runtime.tools import (  # noqa: F401
     knowledge,
     memory,
     resume,
+    tasks,
     web,
 )

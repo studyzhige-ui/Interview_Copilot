@@ -76,6 +76,7 @@ SYSTEM_PROMPT = """你是 Interview Copilot 的执行 Agent，通过调用工具
 - 工具是数据增强，不是知识替代：能用自身知识直接回答的（公司、技术栈、框架对比、最佳实践、常见面试题等）直接回答；工具只用于补充时效性强的、用户私有的、你不掌握的数据。
 - 主动组合：单个工具结果不足时，主动用其它工具补全后再作答。
 - 尊重工具状态：工具返回 disabled 时不再调用；工具未出现在 manifest 中即表示该功能未启用，不要假装会用。
+- 复杂多步任务时，先用 task_create 拆分和追踪你的工作进度，逐步执行并更新状态；简单问题无需使用。
 
 # 错误处理
 - 工具失败或返回空不等于任务失败：结合已有领域知识与部分工具结果，仍要给出有用的回答。
@@ -276,6 +277,7 @@ class AgentLoopStrategy:
         )
         tool_schemas = registry.get_openai_schemas(exclude=excluded_tools)
         manifest_text = registry.format_manifest(exclude=excluded_tools)
+        tool_prompts_text = registry.format_tool_prompts(exclude=excluded_tools)
 
         # Developer trace observability is handled by LangSmith
         # (``wrap_openai`` in core/llm_tracing.py captures every LLM
@@ -297,7 +299,7 @@ class AgentLoopStrategy:
         # instead, so the model has a user turn to answer and the loop can
         # append assistant/tool turns after it.
         from app.services.chat.context_assembly_pipeline import prompt_renderer
-        agent_system_prompt = f"{SYSTEM_PROMPT}\n\nAvailable tools:\n{manifest_text}"
+        agent_system_prompt = f"{SYSTEM_PROMPT}\n\nAvailable tools:\n{manifest_text}{tool_prompts_text}"
         history_messages: list[dict[str, Any]] = []
         if ctx.assembled is not None:
             # L2 skips the flattened [Recent Turns] slot — prior turns are
@@ -412,6 +414,7 @@ class AgentLoopStrategy:
         # Track which text we've already emitted as a block so the
         # final pass doesn't double-count.
         pending_text_for_block = ""
+        stop_hook_fired = False
 
         while True:
             # Budget check
@@ -481,6 +484,33 @@ class AgentLoopStrategy:
                 continue
 
             if assistant_content:
+                # ── Stop Hook: incomplete-task reminder ──────────────
+                # Before accepting the final answer, check if there are
+                # incomplete tasks. If so, inject a one-shot user-message
+                # nudge and let the loop continue — the model can then
+                # update its tasks or incorporate the reminder. The flag
+                # ensures we fire at most once per turn.
+                if not stop_hook_fired:
+                    incomplete = await self._check_incomplete_tasks(ctx.session_id)
+                    if incomplete:
+                        stop_hook_fired = True
+                        messages.append({
+                            "role": "assistant",
+                            "content": assistant_content,
+                        })
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                f"你还有 {len(incomplete)} 个未完成的任务：\n"
+                                + "\n".join(
+                                    f"- [{t['status']}] #{t['task_id']}: {t['subject']}"
+                                    for t in incomplete
+                                )
+                                + "\n请确认这些任务是否都已完成，用 task_update 更新状态后再给出最终回答。"
+                            ),
+                        })
+                        continue
+
                 # Final answer — terminator for the loop. NB:
                 # ``reasoning_acc`` is intentionally NOT persisted on
                 # this path. The thinking trace is intra-turn only —
@@ -503,6 +533,23 @@ class AgentLoopStrategy:
                 "role": "user",
                 "content": "Please provide a final answer now based on gathered tool outputs.",
             })
+
+    # ── Stop hook helper ───────────────────────────────────────────
+
+    @staticmethod
+    async def _check_incomplete_tasks(session_id: str) -> list[dict[str, Any]]:
+        """Return incomplete tasks for *session_id*, or [] if none."""
+        from app.db.database import SessionLocal
+        from app.services import task_service
+
+        def _sync() -> list[dict[str, Any]]:
+            db = SessionLocal()
+            try:
+                return task_service.list_incomplete(db, session_id)
+            finally:
+                db.close()
+
+        return await asyncio.to_thread(_sync)
 
     # ── LLM streaming primitives ──────────────────────────────────
 

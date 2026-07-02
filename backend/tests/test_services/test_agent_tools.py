@@ -12,6 +12,7 @@ def test_tool_registry_has_expected_tools():
         "web_search", "read_url", "read_file", "write_file",
         "recall_memory", "save_memory", "search_knowledge",
         "read_resume", "read_interview_history", "search_jobs",
+        "task_create", "task_update", "task_get", "task_list",
     }
     assert expected == set(registry.tool_names)
 

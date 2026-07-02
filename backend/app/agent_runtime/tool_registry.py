@@ -45,6 +45,7 @@ class ToolEntry:
     max_result_chars: int = 8000
     check_fn: Callable[[], bool] | None = None
     emoji: str = "🔧"
+    prompt: str = ""
 
 
 # ── Schema generation (Pydantic → OpenAI function calling) ───────────────
@@ -191,6 +192,20 @@ class ToolRegistry:
                 "parameters": schema["function"]["parameters"],
             })
         return json.dumps(manifest, ensure_ascii=False, indent=2)
+
+    def format_tool_prompts(self, *, exclude: set[str] | None = None) -> str:
+        """Collect non-empty ``prompt`` fields into a system-prompt block.
+
+        Returns an empty string when no tools carry prompts, so callers
+        can safely append without a conditional.
+        """
+        sections: list[str] = []
+        for entry in self._iter_available(exclude=exclude):
+            if entry.prompt:
+                sections.append(f"## {entry.name}\n{entry.prompt}")
+        if not sections:
+            return ""
+        return "\n\n# Tool guidance\n\n" + "\n\n".join(sections)
 
     async def dispatch(
         self,
