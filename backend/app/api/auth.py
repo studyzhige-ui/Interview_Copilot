@@ -7,13 +7,16 @@ Security model:
 - /logout revokes both presented tokens (access via Authorization header,
   refresh via request body) so a real logout can't be undone by replay.
 - /send-code and /register do not leak whether an email is registered.
+
+Thin router: token/code protocol flow + HTTP status mapping. The
+``users``-table work lives in ``services.auth.user_account_service``; the
+avatar storage logic in ``services.auth.avatar_service``.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
@@ -28,18 +31,12 @@ from app.core.security import (
     decode_token,
     verify_and_maybe_rehash,
     get_current_user,
-    get_password_hash,
     oauth2_scheme,
     token_claims_for,
 )
 from app.db.database import get_db
 from app.models.user import User
-from app.core.storage import (
-    delete_local_uri,
-    delete_s3_object,
-    generate_presigned_get_url,
-    is_local_uri,
-)
+from app.services.auth import avatar_service, user_account_service
 from app.services.auth.token_blacklist_service import is_revoked, revoke
 from app.services.auth.verification_code_service import (
     CodeError,
@@ -69,36 +66,6 @@ from app.schemas.auth import (  # noqa: E402, F401
     Token,
     UserCreate,
 )
-
-
-# Avatar safety limits — validated at set-time against the uploaded object.
-#   * content-type restricted to four common image MIMEs
-#   * 1 MiB hard cap (matches the file_assets 'avatar' purpose limit)
-#   * magic-byte verification on the object head — keeps a renamed executable
-#     from riding a permissive image/png MIME onto the user row
-_AVATAR_MAX_BYTES = 1024 * 1024
-_AVATAR_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
-
-# Each entry: list of valid magic-byte prefixes for the format. WEBP also
-# requires the bytes 8..12 to equal "WEBP" since 4..8 is the file size.
-_MAGIC_PREFIXES: dict[str, tuple[bytes, ...]] = {
-    "image/png":  (b"\x89PNG\r\n\x1a\n",),
-    "image/jpeg": (b"\xff\xd8\xff",),
-    "image/gif":  (b"GIF87a", b"GIF89a"),
-    # WEBP is RIFF + "WEBP" 4 bytes later; handled specially below.
-    "image/webp": (b"RIFF",),
-}
-
-
-def _matches_magic(content_type: str, body: bytes) -> bool:
-    """True iff ``body`` actually starts with the magic bytes for ``content_type``."""
-    prefixes = _MAGIC_PREFIXES.get(content_type)
-    if not prefixes:
-        return False
-    if content_type == "image/webp":
-        # RIFF<size:4>WEBP<...>  — guard against the size bytes being anything.
-        return len(body) >= 12 and body[:4] == b"RIFF" and body[8:12] == b"WEBP"
-    return any(body.startswith(p) for p in prefixes)
 
 
 # ── Token helpers ──────────────────────────────────────────────────────
@@ -167,8 +134,7 @@ async def send_verification_code(
     LOGIN and password reset — keep generic responses elsewhere.
     """
     if payload.purpose == "register":
-        existing = db.query(User).filter(User.email == payload.email).first()
-        if existing is not None:
+        if user_account_service.get_by_email(db, payload.email) is not None:
             raise _conflict(
                 ERR_EMAIL_ALREADY_REGISTERED,
                 "该邮箱已注册，请直接登录",
@@ -210,12 +176,12 @@ async def register_user(
         raise generic_err
 
     # Duplicate-account checks first, and they don't count as verify failures.
-    if db.query(User).filter(User.username == user_in.username).first():
+    if user_account_service.get_by_username(db, user_in.username):
         raise _conflict(
             ERR_USERNAME_ALREADY_REGISTERED,
             "该用户名已被注册，请更换或直接登录",
         )
-    if db.query(User).filter(User.email == user_in.email).first():
+    if user_account_service.get_by_email(db, user_in.email):
         raise _conflict(
             ERR_EMAIL_ALREADY_REGISTERED,
             "该邮箱已注册，请直接登录",
@@ -229,15 +195,9 @@ async def register_user(
 
     await reset_ip_failures(client_ip)
 
-    user = User(
-        username=user_in.username,
-        email=user_in.email,
-        hashed_password=get_password_hash(user_in.password),
-        email_verified=True,
+    user = user_account_service.create_user(
+        db, username=user_in.username, email=user_in.email, password=user_in.password,
     )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
     return {"message": "User registered successfully", "user_id": user.id}
 
 
@@ -249,34 +209,9 @@ def login_access_token(
     db: Session = Depends(get_db),
     form_data: OAuth2PasswordRequestForm = Depends(),
 ):
-    user = db.query(User).filter(User.username == form_data.username).first()
-    if not user:
-        # Constant-ish work to avoid trivial timing oracle: still hash
-        # something so the not-found branch isn't dramatically faster
-        # than the wrong-password branch. (Argon2id is ~300ms; the
-        # difference is the dominant signal an attacker could exploit
-        # to enumerate users.)
-        verify_and_maybe_rehash(form_data.password, "$argon2id$v=19$m=65536,t=3,p=4$bm9uZQ$x")
+    user = user_account_service.authenticate(db, form_data.username, form_data.password)
+    if user is None:
         raise HTTPException(status_code=400, detail="用户名或密码错误")
-
-    valid, new_hash = verify_and_maybe_rehash(
-        form_data.password, user.hashed_password,
-    )
-    if not valid:
-        raise HTTPException(status_code=400, detail="用户名或密码错误")
-
-    # Lazy hash upgrade: if pwdlib decided this user's stored hash
-    # was a legacy algorithm (bcrypt today, maybe argon2-old-params
-    # tomorrow), it returned the new-algorithm hash here. Persist it
-    # so the next login goes faster + uses the upgraded algorithm.
-    # Best-effort — a write failure here doesn't break login, the
-    # user can keep using bcrypt until the next successful auth.
-    if new_hash is not None:
-        try:
-            user.hashed_password = new_hash
-            db.commit()
-        except Exception:  # noqa: BLE001
-            db.rollback()
 
     claims = token_claims_for(user)
     access_token = create_access_token(
@@ -332,7 +267,7 @@ async def refresh_access_token(
         user_id = int(sub)
     except (TypeError, ValueError):
         raise credentials_exception
-    user = db.query(User).filter(User.id == user_id).first()
+    user = user_account_service.get_by_id(db, user_id)
     if user is None:
         raise credentials_exception
 
@@ -403,73 +338,11 @@ def change_password(
     if not valid:
         raise HTTPException(status_code=400, detail="当前密码不正确")
 
-    current_user.hashed_password = get_password_hash(body.new_password)
-    current_user.token_version = (current_user.token_version or 0) + 1
-    # Naive UTC to match the model's created_at/updated_at convention and the
-    # TIMESTAMP (without-tz) column. ``updated_at`` auto-stamps via onupdate.
-    current_user.password_changed_at = datetime.utcnow()
-    db.add(current_user)
-    db.commit()
+    user_account_service.apply_password_change(db, current_user, body.new_password)
     return {"status": "ok", "message": "密码已修改，请使用新密码重新登录"}
 
 
 # ── Profile ─────────────────────────────────────────────────────────────
-
-
-_LOCAL_AVATAR_URI_PREFIX = "local://avatars/"
-_LOCAL_AVATAR_STATIC_PATH = "/api/v1/static/avatars/"
-
-
-def _public_avatar_url(user: User) -> Optional[str]:
-    """Translate the stored ``avatar_url`` to a browser-fetchable URL.
-
-    Three storage shapes are supported AFTER the data:-URL migration ran:
-      * ``s3://bucket/...``           → presigned GET URL (15-min TTL); the
-        browser fetches bytes straight from S3 / MinIO.
-      * ``local://avatars/<rel>...``  → ``/api/v1/static/avatars/<rel>`` —
-        S3-fallback storage, served by FastAPI's StaticFiles mount.
-      * ``http(s)://...``              → user-supplied public URL, verbatim.
-      * ``data:...``                   → returns None. Should never appear
-        after the migration; if it does, log a warning so the operator
-        notices a missed row.
-      * ``None`` / ``""``              → no avatar.
-    """
-    raw = (user.avatar_url or "").strip()
-    if not raw:
-        return None
-    if raw.startswith("s3://"):
-        try:
-            return generate_presigned_get_url(raw, expiration=900)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Presign avatar GET failed for user=%s: %s", user.username, exc,
-            )
-            return None
-    if raw.startswith(_LOCAL_AVATAR_URI_PREFIX):
-        # Strip the ``local://avatars/`` prefix and prepend the static mount
-        # so the browser hits FastAPI for the bytes. URL-quote the segments
-        # so spaces / unicode in usernames don't break the route.
-        rel_under_mount = raw[len(_LOCAL_AVATAR_URI_PREFIX):]
-        from urllib.parse import quote
-        return f"{_LOCAL_AVATAR_STATIC_PATH}{quote(rel_under_mount, safe='/')}"
-    if raw.startswith("http://") or raw.startswith("https://"):
-        return raw
-    if raw.startswith("data:"):
-        # Migration didn't reach this row; log loudly so the operator can
-        # re-run scripts.migrate_avatars. We refuse to render it inline so
-        # the bloat doesn't keep leaving the DB on every /auth/me.
-        logger.warning(
-            "Avatar for user=%s is still a data: URL — run "
-            "`python scripts/migrate_avatars.py` to migrate it.",
-            user.username,
-        )
-        return None
-    # Anything else (e.g. ``local://resumes/...``, a stray absolute path) is
-    # not avatar-shaped — refuse rather than leak server-internal URIs.
-    logger.warning(
-        "Unrecognized avatar_url scheme for user=%s: %r", user.username, raw[:32],
-    )
-    return None
 
 
 def _serialize_me(user: User) -> MeResponse:
@@ -477,7 +350,7 @@ def _serialize_me(user: User) -> MeResponse:
         username=user.username,
         email=user.email,
         nickname=user.nickname,
-        avatar_url=_public_avatar_url(user),
+        avatar_url=avatar_service.public_avatar_url(user),
         bio=user.bio,
         email_verified=bool(user.email_verified),
         created_at=user.created_at.isoformat() if user.created_at else "",
@@ -497,60 +370,14 @@ def update_me(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    changed = False
-    if payload.nickname is not None:
-        current_user.nickname = payload.nickname.strip() or None
-        changed = True
-    if payload.avatar_url is not None:
-        current_user.avatar_url = payload.avatar_url.strip() or None
-        changed = True
-    if payload.bio is not None:
-        current_user.bio = payload.bio.strip() or None
-        changed = True
-    if payload.global_memory_enabled is not None:
-        # Don't normalize to a string truthy/falsy — Pydantic already
-        # gave us a real bool, just persist it. ``False`` is a legitimate
-        # write (the opt-in default), so we don't filter on truthiness.
-        current_user.global_memory_enabled = bool(payload.global_memory_enabled)
-        changed = True
-    if changed:
-        db.add(current_user)
-        db.commit()
-        db.refresh(current_user)
+    user_account_service.update_profile(
+        db, current_user,
+        nickname=payload.nickname,
+        avatar_url=payload.avatar_url,
+        bio=payload.bio,
+        global_memory_enabled=payload.global_memory_enabled,
+    )
     return _serialize_me(current_user)
-
-
-def _read_object_head(storage_uri: str, n: int = 32) -> bytes:
-    """Read the first ``n`` bytes of an S3 object.
-
-    Used to magic-byte-validate an avatar uploaded via the presigned flow: the
-    bytes went straight to object storage, so the server reads the head here to
-    confirm the declared image type matches the real content.
-    """
-    from app.core.storage import parse_s3_uri, s3_client
-
-    bucket, key = parse_s3_uri(storage_uri)
-    obj = s3_client.get_object(Bucket=bucket, Key=key, Range=f"bytes=0-{n - 1}")
-    return obj["Body"].read()
-
-
-def _delete_previous_avatar(previous_uri: str) -> None:
-    """Best-effort cleanup of whichever store the previous avatar lived in.
-
-    Failure is logged but never re-raised — orphan blobs are an operational
-    annoyance, not a correctness problem.
-    """
-    if not previous_uri:
-        return
-    if previous_uri.startswith("s3://"):
-        try:
-            delete_s3_object(previous_uri)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to delete previous avatar %s: %s", previous_uri, exc)
-    elif is_local_uri(previous_uri):
-        # ``delete_local_uri`` is already best-effort.
-        delete_local_uri(previous_uri)
-    # data: / http(s):// / unknown — nothing on disk to clean.
 
 
 @router.post("/me/avatar", response_model=MeResponse)
@@ -570,10 +397,7 @@ async def set_avatar(
     ``users.avatar_url`` at the asset and mark it consumed. ``avatar_url`` stores
     the ``s3://`` URI; the serializer turns it into a presigned GET on /auth/me.
     """
-    from app.services.uploads.file_asset_service import (
-        get_owned_file_asset,
-        mark_file_asset_consumed,
-    )
+    from app.services.uploads.file_asset_service import get_owned_file_asset
 
     asset = get_owned_file_asset(
         db, file_asset_id=body.file_asset_id,
@@ -583,9 +407,9 @@ async def set_avatar(
         raise HTTPException(status_code=404, detail="头像文件不存在")
     if asset.upload_status not in {"uploaded", "consumed"}:
         raise HTTPException(status_code=409, detail="头像尚未上传完成")
-    if (asset.content_type or "") not in _AVATAR_TYPES:
+    if (asset.content_type or "") not in avatar_service.AVATAR_TYPES:
         raise HTTPException(status_code=400, detail=f"不支持的图片类型：{asset.content_type}")
-    if asset.size_bytes is not None and asset.size_bytes > _AVATAR_MAX_BYTES:
+    if asset.size_bytes is not None and asset.size_bytes > avatar_service.AVATAR_MAX_BYTES:
         raise HTTPException(status_code=413, detail="图片过大（>1MB），请压缩后再试")
     if not (asset.storage_uri or "").startswith("s3://"):
         raise HTTPException(status_code=400, detail="头像存储位置无效")
@@ -594,11 +418,11 @@ async def set_avatar(
     # the presigned PUT) — keeps a renamed executable from riding a permissive
     # image MIME into the user row.
     try:
-        head = await asyncio.to_thread(_read_object_head, asset.storage_uri, 32)
+        head = await asyncio.to_thread(avatar_service.read_object_head, asset.storage_uri, 32)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Avatar head read failed for user=%s: %s", current_user.username, exc)
         raise HTTPException(status_code=502, detail="无法读取已上传的头像，请重试") from exc
-    if not _matches_magic(asset.content_type, head):
+    if not avatar_service.matches_magic(asset.content_type, head):
         raise HTTPException(
             status_code=400, detail="文件内容与声明的图片类型不匹配，已拒绝",
         )
@@ -608,32 +432,5 @@ async def set_avatar(
     # to their OWN key after the magic check passes (self-poisoning only — it only
     # affects where their own avatar renders). A future hardening would copy the
     # validated object to an immutable server key or shorten the upload TTL.
-    previous_uri = (current_user.avatar_url or "").strip()
-    current_user.avatar_url = asset.storage_uri
-    mark_file_asset_consumed(db, asset)
-    db.add(current_user)
-    db.commit()
-    db.refresh(current_user)
-
-    # Clean up the REPLACED avatar — but never when re-setting the same asset
-    # (previous_uri == new storage_uri), which would delete the bytes we just
-    # pointed at. If the previous avatar was itself a file_asset, soft-delete that
-    # row so it doesn't linger as a 'consumed' asset pointing at deleted bytes.
-    if previous_uri and previous_uri != asset.storage_uri:
-        from app.models.file_asset import FileAsset
-
-        prev = (
-            db.query(FileAsset)
-            .filter(
-                FileAsset.user_id == current_user.id,
-                FileAsset.storage_uri == previous_uri,
-            )
-            .first()
-        )
-        if prev is not None:
-            prev.upload_status = "deleted"
-            prev.deleted_at = datetime.utcnow()
-            db.add(prev)
-            db.commit()
-        _delete_previous_avatar(previous_uri)
+    avatar_service.swap_avatar(db, current_user, asset)
     return _serialize_me(current_user)

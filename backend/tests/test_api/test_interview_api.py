@@ -61,10 +61,11 @@ def db(monkeypatch) -> Iterator[Session]:
     # bound to the real configured DB. Redirect that to our test engine.
     import app.services.interview.interview_record_service as irs_mod
     monkeypatch.setattr(irs_mod, "SessionLocal", Session_)
-    # The SSE events endpoint (interview_record_events_stream + the
-    # _poll_record_snapshot helper) also opens its own SessionLocal()
-    # per tick — same redirect needed.
-    monkeypatch.setattr(interview_mod, "SessionLocal", Session_)
+    # The SSE events endpoint opens its own SessionLocal() per tick via
+    # record_admin (poll_record_snapshot / record_exists_for_user) — same
+    # redirect needed there.
+    import app.services.interview.record_admin as record_admin_mod
+    monkeypatch.setattr(record_admin_mod, "SessionLocal", Session_)
 
     try:
         yield session
@@ -125,8 +126,8 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
 
     fake_task = MagicMock()
     fake_task.id = "celery-abc"
-    with patch("app.api.interview.process_interview_analysis") as mock_proc, \
-         patch("app.api.interview._extract_resume_snapshot", return_value="resume txt"):
+    with patch("app.services.interview.analysis_intake.process_interview_analysis") as mock_proc, \
+         patch("app.services.interview.analysis_intake.extract_text_snapshot", return_value="resume txt"):
         mock_proc.delay.return_value = fake_task
         resp = client.post(
             "/api/v1/analyze",
@@ -421,7 +422,7 @@ def test_events_stream_emits_error_for_failed_record(client, db: Session):
 def test_poll_record_snapshot_returns_none_for_missing_id(db: Session):
     """The poll helper must return None when the row disappears
     (the SSE loop maps None → 'record disappeared' error event)."""
-    from app.api.interview import _poll_record_snapshot
+    from app.services.interview.record_admin import poll_record_snapshot as _poll_record_snapshot
     # ``db`` fixture didn't insert anything, so any id misses.
     assert _poll_record_snapshot("nothing-here") is None
 
@@ -439,7 +440,7 @@ def test_poll_record_snapshot_returns_plain_dict_not_orm_row(db: Session):
     ))
     db.commit()
 
-    from app.api.interview import _poll_record_snapshot
+    from app.services.interview.record_admin import poll_record_snapshot as _poll_record_snapshot
     snap = _poll_record_snapshot("ir_snap")
     assert isinstance(snap, dict)
     assert snap["status"] == "analyzing"
