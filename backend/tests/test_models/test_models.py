@@ -1,11 +1,8 @@
 """ORM-layer tests for SQLAlchemy models under ``app.models``.
 
-The repo-wide ``conftest.py`` provides a ``db_session`` fixture, but it
-imports the stale ``app.models.interview`` module which no longer exists
-(the unified-schema refactor in alembic 0007/0008 dropped it). Until
-conftest is fixed centrally, we shadow ``test_engine`` / ``db_session``
-locally so this file is self-contained and the rest of the suite is
-unaffected.
+Uses the repo-wide ``test_engine`` / ``db_session`` fixtures from
+``tests/conftest.py`` (in-memory SQLite, every mapper registered via
+``import app.models``, SAVEPOINT-per-test rollback).
 
 Coverage:
   * column / index / FK / unique-constraint definitions match the schema
@@ -19,62 +16,8 @@ Coverage:
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import sessionmaker
-
-
-# ─────────────────────────────────────────────────────────────────────
-# Local fixtures (shadow the broken ones in tests/conftest.py)
-# ─────────────────────────────────────────────────────────────────────
-
-
-@pytest.fixture(scope="module")
-def test_engine():  # noqa: D401 — fixture, not a function
-    """Module-scoped in-memory SQLite engine with all ORM tables created."""
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-    )
-
-    from app.db.database import Base
-    # Importing the models package registers every mapper on Base.metadata.
-    import app.models  # noqa: F401
-
-    Base.metadata.create_all(bind=engine)
-    yield engine
-    Base.metadata.drop_all(bind=engine)
-    engine.dispose()
-
-
-@pytest.fixture()
-def db_session(test_engine):
-    """Per-test transactional session — rolled back on teardown.
-
-    We use ``Session.begin_nested`` + listen-on-after-transaction-end so
-    that callers may freely call ``session.rollback()`` mid-test (e.g.
-    after asserting an IntegrityError) without losing the outer
-    SAVEPOINT we use to keep the DB pristine between tests.
-    """
-    from sqlalchemy import event
-
-    connection = test_engine.connect()
-    transaction = connection.begin()
-    session = sessionmaker(bind=connection, expire_on_commit=False)()
-    session.begin_nested()
-
-    @event.listens_for(session, "after_transaction_end")
-    def _restart_savepoint(sess, trans):  # noqa: D401
-        if trans.nested and not trans._parent.nested:
-            sess.begin_nested()
-
-    try:
-        yield session
-    finally:
-        session.close()
-        if transaction.is_active:
-            transaction.rollback()
-        connection.close()
 
 
 # ─────────────────────────────────────────────────────────────────────

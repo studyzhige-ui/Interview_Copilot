@@ -224,3 +224,86 @@ def test_render_omits_empty_sections():
     from app.services.memory.v3_context_loader import V3MemoryContext
 
     assert V3MemoryContext().render() == ""
+
+
+def test_attach_active_bodies_yields_event_loop_via_to_thread(monkeypatch):
+    """``attach_active_bodies`` is invoked via ``asyncio.create_task``
+    in the engine, with the intent that the strategy-body load runs
+    concurrently with the RAG knowledge_task. Pre-fix the function was
+    ``async def`` around a fully synchronous body — calling it created
+    a coroutine that ran top-to-bottom without ever yielding, so the
+    "concurrent" knowledge_task never got loop time until memory
+    finished.
+
+    The v3 loader hydrates a single doc body (learning_strategy) via
+    ``memory_document_service.load`` inside ``asyncio.to_thread``. We make
+    that read block for 50ms; with the fix the sleep happens on a worker
+    thread and a concurrent marker can complete in ~0ms, without the fix the
+    main event loop is blocked for the full ~50ms before any other coroutine
+    runs. The test detects this by WALL CLOCK rather than list order (an
+    order-only check is tautological — the marker is scheduled first and
+    yields at ``sleep(0)`` in both broken and fixed code).
+    """
+    import asyncio
+    import time
+    from app.services.memory.v3_context_loader import (
+        V3MemoryContext, attach_active_bodies,
+    )
+
+    BLOCK_SECONDS = 0.05  # 50ms simulated DB read
+
+    # ``**_`` swallows the ``db: Session | None`` kwarg the loader passes —
+    # the test only cares about wall-clock blocking behavior.
+    def sleepy_load(user_id, doc_type, **_):
+        time.sleep(BLOCK_SECONDS)
+        return "- some strategy body"
+
+    monkeypatch.setattr(
+        "app.services.memory.memory_document_service.load",
+        sleepy_load,
+    )
+
+    timings: dict[str, float] = {}
+
+    async def concurrent_marker(t0: float):
+        # If attach_active_bodies properly yields the loop, this
+        # coroutine gets driven during the sleep and ``marker`` time
+        # registers near zero. If the loop is blocked, marker can't
+        # run until bodies_task finishes — >= BLOCK_SECONDS later.
+        await asyncio.sleep(0)
+        timings["marker"] = time.perf_counter() - t0
+
+    ctx_holder: dict[str, V3MemoryContext] = {}
+
+    async def run():
+        ctx = V3MemoryContext()
+        ctx_holder["ctx"] = ctx
+        t0 = time.perf_counter()
+        marker_task = asyncio.create_task(concurrent_marker(t0))
+        bodies_task = asyncio.create_task(
+            attach_active_bodies(
+                ctx, user_id="alice",
+                load_strategy=True,    # 1 sleepy_load on a worker thread
+            )
+        )
+        await bodies_task
+        timings["bodies_done"] = time.perf_counter() - t0
+        await marker_task
+
+    asyncio.run(run())
+
+    # With the fix, marker completes in ~0ms (sleep happens on a worker
+    # thread). Without the fix, marker is blocked until bodies finishes
+    # ~BLOCK_SECONDS in. Threshold at HALF the block budget gives plenty
+    # of headroom for slow CI; on the failure side we'd see ~2x this.
+    threshold = BLOCK_SECONDS / 2  # 25ms — well below BLOCK_SECONDS=50ms
+    assert timings["marker"] < threshold, (
+        f"attach_active_bodies didn't yield the event loop: "
+        f"marker completed at {timings['marker']:.3f}s (threshold "
+        f"{threshold:.3f}s; bodies_done at {timings['bodies_done']:.3f}s). "
+        f"With the fix marker should complete in <10ms; the actual "
+        f"value above means the main loop was blocked through the sync "
+        f"DB read."
+    )
+    # And the body actually got hydrated (proves the load_strategy path ran).
+    assert "strategy body" in ctx_holder["ctx"].active_learning_strategy_body
