@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { SessionList } from './SessionList';
 import { QAPanel } from './QAPanel';
-import { ChatPanel } from './ChatPanel';
+import { ChatPanel } from './chat/ChatPanel';
 import { UploadCards, applyDraftMetadata } from './UploadCards';
 import { AnalysisRunner, type AnalysisProgress } from './AnalysisRunner';
 import { Resizer } from '@/components/ui/Resizer';

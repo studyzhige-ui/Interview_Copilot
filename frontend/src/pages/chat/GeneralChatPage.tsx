@@ -29,7 +29,7 @@ import {
   listChatSessions,
   renameChatSession,
 } from '@/api/chat';
-import { ChatPanel } from '@/pages/review/ChatPanel';
+import { ChatPanel } from '@/pages/review/chat/ChatPanel';
 import type { ChatSessionListItem } from '@/types/api';
 
 export function GeneralChatPage() {
