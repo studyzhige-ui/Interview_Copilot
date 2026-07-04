@@ -13,7 +13,7 @@ import {
   getHabitDoc,
   getStrategyDoc,
 } from '@/api/memory';
-import { useToastOnError } from './useToastOnError';
+import { useToastOnError } from '@/hooks/useToastOnError';
 import { LoadingBlock } from './shared';
 
 export function SingleDocSection({ kind }: { kind: 'strategy' | 'habit' }) {

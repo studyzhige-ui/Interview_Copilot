@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/store/uiStore';
 import { extractErr } from '@/api/client';
 import {
@@ -7,8 +8,18 @@ import {
   listChatSessions,
   renameChatSession,
 } from '@/api/chat';
+import { useToastOnError } from '@/hooks/useToastOnError';
 import type { ChatSessionListItem } from '@/types/api';
 import { clearPersistedSessionState } from './usePersistedSessionState';
+
+// One in-flight auto-create per interview, shared across component
+// instances. StrictMode's dev double-mount re-runs the auto-create
+// effect on a fresh ref before the first create resolves — without
+// this, a brand-new record would get TWO "会话 1" rows. (The pre-React-
+// Query code avoided that by aborting the first mount's list fetch
+// before it reached the create branch.) Entries clear on settle, so a
+// later revisit can auto-create again — same as the old behavior.
+const inflightAutoCreate = new Map<string, ReturnType<typeof createChatSession>>();
 
 /**
  * Internal-mode session list: load + auto-pick + auto-create + CRUD.
@@ -16,6 +27,13 @@ import { clearPersistedSessionState } from './usePersistedSessionState';
  * Only active when the caller passes ``interviewId`` (review/debrief
  * mode); in external mode the parent owns the list and this hook stays
  * inert.
+ *
+ * The list itself is a React Query entry keyed
+ * ``['chat','sessions',{type,subject_id}]`` — same key family as the
+ * general-chat sidebar — so switching interview A → B → A serves A's
+ * list from cache instantly, and the query-level abort covers the
+ * fetch race the old AbortController handled by hand. Creates /
+ * renames / deletes update the cached list in place.
  */
 export function useSessionList({
   externalMode,
@@ -29,59 +47,82 @@ export function useSessionList({
   /** Cleanup callback (drop SSE runtime etc.) when a session is deleted. */
   onSessionDeleted: (id: string) => void;
 }) {
-  const [sessions, setSessions] = useState<ChatSessionListItem[]>([]);
+  const queryClient = useQueryClient();
   const [internalActiveId, setInternalActiveId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
 
-  // ── Load + auto-pick + auto-create ────────────────────────────────────
-  // (One round-trip per interviewId change; the auto-create branch only
-  // fires when the result list is empty.)
+  const enabled = !externalMode && !!interviewId;
+  const queryKey = ['chat', 'sessions', { type: sessionType, subject_id: interviewId ?? '' }];
+
+  const listQuery = useQuery({
+    queryKey,
+    enabled,
+    // listChatSessions returns updated_at DESC — first row is the most
+    // recently active session, which is the right default selection.
+    queryFn: ({ signal }) => listChatSessions(
+      { type: sessionType, subject_id: interviewId! },
+      { signal },
+    ),
+  });
+  useToastOnError(listQuery.error, '会话列表加载失败');
+  const sessions = (enabled ? listQuery.data : undefined) ?? [];
+
+  const setSessions = useCallback(
+    (updater: (cur: ChatSessionListItem[]) => ChatSessionListItem[]) => {
+      queryClient.setQueryData<ChatSessionListItem[]>(
+        ['chat', 'sessions', { type: sessionType, subject_id: interviewId ?? '' }],
+        (cur) => updater(cur ?? []),
+      );
+    },
+    [queryClient, sessionType, interviewId],
+  );
+
+  // ── Auto-pick + auto-create ───────────────────────────────────────────
+  // Auto-create "会话 1" so the panel isn't a blank slate when the user
+  // clicks into a fresh record — but only ONCE per interviewId. The guard
+  // ref covers two hazards the old load-effect handled implicitly:
+  //  * StrictMode / remount double-fire would create two sessions;
+  //  * the user deleting the list down to zero must NOT resurrect it
+  //    (the old effect only ran on interviewId change, so an emptied
+  //    list stayed empty — we keep that contract).
+  const autoCreatedForRef = useRef<string | null>(null);
   useEffect(() => {
-    if (externalMode) return;
-    if (!interviewId) {
-      setSessions([]);
+    if (!enabled || !interviewId) {
       setInternalActiveId(null);
       return;
     }
-    // ``listChatSessions`` race is worse than the read-only sibling
-    // effects: if the result is empty we auto-create "会话 1", which
-    // is a SIDE EFFECT on the backend. A rapid switch from interview
-    // A → B → A could in principle land an auto-created session
-    // attached to interview A while the UI has moved on. ``alive``
-    // gates the FE write but doesn't stop the backend create from
-    // committing. ``controller.abort()`` cancels the in-flight list
-    // call, which prevents reaching the create branch in the first
-    // place.
-    const controller = new AbortController();
-    let alive = true;
+    if (!listQuery.isSuccess) return;
+    const rows = listQuery.data;
+    if (rows.length > 0) {
+      // Keep the current selection when it's still in the list (a cache
+      // refresh must not yank the user off their session); otherwise
+      // default to the most recent row.
+      setInternalActiveId((cur) =>
+        cur && rows.some((r) => r.session_id === cur) ? cur : rows[0].session_id,
+      );
+      return;
+    }
+    if (autoCreatedForRef.current === interviewId) {
+      // List emptied after the one-shot auto-create (user deleted down
+      // to zero) — release the selection instead of pointing at a dead id.
+      setInternalActiveId(null);
+      return;
+    }
+    autoCreatedForRef.current = interviewId;
     (async () => {
       try {
-        const rows = await listChatSessions(
-          { type: sessionType, subject_id: interviewId },
-          { signal: controller.signal },
-        );
-        if (!alive) return;
-        if (rows.length > 0) {
-          setSessions(rows);
-          // listChatSessions returns updated_at DESC — first row is the
-          // most recently active session, which is the right default
-          // selection per the product spec.
-          setInternalActiveId(rows[0].session_id);
-          return;
+        let pending = inflightAutoCreate.get(interviewId);
+        if (!pending) {
+          pending = createChatSession({
+            type: sessionType,
+            subject_id: interviewId,
+            title: '会话 1',
+          }).finally(() => { inflightAutoCreate.delete(interviewId); });
+          inflightAutoCreate.set(interviewId, pending);
         }
-        // No sessions yet → auto-create "会话 1" so the panel isn't a
-        // blank slate when the user clicks into a fresh record. The user
-        // can still delete this down to zero if they don't want it.
-        // ``createChatSession`` does not take an AbortSignal — the
-        // post is fast (~30ms) and idempotent enough at this scope.
-        const created = await createChatSession({
-          type: sessionType,
-          subject_id: interviewId,
-          title: '会话 1',
-        });
-        if (!alive) return;
-        setSessions([{
+        const created = await pending;
+        setSessions(() => [{
           session_id: created.session_id,
           title: created.title,
           type: created.type,
@@ -91,18 +132,10 @@ export function useSessionList({
         }]);
         setInternalActiveId(created.session_id);
       } catch (e) {
-        // Suppress aborted-on-switch errors (same pattern as the
-        // transcript-load effect — ERR_CANCELED is benign).
-        const code = (e as { code?: string })?.code;
-        if (code === 'ERR_CANCELED') return;
-        if (alive) toast.error(extractErr(e, '会话列表加载失败'));
+        toast.error(extractErr(e, '会话列表加载失败'));
       }
     })();
-    return () => {
-      alive = false;
-      controller.abort();
-    };
-  }, [externalMode, interviewId, sessionType]);
+  }, [enabled, interviewId, sessionType, listQuery.isSuccess, listQuery.data, setSessions]);
 
   // ── Create ────────────────────────────────────────────────────────────
   const newChat = useCallback(async () => {
@@ -126,7 +159,7 @@ export function useSessionList({
     } catch (e) {
       toast.error(extractErr(e, '创建会话失败'));
     } finally { setCreating(false); }
-  }, [externalMode, interviewId, sessionType, creating, sessions.length]);
+  }, [externalMode, interviewId, sessionType, creating, sessions.length, setSessions]);
 
   // ── Delete (confirm-dialog flow) ──────────────────────────────────────
   // We render a styled <ConfirmDialog> instead of the unstyled native
@@ -150,15 +183,13 @@ export function useSessionList({
       await deleteChatSession(id);
       onSessionDeleted(id);
       clearPersistedSessionState(id);
-      setSessions((s) => {
-        const next = s.filter((x) => x.session_id !== id);
-        if (internalActiveId === id) setInternalActiveId(next[0]?.session_id ?? null);
-        return next;
-      });
+      // Selection fallback (next row / null) is handled by the auto-pick
+      // effect once the cached list no longer contains the active id.
+      setSessions((s) => s.filter((x) => x.session_id !== id));
       setPendingDelete(null);
     } catch (e) { toast.error(extractErr(e, '删除会话失败')); }
     finally { setDeletingChat(false); }
-  }, [pendingDelete, internalActiveId, onSessionDeleted]);
+  }, [pendingDelete, onSessionDeleted, setSessions]);
 
   // ── Rename ────────────────────────────────────────────────────────────
   const commitRename = useCallback(async () => {
@@ -170,7 +201,7 @@ export function useSessionList({
       setSessions((s) => s.map((x) => x.session_id === renaming.id ? { ...x, title } : x));
     } catch (e) { toast.error(extractErr(e, '重命名失败')); }
     setRenaming(null);
-  }, [renaming]);
+  }, [renaming, setSessions]);
 
   return {
     sessions,

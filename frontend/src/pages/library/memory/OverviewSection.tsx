@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { getMemoryOverview } from '@/api/memory';
-import { useToastOnError } from './useToastOnError';
+import { useToastOnError } from '@/hooks/useToastOnError';
 import { LoadingBlock, MasteryDot, type SubTab } from './shared';
 
 export function OverviewSection({ switchTo }: { switchTo: (s: SubTab) => void }) {

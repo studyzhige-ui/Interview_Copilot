@@ -18,6 +18,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, X as XIcon, MessageSquare, Sparkles } from 'lucide-react';
 import { Spinner } from '@/components/ui/Spinner';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -29,39 +30,49 @@ import {
   listChatSessions,
   renameChatSession,
 } from '@/api/chat';
+import { useToastOnError } from '@/hooks/useToastOnError';
 import { ChatPanel } from '@/pages/review/chat/ChatPanel';
 import type { ChatSessionListItem } from '@/types/api';
 
+// Same key family as ChatPanel's internal (debrief) session list — one
+// cache namespace for every chat-session list in the app.
+const SESSIONS_KEY = ['chat', 'sessions', { type: 'general' }] as const;
+
 export function GeneralChatPage() {
-  const [sessions, setSessions] = useState<ChatSessionListItem[]>([]);
+  const queryClient = useQueryClient();
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   // Inline rename inside the sidebar — same pattern as review page.
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
 
-  const refresh = useCallback(async (preserveActive = true) => {
-    setLoading(true);
-    try {
-      const rows = await listChatSessions({ type: 'general' });
-      setSessions(rows);
-      if (rows.length === 0) {
-        setActiveId(null);
-      } else if (!preserveActive || !rows.some((r) => r.session_id === activeId)) {
-        setActiveId(rows[0].session_id);
-      }
-    } catch (e) {
-      toast.error(extractErr(e, '对话列表加载失败'));
-    } finally {
-      setLoading(false);
-    }
-    // activeId is read inside the closure but we don't want refresh to
-    // re-create on every active change (would refetch unnecessarily).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const { data: sessions = [], isPending: loading, error } = useQuery({
+    queryKey: SESSIONS_KEY,
+    queryFn: ({ signal }) => listChatSessions({ type: 'general' }, { signal }),
+  });
+  useToastOnError(error, '对话列表加载失败');
 
-  useEffect(() => { void refresh(false); }, [refresh]);
+  /** Mutate the cached list in place (create / rename / delete below). */
+  const setSessions = useCallback(
+    (updater: (cur: ChatSessionListItem[]) => ChatSessionListItem[]) => {
+      queryClient.setQueryData<ChatSessionListItem[]>(
+        SESSIONS_KEY,
+        (cur) => updater(cur ?? []),
+      );
+    },
+    [queryClient],
+  );
+
+  // Keep the selection valid as the list changes: pick the most recent
+  // session on first load, fall back when the active one disappears,
+  // and clear when the list empties.
+  useEffect(() => {
+    setActiveId((cur) => {
+      if (sessions.length === 0) return null;
+      if (cur && sessions.some((r) => r.session_id === cur)) return cur;
+      return sessions[0].session_id;
+    });
+  }, [sessions]);
 
   // Focus the inline rename input when entering rename mode.
   useEffect(() => {
@@ -127,18 +138,16 @@ export function GeneralChatPage() {
       // delete path).
       try { localStorage.removeItem(`chat-draft:${id}`); } catch { /* ignore */ }
       try { localStorage.removeItem(`chat-mode:${id}`); } catch { /* ignore */ }
-      setSessions((s) => {
-        const next = s.filter((x) => x.session_id !== id);
-        if (activeId === id) setActiveId(next[0]?.session_id ?? null);
-        return next;
-      });
+      // Selection fallback is handled by the keep-selection-valid effect
+      // above once the cached list no longer contains the active id.
+      setSessions((s) => s.filter((x) => x.session_id !== id));
       setPendingDelete(null);
     } catch (e) {
       toast.error(extractErr(e, '删除对话失败'));
     } finally {
       setDeletingChat(false);
     }
-  }, [pendingDelete, activeId]);
+  }, [pendingDelete, setSessions]);
 
   const commitRename = useCallback(async () => {
     if (!renaming) return;
@@ -154,7 +163,7 @@ export function GeneralChatPage() {
     } finally {
       setRenaming(null);
     }
-  }, [renaming]);
+  }, [renaming, setSessions]);
 
   const activeSession = sessions.find((s) => s.session_id === activeId);
 

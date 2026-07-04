@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { SessionList } from './SessionList';
 import { QAPanel } from './QAPanel';
@@ -8,10 +9,17 @@ import { AnalysisRunner, type AnalysisProgress } from './AnalysisRunner';
 import { Resizer } from '@/components/ui/Resizer';
 import { toast } from '@/store/uiStore';
 import { cancelAnalyze, getInterviewRecord, listInterviewRecords } from '@/api/interview';
+import { useToastOnError } from '@/hooks/useToastOnError';
 import type { InterviewRecordDetail, InterviewRecordListItem } from '@/types/api';
 import { useIsMounted } from '@/hooks/useIsMounted';
 
 const PANEL_KEY = 'review.panelWidths';
+
+// React Query cache key for the interview-record list. The refresh flows
+// below fetch with their own AbortControllers (they need the fresh rows
+// value for the active-id fallback logic) and write the result into this
+// cache entry, so every consumer sees one list.
+const RECORDS_KEY = ['interview', 'records'] as const;
 
 function loadWidths(): { left: number; right: number } {
   try {
@@ -60,14 +68,26 @@ interface AnalysisEntry {
 }
 
 export function ReviewPage() {
+  const queryClient = useQueryClient();
   const [search, setSearch] = useSearchParams();
-  const [records, setRecords] = useState<InterviewRecordListItem[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [detail, setDetail] = useState<InterviewRecordDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [widths, setWidths] = useState(loadWidths);
   const [analyses, setAnalyses] = useState<Record<string, AnalysisEntry>>({});
+
+  const { data: records = [], error: recordsError } = useQuery({
+    queryKey: RECORDS_KEY,
+    queryFn: ({ signal }) => listInterviewRecords(0, 50, { signal }),
+  });
+  useToastOnError(recordsError, '面试记录加载失败');
+  const setRecords = useCallback(
+    (rows: InterviewRecordListItem[]) => {
+      queryClient.setQueryData<InterviewRecordListItem[]>([...RECORDS_KEY], rows);
+    },
+    [queryClient],
+  );
 
   useEffect(() => {
     try { localStorage.setItem(PANEL_KEY, JSON.stringify(widths)); } catch { /* ignore */ }
@@ -77,14 +97,6 @@ export function ReviewPage() {
     () => [...drafts, ...records],
     [drafts, records],
   );
-
-  useEffect(() => {
-    let alive = true;
-    listInterviewRecords(0, 50)
-      .then((rows) => alive && setRecords(rows))
-      .catch(() => alive && toast.error('面试记录加载失败'));
-    return () => { alive = false; };
-  }, []);
 
   useEffect(() => {
     if (activeId) return;

@@ -18,7 +18,7 @@ import {
   listKnowledgeTopics,
 } from '@/api/memory';
 import type { MasteryLevel } from '@/types/api';
-import { useToastOnError } from './useToastOnError';
+import { useToastOnError } from '@/hooks/useToastOnError';
 import { LoadingBlock, MasteryDot } from './shared';
 
 export function KnowledgeSection() {

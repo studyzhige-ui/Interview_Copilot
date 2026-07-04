@@ -4,7 +4,7 @@ import { FileText } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { MarkdownBody } from '@/components/ui/MarkdownBody';
 import { getUserProfileDoc } from '@/api/memory';
-import { useToastOnError } from './useToastOnError';
+import { useToastOnError } from '@/hooks/useToastOnError';
 import { LoadingBlock } from './shared';
 
 export function ProfileSection() {

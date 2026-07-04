@@ -11,7 +11,7 @@ import { getMemoryAuditEntry, listMemoryAudit } from '@/api/memory';
 import type {
   MemoryAuditEntry, MemoryChangeType, MemoryDocType,
 } from '@/types/api';
-import { useToastOnError } from './useToastOnError';
+import { useToastOnError } from '@/hooks/useToastOnError';
 import { LoadingBlock } from './shared';
 
 const AUDIT_PAGE_SIZE = 20;
