@@ -70,23 +70,32 @@ export function useSessionList({
 
   const setSessions = useCallback(
     (updater: (cur: ChatSessionListItem[]) => ChatSessionListItem[]) => {
-      queryClient.setQueryData<ChatSessionListItem[]>(
-        ['chat', 'sessions', { type: sessionType, subject_id: interviewId ?? '' }],
-        (cur) => updater(cur ?? []),
-      );
+      const key = ['chat', 'sessions', { type: sessionType, subject_id: interviewId ?? '' }];
+      // Cancel any in-flight background refetch first — otherwise its
+      // (pre-mutation) response could land after this write and undo it.
+      void queryClient.cancelQueries({ queryKey: key });
+      queryClient.setQueryData<ChatSessionListItem[]>(key, (cur) => updater(cur ?? []));
     },
     [queryClient, sessionType, interviewId],
   );
 
   // ── Auto-pick + auto-create ───────────────────────────────────────────
   // Auto-create "会话 1" so the panel isn't a blank slate when the user
-  // clicks into a fresh record — but only ONCE per interviewId. The guard
-  // ref covers two hazards the old load-effect handled implicitly:
-  //  * StrictMode / remount double-fire would create two sessions;
-  //  * the user deleting the list down to zero must NOT resurrect it
-  //    (the old effect only ran on interviewId change, so an emptied
-  //    list stayed empty — we keep that contract).
-  const autoCreatedForRef = useRef<string | null>(null);
+  // clicks into a fresh record. The contract (same as before the React
+  // Query migration): the decision is made ONCE per visit, on the first
+  // settled list — a list the user later deletes down to zero within the
+  // same visit stays empty; re-entering the record later re-evaluates.
+  //
+  // ``initialLoadHandledRef`` marks "first settled list processed for
+  // this interviewId". Without it, every cache write (e.g. a delete
+  // emptying the list) would re-run this effect and resurrect the
+  // session the user just removed.
+  const initialLoadHandledRef = useRef<string | null>(null);
+  // Latest interviewId for staleness checks after awaits — the effect
+  // closure's ``interviewId`` is frozen per run, so a create resolving
+  // after the user switched records must not steal the selection.
+  const interviewIdRef = useRef(interviewId);
+  interviewIdRef.current = interviewId;
   useEffect(() => {
     if (!enabled || !interviewId) {
       setInternalActiveId(null);
@@ -94,7 +103,9 @@ export function useSessionList({
     }
     if (!listQuery.isSuccess) return;
     const rows = listQuery.data;
+    const isInitialLoad = initialLoadHandledRef.current !== interviewId;
     if (rows.length > 0) {
+      initialLoadHandledRef.current = interviewId;
       // Keep the current selection when it's still in the list (a cache
       // refresh must not yank the user off their session); otherwise
       // default to the most recent row.
@@ -103,13 +114,14 @@ export function useSessionList({
       );
       return;
     }
-    if (autoCreatedForRef.current === interviewId) {
-      // List emptied after the one-shot auto-create (user deleted down
-      // to zero) — release the selection instead of pointing at a dead id.
+    if (!isInitialLoad) {
+      // List emptied by the user within this visit (deleted down to
+      // zero) — release the selection instead of pointing at a dead id,
+      // and do NOT auto-create.
       setInternalActiveId(null);
       return;
     }
-    autoCreatedForRef.current = interviewId;
+    initialLoadHandledRef.current = interviewId;
     (async () => {
       try {
         let pending = inflightAutoCreate.get(interviewId);
@@ -122,6 +134,9 @@ export function useSessionList({
           inflightAutoCreate.set(interviewId, pending);
         }
         const created = await pending;
+        // The cache write targets the key captured for THIS record —
+        // correct even if the user has switched away meanwhile (and it
+        // keeps the created session visible when they come back).
         setSessions(() => [{
           session_id: created.session_id,
           title: created.title,
@@ -130,7 +145,11 @@ export function useSessionList({
           turn_count: 0,
           updated_at: new Date().toISOString(),
         }]);
-        setInternalActiveId(created.session_id);
+        // Selection is per-panel live state — only touch it if the user
+        // is still on this record.
+        if (interviewIdRef.current === interviewId) {
+          setInternalActiveId(created.session_id);
+        }
       } catch (e) {
         toast.error(extractErr(e, '会话列表加载失败'));
       }

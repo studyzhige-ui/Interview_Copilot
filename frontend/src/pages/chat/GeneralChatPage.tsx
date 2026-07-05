@@ -32,6 +32,7 @@ import {
 } from '@/api/chat';
 import { useToastOnError } from '@/hooks/useToastOnError';
 import { ChatPanel } from '@/pages/review/chat/ChatPanel';
+import { clearPersistedSessionState } from '@/pages/review/chat/usePersistedSessionState';
 import type { ChatSessionListItem } from '@/types/api';
 
 // Same key family as ChatPanel's internal (debrief) session list — one
@@ -55,6 +56,9 @@ export function GeneralChatPage() {
   /** Mutate the cached list in place (create / rename / delete below). */
   const setSessions = useCallback(
     (updater: (cur: ChatSessionListItem[]) => ChatSessionListItem[]) => {
+      // Cancel any in-flight background refetch first — otherwise its
+      // (pre-mutation) response could land after this write and undo it.
+      void queryClient.cancelQueries({ queryKey: SESSIONS_KEY });
       queryClient.setQueryData<ChatSessionListItem[]>(
         SESSIONS_KEY,
         (cur) => updater(cur ?? []),
@@ -133,11 +137,9 @@ export function GeneralChatPage() {
     setDeletingChat(true);
     try {
       await deleteChatSession(id);
-      // Clean up the per-session localStorage drafts/mode so we
-      // don't leak keys (same cleanup ChatPanel does on its own
-      // delete path).
-      try { localStorage.removeItem(`chat-draft:${id}`); } catch { /* ignore */ }
-      try { localStorage.removeItem(`chat-mode:${id}`); } catch { /* ignore */ }
+      // Clean up the per-session localStorage drafts/mode so we don't
+      // leak keys (same helper ChatPanel uses on its own delete path).
+      clearPersistedSessionState(id);
       // Selection fallback is handled by the keep-selection-valid effect
       // above once the cached list no longer contains the active id.
       setSessions((s) => s.filter((x) => x.session_id !== id));

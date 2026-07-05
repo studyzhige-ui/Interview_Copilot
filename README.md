@@ -185,18 +185,18 @@ on either path — see the "Hybrid mode" add-on in
 
 | Subpackage | Files |
 |---|---|
-| `auth/` | email, token_blacklist, user_api_key, user_provider_settings, verification_code |
-| `resume/` | resume_service, resume_vector_service |
-| `knowledge/` | knowledge_service, document_chunk_service |
-| `uploads/` | file_validation, upload_service |
+| `auth/` | avatar_service, email, user_account, user_api_key, user_provider_settings, verification_code |
+| `resume/` | resume_entity_service, resume_service, resume_vector_service |
+| `knowledge/` | knowledge_service, document_formats, knowledge_outbox, qa_publish_service |
+| `uploads/` | file_asset_service, file_validation, outbox_service |
 | `analytics/` | diagnostics_report_service, telemetry_service |
-| `interview/` | analysis_orchestrator, interview_record_service, mock_interview_service |
-| `chat/` | session, runner, recall_policy, memory bundle |
+| `interview/` | analysis_intake, analysis_orchestrator, interview_record_service, mock_flow, mock_interview_service, mock_runtime_service, record_admin |
+| `chat/` | chat_history_service, citation, context_assembly_pipeline, interview_reference, session_task_service |
 | `memory/` | v3 long-term memory — doc-per-type, persisted in Postgres |
 | `voice/` | WhisperX, Pyannote, TTS |
 | `model_sources/` | Per-vendor `/v1/models` adapters + Redis catalog pipeline |
 
-`storage_service.py` and `cache_service.py` live at the `services/` root — both are cross-domain (S3 wrapper, Redis-TTL cache) with importers across most subpackages.
+Cross-cutting infrastructure lives in `app/core/` (`storage.py` S3 wrapper, `cache.py` Redis-TTL cache, `tokens.py` token counter, `token_blacklist.py` JWT revocation); chunk-level RAG stages (`document_chunk_service.py`, `chunk_hydration.py`) live in `app/rag/`.
 
 ### Top-level
 

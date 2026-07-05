@@ -206,6 +206,11 @@ export function useModelsData() {
     try {
       await updateModelsRuntime({ [role]: profileId });
       toast.success(`${ROLE_DESC[role].label}：${profileId}`);
+      // The chat header reads ['models','runtime'] and re-seeds from the
+      // catalog's ``selection`` — refresh both so a pick here shows up
+      // there without waiting out staleTime.
+      queryClient.invalidateQueries({ queryKey: ['models', 'runtime'] });
+      queryClient.invalidateQueries({ queryKey: ['models', 'catalog'] });
     } catch (err) {
       setSelection((s) => ({ ...s, [role]: prev }));
       const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail;

@@ -23,9 +23,9 @@
 
 - `backend/app/rag/ingestion.py`: 文档解析、切分、embedding、写 Milvus、写 `document_chunks`。
 - `backend/app/rag/milvus_hybrid.py`: Milvus 2.6 hybrid collection schema 与查询。
-- `backend/app/services/knowledge/document_chunk_service.py`: Postgres chunk 事实表写入和读取。
+- `backend/app/rag/document_chunk_service.py`: Postgres chunk 事实表写入和读取。
 - `backend/app/models/document_chunk.py`: `document_chunks` ORM。
-- `backend/app/worker/tasks.py`: Celery ingestion task。
+- `backend/app/worker/tasks/ingestion.py`: Celery ingestion task。
 - `scripts/reingest_hybrid.py`: 从 Postgres 事实源重建 Milvus hybrid collection。
 - `scripts/consistency_scan.py`: 只读一致性巡检。
 

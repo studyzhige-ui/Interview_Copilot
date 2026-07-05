@@ -77,13 +77,21 @@ export function ReviewPage() {
   const [widths, setWidths] = useState(loadWidths);
   const [analyses, setAnalyses] = useState<Record<string, AnalysisEntry>>({});
 
-  const { data: records = [], error: recordsError } = useQuery({
+  const { data: records = [], error: recordsError, isFetchedAfterMount } = useQuery({
     queryKey: RECORDS_KEY,
     queryFn: ({ signal }) => listInterviewRecords(0, 50, { signal }),
+    // Always refresh on mount: mock-interview completion navigates here
+    // with ?id=<fresh record> that a cached list won't contain yet. The
+    // cached rows still paint instantly; the selection effect below just
+    // waits for the post-mount fetch before defaulting.
+    refetchOnMount: 'always',
   });
   useToastOnError(recordsError, '面试记录加载失败');
   const setRecords = useCallback(
     (rows: InterviewRecordListItem[]) => {
+      // Cancel the in-flight (mount/background) refetch so its stale
+      // response can't land after this deliberate overwrite.
+      void queryClient.cancelQueries({ queryKey: RECORDS_KEY });
       queryClient.setQueryData<InterviewRecordListItem[]>([...RECORDS_KEY], rows);
     },
     [queryClient],
@@ -100,11 +108,17 @@ export function ReviewPage() {
 
   useEffect(() => {
     if (activeId) return;
+    // Don't default off a cached (possibly stale) list: a ?id= deep link
+    // may point at a record created seconds ago (mock finish → /review),
+    // and picking records[0] here would lock the wrong selection (this
+    // effect never runs again once activeId is set). Wait for the
+    // post-mount fetch — the cached rows still render meanwhile.
+    if (!isFetchedAfterMount) return;
     const wanted = search.get('id');
     if (wanted && records.some((r) => r.id === wanted)) setActiveId(wanted);
     else if (records.length > 0) setActiveId(records[0].id);
     else if (drafts.length > 0) setActiveId(drafts[0].id);
-  }, [activeId, records, drafts, search]);
+  }, [activeId, records, drafts, search, isFetchedAfterMount]);
 
   useEffect(() => {
     if (!activeId || isDraft(activeId)) { setDetail(null); return; }

@@ -218,7 +218,10 @@ export function ChatPanel({
                   return (
                     <div
                       key={p.id}
-                      onClick={() => { setModelOpen(false); void pickModel(p); }}
+                      // Close only on a successful pick — a not-ready /
+                      // unsupported model keeps the dropdown open (the
+                      // warn toast explains why), same as pre-split.
+                      onClick={() => { void pickModel(p).then((ok) => { if (ok) setModelOpen(false); }); }}
                       className={[
                         'px-2.5 py-1.5 rounded-md cursor-pointer leading-tight',
                         sel ? 'bg-primary-50 text-primary-700' : 'text-stone-700 hover:bg-stone-50',

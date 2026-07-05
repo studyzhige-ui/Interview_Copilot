@@ -33,20 +33,9 @@ from app.core.llm_tracing import setup_llm_tracing as _setup_llm_tracing
 _setup_llm_tracing()
 
 from app.db.database import engine
-import app.models.chat
-import app.models.document_chunk
-import app.models.interview_qa  # Ensure models are registered before table creation.
-import app.models.interview_record
-import app.models.knowledge
-import app.models.memory_ability_state
-import app.models.memory_audit_logs
-import app.models.memory_document
-import app.models.mock_interview_runtime
-import app.models.file_asset
-import app.models.outbox_job
-import app.models.resume
-import app.models.resume_section
-import app.models.user
+# app.models.__init__ imports every model module — the single registry
+# (alembic env.py and tests/conftest.py consume the same package).
+import app.models  # noqa: F401
 from app.rag.embeddings import init_rag_settings
 from app.rag.retriever import init_reranker
 from app.core.config import settings

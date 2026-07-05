@@ -183,18 +183,18 @@ python scripts/init_models.py                        # 总共约 5GB，支持字
 
 | 子包 | 文件 |
 |---|---|
-| `auth/` | email、token_blacklist、user_api_key、user_provider_settings、verification_code |
-| `resume/` | resume_service、resume_vector_service |
-| `knowledge/` | knowledge_service、document_chunk_service |
-| `uploads/` | file_validation、upload_service |
+| `auth/` | avatar_service、email、user_account、user_api_key、user_provider_settings、verification_code |
+| `resume/` | resume_entity_service、resume_service、resume_vector_service |
+| `knowledge/` | knowledge_service、document_formats、knowledge_outbox、qa_publish_service |
+| `uploads/` | file_asset_service、file_validation、outbox_service |
 | `analytics/` | diagnostics_report_service、telemetry_service |
-| `interview/` | analysis_orchestrator、interview_record_service、mock_interview_service |
-| `chat/` | session、runner、recall_policy、memory bundle |
+| `interview/` | analysis_intake、analysis_orchestrator、interview_record_service、mock_flow、mock_interview_service、mock_runtime_service、record_admin |
+| `chat/` | chat_history_service、citation、context_assembly_pipeline、interview_reference、session_task_service |
 | `memory/` | v3 长期记忆 —— 按 doc-per-type 存进 Postgres |
 | `voice/` | WhisperX、Pyannote、TTS |
 | `model_sources/` | 每家厂商 `/v1/models` 适配器 + Redis 目录管道 |
 
-`storage_service.py` 和 `cache_service.py` 留在 `services/` 根 —— 都是跨域工具（S3 封装、Redis-TTL 缓存），上面几乎每个子包都在 import。
+跨域基础设施在 `app/core/`（`storage.py` S3 封装、`cache.py` Redis-TTL 缓存、`tokens.py` token 计数、`token_blacklist.py` JWT 吊销）；chunk 级 RAG 阶段（`document_chunk_service.py`、`chunk_hydration.py`）在 `app/rag/`。
 
 ### 顶层目录
 

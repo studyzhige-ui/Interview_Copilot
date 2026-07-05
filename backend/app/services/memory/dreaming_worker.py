@@ -19,7 +19,7 @@ nightly batch is the right fit for an interview-prep tool.
 
   Celery Beat (worker/celery_app.py beat_schedule)
        ↓ daily 03:30 Asia/Shanghai
-  scan_and_dream_batch_task (worker/tasks.py)
+  scan_and_dream_batch_task (worker/tasks/memory.py)
        ↓ for each user, check 4 gates (per ``select_dreamable_users``):
        │    1. time:   NOW - users.last_dreamed_at >= 24h
        │    2. (no scan throttle — cron fires at most once per day)
