@@ -3,6 +3,7 @@ import logging
 
 from app.core.error_messages import humanize_error
 from app.db.database import SessionLocal
+from app.services.interview.interview_record_service import STATUS_PROCESSING_REVIEW
 from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,7 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
     try:
         interview_record_service.set_status(
             record_id,
-            "processing_review" if is_mock else "pending",
+            STATUS_PROCESSING_REVIEW if is_mock else "pending",
             celery_task_id=self.request.id,
         )
     except Exception:  # noqa: BLE001

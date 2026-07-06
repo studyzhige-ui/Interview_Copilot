@@ -648,3 +648,43 @@ def test_sse_chat_mode_field_picks_strategy(client: TestClient, db: Session, mon
         "/api/v1/chat/sse/s_dispatch", json={"message": "hi", "mode": "bogus"},
     )
     assert resp.status_code == 422
+
+
+# ── Phase 5 (MOCK-3): endpoint-level guard mappings ──────────────────────
+
+
+def test_answer_with_stale_token_maps_to_409(client: TestClient, db: Session):
+    from app.models.mock_interview_runtime import MockInterviewRuntime
+
+    record_id, conv_id = _seed_started_mock(db, record_id="ir_tok", conv_id="c_tok")
+    rt = db.query(MockInterviewRuntime).filter(
+        MockInterviewRuntime.interview_record_id == record_id
+    ).first()
+    rt.current_question_message_id = 42
+    db.commit()
+
+    resp = client.post(
+        f"/api/v1/mock-interviews/{record_id}/answer",
+        json={"answer_text": "回答", "question_message_id": 41},
+    )
+    assert resp.status_code == 409
+    assert "已推进" in resp.json()["detail"]
+
+
+def test_finish_on_non_in_progress_record_maps_to_409(client: TestClient, db: Session):
+    from app.models.interview_record import InterviewRecord
+
+    record_id, _ = _seed_started_mock(db, record_id="ir_fin409", conv_id="c_fin409")
+    rec = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+    rec.status = "processing_review"  # a double-click already dispatched
+    db.commit()
+
+    resp = client.post(f"/api/v1/mock-interviews/{record_id}/finish")
+    assert resp.status_code == 409
+
+
+def test_start_with_active_run_maps_to_409(client: TestClient, db: Session):
+    _seed_started_mock(db, record_id="ir_dup", conv_id="c_dup")
+    resp = client.post("/api/v1/mock-interviews/start", json={})
+    assert resp.status_code == 409
+    assert "进行中" in resp.json()["detail"]

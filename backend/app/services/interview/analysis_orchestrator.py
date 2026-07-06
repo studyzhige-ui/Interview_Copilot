@@ -340,15 +340,12 @@ class InterviewAnalysisOrchestrator:
                 return []
 
         # Stage keys are frozen onto assistant messages as content blocks at
-        # append time (MOCK-8) — map them to the analysis phase vocabulary so
-        # the review report attributes questions to their real stage instead
-        # of blanket "technical".
-        stage_to_phase = {
-            "self_intro": "self_intro",
-            "resume_project_deep_dive": "resume_deep_dive",
-            "role_technical_assessment": "technical",
-            "candidate_questions": "reverse_qa",
-        }
+        # append time (MOCK-8) — the shared STAGE_TO_PHASE map (defined next
+        # to the plan templates) attributes questions to their real stage
+        # instead of blanket "technical".
+        from app.services.interview.mock_interview_service import STAGE_TO_PHASE
+
+        stage_to_phase = STAGE_TO_PHASE
 
         qa_pairs: list[dict[str, Any]] = []
         pending_q: str | None = None

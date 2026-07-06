@@ -234,27 +234,6 @@ def list_interview_records(
     ]
 
 
-def _answer_audio_url(qa: InterviewQA) -> str | None:
-    """Fresh presigned GET for a voice answer's clip (or the legacy stored
-    URL). Best-effort — a storage blip degrades to no playback, never a 500.
-    """
-    if not qa.answer_audio_file_asset_id:
-        return qa.answer_audio_url
-    try:
-        from app.core.storage import generate_presigned_get_url
-        from app.db.database import SessionLocal
-        from app.services.uploads.file_asset_service import get_file_asset
-
-        with SessionLocal() as adb:
-            asset = get_file_asset(adb, qa.answer_audio_file_asset_id)
-            uri = asset.storage_uri if asset else None
-        if uri and uri.startswith("s3://"):
-            return generate_presigned_get_url(uri, expiration=1800)
-    except Exception:  # noqa: BLE001
-        logger.warning("answer audio presign failed for qa=%s", qa.id, exc_info=True)
-    return None
-
-
 @router.get("/interview-records/{record_id}")
 def get_interview_record(
     record_id: str,
@@ -288,7 +267,7 @@ def get_interview_record(
         "transcript_segments": _safe_json_loads(transcript["segments_json"]),
         "interview_plan": _safe_json_loads(record.interview_plan),
         "analysis": analysis,
-        "qa": [_serialize_qa(qa) for qa in qa_rows],
+        "qa": _serialize_qa_rows(db, qa_rows),
         "error_message": record.error_message,
         "created_at": record.created_at.isoformat() if record.created_at else "",
         "updated_at": record.updated_at.isoformat() if record.updated_at else "",
@@ -305,7 +284,19 @@ def _safe_json_loads(value: Optional[str]) -> Optional[object]:
         return None
 
 
-def _serialize_qa(qa: InterviewQA) -> dict:
+def _serialize_qa_rows(db: Session, qa_rows: list[InterviewQA]) -> list[dict]:
+    """Serialize QA rows with voice-answer playback URLs batch-minted in ONE
+    asset query (a 30-question record used to open 30 sessions). local://
+    deployments get no URL — playback degrades gracefully."""
+    from app.services.uploads.file_asset_service import presigned_get_urls
+
+    urls = presigned_get_urls(
+        db, [qa.answer_audio_file_asset_id for qa in qa_rows if qa.answer_audio_file_asset_id],
+    )
+    return [_serialize_qa(qa, audio_urls=urls) for qa in qa_rows]
+
+
+def _serialize_qa(qa: InterviewQA, audio_urls: dict[str, str] | None = None) -> dict:
     return {
         "id": qa.id,
         "order_idx": qa.order_idx,
@@ -323,9 +314,13 @@ def _serialize_qa(qa: InterviewQA) -> dict:
         "key_points": _safe_json_loads(qa.key_points_json) or [],
         "answer_input_mode": qa.answer_input_mode,
         "question_audio_url": qa.question_audio_url,
-        # MOCK-7: voice answers store the clip's asset id; a presigned GET is
-        # minted per read (persisted URLs would expire).
-        "answer_audio_url": _answer_audio_url(qa),
+        # MOCK-7: voice answers store the clip's asset id; presigned GETs are
+        # batch-minted per detail read (persisted URLs would expire). NB the
+        # URL dies after ~30min — a long-open review page needs a refresh.
+        "answer_audio_url": (
+            (audio_urls or {}).get(qa.answer_audio_file_asset_id or "")
+            or qa.answer_audio_url
+        ),
         "answer_audio_file_asset_id": qa.answer_audio_file_asset_id,
         "source_segment_start": qa.source_segment_start,
         "source_segment_end": qa.source_segment_end,
@@ -426,7 +421,7 @@ def edit_interview_qa(
     db.add(qa)
     db.commit()
     db.refresh(qa)
-    return {"status": "success", "qa": _serialize_qa(qa)}
+    return {"status": "success", "qa": _serialize_qa_rows(db, [qa])[0]}
 
 
 @router.post("/interview-records/{record_id}/qa/{qa_id}/save-to-knowledge")

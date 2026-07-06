@@ -63,21 +63,33 @@ def _style_brief(style: str | None) -> str:
 # is frozen into ``mock_interview_runtime.plan_json`` at start so a later
 # template change can't affect a started or finished run.
 
-# Rules-layer hard bound (MOCK-5): once the candidate has answered this
-# many turns, ready_to_finish is FORCED true regardless of what the LLM
-# says. The LLM signal itself is advisory (the FE renders a suggestion
-# banner, never locks input).
-MOCK_MAX_ANSWERED_TURNS = 30
+# Per-question truncation in the asked-question inventory (chars) — also
+# interpolated into the prompt so the claim can't drift from the slice.
+_ASKED_QUESTION_TRUNC = 40
 
+# ``phase`` maps each stage onto the analysis-report vocabulary
+# (interview_analysis_service._PHASE_NAME_MAP) — defined HERE, next to the
+# stage keys, so adding a stage can't silently degrade its review
+# attribution to "general".
 GENERAL_PLAN_TEMPLATE: list[dict[str, str]] = [
-    {"key": "self_intro", "title": "自我介绍"},
-    {"key": "resume_project_deep_dive", "title": "简历项目深挖"},
-    {"key": "role_technical_assessment", "title": "岗位相关技术考察"},
-    {"key": "candidate_questions", "title": "反问"},
+    {"key": "self_intro", "title": "自我介绍", "phase": "self_intro"},
+    {"key": "resume_project_deep_dive", "title": "简历项目深挖", "phase": "resume_deep_dive"},
+    {"key": "role_technical_assessment", "title": "岗位相关技术考察", "phase": "technical"},
+    {"key": "candidate_questions", "title": "反问", "phase": "reverse_qa"},
 ]
+
+
 
 PLAN_TEMPLATES: dict[str, list[dict[str, str]]] = {
     "general": GENERAL_PLAN_TEMPLATE,
+}
+
+# stage_key → analysis phase, derived from the templates (single source —
+# the review pipeline imports this instead of keeping its own copy).
+STAGE_TO_PHASE: dict[str, str] = {
+    s["key"]: s.get("phase", "general")
+    for stages in PLAN_TEMPLATES.values()
+    for s in stages
 }
 
 
@@ -201,7 +213,13 @@ def stages_from_plan_json(plan_json: str | None) -> list[dict[str, str]]:
     stages = data.get("stages") if isinstance(data, dict) else None
     if isinstance(stages, list) and stages:
         out = [
-            {"key": str(s.get("key")), "title": str(s.get("title") or s.get("key"))}
+            # ``phase`` (review attribution, MOCK-8) survives the round-trip
+            # for plans frozen after Phase 5; older plans simply omit it.
+            {
+                "key": str(s.get("key")),
+                "title": str(s.get("title") or s.get("key")),
+                **({"phase": str(s["phase"])} if s.get("phase") else {}),
+            }
             for s in stages
             if isinstance(s, dict) and s.get("key")
         ]
@@ -220,7 +238,7 @@ _NEXT_TURN_PROMPT = """{prefix}
 ## 最近对话
 {recent_dialog}
 
-## 全场已问过的问题（避免重复！每条截断到 40 字）
+## 全场已问过的问题（避免重复！每条截断到 {asked_trunc} 字）
 {asked_questions}
 （当前阶段已提问 {questions_in_current_stage} 个问题）
 
@@ -271,7 +289,7 @@ async def generate_next_turn(
     # interview repeated earlier questions. The full asked-question index
     # (40 chars each) keeps the prompt bounded while covering the whole run.
     asked_block = "\n".join(
-        f"  {i + 1}. {q[:40]}" for i, q in enumerate(asked_questions or [])
+        f"  {i + 1}. {q[:_ASKED_QUESTION_TRUNC]}" for i, q in enumerate(asked_questions or [])
     ) or "（暂无）"
     prompt = _NEXT_TURN_PROMPT.format(
         prefix=prefix,
@@ -279,6 +297,7 @@ async def generate_next_turn(
         current_stage=current_stage_key or (stage_keys[0] if stage_keys else "self_intro"),
         recent_dialog=recent_dialog,
         asked_questions=asked_block,
+        asked_trunc=_ASKED_QUESTION_TRUNC,
         questions_in_current_stage=questions_in_current_stage,
         user_answer=(user_answer or "").strip() or "（候选人沉默）",
         stage_keys_hint=" | ".join(stage_keys),

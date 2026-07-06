@@ -10,7 +10,8 @@ import {
   SPEECH_RECOGNITION_AVAILABLE,
   useSpeechRecognition,
 } from '@/hooks/useSpeechRecognition';
-import { abandonMockInterview, submitMockAnswer, finishMockInterview, TRANSCRIBE_AVAILABLE, transcribeAudio } from '@/api/mock';
+import { abandonMockInterview, getInProgressMock, submitMockAnswer, finishMockInterview, TRANSCRIBE_AVAILABLE, transcribeAudio } from '@/api/mock';
+import { extractErr } from '@/api/client';
 import { uploadFileAsset } from '@/api/fileAssets';
 import { useBlocker, useNavigate } from 'react-router-dom';
 import type { VoiceMode } from './MockSetup';
@@ -67,7 +68,8 @@ export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnswered
   const [endSuggested, setEndSuggested] = useState(false);
   // MOCK-3: id of the interviewer message currently being answered — echoed
   // back with each submit so a concurrent/stale tab gets a 409 instead of
-  // silently forking the interview.
+  // silently forking the interview. A ref (not state): never rendered, only
+  // echoed in the next request.
   const questionMessageIdRef = useRef<number | null>(initialQuestionMessageId);
   const [ttsMuted, setTtsMuted] = useState(false);
   const rec = useMediaRecorder();
@@ -164,8 +166,27 @@ export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnswered
         setEndSuggested(true);
         toast.info('面试官觉得可以收尾了——你可以继续追问，或点右上「结束面试」生成复盘');
       }
-    } catch {
-      toast.error('提交回答失败');
+    } catch (e) {
+      const status = (e as { response?: { status?: number } })?.response?.status;
+      if (status === 409) {
+        // MOCK-3: our token is stale (another tab advanced the interview).
+        // Show the server's actionable message and resync the token +
+        // current question so the NEXT submit can succeed.
+        toast.warn(extractErr(e, '面试已推进到新问题'));
+        try {
+          const r = await getInProgressMock();
+          if (r.has_in_progress && r.record_id === recordId) {
+            questionMessageIdRef.current = r.question_message_id ?? null;
+            if (r.current_question) {
+              setTurns((t) => [...t, { who: 'interviewer', text: r.current_question! }]);
+            }
+          }
+        } catch {
+          /* resync is best-effort */
+        }
+      } else {
+        toast.error(extractErr(e, '提交回答失败'));
+      }
       // Roll back the optimistic insert so the user can retry. Pre-
       // fix the failed message just hung in the transcript with no
       // AI response — visually identical to "AI ghosted me".
@@ -230,6 +251,7 @@ export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnswered
           audioAssetId = await uploadFileAsset(file, 'mock_audio_clip');
         } catch {
           audioAssetId = undefined;
+          toast.warn('语音原声上传失败，复盘将只保留文字回答');
         }
         await pushUserAnswer(text, audioAssetId);
       } catch {
@@ -320,8 +342,10 @@ export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnswered
       setConfirmingFinish(false);
       setFinished(true);  // unblock the nav guard — the run is over for real
       onFinished(r.record_id);
-    } catch {
-      toast.error('结束面试失败');
+    } catch (e) {
+      // A stale tab's finish lands 409 with an actionable server message
+      // (复盘可能已在生成或已完成) — show it instead of a generic failure.
+      toast.error(extractErr(e, '结束面试失败'));
     } finally {
       setFinishing(false);
     }

@@ -12,6 +12,10 @@ scoring is frozen into ``interview_qa`` by the unified analysis orchestrator
 
 The API router keeps HTTP mapping only; LLM planning/turn generation stays in
 ``mock_interview_service``; runtime row CRUD in ``mock_runtime_service``.
+
+Transaction ownership: ``submit_answer`` and ``dispatch_review`` COMMIT
+internally (two-phase / rollback semantics they own); ``start_mock`` and
+``abandon_mock`` flush only — their endpoints commit.
 """
 from __future__ import annotations
 
@@ -39,7 +43,14 @@ from app.worker.tasks import process_interview_analysis
 logger = logging.getLogger(__name__)
 
 
-class StaleQuestionError(RuntimeError):
+# Rules-layer hard bound (MOCK-5): once the candidate has answered this
+# many turns, ready_to_finish is FORCED true regardless of what the LLM
+# says. Lives here — next to the enforcement in submit_answer — not in the
+# LLM service, which never reads it.
+MOCK_MAX_ANSWERED_TURNS = 30
+
+
+class StaleQuestionError(ValueError):
     """The answer references a question that is no longer current — a
     concurrent submit already advanced the interview (MOCK-3)."""
 
@@ -348,6 +359,28 @@ async def submit_answer(
         and last.role == "user"
         and (last.content or "").strip() == (answer_text or "").strip()
     )
+    if dangling_retry:
+        # A retried answer must not appear twice in the prompt: it's already
+        # the last message in ``recent`` AND passed as ``user_answer``.
+        if recent and recent[-1].get("role") == "user":
+            recent = recent[:-1]
+        # A re-recorded clip on retry: attach its block to the EXISTING
+        # dangling message — otherwise the (already consumed) asset would be
+        # referenced by nothing and leak past every cleanup path.
+        if answer_audio_file_asset_id:
+            blocks = []
+            if last.content_blocks_json:
+                try:
+                    blocks = json.loads(last.content_blocks_json) or []
+                except (json.JSONDecodeError, TypeError):
+                    blocks = []
+            if not any(
+                isinstance(b, dict) and b.get("file_asset_id") == answer_audio_file_asset_id
+                for b in blocks
+            ):
+                blocks.append({"type": "audio", "file_asset_id": answer_audio_file_asset_id})
+                last.content_blocks_json = json.dumps(blocks, ensure_ascii=False)
+                db.add(last)
     if not dangling_retry:
         # A voice clip (if any) rides along as an audio content block
         # referencing the file asset.
@@ -378,7 +411,7 @@ async def submit_answer(
     )
 
     # Rules layer (MOCK-5): the hard cap overrides the LLM's soft signal.
-    if count_answered_turns(db, conversation_id) >= mock_interview_service.MOCK_MAX_ANSWERED_TURNS:
+    if count_answered_turns(db, conversation_id) >= MOCK_MAX_ANSWERED_TURNS:
         turn.is_ready_to_finish = True
 
     # ── Phase B: persist the reply + advance runtime, commit ────────

@@ -27,6 +27,8 @@ by id alone (``get_file_asset``); ownership-sensitive reads use
 """
 from __future__ import annotations
 
+import logging
+
 import os
 from datetime import datetime
 
@@ -42,6 +44,8 @@ from app.core.storage import (
     storage_uri_for_key,
 )
 from app.services.uploads.purpose_registry import get_purpose_spec
+
+logger = logging.getLogger(__name__)
 
 # ── Upload-status vocabulary ─────────────────────────────────────────────
 # Raw-file lifecycle on file_assets.upload_status. Import these instead of
@@ -293,6 +297,37 @@ def mark_file_asset_consumed(db: Session, asset: FileAsset) -> None:
     asset.upload_status = UPLOAD_STATUS_CONSUMED
     asset.updated_at = datetime.utcnow()
     db.add(asset)
+
+
+def presigned_get_urls(
+    db: Session, asset_ids: list[str], *, expiration: int = 1800,
+) -> dict[str, str]:
+    """Batch-mint presigned GET URLs for owned assets (one IN query).
+
+    Only ``s3://`` URIs get a URL — ``local://`` storage has no presign
+    equivalent, so those (and unknown ids) are simply absent from the
+    result; callers degrade to no link. Best-effort: a presign failure
+    skips that asset instead of raising.
+    """
+    ids = [i for i in asset_ids if i]
+    if not ids:
+        return {}
+    from app.core.storage import generate_presigned_get_url
+
+    rows = (
+        db.query(FileAsset.id, FileAsset.storage_uri)
+        .filter(FileAsset.id.in_(ids), FileAsset.deleted_at.is_(None))
+        .all()
+    )
+    out: dict[str, str] = {}
+    for asset_id, uri in rows:
+        if not uri or not uri.startswith("s3://"):
+            continue
+        try:
+            out[asset_id] = generate_presigned_get_url(uri, expiration=expiration)
+        except Exception:  # noqa: BLE001 — degrade to no playback link
+            logger.warning("presign failed for asset %s", asset_id, exc_info=True)
+    return out
 
 
 def enqueue_asset_blob_delete(db: Session, asset: FileAsset) -> None:

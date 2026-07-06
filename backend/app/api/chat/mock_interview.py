@@ -193,11 +193,16 @@ async def submit_mock_answer(
             question_message_id=body.question_message_id,
         )
     except mock_flow.StaleQuestionError as exc:
+        # Raised before any write — rollback only clears the (uncommitted)
+        # clip consumption from above.
         db.rollback()
         raise HTTPException(
             status_code=409, detail="面试已推进到新问题，请刷新后继续",
         ) from exc
     except Exception as exc:  # noqa: BLE001
+        # Phase A commits internally; this rollback covers a phase-B failure
+        # (assistant reply / runtime advance uncommitted). The answer itself
+        # survives — the FE retry becomes a deduped 催回应.
         db.rollback()
         logger.exception("mock answer failed for %s: %s", record_id, exc)
         raise HTTPException(status_code=500, detail=humanize_error(exc)) from exc
@@ -308,7 +313,7 @@ async def abandon_mock_interview(
     runtime, mock audio assets and the draft record (abandon = this never
     happened)."""
     record = _owned_mock_record_or_404(db, record_id, current_user.username)
-    if record.status != "mock_in_progress":
+    if record.status != STATUS_MOCK_IN_PROGRESS:
         raise HTTPException(status_code=400, detail="只能放弃进行中的模拟面试")
 
     runtime = mock_runtime_service.get_runtime_for_record(db, interview_record_id=record_id)
@@ -364,7 +369,7 @@ async def get_in_progress_mock(
         current_stage_key=runtime.current_stage_key,
         current_question=runtime.current_question_text,
         answered_count=answered,
-        question_message_id=runtime.current_question_message_id if runtime else None,
+        question_message_id=runtime.current_question_message_id,
         last_activity_at=(
             runtime.last_activity_at.isoformat() if runtime.last_activity_at else None
         ),

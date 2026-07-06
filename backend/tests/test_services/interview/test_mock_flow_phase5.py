@@ -6,8 +6,6 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -125,7 +123,7 @@ def test_dangling_answer_retry_not_double_recorded(db_session, monkeypatch):
 def test_hard_cap_forces_ready_to_finish(db_session, monkeypatch):
     record, runtime, conv = _make_run(db_session)
     _stub_turn(monkeypatch)
-    monkeypatch.setattr(mock_interview_service, "MOCK_MAX_ANSWERED_TURNS", 1)
+    monkeypatch.setattr(mock_flow, "MOCK_MAX_ANSWERED_TURNS", 1)
     turn = asyncio.run(mock_flow.submit_answer(
         db_session, record=record, runtime=runtime,
         answer_text="第一答", answer_audio_file_asset_id=None,
@@ -145,7 +143,7 @@ def test_asked_questions_fed_to_prompt(db_session, monkeypatch):
     assert captured["questions_in_current_stage"] == 1
 
 
-def test_review_pairing_reads_stage_and_audio(db_session):
+def test_review_pairing_reads_stage_and_audio(db_session, monkeypatch):
     """MOCK-7/8: the frozen QA pairs carry the real stage phase and the
     voice clip's asset id from the message content blocks."""
     record, runtime, conv = _make_run(db_session)
@@ -165,6 +163,8 @@ def test_review_pairing_reads_stage_and_audio(db_session):
     mock_flow.append_message(db_session, conv.id, "user", "文字回答")
     db_session.commit()
 
+    # NB: the package __init__ re-exports the singleton under the module's
+    # own name, so ``import ... as orch`` would bind the INSTANCE.
     import app.services.interview.analysis_orchestrator  # noqa: F401
     orch = sys.modules["app.services.interview.analysis_orchestrator"]
 
@@ -178,15 +178,8 @@ def test_review_pairing_reads_stage_and_audio(db_session):
         def close(self):
             self._inner.commit()
 
-    import pytest as _p  # noqa: F401
-    from unittest.mock import patch as _patch
-
-    orig = orch.SessionLocal
-    orch.SessionLocal = lambda: _NoClose(db_session)
-    try:
-        pairs = orch.analysis_orchestrator._load_mock_qa(record.id)
-    finally:
-        orch.SessionLocal = orig
+    monkeypatch.setattr(orch, "SessionLocal", lambda: _NoClose(db_session))
+    pairs = orch.analysis_orchestrator._load_mock_qa(record.id)
 
     assert len(pairs) == 2
     assert pairs[0]["phase"] == "self_intro"

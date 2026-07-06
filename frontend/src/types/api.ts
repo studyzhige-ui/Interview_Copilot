@@ -223,8 +223,8 @@ export interface MockStartResp {
   current_stage_key: string;
   /** The opening interviewer message (greeting + first question), one string. */
   current_question: string;
-  plan_phases: MockStage[];
   question_message_id?: number | null;
+  plan_phases: MockStage[];
 }
 
 /** ``POST /mock-interviews/{record_id}/answer`` — one interviewer line.
