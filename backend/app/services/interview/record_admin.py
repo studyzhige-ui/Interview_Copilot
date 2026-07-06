@@ -91,6 +91,35 @@ def update_record_fields(
     return True
 
 
+def _enqueue_record_asset_deletes(db: Session, record: InterviewRecord) -> None:
+    """Queue blob deletes + drop the file_asset rows a record exclusively
+    owns: its audio recording and the ad-hoc JD / resume files uploaded just
+    for this analysis. Personal resumes (``resume_id``) are a separate
+    entity and are never touched."""
+    from app.models.file_asset import FileAsset
+    from app.services.uploads.file_asset_service import enqueue_asset_blob_delete
+
+    asset_ids = {
+        aid
+        for aid in (
+            record.audio_file_asset_id,
+            record.jd_file_asset_id,
+            record.resume_file_asset_id,
+        )
+        if aid
+    }
+    if not asset_ids:
+        return
+    assets = (
+        db.query(FileAsset)
+        .filter(FileAsset.id.in_(asset_ids), FileAsset.user_id == record.user_id)
+        .all()
+    )
+    for asset in assets:
+        enqueue_asset_blob_delete(db, asset)
+        db.delete(asset)
+
+
 def delete_record_cascade(
     db: Session,
     record: InterviewRecord,
@@ -147,6 +176,17 @@ def delete_record_cascade(
             .filter(Conversation.subject_id == record_id)
             .all()
         ]
+
+        # ── (1b) Storage blobs (UP-2) — queue object deletes BEFORE the
+        # referencing rows disappear. Mock voice clips hang off the
+        # conversations' messages; the audio / ad-hoc JD / ad-hoc resume
+        # uploads hang off the record row. Blob deletion rides the outbox so
+        # a MinIO blip can't fail the user-facing delete.
+        from app.services.interview.mock_flow import delete_mock_audio_assets
+
+        for sid in session_ids:
+            delete_mock_audio_assets(db, sid, record.user_id)
+        _enqueue_record_asset_deletes(db, record)
 
         # ── (2) DB deletes in safe order ─────────────────────────────────
         if session_ids:

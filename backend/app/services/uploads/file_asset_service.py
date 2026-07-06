@@ -3,15 +3,20 @@
 Lifecycle:
 
     create_file_asset()   -> row (pending_upload / pending) + presigned PUT URL
+                             (purpose whitelist + declared-size cap from
+                             PURPOSE_REGISTRY; TTL per purpose)
     <client PUTs bytes to object storage>
-    confirm_file_asset()  -> HEAD-verify + size-reconcile -> uploaded / passed
+    confirm_file_asset()  -> verify: object exists, size reconciles AND is
+                             within the purpose cap, first bytes match the
+                             purpose's content kind -> uploaded / passed
                              (or failed + enqueue object cleanup)
-    <business consumes>    -> mark_file_asset_consumed()
+    <business consumes>    -> ensure_uploaded() (confirm-on-consume — runs the
+                             same verification if the client skipped /confirm)
+                             then mark_file_asset_consumed()
 
-``passed`` attests only that the object exists and its size matches what the
-client declared. Deep content validation (magic bytes / parseability) is left
-to the consuming domain's parse/ingest job — the presigned bytes never reach
-this process.
+The explicit /confirm endpoint remains for the happy path (fail fast, client
+sees the validation error immediately), but consumers no longer trust it to
+have happened: ``ensure_uploaded`` makes verification unskippable (UP-1).
 
 The table keys on the stable ``users.id``; callers still pass the runtime
 principal (username), which this layer resolves once via
@@ -22,6 +27,7 @@ by id alone (``get_file_asset``); ownership-sensitive reads use
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -32,8 +38,24 @@ from app.core.storage import (
     build_owned_object_key,
     generate_presigned_upload_url_for_key,
     head_object,
+    read_object_head,
     storage_uri_for_key,
 )
+from app.services.uploads.purpose_registry import get_purpose_spec
+
+
+class UnknownUploadPurpose(ValueError):
+    """Purpose not in PURPOSE_REGISTRY."""
+
+
+class UploadTooLarge(ValueError):
+    """Declared size exceeds the purpose's cap."""
+
+    def __init__(self, purpose: str, limit_bytes: int):
+        self.limit_bytes = limit_bytes
+        super().__init__(
+            f"upload for purpose={purpose} exceeds {limit_bytes} bytes"
+        )
 
 
 def create_file_asset(
@@ -47,9 +69,20 @@ def create_file_asset(
 ) -> tuple[FileAsset, dict]:
     """Reserve a file-asset row and return it plus a presigned PUT URL.
 
+    Enforces the PURPOSE_REGISTRY whitelist and declared-size cap here — the
+    single choke point every entry (file-assets API, rag.py knowledge URL,
+    agent write_file) goes through. Raises ``UnknownUploadPurpose`` /
+    ``UploadTooLarge`` accordingly.
+
     ``user_id`` is the caller's username; it's resolved to the stable
     ``users.id`` for the FK. Raises ``ValueError`` for an unknown user.
     """
+    spec = get_purpose_spec(purpose)
+    if spec is None:
+        raise UnknownUploadPurpose(f"Unknown upload purpose: {purpose}")
+    if size_bytes is not None and size_bytes > spec.max_bytes:
+        raise UploadTooLarge(purpose, spec.max_bytes)
+
     user_pk = resolve_user_pk(db, user_id)
     if user_pk is None:
         raise ValueError(f"Unknown user: {user_id}")
@@ -74,7 +107,9 @@ def create_file_asset(
     db.commit()
     db.refresh(asset)
     url_info = generate_presigned_upload_url_for_key(
-        object_key, content_type=asset.content_type or "application/octet-stream",
+        object_key,
+        content_type=asset.content_type or "application/octet-stream",
+        expiration=spec.presign_ttl_seconds,
     )
     return asset, url_info
 
@@ -130,20 +165,42 @@ def confirm_file_asset(
     file_asset_id: str,
     user_id: str,
 ) -> FileAsset | None:
-    """Confirm a client-completed upload.
-
-    HEAD the object to prove it exists, reconcile its size against what the
-    client declared, then flip the asset to uploaded/passed. On any failure the
-    asset goes failed/failed and a cleanup job is enqueued in the SAME
-    transaction so a half-uploaded object can't linger. Returns the asset, or
-    ``None`` if it isn't owned by the caller.
-    """
+    """Confirm a client-completed upload (verification below). Returns the
+    asset, or ``None`` if it isn't owned by the caller."""
     asset = get_owned_file_asset(db, file_asset_id=file_asset_id, user_id=user_id)
     if asset is None:
         return None
-    # Idempotent: a re-fired confirm on an already-uploaded/consumed asset is a
-    # no-op — never regress a consumed asset back to uploaded.
-    if asset.upload_status in ("uploaded", "consumed"):
+    return _verify_pending_asset(db, asset)
+
+
+def ensure_uploaded(db: Session, asset: FileAsset) -> FileAsset:
+    """Confirm-on-consume (UP-1): run the confirm verification if the client
+    never called /confirm. Consumers call this and then require
+    ``upload_status == "uploaded"`` — verification can no longer be skipped
+    by consuming a ``pending_upload`` asset directly.
+    """
+    return _verify_pending_asset(db, asset)
+
+
+def _verify_pending_asset(db: Session, asset: FileAsset) -> FileAsset:
+    """Verify a pending upload and flip it uploaded/passed or failed/failed.
+
+    Checks, in order:
+      1. the object exists in storage (HEAD),
+      2. its actual size reconciles with what the client declared,
+      3. its actual size is within the purpose's registry cap — the declared
+         size is client-controlled, so the cap must bind on actual bytes
+         (UP-4),
+      4. its first 32 bytes match the purpose's content kind (UP-6) — the
+         presigned bytes never traverse this process, so this head read is
+         the only server-side look at the content.
+
+    On any failure the asset goes failed/failed and a cleanup job is enqueued
+    in the SAME transaction so a half-uploaded object can't linger.
+    Idempotent: an already-uploaded/consumed asset is returned untouched
+    (never regresses), and a failed asset stays failed.
+    """
+    if asset.upload_status != "pending_upload":
         return asset
 
     meta = head_object(asset.storage_uri)
@@ -162,6 +219,28 @@ def confirm_file_asset(
             f"size mismatch: declared {asset.size_bytes}, stored {actual_size}",
         )
         return asset
+
+    spec = get_purpose_spec(asset.purpose)
+    if spec is not None and actual_size is not None and actual_size > spec.max_bytes:
+        _fail_asset(
+            db, asset,
+            f"file exceeds the {spec.max_bytes // (1024 * 1024)}MB limit "
+            f"for purpose={asset.purpose}",
+        )
+        return asset
+
+    if spec is not None:
+        from app.services.uploads.file_validation import detect_head_format
+
+        head = read_object_head(asset.storage_uri)
+        ext = os.path.splitext(asset.original_filename or "")[1]
+        if detect_head_format(head or b"", spec.content_kind, ext) is None:
+            _fail_asset(
+                db, asset,
+                f"file content does not look like {spec.content_kind} "
+                "(magic-byte check failed)",
+            )
+            return asset
 
     if actual_size is not None:
         asset.size_bytes = actual_size
@@ -182,6 +261,26 @@ def mark_file_asset_consumed(db: Session, asset: FileAsset) -> None:
     asset.upload_status = "consumed"
     asset.updated_at = datetime.utcnow()
     db.add(asset)
+
+
+def enqueue_asset_blob_delete(db: Session, asset: FileAsset) -> None:
+    """Queue deletion of an asset's storage blob via the outbox (UP-2).
+
+    Caller commits (same transaction as the business delete). Idempotent per
+    asset. The row itself is the caller's business — this only handles the
+    bytes in object storage.
+    """
+    from app.services.uploads.outbox_service import enqueue_job
+
+    enqueue_job(
+        db,
+        user_pk=asset.user_id,
+        job_type="delete_object",
+        aggregate_type="file_asset",
+        aggregate_id=asset.id,
+        payload={"storage_uri": asset.storage_uri},
+        idempotency_key=f"delete_object:{asset.id}",
+    )
 
 
 def _fail_asset(db: Session, asset: FileAsset, reason: str) -> None:

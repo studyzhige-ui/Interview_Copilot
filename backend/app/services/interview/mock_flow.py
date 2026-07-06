@@ -389,9 +389,12 @@ def dispatch_review(
 
 def delete_mock_audio_assets(db: Session, conversation_id: str, user_pk: int) -> None:
     """Best-effort: delete file assets referenced by this conversation's
-    messages (the mock voice clips). Non-fatal."""
+    messages (the mock voice clips) — rows hard-deleted, blobs via the
+    outbox (UP-2; rows used to be dropped while the objects lived on in
+    MinIO forever). Non-fatal."""
     try:
         from app.models.file_asset import FileAsset
+        from app.services.uploads.file_asset_service import enqueue_asset_blob_delete
 
         rows = (
             db.query(ConversationMessage.content_blocks_json)
@@ -411,10 +414,17 @@ def delete_mock_audio_assets(db: Session, conversation_id: str, user_pk: int) ->
                 if isinstance(b, dict) and b.get("file_asset_id"):
                     asset_ids.add(str(b["file_asset_id"]))
         if asset_ids:
-            db.query(FileAsset).filter(
-                FileAsset.id.in_(asset_ids),
-                FileAsset.user_id == user_pk,
-            ).delete(synchronize_session=False)
+            assets = (
+                db.query(FileAsset)
+                .filter(
+                    FileAsset.id.in_(asset_ids),
+                    FileAsset.user_id == user_pk,
+                )
+                .all()
+            )
+            for asset in assets:
+                enqueue_asset_blob_delete(db, asset)
+                db.delete(asset)
     except Exception as exc:  # noqa: BLE001
         logger.warning("mock audio asset cleanup skipped for %s: %s", conversation_id, exc)
 

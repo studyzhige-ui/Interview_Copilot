@@ -71,10 +71,23 @@ def _read_file_sync(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]
             assets = list_user_file_assets(
                 db, user_id=ctx.user_id, purpose=args.purpose or None,
             )
-            upload = assets[0] if assets else None  # most recent (desc order)
+            # Most recent VERIFIED file (desc order) — a dangling
+            # pending_upload row must not shadow the real latest file.
+            upload = next(
+                (a for a in assets if a.upload_status in ("uploaded", "consumed")),
+                None,
+            )
 
         if upload is None:
             return {"error": "No file found", "purpose": args.purpose, "upload_id": args.upload_id}
+        if upload.upload_status not in ("uploaded", "consumed"):
+            # pending_upload = never verified (bytes may not even exist);
+            # failed = rejected by validation; deleted = gone. Serving any
+            # of these would hand the agent unvalidated or phantom content.
+            return {
+                "error": f"File is not readable (status: {upload.upload_status})",
+                "upload_id": upload.id,
+            }
 
         content = _read_upload_content(upload)
         return _paginate(
@@ -118,6 +131,16 @@ def _paginate(content: str, args: ReadFileArgs, base: dict[str, Any]) -> dict[st
 def _read_upload_content(upload) -> str:
     """Read the text content of an uploaded file from storage."""
     storage_uri = upload.storage_uri or ""
+
+    if storage_uri.startswith("local://"):
+        try:
+            from app.core.storage import parse_local_uri
+            path = parse_local_uri(storage_uri)
+            if path.is_file():
+                return path.read_text(encoding="utf-8", errors="replace")
+        except (ValueError, OSError) as exc:
+            logger.warning("Failed to read local URI %s: %s", storage_uri, exc)
+        return "[File content unavailable]"
 
     if storage_uri.startswith("s3://"):
         try:
@@ -171,11 +194,16 @@ def _write_file_sync(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, An
 
         from app.core.storage import upload_file_to_owned_key
         file_obj = io.BytesIO(args.content.encode("utf-8"))
-        upload_file_to_owned_key(
+        actual_uri = upload_file_to_owned_key(
             file_obj,
             upload.object_key,
             content_type=upload.content_type,
         )
+        if actual_uri != upload.storage_uri:
+            # S3 was down and the bytes fell back to local disk — record
+            # where they actually live, or every later read_file fails
+            # against a phantom s3:// URI (UP-8).
+            upload.storage_uri = actual_uri
 
         from app.services.uploads.file_asset_service import mark_file_asset_consumed
         mark_file_asset_consumed(db, upload)

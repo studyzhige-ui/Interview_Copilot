@@ -93,3 +93,53 @@ def sweep_stale_interview_records(self):
     if swept:
         logger.info("sweep_stale_interview_records: swept %d record(s)", swept)
     return {"swept": swept}
+
+
+# A pending_upload row whose client never PUT/confirmed is an orphan: nothing
+# will ever look at it again, but its presigned URL may have been used, so an
+# unreferenced blob can sit in MinIO forever. One day is far beyond any
+# legitimate upload-then-confirm window.
+_ORPHAN_UPLOAD_AFTER = timedelta(hours=24)
+
+
+@celery_app.task(
+    bind=True,
+    name="tasks.sweep_orphan_file_assets",
+    time_limit=120,
+    soft_time_limit=100,
+)
+def sweep_orphan_file_assets(self):
+    """Daily orphan cleanup for the presigned upload flow (UP-3).
+
+    * ``pending_upload`` > 24h: enqueue a blob delete (the client may have
+      PUT bytes without ever confirming) and mark the row ``deleted``.
+    * ``failed`` > 24h: cleanup was already enqueued by ``_fail_asset`` at
+      failure time — just mark the row ``deleted`` for hygiene.
+    """
+    from app.models.file_asset import FileAsset
+    from app.services.uploads.file_asset_service import enqueue_asset_blob_delete
+
+    cutoff = datetime.utcnow() - _ORPHAN_UPLOAD_AFTER
+    swept = 0
+    with SessionLocal() as db:
+        rows = (
+            db.query(FileAsset)
+            .filter(
+                FileAsset.upload_status.in_(("pending_upload", "failed")),
+                FileAsset.updated_at < cutoff,
+                FileAsset.deleted_at.is_(None),
+            )
+            .all()
+        )
+        for asset in rows:
+            if asset.upload_status == "pending_upload":
+                enqueue_asset_blob_delete(db, asset)
+            asset.upload_status = "deleted"
+            asset.deleted_at = datetime.utcnow()
+            asset.updated_at = datetime.utcnow()
+            db.add(asset)
+            swept += 1
+        db.commit()
+    if swept:
+        logger.info("sweep_orphan_file_assets: swept %d asset(s)", swept)
+    return {"swept": swept}

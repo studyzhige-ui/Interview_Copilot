@@ -1,7 +1,6 @@
 import logging
 import os
 import re
-import uuid
 from pathlib import Path
 
 import boto3
@@ -80,15 +79,6 @@ def generate_presigned_upload_url_for_key(
         raise
 
 
-def generate_presigned_upload_url(filename: str, expiration=3600) -> dict:
-    """Deprecated compatibility helper. Prefer generate_presigned_upload_url_for_key."""
-    _, ext = os.path.splitext(filename)
-    if not ext:
-        ext = ".bin"
-    object_key = f"uploads/legacy/{uuid.uuid4().hex}{ext}"
-    return generate_presigned_upload_url_for_key(object_key, expiration=expiration)
-
-
 def download_file_from_s3(s3_uri: str, local_path: str):
     """Download an S3 URI to a local worker path."""
     bucket, key = parse_s3_uri(s3_uri)
@@ -146,6 +136,34 @@ def head_object(storage_uri: str) -> dict | None:
         return None
 
 
+def read_object_head(storage_uri: str, num_bytes: int = 32) -> bytes | None:
+    """Read the first ``num_bytes`` of a stored object, or ``None`` if it
+    doesn't exist / isn't reachable. Used by the confirm/consume-time
+    magic-byte check — 32 bytes covers every signature file_validation
+    recognises. Supports ``s3://`` (ranged GET) and ``local://`` URIs.
+    """
+    if is_local_uri(storage_uri):
+        try:
+            local_path = parse_local_uri(storage_uri)
+        except ValueError:
+            return None
+        if not local_path.is_file():
+            return None
+        try:
+            with open(local_path, "rb") as f:
+                return f.read(num_bytes)
+        except OSError:
+            return None
+    try:
+        bucket, key = parse_s3_uri(storage_uri)
+        resp = s3_client.get_object(
+            Bucket=bucket, Key=key, Range=f"bytes=0-{num_bytes - 1}",
+        )
+        return resp["Body"].read()
+    except (ClientError, BotoCoreError, ValueError):
+        return None
+
+
 def delete_s3_object(storage_uri: str) -> None:
     bucket, key = parse_s3_uri(storage_uri)
     if bucket != settings.S3_BUCKET_NAME:
@@ -153,34 +171,15 @@ def delete_s3_object(storage_uri: str) -> None:
     s3_client.delete_object(Bucket=bucket, Key=key)
 
 
-def upload_file_to_s3(file_obj, filename: str) -> str:
-    """Upload a file object to S3-compatible storage and return its s3:// URI."""
-    _, ext = os.path.splitext(filename)
-    if not ext:
-        ext = ".bin"
-
-    unique_filename = f"uploads/{uuid.uuid4().hex}{ext}"
-
-    try:
-        s3_client.upload_fileobj(
-            file_obj,
-            settings.S3_BUCKET_NAME,
-            unique_filename,
-            ExtraArgs={"ContentType": "application/octet-stream"},
-        )
-        url = f"s3://{settings.S3_BUCKET_NAME}/{unique_filename}"
-        logger.info("Uploaded object to %s", url)
-        return url
-    except ClientError as exc:
-        logger.error("S3 upload failed, falling back to local storage: %s", exc)
-        return _fallback_local_save(file_obj, unique_filename)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("S3 client unavailable, falling back to local storage: %s", exc)
-        return _fallback_local_save(file_obj, unique_filename)
-
-
 def upload_file_to_owned_key(file_obj, object_key: str, content_type: str | None = None) -> str:
-    """Upload a file object to a pre-created owned object key."""
+    """Upload a file object to a pre-created owned object key.
+
+    Returns the URI the bytes actually landed at: ``s3://…`` normally, or a
+    ``local://…`` URI when S3 is unreachable and the write fell back to local
+    disk. Callers MUST persist the returned URI — recording the planned
+    ``s3://`` URI while the bytes sit on local disk makes every later read
+    fail (UP-8).
+    """
     try:
         s3_client.upload_fileobj(
             file_obj,
@@ -197,8 +196,11 @@ def upload_file_to_owned_key(file_obj, object_key: str, content_type: str | None
         return _fallback_local_save(file_obj, object_key)
 
 
-def _fallback_local_save(file_obj, relative_path: str):
-    """Write the upload to local disk when S3 isn't reachable.
+def _fallback_local_save(file_obj, relative_path: str) -> str:
+    """Write the upload to local disk when S3 isn't reachable; return its
+    ``local://`` URI (NOT an absolute path — degraded products used to come
+    in two formats, absolute path here vs ``local://`` from
+    ``save_blob_to_local``, and only the latter is understood by readers).
 
     Hardened against path traversal: even though ``relative_path`` is
     constructed internally by ``build_owned_object_key`` (which sanitises
@@ -227,7 +229,8 @@ def _fallback_local_save(file_obj, relative_path: str):
     file_obj.seek(0)
     with open(full_path, "wb") as f:
         shutil.copyfileobj(file_obj, f)
-    return str(full_path)
+    normalised = str(candidate).replace(os.sep, "/")
+    return f"{LOCAL_URI_PREFIX}{normalised}"
 
 
 # ── local:// URI scheme ─────────────────────────────────────────────────

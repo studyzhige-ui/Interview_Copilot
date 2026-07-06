@@ -114,8 +114,11 @@ def _looks_like_text(body: bytes, max_check: int = 4096) -> bool:
     try:
         sample.decode("utf-8")
         return True
-    except UnicodeDecodeError:
-        return False
+    except UnicodeDecodeError as exc:
+        # A truncated read (e.g. the 32-byte confirm-time head) can cut a
+        # multibyte character at the end — that's not binary, just a short
+        # window. Only a decode error away from the tail means binary.
+        return exc.start >= len(sample) - 3
 
 
 # ── Per-purpose dispatcher ──────────────────────────────────────────────
@@ -150,20 +153,64 @@ def _detect_resume_format(body: bytes, declared_ext: str) -> str | None:
 
 
 # ── Per-purpose size ceilings (bytes) ───────────────────────────────────
-# Enforced in addition to nginx's global ``client_max_body_size``. These
-# are the "business-correct" limits — nginx is a coarser network-layer
-# safety net. Bump these only after considering downstream impact (storage
-# cost, LLM context budget, transcription latency).
+# Enforced in addition to nginx's global ``client_max_body_size`` — nginx
+# is a coarser network-layer safety net. The numbers live in
+# PURPOSE_REGISTRY (single source of truth, UP-5); this maps the direct
+# endpoints' local vocabulary onto the canonical purposes so the two can't
+# drift again (resume used to be 20MB in one table and 10MB in the other).
+
+from app.services.uploads.purpose_registry import PURPOSE_REGISTRY
 
 _SIZE_LIMITS_BYTES: dict[str, int] = {
-    "audio_clip": 25 * 1024 * 1024,        # 25 MB — short mock-interview clips
-    "audio_upload": 500 * 1024 * 1024,     # 500 MB — full interview recordings
-    "resume": 10 * 1024 * 1024,            # 10 MB
-    "jd": 10 * 1024 * 1024,                # 10 MB
+    "audio_clip": PURPOSE_REGISTRY["mock_audio_clip"].max_bytes,
+    "audio_upload": PURPOSE_REGISTRY["interview_audio"].max_bytes,
+    "resume": PURPOSE_REGISTRY["resume"].max_bytes,
+    "jd": PURPOSE_REGISTRY["jd"].max_bytes,
 }
 
 
 Purpose = Literal["audio_clip", "audio_upload", "resume", "jd"]
+
+# ── Image signatures (avatar) ───────────────────────────────────────────
+# Mirrors app.api.auth's avatar magic set so the file-asset confirm step
+# can head-check image uploads with the same rules.
+
+_IMAGE_MAGIC: tuple[tuple[str, bytes], ...] = (
+    ("png", b"\x89PNG\r\n\x1a\n"),
+    ("jpeg", b"\xff\xd8\xff"),
+    ("gif", b"GIF87a"),
+    ("gif", b"GIF89a"),
+)
+
+
+def _detect_image_format(body: bytes) -> str | None:
+    for fmt, prefix in _IMAGE_MAGIC:
+        if body.startswith(prefix):
+            return fmt
+    if _matches_riff_with_subtype(body, b"WEBP"):
+        return "webp"
+    return None
+
+
+def detect_head_format(head: bytes, content_kind: str, declared_ext: str = "") -> str | None:
+    """Magic-detect a 32-byte object head against a PURPOSE_REGISTRY
+    ``content_kind``. Returns the detected format label or ``None``.
+
+    This is the confirm/consume-time gate (UP-6) — the presigned bytes never
+    traverse the API process, so the check runs against a ranged head read
+    from object storage instead of the request body.
+    """
+    if not head:
+        return None
+    if content_kind == "audio":
+        return _detect_audio_format(head)
+    if content_kind == "document":
+        return _detect_resume_format(head, declared_ext.lower())
+    if content_kind == "image":
+        return _detect_image_format(head)
+    if content_kind == "text":
+        return "text" if _looks_like_text(head) else None
+    return None
 
 
 def _detect(body: bytes, purpose: Purpose, declared_ext: str) -> str | None:
@@ -294,4 +341,9 @@ async def validate_upload(
     _ = detected
 
 
-__all__ = ["validate_upload", "validate_upload_stream", "Purpose"]
+__all__ = [
+    "validate_upload",
+    "validate_upload_stream",
+    "detect_head_format",
+    "Purpose",
+]

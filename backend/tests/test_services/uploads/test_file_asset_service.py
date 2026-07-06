@@ -23,12 +23,40 @@ def _stub_presign(monkeypatch):
     monkeypatch.setattr(
         file_asset_service,
         "generate_presigned_upload_url_for_key",
-        lambda object_key, content_type="application/octet-stream": {
+        lambda object_key, content_type="application/octet-stream", expiration=600: {
             "upload_url": f"https://signed.example/{object_key}",
             "storage_uri": f"s3://bucket/{object_key}",
             "object_key": object_key,
         },
     )
+
+
+@pytest.fixture(autouse=True)
+def _stub_head_bytes(monkeypatch):
+    """Confirm now magic-checks the first bytes (UP-6) — default every test
+    to a valid-for-its-purpose head so lifecycle tests stay focused; the
+    magic-specific tests override this per-case."""
+    _PAD = bytes(24)
+    _HEADS = {
+        "audio": b"ID3" + bytes(29),
+        "document": b"%PDF-1.7" + _PAD,
+        "image": bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A]) + _PAD,
+        "text": b"plain text head",
+    }
+
+    def _fake_head(storage_uri, num_bytes=32):
+        # The asset's purpose isn't visible here — tests use purpose-typical
+        # filenames, so key off the extension.
+        uri = (storage_uri or "").lower()
+        if uri.endswith((".mp3", ".wav", ".m4a", ".webm")):
+            return _HEADS["audio"]
+        if uri.endswith((".png", ".jpg", ".jpeg", ".webp")):
+            return _HEADS["image"]
+        if uri.endswith((".pdf", ".docx")):
+            return _HEADS["document"]
+        return _HEADS["text"]
+
+    monkeypatch.setattr(file_asset_service, "read_object_head", _fake_head)
 
 
 def test_create_file_asset_resolves_user_and_returns_url(db_session):
@@ -183,3 +211,126 @@ def test_run_due_outbox_jobs_retries_on_failure(db_session, monkeypatch):
     assert job.status == "failed"  # retryable, not dead yet
     assert job.attempts == 1
     assert "storage down" in job.last_error
+
+
+# ── Phase 2: registry caps + confirm-on-consume + magic gate ────────────
+
+
+def test_create_file_asset_rejects_unknown_purpose(db_session):
+    _make_user(db_session)
+    db_session.commit()
+    with pytest.raises(file_asset_service.UnknownUploadPurpose):
+        file_asset_service.create_file_asset(
+            db_session, user_id="alice", filename="x.bin", purpose="mystery",
+        )
+
+
+def test_create_file_asset_rejects_oversized_declaration(db_session):
+    _make_user(db_session)
+    db_session.commit()
+    with pytest.raises(file_asset_service.UploadTooLarge):
+        file_asset_service.create_file_asset(
+            db_session, user_id="alice", filename="cv.pdf", purpose="resume",
+            size_bytes=21 * 1024 * 1024,  # registry cap: 20MB
+        )
+
+
+def test_confirm_rejects_actual_size_over_cap(db_session, monkeypatch):
+    """UP-4: the declared size is client-controlled — the cap must bind on
+    the ACTUAL stored size (declared small, PUT huge)."""
+    _make_user(db_session)
+    db_session.commit()
+    asset, _ = file_asset_service.create_file_asset(
+        db_session, user_id="alice", filename="cv.pdf", purpose="resume",
+        size_bytes=None,  # nothing declared -> size-reconcile can't catch it
+    )
+    monkeypatch.setattr(
+        file_asset_service, "head_object",
+        lambda uri: {"size_bytes": 21 * 1024 * 1024, "content_type": None},
+    )
+    confirmed = file_asset_service.confirm_file_asset(
+        db_session, file_asset_id=asset.id, user_id="alice",
+    )
+    assert confirmed.upload_status == "failed"
+    assert "limit" in (confirmed.validation_error or "")
+
+
+def test_confirm_rejects_wrong_magic(db_session, monkeypatch):
+    """UP-6: an exe renamed to cv.pdf must fail the head magic check."""
+    _make_user(db_session)
+    db_session.commit()
+    asset, _ = file_asset_service.create_file_asset(
+        db_session, user_id="alice", filename="cv.pdf", purpose="resume",
+        size_bytes=64,
+    )
+    monkeypatch.setattr(
+        file_asset_service, "head_object",
+        lambda uri: {"size_bytes": 64, "content_type": "application/pdf"},
+    )
+    monkeypatch.setattr(
+        file_asset_service, "read_object_head",
+        lambda uri, num_bytes=32: b"MZ" + bytes(30),  # PE executable header
+    )
+    confirmed = file_asset_service.confirm_file_asset(
+        db_session, file_asset_id=asset.id, user_id="alice",
+    )
+    assert confirmed.upload_status == "failed"
+    assert "magic" in (confirmed.validation_error or "")
+    # Cleanup for the rejected object was queued.
+    job = db_session.query(OutboxJob).filter(
+        OutboxJob.job_type == "cleanup_failed_upload",
+        OutboxJob.aggregate_id == asset.id,
+    ).first()
+    assert job is not None
+
+
+def test_ensure_uploaded_verifies_pending_asset(db_session, monkeypatch):
+    """UP-1 confirm-on-consume: consuming without /confirm still verifies."""
+    _make_user(db_session)
+    db_session.commit()
+    asset, _ = file_asset_service.create_file_asset(
+        db_session, user_id="alice", filename="a.mp3", purpose="interview_audio",
+        size_bytes=2048,
+    )
+    monkeypatch.setattr(
+        file_asset_service, "head_object",
+        lambda uri: {"size_bytes": 2048, "content_type": "audio/mpeg"},
+    )
+    out = file_asset_service.ensure_uploaded(db_session, asset)
+    assert out.upload_status == "uploaded"
+    assert out.validation_status == "passed"
+
+
+def test_ensure_uploaded_never_regresses_consumed(db_session, monkeypatch):
+    _make_user(db_session)
+    db_session.commit()
+    asset, _ = file_asset_service.create_file_asset(
+        db_session, user_id="alice", filename="a.mp3", purpose="interview_audio",
+    )
+    asset.upload_status = "consumed"
+    db_session.commit()
+    monkeypatch.setattr(
+        file_asset_service, "head_object",
+        lambda uri: (_ for _ in ()).throw(AssertionError("must not HEAD")),
+    )
+    out = file_asset_service.ensure_uploaded(db_session, asset)
+    assert out.upload_status == "consumed"
+
+
+def test_enqueue_asset_blob_delete_is_idempotent(db_session):
+    """UP-2: one delete_object job per asset, no matter how many delete
+    paths race."""
+    _make_user(db_session)
+    db_session.commit()
+    asset, _ = file_asset_service.create_file_asset(
+        db_session, user_id="alice", filename="a.mp3", purpose="interview_audio",
+    )
+    file_asset_service.enqueue_asset_blob_delete(db_session, asset)
+    file_asset_service.enqueue_asset_blob_delete(db_session, asset)
+    db_session.commit()
+    jobs = db_session.query(OutboxJob).filter(
+        OutboxJob.job_type == "delete_object",
+        OutboxJob.aggregate_id == asset.id,
+    ).all()
+    assert len(jobs) == 1
+    assert json.loads(jobs[0].payload_json)["storage_uri"] == asset.storage_uri

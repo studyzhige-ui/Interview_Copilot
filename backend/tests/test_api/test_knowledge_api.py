@@ -428,7 +428,6 @@ def test_hard_delete_guard_uses_pk_namespaced_prefix(db: Session, monkeypatch):
 
     uid = _uid(db, "alice")
     monkeypatch.setattr(ks, "delete_document_vectors_and_chunks", lambda db, d: None)
-    monkeypatch.setattr(ks, "delete_s3_object", lambda uri: None)
 
     ok = KnowledgeDocument(
         id="kdoc_ok", user_id=uid, file_asset_id="fa_ok", title="r", category="默认",
@@ -439,7 +438,14 @@ def test_hard_delete_guard_uses_pk_namespaced_prefix(db: Session, monkeypatch):
     db.commit()
     monkeypatch.setattr(ks, "parse_s3_uri", lambda uri: ("b", f"uploads/{uid}/fa_ok/r.pdf"))
     ks.hard_delete_knowledge_document(db, ok)  # pk-prefixed key → guard passes
-    assert ok.status == "deleting"
+    # Blob delete rides the outbox now (UP-2) — the job must be queued.
+    from app.models.outbox_job import OutboxJob
+
+    job = db.query(OutboxJob).filter(
+        OutboxJob.job_type == "delete_object",
+        OutboxJob.aggregate_id == "kdoc_ok",
+    ).first()
+    assert job is not None
 
     foreign = KnowledgeDocument(
         id="kdoc_bad", user_id=uid, file_asset_id="fa_bad", title="x", category="c",

@@ -25,6 +25,7 @@ from app.services.interview.interview_record_service import (
     interview_record_service,
 )
 from app.services.uploads.file_asset_service import (
+    ensure_uploaded,
     get_owned_file_asset,
     mark_file_asset_consumed,
 )
@@ -108,6 +109,10 @@ async def resolve_resume_context(
         )
         if resume_upload is None:
             raise ResumeUploadNotFound(resume_file_asset_id)
+        # Confirm-on-consume: never snapshot from an unverified upload.
+        resume_upload = ensure_uploaded(db, resume_upload)
+        if resume_upload.upload_status not in ("uploaded", "consumed"):
+            raise ResumeUploadNotFound(resume_file_asset_id)
         ctx.resume_file_asset_id = resume_upload.id
         ctx.resume_source = "context_upload"
         # extract_text_snapshot downloads + parses (sync I/O + CPU);
@@ -141,6 +146,9 @@ async def resolve_jd_context(
             user_id=user_id, purpose="jd",
         )
         if jd_upload is not None:
+            # Confirm-on-consume; a failed JD upload just means no JD text.
+            jd_upload = ensure_uploaded(db, jd_upload)
+        if jd_upload is not None and jd_upload.upload_status in ("uploaded", "consumed"):
             used_asset_id = jd_upload.id
             try:
                 text = await asyncio.to_thread(

@@ -25,7 +25,9 @@ from app.services.knowledge.document_formats import (
 )
 from app.services.knowledge.knowledge_service import default_title, hard_delete_knowledge_document
 from app.services.uploads.file_asset_service import (
+    UploadTooLarge,
     create_file_asset,
+    ensure_uploaded,
     get_owned_file_asset,
     mark_file_asset_consumed,
 )
@@ -104,15 +106,25 @@ async def create_knowledge_upload_url(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Create an owned knowledge upload and return a presigned upload URL."""
-    upload, url_info = create_file_asset(
-        db,
-        user_id=current_user.username,
-        filename=body.filename,
-        purpose="knowledge_document",
-        content_type=body.content_type,
-        size_bytes=body.size_bytes,
-    )
+    """Create an owned knowledge upload and return a presigned upload URL.
+
+    Size cap comes from PURPOSE_REGISTRY inside ``create_file_asset`` — this
+    entry used to skip the declared-size check the file-assets API ran (UP-4).
+    """
+    try:
+        upload, url_info = create_file_asset(
+            db,
+            user_id=current_user.username,
+            filename=body.filename,
+            purpose="knowledge_document",
+            content_type=body.content_type,
+            size_bytes=body.size_bytes,
+        )
+    except UploadTooLarge as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件过大（上限 {exc.limit_bytes // (1024 * 1024)}MB）",
+        )
     return {
         "status": "success",
         "upload_id": upload.id,
@@ -139,8 +151,16 @@ async def create_knowledge_document(
         )
         if upload is None:
             raise HTTPException(status_code=404, detail="Upload not found")
-        if upload.upload_status not in {"pending_upload", "uploaded"}:
+        if upload.upload_status == "consumed":
             raise HTTPException(status_code=409, detail="Upload has already been consumed")
+        # Confirm-on-consume (UP-1): verification (exists / size cap / magic)
+        # can't be skipped by never calling /confirm.
+        upload = ensure_uploaded(db, upload)
+        if upload.upload_status != "uploaded":
+            raise HTTPException(
+                status_code=400,
+                detail=f"文档校验未通过：{upload.validation_error or '上传未完成'}",
+            )
 
         # Format whitelist (ingestion §4.1.2) — the authoritative gate. The
         # bytes never traverse the API (presigned upload), so this checks the

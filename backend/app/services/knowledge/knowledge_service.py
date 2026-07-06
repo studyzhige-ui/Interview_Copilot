@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
-from app.core.storage import delete_s3_object, parse_s3_uri
+from app.core.storage import parse_s3_uri
 
 logger = logging.getLogger(__name__)
 
@@ -97,17 +97,30 @@ def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> 
             raise ValueError("Refusing to delete knowledge object outside the owned upload prefix")
 
     # Mark deleted FIRST so RAG / list read paths exclude this doc immediately,
-    # even before the (async-ish) chunk + Milvus deletes below complete.
+    # even before the (async-ish) chunk + Milvus deletes below complete. The
+    # blob delete rides the outbox in the SAME transaction (UP-2) — a storage
+    # blip can no longer park the doc in delete_failed, and the object is
+    # retried until it's actually gone.
     document.status = "deleting"
     document.deleted_at = datetime.utcnow()
     document.updated_at = datetime.utcnow()
     db.add(document)
+    if has_object:
+        from app.services.uploads.outbox_service import enqueue_job
+
+        enqueue_job(
+            db,
+            user_pk=document.user_id,
+            job_type="delete_object",
+            aggregate_type="knowledge_document",
+            aggregate_id=document.id,
+            payload={"storage_uri": document.storage_uri},
+            idempotency_key=f"delete_object:kdoc:{document.id}",
+        )
     db.commit()
 
     try:
         delete_document_vectors_and_chunks(db, document)
-        if has_object:
-            delete_s3_object(document.storage_uri)
     except Exception as exc:
         document.status = "delete_failed"
         document.error_message = str(exc)

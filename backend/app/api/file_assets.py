@@ -27,6 +27,8 @@ from app.schemas.file_assets import (
     UploadUrlResponse,
 )
 from app.services.uploads.file_asset_service import (
+    UnknownUploadPurpose,
+    UploadTooLarge,
     confirm_file_asset,
     create_file_asset,
 )
@@ -34,20 +36,6 @@ from app.services.uploads.file_asset_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Allowed upload purposes and their max size (bytes). Persistent business files
-# only — small ephemeral internal blobs do not use this API.
-_PURPOSE_LIMITS: dict[str, int] = {
-    "resume": 20 * 1024 * 1024,
-    "knowledge_document": 50 * 1024 * 1024,
-    "interview_audio": 500 * 1024 * 1024,
-    "jd": 10 * 1024 * 1024,
-    "mock_audio_clip": 25 * 1024 * 1024,
-    # Matches the /me/avatar set-time cap so a too-large image is rejected at
-    # upload-url time rather than after a wasted PUT.
-    "avatar": 1 * 1024 * 1024,
-    "agent_output": 20 * 1024 * 1024,
-}
 
 
 @router.post("/file-assets/upload-url", response_model=UploadUrlResponse)
@@ -59,24 +47,27 @@ def create_upload_url(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Reserve a file asset and return a short-lived presigned PUT URL."""
-    limit = _PURPOSE_LIMITS.get(body.purpose)
-    if limit is None:
+    """Reserve a file asset and return a short-lived presigned PUT URL.
+
+    Purpose whitelist + size cap are enforced inside ``create_file_asset``
+    from PURPOSE_REGISTRY — every upload entry point shares the same rules.
+    """
+    try:
+        asset, url_info = create_file_asset(
+            db,
+            user_id=current_user.username,
+            filename=body.filename,
+            purpose=body.purpose,
+            content_type=body.content_type,
+            size_bytes=body.size_bytes,
+        )
+    except UnknownUploadPurpose:
         raise HTTPException(status_code=400, detail=f"不支持的上传用途：{body.purpose}")
-    if body.size_bytes is not None and body.size_bytes > limit:
+    except UploadTooLarge as exc:
         raise HTTPException(
             status_code=413,
-            detail=f"文件过大（上限 {limit // (1024 * 1024)}MB）",
+            detail=f"文件过大（上限 {exc.limit_bytes // (1024 * 1024)}MB）",
         )
-
-    asset, url_info = create_file_asset(
-        db,
-        user_id=current_user.username,
-        filename=body.filename,
-        purpose=body.purpose,
-        content_type=body.content_type,
-        size_bytes=body.size_bytes,
-    )
     return UploadUrlResponse(
         file_asset_id=asset.id,
         upload_url=url_info["upload_url"],

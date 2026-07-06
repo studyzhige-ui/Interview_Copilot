@@ -64,6 +64,7 @@ celery_app.conf.update(
         "tasks.drain_outbox_jobs": {"queue": "default"},
         # Zombie sweeper: pure DB scan.
         "tasks.sweep_stale_interview_records": {"queue": "default"},
+        "tasks.sweep_orphan_file_assets": {"queue": "default"},
     },
     # ── Reliability ─────────────────────────────────────────────────────
     # Default acks_late=True so a worker crash during a task re-queues the
@@ -126,6 +127,12 @@ celery_app.conf.update(
         "stale-record-sweep": {
             "task": "tasks.sweep_stale_interview_records",
             "schedule": crontab(minute="*/10"),
+        },
+        # Daily orphan-upload cleanup (UP-3) — off-peak, after the memory
+        # dreaming batch.
+        "uploads-sweep-orphans-daily": {
+            "task": "tasks.sweep_orphan_file_assets",
+            "schedule": crontab(hour=4, minute=20),
         },
     },
 )
