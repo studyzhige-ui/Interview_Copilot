@@ -1,8 +1,17 @@
+import logging
+
 from celery import Celery
 from celery.schedules import crontab
 from celery.signals import worker_process_init
 
 from app.core.config import settings
+
+# Workers run with --loglevel=info and Celery hijacks the root logger, so
+# httpx's per-request INFO line ("HTTP Request: GET <full URL> ...") would
+# print Gemini's url-key API key on every nightly catalog refresh. The
+# application already logs redacted fetch errors itself (vendors/base.py
+# _redact); the library's request log adds nothing but the leak.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 celery_app = Celery(

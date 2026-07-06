@@ -224,7 +224,11 @@ def enforce_turn_budget(
         if replacement != content:
             total_size -= size
             total_size += len(replacement)
-            tool_messages[idx] = {**msg, "content": replacement}
+            # Mutate the dict IN PLACE — the caller's ``messages`` list (the
+            # actual LLM context) holds references to these same dicts, so
+            # replacing the list slot with a copy would leave the oversized
+            # content in context and make this whole pass a no-op.
+            msg["content"] = replacement
             logger.info(
                 "Budget enforcement: persisted tool result %s (%d chars)",
                 tool_call_id, size,
