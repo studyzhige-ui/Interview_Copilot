@@ -20,7 +20,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.memory_ability_state import MASTERY_LEVELS, SKILL_TYPES
-from app.services.memory import memory_ability_state_service, memory_document_service
+from app.services.memory import _metrics, memory_ability_state_service, memory_document_service
 
 logger = logging.getLogger(__name__)
 
@@ -70,17 +70,53 @@ def dispatch_memory_patches(
     any_attempt = False
     any_success = False
 
-    # ── ability_state upserts ──
+    # ── ability_state upserts (+ dreaming-only archive op, MEM-9) ──
     if ability_items:
         any_attempt = True
         applied = 0
         for item in ability_items:
             topic = str(item.get("topic") or "").strip()
             skill_type = str(item.get("skill_type") or "").strip()
+            op = str(item.get("op") or "").strip().lower()
+
+            if op == "archive":
+                # Retirement is a synthesis-level judgement — only the
+                # dreaming channel may shrink the ledger; a single
+                # conversation must not erase an ability.
+                if change_type != "patch_dreaming" or not topic or skill_type not in SKILL_TYPES:
+                    result.dropped += 1
+                    _metrics.incr(
+                        "memory.patch_dropped", target="ability_state",
+                        reason="archive_not_allowed", change_type=change_type,
+                    )
+                    continue
+                try:
+                    ok = memory_ability_state_service.archive_by_key(
+                        user_id, topic=topic, skill_type=skill_type,
+                        change_type=change_type,
+                        source_interview_record_id=source_interview_record_id,
+                        db=db,
+                    )
+                except Exception:
+                    if db is not None:
+                        raise
+                    result.dropped += 1
+                    continue
+                if ok:
+                    applied += 1
+                    any_success = True
+                else:
+                    result.skipped += 1
+                continue
+
             mastery_level = str(item.get("mastery_level") or "").strip()
             summary = item.get("summary")
             if not topic or skill_type not in SKILL_TYPES or mastery_level not in MASTERY_LEVELS:
                 result.dropped += 1
+                _metrics.incr(
+                    "memory.patch_dropped", target="ability_state",
+                    reason="invalid_fields", change_type=change_type,
+                )
                 continue
             try:
                 row = memory_ability_state_service.upsert(
@@ -110,6 +146,10 @@ def dispatch_memory_patches(
                     user_id, topic, exc,
                 )
                 result.dropped += 1
+                _metrics.incr(
+                    "memory.patch_dropped", target="ability_state",
+                    reason="upsert_error", change_type=change_type,
+                )
         result.applied += applied
         result.by_target["ability_state"] = applied
 
@@ -147,6 +187,16 @@ def dispatch_memory_patches(
             "dispatch: user=%s applied=%d dropped=%d skipped=%d by=%s",
             user_id, result.applied, result.dropped, result.skipped, result.by_target,
         )
+        # The applied/dropped curves (MEM-7) — extraction quality is now a
+        # grep away instead of an INFO-log archaeology dig.
+        if result.applied:
+            _metrics.incr(
+                "memory.patch_applied", value=result.applied, change_type=change_type,
+            )
+        if result.dropped:
+            _metrics.incr(
+                "memory.patch_dropped_total", value=result.dropped, change_type=change_type,
+            )
     return result
 
 

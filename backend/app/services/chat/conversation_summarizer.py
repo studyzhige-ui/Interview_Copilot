@@ -1,15 +1,12 @@
-"""Conversation summary compaction — shared LLM summarization core.
+"""Conversation-summary core (moved from app/services/memory/compaction_service).
 
-Provides ``summarize_conversation(old_summary, conversation)`` which is
-called by BOTH:
-  - L1 assembly-time trigger (``ContextAssemblyPipeline._maybe_compact``)
-  - L2 loop-time trigger (``QueryLoopCompactor.autocompact``)
-
-One function, two call sites, one 6-section structured summary.
-
-The assembly-time trigger logic (threshold detection + cursor advancement)
-lives in ``context_assembly_pipeline.py``; this module is a pure tool.
+This has NOTHING to do with memory-doc compaction — it iteratively folds
+old chat turns into a session summary for context assembly (L1) and the
+agent loop's autocompact (L2). It lived in the memory package under the
+name "compaction_service", which collided conceptually with the memory
+domain's doc-size compaction (MEM-5) — hence the move to the chat domain.
 """
+
 
 import logging
 

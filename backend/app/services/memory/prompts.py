@@ -201,6 +201,12 @@ JSON 数组，元素带 `target` 字段（与实时抽取同一协议）：
 - `target`：ability_state / user_profile / learning_strategy。
 - ability_state：topic + skill_type(knowledge_topic/system_design/behavioral/communication/project_deep_dive) + mastery_level(weak/improving/stable/strong) + summary 全部必填。
 - user_profile / learning_strategy：markdown 行补丁（op/section/match_line/new_line）。
+- **退役能力条目**（仅 dreaming 有此权限）：当某条目明显过时——尤其是标注了
+  「距上次证据 N 天」且 N 很大、内容已被新条目覆盖、或用户已不再涉及该方向——
+  输出 `{{"target": "ability_state", "op": "archive", "topic": "...", "skill_type": "..."}}`
+  将其归档。能力账本应该随用户成长呼吸，不是只增不减的清单。
+- 对于「距上次证据」很久的 weak 条目：若本次记录提供了新证据，正常 upsert 刷新；
+  若毫无新证据且已超过约 60 天，考虑 archive 或在 summary 里标注陈旧。
 
 **优先 update / upsert，不要重复 add。** 没有强信号就输出 `[]`。
 
@@ -208,7 +214,32 @@ JSON 数组，元素带 `target` 字段（与实时抽取同一协议）：
 """
 
 
+# ══════════════════════════════════════════════════════════════════════
+# Memory-doc compaction rewrite (MEM-5)
+# ══════════════════════════════════════════════════════════════════════
+# Fired by the dreaming worker when a doc exceeds the size ceiling. Full
+# before/after lands in the audit trail (change_type=compaction_rewrite),
+# so an over-aggressive rewrite is revertible.
+
+DOC_COMPACT_PROMPT = """[硬性约束] 全部输出使用简体中文。
+
+下面是一位用户的「{doc_label}」记忆文档，它已经超过了大小上限（当前 {line_count} 行 / {char_count} 字符）。
+请把它**压缩重写**为一份不超过 {max_lines} 行的精炼版本：
+
+规则：
+1. 保留所有仍然有效的事实与偏好；合并同义/重复的条目；删除明显过时或已被后文覆盖的内容。
+2. 保持原有的 markdown 结构风格（## 小节 + 列表行）。
+3. 不要发明原文没有的信息；不确定是否过时的内容保守保留。
+4. 输出**只有重写后的文档全文**，不要任何解释。
+
+═════════ 原文 ═════════
+{body}
+
+重写后的文档：
+"""
+
 __all__ = [
     "REALTIME_EXTRACTION_PROMPT",
     "DREAMING_PROMPT",
+    "DOC_COMPACT_PROMPT",
 ]

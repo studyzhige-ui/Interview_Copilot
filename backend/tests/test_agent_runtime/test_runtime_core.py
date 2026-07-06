@@ -405,9 +405,9 @@ def test_autocompact_summarizes_body_keeps_head_and_tail(monkeypatch):
             return _StubResponse()
 
     import sys
-    import app.services.memory.compaction_service  # noqa: F401
+    import app.services.chat.conversation_summarizer  # noqa: F401
     monkeypatch.setattr(
-        sys.modules["app.services.memory.compaction_service"],
+        sys.modules["app.services.chat.conversation_summarizer"],
         "get_llm_for_role",
         lambda role, user_id=None: _StubLLM(),
     )

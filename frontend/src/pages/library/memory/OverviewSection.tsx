@@ -1,7 +1,7 @@
 /** 概览 — overview snapshot of all four v3 doc types. */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Brain, FileText, BookOpen, Compass, Target, RefreshCw, ChevronRight,
+  Brain, FileText, Compass, Target, RefreshCw, ChevronRight,
 } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { getMemoryOverview } from '@/api/memory';
@@ -22,9 +22,8 @@ export function OverviewSection({ switchTo }: { switchTo: (s: SubTab) => void })
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['memory', 'overview'] });
 
   const empty = !data.user_profile_body.trim()
-    && data.knowledge_topics.length === 0
-    && !data.strategy_body.trim()
-    && !data.habit_body.trim();
+    && data.ability_states.length === 0
+    && !data.learning_strategy_body.trim();
 
   if (empty) {
     return (
@@ -50,26 +49,26 @@ export function OverviewSection({ switchTo }: { switchTo: (s: SubTab) => void })
       </OverviewCard>
 
       <OverviewCard
-        icon={<BookOpen size={14} />}
-        title="知识点"
-        subtitle={`${data.knowledge_topics.length} 个主题`}
-        empty={data.knowledge_topics.length === 0}
-        emptyHint="对话中讨论过的技术主题会自动建档"
-        onOpen={() => switchTo('knowledge')}
+        icon={<Target size={14} />}
+        title="能力状态"
+        subtitle={`${data.ability_states.length} 个主题`}
+        empty={data.ability_states.length === 0}
+        emptyHint="复盘与模拟面试中的表现会自动沉淀成能力账本"
+        onOpen={() => switchTo('abilities')}
       >
         <div className="space-y-1.5">
-          {data.knowledge_topics.slice(0, 6).map((t) => (
-            <div key={t.topic} className="flex items-center gap-2 text-[13px]">
-              <span className="font-medium text-stone-800 truncate">{t.topic}</span>
-              <MasteryDot level={t.mastery_level} />
+          {data.ability_states.slice(0, 6).map((s) => (
+            <div key={s.id} className="flex items-center gap-2 text-[13px]">
+              <span className="font-medium text-stone-800 truncate">{s.topic}</span>
+              <MasteryDot level={s.mastery_level} />
               <span className="text-[11px] text-stone-400 ml-auto shrink-0">
-                {t.fact_count} 条
+                {s.skill_type}
               </span>
             </div>
           ))}
-          {data.knowledge_topics.length > 6 && (
+          {data.ability_states.length > 6 && (
             <div className="text-[11px] text-stone-400 pt-1">
-              … 还有 {data.knowledge_topics.length - 6} 个
+              … 还有 {data.ability_states.length - 6} 个
             </div>
           )}
         </div>
@@ -77,24 +76,13 @@ export function OverviewSection({ switchTo }: { switchTo: (s: SubTab) => void })
 
       <OverviewCard
         icon={<Compass size={14} />}
-        title="策略"
+        title="学习策略"
         subtitle="cross-topic answering methodology"
-        empty={!data.strategy_body.trim()}
+        empty={!data.learning_strategy_body.trim()}
         emptyHint="对话中验证有效的方法论会沉淀到这里"
         onOpen={() => switchTo('strategy')}
       >
-        <PreviewBody body={data.strategy_body} />
-      </OverviewCard>
-
-      <OverviewCard
-        icon={<Target size={14} />}
-        title="习惯"
-        subtitle="stable practice & mindset"
-        empty={!data.habit_body.trim()}
-        emptyHint="稳定的练习节奏 / 心态会沉淀到这里"
-        onOpen={() => switchTo('habit')}
-      >
-        <PreviewBody body={data.habit_body} />
+        <PreviewBody body={data.learning_strategy_body} />
       </OverviewCard>
 
       <div className="lg:col-span-2 flex items-center justify-end">

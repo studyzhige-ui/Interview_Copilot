@@ -169,6 +169,21 @@ def _resp(text):
     return r
 
 
+@pytest.fixture(autouse=True)
+def _no_lock(monkeypatch):
+    """These tests exercise extraction logic, not locking. The raise-mode
+    lock (MEM-6) would abort on a missing local Redis — stub it out."""
+    import contextlib
+
+    from app.services.memory import realtime_extraction as rt
+
+    @contextlib.contextmanager
+    def _noop(user_id, **kwargs):
+        yield
+
+    monkeypatch.setattr(rt, "user_memory_lock_sync", _noop)
+
+
 def test_realtime_superseded_is_noop(mem_maker, monkeypatch):
     """If the cursor already passed upto_seq (a later job ran first), the pass
     is a no-op: no LLM call, cursor untouched."""

@@ -2,12 +2,12 @@
 import { Spinner } from '@/components/ui/Spinner';
 import type { MasteryLevel } from '@/types/api';
 
-export type SubTab = 'overview' | 'profile' | 'knowledge' | 'strategy' | 'habit' | 'audit';
+export type SubTab = 'overview' | 'profile' | 'abilities' | 'strategy' | 'audit';
 
 export function MasteryDot({ level }: { level: MasteryLevel | null }) {
   const tone =
     level === 'strong'      ? 'bg-success-500'
-    : level === 'progressing' ? 'bg-primary-400'
+    : level === 'improving' ? 'bg-primary-400'
     : level === 'weak'        ? 'bg-warning-500'
     : 'bg-stone-300';
   // null (no row in DB) vs 'unknown' (explicit "I don't know yet") are

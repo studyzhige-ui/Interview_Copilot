@@ -228,13 +228,18 @@ def test_ability_list_by_mastery(seeded):
     from app.services.memory import memory_ability_state_service as svc
     svc.upsert("alice", topic="A", skill_type="behavioral", mastery_level="weak",
                summary="s", change_type="patch_realtime")
+    # NB: dreaming channel — realtime can no longer mint ``strong``
+    # directly (MEM-4 discipline; see test_mastery_discipline_*).
     svc.upsert("alice", topic="B", skill_type="behavioral", mastery_level="strong",
-               summary="s", change_type="patch_realtime")
+               summary="s", change_type="patch_dreaming")
     weak = svc.list_by_mastery("alice", ("weak", "improving"))
     assert [r.topic for r in weak] == ["A"]
 
 
 def test_ability_archive_then_reupsert_makes_new_active_row(seeded):
+    """MEM-2: after a user archive, AUTOMATIC channels are tombstoned for 30
+    days (the deleted memory must not resurrect); the user's own channel
+    can still re-create immediately."""
     from app.services.memory import memory_ability_state_service as svc
     from app.models.memory_ability_state import MemoryAbilityState
 
@@ -243,9 +248,18 @@ def test_ability_archive_then_reupsert_makes_new_active_row(seeded):
     assert svc.archive("alice", topic="TCP", skill_type="knowledge_topic") is True
     assert svc.load_active("alice") == []
 
-    # Re-upsert after archive: a fresh active row (archived one stays as history).
+    # Automatic channel blocked by the tombstone.
+    blocked = svc.upsert(
+        "alice", topic="TCP", skill_type="knowledge_topic",
+        mastery_level="improving", summary="回魂", change_type="patch_realtime",
+    )
+    assert blocked is None
+    assert svc.load_active("alice") == []
+
+    # The user's own channel re-creates immediately (fresh active row;
+    # the archived one stays as history).
     svc.upsert("alice", topic="TCP", skill_type="knowledge_topic", mastery_level="improving",
-               summary="s2", change_type="patch_realtime")
+               summary="s2", change_type="user_edit")
     assert len(svc.load_active("alice")) == 1
 
     s = seeded()

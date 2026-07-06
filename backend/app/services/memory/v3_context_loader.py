@@ -62,10 +62,13 @@ class V3MemoryContext:
             lines = []
             for s in self.ability_states:
                 mastery = _MASTERY_LABELS.get(s.get("mastery_level", ""), s.get("mastery_level", "?"))
-                lines.append(
+                line = (
                     f"- [{s.get('topic', '')}] {mastery} ({s.get('skill_type', '')})"
                     f" — {s.get('summary', '') or ''}"
                 )
+                if s.get("stale_days"):
+                    line += f"（距上次证据 {s['stale_days']} 天，参考价值打折）"
+                lines.append(line)
             parts.append("\n".join(lines))
 
         # Strategy: prefer the full body when loaded, else the one-liner.
@@ -84,14 +87,33 @@ class V3MemoryContext:
 
 
 def _ability_states_to_dicts(states) -> list[dict]:
+    """Cap at ``_MAX_ABILITIES`` with TIERED priority (MEM-8): weak and
+    improving states all survive the cut — they're what the question
+    engine exists for; a flat updated_at-desc cut used to squeeze out
+    exactly the long-standing weaknesses. Also annotates evidence age
+    (MEM-1) so the LLM can discount three-month-old judgements.
+    """
+    from datetime import datetime
+
+    def _stale_days(s) -> int | None:
+        ts = getattr(s, "last_evidence_at", None)
+        if ts is None:
+            return None
+        days = (datetime.utcnow() - ts).days
+        return days if days >= 14 else None
+
+    growth = [s for s in states if s.mastery_level in ("weak", "improving")]
+    settled = [s for s in states if s.mastery_level not in ("weak", "improving")]
+    picked = (growth + settled)[:_MAX_ABILITIES]
     return [
         {
             "topic": s.topic,
             "skill_type": s.skill_type,
             "mastery_level": s.mastery_level,
             "summary": s.summary or "",
+            **({"stale_days": d} if (d := _stale_days(s)) else {}),
         }
-        for s in states[:_MAX_ABILITIES]
+        for s in picked
     ]
 
 

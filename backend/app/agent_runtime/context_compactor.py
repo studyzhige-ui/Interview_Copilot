@@ -213,7 +213,7 @@ class QueryLoopCompactor:
             f"{m.get('role', '?')}: {_message_text(m)}" for m in to_summarize
         )
 
-        from app.services.memory.compaction_service import summarize_conversation
+        from app.services.chat.conversation_summarizer import summarize_conversation
 
         summary = await summarize_conversation("", conversation, user_id=self.user_id)
         if not summary:

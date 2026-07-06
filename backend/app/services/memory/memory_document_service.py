@@ -242,8 +242,50 @@ def _apply_inner(
     return result
 
 
-def upsert_user_edit(username: str, doc_type: str, new_body: str) -> str:
-    """Persist a user-edited body verbatim. Returns the stored body."""
+class StaleDocumentEdit(ValueError):
+    """The doc changed since the client loaded it (MEM-3): an edit window
+    can span minutes, during which realtime extraction may write — a blind
+    overwrite would silently erase those lines."""
+
+
+def load_with_meta(username: str, doc_type: str, *, db: Session | None = None) -> dict:
+    """``{body, updated_at}`` — updated_at is the optimistic-concurrency
+    token the edit UI must echo back (ISO string, None for a missing doc)."""
+    _validate_doc_type(doc_type)
+    own_db = db is None
+    if own_db:
+        db = SessionLocal()
+    try:
+        user_pk = resolve_user_pk(db, username)
+        if user_pk is None:
+            return {"body": "", "updated_at": None}
+        row = (
+            db.query(MemoryDocument)
+            .filter(MemoryDocument.user_id == user_pk, MemoryDocument.doc_type == doc_type)
+            .first()
+        )
+        if row is None:
+            return {"body": "", "updated_at": None}
+        return {
+            "body": row.body or "",
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+    finally:
+        if own_db:
+            db.close()
+
+
+def upsert_user_edit(
+    username: str, doc_type: str, new_body: str,
+    *, base_updated_at: str | None = None,
+) -> str:
+    """Persist a user-edited body verbatim. Returns the stored body.
+
+    ``base_updated_at`` (MEM-3): the updated_at the client loaded with.
+    A mismatch raises :class:`StaleDocumentEdit` (API → 409) instead of
+    silently erasing whatever realtime extraction wrote in between.
+    Omitted → legacy unconditional overwrite.
+    """
     _validate_doc_type(doc_type)
     db: Session = SessionLocal()
     try:
@@ -255,6 +297,12 @@ def upsert_user_edit(username: str, doc_type: str, new_body: str) -> str:
             .filter(MemoryDocument.user_id == user_pk, MemoryDocument.doc_type == doc_type)
             .first()
         )
+        if base_updated_at and row is not None and row.updated_at is not None:
+            if row.updated_at.isoformat() != base_updated_at:
+                raise StaleDocumentEdit(
+                    f"{doc_type} changed at {row.updated_at.isoformat()}, "
+                    f"edit based on {base_updated_at}"
+                )
         was_new = row is None
         before_body = (row.body if row else "") or ""
         body = (new_body or "").strip("\n")
@@ -284,4 +332,106 @@ def upsert_user_edit(username: str, doc_type: str, new_body: str) -> str:
         db.close()
 
 
-__all__ = ["load", "load_description", "apply_patches", "upsert_user_edit", "UnknownUser"]
+# ── Size-ceiling compaction (MEM-5) ─────────────────────────────────────
+# The docs are injected into every chat turn; unbounded growth makes every
+# turn more expensive AND lowers the patch protocol's exact-line match rate
+# (a vicious cycle — misses become appends, appends grow the doc). The
+# dreaming worker calls this after its dispatch; the rewrite lands in the
+# audit trail with full before/after (change_type=compaction_rewrite).
+
+DOC_MAX_LINES = 100
+DOC_MAX_CHARS = 6000
+
+
+def compact_if_oversized(username: str, doc_type: str, *, user_id_for_llm: str | None = None) -> bool:
+    """LLM-rewrite ``doc_type`` when it exceeds the size ceiling.
+
+    Returns True iff a rewrite was applied. Sync (dreaming worker context);
+    never raises — a failed compaction just leaves the doc as-is for the
+    next pass.
+    """
+    _validate_doc_type(doc_type)
+    try:
+        current = load(username, doc_type)
+        lines = [ln for ln in (current or "").split("\n")]
+        if len(lines) <= DOC_MAX_LINES and len(current or "") <= DOC_MAX_CHARS:
+            return False
+
+        from app.core.llm_client_factory import get_llm_for_role
+        from app.services.memory.prompts import DOC_COMPACT_PROMPT
+        from app.worker.tasks import run_async
+
+        labels = {"user_profile": "用户画像", "learning_strategy": "学习策略"}
+        prompt = DOC_COMPACT_PROMPT.format(
+            doc_label=labels.get(doc_type, doc_type),
+            line_count=len(lines),
+            char_count=len(current),
+            max_lines=DOC_MAX_LINES // 2,
+            body=current,
+        )
+        response = run_async(
+            get_llm_for_role("utility", user_id=user_id_for_llm or username).acomplete(prompt)
+        )
+        new_body = str(response.text).strip()
+        # Sanity floor: an empty/absurdly small rewrite of a large doc is a
+        # model failure, not a compaction — keep the original.
+        if not new_body or len(new_body) < min(200, len(current) // 10):
+            logger.warning(
+                "doc compaction rejected (suspiciously small) user=%s doc=%s",
+                username, doc_type,
+            )
+            return False
+
+        db: Session = SessionLocal()
+        try:
+            user_pk = resolve_user_pk(db, username)
+            if user_pk is None:
+                return False
+            row = (
+                db.query(MemoryDocument)
+                .filter(MemoryDocument.user_id == user_pk, MemoryDocument.doc_type == doc_type)
+                .first()
+            )
+            if row is None:
+                return False
+            before_body = row.body or ""
+            row.body = new_body
+            row.one_liner = _derive_one_liner(new_body)
+            row.updated_at = datetime.utcnow()
+            db.add(row)
+            _memory_audit.record(
+                user_pk=user_pk,
+                change_type="compaction_rewrite",
+                doc_type=doc_type,
+                memory_document_id=row.id,
+                before_body=before_body,
+                after_body=new_body,
+                summary=f"size-ceiling compaction: {len(before_body)} → {len(new_body)} chars",
+                db=db,
+            )
+            db.commit()
+            logger.info(
+                "doc compaction applied user=%s doc=%s %d→%d chars",
+                username, doc_type, len(before_body), len(new_body),
+            )
+            return True
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+    except Exception as exc:  # noqa: BLE001 — best-effort by contract
+        logger.warning("doc compaction failed user=%s doc=%s: %s", username, doc_type, exc)
+        return False
+
+
+__all__ = [
+    "load",
+    "load_with_meta",
+    "load_description",
+    "apply_patches",
+    "upsert_user_edit",
+    "compact_if_oversized",
+    "StaleDocumentEdit",
+    "UnknownUser",
+]

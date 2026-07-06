@@ -70,8 +70,9 @@ from app.models.interview_record import InterviewRecord
 from app.models.user import User
 from app.services.memory import memory_ability_state_service, memory_document_service
 from app.services.memory._dispatch import dispatch_memory_patches
-from app.services.memory._extraction_common import format_ability_index, parse_json_patches
-from app.services.memory._user_memory_lock import user_memory_lock_sync
+from app.services.memory import _metrics
+from app.services.memory._extraction_common import format_ability_index, parse_json_patches_ex
+from app.services.memory._user_memory_lock import LockNotAcquired, user_memory_lock_sync
 from app.services.memory.prompts import DREAMING_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,11 @@ USER_MIN_HOURS_SINCE_LAST_DREAM = 24
 # anything new, so we save the budget for an active user. Messages are the
 # sole gate signal now (the old session-count branch was dropped — a session
 # with no debrief turns produces no work for the dreamer).
-NEW_MESSAGES_THRESHOLD = 50
+# 15, not 50 (MEM-9): at 50 a light user's cross-session growth tracking
+# triggered every 3-4 weeks — i.e. effectively never. The event-driven
+# hook (analysis completion → delayed dream check) is the primary path;
+# this volume gate is the nightly-scan backstop.
+NEW_MESSAGES_THRESHOLD = 15
 
 # Per-record gate — a record's last chat message must be at least this
 # old before dreaming considers it. Avoids dreaming a record while the
@@ -321,7 +326,18 @@ def dream_for_record(record_id: str) -> dict[str, Any]:
     finally:
         db.close()
 
-    with user_memory_lock_sync(user_id):
+    try:
+        return _dream_for_record_locked(record_id, user_id, summary)
+    except LockNotAcquired as exc:
+        logger.warning("dreaming: lock not acquired user=%s: %s", user_id, exc)
+        summary["error"] = "lock_not_acquired"
+        return summary
+
+
+def _dream_for_record_locked(
+    record_id: str, user_id: str, summary: dict[str, Any],
+) -> dict[str, Any]:
+    with user_memory_lock_sync(user_id, on_timeout="raise"):
         # Re-check inside the lock. Under Path B's single nightly cron
         # there's no "another worker" in normal operation, but the
         # re-check is defensive against operator-triggered ad-hoc
@@ -372,7 +388,13 @@ def dream_for_record(record_id: str) -> dict[str, Any]:
                     prompt,
                     response_format={"type": "json_object"},
                 ))
-                patches = parse_json_patches(str(response.text))
+                patches, parse_ok = parse_json_patches_ex(str(response.text))
+                if not parse_ok:
+                    # Do NOT bump last_dreamed_at — the record stays
+                    # eligible and the next scan retries it (MEM-7).
+                    _metrics.incr("memory.extraction_parse_failed", source="dreaming")
+                    summary["error"] = "parse_failed"
+                    return summary
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "dreaming: LLM call failed record=%s user=%s: %s",
@@ -403,6 +425,14 @@ def dream_for_record(record_id: str) -> dict[str, Any]:
             # repeatedly process a quiet record.
             record.last_dreamed_at = datetime.utcnow()
             db.commit()
+
+            # Size-ceiling compaction (MEM-5): dreaming is the natural
+            # low-frequency moment to rewrite an oversized doc. Own
+            # sessions + best-effort — still under this user's lock.
+            for _doc_type in ("user_profile", "learning_strategy"):
+                memory_document_service.compact_if_oversized(
+                    user_id, _doc_type, user_id_for_llm=user_id,
+                )
         except Exception as exc:  # noqa: BLE001
             db.rollback()
             logger.exception(

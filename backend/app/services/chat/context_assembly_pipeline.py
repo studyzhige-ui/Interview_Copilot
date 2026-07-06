@@ -392,7 +392,7 @@ class ContextAssemblyPipeline:
             f"{m['role']}: {m['content']}" for m in to_compress
         )
 
-        from app.services.memory.compaction_service import summarize_conversation
+        from app.services.chat.conversation_summarizer import summarize_conversation
 
         # NB: meta["user_id"] is the integer pk — the summarizer needs the
         # username principal, threaded from the engine (dual-review fix).

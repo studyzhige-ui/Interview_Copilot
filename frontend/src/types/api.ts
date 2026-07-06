@@ -306,30 +306,20 @@ export interface AnalyzeDispatchResp {
 // (user_profile, knowledge, strategy, habit) replace the retired
 // ``memory_items`` table.
 
-export type MasteryLevel = 'weak' | 'progressing' | 'strong' | 'unknown';
-
-export interface KnowledgeTopicSummary {
-  topic: string;
-  one_liner: string | null;
-  mastery_level: MasteryLevel | null;
-  /** Number of bullet-list "- ..." lines in the body. Use as a
-   *  "richness" hint when listing topics. */
-  fact_count: number;
-  last_discussed_at: string | null;
-  updated_at: string | null;
-}
-
-export interface KnowledgeTopicDetail extends KnowledgeTopicSummary {
-  body: string;
-  created_at: string | null;
-}
+export type MasteryLevel = 'weak' | 'improving' | 'stable' | 'strong';
 
 export interface MemoryOverviewResp {
-  /** User profile doc body (markdown). Empty string when not yet seeded. */
   user_profile_body: string;
-  knowledge_topics: KnowledgeTopicSummary[];
-  strategy_body: string;
-  habit_body: string;
+  learning_strategy_body: string;
+  ability_states: {
+    id: string;
+    topic: string;
+    skill_type: string;
+    mastery_level: 'weak' | 'improving' | 'stable' | 'strong';
+    summary: string;
+    last_evidence_at: string | null;
+    updated_at: string | null;
+  }[];
 }
 
 export type MemoryDocType = 'user_profile' | 'knowledge' | 'strategy' | 'habit';

@@ -1,28 +1,25 @@
 /**
  * Memory tab — v3 architecture browser inside the Library page.
  *
- * Replaces the retired ``memory_items`` browser. Six sub-areas, one file
- * per section under this directory:
+ * Five sub-areas matching the REAL v3 stores (the previous 知识点/习惯
+ * tabs called doc types retired with the v3 migration and 404'd):
  *
- *   概览      — OverviewSection: snapshot of all four v3 doc types
- *   个人资料  — ProfileSection: user_profile_doc body (read-only)
- *   知识点    — KnowledgeSection: knowledge_doc topics + view / edit / delete
- *   策略      — SingleDocSection kind="strategy"
- *   习惯      — SingleDocSection kind="habit"
+ *   概览      — OverviewSection: user_profile + ability states + strategy
+ *   用户画像  — SingleDocSection kind="profile" (editable, optimistic lock)
+ *   能力状态  — AbilityStatesSection: the structured ledger + user veto
+ *   学习策略  — SingleDocSection kind="strategy" (editable, optimistic lock)
  *   审计      — AuditSection: memory_audit_log list + before/after detail
  *
  * Edits go through ``PUT /memory/{doc}`` which holds the per-user
- * memory-lock server-side, so user-edits serialise with realtime
- * extraction and dreaming writers. Data fetching is React Query
- * (keys under ['memory', ...]); mutations invalidate their keys.
+ * memory-lock server-side AND carries the optimistic-concurrency token
+ * (MEM-3), so user edits can't silently erase background extraction.
  */
 import { useState } from 'react';
 import {
-  Brain, FileText, BookOpen, Compass, Target, History,
+  Brain, FileText, Compass, Target, History,
 } from 'lucide-react';
 import { OverviewSection } from './OverviewSection';
-import { ProfileSection } from './ProfileSection';
-import { KnowledgeSection } from './KnowledgeSection';
+import { AbilityStatesSection } from './AbilityStatesSection';
 import { SingleDocSection } from './SingleDocSection';
 import { AuditSection } from './AuditSection';
 import type { SubTab } from './shared';
@@ -35,10 +32,9 @@ interface SubTabDef {
 
 const SUB_TABS: SubTabDef[] = [
   { id: 'overview',  label: '概览',     icon: Brain },
-  { id: 'profile',   label: '个人资料', icon: FileText },
-  { id: 'knowledge', label: '知识点',   icon: BookOpen },
-  { id: 'strategy',  label: '策略',     icon: Compass },
-  { id: 'habit',     label: '习惯',     icon: Target },
+  { id: 'profile',   label: '用户画像', icon: FileText },
+  { id: 'abilities', label: '能力状态', icon: Target },
+  { id: 'strategy',  label: '学习策略', icon: Compass },
   { id: 'audit',     label: '审计',     icon: History },
 ];
 
@@ -65,10 +61,9 @@ export function MemoryTab() {
       </div>
       <div className="p-5">
         {sub === 'overview'  && <OverviewSection switchTo={setSub} />}
-        {sub === 'profile'   && <ProfileSection />}
-        {sub === 'knowledge' && <KnowledgeSection />}
+        {sub === 'profile'   && <SingleDocSection kind="profile" />}
+        {sub === 'abilities' && <AbilityStatesSection />}
         {sub === 'strategy'  && <SingleDocSection kind="strategy" />}
-        {sub === 'habit'     && <SingleDocSection kind="habit" />}
         {sub === 'audit'     && <AuditSection />}
       </div>
     </div>

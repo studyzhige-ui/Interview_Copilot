@@ -34,7 +34,12 @@ from sqlalchemy import (
 from app.db.database import Base
 
 # Valid change provenances.
-CHANGE_TYPES = ("patch_realtime", "patch_dreaming", "user_edit", "user_delete")
+# compaction_rewrite: the dreaming-time full-doc size compaction (MEM-5) —
+# audited with full before/after so an over-aggressive rewrite is revertible.
+CHANGE_TYPES = (
+    "patch_realtime", "patch_dreaming", "user_edit", "user_delete",
+    "compaction_rewrite",
+)
 
 
 def generate_audit_id() -> str:

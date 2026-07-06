@@ -29,7 +29,11 @@ from app.models.chat import Conversation
 from app.core.llm_client_factory import get_llm_for_role
 from app.services.memory import memory_ability_state_service, memory_document_service
 from app.services.memory._dispatch import dispatch_memory_patches
-from app.services.memory._extraction_common import format_ability_index, parse_json_patches
+from app.services.memory import _metrics
+from app.services.memory._extraction_common import (
+    format_ability_index,
+    parse_json_patches_ex,
+)
 from app.services.memory._user_memory_lock import user_memory_lock_sync
 from app.services.memory.prompts import REALTIME_EXTRACTION_PROMPT
 
@@ -68,7 +72,9 @@ def run_realtime_extraction(
     from app.worker.tasks import run_async
     from app.services.chat.chat_history_service import transcript_service
 
-    with user_memory_lock_sync(user_id):
+    # Jobs raise on lock contention (MEM-6) — the outbox retries with
+    # backoff, which beats a lockless race every time.
+    with user_memory_lock_sync(user_id, on_timeout="raise"):
         db = SessionLocal()
         try:
             conv = db.query(Conversation).filter(Conversation.id == session_id).first()
@@ -104,7 +110,12 @@ def run_realtime_extraction(
                 get_llm_for_role("utility", user_id=user_id)
                 .acomplete(prompt, response_format={"type": "json_object"})
             )
-            patches = parse_json_patches(str(response.text))
+            patches, parse_ok = parse_json_patches_ex(str(response.text))
+            if not parse_ok:
+                # Advancing the cursor past an unparsed batch loses it
+                # forever — raise so the outbox retries this range (MEM-7).
+                _metrics.incr("memory.extraction_parse_failed", source="realtime")
+                raise RuntimeError("realtime extraction: unparseable LLM output")
 
             result = ExtractionResult(advanced_to=upto_seq)
             if patches:

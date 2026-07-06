@@ -255,7 +255,7 @@ def test_threshold_compaction_fires_and_advances_cursor(monkeypatch):
             updates.append(kwargs)
 
     # Stub summarize_conversation to return a fixed summary.
-    import app.services.memory.compaction_service as cs_mod
+    import app.services.chat.conversation_summarizer as cs_mod
     monkeypatch.setattr(cs_mod, "summarize_conversation",
         lambda old, conv: asyncio.coroutine(lambda: "COMPRESSED SUMMARY")(old, conv)
     )

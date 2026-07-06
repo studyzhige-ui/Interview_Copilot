@@ -15,9 +15,6 @@
  */
 import { apiClient } from './client';
 import type {
-  KnowledgeTopicDetail,
-  KnowledgeTopicSummary,
-  MasteryLevel,
   MemoryAuditDetail,
   MemoryAuditListResp,
   MemoryChangeType,
@@ -34,79 +31,73 @@ export async function getMemoryOverview(
   return res.data;
 }
 
-// ── knowledge_doc ──────────────────────────────────────────────────────
+// ── v3 memory docs: user_profile / learning_strategy (RW) ─────────────
+// Both PUTs carry the optimistic-concurrency token (MEM-3): the updated_at
+// from the GET this edit was based on. A 409 means realtime extraction (or
+// another tab) wrote in between — refetch and re-edit.
 
-export async function listKnowledgeTopics(
-  opts: { signal?: AbortSignal } = {},
-): Promise<KnowledgeTopicSummary[]> {
-  const res = await apiClient.get('/memory/knowledge/topics', { signal: opts.signal });
-  return res.data?.topics ?? [];
+export interface MemoryDocMeta {
+  body: string;
+  updated_at: string | null;
 }
-
-export async function getKnowledgeTopic(
-  topic: string,
-  opts: { signal?: AbortSignal } = {},
-): Promise<KnowledgeTopicDetail> {
-  const res = await apiClient.get(
-    `/memory/knowledge/topics/${encodeURIComponent(topic)}`,
-    { signal: opts.signal },
-  );
-  return res.data;
-}
-
-export interface KnowledgeTopicPatch {
-  body?: string;
-  one_liner?: string | null;
-  mastery_level?: MasteryLevel | null;
-}
-
-export async function editKnowledgeTopic(
-  topic: string,
-  patch: KnowledgeTopicPatch,
-): Promise<void> {
-  await apiClient.put(
-    `/memory/knowledge/topics/${encodeURIComponent(topic)}`,
-    patch,
-  );
-}
-
-export async function deleteKnowledgeTopic(topic: string): Promise<void> {
-  await apiClient.delete(
-    `/memory/knowledge/topics/${encodeURIComponent(topic)}`,
-  );
-}
-
-// ── strategy_doc + habit_doc ───────────────────────────────────────────
-
-export async function getStrategyDoc(
-  opts: { signal?: AbortSignal } = {},
-): Promise<string> {
-  const res = await apiClient.get('/memory/strategy', { signal: opts.signal });
-  return String(res.data?.body ?? '');
-}
-
-export async function editStrategyDoc(body: string): Promise<void> {
-  await apiClient.put('/memory/strategy', { body });
-}
-
-export async function getHabitDoc(
-  opts: { signal?: AbortSignal } = {},
-): Promise<string> {
-  const res = await apiClient.get('/memory/habit', { signal: opts.signal });
-  return String(res.data?.body ?? '');
-}
-
-export async function editHabitDoc(body: string): Promise<void> {
-  await apiClient.put('/memory/habit', { body });
-}
-
-// ── user_profile_doc (read-only) ───────────────────────────────────────
 
 export async function getUserProfileDoc(
   opts: { signal?: AbortSignal } = {},
-): Promise<string> {
+): Promise<MemoryDocMeta> {
   const res = await apiClient.get('/memory/user-profile', { signal: opts.signal });
-  return String(res.data?.body ?? '');
+  return { body: String(res.data?.body ?? ''), updated_at: res.data?.updated_at ?? null };
+}
+
+export async function editUserProfileDoc(
+  body: string,
+  baseUpdatedAt: string | null,
+): Promise<void> {
+  await apiClient.put('/memory/user-profile', {
+    body,
+    base_updated_at: baseUpdatedAt,
+  });
+}
+
+export async function getLearningStrategyDoc(
+  opts: { signal?: AbortSignal } = {},
+): Promise<MemoryDocMeta> {
+  const res = await apiClient.get('/memory/learning-strategy', { signal: opts.signal });
+  return { body: String(res.data?.body ?? ''), updated_at: res.data?.updated_at ?? null };
+}
+
+export async function editLearningStrategyDoc(
+  body: string,
+  baseUpdatedAt: string | null,
+): Promise<void> {
+  await apiClient.put('/memory/learning-strategy', {
+    body,
+    base_updated_at: baseUpdatedAt,
+  });
+}
+
+// ── ability states ─────────────────────────────────────────────────────
+
+export interface AbilityState {
+  id: string;
+  topic: string;
+  skill_type: string;
+  mastery_level: 'weak' | 'improving' | 'stable' | 'strong';
+  summary: string;
+  last_evidence_at: string | null;
+  updated_at: string | null;
+}
+
+export async function listAbilityStates(
+  opts: { signal?: AbortSignal } = {},
+): Promise<AbilityState[]> {
+  const res = await apiClient.get('/memory/ability-states', { signal: opts.signal });
+  return res.data?.ability_states ?? [];
+}
+
+/** Archive (user veto) — automatic extraction won't recreate the pair for
+ *  30 days (backend tombstone, MEM-2). */
+export async function archiveAbilityState(id: string): Promise<void> {
+  await apiClient.delete(`/memory/ability-states/${encodeURIComponent(id)}`);
 }
 
 // ── audit log ──────────────────────────────────────────────────────────

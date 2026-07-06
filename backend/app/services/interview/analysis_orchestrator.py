@@ -188,6 +188,26 @@ class InterviewAnalysisOrchestrator:
                     record_id, exc,
                 )
             interview_record_service.set_status(record_id, done_status)
+            # Event-driven dreaming (MEM-9): a finished analysis is exactly
+            # the "new growth evidence exists" moment. Schedule a per-user
+            # dream check after the quiet window instead of waiting for the
+            # nightly scan (light users used to hit the volume gate every
+            # 3-4 weeks). Best-effort — the nightly scan remains the
+            # backstop if the broker hiccups here.
+            if owner_username:
+                try:
+                    from app.services.memory.dreaming_worker import RECORD_QUIET_HOURS
+                    from app.worker.tasks.memory import dream_for_user_task
+
+                    dream_for_user_task.apply_async(
+                        args=[owner_username],
+                        countdown=RECORD_QUIET_HOURS * 3600,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "event-driven dream scheduling failed for %s: %s",
+                        record_id, exc,
+                    )
             return {"status": done_status, "record_id": record_id}
 
         except Exception as exc:

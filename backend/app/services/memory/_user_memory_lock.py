@@ -55,6 +55,16 @@ from app.services.memory._metrics import incr as _metric_incr
 logger = logging.getLogger(__name__)
 
 
+class LockNotAcquired(RuntimeError):
+    """Raised by ``on_timeout="raise"`` callers when the per-user memory
+    lock can't be acquired. Jobs (outbox / Celery) prefer this over the
+    degraded lockless path — they're natively retryable, so raising and
+    retrying later is strictly safer than two writers racing (the
+    degrade mode is a leftover from the v2 inline era and remains only
+    for API edits, where a 15s wall would be worse than the race).
+    """
+
+
 def _emit_degraded(user_id: str, reason: str, *, sync: bool) -> None:
     """Fire-and-forget metric so ops can alarm on lock contention.
 
@@ -189,8 +199,15 @@ def user_memory_lock_sync(
     user_id: str,
     *,
     timeout_sec: int = DEFAULT_TIMEOUT_SEC,
+    on_timeout: str = "degrade",
 ):
     """Synchronous version of :func:`user_memory_lock` for Celery.
+
+    ``on_timeout="raise"`` (MEM-6): raise :class:`LockNotAcquired` instead
+    of proceeding lockless when the wait budget expires OR Redis is down.
+    Jobs are natively retryable (outbox backoff / Celery retry), so
+    raising is strictly safer for them than two writers racing; the
+    degrade default remains for API edits only.
 
     Celery tasks run sync. Calling the async lock from inside a Celery
     worker would require an event loop — fragile (a fresh loop per
@@ -214,6 +231,8 @@ def user_memory_lock_sync(
     try:
         from app.db.redis import sync_redis_client as client
     except Exception as exc:  # noqa: BLE001
+        if on_timeout == "raise":
+            raise LockNotAcquired(f"redis unavailable for user={user_id}") from exc
         logger.warning(
             "user_memory_lock_sync: Redis client init failed for user=%s, "
             "proceeding without lock: %s",
@@ -230,6 +249,8 @@ def user_memory_lock_sync(
             try:
                 acquired = bool(client.set(key, token, nx=True, ex=timeout_sec))
             except Exception as exc:  # noqa: BLE001
+                if on_timeout == "raise":
+                    raise LockNotAcquired(f"redis unavailable for user={user_id}") from exc
                 logger.warning(
                     "user_memory_lock_sync: Redis unavailable for user=%s, "
                     "proceeding without lock: %s",
@@ -244,6 +265,10 @@ def user_memory_lock_sync(
             waited += _POLL_INTERVAL_SEC
 
         if not acquired:
+            if on_timeout == "raise":
+                raise LockNotAcquired(
+                    f"lock wait budget exhausted for user={user_id} ({waited:.1f}s)"
+                )
             logger.warning(
                 "user_memory_lock_sync: timed out waiting for user=%s after %.1fs, "
                 "proceeding without lock",
@@ -270,4 +295,9 @@ def user_memory_lock_sync(
         # Shared pooled client (app.db.redis) — never closed here.
 
 
-__all__ = ["user_memory_lock", "user_memory_lock_sync", "DEFAULT_TIMEOUT_SEC"]
+__all__ = [
+    "LockNotAcquired",
+    "user_memory_lock",
+    "user_memory_lock_sync",
+    "DEFAULT_TIMEOUT_SEC",
+]

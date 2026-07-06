@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
@@ -26,7 +26,7 @@ from app.models.memory_ability_state import (
     SKILL_TYPES,
     MemoryAbilityState,
 )
-from app.services.memory import _memory_audit
+from app.services.memory import _memory_audit, _metrics
 from app.services.memory._db_helpers import session_scope
 
 logger = logging.getLogger(__name__)
@@ -123,6 +123,51 @@ def list_by_mastery(
 # ── writes ──────────────────────────────────────────────────────────────
 
 
+# ── Mastery upgrade discipline (MEM-4) ─────────────────────────────────
+# The prompt asks the LLM to be conservative, but prompts are advice —
+# these rules are mechanism. Realtime extraction (one conversation's worth
+# of signal, including plain self-reporting like "我精通K8s") can move a
+# level at most one step up per pass and can NEVER write ``strong``
+# without concrete evidence refs. Dreaming (cross-session synthesis over
+# real interview records) and user edits are unrestricted.
+
+# How long a user-archived (topic, skill_type) blocks automatic re-creation
+# (MEM-2): the user's delete is a veto, not a suggestion.
+_TOMBSTONE_WINDOW = timedelta(days=30)
+
+_MASTERY_ORDER = {"weak": 0, "improving": 1, "stable": 2, "strong": 3}
+
+
+def _disciplined_mastery(
+    *,
+    requested: str,
+    current: str | None,
+    change_type: str,
+    has_evidence: bool,
+) -> tuple[str, str | None]:
+    """Return ``(effective_level, clamp_reason)``.
+
+    Downgrades are always allowed (forgetting is real). Only the realtime
+    channel is constrained; see module comment above.
+    """
+    if change_type != "patch_realtime":
+        return requested, None
+    req = _MASTERY_ORDER.get(requested, 0)
+    cur = _MASTERY_ORDER.get(current, -1) if current else -1
+    effective = req
+    reason = None
+    if req > cur + 1:
+        effective = cur + 1
+        reason = "realtime_step_limit"
+    if effective >= _MASTERY_ORDER["strong"] and not has_evidence:
+        effective = _MASTERY_ORDER["stable"]
+        reason = "strong_requires_evidence"
+    if effective == req:
+        return requested, None
+    level = next(k for k, v in _MASTERY_ORDER.items() if v == max(effective, 0))
+    return level, reason
+
+
 def upsert(
     username: str,
     *,
@@ -162,7 +207,8 @@ def upsert(
         )
         if own_db:
             db.commit()
-            db.refresh(row)
+            if row is not None:
+                db.refresh(row)
         return row
     except IntegrityError:
         if not own_db:
@@ -180,7 +226,8 @@ def upsert(
                 idempotency_key=idempotency_key,
             )
             db.commit()
-            db.refresh(row)
+            if row is not None:
+                db.refresh(row)
             return row
         except Exception:
             db.rollback()
@@ -208,7 +255,7 @@ def _upsert_inner(
     source_conversation_id: str | None,
     source_interview_record_id: str | None,
     idempotency_key: str | None,
-) -> MemoryAbilityState:
+) -> MemoryAbilityState | None:
     user_pk = resolve_user_pk(db, username)
     if user_pk is None:
         raise UnknownUser(username)
@@ -224,7 +271,56 @@ def _upsert_inner(
         .first()
     )
     was_new = row is None
-    before = "" if was_new else (row.summary or "")
+
+    # ── Tombstone (MEM-2): the user's delete is a veto ──────────────
+    # A user-archived state used to be silently recreated by the next
+    # extraction pass over the same topic — the deleted hallucination
+    # resurrecting days later is the single most trust-destroying
+    # behaviour a memory system can have. Automatic channels are blocked
+    # from re-creating the pair for 30 days; the user's own edits and
+    # genuinely new evidence after the window still work.
+    if was_new and change_type in ("patch_realtime", "patch_dreaming"):
+        tombstoned = (
+            db.query(MemoryAbilityState.id)
+            .filter(
+                MemoryAbilityState.user_id == user_pk,
+                MemoryAbilityState.topic == topic,
+                MemoryAbilityState.skill_type == skill_type,
+                MemoryAbilityState.archived_at.isnot(None),
+                MemoryAbilityState.archived_at > datetime.utcnow() - _TOMBSTONE_WINDOW,
+            )
+            .first()
+        )
+        if tombstoned is not None:
+            _metrics.incr(
+                "memory.patch_dropped",
+                reason="tombstone", target="ability_state",
+                change_type=change_type,
+            )
+            logger.info(
+                "ability upsert blocked by tombstone user=%s topic=%s/%s",
+                username, topic, skill_type,
+            )
+            return None
+
+    # ── Mastery discipline (MEM-4) ──────────────────────────────────
+    effective_level, clamp_reason = _disciplined_mastery(
+        requested=mastery_level,
+        current=None if was_new else row.mastery_level,
+        change_type=change_type,
+        has_evidence=bool(evidence_refs),
+    )
+    if clamp_reason:
+        _metrics.incr(
+            "memory.mastery_clamped",
+            reason=clamp_reason, requested=mastery_level,
+            clamped_to=effective_level, change_type=change_type,
+        )
+    mastery_level = effective_level
+
+    # Audit bodies carry the mastery value, not just the summary — the
+    # "before" level used to be unrecoverable from the trail (MEM-10).
+    before = "" if was_new else f"[{row.mastery_level}] {row.summary or ''}"
     evidence_json = json.dumps(evidence_refs, ensure_ascii=False) if evidence_refs else None
     search_text = build_search_text(topic, summary)
 
@@ -260,7 +356,7 @@ def _upsert_inner(
         source_interview_record_id=source_interview_record_id,
         idempotency_key=idempotency_key,
         before_body=before,
-        after_body=summary or "",
+        after_body=f"[{mastery_level}] {summary or ''}",
         summary=f"{'created' if was_new else 'updated'} ability "
                 f"{topic}/{skill_type} → {mastery_level}",
         db=db,
@@ -298,6 +394,65 @@ def archive(
         raise
     finally:
         if own_db and db is not None:
+            db.close()
+
+
+def archive_by_key(
+    username: str,
+    *,
+    topic: str,
+    skill_type: str,
+    change_type: str,
+    source_interview_record_id: str | None = None,
+    db: Session | None = None,
+) -> bool:
+    """Archive the active (topic, skill_type) state — the dreaming
+    retirement path (MEM-9): the ability ledger can now shrink, not just
+    grow. Returns False when no active row matches."""
+    own_db = db is None
+    if own_db:
+        db = SessionLocal()
+    try:
+        user_pk = resolve_user_pk(db, username)
+        if user_pk is None:
+            return False
+        row = (
+            db.query(MemoryAbilityState)
+            .filter(
+                MemoryAbilityState.user_id == user_pk,
+                MemoryAbilityState.topic == topic,
+                MemoryAbilityState.skill_type == skill_type,
+                MemoryAbilityState.archived_at.is_(None),
+            )
+            .first()
+        )
+        if row is None:
+            return False
+        before = f"[{row.mastery_level}] {row.summary or ''}"
+        row.archived_at = datetime.utcnow()
+        row.updated_at = datetime.utcnow()
+        db.add(row)
+        _memory_audit.record(
+            user_pk=user_pk,
+            change_type=change_type,
+            topic=topic,
+            memory_ability_state_id=row.id,
+            source_interview_record_id=source_interview_record_id,
+            before_body=before,
+            after_body="",
+            summary=f"archived ability {topic}/{skill_type} (dreaming retirement)",
+            db=db,
+        )
+        _enqueue_index_delete(db, user_pk=user_pk, state_id=row.id)
+        if own_db:
+            db.commit()
+        return True
+    except Exception:
+        if own_db:
+            db.rollback()
+        raise
+    finally:
+        if own_db:
             db.close()
 
 
