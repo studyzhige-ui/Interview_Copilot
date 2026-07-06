@@ -15,7 +15,11 @@ from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
-from app.services.interview.interview_record_service import STATUS_FAILED
+from app.services.interview.interview_record_service import (
+    STATUS_COMPLETED,
+    STATUS_FAILED,
+    STATUS_PENDING,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +143,56 @@ def _enqueue_record_asset_deletes(db: Session, record: InterviewRecord) -> None:
     for asset in assets:
         enqueue_asset_blob_delete(db, asset)
         db.delete(asset)
+
+
+class ReanalyzeNotAllowed(ValueError):
+    """Record is not in a state (or of a source) that can be re-analyzed."""
+
+
+def reanalyze_record(db: Session, record: InterviewRecord):
+    """ANA-7: re-run the analysis pipeline for a terminal upload record.
+
+    Covers both recovery (``failed`` — the audio is still in storage, yet
+    the only pre-fix option was delete + re-upload) and re-scoring
+    (``completed`` — e.g. the user switched to a better model).
+
+    Resets the analysis artifacts but KEEPS the transcript and QA shells:
+    the orchestrator's stage gates then resume from what exists — a
+    completed record re-grades without paying ASR + extraction again; a
+    record that failed mid-transcription starts from where it broke.
+    Returns the dispatched Celery task. Dispatch failure rolls the record
+    back to ``failed`` (never a zombie ``pending``) and re-raises.
+    """
+    from app.worker.tasks import process_interview_analysis
+
+    if record.source != "upload":
+        raise ReanalyzeNotAllowed("仅上传录音的记录支持重新分析（模拟面试请用重试复盘）")
+    if record.status not in (STATUS_COMPLETED, STATUS_FAILED):
+        raise ReanalyzeNotAllowed("记录当前状态不支持重新分析")
+
+    record.analysis_json = None
+    record.error_message = None
+    # Cleared so _generate_debrief_summary regenerates from the new report
+    # (it skips records that already have one).
+    record.debrief_summary = None
+    record.analyzed_qa_count = 0
+    record.status = STATUS_PENDING
+    db.add(record)
+    db.commit()
+
+    try:
+        task = process_interview_analysis.delay(record.id)
+    except Exception as exc:  # noqa: BLE001 — broker down / misconfigured
+        logger.error("reanalyze dispatch failed for %s: %s", record.id, exc)
+        record.status = STATUS_FAILED
+        record.error_message = "重新分析派发失败（任务队列暂不可用），请稍后重试。"
+        db.add(record)
+        db.commit()
+        raise
+    record.celery_task_id = task.id
+    db.add(record)
+    db.commit()
+    return task
 
 
 def delete_record_cascade(

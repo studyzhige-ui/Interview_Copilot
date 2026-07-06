@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
     # the broker visibility_timeout (3700s) so a hung task is reclaimed and
     # re-delivered before Redis would re-deliver on its own.
     acks_late=True,
+    # 30 min budgets a GPU/cloud-ASR deployment. On CPU-only WhisperX a
+    # 60-minute recording can exceed this — raise via env-specific config
+    # if you deploy transcription on CPU.
     time_limit=1800,            # 30 min hard
     soft_time_limit=1740,       # 1 min before hard kill
 )

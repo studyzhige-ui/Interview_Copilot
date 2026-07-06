@@ -104,6 +104,11 @@ class Settings(BaseSettings):
     #                timestamps (e.g. openai/whisper-1).
     #   "none"     — never diarize; transcripts come back single-speaker.
     DIARIZATION_MODE: str = "auto"
+    # Interview diarization speaker bounds. 1:1 interviews are the norm
+    # (2/2); bump MAX for panel interviews. Hardcoding 2 forced every
+    # 3-speaker recording to merge two voices into one.
+    DIARIZATION_MIN_SPEAKERS: int = 2
+    DIARIZATION_MAX_SPEAKERS: int = 2
     DIARIZATION_MODEL_ID: str = "pyannote-community/speaker-diarization-community-1"
     AGENT_MAX_STEPS: int = 80  # hard safety-valve — the ONLY hard stop (no time budget)
     AGENT_TOOL_TIMEOUT_SECONDS: int = 30

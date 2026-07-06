@@ -423,7 +423,11 @@ function QAItem({ qa, recordId }: { qa: InterviewQA; recordId: string }) {
         {qa.is_follow_up && <Pill tone="sand">追问</Pill>}
         <span className="text-xs text-stone-500">{phaseLabel}</span>
         <span className={`ml-auto text-sm font-mono font-semibold ${scoreColor(score)}`}>
-          {typeof score === 'number' ? `${Math.round(score * 10)}分` : ''}
+          {typeof score === 'number'
+            ? `${Math.round(score * 10)}分`
+            : qa.critique
+              ? '未评分'  /* graded-attempted but the model call failed (ANA-6) */
+              : ''}
         </span>
         <button
           onClick={() => setEditingQ((v) => !v)}

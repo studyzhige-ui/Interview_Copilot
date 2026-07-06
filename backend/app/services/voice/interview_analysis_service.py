@@ -77,7 +77,7 @@ _EXTRACTION_MAX_TOKENS = 120_000
 _LLM_EXTRACTION_PROMPT = """\
 [硬性约束] 全部输出使用简体中文。即便原始转录里出现繁体字、英文术语，最终回复也用简体中文表达（专有名词、代码标识符保留原文）。
 
-你是一名专业的面试对话分析专家。下面是一场面试录音的语音转录文本（ASR 输出，可能有错别字和口语化表达）。
+你是一名专业的面试对话分析专家。下面是一场面试录音的语音转录文本（ASR 输出，可能有错别字和口语化表达）。**每一行都带有行号标签（如 L12|）。**
 
 转录文本：
 ---
@@ -86,32 +86,29 @@ _LLM_EXTRACTION_PROMPT = """\
 
 {resume_hint}
 
-你的任务：仔细阅读整段对话，从中提取面试官与候选人之间的所有问答交互（QA pairs）。
+你的任务：仔细阅读整段对话，从中提取面试官与候选人之间的所有问答交互（QA pairs）。**不要复述原文** —— 对每个问答对，只输出它覆盖的行号区间，系统会用行号切回原文。
 
 提取规则：
-1. **角色识别**：根据对话内容判断谁是面试官（提问方）、谁是候选人（回答方）。面试官通常会提出问题、追问细节、引导话题；候选人会介绍自己、回答问题。
-2. **完整保留**：question 和 answer 必须高保真还原转录原文，包括口语化表达、语气词、非技术性闲聊。不要简化、不要省略、不要改写语义。用户需要看到完整的面试过程。
-3. **问题提取**：提取面试官的每一个独立问题或话题。面试官说的所有内容（包括评论、过渡、闲聊）都应完整保留在 question 字段中。
-4. **回答提取**：提取候选人针对该话题的完整回答。如果候选人的回答被面试官打断后继续，应合并为完整回答。
-5. **追问识别**：如果面试官针对候选人的某个回答继续追问，标记为追问并关联到原始问题。
-6. **仅去除 ASR 乱码**：只去除明显的 ASR 错误产物（如无意义的外语碎片、乱码符号），保留所有有意义的中文内容。
-7. **问题概括**：question_summary 用一句简短的话概括这道题/话题的核心内容（15字以内）。
+1. **角色识别**：根据对话内容判断谁是面试官（提问方）、谁是候选人（回答方）。
+2. **问题区间**：question_lines 覆盖面试官就这个话题说的所有行（包括评论、过渡、闲聊）。
+3. **回答区间**：answer_lines 覆盖候选人针对该话题的所有行。如果回答被打断后继续，用多个区间表示（例如 [[5,8],[10,12]]）。
+4. **追问识别**：如果面试官针对候选人的某个回答继续追问，标记 is_follow_up 并在 parent_qa_index 关联原始问题的序号（从 1 开始）。
+5. **区间必须来自给出的行号**，不要发明行号；同一行可以同时属于相邻问答对（例如一句话既是回应又是新问题）。
+6. **问题概括**：question_summary 用一句简短的话概括这道题/话题的核心内容（15字以内）。
 
 输出纯 JSON，不要任何解释文字：
 {{
   "qa_pairs": [
     {{
-      "question": "面试官说的完整原文",
-      "answer": "候选人说的完整原文",
+      "question_lines": [[3, 4]],
+      "answer_lines": [[5, 9]],
       "question_summary": "简短概括",
       "phase": "self_intro 或 resume_deep_dive 或 technical 或 behavioral 或 reverse_qa 或 general",
       "is_follow_up": false,
       "parent_qa_index": null
     }}
   ]
-}}
-
-注意：parent_qa_index 从 1 开始计数，指向本次输出中被追问的 QA 编号。"""
+}}"""
 
 
 async def extract_qa_pairs_with_llm(
@@ -131,33 +128,52 @@ async def extract_qa_pairs_with_llm(
         logger.warning("Empty transcript provided.")
         return []
 
+    # ANA-2: the LLM outputs LINE SPANS, not verbatim text — a 60-minute
+    # recording used to require ~20k output tokens (over every model's
+    # output cap → truncated JSON → empty report at status=completed).
+    # Spans keep the output a few hundred tokens regardless of length,
+    # and the original wording is preserved exactly by construction.
+    lines = [ln for ln in transcript.split("\n") if ln.strip()]
     token_count = _count_tokens(transcript)
-    logger.info("Stage 1: transcript has %d tokens.", token_count)
+    logger.info("Stage 1: transcript has %d tokens / %d lines.", token_count, len(lines))
 
     # Resolve the owner's utility LLM ONCE and thread the instance down --
     # per-chunk re-resolution would re-hit the credential lookup for every
     # chunk (MDL-1: the owner's selection/keys drive background analysis).
     llm = get_llm_for_role("utility", user_id=user_id)
     if token_count <= _EXTRACTION_MAX_TOKENS:
-        return await _extract_single_pass(transcript, resume_context, llm=llm)
+        pairs = await _extract_single_pass(lines, resume_context, llm=llm)
+        for pair in pairs:
+            pair.pop("_start_line", None)
+            pair.pop("_end_line", None)
+        return pairs
 
     # Chunked extraction for very long transcripts
-    return await _extract_chunked(transcript, resume_context, token_count, llm=llm)
+    return await _extract_chunked(lines, resume_context, token_count, llm=llm)
 
 
 async def _extract_single_pass(
-    transcript: str,
+    lines: list[str],
     resume_context: str = "",
     *,
     llm: LLM,
+    line_offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """Extract QA pairs in a single LLM call."""
+    """Extract QA pairs from ``lines`` in one LLM call.
+
+    ``line_offset`` shifts the displayed line numbers so chunked calls carry
+    GLOBAL numbering — spans from any chunk index into the same full
+    transcript and merging needs no per-chunk remapping.
+    """
     resume_hint = ""
     if resume_context:
         resume_hint = f"候选人简历背景（辅助判断阶段和评估）：\n{resume_context[:1500]}"
 
+    numbered = "\n".join(
+        f"L{line_offset + i}|{ln}" for i, ln in enumerate(lines, start=1)
+    )
     prompt = _LLM_EXTRACTION_PROMPT.format(
-        transcript=transcript,
+        transcript=numbered,
         resume_hint=resume_hint,
     )
 
@@ -173,7 +189,9 @@ async def _extract_single_pass(
             logger.warning("LLM returned empty qa_pairs.")
             return []
 
-        qa_pairs = _normalize_qa_pairs(raw_pairs)
+        qa_pairs = _resolve_span_pairs(
+            raw_pairs, lines, line_offset=line_offset,
+        )
         logger.info("Stage 1 complete: extracted %d QA pairs.", len(qa_pairs))
         return qa_pairs
 
@@ -183,131 +201,136 @@ async def _extract_single_pass(
 
 
 async def _extract_chunked(
-    transcript: str,
+    lines: list[str],
     resume_context: str,
     total_tokens: int,
     *,
     llm: LLM,
 ) -> list[dict[str, Any]]:
-    """Extract QA pairs from a long transcript by splitting into chunks.
+    """Extract QA pairs from a very long transcript in line chunks.
 
-    Uses sentence-level splitting with overlap to avoid cutting mid-question.
+    Chunks carry GLOBAL line numbering (via ``line_offset``), so returned
+    spans all index into the same transcript. Overlap gives the model
+    context across the boundary; pairs whose question starts inside a
+    region already covered by an earlier chunk are dropped (span-based
+    dedup — the old text-similarity dedup retired with ANA-2).
     """
-    # Split by sentences (Chinese periods, question marks, or newlines)
-    sentences = re.split(r'(?<=[。？！\n])', transcript)
-    sentences = [s for s in sentences if s.strip()]
-
-    chunks: list[str] = []
-    current_chunk: list[str] = []
-    current_tokens = 0
     chunk_limit = _EXTRACTION_MAX_TOKENS - 5000  # reserve space for prompt
+    overlap_lines = 10
 
-    for sent in sentences:
-        sent_tokens = _count_tokens(sent)
-        if current_tokens + sent_tokens > chunk_limit and current_chunk:
-            chunks.append("".join(current_chunk))
-            # Keep last ~20% of sentences as overlap
-            overlap_count = max(1, len(current_chunk) // 5)
-            current_chunk = current_chunk[-overlap_count:]
-            current_tokens = sum(_count_tokens(s) for s in current_chunk)
-        current_chunk.append(sent)
-        current_tokens += sent_tokens
-
-    if current_chunk:
-        chunks.append("".join(current_chunk))
+    chunks: list[tuple[int, list[str]]] = []  # (0-based global start, lines)
+    cur_start = 0
+    cur: list[str] = []
+    cur_tokens = 0
+    for i, ln in enumerate(lines):
+        ln_tokens = _count_tokens(ln)
+        if cur_tokens + ln_tokens > chunk_limit and cur:
+            chunks.append((cur_start, cur))
+            keep = cur[-overlap_lines:]
+            cur_start = i - len(keep)
+            cur = list(keep)
+            cur_tokens = sum(_count_tokens(x) for x in keep)
+        cur.append(ln)
+        cur_tokens += ln_tokens
+    if cur:
+        chunks.append((cur_start, cur))
 
     logger.info(
-        "Stage 1: splitting %d-token transcript into %d chunks.",
+        "Stage 1: splitting %d-token transcript into %d line chunks.",
         total_tokens, len(chunks),
     )
 
-    # Extract from each chunk
     all_pairs: list[dict[str, Any]] = []
-    for ci, chunk in enumerate(chunks):
-        chunk_pairs = await _extract_single_pass(chunk, resume_context, llm=llm)
-        logger.info("Stage 1 chunk %d/%d: extracted %d pairs.", ci + 1, len(chunks), len(chunk_pairs))
-        all_pairs.extend(chunk_pairs)
+    covered_until = 0  # highest global line (1-based) claimed so far
+    for ci, (start0, chunk_lines) in enumerate(chunks):
+        chunk_pairs = await _extract_single_pass(
+            chunk_lines, resume_context, llm=llm, line_offset=start0,
+        )
+        kept = 0
+        for pair in chunk_pairs:
+            if ci > 0 and pair.get("_start_line", 0) <= covered_until:
+                continue  # overlap region — an earlier chunk already owns it
+            all_pairs.append(pair)
+            covered_until = max(covered_until, pair.get("_end_line", 0))
+            kept += 1
+        logger.info(
+            "Stage 1 chunk %d/%d: extracted %d pairs, kept %d.",
+            ci + 1, len(chunks), len(chunk_pairs), kept,
+        )
 
-    # Deduplicate overlapping QA pairs (by question_summary similarity)
-    deduped = _deduplicate_qa_pairs(all_pairs)
-
-    # Re-number
-    for i, pair in enumerate(deduped, start=1):
+    for i, pair in enumerate(all_pairs, start=1):
         pair["index"] = i
+        pair.pop("_start_line", None)
+        pair.pop("_end_line", None)
+    logger.info("Stage 1 complete: %d QA pairs after span dedup.", len(all_pairs))
+    return all_pairs
 
-    logger.info("Stage 1 complete: %d QA pairs after dedup (from %d raw).", len(deduped), len(all_pairs))
-    return deduped
+
+def _coerce_ranges(value: Any) -> list[tuple[int, int]]:
+    """Accept ``[s, e]`` or ``[[s, e], ...]`` (ints or numeric strings);
+    reject anything else. Returned ranges are 1-based inclusive."""
+    if not isinstance(value, list) or not value:
+        return []
+    if all(isinstance(v, (int, float, str)) for v in value) and len(value) == 2:
+        value = [value]
+    out: list[tuple[int, int]] = []
+    for item in value:
+        if not isinstance(item, list) or len(item) != 2:
+            continue
+        try:
+            s, e = int(item[0]), int(item[1])
+        except (TypeError, ValueError):
+            continue
+        if s > e:
+            s, e = e, s
+        out.append((s, e))
+    return out
 
 
-def _normalize_qa_pairs(raw_pairs: list[dict]) -> list[dict[str, Any]]:
-    """Normalize and validate raw QA pairs from LLM output."""
+def _slice_lines(lines: list[str], ranges: list[tuple[int, int]], line_offset: int) -> str:
+    """Join the transcript lines covered by ``ranges`` (global 1-based,
+    clamped to the chunk's own window)."""
+    lo, hi = line_offset + 1, line_offset + len(lines)
+    picked: list[str] = []
+    for s, e in ranges:
+        s, e = max(s, lo), min(e, hi)
+        for n in range(s, e + 1):
+            picked.append(lines[n - line_offset - 1])
+    return "\n".join(picked).strip()
+
+
+def _resolve_span_pairs(
+    raw_pairs: list[dict], lines: list[str], *, line_offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Turn LLM span output into the pipeline's QA-pair shape by slicing
+    the ORIGINAL transcript lines (high fidelity by construction)."""
     qa_pairs: list[dict[str, Any]] = []
-
-    for qi, rp in enumerate(raw_pairs, start=1):
-        question = str(rp.get("question", "")).strip()
-        answer = str(rp.get("answer", "")).strip()
-
+    for rp in raw_pairs:
+        if not isinstance(rp, dict):
+            continue
+        q_ranges = _coerce_ranges(rp.get("question_lines"))
+        a_ranges = _coerce_ranges(rp.get("answer_lines"))
+        question = _slice_lines(lines, q_ranges, line_offset)
+        answer = _slice_lines(lines, a_ranges, line_offset)
         if not question or not answer:
             continue
-
-        # Skip very short pairs that are likely noise
         if len(question) < 5 and len(answer) < 5:
             continue
-
+        span_points = [n for s, e in q_ranges + a_ranges for n in (s, e)]
         qa_pairs.append({
-            "index": qi,
+            "index": len(qa_pairs) + 1,
             "question": question,
             "answer": answer,
             "question_summary": str(rp.get("question_summary", "")).strip(),
             "phase": str(rp.get("phase", "general")).strip(),
             "is_follow_up": bool(rp.get("is_follow_up", False)),
             "parent_index": rp.get("parent_qa_index"),
+            # Chunk-merge bookkeeping (stripped before the pairs leave
+            # extraction).
+            "_start_line": min(span_points) if span_points else 0,
+            "_end_line": max(span_points) if span_points else 0,
         })
-
-    # Re-number sequentially
-    for i, pair in enumerate(qa_pairs, start=1):
-        pair["index"] = i
-
     return qa_pairs
-
-
-def _deduplicate_qa_pairs(pairs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Remove duplicate QA pairs from chunked extraction.
-
-    Uses question text overlap ratio to detect duplicates.
-    """
-    if not pairs:
-        return []
-
-    deduped: list[dict[str, Any]] = [pairs[0]]
-
-    for pair in pairs[1:]:
-        is_dup = False
-        q = pair["question"]
-        for existing in deduped[-3:]:  # Only check last 3 to avoid O(n^2)
-            eq = existing["question"]
-            # Check character overlap
-            shorter = min(len(q), len(eq))
-            if shorter == 0:
-                continue
-            # Simple: check if one is a substring of the other
-            if q in eq or eq in q:
-                is_dup = True
-                break
-            # Check prefix overlap (common when chunks split mid-question)
-            overlap = 0
-            for c1, c2 in zip(q, eq):
-                if c1 == c2:
-                    overlap += 1
-                else:
-                    break
-            if overlap > shorter * 0.6:
-                is_dup = True
-                break
-        if not is_dup:
-            deduped.append(pair)
-
-    return deduped
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -339,7 +362,6 @@ _PER_QUESTION_PROMPT = """\
   "improved_answer": "更完整、更严谨的参考答案",
   "tags": ["知识点标签1", "标签2"]
 }}"""
-
 
 def _build_sliding_context(
     qa_pairs: list[dict[str, Any]],
@@ -412,8 +434,7 @@ async def _analyze_single_question(
     )
 
     try:
-        response = await llm.acomplete(prompt)
-        result = _clean_json_response(response.text)
+        result = await _acomplete_json_with_retry(llm, prompt)
 
         return {
             "index": qa_pair["index"],
@@ -426,17 +447,49 @@ async def _analyze_single_question(
             "tags": result.get("tags", []),
         }
     except Exception as exc:
+        # ANA-6: a failed grading is 未评分 (score=None), never a silent 0 —
+        # zeros were averaged into the overall verdict as if the candidate
+        # had bombed the question.
         logger.error("Per-question analysis failed for Q%d: %s", qa_pair["index"], exc)
         return {
             "index": qa_pair["index"],
             "phase": qa_pair.get("phase", "general"),
             "question": qa_pair["question"],
             "answer": qa_pair["answer"],
-            "score": 0,
-            "critique": "分析失败",
+            "score": None,
+            "critique": "该题分析失败（模型调用异常），未计入总分。",
             "improved_answer": "",
             "tags": [],
+            "analysis_failed": True,
         }
+
+
+_ANALYSIS_MAX_ATTEMPTS = 2
+_ANALYSIS_RETRY_BASE_S = 2.0
+# Upload path fans out one task per question; without a bound a 30-question
+# interview fires 30 concurrent completions — a rate-limit trigger on most
+# providers. 5 keeps the pipeline fast without tripping vendor limits.
+_ANALYSIS_MAX_CONCURRENCY = 5
+
+
+async def _acomplete_json_with_retry(llm: LLM, prompt: str) -> dict[str, Any]:
+    """One grading call: JSON mode + bounded retry with backoff.
+
+    Raises the last exception after ``_ANALYSIS_MAX_ATTEMPTS`` — the caller
+    decides what a failed question looks like (score=None, 未评分).
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, _ANALYSIS_MAX_ATTEMPTS + 1):
+        try:
+            response = await llm.acomplete(
+                prompt, response_format={"type": "json_object"},
+            )
+            return _clean_json_response(response.text)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt < _ANALYSIS_MAX_ATTEMPTS:
+                await asyncio.sleep(_ANALYSIS_RETRY_BASE_S * attempt)
+    raise last_exc  # type: ignore[misc]
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -521,9 +574,13 @@ async def _synthesize_report(
 ) -> dict[str, Any]:
     """Stage 3: Synthesize per-question results into a global report."""
 
-    # Build per-question summary for the synthesis prompt
+    # Build per-question summary for the synthesis prompt. Failed (未评分)
+    # questions are excluded — their placeholder critique would poison the
+    # synthesis — and reported via failed_count instead (ANA-6).
+    graded = [pq for pq in per_question_results if not pq.get("analysis_failed")]
+    failed_count = len(per_question_results) - len(graded)
     summary_lines: list[str] = []
-    for pq in per_question_results:
+    for pq in graded:
         summary_lines.append(
             f"第{pq['index']}题 [{_PHASE_NAME_MAP.get(pq.get('phase', ''), pq.get('phase', ''))}] "
             f"评分:{pq['score']}/10\n"
@@ -548,11 +605,13 @@ async def _synthesize_report(
         synthesis = _clean_json_response(response.text)
         overall_in = synthesis.get("overall") or {}
 
+        meta = synthesis.get("interview_metadata") or {
+            "total_questions": len(per_question_results),
+            "phases": list({pq.get("phase", "general") for pq in per_question_results}),
+        }
+        meta["failed_count"] = failed_count
         return {
-            "interview_metadata": synthesis.get("interview_metadata", {
-                "total_questions": len(per_question_results),
-                "phases": list({pq.get("phase", "general") for pq in per_question_results}),
-            }),
+            "interview_metadata": meta,
             "overall": {
                 "score": float(overall_in.get("score", 0) or 0),
                 "summary": str(overall_in.get("summary", "") or "").strip(),
@@ -566,13 +625,15 @@ async def _synthesize_report(
         }
     except Exception as exc:
         logger.error("Report synthesis failed: %s", exc)
-        # Fallback: aggregate scores by phase, no key_growth_areas
-        scores = [pq["score"] for pq in per_question_results if pq["score"] > 0]
+        # Fallback: aggregate scores by phase, no key_growth_areas.
+        # None scores (未评分) are excluded, not treated as zeros.
+        scores = [pq["score"] for pq in graded if (pq.get("score") or 0) > 0]
         avg_score = sum(scores) / len(scores) if scores else 0.0
         return {
             "interview_metadata": {
                 "total_questions": len(per_question_results),
                 "phases": list({pq.get("phase", "general") for pq in per_question_results}),
+                "failed_count": failed_count,
             },
             "overall": {
                 "score": round(avg_score, 1),
@@ -599,6 +660,7 @@ async def analyze_interview(
     jd_context: str = "",
     on_progress: Callable[[int], None] | None = None,
     user_id: str | None = None,
+    qa_pairs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Analyze an interview transcript using the three-stage MapReduce pipeline.
 
@@ -617,9 +679,14 @@ async def analyze_interview(
     """
     try:
         # ── Stage 1: LLM-powered QA extraction ──────────────────────
-        qa_pairs = await extract_qa_pairs_with_llm(
-            transcript, resume_context, user_id=user_id,
-        )
+        # ANA-1: the orchestrator already ran Stage 1 (and persisted the QA
+        # shells from ITS result) — re-extracting here was a second full LLM
+        # pass whose independently-sampled pairs could mismatch the shells
+        # (order_idx backfill then attaches analyses to the wrong questions).
+        if qa_pairs is None:
+            qa_pairs = await extract_qa_pairs_with_llm(
+                transcript, resume_context, user_id=user_id,
+            )
 
         if not qa_pairs:
             logger.warning("No QA pairs extracted; returning empty report.")
@@ -645,8 +712,15 @@ async def analyze_interview(
         # Owner's primary model drives scoring + synthesis (MDL-1);
         # resolved once, shared by every concurrent question task.
         analysis_llm = get_llm_for_role("primary", user_id=user_id)
+        # ANA-6: bound the fan-out — 30 questions used to mean 30 concurrent
+        # completions, a guaranteed rate-limit trip on most providers.
+        semaphore = asyncio.Semaphore(_ANALYSIS_MAX_CONCURRENCY)
 
         async def _run_one(pair: dict[str, Any], idx: int) -> dict[str, Any]:
+            async with semaphore:
+                return await _run_one_inner(pair, idx)
+
+        async def _run_one_inner(pair: dict[str, Any], idx: int) -> dict[str, Any]:
             context_text = _build_sliding_context(qa_pairs, idx)
             res = await _analyze_single_question(
                 qa_pair=pair,
@@ -692,7 +766,7 @@ async def analyze_interview(
 # Mock-specific batched analyzer
 # ══════════════════════════════════════════════════════════════════════════
 # When the QA pairs come from a mock interview (already structured, no ASR
-# noise, grounding_refs known), we can do better than the upload pipeline:
+# noise), we can do better than the upload pipeline:
 #   - batch_size questions per LLM call (token-efficient)
 #   - explicit prev / next sliding window so each question sees neighbours
 # The output shape matches `_analyze_single_question`, so `_synthesize_report`
@@ -776,11 +850,12 @@ async def _analyze_batch(
     jd_context: str,
     llm: LLM,
 ) -> list[dict[str, Any]]:
-    # NOTE: the prefix is intentionally fed FULL resume + JD (truncating to a
-    # massive 16k each, well within DeepSeek's 1M context). That cost is one
-    # cache miss on the first batch — every subsequent batch in the same finish
-    # call hits the prompt cache on the prefix prefix and pays only for the
-    # dynamic tail.
+    # NOTE: the prefix is intentionally fed FULL resume + JD (truncated to
+    # 16k/8k). Batches fire concurrently (bounded by the semaphore), so the
+    # shared prefix does NOT reliably hit the provider prompt cache — the
+    # first wave all miss; only batches scheduled after one completes can
+    # hit. The stable prefix still helps: retries and the synthesis call
+    # reuse it, and providers with racy cache insertion catch some of it.
     resume_for_prefix = (resume_context or "")[:16000]
     jd_for_prefix = (jd_context or "")[:8000]
 
@@ -796,7 +871,7 @@ async def _analyze_batch(
         batch_block=batch_block,
     )
 
-    # Default fallback: 0-score entries for each QA in the batch.
+    # Failed batch → 未评分 entries (score=None), not zeros (ANA-6).
     def _fallback() -> list[dict[str, Any]]:
         return [
             {
@@ -804,17 +879,17 @@ async def _analyze_batch(
                 "phase": q.get("phase", "general"),
                 "question": q["question"],
                 "answer": q["answer"],
-                "score": 0,
-                "critique": "分析失败",
+                "score": None,
+                "critique": "该题分析失败（模型调用异常），未计入总分。",
                 "improved_answer": "",
                 "tags": [],
+                "analysis_failed": True,
             }
             for q in batch
         ]
 
     try:
-        response = await llm.acomplete(prompt)
-        parsed = _clean_json_response(response.text)
+        parsed = await _acomplete_json_with_retry(llm, prompt)
         items_in = parsed.get("results") if isinstance(parsed, dict) else None
         if not isinstance(items_in, list):
             logger.warning("Batched analyzer returned non-list results; falling back")
@@ -894,7 +969,6 @@ async def analyze_mock_qa_batched(
             "question": str(pair.get("question") or ""),
             "answer": str(pair.get("answer") or ""),
             "is_follow_up": bool(pair.get("is_follow_up", False)),
-            "grounding_refs": pair.get("grounding_refs") or [],
             "topic": pair.get("topic"),
             "prior_quality": pair.get("answer_quality"),
         })
@@ -914,6 +988,8 @@ async def analyze_mock_qa_batched(
 
     # Owner's primary model drives scoring + synthesis (MDL-1).
     analysis_llm = get_llm_for_role("primary", user_id=user_id)
+    # Bounded fan-out (ANA-6) — same rationale as the upload path.
+    semaphore = asyncio.Semaphore(_ANALYSIS_MAX_CONCURRENCY)
 
     # Walk in batch_size strides, schedule batches concurrently.
     async def _run_batch(
@@ -921,14 +997,15 @@ async def analyze_mock_qa_batched(
         prev_window: list[dict[str, Any]],
         next_window: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        chunk = await _analyze_batch(
-            batch,
-            prev_window,
-            next_window,
-            resume_context=resume_context,
-            jd_context=jd_context,
-            llm=analysis_llm,
-        )
+        async with semaphore:
+            chunk = await _analyze_batch(
+                batch,
+                prev_window,
+                next_window,
+                resume_context=resume_context,
+                jd_context=jd_context,
+                llm=analysis_llm,
+            )
         _notify_progress(on_progress, len(chunk))
         return chunk
 

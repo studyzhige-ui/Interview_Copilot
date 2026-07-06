@@ -145,6 +145,33 @@ async def analyze_interview_endpoint(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/interview-records/{record_id}/reanalyze")
+@limiter.limit(RATE_EXPENSIVE)
+async def reanalyze_interview_record(
+    request: Request,
+    response: Response,
+    record_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Re-run the analysis pipeline for a failed or completed upload record
+    (ANA-7). Stage gates reuse the persisted transcript / QA shells, so a
+    re-score doesn't pay for ASR + extraction again."""
+    record = record_admin.get_owned_record(db, record_id, current_user.username)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Interview record not found")
+    try:
+        task = await asyncio.to_thread(record_admin.reanalyze_record, db, record)
+    except record_admin.ReanalyzeNotAllowed as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001 — dispatch failure already rolled back
+        raise HTTPException(
+            status_code=503,
+            detail="重新分析派发失败（任务队列暂不可用），请稍后重试。",
+        ) from exc
+    return {"status": "processing", "record_id": record_id, "task_id": task.id}
+
+
 @router.post("/analyze/{record_id}/cancel")
 async def cancel_analysis(
     record_id: str,

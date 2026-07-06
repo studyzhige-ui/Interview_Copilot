@@ -91,10 +91,30 @@ class InterviewAnalysisOrchestrator:
 
         try:
             if source == "upload":
-                transcript = await self._stage_transcribe(record_id, language=language)
-                qa_pairs = await self._stage_extract(
-                    record_id, transcript, resume_text, user_id=owner_username,
-                )
+                # ── Stage gates (ANA-3) ──────────────────────────────
+                # The pipeline is artifact-driven: transcript and QA
+                # shells are durable checkpoints. A retry / redelivery
+                # resumes from whatever already exists instead of paying
+                # for ASR (+minutes) and extraction (+LLM) again.
+                transcript = interview_record_service.get_transcript_text(record_id)
+                if transcript.strip():
+                    logger.info(
+                        "stage gate: reusing persisted transcript for %s (%d chars)",
+                        record_id, len(transcript),
+                    )
+                else:
+                    transcript = await self._stage_transcribe(record_id, language=language)
+
+                qa_pairs = self._load_existing_qa_shells(record_id)
+                if qa_pairs:
+                    logger.info(
+                        "stage gate: reusing %d persisted QA shells for %s",
+                        len(qa_pairs), record_id,
+                    )
+                else:
+                    qa_pairs = await self._stage_extract(
+                        record_id, transcript, resume_text, user_id=owner_username,
+                    )
             else:  # mock
                 qa_pairs = self._load_mock_qa(record_id)
                 transcript = self._compose_transcript_from_qa(qa_pairs)
@@ -133,6 +153,11 @@ class InterviewAnalysisOrchestrator:
                     jd_context=jd_text,
                     on_progress=_bump_progress,
                     user_id=owner_username,
+                    # ANA-1: reuse Stage 1's result — re-extracting inside
+                    # analyze_interview doubled the LLM cost and its
+                    # independently-sampled pairs could mismatch the
+                    # persisted shells (order_idx backfill misattribution).
+                    qa_pairs=qa_pairs,
                 )
             else:
                 from app.services.voice.interview_analysis_service import (
@@ -242,6 +267,36 @@ class InterviewAnalysisOrchestrator:
         )
         return qa_pairs or []
 
+    def _load_existing_qa_shells(self, record_id: str) -> list[dict[str, Any]]:
+        """Stage gate (ANA-3): QA shells persisted by an earlier attempt.
+
+        Returns [] when none exist (fresh run). Rows are returned in
+        order_idx order and renumbered 1-based to match extractor output.
+        """
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(InterviewQA)
+                .filter(InterviewQA.record_id == record_id)
+                .order_by(InterviewQA.order_idx)
+                .all()
+            )
+            return [
+                {
+                    "index": i,
+                    "question": row.question or "",
+                    "answer": row.answer or "",
+                    "question_summary": "",
+                    "phase": row.phase or "general",
+                    "is_follow_up": False,
+                    "parent_index": None,
+                }
+                for i, row in enumerate(rows, start=1)
+                if (row.question or "").strip()
+            ]
+        finally:
+            db.close()
+
     # ── Mock-specific helpers ─────────────────────────────────────────
 
     def _load_mock_qa(self, record_id: str) -> list[dict[str, Any]]:
@@ -294,7 +349,6 @@ class InterviewAnalysisOrchestrator:
                         "topic": None,
                         "action": None,
                         "answer_quality": None,
-                        "grounding_refs": [],
                     })
                     pending_q = None
             # system / tool roles are ignored

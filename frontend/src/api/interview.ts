@@ -80,6 +80,12 @@ export async function startAnalyze(payload: {
   return res.data;
 }
 
+/** ANA-7: re-run analysis for a failed/completed upload record. Stage gates
+ *  on the backend reuse the persisted transcript + QA shells. */
+export async function reanalyzeRecord(recordId: string): Promise<void> {
+  await apiClient.post(`/interview-records/${encodeURIComponent(recordId)}/reanalyze`);
+}
+
 export async function cancelAnalyze(recordId: string): Promise<void> {
   await apiClient.post(`/analyze/${encodeURIComponent(recordId)}/cancel`);
 }

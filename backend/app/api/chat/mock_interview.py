@@ -419,6 +419,24 @@ async def transcribe_short_clip(
         tf.write(contents)
 
     try:
+        # ANA-5: remote-first. When TRANSCRIPTION_PROVIDER resolves to a
+        # cloud provider the API process never loads WhisperX (1.5GB model
+        # + lock serialization stay out of the request path); the local
+        # path below only runs for the local_whisperx provider.
+        from app.services.voice import transcription_registry
+
+        try:
+            text = await transcription_registry.transcribe_plain(
+                local_path, language=language,
+            )
+            logger.info(
+                "transcribe ok (remote): user=%s lang=%s text_chars=%d",
+                current_user.username, language, len(text),
+            )
+            return {"text": text, "language": language or "", "duration_sec": 0.0}
+        except transcription_registry.LocalProviderOnly:
+            pass  # fall through to the local WhisperX path below
+
         from app.services.voice import audio_transcription_service as ats
 
         if ats.whisper_model is None:

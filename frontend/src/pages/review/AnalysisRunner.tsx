@@ -31,8 +31,7 @@ export function AnalysisRunner({ recordId, onProgress, onDone, onError }: Props)
   // don't re-open the SSE connection just because the parent
   // re-rendered and produced new arrow-function callbacks. Refs let
   // the long-lived stream loop dispatch to the LATEST callbacks each
-  // event without restarting the connection. Same pattern as
-  // ``useAnalysisStream`` — see that file for the longer rationale.
+  // event without restarting the connection.
   const onProgressRef = useRef(onProgress);
   const onDoneRef = useRef(onDone);
   const onErrorRef = useRef(onError);

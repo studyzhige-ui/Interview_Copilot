@@ -142,6 +142,53 @@ async def transcribe(file_path: str, language: Optional[str] = "zh") -> str:
     raise RuntimeError(f"Unknown provider kind: {p.kind!r}")
 
 
+class LocalProviderOnly(RuntimeError):
+    """Raised by transcribe_plain when the resolved provider is the local
+    WhisperX kind — the caller owns the local fallback path."""
+
+
+async def transcribe_plain(file_path: str, language: Optional[str] = "zh") -> str:
+    """Short-clip ASR: plain text, no speaker labels, no diarization.
+
+    Used by the mock-interview /transcribe endpoint (ANA-5): when
+    TRANSCRIPTION_PROVIDER resolves to a remote provider, the API process
+    never touches WhisperX (no 1.5GB model in the request path, no lock
+    serialization). Raises ``LocalProviderOnly`` for the local kind — the
+    endpoint then runs its own locked local path.
+    """
+    import httpx
+
+    cfg = resolve_transcription()
+    p = cfg.provider
+    if p.kind == "local_whisperx":
+        raise LocalProviderOnly(cfg.provider_id)
+    if p.kind != "openai_compat":
+        raise RuntimeError(f"Unknown provider kind: {p.kind!r}")
+
+    api_key = os.getenv(p.api_key_env, "").strip()
+    if not api_key:
+        raise RuntimeError(
+            f"TRANSCRIPTION_PROVIDER={cfg.provider_id} requires {p.api_key_env}"
+            " to be set in .env"
+        )
+    url = f"{p.api_base.rstrip('/')}/audio/transcriptions"
+    with open(file_path, "rb") as f:
+        body = f.read()
+    data: dict[str, Any] = {"model": cfg.model, "response_format": "text"}
+    if language and language.lower() != "auto":
+        data["language"] = language
+    files = {"file": (os.path.basename(file_path), body, "application/octet-stream")}
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            data=data,
+            files=files,
+        )
+        resp.raise_for_status()
+        return resp.text.strip()
+
+
 async def _transcribe_openai_compat(
     cfg: ResolvedTranscription,
     file_path: str,

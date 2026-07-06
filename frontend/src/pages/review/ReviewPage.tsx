@@ -8,7 +8,7 @@ import { UploadCards, applyDraftMetadata } from './UploadCards';
 import { AnalysisRunner, type AnalysisProgress } from './AnalysisRunner';
 import { Resizer } from '@/components/ui/Resizer';
 import { toast } from '@/store/uiStore';
-import { cancelAnalyze, getInterviewRecord, listInterviewRecords } from '@/api/interview';
+import { cancelAnalyze, getInterviewRecord, listInterviewRecords, reanalyzeRecord } from '@/api/interview';
 import { retryMockReview } from '@/api/mock';
 import { useToastOnError } from '@/hooks/useToastOnError';
 import type { InterviewRecordDetail, InterviewRecordListItem } from '@/types/api';
@@ -253,6 +253,26 @@ export function ReviewPage() {
     }
   };
 
+  const retryUploadAnalysis = async (recordId: string) => {
+    setRetryingReview(recordId);
+    try {
+      await reanalyzeRecord(recordId);
+      if (!isMounted.current) return;
+      // Same stale-entry cleanup as retryReview — the auto-spawn effect
+      // needs a fresh slot to register the SSE runner for the new run.
+      setAnalyses((prev) => {
+        if (!(recordId in prev)) return prev;
+        const { [recordId]: _, ...rest } = prev;
+        return rest;
+      });
+      await onRecordChanged();
+    } catch {
+      if (isMounted.current) toast.error('重新分析失败，请稍后再试');
+    } finally {
+      if (isMounted.current) setRetryingReview(null);
+    }
+  };
+
   // ── Analysis lifecycle ──────────────────────────────────────────────────
   const startAnalysis = (
     forActiveId: string,
@@ -431,6 +451,19 @@ export function ReviewPage() {
       );
     }
 
+    // Failed upload analysis: the audio + transcript are still persisted —
+    // one-click rerun (ANA-7) instead of the old delete-and-reupload dead end.
+    if (detail && status === 'failed' && !isMockSource) {
+      return (
+        <ReviewFailedState
+          kind="upload"
+          message={detail.error_message ?? null}
+          retrying={retryingReview === detail.id}
+          onRetry={() => { void retryUploadAnalysis(detail.id); }}
+        />
+      );
+    }
+
     // Mock records always come pre-attached to a record and a running analysis —
     // they never need new uploads. While analysis is in flight, show a
     // dedicated progress card backed by the existing SSE runner (auto-spawned
@@ -514,18 +547,34 @@ function ReviewFailedState({
   message,
   retrying,
   onRetry,
+  kind = 'mock',
 }: {
   message: string | null;
   retrying: boolean;
   onRetry: () => void;
+  /** mock = review generation failed; upload = analysis pipeline failed. */
+  kind?: 'mock' | 'upload';
 }) {
+  const copy = kind === 'mock'
+    ? {
+        header: '模拟面试 · 复盘生成失败',
+        title: '复盘没有生成成功',
+        hint: '生成过程中出现异常。面试问答内容已完整保留，可以直接重试。',
+        button: '重试复盘',
+      }
+    : {
+        header: '面试录音 · 分析失败',
+        title: '分析没有完成',
+        hint: '录音和已完成的中间结果都已保留，重新分析会从断点继续，不需要重新上传。',
+        button: '重新分析',
+      };
   return (
     <div className="max-w-3xl mx-auto p-10">
       <div className="bg-white border border-red-200 rounded-2xl shadow-sm p-10">
-        <div className="text-xs text-stone-500 mb-2">模拟面试 · 复盘生成失败</div>
-        <div className="text-sm text-red-700 mb-1 font-medium">复盘没有生成成功</div>
+        <div className="text-xs text-stone-500 mb-2">{copy.header}</div>
+        <div className="text-sm text-red-700 mb-1 font-medium">{copy.title}</div>
         <div className="text-xs text-stone-500 mb-6">
-          {message || '生成过程中出现异常。面试问答内容已完整保留，可以直接重试。'}
+          {message || copy.hint}
         </div>
         <button
           type="button"
@@ -533,7 +582,7 @@ function ReviewFailedState({
           disabled={retrying}
           className="text-sm text-white px-4 py-2 rounded-lg bg-primary-600 hover:bg-primary-700 disabled:opacity-60"
         >
-          {retrying ? '重新派发中…' : '重试复盘'}
+          {retrying ? '重新派发中…' : copy.button}
         </button>
       </div>
     </div>

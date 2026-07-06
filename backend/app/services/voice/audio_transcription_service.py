@@ -203,7 +203,8 @@ def _run_whisperx_sync(file_path: str, language: str | None = "zh") -> str:
         kwargs["language"] = effective_lang
     result = whisper_model.transcribe(audio, **kwargs)
     if diarize_model is not None:
-        diarize_segments = diarize_model(audio, min_speakers=2, max_speakers=2)
+        diarize_segments = diarize_model(audio, min_speakers=settings.DIARIZATION_MIN_SPEAKERS,
+        max_speakers=settings.DIARIZATION_MAX_SPEAKERS)
         result = whisperx.assign_word_speakers(diarize_segments, result)
     return _segments_to_markdown(result.get("segments", []))
 
@@ -238,7 +239,8 @@ def align_remote_words_with_local_diarization(
     import whisperx
 
     audio = whisperx.load_audio(file_path)
-    diarize_segments = diarize_model(audio, min_speakers=2, max_speakers=2)
+    diarize_segments = diarize_model(audio, min_speakers=settings.DIARIZATION_MIN_SPEAKERS,
+        max_speakers=settings.DIARIZATION_MAX_SPEAKERS)
     # whisperx.assign_word_speakers wants a dict with "segments" containing
     # word-level entries. The OpenAI verbose_json shape is already close —
     # word entries use "word"/"start"/"end" keys, exactly what whisperx expects.
