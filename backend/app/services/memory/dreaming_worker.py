@@ -68,7 +68,6 @@ from app.db.database import SessionLocal
 from app.models.chat import ConversationMessage, Conversation
 from app.models.interview_record import InterviewRecord
 from app.models.user import User
-from app.rag.embeddings import agent_fast_llm
 from app.services.memory import memory_ability_state_service, memory_document_service
 from app.services.memory._dispatch import dispatch_memory_patches
 from app.services.memory._extraction_common import format_ability_index, parse_json_patches
@@ -367,8 +366,9 @@ def dream_for_record(record_id: str) -> dict[str, Any]:
             try:
                 # NB: this is a sync call from a sync worker — wrap the
                 # async LLM in run_async via the worker helper.
+                from app.core.llm_client_factory import get_llm_for_role
                 from app.worker.tasks import run_async
-                response = run_async(agent_fast_llm.acomplete(
+                response = run_async(get_llm_for_role("utility", user_id=user_id).acomplete(
                     prompt,
                     response_format={"type": "json_object"},
                 ))

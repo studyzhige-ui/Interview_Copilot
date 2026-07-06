@@ -109,7 +109,8 @@ def test_generate_next_turn_parses_llm_output():
         "stage_key": "resume_project_deep_dive",
         "ready_to_finish": False,
     })
-    with patch.object(mod, "_mock_llm") as mock_llm:
+    with patch.object(mod, "get_llm_for_role") as _factory:
+        mock_llm = _factory.return_value
         mock_llm.acomplete = AsyncMock(return_value=resp)
         turn = asyncio.run(generate_next_turn(
             prefix="P", stages=_stages(), current_stage_key="self_intro",
@@ -127,7 +128,8 @@ def test_generate_next_turn_rejects_unknown_stage_key():
     """An LLM-hallucinated stage outside the plan keeps the current stage."""
     resp = MagicMock()
     resp.text = json.dumps({"message": "继续", "stage_key": "made_up", "ready_to_finish": False})
-    with patch.object(mod, "_mock_llm") as mock_llm:
+    with patch.object(mod, "get_llm_for_role") as _factory:
+        mock_llm = _factory.return_value
         mock_llm.acomplete = AsyncMock(return_value=resp)
         turn = asyncio.run(generate_next_turn(
             prefix="P", stages=_stages(), current_stage_key="role_technical_assessment",
@@ -141,7 +143,8 @@ def test_generate_next_turn_survives_parse_failure():
     moving with a safe generic line and the current stage held."""
     resp = MagicMock()
     resp.text = "not json at all"
-    with patch.object(mod, "_mock_llm") as mock_llm:
+    with patch.object(mod, "get_llm_for_role") as _factory:
+        mock_llm = _factory.return_value
         mock_llm.acomplete = AsyncMock(return_value=resp)
         turn = asyncio.run(generate_next_turn(
             prefix="P", stages=_stages(), current_stage_key="self_intro",

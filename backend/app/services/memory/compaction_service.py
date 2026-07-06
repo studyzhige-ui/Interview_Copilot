@@ -13,7 +13,7 @@ lives in ``context_assembly_pipeline.py``; this module is a pure tool.
 
 import logging
 
-from app.rag.embeddings import agent_fast_llm
+from app.core.llm_client_factory import get_llm_for_role
 from app.services.chat.context_assembly_pipeline import count_tokens
 from app.services.memory._json_payload import _extract_json_payload
 
@@ -70,7 +70,9 @@ COMPACTION_PROMPT = """你是一个对话摘要助手。
 """
 
 
-async def summarize_conversation(old_summary: str, conversation: str) -> str:
+async def summarize_conversation(
+    old_summary: str, conversation: str, *, user_id: str | None = None,
+) -> str:
     """The single LLM summarization core — used by BOTH the outer assembly-time
     compaction (``ContextAssemblyPipeline._maybe_compact``) and the inner
     loop autocompact (``QueryLoopCompactor.autocompact``).
@@ -85,7 +87,7 @@ async def summarize_conversation(old_summary: str, conversation: str) -> str:
         new_conversation=conversation,
     )
     try:
-        response = await agent_fast_llm.acomplete(
+        response = await get_llm_for_role("utility", user_id=user_id).acomplete(
             prompt, response_format={"type": "json_object"},
         )
         new_summary = str(

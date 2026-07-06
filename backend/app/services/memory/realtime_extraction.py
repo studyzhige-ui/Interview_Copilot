@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 
 from app.db.database import SessionLocal
 from app.models.chat import Conversation
-from app.rag.embeddings import agent_fast_llm
+from app.core.llm_client_factory import get_llm_for_role
 from app.services.memory import memory_ability_state_service, memory_document_service
 from app.services.memory._dispatch import dispatch_memory_patches
 from app.services.memory._extraction_common import format_ability_index, parse_json_patches
@@ -101,7 +101,8 @@ def run_realtime_extraction(
             )
 
             response = run_async(
-                agent_fast_llm.acomplete(prompt, response_format={"type": "json_object"})
+                get_llm_for_role("utility", user_id=user_id)
+                .acomplete(prompt, response_format={"type": "json_object"})
             )
             patches = parse_json_patches(str(response.text))
 

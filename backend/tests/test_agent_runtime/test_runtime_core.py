@@ -408,8 +408,8 @@ def test_autocompact_summarizes_body_keeps_head_and_tail(monkeypatch):
     import app.services.memory.compaction_service  # noqa: F401
     monkeypatch.setattr(
         sys.modules["app.services.memory.compaction_service"],
-        "agent_fast_llm",
-        _StubLLM(),
+        "get_llm_for_role",
+        lambda role, user_id=None: _StubLLM(),
     )
 
     pipeline = QueryLoopCompactor(profile=_profile())

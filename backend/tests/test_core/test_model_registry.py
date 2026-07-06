@@ -111,7 +111,6 @@ def test_normalize_selection_drops_pre_p6l_bare_ids():
     """Pre-P6-L profile ids ('deepseek-v4-flash', no slash) must not stick."""
     normalized = _normalize_selection({
         "primary": "deepseek-v4-flash",
-        "fast": "deepseek-chat",
         "agent": "deepseek-chat",
         "mock_interview": "deepseek-reasoner",
     })
@@ -122,12 +121,13 @@ def test_normalize_selection_drops_pre_p6l_bare_ids():
 def test_normalize_selection_preserves_valid_provider_slash_ids():
     normalized = _normalize_selection({
         "primary": "openai/gpt-4o",
-        "fast": "deepseek/deepseek-chat",
+        # utility is a SYSTEM role — raw input for it must be ignored.
+        "utility": "openai/gpt-4o",
         "agent": "openai/gpt-4o",
         "mock_interview": "openai/gpt-4o-mini",
     })
     assert normalized["primary"] == "openai/gpt-4o"
-    assert normalized["fast"] == "deepseek/deepseek-chat"
+    assert normalized["utility"] == ROLE_DEFAULTS["utility"]
     assert normalized["agent"] == "openai/gpt-4o"
     assert normalized["mock_interview"] == "openai/gpt-4o-mini"
 
@@ -198,15 +198,15 @@ def test_get_profile_for_role_raises_when_catalog_empty(monkeypatch):
 def test_runtime_selection_is_per_user_isolated():
     """A's update doesn't leak into B's read (P6-C cross-tenant fix)."""
     sel_a = user_model_selection.update_runtime_selection(
-        {"fast": "openai/gpt-4o"}, user_id="alice",
+        {"primary": "openai/gpt-4o"}, user_id="alice",
     )
-    assert sel_a["fast"] == "openai/gpt-4o"
-    assert user_model_selection.get_runtime_selection(user_id="alice")["fast"] == "openai/gpt-4o"
+    assert sel_a["primary"] == "openai/gpt-4o"
+    assert user_model_selection.get_runtime_selection(user_id="alice")["primary"] == "openai/gpt-4o"
     bob_sel = user_model_selection.get_runtime_selection(user_id="bob")
-    assert bob_sel["fast"] == ROLE_DEFAULTS["fast"]
+    assert bob_sel["primary"] == ROLE_DEFAULTS["primary"]
     # Process-default lookup (no user) returns defaults too.
     process_sel = user_model_selection.get_runtime_selection()
-    assert process_sel["fast"] == ROLE_DEFAULTS["fast"]
+    assert process_sel["primary"] == ROLE_DEFAULTS["primary"]
 
 
 # ── validate_role_update ─────────────────────────────────────────────────
@@ -311,3 +311,65 @@ def test_resolve_api_base_returns_default_when_db_lookup_fails(monkeypatch, _stu
         raise RuntimeError("DB down")
     monkeypatch.setattr("app.db.database.SessionLocal", boom)
     assert llm_client_factory._resolve_api_base(prof, user_id="alice") == prof.api_base
+
+
+# ── MDL-1/MDL-3: ready-aware role resolution ─────────────────────────────
+
+
+def _stub_user_keys(monkeypatch, providers: set[str]):
+    """User has UI-configured keys for ``providers``; no env keys at all."""
+    import app.services.auth.user_api_key_service as key_svc
+
+    monkeypatch.setattr(
+        key_svc, "list_user_api_keys",
+        lambda user_id, db=None: {p: {"set": True} for p in providers},
+    )
+    for env in ("DEEPSEEK_API_KEY", "OPENAI_API_KEY", "NVIDIA_API_KEY"):
+        monkeypatch.delenv(env, raising=False)
+
+
+def test_openai_only_user_gets_ready_profile_not_default(monkeypatch):
+    """Acceptance: a new user with ONLY an OpenAI key must resolve every role
+    to a profile they can actually call — not the deepseek defaults that
+    would 401 while the Models page shows green."""
+    _stub_user_keys(monkeypatch, {"openai"})
+
+    for role in ("primary", "agent", "mock_interview", "utility"):
+        profile = get_profile_for_role(role, user_id="alice")
+        assert profile.provider == "openai", (role, profile.id)
+
+
+def test_ready_selection_wins_over_default(monkeypatch):
+    _stub_user_keys(monkeypatch, {"openai"})
+    monkeypatch.setattr(
+        user_model_selection, "_load_user_selection",
+        lambda user_id: {"primary": "openai/gpt-4o-mini"},
+    )
+    assert get_profile_for_role("primary", user_id="alice").id == "openai/gpt-4o-mini"
+
+
+def test_not_ready_selection_degrades_to_user_primary(monkeypatch):
+    """utility follows the user's ready primary when its default isn't ready."""
+    _stub_user_keys(monkeypatch, {"openai"})
+    monkeypatch.setattr(
+        user_model_selection, "_load_user_selection",
+        lambda user_id: {"primary": "openai/gpt-4o"},
+    )
+    assert get_profile_for_role("utility", user_id="alice").id == "openai/gpt-4o"
+
+
+def test_agent_role_never_degrades_to_non_fc(monkeypatch):
+    """Even under ready-fallback, agent must get a function-calling profile."""
+    _stub_user_keys(monkeypatch, {"nvidia"})  # only a non-FC profile is ready
+    profile = get_profile_for_role("agent", user_id="alice")
+    # nvidia/nemotron-1 is non-FC → ready fallback must skip it; the
+    # historical not-ready chain then yields the FC default.
+    assert profile.supports_function_calling
+
+
+def test_no_keys_at_all_falls_back_to_historical_chain(monkeypatch):
+    """Zero keys anywhere → old behaviour: resolve the default and let the
+    provider call surface the auth error."""
+    _stub_user_keys(monkeypatch, set())
+    profile = get_profile_for_role("primary", user_id="alice")
+    assert profile.id == ROLE_DEFAULTS["primary"]

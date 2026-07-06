@@ -25,7 +25,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from app.rag.embeddings import mock_interview_llm as _mock_llm
+from app.core.llm_client_factory import get_llm_for_role
 
 logger = logging.getLogger(__name__)
 
@@ -238,6 +238,7 @@ async def generate_next_turn(
     current_stage_key: str,
     recent_messages: list[dict[str, str]],
     user_answer: str,
+    username: str | None = None,
 ) -> NextTurn:
     """One LLM call → the next interviewer line + stage + finish signal.
 
@@ -260,7 +261,8 @@ async def generate_next_turn(
     )
 
     try:
-        response = await _mock_llm.acomplete(prompt, response_format={"type": "json_object"})
+        llm = get_llm_for_role("mock_interview", user_id=username)
+        response = await llm.acomplete(prompt, response_format={"type": "json_object"})
         data = _clean_json(str(response.text))
     except Exception as exc:  # noqa: BLE001 — any failure: keep the interview moving
         logger.warning("generate_next_turn failed (non-fatal, advancing safely): %s", exc)

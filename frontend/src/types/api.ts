@@ -279,7 +279,7 @@ export interface ModelProfile {
   auto_discovered?: boolean;
 }
 
-export type ModelRole = 'primary' | 'fast' | 'agent' | 'mock_interview';
+export type ModelRole = 'primary' | 'agent' | 'mock_interview';
 
 export interface ModelRuntime {
   selection: Record<ModelRole, string>;

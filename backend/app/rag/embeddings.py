@@ -8,14 +8,14 @@ from app.rag.embedding_registry import build_embedding, resolve_embedding
 logger = logging.getLogger(__name__)
 
 
-agent_fast_llm = RuntimeLLMProxy(role="fast")
-# Dedicated proxy for mock-interview LLM calls (plan generation, interviewer
-# responses, batch evaluation). Separate from `agent_fast_llm` so the user can
-# pick a different model for mock from the Models page.
-mock_interview_llm = RuntimeLLMProxy(role="mock_interview")
-
-
 def refresh_primary_llm() -> None:
+    """(Re)bind the SYSTEM-view primary LLM into LlamaIndex ``Settings.llm``.
+
+    Settings.llm is the system path only (MDL-1): LlamaIndex components with
+    no request context (RAG synthesizers etc). Every user-facing pipeline —
+    L1 chat, planner, mock, memory, resume, analysis — resolves its own LLM
+    explicitly via ``get_llm_for_role(role, user_id=owner)``.
+    """
     profile = get_profile_for_role("primary")
     Settings.llm = get_llm_for_role("primary")
     logger.info(

@@ -385,7 +385,9 @@ class ContextAssemblyPipeline:
 
         from app.services.memory.compaction_service import summarize_conversation
 
-        new_summary = await summarize_conversation(old_summary, conversation)
+        new_summary = await summarize_conversation(
+            old_summary, conversation, user_id=meta.get("user_id"),
+        )
         if not new_summary:
             return cleaned_turns, old_summary
 

@@ -179,6 +179,7 @@ async def submit_mock_answer(
             runtime=runtime,
             answer_text=body.answer_text,
             answer_audio_file_asset_id=body.answer_audio_file_asset_id,
+            username=current_user.username,
         )
     except Exception as exc:  # noqa: BLE001
         db.rollback()

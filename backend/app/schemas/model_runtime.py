@@ -29,7 +29,6 @@ _SYSTEM_RESERVED_HEADER_NAMES = {
 class RuntimeSelectionUpdateRequest(BaseModel):
     """``PATCH /models/selection`` — pick which profile drives each role."""
     primary: str | None = Field(default=None, description="Primary LLM profile id")
-    fast: str | None = Field(default=None, description="(internal) fast utility LLM, kept for back-compat")
     agent: str | None = Field(default=None, description="Function-calling agent profile id")
     mock_interview: str | None = Field(default=None, description="Mock-interview plan / interviewer LLM")
 

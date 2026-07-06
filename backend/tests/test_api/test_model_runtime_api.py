@@ -109,7 +109,7 @@ def test_models_runtime_get_resolves_each_role(client, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "success"
-    assert set(body["resolved"].keys()) == {"primary", "fast", "agent", "mock_interview"}
+    assert set(body["resolved"].keys()) == {"primary", "agent", "mock_interview", "utility"}
     assert body["resolved"]["primary"]["profile_id"] == "p_primary"
 
 
@@ -232,12 +232,29 @@ def test_delete_api_key_reports_status(client):
 # ── /models/ping ──────────────────────────────────────────────────────────
 
 
-def test_ping_models_returns_one_result_per_profile(client, monkeypatch):
-    """Ping iterates the catalog's current ``_get_all_profiles()`` snapshot."""
-    fake_profiles = {"p1": object(), "p2": object()}
+def test_ping_models_pings_only_user_ready_profiles(client, monkeypatch):
+    """MDL-6: one result per catalog profile, but only READY profiles get a
+    real request — the rest are answered locally as 未配置."""
+
+    class FakeProfile:
+        def __init__(self, pid):
+            self.id = pid
+            self.provider = "openai"
+            self.model = f"model-{pid}"
+            self.api_key_env = f"KEY_{pid.upper()}"
+
+    fake_profiles = {"p1": FakeProfile("p1"), "p2": FakeProfile("p2")}
     monkeypatch.setattr(model_runtime_mod, "_get_all_profiles", lambda: fake_profiles)
+    # Only p1 is ready for this user.
+    monkeypatch.setattr(
+        model_runtime_mod, "profile_ready",
+        lambda profile, user_id=None: profile.id == "p1",
+    )
+
+    pinged: list[str] = []
 
     async def fake_ping(pid, user_id=None):
+        pinged.append(pid)
         return {"profile_id": pid, "ok": True, "latency_ms": 1}
 
     monkeypatch.setattr(model_runtime_mod, "_ping_one", fake_ping)
@@ -246,5 +263,8 @@ def test_ping_models_returns_one_result_per_profile(client, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     ids = sorted(r["profile_id"] for r in body["results"])
-    assert ids == ["p1", "p2"]
-    assert all(r["ok"] for r in body["results"])
+    assert ids == ["p1", "p2"]          # still one row per profile
+    assert pinged == ["p1"]             # but only the ready one was pinged
+    by_id = {r["profile_id"]: r for r in body["results"]}
+    assert by_id["p1"]["ok"] is True
+    assert by_id["p2"]["ok"] is False and "未配置" in by_id["p2"]["error"]

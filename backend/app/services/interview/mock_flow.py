@@ -284,6 +284,7 @@ async def submit_answer(
     runtime,
     answer_text: str,
     answer_audio_file_asset_id: str | None,
+    username: str | None = None,
 ):
     """One turn: persist the candidate's answer, generate the next interviewer
     line from the plan + stage + recent messages, persist it, advance runtime.
@@ -323,6 +324,7 @@ async def submit_answer(
         current_stage_key=runtime.current_stage_key or stages[0]["key"],
         recent_messages=recent,
         user_answer=answer_text,
+        username=username,
     )
 
     assistant_msg = append_message(db, conversation_id, "assistant", turn.interviewer_message)

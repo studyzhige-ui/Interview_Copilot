@@ -74,18 +74,28 @@ class ModelProfile:
 # to the first function-calling profile in the catalog so the system
 # never deadlocks on a missing default.
 ROLE_DEFAULTS: dict[str, str] = {
-    # Three user-facing roles:
+    # Three USER-FACING roles (selectable on the Models page):
     #   primary        — chat / debrief default model (must support function
     #                    calling when the user toggles the AGENT panel button)
     #   agent          — agentic / tool-use chains (function calling required)
-    #   mock_interview — drives mock-interview plan + interviewer responses;
-    #                    aliased internally as `fast` for back-compat (older
-    #                    code paths still read `fast`).
+    #   mock_interview — drives mock-interview plan + interviewer responses
+    # One SYSTEM role (never selectable, resolved automatically):
+    #   utility        — high-volume low-stakes internal calls: query planner,
+    #                    QA extraction, memory extraction/dreaming/compaction,
+    #                    resume parsing, diagnostics. Formerly named "fast".
+    #                    Resolution order: this default if ready for the
+    #                    caller, else the user's primary selection, else any
+    #                    profile the user is ready for (see
+    #                    ``get_profile_for_role``).
     "primary":        "deepseek/deepseek-chat",
-    "fast":           "deepseek/deepseek-chat",
     "agent":          "deepseek/deepseek-chat",
     "mock_interview": "deepseek/deepseek-chat",
+    "utility":        "deepseek/deepseek-chat",
 }
+
+# Roles the user can bind on the Models page / PUT /models/runtime. utility
+# is deliberately absent — it's a system role.
+USER_SELECTABLE_ROLES: tuple[str, ...] = ("primary", "agent", "mock_interview")
 
 
 # ── Profile cache ───────────────────────────────────────────────────────

@@ -256,7 +256,7 @@ class AgentLoopStrategy:
         client, profile = build_async_openai_client_for_role(
             "agent", user_id=ctx.user_id,
         )
-        compactor = QueryLoopCompactor(profile=profile)
+        compactor = QueryLoopCompactor(profile=profile, user_id=ctx.user_id)
 
         # Per-turn tool gating. When the global-memory toggle is OFF
         # for this session, drop ``recall_memory`` and ``save_memory``

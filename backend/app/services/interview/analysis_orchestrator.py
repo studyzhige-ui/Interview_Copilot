@@ -69,6 +69,14 @@ class InterviewAnalysisOrchestrator:
             source = record.source
             resume_text = record.resume_text_snapshot or ""
             jd_text = record.jd_text_snapshot or ""
+            # Owner identity for LLM resolution (MDL-1): background analysis
+            # runs with the record owner's model selection + keys. The
+            # credential chain is username-keyed; record.user_id is the pk.
+            from app.models.user import User
+
+            owner_username = (
+                db.query(User.username).filter(User.id == record.user_id).scalar()
+            )
         finally:
             db.close()
 
@@ -84,7 +92,9 @@ class InterviewAnalysisOrchestrator:
         try:
             if source == "upload":
                 transcript = await self._stage_transcribe(record_id, language=language)
-                qa_pairs = await self._stage_extract(record_id, transcript, resume_text)
+                qa_pairs = await self._stage_extract(
+                    record_id, transcript, resume_text, username=owner_username,
+                )
             else:  # mock
                 qa_pairs = self._load_mock_qa(record_id)
                 transcript = self._compose_transcript_from_qa(qa_pairs)
@@ -122,6 +132,7 @@ class InterviewAnalysisOrchestrator:
                     resume_context=resume_text,
                     jd_context=jd_text,
                     on_progress=_bump_progress,
+                    user_id=owner_username,
                 )
             else:
                 from app.services.voice.interview_analysis_service import (
@@ -136,6 +147,7 @@ class InterviewAnalysisOrchestrator:
                     ctx_prev=3,
                     ctx_next=2,
                     on_progress=_bump_progress,
+                    user_id=owner_username,
                 )
 
             self._persist_analysis(record_id, qa_pairs, report)
@@ -144,7 +156,7 @@ class InterviewAnalysisOrchestrator:
             # Non-fatal — a missing summary just falls back to the
             # truncated transcript at render time.
             try:
-                await self._generate_debrief_summary(record_id)
+                await self._generate_debrief_summary(record_id, username=owner_username)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "debrief_summary generation failed for %s (non-fatal): %s",
@@ -216,7 +228,8 @@ class InterviewAnalysisOrchestrator:
                 os.unlink(local_path)
 
     async def _stage_extract(
-        self, record_id: str, transcript: str, resume_text: str
+        self, record_id: str, transcript: str, resume_text: str,
+        *, username: str | None = None,
     ) -> list[dict[str, Any]]:
         """LLM extracts structured Q&A pairs from the diarized transcript."""
         from app.services.voice.interview_analysis_service import (
@@ -224,7 +237,9 @@ class InterviewAnalysisOrchestrator:
         )
 
         interview_record_service.set_status(record_id, STATUS_EXTRACTING)
-        qa_pairs = await extract_qa_pairs_with_llm(transcript, resume_text)
+        qa_pairs = await extract_qa_pairs_with_llm(
+            transcript, resume_text, user_id=username,
+        )
         return qa_pairs or []
 
     # ── Mock-specific helpers ─────────────────────────────────────────
@@ -393,7 +408,9 @@ class InterviewAnalysisOrchestrator:
             db.close()
 
 
-    async def _generate_debrief_summary(self, record_id: str) -> None:
+    async def _generate_debrief_summary(
+        self, record_id: str, *, username: str | None = None,
+    ) -> None:
         """LLM-produced 200-400 字 summary of one finished interview.
 
         The summary is the centrepiece of the ``record_context`` prompt
@@ -487,10 +504,10 @@ class InterviewAnalysisOrchestrator:
             '描述要凝练成段落。>"}\n'
         )
 
-        from app.rag.embeddings import agent_fast_llm
+        from app.core.llm_client_factory import get_llm_for_role
         from app.services.memory._json_payload import _extract_json_payload
 
-        response = await agent_fast_llm.acomplete(prompt)
+        response = await get_llm_for_role("utility", user_id=username).acomplete(prompt)
         payload = _extract_json_payload(str(response.text))
         if not isinstance(payload, dict):
             return

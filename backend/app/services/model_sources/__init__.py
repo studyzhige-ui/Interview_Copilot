@@ -23,12 +23,10 @@ Public API:
     ProviderDefaults, ModelEntry                 — dataclasses
     refresh_catalog() / refresh_catalog_for(provider)
     load_catalog() / load_catalog_for(provider)
-    invalidate_all()                             — wipe Redis cache
 """
 from .base import ModelEntry, ProviderDefaults
 from .providers import PROVIDERS, get_provider_defaults, known_provider_ids
 from .pipeline import (
-    invalidate_all,
     load_catalog,
     load_catalog_for,
     refresh_catalog,
@@ -45,5 +43,4 @@ __all__ = [
     "load_catalog_for",
     "refresh_catalog",
     "refresh_catalog_for",
-    "invalidate_all",
 ]

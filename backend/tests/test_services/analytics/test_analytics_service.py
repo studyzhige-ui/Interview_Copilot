@@ -41,7 +41,8 @@ async def test_generate_report_successful_json_parse():
     mock_response.text = report_json
 
     with patch(f"{_SVC}._extract_ability_records", return_value=memories), \
-         patch(f"{_SVC}.agent_fast_llm") as llm_mock:
+         patch(f"{_SVC}.get_llm_for_role") as factory_mock:
+        llm_mock = factory_mock.return_value
         llm_mock.acomplete = AsyncMock(return_value=mock_response)
         from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
         result = await generate_comprehensive_report(limit=20, user_id="u1")
@@ -59,7 +60,8 @@ async def test_generate_report_strips_markdown_codeblock():
     mock_response.text = raw
 
     with patch(f"{_SVC}._extract_ability_records", return_value=memories), \
-         patch(f"{_SVC}.agent_fast_llm") as llm_mock:
+         patch(f"{_SVC}.get_llm_for_role") as factory_mock:
+        llm_mock = factory_mock.return_value
         llm_mock.acomplete = AsyncMock(return_value=mock_response)
         from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
         result = await generate_comprehensive_report(limit=20, user_id="u1")
@@ -74,7 +76,8 @@ async def test_generate_report_fallback_on_invalid_json():
     mock_response.text = "这不是合法的 JSON 格式"
 
     with patch(f"{_SVC}._extract_ability_records", return_value=memories), \
-         patch(f"{_SVC}.agent_fast_llm") as llm_mock:
+         patch(f"{_SVC}.get_llm_for_role") as factory_mock:
+        llm_mock = factory_mock.return_value
         llm_mock.acomplete = AsyncMock(return_value=mock_response)
         from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
         result = await generate_comprehensive_report(limit=20, user_id="u1")

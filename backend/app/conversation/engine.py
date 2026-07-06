@@ -252,6 +252,7 @@ class ConversationEngine:
                 recent_turns=recent_turns,
                 learning_strategy_description=universal_ctx.learning_strategy_description,
                 global_memory_on=global_memory_on,
+                user_id=self.user_id,
             )
 
         # Step 3: concurrent RAG + memory body loads.

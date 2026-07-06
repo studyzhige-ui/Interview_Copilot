@@ -13,7 +13,7 @@ import json
 import logging
 from typing import Any
 
-from app.rag.embeddings import agent_fast_llm
+from app.core.llm_client_factory import get_llm_for_role
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ async def generate_comprehensive_report(limit: int = 20, user_id: str | None = N
 输入记录：
 {structured_payload}
 """
-        response = await agent_fast_llm.acomplete(
+        response = await get_llm_for_role("utility", user_id=user_id).acomplete(
             sys_prompt,
             response_format={"type": "json_object"},
         )

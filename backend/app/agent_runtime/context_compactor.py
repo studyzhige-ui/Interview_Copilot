@@ -103,8 +103,11 @@ class QueryLoopCompactor:
     lists and dicts — the original messages list is never modified.
     """
 
-    def __init__(self, profile: ModelProfile):
+    def __init__(self, profile: ModelProfile, user_id: str | None = None):
         self.profile = profile
+        # Owner of the conversation — the autocompact summarizer resolves the
+        # utility LLM with this user's selection/keys (MDL-1).
+        self.user_id = user_id
         self.cheap_prepass_threshold = get_cheap_prepass_threshold(profile)
         self.blocking_limit = get_blocking_limit(profile)
         self.has_attempted_reactive_compact: bool = False
@@ -212,7 +215,7 @@ class QueryLoopCompactor:
 
         from app.services.memory.compaction_service import summarize_conversation
 
-        summary = await summarize_conversation("", conversation)
+        summary = await summarize_conversation("", conversation, user_id=self.user_id)
         if not summary:
             return messages
 

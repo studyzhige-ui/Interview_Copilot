@@ -20,7 +20,7 @@ from llama_index.core import Settings
 
 from app.conversation.events import HarnessEvent
 from app.conversation.strategy import StrategyContext, StrategyResult
-from app.rag.embeddings import agent_fast_llm
+from app.core.llm_client_factory import get_llm_for_role
 from app.services.chat.citation import validate_citations
 from app.services.chat.context_assembly_pipeline import (
     AssembledContext,
@@ -131,12 +131,14 @@ class ChatPipelineStrategy:
             prompt = self.renderer.render_answer_prompt(
                 assembled, system_prompt=RAG_SYSTEM_RULES,
             )
-            response_generator = await Settings.llm.astream_complete(prompt)
+            llm = get_llm_for_role("primary", user_id=ctx.user_id)
+            response_generator = await llm.astream_complete(prompt)
         else:
             prompt = self.renderer.render_answer_prompt(
                 assembled, system_prompt=DIRECT_SYSTEM_PROMPT,
             )
-            response_generator = await agent_fast_llm.astream_complete(prompt)
+            llm = get_llm_for_role("utility", user_id=ctx.user_id)
+            response_generator = await llm.astream_complete(prompt)
 
         yield HarnessEvent.status(
             "正在生成回答...", step=0, elapsed_ms=0,

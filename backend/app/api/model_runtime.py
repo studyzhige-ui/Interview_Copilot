@@ -132,9 +132,11 @@ async def api_model_runtime(
             }
             for role, profile in {
                 "primary": get_profile_for_role("primary", user_id=uid),
-                "fast": get_profile_for_role("fast", user_id=uid),
                 "agent": get_profile_for_role("agent", user_id=uid),
                 "mock_interview": get_profile_for_role("mock_interview", user_id=uid),
+                # System role — shown read-only so the user can see which
+                # model handles internal calls (planner/memory/extraction).
+                "utility": get_profile_for_role("utility", user_id=uid),
             }.items()
         },
     }
@@ -233,6 +235,23 @@ async def upsert_my_api_key(
     # Refresh the LLM cache so the next request uses the new key.
     from app.core.model_registry import clear_llm_cache_for_provider
     clear_llm_cache_for_provider(provider)
+    # MDL-4: kick a live /v1/models fetch for THIS provider with the fresh
+    # key, fire-and-forget. Without it, a UI-only-key deployment (no env
+    # vars) never advances past the shipped seed catalog until the nightly
+    # beat. Small-deployment tradeoff, deliberate: the fetched slice lands
+    # in the SHARED catalog cache (discovery is key-independent for our
+    # vendors); per-user gating stays in the ready flags.
+    import asyncio as _asyncio
+
+    from app.services.model_sources.pipeline import refresh_catalog_for
+
+    async def _refresh_provider_catalog() -> None:
+        try:
+            await refresh_catalog_for(provider, user_id=current_user.username)
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning("post-upsert catalog refresh failed for %s: %s", provider, exc)
+
+    _asyncio.create_task(_refresh_provider_catalog())
     # Invalidate this user's cached catalog response so the new "ready" flag
     # for the just-configured provider shows up on the next /catalog GET.
     # NOTE: we do NOT touch the 24h discovery cache (model_catalog:v3:*).
@@ -273,9 +292,26 @@ async def ping_models(
     per profile rather than discovering breakage only when they try to use
     a model in production.
     """
-    ids = list(_get_all_profiles().keys())
-    results = await asyncio.gather(*[_ping_one(pid, user_id=current_user.username) for pid in ids])
-    return {"results": results, "checked_at": int(time.time())}
+    # MDL-6: only profiles this user is READY for get a real (paid)
+    # request; the rest are answered locally so the UI still gets one
+    # result per profile. Pre-fix this fired a 1-token completion at every
+    # env-ready profile in the catalog on each refresh click.
+    all_profiles = _get_all_profiles()
+    ready_ids = [
+        pid for pid, p in all_profiles.items()
+        if profile_ready(p, user_id=current_user.username)
+    ]
+    skipped = [
+        {
+            "profile_id": pid, "ok": False, "latency_ms": 0,
+            "error": f"未配置 {all_profiles[pid].api_key_env}",
+        }
+        for pid in all_profiles if pid not in set(ready_ids)
+    ]
+    pinged = await asyncio.gather(
+        *[_ping_one(pid, user_id=current_user.username) for pid in ready_ids]
+    )
+    return {"results": list(pinged) + skipped, "checked_at": int(time.time())}
 
 
 # ── Per-user provider settings (P6-M) ──────────────────────────────────
@@ -402,10 +438,12 @@ async def api_update_model_runtime(
     request: RuntimeSelectionUpdateRequest,
     current_user: User = Depends(get_current_user),
 ):
+    from app.core.model_catalog import USER_SELECTABLE_ROLES
+
     updates = {
         role: value
         for role, value in request.model_dump().items()
-        if value is not None
+        if value is not None and role in USER_SELECTABLE_ROLES
     }
     if not updates:
         raise HTTPException(status_code=400, detail="No model role update provided")

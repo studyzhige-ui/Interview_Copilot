@@ -176,7 +176,7 @@ def test_realtime_superseded_is_noop(mem_maker, monkeypatch):
 
     _seed_conv(mem_maker, cursor=10)
     acomplete = AsyncMock(return_value=_resp("[]"))
-    monkeypatch.setattr(rt, "agent_fast_llm", _fake_llm(acomplete))
+    monkeypatch.setattr(rt, "get_llm_for_role", lambda role, user_id=None: _fake_llm(acomplete))
 
     res = rt.run_realtime_extraction(session_id="s1", user_id="alice", record_id=None, upto_seq=8)
     assert res.skipped_reason == "superseded"
@@ -195,7 +195,7 @@ def test_realtime_success_advances_cursor(mem_maker, monkeypatch):
         lambda session_id, start, end: [{"seq": 1, "role": "user", "content": "我懂了"}],
     )
     # no strong signals → 0 patches, still a success
-    monkeypatch.setattr(rt, "agent_fast_llm", _fake_llm(AsyncMock(return_value=_resp("[]"))))
+    monkeypatch.setattr(rt, "get_llm_for_role", lambda role, user_id=None: _fake_llm(AsyncMock(return_value=_resp("[]"))))
 
     res = rt.run_realtime_extraction(session_id="s1", user_id="alice", record_id=None, upto_seq=3)
     assert res.advanced_to == 3
@@ -213,7 +213,8 @@ def test_realtime_failure_holds_cursor(mem_maker, monkeypatch):
         lambda session_id, start, end: [{"seq": 1, "role": "user", "content": "x"}],
     )
     monkeypatch.setattr(
-        rt, "agent_fast_llm", _fake_llm(AsyncMock(side_effect=RuntimeError("llm down"))),
+        rt, "get_llm_for_role",
+        lambda role, user_id=None: _fake_llm(AsyncMock(side_effect=RuntimeError("llm down"))),
     )
 
     with pytest.raises(RuntimeError):

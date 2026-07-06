@@ -88,8 +88,7 @@ _SEED_CATALOG: dict[str, list[ModelEntry]] = {}
 
 # Cache key namespace. Versioned so a schema-incompatible payload
 # change (renamed field, etc.) doesn't blow up readers — bump the
-# suffix and ``invalidate_all`` will reap older variants on the
-# first refresh.
+# suffix; entries under old prefixes simply expire via their 24h TTL.
 _CACHE_PREFIX = "model_catalog:v5:"
 _CACHE_TTL_S = 24 * 3600
 
@@ -410,36 +409,11 @@ async def load_catalog_for(provider: str) -> list[ModelEntry]:
     return await _load_one_provider(provider)
 
 
-async def invalidate_all() -> int:
-    """Drop every cached discovery result across all prefix versions.
-    Used by the manual ``POST /models/refresh-catalog`` endpoint and
-    legacy callers that still call this name."""
-    deleted = 0
-    # Sweep current + every historical prefix so leftover entries
-    # from earlier keying schemes get reaped on first refresh.
-    patterns = (
-        f"{_CACHE_PREFIX}*",
-        "model_catalog:v4:*",
-        "model_catalog:v3:*",
-        "model_catalog:v2:*",
-        "model_catalog:v1:*",
-    )
-    try:
-        for pattern in patterns:
-            async for key in redis_client.scan_iter(match=pattern, count=200):
-                await redis_client.delete(key)
-                deleted += 1
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("invalidate_all failed: %s", exc)
-    return deleted
-
-
 __all__ = [
     "refresh_catalog",
     "refresh_catalog_for",
     "load_catalog",
     "load_catalog_for",
-    "invalidate_all",
 ]
 
 

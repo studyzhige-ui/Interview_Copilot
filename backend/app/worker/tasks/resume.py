@@ -44,6 +44,12 @@ def process_resume_parse(self, resume_id: str):
             return {"status": "missing", "resume_id": resume_id}
         text = (resume.raw_text_snapshot or "").strip()
         owner_pk = resume.user_id
+        # LLM resolution is username-keyed (user_model_credentials joins on
+        # users.username) — resolve it once for the sectioner (MDL-1).
+        from app.models.user import User
+        owner_username = (
+            db.query(User.username).filter(User.id == owner_pk).scalar()
+        )
         file_asset_id = resume.file_asset_id
     finally:
         db.close()
@@ -75,6 +81,7 @@ def process_resume_parse(self, resume_id: str):
         if text:
             run_async(resume_service.extract_and_store(
                 user_pk=owner_pk, resume_id=resume_id, resume_text=text,
+                username=owner_username,
             ))
         db = SessionLocal()
         try:

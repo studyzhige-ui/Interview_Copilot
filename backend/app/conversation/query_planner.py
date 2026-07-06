@@ -41,7 +41,7 @@ import re
 from pydantic import BaseModel
 
 from app.core.config import settings
-from app.rag.embeddings import agent_fast_llm
+from app.core.llm_client_factory import get_llm_for_role
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +130,7 @@ async def plan_query(
     recent_turns: list[dict],
     learning_strategy_description: str = "",
     global_memory_on: bool = True,
+    user_id: str | None = None,
 ) -> QueryPlan:
     """One LLM call per turn: rewrite query for RAG + decide whether to load the
     full learning_strategy body.
@@ -193,7 +194,7 @@ async def plan_query(
     prompt = "\n\n".join(parts)
 
     try:
-        response = await agent_fast_llm.acomplete(
+        response = await get_llm_for_role("utility", user_id=user_id).acomplete(
             prompt,
             response_format={"type": "json_object"},
         )

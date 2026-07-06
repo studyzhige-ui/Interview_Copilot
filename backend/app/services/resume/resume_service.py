@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.resume_section import ResumeSection, _generate_section_id
-from app.rag.embeddings import agent_fast_llm
+from app.core.llm_client_factory import get_llm_for_role
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +57,12 @@ class ResumeService:
         user_pk: int,
         resume_id: str,
         resume_text: str,
+        username: str | None = None,
     ) -> list[ResumeSection]:
         """Parse a resume entity's text into typed sections, persist them
         (keyed by ``resume_id``), and index each into the resume Milvus
         collection. ``user_pk`` is the stable users.id (redundant scope key)."""
-        sections_data = await self._parse_with_llm(resume_text)
+        sections_data = await self._parse_with_llm(resume_text, username=username)
         sections = self._persist_sections(user_pk, resume_id, sections_data)
         self._vectorize_sections(sections)
         return sections
@@ -112,11 +113,13 @@ class ResumeService:
 
     # ── Internal ──────────────────────────────────────────────────────
 
-    async def _parse_with_llm(self, resume_text: str) -> list[dict[str, Any]]:
+    async def _parse_with_llm(
+        self, resume_text: str, username: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Use LLM to split resume text into structured sections."""
         prompt = PARSE_PROMPT.format(resume_text=resume_text)
         try:
-            response = await agent_fast_llm.acomplete(
+            response = await get_llm_for_role("utility", user_id=username).acomplete(
                 prompt,
                 response_format={"type": "json_object"},
             )

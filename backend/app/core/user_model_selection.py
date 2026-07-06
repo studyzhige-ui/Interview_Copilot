@@ -19,7 +19,7 @@ import logging
 from threading import Lock
 
 from app.core import model_catalog
-from app.core.model_catalog import ROLE_DEFAULTS, ModelProfile
+from app.core.model_catalog import ROLE_DEFAULTS, USER_SELECTABLE_ROLES, ModelProfile
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,9 @@ def _normalize_selection(raw: dict[str, str]) -> dict[str, str]:
     """
     profiles = model_catalog._get_all_profiles()
     selection = dict(ROLE_DEFAULTS)
-    for role in ROLE_DEFAULTS:
+    # Only user-facing roles are read from input — ``utility`` is a system
+    # role and always resolves automatically (see get_profile_for_role).
+    for role in USER_SELECTABLE_ROLES:
         candidate = raw.get(role)
         # Drop pre-P6-L bare ids (no "provider/" prefix). They aren't
         # valid in the new "provider/model" id scheme.
@@ -149,21 +151,95 @@ def update_runtime_selection(
     return persist_runtime_selection(current, user_id)
 
 
-def get_profile_for_role(role: str, user_id: str | None = None) -> ModelProfile:
-    """Resolve role → ModelProfile.
+def _ready_profile_ids(profiles: dict[str, ModelProfile], user_id: str | None) -> set[str]:
+    """Profile ids the caller can actually use: a key resolves for the
+    profile's provider (user_model_credentials first, env fallback).
 
-    Falls back to ROLE_DEFAULTS if the user's selection points at a
-    profile that's no longer in the catalog (rare: vendor retired the
-    model since last refresh). Falls back to "first function-calling
-    profile in the catalog" if even ROLE_DEFAULTS isn't present (e.g.,
-    the vendor's /v1/models temporarily dropped that id).
+    One DB query for the user's configured providers instead of a
+    per-profile key lookup — this runs inside every role resolution.
+    """
+    import os
+
+    user_providers: set[str] = set()
+    if user_id:
+        try:
+            from app.services.auth.user_api_key_service import list_user_api_keys
+
+            # Returns {provider: {...masked info...}} — we only need the keys.
+            user_providers = set(list_user_api_keys(user_id).keys())
+        except Exception as exc:  # noqa: BLE001 — never fail resolution on a DB blip
+            logger.warning("ready-provider lookup failed for user=%s: %s", user_id, exc)
+    return {
+        pid
+        for pid, p in profiles.items()
+        if p.model.strip()
+        and (p.provider in user_providers or bool(os.getenv(p.api_key_env, "")))
+    }
+
+
+def get_profile_for_role(role: str, user_id: str | None = None) -> ModelProfile:
+    """Resolve role → ModelProfile, preferring profiles the CALLER is ready
+    for (their key or an env key resolves).
+
+    Chain (first hit wins; every degradation below step 1 logs a warning):
+      1. the user's selected profile for ``role`` — if in catalog AND ready
+      2. ``ROLE_DEFAULTS[role]`` — if in catalog AND ready
+      3. the user's ``primary`` selection — if ready (covers the system
+         ``utility`` role for users whose only key is a non-default vendor)
+      4. any ready profile (function-calling first — required for agent,
+         harmless preference elsewhere)
+      5. the old not-ready chain (selection → default → first FC → first) so
+         behaviour without ANY key matches history: the call fails at the
+         provider with a visible auth error instead of failing here.
+
+    Pre-MDL-1 this ignored readiness entirely: a new user with only an
+    OpenAI key kept resolving to the deepseek defaults and every chat
+    401'd while the Models page showed green.
     """
     profiles = model_catalog._get_all_profiles()
     selection = get_runtime_selection(user_id)
-    pid = selection.get(role, ROLE_DEFAULTS[role])
+    ready = _ready_profile_ids(profiles, user_id)
+
+    def _usable(pid: str | None) -> ModelProfile | None:
+        if pid and pid in profiles and pid in ready:
+            p = profiles[pid]
+            if role == "agent" and not p.supports_function_calling:
+                return None
+            return p
+        return None
+
+    selected_pid = selection.get(role, ROLE_DEFAULTS.get(role))
+    hit = _usable(selected_pid)
+    if hit is not None:
+        return hit
+    for fallback_pid, why in (
+        (ROLE_DEFAULTS.get(role), "role default"),
+        (selection.get("primary"), "user primary selection"),
+    ):
+        hit = _usable(fallback_pid)
+        if hit is not None:
+            logger.warning(
+                "model selection degraded: role=%s user=%s wanted=%s -> %s (%s)",
+                role, user_id, selected_pid, hit.id, why,
+            )
+            return hit
+    ready_profiles = [profiles[pid] for pid in ready]
+    ready_profiles.sort(key=lambda p: (not p.supports_function_calling, p.id))
+    for p in ready_profiles:
+        if role == "agent" and not p.supports_function_calling:
+            continue
+        logger.warning(
+            "model selection degraded: role=%s user=%s wanted=%s -> %s (first ready profile)",
+            role, user_id, selected_pid, p.id,
+        )
+        return p
+
+    # Nothing is ready for this caller — fall back to the historical
+    # not-ready chain so the downstream provider call surfaces the auth
+    # error (better signal than dying here).
+    pid = selection.get(role, ROLE_DEFAULTS.get(role, ""))
     if pid in profiles:
         return profiles[pid]
-    # Fallback chain.
     default_pid = ROLE_DEFAULTS.get(role)
     if default_pid and default_pid in profiles:
         return profiles[default_pid]

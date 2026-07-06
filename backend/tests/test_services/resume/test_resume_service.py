@@ -75,7 +75,7 @@ class _NoCloseSession:
 
 def _patch(monkeypatch, module, session, llm):
     monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(session))
-    monkeypatch.setattr(module, "agent_fast_llm", llm)
+    monkeypatch.setattr(module, "get_llm_for_role", lambda role, user_id=None: llm)
     # Vectorization + the delete-then-insert index sync hit the real embed model
     # and Milvus — out of scope for these persistence tests, and they block when
     # those services are offline. Stub both.

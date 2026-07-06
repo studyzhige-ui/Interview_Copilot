@@ -21,7 +21,6 @@ import re
 from typing import Any, Callable
 
 import tiktoken
-from llama_index.core import Settings
 
 
 logger = logging.getLogger(__name__)
@@ -114,6 +113,8 @@ _LLM_EXTRACTION_PROMPT = """\
 async def extract_qa_pairs_with_llm(
     transcript: str,
     resume_context: str = "",
+    *,
+    user_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Stage 1: Full LLM-powered QA extraction.
 
@@ -129,16 +130,24 @@ async def extract_qa_pairs_with_llm(
     token_count = _count_tokens(transcript)
     logger.info("Stage 1: transcript has %d tokens.", token_count)
 
+    # Resolve the owner's utility LLM ONCE and thread the instance down --
+    # per-chunk re-resolution would re-hit the credential lookup for every
+    # chunk (MDL-1: the owner's selection/keys drive background analysis).
+    from app.core.llm_client_factory import get_llm_for_role
+
+    llm = get_llm_for_role("utility", user_id=user_id)
     if token_count <= _EXTRACTION_MAX_TOKENS:
-        return await _extract_single_pass(transcript, resume_context)
+        return await _extract_single_pass(transcript, resume_context, llm=llm)
 
     # Chunked extraction for very long transcripts
-    return await _extract_chunked(transcript, resume_context, token_count)
+    return await _extract_chunked(transcript, resume_context, token_count, llm=llm)
 
 
 async def _extract_single_pass(
     transcript: str,
     resume_context: str = "",
+    *,
+    llm: Any,
 ) -> list[dict[str, Any]]:
     """Extract QA pairs in a single LLM call."""
     resume_hint = ""
@@ -151,9 +160,7 @@ async def _extract_single_pass(
     )
 
     try:
-        from app.rag.embeddings import agent_fast_llm
-
-        response = await agent_fast_llm.acomplete(
+        response = await llm.acomplete(
             prompt,
             response_format={"type": "json_object"},
         )
@@ -177,6 +184,8 @@ async def _extract_chunked(
     transcript: str,
     resume_context: str,
     total_tokens: int,
+    *,
+    llm: Any,
 ) -> list[dict[str, Any]]:
     """Extract QA pairs from a long transcript by splitting into chunks.
 
@@ -213,7 +222,7 @@ async def _extract_chunked(
     # Extract from each chunk
     all_pairs: list[dict[str, Any]] = []
     for ci, chunk in enumerate(chunks):
-        chunk_pairs = await _extract_single_pass(chunk, resume_context)
+        chunk_pairs = await _extract_single_pass(chunk, resume_context, llm=llm)
         logger.info("Stage 1 chunk %d/%d: extracted %d pairs.", ci + 1, len(chunks), len(chunk_pairs))
         all_pairs.extend(chunk_pairs)
 
@@ -378,6 +387,8 @@ async def _analyze_single_question(
     total_questions: int,
     resume_context: str = "",
     jd_context: str = "",
+    *,
+    llm: Any,
 ) -> dict[str, Any]:
     """Analyze a single QA pair and return structured result."""
     resume_section = ""
@@ -399,7 +410,7 @@ async def _analyze_single_question(
     )
 
     try:
-        response = await Settings.llm.acomplete(prompt)
+        response = await llm.acomplete(prompt)
         result = _clean_json_response(response.text)
 
         return {
@@ -503,6 +514,8 @@ async def _synthesize_report(
     per_question_results: list[dict[str, Any]],
     resume_context: str = "",
     jd_context: str = "",
+    *,
+    llm: Any,
 ) -> dict[str, Any]:
     """Stage 3: Synthesize per-question results into a global report."""
 
@@ -529,7 +542,7 @@ async def _synthesize_report(
     )
 
     try:
-        response = await Settings.llm.acomplete(prompt)
+        response = await llm.acomplete(prompt)
         synthesis = _clean_json_response(response.text)
         overall_in = synthesis.get("overall") or {}
 
@@ -583,6 +596,7 @@ async def analyze_interview(
     resume_context: str = "",
     jd_context: str = "",
     on_progress: Callable[[int], None] | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """Analyze an interview transcript using the three-stage MapReduce pipeline.
 
@@ -601,7 +615,9 @@ async def analyze_interview(
     """
     try:
         # ── Stage 1: LLM-powered QA extraction ──────────────────────
-        qa_pairs = await extract_qa_pairs_with_llm(transcript, resume_context)
+        qa_pairs = await extract_qa_pairs_with_llm(
+            transcript, resume_context, user_id=user_id,
+        )
 
         if not qa_pairs:
             logger.warning("No QA pairs extracted; returning empty report.")
@@ -624,6 +640,12 @@ async def analyze_interview(
         )
 
         # ── Stage 2: Per-question analysis (Map, concurrent) ─────────
+        # Owner's primary model drives scoring + synthesis (MDL-1);
+        # resolved once, shared by every concurrent question task.
+        from app.core.llm_client_factory import get_llm_for_role
+
+        analysis_llm = get_llm_for_role("primary", user_id=user_id)
+
         async def _run_one(pair: dict[str, Any], idx: int) -> dict[str, Any]:
             context_text = _build_sliding_context(qa_pairs, idx)
             res = await _analyze_single_question(
@@ -632,6 +654,7 @@ async def analyze_interview(
                 total_questions=len(qa_pairs),
                 resume_context=resume_context,
                 jd_context=jd_context,
+                llm=analysis_llm,
             )
             _notify_progress(on_progress, 1)
             return res
@@ -650,6 +673,7 @@ async def analyze_interview(
             per_question_results,
             resume_context=resume_context,
             jd_context=jd_context,
+            llm=analysis_llm,
         )
 
         logger.info(
@@ -750,6 +774,7 @@ async def _analyze_batch(
     *,
     resume_context: str,
     jd_context: str,
+    llm: Any,
 ) -> list[dict[str, Any]]:
     # NOTE: the prefix is intentionally fed FULL resume + JD (truncating to a
     # massive 16k each, well within DeepSeek's 1M context). That cost is one
@@ -788,7 +813,7 @@ async def _analyze_batch(
         ]
 
     try:
-        response = await Settings.llm.acomplete(prompt)
+        response = await llm.acomplete(prompt)
         parsed = _clean_json_response(response.text)
         items_in = parsed.get("results") if isinstance(parsed, dict) else None
         if not isinstance(items_in, list):
@@ -818,6 +843,7 @@ async def _analyze_batch(
                         total_questions=len(batch),
                         resume_context=resume_context,
                         jd_context=jd_context,
+                        llm=llm,
                     )
                 )
                 continue
@@ -846,6 +872,7 @@ async def analyze_mock_qa_batched(
     ctx_prev: int = 3,
     ctx_next: int = 2,
     on_progress: Callable[[int], None] | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the full mock-source pipeline: batched per-question scoring with a
     sliding window, then global synthesis. Returns the same v2 report shape as
@@ -885,6 +912,11 @@ async def analyze_mock_qa_batched(
             "skill_radar": {},
         }
 
+    # Owner's primary model drives scoring + synthesis (MDL-1).
+    from app.core.llm_client_factory import get_llm_for_role
+
+    analysis_llm = get_llm_for_role("primary", user_id=user_id)
+
     # Walk in batch_size strides, schedule batches concurrently.
     async def _run_batch(
         batch: list[dict[str, Any]],
@@ -897,6 +929,7 @@ async def analyze_mock_qa_batched(
             next_window,
             resume_context=resume_context,
             jd_context=jd_context,
+            llm=analysis_llm,
         )
         _notify_progress(on_progress, len(chunk))
         return chunk
@@ -925,6 +958,7 @@ async def analyze_mock_qa_batched(
         per_question_results,
         resume_context=resume_context,
         jd_context=jd_context,
+        llm=analysis_llm,
     )
     return report
 

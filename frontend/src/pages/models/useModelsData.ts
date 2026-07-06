@@ -57,16 +57,15 @@ export function useModelsData() {
   // Role selection: seeded from the catalog, then locally owned so assigns
   // are optimistic (rollback on save failure).
   const [selection, setSelection] = useState<Record<ModelRole, string>>({
-    primary: '', fast: '', agent: '', mock_interview: '',
+    primary: '', agent: '', mock_interview: '',
   });
   useEffect(() => {
     const sel = catalogQuery.data?.selection;
     if (!sel) return;
     setSelection({
       primary: sel.primary ?? '',
-      fast: sel.fast ?? '',
       agent: sel.agent ?? '',
-      mock_interview: sel.mock_interview ?? sel.fast ?? '',
+      mock_interview: sel.mock_interview ?? '',
     });
   }, [catalogQuery.data]);
 

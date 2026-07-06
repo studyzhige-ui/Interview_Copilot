@@ -490,7 +490,7 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
 
     # Stub the budget compactor so the loop reaches the LLM-stream call.
     class _StubCompactor:
-        def __init__(self, profile=None): self.profile = profile
+        def __init__(self, profile=None, user_id=None): self.profile = profile
         async def compress(self, messages): return messages, False
         def reset_circuit_breaker(self): pass
         async def on_context_too_long(self, messages): return messages, False
@@ -558,7 +558,7 @@ def test_strategy_crash_yields_humanized_error_event(monkeypatch):
     )
 
     class _StubCompactor:
-        def __init__(self, profile=None): self.profile = profile
+        def __init__(self, profile=None, user_id=None): self.profile = profile
         async def compress(self, messages): return messages, False
         def reset_circuit_breaker(self): pass
         async def on_context_too_long(self, messages): return messages, False
