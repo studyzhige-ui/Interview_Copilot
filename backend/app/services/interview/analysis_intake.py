@@ -187,8 +187,20 @@ def create_record_and_dispatch(
     mark_file_asset_consumed(db, upload)
     db.commit()
 
-    task = process_interview_analysis.delay(
-        record.id, language=normalize_language(language),
-    )
+    try:
+        task = process_interview_analysis.delay(
+            record.id, language=normalize_language(language),
+        )
+    except Exception as exc:  # noqa: BLE001 — broker down / misconfigured
+        # The record + consumed upload are already committed. Without this
+        # catch a broker blip left a zombie forever-pending record that no
+        # worker would ever pick up. Park it in a terminal, user-visible
+        # state instead — the reanalyze path can revive it later.
+        logger.error("analysis dispatch failed for record %s: %s", record.id, exc)
+        interview_record_service.set_status(
+            record.id, "failed",
+            error_message="分析任务派发失败（任务队列暂不可用），请稍后重试。",
+        )
+        raise
     interview_record_service.set_status(record.id, "pending", celery_task_id=task.id)
     return record, task

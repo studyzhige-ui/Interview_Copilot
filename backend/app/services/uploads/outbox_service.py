@@ -17,7 +17,7 @@ import socket
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.models.outbox_job import OutboxJob, generate_outbox_job_id
@@ -89,6 +89,13 @@ def run_due_outbox_jobs(db: Session, *, limit: int = 50) -> int:
     """
     worker_id = f"{socket.gethostname()}:{id(db)}"
     now = datetime.utcnow()
+    # Stale-lock recovery: a worker that is SIGKILLed after the claim commit
+    # leaves the job at status='running' with locked_at set — the finally
+    # block never runs, and without this clause the job would be invisible
+    # to every future claim forever (the reliability layer's own reliability
+    # hole). 10 minutes is far above the drain task's 120s time_limit, so a
+    # live run can never be stolen.
+    stale_cutoff = now - timedelta(minutes=10)
     # Atomic claim: lock a due batch with FOR UPDATE SKIP LOCKED and flip it to
     # ``running`` in ONE transaction, so two concurrent workers never grab the
     # same job. SKIP LOCKED is a no-op on sqlite (unit tests run single-
@@ -96,9 +103,18 @@ def run_due_outbox_jobs(db: Session, *, limit: int = 50) -> int:
     query = (
         db.query(OutboxJob)
         .filter(
-            or_(OutboxJob.status == "pending", OutboxJob.status == "failed"),
-            OutboxJob.next_run_at <= now,
-            OutboxJob.locked_at.is_(None),
+            or_(
+                and_(
+                    or_(OutboxJob.status == "pending", OutboxJob.status == "failed"),
+                    OutboxJob.next_run_at <= now,
+                    OutboxJob.locked_at.is_(None),
+                ),
+                # Orphaned by a hard-killed worker — reclaim.
+                and_(
+                    OutboxJob.status == "running",
+                    OutboxJob.locked_at < stale_cutoff,
+                ),
+            ),
         )
         .order_by(OutboxJob.next_run_at.asc())
         .limit(limit)
@@ -107,6 +123,11 @@ def run_due_outbox_jobs(db: Session, *, limit: int = 50) -> int:
         query = query.with_for_update(skip_locked=True)
     claimed = query.all()
     for job in claimed:
+        if job.status == "running":
+            logger.warning(
+                "outbox job %s reclaimed from stale lock (locked_by=%s since %s)",
+                job.id, job.locked_by, job.locked_at,
+            )
         job.status = "running"
         job.locked_at = datetime.utcnow()
         job.locked_by = worker_id
@@ -140,6 +161,19 @@ def run_due_outbox_jobs(db: Session, *, limit: int = 50) -> int:
             db.add(job)
             db.commit()
         processed += 1
+
+    # Dead-backlog visibility: dead jobs mean permanently-skipped side
+    # effects (leaked blobs / stale Milvus rows / lost memory extraction)
+    # and nothing else surfaces them. One WARNING per drain (≤1/min) while
+    # any exist is deliberate — quiet enough to live with, loud enough to
+    # notice in logs.
+    dead_count = db.query(OutboxJob).filter(OutboxJob.status == "dead").count()
+    if dead_count:
+        logger.warning(
+            "outbox has %d dead job(s) needing manual attention "
+            "(inspect outbox_jobs WHERE status='dead')",
+            dead_count,
+        )
     return processed
 
 

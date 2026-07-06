@@ -62,6 +62,8 @@ celery_app.conf.update(
         "tasks.refresh_model_catalog": {"queue": "default"},
         # Outbox drain: object-storage / index cleanup. DB + storage I/O.
         "tasks.drain_outbox_jobs": {"queue": "default"},
+        # Zombie sweeper: pure DB scan.
+        "tasks.sweep_stale_interview_records": {"queue": "default"},
     },
     # ── Reliability ─────────────────────────────────────────────────────
     # Default acks_late=True so a worker crash during a task re-queues the
@@ -116,6 +118,14 @@ celery_app.conf.update(
         "outbox-drain-every-minute": {
             "task": "tasks.drain_outbox_jobs",
             "schedule": crontab(minute="*"),
+        },
+        # Zombie sweeper: records whose broker message was lost outright
+        # (e.g. Redis restart without persistence) never move again —
+        # this is the terminal-state guarantee of last resort. Every 10
+        # minutes; the task itself only sweeps rows stale >2h.
+        "stale-record-sweep": {
+            "task": "tasks.sweep_stale_interview_records",
+            "schedule": crontab(minute="*/10"),
         },
     },
 )

@@ -18,7 +18,7 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, Callable
 
 import tiktoken
 from llama_index.core import Settings
@@ -570,6 +570,7 @@ async def analyze_interview(
     *,
     resume_context: str = "",
     jd_context: str = "",
+    on_progress: Callable[[int], None] | None = None,
 ) -> dict[str, Any]:
     """Analyze an interview transcript using the three-stage MapReduce pipeline.
 
@@ -577,6 +578,11 @@ async def analyze_interview(
         transcript: WhisperX diarized transcript (Markdown format)
         resume_context: Plain text resume content (recommended)
         jd_context: Plain text job description (optional)
+        on_progress: optional callback invoked with the number of questions
+            just completed (per-question during Stage 2). The orchestrator
+            wires this to ``increment_analyzed_count`` so the SSE progress
+            stream reports REAL per-question progress. Exceptions from the
+            callback are swallowed — progress must never fail an analysis.
 
     Returns:
         Complete analysis report dict matching the v2 report schema.
@@ -606,20 +612,26 @@ async def analyze_interview(
         )
 
         # ── Stage 2: Per-question analysis (Map, concurrent) ─────────
-        tasks: list[asyncio.Task] = []
-        for idx, pair in enumerate(qa_pairs):
+        async def _run_one(pair: dict[str, Any], idx: int) -> dict[str, Any]:
             context_text = _build_sliding_context(qa_pairs, idx)
-            task = asyncio.create_task(
-                _analyze_single_question(
-                    qa_pair=pair,
-                    context_text=context_text,
-                    total_questions=len(qa_pairs),
-                    resume_context=resume_context,
-                    jd_context=jd_context,
-                )
+            res = await _analyze_single_question(
+                qa_pair=pair,
+                context_text=context_text,
+                total_questions=len(qa_pairs),
+                resume_context=resume_context,
+                jd_context=jd_context,
             )
-            tasks.append(task)
+            if on_progress is not None:
+                try:
+                    on_progress(1)
+                except Exception:  # noqa: BLE001 — progress is best-effort
+                    logger.debug("on_progress callback failed", exc_info=True)
+            return res
 
+        tasks = [
+            asyncio.create_task(_run_one(pair, idx))
+            for idx, pair in enumerate(qa_pairs)
+        ]
         per_question_results = await asyncio.gather(*tasks)
         per_question_results = list(per_question_results)
 
@@ -825,10 +837,14 @@ async def analyze_mock_qa_batched(
     batch_size: int = 2,
     ctx_prev: int = 3,
     ctx_next: int = 2,
+    on_progress: Callable[[int], None] | None = None,
 ) -> dict[str, Any]:
     """Run the full mock-source pipeline: batched per-question scoring with a
     sliding window, then global synthesis. Returns the same v2 report shape as
-    `analyze_interview`."""
+    `analyze_interview`.
+
+    ``on_progress`` (optional): called with the number of questions completed
+    after each batch — see ``analyze_interview`` for the contract."""
     # Normalize incoming entries to the {index, question, answer, phase} shape
     # the rest of this module expects (1-based index, ordered by appearance).
     # We additionally carry forward any optional per-QA metadata (topic + a
@@ -862,23 +878,32 @@ async def analyze_mock_qa_batched(
         }
 
     # Walk in batch_size strides, schedule batches concurrently.
+    async def _run_batch(
+        batch: list[dict[str, Any]],
+        prev_window: list[dict[str, Any]],
+        next_window: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        chunk = await _analyze_batch(
+            batch,
+            prev_window,
+            next_window,
+            resume_context=resume_context,
+            jd_context=jd_context,
+        )
+        if on_progress is not None:
+            try:
+                on_progress(len(chunk))
+            except Exception:  # noqa: BLE001 — progress is best-effort
+                logger.debug("on_progress callback failed", exc_info=True)
+        return chunk
+
     tasks: list[asyncio.Task] = []
     for start in range(0, len(normalized), batch_size):
         end = min(start + batch_size, len(normalized))
         batch = normalized[start:end]
         prev_window = normalized[max(0, start - ctx_prev):start]
         next_window = normalized[end:end + ctx_next]
-        tasks.append(
-            asyncio.create_task(
-                _analyze_batch(
-                    batch,
-                    prev_window,
-                    next_window,
-                    resume_context=resume_context,
-                    jd_context=jd_context,
-                )
-            )
-        )
+        tasks.append(asyncio.create_task(_run_batch(batch, prev_window, next_window)))
 
     batched_results = await asyncio.gather(*tasks)
     per_question_results: list[dict[str, Any]] = [r for chunk in batched_results for r in chunk]

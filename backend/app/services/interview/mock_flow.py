@@ -345,9 +345,44 @@ def count_answered_turns(db: Session, conversation_id: str) -> int:
     )
 
 
-def dispatch_review(db: Session, record_id: str) -> object:
-    """Dispatch the review task and stamp the celery task id. Commits."""
-    task = process_interview_analysis.delay(record_id)
+def dispatch_review(
+    db: Session,
+    record_id: str,
+    *,
+    rollback_status: str = STATUS_MOCK_IN_PROGRESS,
+) -> object:
+    """Dispatch the review task and stamp the celery task id. Commits.
+
+    If the broker is unreachable, roll the record back to
+    ``rollback_status`` before re-raising — without the rollback the
+    record parks in ``processing_review`` with no task, invisible in
+    every list for the grace period and stuck after it.
+
+    * finish path: roll back to ``mock_in_progress`` (+ reactivate the
+      runtime) — the conversation is intact, the user just hits
+      "结束面试" again.
+    * retry path: roll back to ``review_failed`` — the interview is over;
+      reviving the runtime would resurface a finished interview in the
+      resume banner.
+    """
+    try:
+        task = process_interview_analysis.delay(record_id)
+    except Exception as exc:  # noqa: BLE001 — broker down / misconfigured
+        logger.error("review dispatch failed for record %s: %s", record_id, exc)
+        record = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+        if record is not None:
+            record.status = rollback_status
+            db.add(record)
+        if rollback_status == STATUS_MOCK_IN_PROGRESS:
+            runtime = mock_runtime_service.get_runtime_for_record(
+                db, interview_record_id=record_id,
+            )
+            if runtime is not None:
+                mock_runtime_service.set_status(
+                    db, runtime, mock_runtime_service.ACTIVE_STATUS, commit=False,
+                )
+        db.commit()
+        raise
     interview_record_service.set_status(
         record_id, STATUS_PROCESSING_REVIEW, celery_task_id=task.id, db=db,
     )

@@ -96,6 +96,17 @@ class InterviewAnalysisOrchestrator:
             self._persist_qa_shells(record_id, qa_pairs)
 
             interview_record_service.set_status(record_id, in_flight_status)
+            # Zero the per-question counter so a retry doesn't stack this
+            # run's increments on the previous attempt's.
+            interview_record_service.reset_analyzed_count(record_id)
+
+            # Real per-question progress: each completed Stage-2 question
+            # bumps ``analyzed_qa_count`` so the SSE stream can interpolate
+            # an honest percent instead of a wall-clock guess. Sync DB write
+            # per question is fine here — the worker runs --pool=solo and a
+            # question costs an LLM call, so the write is noise.
+            def _bump_progress(n: int) -> None:
+                interview_record_service.increment_analyzed_count(record_id, by=n)
 
             # Branch on source:
             #   upload: noisy ASR transcript → 3-stage MapReduce pipeline
@@ -107,6 +118,7 @@ class InterviewAnalysisOrchestrator:
                     transcript,
                     resume_context=resume_text,
                     jd_context=jd_text,
+                    on_progress=_bump_progress,
                 )
             else:
                 from app.services.voice.interview_analysis_service import (
@@ -120,6 +132,7 @@ class InterviewAnalysisOrchestrator:
                     batch_size=2,
                     ctx_prev=3,
                     ctx_next=2,
+                    on_progress=_bump_progress,
                 )
 
             self._persist_analysis(record_id, qa_pairs, report)

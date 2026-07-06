@@ -9,6 +9,7 @@ import { AnalysisRunner, type AnalysisProgress } from './AnalysisRunner';
 import { Resizer } from '@/components/ui/Resizer';
 import { toast } from '@/store/uiStore';
 import { cancelAnalyze, getInterviewRecord, listInterviewRecords } from '@/api/interview';
+import { retryMockReview } from '@/api/mock';
 import { useToastOnError } from '@/hooks/useToastOnError';
 import type { InterviewRecordDetail, InterviewRecordListItem } from '@/types/api';
 import { useIsMounted } from '@/hooks/useIsMounted';
@@ -222,6 +223,25 @@ export function ReviewPage() {
     }
   };
 
+  // ── Mock review retry ───────────────────────────────────────────────────
+  // review_failed is a terminal state the sweeper/worker can land a mock
+  // record in; the retry endpoint flips it back to processing_review and
+  // re-dispatches the Celery review task.
+  const [retryingReview, setRetryingReview] = useState(false);
+  const retryReview = async (recordId: string) => {
+    setRetryingReview(true);
+    try {
+      await retryMockReview(recordId);
+      // Refresh list + detail: status becomes processing_review, which the
+      // auto-spawn effect picks up and opens an SSE runner for.
+      await onRecordChanged();
+    } catch {
+      if (isMounted.current) toast.error('重试复盘失败，请稍后再试');
+    } finally {
+      if (isMounted.current) setRetryingReview(false);
+    }
+  };
+
   // ── Analysis lifecycle ──────────────────────────────────────────────────
   const startAnalysis = (
     forActiveId: string,
@@ -326,7 +346,7 @@ export function ReviewPage() {
   useEffect(() => {
     if (!activeId || !detail || isDraft(activeId)) return;
     const status = (detail.status ?? '').toLowerCase();
-    const isAnalyzingStatus = ['pending', 'transcribing', 'extracting', 'analyzing'].includes(status);
+    const isAnalyzingStatus = ['pending', 'transcribing', 'extracting', 'analyzing', 'processing_review'].includes(status);
     if (!isAnalyzingStatus) return;
     if (analysesRef.current[activeId]) return;  // already registered
 
@@ -370,9 +390,22 @@ export function ReviewPage() {
     }
     // For real records: if no content and not analyzing, show upload cards.
     const status = (detail?.status ?? '').toLowerCase();
-    const isAnalyzingStatus = ['pending', 'transcribing', 'extracting', 'analyzing'].includes(status);
+    const isAnalyzingStatus = ['pending', 'transcribing', 'extracting', 'analyzing', 'processing_review'].includes(status);
     const isMockSource = detail?.source === 'mock';
     const hasContent = !!detail && (!!detail.transcript || hasStructuredQA(detail));
+
+    // A failed mock review must NOT fall into the AnalyzingState spinner
+    // below (it would spin forever) — show an explicit retry card wired
+    // to the retry-review endpoint.
+    if (detail && status === 'review_failed') {
+      return (
+        <ReviewFailedState
+          message={detail.error_message ?? null}
+          retrying={retryingReview}
+          onRetry={() => { void retryReview(detail.id); }}
+        />
+      );
+    }
 
     // Mock records always come pre-attached to a record and a running analysis —
     // they never need new uploads. While analysis is in flight, show a
@@ -453,6 +486,36 @@ function hasStructuredQA(detail: InterviewRecordDetail): boolean {
   return Array.isArray(detail.qa) && detail.qa.length > 0;
 }
 
+function ReviewFailedState({
+  message,
+  retrying,
+  onRetry,
+}: {
+  message: string | null;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="max-w-3xl mx-auto p-10">
+      <div className="bg-white border border-red-200 rounded-2xl shadow-sm p-10">
+        <div className="text-xs text-stone-500 mb-2">模拟面试 · 复盘生成失败</div>
+        <div className="text-sm text-red-700 mb-1 font-medium">复盘没有生成成功</div>
+        <div className="text-xs text-stone-500 mb-6">
+          {message || '生成过程中出现异常。面试问答内容已完整保留，可以直接重试。'}
+        </div>
+        <button
+          type="button"
+          onClick={onRetry}
+          disabled={retrying}
+          className="text-sm text-white px-4 py-2 rounded-lg bg-primary-600 hover:bg-primary-700 disabled:opacity-60"
+        >
+          {retrying ? '重新派发中…' : '重试复盘'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AnalyzingState({
   progress,
   sourceLabel,
@@ -466,6 +529,7 @@ function AnalyzingState({
     status === 'transcribing' ? '正在语音识别…'
     : status === 'extracting' ? '正在抽取 Q&A…'
     : status === 'analyzing' ? '正在逐题分析与综合…'
+    : status === 'processing_review' ? '正在生成复盘…'
     : status === 'pending' ? '排队中…'
     : '建立 SSE 连接中…';
   return (

@@ -417,7 +417,26 @@ def unsave_qa_from_knowledge_endpoint(
 
 
 # ── SSE progress stream ───────────────────────────────────────────────
-_PROGRESS_TICK_REFERENCE = 80  # ~120s expected wall-clock for upload pipeline
+#
+# Status-driven progress bands (honest, not wall-clock guesses). Within a
+# band the percent creeps slowly toward the ceiling; the analyzing band
+# interpolates on REAL per-question progress (analyzed_qa_count/qa_total —
+# the orchestrator bumps the counter per completed question).
+_STAGE_BANDS: dict[str, tuple[int, int]] = {
+    "pending": (2, 5),
+    "transcribing": (5, 50),
+    "extracting": (50, 70),
+    "analyzing": (70, 95),
+    # Mock review runs the analyzing pipeline under its own status.
+    "processing_review": (70, 95),
+}
+# Slow in-band creep for stages with no sub-progress signal: +1% every
+# 2 ticks (3s), capped 1 below the ceiling so a band can't lie about
+# being finished.
+_CREEP_TICKS_PER_PERCENT = 2
+
+_TERMINAL_DONE = {STATUS_COMPLETED, "review_ready"}
+_TERMINAL_FAILED = {STATUS_FAILED, "review_failed"}
 
 
 @router.get("/interview-records/{record_id}/events")
@@ -427,16 +446,14 @@ async def interview_record_events_stream(
 ):
     """SSE progress stream for the unified analysis pipeline.
 
-    Polls InterviewRecord.status and analyzed_qa_count. Mock-source records
-    skip the transcribing/extracting prefix and go straight to analyzing.
+    Polls InterviewRecord.status + analyzed_qa_count/qa_total. Handles both
+    sources: upload (pending→transcribing→extracting→analyzing→completed/
+    failed) and mock (processing_review→review_ready/review_failed).
 
     Each poll opens its own short-lived DB session (via
-    ``record_admin.poll_record_snapshot`` + ``asyncio.to_thread``) so 20+
-    concurrent viewers don't pin the connection pool for 8 minutes
-    apiece. The owner check at the top of the request does one
-    short read; the long-running generator opens its own sessions
-    so the request-scoped ``get_db`` isn't held for the lifetime
-    of the stream.
+    ``record_admin.poll_record_snapshot`` + ``asyncio.to_thread``) so
+    concurrent viewers don't pin the connection pool. The owner check at
+    the top does one short read; the generator opens its own sessions.
     """
     if not await asyncio.to_thread(
         record_admin.record_exists_for_user, record_id, current_user.username,
@@ -444,9 +461,14 @@ async def interview_record_events_stream(
         raise HTTPException(status_code=404, detail="Interview record not found")
 
     POLL_INTERVAL = 1.5
-    MAX_TICKS = 320
+    # Aligned with the analysis task's celery time_limit (30 min). The old
+    # 8-minute cap fired "timeout" on analyses that were still legitimately
+    # running — the most trust-destroying failure mode this stream had.
+    MAX_TICKS = 1200
 
     async def event_generator():
+        last_status: str | None = None
+        stage_entered_tick = 0
         try:
             for tick in range(MAX_TICKS):
                 snap = await asyncio.to_thread(record_admin.poll_record_snapshot, record_id)
@@ -454,18 +476,36 @@ async def interview_record_events_stream(
                     yield f"data: {json.dumps({'type': 'error', 'message': 'record disappeared'})}\n\n"
                     return
                 status = snap["status"]
-                percent = min(95, int(tick * 100 / _PROGRESS_TICK_REFERENCE))
+                if status != last_status:
+                    last_status = status
+                    stage_entered_tick = tick
+
+                band = _STAGE_BANDS.get(status)
+                if band is None:
+                    percent = 0
+                else:
+                    lo, hi = band
+                    analyzed = snap["analyzed_qa_count"]
+                    total = snap.get("qa_total") or 0
+                    if status in ("analyzing", "processing_review") and total > 0:
+                        # Real progress: interpolate on questions completed.
+                        percent = lo + int((hi - lo) * min(analyzed, total) / total)
+                    else:
+                        # No sub-progress signal — slow creep, honest cap.
+                        ticks_in_stage = tick - stage_entered_tick
+                        percent = min(hi - 1, lo + ticks_in_stage // _CREEP_TICKS_PER_PERCENT)
                 yield "data: " + json.dumps(
                     {
                         "type": "progress",
                         "status": status,
                         "percent": percent,
                         "analyzed_qa_count": snap["analyzed_qa_count"],
+                        "qa_total": snap.get("qa_total") or 0,
                     },
                     ensure_ascii=False,
                 ) + "\n\n"
 
-                if status == STATUS_COMPLETED:
+                if status in _TERMINAL_DONE:
                     overall = {}
                     if snap["analysis_json"]:
                         try:
@@ -486,7 +526,7 @@ async def interview_record_events_stream(
                         ensure_ascii=False,
                     ) + "\n\n"
                     return
-                if status == STATUS_FAILED:
+                if status in _TERMINAL_FAILED:
                     yield "data: " + json.dumps(
                         {
                             "type": "error",

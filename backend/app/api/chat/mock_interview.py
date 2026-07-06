@@ -44,7 +44,10 @@ from app.schemas.chat import (
     TTSRequest,
 )
 from app.services.interview import mock_flow, mock_runtime_service
-from app.services.interview.interview_record_service import STATUS_PROCESSING_REVIEW
+from app.services.interview.interview_record_service import (
+    STATUS_PROCESSING_REVIEW,
+    STATUS_REVIEW_FAILED,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +178,13 @@ async def finish_mock_interview(
         mock_runtime_service.set_status(db, runtime, "processing_review", commit=False)
     await asyncio.to_thread(db.commit)
 
-    await asyncio.to_thread(mock_flow.dispatch_review, db, record_id)
+    try:
+        await asyncio.to_thread(mock_flow.dispatch_review, db, record_id)
+    except Exception as exc:  # noqa: BLE001 — dispatch_review already rolled back
+        raise HTTPException(
+            status_code=503,
+            detail="复盘任务派发失败（任务队列暂不可用），面试内容已保留，请稍后再点一次「结束面试」。",
+        ) from exc
 
     return MockFinishResp(status="processing_review", record_id=record_id)
 
@@ -201,7 +210,17 @@ async def retry_mock_review(
         mock_runtime_service.set_status(db, runtime, "processing_review", commit=False)
     await asyncio.to_thread(db.commit)
 
-    await asyncio.to_thread(mock_flow.dispatch_review, db, record_id)
+    try:
+        await asyncio.to_thread(
+            lambda: mock_flow.dispatch_review(
+                db, record_id, rollback_status=STATUS_REVIEW_FAILED,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — dispatch_review already rolled back
+        raise HTTPException(
+            status_code=503,
+            detail="复盘任务派发失败（任务队列暂不可用），请稍后重试。",
+        ) from exc
 
     return MockRetryReviewResp(status="processing_review", record_id=record_id)
 
@@ -262,6 +281,13 @@ async def get_in_progress_mock(
         .first()
     )
     title = record.title if record else "模拟面试"
+    # The FE seeds its answeredCount from this — without it, a resumed
+    # interview looked like "0 answered" and the finish button stayed
+    # disabled until the user answered one more question.
+    answered = (
+        mock_flow.count_answered_turns(db, runtime.conversation_id)
+        if runtime.conversation_id else 0
+    )
     return MockInProgressResp(
         has_in_progress=True,
         record_id=runtime.interview_record_id,
@@ -270,6 +296,7 @@ async def get_in_progress_mock(
         title=title,
         current_stage_key=runtime.current_stage_key,
         current_question=runtime.current_question_text,
+        answered_count=answered,
         last_activity_at=(
             runtime.last_activity_at.isoformat() if runtime.last_activity_at else None
         ),

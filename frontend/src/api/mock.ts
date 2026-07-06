@@ -59,6 +59,9 @@ export interface InProgressMock {
   current_stage_key?: string | null;
   /** The last interviewer line — what the candidate is answering. */
   current_question?: string | null;
+  /** Answered-turn count — seeds the resumed view's answeredCount so the
+   *  finish button isn't wrongly disabled after a refresh. */
+  answered_count?: number;
   last_activity_at?: string | null;
 }
 

@@ -201,10 +201,19 @@ def poll_record_snapshot(record_id: str) -> dict | None:
         )
         if row is None:
             return None
+        # Denominator for the analyzing-stage progress interpolation: the
+        # QA shells are persisted before the analyzing status flips, so by
+        # the time the FE needs a percent this is stable.
+        qa_total = (
+            db.query(InterviewQA)
+            .filter(InterviewQA.record_id == record_id)
+            .count()
+        )
         return {
             "id": row.id,
             "status": (row.status or "").lower(),
             "analyzed_qa_count": row.analyzed_qa_count or 0,
+            "qa_total": qa_total,
             "analysis_json": row.analysis_json,
             "error_message": row.error_message,
         }

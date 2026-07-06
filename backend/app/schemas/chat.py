@@ -145,6 +145,9 @@ class MockInProgressResp(BaseModel):
     # The last interviewer line (what the candidate is answering) — lets the
     # frontend re-seed the live view on resume without a history round-trip.
     current_question: str | None = None
+    # Answered-turn count so the resumed view doesn't think answeredCount=0
+    # (which used to grey out the "生成复盘" button until one more answer).
+    answered_count: int = 0
     last_activity_at: str | None = None
 
 

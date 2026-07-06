@@ -17,6 +17,8 @@ type Stage =
       conversationId: string;
       currentQuestion: string;
       voiceMode: VoiceMode;
+      /** Turns answered before this mount (resume path) — 0 for a fresh start. */
+      resumedAnsweredCount: number;
     };
 
 interface InProgressBanner {
@@ -24,6 +26,7 @@ interface InProgressBanner {
   conversationId: string;
   currentQuestion: string;
   title: string;
+  answeredCount: number;
   lastActivityAt: string | null;
 }
 
@@ -44,6 +47,7 @@ export function MockPage() {
           conversationId: r.conversation_id ?? '',
           currentQuestion: r.current_question ?? '',
           title: r.title ?? '模拟面试',
+          answeredCount: r.answered_count ?? 0,
           lastActivityAt: r.last_activity_at ?? null,
         });
       })
@@ -63,6 +67,7 @@ export function MockPage() {
       conversationId: inProgress.conversationId,
       currentQuestion: inProgress.currentQuestion,
       voiceMode: 'hybrid',
+      resumedAnsweredCount: inProgress.answeredCount,
     });
     setInProgress(null);
   };
@@ -97,6 +102,7 @@ export function MockPage() {
         conversationId: started.conversation_id,
         currentQuestion: started.current_question,
         voiceMode: payload.voice_mode,
+        resumedAnsweredCount: 0,
       });
     } catch {
       toast.error('启动模拟面试失败');
@@ -139,6 +145,7 @@ export function MockPage() {
       recordId={stage.recordId}
       initialQuestion={stage.currentQuestion}
       voiceMode={stage.voiceMode}
+      resumedAnsweredCount={stage.resumedAnsweredCount}
       onFinished={onFinished}
       onAbandoned={onAbandoned}
     />

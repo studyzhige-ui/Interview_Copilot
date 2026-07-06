@@ -53,6 +53,14 @@ async def revoke(jti: str, exp: int | float | None = None) -> None:
     except Exception as exc:  # noqa: BLE001
         # Don't break the request flow on Redis hiccup — log loudly so this
         # surfaces during monitoring; the token will still expire naturally.
+        #
+        # Known residual window (accepted): this write is fail-open while
+        # ``is_revoked`` is fail-closed. If Redis is down at logout time the
+        # revocation is LOST — after Redis recovers, the presented token
+        # stays valid until natural expiry (access: ~30 min). Backstops: a
+        # password change bumps ``token_version`` (kills everything without
+        # the blacklist), and during the outage itself every authed request
+        # 401s anyway via the fail-closed read.
         logger.error("Failed to revoke jti=%s in Redis: %s", jti, exc)
 
 

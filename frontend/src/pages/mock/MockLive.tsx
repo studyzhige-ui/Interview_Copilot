@@ -38,6 +38,9 @@ interface Props {
   /** The opening / current interviewer line (greeting + question), one string. */
   initialQuestion: string;
   voiceMode: VoiceMode;
+  /** Turns answered before this mount (resume path) — keeps answeredCount
+   *  honest after a refresh so the finish button isn't wrongly disabled. */
+  resumedAnsweredCount?: number;
   onFinished: (recordId: string) => void;
   onAbandoned: () => void;
 }
@@ -47,7 +50,7 @@ function fmtDuration(ms: number) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export function MockLive({ recordId, initialQuestion, voiceMode, onFinished, onAbandoned }: Props) {
+export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnsweredCount = 0, onFinished, onAbandoned }: Props) {
   const [turns, setTurns] = useState<Turn[]>(
     initialQuestion ? [{ who: 'interviewer', text: initialQuestion }] : [],
   );
@@ -241,7 +244,7 @@ export function MockLive({ recordId, initialQuestion, voiceMode, onFinished, onA
 
   const [confirmingFinish, setConfirmingFinish] = useState(false);
   const [abandoning, setAbandoning] = useState(false);
-  const answeredCount = turns.filter((t) => t.who === 'me').length;
+  const answeredCount = resumedAnsweredCount + turns.filter((t) => t.who === 'me').length;
   const navigate = useNavigate();
 
   // ── Navigation lock while interview is in flight ─────────────────────

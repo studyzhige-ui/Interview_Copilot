@@ -16,6 +16,7 @@ from app.worker.tasks.resume import process_resume_parse
 from app.worker.tasks.memory import dream_for_user_task, scan_and_dream_batch_task
 from app.worker.tasks.catalog import refresh_model_catalog_task
 from app.worker.tasks.outbox import drain_outbox_jobs
+from app.worker.tasks.maintenance import sweep_stale_interview_records
 
 __all__ = [
     "run_async",
@@ -26,4 +27,5 @@ __all__ = [
     "scan_and_dream_batch_task",
     "refresh_model_catalog_task",
     "drain_outbox_jobs",
+    "sweep_stale_interview_records",
 ]

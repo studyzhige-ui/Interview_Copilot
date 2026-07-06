@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Iterable
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.core.user_identity import resolve_user_pk
@@ -44,7 +45,13 @@ STATUS_REVIEW_READY = "review_ready"
 STATUS_REVIEW_FAILED = "review_failed"
 
 # Mock states that must NOT appear in the review list (not yet viewable).
+# ``processing_review`` is only hidden while YOUNG: a review normally lands
+# in a couple of minutes, but if the dispatch was lost (broker blip) the
+# record would otherwise be invisible in every UI surface forever — the
+# "面试蒸发" black hole. After the grace period it surfaces in the list so
+# the user can see it's stuck and hit retry.
 MOCK_HIDDEN_STATUSES = (STATUS_MOCK_IN_PROGRESS, STATUS_PROCESSING_REVIEW)
+_PROCESSING_REVIEW_GRACE = timedelta(minutes=10)
 
 
 class InterviewRecordService:
@@ -138,11 +145,20 @@ class InterviewRecordService:
         review_failed mock DOES appear so the user can retry)."""
         db: Session = SessionLocal()
         try:
+            stale_review_cutoff = datetime.utcnow() - _PROCESSING_REVIEW_GRACE
             return (
                 db.query(InterviewRecord)
                 .filter(
                     InterviewRecord.user_id == resolve_user_pk(db, user_id),
-                    ~InterviewRecord.status.in_(MOCK_HIDDEN_STATUSES),
+                    or_(
+                        ~InterviewRecord.status.in_(MOCK_HIDDEN_STATUSES),
+                        # Stuck reviews become visible after the grace
+                        # period so the user can reach the retry button.
+                        and_(
+                            InterviewRecord.status == STATUS_PROCESSING_REVIEW,
+                            InterviewRecord.updated_at < stale_review_cutoff,
+                        ),
+                    ),
                 )
                 .order_by(InterviewRecord.created_at.desc())
                 .offset(offset)
@@ -425,6 +441,30 @@ class InterviewRecordService:
             if row is None:
                 return
             row.analyzed_qa_count = (row.analyzed_qa_count or 0) + by
+            row.updated_at = datetime.utcnow()
+            if own_db:
+                db.commit()
+            else:
+                db.flush()
+        finally:
+            if own_db:
+                db.close()
+
+    def reset_analyzed_count(self, record_id: str, *, db: Session | None = None) -> None:
+        """Zero the per-question progress counter.
+
+        Called at the start of the analyzing stage so a Celery retry /
+        redelivery doesn't stack this run's increments on top of the
+        previous attempt's.
+        """
+        own_db = db is None
+        if own_db:
+            db = SessionLocal()
+        try:
+            row = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            if row is None:
+                return
+            row.analyzed_qa_count = 0
             row.updated_at = datetime.utcnow()
             if own_db:
                 db.commit()
