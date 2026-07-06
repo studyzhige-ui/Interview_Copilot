@@ -118,3 +118,37 @@ def _disable_rate_limiter():
     except ImportError:
         # rate_limit module not imported yet — nothing to disable.
         yield
+
+
+class NoCloseSession:
+    """Forward attribute access to a shared test session; ``close()``
+    becomes a commit so cross-call state survives service-owned
+    ``SessionLocal()`` usage. Context-manager protocol supported for
+    ``with SessionLocal() as db`` call sites."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def close(self):
+        self._inner.commit()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
+def patch_session_locals(monkeypatch, db_session, *modules) -> None:
+    """Route every listed module's ``SessionLocal`` at the test session.
+
+    NB: enumerated modules only — a new module that owns sessions must be
+    added by its tests explicitly (silently escaping to the real DB is the
+    failure mode this helper documents).
+    """
+    for mod in modules:
+        monkeypatch.setattr(mod, "SessionLocal", lambda: NoCloseSession(db_session))

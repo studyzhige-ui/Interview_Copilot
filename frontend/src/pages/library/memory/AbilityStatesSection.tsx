@@ -6,20 +6,12 @@
  * days, so a deleted hallucination can't resurrect a week later.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Trash2 } from 'lucide-react';
+import { Target, Trash2 } from 'lucide-react';
 import { archiveAbilityState, listAbilityStates } from '@/api/memory';
 import { extractErr } from '@/api/client';
 import { toast } from '@/store/uiStore';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { Target } from 'lucide-react';
-import { LoadingBlock } from './shared';
-
-const MASTERY_LABEL: Record<string, { text: string; cls: string }> = {
-  weak: { text: '弱', cls: 'bg-red-50 text-red-700 border-red-200' },
-  improving: { text: '进步中', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
-  stable: { text: '稳定', cls: 'bg-sky-50 text-sky-700 border-sky-200' },
-  strong: { text: '强', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-};
+import { LoadingBlock, MASTERY_META } from './shared';
 
 function staleDays(iso: string | null): number | null {
   if (!iso) return null;
@@ -63,7 +55,10 @@ export function AbilityStatesSection() {
   return (
     <div className="space-y-2">
       {states.map((s) => {
-        const m = MASTERY_LABEL[s.mastery_level] ?? { text: s.mastery_level, cls: 'bg-stone-50 text-stone-600 border-stone-200' };
+        const meta = MASTERY_META[s.mastery_level];
+        const m = meta
+          ? { text: meta.label, cls: meta.pill }
+          : { text: s.mastery_level, cls: 'bg-stone-50 text-stone-600 border-stone-200' };
         const stale = staleDays(s.last_evidence_at);
         return (
           <div key={s.id} className="flex items-start gap-3 border border-stone-200 rounded-lg bg-white px-4 py-3">
@@ -82,7 +77,7 @@ export function AbilityStatesSection() {
               type="button"
               title="删除（自动记忆 30 天内不会重建）"
               onClick={() => archiveMutation.mutate(s.id)}
-              disabled={archiveMutation.isPending}
+              disabled={archiveMutation.isPending && archiveMutation.variables === s.id}
               className="w-7 h-7 rounded text-stone-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center shrink-0"
             >
               <Trash2 size={14} />

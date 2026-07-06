@@ -47,7 +47,7 @@ import asyncio
 import contextlib
 import logging
 import secrets
-from typing import AsyncIterator
+from typing import AsyncIterator, Literal
 
 from app.db.redis import redis_client
 from app.services.memory._metrics import incr as _metric_incr
@@ -199,9 +199,9 @@ def user_memory_lock_sync(
     user_id: str,
     *,
     timeout_sec: int = DEFAULT_TIMEOUT_SEC,
-    on_timeout: str = "degrade",
+    on_timeout: Literal["degrade", "raise"] = "degrade",
 ):
-    """Synchronous version of :func:`user_memory_lock` for Celery.
+    """Synchronous variant (Celery workers, outbox handlers, API edits).
 
     ``on_timeout="raise"`` (MEM-6): raise :class:`LockNotAcquired` instead
     of proceeding lockless when the wait budget expires OR Redis is down.

@@ -327,11 +327,25 @@ def dream_for_record(record_id: str) -> dict[str, Any]:
         db.close()
 
     try:
-        return _dream_for_record_locked(record_id, user_id, summary)
+        summary = _dream_for_record_locked(record_id, user_id, summary)
     except LockNotAcquired as exc:
         logger.warning("dreaming: lock not acquired user=%s: %s", user_id, exc)
         summary["error"] = "lock_not_acquired"
         return summary
+
+    # Size-ceiling compaction (MEM-5): dreaming is the natural low-frequency
+    # moment to rewrite an oversized doc. Runs OUTSIDE the record dream's
+    # lock hold under its own short acquisition — the rewrite involves an
+    # LLM call, and stretching the fixed-TTL record lock across it risked
+    # expiry mid-write. Contention → skip; next dream retries.
+    if not summary.get("error"):
+        try:
+            with user_memory_lock_sync(user_id, on_timeout="raise"):
+                for doc_type in ("user_profile", "learning_strategy"):
+                    memory_document_service.compact_if_oversized(user_id, doc_type)
+        except LockNotAcquired:
+            logger.info("dreaming: compaction skipped (lock busy) user=%s", user_id)
+    return summary
 
 
 def _dream_for_record_locked(
@@ -425,14 +439,6 @@ def _dream_for_record_locked(
             # repeatedly process a quiet record.
             record.last_dreamed_at = datetime.utcnow()
             db.commit()
-
-            # Size-ceiling compaction (MEM-5): dreaming is the natural
-            # low-frequency moment to rewrite an oversized doc. Own
-            # sessions + best-effort — still under this user's lock.
-            for _doc_type in ("user_profile", "learning_strategy"):
-                memory_document_service.compact_if_oversized(
-                    user_id, _doc_type, user_id_for_llm=user_id,
-                )
         except Exception as exc:  # noqa: BLE001
             db.rollback()
             logger.exception(

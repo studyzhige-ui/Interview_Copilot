@@ -256,10 +256,7 @@ def test_threshold_compaction_fires_and_advances_cursor(monkeypatch):
 
     # Stub summarize_conversation to return a fixed summary.
     import app.services.chat.conversation_summarizer as cs_mod
-    monkeypatch.setattr(cs_mod, "summarize_conversation",
-        lambda old, conv: asyncio.coroutine(lambda: "COMPRESSED SUMMARY")(old, conv)
-    )
-    # Use a proper async stub
+
     async def fake_summarize(old, conv, *, user_id=None):
         return "COMPRESSED SUMMARY"
     monkeypatch.setattr(cs_mod, "summarize_conversation", fake_summarize)

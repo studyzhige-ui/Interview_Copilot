@@ -278,13 +278,14 @@ def load_with_meta(username: str, doc_type: str, *, db: Session | None = None) -
 def upsert_user_edit(
     username: str, doc_type: str, new_body: str,
     *, base_updated_at: str | None = None,
-) -> str:
+) -> dict:
     """Persist a user-edited body verbatim. Returns the stored body.
 
     ``base_updated_at`` (MEM-3): the updated_at the client loaded with.
     A mismatch raises :class:`StaleDocumentEdit` (API → 409) instead of
     silently erasing whatever realtime extraction wrote in between.
-    Omitted → legacy unconditional overwrite.
+    Omitted → legacy unconditional overwrite. Returns
+    ``{body, updated_at}`` — the token comes from the save transaction.
     """
     _validate_doc_type(doc_type)
     db: Session = SessionLocal()
@@ -324,7 +325,11 @@ def upsert_user_edit(
             db=db,
         )
         db.commit()
-        return body
+        # Token from THIS transaction (not a post-lock re-read): a background
+        # write between save and re-read would hand the client a token that
+        # validates against the background version — the exact silent
+        # overwrite MEM-3 exists to stop.
+        return {"body": body, "updated_at": row.updated_at.isoformat()}
     except Exception:
         db.rollback()
         raise
@@ -341,6 +346,9 @@ def upsert_user_edit(
 
 DOC_MAX_LINES = 100
 DOC_MAX_CHARS = 6000
+# Rewrites aim at half the ceiling so the doc has headroom to grow before
+# the next compaction instead of thrashing right at the limit.
+DOC_COMPACT_TARGET_LINES = DOC_MAX_LINES // 2
 
 
 def compact_if_oversized(username: str, doc_type: str, *, user_id_for_llm: str | None = None) -> bool:
@@ -353,7 +361,7 @@ def compact_if_oversized(username: str, doc_type: str, *, user_id_for_llm: str |
     _validate_doc_type(doc_type)
     try:
         current = load(username, doc_type)
-        lines = [ln for ln in (current or "").split("\n")]
+        lines = (current or "").split("\n")
         if len(lines) <= DOC_MAX_LINES and len(current or "") <= DOC_MAX_CHARS:
             return False
 
@@ -366,7 +374,7 @@ def compact_if_oversized(username: str, doc_type: str, *, user_id_for_llm: str |
             doc_label=labels.get(doc_type, doc_type),
             line_count=len(lines),
             char_count=len(current),
-            max_lines=DOC_MAX_LINES // 2,
+            max_lines=DOC_COMPACT_TARGET_LINES,
             body=current,
         )
         response = run_async(

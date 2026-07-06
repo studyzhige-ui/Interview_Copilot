@@ -96,11 +96,13 @@ def _ability_states_to_dicts(states) -> list[dict]:
     from datetime import datetime
 
     def _stale_days(s) -> int | None:
+        from app.services.memory._extraction_common import STALE_ANNOTATION_DAYS
+
         ts = getattr(s, "last_evidence_at", None)
         if ts is None:
             return None
         days = (datetime.utcnow() - ts).days
-        return days if days >= 14 else None
+        return days if days >= STALE_ANNOTATION_DAYS else None
 
     growth = [s for s in states if s.mastery_level in ("weak", "improving")]
     settled = [s for s in states if s.mastery_level not in ("weak", "improving")]

@@ -46,6 +46,7 @@ def enqueue_job(
     payload: dict[str, Any] | None = None,
     idempotency_key: str | None = None,
     max_attempts: int = 5,
+    run_after: datetime | None = None,
 ) -> OutboxJob | None:
     """Add a job in the caller's transaction (caller commits).
 
@@ -74,7 +75,7 @@ def enqueue_job(
         status="pending",
         attempts=0,
         max_attempts=max_attempts,
-        next_run_at=datetime.utcnow(),
+        next_run_at=run_after or datetime.utcnow(),
         idempotency_key=idempotency_key,
     )
     db.add(job)

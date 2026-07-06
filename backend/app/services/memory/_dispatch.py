@@ -87,7 +87,12 @@ def dispatch_memory_patches(
                     result.dropped += 1
                     _metrics.incr(
                         "memory.patch_dropped", target="ability_state",
-                        reason="archive_not_allowed", change_type=change_type,
+                        reason=(
+                            "archive_wrong_channel"
+                            if change_type != "patch_dreaming"
+                            else "invalid_fields"
+                        ),
+                        change_type=change_type,
                     )
                     continue
                 try:
@@ -101,6 +106,10 @@ def dispatch_memory_patches(
                     if db is not None:
                         raise
                     result.dropped += 1
+                    _metrics.incr(
+                        "memory.patch_dropped", target="ability_state",
+                        reason="archive_error", change_type=change_type,
+                    )
                     continue
                 if ok:
                     applied += 1
@@ -134,6 +143,10 @@ def dispatch_memory_patches(
                 if row is not None:
                     applied += 1
                     any_success = True
+                else:
+                    # Idempotency replay or tombstone block — neither is a
+                    # loss; count as skipped so DispatchResult adds up.
+                    result.skipped += 1
             except Exception as exc:  # noqa: BLE001
                 # On a caller-owned (shared) session the write has poisoned the
                 # transaction — propagate so the caller (dreaming) rolls back
@@ -187,15 +200,11 @@ def dispatch_memory_patches(
             "dispatch: user=%s applied=%d dropped=%d skipped=%d by=%s",
             user_id, result.applied, result.dropped, result.skipped, result.by_target,
         )
-        # The applied/dropped curves (MEM-7) — extraction quality is now a
-        # grep away instead of an INFO-log archaeology dig.
+        # The applied curve (MEM-7); drops are emitted per-reason at each
+        # drop site under the single event name memory.patch_dropped.
         if result.applied:
             _metrics.incr(
                 "memory.patch_applied", value=result.applied, change_type=change_type,
-            )
-        if result.dropped:
-            _metrics.incr(
-                "memory.patch_dropped_total", value=result.dropped, change_type=change_type,
             )
     return result
 

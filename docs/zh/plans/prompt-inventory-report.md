@@ -49,7 +49,7 @@
 | Agent 工具提示面 | `backend/app/agent_runtime/tool_registry.py`、`backend/app/agent_runtime/tools/*.py` |
 | 模拟面试 | `backend/app/services/interview/mock_interview_service.py` |
 | 面试分析 | `backend/app/services/voice/interview_analysis_service.py`、`backend/app/services/interview/analysis_orchestrator.py` |
-| 长短期记忆 | `backend/app/services/memory/compaction_service.py`、`prompts.py` |
+| 长短期记忆 | `backend/app/services/chat/conversation_summarizer.py`、`prompts.py` |
 | 简历解析 | `backend/app/services/resume/resume_service.py` |
 | 能力诊断 | `backend/app/services/analytics/diagnostics_report_service.py` |
 | 评测 | `evaluation/runners.py` |
@@ -168,7 +168,7 @@
 
 | ID | 用途 | 定义位置 | 调用位置 | 模型角色 | 输出 |
 | --- | --- | --- | --- | --- | --- |
-| P13 | 会话摘要压缩 | `backend/app/services/memory/compaction_service.py:42-91` `COMPACTION_PROMPT` | 同文件 `:162-169` | `fast` | JSON object |
+| P13 | 会话摘要压缩 | `backend/app/services/chat/conversation_summarizer.py:42-91` `COMPACTION_PROMPT` | 同文件 `:162-169` | `fast` | JSON object |
 | P14 | 实时记忆抽取 | `backend/app/services/memory/prompts.py:40-125` `REALTIME_EXTRACTION_PROMPT` | `realtime_extraction.py:96-105` | `fast` | JSON array |
 | P15 | 夜间记忆整理 | `backend/app/services/memory/prompts.py:136-208` `DREAMING_PROMPT` | `dreaming_worker.py:358-374` | `fast` | JSON array |
 

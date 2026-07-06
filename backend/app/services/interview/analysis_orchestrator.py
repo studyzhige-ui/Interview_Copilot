@@ -20,6 +20,7 @@ states. Long LLM calls happen outside any open transaction.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
 import logging
 import os
@@ -189,20 +190,35 @@ class InterviewAnalysisOrchestrator:
                 )
             interview_record_service.set_status(record_id, done_status)
             # Event-driven dreaming (MEM-9): a finished analysis is exactly
-            # the "new growth evidence exists" moment. Schedule a per-user
-            # dream check after the quiet window instead of waiting for the
-            # nightly scan (light users used to hit the volume gate every
-            # 3-4 weeks). Best-effort — the nightly scan remains the
-            # backstop if the broker hiccups here.
+            # the "new growth evidence exists" moment. The quiet-window wait
+            # rides the OUTBOX (run_after) — a 6h Celery countdown would sit
+            # unacked past the broker's visibility_timeout (3700s) and be
+            # redelivered ~hourly. Idempotency-keyed per (user, record) so a
+            # reanalyze doesn't stack checks. Best-effort — the nightly scan
+            # remains the backstop.
             if owner_username:
                 try:
-                    from app.services.memory.dreaming_worker import RECORD_QUIET_HOURS
-                    from app.worker.tasks.memory import dream_for_user_task
+                    from datetime import timedelta as _td
 
-                    dream_for_user_task.apply_async(
-                        args=[owner_username],
-                        countdown=RECORD_QUIET_HOURS * 3600,
-                    )
+                    from app.services.memory.dreaming_worker import RECORD_QUIET_HOURS
+                    from app.services.uploads.outbox_service import enqueue_job
+
+                    with SessionLocal() as odb:
+                        rec_row = odb.query(InterviewRecord).filter(
+                            InterviewRecord.id == record_id
+                        ).first()
+                        if rec_row is not None:
+                            enqueue_job(
+                                odb,
+                                user_pk=rec_row.user_id,
+                                job_type="dream_check_user",
+                                aggregate_type="interview_record",
+                                aggregate_id=record_id,
+                                payload={"username": owner_username},
+                                idempotency_key=f"dream_check:{record_id}",
+                                run_after=datetime.utcnow() + _td(hours=RECORD_QUIET_HOURS),
+                            )
+                            odb.commit()
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "event-driven dream scheduling failed for %s: %s",

@@ -30,6 +30,10 @@ export function SingleDocSection({ kind }: Props) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
+  // Set on a 409: a background writer landed during the edit window. The
+  // next save must be an EXPLICIT choice (overwrite vs discard) — silently
+  // retrying with a refreshed token would erase lines the user never saw.
+  const [conflict, setConflict] = useState(false);
 
   const label = kind === 'profile' ? '用户画像' : '学习策略';
   const fetchDoc = kind === 'profile' ? getUserProfileDoc : getLearningStrategyDoc;
@@ -50,18 +54,20 @@ export function SingleDocSection({ kind }: Props) {
   };
 
   const saveMutation = useMutation({
-    mutationFn: () => saveDoc(draft, baseUpdatedAt),
+    mutationFn: (opts: { force?: boolean }) =>
+      saveDoc(draft, opts.force ? null : baseUpdatedAt),
     onSuccess: () => {
       toast.success('已保存');
       setEditing(false);
+      setConflict(false);
       refetchDoc();
     },
     onError: (e) => {
       const status = (e as { response?: { status?: number } })?.response?.status;
       toast.error(extractErr(e, '保存失败'));
       if (status === 409) {
-        // Stale edit — pull the fresh version; the user's draft stays in
-        // the textarea so nothing they typed is lost.
+        // Keep the draft; require an explicit resolution (banner below).
+        setConflict(true);
         refetchDoc();
       }
     },
@@ -98,10 +104,10 @@ export function SingleDocSection({ kind }: Props) {
         <span className="ml-auto" />
         {editing ? (
           <>
-            <Btn size="sm" kind="ghost" onClick={() => setEditing(false)} disabled={saveMutation.isPending}>
+            <Btn size="sm" kind="ghost" onClick={() => { setEditing(false); setConflict(false); }} disabled={saveMutation.isPending}>
               取消
             </Btn>
-            <Btn size="sm" onClick={() => saveMutation.mutate()} loading={saveMutation.isPending}>
+            <Btn size="sm" onClick={() => saveMutation.mutate({})} loading={saveMutation.isPending} disabled={conflict}>
               保存
             </Btn>
           </>
@@ -111,6 +117,23 @@ export function SingleDocSection({ kind }: Props) {
           </Btn>
         )}
       </div>
+      {editing && conflict && (
+        <div className="mx-4 mt-3 flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          <span className="text-xs text-amber-900 flex-1">
+            后台在你编辑期间更新了内容。请选择：放弃我的修改并查看最新版本，或强制覆盖（会丢失后台更新）。
+          </span>
+          <Btn
+            size="sm"
+            kind="ghost"
+            onClick={() => { setConflict(false); setEditing(false); refetchDoc(); }}
+          >
+            放弃我的修改
+          </Btn>
+          <Btn size="sm" onClick={() => saveMutation.mutate({ force: true })} loading={saveMutation.isPending}>
+            强制覆盖
+          </Btn>
+        </div>
+      )}
       {editing ? (
         <textarea
           autoFocus

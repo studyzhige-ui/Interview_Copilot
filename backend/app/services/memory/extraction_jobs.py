@@ -148,3 +148,25 @@ __all__ = [
     "enqueue_realtime_extraction",
     "enqueue_dreaming",
 ]
+
+
+def _handle_dream_check_user(db, job) -> None:
+    """Outbox handler for the event-driven dream check (MEM-9).
+
+    The delayed wait lives in the OUTBOX (``run_after``), not in a Celery
+    countdown: a 6h-unacked message would blow through the broker's
+    visibility_timeout (3700s) and get redelivered ~hourly. When this
+    fires, the quiet window has already passed — dispatch the (immediate,
+    fast-ack) dream task and let its own gates decide.
+    """
+    import json as _json
+
+    from app.worker.tasks.memory import dream_for_user_task
+
+    payload = _json.loads(job.payload_json) if job.payload_json else {}
+    username = payload.get("username")
+    if username:
+        dream_for_user_task.delay(username)
+
+
+register_handler("dream_check_user", _handle_dream_check_user)

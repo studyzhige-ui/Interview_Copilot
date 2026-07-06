@@ -125,7 +125,7 @@ def test_document_user_edit_overwrites_body(seeded):
     svc.apply_patches("alice", "user_profile",
                       [{"op": "add", "new_line": "- a"}], change_type="patch_realtime")
     stored = svc.upsert_user_edit("alice", "user_profile", "- only this line")
-    assert stored == "- only this line"
+    assert stored["body"] == "- only this line"
     assert svc.load("alice", "user_profile") == "- only this line"
 
 

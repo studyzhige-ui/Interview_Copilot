@@ -94,6 +94,22 @@ def delete_ability_state(
 # ── memory documents (user_profile / learning_strategy) ─────────────────
 
 
+def _edit_doc(username: str, doc_type: str, payload: DocBodyRequest) -> dict:
+    """Shared PUT core: lock + optimistic token check (MEM-3) → 409."""
+    try:
+        with user_memory_lock_sync(username):
+            saved = memory_document_service.upsert_user_edit(
+                username, doc_type, payload.body,
+                base_updated_at=payload.base_updated_at,
+            )
+    except memory_document_service.StaleDocumentEdit as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="内容已被后台更新，请刷新后基于最新版本再编辑",
+        ) from exc
+    return {"status": "success", **saved}
+
+
 @router.get("/memory/user-profile")
 def get_user_profile(current_user: User = Depends(get_current_user)):
     return memory_document_service.load_with_meta(current_user.username, "user_profile")
@@ -104,19 +120,7 @@ def edit_user_profile(
     payload: DocBodyRequest,
     current_user: User = Depends(get_current_user),
 ):
-    try:
-        with user_memory_lock_sync(current_user.username):
-            body = memory_document_service.upsert_user_edit(
-                current_user.username, "user_profile", payload.body,
-                base_updated_at=payload.base_updated_at,
-            )
-    except memory_document_service.StaleDocumentEdit as exc:
-        raise HTTPException(
-            status_code=409,
-            detail="内容已被后台更新，请刷新后基于最新版本再编辑",
-        ) from exc
-    meta = memory_document_service.load_with_meta(current_user.username, "user_profile")
-    return {"status": "success", "body": body, "updated_at": meta["updated_at"]}
+    return _edit_doc(current_user.username, "user_profile", payload)
 
 
 @router.get("/memory/learning-strategy")
@@ -129,19 +133,7 @@ def edit_learning_strategy(
     payload: DocBodyRequest,
     current_user: User = Depends(get_current_user),
 ):
-    try:
-        with user_memory_lock_sync(current_user.username):
-            body = memory_document_service.upsert_user_edit(
-                current_user.username, "learning_strategy", payload.body,
-                base_updated_at=payload.base_updated_at,
-            )
-    except memory_document_service.StaleDocumentEdit as exc:
-        raise HTTPException(
-            status_code=409,
-            detail="内容已被后台更新，请刷新后基于最新版本再编辑",
-        ) from exc
-    meta = memory_document_service.load_with_meta(current_user.username, "learning_strategy")
-    return {"status": "success", "body": body, "updated_at": meta["updated_at"]}
+    return _edit_doc(current_user.username, "learning_strategy", payload)
 
 
 # ── memory_audit_logs read API ──────────────────────────────────────────
