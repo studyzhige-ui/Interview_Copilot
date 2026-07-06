@@ -17,6 +17,18 @@ Change a number here and every path moves together.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
+
+# What the first bytes of an upload must look like, checked at
+# confirm/consume via a 32-byte head read (file_validation.detect_head_format):
+#   audio     — recognised audio/video container magic
+#   document  — pdf / docx-zip / txt-md text (the strict resume/JD family)
+#   knowledge — anything the knowledge whitelist can parse: pdf / OOXML zip /
+#               legacy-Office OLE / image / text-family (extension gate runs
+#               separately at POST /knowledge/documents)
+#   image     — png / jpeg / gif / webp
+#   text      — non-binary head
+ContentKind = Literal["audio", "document", "knowledge", "image", "text"]
 
 _MB = 1024 * 1024
 
@@ -33,9 +45,7 @@ _TTL_AUDIO = 3600
 class PurposeSpec:
     key: str
     max_bytes: int
-    # What the first bytes must look like ('audio' | 'document' | 'image' |
-    # 'text'). Checked at confirm/consume via a 32-byte head read.
-    content_kind: str
+    content_kind: ContentKind
     presign_ttl_seconds: int
 
 
@@ -44,7 +54,7 @@ PURPOSE_REGISTRY: dict[str, PurposeSpec] = {
     for spec in (
         PurposeSpec("resume", 20 * _MB, "document", _TTL_SHORT),
         PurposeSpec("jd", 10 * _MB, "document", _TTL_SHORT),
-        PurposeSpec("knowledge_document", 50 * _MB, "document", _TTL_SHORT),
+        PurposeSpec("knowledge_document", 50 * _MB, "knowledge", _TTL_SHORT),
         PurposeSpec("interview_audio", 500 * _MB, "audio", _TTL_AUDIO),
         PurposeSpec("mock_audio_clip", 25 * _MB, "audio", _TTL_SHORT),
         # Matches the /me/avatar set-time cap so a too-large image is rejected
@@ -60,4 +70,4 @@ def get_purpose_spec(purpose: str) -> PurposeSpec | None:
     return PURPOSE_REGISTRY.get(purpose)
 
 
-__all__ = ["PurposeSpec", "PURPOSE_REGISTRY", "get_purpose_spec"]
+__all__ = ["ContentKind", "PurposeSpec", "PURPOSE_REGISTRY", "get_purpose_spec"]

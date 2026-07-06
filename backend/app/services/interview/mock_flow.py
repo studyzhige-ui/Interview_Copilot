@@ -88,11 +88,19 @@ def recent_messages(db: Session, conversation_id: str, limit: int = 8) -> list[d
 def extract_file_asset_text(db: Session, asset_id: str, username: str) -> str:
     """Best-effort: download an owned file asset and extract its plain text."""
     try:
-        from app.services.uploads.file_asset_service import get_file_asset
+        from app.services.uploads.file_asset_service import (
+            READABLE_UPLOAD_STATUSES,
+            get_file_asset,
+        )
         from app.services.voice.file_parser import extract_resume_text
 
         asset = get_file_asset(db, asset_id)
         if asset is None or asset.user_id != resolve_user_pk(db, username):
+            return ""
+        if asset.upload_status not in READABLE_UPLOAD_STATUSES:
+            # Never parse unverified bytes; the start endpoint gates its own
+            # uploads with require_uploaded, so this is the backstop for any
+            # other caller.
             return ""
         storage_uri = asset.storage_uri
         local_path = storage_uri

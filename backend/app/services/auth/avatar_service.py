@@ -13,6 +13,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from app.services.uploads.file_asset_service import UPLOAD_STATUS_DELETED
 from app.core.storage import (
     delete_local_uri,
     delete_s3_object,
@@ -171,7 +172,7 @@ def swap_avatar(db: Session, user: User, asset) -> None:
             .first()
         )
         if prev is not None:
-            prev.upload_status = "deleted"
+            prev.upload_status = UPLOAD_STATUS_DELETED
             prev.deleted_at = datetime.utcnow()
             db.add(prev)
             db.commit()

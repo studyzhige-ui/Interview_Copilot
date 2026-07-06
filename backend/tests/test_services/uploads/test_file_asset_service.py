@@ -19,44 +19,38 @@ def _make_user(db, username="alice") -> User:
 
 @pytest.fixture(autouse=True)
 def _stub_presign(monkeypatch):
-    """create_file_asset mints a presigned URL — stub the S3 call out."""
-    monkeypatch.setattr(
-        file_asset_service,
-        "generate_presigned_upload_url_for_key",
-        lambda object_key, content_type="application/octet-stream", expiration=600: {
+    """create_file_asset mints a presigned URL — stub the S3 call out.
+    Records the TTL each call used so tests can pin UP-7."""
+    calls = {}
+
+    def _fake(object_key, content_type="application/octet-stream", expiration=600):
+        calls["expiration"] = expiration
+        return {
             "upload_url": f"https://signed.example/{object_key}",
             "storage_uri": f"s3://bucket/{object_key}",
             "object_key": object_key,
-        },
+        }
+
+    monkeypatch.setattr(
+        file_asset_service, "generate_presigned_upload_url_for_key", _fake,
     )
+    return calls
 
 
 @pytest.fixture(autouse=True)
-def _stub_head_bytes(monkeypatch):
-    """Confirm now magic-checks the first bytes (UP-6) — default every test
-    to a valid-for-its-purpose head so lifecycle tests stay focused; the
-    magic-specific tests override this per-case."""
-    _PAD = bytes(24)
-    _HEADS = {
-        "audio": b"ID3" + bytes(29),
-        "document": b"%PDF-1.7" + _PAD,
-        "image": bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A]) + _PAD,
-        "text": b"plain text head",
-    }
+def _stub_magic_gate(monkeypatch):
+    """Confirm runs a head read + magic check (UP-6). Lifecycle tests aren't
+    about the byte-level detectors (those have their own unit tests in
+    test_file_validation_detect.py), so stub the gate open by default; the
+    magic/transient-specific tests override per-case."""
+    from app.services.uploads import file_validation
 
-    def _fake_head(storage_uri, num_bytes=32):
-        # The asset's purpose isn't visible here — tests use purpose-typical
-        # filenames, so key off the extension.
-        uri = (storage_uri or "").lower()
-        if uri.endswith((".mp3", ".wav", ".m4a", ".webm")):
-            return _HEADS["audio"]
-        if uri.endswith((".png", ".jpg", ".jpeg", ".webp")):
-            return _HEADS["image"]
-        if uri.endswith((".pdf", ".docx")):
-            return _HEADS["document"]
-        return _HEADS["text"]
-
-    monkeypatch.setattr(file_asset_service, "read_object_head", _fake_head)
+    monkeypatch.setattr(
+        file_asset_service, "read_object_head", lambda uri, num_bytes=32: b"stub-head",
+    )
+    monkeypatch.setattr(
+        file_validation, "detect_head_format", lambda head, kind, ext="": "stub",
+    )
 
 
 def test_create_file_asset_resolves_user_and_returns_url(db_session):
@@ -256,7 +250,9 @@ def test_confirm_rejects_actual_size_over_cap(db_session, monkeypatch):
 
 
 def test_confirm_rejects_wrong_magic(db_session, monkeypatch):
-    """UP-6: an exe renamed to cv.pdf must fail the head magic check."""
+    """UP-6: content that fails the purpose's magic detection fails confirm."""
+    from app.services.uploads import file_validation
+
     _make_user(db_session)
     db_session.commit()
     asset, _ = file_asset_service.create_file_asset(
@@ -268,8 +264,7 @@ def test_confirm_rejects_wrong_magic(db_session, monkeypatch):
         lambda uri: {"size_bytes": 64, "content_type": "application/pdf"},
     )
     monkeypatch.setattr(
-        file_asset_service, "read_object_head",
-        lambda uri, num_bytes=32: b"MZ" + bytes(30),  # PE executable header
+        file_validation, "detect_head_format", lambda head, kind, ext="": None,
     )
     confirmed = file_asset_service.confirm_file_asset(
         db_session, file_asset_id=asset.id, user_id="alice",
@@ -334,3 +329,50 @@ def test_enqueue_asset_blob_delete_is_idempotent(db_session):
     ).all()
     assert len(jobs) == 1
     assert json.loads(jobs[0].payload_json)["storage_uri"] == asset.storage_uri
+
+
+def test_presign_ttl_follows_purpose(db_session, _stub_presign):
+    """UP-7: interview audio keeps the 1h window, documents drop to 10min."""
+    _make_user(db_session)
+    db_session.commit()
+    file_asset_service.create_file_asset(
+        db_session, user_id="alice", filename="a.mp3", purpose="interview_audio",
+    )
+    assert _stub_presign["expiration"] == 3600
+    file_asset_service.create_file_asset(
+        db_session, user_id="alice", filename="cv.pdf", purpose="resume",
+    )
+    assert _stub_presign["expiration"] == 600
+
+
+def test_transient_head_read_failure_keeps_asset_pending(db_session, monkeypatch):
+    """A storage blip during the ranged head read must NOT destroy the
+    upload: the asset stays pending (retryable), no cleanup job."""
+    _make_user(db_session)
+    db_session.commit()
+    asset, _ = file_asset_service.create_file_asset(
+        db_session, user_id="alice", filename="a.mp3", purpose="interview_audio",
+        size_bytes=2048,
+    )
+    monkeypatch.setattr(
+        file_asset_service, "head_object",
+        lambda uri: {"size_bytes": 2048, "content_type": "audio/mpeg"},
+    )
+    monkeypatch.setattr(
+        file_asset_service, "read_object_head", lambda uri, num_bytes=32: None,
+    )
+    out = file_asset_service.confirm_file_asset(
+        db_session, file_asset_id=asset.id, user_id="alice",
+    )
+    assert out.upload_status == "pending_upload"
+    assert out.validation_error  # user-visible retry hint
+    assert db_session.query(OutboxJob).count() == 0
+
+    # And a later retry (storage recovered) succeeds.
+    monkeypatch.setattr(
+        file_asset_service, "read_object_head", lambda uri, num_bytes=32: b"ID3ok",
+    )
+    out = file_asset_service.confirm_file_asset(
+        db_session, file_asset_id=asset.id, user_id="alice",
+    )
+    assert out.upload_status == "uploaded"

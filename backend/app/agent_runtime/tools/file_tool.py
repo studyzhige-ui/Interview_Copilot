@@ -57,6 +57,7 @@ def _read_file_sync(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]
     # Branch 2: read a user-uploaded file by id / purpose.
     from app.db.database import SessionLocal
     from app.services.uploads.file_asset_service import (
+        READABLE_UPLOAD_STATUSES,
         get_owned_file_asset,
         list_user_file_assets,
     )
@@ -74,13 +75,13 @@ def _read_file_sync(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]
             # Most recent VERIFIED file (desc order) — a dangling
             # pending_upload row must not shadow the real latest file.
             upload = next(
-                (a for a in assets if a.upload_status in ("uploaded", "consumed")),
+                (a for a in assets if a.upload_status in READABLE_UPLOAD_STATUSES),
                 None,
             )
 
         if upload is None:
             return {"error": "No file found", "purpose": args.purpose, "upload_id": args.upload_id}
-        if upload.upload_status not in ("uploaded", "consumed"):
+        if upload.upload_status not in READABLE_UPLOAD_STATUSES:
             # pending_upload = never verified (bytes may not even exist);
             # failed = rejected by validation; deleted = gone. Serving any
             # of these would hand the agent unvalidated or phantom content.

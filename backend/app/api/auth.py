@@ -397,7 +397,7 @@ async def set_avatar(
     ``users.avatar_url`` at the asset and mark it consumed. ``avatar_url`` stores
     the ``s3://`` URI; the serializer turns it into a presigned GET on /auth/me.
     """
-    from app.services.uploads.file_asset_service import get_owned_file_asset
+    from app.services.uploads.file_asset_service import READABLE_UPLOAD_STATUSES, get_owned_file_asset
 
     asset = get_owned_file_asset(
         db, file_asset_id=body.file_asset_id,
@@ -405,7 +405,7 @@ async def set_avatar(
     )
     if asset is None:
         raise HTTPException(status_code=404, detail="头像文件不存在")
-    if asset.upload_status not in {"uploaded", "consumed"}:
+    if asset.upload_status not in READABLE_UPLOAD_STATUSES:
         raise HTTPException(status_code=409, detail="头像尚未上传完成")
     if (asset.content_type or "") not in avatar_service.AVATAR_TYPES:
         raise HTTPException(status_code=400, detail=f"不支持的图片类型：{asset.content_type}")

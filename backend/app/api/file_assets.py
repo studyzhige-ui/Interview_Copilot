@@ -26,16 +26,44 @@ from app.schemas.file_assets import (
     UploadUrlRequest,
     UploadUrlResponse,
 )
+from app.models.file_asset import FileAsset
 from app.services.uploads.file_asset_service import (
+    UPLOAD_STATUS_UPLOADED,
     UnknownUploadPurpose,
     UploadTooLarge,
     confirm_file_asset,
     create_file_asset,
+    ensure_uploaded,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ── Shared HTTP mappings for upload errors ───────────────────────────────
+# Every router that mints upload URLs or consumes assets uses these, so the
+# user-facing wording lives exactly once.
+
+
+def upload_too_large_http(exc: UploadTooLarge) -> HTTPException:
+    return HTTPException(
+        status_code=413, detail=f"文件过大（上限 {exc.limit_mb}MB）",
+    )
+
+
+def require_uploaded(db: Session, upload: FileAsset, noun: str) -> FileAsset:
+    """Confirm-on-consume gate for business endpoints: verify a possibly
+    still-pending asset and 400 with its validation error if it isn't
+    readable. ``noun`` names the file in the user-facing message (文档 /
+    音频文件 / ...)."""
+    upload = ensure_uploaded(db, upload)
+    if upload.upload_status != UPLOAD_STATUS_UPLOADED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{noun}校验未通过：{upload.validation_error or '上传未完成'}",
+        )
+    return upload
 
 
 @router.post("/file-assets/upload-url", response_model=UploadUrlResponse)
@@ -64,10 +92,7 @@ def create_upload_url(
     except UnknownUploadPurpose:
         raise HTTPException(status_code=400, detail=f"不支持的上传用途：{body.purpose}")
     except UploadTooLarge as exc:
-        raise HTTPException(
-            status_code=413,
-            detail=f"文件过大（上限 {exc.limit_bytes // (1024 * 1024)}MB）",
-        )
+        raise upload_too_large_http(exc)
     return UploadUrlResponse(
         file_asset_id=asset.id,
         upload_url=url_info["upload_url"],

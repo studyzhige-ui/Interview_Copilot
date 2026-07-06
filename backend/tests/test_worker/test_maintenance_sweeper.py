@@ -11,6 +11,28 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 
+class _CtxSession:
+    """Forward attribute access; ``close()`` becomes a flush-commit and the
+    context-manager protocol is supported (``with SessionLocal() as db`` in
+    the sweepers)."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def close(self):
+        self._inner.commit()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
 @pytest.fixture
 def sweeper_db(monkeypatch):
     import app.models.interview_qa  # noqa: F401
@@ -40,25 +62,7 @@ def sweeper_db(monkeypatch):
     session.add(User(username="alice", hashed_password="x"))
     session.commit()
 
-    class _NoCloseSession:
-        def __init__(self, inner):
-            self._inner = inner
-
-        def __getattr__(self, name):
-            return getattr(self._inner, name)
-
-        def close(self):
-            self._inner.commit()
-
-        # ``with SessionLocal() as db`` in the sweeper.
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            self.close()
-            return False
-
-    monkeypatch.setattr(maintenance, "SessionLocal", lambda: _NoCloseSession(session))
+    monkeypatch.setattr(maintenance, "SessionLocal", lambda: _CtxSession(session))
     try:
         yield session
     finally:
@@ -137,24 +141,6 @@ def test_terminal_and_mock_in_progress_records_untouched(sweeper_db):
 
 
 # ── UP-3: orphan file-asset sweeper ─────────────────────────────────────
-
-
-class _CtxSession:
-    def __init__(self, inner):
-        self._inner = inner
-
-    def __getattr__(self, name):
-        return getattr(self._inner, name)
-
-    def close(self):
-        self._inner.commit()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
-        return False
 
 
 @pytest.fixture

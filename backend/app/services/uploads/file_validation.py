@@ -38,6 +38,8 @@ from typing import Literal
 
 from fastapi import HTTPException, UploadFile
 
+from app.services.uploads.purpose_registry import PURPOSE_REGISTRY
+
 logger = logging.getLogger(__name__)
 
 # Size at which SpooledTemporaryFile rolls over from RAM to disk.
@@ -93,7 +95,8 @@ def _matches_iso_bmff(body: bytes, brands: tuple[bytes, ...]) -> bool:
 
 # Major brands that count as "audio/video media we'd send to WhisperX".
 _MP4_BRANDS: tuple[bytes, ...] = (
-    b"isom", b"iso2", b"mp41", b"mp42",   # generic MP4
+    b"isom", b"iso2", b"iso5", b"iso6",   # generic MP4 (iso5/6: Safari
+    b"mp41", b"mp42",                     # MediaRecorder audio/mp4)
     b"M4A ", b"M4B ", b"mp4a",            # audio-only
     b"qt  ",                              # QuickTime mov
     b"3gp4", b"3gp5",                     # 3GP
@@ -159,8 +162,6 @@ def _detect_resume_format(body: bytes, declared_ext: str) -> str | None:
 # endpoints' local vocabulary onto the canonical purposes so the two can't
 # drift again (resume used to be 20MB in one table and 10MB in the other).
 
-from app.services.uploads.purpose_registry import PURPOSE_REGISTRY
-
 _SIZE_LIMITS_BYTES: dict[str, int] = {
     "audio_clip": PURPOSE_REGISTRY["mock_audio_clip"].max_bytes,
     "audio_upload": PURPOSE_REGISTRY["interview_audio"].max_bytes,
@@ -192,6 +193,31 @@ def _detect_image_format(body: bytes) -> str | None:
     return None
 
 
+# Legacy Office (.doc/.ppt/.xls) — OLE Compound File Binary magic.
+_OLE_MAGIC = bytes([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1])
+
+
+def _detect_knowledge_format(head: bytes) -> str | None:
+    """Permissive gate for knowledge documents: anything the knowledge
+    whitelist (document_formats.ALLOWED_KNOWLEDGE_EXTENSIONS) can parse —
+    pdf, OOXML zip, legacy-Office OLE, images, or any text-family format
+    (html/markdown/csv/json/code, detected by the text heuristic without an
+    extension check; the extension whitelist is enforced separately at
+    POST /knowledge/documents). Still blocks binary junk: an exe's MZ head
+    contains NUL bytes within the first 32 and fails the text heuristic."""
+    for fmt, prefixes in _RESUME_MAGIC.items():
+        if any(head.startswith(p) for p in prefixes):
+            return fmt
+    if head.startswith(_OLE_MAGIC):
+        return "ole"
+    detected_image = _detect_image_format(head)
+    if detected_image is not None:
+        return detected_image
+    if _looks_like_text(head):
+        return "text"
+    return None
+
+
 def detect_head_format(head: bytes, content_kind: str, declared_ext: str = "") -> str | None:
     """Magic-detect a 32-byte object head against a PURPOSE_REGISTRY
     ``content_kind``. Returns the detected format label or ``None``.
@@ -206,6 +232,8 @@ def detect_head_format(head: bytes, content_kind: str, declared_ext: str = "") -
         return _detect_audio_format(head)
     if content_kind == "document":
         return _detect_resume_format(head, declared_ext.lower())
+    if content_kind == "knowledge":
+        return _detect_knowledge_format(head)
     if content_kind == "image":
         return _detect_image_format(head)
     if content_kind == "text":

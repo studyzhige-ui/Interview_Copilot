@@ -43,6 +43,18 @@ from app.core.storage import (
 )
 from app.services.uploads.purpose_registry import get_purpose_spec
 
+# ── Upload-status vocabulary ─────────────────────────────────────────────
+# Raw-file lifecycle on file_assets.upload_status. Import these instead of
+# hardcoding the strings — same drift hazard the record STATUS_* constants
+# exist to prevent.
+UPLOAD_STATUS_PENDING = "pending_upload"
+UPLOAD_STATUS_UPLOADED = "uploaded"
+UPLOAD_STATUS_CONSUMED = "consumed"
+UPLOAD_STATUS_FAILED = "failed"
+UPLOAD_STATUS_DELETED = "deleted"
+# Statuses whose bytes are verified and safe to read/consume.
+READABLE_UPLOAD_STATUSES = (UPLOAD_STATUS_UPLOADED, UPLOAD_STATUS_CONSUMED)
+
 
 class UnknownUploadPurpose(ValueError):
     """Purpose not in PURPOSE_REGISTRY."""
@@ -52,10 +64,15 @@ class UploadTooLarge(ValueError):
     """Declared size exceeds the purpose's cap."""
 
     def __init__(self, purpose: str, limit_bytes: int):
+        self.purpose = purpose
         self.limit_bytes = limit_bytes
         super().__init__(
             f"upload for purpose={purpose} exceeds {limit_bytes} bytes"
         )
+
+    @property
+    def limit_mb(self) -> int:
+        return self.limit_bytes // (1024 * 1024)
 
 
 def create_file_asset(
@@ -100,7 +117,7 @@ def create_file_asset(
         storage_uri=storage_uri,
         content_type=content_type or "application/octet-stream",
         size_bytes=size_bytes,
-        upload_status="pending_upload",
+        upload_status=UPLOAD_STATUS_PENDING,
         validation_status="pending",
     )
     db.add(asset)
@@ -165,8 +182,9 @@ def confirm_file_asset(
     file_asset_id: str,
     user_id: str,
 ) -> FileAsset | None:
-    """Confirm a client-completed upload (verification below). Returns the
-    asset, or ``None`` if it isn't owned by the caller."""
+    """Confirm a client-completed upload — delegates to
+    ``_verify_pending_asset``. Returns the asset, or ``None`` if it isn't
+    owned by the caller."""
     asset = get_owned_file_asset(db, file_asset_id=file_asset_id, user_id=user_id)
     if asset is None:
         return None
@@ -200,7 +218,7 @@ def _verify_pending_asset(db: Session, asset: FileAsset) -> FileAsset:
     Idempotent: an already-uploaded/consumed asset is returned untouched
     (never regresses), and a failed asset stays failed.
     """
-    if asset.upload_status != "pending_upload":
+    if asset.upload_status != UPLOAD_STATUS_PENDING:
         return asset
 
     meta = head_object(asset.storage_uri)
@@ -233,8 +251,22 @@ def _verify_pending_asset(db: Session, asset: FileAsset) -> FileAsset:
         from app.services.uploads.file_validation import detect_head_format
 
         head = read_object_head(asset.storage_uri)
+        if head is None:
+            # HEAD just proved the object exists, so a failed ranged read is
+            # a storage blip (conn reset / restart / throttle), not bad
+            # content. Failing here would enqueue blob cleanup and destroy a
+            # possibly-500MB upload over a transient error — leave the asset
+            # pending so a retried confirm/consume can re-verify. (A 0-byte
+            # object also lands here via InvalidRange and stays pending; the
+            # orphan sweeper reaps it after 24h.)
+            asset.validation_error = "存储暂时不可读，请稍后重试"
+            asset.updated_at = datetime.utcnow()
+            db.add(asset)
+            db.commit()
+            db.refresh(asset)
+            return asset
         ext = os.path.splitext(asset.original_filename or "")[1]
-        if detect_head_format(head or b"", spec.content_kind, ext) is None:
+        if detect_head_format(head, spec.content_kind, ext) is None:
             _fail_asset(
                 db, asset,
                 f"file content does not look like {spec.content_kind} "
@@ -246,7 +278,7 @@ def _verify_pending_asset(db: Session, asset: FileAsset) -> FileAsset:
         asset.size_bytes = actual_size
     if meta.get("content_type"):
         asset.content_type = meta["content_type"]
-    asset.upload_status = "uploaded"
+    asset.upload_status = UPLOAD_STATUS_UPLOADED
     asset.validation_status = "passed"
     asset.validation_error = None
     asset.updated_at = datetime.utcnow()
@@ -258,7 +290,7 @@ def _verify_pending_asset(db: Session, asset: FileAsset) -> FileAsset:
 
 def mark_file_asset_consumed(db: Session, asset: FileAsset) -> None:
     """Mark an asset consumed by a business object. Caller commits."""
-    asset.upload_status = "consumed"
+    asset.upload_status = UPLOAD_STATUS_CONSUMED
     asset.updated_at = datetime.utcnow()
     db.add(asset)
 
@@ -287,7 +319,7 @@ def _fail_asset(db: Session, asset: FileAsset, reason: str) -> None:
     """Flag a failed upload and enqueue object-storage cleanup, atomically."""
     from app.services.uploads.outbox_service import enqueue_job
 
-    asset.upload_status = "failed"
+    asset.upload_status = UPLOAD_STATUS_FAILED
     asset.validation_status = "failed"
     asset.validation_error = reason
     asset.updated_at = datetime.utcnow()

@@ -78,3 +78,38 @@ def test_delete_record_cascade_without_assets_is_clean(db_session):
 
     assert db_session.query(InterviewRecord).count() == 0
     assert db_session.query(OutboxJob).count() == 0
+
+
+def test_delete_record_cascade_spares_assets_other_entities_reference(db_session):
+    """A resume asset shared with a personal Resume entity must survive the
+    record cascade — deleting it would break the FK / orphan the resume."""
+    from app.models.resume import Resume
+
+    shared = _asset(db_session, "fa_shared_resume", "resume")
+    _asset(db_session, "fa_audio2", "interview_audio")
+    db_session.add(Resume(
+        id="res_1", user_id=_pk(db_session), file_asset_id=shared.id, title="我的简历",
+    ))
+    record = InterviewRecord(
+        id="ir_shared",
+        user_id=_pk(db_session),
+        source="upload",
+        status="completed",
+        audio_file_asset_id="fa_audio2",
+        resume_file_asset_id="fa_shared_resume",
+    )
+    db_session.add(record)
+    db_session.commit()
+
+    record_admin.delete_record_cascade(db_session, record)
+
+    # Audio blob queued for deletion; the shared resume asset untouched.
+    surviving = {a.id for a in db_session.query(FileAsset).all()}
+    assert surviving == {"fa_shared_resume"}
+    jobs = {
+        j.aggregate_id
+        for j in db_session.query(OutboxJob).filter(
+            OutboxJob.job_type == "delete_object"
+        )
+    }
+    assert jobs == {"fa_audio2"}

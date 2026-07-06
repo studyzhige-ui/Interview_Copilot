@@ -40,7 +40,11 @@ from app.services.interview.interview_record_service import (
     STATUS_TRANSCRIBING,
     interview_record_service,
 )
-from app.services.uploads.file_asset_service import ensure_uploaded, get_owned_file_asset
+from app.api.file_assets import require_uploaded
+from app.services.uploads.file_asset_service import (
+    UPLOAD_STATUS_CONSUMED,
+    get_owned_file_asset,
+)
 
 router = APIRouter()
 
@@ -93,16 +97,11 @@ async def analyze_interview_endpoint(
         )
         if upload is None:
             raise HTTPException(status_code=404, detail="Audio upload not found")
-        if upload.upload_status == "consumed":
+        if upload.upload_status == UPLOAD_STATUS_CONSUMED:
             raise HTTPException(status_code=409, detail="Audio upload has already been consumed")
         # Confirm-on-consume (UP-1): verification (exists / size cap / magic)
         # can't be skipped by never calling /confirm.
-        upload = ensure_uploaded(db, upload)
-        if upload.upload_status != "uploaded":
-            raise HTTPException(
-                status_code=400,
-                detail=f"音频文件校验未通过：{upload.validation_error or '上传未完成'}",
-            )
+        upload = require_uploaded(db, upload, "音频文件")
 
         try:
             resume_ctx = await analysis_intake.resolve_resume_context(

@@ -110,6 +110,27 @@ def _enqueue_record_asset_deletes(db: Session, record: InterviewRecord) -> None:
     }
     if not asset_ids:
         return
+    # "Exclusively owns" must be verified, not assumed: the same asset id can
+    # also be referenced by a personal resume entity (Resume.file_asset_id is
+    # a real FK — deleting the row would 500 the whole cascade on Postgres)
+    # or a knowledge document. Skip anything with an outside reference.
+    from app.models.knowledge import KnowledgeDocument
+    from app.models.resume import Resume
+
+    referenced = {
+        row[0]
+        for row in db.query(Resume.file_asset_id)
+        .filter(Resume.file_asset_id.in_(asset_ids))
+        .all()
+    } | {
+        row[0]
+        for row in db.query(KnowledgeDocument.file_asset_id)
+        .filter(KnowledgeDocument.file_asset_id.in_(asset_ids))
+        .all()
+    }
+    asset_ids -= referenced
+    if not asset_ids:
+        return
     assets = (
         db.query(FileAsset)
         .filter(FileAsset.id.in_(asset_ids), FileAsset.user_id == record.user_id)

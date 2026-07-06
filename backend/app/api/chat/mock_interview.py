@@ -43,7 +43,12 @@ from app.schemas.chat import (
     MockTranscribeResp,
     TTSRequest,
 )
+from app.api.file_assets import require_uploaded
 from app.services.interview import mock_flow, mock_runtime_service
+from app.services.uploads.file_asset_service import (
+    get_owned_file_asset,
+    mark_file_asset_consumed,
+)
 from app.services.interview.interview_record_service import (
     STATUS_PROCESSING_REVIEW,
     STATUS_REVIEW_FAILED,
@@ -61,6 +66,20 @@ def _owned_mock_record_or_404(db: Session, record_id: str, username: str) -> Int
     return record
 
 
+def _verify_start_upload(
+    db: Session, file_asset_id: str | None, purpose: str, noun: str, username: str,
+) -> None:
+    """Ownership + confirm-on-consume gate for an optional start-time upload."""
+    if not file_asset_id:
+        return
+    upload = get_owned_file_asset(
+        db, file_asset_id=file_asset_id, user_id=username, purpose=purpose,
+    )
+    if upload is None:
+        raise HTTPException(status_code=404, detail=f"{noun}不存在或无权访问")
+    require_uploaded(db, upload, noun)
+
+
 # ── /start ───────────────────────────────────────────────────────────────
 
 
@@ -75,6 +94,12 @@ async def start_mock_interview(
 ):
     """Atomically create the record + conversation + runtime and return the
     opening interviewer line. No pre-created chat session — start owns it."""
+    # Confirm-on-consume (UP-1) for the ad-hoc context uploads. Runs BEFORE
+    # start_mock dirties the session — require_uploaded/ensure_uploaded commit
+    # internally, which would otherwise break start_mock's one-transaction
+    # contract by committing partial state.
+    _verify_start_upload(db, body.resume_file_asset_id, "resume", "简历文件", current_user.username)
+    _verify_start_upload(db, body.jd_file_asset_id, "jd", "JD 文件", current_user.username)
     try:
         started = mock_flow.start_mock(
             db,
@@ -128,7 +153,26 @@ async def submit_mock_answer(
     if not runtime.conversation_id:
         raise HTTPException(status_code=400, detail="模拟面试会话缺失")
 
+    # Voice clip: ownership + confirm-on-consume (UP-1), and mark it consumed
+    # so the orphan sweeper can never reap a clip a message still references.
+    # Verified here (before submit_answer dirties the session) because
+    # ensure_uploaded commits internally; mark_file_asset_consumed doesn't
+    # commit — it rides submit_answer's transaction below.
+    clip = None
+    if body.answer_audio_file_asset_id:
+        clip = get_owned_file_asset(
+            db,
+            file_asset_id=body.answer_audio_file_asset_id,
+            user_id=current_user.username,
+            purpose="mock_audio_clip",
+        )
+        if clip is None:
+            raise HTTPException(status_code=404, detail="语音片段不存在或无权访问")
+        require_uploaded(db, clip, "语音片段")
+
     try:
+        if clip is not None:
+            mark_file_asset_consumed(db, clip)
         turn = await mock_flow.submit_answer(
             db,
             record=record,

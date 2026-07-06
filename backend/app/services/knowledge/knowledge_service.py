@@ -97,26 +97,11 @@ def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> 
             raise ValueError("Refusing to delete knowledge object outside the owned upload prefix")
 
     # Mark deleted FIRST so RAG / list read paths exclude this doc immediately,
-    # even before the (async-ish) chunk + Milvus deletes below complete. The
-    # blob delete rides the outbox in the SAME transaction (UP-2) — a storage
-    # blip can no longer park the doc in delete_failed, and the object is
-    # retried until it's actually gone.
+    # even before the (async-ish) chunk + Milvus deletes below complete.
     document.status = "deleting"
     document.deleted_at = datetime.utcnow()
     document.updated_at = datetime.utcnow()
     db.add(document)
-    if has_object:
-        from app.services.uploads.outbox_service import enqueue_job
-
-        enqueue_job(
-            db,
-            user_pk=document.user_id,
-            job_type="delete_object",
-            aggregate_type="knowledge_document",
-            aggregate_id=document.id,
-            payload={"storage_uri": document.storage_uri},
-            idempotency_key=f"delete_object:kdoc:{document.id}",
-        )
     db.commit()
 
     try:
@@ -129,6 +114,25 @@ def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> 
         db.commit()
         raise
 
+    # Blob delete rides the outbox (UP-2), enqueued only AFTER the vector/
+    # chunk delete succeeded and committed together with the row deletes: a
+    # vectors failure then parks the doc in delete_failed with its object
+    # intact (retryable), and a crash between the vectors delete and this
+    # commit leaks a blob (recoverable) instead of stranding a doc row that
+    # points at nothing. A storage blip can't park the doc in delete_failed
+    # either way — the outbox retries until the object is gone.
+    if has_object:
+        from app.services.uploads.outbox_service import enqueue_job
+
+        enqueue_job(
+            db,
+            user_pk=document.user_id,
+            job_type="delete_object",
+            aggregate_type="knowledge_document",
+            aggregate_id=document.id,
+            payload={"storage_uri": document.storage_uri},
+            idempotency_key=f"delete_object:kdoc:{document.id}",
+        )
     upload = document.upload
     db.delete(document)
     if upload is not None:

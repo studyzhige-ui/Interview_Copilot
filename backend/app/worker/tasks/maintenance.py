@@ -1,23 +1,10 @@
-"""Zombie-state sweeper (light queue).
+"""Beat-driven DB sweepers (light queue) — the terminal-state guarantee of
+last resort for rows nothing else re-examines.
 
-If the broker loses a dispatched analysis message outright (e.g. Redis
-restarts without persistence after the API committed status='pending'),
-the record sits in an intermediate state forever: Celery's retry/ack
-machinery only protects messages it still has. Nothing else re-examines
-those rows — this beat task is the terminal-state guarantee of last
-resort.
-
-Threshold rationale — two tiers, keyed off ``updated_at`` (bumped by
-every status transition AND every per-question progress increment):
-
-* Upload pipeline (pending/transcribing/extracting/analyzing): a
-  legitimate run can be quiet for a long stretch — transcription writes
-  nothing for up to one attempt (time_limit=1800s), × up to 3 retries +
-  backoff. 2 hours comfortably exceeds the worst case.
-* Mock review (processing_review): no silent stage — the orchestrator
-  bumps the counter per analyzed batch, so a 30-minute-quiet review is
-  dead. Sweeping it faster matters because the UI's retry card only
-  appears once the record reaches review_failed.
+* ``sweep_stale_interview_records`` — interview records stuck in an
+  in-flight status (lost broker message, dead worker).
+* ``sweep_orphan_file_assets`` — presigned uploads whose client vanished
+  before confirm/consume.
 """
 import logging
 from datetime import datetime, timedelta
@@ -39,6 +26,17 @@ from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
+# Threshold rationale — two tiers, keyed off ``updated_at`` (bumped by every
+# status transition AND every per-question progress increment):
+#
+# * Upload pipeline (pending/transcribing/extracting/analyzing): a legitimate
+#   run can be quiet for a long stretch — transcription writes nothing for up
+#   to one attempt (time_limit=1800s), × up to 3 retries + backoff. 2 hours
+#   comfortably exceeds the worst case.
+# * Mock review (processing_review): no silent stage — the orchestrator bumps
+#   the counter per analyzed batch, so a 30-minute-quiet review is dead.
+#   Sweeping it faster matters because the UI's retry card only appears once
+#   the record reaches review_failed.
 _UPLOAD_SWEEP_STATES = (
     STATUS_PENDING, STATUS_TRANSCRIBING, STATUS_EXTRACTING, STATUS_ANALYZING,
 )
@@ -99,7 +97,7 @@ def sweep_stale_interview_records(self):
 # will ever look at it again, but its presigned URL may have been used, so an
 # unreferenced blob can sit in MinIO forever. One day is far beyond any
 # legitimate upload-then-confirm window.
-_ORPHAN_UPLOAD_AFTER = timedelta(hours=24)
+_ORPHAN_ASSET_STALE_AFTER = timedelta(hours=24)
 
 
 @celery_app.task(
@@ -117,24 +115,29 @@ def sweep_orphan_file_assets(self):
       failure time — just mark the row ``deleted`` for hygiene.
     """
     from app.models.file_asset import FileAsset
-    from app.services.uploads.file_asset_service import enqueue_asset_blob_delete
+    from app.services.uploads.file_asset_service import (
+        UPLOAD_STATUS_DELETED,
+        UPLOAD_STATUS_FAILED,
+        UPLOAD_STATUS_PENDING,
+        enqueue_asset_blob_delete,
+    )
 
-    cutoff = datetime.utcnow() - _ORPHAN_UPLOAD_AFTER
+    cutoff = datetime.utcnow() - _ORPHAN_ASSET_STALE_AFTER
     swept = 0
     with SessionLocal() as db:
         rows = (
             db.query(FileAsset)
             .filter(
-                FileAsset.upload_status.in_(("pending_upload", "failed")),
+                FileAsset.upload_status.in_((UPLOAD_STATUS_PENDING, UPLOAD_STATUS_FAILED)),
                 FileAsset.updated_at < cutoff,
                 FileAsset.deleted_at.is_(None),
             )
             .all()
         )
         for asset in rows:
-            if asset.upload_status == "pending_upload":
+            if asset.upload_status == UPLOAD_STATUS_PENDING:
                 enqueue_asset_blob_delete(db, asset)
-            asset.upload_status = "deleted"
+            asset.upload_status = UPLOAD_STATUS_DELETED
             asset.deleted_at = datetime.utcnow()
             asset.updated_at = datetime.utcnow()
             db.add(asset)
