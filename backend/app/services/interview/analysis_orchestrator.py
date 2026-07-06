@@ -93,7 +93,7 @@ class InterviewAnalysisOrchestrator:
             if source == "upload":
                 transcript = await self._stage_transcribe(record_id, language=language)
                 qa_pairs = await self._stage_extract(
-                    record_id, transcript, resume_text, username=owner_username,
+                    record_id, transcript, resume_text, user_id=owner_username,
                 )
             else:  # mock
                 qa_pairs = self._load_mock_qa(record_id)
@@ -156,7 +156,7 @@ class InterviewAnalysisOrchestrator:
             # Non-fatal — a missing summary just falls back to the
             # truncated transcript at render time.
             try:
-                await self._generate_debrief_summary(record_id, username=owner_username)
+                await self._generate_debrief_summary(record_id, user_id=owner_username)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "debrief_summary generation failed for %s (non-fatal): %s",
@@ -229,7 +229,7 @@ class InterviewAnalysisOrchestrator:
 
     async def _stage_extract(
         self, record_id: str, transcript: str, resume_text: str,
-        *, username: str | None = None,
+        *, user_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """LLM extracts structured Q&A pairs from the diarized transcript."""
         from app.services.voice.interview_analysis_service import (
@@ -238,7 +238,7 @@ class InterviewAnalysisOrchestrator:
 
         interview_record_service.set_status(record_id, STATUS_EXTRACTING)
         qa_pairs = await extract_qa_pairs_with_llm(
-            transcript, resume_text, user_id=username,
+            transcript, resume_text, user_id=user_id,
         )
         return qa_pairs or []
 
@@ -409,7 +409,7 @@ class InterviewAnalysisOrchestrator:
 
 
     async def _generate_debrief_summary(
-        self, record_id: str, *, username: str | None = None,
+        self, record_id: str, *, user_id: str | None = None,
     ) -> None:
         """LLM-produced 200-400 字 summary of one finished interview.
 
@@ -507,7 +507,7 @@ class InterviewAnalysisOrchestrator:
         from app.core.llm_client_factory import get_llm_for_role
         from app.services.memory._json_payload import _extract_json_payload
 
-        response = await get_llm_for_role("utility", user_id=username).acomplete(prompt)
+        response = await get_llm_for_role("utility", user_id=user_id).acomplete(prompt)
         payload = _extract_json_payload(str(response.text))
         if not isinstance(payload, dict):
             return

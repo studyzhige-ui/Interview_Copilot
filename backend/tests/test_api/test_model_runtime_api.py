@@ -268,3 +268,22 @@ def test_ping_models_pings_only_user_ready_profiles(client, monkeypatch):
     by_id = {r["profile_id"]: r for r in body["results"]}
     assert by_id["p1"]["ok"] is True
     assert by_id["p2"]["ok"] is False and "未配置" in by_id["p2"]["error"]
+
+
+def test_upsert_key_schedules_provider_catalog_refresh(client, monkeypatch):
+    """MDL-4: saving a key kicks a per-provider catalog refresh so UI-only
+    deployments advance past the seed catalog immediately."""
+    scheduled: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        model_runtime_mod, "_schedule_provider_catalog_refresh",
+        lambda provider, username: scheduled.append((provider, username)),
+    )
+    monkeypatch.setattr(
+        "app.services.auth.user_api_key_service.set_user_api_key",
+        lambda user, provider, key, db=None: {"provider": provider, "masked": "sk-***"},
+    )
+    resp = client.put(
+        "/api/v1/models/api-keys/openai", json={"api_key": "sk-test-123456789"},
+    )
+    assert resp.status_code == 200
+    assert scheduled and scheduled[0][0] == "openai"

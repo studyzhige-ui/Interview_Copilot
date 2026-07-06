@@ -1,5 +1,7 @@
 # Interview Copilot Prompt 全量盘点与统一管理建议
 
+> 注（2026-07）：本文为历史快照；其中的 `fast` 角色已更名为系统角色 `utility`（不可在 UI 选择）。
+
 > 盘点日期：2026-06-10  
 > 盘点范围：当前工作树中的 `backend/`、`frontend/`、`evaluation/`、`scripts/`、`alembic/`、`docs/`、`.claude/`、`.github/`  
 > 当前分支：`feat/rag-optimization`  

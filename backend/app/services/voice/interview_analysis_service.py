@@ -23,6 +23,10 @@ from typing import Any, Callable
 import tiktoken
 
 
+from llama_index.core.llms import LLM
+
+from app.core.llm_client_factory import get_llm_for_role
+
 logger = logging.getLogger(__name__)
 
 def _notify_progress(on_progress, n: int) -> None:
@@ -133,8 +137,6 @@ async def extract_qa_pairs_with_llm(
     # Resolve the owner's utility LLM ONCE and thread the instance down --
     # per-chunk re-resolution would re-hit the credential lookup for every
     # chunk (MDL-1: the owner's selection/keys drive background analysis).
-    from app.core.llm_client_factory import get_llm_for_role
-
     llm = get_llm_for_role("utility", user_id=user_id)
     if token_count <= _EXTRACTION_MAX_TOKENS:
         return await _extract_single_pass(transcript, resume_context, llm=llm)
@@ -147,7 +149,7 @@ async def _extract_single_pass(
     transcript: str,
     resume_context: str = "",
     *,
-    llm: Any,
+    llm: LLM,
 ) -> list[dict[str, Any]]:
     """Extract QA pairs in a single LLM call."""
     resume_hint = ""
@@ -185,7 +187,7 @@ async def _extract_chunked(
     resume_context: str,
     total_tokens: int,
     *,
-    llm: Any,
+    llm: LLM,
 ) -> list[dict[str, Any]]:
     """Extract QA pairs from a long transcript by splitting into chunks.
 
@@ -388,7 +390,7 @@ async def _analyze_single_question(
     resume_context: str = "",
     jd_context: str = "",
     *,
-    llm: Any,
+    llm: LLM,
 ) -> dict[str, Any]:
     """Analyze a single QA pair and return structured result."""
     resume_section = ""
@@ -515,7 +517,7 @@ async def _synthesize_report(
     resume_context: str = "",
     jd_context: str = "",
     *,
-    llm: Any,
+    llm: LLM,
 ) -> dict[str, Any]:
     """Stage 3: Synthesize per-question results into a global report."""
 
@@ -642,8 +644,6 @@ async def analyze_interview(
         # ── Stage 2: Per-question analysis (Map, concurrent) ─────────
         # Owner's primary model drives scoring + synthesis (MDL-1);
         # resolved once, shared by every concurrent question task.
-        from app.core.llm_client_factory import get_llm_for_role
-
         analysis_llm = get_llm_for_role("primary", user_id=user_id)
 
         async def _run_one(pair: dict[str, Any], idx: int) -> dict[str, Any]:
@@ -774,7 +774,7 @@ async def _analyze_batch(
     *,
     resume_context: str,
     jd_context: str,
-    llm: Any,
+    llm: LLM,
 ) -> list[dict[str, Any]]:
     # NOTE: the prefix is intentionally fed FULL resume + JD (truncating to a
     # massive 16k each, well within DeepSeek's 1M context). That cost is one
@@ -913,8 +913,6 @@ async def analyze_mock_qa_batched(
         }
 
     # Owner's primary model drives scoring + synthesis (MDL-1).
-    from app.core.llm_client_factory import get_llm_for_role
-
     analysis_llm = get_llm_for_role("primary", user_id=user_id)
 
     # Walk in batch_size strides, schedule batches concurrently.

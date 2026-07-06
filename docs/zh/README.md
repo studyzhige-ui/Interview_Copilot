@@ -61,7 +61,7 @@
 | **录音分析** | 上传真实面试录音 → WhisperX 转写 → Pyannote 说话人分离 → 三阶段 MapReduce LLM 分析（逐题打分 + 阶段摘要 + 能力雷达）。 |
 | **复盘对话** | 围绕你的简历 / JD / 文档的 dense + BM25 混合检索，交叉编码器重排。 |
 | **Agent** | 工具调用运行时：网页搜索（Tavily）、文件读写、memory、结构化事件流。 |
-| **每用户模型路由** | 每个用户在「模型」页给三个角色（primary / fast / agent）各选一个 LLM。开箱 9 家厂商、30+ 个 profile，加新厂商一行配置就够。 |
+| **每用户模型路由** | 每个用户在「模型」页给三个角色（primary / agent / mock_interview）各选一个 LLM；内部 utility 角色自动跟随可用配置。开箱 9 家厂商、30+ 个 profile，加新厂商一行配置就够。 |
 
 ---
 

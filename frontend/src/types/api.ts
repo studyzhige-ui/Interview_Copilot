@@ -283,8 +283,10 @@ export type ModelRole = 'primary' | 'agent' | 'mock_interview';
 
 export interface ModelRuntime {
   selection: Record<ModelRole, string>;
+  // resolved additionally carries the system 'utility' role (read-only,
+  // observability) — which model handles internal planner/memory calls.
   resolved: Record<
-    ModelRole,
+    ModelRole | 'utility',
     { profile_id: string; provider: string; model: string; display_name: string }
   >;
 }

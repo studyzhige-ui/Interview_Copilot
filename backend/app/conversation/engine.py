@@ -332,6 +332,7 @@ class ConversationEngine:
             current_query=self.user_message,
             memory_block=v3_memory_block,
             knowledge_chunks=knowledge_chunks,
+            user_id=self.user_id,
         )
 
         self._ctx = StrategyContext(

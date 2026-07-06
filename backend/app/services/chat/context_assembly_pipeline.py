@@ -234,6 +234,7 @@ class ContextAssemblyPipeline:
         memory_block: str = "",
         debrief_reference: str = "",
         knowledge_chunks: list[dict] | None = None,
+        user_id: str | None = None,
     ) -> AssembledContext:
         """Full context for answer generation.
 
@@ -245,6 +246,10 @@ class ContextAssemblyPipeline:
                                 in non-debrief mode and let the
                                 pipeline auto-inject when applicable.
         ``knowledge_chunks``    RAG output chunks (already reranked).
+        ``user_id``             the OWNER's username principal — drives the
+                                compaction summarizer's LLM resolution.
+                                (NOT ``meta["user_id"]``, which is the
+                                integer users.id pk.)
         """
         return await self._assemble(
             session_id=session_id,
@@ -252,6 +257,7 @@ class ContextAssemblyPipeline:
             memory_block=memory_block,
             debrief_reference=debrief_reference,
             knowledge_chunks=knowledge_chunks or [],
+            user_id=user_id,
         )
 
     # ── Internal ──────────────────────────────────────────────────────
@@ -265,6 +271,7 @@ class ContextAssemblyPipeline:
         knowledge_chunks: list[dict],
         *,
         skip_debrief_autoinject: bool = False,
+        user_id: str | None = None,
     ) -> AssembledContext:
         meta = await asyncio.to_thread(
             transcript_service.get_session_meta, session_id,
@@ -298,6 +305,7 @@ class ContextAssemblyPipeline:
         if turns_tokens + overhead_tokens > compress_threshold and len(cleaned_turns) > self.budget.COMPRESS_PROTECT_LAST_N:
             cleaned_turns, old_summary = await self._maybe_compact(
                 session_id=session_id,
+                user_id=user_id,
                 meta=meta,
                 cleaned_turns=cleaned_turns,
                 old_summary=old_summary,
@@ -358,6 +366,7 @@ class ContextAssemblyPipeline:
         self,
         *,
         session_id: str,
+        user_id: str | None = None,
         meta: dict,
         cleaned_turns: list[dict],
         old_summary: str,
@@ -385,8 +394,10 @@ class ContextAssemblyPipeline:
 
         from app.services.memory.compaction_service import summarize_conversation
 
+        # NB: meta["user_id"] is the integer pk — the summarizer needs the
+        # username principal, threaded from the engine (dual-review fix).
         new_summary = await summarize_conversation(
-            old_summary, conversation, user_id=meta.get("user_id"),
+            old_summary, conversation, user_id=user_id,
         )
         if not new_summary:
             return cleaned_turns, old_summary

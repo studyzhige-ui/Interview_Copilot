@@ -266,6 +266,31 @@ def clear_llm_cache_for_provider(provider: str) -> None:
                 _close_client_quietly(entry[1])
 
 
+def ready_profile_ids(
+    profiles: dict[str, ModelProfile], user_id: str | None = None,
+) -> set[str]:
+    """Profile ids whose provider key actually RESOLVES for the caller.
+
+    Same truth as ``profile_ready`` (plaintext resolves via
+    ``resolve_api_key``: user_model_credentials first, env fallback) — the
+    role-resolution fallback in ``user_model_selection`` consumes this so
+    "ready" can never mean two different things. Resolution is memoized
+    per provider (profiles of one provider share the key).
+    """
+    provider_ok: dict[str, bool] = {}
+    out: set[str] = set()
+    for pid, profile in profiles.items():
+        if not profile.model.strip():
+            continue
+        ok = provider_ok.get(profile.provider)
+        if ok is None:
+            ok = bool(resolve_api_key(profile, user_id=user_id))
+            provider_ok[profile.provider] = ok
+        if ok:
+            out.add(pid)
+    return out
+
+
 def profile_ready(profile: ModelProfile, user_id: str | None = None) -> bool:
     """A profile is "ready" when SOME key resolves for it.
 
@@ -427,6 +452,7 @@ __all__ = [
     "get_async_openai_client",
     "clear_llm_cache_for_provider",
     "profile_ready",
+    "ready_profile_ids",
     "list_profiles",
     "validate_role_update",
     "get_llm_for_role",

@@ -62,8 +62,7 @@ def init_rag_settings():
     # NOT crash startup: degrade to a lazy ``RuntimeLLMProxy`` that resolves on
     # first use (by which point the catalog is seeded; if it still isn't, a
     # single LLM call fails gracefully instead of the whole app refusing to
-    # boot). The fast / mock_interview roles are already lazy proxies for this
-    # same reason.
+    # boot).
     try:
         refresh_primary_llm()
     except Exception as e:  # noqa: BLE001 — catalog cold / vendor /v1/models hiccup

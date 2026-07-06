@@ -317,12 +317,16 @@ def test_resolve_api_base_returns_default_when_db_lookup_fails(monkeypatch, _stu
 
 
 def _stub_user_keys(monkeypatch, providers: set[str]):
-    """User has UI-configured keys for ``providers``; no env keys at all."""
+    """User has UI-configured keys for ``providers``; no env keys at all.
+
+    Stubs ``get_user_api_key_plaintext`` — the single source both
+    ``resolve_api_key`` and ``ready_profile_ids`` sit on (one definition
+    of "ready", per the Phase 3 review)."""
     import app.services.auth.user_api_key_service as key_svc
 
     monkeypatch.setattr(
-        key_svc, "list_user_api_keys",
-        lambda user_id, db=None: {p: {"set": True} for p in providers},
+        key_svc, "get_user_api_key_plaintext",
+        lambda user_id, provider, db=None: "sk-user-test" if provider in providers else None,
     )
     for env in ("DEEPSEEK_API_KEY", "OPENAI_API_KEY", "NVIDIA_API_KEY"):
         monkeypatch.delenv(env, raising=False)
@@ -373,3 +377,28 @@ def test_no_keys_at_all_falls_back_to_historical_chain(monkeypatch):
     _stub_user_keys(monkeypatch, set())
     profile = get_profile_for_role("primary", user_id="alice")
     assert profile.id == ROLE_DEFAULTS["primary"]
+
+
+def test_degradation_logs_a_warning(monkeypatch, caplog):
+    """MDL-3 降级留痕: any resolution that isn't the user's own selection
+    must leave a WARNING with the wanted → got mapping."""
+    import logging
+
+    _stub_user_keys(monkeypatch, {"openai"})
+    with caplog.at_level(logging.WARNING, logger="app.core.user_model_selection"):
+        profile = get_profile_for_role("primary", user_id="alice")
+    assert profile.provider == "openai"
+    assert any("model selection degraded" in r.message for r in caplog.records)
+
+
+def test_ready_selection_does_not_log_degradation(monkeypatch, caplog):
+    import logging
+
+    _stub_user_keys(monkeypatch, {"openai"})
+    monkeypatch.setattr(
+        user_model_selection, "_load_user_selection",
+        lambda user_id: {"primary": "openai/gpt-4o"},
+    )
+    with caplog.at_level(logging.WARNING, logger="app.core.user_model_selection"):
+        get_profile_for_role("primary", user_id="alice")
+    assert not any("model selection degraded" in r.message for r in caplog.records)

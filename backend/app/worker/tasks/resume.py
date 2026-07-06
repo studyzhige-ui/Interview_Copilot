@@ -81,7 +81,7 @@ def process_resume_parse(self, resume_id: str):
         if text:
             run_async(resume_service.extract_and_store(
                 user_pk=owner_pk, resume_id=resume_id, resume_text=text,
-                username=owner_username,
+                user_id=owner_username,
             ))
         db = SessionLocal()
         try:

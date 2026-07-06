@@ -29,6 +29,27 @@ from app.services.model_sources.pipeline import load_catalog, refresh_catalog
 
 logger = logging.getLogger(__name__)
 
+# Fire-and-forget background tasks (MDL-4 catalog refresh). asyncio holds
+# only a weak reference to tasks — without this registry a task suspended
+# on the vendor HTTP call can be garbage-collected and silently never run.
+_bg_tasks: set = set()
+
+
+def _schedule_provider_catalog_refresh(provider: str, username: str) -> None:
+    """Kick a live /v1/models fetch for one provider with the (fresh) key,
+    without blocking the request. Failures are logged, never raised."""
+    from app.services.model_sources.pipeline import refresh_catalog_for
+
+    async def _run() -> None:
+        try:
+            await refresh_catalog_for(provider, user_id=username)
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning("post-upsert catalog refresh failed for %s: %s", provider, exc)
+
+    task = asyncio.create_task(_run())
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
 router = APIRouter(tags=["models"])
 
 
@@ -134,8 +155,8 @@ async def api_model_runtime(
                 "primary": get_profile_for_role("primary", user_id=uid),
                 "agent": get_profile_for_role("agent", user_id=uid),
                 "mock_interview": get_profile_for_role("mock_interview", user_id=uid),
-                # System role — shown read-only so the user can see which
-                # model handles internal calls (planner/memory/extraction).
+                # System role — returned for observability (which model
+                # handles planner/memory/extraction calls); not a picker.
                 "utility": get_profile_for_role("utility", user_id=uid),
             }.items()
         },
@@ -235,23 +256,13 @@ async def upsert_my_api_key(
     # Refresh the LLM cache so the next request uses the new key.
     from app.core.model_registry import clear_llm_cache_for_provider
     clear_llm_cache_for_provider(provider)
-    # MDL-4: kick a live /v1/models fetch for THIS provider with the fresh
-    # key, fire-and-forget. Without it, a UI-only-key deployment (no env
-    # vars) never advances past the shipped seed catalog until the nightly
-    # beat. Small-deployment tradeoff, deliberate: the fetched slice lands
-    # in the SHARED catalog cache (discovery is key-independent for our
-    # vendors); per-user gating stays in the ready flags.
-    import asyncio as _asyncio
-
-    from app.services.model_sources.pipeline import refresh_catalog_for
-
-    async def _refresh_provider_catalog() -> None:
-        try:
-            await refresh_catalog_for(provider, user_id=current_user.username)
-        except Exception as exc:  # noqa: BLE001 — best-effort
-            logger.warning("post-upsert catalog refresh failed for %s: %s", provider, exc)
-
-    _asyncio.create_task(_refresh_provider_catalog())
+    # MDL-4: refresh THIS provider's catalog slice with the fresh key.
+    # Without it, a UI-only-key deployment (no env vars) never advances past
+    # the shipped seed catalog until the nightly beat. Small-deployment
+    # tradeoff, deliberate: the fetched slice lands in the SHARED catalog
+    # cache (discovery is key-independent for our vendors); per-user gating
+    # stays in the ready flags.
+    _schedule_provider_catalog_refresh(provider, current_user.username)
     # Invalidate this user's cached catalog response so the new "ready" flag
     # for the just-configured provider shows up on the next /catalog GET.
     # NOTE: we do NOT touch the 24h discovery cache (model_catalog:v3:*).
@@ -301,12 +312,13 @@ async def ping_models(
         pid for pid, p in all_profiles.items()
         if profile_ready(p, user_id=current_user.username)
     ]
+    ready_id_set = set(ready_ids)
     skipped = [
         {
             "profile_id": pid, "ok": False, "latency_ms": 0,
             "error": f"未配置 {all_profiles[pid].api_key_env}",
         }
-        for pid in all_profiles if pid not in set(ready_ids)
+        for pid in all_profiles if pid not in ready_id_set
     ]
     pinged = await asyncio.gather(
         *[_ping_one(pid, user_id=current_user.username) for pid in ready_ids]

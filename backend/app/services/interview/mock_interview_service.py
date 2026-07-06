@@ -238,7 +238,7 @@ async def generate_next_turn(
     current_stage_key: str,
     recent_messages: list[dict[str, str]],
     user_answer: str,
-    username: str | None = None,
+    user_id: str | None = None,
 ) -> NextTurn:
     """One LLM call → the next interviewer line + stage + finish signal.
 
@@ -261,7 +261,7 @@ async def generate_next_turn(
     )
 
     try:
-        llm = get_llm_for_role("mock_interview", user_id=username)
+        llm = get_llm_for_role("mock_interview", user_id=user_id)
         response = await llm.acomplete(prompt, response_format={"type": "json_object"})
         data = _clean_json(str(response.text))
     except Exception as exc:  # noqa: BLE001 — any failure: keep the interview moving

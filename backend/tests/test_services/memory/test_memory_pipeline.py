@@ -24,7 +24,7 @@ import app.models  # noqa: F401  — register mappers
 
 
 def _fake_llm(acomplete):
-    """A stand-in for the catalog-backed ``agent_fast_llm`` proxy (which resolves
+    """A stand-in for the catalog-backed utility LLM (which resolves
     a model on attribute access, raising when the test catalog is empty)."""
     llm = MagicMock()
     llm.acomplete = acomplete

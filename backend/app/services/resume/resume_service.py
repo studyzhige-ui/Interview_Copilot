@@ -57,12 +57,12 @@ class ResumeService:
         user_pk: int,
         resume_id: str,
         resume_text: str,
-        username: str | None = None,
+        user_id: str | None = None,
     ) -> list[ResumeSection]:
         """Parse a resume entity's text into typed sections, persist them
         (keyed by ``resume_id``), and index each into the resume Milvus
         collection. ``user_pk`` is the stable users.id (redundant scope key)."""
-        sections_data = await self._parse_with_llm(resume_text, username=username)
+        sections_data = await self._parse_with_llm(resume_text, user_id=user_id)
         sections = self._persist_sections(user_pk, resume_id, sections_data)
         self._vectorize_sections(sections)
         return sections
@@ -114,12 +114,12 @@ class ResumeService:
     # ── Internal ──────────────────────────────────────────────────────
 
     async def _parse_with_llm(
-        self, resume_text: str, username: str | None = None,
+        self, resume_text: str, user_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Use LLM to split resume text into structured sections."""
         prompt = PARSE_PROMPT.format(resume_text=resume_text)
         try:
-            response = await get_llm_for_role("utility", user_id=username).acomplete(
+            response = await get_llm_for_role("utility", user_id=user_id).acomplete(
                 prompt,
                 response_format={"type": "json_object"},
             )
