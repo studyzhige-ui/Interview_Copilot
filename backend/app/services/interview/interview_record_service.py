@@ -139,10 +139,11 @@ class InterviewRecordService:
         offset: int = 0,
         limit: int = 20,
     ) -> list[InterviewRecord]:
-        """Records for the review list. Mock interviews that haven't reached
-        review_ready (i.e. mock_in_progress / processing_review) are hidden —
-        an unfinished or still-reviewing mock never appears in the list (a
-        review_failed mock DOES appear so the user can retry)."""
+        """Records for the review list. mock_in_progress is always hidden
+        (the run lives on the mock page, not here). processing_review is
+        hidden only while fresh: past ``_PROCESSING_REVIEW_GRACE`` it
+        surfaces so a stuck review is reachable instead of invisible.
+        Terminal mock states (review_ready / review_failed) always show."""
         db: Session = SessionLocal()
         try:
             stale_review_cutoff = datetime.utcnow() - _PROCESSING_REVIEW_GRACE
@@ -433,6 +434,9 @@ class InterviewRecordService:
                 db.close()
 
     def increment_analyzed_count(self, record_id: str, by: int = 1, *, db: Session | None = None) -> None:
+        """Bump the per-question progress counter the SSE stream interpolates
+        on. Counterpart of ``reset_analyzed_count`` — see its docstring for
+        the retry-stacking contract."""
         own_db = db is None
         if own_db:
             db = SessionLocal()

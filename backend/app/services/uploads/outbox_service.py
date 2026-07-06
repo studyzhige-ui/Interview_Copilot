@@ -122,20 +122,34 @@ def run_due_outbox_jobs(db: Session, *, limit: int = 50) -> int:
     if db.get_bind().dialect.name == "postgresql":
         query = query.with_for_update(skip_locked=True)
     claimed = query.all()
+    runnable: list[OutboxJob] = []
     for job in claimed:
         if job.status == "running":
+            # Count the crashed attempt: a handler that hard-kills its worker
+            # every time would otherwise be reclaimed forever without
+            # ``attempts`` moving, and could never reach ``dead``.
+            job.attempts += 1
             logger.warning(
-                "outbox job %s reclaimed from stale lock (locked_by=%s since %s)",
-                job.id, job.locked_by, job.locked_at,
+                "outbox job %s reclaimed from stale lock (locked_by=%s since %s, attempt %d)",
+                job.id, job.locked_by, job.locked_at, job.attempts,
             )
+            if job.attempts >= job.max_attempts:
+                job.status = "dead"
+                job.last_error = "worker died mid-run repeatedly (stale-lock reclaim limit)"
+                job.locked_at = None
+                job.locked_by = None
+                db.add(job)
+                logger.error("outbox job %s dead after %d crashed attempts", job.id, job.attempts)
+                continue
         job.status = "running"
         job.locked_at = datetime.utcnow()
         job.locked_by = worker_id
         db.add(job)
+        runnable.append(job)
     db.commit()
 
     processed = 0
-    for job in claimed:
+    for job in runnable:
         handler = _HANDLERS.get(job.job_type)
         try:
             if handler is None:

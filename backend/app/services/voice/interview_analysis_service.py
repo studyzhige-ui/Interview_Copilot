@@ -26,6 +26,18 @@ from llama_index.core import Settings
 
 logger = logging.getLogger(__name__)
 
+def _notify_progress(on_progress, n: int) -> None:
+    """Best-effort progress ping — a broken callback (it's a DB write) must
+    never fail the analysis, but a persistently failing one silently freezes
+    the SSE percent at the band floor, hence WARNING not DEBUG."""
+    if on_progress is None:
+        return
+    try:
+        on_progress(n)
+    except Exception:  # noqa: BLE001
+        logger.warning("on_progress callback failed", exc_info=True)
+
+
 try:
     _tokenizer = tiktoken.get_encoding("cl100k_base")
 except Exception:
@@ -621,11 +633,7 @@ async def analyze_interview(
                 resume_context=resume_context,
                 jd_context=jd_context,
             )
-            if on_progress is not None:
-                try:
-                    on_progress(1)
-                except Exception:  # noqa: BLE001 — progress is best-effort
-                    logger.debug("on_progress callback failed", exc_info=True)
+            _notify_progress(on_progress, 1)
             return res
 
         tasks = [
@@ -890,11 +898,7 @@ async def analyze_mock_qa_batched(
             resume_context=resume_context,
             jd_context=jd_context,
         )
-        if on_progress is not None:
-            try:
-                on_progress(len(chunk))
-            except Exception:  # noqa: BLE001 — progress is best-effort
-                logger.debug("on_progress callback failed", exc_info=True)
+        _notify_progress(on_progress, len(chunk))
         return chunk
 
     tasks: list[asyncio.Task] = []

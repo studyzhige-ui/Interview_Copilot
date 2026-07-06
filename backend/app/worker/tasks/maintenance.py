@@ -7,28 +7,43 @@ machinery only protects messages it still has. Nothing else re-examines
 those rows — this beat task is the terminal-state guarantee of last
 resort.
 
-Threshold rationale: a legitimate run can be alive for a long time —
-time_limit=1800s per attempt × up to 3 retries + backoff, and
-``updated_at`` only moves on status transitions (a 30-minute
-transcription stage writes nothing). 2 hours comfortably exceeds the
-worst legitimate case, and a record whose message is truly lost never
-moves again anyway, so the extra latency only delays the *error
-message*, not any work.
+Threshold rationale — two tiers, keyed off ``updated_at`` (bumped by
+every status transition AND every per-question progress increment):
+
+* Upload pipeline (pending/transcribing/extracting/analyzing): a
+  legitimate run can be quiet for a long stretch — transcription writes
+  nothing for up to one attempt (time_limit=1800s), × up to 3 retries +
+  backoff. 2 hours comfortably exceeds the worst case.
+* Mock review (processing_review): no silent stage — the orchestrator
+  bumps the counter per analyzed batch, so a 30-minute-quiet review is
+  dead. Sweeping it faster matters because the UI's retry card only
+  appears once the record reaches review_failed.
 """
 import logging
 from datetime import datetime, timedelta
 
+from sqlalchemy import and_, or_
+
 from app.db.database import SessionLocal
 from app.models.interview_record import InterviewRecord
+from app.services.interview.interview_record_service import (
+    STATUS_ANALYZING,
+    STATUS_EXTRACTING,
+    STATUS_FAILED,
+    STATUS_PENDING,
+    STATUS_PROCESSING_REVIEW,
+    STATUS_REVIEW_FAILED,
+    STATUS_TRANSCRIBING,
+)
 from app.worker.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
-# Upload-path in-flight states + the mock review in-flight state.
-_STALE_SWEEP_STATES = (
-    "pending", "transcribing", "extracting", "analyzing", "processing_review",
+_UPLOAD_SWEEP_STATES = (
+    STATUS_PENDING, STATUS_TRANSCRIBING, STATUS_EXTRACTING, STATUS_ANALYZING,
 )
-_STALE_AFTER = timedelta(hours=2)
+_UPLOAD_STALE_AFTER = timedelta(hours=2)
+_REVIEW_STALE_AFTER = timedelta(minutes=30)
 
 
 @celery_app.task(
@@ -38,26 +53,34 @@ _STALE_AFTER = timedelta(hours=2)
     soft_time_limit=50,
 )
 def sweep_stale_interview_records(self):
-    """Move records stuck >2h in an in-flight state to a terminal one.
+    """Move records stuck in an in-flight state to a terminal one.
 
     Idempotent and safe against races with a live worker: the analysis
     task's own status writes will simply overwrite ours if (against all
     odds) it is still running — the orchestrator writes completed/
     review_ready unconditionally at the end of a successful run.
     """
-    cutoff = datetime.utcnow() - _STALE_AFTER
+    now = datetime.utcnow()
     swept = 0
     with SessionLocal() as db:
         rows = (
             db.query(InterviewRecord)
             .filter(
-                InterviewRecord.status.in_(_STALE_SWEEP_STATES),
-                InterviewRecord.updated_at < cutoff,
+                or_(
+                    and_(
+                        InterviewRecord.status.in_(_UPLOAD_SWEEP_STATES),
+                        InterviewRecord.updated_at < now - _UPLOAD_STALE_AFTER,
+                    ),
+                    and_(
+                        InterviewRecord.status == STATUS_PROCESSING_REVIEW,
+                        InterviewRecord.updated_at < now - _REVIEW_STALE_AFTER,
+                    ),
+                )
             )
             .all()
         )
         for rec in rows:
-            terminal = "review_failed" if rec.source == "mock" else "failed"
+            terminal = STATUS_REVIEW_FAILED if rec.source == "mock" else STATUS_FAILED
             logger.warning(
                 "sweeping stale interview record %s: %s (updated %s) -> %s",
                 rec.id, rec.status, rec.updated_at, terminal,

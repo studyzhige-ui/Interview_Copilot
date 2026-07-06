@@ -95,10 +95,13 @@ class InterviewAnalysisOrchestrator:
             # Persist QA shells (so SSE can show "X of Y analyzed" early on)
             self._persist_qa_shells(record_id, qa_pairs)
 
-            interview_record_service.set_status(record_id, in_flight_status)
-            # Zero the per-question counter so a retry doesn't stack this
-            # run's increments on the previous attempt's.
+            # Zero the per-question counter BEFORE flipping status: the SSE
+            # stream interpolates percent from the counter whenever status is
+            # in-flight, so the opposite order lets one poll window see the
+            # previous attempt's (possibly complete) count and jump to 95%
+            # before snapping back.
             interview_record_service.reset_analyzed_count(record_id)
+            interview_record_service.set_status(record_id, in_flight_status)
 
             # Real per-question progress: each completed Stage-2 question
             # bumps ``analyzed_qa_count`` so the SSE stream can interpolate

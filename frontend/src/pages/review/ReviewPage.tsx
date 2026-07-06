@@ -227,18 +227,29 @@ export function ReviewPage() {
   // review_failed is a terminal state the sweeper/worker can land a mock
   // record in; the retry endpoint flips it back to processing_review and
   // re-dispatches the Celery review task.
-  const [retryingReview, setRetryingReview] = useState(false);
+  // Holds the record id being retried (not a boolean — two review_failed
+  // records must not share one "retrying" flag).
+  const [retryingReview, setRetryingReview] = useState<string | null>(null);
   const retryReview = async (recordId: string) => {
-    setRetryingReview(true);
+    setRetryingReview(recordId);
     try {
       await retryMockReview(recordId);
+      if (!isMounted.current) return;
+      // Drop any stale (errored) runner entry — the auto-spawn effect bails
+      // on an existing entry, so leaving it would mean no SSE runner for the
+      // re-dispatched review and a pane frozen at "建立 SSE 连接中".
+      setAnalyses((prev) => {
+        if (!(recordId in prev)) return prev;
+        const { [recordId]: _, ...rest } = prev;
+        return rest;
+      });
       // Refresh list + detail: status becomes processing_review, which the
       // auto-spawn effect picks up and opens an SSE runner for.
       await onRecordChanged();
     } catch {
       if (isMounted.current) toast.error('重试复盘失败，请稍后再试');
     } finally {
-      if (isMounted.current) setRetryingReview(false);
+      if (isMounted.current) setRetryingReview(null);
     }
   };
 
@@ -308,11 +319,24 @@ export function ReviewPage() {
     }
   };
 
-  const onAnalysisError = (_forActiveId: string, msg: string) => {
+  const onAnalysisError = (forActiveId: string, msg: string) => {
     toast.error(`分析失败：${msg}`);
-    // Keep the entry so the user can see the error state; they can re-create
-    // the draft to retry. (Removing here would silently send them back to the
-    // upload cards without explanation.)
+    if (isDraft(forActiveId)) {
+      // Keep the entry so the user can see the error state; they can
+      // re-create the draft to retry. (Removing here would silently send
+      // them back to the upload cards without explanation.)
+      return;
+    }
+    // Real record (e.g. a mock review that just failed while the user was
+    // watching): drop the dead runner entry so a retry can register a fresh
+    // one, and refetch so the terminal status (review_failed) renders its
+    // retry card instead of a spinner frozen on the errored stream.
+    setAnalyses((prev) => {
+      if (!(forActiveId in prev)) return prev;
+      const { [forActiveId]: _, ...rest } = prev;
+      return rest;
+    });
+    void onRecordChanged();
   };
 
   const activeRecord = combined.find((r) => r.id === activeId) ?? null;
@@ -401,7 +425,7 @@ export function ReviewPage() {
       return (
         <ReviewFailedState
           message={detail.error_message ?? null}
-          retrying={retryingReview}
+          retrying={retryingReview === detail.id}
           onRetry={() => { void retryReview(detail.id); }}
         />
       );

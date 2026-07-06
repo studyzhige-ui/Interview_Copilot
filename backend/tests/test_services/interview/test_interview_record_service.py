@@ -207,3 +207,83 @@ def test_get_analysis_summary_returns_empty_for_unknown(record_db_session, monke
 
     summary = module.InterviewRecordService().get_analysis_summary("ir_nope", "alice")
     assert summary == ""
+
+
+# ── list_by_user grace filter (MOCK-1) + progress counter (ANA-4) ──────
+
+
+def _mock_record_with_status(db, service, status, *, age_minutes=0):
+    from datetime import datetime, timedelta
+
+    record = service.create_for_mock(user_id="alice", title="模拟面试", db=db)
+    record.status = status
+    record.updated_at = datetime.utcnow() - timedelta(minutes=age_minutes)
+    db.add(record)
+    db.commit()
+    return record
+
+
+def test_list_by_user_hides_fresh_processing_review(record_db_session, monkeypatch):
+    from app.services.interview import interview_record_service as module
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
+    service = module.InterviewRecordService()
+    _mock_record_with_status(record_db_session, service, module.STATUS_PROCESSING_REVIEW,
+                             age_minutes=1)
+
+    assert service.list_by_user("alice") == []
+
+
+def test_list_by_user_surfaces_stale_processing_review(record_db_session, monkeypatch):
+    from app.services.interview import interview_record_service as module
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
+    service = module.InterviewRecordService()
+    rec = _mock_record_with_status(record_db_session, service, module.STATUS_PROCESSING_REVIEW,
+                                   age_minutes=15)
+
+    rows = service.list_by_user("alice")
+    assert [r.id for r in rows] == [rec.id]
+
+
+def test_list_by_user_always_hides_mock_in_progress(record_db_session, monkeypatch):
+    from app.services.interview import interview_record_service as module
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
+    service = module.InterviewRecordService()
+    _mock_record_with_status(record_db_session, service, module.STATUS_MOCK_IN_PROGRESS,
+                             age_minutes=60 * 24)
+
+    assert service.list_by_user("alice") == []
+
+
+def test_list_by_user_shows_terminal_mock_states(record_db_session, monkeypatch):
+    from app.services.interview import interview_record_service as module
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
+    service = module.InterviewRecordService()
+    failed = _mock_record_with_status(record_db_session, service, module.STATUS_REVIEW_FAILED)
+    ready = _mock_record_with_status(record_db_session, service, module.STATUS_REVIEW_READY)
+
+    rows = service.list_by_user("alice")
+    assert {r.id for r in rows} == {failed.id, ready.id}
+
+
+def test_analyzed_count_increment_and_reset(record_db_session, monkeypatch):
+    from app.models.interview_record import InterviewRecord
+    from app.services.interview import interview_record_service as module
+
+    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
+    service = module.InterviewRecordService()
+    record = service.create_for_mock(user_id="alice", db=record_db_session)
+    record_db_session.commit()
+
+    service.increment_analyzed_count(record.id, by=2)
+    service.increment_analyzed_count(record.id)
+    row = record_db_session.query(InterviewRecord).filter(InterviewRecord.id == record.id).one()
+    assert row.analyzed_qa_count == 3
+
+    # A retry must start from zero, not stack on the previous attempt.
+    service.reset_analyzed_count(record.id)
+    row = record_db_session.query(InterviewRecord).filter(InterviewRecord.id == record.id).one()
+    assert row.analyzed_qa_count == 0

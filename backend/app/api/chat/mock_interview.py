@@ -212,9 +212,8 @@ async def retry_mock_review(
 
     try:
         await asyncio.to_thread(
-            lambda: mock_flow.dispatch_review(
-                db, record_id, rollback_status=STATUS_REVIEW_FAILED,
-            ),
+            mock_flow.dispatch_review,
+            db, record_id, rollback_status=STATUS_REVIEW_FAILED,
         )
     except Exception as exc:  # noqa: BLE001 — dispatch_review already rolled back
         raise HTTPException(

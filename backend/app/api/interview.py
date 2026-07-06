@@ -29,8 +29,15 @@ from app.schemas.interview import (
 from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
 from app.services.interview import analysis_intake, record_admin
 from app.services.interview.interview_record_service import (
+    STATUS_ANALYZING,
     STATUS_COMPLETED,
+    STATUS_EXTRACTING,
     STATUS_FAILED,
+    STATUS_PENDING,
+    STATUS_PROCESSING_REVIEW,
+    STATUS_REVIEW_FAILED,
+    STATUS_REVIEW_READY,
+    STATUS_TRANSCRIBING,
     interview_record_service,
 )
 from app.services.uploads.file_asset_service import get_owned_file_asset
@@ -423,20 +430,22 @@ def unsave_qa_from_knowledge_endpoint(
 # interpolates on REAL per-question progress (analyzed_qa_count/qa_total —
 # the orchestrator bumps the counter per completed question).
 _STAGE_BANDS: dict[str, tuple[int, int]] = {
-    "pending": (2, 5),
-    "transcribing": (5, 50),
-    "extracting": (50, 70),
-    "analyzing": (70, 95),
+    STATUS_PENDING: (2, 5),
+    STATUS_TRANSCRIBING: (5, 50),
+    STATUS_EXTRACTING: (50, 70),
+    STATUS_ANALYZING: (70, 95),
     # Mock review runs the analyzing pipeline under its own status.
-    "processing_review": (70, 95),
+    STATUS_PROCESSING_REVIEW: (70, 95),
 }
+# The two bands with a real sub-progress signal (analyzed_qa_count/qa_total).
+_INTERPOLATED_STAGES = {STATUS_ANALYZING, STATUS_PROCESSING_REVIEW}
 # Slow in-band creep for stages with no sub-progress signal: +1% every
 # 2 ticks (3s), capped 1 below the ceiling so a band can't lie about
 # being finished.
 _CREEP_TICKS_PER_PERCENT = 2
 
-_TERMINAL_DONE = {STATUS_COMPLETED, "review_ready"}
-_TERMINAL_FAILED = {STATUS_FAILED, "review_failed"}
+_TERMINAL_DONE = {STATUS_COMPLETED, STATUS_REVIEW_READY}
+_TERMINAL_FAILED = {STATUS_FAILED, STATUS_REVIEW_FAILED}
 
 
 @router.get("/interview-records/{record_id}/events")
@@ -468,6 +477,7 @@ async def interview_record_events_stream(
 
     async def event_generator():
         last_status: str | None = None
+        last_percent = 0
         stage_entered_tick = 0
         try:
             for tick in range(MAX_TICKS):
@@ -481,29 +491,32 @@ async def interview_record_events_stream(
                     stage_entered_tick = tick
 
                 band = _STAGE_BANDS.get(status)
-                if band is None:
-                    percent = 0
-                else:
+                if band is not None:
                     lo, hi = band
                     analyzed = snap["analyzed_qa_count"]
                     total = snap.get("qa_total") or 0
-                    if status in ("analyzing", "processing_review") and total > 0:
+                    if status in _INTERPOLATED_STAGES and total > 0:
                         # Real progress: interpolate on questions completed.
                         percent = lo + int((hi - lo) * min(analyzed, total) / total)
                     else:
                         # No sub-progress signal — slow creep, honest cap.
                         ticks_in_stage = tick - stage_entered_tick
                         percent = min(hi - 1, lo + ticks_in_stage // _CREEP_TICKS_PER_PERCENT)
-                yield "data: " + json.dumps(
-                    {
-                        "type": "progress",
-                        "status": status,
-                        "percent": percent,
-                        "analyzed_qa_count": snap["analyzed_qa_count"],
-                        "qa_total": snap.get("qa_total") or 0,
-                    },
-                    ensure_ascii=False,
-                ) + "\n\n"
+                    # Monotonic guard: interpolation can start below where
+                    # creep already got to (qa_total lands mid-stage) and a
+                    # retry resets the counter — never move the bar backwards.
+                    percent = max(percent, last_percent)
+                    last_percent = percent
+                    yield "data: " + json.dumps(
+                        {
+                            "type": "progress",
+                            "status": status,
+                            "percent": percent,
+                            "analyzed_qa_count": snap["analyzed_qa_count"],
+                            "qa_total": snap.get("qa_total") or 0,
+                        },
+                        ensure_ascii=False,
+                    ) + "\n\n"
 
                 if status in _TERMINAL_DONE:
                     overall = {}
@@ -533,6 +546,17 @@ async def interview_record_events_stream(
                             "status": status,
                             "message": snap["error_message"] or "分析失败",
                         },
+                        ensure_ascii=False,
+                    ) + "\n\n"
+                    return
+                if band is None:
+                    # Non-terminal but unbanded — e.g. a failed finish
+                    # dispatch rolled the record back to mock_in_progress
+                    # while we were streaming. There is no run to watch any
+                    # more; end the stream instead of polling a dead record
+                    # for the remaining 30 minutes.
+                    yield "data: " + json.dumps(
+                        {"type": "error", "status": status, "message": "分析已中止"},
                         ensure_ascii=False,
                     ) + "\n\n"
                     return

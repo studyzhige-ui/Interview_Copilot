@@ -369,10 +369,7 @@ def dispatch_review(
         task = process_interview_analysis.delay(record_id)
     except Exception as exc:  # noqa: BLE001 — broker down / misconfigured
         logger.error("review dispatch failed for record %s: %s", record_id, exc)
-        record = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
-        if record is not None:
-            record.status = rollback_status
-            db.add(record)
+        interview_record_service.set_status(record_id, rollback_status, db=db)
         if rollback_status == STATUS_MOCK_IN_PROGRESS:
             runtime = mock_runtime_service.get_runtime_for_record(
                 db, interview_record_id=record_id,

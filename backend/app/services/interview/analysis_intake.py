@@ -19,7 +19,11 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.services.interview.interview_record_service import interview_record_service
+from app.services.interview.interview_record_service import (
+    STATUS_FAILED,
+    STATUS_PENDING,
+    interview_record_service,
+)
 from app.services.uploads.file_asset_service import (
     get_owned_file_asset,
     mark_file_asset_consumed,
@@ -195,12 +199,13 @@ def create_record_and_dispatch(
         # The record + consumed upload are already committed. Without this
         # catch a broker blip left a zombie forever-pending record that no
         # worker would ever pick up. Park it in a terminal, user-visible
-        # state instead — the reanalyze path can revive it later.
+        # state instead (recovery today = delete the record and re-upload;
+        # there is no reanalyze endpoint for upload records).
         logger.error("analysis dispatch failed for record %s: %s", record.id, exc)
         interview_record_service.set_status(
-            record.id, "failed",
+            record.id, STATUS_FAILED,
             error_message="分析任务派发失败（任务队列暂不可用），请稍后重试。",
         )
         raise
-    interview_record_service.set_status(record.id, "pending", celery_task_id=task.id)
+    interview_record_service.set_status(record.id, STATUS_PENDING, celery_task_id=task.id)
     return record, task

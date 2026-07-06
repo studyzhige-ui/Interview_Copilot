@@ -368,7 +368,9 @@ def test_events_stream_404_when_record_belongs_to_other_user(client, db: Session
 
 def test_events_stream_emits_done_for_completed_record(client, db: Session):
     """When the record is already COMPLETED on the first poll, the
-    stream yields one progress frame + one done frame, then closes.
+    stream yields exactly one done frame (no progress frame — terminal
+    statuses have no band, and a percent-0 progress frame right before
+    "done: 100" made the bar snap backwards), then closes.
 
     We use TestClient.stream() to consume the SSE response — the
     handler closes the generator after emitting ``done`` so the
@@ -386,10 +388,9 @@ def test_events_stream_emits_done_for_completed_record(client, db: Session):
         assert resp.status_code == 200
         chunks = [line for line in resp.iter_lines() if line.startswith("data: ")]
 
-    # One progress frame (the first tick reads status=completed) then
-    # one done frame, then the generator returns.
     payloads = [_json.loads(line[len("data: "):]) for line in chunks]
-    assert any(p["type"] == "progress" for p in payloads)
+    # Terminal on first poll → no progress frame at all.
+    assert not any(p["type"] == "progress" for p in payloads)
     done = next((p for p in payloads if p["type"] == "done"), None)
     assert done is not None, payloads
     assert done["status"] == "completed"
