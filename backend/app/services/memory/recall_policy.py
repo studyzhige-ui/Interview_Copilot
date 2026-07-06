@@ -11,7 +11,11 @@ Claude Code's ``isAutoMemoryEnabled``. When off:
     debrief sessions) STILL loads — those are per-conversation context,
     not "memory".
   * User-facing UI can still read the docs directly from the DB — the
-    toggle only gates LLM INJECTION, not storage.
+    toggle gates the LLM loop's cross-session memory in BOTH directions
+    (Claude Code's ``isAutoMemoryEnabled`` semantics): injection AND the
+    automatic writes (save_memory tool + post-turn extraction) are off
+    together. Existing memories are never deleted by the toggle; they
+    just stop flowing through the LLM until it's re-enabled.
 
 Two tiers of preference (first non-NULL wins):
 

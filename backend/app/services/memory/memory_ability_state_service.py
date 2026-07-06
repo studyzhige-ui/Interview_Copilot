@@ -243,8 +243,11 @@ def _upsert_inner(
         if evidence_json is not None:
             row.evidence_refs_json = evidence_json
         row.search_text = search_text
-        if last_evidence_at is not None:
-            row.last_evidence_at = last_evidence_at
+        # Every upsert from the extraction channels IS fresh evidence —
+        # default-bump so the field actually "drives staleness" as the
+        # model docstring promises (callers never pass it explicitly,
+        # which used to freeze it at row-creation time forever).
+        row.last_evidence_at = last_evidence_at or datetime.utcnow()
         row.updated_at = datetime.utcnow()
         db.add(row)
 

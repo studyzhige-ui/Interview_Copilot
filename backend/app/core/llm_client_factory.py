@@ -41,7 +41,8 @@ logger = logging.getLogger(__name__)
 # that contention isn't observable, so one lock keeps the invariants
 # (LRU ordering + cleanup) easy to reason about.
 _llm_cache_lock = Lock()
-_llm_cache: dict[tuple[str, str], Any] = {}
+# key: (user_id, role, profile_id) → (credential fingerprint, LLM instance)
+_llm_cache: dict[tuple[str | None, str, str], tuple[str, Any]] = {}
 
 
 # ── API-key resolution ──────────────────────────────────────────────────
@@ -248,9 +249,9 @@ def clear_llm_cache_for_provider(provider: str) -> None:
     """
     prefix = f"{provider}/"
     with _llm_cache_lock:
-        # LlamaIndex LLM cache: key is (role, profile_id)
+        # LlamaIndex LLM cache: key is (user_id, role, profile_id)
         to_drop_llm = [
-            key for key in _llm_cache if isinstance(key[1], str) and key[1].startswith(prefix)
+            key for key in _llm_cache if isinstance(key[2], str) and key[2].startswith(prefix)
         ]
         for k in to_drop_llm:
             _llm_cache.pop(k, None)
@@ -356,15 +357,25 @@ def _build_llm_instance(profile: ModelProfile, user_id: str | None = None):
 
 
 def get_llm_for_role(role: str, user_id: str | None = None):
-    """Build (or fetch from cache) a llama-index LLM for ``role``."""
+    """Build (or fetch from cache) a llama-index LLM for ``role``.
+
+    The cache key includes ``user_id`` AND a credential fingerprint:
+    ``_build_llm_instance`` bakes the resolved api_key/api_base into the
+    instance, so a key without the user dimension would hand the first
+    caller's private key to every same-role caller, and a key change
+    would keep serving the stale client until restart.
+    """
     profile = user_model_selection.get_profile_for_role(role, user_id=user_id)
-    cache_key = (role, profile.id)
+    api_key = resolve_api_key(profile, user_id=user_id)
+    api_base = _resolve_api_base(profile, user_id=user_id)
+    fp = _key_fingerprint(f"{api_key}|{api_base}")
+    cache_key = (user_id, role, profile.id)
     with _llm_cache_lock:
         cached = _llm_cache.get(cache_key)
-        if cached is not None:
-            return cached
+        if cached is not None and cached[0] == fp:
+            return cached[1]
         instance = _build_llm_instance(profile, user_id=user_id)
-        _llm_cache[cache_key] = instance
+        _llm_cache[cache_key] = (fp, instance)
         return instance
 
 

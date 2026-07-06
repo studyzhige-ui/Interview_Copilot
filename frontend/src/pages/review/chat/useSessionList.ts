@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useState } from 'react';
+import { CancelledError, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/store/uiStore';
 import { extractErr } from '@/api/client';
 import {
@@ -12,14 +12,16 @@ import { useToastOnError } from '@/hooks/useToastOnError';
 import type { ChatSessionListItem } from '@/types/api';
 import { clearPersistedSessionState } from './usePersistedSessionState';
 
-// One in-flight auto-create per interview, shared across component
-// instances. StrictMode's dev double-mount re-runs the auto-create
-// effect on a fresh ref before the first create resolves — without
-// this, a brand-new record would get TWO "会话 1" rows. (The pre-React-
-// Query code avoided that by aborting the first mount's list fetch
-// before it reached the create branch.) Entries clear on settle, so a
-// later revisit can auto-create again — same as the old behavior.
-const inflightAutoCreate = new Map<string, ReturnType<typeof createChatSession>>();
+function toListItem(created: { session_id: string; title: string; type: string }): ChatSessionListItem {
+  return {
+    session_id: created.session_id,
+    title: created.title,
+    type: created.type,
+    state_summary: '',
+    turn_count: 0,
+    updated_at: new Date().toISOString(),
+  };
+}
 
 /**
  * Internal-mode session list: load + auto-pick + auto-create + CRUD.
@@ -28,12 +30,11 @@ const inflightAutoCreate = new Map<string, ReturnType<typeof createChatSession>>
  * mode); in external mode the parent owns the list and this hook stays
  * inert.
  *
- * The list itself is a React Query entry keyed
+ * The list is a React Query entry keyed
  * ``['chat','sessions',{type,subject_id}]`` — same key family as the
- * general-chat sidebar — so switching interview A → B → A serves A's
- * list from cache instantly, and the query-level abort covers the
- * fetch race the old AbortController handled by hand. Creates /
- * renames / deletes update the cached list in place.
+ * general-chat sidebar — so revisiting a record serves its list from
+ * cache instantly. Creates / renames / deletes update the cached list
+ * in place.
  */
 export function useSessionList({
   externalMode,
@@ -53,13 +54,9 @@ export function useSessionList({
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
 
   const enabled = !externalMode && !!interviewId;
-  const queryKey = ['chat', 'sessions', { type: sessionType, subject_id: interviewId ?? '' }];
-
   const listQuery = useQuery({
-    queryKey,
+    queryKey: ['chat', 'sessions', { type: sessionType, subject_id: interviewId ?? '' }],
     enabled,
-    // listChatSessions returns updated_at DESC — first row is the most
-    // recently active session, which is the right default selection.
     queryFn: ({ signal }) => listChatSessions(
       { type: sessionType, subject_id: interviewId! },
       { signal },
@@ -79,82 +76,60 @@ export function useSessionList({
     [queryClient, sessionType, interviewId],
   );
 
-  // ── Auto-pick + auto-create ───────────────────────────────────────────
-  // Auto-create "会话 1" so the panel isn't a blank slate when the user
-  // clicks into a fresh record. The contract (same as before the React
-  // Query migration): the decision is made ONCE per visit, on the first
-  // settled list — a list the user later deletes down to zero within the
-  // same visit stays empty; re-entering the record later re-evaluates.
-  //
-  // ``initialLoadHandledRef`` marks "first settled list processed for
-  // this interviewId". Without it, every cache write (e.g. a delete
-  // emptying the list) would re-run this effect and resurrect the
-  // session the user just removed.
-  const initialLoadHandledRef = useRef<string | null>(null);
-  // Latest interviewId for staleness checks after awaits — the effect
-  // closure's ``interviewId`` is frozen per run, so a create resolving
-  // after the user switched records must not steal the selection.
-  const interviewIdRef = useRef(interviewId);
-  interviewIdRef.current = interviewId;
+  // ── Once per visit: load, pick the most recent, auto-create if empty ──
+  // Same shape as before the React Query migration: this effect runs on
+  // interviewId change only, so later cache updates (e.g. the user
+  // deleting the list down to zero) can never re-trigger the
+  // auto-create. ``ensureQueryData`` serves the cached list instantly on
+  // revisit, fetches otherwise, and dedupes concurrent calls — which
+  // also makes StrictMode's dev double-mount create at most one session
+  // (the first run's ``alive`` flag drops before it reaches the create).
   useEffect(() => {
     if (!enabled || !interviewId) {
       setInternalActiveId(null);
       return;
     }
-    if (!listQuery.isSuccess) return;
-    const rows = listQuery.data;
-    const isInitialLoad = initialLoadHandledRef.current !== interviewId;
-    if (rows.length > 0) {
-      initialLoadHandledRef.current = interviewId;
-      // Keep the current selection when it's still in the list (a cache
-      // refresh must not yank the user off their session); otherwise
-      // default to the most recent row.
-      setInternalActiveId((cur) =>
-        cur && rows.some((r) => r.session_id === cur) ? cur : rows[0].session_id,
-      );
-      return;
-    }
-    if (!isInitialLoad) {
-      // List emptied by the user within this visit (deleted down to
-      // zero) — release the selection instead of pointing at a dead id,
-      // and do NOT auto-create.
-      setInternalActiveId(null);
-      return;
-    }
-    initialLoadHandledRef.current = interviewId;
+    const key = ['chat', 'sessions', { type: sessionType, subject_id: interviewId }];
+    let alive = true;
     (async () => {
       try {
-        let pending = inflightAutoCreate.get(interviewId);
-        if (!pending) {
-          pending = createChatSession({
-            type: sessionType,
-            subject_id: interviewId,
-            title: '会话 1',
-          }).finally(() => { inflightAutoCreate.delete(interviewId); });
-          inflightAutoCreate.set(interviewId, pending);
+        const rows = await queryClient.ensureQueryData({
+          queryKey: key,
+          queryFn: ({ signal }) => listChatSessions(
+            { type: sessionType, subject_id: interviewId },
+            { signal },
+          ),
+        });
+        if (!alive) return;
+        if (rows.length > 0) {
+          // updated_at DESC — first row is the most recently active
+          // session, the right default per the product spec.
+          setInternalActiveId(rows[0].session_id);
+          return;
         }
-        const created = await pending;
-        // The cache write targets the key captured for THIS record —
-        // correct even if the user has switched away meanwhile (and it
-        // keeps the created session visible when they come back).
-        setSessions(() => [{
-          session_id: created.session_id,
-          title: created.title,
-          type: created.type,
-          state_summary: '',
-          turn_count: 0,
-          updated_at: new Date().toISOString(),
-        }]);
-        // Selection is per-panel live state — only touch it if the user
-        // is still on this record.
-        if (interviewIdRef.current === interviewId) {
-          setInternalActiveId(created.session_id);
-        }
+        // No sessions yet → auto-create "会话 1" so the panel isn't a
+        // blank slate on a fresh record. The user can still delete this
+        // down to zero if they don't want it.
+        const created = await createChatSession({
+          type: sessionType,
+          subject_id: interviewId,
+          title: '会话 1',
+        });
+        // The cache write is keyed to THIS record — do it even if the
+        // user has switched away, so the session that now exists on the
+        // backend isn't hidden behind a stale-empty cache entry.
+        queryClient.setQueryData<ChatSessionListItem[]>(key, [toListItem(created)]);
+        if (!alive) return;
+        setInternalActiveId(created.session_id);
       } catch (e) {
+        if (!alive) return;
+        if (e instanceof CancelledError) return;                 // query cancelled
+        if ((e as { code?: string })?.code === 'ERR_CANCELED') return;  // axios abort
         toast.error(extractErr(e, '会话列表加载失败'));
       }
     })();
-  }, [enabled, interviewId, sessionType, listQuery.isSuccess, listQuery.data, setSessions]);
+    return () => { alive = false; };
+  }, [enabled, interviewId, sessionType, queryClient]);
 
   // ── Create ────────────────────────────────────────────────────────────
   const newChat = useCallback(async () => {
@@ -166,14 +141,7 @@ export function useSessionList({
         subject_id: interviewId,
         title: `会话 ${sessions.length + 1}`,
       });
-      setSessions((s) => [{
-        session_id: created.session_id,
-        title: created.title,
-        type: created.type,
-        state_summary: '',
-        turn_count: 0,
-        updated_at: new Date().toISOString(),
-      }, ...s]);
+      setSessions((s) => [toListItem(created), ...s]);
       setInternalActiveId(created.session_id);
     } catch (e) {
       toast.error(extractErr(e, '创建会话失败'));
@@ -202,13 +170,13 @@ export function useSessionList({
       await deleteChatSession(id);
       onSessionDeleted(id);
       clearPersistedSessionState(id);
-      // Selection fallback (next row / null) is handled by the auto-pick
-      // effect once the cached list no longer contains the active id.
-      setSessions((s) => s.filter((x) => x.session_id !== id));
+      const next = sessions.filter((x) => x.session_id !== id);
+      setSessions(() => next);
+      if (internalActiveId === id) setInternalActiveId(next[0]?.session_id ?? null);
       setPendingDelete(null);
     } catch (e) { toast.error(extractErr(e, '删除会话失败')); }
     finally { setDeletingChat(false); }
-  }, [pendingDelete, onSessionDeleted, setSessions]);
+  }, [pendingDelete, sessions, internalActiveId, onSessionDeleted, setSessions]);
 
   // ── Rename ────────────────────────────────────────────────────────────
   const commitRename = useCallback(async () => {

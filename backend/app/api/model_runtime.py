@@ -181,10 +181,15 @@ async def _ping_one(profile_id: str, user_id: str | None = None) -> dict:
             "error": "超时",
         }
     except Exception as exc:  # noqa: BLE001
+        # Humanize before it reaches the UI: raw exception text can carry
+        # request URLs (query-string keys for url-key vendors) and is
+        # inconsistent with the site-wide friendly-error policy. The raw
+        # detail still lands in server logs via the client library.
+        from app.core.error_messages import humanize_error
         return {
             "profile_id": profile_id, "ok": False,
             "latency_ms": int((time.perf_counter() - started) * 1000),
-            "error": f"{type(exc).__name__}: {exc}"[:200],
+            "error": humanize_error(exc)[:200],
         }
 
 

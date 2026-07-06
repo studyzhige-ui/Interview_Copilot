@@ -8,11 +8,13 @@ this is recoverable — the full bytes stay on disk.
 
 Three levels of defense against context-window overflow:
 
-1. **Per-tool output cap** (``ToolEntry.max_result_chars``): the registry
-   truncates at this level, but the per-result step below can override it.
+1. **Per-tool output cap** (``ToolEntry.max_result_chars``): enforced here
+   in ``resolve_threshold`` — a result larger than the tool's registered cap
+   is persisted (recoverable), not truncated. The effective threshold is
+   ``min(max_result_chars, AGENT_PERSIST_THRESHOLD)``.
 
 2. **Per-result persistence** (``maybe_persist_result``): if a single result
-   exceeds ``AGENT_PERSIST_THRESHOLD``, write the full content to
+   exceeds the effective threshold, write the full content to
    ``{APP_DATA_DIR}/agent-results/{session_id}/{tool_call_id}.txt`` and replace
    the in-context content with a preview + path (read back via
    ``resolve_persisted_path`` + ``read_file``).
@@ -104,11 +106,24 @@ def resolve_threshold(tool_name: str) -> int | float:
     """Resolve the effective persistence threshold for a tool.
 
     - Tools in ``_NEVER_PERSIST_TOOLS`` → ``inf`` (never persisted).
-    - Otherwise → ``settings.AGENT_PERSIST_THRESHOLD``.
+    - Otherwise → ``min(ToolEntry.max_result_chars, AGENT_PERSIST_THRESHOLD)``.
+      This is what makes the per-tool cap REAL: a tool registered with a
+      2K cap gets its oversized result offloaded at 2K instead of riding
+      the global 50K default into the LLM context and the SSE frame.
     """
     if tool_name in _NEVER_PERSIST_TOOLS:
         return float("inf")
-    return settings.AGENT_PERSIST_THRESHOLD
+    threshold: int | float = settings.AGENT_PERSIST_THRESHOLD
+    try:
+        # Lazy import: registry ← tools ← (this module, via read_file) —
+        # importing at module level would risk a cycle through file_tool.
+        from app.agent_runtime.tool_registry import registry
+        entry = registry.get(tool_name)
+        if entry is not None and entry.max_result_chars > 0:
+            threshold = min(threshold, entry.max_result_chars)
+    except Exception:  # noqa: BLE001 — unknown tool → global default
+        pass
+    return threshold
 
 
 def maybe_persist_result(

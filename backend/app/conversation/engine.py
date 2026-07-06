@@ -37,7 +37,7 @@ from app.conversation.strategy import (
 )
 from app.core.background_tasks import safe_background_task
 from app.core.error_messages import humanize_error
-from app.conversation.query_planner import plan_query
+from app.conversation.query_planner import QueryPlan, plan_query
 from app.rag.knowledge_retriever import knowledge_retriever
 from app.rag.retrieval_state import EMPTY_PLANNER_NO_RETRIEVAL
 from app.services.chat.chat_history_service import transcript_service
@@ -225,23 +225,34 @@ class ConversationEngine:
         # straight from transcript_service, no pre-rendered string wrapper.
         # The planner builds its own prompt internally with the user message
         # at the end (LLMs attend more to the tail of the context).
-        meta = await asyncio.to_thread(
-            transcript_service.get_session_meta, self.session_id,
-        )
-        if meta is None:
-            recent_turns: list[dict] = []
+        #
+        # L2 (agent) mode skips the planner entirely (LLM call AND its two
+        # feeder DB reads): every planner output except ``load_strategy``
+        # is RAG routing — unused, because the agent retrieves via the
+        # ``search_knowledge`` tool — and the strategy body is available on
+        # demand through ``recall_memory(load_strategy=true)``. Paying a
+        # serial fast-LLM round-trip per agent turn for one discarded bool
+        # was waste.
+        agent_mode = self.strategy.name == "agent"
+        if agent_mode:
+            query_plan = QueryPlan()  # null plan: no retrieval, no body load
         else:
-            recent_turns = await asyncio.to_thread(
-                transcript_service.get_recent_turns,
-                self.session_id, 20, meta["compaction_cursor"],
+            meta = await asyncio.to_thread(
+                transcript_service.get_session_meta, self.session_id,
             )
-
-        query_plan = await plan_query(
-            user_message=self.user_message,
-            recent_turns=recent_turns,
-            learning_strategy_description=universal_ctx.learning_strategy_description,
-            global_memory_on=global_memory_on,
-        )
+            if meta is None:
+                recent_turns: list[dict] = []
+            else:
+                recent_turns = await asyncio.to_thread(
+                    transcript_service.get_recent_turns,
+                    self.session_id, 20, meta["compaction_cursor"],
+                )
+            query_plan = await plan_query(
+                user_message=self.user_message,
+                recent_turns=recent_turns,
+                learning_strategy_description=universal_ctx.learning_strategy_description,
+                global_memory_on=global_memory_on,
+            )
 
         # Step 3: concurrent RAG + memory body loads.
         #
@@ -250,8 +261,6 @@ class ConversationEngine:
         # would be redundant and double-pay the Milvus + rerank cost. It also
         # lengthens the cache-stable prompt prefix — RAG chunks were the
         # per-turn-variable part of the agent's grounding. L1 (chat) keeps it.
-        # ``query_plan`` is left intact so memory-body loads below still fire.
-        agent_mode = self.strategy.name == "agent"
         knowledge_task = (
             asyncio.create_task(
                 knowledge_retriever.retrieve(
@@ -388,11 +397,22 @@ class ConversationEngine:
         ``completed`` (gated in submit_message)."""
         if not self._result.final_answer:
             return
+        # Degraded turns (agent crash → graceful fallback text) must not
+        # feed the extractor: the fallback embeds raw error detail, and
+        # extracting from it manufactures fake facts about the user.
+        if self._result.extras.get("degraded"):
+            logger.info("post-turn extraction skipped: degraded turn")
+            return
         safe_background_task(
             post_turn_maintenance_service.run(
                 self.session_id,
                 self.user_id,
-                allow_memory_write=True,
+                # The global-memory toggle is the CROSS-SESSION memory gate
+                # in BOTH directions (Claude Code's isAutoMemoryEnabled
+                # semantics): off = don't inject AND don't write. The other
+                # three gates (injection, tool manifest, tool handler)
+                # already honour it; this was the leak.
+                allow_memory_write=self._ctx.global_memory_on if self._ctx else False,
             )
         )
 

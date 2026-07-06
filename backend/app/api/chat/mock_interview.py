@@ -316,6 +316,14 @@ async def parse_jd_for_mock(
 
 # ── Short-clip transcription (MediaRecorder → text) ────────────────────────
 
+# WhisperX's FasterWhisperPipeline.transcribe is NOT thread-safe: it mutates
+# self.tokenizer (rebuilt per language, reset to None when no preset) and
+# self.options mid-call. Two users answering by voice concurrently would
+# race on the shared module-level instance — crash or cross-language
+# garbage. Serialise all transcribe calls in this API process. (The celery
+# transcription worker runs --pool=solo, so it is naturally serial.)
+_whisper_lock = asyncio.Lock()
+
 
 @router.post("/mock-interviews/transcribe", response_model=MockTranscribeResp)
 @limiter.limit(RATE_EXPENSIVE)
@@ -343,13 +351,17 @@ async def transcribe_short_clip(
         from app.services.voice import audio_transcription_service as ats
 
         if ats.whisper_model is None:
-            try:
-                ats.init_whisper_model()
-            except Exception as exc:  # noqa: BLE001
-                logger.error("WhisperX init failed in transcribe endpoint: %s", exc)
-                raise HTTPException(
-                    status_code=503, detail="转写模型未就绪，请稍后重试",
-                ) from exc
+            async with _whisper_lock:
+                # Re-check inside the lock — two concurrent first requests
+                # must not both load the ~1.5GB model.
+                if ats.whisper_model is None:
+                    try:
+                        await asyncio.to_thread(ats.init_whisper_model)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error("WhisperX init failed in transcribe endpoint: %s", exc)
+                        raise HTTPException(
+                            status_code=503, detail="转写模型未就绪，请稍后重试",
+                        ) from exc
 
         import whisperx  # type: ignore
 
@@ -357,7 +369,8 @@ async def transcribe_short_clip(
         kwargs: dict = {"batch_size": 8}
         if language and language.lower() != "auto":
             kwargs["language"] = language
-        result = await asyncio.to_thread(ats.whisper_model.transcribe, audio, **kwargs)
+        async with _whisper_lock:
+            result = await asyncio.to_thread(ats.whisper_model.transcribe, audio, **kwargs)
         segments = result.get("segments", []) if isinstance(result, dict) else []
         text = " ".join((seg.get("text", "") or "").strip() for seg in segments).strip()
         detected = result.get("language", "") if isinstance(result, dict) else ""

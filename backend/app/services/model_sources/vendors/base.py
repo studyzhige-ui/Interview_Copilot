@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Literal
@@ -28,6 +29,16 @@ import httpx
 from ..base import ModelEntry
 
 logger = logging.getLogger(__name__)
+
+# url-key vendors (Gemini) carry the API key as a query parameter, and
+# httpx exception messages include the full request URL — redact before
+# anything reaches logs or exception text, or the key leaks into logs.
+_KEY_IN_URL_RE = re.compile(r"([?&]key=)[^&\s'\"]+", re.IGNORECASE)
+
+
+def _redact(text: object) -> str:
+    """Mask ``key=...`` query values in any string destined for logs."""
+    return _KEY_IN_URL_RE.sub(r"\1***", str(text))
 
 
 # Per-attempt HTTP timeout. 20s is generous for the small JSON
@@ -271,15 +282,15 @@ async def fetch_one_vendor(
                 await asyncio.sleep(0.5)
                 logger.warning(
                     "%s: fetch attempt %d failed (%s) — retrying",
-                    spec.provider, attempt + 1, exc,
+                    spec.provider, attempt + 1, _redact(exc),
                 )
                 continue
             logger.error(
                 "%s: fetch exhausted %d attempts: %s",
-                spec.provider, retries + 1, exc,
+                spec.provider, retries + 1, _redact(exc),
             )
             raise VendorFetchFailed(
-                f"{spec.provider}: fetch failed after {retries + 1} attempts: {exc}",
+                f"{spec.provider}: fetch failed after {retries + 1} attempts: {_redact(exc)}",
             ) from exc
 
     if not isinstance(payload, dict):

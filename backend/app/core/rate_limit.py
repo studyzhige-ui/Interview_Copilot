@@ -28,6 +28,11 @@ limiter = Limiter(
     storage_uri=settings.REDIS_URL,
     headers_enabled=True,  # surface X-RateLimit-* headers for debugging
     default_limits=[],     # opt-in per-endpoint; no global default
+    # Rate limiting here is an availability guard, not a security boundary
+    # (auth endpoints have their own verification-code IP lockout). Without
+    # this fallback a Redis blip turns every @limiter.limit endpoint —
+    # including /chat/sse — into a 500. Degraded mode = per-process counters.
+    in_memory_fallback_enabled=True,
 )
 
 # Tier constants — change once, applied everywhere.

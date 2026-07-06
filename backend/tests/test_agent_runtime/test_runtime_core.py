@@ -580,12 +580,18 @@ def test_generate_preview():
 
 
 def test_resolve_threshold():
-    """read_file is never offloaded (inf); other tools use the configured threshold."""
+    """read_file is never offloaded (inf); registered tools are capped at
+    min(ToolEntry.max_result_chars, AGENT_PERSIST_THRESHOLD) — the per-tool
+    cap is enforced via persistence, not truncation; unknown tools fall back
+    to the global threshold."""
+    from app.agent_runtime.tool_registry import registry
     from app.agent_runtime.tool_result_storage import resolve_threshold
     from app.core.config import settings
 
     assert resolve_threshold("read_file") == float("inf")
-    assert resolve_threshold("web_search") == settings.AGENT_PERSIST_THRESHOLD
+    web_cap = registry.get("web_search").max_result_chars
+    assert resolve_threshold("web_search") == min(web_cap, settings.AGENT_PERSIST_THRESHOLD)
+    assert resolve_threshold("no_such_tool") == settings.AGENT_PERSIST_THRESHOLD
 
 
 def test_maybe_persist_result_small(tmp_path, monkeypatch):

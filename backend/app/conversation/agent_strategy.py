@@ -365,6 +365,12 @@ class AgentLoopStrategy:
                 blocks=blocks,
                 error_message=str(exc),
             )
+            # Mark the turn degraded so the engine skips post-turn memory
+            # extraction — the fallback text embeds the raw error detail,
+            # and feeding that to the extractor manufactures fake "facts"
+            # about the user (the exact failure mode the engine's own
+            # notes warn about).
+            result.extras["degraded"] = True
 
         # Ensure a trailing text block exists (so the persisted message
         # always carries a final answer, even when the loop ended on

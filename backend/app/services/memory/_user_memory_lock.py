@@ -197,13 +197,11 @@ def user_memory_lock_sync(
     task burns memory and confuses the async Redis client). Use this
     instead.
 
-    Implementation note: we lazily import ``redis`` (the sync client
-    from the same package) here so the module isn't dragged into
-    the async API hot path that already uses ``redis.asyncio``.
+    Implementation note: the sync client is lazily imported from
+    ``app.db.redis`` (the single source of truth for Redis connections)
+    so this module isn't dragged into the async API hot path.
     """
     import time
-    import redis as sync_redis  # type: ignore[import-untyped]
-    from app.core.config import settings
 
     if not user_id:
         yield
@@ -212,11 +210,9 @@ def user_memory_lock_sync(
     key = _lock_key(user_id)
     token = secrets.token_urlsafe(16)
 
-    # Construct a sync client. Reuse across calls would help, but this
-    # path runs from Celery tasks (one per dream); the connection
-    # overhead is negligible compared to the LLM call we're guarding.
+    # Shared pooled client — do NOT close it in this function.
     try:
-        client = sync_redis.from_url(settings.REDIS_URL, decode_responses=True)
+        from app.db.redis import sync_redis_client as client
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "user_memory_lock_sync: Redis client init failed for user=%s, "
@@ -271,10 +267,7 @@ def user_memory_lock_sync(
                     "(token=%s): %s — lock will auto-expire",
                     user_id, token[:6], exc,
                 )
-        try:
-            client.close()
-        except Exception:  # noqa: BLE001
-            pass
+        # Shared pooled client (app.db.redis) — never closed here.
 
 
 __all__ = ["user_memory_lock", "user_memory_lock_sync", "DEFAULT_TIMEOUT_SEC"]
