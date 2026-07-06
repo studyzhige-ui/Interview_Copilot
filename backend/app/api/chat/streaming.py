@@ -88,11 +88,19 @@ async def sse_chat_endpoint(
         make_chat_strategy,
     )
 
-    # Dispatch on the request's ``mode`` field. The frontend's AGENT
-    # pill sends ``mode="agent"``; everything else (and the default
-    # for back-compat) is the L1 chat pipeline.
+    # Mode resolution (AGT-4): conversations.mode is the source of truth.
+    # An explicit request value is the user's latest choice — persist it;
+    # a request without one (fresh device, old client) uses the stored
+    # mode instead of silently falling back to chat. Mock conversations
+    # never run the agent loop.
+    effective_mode = body.mode or row.mode or "chat"
+    if row.type == "mock_interview":
+        effective_mode = "chat"
+    elif body.mode and body.mode != row.mode:
+        row.mode = body.mode
+        db.commit()
     strategy = (
-        make_agent_strategy() if body.mode == "agent" else make_chat_strategy()
+        make_agent_strategy() if effective_mode == "agent" else make_chat_strategy()
     )
 
     async def event_generator():

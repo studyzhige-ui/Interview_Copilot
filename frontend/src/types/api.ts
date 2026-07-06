@@ -92,6 +92,8 @@ export interface ChatSessionListItem {
   state_summary: string;
   turn_count: number;
   updated_at: string;
+  /** Persisted run mode (chat|agent) — seeds the CHAT/AGENT pill (AGT-4). */
+  mode?: string;
 }
 
 export interface ChatSessionCreateResp {

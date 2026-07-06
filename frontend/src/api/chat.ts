@@ -72,6 +72,9 @@ export interface ToolStartInfo {
    *  match what ``/chat/transcript`` persists. Empty string from
    *  older backends; renderer falls back to FIFO-by-order then. */
   tool_call_id: string;
+  /** Full parsed input dict (AGT-5, live == replay) — matches the
+   *  persisted tool_use block. Absent on older backends. */
+  input?: Record<string, unknown>;
   args_summary: string;
   step: number;
   elapsed_ms: number;
@@ -136,6 +139,8 @@ export interface StreamChatHandlers {
   onToolStart?: (info: ToolStartInfo) => void;
   onToolDone?: (info: ToolDoneInfo) => void;
   onBudget?: (info: BudgetInfo, step: number) => void;
+  /** Terminal in-stream error (AGT-5) — render into the transcript, don't throw. */
+  onStreamError?: (message: string) => void;
 }
 
 /** Execution strategy for the turn — picks L1 chat vs L2 ReAct agent on
@@ -268,6 +273,9 @@ export async function streamChatSSE(
               tool: String(data.tool ?? ''),
               tool_call_id: String(data.tool_call_id ?? ''),
               args_summary: String(data.args_summary ?? ''),
+              input: (data.input && typeof data.input === 'object')
+                ? data.input as Record<string, unknown>
+                : undefined,
               step, elapsed_ms: elapsed,
             });
             break;
@@ -291,13 +299,14 @@ export async function streamChatSSE(
             handlers.onBudget?.(data as unknown as BudgetInfo, step);
             break;
           case 'error':
-            // Throw so the caller's .catch() handles it — also lets the
-            // ``finally`` release the reader. The server may emit a
-            // trailing ``done`` after the error per streaming.py's
-            // fallback path; we never reach it because the throw
-            // short-circuits the loop, which is the right behaviour
-            // (an errored stream is finished from our POV).
-            throw new Error(String(data.error ?? 'stream error'));
+            // live == replay (AGT-5): an agent error is a TERMINAL EVENT
+            // rendered into the transcript, not a thrown exception. The
+            // backend follows it with the graceful-fallback text (persisted
+            // in blocks) and possibly a trailing ``done`` — throwing here
+            // used to discard both and show a generic 连接中断 that looked
+            // nothing like what a reload rendered.
+            handlers.onStreamError?.(String(data.error ?? 'stream error'));
+            break;
           case 'done':
             return;
           default:

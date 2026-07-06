@@ -28,6 +28,9 @@ class SessionListItem(BaseModel):
     session_id: str
     title: str
     type: str
+    # Persisted run mode (chat|agent) — seeds the FE's CHAT/AGENT pill
+    # across devices (AGT-4).
+    mode: str = "chat"
     state_summary: str
     turn_count: int
     updated_at: str
@@ -43,10 +46,13 @@ class MessageItem(BaseModel):
 class SSEChatRequest(BaseModel):
     message: str
     # Execution strategy. ``chat`` runs the L1 chat pipeline (planner →
-    # answer LLM, no tool use). ``agent`` runs the L2 ReAct loop with
-    # the full tool registry. Default ``chat`` for back-compat. agent mode
-    # is only valid for general/debrief conversations, never mock_interview.
-    mode: Literal["chat", "agent"] = Field(default="chat")
+    # answer LLM, no tool use). ``agent`` runs the L2 ReAct loop with the
+    # full tool registry. ``None`` = use the conversation's persisted mode
+    # (AGT-4: conversations.mode is authoritative — a device without the
+    # localStorage entry no longer silently falls back to chat). An
+    # explicit value updates the stored mode. Never agent for
+    # mock_interview conversations.
+    mode: Literal["chat", "agent"] | None = Field(default=None)
 
 
 class SessionRenameRequest(BaseModel):

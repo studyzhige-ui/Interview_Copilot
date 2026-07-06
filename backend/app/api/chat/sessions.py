@@ -132,6 +132,7 @@ def list_conversations(
             session_id=row.id,
             title=row.title or "新的面试对话",
             type=row.type or "general",
+            mode=row.mode or "chat",
             state_summary=_session_list_label(row),
             turn_count=row.turn_count or 0,
             updated_at=row.updated_at.isoformat() if row.updated_at else "",

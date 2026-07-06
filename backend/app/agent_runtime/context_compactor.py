@@ -112,6 +112,11 @@ class QueryLoopCompactor:
         self.blocking_limit = get_blocking_limit(profile)
         self.has_attempted_reactive_compact: bool = False
         self._consecutive_compact_failures: int = 0
+        # Latest autocompact summary (AGT-7): the strategy exports it via
+        # result.extras so the engine can fold it into the session's
+        # persistent summary — pre-fix it died with the turn and the next
+        # turn re-paid the same summarize call.
+        self.last_summary: str | None = None
 
     # ── Proactive blocking-limit guard ───────────────────────────────
 
@@ -218,6 +223,7 @@ class QueryLoopCompactor:
         summary = await summarize_conversation("", conversation, user_id=self.user_id)
         if not summary:
             return messages
+        self.last_summary = summary
 
         summary_msg = {
             "role": "system",

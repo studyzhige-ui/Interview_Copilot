@@ -65,8 +65,10 @@ class WebSearchArgs(BaseModel):
     limit: int = Field(default=5, ge=1, le=10, description="Max results")
 
 
-def _tavily_available() -> bool:
-    return bool(os.getenv("TAVILY_API_KEY"))
+def _tavily_available(user_id: str | None = None) -> bool:
+    # Per-user key OR env key (AGT-9): a UI-key-only deployment used to
+    # hide web_search even for users who had configured their own key.
+    return bool(_resolve_tavily_key(user_id))
 
 
 def _resolve_tavily_key(user_id: str | None) -> str:

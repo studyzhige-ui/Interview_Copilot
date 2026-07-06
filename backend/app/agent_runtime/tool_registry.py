@@ -43,7 +43,11 @@ class ToolEntry:
     handler: Callable[[BaseModel, AgentToolContext], Awaitable[dict[str, Any]]]
     toolset: str = "default"
     max_result_chars: int = 8000
-    check_fn: Callable[[], bool] | None = None
+    # Availability probe. May accept a keyword ``user_id`` — the registry
+    # passes the calling user when the signature allows it (AGT-9: a tool
+    # backed by a per-user key, e.g. web_search with a user-configured
+    # Tavily key, was wrongly hidden by an env-only check).
+    check_fn: Callable[..., bool] | None = None
     emoji: str = "🔧"
     prompt: str = ""
 
@@ -141,17 +145,26 @@ class ToolRegistry:
         return self._entries.get(name)
 
     def _iter_available(
-        self, *, exclude: set[str] | None = None,
+        self, *, exclude: set[str] | None = None, user_id: str | None = None,
     ) -> list[ToolEntry]:
-        """Return entries passing check_fn and not in *exclude*."""
+        """Return entries passing check_fn and not in *exclude*.
+
+        ``user_id`` reaches check_fns that accept it (keyword) — env-only
+        probes keep their zero-arg signature.
+        """
         self._ensure_default_tools_loaded()
         exclude = exclude or set()
         entries = []
         for entry in self._entries.values():
             if entry.name in exclude:
                 continue
-            if entry.check_fn is not None and not entry.check_fn():
-                continue
+            if entry.check_fn is not None:
+                try:
+                    ok = entry.check_fn(user_id=user_id)
+                except TypeError:
+                    ok = entry.check_fn()
+                if not ok:
+                    continue
             entries.append(entry)
         return entries
 
@@ -159,6 +172,7 @@ class ToolRegistry:
         self,
         *,
         exclude: set[str] | None = None,
+        user_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Build OpenAI function-calling schemas for available tools.
 
@@ -171,10 +185,12 @@ class ToolRegistry:
         """
         return [
             _pydantic_to_openai_schema(e.name, e.description, e.args_model)
-            for e in self._iter_available(exclude=exclude)
+            for e in self._iter_available(exclude=exclude, user_id=user_id)
         ]
 
-    def format_manifest(self, *, exclude: set[str] | None = None) -> str:
+    def format_manifest(
+        self, *, exclude: set[str] | None = None, user_id: str | None = None,
+    ) -> str:
         """Human-readable tool manifest for the system prompt.
 
         ``exclude`` filters by name — must match the same set passed to
@@ -182,7 +198,7 @@ class ToolRegistry:
         always agree about which tools the LLM is allowed to call.
         """
         manifest = []
-        for entry in self._iter_available(exclude=exclude):
+        for entry in self._iter_available(exclude=exclude, user_id=user_id):
             schema = _pydantic_to_openai_schema(
                 entry.name, entry.description, entry.args_model,
             )

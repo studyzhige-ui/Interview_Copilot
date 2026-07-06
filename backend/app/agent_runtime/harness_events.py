@@ -61,6 +61,7 @@ class HarnessEvent:
         step: int,
         elapsed_ms: float,
         tool_call_id: str = "",
+        input: dict | None = None,
     ) -> "HarnessEvent":
         """``tool_call_id`` is the LLM-assigned id (``tc.id`` from the
         OpenAI tool_calls stream). Pairs with the matching ``tool_done``
@@ -75,6 +76,9 @@ class HarnessEvent:
                 "tool": name,
                 "tool_call_id": tool_call_id,
                 "args_summary": args_summary,
+                # live == replay (AGT-5): the full input dict, matching the
+                # persisted tool_use block (args_summary is display-only).
+                **({"input": input} if input is not None else {}),
             },
             step=step,
             elapsed_ms=elapsed_ms,

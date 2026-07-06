@@ -43,6 +43,7 @@ execution (different problem, different file).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Callable
@@ -62,8 +63,16 @@ logger = logging.getLogger(__name__)
 # Designed for 1M-context models (DeepSeek V4 / Mimo).
 
 class TokenBudget:
-    MODEL_CONTEXT_WINDOW = 1_000_000
+    # Default window is a safe LOWER bound fallback; the engine passes the
+    # active primary profile's real context_window per turn (AGT-6 — the
+    # old hardcoded 1M meant a 128K model NEVER triggered L1 compression
+    # and eventually 400'd on an overlong prompt).
+    MODEL_CONTEXT_WINDOW = 128_000
     COMPRESS_THRESHOLD_RATIO = 0.75
+
+    def __init__(self, model_context_window: int | None = None):
+        if model_context_window:
+            self.MODEL_CONTEXT_WINDOW = model_context_window
 
     SYSTEM_PROMPT_BUDGET = 3_000
     DEBRIEF_REFERENCE_BUDGET = 2_000
@@ -215,6 +224,23 @@ class PromptRenderer:
 # ── Pipeline ─────────────────────────────────────────────────────────────
 
 
+def _turn_tokens(m: dict) -> int:
+    """Token weight of one persisted turn for the compression threshold.
+
+    Agent turns carry most of their volume in content BLOCKS (tool_use /
+    tool_result), not ``content`` — counting content alone systematically
+    underestimated agent sessions and pushed the whole compression job onto
+    the in-turn compactor every turn (AGT-7). Blocks are only counted when
+    they are richer than the read-time synthesized single text block
+    (which just mirrors content).
+    """
+    base = count_tokens(m.get("content") or "")
+    blocks = m.get("blocks")
+    if blocks and (len(blocks) > 1 or (blocks[0] or {}).get("type") != "text"):
+        base += count_tokens(json.dumps(blocks, ensure_ascii=False))
+    return base
+
+
 class ContextAssemblyPipeline:
 
     def __init__(
@@ -235,6 +261,7 @@ class ContextAssemblyPipeline:
         debrief_reference: str = "",
         knowledge_chunks: list[dict] | None = None,
         user_id: str | None = None,
+        model_context_window: int | None = None,
     ) -> AssembledContext:
         """Full context for answer generation.
 
@@ -258,6 +285,7 @@ class ContextAssemblyPipeline:
             debrief_reference=debrief_reference,
             knowledge_chunks=knowledge_chunks or [],
             user_id=user_id,
+            model_context_window=model_context_window,
         )
 
     # ── Internal ──────────────────────────────────────────────────────
@@ -272,6 +300,7 @@ class ContextAssemblyPipeline:
         *,
         skip_debrief_autoinject: bool = False,
         user_id: str | None = None,
+        model_context_window: int | None = None,
     ) -> AssembledContext:
         meta = await asyncio.to_thread(
             transcript_service.get_session_meta, session_id,
@@ -290,10 +319,9 @@ class ContextAssemblyPipeline:
         # ── Threshold-based compaction ───────────────────────────────
         # Check whether the full context exceeds the threshold. If so,
         # compress old turns into the summary and re-load.
-        compress_threshold = int(
-            self.budget.MODEL_CONTEXT_WINDOW * self.budget.COMPRESS_THRESHOLD_RATIO
-        )
-        turns_tokens = sum(count_tokens(m["content"]) for m in cleaned_turns)
+        window = model_context_window or self.budget.MODEL_CONTEXT_WINDOW
+        compress_threshold = int(window * self.budget.COMPRESS_THRESHOLD_RATIO)
+        turns_tokens = sum(_turn_tokens(m) for m in cleaned_turns)
         old_summary = str((meta or {}).get("summary") or "")
         overhead_tokens = (
             count_tokens(old_summary)

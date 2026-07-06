@@ -92,7 +92,10 @@ export function ChatPanel({
 
   // ── Input / mode / attachments / memory / models ─────────────────────
   const { input, setInput } = useSessionDraft(activeSessionId);
-  const { mode, setMode } = useSessionMode(activeSessionId);
+  const serverMode = sessionList.sessions.find(
+    (s) => s.session_id === activeSessionId,
+  )?.mode;
+  const { mode, setMode } = useSessionMode(activeSessionId, serverMode);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const { globalMemoryOn, togglingMemory, toggleGlobalMemory } =
     useGlobalMemoryToggle(activeSessionId);

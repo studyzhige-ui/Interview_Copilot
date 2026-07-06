@@ -116,7 +116,7 @@ export function useChatStream({
         rt.streaming = true;
         bump();
       },
-      onToolStart: ({ tool, tool_call_id, args_summary }) => {
+      onToolStart: ({ tool, tool_call_id, args_summary, input }) => {
         const rt = getRuntime(sid);
         // Flush any text-before-tool so it lands BEFORE the tool card.
         flushPartial(rt);
@@ -136,12 +136,11 @@ export function useChatStream({
           type: 'tool_use',
           id: tool_call_id,
           name: tool,
-          // ``args_summary`` is a flat string for display; we surface
-          // it under an ``_args_summary`` key so the JSON-inspector
-          // view still renders nicely. The persisted shape has full
-          // ``input`` (parsed args); during live streaming we don't
-          // have the parsed dict yet.
-          input: args_summary ? { _args_summary: args_summary } : {},
+          // live == replay (AGT-5): the backend now streams the full
+          // parsed input dict alongside the display summary, matching
+          // the persisted tool_use block byte for byte. Older backends
+          // without ``input`` fall back to the summary shim.
+          input: input ?? (args_summary ? { _args_summary: args_summary } : {}),
         };
         rt.inflightBlocks.push(block);
         rt.status = `🔧 ${tool}`;
@@ -171,12 +170,22 @@ export function useChatStream({
         rt.streaming = true;
         bump();
       },
+      onStreamError: (message) => {
+        // Terminal in-stream error (AGT-5): render it as a notice block in
+        // the transcript — the graceful-fallback text (if any) follows on
+        // the same stream, so what the user sees live now matches what a
+        // reload replays from the persisted blocks.
+        const rt = getRuntime(sid);
+        flushPartial(rt);
+        rt.inflightBlocks.push({ type: 'text', text: `⚠️ ${message}` });
+        rt.status = '出错了';
+        bump();
+      },
     }, {
       signal: ac.signal,
-      // The mode pill (CHAT vs AGENT) selects the server-side strategy.
-      // Without this plumbing the AGENT button is purely decorative and
-      // the full tool registry never reaches the LLM — see the SSE
-      // endpoint's dispatch on ``request.mode``.
+      // The mode pill (CHAT vs AGENT) selects the server-side strategy;
+      // the server persists it onto conversations.mode (AGT-4), so a
+      // fresh device resumes the same mode without localStorage.
       mode: mode === 'AGENT' ? 'agent' : 'chat',
     })
       .then(() => finalize())

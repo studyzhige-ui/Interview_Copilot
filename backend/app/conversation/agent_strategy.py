@@ -275,8 +275,12 @@ class AgentLoopStrategy:
         excluded_tools: set[str] = (
             set() if ctx.global_memory_on else {"recall_memory", "save_memory"}
         )
-        tool_schemas = registry.get_openai_schemas(exclude=excluded_tools)
-        manifest_text = registry.format_manifest(exclude=excluded_tools)
+        tool_schemas = registry.get_openai_schemas(
+            exclude=excluded_tools, user_id=ctx.user_id,
+        )
+        manifest_text = registry.format_manifest(
+            exclude=excluded_tools, user_id=ctx.user_id,
+        )
         tool_prompts_text = registry.format_tool_prompts(exclude=excluded_tools)
 
         # Developer trace observability is handled by LangSmith
@@ -382,8 +386,21 @@ class AgentLoopStrategy:
                 if budget.stop_reason else "Agent 无法生成最终回答。"
             )
             blocks.append({"type": "text", "text": final_answer})
+            # live == replay (AGT-5): a synthetic tail (budget stop / crash
+            # fallback) used to exist only in the persisted blocks — the
+            # live viewer saw the stream just... end.
+            yield HarnessEvent.text(
+                final_answer,
+                step=budget.steps,
+                elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
+            )
         elif not blocks or blocks[-1].get("type") != "text":
             blocks.append({"type": "text", "text": final_answer})
+
+        if compactor.last_summary:
+            # AGT-7: hand the in-loop compaction result to the engine for
+            # session-level persistence (summary + cursor fold).
+            result.extras["autocompact_summary"] = compactor.last_summary
 
         result.final_answer = final_answer
         result.assistant_blocks = blocks
@@ -642,11 +659,13 @@ class AgentLoopStrategy:
             if delta.content:
                 # Always accumulate into the loop's local text buffer.
                 yield delta.content
-                if not saw_tool_call:
-                    yield HarnessEvent.text_delta(
-                        delta.content, step=budget.steps,
-                        elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
-                    )
+                # live == replay (AGT-5): this text lands in the persisted
+                # blocks, so it MUST also stream — the old saw_tool_call
+                # gate made replay show text the live viewer never saw.
+                yield HarnessEvent.text_delta(
+                    delta.content, step=budget.steps,
+                    elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
+                )
 
             if delta.tool_calls:
                 saw_tool_call = True
@@ -728,6 +747,9 @@ class AgentLoopStrategy:
                 step=budget.steps,
                 elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
                 tool_call_id=tc.id,
+                # live == replay (AGT-5): the persisted block carries the
+                # full input dict; the live event must too.
+                input=parsed_args,
             )
 
             observation: dict[str, Any]

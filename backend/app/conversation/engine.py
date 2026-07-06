@@ -327,12 +327,22 @@ class ConversationEngine:
         # compaction cursor and may trigger threshold-based compaction
         # (LLM summarization) before returning. Sync DB reads inside are
         # dispatched to worker threads internally.
+        # AGT-6: the compression threshold follows the ACTIVE primary
+        # model's real window (a 128K model never hit the old hardcoded 1M
+        # threshold and eventually 400'd instead of compressing).
+        try:
+            from app.core.user_model_selection import get_profile_for_role
+
+            _window = get_profile_for_role("primary", user_id=self.user_id).context_window
+        except Exception:  # noqa: BLE001 — cold catalog: fall back to default
+            _window = None
         assembled = await context_pipeline.assemble_answer_context(
             session_id=self.session_id,
             current_query=self.user_message,
             memory_block=v3_memory_block,
             knowledge_chunks=knowledge_chunks,
             user_id=self.user_id,
+            model_context_window=_window,
         )
 
         self._ctx = StrategyContext(
@@ -392,6 +402,40 @@ class ConversationEngine:
             rewritten_query=self._ctx.rewritten_query,
             ai_blocks=ai_blocks,
         )
+        # AGT-7②: fold the agent loop's autocompact summary into the
+        # session so the NEXT turn's assembly starts from it instead of
+        # re-summarizing the same history. Cursor moves to the last
+        # message BEFORE this turn — the summary was built from exactly
+        # that prefix (plus this turn's tool traffic, which also lives
+        # in this turn's blocks; the redundancy is deliberate and far
+        # cheaper than re-paying summarize every turn).
+        autocompact_summary = (self._result.extras or {}).get("autocompact_summary")
+        if autocompact_summary:
+            try:
+                meta = await asyncio.to_thread(
+                    transcript_service.get_session_meta, self.session_id,
+                )
+                turns = await asyncio.to_thread(
+                    transcript_service.get_turns_after,
+                    self.session_id,
+                    (meta or {}).get("compaction_cursor") or 0,
+                )
+                # The just-persisted pair is the tail; everything before
+                # this turn's user message is covered by the summary.
+                pre_turn = [
+                    m["seq"] for m in turns
+                    if not (m["role"] == "user" and m["content"] == self.user_message)
+                ][: max(0, len(turns) - 2)]
+                new_cursor = pre_turn[-1] if pre_turn else None
+                if new_cursor:
+                    await asyncio.to_thread(
+                        transcript_service.update_session_fields,
+                        self.session_id,
+                        summary=autocompact_summary,
+                        compaction_cursor=new_cursor,
+                    )
+            except Exception as exc:  # noqa: BLE001 — folding is an optimization
+                logger.warning("autocompact fold failed for %s: %s", self.session_id, exc)
 
     def _fire_post_turn_maintenance(self) -> None:
         """Realtime memory extraction. Always background — never blocks

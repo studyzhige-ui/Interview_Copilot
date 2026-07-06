@@ -27,7 +27,7 @@ _MAX_READ_LIMIT = 50_000
 
 class ReadFileArgs(BaseModel):
     upload_id: str = Field(default="", description="Specific upload ID to read. Leave empty to read the latest file of a given purpose.")
-    purpose: str = Field(default="", description="File purpose filter: 'resume', 'jd', 'audio', or empty for any.")
+    purpose: str = Field(default="", description="File purpose filter: 'jd', 'agent_output', or empty for any. For the candidate's RESUME prefer the read_resume tool (structured sections); use read_file(purpose='resume') only for raw ad-hoc resume uploads.")
     path: str = Field(default="", description="Path to a large persisted tool output (shown inside a <persisted-output> block) to read back. Takes precedence over upload_id/purpose.")
     offset: int = Field(default=0, ge=0, description="Character offset to start reading from. Pass the previous response's next_offset to page through a large file.")
     limit: int = Field(default=_DEFAULT_READ_LIMIT, ge=1, description="Max characters to return per call (default 20000, capped at 50000).")

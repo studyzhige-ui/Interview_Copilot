@@ -43,17 +43,21 @@ export function useSessionDraft(activeSessionId: string | null) {
  * user's AGENT pill resets to CHAT every time they refresh, and the
  * backend silently downgrades the strategy back to L1. We key by
  * session_id so a chat session and an agent session can co-exist.
- * (A backend column would be the more "correct" home for this
- * but the round-trip cost isn't worth it for a boolean.)
+ * The backend column (conversations.mode) is authoritative (AGT-4);
+ * localStorage is just the zero-round-trip cache, seeded from the
+ * server's session list on a fresh device.
  */
-export function useSessionMode(activeSessionId: string | null) {
+export function useSessionMode(activeSessionId: string | null, serverMode?: string) {
   const modeStorageKey = activeSessionId ? `chat-mode:${activeSessionId}` : null;
   const [mode, setModeState] = useState<Mode>(() => {
     if (!modeStorageKey) return 'CHAT';
     try {
       const v = localStorage.getItem(modeStorageKey);
-      return v === 'AGENT' ? 'AGENT' : 'CHAT';
-    } catch { return 'CHAT'; }
+      if (v === 'AGENT' || v === 'CHAT') return v;
+    } catch { /* fall through */ }
+    // AGT-4: no local entry (fresh device) — the server's persisted
+    // conversations.mode is authoritative instead of silently CHAT.
+    return serverMode === 'agent' ? 'AGENT' : 'CHAT';
   });
   const setMode = useCallback((next: Mode | ((prev: Mode) => Mode)) => {
     setModeState((prev) => {
