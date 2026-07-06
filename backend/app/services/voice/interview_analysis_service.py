@@ -7,7 +7,7 @@ Architecture:
   Stage 3: Global synthesis report (Reduce)
 
 Design principles:
-  - LLM reads raw transcript and extracts QA pairs directly
+  - LLM reads numbered transcript lines and returns QA line-spans; code slices the original text
   - Handles speaker diarization failures, mixed turns, short/long exchanges
   - Long transcripts are chunked with overlap and deduplicated
   - Each question is analyzed with a 3-question sliding context window
@@ -117,12 +117,13 @@ async def extract_qa_pairs_with_llm(
     *,
     user_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Stage 1: Full LLM-powered QA extraction.
+    """Stage 1: LLM-powered QA extraction over NUMBERED transcript lines.
 
-    Sends the raw transcript to LLM and lets it identify speaker roles,
-    extract QA pairs, tag phases, and detect follow-up chains.
-
-    For very long transcripts, splits into overlapping chunks and merges.
+    The LLM identifies speaker roles / phases / follow-up chains but returns
+    only line-span indices per pair (ANA-2); code slices the original
+    transcript, so wording fidelity is exact by construction and output size
+    is independent of recording length. Very long transcripts are split into
+    overlapping line chunks with global numbering and merged.
     """
     if not transcript or not transcript.strip():
         logger.warning("Empty transcript provided.")
@@ -134,7 +135,9 @@ async def extract_qa_pairs_with_llm(
     # Spans keep the output a few hundred tokens regardless of length,
     # and the original wording is preserved exactly by construction.
     lines = [ln for ln in transcript.split("\n") if ln.strip()]
-    token_count = _count_tokens(transcript)
+    # +3/line ≈ the "L{n}|" prefixes the prompt adds — near the threshold an
+    # uncounted prefix on thousands of lines could push past the context cap.
+    token_count = _count_tokens(transcript) + 3 * len(lines)
     logger.info("Stage 1: transcript has %d tokens / %d lines.", token_count, len(lines))
 
     # Resolve the owner's utility LLM ONCE and thread the instance down --
@@ -142,11 +145,9 @@ async def extract_qa_pairs_with_llm(
     # chunk (MDL-1: the owner's selection/keys drive background analysis).
     llm = get_llm_for_role("utility", user_id=user_id)
     if token_count <= _EXTRACTION_MAX_TOKENS:
-        pairs = await _extract_single_pass(lines, resume_context, llm=llm)
-        for pair in pairs:
-            pair.pop("_start_line", None)
-            pair.pop("_end_line", None)
-        return pairs
+        return _strip_span_bookkeeping(
+            await _extract_single_pass(lines, resume_context, llm=llm)
+        )
 
     # Chunked extraction for very long transcripts
     return await _extract_chunked(lines, resume_context, token_count, llm=llm)
@@ -224,7 +225,7 @@ async def _extract_chunked(
     cur_tokens = 0
     for i, ln in enumerate(lines):
         ln_tokens = _count_tokens(ln)
-        if cur_tokens + ln_tokens > chunk_limit and cur:
+        if cur_tokens + ln_tokens + 3 > chunk_limit and cur:
             chunks.append((cur_start, cur))
             keep = cur[-overlap_lines:]
             cur_start = i - len(keep)
@@ -241,29 +242,64 @@ async def _extract_chunked(
     )
 
     all_pairs: list[dict[str, Any]] = []
-    covered_until = 0  # highest global line (1-based) claimed so far
+    # Highest QUESTION end line claimed by an accepted pair. Dedup keys on
+    # question spans only: an answer that ran past a chunk boundary must not
+    # block the next chunk's FULLER version of the same pair.
+    covered_q_until = 0
     for ci, (start0, chunk_lines) in enumerate(chunks):
         chunk_pairs = await _extract_single_pass(
             chunk_lines, resume_context, llm=llm, line_offset=start0,
         )
+        for pair in chunk_pairs:
+            pair["_chunk"] = ci
         kept = 0
         for pair in chunk_pairs:
-            if ci > 0 and pair.get("_start_line", 0) <= covered_until:
-                continue  # overlap region — an earlier chunk already owns it
+            if ci > 0 and pair.get("_q_start", 0) <= covered_q_until:
+                # A previously accepted pair already claims this question.
+                # If this version extends further (its answer was cut at the
+                # previous chunk's window edge), prefer it over the stub.
+                prev = all_pairs[-1] if all_pairs else None
+                if (
+                    prev is not None
+                    and pair.get("_q_start") == prev.get("_q_start")
+                    and pair.get("_end_line", 0) > prev.get("_end_line", 0)
+                ):
+                    all_pairs[-1] = pair
+                    covered_q_until = max(covered_q_until, pair.get("_q_end", 0))
+                continue
             all_pairs.append(pair)
-            covered_until = max(covered_until, pair.get("_end_line", 0))
+            covered_q_until = max(covered_q_until, pair.get("_q_end", 0))
             kept += 1
         logger.info(
             "Stage 1 chunk %d/%d: extracted %d pairs, kept %d.",
             ci + 1, len(chunks), len(chunk_pairs), kept,
         )
 
+    # Cross-chunk parent links can't survive the merge (each chunk numbers
+    # its own output) — the in-chunk remap already happened in
+    # _resolve_span_pairs; renumber globally and keep parent links only
+    # when parent and child were kept from the same chunk.
+    old_to_new = {
+        (pair.get("_chunk"), pair["index"]): i
+        for i, pair in enumerate(all_pairs, start=1)
+    }
     for i, pair in enumerate(all_pairs, start=1):
+        parent = pair.get("parent_index")
+        pair["parent_index"] = (
+            old_to_new.get((pair.get("_chunk"), parent)) if parent else None
+        )
         pair["index"] = i
-        pair.pop("_start_line", None)
-        pair.pop("_end_line", None)
+    _strip_span_bookkeeping(all_pairs)
     logger.info("Stage 1 complete: %d QA pairs after span dedup.", len(all_pairs))
     return all_pairs
+
+
+def _strip_span_bookkeeping(pairs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop the chunk-merge bookkeeping keys before pairs leave extraction."""
+    for pair in pairs:
+        for key in ("_start_line", "_end_line", "_q_start", "_q_end", "_chunk"):
+            pair.pop(key, None)
+    return pairs
 
 
 def _coerce_ranges(value: Any) -> list[tuple[int, int]]:
@@ -305,7 +341,13 @@ def _resolve_span_pairs(
     """Turn LLM span output into the pipeline's QA-pair shape by slicing
     the ORIGINAL transcript lines (high fidelity by construction)."""
     qa_pairs: list[dict[str, Any]] = []
-    for rp in raw_pairs:
+    # The LLM's parent_qa_index refers to ITS 1-based output ordering;
+    # invalid-span pairs get dropped below, so remap ordinals → final
+    # indices (a stale ordinal used to point 追问 context at the wrong
+    # question).
+    ordinal_to_new: dict[int, int] = {}
+    parents_raw: list[Any] = []
+    for ordinal, rp in enumerate(raw_pairs, start=1):
         if not isinstance(rp, dict):
             continue
         q_ranges = _coerce_ranges(rp.get("question_lines"))
@@ -317,6 +359,9 @@ def _resolve_span_pairs(
         if len(question) < 5 and len(answer) < 5:
             continue
         span_points = [n for s, e in q_ranges + a_ranges for n in (s, e)]
+        q_points = [n for s, e in q_ranges for n in (s, e)]
+        ordinal_to_new[ordinal] = len(qa_pairs) + 1
+        parents_raw.append(rp.get("parent_qa_index"))
         qa_pairs.append({
             "index": len(qa_pairs) + 1,
             "question": question,
@@ -324,13 +369,48 @@ def _resolve_span_pairs(
             "question_summary": str(rp.get("question_summary", "")).strip(),
             "phase": str(rp.get("phase", "general")).strip(),
             "is_follow_up": bool(rp.get("is_follow_up", False)),
-            "parent_index": rp.get("parent_qa_index"),
+            "parent_index": None,  # remapped below
             # Chunk-merge bookkeeping (stripped before the pairs leave
             # extraction).
             "_start_line": min(span_points) if span_points else 0,
             "_end_line": max(span_points) if span_points else 0,
+            "_q_start": min(q_points) if q_points else 0,
+            "_q_end": max(q_points) if q_points else 0,
         })
+    for pair, parent_raw in zip(qa_pairs, parents_raw):
+        try:
+            pair["parent_index"] = ordinal_to_new.get(int(parent_raw)) if parent_raw else None
+        except (TypeError, ValueError):
+            pair["parent_index"] = None
     return qa_pairs
+
+
+_ANALYSIS_MAX_ATTEMPTS = 2
+_ANALYSIS_RETRY_BASE_S = 2.0
+# Upload path fans out one task per question; without a bound a 30-question
+# interview fires 30 concurrent completions — a rate-limit trigger on most
+# providers. 5 keeps the pipeline fast without tripping vendor limits.
+_ANALYSIS_MAX_CONCURRENCY = 5
+
+
+async def _acomplete_json_with_retry(llm: LLM, prompt: str) -> dict[str, Any]:
+    """One grading call: JSON mode + bounded retry with backoff.
+
+    Raises the last exception after ``_ANALYSIS_MAX_ATTEMPTS`` — the caller
+    decides what a failed question looks like (score=None, 未评分).
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, _ANALYSIS_MAX_ATTEMPTS + 1):
+        try:
+            response = await llm.acomplete(
+                prompt, response_format={"type": "json_object"},
+            )
+            return _clean_json_response(response.text)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt < _ANALYSIS_MAX_ATTEMPTS:
+                await asyncio.sleep(_ANALYSIS_RETRY_BASE_S * attempt)
+    raise last_exc  # type: ignore[misc]
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -464,34 +544,6 @@ async def _analyze_single_question(
         }
 
 
-_ANALYSIS_MAX_ATTEMPTS = 2
-_ANALYSIS_RETRY_BASE_S = 2.0
-# Upload path fans out one task per question; without a bound a 30-question
-# interview fires 30 concurrent completions — a rate-limit trigger on most
-# providers. 5 keeps the pipeline fast without tripping vendor limits.
-_ANALYSIS_MAX_CONCURRENCY = 5
-
-
-async def _acomplete_json_with_retry(llm: LLM, prompt: str) -> dict[str, Any]:
-    """One grading call: JSON mode + bounded retry with backoff.
-
-    Raises the last exception after ``_ANALYSIS_MAX_ATTEMPTS`` — the caller
-    decides what a failed question looks like (score=None, 未评分).
-    """
-    last_exc: Exception | None = None
-    for attempt in range(1, _ANALYSIS_MAX_ATTEMPTS + 1):
-        try:
-            response = await llm.acomplete(
-                prompt, response_format={"type": "json_object"},
-            )
-            return _clean_json_response(response.text)
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
-            if attempt < _ANALYSIS_MAX_ATTEMPTS:
-                await asyncio.sleep(_ANALYSIS_RETRY_BASE_S * attempt)
-    raise last_exc  # type: ignore[misc]
-
-
 # ══════════════════════════════════════════════════════════════════════════
 # Stage 3: Global Synthesis Report (Reduce)
 # ══════════════════════════════════════════════════════════════════════════
@@ -579,6 +631,25 @@ async def _synthesize_report(
     # synthesis — and reported via failed_count instead (ANA-6).
     graded = [pq for pq in per_question_results if not pq.get("analysis_failed")]
     failed_count = len(per_question_results) - len(graded)
+    if per_question_results and not graded:
+        # Every grading call failed (e.g. broken provider auth) — asking the
+        # synthesis LLM to write a verdict from just resume+JD would invent
+        # one. Return an honest empty report instead.
+        return {
+            "interview_metadata": {
+                "total_questions": len(per_question_results),
+                "phases": list({pq.get("phase", "general") for pq in per_question_results}),
+                "failed_count": failed_count,
+            },
+            "overall": {
+                "score": 0,
+                "summary": "全部题目的分析调用都失败了（模型服务异常），未能生成综合报告，请重试。",
+                "strengths": [], "weaknesses": [], "key_growth_areas": [],
+            },
+            "phase_summary": [],
+            "per_question": per_question_results,
+            "skill_radar": {},
+        }
     summary_lines: list[str] = []
     for pq in graded:
         summary_lines.append(
@@ -718,18 +789,15 @@ async def analyze_interview(
 
         async def _run_one(pair: dict[str, Any], idx: int) -> dict[str, Any]:
             async with semaphore:
-                return await _run_one_inner(pair, idx)
-
-        async def _run_one_inner(pair: dict[str, Any], idx: int) -> dict[str, Any]:
-            context_text = _build_sliding_context(qa_pairs, idx)
-            res = await _analyze_single_question(
-                qa_pair=pair,
-                context_text=context_text,
-                total_questions=len(qa_pairs),
-                resume_context=resume_context,
-                jd_context=jd_context,
-                llm=analysis_llm,
-            )
+                context_text = _build_sliding_context(qa_pairs, idx)
+                res = await _analyze_single_question(
+                    qa_pair=pair,
+                    context_text=context_text,
+                    total_questions=len(qa_pairs),
+                    resume_context=resume_context,
+                    jd_context=jd_context,
+                    llm=analysis_llm,
+                )
             _notify_progress(on_progress, 1)
             return res
 

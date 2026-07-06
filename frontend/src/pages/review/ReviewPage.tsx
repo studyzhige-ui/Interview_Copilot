@@ -230,48 +230,37 @@ export function ReviewPage() {
   // Holds the record id being retried (not a boolean — two review_failed
   // records must not share one "retrying" flag).
   const [retryingReview, setRetryingReview] = useState<string | null>(null);
-  const retryReview = async (recordId: string) => {
+  // One retry flow, two dispatchers (mock retry-review / upload reanalyze).
+  const retryRecord = async (
+    recordId: string,
+    call: (id: string) => Promise<unknown>,
+    errorToast: string,
+  ) => {
     setRetryingReview(recordId);
     try {
-      await retryMockReview(recordId);
+      await call(recordId);
       if (!isMounted.current) return;
       // Drop any stale (errored) runner entry — the auto-spawn effect bails
       // on an existing entry, so leaving it would mean no SSE runner for the
-      // re-dispatched review and a pane frozen at "建立 SSE 连接中".
+      // re-dispatched run and a pane frozen at "建立 SSE 连接中".
       setAnalyses((prev) => {
         if (!(recordId in prev)) return prev;
         const { [recordId]: _, ...rest } = prev;
         return rest;
       });
-      // Refresh list + detail: status becomes processing_review, which the
-      // auto-spawn effect picks up and opens an SSE runner for.
+      // Refresh list + detail: the new in-flight status is picked up by the
+      // auto-spawn effect, which opens an SSE runner for it.
       await onRecordChanged();
     } catch {
-      if (isMounted.current) toast.error('重试复盘失败，请稍后再试');
+      if (isMounted.current) toast.error(errorToast);
     } finally {
       if (isMounted.current) setRetryingReview(null);
     }
   };
-
-  const retryUploadAnalysis = async (recordId: string) => {
-    setRetryingReview(recordId);
-    try {
-      await reanalyzeRecord(recordId);
-      if (!isMounted.current) return;
-      // Same stale-entry cleanup as retryReview — the auto-spawn effect
-      // needs a fresh slot to register the SSE runner for the new run.
-      setAnalyses((prev) => {
-        if (!(recordId in prev)) return prev;
-        const { [recordId]: _, ...rest } = prev;
-        return rest;
-      });
-      await onRecordChanged();
-    } catch {
-      if (isMounted.current) toast.error('重新分析失败，请稍后再试');
-    } finally {
-      if (isMounted.current) setRetryingReview(null);
-    }
-  };
+  const retryReview = (recordId: string) =>
+    retryRecord(recordId, retryMockReview, '重试复盘失败，请稍后再试');
+  const retryUploadAnalysis = (recordId: string) =>
+    retryRecord(recordId, reanalyzeRecord, '重新分析失败，请稍后再试');
 
   // ── Analysis lifecycle ──────────────────────────────────────────────────
   const startAnalysis = (
@@ -444,6 +433,7 @@ export function ReviewPage() {
     if (detail && status === 'review_failed') {
       return (
         <ReviewFailedState
+          kind="mock"
           message={detail.error_message ?? null}
           retrying={retryingReview === detail.id}
           onRetry={() => { void retryReview(detail.id); }}
@@ -453,7 +443,32 @@ export function ReviewPage() {
 
     // Failed upload analysis: the audio + transcript are still persisted —
     // one-click rerun (ANA-7) instead of the old delete-and-reupload dead end.
+    // With partial results (transcript/QA rows persisted before the failure)
+    // keep them readable and show a slim retry banner instead of hiding
+    // everything behind the full-page card.
     if (detail && status === 'failed' && !isMockSource) {
+      if (hasContent) {
+        return (
+          <div className="h-full flex flex-col">
+            <div className="mx-6 mt-4 flex items-center gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-2.5">
+              <span className="text-xs text-red-700 flex-1">
+                分析未完成：{detail.error_message || '中途出错'}。已保留的转录与逐题结果如下。
+              </span>
+              <button
+                type="button"
+                onClick={() => { void retryUploadAnalysis(detail.id); }}
+                disabled={retryingReview === detail.id}
+                className="text-xs text-white px-3 py-1.5 rounded bg-primary-600 hover:bg-primary-700 disabled:opacity-60 shrink-0"
+              >
+                {retryingReview === detail.id ? '重新派发中…' : '重新分析'}
+              </button>
+            </div>
+            <div className="flex-1 min-h-0">
+              <QAPanel detail={detail} loading={detailLoading} />
+            </div>
+          </div>
+        );
+      }
       return (
         <ReviewFailedState
           kind="upload"
@@ -547,13 +562,13 @@ function ReviewFailedState({
   message,
   retrying,
   onRetry,
-  kind = 'mock',
+  kind,
 }: {
   message: string | null;
   retrying: boolean;
   onRetry: () => void;
   /** mock = review generation failed; upload = analysis pipeline failed. */
-  kind?: 'mock' | 'upload';
+  kind: 'mock' | 'upload';
 }) {
   const copy = kind === 'mock'
     ? {

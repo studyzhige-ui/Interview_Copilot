@@ -151,23 +151,30 @@ async def reanalyze_interview_record(
     request: Request,
     response: Response,
     record_id: str,
+    from_stage: str | None = Query(
+        None,
+        description="'extract' 时丢弃已有 QA 壳、从抽取阶段重跑（默认只重新批改）",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Re-run the analysis pipeline for a failed or completed upload record
     (ANA-7). Stage gates reuse the persisted transcript / QA shells, so a
-    re-score doesn't pay for ASR + extraction again."""
+    re-score doesn't pay for ASR + extraction again; pass
+    ``?from_stage=extract`` to drop the shells and re-extract."""
     record = record_admin.get_owned_record(db, record_id, current_user.username)
     if record is None:
         raise HTTPException(status_code=404, detail="Interview record not found")
     try:
-        task = await asyncio.to_thread(record_admin.reanalyze_record, db, record)
+        task = await asyncio.to_thread(
+            lambda: record_admin.reanalyze_record(db, record, drop_qa=from_stage == "extract"),
+        )
     except record_admin.ReanalyzeNotAllowed as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 — dispatch failure already rolled back
         raise HTTPException(
             status_code=503,
-            detail="重新分析派发失败（任务队列暂不可用），请稍后重试。",
+            detail=record_admin.REANALYZE_DISPATCH_FAILED_MSG,
         ) from exc
     return {"status": "processing", "record_id": record_id, "task_id": task.id}
 

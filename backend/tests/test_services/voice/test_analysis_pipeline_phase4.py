@@ -7,8 +7,6 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import pytest
-
 from app.services.voice import interview_analysis_service as svc
 
 
@@ -75,8 +73,6 @@ def test_extraction_slices_original_text_from_spans():
     }
     llm = _FakeLLM(AsyncMock(return_value=_resp(payload)))
 
-    from app.core import llm_client_factory
-
     pairs = asyncio.run(
         svc._extract_single_pass(
             [ln for ln in transcript.split("\n") if ln.strip()],
@@ -127,9 +123,8 @@ def test_analyze_interview_skips_extraction_when_pairs_given(monkeypatch):
 
     async def _acomplete(prompt, **kwargs):
         calls["n"] += 1
-        # per-question calls then the synthesis call
-        return _resp(graded if "评分" not in prompt or True else synthesis) \
-            if calls["n"] <= 1 else _resp(synthesis)
+        # First call = the single per-question grading; second = synthesis.
+        return _resp(graded) if calls["n"] <= 1 else _resp(synthesis)
 
     monkeypatch.setattr(
         svc, "get_llm_for_role", lambda role, user_id=None: _FakeLLM(_acomplete),
@@ -141,7 +136,10 @@ def test_analyze_interview_skips_extraction_when_pairs_given(monkeypatch):
             "index": 1, "question": "Q1", "answer": "A1", "phase": "technical",
         }],
     ))
-    assert report["per_question"], report
+    # The provided pair actually flowed through grading + synthesis.
+    assert report["per_question"][0]["question"] == "Q1"
+    assert report["per_question"][0]["score"] == 7.0
+    assert report["overall"]["score"] == 7.0
 
 
 # ── ANA-6: failed grading is 未评分, not a silent zero ────────────────────
@@ -186,3 +184,54 @@ def test_synthesis_excludes_failed_and_reports_count():
     assert report["interview_metadata"]["failed_count"] == 1
     # Average over graded only — a silent 0 would have halved it.
     assert report["overall"]["score"] == 8.0
+
+
+def test_resolve_span_pairs_remaps_parent_after_drops():
+    """A dropped invalid pair must not leave parent_qa_index pointing at the
+    wrong question (LLM ordinals → final indices)."""
+    lines = ["Q one", "A one", "Q two", "A two"]
+    raw = [
+        {"question_lines": [[99, 99]], "answer_lines": [[99, 99]]},  # dropped
+        {"question_lines": [[1, 1]], "answer_lines": [[2, 2]],
+         "question_summary": "第一题", "phase": "technical"},
+        {"question_lines": [[3, 3]], "answer_lines": [[4, 4]],
+         "question_summary": "追问", "phase": "technical",
+         "is_follow_up": True, "parent_qa_index": 2},  # LLM ordinal of Q one
+    ]
+    pairs = svc._resolve_span_pairs(raw, lines)
+    assert len(pairs) == 2
+    assert pairs[1]["is_follow_up"] is True
+    assert pairs[1]["parent_index"] == 1  # remapped from ordinal 2 → index 1
+
+
+def test_chunked_dedup_prefers_fuller_boundary_pair(monkeypatch):
+    """A pair whose answer was cut at chunk 1's window edge must be replaced
+    by chunk 2's fuller version, not dropped."""
+    lines = [f"line {i}" for i in range(1, 21)]  # 20 lines
+
+    # Force two chunks with overlap regardless of real token counts.
+    monkeypatch.setattr(svc, "_EXTRACTION_MAX_TOKENS", 5040)
+    monkeypatch.setattr(svc, "_count_tokens", lambda s: 2)
+
+    async def _fake_single(chunk_lines, resume_context="", *, llm, line_offset=0):
+        # Chunk 1 (offset 0): emits a stub pair cut at its window edge.
+        if line_offset == 0:
+            return [{
+                "index": 1, "question": "Q", "answer": "A-stub",
+                "question_summary": "", "phase": "general",
+                "is_follow_up": False, "parent_index": None,
+                "_start_line": 8, "_end_line": 10, "_q_start": 8, "_q_end": 8,
+            }]
+        # Chunk 2: same question (global line 8) with the full answer.
+        return [{
+            "index": 1, "question": "Q", "answer": "A-full",
+            "question_summary": "", "phase": "general",
+            "is_follow_up": False, "parent_index": None,
+            "_start_line": 8, "_end_line": 14, "_q_start": 8, "_q_end": 8,
+        }]
+
+    monkeypatch.setattr(svc, "_extract_single_pass", _fake_single)
+    pairs = asyncio.run(svc._extract_chunked(lines, "", 40, llm=object()))
+    assert len(pairs) == 1
+    assert pairs[0]["answer"] == "A-full"      # fuller version won
+    assert "_start_line" not in pairs[0]        # bookkeeping stripped

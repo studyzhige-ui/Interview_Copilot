@@ -430,12 +430,19 @@ async def transcribe_short_clip(
                 local_path, language=language,
             )
             logger.info(
-                "transcribe ok (remote): user=%s lang=%s text_chars=%d",
+                "transcribe ok: provider=remote user=%s lang=%s duration=0.0 text_chars=%d",
                 current_user.username, language, len(text),
             )
             return {"text": text, "language": language or "", "duration_sec": 0.0}
         except transcription_registry.LocalProviderOnly:
             pass  # fall through to the local WhisperX path below
+        except RuntimeError as exc:
+            # Missing provider env key etc — configuration, not a crash;
+            # never leak the raw env-var message to the client.
+            logger.error("Short-clip remote transcription unavailable: %s", exc)
+            raise HTTPException(
+                status_code=503, detail="转写服务未配置或暂不可用，请稍后重试",
+            ) from exc
 
         from app.services.voice import audio_transcription_service as ats
 
@@ -465,7 +472,7 @@ async def transcribe_short_clip(
         detected = result.get("language", "") if isinstance(result, dict) else ""
         duration_sec = float(len(audio)) / 16000.0 if hasattr(audio, "__len__") else 0.0
         logger.info(
-            "transcribe ok: user=%s lang=%s duration=%.1fs text_chars=%d",
+            "transcribe ok: provider=local user=%s lang=%s duration=%.1f text_chars=%d",
             current_user.username, detected, duration_sec, len(text),
         )
         return {"text": text, "language": detected, "duration_sec": duration_sec}
@@ -473,7 +480,9 @@ async def transcribe_short_clip(
         raise
     except Exception as exc:  # noqa: BLE001
         logger.error("Short-clip transcription failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"转写失败: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"转写失败：{humanize_error(exc)}",
+        ) from exc
     finally:
         try:
             os.unlink(local_path)

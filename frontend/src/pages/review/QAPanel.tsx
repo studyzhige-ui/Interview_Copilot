@@ -426,7 +426,7 @@ function QAItem({ qa, recordId }: { qa: InterviewQA; recordId: string }) {
           {typeof score === 'number'
             ? `${Math.round(score * 10)}分`
             : qa.critique
-              ? '未评分'  /* graded-attempted but the model call failed (ANA-6) */
+              ? '未评分'  /* grading was attempted but the model call failed (ANA-6) */
               : ''}
         </span>
         <button

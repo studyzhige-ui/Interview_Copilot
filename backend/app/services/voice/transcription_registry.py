@@ -147,6 +147,26 @@ class LocalProviderOnly(RuntimeError):
     WhisperX kind — the caller owns the local fallback path."""
 
 
+def _openai_compat_request_parts(
+    cfg: ResolvedTranscription, file_path: str,
+) -> tuple[str, dict[str, str], dict[str, Any]]:
+    """Shared request scaffolding for the OpenAI-compatible ASR calls:
+    (url, headers, files). Raises RuntimeError when the provider's env key
+    is missing."""
+    p = cfg.provider
+    api_key = os.getenv(p.api_key_env, "").strip()
+    if not api_key:
+        raise RuntimeError(
+            f"TRANSCRIPTION_PROVIDER={cfg.provider_id} requires {p.api_key_env}"
+            " to be set in .env"
+        )
+    url = f"{p.api_base.rstrip('/')}/audio/transcriptions"
+    with open(file_path, "rb") as f:
+        body = f.read()
+    files = {"file": (os.path.basename(file_path), body, "application/octet-stream")}
+    return url, {"Authorization": f"Bearer {api_key}"}, files
+
+
 async def transcribe_plain(file_path: str, language: Optional[str] = "zh") -> str:
     """Short-clip ASR: plain text, no speaker labels, no diarization.
 
@@ -165,26 +185,12 @@ async def transcribe_plain(file_path: str, language: Optional[str] = "zh") -> st
     if p.kind != "openai_compat":
         raise RuntimeError(f"Unknown provider kind: {p.kind!r}")
 
-    api_key = os.getenv(p.api_key_env, "").strip()
-    if not api_key:
-        raise RuntimeError(
-            f"TRANSCRIPTION_PROVIDER={cfg.provider_id} requires {p.api_key_env}"
-            " to be set in .env"
-        )
-    url = f"{p.api_base.rstrip('/')}/audio/transcriptions"
-    with open(file_path, "rb") as f:
-        body = f.read()
+    url, headers, files = _openai_compat_request_parts(cfg, file_path)
     data: dict[str, Any] = {"model": cfg.model, "response_format": "text"}
     if language and language.lower() != "auto":
         data["language"] = language
-    files = {"file": (os.path.basename(file_path), body, "application/octet-stream")}
     async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(
-            url,
-            headers={"Authorization": f"Bearer {api_key}"},
-            data=data,
-            files=files,
-        )
+        resp = await client.post(url, headers=headers, data=data, files=files)
         resp.raise_for_status()
         return resp.text.strip()
 
@@ -211,18 +217,7 @@ async def _transcribe_openai_compat(
     """
     import httpx
 
-    p = cfg.provider
-    api_key = os.getenv(p.api_key_env, "").strip()
-    if not api_key:
-        raise RuntimeError(
-            f"TRANSCRIPTION_PROVIDER={cfg.provider_id} requires {p.api_key_env}"
-            " to be set in .env"
-        )
-    url = f"{p.api_base.rstrip('/')}/audio/transcriptions"
-
-    with open(file_path, "rb") as f:
-        body = f.read()
-    file_name = os.path.basename(file_path)
+    url, headers, files = _openai_compat_request_parts(cfg, file_path)
 
     want_hybrid = _hybrid_diarization_wanted()
     if want_hybrid:
@@ -233,17 +228,11 @@ async def _transcribe_openai_compat(
         }
     else:
         data = {"model": cfg.model, "response_format": "text"}
-    if language:
+    if language and language.lower() != "auto":
         data["language"] = language
-    files = {"file": (file_name, body, "application/octet-stream")}
 
     async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(
-            url,
-            headers={"Authorization": f"Bearer {api_key}"},
-            data=data,
-            files=files,
-        )
+        resp = await client.post(url, headers=headers, data=data, files=files)
         resp.raise_for_status()
         if want_hybrid:
             try:

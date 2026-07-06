@@ -19,6 +19,7 @@ from app.services.interview.interview_record_service import (
     STATUS_COMPLETED,
     STATUS_FAILED,
     STATUS_PENDING,
+    interview_record_service,
 )
 
 logger = logging.getLogger(__name__)
@@ -149,7 +150,12 @@ class ReanalyzeNotAllowed(ValueError):
     """Record is not in a state (or of a source) that can be re-analyzed."""
 
 
-def reanalyze_record(db: Session, record: InterviewRecord):
+# Shared by the rolled-back error_message and the API's 503 detail so the
+# two can't drift.
+REANALYZE_DISPATCH_FAILED_MSG = "重新分析派发失败（任务队列暂不可用），请稍后重试。"
+
+
+def reanalyze_record(db: Session, record: InterviewRecord, *, drop_qa: bool = False):
     """ANA-7: re-run the analysis pipeline for a terminal upload record.
 
     Covers both recovery (``failed`` — the audio is still in storage, yet
@@ -160,6 +166,10 @@ def reanalyze_record(db: Session, record: InterviewRecord):
     the orchestrator's stage gates then resume from what exists — a
     completed record re-grades without paying ASR + extraction again; a
     record that failed mid-transcription starts from where it broke.
+    ``drop_qa=True`` additionally deletes the QA shells so the rerun
+    re-extracts from the transcript — the escape hatch when the FIRST
+    run's pairing itself was garbage (wrong speaker attribution etc.),
+    which a shell-reusing rerun could never fix.
     Returns the dispatched Celery task. Dispatch failure rolls the record
     back to ``failed`` (never a zombie ``pending``) and re-raises.
     """
@@ -170,27 +180,47 @@ def reanalyze_record(db: Session, record: InterviewRecord):
     if record.status not in (STATUS_COMPLETED, STATUS_FAILED):
         raise ReanalyzeNotAllowed("记录当前状态不支持重新分析")
 
+    # Best-effort revoke of a stale task handle: an acks_late redelivery
+    # after a hard worker kill could otherwise run concurrently with the
+    # rerun we're about to dispatch.
+    if record.celery_task_id:
+        try:
+            from app.worker.celery_app import celery_app
+
+            celery_app.control.revoke(record.celery_task_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("reanalyze: stale-task revoke failed: %s", exc)
+
+    if drop_qa:
+        db.query(InterviewQA).filter(InterviewQA.record_id == record.id).delete(
+            synchronize_session=False,
+        )
     record.analysis_json = None
     record.error_message = None
     # Cleared so _generate_debrief_summary regenerates from the new report
     # (it skips records that already have one).
     record.debrief_summary = None
     record.analyzed_qa_count = 0
-    record.status = STATUS_PENDING
     db.add(record)
+    db.commit()
+    # Status flips go through the canonical helper (updated_at bump — a
+    # re-analyzed record must not sort stale in updated_at-ordered views).
+    interview_record_service.set_status(record.id, STATUS_PENDING, db=db)
     db.commit()
 
     try:
         task = process_interview_analysis.delay(record.id)
     except Exception as exc:  # noqa: BLE001 — broker down / misconfigured
         logger.error("reanalyze dispatch failed for %s: %s", record.id, exc)
-        record.status = STATUS_FAILED
-        record.error_message = "重新分析派发失败（任务队列暂不可用），请稍后重试。"
-        db.add(record)
+        interview_record_service.set_status(
+            record.id, STATUS_FAILED,
+            error_message=REANALYZE_DISPATCH_FAILED_MSG, db=db,
+        )
         db.commit()
         raise
-    record.celery_task_id = task.id
-    db.add(record)
+    interview_record_service.set_status(
+        record.id, STATUS_PENDING, celery_task_id=task.id, db=db,
+    )
     db.commit()
     return task
 
