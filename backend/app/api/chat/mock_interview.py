@@ -50,6 +50,7 @@ from app.services.uploads.file_asset_service import (
     mark_file_asset_consumed,
 )
 from app.services.interview.interview_record_service import (
+    STATUS_MOCK_IN_PROGRESS,
     STATUS_PROCESSING_REVIEW,
     STATUS_REVIEW_FAILED,
 )
@@ -100,6 +101,14 @@ async def start_mock_interview(
     # contract by committing partial state.
     _verify_start_upload(db, body.resume_file_asset_id, "resume", "简历文件", current_user.username)
     _verify_start_upload(db, body.jd_file_asset_id, "jd", "JD 文件", current_user.username)
+    # MOCK-3: one active run per user — a second /start would orphan the
+    # first runtime (invisible to the resume banner once superseded).
+    existing = mock_runtime_service.get_active_runtime(db, user_id=current_user.username)
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="已有进行中的模拟面试，请先继续或放弃它",
+        )
     try:
         started = mock_flow.start_mock(
             db,
@@ -127,6 +136,7 @@ async def start_mock_interview(
         runtime_id=started.runtime.id,
         current_stage_key=plan.first_stage_key,
         current_question=plan.opening_message,
+        question_message_id=started.runtime.current_question_message_id,
         plan_phases=[MockStage(key=s["key"], title=s["title"]) for s in plan.stages],
     )
 
@@ -180,18 +190,24 @@ async def submit_mock_answer(
             answer_text=body.answer_text,
             answer_audio_file_asset_id=body.answer_audio_file_asset_id,
             user_id=current_user.username,
+            question_message_id=body.question_message_id,
         )
+    except mock_flow.StaleQuestionError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="面试已推进到新问题，请刷新后继续",
+        ) from exc
     except Exception as exc:  # noqa: BLE001
         db.rollback()
         logger.exception("mock answer failed for %s: %s", record_id, exc)
         raise HTTPException(status_code=500, detail=humanize_error(exc)) from exc
 
-    await asyncio.to_thread(db.commit)
-
+    # submit_answer commits its own two short transactions (MOCK-4).
     return MockAnswerResp(
         interviewer_message=turn.interviewer_message,
         current_stage_key=turn.next_stage_key,
         is_ready_to_finish=turn.is_ready_to_finish,
+        question_message_id=turn.question_message_id,
     )
 
 
@@ -210,6 +226,13 @@ async def finish_mock_interview(
     """Move the record into processing_review and dispatch the review task,
     which parses structured QA from the conversation messages and scores it."""
     record = _owned_mock_record_or_404(db, record_id, current_user.username)
+    # MOCK-3: only an in-progress run can finish — a double-click or a stale
+    # tab must not re-dispatch a review that is already running/done.
+    if record.status != STATUS_MOCK_IN_PROGRESS:
+        raise HTTPException(
+            status_code=409,
+            detail="该面试不在进行中（复盘可能已在生成或已完成）",
+        )
     runtime = mock_runtime_service.get_runtime_for_record(db, interview_record_id=record_id)
 
     # Require at least one answered turn — an interview with no candidate
@@ -220,7 +243,7 @@ async def finish_mock_interview(
 
     record.status = STATUS_PROCESSING_REVIEW
     if runtime is not None:
-        mock_runtime_service.set_status(db, runtime, "processing_review", commit=False)
+        mock_runtime_service.set_status(db, runtime, mock_runtime_service.PROCESSING_STATUS, commit=False)
     await asyncio.to_thread(db.commit)
 
     try:
@@ -246,13 +269,13 @@ async def retry_mock_review(
     """Re-run review generation from the preserved conversation messages after
     a review_failed (or stuck processing_review)."""
     record = _owned_mock_record_or_404(db, record_id, current_user.username)
-    if record.status not in ("review_failed", "processing_review"):
+    if record.status not in (STATUS_REVIEW_FAILED, STATUS_PROCESSING_REVIEW):
         raise HTTPException(status_code=400, detail="当前状态不可重试复盘")
 
     runtime = mock_runtime_service.get_runtime_for_record(db, interview_record_id=record_id)
     record.status = STATUS_PROCESSING_REVIEW
     if runtime is not None:
-        mock_runtime_service.set_status(db, runtime, "processing_review", commit=False)
+        mock_runtime_service.set_status(db, runtime, mock_runtime_service.PROCESSING_STATUS, commit=False)
     await asyncio.to_thread(db.commit)
 
     try:
@@ -341,6 +364,7 @@ async def get_in_progress_mock(
         current_stage_key=runtime.current_stage_key,
         current_question=runtime.current_question_text,
         answered_count=answered,
+        question_message_id=runtime.current_question_message_id if runtime else None,
         last_activity_at=(
             runtime.last_activity_at.isoformat() if runtime.last_activity_at else None
         ),

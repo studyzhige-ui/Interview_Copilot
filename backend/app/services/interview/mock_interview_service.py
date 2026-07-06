@@ -63,6 +63,12 @@ def _style_brief(style: str | None) -> str:
 # is frozen into ``mock_interview_runtime.plan_json`` at start so a later
 # template change can't affect a started or finished run.
 
+# Rules-layer hard bound (MOCK-5): once the candidate has answered this
+# many turns, ready_to_finish is FORCED true regardless of what the LLM
+# says. The LLM signal itself is advisory (the FE renders a suggestion
+# banner, never locks input).
+MOCK_MAX_ANSWERED_TURNS = 30
+
 GENERAL_PLAN_TEMPLATE: list[dict[str, str]] = [
     {"key": "self_intro", "title": "自我介绍"},
     {"key": "resume_project_deep_dive", "title": "简历项目深挖"},
@@ -128,6 +134,9 @@ class NextTurn:
     interviewer_message: str
     next_stage_key: str
     is_ready_to_finish: bool
+    # Set by mock_flow.submit_answer after persisting the message — the FE
+    # echoes it back with the next answer as the concurrency token (MOCK-3).
+    question_message_id: int | None = None
 
 
 # ── JSON helper ──────────────────────────────────────────────────────────
@@ -211,12 +220,17 @@ _NEXT_TURN_PROMPT = """{prefix}
 ## 最近对话
 {recent_dialog}
 
+## 全场已问过的问题（避免重复！每条截断到 40 字）
+{asked_questions}
+（当前阶段已提问 {questions_in_current_stage} 个问题）
+
 ## 候选人刚才的回答
 {user_answer}
 
 ## 你的任务
 作为面试官，自然地接住候选人刚才的回答，并给出下一句话。规则：
 - 一段连贯口语，先简短承接，再问下一个问题；只问一个问题。
+- **绝不重复**「全场已问过的问题」里出现过的问题或同义变体；当前阶段问了 3 个以上就考虑推进。
 - 在当前阶段聊够了就推进到下一个阶段（stage_key 用下一个阶段的 key）；否则保持当前阶段。
 - 进入「反问」阶段（candidate_questions）时，邀请候选人提问，并认真回答其问题。
 - 反问阶段也聊完、整场覆盖充分时，把 ready_to_finish 设为 true，并说一句收尾的话。
@@ -239,6 +253,8 @@ async def generate_next_turn(
     recent_messages: list[dict[str, str]],
     user_answer: str,
     user_id: str | None = None,
+    asked_questions: list[str] | None = None,
+    questions_in_current_stage: int = 0,
 ) -> NextTurn:
     """One LLM call → the next interviewer line + stage + finish signal.
 
@@ -251,11 +267,19 @@ async def generate_next_turn(
     )
     recent_dialog = _recent_dialog_block(recent_messages)
 
+    # MOCK-6: the recent-8 window only remembers ~4 turns; a 20-turn
+    # interview repeated earlier questions. The full asked-question index
+    # (40 chars each) keeps the prompt bounded while covering the whole run.
+    asked_block = "\n".join(
+        f"  {i + 1}. {q[:40]}" for i, q in enumerate(asked_questions or [])
+    ) or "（暂无）"
     prompt = _NEXT_TURN_PROMPT.format(
         prefix=prefix,
         stage_list=stage_list,
         current_stage=current_stage_key or (stage_keys[0] if stage_keys else "self_intro"),
         recent_dialog=recent_dialog,
+        asked_questions=asked_block,
+        questions_in_current_stage=questions_in_current_stage,
         user_answer=(user_answer or "").strip() or "（候选人沉默）",
         stage_keys_hint=" | ".join(stage_keys),
     )

@@ -95,6 +95,8 @@ class MockStartResp(BaseModel):
     current_stage_key: str
     # The opening interviewer message (greeting + first question), one string.
     current_question: str
+    # Concurrency token for the first answer (MOCK-3).
+    question_message_id: int | None = None
     plan_phases: list[MockStage]
 
 
@@ -102,13 +104,22 @@ class MockAnswerRequest(BaseModel):
     answer_text: str
     # Optional voice answer clip (file_assets.id, purpose="mock_audio_clip").
     answer_audio_file_asset_id: str | None = None
+    # Optimistic concurrency token (MOCK-3): the id of the interviewer
+    # message this answer responds to. Mismatch → 409 (a concurrent submit
+    # already advanced the interview). Optional for legacy clients.
+    question_message_id: int | None = None
 
 
 class MockAnswerResp(BaseModel):
     """``POST /mock-interviews/{record_id}/answer`` — next interviewer line."""
     interviewer_message: str
     current_stage_key: str
+    # Advisory ONLY (MOCK-5): the FE shows a "可以结束了" suggestion banner;
+    # it must never lock the composer. Forced true by the rules layer once
+    # MOCK_MAX_ANSWERED_TURNS is reached.
     is_ready_to_finish: bool
+    # Echo back with the next answer as the concurrency token (MOCK-3).
+    question_message_id: int | None = None
 
 
 class MockFinishResp(BaseModel):
@@ -148,6 +159,8 @@ class MockInProgressResp(BaseModel):
     # Answered-turn count so the resumed view doesn't think answeredCount=0
     # (which used to grey out the "生成复盘" button until one more answer).
     answered_count: int = 0
+    # Concurrency token for the next answer after resume (MOCK-3).
+    question_message_id: int | None = None
     last_activity_at: str | None = None
 
 

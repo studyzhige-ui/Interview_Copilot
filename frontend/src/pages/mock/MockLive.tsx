@@ -11,6 +11,7 @@ import {
   useSpeechRecognition,
 } from '@/hooks/useSpeechRecognition';
 import { abandonMockInterview, submitMockAnswer, finishMockInterview, TRANSCRIBE_AVAILABLE, transcribeAudio } from '@/api/mock';
+import { uploadFileAsset } from '@/api/fileAssets';
 import { useBlocker, useNavigate } from 'react-router-dom';
 import type { VoiceMode } from './MockSetup';
 
@@ -41,6 +42,8 @@ interface Props {
   /** Turns answered before this mount (resume path) — keeps answeredCount
    *  honest after a refresh so the finish button isn't wrongly disabled. */
   resumedAnsweredCount?: number;
+  /** Concurrency token for the first answer (MOCK-3). */
+  initialQuestionMessageId?: number | null;
   onFinished: (recordId: string) => void;
   onAbandoned: () => void;
 }
@@ -50,7 +53,7 @@ function fmtDuration(ms: number) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnsweredCount = 0, onFinished, onAbandoned }: Props) {
+export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnsweredCount = 0, initialQuestionMessageId = null, onFinished, onAbandoned }: Props) {
   const [turns, setTurns] = useState<Turn[]>(
     initialQuestion ? [{ who: 'interviewer', text: initialQuestion }] : [],
   );
@@ -58,6 +61,14 @@ export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnswered
   const [sending, setSending] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const [finished, setFinished] = useState(false);
+  // Advisory-only end suggestion (MOCK-5): the LLM's ready_to_finish shows a
+  // banner; it never locks the composer. ``finished`` remains for the real
+  // end (user clicked 结束面试).
+  const [endSuggested, setEndSuggested] = useState(false);
+  // MOCK-3: id of the interviewer message currently being answered — echoed
+  // back with each submit so a concurrent/stale tab gets a 409 instead of
+  // silently forking the interview.
+  const questionMessageIdRef = useRef<number | null>(initialQuestionMessageId);
   const [ttsMuted, setTtsMuted] = useState(false);
   const rec = useMediaRecorder();
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -130,7 +141,7 @@ export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnswered
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ttsActive, initialQuestion]);
 
-  const pushUserAnswer = async (answer: string) => {
+  const pushUserAnswer = async (answer: string, audioAssetId?: string) => {
     if (!answer.trim() || finished) return;
     setSending(true);
     // Optimistic insert — the user sees their message immediately
@@ -139,12 +150,19 @@ export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnswered
     const optimisticTurn: Turn = { who: 'me', text: answer };
     setTurns((t) => [...t, optimisticTurn]);
     try {
-      const resp = await submitMockAnswer(recordId, { answer_text: answer });
+      const resp = await submitMockAnswer(recordId, {
+        answer_text: answer,
+        answer_audio_file_asset_id: audioAssetId,
+        question_message_id: questionMessageIdRef.current,
+      });
+      questionMessageIdRef.current = resp.question_message_id ?? null;
       setTurns((t) => [...t, { who: 'interviewer', text: resp.interviewer_message }]);
       if (ttsActive) void tts.speak(resp.interviewer_message);
       if (resp.is_ready_to_finish) {
-        setFinished(true);
-        toast.info('面试已结束，点击右上「结束面试」生成复盘记录');
+        // Advisory (MOCK-5): suggest ending; the candidate keeps control and
+        // can continue answering or reverse-asking.
+        setEndSuggested(true);
+        toast.info('面试官觉得可以收尾了——你可以继续追问，或点右上「结束面试」生成复盘');
       }
     } catch {
       toast.error('提交回答失败');
@@ -202,7 +220,18 @@ export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnswered
           toast.warn('未识别到有效语音，请重试或文字作答');
           return;
         }
-        await pushUserAnswer(text);
+        // MOCK-7: keep the original clip — upload it (best-effort) so the
+        // review can play back the real voice. Failure degrades to text-only.
+        let audioAssetId: string | undefined;
+        try {
+          const file = new File([blob], `answer-${Date.now()}.webm`, {
+            type: blob.type || 'audio/webm',
+          });
+          audioAssetId = await uploadFileAsset(file, 'mock_audio_clip');
+        } catch {
+          audioAssetId = undefined;
+        }
+        await pushUserAnswer(text, audioAssetId);
       } catch {
         toast.error('转写失败，请重试或文字作答');
       } finally {
@@ -289,6 +318,7 @@ export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnswered
     try {
       const r = await finishMockInterview(recordId);
       setConfirmingFinish(false);
+      setFinished(true);  // unblock the nav guard — the run is over for real
       onFinished(r.record_id);
     } catch {
       toast.error('结束面试失败');
@@ -352,6 +382,23 @@ export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnswered
           结束面试
         </Btn>
       </div>
+
+      {endSuggested && !finished && (
+        // Advisory only (MOCK-5): the LLM thinks the interview covered
+        // enough. The candidate stays in control — keep answering or finish.
+        <div className="mx-4 mt-2 flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          <span className="text-xs text-amber-900 flex-1">
+            面试官觉得可以收尾了。你仍可以继续回答或反问；准备好后点「结束面试」生成复盘。
+          </span>
+          <button
+            type="button"
+            onClick={() => setEndSuggested(false)}
+            className="text-xs text-amber-700 hover:text-amber-900 shrink-0"
+          >
+            继续面试
+          </button>
+        </div>
+      )}
 
       <Modal
         open={confirmingFinish}

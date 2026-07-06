@@ -43,6 +43,7 @@ export interface InterviewQA {
   answer_input_mode: 'text' | 'voice' | 'voice_transcribed';
   question_audio_url?: string | null;
   answer_audio_url?: string | null;
+  answer_audio_file_asset_id?: string | null;
   source_segment_start?: number | null;
   source_segment_end?: number | null;
   analyzed_at?: string | null;
@@ -223,6 +224,7 @@ export interface MockStartResp {
   /** The opening interviewer message (greeting + first question), one string. */
   current_question: string;
   plan_phases: MockStage[];
+  question_message_id?: number | null;
 }
 
 /** ``POST /mock-interviews/{record_id}/answer`` — one interviewer line.
@@ -232,6 +234,7 @@ export interface MockAnswerResp {
   interviewer_message: string;
   current_stage_key: string;
   is_ready_to_finish: boolean;
+  question_message_id?: number | null;
 }
 
 /** ``POST /mock-interviews/{record_id}/finish`` and ``/retry-review`` — the

@@ -35,7 +35,9 @@ def test_mock_answer_resp_matches_endpoint_dict_shape():
     """The /answer endpoint returns exactly these three fields — round-trip
     through model_dump to guard against drift with the response_model."""
     resp = MockAnswerResp(**_VALID_ANSWER_RESP)
-    assert resp.model_dump() == _VALID_ANSWER_RESP
+    # question_message_id (MOCK-3 concurrency token) defaults None when the
+    # endpoint dict omits it.
+    assert resp.model_dump() == {**_VALID_ANSWER_RESP, "question_message_id": None}
 
 
 @pytest.mark.parametrize("missing", [
@@ -65,7 +67,7 @@ def test_mock_start_resp_accepts_full_valid_payload():
     resp = MockStartResp(**payload)
     assert resp.runtime_id == "mir_x"
     assert resp.plan_phases[0].key == "self_intro"
-    assert resp.model_dump() == payload
+    assert resp.model_dump() == {**payload, "question_message_id": None}
 
 
 @pytest.mark.parametrize("missing", ["key", "title"])

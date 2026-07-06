@@ -46,6 +46,10 @@ from app.services.uploads.file_asset_service import (
     get_owned_file_asset,
 )
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 
@@ -230,6 +234,27 @@ def list_interview_records(
     ]
 
 
+def _answer_audio_url(qa: InterviewQA) -> str | None:
+    """Fresh presigned GET for a voice answer's clip (or the legacy stored
+    URL). Best-effort — a storage blip degrades to no playback, never a 500.
+    """
+    if not qa.answer_audio_file_asset_id:
+        return qa.answer_audio_url
+    try:
+        from app.core.storage import generate_presigned_get_url
+        from app.db.database import SessionLocal
+        from app.services.uploads.file_asset_service import get_file_asset
+
+        with SessionLocal() as adb:
+            asset = get_file_asset(adb, qa.answer_audio_file_asset_id)
+            uri = asset.storage_uri if asset else None
+        if uri and uri.startswith("s3://"):
+            return generate_presigned_get_url(uri, expiration=1800)
+    except Exception:  # noqa: BLE001
+        logger.warning("answer audio presign failed for qa=%s", qa.id, exc_info=True)
+    return None
+
+
 @router.get("/interview-records/{record_id}")
 def get_interview_record(
     record_id: str,
@@ -298,7 +323,10 @@ def _serialize_qa(qa: InterviewQA) -> dict:
         "key_points": _safe_json_loads(qa.key_points_json) or [],
         "answer_input_mode": qa.answer_input_mode,
         "question_audio_url": qa.question_audio_url,
-        "answer_audio_url": qa.answer_audio_url,
+        # MOCK-7: voice answers store the clip's asset id; a presigned GET is
+        # minted per read (persisted URLs would expire).
+        "answer_audio_url": _answer_audio_url(qa),
+        "answer_audio_file_asset_id": qa.answer_audio_file_asset_id,
         "source_segment_start": qa.source_segment_start,
         "source_segment_end": qa.source_segment_end,
         "analyzed_at": qa.analyzed_at.isoformat() if qa.analyzed_at else None,

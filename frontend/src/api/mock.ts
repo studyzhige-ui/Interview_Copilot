@@ -19,7 +19,12 @@ export async function startMockInterview(payload: {
 
 export async function submitMockAnswer(
   recordId: string,
-  payload: { answer_text: string; answer_audio_file_asset_id?: string },
+  payload: {
+    answer_text: string;
+    answer_audio_file_asset_id?: string;
+    /** Concurrency token (MOCK-3): id of the question being answered. */
+    question_message_id?: number | null;
+  },
 ): Promise<MockAnswerResp> {
   const res = await apiClient.post(
     `/mock-interviews/${encodeURIComponent(recordId)}/answer`,
@@ -62,6 +67,8 @@ export interface InProgressMock {
   /** Answered-turn count — seeds the resumed view's answeredCount so the
    *  finish button isn't wrongly disabled after a refresh. */
   answered_count?: number;
+  /** Concurrency token for the next answer after resume (MOCK-3). */
+  question_message_id?: number | null;
   last_activity_at?: string | null;
 }
 

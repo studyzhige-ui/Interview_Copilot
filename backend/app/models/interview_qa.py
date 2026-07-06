@@ -64,6 +64,10 @@ class InterviewQA(Base):
     # Voice artifacts (P1+; columns reserved)
     question_audio_url = Column(String, nullable=True)
     answer_audio_url = Column(String, nullable=True)
+    # Mock voice answers (MOCK-7): the original clip's file_assets.id. The
+    # API mints a fresh presigned GET into ``answer_audio_url`` at read time
+    # (stored URLs would expire).
+    answer_audio_file_asset_id = Column(String, nullable=True)
     answer_input_mode = Column(String, nullable=False, default="text")
 
     # Optional per-QA classification metadata. Reserved columns: the mock flow

@@ -19,6 +19,8 @@ type Stage =
       voiceMode: VoiceMode;
       /** Turns answered before this mount (resume path) — 0 for a fresh start. */
       resumedAnsweredCount: number;
+      /** Concurrency token for the first answer (MOCK-3). */
+      questionMessageId: number | null;
     };
 
 interface InProgressBanner {
@@ -27,6 +29,7 @@ interface InProgressBanner {
   currentQuestion: string;
   title: string;
   answeredCount: number;
+  questionMessageId: number | null;
   lastActivityAt: string | null;
 }
 
@@ -48,6 +51,7 @@ export function MockPage() {
           currentQuestion: r.current_question ?? '',
           title: r.title ?? '模拟面试',
           answeredCount: r.answered_count ?? 0,
+          questionMessageId: r.question_message_id ?? null,
           lastActivityAt: r.last_activity_at ?? null,
         });
       })
@@ -68,6 +72,7 @@ export function MockPage() {
       currentQuestion: inProgress.currentQuestion,
       voiceMode: 'hybrid',
       resumedAnsweredCount: inProgress.answeredCount,
+      questionMessageId: inProgress.questionMessageId,
     });
     setInProgress(null);
   };
@@ -103,6 +108,7 @@ export function MockPage() {
         currentQuestion: started.current_question,
         voiceMode: payload.voice_mode,
         resumedAnsweredCount: 0,
+        questionMessageId: started.question_message_id ?? null,
       });
     } catch {
       toast.error('启动模拟面试失败');
@@ -146,6 +152,7 @@ export function MockPage() {
       initialQuestion={stage.currentQuestion}
       voiceMode={stage.voiceMode}
       resumedAnsweredCount={stage.resumedAnsweredCount}
+      initialQuestionMessageId={stage.questionMessageId}
       onFinished={onFinished}
       onAbandoned={onAbandoned}
     />

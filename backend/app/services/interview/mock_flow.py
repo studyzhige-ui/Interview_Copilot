@@ -39,6 +39,11 @@ from app.worker.tasks import process_interview_analysis
 logger = logging.getLogger(__name__)
 
 
+class StaleQuestionError(RuntimeError):
+    """The answer references a question that is no longer current — a
+    concurrent submit already advanced the interview (MOCK-3)."""
+
+
 # ── Message helpers ──────────────────────────────────────────────────────
 
 
@@ -255,8 +260,14 @@ def start_mock(
     db.add(conversation)
     db.flush()
 
-    # 3) opening interviewer message.
-    opening = append_message(db, conversation.id, "assistant", plan.opening_message)
+    # 3) opening interviewer message (stage meta rides in a content block —
+    # the review pipeline reads it back for per-stage attribution, MOCK-8).
+    opening = append_message(
+        db, conversation.id, "assistant", plan.opening_message,
+        content_blocks_json=json.dumps(
+            [{"type": "stage", "stage_key": plan.first_stage_key}], ensure_ascii=False,
+        ),
+    )
 
     # 4) runtime (in_progress), pointed at the opening question.
     runtime = mock_runtime_service.create_runtime(
@@ -285,16 +296,40 @@ async def submit_answer(
     answer_text: str,
     answer_audio_file_asset_id: str | None,
     user_id: str | None = None,
+    question_message_id: int | None = None,
 ):
-    """One turn: persist the candidate's answer, generate the next interviewer
-    line from the plan + stage + recent messages, persist it, advance runtime.
+    """One turn in TWO short transactions (MOCK-4):
 
-    Leaves the transaction uncommitted (caller commits / rolls back). Returns
-    the generated ``NextTurn``.
+      A. persist the candidate's answer and COMMIT — the LLM call below can
+         take tens of seconds and must not hold row locks / a connection
+         mid-transaction. A retry after a failed interviewer turn (same
+         text, last message is the dangling answer) is deduped, so the
+         answer is never double-recorded.
+      B. persist the interviewer's reply + advance the runtime and COMMIT.
+
+    ``question_message_id`` (MOCK-3): optimistic concurrency token — the FE
+    echoes back the id of the question it is answering; a mismatch means a
+    concurrent submit already advanced the interview → StaleQuestionError
+    (409 at the API). Legacy clients that don't send it keep the old
+    last-write-wins behaviour.
+
+    Returns the ``NextTurn`` with ``question_message_id`` set to the new
+    interviewer message's id.
     """
     conversation_id = runtime.conversation_id
 
+    if (
+        question_message_id is not None
+        and runtime.current_question_message_id is not None
+        and question_message_id != runtime.current_question_message_id
+    ):
+        raise StaleQuestionError(
+            f"answer targets message {question_message_id}, current is "
+            f"{runtime.current_question_message_id}"
+        )
+
     stages = mock_interview_service.stages_from_plan_json(runtime.plan_json)
+    current_stage = runtime.current_stage_key or stages[0]["key"]
     prefix = mock_interview_service.build_prefix(
         record.resume_text_snapshot or "",
         record.jd_text_snapshot or "",
@@ -304,30 +339,55 @@ async def submit_answer(
     # is passed separately as ``user_answer`` so it isn't double-counted in the
     # prompt — read recent first, then persist the answer.
     recent = recent_messages(db, conversation_id, limit=8)
+    asked = list_asked_questions(db, conversation_id)
 
-    # Persist the candidate's answer. A voice clip (if any) rides along as an
-    # audio content block referencing the file asset.
-    user_blocks = None
-    if answer_audio_file_asset_id:
-        user_blocks = json.dumps(
-            [
-                {"type": "text", "text": answer_text},
-                {"type": "audio", "file_asset_id": answer_audio_file_asset_id},
-            ],
-            ensure_ascii=False,
-        )
-    append_message(db, conversation_id, "user", answer_text, content_blocks_json=user_blocks)
+    # ── Phase A: persist the answer, commit ─────────────────────────
+    last = _last_message(db, conversation_id)
+    dangling_retry = (
+        last is not None
+        and last.role == "user"
+        and (last.content or "").strip() == (answer_text or "").strip()
+    )
+    if not dangling_retry:
+        # A voice clip (if any) rides along as an audio content block
+        # referencing the file asset.
+        user_blocks = None
+        if answer_audio_file_asset_id:
+            user_blocks = json.dumps(
+                [
+                    {"type": "text", "text": answer_text},
+                    {"type": "audio", "file_asset_id": answer_audio_file_asset_id},
+                ],
+                ensure_ascii=False,
+            )
+        append_message(db, conversation_id, "user", answer_text, content_blocks_json=user_blocks)
+    db.commit()
 
+    # ── LLM turn (no transaction open) ──────────────────────────────
     turn = await mock_interview_service.generate_next_turn(
         prefix=prefix,
         stages=stages,
-        current_stage_key=runtime.current_stage_key or stages[0]["key"],
+        current_stage_key=current_stage,
         recent_messages=recent,
         user_answer=answer_text,
         user_id=user_id,
+        asked_questions=[q["text"] for q in asked],
+        questions_in_current_stage=sum(
+            1 for q in asked if q["stage_key"] == current_stage
+        ),
     )
 
-    assistant_msg = append_message(db, conversation_id, "assistant", turn.interviewer_message)
+    # Rules layer (MOCK-5): the hard cap overrides the LLM's soft signal.
+    if count_answered_turns(db, conversation_id) >= mock_interview_service.MOCK_MAX_ANSWERED_TURNS:
+        turn.is_ready_to_finish = True
+
+    # ── Phase B: persist the reply + advance runtime, commit ────────
+    assistant_msg = append_message(
+        db, conversation_id, "assistant", turn.interviewer_message,
+        content_blocks_json=json.dumps(
+            [{"type": "stage", "stage_key": turn.next_stage_key}], ensure_ascii=False,
+        ),
+    )
 
     stage_index = next(
         (i for i, s in enumerate(stages) if s["key"] == turn.next_stage_key), runtime.stage_index,
@@ -341,7 +401,49 @@ async def submit_answer(
         current_question_message_id=assistant_msg.id,
         commit=False,
     )
+    db.commit()
+    turn.question_message_id = assistant_msg.id
     return turn
+
+
+def list_asked_questions(db: Session, conversation_id: str) -> list[dict[str, str]]:
+    """All interviewer lines so far, oldest first, with their stage meta.
+
+    Feeds the anti-repetition inventory (MOCK-6) and the per-stage question
+    count. Returns ``[{"text": ..., "stage_key": ...}]``; stage_key is ""
+    for legacy messages without the meta block.
+    """
+    rows = (
+        db.query(ConversationMessage.content, ConversationMessage.content_blocks_json)
+        .filter(
+            ConversationMessage.conversation_id == conversation_id,
+            ConversationMessage.role == "assistant",
+        )
+        .order_by(ConversationMessage.seq)
+        .all()
+    )
+    out: list[dict[str, str]] = []
+    for content, blocks_json in rows:
+        stage_key = ""
+        if blocks_json:
+            try:
+                for b in json.loads(blocks_json) or []:
+                    if isinstance(b, dict) and b.get("type") == "stage":
+                        stage_key = str(b.get("stage_key") or "")
+                        break
+            except (json.JSONDecodeError, TypeError):
+                pass
+        out.append({"text": (content or "").strip(), "stage_key": stage_key})
+    return out
+
+
+def _last_message(db: Session, conversation_id: str):
+    return (
+        db.query(ConversationMessage)
+        .filter(ConversationMessage.conversation_id == conversation_id)
+        .order_by(ConversationMessage.seq.desc())
+        .first()
+    )
 
 
 def count_answered_turns(db: Session, conversation_id: str) -> int:

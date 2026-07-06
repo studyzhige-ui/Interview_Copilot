@@ -381,6 +381,7 @@ class InterviewRecordService:
                     source_segment_start=payload.get("source_segment_start"),
                     source_segment_end=payload.get("source_segment_end"),
                     answer_input_mode=str(payload.get("answer_input_mode") or "text"),
+                    answer_audio_file_asset_id=payload.get("answer_audio_file_asset_id"),
                     # Optional per-QA classification metadata (usually null).
                     action=payload.get("action"),
                     topic=payload.get("topic"),

@@ -330,8 +330,29 @@ class InterviewAnalysisOrchestrator:
         finally:
             db.close()
 
+        def _blocks(r) -> list[dict[str, Any]]:
+            if not r.content_blocks_json:
+                return []
+            try:
+                blocks = json.loads(r.content_blocks_json)
+                return blocks if isinstance(blocks, list) else []
+            except (json.JSONDecodeError, TypeError):
+                return []
+
+        # Stage keys are frozen onto assistant messages as content blocks at
+        # append time (MOCK-8) — map them to the analysis phase vocabulary so
+        # the review report attributes questions to their real stage instead
+        # of blanket "technical".
+        stage_to_phase = {
+            "self_intro": "self_intro",
+            "resume_project_deep_dive": "resume_deep_dive",
+            "role_technical_assessment": "technical",
+            "candidate_questions": "reverse_qa",
+        }
+
         qa_pairs: list[dict[str, Any]] = []
         pending_q: str | None = None
+        pending_phase: str = "general"
         for r in rows:
             role = (r.role or "").lower()
             content = (r.content or "").strip()
@@ -339,18 +360,38 @@ class InterviewAnalysisOrchestrator:
                 # New interviewer line. If a prior question is still
                 # unanswered (two interviewer lines in a row), the latest wins.
                 pending_q = content or pending_q
+                stage_key = next(
+                    (str(b.get("stage_key") or "") for b in _blocks(r)
+                     if isinstance(b, dict) and b.get("type") == "stage"),
+                    "",
+                )
+                pending_phase = stage_to_phase.get(stage_key, "general") if stage_key else pending_phase
             elif role.startswith(("user", "candidate")):
+                audio_asset = next(
+                    (str(b.get("file_asset_id") or "") for b in _blocks(r)
+                     if isinstance(b, dict) and b.get("type") == "audio"),
+                    None,
+                )
                 if pending_q:
                     qa_pairs.append({
                         "question": pending_q,
                         "answer": content,
-                        "phase": "technical",
+                        "phase": pending_phase,
                         "is_follow_up": False,
                         "topic": None,
                         "action": None,
                         "answer_quality": None,
+                        "answer_audio_file_asset_id": audio_asset or None,
+                        "answer_input_mode": "voice" if audio_asset else "text",
                     })
                     pending_q = None
+                elif qa_pairs and content:
+                    # Consecutive candidate messages (a two-phase-transaction
+                    # retry appended a second answer before the interviewer
+                    # replied) — merge into the previous answer instead of
+                    # dropping it on the floor.
+                    merged = qa_pairs[-1]["answer"] + "\n" + content
+                    qa_pairs[-1]["answer"] = merged.strip()
             # system / tool roles are ignored
         return qa_pairs
 

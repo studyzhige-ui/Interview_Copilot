@@ -17,7 +17,12 @@ from app.core.user_identity import resolve_user_pk
 from app.models.mock_interview_runtime import MockInterviewRuntime
 
 # The single live status; every other status is terminal.
+# Runtime is a PRESENCE CURSOR, not a second state machine: record.status is
+# the single source of truth for the run's lifecycle; the runtime row only
+# answers "does this user have a live run to resume, and where was it".
+# Its status just mirrors active-vs-not (MOCK-9).
 ACTIVE_STATUS = "in_progress"
+PROCESSING_STATUS = "processing_review"
 
 
 def create_runtime(
