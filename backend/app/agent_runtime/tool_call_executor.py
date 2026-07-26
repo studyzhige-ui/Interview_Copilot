@@ -56,17 +56,42 @@ async def execute_tool_call(
             "preview": encoded_arguments[: settings.AGENT_MAX_TOOL_ARG_CHARS],
         }
     )
-    if turn_id:
+
+    async def audit_cancellation() -> None:
+        if not turn_id:
+            return
         await asyncio.to_thread(
-            _start,
+            _finish,
             call_id,
             turn_id,
             session_id,
             user_id,
             tool_name,
-            audited_arguments,
-            timeout_seconds,
+            "cancelled",
+            None,
+            "tool_cancelled",
+            (time.perf_counter() - started) * 1000,
         )
+
+    if turn_id:
+        start_task = asyncio.create_task(
+            asyncio.to_thread(
+                _start,
+                call_id,
+                turn_id,
+                session_id,
+                user_id,
+                tool_name,
+                audited_arguments,
+                timeout_seconds,
+            )
+        )
+        try:
+            await asyncio.shield(start_task)
+        except asyncio.CancelledError:
+            await start_task
+            await audit_cancellation()
+            raise
     if arguments_too_large:
         result = {"error": "tool_args_too_large", "tool_name": tool_name}
         if turn_id:
@@ -98,21 +123,7 @@ async def execute_tool_call(
         result = {"error": "tool_timeout", "tool_name": tool_name}
         status, error = "timeout", "tool_timeout"
     except asyncio.CancelledError:
-        if turn_id:
-            await asyncio.shield(
-                asyncio.to_thread(
-                    _finish,
-                    call_id,
-                    turn_id,
-                    session_id,
-                    user_id,
-                    tool_name,
-                    "cancelled",
-                    None,
-                    "tool_cancelled",
-                    (time.perf_counter() - started) * 1000,
-                )
-            )
+        await audit_cancellation()
         raise
     except ValueError as exc:
         result = {"error": str(exc)}
