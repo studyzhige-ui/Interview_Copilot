@@ -8,10 +8,10 @@
 #   1. Choose an edition and create .env if missing
 #   2. Verify prerequisites and an isolated Python environment
 #   3. Install the edition-appropriate development dependencies
-#   5. Generate SECRET_KEY if blank
-#   6. docker compose up -d  +  wait for postgres
-#   7. alembic upgrade head
-#   8. cd frontend && npm install
+#   4. Generate SECRET_KEY if blank
+#   5. docker compose up -d  +  wait for postgres
+#   6. alembic upgrade head
+#   7. cd frontend && npm install
 #
 # What this script does NOT do:
 #   - Create or activate your Python environment. Do that yourself first.
@@ -49,9 +49,12 @@ else
     ok "Copied $TEMPLATE -> .env"
 fi
 if [ "$EDITION" = "cloud" ]; then
-    REQUIREMENTS_FILE="requirements-dev.txt"
+    DEPENDENCY_ARGS=(-e ".[dev]")
 else
-    REQUIREMENTS_FILE="requirements-community-dev.txt"
+    DEPENDENCY_ARGS=(
+        --extra-index-url "https://download.pytorch.org/whl/cu129"
+        -e ".[community,dev]"
+    )
 fi
 
 # -----------------------------------------------------------------------------
@@ -88,18 +91,13 @@ ok "isolated environment detected"
 # 3. Python dependencies
 # -----------------------------------------------------------------------------
 step "Installing Python dependencies (this can take 5-15 min on first run)"
-( cd "$PROJECT_ROOT" && python -m pip install --upgrade pip && python -m pip install -r "$REQUIREMENTS_FILE" ) \
+( cd "$PROJECT_ROOT" && python -m pip install --upgrade pip && python -m pip install "${DEPENDENCY_ARGS[@]}" ) \
     || fail "pip install failed."
-ok "$EDITION development dependencies installed from $REQUIREMENTS_FILE"
+ok "$EDITION development dependencies installed from pyproject.toml"
 
 # -----------------------------------------------------------------------------
-# 4. Secrets and Docker environment
+# 4. Secret
 # -----------------------------------------------------------------------------
-[ -f "$PROJECT_ROOT/.env.docker" ] || {
-    cp "$PROJECT_ROOT/.env.docker.example" "$PROJECT_ROOT/.env.docker"
-    ok "Copied .env.docker.example -> .env.docker"
-}
-
 # Auto-generate SECRET_KEY if blank.
 if grep -qE '^SECRET_KEY=[[:space:]]*$' "$ENV_FILE"; then
     NEW_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
@@ -110,7 +108,7 @@ if grep -qE '^SECRET_KEY=[[:space:]]*$' "$ENV_FILE"; then
 fi
 
 # -----------------------------------------------------------------------------
-# 4. Infrastructure
+# 5. Infrastructure
 # -----------------------------------------------------------------------------
 step "Starting Docker infrastructure (postgres, redis, minio, milvus)"
 ( cd "$PROJECT_ROOT" && docker compose up -d ) || fail "docker compose up failed."

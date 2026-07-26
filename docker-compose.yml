@@ -1,6 +1,13 @@
+x-backend-build: &backend-build
+  context: .
+  dockerfile: backend/Dockerfile
+  args:
+    APP_EXTRAS: community
+
 services:
-  # Local infrastructure only. Run the FastAPI app and Celery worker on the host,
-  # or add a Dockerfile/api service before using this compose file for production.
+  # Community development stack. The default profile starts infrastructure;
+  # `--profile full` also starts the API, workers, scheduler, and frontend.
+  # This is not the production Cloud topology.
   # Dev-only nginx: proxies all of :80 to the host-running uvicorn.
   # Use with: docker compose --profile dev up -d
   # In `full` mode the `frontend` service replaces this with a real SPA
@@ -21,7 +28,10 @@ services:
   db:
     image: postgres:15-alpine
     container_name: interview_copilot_db
-    env_file: .env.docker
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-interview_copilot}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
@@ -43,7 +53,9 @@ services:
     ports:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:9001:9001"
-    env_file: .env.docker
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
     volumes:
       - minio_data:/data
     command: server /data --console-address ":9001"
@@ -55,11 +67,9 @@ services:
     container_name: interview_copilot_mc
     depends_on:
       - minio
-    # Read MINIO_ROOT_USER / MINIO_ROOT_PASSWORD / S3_BUCKET_NAME from
-    # .env.docker so they stay in sync with the minio service. Defaults
-    # are the example values used when the file is missing.
-    env_file: .env.docker
     environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-interview-copilot-bucket}
     entrypoint: >
       /bin/sh -c "
@@ -142,26 +152,14 @@ services:
   # Activate with: docker compose --profile full up -d
   api:
     profiles: [full]
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-      args:
-        REQUIREMENTS_FILE: requirements-community.txt
+    build: *backend-build
     container_name: interview_copilot_api
     env_file: .env
     environment:
-      # Container-network URL overrides. Defaults assume the bundled
-      # docker-compose services (db / redis / minio / milvus-standalone)
-      # AND the default credentials in .env.docker.example.
-      #
-      # If you customised POSTGRES_USER/PASSWORD or MINIO_ROOT_USER in
-      # .env.docker, set the matching `*_DOCKER` overrides in .env so
-      # this composition picks them up. Example:
-      #     DATABASE_URL_DOCKER=postgresql://myuser:mypass@db:5432/mydb
-      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql://postgres:postgres@db:5432/interview_copilot}
-      REDIS_URL: ${REDIS_URL_DOCKER:-redis://redis:6379/0}
-      MILVUS_URI: ${MILVUS_URI_DOCKER:-http://milvus-standalone:19530}
-      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL_DOCKER:-http://minio:9000}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-interview_copilot}
+      REDIS_URL: redis://redis:6379/0
+      MILVUS_URI: http://milvus-standalone:19530
+      AWS_ENDPOINT_URL: http://minio:9000
       # Worker count — 2 is safe with the default DB pool math
       # (2 * 40 = 80 < 100 PG max_connections). Bump together with
       # postgres max_connections + DB_POOL_SIZE if you want more.
@@ -222,18 +220,14 @@ services:
 
   worker-transcription:
     profiles: [full]
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-      args:
-        REQUIREMENTS_FILE: requirements-community.txt
+    build: *backend-build
     container_name: interview_copilot_worker_transcription
     env_file: .env
     environment:
-      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql://postgres:postgres@db:5432/interview_copilot}
-      REDIS_URL: ${REDIS_URL_DOCKER:-redis://redis:6379/0}
-      MILVUS_URI: ${MILVUS_URI_DOCKER:-http://milvus-standalone:19530}
-      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL_DOCKER:-http://minio:9000}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-interview_copilot}
+      REDIS_URL: redis://redis:6379/0
+      MILVUS_URI: http://milvus-standalone:19530
+      AWS_ENDPOINT_URL: http://minio:9000
       # Belt-and-braces signal in addition to --queues; init_worker_models
       # checks this env var first when deciding whether to load Whisper.
       CELERY_QUEUES: "transcription"
@@ -256,18 +250,14 @@ services:
 
   worker-light:
     profiles: [full]
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-      args:
-        REQUIREMENTS_FILE: requirements-community.txt
+    build: *backend-build
     container_name: interview_copilot_worker_light
     env_file: .env
     environment:
-      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql://postgres:postgres@db:5432/interview_copilot}
-      REDIS_URL: ${REDIS_URL_DOCKER:-redis://redis:6379/0}
-      MILVUS_URI: ${MILVUS_URI_DOCKER:-http://milvus-standalone:19530}
-      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL_DOCKER:-http://minio:9000}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-interview_copilot}
+      REDIS_URL: redis://redis:6379/0
+      MILVUS_URI: http://milvus-standalone:19530
+      AWS_ENDPOINT_URL: http://minio:9000
       CELERY_QUEUES: "default"
     command:
       - celery
@@ -295,16 +285,12 @@ services:
   # work; one instance is sufficient.
   beat:
     profiles: [full]
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-      args:
-        REQUIREMENTS_FILE: requirements-community.txt
+    build: *backend-build
     container_name: interview_copilot_beat
     env_file: .env
     environment:
-      DATABASE_URL: ${DATABASE_URL_DOCKER:-postgresql://postgres:postgres@db:5432/interview_copilot}
-      REDIS_URL: ${REDIS_URL_DOCKER:-redis://redis:6379/0}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-interview_copilot}
+      REDIS_URL: redis://redis:6379/0
     command:
       - celery
       - -A

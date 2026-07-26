@@ -36,7 +36,12 @@ bash ./scripts/setup.sh
 Manual equivalent:
 
 ```bash
-python -m pip install -r requirements-dev.txt
+# Cloud development
+python -m pip install -e ".[dev]"
+
+# Community development
+python -m pip install --extra-index-url https://download.pytorch.org/whl/cu129 -e ".[community,dev]"
+
 docker compose up -d
 alembic upgrade head
 cd frontend && npm ci

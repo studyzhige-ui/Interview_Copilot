@@ -3,7 +3,6 @@
 .env.*
 !.env.cloud.example
 !.env.community.example
-!.env.docker.example
 
 # User-local prompt scratchpad (not project content)
 docs/prompts/

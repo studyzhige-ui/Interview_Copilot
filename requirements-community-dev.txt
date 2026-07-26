@@ -1,2 +1,0 @@
--r requirements-community.txt
--r requirements-dev.txt

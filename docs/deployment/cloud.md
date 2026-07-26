@@ -9,7 +9,7 @@ cp .env.cloud.example .env
 The Cloud backend image uses the lean core dependency set by default:
 
 ```bash
-docker build -f backend/Dockerfile --build-arg REQUIREMENTS_FILE=requirements.txt .
+docker build -f backend/Dockerfile .
 ```
 
 ## Product contract

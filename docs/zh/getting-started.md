@@ -35,6 +35,18 @@ bash ./scripts/setup.sh
 
 脚本会安装依赖、启动本地基础设施并执行数据库迁移。
 
+手动安装依赖时，Cloud 使用：
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+Community 使用：
+
+```bash
+python -m pip install --extra-index-url https://download.pytorch.org/whl/cu129 -e ".[community,dev]"
+```
+
 ## 3. 模型
 
 Cloud 模板默认使用远程 Embedding、Reranker 和 ASR。相关密钥属于平台运营方，

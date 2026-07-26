@@ -9,10 +9,10 @@
       1. Choose an edition and create .env if missing
       2. Verify prerequisites and an isolated Python environment
       3. Install the edition-appropriate development dependencies
-      5. Generate SECRET_KEY if blank
-      6. docker compose up -d  +  wait for postgres / redis
-      7. alembic upgrade head
-      8. cd frontend && npm install
+      4. Generate SECRET_KEY if blank
+      5. docker compose up -d  +  wait for postgres / redis
+      6. alembic upgrade head
+      7. cd frontend && npm install
 
     What this script does NOT do:
       - Create or activate your Python environment. Do that yourself first.
@@ -64,10 +64,14 @@ if (Test-Path $envFile) {
     Copy-Item (Join-Path $projectRoot $template) $envFile
     Ok "Copied $template -> .env"
 }
-$requirementsFile = if ($edition -eq 'cloud') {
-    'requirements-dev.txt'
+$dependencyArgs = if ($edition -eq 'cloud') {
+    @('install', '-e', '.[dev]')
 } else {
-    'requirements-community-dev.txt'
+    @(
+        'install',
+        '--extra-index-url', 'https://download.pytorch.org/whl/cu129',
+        '-e', '.[community,dev]'
+    )
 }
 
 # -----------------------------------------------------------------------------
@@ -111,20 +115,14 @@ Step 'Installing Python dependencies (this can take 5-15 min on first run)'
 Push-Location $projectRoot
 try {
     & python -m pip install --upgrade pip
-    & python -m pip install -r $requirementsFile
+    & python -m pip @dependencyArgs
     if ($LASTEXITCODE -ne 0) { Fail 'pip install failed.' }
 } finally { Pop-Location }
-Ok "$edition development dependencies installed from $requirementsFile"
+Ok "$edition development dependencies installed from pyproject.toml"
 
 # -----------------------------------------------------------------------------
-# 4. Secrets and Docker environment
+# 4. Secret
 # -----------------------------------------------------------------------------
-$envFileForDocker = Join-Path $projectRoot '.env.docker'
-if (-not (Test-Path $envFileForDocker)) {
-    Copy-Item (Join-Path $projectRoot '.env.docker.example') $envFileForDocker
-    Ok 'Copied .env.docker.example -> .env.docker'
-}
-
 # Auto-generate SECRET_KEY if blank.
 $envContent = Get-Content $envFile -Raw
 if ($envContent -match '(?m)^SECRET_KEY=\s*$') {
@@ -135,7 +133,7 @@ if ($envContent -match '(?m)^SECRET_KEY=\s*$') {
 }
 
 # -----------------------------------------------------------------------------
-# 4. Infrastructure
+# 5. Infrastructure
 # -----------------------------------------------------------------------------
 Step 'Starting Docker infrastructure (postgres, redis, minio, milvus)'
 Push-Location $projectRoot

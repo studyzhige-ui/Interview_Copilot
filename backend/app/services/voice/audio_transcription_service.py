@@ -38,7 +38,8 @@ def _local_device() -> str:
         import torch
     except ImportError as exc:
         raise RuntimeError(
-            "Local speech models require requirements-community.txt"
+            'Local speech models require the "community" dependency group '
+            '(pip install --extra-index-url https://download.pytorch.org/whl/cu129 ".[community]")'
         ) from exc
     return "cuda" if torch.cuda.is_available() else "cpu"
 

@@ -15,7 +15,7 @@
 安装开发依赖：
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -e ".[dev]"
 ```
 
 用 `golden_dataset.example.jsonl` 作为格式模板，建立属于项目自己的 JSONL

@@ -7,6 +7,12 @@ cp .env.community.example .env
 pwsh ./scripts/setup.ps1
 ```
 
+Manual dependency install:
+
+```bash
+python -m pip install --extra-index-url https://download.pytorch.org/whl/cu129 -e ".[community,dev]"
+```
+
 Run the full container stack with:
 
 ```bash

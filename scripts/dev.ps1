@@ -144,7 +144,7 @@ function Invoke-EnsureCondaEnv {
         Write-Host '  If missing, create it (Python 3.10 / 3.11 / 3.12 all work):' -ForegroundColor Yellow
         Write-Host "      conda create -n $WantEnv python=3.11 -y" -ForegroundColor White
         Write-Host "      conda activate $WantEnv" -ForegroundColor White
-        Write-Host '      pip install -r requirements-dev.txt' -ForegroundColor White
+        Write-Host '      python -m pip install -e ".[dev]"' -ForegroundColor White
         Write-Error "Conda activate failed for env '$WantEnv'."
     }
 
@@ -159,7 +159,7 @@ function Invoke-EnsureCondaEnv {
         Write-Host "      conda env remove -n $WantEnv -y" -ForegroundColor White
         Write-Host "      conda create -n $WantEnv python=3.11 -y" -ForegroundColor White
         Write-Host "      conda activate $WantEnv" -ForegroundColor White
-        Write-Host '      pip install -r requirements-dev.txt' -ForegroundColor White
+        Write-Host '      python -m pip install -e ".[dev]"' -ForegroundColor White
         Write-Error "Conda env '$WantEnv' has no Python."
     }
     return $pyExe
@@ -182,7 +182,7 @@ if ($RunBackend) {
     & python -c "import fastapi, alembic, uvicorn, celery, slowapi" 2>$null
     if ($LASTEXITCODE -ne 0) {
         Write-Host '  Backend Python deps missing.' -ForegroundColor Red
-        Write-Host '  Fix: pip install -r requirements-dev.txt' -ForegroundColor Yellow
+        Write-Host '  Fix: python -m pip install -e ".[dev]"' -ForegroundColor Yellow
         Write-Error 'Backend deps check failed.'
     }
     Say 'Init' 'Backend deps OK (fastapi, alembic, uvicorn, celery, slowapi)' Green

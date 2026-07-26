@@ -18,7 +18,7 @@ The suite has three layers:
 Install the developer dependencies:
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -e ".[dev]"
 ```
 
 Create a project-owned JSONL dataset. The repository includes

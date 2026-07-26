@@ -324,22 +324,22 @@ def _validate_production_safety(s: "Settings") -> None:
         findings.append(
             (
                 "DATABASE_URL still uses bundled postgres/postgres",
-                "Set POSTGRES_USER/POSTGRES_PASSWORD in .env.docker AND DATABASE_URL"
-                " (or DATABASE_URL_DOCKER) in .env to match.",
+                "Set POSTGRES_USER/POSTGRES_PASSWORD and DATABASE_URL in .env"
+                " to matching non-default values.",
             )
         )
     if (s.AWS_ACCESS_KEY_ID or "").strip() == "minioadmin":
         findings.append(
             (
                 "AWS_ACCESS_KEY_ID is bundled 'minioadmin'",
-                "Rotate MINIO_ROOT_USER in .env.docker and AWS_ACCESS_KEY_ID in .env.",
+                "Rotate AWS_ACCESS_KEY_ID in .env; Docker Compose uses it for MinIO.",
             )
         )
     if (s.AWS_SECRET_ACCESS_KEY or "").strip() == "minioadmin":
         findings.append(
             (
                 "AWS_SECRET_ACCESS_KEY is bundled 'minioadmin'",
-                "Rotate MINIO_ROOT_PASSWORD in .env.docker and AWS_SECRET_ACCESS_KEY in .env.",
+                "Rotate AWS_SECRET_ACCESS_KEY in .env; Docker Compose uses it for MinIO.",
             )
         )
 

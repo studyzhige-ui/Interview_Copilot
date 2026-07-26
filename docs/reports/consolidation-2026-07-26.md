@@ -77,25 +77,24 @@ MCP 还具备：
 
 ## 5. 模型与依赖边界
 
-依赖拆为四个入口：
+依赖统一由 `pyproject.toml` 管理，不再维护相互引用的 requirements 文件：
 
-- `requirements.txt`：Cloud/核心运行时；
-- `requirements-community.txt`：本地模型、OCR、WhisperX、Pyannote；
-- `requirements-dev.txt`：核心开发、测试与评测；
-- `requirements-community-dev.txt`：Community 完整开发环境。
+- 基础依赖：Cloud/核心运行时；
+- `community`：本地模型、OCR、WhisperX、Pyannote；
+- `dev`：测试、静态分析与评测；
+- Community 开发环境直接组合 `.[community,dev]`，没有额外中间文件。
 
 Cloud 的语音模型和本地 RAG 模型依赖采用延迟导入。冷启动边界测试会阻断
 Torch、WhisperX、Docling、Sentence Transformers 等 Community 包，并验证
 Cloud 的 API、远程 Embedding、远程 Reranker 与远程 ASR 工厂仍可导入和构造。
 
-环境模板拆为：
+环境模板只保留：
 
 - `.env.cloud.example`
 - `.env.community.example`
-- `.env.docker.example`
 
 安装脚本会先识别 Edition，再选择对应依赖，Cloud 开发者不再被迫安装数 GB
-本地模型栈。
+本地模型栈。Docker Compose 直接读取 `.env`，不再维护第二套 Docker 环境文件。
 
 ## 6. 前端收口
 
@@ -125,6 +124,7 @@ Cloud 的 API、远程 Embedding、远程 Reranker 与远程 ASR 工厂仍可导
 ## 8. 删除的历史内容
 
 - 旧 `.env.example` 与 `.env.example.lite`；
+- 重复、相互嵌套的旧依赖清单与独立 Docker 环境模板；
 - 9 份已经完成或失效的历史计划文档；
 - 旧前端设计交付说明、演示 HTML/JSX、未使用 Logo；
 - 重复静态字体；

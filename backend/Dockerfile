@@ -12,12 +12,18 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
-ARG REQUIREMENTS_FILE=requirements.txt
-COPY requirements*.txt ./
+ARG APP_EXTRAS
+ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu129
+COPY pyproject.toml README.md ./
+COPY backend/app ./backend/app
 RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir --upgrade pip && \
-    /opt/venv/bin/pip install --no-cache-dir -r "$REQUIREMENTS_FILE" && \
-    /opt/venv/bin/pip install --no-cache-dir gunicorn
+    if [ -n "$APP_EXTRAS" ]; then \
+        /opt/venv/bin/pip install --no-cache-dir \
+            --extra-index-url "$PYTORCH_INDEX_URL" ".[${APP_EXTRAS}]"; \
+    else \
+        /opt/venv/bin/pip install --no-cache-dir .; \
+    fi
 
 # Stage 2: Lean runtime image
 FROM python:3.13-slim AS runtime

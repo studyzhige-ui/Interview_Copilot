@@ -72,6 +72,16 @@ servers. The edition decides what end users are allowed to configure.
 
 ## Development
 
+Python dependencies have one source of truth in `pyproject.toml`:
+
+```bash
+# Cloud development
+python -m pip install -e ".[dev]"
+
+# Community development
+python -m pip install --extra-index-url https://download.pytorch.org/whl/cu129 -e ".[community,dev]"
+```
+
 ```bash
 python -m pytest -q
 ruff format --check backend/app backend/tests evaluation scripts
@@ -100,6 +110,8 @@ evaluation/        Optional RAG evaluation runners, tests, and dataset template
 docs/deployment/   Edition-specific deployment guidance
 docs/              Current architecture and operator documentation
 scripts/           Setup, maintenance, and model initialization
+pyproject.toml     Python dependencies, package metadata, and tool configuration
+docker-compose.yml Community infrastructure and optional full local stack
 ```
 
 ## Security boundary
