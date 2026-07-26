@@ -1,6 +1,7 @@
 import logging
 import os
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic import field_validator
@@ -29,18 +30,16 @@ class Settings(BaseSettings):
     )
 
     PROJECT_NAME: str = "Interview Copilot API"
-    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/interview_copilot"
-    DEEPSEEK_API_KEY: str = ""
-    NVIDIA_API_KEY: str = ""
-    HF_ENDPOINT: str = "https://hf-mirror.com"
+    APP_EDITION: Literal["cloud", "community"] = "community"
+    DATABASE_URL: str = (
+        "postgresql://postgres:postgres@localhost:5432/interview_copilot"
+    )
     LLAMA_CLOUD_API_KEY: str = ""
 
     # Runtime data paths
     APP_DATA_DIR: str = _default_app_data_dir()
 
     # Database and vector-store data
-    DB_DIR: str = ""
-    CHROMA_DB_DIR: str = ""
     MILVUS_URI: str = "http://localhost:19530"
     MILVUS_COLLECTION: str = "interview_copilot_rag"
     MILVUS_SIMILARITY_METRIC: str = "IP"
@@ -62,9 +61,6 @@ class Settings(BaseSettings):
     LOG_DIR: str = ""
     LOG_LEVEL: str = "INFO"
 
-    # Evaluation datasets and result files
-    EVAL_DIR: str = ""
-
     # Local upload backups and object-storage staging
     STORAGE_DIR: str = ""
 
@@ -82,16 +78,20 @@ class Settings(BaseSettings):
     #   dropping the Milvus collection and re-ingesting.
 
     # Embedding (RAG vector store)
-    EMBEDDING_PROVIDER: str = "local"            # local | openai | siliconflow | jina | dashscope | zhipu
+    EMBEDDING_PROVIDER: str = (
+        "local"  # local | openai | siliconflow | jina | dashscope | zhipu
+    )
     EMBEDDING_MODEL: str = "BAAI/bge-m3"
     EMBEDDING_DIM: int = 1024
 
     # Reranker (RAG cross-encoder)
-    RERANKER_PROVIDER: str = "local"             # local | siliconflow | jina | cohere | dashscope
+    RERANKER_PROVIDER: str = "local"  # local | siliconflow | jina | cohere | dashscope
     RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"
 
     # ASR (audio transcription)
-    TRANSCRIPTION_PROVIDER: str = "local_whisperx"   # local_whisperx | openai | siliconflow | dashscope
+    TRANSCRIPTION_PROVIDER: str = (
+        "local_whisperx"  # local_whisperx | openai | siliconflow | dashscope
+    )
     TRANSCRIPTION_MODEL: str = "Systran/faster-whisper-large-v3"
 
     # Speaker diarization (separates "who said what"). Three modes:
@@ -113,15 +113,25 @@ class Settings(BaseSettings):
     AGENT_MAX_STEPS: int = 80  # hard safety-valve — the ONLY hard stop (no time budget)
     AGENT_TOOL_TIMEOUT_SECONDS: int = 30
     AGENT_TEMPERATURE: float = 0.2
-    AGENT_MAX_TOTAL_TOKENS: int = 200000  # observability only, not a hard stop
     AGENT_MAX_RESPONSE_TOKENS: int = 4096
-    AGENT_MAX_TOOL_CALLS: int = 50  # observability only, not a hard stop
     AGENT_TOOL_SCHEMA_STRICT: bool = True
     AGENT_MAX_TOOL_ARG_CHARS: int = 4000
+    TURN_HEARTBEAT_SECONDS: int = 10
+    TURN_STALE_SECONDS: int = 60
     # Stage A — tool-result offload thresholds.
-    AGENT_PERSIST_THRESHOLD: int = 50_000      # per-result: offload if > 50K chars
-    AGENT_TURN_BUDGET_CHARS: int = 200_000     # per-turn aggregate: spill largest until < 200K
-    AGENT_PERSIST_PREVIEW_SIZE: int = 2_000    # preview size (chars) in persisted-output block
+    AGENT_PERSIST_THRESHOLD: int = 50_000  # per-result: offload if > 50K chars
+    AGENT_TURN_BUDGET_CHARS: int = (
+        200_000  # per-turn aggregate: spill largest until < 200K
+    )
+    AGENT_PERSIST_PREVIEW_SIZE: int = (
+        2_000  # preview size (chars) in persisted-output block
+    )
+    # User-managed MCP servers. stdio is disabled by default because it executes
+    # a user-supplied command in the API process; private HTTP targets are opt-in
+    # for trusted local/single-tenant deployments.
+    MCP_ALLOW_STDIO: bool = False
+    MCP_ALLOW_PRIVATE_NETWORKS: bool = False
+    MCP_RUNTIME_IDLE_SECONDS: int = 600
     # Pre-rerank hybrid candidate count (Milvus RRF output). 12 gives the
     # cross-encoder a real choice space (retrieval plan §2.3).
     FUSION_TOP_K: int = 12
@@ -160,22 +170,13 @@ class Settings(BaseSettings):
     TTS_DEFAULT_VOICE: str = "zh-CN-YunxiNeural"
     LEVER_API_BASE: str = "https://api.lever.co/v0"
     LEVER_SITES: str = "openai"
-    LEVER_DEFAULT_LIMIT: int = 30
-    # NVIDIA_API_BASE / NVIDIA_CHAT_MODEL fields used to live here as
-    # Pydantic settings but nothing in the codebase ever read them
-    # through ``settings.``. The live read path is
-    # ``services/model_sources/providers.py`` calling
-    # ``os.getenv("NVIDIA_API_BASE", "https://integrate.api.nvidia.com/v1")``
-    # directly, and the model list is sourced from
-    # ``/v1/models`` (no hardcoded chat model). Only ``NVIDIA_API_KEY``
-    # above is required to enable the provider.
 
     # ── Deployment environment ──────────────────────────────────────────
     # Drives production-safety validation (see _validate_production_safety):
     # "staging" / "prod" / "production" turn a placeholder SECRET_KEY into a
     # fatal startup error and enable other prod-only checks. Default "local"
     # keeps dev convenient.
-    ENVIRONMENT: str = "local"                 # "local" / "staging" / "prod"
+    ENVIRONMENT: str = "local"  # "local" / "staging" / "prod"
 
     # Security and JWT.
     # No in-code default — keys must come from .env (or environment). An empty
@@ -217,7 +218,7 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = "Interview Copilot <noreply@interview-copilot.local>"
     SMTP_USE_TLS: bool = True
-    EMAIL_CODE_TTL_SECONDS: int = 600     # 10 minutes
+    EMAIL_CODE_TTL_SECONDS: int = 600  # 10 minutes
     EMAIL_CODE_RESEND_COOLDOWN: int = 60  # min seconds between resend
 
     # S3-compatible object storage. Defaults are for local MinIO development.
@@ -251,8 +252,9 @@ class Settings(BaseSettings):
     REDIS_POOL_SIZE: int = 50
 
     @field_validator(
-        "DB_DIR", "CHROMA_DB_DIR",
-        "CACHE_DIR", "LOG_DIR", "EVAL_DIR", "STORAGE_DIR",
+        "CACHE_DIR",
+        "LOG_DIR",
+        "STORAGE_DIR",
         mode="before",
     )
     @classmethod
@@ -263,11 +265,8 @@ class Settings(BaseSettings):
         # Resolve APP_DATA_DIR from already-validated values or env/default.
         app_data = info.data.get("APP_DATA_DIR") or _default_app_data_dir()
         field_to_subdir = {
-            "DB_DIR": "databases",
-            "CHROMA_DB_DIR": str(Path("databases") / "chroma"),
             "CACHE_DIR": "cache",
             "LOG_DIR": "logs",
-            "EVAL_DIR": "evaluation",
             "STORAGE_DIR": "storage",
         }
         subdir = field_to_subdir.get(info.field_name, info.field_name.lower())
@@ -303,7 +302,11 @@ def _validate_production_safety(s: "Settings") -> None:
 
     Then drop the printed value into ``.env`` as ``SECRET_KEY=...``.
     """
-    is_prodlike = (s.ENVIRONMENT or "local").strip().lower() in {"staging", "prod", "production"}
+    is_prodlike = (s.ENVIRONMENT or "local").strip().lower() in {
+        "staging",
+        "prod",
+        "production",
+    }
     findings: list[tuple[str, str]] = []
     secret_finding: tuple[str, str] | None = None
 
@@ -311,28 +314,34 @@ def _validate_production_safety(s: "Settings") -> None:
         secret_finding = (
             "SECRET_KEY",
             "Generate one with: python scripts/generate_secret.py "
-            "(or python -c \"import secrets; print(secrets.token_urlsafe(48))\")",
+            '(or python -c "import secrets; print(secrets.token_urlsafe(48))")',
         )
 
     # Bundled-Postgres / MinIO well-known credentials. These are baked into
     # docker-compose's defaults; rotating them in production prevents anyone
     # who reads the public README from logging into your DB / object store.
     if "postgres:postgres@" in (s.DATABASE_URL or ""):
-        findings.append((
-            "DATABASE_URL still uses bundled postgres/postgres",
-            "Set POSTGRES_USER/POSTGRES_PASSWORD in .env.docker AND DATABASE_URL"
-            " (or DATABASE_URL_DOCKER) in .env to match.",
-        ))
+        findings.append(
+            (
+                "DATABASE_URL still uses bundled postgres/postgres",
+                "Set POSTGRES_USER/POSTGRES_PASSWORD in .env.docker AND DATABASE_URL"
+                " (or DATABASE_URL_DOCKER) in .env to match.",
+            )
+        )
     if (s.AWS_ACCESS_KEY_ID or "").strip() == "minioadmin":
-        findings.append((
-            "AWS_ACCESS_KEY_ID is bundled 'minioadmin'",
-            "Rotate MINIO_ROOT_USER in .env.docker and AWS_ACCESS_KEY_ID in .env.",
-        ))
+        findings.append(
+            (
+                "AWS_ACCESS_KEY_ID is bundled 'minioadmin'",
+                "Rotate MINIO_ROOT_USER in .env.docker and AWS_ACCESS_KEY_ID in .env.",
+            )
+        )
     if (s.AWS_SECRET_ACCESS_KEY or "").strip() == "minioadmin":
-        findings.append((
-            "AWS_SECRET_ACCESS_KEY is bundled 'minioadmin'",
-            "Rotate MINIO_ROOT_PASSWORD in .env.docker and AWS_SECRET_ACCESS_KEY in .env.",
-        ))
+        findings.append(
+            (
+                "AWS_SECRET_ACCESS_KEY is bundled 'minioadmin'",
+                "Rotate MINIO_ROOT_PASSWORD in .env.docker and AWS_SECRET_ACCESS_KEY in .env.",
+            )
+        )
 
     # Prod-only: with TRUSTED_PROXIES empty, every request's
     # ``request.client.host`` collapses to the proxy IP (nginx / ALB)
@@ -342,13 +351,15 @@ def _validate_production_safety(s: "Settings") -> None:
     # deployment. Skipped in dev because direct-connect doesn't need
     # the rewrite.
     if is_prodlike and not (s.TRUSTED_PROXIES or "").strip():
-        findings.append((
-            "TRUSTED_PROXIES is empty in production",
-            "Set to the nginx/ALB IP(s) (e.g. '127.0.0.1' for same-host "
-            "nginx) so ProxyHeadersMiddleware can rewrite client.host "
-            "from X-Forwarded-For. Without it, per-IP rate-limit and "
-            "login-lockout share one global counter.",
-        ))
+        findings.append(
+            (
+                "TRUSTED_PROXIES is empty in production",
+                "Set to the nginx/ALB IP(s) (e.g. '127.0.0.1' for same-host "
+                "nginx) so ProxyHeadersMiddleware can rewrite client.host "
+                "from X-Forwarded-For. Without it, per-IP rate-limit and "
+                "login-lockout share one global counter.",
+            )
+        )
 
     # ── SECRET_KEY: hard stop in production, WARN elsewhere ─────────────
     if secret_finding is not None:
@@ -364,7 +375,8 @@ def _validate_production_safety(s: "Settings") -> None:
             )
         logger.warning(
             "[security] %s is set to an insecure default. %s",
-            name, hint,
+            name,
+            hint,
         )
 
     if not findings:
@@ -378,7 +390,8 @@ def _validate_production_safety(s: "Settings") -> None:
         for name, hint in findings:
             logger.error(
                 "[PRODUCTION BLOCKER] Insecure default: %s. Hint: %s",
-                name, hint,
+                name,
+                hint,
             )
     else:
         items = "; ".join(name for name, _ in findings)

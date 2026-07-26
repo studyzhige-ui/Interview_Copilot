@@ -5,6 +5,7 @@ especially the ``knowledge`` kind, whose gate must accept everything
 document_formats.ALLOWED_KNOWLEDGE_EXTENSIONS can parse (html/markdown/
 csv/json/code/images/legacy Office) while still rejecting binary junk.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -63,5 +64,5 @@ def test_detect_head_format(head, kind, ext, expected_ok):
 
 def test_chinese_text_head_cut_mid_character_still_passes():
     """A 32-byte window can cut a UTF-8 multibyte char — not binary."""
-    head = ("这是一份中文简历，包含多字节字符" .encode("utf-8"))[:32]
+    head = ("这是一份中文简历，包含多字节字符".encode("utf-8"))[:32]
     assert detect_head_format(head, "knowledge", ".txt") is not None

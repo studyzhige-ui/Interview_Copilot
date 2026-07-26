@@ -3,6 +3,7 @@
 Local SQLite fixture — the shared conftest db_session fixture is broken
 because it imports a removed ``app.models.interview`` module.
 """
+
 import json
 
 import pytest
@@ -41,10 +42,12 @@ def record_db_session():
     )
     Session = sessionmaker(bind=engine, expire_on_commit=False)
     session = Session()
-    session.add_all([
-        User(username="alice", hashed_password="x"),
-        User(username="bob", hashed_password="x"),
-    ])
+    session.add_all(
+        [
+            User(username="alice", hashed_password="x"),
+            User(username="bob", hashed_password="x"),
+        ]
+    )
     session.commit()
     try:
         yield session
@@ -75,7 +78,9 @@ def test_create_for_upload(record_db_session, monkeypatch):
     from app.models.user import User
     from app.services.interview import interview_record_service as module
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
+    monkeypatch.setattr(
+        module, "SessionLocal", lambda: _NoCloseSession(record_db_session)
+    )
 
     service = module.InterviewRecordService()
     record = service.create_for_upload(
@@ -91,7 +96,9 @@ def test_create_for_upload(record_db_session, monkeypatch):
     assert record.status == module.STATUS_PENDING
     # The service resolves the "alice" principal to users.id and stores the
     # integer pk, not the username string.
-    alice_pk = record_db_session.query(User.id).filter(User.username == "alice").scalar()
+    alice_pk = (
+        record_db_session.query(User.id).filter(User.username == "alice").scalar()
+    )
     assert record.user_id == alice_pk
     assert record.resume_text_snapshot == "老的简历内容"
 
@@ -102,7 +109,9 @@ def test_create_for_upload(record_db_session, monkeypatch):
 def test_create_for_mock(record_db_session, monkeypatch):
     from app.services.interview import interview_record_service as module
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
+    monkeypatch.setattr(
+        module, "SessionLocal", lambda: _NoCloseSession(record_db_session)
+    )
 
     service = module.InterviewRecordService()
     record = service.create_for_mock(
@@ -122,7 +131,9 @@ def test_set_status_set_transcript_set_analysis(record_db_session, monkeypatch):
     from app.models.interview_record import InterviewRecord
     from app.services.interview import interview_record_service as module
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
+    monkeypatch.setattr(
+        module, "SessionLocal", lambda: _NoCloseSession(record_db_session)
+    )
 
     service = module.InterviewRecordService()
     record = service.create_for_upload(user_id="alice", db=record_db_session)
@@ -144,7 +155,9 @@ def test_set_status_set_transcript_set_analysis(record_db_session, monkeypatch):
     )
     # Transcript now lives in interview_transcripts; the record points at it.
     assert refreshed.transcript_id is not None
-    assert service.get_transcript_text(record.id, db=record_db_session) == "Q: ...\nA: ..."
+    assert (
+        service.get_transcript_text(record.id, db=record_db_session) == "Q: ...\nA: ..."
+    )
     assert refreshed.status == module.STATUS_COMPLETED
     assert refreshed.completed_at is not None
     parsed = json.loads(refreshed.analysis_json)
@@ -155,7 +168,9 @@ def test_bulk_insert_qa_and_summary(record_db_session, monkeypatch):
     from app.models.interview_qa import InterviewQA
     from app.services.interview import interview_record_service as module
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
+    monkeypatch.setattr(
+        module, "SessionLocal", lambda: _NoCloseSession(record_db_session)
+    )
 
     service = module.InterviewRecordService()
     record = service.create_for_upload(
@@ -168,8 +183,16 @@ def test_bulk_insert_qa_and_summary(record_db_session, monkeypatch):
     rows = service.bulk_insert_qa(
         record.id,
         [
-            {"question": "What is Redis?", "answer": "in-memory KV", "phase": "technical"},
-            {"question": "Explain TCP handshake", "answer": "SYN/ACK", "phase": "technical"},
+            {
+                "question": "What is Redis?",
+                "answer": "in-memory KV",
+                "phase": "technical",
+            },
+            {
+                "question": "Explain TCP handshake",
+                "answer": "SYN/ACK",
+                "phase": "technical",
+            },
         ],
         db=record_db_session,
     )
@@ -184,7 +207,11 @@ def test_bulk_insert_qa_and_summary(record_db_session, monkeypatch):
     assert {r.question for r in qa_rows} == {"What is Redis?", "Explain TCP handshake"}
 
     service.update_qa_analysis(
-        rows[0].id, score=9, critique="ok", improved_answer="…", db=record_db_session,
+        rows[0].id,
+        score=9,
+        critique="ok",
+        improved_answer="…",
+        db=record_db_session,
     )
     service.set_analysis(
         record.id,
@@ -203,7 +230,9 @@ def test_get_analysis_summary_returns_empty_for_unknown(record_db_session, monke
     """Unknown record_id / wrong user → empty string, no exception."""
     from app.services.interview import interview_record_service as module
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
+    monkeypatch.setattr(
+        module, "SessionLocal", lambda: _NoCloseSession(record_db_session)
+    )
 
     summary = module.InterviewRecordService().get_analysis_summary("ir_nope", "alice")
     assert summary == ""
@@ -226,10 +255,13 @@ def _mock_record_with_status(db, service, status, *, age_minutes=0):
 def test_list_by_user_hides_fresh_processing_review(record_db_session, monkeypatch):
     from app.services.interview import interview_record_service as module
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
+    monkeypatch.setattr(
+        module, "SessionLocal", lambda: _NoCloseSession(record_db_session)
+    )
     service = module.InterviewRecordService()
-    _mock_record_with_status(record_db_session, service, module.STATUS_PROCESSING_REVIEW,
-                             age_minutes=1)
+    _mock_record_with_status(
+        record_db_session, service, module.STATUS_PROCESSING_REVIEW, age_minutes=1
+    )
 
     assert service.list_by_user("alice") == []
 
@@ -237,10 +269,13 @@ def test_list_by_user_hides_fresh_processing_review(record_db_session, monkeypat
 def test_list_by_user_surfaces_stale_processing_review(record_db_session, monkeypatch):
     from app.services.interview import interview_record_service as module
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
+    monkeypatch.setattr(
+        module, "SessionLocal", lambda: _NoCloseSession(record_db_session)
+    )
     service = module.InterviewRecordService()
-    rec = _mock_record_with_status(record_db_session, service, module.STATUS_PROCESSING_REVIEW,
-                                   age_minutes=15)
+    rec = _mock_record_with_status(
+        record_db_session, service, module.STATUS_PROCESSING_REVIEW, age_minutes=15
+    )
 
     rows = service.list_by_user("alice")
     assert [r.id for r in rows] == [rec.id]
@@ -249,10 +284,13 @@ def test_list_by_user_surfaces_stale_processing_review(record_db_session, monkey
 def test_list_by_user_always_hides_mock_in_progress(record_db_session, monkeypatch):
     from app.services.interview import interview_record_service as module
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
+    monkeypatch.setattr(
+        module, "SessionLocal", lambda: _NoCloseSession(record_db_session)
+    )
     service = module.InterviewRecordService()
-    _mock_record_with_status(record_db_session, service, module.STATUS_MOCK_IN_PROGRESS,
-                             age_minutes=60 * 24)
+    _mock_record_with_status(
+        record_db_session, service, module.STATUS_MOCK_IN_PROGRESS, age_minutes=60 * 24
+    )
 
     assert service.list_by_user("alice") == []
 
@@ -260,10 +298,16 @@ def test_list_by_user_always_hides_mock_in_progress(record_db_session, monkeypat
 def test_list_by_user_shows_terminal_mock_states(record_db_session, monkeypatch):
     from app.services.interview import interview_record_service as module
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
+    monkeypatch.setattr(
+        module, "SessionLocal", lambda: _NoCloseSession(record_db_session)
+    )
     service = module.InterviewRecordService()
-    failed = _mock_record_with_status(record_db_session, service, module.STATUS_REVIEW_FAILED)
-    ready = _mock_record_with_status(record_db_session, service, module.STATUS_REVIEW_READY)
+    failed = _mock_record_with_status(
+        record_db_session, service, module.STATUS_REVIEW_FAILED
+    )
+    ready = _mock_record_with_status(
+        record_db_session, service, module.STATUS_REVIEW_READY
+    )
 
     rows = service.list_by_user("alice")
     assert {r.id for r in rows} == {failed.id, ready.id}
@@ -273,17 +317,27 @@ def test_analyzed_count_increment_and_reset(record_db_session, monkeypatch):
     from app.models.interview_record import InterviewRecord
     from app.services.interview import interview_record_service as module
 
-    monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(record_db_session))
+    monkeypatch.setattr(
+        module, "SessionLocal", lambda: _NoCloseSession(record_db_session)
+    )
     service = module.InterviewRecordService()
     record = service.create_for_mock(user_id="alice", db=record_db_session)
     record_db_session.commit()
 
     service.increment_analyzed_count(record.id, by=2)
     service.increment_analyzed_count(record.id)
-    row = record_db_session.query(InterviewRecord).filter(InterviewRecord.id == record.id).one()
+    row = (
+        record_db_session.query(InterviewRecord)
+        .filter(InterviewRecord.id == record.id)
+        .one()
+    )
     assert row.analyzed_qa_count == 3
 
     # A retry must start from zero, not stack on the previous attempt.
     service.reset_analyzed_count(record.id)
-    row = record_db_session.query(InterviewRecord).filter(InterviewRecord.id == record.id).one()
+    row = (
+        record_db_session.query(InterviewRecord)
+        .filter(InterviewRecord.id == record.id)
+        .one()
+    )
     assert row.analyzed_qa_count == 0

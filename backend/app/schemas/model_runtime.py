@@ -6,6 +6,7 @@ overrides. Per-user overrides carry their own SSRF / header-shape
 validators alongside the schema definition — the bounds and the
 validator must stay co-located to keep the contract self-documenting.
 """
+
 from __future__ import annotations
 
 import json
@@ -21,21 +22,36 @@ _ORG_ID_MAX_LEN = 100
 _EXTRA_HEADERS_MAX_COUNT = 10
 _EXTRA_HEADERS_MAX_VALUE_LEN = 500
 _SYSTEM_RESERVED_HEADER_NAMES = {
-    "authorization", "cookie", "host", "content-length", "content-type",
-    "x-api-key", "anthropic-version",
+    "authorization",
+    "cookie",
+    "host",
+    "content-length",
+    "content-type",
+    "x-api-key",
+    "anthropic-version",
 }
 
 
 class RuntimeSelectionUpdateRequest(BaseModel):
     """``PATCH /models/selection`` — pick which profile drives each role."""
+
     primary: str | None = Field(default=None, description="Primary LLM profile id")
-    agent: str | None = Field(default=None, description="Function-calling agent profile id")
-    mock_interview: str | None = Field(default=None, description="Mock-interview plan / interviewer LLM")
+    agent: str | None = Field(
+        default=None, description="Function-calling agent profile id"
+    )
+    mock_interview: str | None = Field(
+        default=None, description="Mock-interview plan / interviewer LLM"
+    )
 
 
 class APIKeyUpsertRequest(BaseModel):
     """``PUT /models/api-keys/{provider}`` — write a per-user provider key."""
-    api_key: str = Field(..., min_length=4, description="Provider API key. Encrypted at rest; never echoed back.")
+
+    api_key: str = Field(
+        ...,
+        min_length=4,
+        description="Provider API key. Encrypted at rest; never echoed back.",
+    )
 
 
 class ProviderSettingsUpdateRequest(BaseModel):
@@ -48,6 +64,7 @@ class ProviderSettingsUpdateRequest(BaseModel):
     SSRF / shape validation happens in ``field_validator``s below so
     the API layer rejects bad input before service-layer DB writes.
     """
+
     enabled: bool | None = Field(
         default=None,
         description="Show this vendor card on the user's Models page.",
@@ -55,17 +72,17 @@ class ProviderSettingsUpdateRequest(BaseModel):
     api_base_override: str | None = Field(
         default=None,
         description="HTTPS override URL for subscription / self-hosted endpoints. "
-                    "Empty string = clear override.",
+        "Empty string = clear override.",
     )
     organization_id: str | None = Field(
         default=None,
         description="OpenAI org / Azure deployment / Aliyun project id. "
-                    "Empty string = clear.",
+        "Empty string = clear.",
     )
     extra_headers_json: str | None = Field(
         default=None,
         description="JSON-encoded {str: str} of additional headers (v1 only via "
-                    "PATCH; no UI surface). Empty string = clear.",
+        "PATCH; no UI surface). Empty string = clear.",
     )
 
     @field_validator("api_base_override")

@@ -4,6 +4,7 @@ The pure diff (_diff_pg_milvus) classifies missing/stale/mismatch deterministica
 _milvus_node_consistency wires the Postgres baseline (live INDEXED chunks under
 live docs) to a Milvus row snapshot and degrades to 'skipped' when Milvus is down.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -24,12 +25,20 @@ def test_diff_classifies_missing_and_stale():
         "n2": {"document_id": "d1", "user_id": 1, "source_kind": "user_upload"},
     }
     milvus = {
-        "n1": {"document_id": "d1", "user_id": 1, "source_kind": "user_upload"},   # match
-        "n3": {"document_id": "ghost", "user_id": 1, "source_kind": "user_upload"},  # stale
+        "n1": {
+            "document_id": "d1",
+            "user_id": 1,
+            "source_kind": "user_upload",
+        },  # match
+        "n3": {
+            "document_id": "ghost",
+            "user_id": 1,
+            "source_kind": "user_upload",
+        },  # stale
     }
     missing, stale, mismatch = cs._diff_pg_milvus(pg, milvus, {"d1"})
-    assert missing == ["n2"]   # indexed in PG, absent from Milvus
-    assert stale == ["n3"]     # Milvus row -> non-live document
+    assert missing == ["n2"]  # indexed in PG, absent from Milvus
+    assert stale == ["n3"]  # Milvus row -> non-live document
     assert mismatch == []
 
 
@@ -50,32 +59,67 @@ def test_diff_clean_when_in_sync():
 
 
 def _seed_indexed(db, doc_id, node_ids):
-    db.add(KnowledgeDocument(
-        id=doc_id, user_id=1, title="t", source_kind="user_upload", status="ready",
-    ))
+    db.add(
+        KnowledgeDocument(
+            id=doc_id,
+            user_id=1,
+            title="t",
+            source_kind="user_upload",
+            status="ready",
+        )
+    )
     for i, nid in enumerate(node_ids):
-        db.add(DocumentChunk(
-            document_id=doc_id, node_id=nid, user_id=1, source_kind="user_upload",
-            chunk_index=i, text="x", index_status="indexed",
-        ))
+        db.add(
+            DocumentChunk(
+                document_id=doc_id,
+                node_id=nid,
+                user_id=1,
+                source_kind="user_upload",
+                chunk_index=i,
+                text="x",
+                index_status="indexed",
+            )
+        )
     db.commit()
 
 
 def test_node_consistency_reports_missing_and_stale(db_session, monkeypatch):
     _seed_indexed(db_session, "d1", ["n1", "n2"])  # both should be in Milvus
 
-    monkeypatch.setattr("app.rag.milvus_hybrid._get_client",
-                        lambda: SimpleNamespace(has_collection=lambda name: True))
-    monkeypatch.setattr(cs, "_collection_dim_finding",
-                        lambda client: cs.Finding("dimension_mismatch", 0, note="ok"))
-    monkeypatch.setattr(cs, "_scan_milvus_rows", lambda client: {
-        "n1": {"document_id": "d1", "user_id": 1, "source_kind": "user_upload"},  # ok
-        "n_orphan": {"document_id": "ghost", "user_id": 1, "source_kind": "user_upload"},
-    })
+    monkeypatch.setattr(
+        "app.rag.milvus_hybrid._get_client",
+        lambda: SimpleNamespace(has_collection=lambda name: True),
+    )
+    monkeypatch.setattr(
+        cs,
+        "_collection_dim_finding",
+        lambda client: cs.Finding("dimension_mismatch", 0, note="ok"),
+    )
+    monkeypatch.setattr(
+        cs,
+        "_scan_milvus_rows",
+        lambda client: {
+            "n1": {
+                "document_id": "d1",
+                "user_id": 1,
+                "source_kind": "user_upload",
+            },  # ok
+            "n_orphan": {
+                "document_id": "ghost",
+                "user_id": 1,
+                "source_kind": "user_upload",
+            },
+        },
+    )
 
     f = {x.name: x for x in cs._milvus_node_consistency(db_session)}
-    assert f["missing_in_milvus"].count == 1 and "n2" in f["missing_in_milvus"].sample_ids
-    assert f["stale_in_milvus"].count == 1 and "n_orphan" in f["stale_in_milvus"].sample_ids
+    assert (
+        f["missing_in_milvus"].count == 1 and "n2" in f["missing_in_milvus"].sample_ids
+    )
+    assert (
+        f["stale_in_milvus"].count == 1
+        and "n_orphan" in f["stale_in_milvus"].sample_ids
+    )
     assert f["metadata_mismatch"].count == 0
 
 
@@ -84,70 +128,118 @@ def test_node_consistency_skips_when_milvus_unreachable(db_session, monkeypatch)
 
     def _boom():
         raise RuntimeError("milvus down")
+
     monkeypatch.setattr("app.rag.milvus_hybrid._get_client", _boom)
 
     f = {x.name: x for x in cs._milvus_node_consistency(db_session)}
-    names = ("missing_in_milvus", "stale_in_milvus", "metadata_mismatch", "dimension_mismatch")
+    names = (
+        "missing_in_milvus",
+        "stale_in_milvus",
+        "metadata_mismatch",
+        "dimension_mismatch",
+    )
     assert all(f[n].count == 0 and "skipped" in f[n].note for n in names)
 
 
 def test_node_consistency_reports_metadata_mismatch(db_session, monkeypatch):
     _seed_indexed(db_session, "d1", ["n1"])
 
-    monkeypatch.setattr("app.rag.milvus_hybrid._get_client",
-                        lambda: SimpleNamespace(has_collection=lambda name: True))
-    monkeypatch.setattr(cs, "_collection_dim_finding",
-                        lambda client: cs.Finding("dimension_mismatch", 0, note="ok"))
+    monkeypatch.setattr(
+        "app.rag.milvus_hybrid._get_client",
+        lambda: SimpleNamespace(has_collection=lambda name: True),
+    )
+    monkeypatch.setattr(
+        cs,
+        "_collection_dim_finding",
+        lambda client: cs.Finding("dimension_mismatch", 0, note="ok"),
+    )
     # same node_id but a different user_id scalar → metadata mismatch.
-    monkeypatch.setattr(cs, "_scan_milvus_rows", lambda client: {
-        "n1": {"document_id": "d1", "user_id": 2, "source_kind": "user_upload"},
-    })
+    monkeypatch.setattr(
+        cs,
+        "_scan_milvus_rows",
+        lambda client: {
+            "n1": {"document_id": "d1", "user_id": 2, "source_kind": "user_upload"},
+        },
+    )
 
     f = {x.name: x for x in cs._milvus_node_consistency(db_session)}
-    assert f["metadata_mismatch"].count == 1 and "n1" in f["metadata_mismatch"].sample_ids
+    assert (
+        f["metadata_mismatch"].count == 1 and "n1" in f["metadata_mismatch"].sample_ids
+    )
     assert f["missing_in_milvus"].count == 0 and f["stale_in_milvus"].count == 0
 
 
 def test_node_consistency_collection_not_created(db_session, monkeypatch):
-    monkeypatch.setattr("app.rag.milvus_hybrid._get_client",
-                        lambda: SimpleNamespace(has_collection=lambda name: False))
+    monkeypatch.setattr(
+        "app.rag.milvus_hybrid._get_client",
+        lambda: SimpleNamespace(has_collection=lambda name: False),
+    )
 
     f = {x.name: x for x in cs._milvus_node_consistency(db_session)}
-    names = ("missing_in_milvus", "stale_in_milvus", "metadata_mismatch", "dimension_mismatch")
+    names = (
+        "missing_in_milvus",
+        "stale_in_milvus",
+        "metadata_mismatch",
+        "dimension_mismatch",
+    )
     assert all(f[n].count == 0 and "not created" in f[n].note for n in names)
 
 
 def test_collection_dim_finding_detects_mismatch():
-    fake = SimpleNamespace(describe_collection=lambda name: {
-        "fields": [{"name": "dense", "params": {"dim": settings.EMBEDDING_DIM + 256}}],
-    })
+    fake = SimpleNamespace(
+        describe_collection=lambda name: {
+            "fields": [
+                {"name": "dense", "params": {"dim": settings.EMBEDDING_DIM + 256}}
+            ],
+        }
+    )
     f = cs._collection_dim_finding(fake)
     assert f.name == "dimension_mismatch" and f.count == 1
 
 
 def test_collection_dim_finding_ok_when_matches():
-    fake = SimpleNamespace(describe_collection=lambda name: {
-        "fields": [{"name": "dense", "params": {"dim": settings.EMBEDDING_DIM}}],
-    })
+    fake = SimpleNamespace(
+        describe_collection=lambda name: {
+            "fields": [{"name": "dense", "params": {"dim": settings.EMBEDDING_DIM}}],
+        }
+    )
     assert cs._collection_dim_finding(fake).count == 0
 
 
 def test_node_consistency_excludes_pending_from_missing(db_session, monkeypatch):
     """A 'pending' chunk (two-phase window / queued upsert) is NOT reported
     missing — only 'indexed' chunks are expected in Milvus."""
-    db_session.add(KnowledgeDocument(
-        id="d1", user_id=1, title="t", source_kind="user_upload", status="processing",
-    ))
-    db_session.add(DocumentChunk(
-        document_id="d1", node_id="np", user_id=1, source_kind="user_upload",
-        chunk_index=0, text="x", index_status="pending",
-    ))
+    db_session.add(
+        KnowledgeDocument(
+            id="d1",
+            user_id=1,
+            title="t",
+            source_kind="user_upload",
+            status="processing",
+        )
+    )
+    db_session.add(
+        DocumentChunk(
+            document_id="d1",
+            node_id="np",
+            user_id=1,
+            source_kind="user_upload",
+            chunk_index=0,
+            text="x",
+            index_status="pending",
+        )
+    )
     db_session.commit()
 
-    monkeypatch.setattr("app.rag.milvus_hybrid._get_client",
-                        lambda: SimpleNamespace(has_collection=lambda name: True))
-    monkeypatch.setattr(cs, "_collection_dim_finding",
-                        lambda client: cs.Finding("dimension_mismatch", 0, note="ok"))
+    monkeypatch.setattr(
+        "app.rag.milvus_hybrid._get_client",
+        lambda: SimpleNamespace(has_collection=lambda name: True),
+    )
+    monkeypatch.setattr(
+        cs,
+        "_collection_dim_finding",
+        lambda client: cs.Finding("dimension_mismatch", 0, note="ok"),
+    )
     monkeypatch.setattr(cs, "_scan_milvus_rows", lambda client: {})
 
     f = {x.name: x for x in cs._milvus_node_consistency(db_session)}

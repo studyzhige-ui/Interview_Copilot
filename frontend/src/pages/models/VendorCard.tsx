@@ -21,6 +21,7 @@ export function VendorCard({
   onDeleteKey,
   onSaveSettings,
   onResetSettings,
+  showAdvancedSettings,
 }: {
   info: ProviderInfo;
   list: ModelProfile[];
@@ -32,6 +33,7 @@ export function VendorCard({
   onDeleteKey: () => void;
   onSaveSettings: (patch: { api_base_override?: string; organization_id?: string }) => Promise<boolean>;
   onResetSettings: () => void;
+  showAdvancedSettings: boolean;
 }) {
   const anyReady = list.some((p) => p.ready);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -136,6 +138,7 @@ export function VendorCard({
           onDeleteKey={onDeleteKey}
           onSaveSettings={onSaveSettings}
           onResetSettings={onResetSettings}
+          showAdvancedSettings={showAdvancedSettings}
         />
       )}
     </div>

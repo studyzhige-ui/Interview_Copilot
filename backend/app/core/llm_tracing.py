@@ -1,7 +1,7 @@
 """Enable LangSmith tracing for every LLM call we make.
 
 Our LLM layer goes through ``llama_index.llms.openai_like.OpenAILike``
-(see ``app.core.model_registry._build_llm_instance``), which internally
+(see ``app.core.llm_client_factory._build_llm_instance``), which internally
 constructs ``openai.OpenAI`` / ``openai.AsyncOpenAI`` clients. LangSmith
 provides ``langsmith.wrappers.wrap_openai`` to instrument those clients
 without changing call sites.
@@ -33,6 +33,7 @@ Set these in ``.env`` to enable:
     LANGSMITH_PROJECT=interview-copilot-dev
     LANGSMITH_TRACING=true
 """
+
 from __future__ import annotations
 
 import logging
@@ -70,6 +71,7 @@ def _ensure_dotenv_loaded() -> None:
     except ImportError:
         return
     from pathlib import Path
+
     project_root = Path(__file__).resolve().parents[3]
     env_file = project_root / ".env"
     if env_file.exists():
@@ -89,7 +91,11 @@ def _tracing_enabled() -> bool:
     if _TRACING_ENABLED is not None:
         return _TRACING_ENABLED
     _ensure_dotenv_loaded()
-    if (os.getenv("LANGSMITH_TRACING") or "").strip().lower() not in {"true", "1", "yes"}:
+    if (os.getenv("LANGSMITH_TRACING") or "").strip().lower() not in {
+        "true",
+        "1",
+        "yes",
+    }:
         _TRACING_ENABLED = False
         return False
     if not (os.getenv("LANGSMITH_API_KEY") or "").strip():
@@ -132,7 +138,7 @@ def setup_llm_tracing() -> bool:
     def _make_wrapped_async(*args, **kwargs):
         return wrap_openai(_orig_AsyncOpenAI(*args, **kwargs))
 
-    openai.OpenAI = _make_wrapped_sync       # type: ignore[assignment]
+    openai.OpenAI = _make_wrapped_sync  # type: ignore[assignment]
     openai.AsyncOpenAI = _make_wrapped_async  # type: ignore[assignment]
     _PATCHED = True
 

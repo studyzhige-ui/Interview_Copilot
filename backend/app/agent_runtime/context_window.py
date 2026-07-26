@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app.core.model_registry import ModelProfile
+    from app.core.model_catalog import ModelProfile
 
 # ── Buffer constants (Claude Code values) ────────────────────────────────
 

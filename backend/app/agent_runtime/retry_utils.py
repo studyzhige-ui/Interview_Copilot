@@ -24,12 +24,15 @@ def classify_api_error(error: Exception) -> ErrorCategory:
     err_type = type(error).__name__
 
     # Context length exceeded — need compaction
-    if any(phrase in msg for phrase in (
-        "context_length_exceeded",
-        "maximum context length",
-        "token limit",
-        "reduce the length",
-    )):
+    if any(
+        phrase in msg
+        for phrase in (
+            "context_length_exceeded",
+            "maximum context length",
+            "token limit",
+            "reduce the length",
+        )
+    ):
         return ErrorCategory.CONTEXT_TOO_LONG
 
     # Payment / balance / quota exhausted — retrying NEVER helps (DeepSeek
@@ -37,20 +40,25 @@ def classify_api_error(error: Exception) -> ErrorCategory:
     # default-retryable branches so we fail fast instead of burning the
     # full backoff schedule on a hopeless call.
     status = getattr(error, "status_code", None)
-    if status == 402 or any(phrase in msg for phrase in (
-        "insufficient_balance",
-        "insufficient account balance",
-        "insufficient_quota",
-        "payment required",
-        "余额不足",
-        "欠费",
-    )):
+    if status == 402 or any(
+        phrase in msg
+        for phrase in (
+            "insufficient_balance",
+            "insufficient account balance",
+            "insufficient_quota",
+            "payment required",
+            "余额不足",
+            "欠费",
+        )
+    ):
         return ErrorCategory.FATAL
 
     # Rate limit / server errors — retryable
     if any(phrase in msg for phrase in ("429", "rate_limit", "rate limit")):
         return ErrorCategory.RETRYABLE
-    if any(phrase in msg for phrase in ("500", "502", "503", "overloaded", "server_error")):
+    if any(
+        phrase in msg for phrase in ("500", "502", "503", "overloaded", "server_error")
+    ):
         return ErrorCategory.RETRYABLE
     if "timeout" in msg or "timed out" in msg:
         return ErrorCategory.RETRYABLE
@@ -58,7 +66,9 @@ def classify_api_error(error: Exception) -> ErrorCategory:
         return ErrorCategory.RETRYABLE
 
     # Auth / bad request — fatal
-    if any(phrase in msg for phrase in ("401", "403", "invalid_api_key", "authentication")):
+    if any(
+        phrase in msg for phrase in ("401", "403", "invalid_api_key", "authentication")
+    ):
         return ErrorCategory.FATAL
     if "400" in msg and "context" not in msg:
         return ErrorCategory.FATAL
@@ -72,7 +82,7 @@ def jittered_backoff(attempt: int, base: float = 1.0, cap: float = 30.0) -> floa
 
     Formula: ``min(cap, base * 2^attempt) * uniform(0.5, 1.0)``
     """
-    delay = min(cap, base * (2 ** attempt))
+    delay = min(cap, base * (2**attempt))
     return delay * random.uniform(0.5, 1.0)
 
 

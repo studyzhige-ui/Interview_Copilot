@@ -9,6 +9,7 @@ engine reads after the generator exhausts — final answer text, the
 assistant content blocks to persist (Claude-Code shape), and any extra
 metadata the engine wants for hooks / metrics.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -27,19 +28,21 @@ class StrategyContext:
     The engine builds this once in ``_prepare()`` and hands it to
     ``strategy.execute()``. Strategies treat it as read-only.
     """
+
     # Conversation identity
     user_id: str
     session_id: str
     user_message: str
+    turn_id: str | None = None
 
     # Prepared context — the FULL ``AssembledContext`` built by the
     # engine. Strategies should render via
     # ``prompt_renderer.render_answer_prompt(ctx.assembled, ...)``
     # so memory, debrief reference, and RAG all reach the LLM with
     # the SLOT_ORDER contract intact. Engine sets this in _prepare.
-    assembled: Any = None              # AssembledContext (forward ref to avoid import cycle)
+    assembled: Any = None  # AssembledContext (forward ref to avoid import cycle)
     knowledge_chunks: list[dict] = field(default_factory=list)
-    v3_memory_block: str = ""          # Convenience: already-rendered v3 memory bundle
+    v3_memory_block: str = ""  # Convenience: already-rendered v3 memory bundle
     rewritten_query: str | None = None
     needs_knowledge_retrieval: bool = False
 
@@ -78,6 +81,7 @@ class StrategyResult:
     strategy emits an interleaved chain so the frontend folded-card
     UX has every tool call to render on history reload.
     """
+
     final_answer: str = ""
     assistant_blocks: list[dict] = field(default_factory=list)
 
@@ -130,12 +134,14 @@ def make_agent_strategy() -> ExecutionStrategy:
     path doesn't pay the agent_runtime import cost when running pure-
     chat traffic."""
     from app.conversation.agent_strategy import AgentLoopStrategy
+
     return AgentLoopStrategy()
 
 
 def make_chat_strategy() -> ExecutionStrategy:
     """Factory for the L1 chat-pipeline strategy."""
     from app.conversation.chat_strategy import ChatPipelineStrategy
+
     return ChatPipelineStrategy()
 
 

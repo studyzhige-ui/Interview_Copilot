@@ -11,6 +11,7 @@ A username is unique, so this is an exact 1:1 lookup. Keeping the mapping in
 one place means that when the rest of the runtime later threads ``users.id``
 directly, only this resolver (and its call sites' argument) changes.
 """
+
 from sqlalchemy.orm import Session
 
 from app.models.user import User

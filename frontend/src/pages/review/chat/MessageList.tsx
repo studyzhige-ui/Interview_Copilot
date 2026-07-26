@@ -40,6 +40,9 @@ export function MessageList({
   hidePartialBar: boolean;
   onTogglePartialBar: (hidden: boolean) => void;
 }) {
+  // TanStack Virtual deliberately exposes mutable measurement functions;
+  // React Compiler skips this component while runtime behavior stays valid.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const messageVirtualizer = useVirtualizer({
     count: messages.length,
     getScrollElement: () => listRef.current,

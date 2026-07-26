@@ -15,6 +15,7 @@ Failure mode: if Redis is unreachable the safe default is to *deny* —
 better to ask the user to re-login than to honour a revoked token. The
 check raises so the auth dependency converts it to 401.
 """
+
 from __future__ import annotations
 
 import logging

@@ -20,6 +20,7 @@ NOTHING is mutated — the script only reports ids so an operator (or a future
 repair job) can act. Run from the project root:
 ``python scripts/consistency_scan.py``.
 """
+
 from __future__ import annotations
 
 import json
@@ -30,7 +31,9 @@ from pathlib import Path
 # Make the ``app`` package importable. Two layouts: repo (<root>/backend/app,
 # script at <root>/scripts/) and docker image (/app/app, script at /app/scripts/).
 _parent = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_parent / "backend" if (_parent / "backend" / "app").is_dir() else _parent))
+sys.path.insert(
+    0, str(_parent / "backend" if (_parent / "backend" / "app").is_dir() else _parent)
+)
 
 from sqlalchemy import text  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
@@ -61,31 +64,45 @@ def scan_orphan_file_assets(db: Session) -> list[Finding]:
     # A consumed/uploaded resume asset that no resume row points at. (resume is
     # the only purpose wired to file_assets today; other purposes are reported
     # as "no consumer yet" below rather than as orphans.)
-    rows = _rows(db, """
+    rows = _rows(
+        db,
+        """
         SELECT fa.id FROM file_assets fa
         WHERE fa.purpose = 'resume'
           AND fa.deleted_at IS NULL
           AND fa.upload_status IN ('uploaded', 'consumed')
           AND NOT EXISTS (SELECT 1 FROM resumes r WHERE r.file_asset_id = fa.id)
-    """)
+    """,
+    )
     ids = [r[0] for r in rows]
-    findings.append(Finding(
-        "orphan_resume_file_assets", len(ids), ids[:_SAMPLE],
-        note="resume asset with no referencing resumes row",
-    ))
+    findings.append(
+        Finding(
+            "orphan_resume_file_assets",
+            len(ids),
+            ids[:_SAMPLE],
+            note="resume asset with no referencing resumes row",
+        )
+    )
 
     # Stale pending uploads (presign issued, bytes never confirmed) older than 24h.
-    rows = _rows(db, """
+    rows = _rows(
+        db,
+        """
         SELECT id FROM file_assets
         WHERE upload_status = 'pending_upload'
           AND deleted_at IS NULL
           AND created_at < (NOW() - INTERVAL '24 hours')
-    """)
+    """,
+    )
     ids = [r[0] for r in rows]
-    findings.append(Finding(
-        "stale_pending_uploads", len(ids), ids[:_SAMPLE],
-        note="pending_upload older than 24h — never confirmed",
-    ))
+    findings.append(
+        Finding(
+            "stale_pending_uploads",
+            len(ids),
+            ids[:_SAMPLE],
+            note="pending_upload older than 24h — never confirmed",
+        )
+    )
     return findings
 
 
@@ -97,18 +114,25 @@ def scan_orphan_chunks(db: Session) -> list[Finding]:
 
     # Knowledge chunks whose parent knowledge_documents row is gone. These are
     # also orphan vectors in Milvus (the chunk is the fact source for the index).
-    rows = _rows(db, """
+    rows = _rows(
+        db,
+        """
         SELECT dc.id FROM document_chunks dc
         WHERE dc.document_id IS NOT NULL
           AND NOT EXISTS (
             SELECT 1 FROM knowledge_documents kd WHERE kd.id = dc.document_id
           )
-    """)
+    """,
+    )
     ids = [r[0] for r in rows]
-    findings.append(Finding(
-        "orphan_knowledge_chunks", len(ids), ids[:_SAMPLE],
-        note="document_chunks.document_id -> deleted knowledge_documents",
-    ))
+    findings.append(
+        Finding(
+            "orphan_knowledge_chunks",
+            len(ids),
+            ids[:_SAMPLE],
+            note="document_chunks.document_id -> deleted knowledge_documents",
+        )
+    )
 
     # node_id-level Postgres <-> Milvus consistency (plan §4.6.3) — replaces the
     # old count-only drift so the two scan semantics don't coexist (INGEST-CLEANUP).
@@ -117,7 +141,9 @@ def scan_orphan_chunks(db: Session) -> list[Finding]:
 
 
 def _diff_pg_milvus(
-    pg_indexed: dict[str, dict], milvus_rows: dict[str, dict], live_doc_ids: set,
+    pg_indexed: dict[str, dict],
+    milvus_rows: dict[str, dict],
+    live_doc_ids: set,
 ) -> tuple[list[str], list[str], list[str]]:
     """Pure set/field diff (no I/O, so it's fully unit-testable).
 
@@ -136,11 +162,18 @@ def _diff_pg_milvus(
     missing = sorted(pg_ids - mv_ids)
     # A NULL document_id is intentionally stale (an ownerless vector): live
     # KNOWLEDGE rows always carry a document_id, so this only flags genuine junk.
-    stale = sorted(mid for mid, r in milvus_rows.items() if r.get("document_id") not in live_doc_ids)
+    stale = sorted(
+        mid
+        for mid, r in milvus_rows.items()
+        if r.get("document_id") not in live_doc_ids
+    )
     mismatch = sorted(
-        nid for nid in (pg_ids & mv_ids)
-        if any(str(pg_indexed[nid].get(k)) != str(milvus_rows[nid].get(k))
-               for k in ("document_id", "user_id", "source_kind"))
+        nid
+        for nid in (pg_ids & mv_ids)
+        if any(
+            str(pg_indexed[nid].get(k)) != str(milvus_rows[nid].get(k))
+            for k in ("document_id", "user_id", "source_kind")
+        )
     )
     return missing, stale, mismatch
 
@@ -177,16 +210,21 @@ def _collection_dim_finding(client) -> Finding:
 
     desc = client.describe_collection(settings.MILVUS_COLLECTION)
     dim = None
-    for f in (desc.get("fields", []) if isinstance(desc, dict) else []):
+    for f in desc.get("fields", []) if isinstance(desc, dict) else []:
         if f.get("name") == "dense":
             dim = (f.get("params") or {}).get("dim")
             break
     if dim is not None and int(dim) != settings.EMBEDDING_DIM:
         return Finding(
-            "dimension_mismatch", 1,
+            "dimension_mismatch",
+            1,
             note=f"milvus dim={int(dim)} != EMBEDDING_DIM={settings.EMBEDDING_DIM} — rebuild required",
         )
-    return Finding("dimension_mismatch", 0, note=f"dim matches EMBEDDING_DIM={settings.EMBEDDING_DIM}")
+    return Finding(
+        "dimension_mismatch",
+        0,
+        note=f"dim matches EMBEDDING_DIM={settings.EMBEDDING_DIM}",
+    )
 
 
 def _milvus_node_consistency(db: Session) -> list[Finding]:
@@ -195,40 +233,69 @@ def _milvus_node_consistency(db: Session) -> list[Finding]:
     *indexed* chunks under live documents — what Milvus should mirror."""
     from app.core.config import settings
 
-    pg_rows = _rows(db, """
+    pg_rows = _rows(
+        db,
+        """
         SELECT dc.node_id, dc.document_id, dc.user_id, dc.source_kind
         FROM document_chunks dc
         JOIN knowledge_documents kd ON dc.document_id = kd.id
         WHERE dc.index_status = 'indexed' AND dc.deleted_at IS NULL
           AND kd.deleted_at IS NULL AND dc.node_id IS NOT NULL
-    """)
+    """,
+    )
     pg_indexed = {
-        str(r[0]): {"document_id": r[1], "user_id": r[2], "source_kind": r[3]} for r in pg_rows
+        str(r[0]): {"document_id": r[1], "user_id": r[2], "source_kind": r[3]}
+        for r in pg_rows
     }
     live_doc_ids = {
-        r[0] for r in _rows(db, "SELECT id FROM knowledge_documents WHERE deleted_at IS NULL")
+        r[0]
+        for r in _rows(
+            db, "SELECT id FROM knowledge_documents WHERE deleted_at IS NULL"
+        )
     }
 
-    names = ("missing_in_milvus", "stale_in_milvus", "metadata_mismatch", "dimension_mismatch")
+    names = (
+        "missing_in_milvus",
+        "stale_in_milvus",
+        "metadata_mismatch",
+        "dimension_mismatch",
+    )
     try:
         from app.rag import milvus_hybrid
 
         client = milvus_hybrid._get_client()
         if not client.has_collection(settings.MILVUS_COLLECTION):
-            return [Finding(n, 0, note="knowledge collection not created yet") for n in names]
+            return [
+                Finding(n, 0, note="knowledge collection not created yet")
+                for n in names
+            ]
         dim_finding = _collection_dim_finding(client)
         milvus_rows = _scan_milvus_rows(client)
     except Exception as exc:  # noqa: BLE001 — Milvus optional for the scan
-        return [Finding(n, 0, note=f"skipped (Milvus unreachable: {exc})") for n in names]
+        return [
+            Finding(n, 0, note=f"skipped (Milvus unreachable: {exc})") for n in names
+        ]
 
     missing, stale, mismatch = _diff_pg_milvus(pg_indexed, milvus_rows, live_doc_ids)
     return [
-        Finding("missing_in_milvus", len(missing), missing[:_SAMPLE],
-                note="live indexed chunk has no Milvus row"),
-        Finding("stale_in_milvus", len(stale), stale[:_SAMPLE],
-                note="Milvus row -> non-live document (orphan vector)"),
-        Finding("metadata_mismatch", len(mismatch), mismatch[:_SAMPLE],
-                note="Milvus scope scalar != Postgres chunk"),
+        Finding(
+            "missing_in_milvus",
+            len(missing),
+            missing[:_SAMPLE],
+            note="live indexed chunk has no Milvus row",
+        ),
+        Finding(
+            "stale_in_milvus",
+            len(stale),
+            stale[:_SAMPLE],
+            note="Milvus row -> non-live document (orphan vector)",
+        ),
+        Finding(
+            "metadata_mismatch",
+            len(mismatch),
+            mismatch[:_SAMPLE],
+            note="Milvus scope scalar != Postgres chunk",
+        ),
         dim_finding,
     ]
 
@@ -237,16 +304,23 @@ def _milvus_node_consistency(db: Session) -> list[Finding]:
 
 
 def scan_subjectless_conversations(db: Session) -> list[Finding]:
-    rows = _rows(db, """
+    rows = _rows(
+        db,
+        """
         SELECT id FROM conversations
         WHERE mode IS NOT NULL AND mode <> 'chat'
           AND (subject_type IS NULL OR subject_id IS NULL)
-    """)
+    """,
+    )
     ids = [r[0] for r in rows]
-    return [Finding(
-        "subjectless_conversations", len(ids), ids[:_SAMPLE],
-        note="non-chat mode but no subject_type/subject_id binding",
-    )]
+    return [
+        Finding(
+            "subjectless_conversations",
+            len(ids),
+            ids[:_SAMPLE],
+            note="non-chat mode but no subject_type/subject_id binding",
+        )
+    ]
 
 
 # ── 4. Dangling memory evidence ──────────────────────────────────────────
@@ -259,10 +333,13 @@ _EVIDENCE_TABLE = {
 
 
 def scan_dangling_evidence(db: Session) -> list[Finding]:
-    rows = _rows(db, """
+    rows = _rows(
+        db,
+        """
         SELECT id, evidence_refs_json FROM memory_ability_states
         WHERE evidence_refs_json IS NOT NULL AND archived_at IS NULL
-    """)
+    """,
+    )
     dangling: list[str] = []
     # Cache existence checks so a big scan doesn't re-query per ref.
     exists_cache: dict[tuple, bool] = {}
@@ -285,15 +362,21 @@ def scan_dangling_evidence(db: Session) -> list[Finding]:
                 continue
             key = (table, str(rid))
             if key not in exists_cache:
-                hit = _rows(db, f"SELECT 1 FROM {table} WHERE id = :rid LIMIT 1", rid=rid)
+                hit = _rows(
+                    db, f"SELECT 1 FROM {table} WHERE id = :rid LIMIT 1", rid=rid
+                )
                 exists_cache[key] = bool(hit)
             if not exists_cache[key]:
                 dangling.append(state_id)
                 break
-    return [Finding(
-        "dangling_memory_evidence", len(dangling), dangling[:_SAMPLE],
-        note="ability state evidence_refs -> deleted business record",
-    )]
+    return [
+        Finding(
+            "dangling_memory_evidence",
+            len(dangling),
+            dangling[:_SAMPLE],
+            note="ability state evidence_refs -> deleted business record",
+        )
+    ]
 
 
 # ── Runner ───────────────────────────────────────────────────────────────

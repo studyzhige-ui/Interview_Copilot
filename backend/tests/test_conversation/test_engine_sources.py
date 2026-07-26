@@ -10,6 +10,7 @@ tests; here we pin the ENGINE's three responsibilities for sources:
 ``_prepare`` is stubbed to inject a ready ``StrategyContext`` so the test
 doesn't drag in the planner / retriever / memory / transcript stack.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,14 +34,19 @@ class _NoopStrategy:
 
 def _engine(monkeypatch, *, sources, capture: dict):
     engine = ConversationEngine(
-        user_id="alice", session_id="s1", user_message="缓存击穿怎么办",
+        user_id="alice",
+        session_id="s1",
+        user_message="缓存击穿怎么办",
         strategy=_NoopStrategy(),
     )
 
     async def fake_prepare(self):
         self._ctx = StrategyContext(
-            user_id="alice", session_id="s1", user_message="缓存击穿怎么办",
-            sources=sources, retrieval_hit=bool(sources),
+            user_id="alice",
+            session_id="s1",
+            user_message="缓存击穿怎么办",
+            sources=sources,
+            retrieval_hit=bool(sources),
             needs_knowledge_retrieval=bool(sources),
         )
         self._retrieval_attempted = bool(sources)
@@ -55,7 +61,9 @@ def _engine(monkeypatch, *, sources, capture: dict):
         capture["ai_blocks"] = ai_blocks
 
     monkeypatch.setattr(engine_mod.transcript_service, "append_turn", fake_append_turn)
-    monkeypatch.setattr(ConversationEngine, "_fire_post_turn_maintenance", lambda self: None)
+    monkeypatch.setattr(
+        ConversationEngine, "_fire_post_turn_maintenance", lambda self: None
+    )
     monkeypatch.setattr(ConversationEngine, "_fire_telemetry", lambda self: None)
     return engine
 

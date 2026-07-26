@@ -10,6 +10,7 @@ JD / mock voice clip / avatar / agent output) is uploaded the same way:
 Business endpoints then consume the confirmed ``file_asset_id``. There is no
 server-receives-bytes "direct upload" path for persistent business files.
 """
+
 from __future__ import annotations
 
 import logging
@@ -48,7 +49,8 @@ router = APIRouter()
 
 def upload_too_large_http(exc: UploadTooLarge) -> HTTPException:
     return HTTPException(
-        status_code=413, detail=f"文件过大（上限 {exc.limit_mb}MB）",
+        status_code=413,
+        detail=f"文件过大（上限 {exc.limit_mb}MB）",
     )
 
 
@@ -116,7 +118,9 @@ def confirm_upload(
     validation is the consuming domain's parse/ingest step.
     """
     asset = confirm_file_asset(
-        db, file_asset_id=file_asset_id, user_id=current_user.username,
+        db,
+        file_asset_id=file_asset_id,
+        user_id=current_user.username,
     )
     if asset is None:
         raise HTTPException(status_code=404, detail="文件资产不存在或无权访问")

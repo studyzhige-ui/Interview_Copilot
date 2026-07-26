@@ -1,233 +1,72 @@
 # Interview Copilot
 
-<p align="center">
-  <a href="../../README.md"><img alt="English" src="https://img.shields.io/badge/Lang-English-9ca3af?style=for-the-badge"></a>
-  <a href="./README.md"><img alt="简体中文" src="https://img.shields.io/badge/语言-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-3b82f6?style=for-the-badge"></a>
-</p>
+Interview Copilot 是一个 AI 面试训练与复盘平台，包含模拟面试、录音分析、
+简历/JD 检索、长期学习记忆、用户 Skill 和 MCP 工具。
 
-> AI 面试练习与分析平台。实时语音模拟面试、录音深度分析（WhisperX +
-> Pyannote 说话人分离）、基于简历和 JD 的 RAG 检索，以及工具调用 Agent
-> 运行时 —— 全部通过用户级模型注册表打通，可用任意 OpenAI 兼容厂商
-> （DeepSeek、OpenAI、Anthropic、阿里 Qwen、月之暗面、智谱、小米 MiMo、
-> NVIDIA Catalog ……）。
+项目采用一套共享核心、两个发行版本：
 
-📖 [新手上路](getting-started.md)
+- **Interview Copilot Cloud**：面向普通用户的 Web 产品。用户可以选择 LLM、
+  配置自己的 API Key、Skill、远程 MCP 和音色；语音与 RAG 基础能力由运营方提供。
+- **Interview Copilot Community**：面向 GitHub 和学习开发者的自部署版本。
+  模型、接口、本地运行时和 stdio MCP 均可由部署者配置。
 
-## 截图
+两个版本不是两套源码，也不是两个长期分支。产品差异由 `APP_EDITION` 和统一的
+Edition Policy 决定，后端负责强制执行。
 
-<table>
-  <tr>
-    <td colspan="2" align="center"><sub><b>① 进入应用 —— 登录或注册</b></sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="../screenshots/login.png" alt="登录页" /></td>
-    <td width="50%"><img src="../screenshots/auth.png" alt="邮箱验证注册" /></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>登录 —— JWT access + refresh，jti 撤销名单在 Redis</sub></td>
-    <td align="center"><sub>注册 —— 邮箱验证码流程（没配 SMTP 时验证码直接打在后端 stdout）</sub></td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><sub><b>② 配置 —— 挑模型、上传资料</b></sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="../screenshots/models.png" alt="模型配置页" /></td>
-    <td width="50%"><img src="../screenshots/knowledge.png" alt="资料库" /></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>模型 —— 9 家厂商的用户级路由（主对话 / Agent / 模拟面试）</sub></td>
-    <td align="center"><sub>资料库 —— 简历 / 面试题库 / 官方文档</sub></td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center"><sub><b>③ 使用 —— 模拟面试 或 复盘真实录音</b></sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="../screenshots/mock-interview.png" alt="模拟面试" /></td>
-    <td width="50%"><img src="../screenshots/review.png" alt="复盘对话面板" /></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>模拟面试 —— 上传简历 + JD，四种面试官风格</sub></td>
-    <td align="center"><sub>复盘对话 —— 每条记录下多会话切换，对话中可换模型</sub></td>
-  </tr>
-</table>
+## 快速开始
 
----
+环境要求：Python 3.11+、Node.js 20+、Docker。
 
-## 核心模块
-
-| 模块 | 用途 |
-|---|---|
-| **模拟面试** | 实时语音 LLM 面试官 + TTS 语音回答；可选风格（友善 / 专业 / 严谨 / 高压）。 |
-| **录音分析** | 上传真实面试录音 → WhisperX 转写 → Pyannote 说话人分离 → 三阶段 MapReduce LLM 分析（逐题打分 + 阶段摘要 + 能力雷达）。 |
-| **复盘对话** | 围绕你的简历 / JD / 文档的 dense + BM25 混合检索，交叉编码器重排。 |
-| **Agent** | 工具调用运行时：网页搜索（Tavily）、文件读写、memory、结构化事件流。 |
-| **每用户模型路由** | 每个用户在「模型」页给三个角色（primary / agent / mock_interview）各选一个 LLM；内部 utility 角色自动跟随可用配置。开箱 9 家厂商、30+ 个 profile，加新厂商一行配置就够。 |
-
----
-
-## 架构
-
-```mermaid
-flowchart LR
-    User([浏览器]) -->|HTTPS / WSS| Front[Vite dev / nginx prod<br/>:5173 / :80]
-    Front -->|/api/v1/*| API[FastAPI uvicorn<br/>:8080]
-
-    API --> Redis[(Redis<br/>broker · cache · JWT 黑名单)]
-    Redis --> Worker[Celery worker<br/>--pool=solo]
-
-    subgraph Stateful[有状态服务]
-        PG[(Postgres<br/>用户 · 会话 · QA · 上传)]
-        Milvus[(Milvus<br/>RAG · memory 向量)]
-        MinIO[(MinIO / S3<br/>上传文件 · 音频 · 头像)]
-    end
-
-    API --> PG
-    API --> Milvus
-    API --> MinIO
-    Worker --> PG
-    Worker --> Milvus
-    Worker --> MinIO
-
-    API -->|chat / agent| LLM[云端 LLM<br/>DeepSeek · OpenAI · Anthropic<br/>Qwen · 月之暗面 · 智谱 · ...]
-    API -->|embed / rerank| Local[本地模型<br/>bge-m3 · bge-reranker-v2-m3]
-    Worker -->|转写| Whisper[WhisperX + Pyannote<br/>本地或云端]
+```powershell
+pwsh ./scripts/setup.ps1
 ```
 
-LLM / embedding / reranker / ASR 走小型 **provider 注册表**。LLM 目录
-不再硬编码 —— 由每家厂商官方 `/v1/models` 实时驱动。加新厂商 =
-`model_sources/providers.py` 加一行 + `model_sources/vendors/` 加一个
-适配器文件；新模型由厂商发布即自动出现，零代码改动。
-
----
-
-## 二选一
-
-### 🌐 路线 A —— API 轻量版 *（云端全包，本机零下载）*
-
-适合：端到端体验、没 GPU、不想吃磁盘。
-
-需要**两个** key：
-
-1. **一家 LLM 厂商**（推荐 DeepSeek —— 最便宜上手）。
-2. **一家 embedding + reranker + ASR 联合厂商**（推荐硅基流动 ——
-   一把 key 覆盖三个角色）。
+或者：
 
 ```bash
-git clone https://github.com/<your-org>/Interview_Copilot.git
-cd Interview_Copilot
-conda create -n interview-copilot python=3.11 -y    # 或 3.10 / 3.12，不要 3.13
-conda activate interview-copilot
-
-.\scripts\setup.ps1                                  # Windows（Linux / macOS：./scripts/setup.sh）
-# setup 提示时输入 "1"：[1] API-light  [2] Local-models
-
-# 打开 .env，粘两把 key：
-#   DEEPSEEK_API_KEY=sk-...
-#   SILICONFLOW_API_KEY=sk-...
-
-.\scripts\start.ps1 -SkipFrontend                    # tab 1
-.\scripts\start.ps1 -SkipBackend                     # tab 2
-
-# 浏览器开 http://localhost:5173 → 注册 → 验证码在后端终端能看到
-# （不需要配 SMTP）→ 登录 → 聊天。
+bash ./scripts/setup.sh
 ```
 
-### 💻 路线 B —— 本地版 *（embedding / reranker / ASR 都跑在本机）*
-
-适合：隐私、离线、已经有 GPU 的人。
-
-只要**一把** key（LLM 仍走云）：
+手动选择配置模板：
 
 ```bash
-# 1-2 跟路线 A 一样，但 setup 提示时输入 "2"。
-
-# 打开 .env，只粘一把 LLM key：
-#   DEEPSEEK_API_KEY=sk-...
-
-python scripts/init_models.py --dry-run              # 实时从 HuggingFace 查大小
-python scripts/init_models.py                        # 总共约 5GB，支持字节级断点续传
-
-.\scripts\start.ps1 -SkipFrontend                    # tab 1
-.\scripts\start.ps1 -SkipBackend                     # tab 2
-
-# 注册 / 登录 跟路线 A 一样。可以试录音分析流程 —— WhisperX + Pyannote
-# 全部本地跑。
+cp .env.community.example .env
+# 或
+cp .env.cloud.example .env
 ```
 
-→ **逐步说明 + 预期输出 + 坑点全在：
-[docs/zh/getting-started.md](getting-started.md)**
+启动服务：
 
-第三种 **Hybrid** 模式（云端 ASR + 本地说话人分离）任何一条路上改 2
-行 env 就能切，详见 [getting-started.md](getting-started.md) 里的 “Hybrid mode” 一节。
+```bash
+uvicorn app.main:app --app-dir backend --reload --port 8080
+cd frontend
+npm run dev
+```
 
----
+浏览器访问 `http://localhost:5173`。
 
-## 仓库结构
+详细说明：
 
-### `backend/app/` —— FastAPI 应用
+- [完整启动指南](getting-started.md)
+- [双版本架构](../architecture/editions.md)
+- [Cloud 部署](../deployment/cloud.md)
+- [Community 部署](../deployment/community.md)
+- [Agent 能力运行时](agent-capability-runtime.md)
 
-| 子包 | 作用 |
-|---|---|
-| `api/` | 路由 —— auth、chat、interview、memory、model_runtime、rag |
-| `schemas/` | Pydantic 请求 / 响应模型（每个路由一份） |
-| `core/` | config、security、rate_limit、SSRF、request_id、LLM tracing、HF runtime。原 model_registry 已经拆成 `model_catalog.py` + `user_model_selection.py` + `llm_client_factory.py`，`model_registry.py` 留作 70 行的 re-export 兼容垫片 |
-| `db/` | SQLAlchemy engine、session factory、同步 + 异步 Redis 客户端 |
-| `models/` | ORM 行 —— `User`、`InterviewRecord`、`InterviewQA`、`KnowledgeDocument`、…… |
-| `rag/` | embedding + reranker 注册表、混合检索、ingestion、BM25 缓存 |
-| `services/` | 业务逻辑，按领域分包 —— 见下表 |
-| `conversation/` | 聊天引擎 + 策略分流（L1 chat 流水线 vs L2 ReAct 循环） |
-| `agent_runtime/` | 工具注册表、ReAct 循环、context compactor、事件流 |
-| `worker/` | Celery app + tasks（analyze / ingest / refresh-catalog） |
+## 用户与部署者边界
 
-### `backend/app/services/` —— 领域子包
+Cloud 用户可配置：
 
-| 子包 | 文件 |
-|---|---|
-| `auth/` | avatar_service、email、user_account、user_api_key、user_provider_settings、verification_code |
-| `resume/` | resume_entity_service、resume_service、resume_vector_service |
-| `knowledge/` | knowledge_service、document_formats、knowledge_outbox、qa_publish_service |
-| `uploads/` | file_asset_service、file_validation、outbox_service |
-| `analytics/` | diagnostics_report_service、telemetry_service |
-| `interview/` | analysis_intake、analysis_orchestrator、interview_record_service、mock_flow、mock_interview_service、mock_runtime_service、record_admin |
-| `chat/` | chat_history_service、citation、context_assembly_pipeline、interview_reference、session_task_service |
-| `memory/` | v3 长期记忆 —— 按 doc-per-type 存进 Postgres |
-| `voice/` | WhisperX、Pyannote、TTS |
-| `model_sources/` | 每家厂商 `/v1/models` 适配器 + Redis 目录管道 |
+- LLM 厂商、模型与个人 API Key
+- 声音
+- 声明式 Skill
+- 远程 Streamable HTTP MCP
 
-跨域基础设施在 `app/core/`（`storage.py` S3 封装、`cache.py` Redis-TTL 缓存、`tokens.py` token 计数、`token_blacklist.py` JWT 吊销）；chunk 级 RAG 阶段（`document_chunk_service.py`、`chunk_hydration.py`）在 `app/rag/`。
+Cloud 运营方负责：
 
-### 顶层目录
+- Embedding、Reranker
+- 语音识别与说话人分离
+- 数据库、向量库、对象存储和任务队列
+- 平台默认 LLM、配额、监控、备份与数据生命周期
 
-- **`backend/tests/`** —— ~500 个测试（api / services / rag / models / core / db）
-- **`frontend/`** —— React SPA（Vite + TS + Tailwind + zustand）；nginx 静态配置在 `public/` 下
-- **`alembic/versions/`** —— 数据库迁移（squash 为单一基线 + 少量增量）
-- **`nginx/conf.d/`** —— 反向代理配置（dev + production）
-- **`scripts/`** —— setup / start / stop / init_models / refresh_models / wipe_non_admin / migrate_avatars
-- **`docs/`** —— getting-started（含 `zh/` 中文版）
-- **`.github/workflows/`** —— CI（后端测试、ruff、前端构建）
-
----
-
-## 文档
-
-完整上手（两条路线、预期输出、可选项 SMTP / LangSmith / Tavily / Hybrid、
-以及坑点清单）：[getting-started.md](getting-started.md) · [English](../getting-started.md)。
-
----
-
-## 技术栈
-
-- **API**：FastAPI 0.135、SQLAlchemy 2、Pydantic v2、slowapi（限流）
-- **后台任务**：Celery 5 + Redis（队列 / 缓存 / 黑名单）
-- **存储**：PostgreSQL 15、Milvus 2.6（向量）、MinIO（S3 兼容）
-- **AI**：LlamaIndex、BGE-M3 + BGE-Reranker-v2-m3、WhisperX、Pyannote
-- **LLM**：任意 OpenAI 兼容 API（默认 DeepSeek）
-- **前端**：React 18、Vite 5、Tailwind、zustand、react-virtual
-- **基础设施**：Docker Compose、nginx
-- **观测**：LangSmith（LLM trace，按需启用）
-
----
-
-## License
-
-MIT.
+Community 部署者可以修改上述所有能力，但本地进程能力仍需显式开启。

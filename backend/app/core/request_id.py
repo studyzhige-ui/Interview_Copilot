@@ -19,6 +19,7 @@ response header (already in CORS's ``expose_headers`` since P3-C) so
 a user can attach it to a bug report and the engineer can grep the
 log for a single string.
 """
+
 from __future__ import annotations
 
 import contextvars
@@ -31,7 +32,8 @@ import uuid
 # ``threading.Thread`` does NOT copy — but we don't spawn raw threads
 # from request handlers.)
 _request_id: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "request_id", default="-",
+    "request_id",
+    default="-",
 )
 
 

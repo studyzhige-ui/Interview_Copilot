@@ -13,6 +13,7 @@ Coverage:
     MemoryAbilityState / MemoryAuditEntry (v3 memory),
     MockInterviewRuntime, UserModelCredential, ResumeSection).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -56,29 +57,42 @@ def test_all_expected_tables_registered(test_engine):
 def test_user_columns_and_uniques(test_engine):
     insp = inspect(test_engine)
     cols = {c["name"]: c for c in insp.get_columns("users")}
-    for required in ("id", "username", "email", "hashed_password", "is_active",
-                     "email_verified", "nickname", "avatar_url", "bio",
-                     "created_at", "updated_at"):
+    for required in (
+        "id",
+        "username",
+        "email",
+        "hashed_password",
+        "is_active",
+        "email_verified",
+        "nickname",
+        "avatar_url",
+        "bio",
+        "created_at",
+        "updated_at",
+    ):
         assert required in cols, f"User.{required} missing"
     # Index-style uniqueness on username/email.
-    assert any("username" in u["column_names"] for u in insp.get_indexes("users")), \
+    assert any("username" in u["column_names"] for u in insp.get_indexes("users")), (
         "username should be indexed"
+    )
 
 
 def test_user_model_credential_unique_constraint(test_engine):
     insp = inspect(test_engine)
     uqs = insp.get_unique_constraints("user_model_credentials")
     names = {u["name"] for u in uqs}
-    assert "uq_user_model_credentials_user_provider" in names, \
+    assert "uq_user_model_credentials_user_provider" in names, (
         f"Missing unique (user_id, provider): {uqs}"
+    )
 
 
 def test_interview_qa_foreign_key_to_record(test_engine):
     insp = inspect(test_engine)
     fks = insp.get_foreign_keys("interview_qa")
     targets = {(fk["referred_table"], tuple(fk["referred_columns"])) for fk in fks}
-    assert ("interview_records", ("id",)) in targets, \
+    assert ("interview_records", ("id",)) in targets, (
         f"interview_qa → interview_records FK missing: {fks}"
+    )
 
 
 def test_chat_message_foreign_key_to_session(test_engine):
@@ -136,13 +150,21 @@ def test_chat_session_with_messages_relationship(db_session):
     db_session.add(session)
     db_session.flush()
 
-    db_session.add_all([
-        ConversationMessage(conversation_id="sess-001", seq=1, role="User", content="hi"),
-        ConversationMessage(conversation_id="sess-001", seq=2, role="Agent", content="hello back"),
-    ])
+    db_session.add_all(
+        [
+            ConversationMessage(
+                conversation_id="sess-001", seq=1, role="User", content="hi"
+            ),
+            ConversationMessage(
+                conversation_id="sess-001", seq=2, role="Agent", content="hello back"
+            ),
+        ]
+    )
     db_session.flush()
 
-    loaded = db_session.query(Conversation).filter(Conversation.id == "sess-001").first()
+    loaded = (
+        db_session.query(Conversation).filter(Conversation.id == "sess-001").first()
+    )
     assert len(loaded.messages) == 2
     # relationship order_by=seq → first msg is the user msg
     assert loaded.messages[0].seq == 1
@@ -163,12 +185,26 @@ def test_interview_record_with_qa_rows(db_session):
     db_session.add(record)
     db_session.flush()
 
-    db_session.add_all([
-        InterviewQA(record_id=record.id, order_idx=0, phase="technical",
-                    question="Q1", answer="A1", score=9),
-        InterviewQA(record_id=record.id, order_idx=1, phase="technical",
-                    question="Q2", answer="A2", score=8),
-    ])
+    db_session.add_all(
+        [
+            InterviewQA(
+                record_id=record.id,
+                order_idx=0,
+                phase="technical",
+                question="Q1",
+                answer="A1",
+                score=9,
+            ),
+            InterviewQA(
+                record_id=record.id,
+                order_idx=1,
+                phase="technical",
+                question="Q2",
+                answer="A2",
+                score=8,
+            ),
+        ]
+    )
     db_session.flush()
 
     rows = (
@@ -211,8 +247,11 @@ def test_file_asset_object_key_unique(db_session):
     uid = _make_user(db_session, username="fa_owner")
 
     asset = FileAsset(
-        id="fa_a", user_id=uid, purpose="resume",
-        original_filename="cv.pdf", storage_uri="s3://bk/a",
+        id="fa_a",
+        user_id=uid,
+        purpose="resume",
+        original_filename="cv.pdf",
+        storage_uri="s3://bk/a",
         object_key="key-shared",
     )
     db_session.add(asset)
@@ -226,11 +265,16 @@ def test_file_asset_object_key_unique(db_session):
     assert loaded.id.startswith("fa_")
 
     # A second row reusing the same object_key violates the unique index.
-    db_session.add(FileAsset(
-        id="fa_b", user_id=uid, purpose="resume",
-        original_filename="cv2.pdf", storage_uri="s3://bk/b",
-        object_key="key-shared",
-    ))
+    db_session.add(
+        FileAsset(
+            id="fa_b",
+            user_id=uid,
+            purpose="resume",
+            original_filename="cv2.pdf",
+            storage_uri="s3://bk/b",
+            object_key="key-shared",
+        )
+    )
     with pytest.raises(IntegrityError):
         db_session.flush()
     db_session.rollback()
@@ -243,11 +287,16 @@ def test_knowledge_document_default_values(db_session):
     # The KnowledgeDocument.file_asset_id FK points at file_assets.id, so the
     # parent asset is a FileAsset keyed on the integer users.id.
     uid = _make_user(db_session, username="kdoc_owner")
-    db_session.add(FileAsset(
-        id="upl_k", user_id=uid, purpose="knowledge_document",
-        original_filename="doc.pdf", storage_uri="s3://bk/k",
-        object_key="key-knowledge",
-    ))
+    db_session.add(
+        FileAsset(
+            id="upl_k",
+            user_id=uid,
+            purpose="knowledge_document",
+            original_filename="doc.pdf",
+            storage_uri="s3://bk/k",
+            object_key="key-knowledge",
+        )
+    )
     db_session.flush()
 
     doc = KnowledgeDocument(
@@ -295,9 +344,9 @@ def test_memory_document_defaults_and_unique_per_doc_type(db_session):
 
     loaded = db_session.query(MemoryDocument).first()
     assert loaded.doc_type == "user_profile"
-    assert loaded.one_liner == ""          # default
+    assert loaded.one_liner == ""  # default
     assert loaded.body == "- 目标：后端"
-    assert loaded.id.startswith("mdoc_")   # generated id prefix
+    assert loaded.id.startswith("mdoc_")  # generated id prefix
 
     # A different doc_type for the same user is allowed.
     db_session.add(MemoryDocument(user_id=uid, doc_type="learning_strategy", body="x"))
@@ -328,7 +377,7 @@ def test_memory_ability_state_defaults_and_active_uniqueness(db_session):
     db_session.flush()
 
     loaded = db_session.query(MemoryAbilityState).first()
-    assert loaded.mastery_level == "improving"   # default
+    assert loaded.mastery_level == "improving"  # default
     assert loaded.archived_at is None
     assert loaded.id.startswith("mas_")
 
@@ -353,20 +402,31 @@ def test_memory_ability_state_defaults_and_active_uniqueness(db_session):
     live.archived_at = datetime.utcnow()
     db_session.flush()
     db_session.add(
-        MemoryAbilityState(user_id=uid2, topic="TCP", skill_type="knowledge_topic",
-                           mastery_level="weak")
+        MemoryAbilityState(
+            user_id=uid2,
+            topic="TCP",
+            skill_type="knowledge_topic",
+            mastery_level="weak",
+        )
     )
     db_session.flush()
-    active = db_session.query(MemoryAbilityState).filter(
-        MemoryAbilityState.topic == "TCP",
-        MemoryAbilityState.archived_at.is_(None),
-    ).all()
+    active = (
+        db_session.query(MemoryAbilityState)
+        .filter(
+            MemoryAbilityState.topic == "TCP",
+            MemoryAbilityState.archived_at.is_(None),
+        )
+        .all()
+    )
     assert len(active) == 1
     assert active[0].mastery_level == "weak"
     # Total TCP rows = 1 archived + 1 active.
-    assert db_session.query(MemoryAbilityState).filter(
-        MemoryAbilityState.topic == "TCP"
-    ).count() == 2
+    assert (
+        db_session.query(MemoryAbilityState)
+        .filter(MemoryAbilityState.topic == "TCP")
+        .count()
+        == 2
+    )
 
 
 def test_memory_audit_entry_round_trip_and_unique_idem_key(db_session):
@@ -379,20 +439,30 @@ def test_memory_audit_entry_round_trip_and_unique_idem_key(db_session):
 
     uid = _make_user(db_session)
 
-    db_session.add_all([
-        MemoryAuditEntry(user_id=uid, change_type="patch_realtime", doc_type="user_profile"),
-        MemoryAuditEntry(user_id=uid, change_type="user_edit"),   # NULL idem key
-        MemoryAuditEntry(user_id=uid, change_type="user_edit"),   # NULL idem key — allowed
-    ])
+    db_session.add_all(
+        [
+            MemoryAuditEntry(
+                user_id=uid, change_type="patch_realtime", doc_type="user_profile"
+            ),
+            MemoryAuditEntry(user_id=uid, change_type="user_edit"),  # NULL idem key
+            MemoryAuditEntry(
+                user_id=uid, change_type="user_edit"
+            ),  # NULL idem key — allowed
+        ]
+    )
     db_session.flush()
     assert db_session.query(MemoryAuditEntry).count() == 3
 
     db_session.add(
-        MemoryAuditEntry(user_id=uid, change_type="patch_dreaming", idempotency_key="job-1")
+        MemoryAuditEntry(
+            user_id=uid, change_type="patch_dreaming", idempotency_key="job-1"
+        )
     )
     db_session.flush()
     db_session.add(
-        MemoryAuditEntry(user_id=uid, change_type="patch_dreaming", idempotency_key="job-1")
+        MemoryAuditEntry(
+            user_id=uid, change_type="patch_dreaming", idempotency_key="job-1"
+        )
     )
     with pytest.raises(IntegrityError):
         db_session.flush()
@@ -413,15 +483,23 @@ def test_user_model_credential_uniqueness(db_session):
     db_session.add(user)
     db_session.flush()
 
-    db_session.add(UserModelCredential(
-        user_id=user.id, provider="openai",
-        key_ciphertext="aaa", key_masked="sk-****abcd",
-    ))
+    db_session.add(
+        UserModelCredential(
+            user_id=user.id,
+            provider="openai",
+            key_ciphertext="aaa",
+            key_masked="sk-****abcd",
+        )
+    )
     db_session.flush()
-    db_session.add(UserModelCredential(
-        user_id=user.id, provider="openai",
-        key_ciphertext="bbb", key_masked="sk-****xyzw",
-    ))
+    db_session.add(
+        UserModelCredential(
+            user_id=user.id,
+            provider="openai",
+            key_ciphertext="bbb",
+            key_masked="sk-****xyzw",
+        )
+    )
     with pytest.raises(IntegrityError):
         db_session.flush()
     db_session.rollback()

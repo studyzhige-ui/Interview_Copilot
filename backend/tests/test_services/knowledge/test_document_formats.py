@@ -1,4 +1,5 @@
 """Tests for the knowledge-document format whitelist (ingestion §4.1.2)."""
+
 from __future__ import annotations
 
 import pytest
@@ -13,10 +14,22 @@ from app.services.knowledge.document_formats import (
 @pytest.mark.parametrize(
     "filename",
     [
-        "redis.pdf", "notes.docx", "deck.pptx", "data.xlsx",
-        "page.html", "page.htm", "readme.md", "guide.markdown", "log.txt",
-        "rows.csv", "rows.tsv", "config.json",
-        "main.py", "App.java", "engine.cpp", "kernel.c",
+        "redis.pdf",
+        "notes.docx",
+        "deck.pptx",
+        "data.xlsx",
+        "page.html",
+        "page.htm",
+        "readme.md",
+        "guide.markdown",
+        "log.txt",
+        "rows.csv",
+        "rows.tsv",
+        "config.json",
+        "main.py",
+        "App.java",
+        "engine.cpp",
+        "kernel.c",
         "UPPER.PDF",  # case-insensitive
     ],
 )
@@ -25,7 +38,9 @@ def test_allowed_formats_pass(filename):
     assert ext in ALLOWED_KNOWLEDGE_EXTENSIONS
 
 
-@pytest.mark.parametrize("filename", ["scan.png", "photo.jpg", "img.jpeg", "x.tiff", "y.bmp", "z.webp"])
+@pytest.mark.parametrize(
+    "filename", ["scan.png", "photo.jpg", "img.jpeg", "x.tiff", "y.bmp", "z.webp"]
+)
 def test_image_formats_now_allowed(filename):
     """Images are OCR-ingested (Docling RapidOCR / LlamaParse cloud) as of the
     OCR round — they moved out of the deferred set into the whitelist."""
@@ -42,7 +57,9 @@ def test_legacy_office_now_allowed(filename):
     assert ext in ALLOWED_KNOWLEDGE_EXTENSIONS
 
 
-@pytest.mark.parametrize("filename", ["malware.exe", "archive.zip", "movie.mkv", "noext"])
+@pytest.mark.parametrize(
+    "filename", ["malware.exe", "archive.zip", "movie.mkv", "noext"]
+)
 def test_unknown_formats_rejected_generic(filename):
     with pytest.raises(UnsupportedDocumentFormat):
         validate_knowledge_document_format(filename)
@@ -63,7 +80,9 @@ def test_audio_video_content_type_rejected_even_with_ok_ext():
 
 def test_generic_octet_stream_content_type_is_allowed():
     """The common generic content_type must NOT trigger a false rejection."""
-    ext = validate_knowledge_document_format("redis.pdf", content_type="application/octet-stream")
+    ext = validate_knowledge_document_format(
+        "redis.pdf", content_type="application/octet-stream"
+    )
     assert ext == ".pdf"
 
 

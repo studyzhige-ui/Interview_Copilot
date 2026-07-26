@@ -22,6 +22,7 @@ Keyed by the stable ``users.id`` (FK, ON DELETE CASCADE). ``provider`` is the
 stable provider key validated at the API layer against ``providers.PROVIDERS``
 (not a DB FK — adding/removing a provider must not need a migration).
 """
+
 from datetime import datetime
 
 from sqlalchemy import (
@@ -42,7 +43,9 @@ class UserModelProviderSettings(Base):
     __tablename__ = "user_model_provider_settings"
     __table_args__ = (
         UniqueConstraint(
-            "user_id", "provider", name="uq_user_model_provider_settings",
+            "user_id",
+            "provider",
+            name="uq_user_model_provider_settings",
         ),
     )
 
@@ -74,5 +77,8 @@ class UserModelProviderSettings(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
     )

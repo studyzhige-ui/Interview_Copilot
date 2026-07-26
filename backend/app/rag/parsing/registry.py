@@ -7,6 +7,7 @@ the previous key-based selection (LlamaParse when a LlamaCloud key is set, else
 PyMuPDF/default reader) — Docling (E2) and the per-format lightweight matrix
 (E3) extend ``_candidates`` without touching callers.
 """
+
 from __future__ import annotations
 
 import logging
@@ -73,6 +74,7 @@ def _docling_available() -> bool:
     if _docling_available_cache is None:
         try:
             import docling.document_converter  # noqa: F401
+
             _docling_available_cache = True
         except Exception:  # noqa: BLE001 — any import/init issue -> treat as unavailable
             _docling_available_cache = False
@@ -124,7 +126,10 @@ def _candidates(ext: str) -> list:
 
 
 def _run_candidates(
-    file_path: str, candidates: list, *, legacy_conversion_used: bool = False,
+    file_path: str,
+    candidates: list,
+    *,
+    legacy_conversion_used: bool = False,
 ) -> ParseResult | None:
     """Try candidates in order; return the first non-empty ParseResult with its
     ``parser_profile`` stamped, or None if every candidate fails / yields empty.
@@ -161,15 +166,26 @@ def _run_candidates(
     return None
 
 
-def _soffice_convert(soffice: str, file_path: str, target_ext: str, outdir: str) -> str | None:
+def _soffice_convert(
+    soffice: str, file_path: str, target_ext: str, outdir: str
+) -> str | None:
     """Convert a legacy Office file to modern OOXML via headless LibreOffice,
     returning the converted path under ``outdir`` (or None if no output landed).
     Raises on a non-zero exit / timeout — the caller treats that as conversion
     failure. ``--convert-to`` wants the bare filter name ("docx", not ".docx")."""
     proc = subprocess.run(
-        [soffice, "--headless", "--convert-to", target_ext.lstrip("."),
-         "--outdir", outdir, file_path],
-        capture_output=True, timeout=180, check=True,
+        [
+            soffice,
+            "--headless",
+            "--convert-to",
+            target_ext.lstrip("."),
+            "--outdir",
+            outdir,
+            file_path,
+        ],
+        capture_output=True,
+        timeout=180,
+        check=True,
     )
     base = os.path.splitext(os.path.basename(file_path))[0]
     converted = os.path.join(outdir, f"{base}{target_ext}")
@@ -202,12 +218,16 @@ def _parse_legacy_office(file_path: str, ext: str) -> ParseResult:
             try:
                 converted = _soffice_convert(soffice, file_path, target_ext, outdir)
             except Exception as exc:  # noqa: BLE001 — fall through to the friendly error
-                logger.warning("LibreOffice conversion failed for %s: %s", file_path, exc)
+                logger.warning(
+                    "LibreOffice conversion failed for %s: %s", file_path, exc
+                )
                 converted = None
             if converted is not None:
                 # markdown is read into memory before the tempdir is cleaned up.
                 result = _run_candidates(
-                    converted, _candidates(target_ext), legacy_conversion_used=True,
+                    converted,
+                    _candidates(target_ext),
+                    legacy_conversion_used=True,
                 )
                 if result is not None:
                     return result

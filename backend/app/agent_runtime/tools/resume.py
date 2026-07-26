@@ -21,7 +21,9 @@ class ReadResumeArgs(BaseModel):
     )
 
 
-async def _read_resume_handler(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, Any]:
+async def _read_resume_handler(
+    args: ReadResumeArgs, ctx: AgentToolContext
+) -> dict[str, Any]:
     """Async wrapper — entire body is sync DB + chunk reads, so
     offload to a worker thread to keep the agent loop responsive."""
     return await asyncio.to_thread(_read_resume_sync, args, ctx)
@@ -79,11 +81,13 @@ def _read_resume_inner(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str,
         for s in sections:
             if args.section_types and s.section_type not in args.section_types:
                 continue
-            section_summary.append({
-                "type": s.section_type,
-                "title": s.title,
-                "content": s.content[:800],
-            })
+            section_summary.append(
+                {
+                    "type": s.section_type,
+                    "title": s.title,
+                    "content": s.content[:800],
+                }
+            )
         return {
             "resume_id": primary_id,
             "title": primary_title,
@@ -120,20 +124,22 @@ def _read_resume_inner(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str,
     }
 
 
-registry.register(ToolEntry(
-    name="read_resume",
-    description=(
-        "Read the user's default personal resume. Tries the parsed "
-        "``resume_sections`` first; falls back to the resume entity's "
-        "``raw_text_snapshot``. Returns either structured sections or "
-        "``full_text`` plus metadata. Resumes are a personal entity, "
-        "never knowledge documents."
-    ),
-    args_model=ReadResumeArgs,
-    handler=_read_resume_handler,
-    # Bumped from 10K to 20K to accommodate the full-text fallback —
-    # the handler caps full_text at 18K internally, leaving headroom
-    # for the surrounding JSON envelope.
-    max_result_chars=20000,
-    emoji="📄",
-))
+registry.register(
+    ToolEntry(
+        name="read_resume",
+        description=(
+            "Read the user's default personal resume. Tries the parsed "
+            "``resume_sections`` first; falls back to the resume entity's "
+            "``raw_text_snapshot``. Returns either structured sections or "
+            "``full_text`` plus metadata. Resumes are a personal entity, "
+            "never knowledge documents."
+        ),
+        args_model=ReadResumeArgs,
+        handler=_read_resume_handler,
+        # Bumped from 10K to 20K to accommodate the full-text fallback —
+        # the handler caps full_text at 18K internally, leaving headroom
+        # for the surrounding JSON envelope.
+        max_result_chars=20000,
+        emoji="📄",
+    )
+)

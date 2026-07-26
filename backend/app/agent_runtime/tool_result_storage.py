@@ -42,6 +42,7 @@ _NEVER_PERSIST_TOOLS: frozenset[str] = frozenset({"read_file"})
 
 # ── Storage directory helpers ────────────────────────────────────────────
 
+
 def _storage_dir(session_id: str) -> Path:
     """Return the local directory for persisted tool results."""
     return Path(settings.APP_DATA_DIR) / "agent-results" / session_id
@@ -52,6 +53,7 @@ def _ensure_dir(directory: Path) -> None:
 
 
 # ── Preview generation ───────────────────────────────────────────────────
+
 
 def generate_preview(content: str, max_chars: int | None = None) -> tuple[str, bool]:
     """Truncate at last newline within *max_chars*.  Returns (preview, has_more).
@@ -89,7 +91,9 @@ def _build_persisted_message(
         size_str = f"{size_kb:.1f} KB"
 
     msg = f"{PERSISTED_OUTPUT_TAG}\n"
-    msg += f"This tool result was too large ({original_size:,} characters, {size_str}).\n"
+    msg += (
+        f"This tool result was too large ({original_size:,} characters, {size_str}).\n"
+    )
     msg += f"Full output saved to: {file_path}\n"
     msg += "Use the read_file tool with the path above to access specific sections.\n\n"
     msg += f"Preview (first {len(preview)} chars):\n"
@@ -101,6 +105,7 @@ def _build_persisted_message(
 
 
 # ── Per-result persistence ───────────────────────────────────────────────
+
 
 def resolve_threshold(tool_name: str) -> int | float:
     """Resolve the effective persistence threshold for a tool.
@@ -118,6 +123,7 @@ def resolve_threshold(tool_name: str) -> int | float:
         # Lazy import: registry ← tools ← (this module, via read_file) —
         # importing at module level would risk a cycle through file_tool.
         from app.agent_runtime.tool_registry import registry
+
         entry = registry.get(tool_name)
         if entry is not None and entry.max_result_chars > 0:
             threshold = min(threshold, entry.max_result_chars)
@@ -142,7 +148,9 @@ def maybe_persist_result(
 
     Falls back to inline truncation if the write fails.
     """
-    effective_threshold = threshold if threshold is not None else resolve_threshold(tool_name)
+    effective_threshold = (
+        threshold if threshold is not None else resolve_threshold(tool_name)
+    )
 
     # inf threshold → never persist (read_file protection)
     if effective_threshold == float("inf"):
@@ -161,7 +169,10 @@ def maybe_persist_result(
         file_path.write_text(content, encoding="utf-8")
         logger.info(
             "Persisted large tool result: %s (%s, %d chars -> %s)",
-            tool_name, tool_call_id, len(content), file_path,
+            tool_name,
+            tool_call_id,
+            len(content),
+            file_path,
         )
         return _build_persisted_message(preview, has_more, len(content), str(file_path))
     except Exception as exc:
@@ -175,6 +186,7 @@ def maybe_persist_result(
 
 
 # ── Per-turn aggregate budget ────────────────────────────────────────────
+
 
 def enforce_turn_budget(
     tool_messages: list[dict],
@@ -231,7 +243,8 @@ def enforce_turn_budget(
             msg["content"] = replacement
             logger.info(
                 "Budget enforcement: persisted tool result %s (%d chars)",
-                tool_call_id, size,
+                tool_call_id,
+                size,
             )
 
     return tool_messages

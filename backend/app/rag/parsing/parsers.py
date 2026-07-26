@@ -6,6 +6,7 @@ class, when a LlamaCloud key is set) for PDF/PPTX/DOCX, PyMuPDF for PDF text,
 and LlamaIndex's default ``SimpleDirectoryReader`` for everything else. Docling
 (E2) and the per-format lightweight matrix (E3) register alongside these later.
 """
+
 from __future__ import annotations
 
 import os
@@ -39,7 +40,9 @@ def _join_documents(docs: list) -> tuple[str, list[PageSpan]]:
             page = int(meta.get("page_label"))
         except (TypeError, ValueError):
             page = i + 1
-        page_map.append(PageSpan(page=page, char_start=cursor, char_end=cursor + len(text)))
+        page_map.append(
+            PageSpan(page=page, char_start=cursor, char_end=cursor + len(text))
+        )
         parts.append(text)
         cursor += len(text) + 2  # the "\n\n" the join inserts
     return "\n\n".join(parts), page_map
@@ -79,16 +82,22 @@ class LlamaParseParser:
 
         nest_asyncio.apply()
         parser = LlamaParse(
-            result_type="markdown", language="ch_sim",
-            api_key=settings.LLAMA_CLOUD_API_KEY, num_workers=2,
+            result_type="markdown",
+            language="ch_sim",
+            api_key=settings.LLAMA_CLOUD_API_KEY,
+            num_workers=2,
         )
         ext = os.path.splitext(file_path)[1].lower()
         docs = SimpleDirectoryReader(
-            input_files=[file_path], file_extractor={ext: parser},
+            input_files=[file_path],
+            file_extractor={ext: parser},
         ).load_data()
         markdown, page_map = _join_documents(docs)
         return ParseResult(
-            markdown=markdown, parser_id=self.id, is_markdown=True, page_map=page_map,
+            markdown=markdown,
+            parser_id=self.id,
+            is_markdown=True,
+            page_map=page_map,
         )
 
 
@@ -112,6 +121,7 @@ def _ocr_available() -> bool:
     global _ocr_available_cache
     if _ocr_available_cache is None:
         from importlib.util import find_spec
+
         _ocr_available_cache = find_spec("rapidocr_onnxruntime") is not None
     return _ocr_available_cache
 
@@ -155,13 +165,16 @@ def _get_docling_converter():
         # leave artifacts_path unset so Docling falls back to its own download
         # (works where HuggingFace is reachable; degrades gracefully otherwise).
         from app.core.hf_runtime import DOCLING_CACHE_DIR
+
         models_dir = DOCLING_CACHE_DIR / "models"
         if models_dir.is_dir() and any(models_dir.iterdir()):
             pdf_opts.artifacts_path = models_dir
-        _docling_converter = DocumentConverter(format_options={
-            InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_opts),
-            InputFormat.IMAGE: ImageFormatOption(pipeline_options=pdf_opts),
-        })
+        _docling_converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_opts),
+                InputFormat.IMAGE: ImageFormatOption(pipeline_options=pdf_opts),
+            }
+        )
     return _docling_converter
 
 
@@ -203,8 +216,11 @@ class DoclingParser:
         # spans, so page_count reads 0 here (unlike PyMuPDF, which maps per page).
         # Accurate Docling page provenance is deferred to the page_start/end round.
         return ParseResult(
-            markdown=markdown, parser_id=self.id, is_markdown=True,
-            ocr_used=ocr_used, page_map=[],
+            markdown=markdown,
+            parser_id=self.id,
+            is_markdown=True,
+            ocr_used=ocr_used,
+            page_map=[],
         )
 
 
@@ -222,11 +238,15 @@ class PyMuPDFParser:
         from llama_index.readers.file import PyMuPDFReader
 
         docs = SimpleDirectoryReader(
-            input_files=[file_path], file_extractor={".pdf": PyMuPDFReader()},
+            input_files=[file_path],
+            file_extractor={".pdf": PyMuPDFReader()},
         ).load_data()
         markdown, page_map = _join_documents(docs)
         return ParseResult(
-            markdown=markdown, parser_id=self.id, is_markdown=False, page_map=page_map,
+            markdown=markdown,
+            parser_id=self.id,
+            is_markdown=False,
+            page_map=page_map,
         )
 
 
@@ -249,8 +269,10 @@ class SimpleReaderParser:
         markdown, page_map = _join_documents(docs)
         ext = os.path.splitext(file_path)[1].lower()
         return ParseResult(
-            markdown=markdown, parser_id=self.id,
-            is_markdown=ext in self._MARKDOWN_EXTS, page_map=page_map,
+            markdown=markdown,
+            parser_id=self.id,
+            is_markdown=ext in self._MARKDOWN_EXTS,
+            page_map=page_map,
         )
 
 
@@ -293,12 +315,15 @@ class PptxParser:
         slides: list[str] = []
         for slide in Presentation(file_path).slides:
             parts = [
-                shape.text for shape in slide.shapes
+                shape.text
+                for shape in slide.shapes
                 if shape.has_text_frame and shape.text.strip()
             ]
             if parts:
                 slides.append("\n".join(parts))
-        return ParseResult(markdown="\n\n".join(slides), parser_id=self.id, is_markdown=False)
+        return ParseResult(
+            markdown="\n\n".join(slides), parser_id=self.id, is_markdown=False
+        )
 
 
 class XlsxParser:
@@ -337,7 +362,9 @@ class XlsxParser:
         # No sheet marker: every row already self-describes (header: value), so
         # rows from different sheets stay correct without a "[Sheet]" line that
         # the table splitter would mis-promote to a repeated header.
-        return ParseResult(markdown="\n".join(lines), parser_id=self.id, is_markdown=False)
+        return ParseResult(
+            markdown="\n".join(lines), parser_id=self.id, is_markdown=False
+        )
 
 
 class HtmlParser:
@@ -377,4 +404,6 @@ class TextParser:
         return ext in self._EXTS
 
     def parse(self, file_path: str) -> ParseResult:
-        return ParseResult(markdown=_read_text(file_path), parser_id=self.id, is_markdown=False)
+        return ParseResult(
+            markdown=_read_text(file_path), parser_id=self.id, is_markdown=False
+        )

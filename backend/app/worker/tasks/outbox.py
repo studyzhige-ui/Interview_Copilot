@@ -1,4 +1,5 @@
 """Outbox drain task — reliable cross-system side effects (light queue)."""
+
 import logging
 
 from app.worker.celery_app import celery_app
@@ -23,6 +24,7 @@ def drain_outbox_jobs(self):
     """
     from app.db.database import SessionLocal
     from app.services.uploads.outbox_service import run_due_outbox_jobs
+
     # Import for side effect: register the handlers before any job is claimed —
     # Milvus ability-index (upsert/delete_memory_ability_index), the memory
     # extraction jobs (extract_memory_realtime / extract_memory_dreaming), and

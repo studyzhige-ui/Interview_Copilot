@@ -5,10 +5,9 @@
 # cloning. For everyday startup, use scripts/start.sh.
 #
 # What this script does:
-#   1. Verify prerequisites (docker, npm, python in supported range)
-#   2. Verify you're in an activated venv / conda env
-#   3. pip install -r requirements.txt
-#   4. Create .env from a template if missing (interactive)
+#   1. Choose an edition and create .env if missing
+#   2. Verify prerequisites and an isolated Python environment
+#   3. Install the edition-appropriate development dependencies
 #   5. Generate SECRET_KEY if blank
 #   6. docker compose up -d  +  wait for postgres
 #   7. alembic upgrade head
@@ -17,12 +16,13 @@
 # What this script does NOT do:
 #   - Create or activate your Python environment. Do that yourself first.
 #   - Download Whisper / Pyannote model weights. Run
-#     `python scripts/init_models.py` separately if you chose full mode.
+#     `python scripts/init_models.py` separately for Community local models.
 
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FRONTEND_DIR="$PROJECT_ROOT/frontend"
+ENV_FILE="$PROJECT_ROOT/.env"
 
 CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 step() { printf "${CYAN}==> %s${NC}\n" "$*"; }
@@ -31,7 +31,31 @@ warn() { printf "    ${YELLOW}%s${NC}\n" "$*"; }
 fail() { printf "    ${RED}%s${NC}\n" "$*"; exit 1; }
 
 # -----------------------------------------------------------------------------
-# 1. Prerequisites
+# 1. Edition
+# -----------------------------------------------------------------------------
+step "Configuring edition"
+if [ -f "$ENV_FILE" ]; then
+    EDITION="$(sed -nE 's/^APP_EDITION=(cloud|community)[[:space:]]*$/\1/p' "$ENV_FILE" | head -n 1)"
+    EDITION="${EDITION:-community}"
+    ok ".env already exists; using $EDITION edition"
+else
+    printf "    Choose an edition:\n"
+    printf "      [1] Community — GitHub self-hosted edition with full developer controls\n"
+    printf "      [2] Cloud     — hosted Web profile with managed foundation models\n"
+    read -rp "    Enter 1 or 2: " choice
+    if [ "$choice" = "2" ]; then EDITION="cloud"; else EDITION="community"; fi
+    TEMPLATE=".env.$EDITION.example"
+    cp "$PROJECT_ROOT/$TEMPLATE" "$ENV_FILE"
+    ok "Copied $TEMPLATE -> .env"
+fi
+if [ "$EDITION" = "cloud" ]; then
+    REQUIREMENTS_FILE="requirements-dev.txt"
+else
+    REQUIREMENTS_FILE="requirements-community-dev.txt"
+fi
+
+# -----------------------------------------------------------------------------
+# 2. Prerequisites
 # -----------------------------------------------------------------------------
 step "Checking prerequisites"
 
@@ -39,12 +63,10 @@ for cmd in docker npm python; do
     command -v "$cmd" >/dev/null 2>&1 || fail "$cmd is not on PATH. Install it (or activate your env) and retry."
 done
 
-# Python version: require 3.10 / 3.11 / 3.12. 3.13 has no whisperx/pyannote
-# wheels yet; <3.10 is unsupported by torch 2.x and pydantic v2.
 PY_VER="$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 case "$PY_VER" in
-    3.10|3.11|3.12) ;;
-    *) fail "Python $PY_VER is not supported. Use 3.10, 3.11, or 3.12. (3.13 lacks ML wheels.)" ;;
+    3.11|3.12|3.13) ;;
+    *) fail "Python $PY_VER is not supported. Use 3.11, 3.12, or 3.13." ;;
 esac
 ok "python $PY_VER  ($(python -c 'import sys; print(sys.executable)'))"
 
@@ -63,34 +85,16 @@ fi
 ok "isolated environment detected"
 
 # -----------------------------------------------------------------------------
-# 2. Python dependencies
+# 3. Python dependencies
 # -----------------------------------------------------------------------------
 step "Installing Python dependencies (this can take 5-15 min on first run)"
-( cd "$PROJECT_ROOT" && python -m pip install --upgrade pip && python -m pip install -r requirements.txt ) \
+( cd "$PROJECT_ROOT" && python -m pip install --upgrade pip && python -m pip install -r "$REQUIREMENTS_FILE" ) \
     || fail "pip install failed."
-ok "requirements.txt installed"
+ok "$EDITION development dependencies installed from $REQUIREMENTS_FILE"
 
 # -----------------------------------------------------------------------------
-# 3. .env scaffolding
+# 4. Secrets and Docker environment
 # -----------------------------------------------------------------------------
-step "Configuring .env"
-ENV_FILE="$PROJECT_ROOT/.env"
-if [ -f "$ENV_FILE" ]; then
-    ok ".env already exists, leaving it alone"
-else
-    printf "    Choose a starting template:\n"
-    printf "      [1] API-light    — all cloud APIs, no GPU, no model downloads\n"
-    printf "      [2] Local-models — embeddings/reranker/ASR run locally\n"
-    read -rp "    Enter 1 or 2: " choice
-    case "$choice" in
-        2) TEMPLATE=".env.example" ;;
-        *) TEMPLATE=".env.example.lite" ;;
-    esac
-    cp "$PROJECT_ROOT/$TEMPLATE" "$ENV_FILE"
-    ok "Copied $TEMPLATE -> .env"
-    warn "Remember to fill in your API keys before the first run."
-fi
-
 [ -f "$PROJECT_ROOT/.env.docker" ] || {
     cp "$PROJECT_ROOT/.env.docker.example" "$PROJECT_ROOT/.env.docker"
     ok "Copied .env.docker.example -> .env.docker"
@@ -145,8 +149,8 @@ printf "${GREEN}================================================================
 echo
 echo "  Next steps:"
 echo "    1. Open .env and fill in any provider API keys you want to use"
-echo "       (DEEPSEEK_API_KEY at minimum, for the LLM)."
-echo "    2. (full mode only) python scripts/init_models.py"
+echo "       or configure the operator-provided default LLM."
+echo "    2. (Community local models only) python scripts/init_models.py"
 echo "       — downloads Whisper / Pyannote weights for local inference."
 echo "    3. ./scripts/start.sh"
 echo "       — every-day startup (uvicorn + celery + vite, single shell)."

@@ -30,7 +30,7 @@ let refreshInFlight: Promise<string | null> | null = null;
 /**
  * Refresh the access token using the stored refresh token.
  *
- * Exported so non-axios paths (notably ``streamChatSSE``, which uses
+ * Exported so non-axios paths (notably ``streamChatTurn``, which uses
  * raw ``fetch`` and therefore bypasses the response interceptor below)
  * can also recover from a 401. In-flight de-duplication is process-wide:
  * a second caller that arrives while a refresh is already pending awaits

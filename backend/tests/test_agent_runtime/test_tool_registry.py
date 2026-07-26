@@ -9,10 +9,22 @@ def test_tool_registry_has_expected_tools():
     from app.agent_runtime.tool_registry import registry
 
     expected = {
-        "web_search", "read_url", "read_file", "write_file",
-        "recall_memory", "save_memory", "search_knowledge",
-        "read_resume", "read_interview_history", "search_jobs",
-        "task_create", "task_update", "task_get", "task_list",
+        "web_search",
+        "read_url",
+        "read_file",
+        "write_file",
+        "recall_memory",
+        "save_memory",
+        "search_knowledge",
+        "read_resume",
+        "read_interview_history",
+        "search_jobs",
+        "task_create",
+        "task_update",
+        "task_get",
+        "task_list",
+        "task_verify",
+        "task_checkpoint",
     }
     assert expected == set(registry.tool_names)
 
@@ -97,11 +109,13 @@ def test_result_summary_detects_disabled_payload():
     """
     from app.agent_runtime.react_agent import _result_summary
 
-    s = _result_summary({
-        "disabled": True,
-        "reason": "用户已关闭全局记忆开关",
-        "user_profile": "",
-    })
+    s = _result_summary(
+        {
+            "disabled": True,
+            "reason": "用户已关闭全局记忆开关",
+            "user_profile": "",
+        }
+    )
     assert s.startswith("⊘")
     assert "已关闭" in s
     assert "完成" not in s  # MUST NOT use the success template

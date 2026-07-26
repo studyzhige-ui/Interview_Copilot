@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.core.request_id import (
@@ -52,8 +51,13 @@ def test_formatter_injects_request_id_into_record(monkeypatch):
     set_request_id("test_rid_1")
     fmt = RequestIdFormatter("%(request_id)s | %(message)s")
     record = logging.LogRecord(
-        name="t", level=logging.INFO, pathname=".", lineno=1,
-        msg="hello", args=(), exc_info=None,
+        name="t",
+        level=logging.INFO,
+        pathname=".",
+        lineno=1,
+        msg="hello",
+        args=(),
+        exc_info=None,
     )
     formatted = fmt.format(record)
     assert formatted == "test_rid_1 | hello"

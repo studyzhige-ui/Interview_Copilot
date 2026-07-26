@@ -17,6 +17,7 @@ Post-interview scoring is handled by the unified
 ``InterviewAnalysisOrchestrator`` (shared with the upload-audio debrief path);
 this module is only the conducting layer.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -73,11 +74,18 @@ _ASKED_QUESTION_TRUNC = 40
 # attribution to "general".
 GENERAL_PLAN_TEMPLATE: list[dict[str, str]] = [
     {"key": "self_intro", "title": "自我介绍", "phase": "self_intro"},
-    {"key": "resume_project_deep_dive", "title": "简历项目深挖", "phase": "resume_deep_dive"},
-    {"key": "role_technical_assessment", "title": "岗位相关技术考察", "phase": "technical"},
+    {
+        "key": "resume_project_deep_dive",
+        "title": "简历项目深挖",
+        "phase": "resume_deep_dive",
+    },
+    {
+        "key": "role_technical_assessment",
+        "title": "岗位相关技术考察",
+        "phase": "technical",
+    },
     {"key": "candidate_questions", "title": "反问", "phase": "reverse_qa"},
 ]
-
 
 
 PLAN_TEMPLATES: dict[str, list[dict[str, str]]] = {
@@ -94,7 +102,9 @@ STAGE_TO_PHASE: dict[str, str] = {
 
 
 def _template_stages(plan_template_key: str | None) -> list[dict[str, str]]:
-    return PLAN_TEMPLATES.get((plan_template_key or "general").strip(), GENERAL_PLAN_TEMPLATE)
+    return PLAN_TEMPLATES.get(
+        (plan_template_key or "general").strip(), GENERAL_PLAN_TEMPLATE
+    )
 
 
 # ── Cacheable prefix ─────────────────────────────────────────────────────
@@ -133,6 +143,7 @@ def prefix_hash(prefix: str) -> str:
 @dataclass
 class MockPlan:
     """Result of ``generate_plan`` — what mock-start freezes + shows."""
+
     template_key: str
     stages: list[dict[str, str]]
     plan_json: str
@@ -143,6 +154,7 @@ class MockPlan:
 @dataclass
 class NextTurn:
     """Result of ``generate_next_turn`` — the next interviewer line."""
+
     interviewer_message: str
     next_stage_key: str
     is_ready_to_finish: bool
@@ -281,20 +293,26 @@ async def generate_next_turn(
     """
     stage_keys = [s["key"] for s in stages]
     stage_list = "\n".join(
-        f"  {i + 1}. {s['key']} — {s.get('title', s['key'])}" for i, s in enumerate(stages)
+        f"  {i + 1}. {s['key']} — {s.get('title', s['key'])}"
+        for i, s in enumerate(stages)
     )
     recent_dialog = _recent_dialog_block(recent_messages)
 
     # MOCK-6: the recent-8 window only remembers ~4 turns; a 20-turn
     # interview repeated earlier questions. The full asked-question index
     # (40 chars each) keeps the prompt bounded while covering the whole run.
-    asked_block = "\n".join(
-        f"  {i + 1}. {q[:_ASKED_QUESTION_TRUNC]}" for i, q in enumerate(asked_questions or [])
-    ) or "（暂无）"
+    asked_block = (
+        "\n".join(
+            f"  {i + 1}. {q[:_ASKED_QUESTION_TRUNC]}"
+            for i, q in enumerate(asked_questions or [])
+        )
+        or "（暂无）"
+    )
     prompt = _NEXT_TURN_PROMPT.format(
         prefix=prefix,
         stage_list=stage_list,
-        current_stage=current_stage_key or (stage_keys[0] if stage_keys else "self_intro"),
+        current_stage=current_stage_key
+        or (stage_keys[0] if stage_keys else "self_intro"),
         recent_dialog=recent_dialog,
         asked_questions=asked_block,
         asked_trunc=_ASKED_QUESTION_TRUNC,
@@ -308,10 +326,13 @@ async def generate_next_turn(
         response = await llm.acomplete(prompt, response_format={"type": "json_object"})
         data = _clean_json(str(response.text))
     except Exception as exc:  # noqa: BLE001 — any failure: keep the interview moving
-        logger.warning("generate_next_turn failed (non-fatal, advancing safely): %s", exc)
+        logger.warning(
+            "generate_next_turn failed (non-fatal, advancing safely): %s", exc
+        )
         return NextTurn(
             interviewer_message="好的，我们继续。能再展开讲讲你刚才提到的点吗？",
-            next_stage_key=current_stage_key or (stage_keys[0] if stage_keys else "self_intro"),
+            next_stage_key=current_stage_key
+            or (stage_keys[0] if stage_keys else "self_intro"),
             is_ready_to_finish=False,
         )
 
@@ -321,7 +342,9 @@ async def generate_next_turn(
 
     next_stage = str(data.get("stage_key") or "").strip()
     if next_stage not in stage_keys:
-        next_stage = current_stage_key or (stage_keys[0] if stage_keys else "self_intro")
+        next_stage = current_stage_key or (
+            stage_keys[0] if stage_keys else "self_intro"
+        )
 
     return NextTurn(
         interviewer_message=message,

@@ -67,16 +67,9 @@ export function GeneralChatPage() {
     [queryClient],
   );
 
-  // Keep the selection valid as the list changes: pick the most recent
-  // session on first load, fall back when the active one disappears,
-  // and clear when the list empties.
-  useEffect(() => {
-    setActiveId((cur) => {
-      if (sessions.length === 0) return null;
-      if (cur && sessions.some((r) => r.session_id === cur)) return cur;
-      return sessions[0].session_id;
-    });
-  }, [sessions]);
+  const selectedId = activeId && sessions.some((row) => row.session_id === activeId)
+    ? activeId
+    : sessions[0]?.session_id ?? null;
 
   // Focus the inline rename input when entering rename mode.
   useEffect(() => {
@@ -167,7 +160,7 @@ export function GeneralChatPage() {
     }
   }, [renaming, setSessions]);
 
-  const activeSession = sessions.find((s) => s.session_id === activeId);
+  const activeSession = sessions.find((s) => s.session_id === selectedId);
 
   return (
     <div className="flex h-full bg-cream-50">
@@ -198,7 +191,7 @@ export function GeneralChatPage() {
             </div>
           ) : (
             sessions.map((s) => {
-              const act = s.session_id === activeId;
+              const act = s.session_id === selectedId;
               const editing = renaming?.id === s.session_id;
               return (
                 <div

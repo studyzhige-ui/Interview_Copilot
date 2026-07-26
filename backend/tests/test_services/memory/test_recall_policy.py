@@ -5,6 +5,7 @@ The per-session override now lives in the dedicated
 through to the per-user ``users.global_memory_enabled`` default). These
 tests pin the two-tier resolution and the safety net on the writer.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -17,8 +18,8 @@ from sqlalchemy.pool import StaticPool
 def engine_and_session():
     """In-memory SQLite engine with users + conversations tables."""
     from app.db.database import Base
-    import app.models.chat   # noqa: F401
-    import app.models.user   # noqa: F401
+    import app.models.chat  # noqa: F401
+    import app.models.user  # noqa: F401
 
     engine = create_engine(
         "sqlite://",
@@ -37,6 +38,7 @@ def engine_and_session():
 def _rebind(monkeypatch, Session):
     """Make the policy module use our in-memory Session."""
     import app.services.memory.recall_policy as recall_mod
+
     monkeypatch.setattr(recall_mod, "SessionLocal", Session, raising=False)
 
 
@@ -48,6 +50,7 @@ def _seed(Session, *, username="alice", user_default=False, session_override=Non
     """
     from app.models.chat import Conversation
     from app.models.user import User
+
     db = Session()
     try:
         user = User(
@@ -61,17 +64,21 @@ def _seed(Session, *, username="alice", user_default=False, session_override=Non
         # conversations.user_id is the integer users.id FK now (CLEANUP #2);
         # the writer's ownership guard resolves the username → pk and compares
         # against this column, so seed the resolved pk (not the username).
-        db.add(Conversation(
-            id="s1",
-            user_id=user.id,
-            global_memory_enabled=session_override,
-        ))
+        db.add(
+            Conversation(
+                id="s1",
+                user_id=user.id,
+                global_memory_enabled=session_override,
+            )
+        )
         db.commit()
     finally:
         db.close()
 
 
-def test_session_override_on_wins_over_user_default_off(engine_and_session, monkeypatch):
+def test_session_override_on_wins_over_user_default_off(
+    engine_and_session, monkeypatch
+):
     """A per-session override of True wins even when the user default is False."""
     from app.services.memory.recall_policy import is_global_memory_enabled_for_session
 
@@ -82,7 +89,9 @@ def test_session_override_on_wins_over_user_default_off(engine_and_session, monk
     assert is_global_memory_enabled_for_session("s1", "alice") is True
 
 
-def test_session_override_off_wins_over_user_default_on(engine_and_session, monkeypatch):
+def test_session_override_off_wins_over_user_default_on(
+    engine_and_session, monkeypatch
+):
     """The override must DOWN-grade too — an explicit-False session override
     wins over a True user default. Guards against a buggy implementation that
     treats False the same as NULL and silently flips memory back ON."""
@@ -95,7 +104,9 @@ def test_session_override_off_wins_over_user_default_on(engine_and_session, monk
     assert is_global_memory_enabled_for_session("s1", "alice") is False
 
 
-def test_user_default_used_when_session_override_is_null(engine_and_session, monkeypatch):
+def test_user_default_used_when_session_override_is_null(
+    engine_and_session, monkeypatch
+):
     """Falls through to ``users.global_memory_enabled`` when the session column
     is NULL."""
     from app.services.memory.recall_policy import is_global_memory_enabled_for_session
@@ -163,7 +174,9 @@ def test_set_session_is_noop_for_wrong_owner(engine_and_session, monkeypatch):
     # pk mismatch (alice_pk != mallory_pk), not by an unseeded user → None.
     seed_db = Session()
     try:
-        seed_db.add(User(username="mallory", email="mallory@e.com", hashed_password="x"))
+        seed_db.add(
+            User(username="mallory", email="mallory@e.com", hashed_password="x")
+        )
         seed_db.commit()
     finally:
         seed_db.close()

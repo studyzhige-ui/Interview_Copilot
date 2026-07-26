@@ -13,7 +13,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.background_tasks import cancel_and_wait_all
+from app.core.background_tasks import cancel_and_wait_all, safe_background_task
 
 # Set a default Hugging Face mirror without overriding the user's .env value.
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
@@ -30,9 +30,11 @@ os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 # Celery worker process patches before importing llama_index — see
 # ``app/worker/celery_app.py::init_worker_models``).
 from app.core.llm_tracing import setup_llm_tracing as _setup_llm_tracing
+
 _setup_llm_tracing()
 
 from app.db.database import engine
+
 # app.models.__init__ imports every model module — the single registry
 # (alembic env.py and tests/conftest.py consume the same package).
 import app.models  # noqa: F401
@@ -90,7 +92,9 @@ async def lifespan(app: FastAPI):
             "Database is not migrated. Run `alembic upgrade head` before starting the API."
         )
     with engine.connect() as connection:
-        current_version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        current_version = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar()
     script = ScriptDirectory.from_config(Config(str(PROJECT_ROOT / "alembic.ini")))
     head_version = script.get_current_head()
     if current_version != head_version:
@@ -98,6 +102,18 @@ async def lifespan(app: FastAPI):
             f"Database migration is out of date ({current_version} != {head_version}). "
             "Run `alembic upgrade head` before starting the API."
         )
+
+    from app.services.chat.turn_executor import (
+        fail_orphaned_turns,
+        monitor_orphaned_turns,
+    )
+
+    try:
+        orphan_count = await fail_orphaned_turns()
+        if orphan_count:
+            logger.warning("Closed %d orphaned conversation turn(s).", orphan_count)
+    except Exception as exc:  # Redis failure must not prevent API startup.
+        logger.warning("Could not publish orphan-turn terminal events: %s", exc)
 
     logger.info(">>> [2/5] Initializing LlamaIndex LLM and embedding settings...")
     init_rag_settings()
@@ -111,17 +127,23 @@ async def lifespan(app: FastAPI):
     logger.info(">>> [4/5] Initializing reranker...")
     init_reranker()
 
-    logger.info(">>> [5/5] Whisper and diarization models are loaded by Celery workers.")
+    logger.info(
+        ">>> [5/5] Whisper and diarization models are loaded by Celery workers."
+    )
+    safe_background_task(monitor_orphaned_turns(), name="orphan-turn-monitor")
     logger.info("====== Interview Copilot startup sequence complete ======")
     yield
 
     logger.info("Draining background tasks before shutdown...")
     await cancel_and_wait_all(timeout=10.0)
+    from app.agent_runtime.mcp import manager
+
+    await manager.close_all()
     logger.info("====== Interview Copilot shutdown sequence complete ======")
 
 
 app = FastAPI(
-    title="Interview Copilot API",
+    title=settings.PROJECT_NAME,
     description="Agent + RAG Backend for Interview Copilot",
     version="1.0.0",
     lifespan=lifespan,
@@ -139,13 +161,10 @@ app = FastAPI(
 # Default empty = dev direct-connect, no rewrite — same behaviour as
 # before. Must be configured in prod for the rate-limit P0 to actually
 # bite.
-_trusted_proxies = [
-    p.strip()
-    for p in settings.TRUSTED_PROXIES.split(",")
-    if p.strip()
-]
+_trusted_proxies = [p.strip() for p in settings.TRUSTED_PROXIES.split(",") if p.strip()]
 if _trusted_proxies:
     from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
     # trusted_hosts accepts a list or comma-string; we pass the parsed
     # list so a typo in TRUSTED_PROXIES surfaces at startup, not later.
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_proxies)
@@ -157,9 +176,7 @@ if _trusted_proxies:
 
 # CORS Configuration — read allowed origins from settings (comma-separated).
 _cors_origins = [
-    origin.strip()
-    for origin in settings.CORS_ORIGINS.split(",")
-    if origin.strip()
+    origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -222,6 +239,7 @@ async def unhandled_exception_logger(request: _Request, exc: Exception):
     # log line share one searchable token. ``get_request_id`` returns
     # the contextvar's current value (or "-" if somehow unset).
     from app.core.request_id import get_request_id
+
     return _JSONResponse(
         status_code=500,
         content={"detail": "Internal server error"},
@@ -258,7 +276,9 @@ async def add_security_headers(request, call_next):
     headers.setdefault("X-Frame-Options", "DENY")
     headers.setdefault("X-Content-Type-Options", "nosniff")
     headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(self), camera=()")
+    headers.setdefault(
+        "Permissions-Policy", "geolocation=(), microphone=(self), camera=()"
+    )
     fwd_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
     if fwd_proto == "https":
         headers.setdefault(
@@ -266,6 +286,7 @@ async def add_security_headers(request, call_next):
             "max-age=31536000; includeSubDomains",
         )
     return response
+
 
 # ─── Rate limiting (Redis-backed slowapi) ────────────────────────────────
 # Tiered per-endpoint limits live in app.core.rate_limit; this is just the
@@ -283,13 +304,23 @@ try:
     app.add_middleware(SlowAPIMiddleware)
 except ImportError:
     logging.getLogger(__name__).warning(
-        "slowapi not installed — rate limiting disabled. "
-        "Run: pip install slowapi"
+        "slowapi not installed — rate limiting disabled. Run: pip install slowapi"
     )
 
-from app.api import auth, chat, file_assets, interview, memory, model_runtime, rag, resumes
+from app.api import (
+    auth,
+    capabilities,
+    chat,
+    file_assets,
+    interview,
+    memory,
+    model_runtime,
+    rag,
+    resumes,
+)
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
+app.include_router(capabilities.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
 app.include_router(file_assets.router, prefix="/api/v1")
 app.include_router(interview.router, prefix="/api/v1")

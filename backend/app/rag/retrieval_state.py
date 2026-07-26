@@ -3,14 +3,14 @@
 Single home for the retrieval-state shape and its fixed enums
 (``empty_reason``, ``score_source``) — the retriever produces it, the engine
 forwards it, and telemetry/trace (plus the planned offline evaluation runners)
-consume it. Defined ONCE here so online metrics and offline eval reports share
-identical values (docs/zh/plans/rag-evaluation-optimization-plan.md §2.4); do not
-redeclare these strings elsewhere.
+consume it. Defined once here so online metrics and offline reports share the
+same values; do not redeclare these strings elsewhere.
 
 This replaces the old ``[SYSTEM_EMPTY_WARNING]`` sentinel-string protocol:
 emptiness is now an explicit ``retrieval_hit=False`` + ``empty_reason`` pair
 instead of a magic substring inside a context string.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -24,14 +24,16 @@ EMPTY_ALL_FILTERED_LIVE_CHECK = "all_filtered_live_check"
 EMPTY_MILVUS_UNAVAILABLE = "milvus_unavailable"
 EMPTY_PRINCIPAL_UNRESOLVED = "principal_unresolved"
 
-EMPTY_REASONS = frozenset({
-    EMPTY_PLANNER_NO_RETRIEVAL,
-    EMPTY_NO_CANDIDATES,
-    EMPTY_ALL_BELOW_THRESHOLD,
-    EMPTY_ALL_FILTERED_LIVE_CHECK,
-    EMPTY_MILVUS_UNAVAILABLE,
-    EMPTY_PRINCIPAL_UNRESOLVED,
-})
+EMPTY_REASONS = frozenset(
+    {
+        EMPTY_PLANNER_NO_RETRIEVAL,
+        EMPTY_NO_CANDIDATES,
+        EMPTY_ALL_BELOW_THRESHOLD,
+        EMPTY_ALL_FILTERED_LIVE_CHECK,
+        EMPTY_MILVUS_UNAVAILABLE,
+        EMPTY_PRINCIPAL_UNRESOLVED,
+    }
+)
 
 # ── score_source 固定枚举（sources/trace 中只允许这两个值）─────────────────
 SCORE_SOURCE_RERANKER = "reranker"

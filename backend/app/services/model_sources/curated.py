@@ -29,6 +29,7 @@ Dated-alias auto-hide (e.g. ``gpt-5.5-2026-04-23`` when ``gpt-5.5``
 exists) runs FIRST, before either path — it's pattern-based, not
 per-vendor knowledge.
 """
+
 from __future__ import annotations
 
 import re
@@ -41,9 +42,10 @@ from .base import ModelEntry
 @dataclass(frozen=True)
 class ModelOverride:
     """Hand-curated UX override. All fields optional."""
-    display_name: str | None = None      # None → use vendor / auto-derived
-    tier_rank: int = 999                  # lower = higher in card; 999 = bottom
-    hidden: bool = False                  # drop entirely
+
+    display_name: str | None = None  # None → use vendor / auto-derived
+    tier_rank: int = 999  # lower = higher in card; 999 = bottom
+    hidden: bool = False  # drop entirely
 
 
 # ── Dated-alias auto-suppression ─────────────────────────────────────
@@ -53,10 +55,10 @@ class ModelOverride:
 
 
 _DATE_SUFFIX_PATTERNS: dict[str, re.Pattern[str]] = {
-    "openai":    re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
-    "deepseek":  re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
-    "moonshot":  re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
-    "qwen":      re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
+    "openai": re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
+    "deepseek": re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
+    "moonshot": re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
+    "qwen": re.compile(r"^(?P<bare>.+)-\d{4}-\d{2}-\d{2}$"),
     "anthropic": re.compile(r"^(?P<bare>.+)-\d{8}$"),
     # Gemini / NVIDIA / zai / Xiaomi don't ship dated aliases in
     # current /v1/models responses — no rule means no suppression.
@@ -70,18 +72,18 @@ _DATE_SUFFIX_PATTERNS: dict[str, re.Pattern[str]] = {
 
 
 _BRAND_DISPLAY: dict[str, str] = {
-    "gpt":      "GPT",
-    "glm":      "GLM",
+    "gpt": "GPT",
+    "glm": "GLM",
     "deepseek": "DeepSeek",
-    "mimo":     "MiMo",
-    "kimi":     "Kimi",
+    "mimo": "MiMo",
+    "kimi": "Kimi",
     "moonshot": "Moonshot",
-    "qwen":     "Qwen",
-    "qwq":      "QwQ",
-    "gemini":   "Gemini",
-    "gemma":    "Gemma",
+    "qwen": "Qwen",
+    "qwq": "QwQ",
+    "gemini": "Gemini",
+    "gemma": "Gemma",
     # Acronyms
-    "vl":  "VL",
+    "vl": "VL",
     "vlm": "VLM",
     "tts": "TTS",
     "asr": "ASR",
@@ -91,18 +93,18 @@ _BRAND_DISPLAY: dict[str, str] = {
 
 
 _TIER_SUFFIX_DISPLAY: dict[str, str] = {
-    "pro":     "Pro",
-    "max":     "Max",
-    "plus":    "Plus",
-    "mini":    "Mini",
-    "nano":    "Nano",
-    "flash":   "Flash",
-    "lite":    "Lite",
-    "turbo":   "Turbo",
-    "air":     "Air",
-    "omni":    "Omni",
+    "pro": "Pro",
+    "max": "Max",
+    "plus": "Plus",
+    "mini": "Mini",
+    "nano": "Nano",
+    "flash": "Flash",
+    "lite": "Lite",
+    "turbo": "Turbo",
+    "air": "Air",
+    "omni": "Omni",
     "preview": "Preview",
-    "latest":  "Latest",
+    "latest": "Latest",
     "thinking": "Thinking",
 }
 
@@ -215,17 +217,17 @@ _TIER_RANK_OFFSETS: dict[str, int] = {
     # difference can NEVER flip the order across version families —
     # gpt-5.5 (bare) must always beat gpt-5.4-pro because 5.5 is the
     # newer generation.
-    "pro":      -30,
-    "max":      -25,
-    "plus":     -10,
-    "thinking": -15,   # thinking variants often preferred for hard tasks
-    "flash":     10,
-    "mini":      20,
-    "nano":      30,
-    "lite":      35,
-    "turbo":     40,
-    "air":       40,
-    "preview":    5,   # preview demoted slightly vs stable
+    "pro": -30,
+    "max": -25,
+    "plus": -10,
+    "thinking": -15,  # thinking variants often preferred for hard tasks
+    "flash": 10,
+    "mini": 20,
+    "nano": 30,
+    "lite": 35,
+    "turbo": 40,
+    "air": 40,
+    "preview": 5,  # preview demoted slightly vs stable
 }
 
 
@@ -252,7 +254,7 @@ def _auto_tier_rank(provider: str, model_id: str) -> int:
     # Currently just Google — Gemma (open-source) sinks below Gemini.
     lower = model_id.lower()
     if provider == "gemini" and lower.startswith("gemma"):
-        rank += 2000   # Gemma well below any Gemini entry
+        rank += 2000  # Gemma well below any Gemini entry
 
     major, minor = _parse_version(model_id)
     rank -= major * 1000 + minor * 100
@@ -312,21 +314,38 @@ def _anthropic_tier_rank(model_id: str) -> int:
 
 
 CURATED: dict[tuple[str, str], ModelOverride] = {
-
     # ── NVIDIA NIM — hot models featured; long tail at default 999 ──
     # NIM hosts hundreds of third-party OSS models; only the
     # most-used ones get a rank, everything else auto-sinks.
-    ("nvidia_nim", "deepseek-ai/deepseek-v4-pro"):       ModelOverride("DeepSeek V4 Pro (NIM)",   tier_rank=1),
-    ("nvidia_nim", "deepseek-ai/deepseek-v4-flash"):     ModelOverride("DeepSeek V4 Flash (NIM)", tier_rank=2),
-    ("nvidia_nim", "meta/llama-3.3-70b-instruct"):       ModelOverride("Llama 3.3 70B",           tier_rank=5),
-    ("nvidia_nim", "meta/llama-3.1-70b-instruct"):       ModelOverride("Llama 3.1 70B",           tier_rank=6),
-    ("nvidia_nim", "meta/llama-4-maverick-17b-128e-instruct"): ModelOverride("Llama 4 Maverick",  tier_rank=7),
-    ("nvidia_nim", "qwen/qwen3-coder-480b-a35b-instruct"):     ModelOverride("Qwen3 Coder 480B",  tier_rank=10),
-    ("nvidia_nim", "qwen/qwen3-next-80b-a3b-instruct"):        ModelOverride("Qwen3 Next 80B",    tier_rank=11),
-    ("nvidia_nim", "mistralai/mistral-large-3-675b-instruct-2512"): ModelOverride("Mistral Large 3 675B", tier_rank=15),
-    ("nvidia_nim", "openai/gpt-oss-120b"):               ModelOverride("GPT OSS 120B",            tier_rank=20),
-    ("nvidia_nim", "moonshotai/kimi-k2.6"):              ModelOverride("Kimi K2.6 (NIM)",         tier_rank=25),
-    ("nvidia_nim", "z-ai/glm-5.1"):                      ModelOverride("GLM-5.1 (NIM)",           tier_rank=26),
+    ("nvidia_nim", "deepseek-ai/deepseek-v4-pro"): ModelOverride(
+        "DeepSeek V4 Pro (NIM)", tier_rank=1
+    ),
+    ("nvidia_nim", "deepseek-ai/deepseek-v4-flash"): ModelOverride(
+        "DeepSeek V4 Flash (NIM)", tier_rank=2
+    ),
+    ("nvidia_nim", "meta/llama-3.3-70b-instruct"): ModelOverride(
+        "Llama 3.3 70B", tier_rank=5
+    ),
+    ("nvidia_nim", "meta/llama-3.1-70b-instruct"): ModelOverride(
+        "Llama 3.1 70B", tier_rank=6
+    ),
+    ("nvidia_nim", "meta/llama-4-maverick-17b-128e-instruct"): ModelOverride(
+        "Llama 4 Maverick", tier_rank=7
+    ),
+    ("nvidia_nim", "qwen/qwen3-coder-480b-a35b-instruct"): ModelOverride(
+        "Qwen3 Coder 480B", tier_rank=10
+    ),
+    ("nvidia_nim", "qwen/qwen3-next-80b-a3b-instruct"): ModelOverride(
+        "Qwen3 Next 80B", tier_rank=11
+    ),
+    ("nvidia_nim", "mistralai/mistral-large-3-675b-instruct-2512"): ModelOverride(
+        "Mistral Large 3 675B", tier_rank=15
+    ),
+    ("nvidia_nim", "openai/gpt-oss-120b"): ModelOverride("GPT OSS 120B", tier_rank=20),
+    ("nvidia_nim", "moonshotai/kimi-k2.6"): ModelOverride(
+        "Kimi K2.6 (NIM)", tier_rank=25
+    ),
+    ("nvidia_nim", "z-ai/glm-5.1"): ModelOverride("GLM-5.1 (NIM)", tier_rank=26),
 }
 
 
@@ -334,7 +353,8 @@ CURATED: dict[tuple[str, str], ModelOverride] = {
 
 
 def apply_overrides(
-    provider: str, entries: Iterable[ModelEntry],
+    provider: str,
+    entries: Iterable[ModelEntry],
 ) -> list[ModelEntry]:
     """Apply the full UX layer to one vendor's adapter output.
 

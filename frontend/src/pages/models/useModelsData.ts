@@ -54,20 +54,19 @@ export function useModelsData() {
   const apiKeys: UserApiKeyStatus = apiKeysQuery.data ?? {};
   const loading = catalogQuery.isPending || providersQuery.isPending;
 
-  // Role selection: seeded from the catalog, then locally owned so assigns
-  // are optimistic (rollback on save failure).
-  const [selection, setSelection] = useState<Record<ModelRole, string>>({
-    primary: '', agent: '', mock_interview: '',
-  });
-  useEffect(() => {
-    const sel = catalogQuery.data?.selection;
-    if (!sel) return;
-    setSelection({
-      primary: sel.primary ?? '',
-      agent: sel.agent ?? '',
-      mock_interview: sel.mock_interview ?? '',
-    });
-  }, [catalogQuery.data]);
+  // Server selection plus optimistic per-role overrides. Once the refreshed
+  // catalog contains a successful write, its override is removed.
+  const [selectionOverride, setSelectionOverride] = useState<
+    Partial<Record<ModelRole, string>>
+  >({});
+  const serverSelection = catalogQuery.data?.selection;
+  const selection: Record<ModelRole, string> = {
+    primary: selectionOverride.primary ?? serverSelection?.primary ?? '',
+    agent: selectionOverride.agent ?? serverSelection?.agent ?? '',
+    mock_interview: selectionOverride.mock_interview
+      ?? serverSelection?.mock_interview
+      ?? '',
+  };
 
   const [pingResults, setPingResults] = useState<Record<string, ModelPingResult>>({});
 
@@ -201,17 +200,23 @@ export function useModelsData() {
   const assign = async (role: ModelRole, profileId: string) => {
     const prev = selection[role];
     if (prev === profileId) return;
-    setSelection((s) => ({ ...s, [role]: profileId }));
+    setSelectionOverride((s) => ({ ...s, [role]: profileId }));
     try {
       await updateModelsRuntime({ [role]: profileId });
       toast.success(`${ROLE_DESC[role].label}：${profileId}`);
       // The chat header reads ['models','runtime'] and re-seeds from the
       // catalog's ``selection`` — refresh both so a pick here shows up
       // there without waiting out staleTime.
-      queryClient.invalidateQueries({ queryKey: ['models', 'runtime'] });
-      queryClient.invalidateQueries({ queryKey: ['models', 'catalog'] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['models', 'runtime'] }),
+        queryClient.invalidateQueries({ queryKey: ['models', 'catalog'] }),
+      ]);
+      setSelectionOverride((current) => {
+        const { [role]: _, ...rest } = current;
+        return rest;
+      });
     } catch (err) {
-      setSelection((s) => ({ ...s, [role]: prev }));
+      setSelectionOverride((s) => ({ ...s, [role]: prev }));
       const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail;
       toast.error(detail ?? '保存失败');
     }

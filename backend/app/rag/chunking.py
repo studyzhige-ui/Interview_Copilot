@@ -9,6 +9,7 @@ There is deliberately NO HTML strategy: the parse stage emits Markdown for HTML
 plain-text HTML (lightweight fallback failure) falls to the sentence strategy.
 Feeding tag-stripped text to HTMLNodeParser yields zero nodes — silent loss.
 """
+
 from __future__ import annotations
 
 import os
@@ -41,7 +42,9 @@ class Splitter(Protocol):
     id: str
     chunk_type: str
 
-    def matches(self, file_name: str, source_kind: str, is_markdown_parsed: bool) -> bool: ...
+    def matches(
+        self, file_name: str, source_kind: str, is_markdown_parsed: bool
+    ) -> bool: ...
 
     def split(self, document: Document) -> tuple[list, bool]: ...
 
@@ -64,12 +67,21 @@ def _table_aware_nodes(document: Document, char_budget: int) -> list:
     size = len(header)
     for row in body:
         if buf and size + len(row) > char_budget:
-            nodes.append(TextNode(text=header + "\n" + "\n".join(buf), metadata=dict(document.metadata)))
+            nodes.append(
+                TextNode(
+                    text=header + "\n" + "\n".join(buf),
+                    metadata=dict(document.metadata),
+                )
+            )
             buf, size = [], len(header)
         buf.append(row)
         size += len(row) + 1
     if buf:
-        nodes.append(TextNode(text=header + "\n" + "\n".join(buf), metadata=dict(document.metadata)))
+        nodes.append(
+            TextNode(
+                text=header + "\n" + "\n".join(buf), metadata=dict(document.metadata)
+            )
+        )
     return nodes
 
 
@@ -86,7 +98,10 @@ def _code_splitter(language: str) -> _LlamaCodeSplitter:
 
     parser = Parser(get_language(language))
     return _LlamaCodeSplitter(
-        language=language, chunk_lines=40, chunk_lines_overlap=5, parser=parser,
+        language=language,
+        chunk_lines=40,
+        chunk_lines_overlap=5,
+        parser=parser,
     )
 
 
@@ -138,7 +153,9 @@ class TableSplitter:
     id = "table"
     chunk_type = "table"
 
-    def matches(self, file_name: str, source_kind: str, is_markdown_parsed: bool) -> bool:
+    def matches(
+        self, file_name: str, source_kind: str, is_markdown_parsed: bool
+    ) -> bool:
         return file_name.endswith((".csv", ".tsv", ".xlsx", ".xls"))
 
     def split(self, document: Document) -> tuple[list, bool]:
@@ -153,7 +170,9 @@ class MarkdownSplitter:
     id = "markdown"
     chunk_type = "text"
 
-    def matches(self, file_name: str, source_kind: str, is_markdown_parsed: bool) -> bool:
+    def matches(
+        self, file_name: str, source_kind: str, is_markdown_parsed: bool
+    ) -> bool:
         return (
             is_markdown_parsed
             or file_name.endswith((".md", ".markdown"))
@@ -168,7 +187,9 @@ class JsonSplitter:
     id = "json"
     chunk_type = "text"
 
-    def matches(self, file_name: str, source_kind: str, is_markdown_parsed: bool) -> bool:
+    def matches(
+        self, file_name: str, source_kind: str, is_markdown_parsed: bool
+    ) -> bool:
         return file_name.endswith(".json")
 
     def split(self, document: Document) -> tuple[list, bool]:
@@ -183,7 +204,9 @@ class CodeSplitter:
     id = "code"
     chunk_type = "code"
 
-    def matches(self, file_name: str, source_kind: str, is_markdown_parsed: bool) -> bool:
+    def matches(
+        self, file_name: str, source_kind: str, is_markdown_parsed: bool
+    ) -> bool:
         return os.path.splitext(file_name)[1] in _CODE_LANGS
 
     def split(self, document: Document) -> tuple[list, bool]:
@@ -199,7 +222,9 @@ class SentenceSplitterStrategy:
     id = "sentence"
     chunk_type = "text"
 
-    def matches(self, file_name: str, source_kind: str, is_markdown_parsed: bool) -> bool:
+    def matches(
+        self, file_name: str, source_kind: str, is_markdown_parsed: bool
+    ) -> bool:
         return True  # catch-all floor
 
     def split(self, document: Document) -> tuple[list, bool]:
@@ -221,7 +246,9 @@ SPLITTERS: list[Splitter] = [
 ]
 
 
-def select_splitter(file_name: str, source_kind: str, is_markdown_parsed: bool) -> Splitter:
+def select_splitter(
+    file_name: str, source_kind: str, is_markdown_parsed: bool
+) -> Splitter:
     """Pick the chunking strategy for a document (first match; sentence floor)."""
     for splitter in SPLITTERS:
         if splitter.matches(file_name, source_kind, is_markdown_parsed):

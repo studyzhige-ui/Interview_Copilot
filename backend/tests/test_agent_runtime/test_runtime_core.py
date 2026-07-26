@@ -15,8 +15,8 @@ Covers:
 import time
 
 
-
 # ── AgentBudget ──────────────────────────────────────────────────────────
+
 
 def test_agent_budget_dataclass():
     """AgentBudget check() and refund() work correctly."""
@@ -100,7 +100,7 @@ def test_budget_tracks_repeated_call_signatures():
     assert budget.consume_tool_call("web_search", sig) == 2
     assert budget.consume_tool_call("web_search", sig) == 3
     # Different args → its own counter
-    assert budget.consume_tool_call("web_search", 'web_search\x00{}') == 1
+    assert budget.consume_tool_call("web_search", "web_search\x00{}") == 1
     # tool_usage (by name) aggregates all four calls
     assert budget.tool_usage["web_search"] == 4
     # No signature → no repeat tracking
@@ -119,13 +119,43 @@ def test_repeat_call_nudge_is_firmer_at_six():
     assert "final answer" in firm
 
 
+def test_budget_requests_replan_after_repeated_failed_outcome():
+    from app.agent_runtime.react_agent import AgentBudget
+
+    budget = AgentBudget(started_at=time.perf_counter())
+    assert (
+        budget.observe_tool_result("fetch", "fetch\x00{}", "same error", is_error=True)
+        is None
+    )
+    assert (
+        budget.observe_tool_result("fetch", "fetch\x00{}", "same error", is_error=True)
+        is None
+    )
+    incident = budget.observe_tool_result(
+        "fetch", "fetch\x00{}", "same error", is_error=True
+    )
+    assert incident and "replan" in incident
+
+
+def test_budget_resets_failure_streak_on_progress():
+    from app.agent_runtime.react_agent import AgentBudget
+
+    budget = AgentBudget(started_at=time.perf_counter())
+    budget.observe_tool_result("fetch", "fetch\x00{}", "error", is_error=True)
+    budget.observe_tool_result("fetch", "fetch\x00{}", "success", is_error=False)
+    assert budget.failed_outcome_streak == 0
+
+
 # ── HarnessEvent ─────────────────────────────────────────────────────────
+
 
 def test_harness_event_serialization():
     """HarnessEvent serializes to JSON correctly."""
     from app.agent_runtime.harness_events import HarnessEvent
 
-    event = HarnessEvent.tool_start("web_search", "query=test", step=1, elapsed_ms=100.0)
+    event = HarnessEvent.tool_start(
+        "web_search", "query=test", step=1, elapsed_ms=100.0
+    )
     d = event.to_dict()
     assert d["type"] == "tool_start"
     assert d["data"]["tool"] == "web_search"
@@ -137,24 +167,33 @@ def test_harness_event_serialization():
 
 # ── retry_utils ──────────────────────────────────────────────────────────
 
+
 def test_retry_utils_classify():
     """Error classification works for common error patterns."""
     from app.agent_runtime.retry_utils import ErrorCategory, classify_api_error
 
-    assert classify_api_error(Exception("429 rate limit exceeded")) == ErrorCategory.RETRYABLE
-    assert classify_api_error(Exception("maximum context length exceeded")) == ErrorCategory.CONTEXT_TOO_LONG
+    assert (
+        classify_api_error(Exception("429 rate limit exceeded"))
+        == ErrorCategory.RETRYABLE
+    )
+    assert (
+        classify_api_error(Exception("maximum context length exceeded"))
+        == ErrorCategory.CONTEXT_TOO_LONG
+    )
     assert classify_api_error(Exception("401 invalid_api_key")) == ErrorCategory.FATAL
 
     # Insufficient balance / quota — must be FATAL (retrying never helps),
     # detected by message phrase OR a 402 status_code attribute. Regression
     # guard: before this fix a 402 fell through to the optimistic-retryable
     # default and burned the whole backoff schedule on a hopeless call.
-    assert classify_api_error(
-        Exception("Error code: 402 - Insufficient account balance")
-    ) == ErrorCategory.FATAL
+    assert (
+        classify_api_error(Exception("Error code: 402 - Insufficient account balance"))
+        == ErrorCategory.FATAL
+    )
 
     class _Err402(Exception):
         status_code = 402
+
     assert classify_api_error(_Err402("payment required")) == ErrorCategory.FATAL
     assert classify_api_error(Exception("insufficient_quota")) == ErrorCategory.FATAL
 
@@ -172,13 +211,14 @@ def test_retry_utils_jittered_backoff():
 
 # ── QueryLoopCompactor ────────────────────────────────────────────────────
 
+
 def _profile(context_window: int = 1_000_000, max_output_tokens: int = 0):
     """Minimal ModelProfile for driving QueryLoopCompactor in tests.
 
     max_output_tokens defaults to 0 so the effective window equals
     context_window (blocking_limit == context_window - 3_000).
     """
-    from app.core.model_registry import ModelProfile
+    from app.core.model_catalog import ModelProfile
 
     return ModelProfile(
         id="test",
@@ -208,19 +248,36 @@ def test_microcompact_clears_old_keeps_recent():
     messages = [{"role": "system", "content": "sys"}]
     # 7 compactable tool results → should keep last 5, clear first 2
     for i in range(7):
-        messages.append({"role": "assistant", "content": "", "tool_calls": [
-            {"id": f"c{i}", "function": {"name": "web_search", "arguments": "{}"}}
-        ]})
-        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"c{i}",
+                        "function": {"name": "web_search", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
+        messages.append(
+            {"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"}
+        )
 
     result = pipeline._microcompact(messages)
 
     # First 2 cleared
-    assert [m for m in result if m.get("tool_call_id") == "c0"][0]["content"] == _CLEARED_CONTENT
-    assert [m for m in result if m.get("tool_call_id") == "c1"][0]["content"] == _CLEARED_CONTENT
+    assert [m for m in result if m.get("tool_call_id") == "c0"][0][
+        "content"
+    ] == _CLEARED_CONTENT
+    assert [m for m in result if m.get("tool_call_id") == "c1"][0][
+        "content"
+    ] == _CLEARED_CONTENT
     # Last 5 kept
     for i in range(2, 7):
-        assert [m for m in result if m.get("tool_call_id") == f"c{i}"][0]["content"] == f"result_{i}"
+        assert [m for m in result if m.get("tool_call_id") == f"c{i}"][0][
+            "content"
+        ] == f"result_{i}"
 
 
 def test_microcompact_skips_non_compactable_tools():
@@ -231,15 +288,38 @@ def test_microcompact_skips_non_compactable_tools():
     messages = [{"role": "system", "content": "sys"}]
     # 6 compactable + 1 non-compactable tool
     for i in range(6):
-        messages.append({"role": "assistant", "content": "", "tool_calls": [
-            {"id": f"c{i}", "function": {"name": "web_search", "arguments": "{}"}}
-        ]})
-        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"c{i}",
+                        "function": {"name": "web_search", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
+        messages.append(
+            {"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"}
+        )
     # Insert a non-compactable tool result at the beginning (oldest)
-    messages.insert(1, {"role": "assistant", "content": "", "tool_calls": [
-        {"id": "nc1", "function": {"name": "some_custom_tool", "arguments": "{}"}}
-    ]})
-    messages.insert(2, {"role": "tool", "tool_call_id": "nc1", "content": "non-compactable result"})
+    messages.insert(
+        1,
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "nc1",
+                    "function": {"name": "some_custom_tool", "arguments": "{}"},
+                }
+            ],
+        },
+    )
+    messages.insert(
+        2, {"role": "tool", "tool_call_id": "nc1", "content": "non-compactable result"}
+    )
 
     result = pipeline._microcompact(messages)
 
@@ -263,9 +343,18 @@ def test_microcompact_skips_persisted_results():
     # 7 compactable results, first one is persisted
     for i in range(7):
         content = persisted if i == 0 else f"result_{i}"
-        messages.append({"role": "assistant", "content": "", "tool_calls": [
-            {"id": f"c{i}", "function": {"name": "web_search", "arguments": "{}"}}
-        ]})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"c{i}",
+                        "function": {"name": "web_search", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
         messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": content})
 
     result = pipeline._microcompact(messages)
@@ -282,16 +371,29 @@ def test_microcompact_noop_when_under_keep_limit():
     pipeline = QueryLoopCompactor(profile=_profile())
     messages = [{"role": "system", "content": "sys"}]
     for i in range(3):
-        messages.append({"role": "assistant", "content": "", "tool_calls": [
-            {"id": f"c{i}", "function": {"name": "web_search", "arguments": "{}"}}
-        ]})
-        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"c{i}",
+                        "function": {"name": "web_search", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
+        messages.append(
+            {"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"}
+        )
 
     result = pipeline._microcompact(messages)
 
     # All kept — no change
     for i in range(3):
-        assert [m for m in result if m.get("tool_call_id") == f"c{i}"][0]["content"] == f"result_{i}"
+        assert [m for m in result if m.get("tool_call_id") == f"c{i}"][0][
+            "content"
+        ] == f"result_{i}"
 
 
 def test_microcompact_copy_on_write():
@@ -301,17 +403,30 @@ def test_microcompact_copy_on_write():
     pipeline = QueryLoopCompactor(profile=_profile())
     messages = [{"role": "system", "content": "sys"}]
     for i in range(7):
-        messages.append({"role": "assistant", "content": "", "tool_calls": [
-            {"id": f"c{i}", "function": {"name": "web_search", "arguments": "{}"}}
-        ]})
-        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"c{i}",
+                        "function": {"name": "web_search", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
+        messages.append(
+            {"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"}
+        )
 
     result = pipeline._microcompact(messages)
 
     # Original unchanged
     assert messages[2]["content"] == "result_0"
     # Pruned copy changed
-    assert [m for m in result if m.get("tool_call_id") == "c0"][0]["content"] == _CLEARED_CONTENT
+    assert [m for m in result if m.get("tool_call_id") == "c0"][0][
+        "content"
+    ] == _CLEARED_CONTENT
 
 
 def test_microcompact_skips_already_cleared():
@@ -322,18 +437,33 @@ def test_microcompact_skips_already_cleared():
     messages = [{"role": "system", "content": "sys"}]
     for i in range(8):
         content = _CLEARED_CONTENT if i < 2 else f"result_{i}"
-        messages.append({"role": "assistant", "content": "", "tool_calls": [
-            {"id": f"c{i}", "function": {"name": "web_search", "arguments": "{}"}}
-        ]})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"c{i}",
+                        "function": {"name": "web_search", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
         messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": content})
 
     result = pipeline._microcompact(messages)
 
     # c0, c1 were already cleared — stay cleared
-    assert [m for m in result if m.get("tool_call_id") == "c0"][0]["content"] == _CLEARED_CONTENT
+    assert [m for m in result if m.get("tool_call_id") == "c0"][0][
+        "content"
+    ] == _CLEARED_CONTENT
     # 6 live results (c2..c7), keep last 5 → clear c2 only
-    assert [m for m in result if m.get("tool_call_id") == "c2"][0]["content"] == _CLEARED_CONTENT
-    assert [m for m in result if m.get("tool_call_id") == "c3"][0]["content"] == "result_3"
+    assert [m for m in result if m.get("tool_call_id") == "c2"][0][
+        "content"
+    ] == _CLEARED_CONTENT
+    assert [m for m in result if m.get("tool_call_id") == "c3"][0][
+        "content"
+    ] == "result_3"
 
 
 # ── compress() integration ───────────────────────────────────────────────
@@ -349,10 +479,21 @@ def test_compress_runs_microcompact_unconditionally(monkeypatch):
 
     messages = [{"role": "system", "content": "sys"}]
     for i in range(7):
-        messages.append({"role": "assistant", "content": "", "tool_calls": [
-            {"id": f"c{i}", "function": {"name": "web_search", "arguments": "{}"}}
-        ]})
-        messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"c{i}",
+                        "function": {"name": "web_search", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
+        messages.append(
+            {"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"}
+        )
 
     # Huge window → well under threshold, but microcompact still runs
     pipeline = QueryLoopCompactor(
@@ -360,8 +501,12 @@ def test_compress_runs_microcompact_unconditionally(monkeypatch):
     )
     result, at_blocking = asyncio.run(pipeline.compress(messages))
 
-    assert [m for m in result if m.get("tool_call_id") == "c0"][0]["content"] == _CLEARED_CONTENT
-    assert [m for m in result if m.get("tool_call_id") == "c6"][0]["content"] == "result_6"
+    assert [m for m in result if m.get("tool_call_id") == "c0"][0][
+        "content"
+    ] == _CLEARED_CONTENT
+    assert [m for m in result if m.get("tool_call_id") == "c6"][0][
+        "content"
+    ] == "result_6"
     assert at_blocking is False
 
 
@@ -375,9 +520,13 @@ def test_compress_flags_blocking_limit(monkeypatch):
 
     messages = [
         {"role": "system", "content": "sys"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "web_search", "arguments": "{}"}}
-        ]},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "web_search", "arguments": "{}"}}
+            ],
+        },
         {"role": "tool", "tool_call_id": "c1", "content": "B" * 500},
     ]
     # Tiny window: blocking_limit = 3_100 - 3_000 = 100; measured total > 100.
@@ -406,6 +555,7 @@ def test_autocompact_summarizes_body_keeps_head_and_tail(monkeypatch):
 
     import sys
     import app.services.chat.conversation_summarizer  # noqa: F401
+
     monkeypatch.setattr(
         sys.modules["app.services.chat.conversation_summarizer"],
         "get_llm_for_role",
@@ -417,9 +567,16 @@ def test_autocompact_summarizes_body_keeps_head_and_tail(monkeypatch):
         {"role": "system", "content": "SYS"},
         {"role": "system", "content": "MANIFEST"},
         {"role": "user", "content": "the task"},
-        {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "web_search", "arguments": '{"query": "x"}'}}
-        ]},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "function": {"name": "web_search", "arguments": '{"query": "x"}'},
+                }
+            ],
+        },
         {"role": "tool", "tool_call_id": "c1", "content": "old result"},
         {"role": "assistant", "content": "a working step"},
         {"role": "tool", "tool_call_id": "c2", "content": "recent result"},
@@ -456,6 +613,7 @@ def test_autocompact_noop_when_nothing_to_summarize():
 
 # ── Blocking-limit guard ──────────────────────────────────────────────────
 
+
 def test_token_warning_blocks_at_limit():
     """is_at_blocking_limit blocks when prompt_tokens approach the context window."""
     from app.agent_runtime.context_compactor import QueryLoopCompactor
@@ -483,6 +641,7 @@ def test_token_warning_default_1m_window():
 
 
 # ── Reactive compact + circuit breaker ───────────────────────────────────
+
 
 def test_reactive_compact_prevents_loop():
     """Reactive compact refuses retry on the second attempt."""
@@ -563,6 +722,7 @@ def test_should_compact_absolute_threshold():
 
 # ── tool_result_storage ──────────────────────────────────────────────────
 
+
 def test_generate_preview():
     """Preview generation respects max_chars and prefers newline boundaries."""
     from app.agent_runtime.tool_result_storage import generate_preview
@@ -590,7 +750,9 @@ def test_resolve_threshold():
 
     assert resolve_threshold("read_file") == float("inf")
     web_cap = registry.get("web_search").max_result_chars
-    assert resolve_threshold("web_search") == min(web_cap, settings.AGENT_PERSIST_THRESHOLD)
+    assert resolve_threshold("web_search") == min(
+        web_cap, settings.AGENT_PERSIST_THRESHOLD
+    )
     assert resolve_threshold("no_such_tool") == settings.AGENT_PERSIST_THRESHOLD
 
 
@@ -598,7 +760,9 @@ def test_maybe_persist_result_small(tmp_path, monkeypatch):
     """Small results pass through unchanged."""
     from app.agent_runtime.tool_result_storage import maybe_persist_result
 
-    monkeypatch.setattr("app.agent_runtime.tool_result_storage.settings.AGENT_PERSIST_THRESHOLD", 100)
+    monkeypatch.setattr(
+        "app.agent_runtime.tool_result_storage.settings.AGENT_PERSIST_THRESHOLD", 100
+    )
 
     result = maybe_persist_result(
         content="small result",
@@ -616,9 +780,15 @@ def test_maybe_persist_result_large(tmp_path, monkeypatch):
         maybe_persist_result,
     )
 
-    monkeypatch.setattr("app.agent_runtime.tool_result_storage.settings.AGENT_PERSIST_THRESHOLD", 50)
-    monkeypatch.setattr("app.agent_runtime.tool_result_storage.settings.APP_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr("app.agent_runtime.tool_result_storage.settings.AGENT_PERSIST_PREVIEW_SIZE", 20)
+    monkeypatch.setattr(
+        "app.agent_runtime.tool_result_storage.settings.AGENT_PERSIST_THRESHOLD", 50
+    )
+    monkeypatch.setattr(
+        "app.agent_runtime.tool_result_storage.settings.APP_DATA_DIR", str(tmp_path)
+    )
+    monkeypatch.setattr(
+        "app.agent_runtime.tool_result_storage.settings.AGENT_PERSIST_PREVIEW_SIZE", 20
+    )
 
     content = "X" * 200
     result = maybe_persist_result(
@@ -645,7 +815,9 @@ def test_maybe_persist_result_read_file_never_persists(tmp_path, monkeypatch):
         maybe_persist_result,
     )
 
-    monkeypatch.setattr("app.agent_runtime.tool_result_storage.settings.AGENT_PERSIST_THRESHOLD", 10)
+    monkeypatch.setattr(
+        "app.agent_runtime.tool_result_storage.settings.AGENT_PERSIST_THRESHOLD", 10
+    )
 
     content = "Y" * 200
     result = maybe_persist_result(
@@ -664,7 +836,9 @@ def test_resolve_persisted_path_confined(tmp_path, monkeypatch):
     """resolve_persisted_path returns files inside the session dir, blocks others."""
     from app.agent_runtime.tool_result_storage import resolve_persisted_path
 
-    monkeypatch.setattr("app.agent_runtime.tool_result_storage.settings.APP_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "app.agent_runtime.tool_result_storage.settings.APP_DATA_DIR", str(tmp_path)
+    )
 
     session_dir = tmp_path / "agent-results" / "sess_rp"
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -690,7 +864,9 @@ def test_read_file_paginates_persisted_output(tmp_path, monkeypatch):
     from app.agent_runtime.tool_registry import AgentToolContext
     from app.agent_runtime.tools.file_tool import ReadFileArgs, _read_file_sync
 
-    monkeypatch.setattr("app.agent_runtime.tool_result_storage.settings.APP_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "app.agent_runtime.tool_result_storage.settings.APP_DATA_DIR", str(tmp_path)
+    )
 
     session_dir = tmp_path / "agent-results" / "sess_pg"
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -715,7 +891,9 @@ def test_read_file_paginates_persisted_output(tmp_path, monkeypatch):
     assert page2["next_offset"] == 100
 
     # Final page exhausts the file
-    page3 = _read_file_sync(ReadFileArgs(path=str(persisted), offset=100, limit=50), ctx)
+    page3 = _read_file_sync(
+        ReadFileArgs(path=str(persisted), offset=100, limit=50), ctx
+    )
     assert page3["content"] == content[100:]
     assert page3["has_more"] is False
     assert page3["next_offset"] is None
@@ -735,13 +913,23 @@ def test_enforce_turn_budget(tmp_path, monkeypatch):
     # Budget 4900, total = 100 + 5000 + 50 = 5150 → over budget
     # t2 (5000, largest) spilled → persisted block ~400 chars
     # After: 100 + ~400 + 50 ≈ 550 → well under 4900 → done
-    monkeypatch.setattr("app.agent_runtime.tool_result_storage.settings.AGENT_TURN_BUDGET_CHARS", 4900)
-    monkeypatch.setattr("app.agent_runtime.tool_result_storage.settings.APP_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr("app.agent_runtime.tool_result_storage.settings.AGENT_PERSIST_PREVIEW_SIZE", 20)
+    monkeypatch.setattr(
+        "app.agent_runtime.tool_result_storage.settings.AGENT_TURN_BUDGET_CHARS", 4900
+    )
+    monkeypatch.setattr(
+        "app.agent_runtime.tool_result_storage.settings.APP_DATA_DIR", str(tmp_path)
+    )
+    monkeypatch.setattr(
+        "app.agent_runtime.tool_result_storage.settings.AGENT_PERSIST_PREVIEW_SIZE", 20
+    )
 
     tool_messages = [
         {"role": "tool", "tool_call_id": "t1", "content": "A" * 100},
-        {"role": "tool", "tool_call_id": "t2", "content": "B" * 5000},  # largest, way over
+        {
+            "role": "tool",
+            "tool_call_id": "t2",
+            "content": "B" * 5000,
+        },  # largest, way over
         {"role": "tool", "tool_call_id": "t3", "content": "C" * 50},
     ]
 

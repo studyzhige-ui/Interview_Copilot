@@ -30,7 +30,9 @@ def default_title(upload: FileAsset) -> str:
     return Path(upload.original_filename).stem or upload.original_filename
 
 
-def delete_document_vectors_and_chunks(db: Session, document: KnowledgeDocument) -> None:
+def delete_document_vectors_and_chunks(
+    db: Session, document: KnowledgeDocument
+) -> None:
     """Delete a document's chunk facts (Postgres ``document_chunks``) then its
     Milvus index rows (keyed by document_id).
 
@@ -45,11 +47,14 @@ def delete_document_vectors_and_chunks(db: Session, document: KnowledgeDocument)
 
     delete_document_chunks(db, document.id)
     try:
-        milvus_hybrid.delete_by_field(milvus_hybrid.KNOWLEDGE, "document_id", document.id)
+        milvus_hybrid.delete_by_field(
+            milvus_hybrid.KNOWLEDGE, "document_id", document.id
+        )
     except Exception as exc:  # noqa: BLE001 — queue a reliable retry, don't fail the delete
         logger.warning(
             "Milvus delete failed for document %s; queuing outbox retry: %s",
-            document.id, exc,
+            document.id,
+            exc,
         )
         enqueue_milvus_delete(db, user_pk=document.user_id, document_id=document.id)
         db.commit()  # facts already committed above; this persists just the retry job
@@ -59,7 +64,9 @@ def mark_document_indexed_ready(db: Session, document_id: str) -> None:
     """The async Milvus index write landed — graduate an index-queued document
     to ``ready`` (plan §4.6.3 / C2). Only flips a doc still in ``processing`` so
     a delete that happened while the upsert was queued is never resurrected."""
-    doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+    doc = (
+        db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+    )
     if doc is None or doc.status != "processing":
         return
     doc.status = "ready"
@@ -73,7 +80,9 @@ def mark_document_index_failed(db: Session, document_id: str, message: str) -> N
     """The async Milvus index retries were exhausted — terminal failure so an
     index-queued document never stays ``processing`` forever. Only flips a doc
     still in ``processing`` (leaves a concurrent delete alone)."""
-    doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+    doc = (
+        db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+    )
     if doc is None or doc.status != "processing":
         return
     doc.status = "failed"
@@ -86,15 +95,21 @@ def mark_document_index_failed(db: Session, document_id: str, message: str) -> N
 def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> None:
     # Fileless docs (improved_qa / manual_text) have no S3 object — only chunks +
     # Milvus index to drop. File docs validate the owned-prefix before any delete.
-    has_object = bool(document.file_asset_id and document.storage_uri and document.object_key)
+    has_object = bool(
+        document.file_asset_id and document.storage_uri and document.object_key
+    )
     if has_object:
         # document.user_id is the stable users.id (CLEANUP #2) — the FileAsset's
         # owner — and object_key is namespaced by it, so use it directly.
         owner_pk = document.user_id
         expected_prefix = f"uploads/{owner_pk}/{document.file_asset_id}/"
         _, storage_key = parse_s3_uri(document.storage_uri)
-        if document.object_key != storage_key or not document.object_key.startswith(expected_prefix):
-            raise ValueError("Refusing to delete knowledge object outside the owned upload prefix")
+        if document.object_key != storage_key or not document.object_key.startswith(
+            expected_prefix
+        ):
+            raise ValueError(
+                "Refusing to delete knowledge object outside the owned upload prefix"
+            )
 
     # Mark deleted FIRST so RAG / list read paths exclude this doc immediately,
     # even before the (async-ish) chunk + Milvus deletes below complete.

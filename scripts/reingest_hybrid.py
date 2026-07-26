@@ -17,6 +17,7 @@ Fact sources (Postgres is authoritative — this NEVER reads the old Milvus rows
 DB: 0 fact rows -> 0 inserts, no error. The embedding model is loaded directly
 (no model-catalog dependency).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -26,7 +27,9 @@ from pathlib import Path
 # Make the ``app`` package importable. Two layouts: repo (<root>/backend/app,
 # script at <root>/scripts/) and docker image (/app/app, script at /app/scripts/).
 _parent = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_parent / "backend" if (_parent / "backend" / "app").is_dir() else _parent))
+sys.path.insert(
+    0, str(_parent / "backend" if (_parent / "backend" / "app").is_dir() else _parent)
+)
 
 from llama_index.core import Settings  # noqa: E402
 
@@ -46,7 +49,9 @@ def _drop(coll: milvus_hybrid.HybridCollection) -> None:
 
 
 def reingest_knowledge(
-    *, document_ids: list[str] | None = None, user_id: int | None = None,
+    *,
+    document_ids: list[str] | None = None,
+    user_id: int | None = None,
     category: str | None = None,
 ) -> int:
     """Rebuild knowledge Milvus rows from the Postgres facts, at the requested
@@ -73,7 +78,9 @@ def reingest_knowledge(
     db = SessionLocal()
     try:
         if document_ids is None:
-            q = db.query(KnowledgeDocument.id).filter(KnowledgeDocument.deleted_at.is_(None))
+            q = db.query(KnowledgeDocument.id).filter(
+                KnowledgeDocument.deleted_at.is_(None)
+            )
             if user_id is not None:
                 q = q.filter(KnowledgeDocument.user_id == user_id)
             if category is not None:
@@ -144,12 +151,20 @@ _TARGETS = {
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--drop", action="store_true", help="drop + recreate the collection(s) first")
-    p.add_argument("--only", choices=sorted(_TARGETS), help="reingest just one collection")
+    p.add_argument(
+        "--drop", action="store_true", help="drop + recreate the collection(s) first"
+    )
+    p.add_argument(
+        "--only", choices=sorted(_TARGETS), help="reingest just one collection"
+    )
     # Knowledge-only subset reingest (plan §4.6.3 document/user/category dims).
     p.add_argument("--document", help="reingest one knowledge document by id")
-    p.add_argument("--user", type=int, help="reingest all of a user's live knowledge documents")
-    p.add_argument("--category", help="with --user, restrict to this knowledge category")
+    p.add_argument(
+        "--user", type=int, help="reingest all of a user's live knowledge documents"
+    )
+    p.add_argument(
+        "--category", help="with --user, restrict to this knowledge category"
+    )
     args = p.parse_args()
 
     # --category only filters within a --user scope; reject it alone so an
@@ -167,7 +182,9 @@ def main() -> None:
             print(f"reingested document {args.document}: {n} chunk(s)")
         else:
             n = reingest_knowledge(user_id=args.user, category=args.category)
-            scope = f"user {args.user}" + (f" / category {args.category}" if args.category else "")
+            scope = f"user {args.user}" + (
+                f" / category {args.category}" if args.category else ""
+            )
             print(f"reingested {scope}: {n} chunk(s)")
         print("\nDone.")
         return

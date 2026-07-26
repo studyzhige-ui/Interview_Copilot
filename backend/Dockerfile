@@ -12,10 +12,11 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+ARG REQUIREMENTS_FILE=requirements.txt
+COPY requirements*.txt ./
 RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir --upgrade pip && \
-    /opt/venv/bin/pip install --no-cache-dir -r requirements.txt && \
+    /opt/venv/bin/pip install --no-cache-dir -r "$REQUIREMENTS_FILE" && \
     /opt/venv/bin/pip install --no-cache-dir gunicorn
 
 # Stage 2: Lean runtime image

@@ -1,9 +1,10 @@
-"""Session-scoped task tracking (Claude Code V2 TaskCreate/Update alignment).
+"""Session-scoped task tracking for multi-turn agent work.
 
 Each task belongs to a conversation session and tracks a discrete unit of
-work the agent plans to complete.  Tasks persist across turns within a
+work the agent plans to complete. Tasks persist across turns within a
 session so the agent (and user) can see progress over multi-turn workflows.
 """
+
 from datetime import datetime
 
 from sqlalchemy import (
@@ -12,6 +13,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -38,5 +40,13 @@ class SessionTask(Base):
     subject = Column(String, nullable=False)
     description = Column(Text, nullable=False, default="")
     status = Column(String, nullable=False, default="pending")
+    parent_task_id = Column(Integer, nullable=True)
+    owner = Column(String(64), nullable=True)
+    blocked_by_json = Column(JSON, nullable=False, default=list)
+    acceptance_criteria = Column(Text, nullable=False, default="")
+    evidence_json = Column(JSON, nullable=False, default=list)
+    verification_status = Column(String(16), nullable=False, default="unverified")
+    verification_notes = Column(Text, nullable=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

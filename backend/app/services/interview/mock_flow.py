@@ -17,6 +17,7 @@ Transaction ownership: ``submit_answer`` and ``dispatch_review`` COMMIT
 internally (two-phase / rollback semantics they own); ``start_mock`` and
 ``abandon_mock`` flush only — their endpoints commit.
 """
+
 from __future__ import annotations
 
 import json
@@ -86,7 +87,9 @@ def append_message(
     return msg
 
 
-def recent_messages(db: Session, conversation_id: str, limit: int = 8) -> list[dict[str, str]]:
+def recent_messages(
+    db: Session, conversation_id: str, limit: int = 8
+) -> list[dict[str, str]]:
     rows = (
         db.query(ConversationMessage)
         .filter(ConversationMessage.conversation_id == conversation_id)
@@ -135,7 +138,9 @@ def extract_file_asset_text(db: Session, asset_id: str, username: str) -> str:
             if is_temp and local_path and os.path.exists(local_path):
                 os.unlink(local_path)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("mock file-asset text extraction failed for %s: %s", asset_id, exc)
+        logger.warning(
+            "mock file-asset text extraction failed for %s: %s", asset_id, exc
+        )
         return ""
 
 
@@ -154,12 +159,16 @@ def resolve_resume_context(
             from app.services.resume.resume_service import resume_service
 
             resume = resume_entity_service.get_owned_resume(
-                db, resume_id=resume_id, user_id=username,
+                db,
+                resume_id=resume_id,
+                user_id=username,
             )
             if resume is not None:
                 sections = resume_service.get_sections_by_resume(resume.id)
                 if sections:
-                    return resume_service.format_for_context(sections), "personal_resume"
+                    return resume_service.format_for_context(
+                        sections
+                    ), "personal_resume"
                 if (resume.raw_text_snapshot or "").strip():
                     return resume.raw_text_snapshot.strip(), "personal_resume"
         except Exception as exc:  # noqa: BLE001
@@ -188,7 +197,9 @@ def resolve_jd_context(
 # ── Ownership ────────────────────────────────────────────────────────────
 
 
-def get_owned_mock_record(db: Session, record_id: str, username: str) -> InterviewRecord | None:
+def get_owned_mock_record(
+    db: Session, record_id: str, username: str
+) -> InterviewRecord | None:
     return (
         db.query(InterviewRecord)
         .filter(
@@ -229,11 +240,16 @@ def start_mock(
     (so it can offload the commit to a thread) and rolls back on failure.
     """
     resume_context, resume_source = resolve_resume_context(
-        db, username=username,
-        resume_id=resume_id, resume_file_asset_id=resume_file_asset_id,
+        db,
+        username=username,
+        resume_id=resume_id,
+        resume_file_asset_id=resume_file_asset_id,
     )
     jd_context = resolve_jd_context(
-        db, username=username, jd_text=jd_text, jd_file_asset_id=jd_file_asset_id,
+        db,
+        username=username,
+        jd_text=jd_text,
+        jd_file_asset_id=jd_file_asset_id,
     )
 
     plan = mock_interview_service.generate_plan(
@@ -274,9 +290,13 @@ def start_mock(
     # 3) opening interviewer message (stage meta rides in a content block —
     # the review pipeline reads it back for per-stage attribution, MOCK-8).
     opening = append_message(
-        db, conversation.id, "assistant", plan.opening_message,
+        db,
+        conversation.id,
+        "assistant",
+        plan.opening_message,
         content_blocks_json=json.dumps(
-            [{"type": "stage", "stage_key": plan.first_stage_key}], ensure_ascii=False,
+            [{"type": "stage", "stage_key": plan.first_stage_key}],
+            ensure_ascii=False,
         ),
     )
 
@@ -296,7 +316,9 @@ def start_mock(
     runtime.current_question_text = plan.opening_message
     runtime.current_question_message_id = opening.id
 
-    return StartedMock(record=record, conversation=conversation, runtime=runtime, plan=plan)
+    return StartedMock(
+        record=record, conversation=conversation, runtime=runtime, plan=plan
+    )
 
 
 async def submit_answer(
@@ -375,10 +397,13 @@ async def submit_answer(
                 except (json.JSONDecodeError, TypeError):
                     blocks = []
             if not any(
-                isinstance(b, dict) and b.get("file_asset_id") == answer_audio_file_asset_id
+                isinstance(b, dict)
+                and b.get("file_asset_id") == answer_audio_file_asset_id
                 for b in blocks
             ):
-                blocks.append({"type": "audio", "file_asset_id": answer_audio_file_asset_id})
+                blocks.append(
+                    {"type": "audio", "file_asset_id": answer_audio_file_asset_id}
+                )
                 last.content_blocks_json = json.dumps(blocks, ensure_ascii=False)
                 db.add(last)
     if not dangling_retry:
@@ -393,7 +418,9 @@ async def submit_answer(
                 ],
                 ensure_ascii=False,
             )
-        append_message(db, conversation_id, "user", answer_text, content_blocks_json=user_blocks)
+        append_message(
+            db, conversation_id, "user", answer_text, content_blocks_json=user_blocks
+        )
     db.commit()
 
     # ── LLM turn (no transaction open) ──────────────────────────────
@@ -416,14 +443,19 @@ async def submit_answer(
 
     # ── Phase B: persist the reply + advance runtime, commit ────────
     assistant_msg = append_message(
-        db, conversation_id, "assistant", turn.interviewer_message,
+        db,
+        conversation_id,
+        "assistant",
+        turn.interviewer_message,
         content_blocks_json=json.dumps(
-            [{"type": "stage", "stage_key": turn.next_stage_key}], ensure_ascii=False,
+            [{"type": "stage", "stage_key": turn.next_stage_key}],
+            ensure_ascii=False,
         ),
     )
 
     stage_index = next(
-        (i for i, s in enumerate(stages) if s["key"] == turn.next_stage_key), runtime.stage_index,
+        (i for i, s in enumerate(stages) if s["key"] == turn.next_stage_key),
+        runtime.stage_index,
     )
     mock_runtime_service.advance_runtime(
         db,
@@ -517,16 +549,23 @@ def dispatch_review(
         interview_record_service.set_status(record_id, rollback_status, db=db)
         if rollback_status == STATUS_MOCK_IN_PROGRESS:
             runtime = mock_runtime_service.get_runtime_for_record(
-                db, interview_record_id=record_id,
+                db,
+                interview_record_id=record_id,
             )
             if runtime is not None:
                 mock_runtime_service.set_status(
-                    db, runtime, mock_runtime_service.ACTIVE_STATUS, commit=False,
+                    db,
+                    runtime,
+                    mock_runtime_service.ACTIVE_STATUS,
+                    commit=False,
                 )
         db.commit()
         raise
     interview_record_service.set_status(
-        record_id, STATUS_PROCESSING_REVIEW, celery_task_id=task.id, db=db,
+        record_id,
+        STATUS_PROCESSING_REVIEW,
+        celery_task_id=task.id,
+        db=db,
     )
     db.commit()
     return task
@@ -571,7 +610,9 @@ def delete_mock_audio_assets(db: Session, conversation_id: str, user_pk: int) ->
                 enqueue_asset_blob_delete(db, asset)
                 db.delete(asset)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("mock audio asset cleanup skipped for %s: %s", conversation_id, exc)
+        logger.warning(
+            "mock audio asset cleanup skipped for %s: %s", conversation_id, exc
+        )
 
 
 def abandon_mock(db: Session, record: InterviewRecord, runtime) -> None:
@@ -595,9 +636,9 @@ def abandon_mock(db: Session, record: InterviewRecord, runtime) -> None:
         db.query(ConversationMessage).filter(
             ConversationMessage.conversation_id == conversation_id
         ).delete(synchronize_session=False)
-        db.query(Conversation).filter(
-            Conversation.id == conversation_id
-        ).delete(synchronize_session=False)
+        db.query(Conversation).filter(Conversation.id == conversation_id).delete(
+            synchronize_session=False
+        )
     if runtime is not None:
         db.delete(runtime)
     # interview_qa + any runtime left auto-cascade on the record delete.

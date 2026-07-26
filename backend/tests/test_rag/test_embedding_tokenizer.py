@@ -3,6 +3,7 @@
 Behaviour is asserted via monkeypatched tokenizer loading so the tests are
 environment-independent (no dependency on whether BGE-M3 is cached locally).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -91,8 +92,12 @@ def test_load_tokenizer_returns_none_for_remote_provider(monkeypatch):
     # _load_tokenizer imports resolve_embedding from embedding_registry, so
     # that is the binding to patch.
     import app.rag.embedding_registry as reg
+
     monkeypatch.setattr(
-        reg, "resolve_embedding",
-        lambda: SimpleNamespace(provider=SimpleNamespace(kind="openai_compat"), model="x"),
+        reg,
+        "resolve_embedding",
+        lambda: SimpleNamespace(
+            provider=SimpleNamespace(kind="openai_compat"), model="x"
+        ),
     )
     assert et._load_tokenizer() is None

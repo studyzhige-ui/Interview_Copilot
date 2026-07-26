@@ -66,10 +66,10 @@ def _nfkc(s: str) -> str:
 class DocPatch:
     """One unit of change."""
 
-    op: str                                  # "add" | "update" | "delete"
-    match_line: str = ""                     # required for update / delete
-    new_line: str = ""                       # required for add / update
-    section: Optional[str] = None            # optional ## header for add
+    op: str  # "add" | "update" | "delete"
+    match_line: str = ""  # required for update / delete
+    new_line: str = ""  # required for add / update
+    section: Optional[str] = None  # optional ## header for add
 
 
 @dataclass
@@ -172,7 +172,9 @@ def parse_patches(raw_patches: Iterable[Any]) -> list[DocPatch]:
         if match_line and _looks_like_section_header(match_line):
             continue
 
-        out.append(DocPatch(op=op, match_line=match_line, new_line=new_line, section=section))
+        out.append(
+            DocPatch(op=op, match_line=match_line, new_line=new_line, section=section)
+        )
     return out
 
 

@@ -8,6 +8,7 @@ never orphans a credential, and deleting the user reaps its keys. ``provider``
 holds the stable provider key (``openai`` / ``deepseek`` / ...) — there is no
 provider catalog table; the runtime catalog lives in code / Redis.
 """
+
 from datetime import datetime
 
 from sqlalchemy import (
@@ -27,7 +28,9 @@ class UserModelCredential(Base):
     __tablename__ = "user_model_credentials"
     __table_args__ = (
         UniqueConstraint(
-            "user_id", "provider", name="uq_user_model_credentials_user_provider",
+            "user_id",
+            "provider",
+            name="uq_user_model_credentials_user_provider",
         ),
     )
 
@@ -50,5 +53,8 @@ class UserModelCredential(Base):
     last_validation_error = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
     )

@@ -161,8 +161,6 @@ function FilesSection() {
     // rapidly could land an older filter's response into ``docs``.
     const controller = new AbortController();
     let alive = true;
-    setPage(1);
-    setLoading(true);
     Promise.all([
       listKnowledgeDocuments(
         filter ? { category: filter } : {},
@@ -294,8 +292,8 @@ function FilesSection() {
   }, [docs, query, sortDir]);
 
   const totalPages = Math.max(1, Math.ceil(processed.length / PAGE_SIZE));
-  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [totalPages, page]);
-  const pageStart = (page - 1) * PAGE_SIZE;
+  const visiblePage = Math.min(page, totalPages);
+  const pageStart = (visiblePage - 1) * PAGE_SIZE;
   const pageItems = processed.slice(pageStart, pageStart + PAGE_SIZE);
 
   return (
@@ -343,11 +341,11 @@ function FilesSection() {
             />
           </div>
           <div className="flex items-center gap-1 overflow-x-auto">
-            <CatChip active={filter === ''} onClick={() => setFilter('')}>全部</CatChip>
+            <CatChip active={filter === ''} onClick={() => { setPage(1); setLoading(true); setFilter(''); }}>全部</CatChip>
             {CATEGORIES.map((c) => {
               const count = cats.find((x) => x.category === c)?.count ?? 0;
               return (
-                <CatChip key={c} active={filter === c} onClick={() => setFilter(c)}>
+                <CatChip key={c} active={filter === c} onClick={() => { setPage(1); setLoading(true); setFilter(c); }}>
                   {c} <span className="opacity-60">· {count}</span>
                 </CatChip>
               );
@@ -359,7 +357,7 @@ function FilesSection() {
                 <CatChip
                   key={c.category}
                   active={filter === c.category}
-                  onClick={() => setFilter(c.category)}
+                  onClick={() => { setPage(1); setLoading(true); setFilter(c.category); }}
                 >
                   {c.category} <span className="opacity-60">· {c.count}</span>
                 </CatChip>
@@ -475,17 +473,17 @@ function FilesSection() {
                 <div className="flex items-center gap-1">
                   <button
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    disabled={page === 1}
+                    disabled={visiblePage === 1}
                     className="w-7 h-7 rounded hover:bg-stone-100 disabled:opacity-30 inline-flex items-center justify-center"
                   >
                     <ChevronLeft size={14} />
                   </button>
                   <span className="px-2">
-                    {page} / {totalPages}
+                    {visiblePage} / {totalPages}
                   </span>
                   <button
                     onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={page === totalPages}
+                    disabled={visiblePage === totalPages}
                     className="w-7 h-7 rounded hover:bg-stone-100 disabled:opacity-30 inline-flex items-center justify-center"
                   >
                     <ChevronRight size={14} />

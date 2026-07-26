@@ -92,7 +92,9 @@ export function ProfilePage() {
     }
   };
 
-  useEffect(() => { refresh(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+  // Initial account synchronization is intentionally effect-driven.
+  // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps
+  useEffect(() => { void refresh(); }, []);
 
   const dirty =
     !!me &&

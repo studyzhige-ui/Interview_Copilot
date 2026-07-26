@@ -11,6 +11,7 @@ is idempotent. This module is just the outbox glue: enqueue helpers + handlers.
 Imported by the worker's drain task so the handlers register before any job
 runs (mirrors ``ability_outbox``).
 """
+
 from __future__ import annotations
 
 import json
@@ -37,7 +38,11 @@ _INFLIGHT = ("pending", "running", "failed")
 
 
 def enqueue_realtime_extraction(
-    *, session_id: str, user_id: str, record_id: str | None, upto_seq: int,
+    *,
+    session_id: str,
+    user_id: str,
+    record_id: str | None,
+    upto_seq: int,
 ) -> None:
     """Enqueue a realtime extraction job for messages up to ``upto_seq``.
 

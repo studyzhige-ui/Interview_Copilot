@@ -7,6 +7,7 @@ Covers rank-order preservation, the live check (soft-deleted chunk,
 ``failed`` index_status NOT hiding a chunk (Postgres text stays the fact
 source), file-asset attribution and ``metadata_json`` parsing.
 """
+
 from __future__ import annotations
 
 import json
@@ -107,12 +108,19 @@ def test_hydrate_preserves_input_order_and_attributes(db: Session):
     uid = _seed_user(db)
     doc = _seed_doc(db, uid)
     _seed_chunk(
-        db, doc, uid, "n1", chunk_index=0,
-        page_start=3, page_end=4,
-        metadata_json=json.dumps({
-            "section_title": "异常场景",
-            "heading_path": ["缓存", "异常场景"],
-        }),
+        db,
+        doc,
+        uid,
+        "n1",
+        chunk_index=0,
+        page_start=3,
+        page_end=4,
+        metadata_json=json.dumps(
+            {
+                "section_title": "异常场景",
+                "heading_path": ["缓存", "异常场景"],
+            }
+        ),
     )
     _seed_chunk(db, doc, uid, "n2", chunk_index=1, text="缓存穿透是查询不存在的数据。")
 
@@ -142,7 +150,11 @@ def test_hydrate_drops_dead_chunks_and_documents(db: Session):
     _seed_chunk(db, live_doc, uid, "n-chunk-deleted", deleted_at=datetime.utcnow())
     _seed_chunk(db, live_doc, uid, "n-index-deleted", index_status="deleted")
     deleting_doc = _seed_doc(
-        db, uid, suffix="2", status="deleting", deleted_at=datetime.utcnow(),
+        db,
+        uid,
+        suffix="2",
+        status="deleting",
+        deleted_at=datetime.utcnow(),
     )
     _seed_chunk(db, deleting_doc, uid, "n-dead-doc")
 

@@ -58,7 +58,9 @@ def _disabled_bundle() -> dict[str, Any]:
     }
 
 
-async def _recall_memory_handler(args: RecallMemoryArgs, ctx: AgentToolContext) -> dict[str, Any]:
+async def _recall_memory_handler(
+    args: RecallMemoryArgs, ctx: AgentToolContext
+) -> dict[str, Any]:
     """Return the v3 memory snapshot, optionally with the full strategy body.
 
     Privacy gate (Stage-H): when the global memory toggle is OFF for this
@@ -67,8 +69,11 @@ async def _recall_memory_handler(args: RecallMemoryArgs, ctx: AgentToolContext) 
     from app.services.memory.recall_policy import (
         is_global_memory_enabled_for_session,
     )
+
     enabled = await asyncio.to_thread(
-        is_global_memory_enabled_for_session, ctx.session_id, ctx.user_id,
+        is_global_memory_enabled_for_session,
+        ctx.session_id,
+        ctx.user_id,
     )
     if not enabled:
         return _disabled_bundle()
@@ -85,8 +90,11 @@ async def _recall_memory_handler(args: RecallMemoryArgs, ctx: AgentToolContext) 
     relevant_abilities: list = []
     if args.query.strip():
         from app.services.memory import ability_index
+
         relevant_abilities = await asyncio.to_thread(
-            ability_index.search_abilities, ctx.user_id, args.query,
+            ability_index.search_abilities,
+            ctx.user_id,
+            args.query,
         )
     return {
         "user_profile": bundle.user_profile_body,
@@ -107,13 +115,15 @@ class SaveMemoryArgs(BaseModel):
         description=(
             "Which memory surface to write:\n"
             "  - 'ability_state'     — user's mastery of a specific topic. "
-                                     "Requires topic + skill_type + mastery_level + summary.\n"
+            "Requires topic + skill_type + mastery_level + summary.\n"
             "  - 'user_profile'      — durable identity / preference / goal. Requires fact.\n"
             "  - 'learning_strategy' — answering / review / training method. Requires fact."
         ),
     )
     # ability_state fields
-    topic: str = Field(default="", description="ability_state: the subject, e.g. 'Redis 缓存穿透'.")
+    topic: str = Field(
+        default="", description="ability_state: the subject, e.g. 'Redis 缓存穿透'."
+    )
     skill_type: str = Field(
         default="",
         description=(
@@ -141,7 +151,9 @@ class SaveMemoryArgs(BaseModel):
     )
 
 
-async def _save_memory_handler(args: SaveMemoryArgs, ctx: AgentToolContext) -> dict[str, Any]:
+async def _save_memory_handler(
+    args: SaveMemoryArgs, ctx: AgentToolContext
+) -> dict[str, Any]:
     """Dispatch one fact into the chosen v3 surface.
 
     Held under :func:`user_memory_lock` so it can't race the realtime-extraction
@@ -151,8 +163,11 @@ async def _save_memory_handler(args: SaveMemoryArgs, ctx: AgentToolContext) -> d
     from app.services.memory.recall_policy import (
         is_global_memory_enabled_for_session,
     )
+
     enabled = await asyncio.to_thread(
-        is_global_memory_enabled_for_session, ctx.session_id, ctx.user_id,
+        is_global_memory_enabled_for_session,
+        ctx.session_id,
+        ctx.user_id,
     )
     if not enabled:
         return {
@@ -184,7 +199,9 @@ async def _save_memory_handler(args: SaveMemoryArgs, ctx: AgentToolContext) -> d
             try:
                 result = await asyncio.to_thread(
                     memory_document_service.apply_patches,
-                    ctx.user_id, target, [patch],
+                    ctx.user_id,
+                    target,
+                    [patch],
                     change_type="patch_realtime",
                     source_conversation_id=ctx.session_id,
                 )
@@ -220,7 +237,9 @@ def _save_ability_state(args: SaveMemoryArgs, ctx: AgentToolContext) -> dict[str
     try:
         memory_ability_state_service.upsert(
             ctx.user_id,
-            topic=topic, skill_type=skill_type, mastery_level=mastery_level,
+            topic=topic,
+            skill_type=skill_type,
+            mastery_level=mastery_level,
             summary=args.summary.strip() or None,
             change_type="patch_realtime",
             source_conversation_id=ctx.session_id,
@@ -233,30 +252,34 @@ def _save_ability_state(args: SaveMemoryArgs, ctx: AgentToolContext) -> dict[str
 
 # ── Registration ─────────────────────────────────────────────────────────
 
-registry.register(ToolEntry(
-    name="recall_memory",
-    description=(
-        "Recall the user's long-term memory: user_profile + per-topic ability "
-        "states (what they're weak/strong at) + learning_strategy. Use to ground "
-        "responses in what you know about this user and how they're progressing."
-    ),
-    args_model=RecallMemoryArgs,
-    handler=_recall_memory_handler,
-    max_result_chars=20000,
-    emoji="🧠",
-))
+registry.register(
+    ToolEntry(
+        name="recall_memory",
+        description=(
+            "Recall the user's long-term memory: user_profile + per-topic ability "
+            "states (what they're weak/strong at) + learning_strategy. Use to ground "
+            "responses in what you know about this user and how they're progressing."
+        ),
+        args_model=RecallMemoryArgs,
+        handler=_recall_memory_handler,
+        max_result_chars=20000,
+        emoji="🧠",
+    )
+)
 
-registry.register(ToolEntry(
-    name="save_memory",
-    description=(
-        "Save one fact to the user's long-term memory. Pick target: "
-        "'ability_state' for a topic's mastery (needs topic/skill_type/"
-        "mastery_level/summary), 'user_profile' for identity/preference, "
-        "'learning_strategy' for answering/review methodology. Use positive "
-        "present-state phrasing (not past errors)."
-    ),
-    args_model=SaveMemoryArgs,
-    handler=_save_memory_handler,
-    max_result_chars=2000,
-    emoji="💾",
-))
+registry.register(
+    ToolEntry(
+        name="save_memory",
+        description=(
+            "Save one fact to the user's long-term memory. Pick target: "
+            "'ability_state' for a topic's mastery (needs topic/skill_type/"
+            "mastery_level/summary), 'user_profile' for identity/preference, "
+            "'learning_strategy' for answering/review methodology. Use positive "
+            "present-state phrasing (not past errors)."
+        ),
+        args_model=SaveMemoryArgs,
+        handler=_save_memory_handler,
+        max_result_chars=2000,
+        emoji="💾",
+    )
+)

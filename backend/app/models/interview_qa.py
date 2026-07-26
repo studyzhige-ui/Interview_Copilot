@@ -4,6 +4,7 @@ Each row is one question + answer + (optional) analysis. Promoted from the
 analysis_json JSON blob to a first-class table so the review UI can render,
 edit, and re-analyze a single Q&A without rewriting the whole record.
 """
+
 import uuid
 from datetime import datetime
 
@@ -31,9 +32,7 @@ class InterviewQA(Base):
     __tablename__ = "interview_qa"
     # Composite — QAPanel renders QA list ordered by order_idx for one
     # record. See alembic 0001_baseline:277.
-    __table_args__ = (
-        Index("ix_interview_qa_record_order", "record_id", "order_idx"),
-    )
+    __table_args__ = (Index("ix_interview_qa_record_order", "record_id", "order_idx"),)
 
     id = Column(String, primary_key=True, default=_generate_qa_id)
     record_id = Column(

@@ -16,6 +16,7 @@ What it does NOT cover: DNS rebinding. Mitigating requires resolve-once
 then dial-via-resolved-IP, which is a bigger refactor — out of scope.
 The guard still blocks 99% of the realistic SSRF attempts.
 """
+
 from __future__ import annotations
 
 import ipaddress
@@ -69,8 +70,14 @@ def validate_safe_url(url: str, *, require_https: bool = False) -> None:
             ip = ipaddress.ip_address(ip_str)
         except ValueError as exc:
             raise UrlNotSafe(f"bad ip from dns: {ip_str!r}") from exc
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
             # Classify rather than echo the IP — keeps the error
             # actionable without disclosing the resolution.
             classes = []

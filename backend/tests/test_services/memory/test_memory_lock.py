@@ -9,6 +9,7 @@ unchanged by the v3 cutover, so this behaviour still matters: a Redis outage
 must degrade the lock to a no-op AND emit the ``memory.lock_degraded`` metric so
 ops can alarm on contention.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -21,7 +22,8 @@ def test_lock_degradation_emits_metric(monkeypatch):
 
     captured: list[dict] = []
     monkeypatch.setattr(
-        lock_mod, "_metric_incr",
+        lock_mod,
+        "_metric_incr",
         lambda event, **labels: captured.append({"event": event, **labels}),
     )
 

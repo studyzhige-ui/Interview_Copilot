@@ -3,6 +3,7 @@
 Mirrors the request / response shapes used by ``app/api/interview.py``
 (audio upload, analysis, InterviewRecord CRUD, QA edits).
 """
+
 from __future__ import annotations
 
 from typing import Optional
@@ -19,6 +20,7 @@ class AnalyzeRequest(BaseModel):
     direct ``jd_text`` or a ``jd_file_asset_id`` (file_assets.id, purpose='jd');
     JD never becomes a knowledge document.
     """
+
     upload_id: str
     resume_id: Optional[str] = None
     resume_file_asset_id: Optional[str] = None
@@ -33,6 +35,7 @@ class AnalyzeRequest(BaseModel):
 
 class InterviewRecordListItem(BaseModel):
     """Row shape for ``GET /interview-records``."""
+
     id: str
     source: str
     title: str
@@ -43,12 +46,14 @@ class InterviewRecordListItem(BaseModel):
 
 class InterviewRecordUpdateRequest(BaseModel):
     """``PATCH /interview-records/{record_id}`` request body."""
+
     title: Optional[str] = Field(default=None, min_length=1, max_length=200)
     tag: Optional[str] = Field(default=None, max_length=32)
 
 
 class QAEditRequest(BaseModel):
     """``PATCH /interview-records/{record_id}/qa/{qa_id}`` request body."""
+
     question: Optional[str] = None
     answer: Optional[str] = None
     critique: Optional[str] = None
@@ -60,6 +65,7 @@ class SaveQARequest(BaseModel):
 
     Publishes the QA's improved answer as a knowledge_documents(improved_qa).
     """
+
     category: Optional[str] = Field(default=None, max_length=80)
 
 

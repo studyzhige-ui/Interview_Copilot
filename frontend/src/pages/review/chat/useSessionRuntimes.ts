@@ -61,7 +61,7 @@ export function useSessionRuntimes() {
       map.set(id, r);
     } else {
       r = {
-        abort: null, messages: [], partial: '', inflightBlocks: [],
+        abort: null, turnId: null, messages: [], partial: '', inflightBlocks: [],
         inflightSources: [],
         status: '', streaming: false, hidePartialBar: false,
         loadedHistory: false,

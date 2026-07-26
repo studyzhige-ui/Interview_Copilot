@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CancelledError, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/store/uiStore';
 import { extractErr } from '@/api/client';
@@ -49,7 +49,7 @@ export function useSessionList({
   onSessionDeleted: (id: string) => void;
 }) {
   const queryClient = useQueryClient();
-  const [internalActiveId, setInternalActiveId] = useState<string | null>(null);
+  const [selectedId, setInternalActiveId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
 
@@ -63,7 +63,11 @@ export function useSessionList({
     ),
   });
   useToastOnError(listQuery.error, '会话列表加载失败');
-  const sessions = (enabled ? listQuery.data : undefined) ?? [];
+  const sessions = useMemo(
+    () => (enabled ? listQuery.data : undefined) ?? [],
+    [enabled, listQuery.data],
+  );
+  const internalActiveId = enabled ? selectedId : null;
 
   const setSessions = useCallback(
     (updater: (cur: ChatSessionListItem[]) => ChatSessionListItem[]) => {
@@ -86,7 +90,6 @@ export function useSessionList({
   // (the first run's ``alive`` flag drops before it reaches the create).
   useEffect(() => {
     if (!enabled || !interviewId) {
-      setInternalActiveId(null);
       return;
     }
     const key = ['chat', 'sessions', { type: sessionType, subject_id: interviewId }];

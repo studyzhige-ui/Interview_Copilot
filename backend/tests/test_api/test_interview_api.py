@@ -7,6 +7,7 @@ Like the other files in this directory, we build a local SQLite engine
 because the shared ``db_session`` fixture in tests/conftest.py references
 the missing ``app.models.interview`` module.
 """
+
 from __future__ import annotations
 
 from typing import Iterator
@@ -60,11 +61,13 @@ def db(monkeypatch) -> Iterator[Session]:
     # ``interview_record_service`` which opens its own ``SessionLocal()``
     # bound to the real configured DB. Redirect that to our test engine.
     import app.services.interview.interview_record_service as irs_mod
+
     monkeypatch.setattr(irs_mod, "SessionLocal", Session_)
     # The SSE events endpoint opens its own SessionLocal() per tick via
     # record_admin (poll_record_snapshot / record_exists_for_user) — same
     # redirect needed there.
     import app.services.interview.record_admin as record_admin_mod
+
     monkeypatch.setattr(record_admin_mod, "SessionLocal", Session_)
 
     try:
@@ -100,34 +103,43 @@ def client(db: Session) -> Iterator[TestClient]:
 
 
 def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
-    db.add_all([
-        FileAsset(
-            id="upl_audio",
-            user_id=_uid(db, "alice"),
-            purpose="interview_audio",
-            original_filename="a.wav",
-            storage_uri="s3://b/uploads/alice/upl_audio/a.wav",
-            object_key="uploads/alice/upl_audio/a.wav",
-            upload_status="uploaded",
-            validation_status="passed",
-        ),
-        FileAsset(
-            id="upl_resume",
-            user_id=_uid(db, "alice"),
-            purpose="resume",
-            original_filename="r.pdf",
-            storage_uri="s3://b/uploads/alice/upl_resume/r.pdf",
-            object_key="uploads/alice/upl_resume/r.pdf",
-            upload_status="uploaded",
-            validation_status="passed",
-        ),
-    ])
+    db.add_all(
+        [
+            FileAsset(
+                id="upl_audio",
+                user_id=_uid(db, "alice"),
+                purpose="interview_audio",
+                original_filename="a.wav",
+                storage_uri="s3://b/uploads/alice/upl_audio/a.wav",
+                object_key="uploads/alice/upl_audio/a.wav",
+                upload_status="uploaded",
+                validation_status="passed",
+            ),
+            FileAsset(
+                id="upl_resume",
+                user_id=_uid(db, "alice"),
+                purpose="resume",
+                original_filename="r.pdf",
+                storage_uri="s3://b/uploads/alice/upl_resume/r.pdf",
+                object_key="uploads/alice/upl_resume/r.pdf",
+                upload_status="uploaded",
+                validation_status="passed",
+            ),
+        ]
+    )
     db.commit()
 
     fake_task = MagicMock()
     fake_task.id = "celery-abc"
-    with patch("app.services.interview.analysis_intake.process_interview_analysis") as mock_proc, \
-         patch("app.services.interview.analysis_intake.extract_text_snapshot", return_value="resume txt"):
+    with (
+        patch(
+            "app.services.interview.analysis_intake.process_interview_analysis"
+        ) as mock_proc,
+        patch(
+            "app.services.interview.analysis_intake.extract_text_snapshot",
+            return_value="resume txt",
+        ),
+    ):
         mock_proc.delay.return_value = fake_task
         resp = client.post(
             "/api/v1/analyze",
@@ -146,7 +158,11 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
     # re-run can override it without breaking idempotency.
     mock_proc.delay.assert_called_once_with(body["record_id"], language="zh")
 
-    record = db.query(InterviewRecord).filter(InterviewRecord.id == body["record_id"]).first()
+    record = (
+        db.query(InterviewRecord)
+        .filter(InterviewRecord.id == body["record_id"])
+        .first()
+    )
     assert record is not None
     # Route resolves the caller's username → users.id and stores the pk.
     assert record.user_id == _uid(db, "alice")
@@ -175,29 +191,31 @@ def test_analyze_returns_404_for_missing_audio_upload(client, db: Session):
 
 
 def test_analyze_blocks_already_consumed_audio(client, db: Session):
-    db.add_all([
-        FileAsset(
-            id="upl_audio",
-            user_id=_uid(db, "alice"),
-            purpose="interview_audio",
-            original_filename="a.wav",
-            storage_uri="s3://b/x",
-            object_key="x",
-            # Already-consumed audio must still drive the 409 path.
-            upload_status="consumed",
-            validation_status="passed",
-        ),
-        FileAsset(
-            id="upl_resume",
-            user_id=_uid(db, "alice"),
-            purpose="resume",
-            original_filename="r.pdf",
-            storage_uri="s3://b/y",
-            object_key="y",
-            upload_status="uploaded",
-            validation_status="passed",
-        ),
-    ])
+    db.add_all(
+        [
+            FileAsset(
+                id="upl_audio",
+                user_id=_uid(db, "alice"),
+                purpose="interview_audio",
+                original_filename="a.wav",
+                storage_uri="s3://b/x",
+                object_key="x",
+                # Already-consumed audio must still drive the 409 path.
+                upload_status="consumed",
+                validation_status="passed",
+            ),
+            FileAsset(
+                id="upl_resume",
+                user_id=_uid(db, "alice"),
+                purpose="resume",
+                original_filename="r.pdf",
+                storage_uri="s3://b/y",
+                object_key="y",
+                upload_status="uploaded",
+                validation_status="passed",
+            ),
+        ]
+    )
     db.commit()
     resp = client.post(
         "/api/v1/analyze",
@@ -229,7 +247,7 @@ def test_cancel_analysis_revokes_celery_task(client, db: Session):
     assert body["revoked"] is True
     mock_celery.control.revoke.assert_called_once()
     db.expire_all()
-    assert db.get(InterviewRecord,"ir_1").status == "failed"
+    assert db.get(InterviewRecord, "ir_1").status == "failed"
 
 
 def test_cancel_analysis_404_for_other_user(client, db: Session):
@@ -238,9 +256,15 @@ def test_cancel_analysis_404_for_other_user(client, db: Session):
     # column type differs.
     db.add(User(username="bob", hashed_password="x"))
     db.commit()
-    db.add(InterviewRecord(
-        id="ir_bob", user_id=_uid(db, "bob"), source="upload", title="t", status="pending",
-    ))
+    db.add(
+        InterviewRecord(
+            id="ir_bob",
+            user_id=_uid(db, "bob"),
+            source="upload",
+            title="t",
+            status="pending",
+        )
+    )
     db.commit()
     resp = client.post("/api/v1/analyze/ir_bob/cancel")
     assert resp.status_code == 404
@@ -270,10 +294,24 @@ def test_list_interview_records_returns_user_records(client, db: Session):
     # real user so his record carries a distinct pk and is genuinely scoped out.
     db.add(User(username="bob", hashed_password="x"))
     db.commit()
-    db.add_all([
-        InterviewRecord(id="ir_a", user_id=_uid(db, "alice"), source="upload", title="A", status="completed"),
-        InterviewRecord(id="ir_b", user_id=_uid(db, "bob"),   source="upload", title="B", status="completed"),
-    ])
+    db.add_all(
+        [
+            InterviewRecord(
+                id="ir_a",
+                user_id=_uid(db, "alice"),
+                source="upload",
+                title="A",
+                status="completed",
+            ),
+            InterviewRecord(
+                id="ir_b",
+                user_id=_uid(db, "bob"),
+                source="upload",
+                title="B",
+                status="completed",
+            ),
+        ]
+    )
     db.commit()
     resp = client.get("/api/v1/interview-records")
     assert resp.status_code == 200
@@ -284,23 +322,47 @@ def test_list_interview_records_returns_user_records(client, db: Session):
 def test_get_interview_record_404_for_other_user(client, db: Session):
     db.add(User(username="bob", hashed_password="x"))
     db.commit()
-    db.add(InterviewRecord(id="ir_b", user_id=_uid(db, "bob"), source="upload", title="B", status="completed"))
+    db.add(
+        InterviewRecord(
+            id="ir_b",
+            user_id=_uid(db, "bob"),
+            source="upload",
+            title="B",
+            status="completed",
+        )
+    )
     db.commit()
     resp = client.get("/api/v1/interview-records/ir_b")
     assert resp.status_code == 404
 
 
 def test_patch_interview_record_updates_title(client, db: Session):
-    db.add(InterviewRecord(id="ir_a", user_id=_uid(db, "alice"), source="upload", title="old", status="completed"))
+    db.add(
+        InterviewRecord(
+            id="ir_a",
+            user_id=_uid(db, "alice"),
+            source="upload",
+            title="old",
+            status="completed",
+        )
+    )
     db.commit()
     resp = client.patch("/api/v1/interview-records/ir_a", json={"title": "new title"})
     assert resp.status_code == 200
     db.expire_all()
-    assert db.get(InterviewRecord,"ir_a").title == "new title"
+    assert db.get(InterviewRecord, "ir_a").title == "new title"
 
 
 def test_patch_interview_record_400_when_empty(client, db: Session):
-    db.add(InterviewRecord(id="ir_a", user_id=_uid(db, "alice"), source="upload", title="old", status="completed"))
+    db.add(
+        InterviewRecord(
+            id="ir_a",
+            user_id=_uid(db, "alice"),
+            source="upload",
+            title="old",
+            status="completed",
+        )
+    )
     db.commit()
     resp = client.patch("/api/v1/interview-records/ir_a", json={})
     assert resp.status_code == 400
@@ -316,15 +378,31 @@ def test_delete_interview_record_cascades_conversations(client, db: Session):
     from app.models.chat import ConversationMessage, Conversation
 
     alice_pk = _uid(db, "alice")
-    db.add(InterviewRecord(id="ir_a", user_id=alice_pk, source="upload", title="t", status="completed"))
+    db.add(
+        InterviewRecord(
+            id="ir_a", user_id=alice_pk, source="upload", title="t", status="completed"
+        )
+    )
     # conversations.user_id is the integer users.id FK (CLEANUP #2). The
     # delete handler finds bound conversations via subject_id == record_id.
-    db.add(Conversation(
-        id="cs_1", user_id=alice_pk, title="debrief",
-        type="debrief", subject_type="interview_record", subject_id="ir_a",
-    ))
-    db.add(ConversationMessage(conversation_id="cs_1", seq=0, role="user", content="hi"))
-    db.add(ConversationMessage(conversation_id="cs_1", seq=1, role="assistant", content="hello"))
+    db.add(
+        Conversation(
+            id="cs_1",
+            user_id=alice_pk,
+            title="debrief",
+            type="debrief",
+            subject_type="interview_record",
+            subject_id="ir_a",
+        )
+    )
+    db.add(
+        ConversationMessage(conversation_id="cs_1", seq=0, role="user", content="hi")
+    )
+    db.add(
+        ConversationMessage(
+            conversation_id="cs_1", seq=1, role="assistant", content="hello"
+        )
+    )
     db.commit()
 
     # The delete handler no longer touches Milvus (memory_items cascade
@@ -338,7 +416,12 @@ def test_delete_interview_record_cascades_conversations(client, db: Session):
     db.expire_all()
     assert db.get(InterviewRecord, "ir_a") is None
     assert db.get(Conversation, "cs_1") is None
-    assert db.query(ConversationMessage).filter(ConversationMessage.conversation_id == "cs_1").count() == 0
+    assert (
+        db.query(ConversationMessage)
+        .filter(ConversationMessage.conversation_id == "cs_1")
+        .count()
+        == 0
+    )
 
 
 # ── /interview-records/{id}/events (SSE) ─────────────────────────────────
@@ -357,10 +440,15 @@ def test_events_stream_404_when_record_belongs_to_other_user(client, db: Session
     a missing record (no IDOR leakage)."""
     db.add(User(username="bob", hashed_password="x"))
     db.commit()
-    db.add(InterviewRecord(
-        id="ir_other", user_id=_uid(db, "bob"), source="upload",
-        status="analyzing", title="bob's record",
-    ))
+    db.add(
+        InterviewRecord(
+            id="ir_other",
+            user_id=_uid(db, "bob"),
+            source="upload",
+            status="analyzing",
+            title="bob's record",
+        )
+    )
     db.commit()
     resp = client.get("/api/v1/interview-records/ir_other/events")
     assert resp.status_code == 404
@@ -376,19 +464,27 @@ def test_events_stream_emits_done_for_completed_record(client, db: Session):
     handler closes the generator after emitting ``done`` so the
     context manager exits cleanly without timing out."""
     import json as _json
-    db.add(InterviewRecord(
-        id="ir_done", user_id=_uid(db, "alice"), source="upload",
-        status="completed", title="finished",
-        analysis_json=_json.dumps({"overall": {"score": 88, "summary": "well done"}}),
-        analyzed_qa_count=5,
-    ))
+
+    db.add(
+        InterviewRecord(
+            id="ir_done",
+            user_id=_uid(db, "alice"),
+            source="upload",
+            status="completed",
+            title="finished",
+            analysis_json=_json.dumps(
+                {"overall": {"score": 88, "summary": "well done"}}
+            ),
+            analyzed_qa_count=5,
+        )
+    )
     db.commit()
 
     with client.stream("GET", "/api/v1/interview-records/ir_done/events") as resp:
         assert resp.status_code == 200
         chunks = [line for line in resp.iter_lines() if line.startswith("data: ")]
 
-    payloads = [_json.loads(line[len("data: "):]) for line in chunks]
+    payloads = [_json.loads(line[len("data: ") :]) for line in chunks]
     # Terminal on first poll → no progress frame at all.
     assert not any(p["type"] == "progress" for p in payloads)
     done = next((p for p in payloads if p["type"] == "done"), None)
@@ -403,18 +499,24 @@ def test_events_stream_emits_error_for_failed_record(client, db: Session):
     ``error_message``, then close. (Contrast with the 404 path,
     which fails synchronously before the stream starts.)"""
     import json as _json
-    db.add(InterviewRecord(
-        id="ir_failed", user_id=_uid(db, "alice"), source="upload",
-        status="failed", title="bad upload",
-        error_message="upload corrupted",
-    ))
+
+    db.add(
+        InterviewRecord(
+            id="ir_failed",
+            user_id=_uid(db, "alice"),
+            source="upload",
+            status="failed",
+            title="bad upload",
+            error_message="upload corrupted",
+        )
+    )
     db.commit()
 
     with client.stream("GET", "/api/v1/interview-records/ir_failed/events") as resp:
         assert resp.status_code == 200
         chunks = [line for line in resp.iter_lines() if line.startswith("data: ")]
 
-    payloads = [_json.loads(line[len("data: "):]) for line in chunks]
+    payloads = [_json.loads(line[len("data: ") :]) for line in chunks]
     err = next((p for p in payloads if p["type"] == "error"), None)
     assert err is not None, payloads
     assert err["message"] == "upload corrupted"
@@ -423,7 +525,10 @@ def test_events_stream_emits_error_for_failed_record(client, db: Session):
 def test_poll_record_snapshot_returns_none_for_missing_id(db: Session):
     """The poll helper must return None when the row disappears
     (the SSE loop maps None → 'record disappeared' error event)."""
-    from app.services.interview.record_admin import poll_record_snapshot as _poll_record_snapshot
+    from app.services.interview.record_admin import (
+        poll_record_snapshot as _poll_record_snapshot,
+    )
+
     # ``db`` fixture didn't insert anything, so any id misses.
     assert _poll_record_snapshot("nothing-here") is None
 
@@ -434,14 +539,22 @@ def test_poll_record_snapshot_returns_plain_dict_not_orm_row(db: Session):
     a lazy-loaded attribute on a detached row would raise
     DetachedInstanceError. Returning a plain dict pins that
     contract so a future edit can't reintroduce the leak."""
-    db.add(InterviewRecord(
-        id="ir_snap", user_id=_uid(db, "alice"), source="upload",
-        status="analyzing", title="snap test",
-        analyzed_qa_count=3,
-    ))
+    db.add(
+        InterviewRecord(
+            id="ir_snap",
+            user_id=_uid(db, "alice"),
+            source="upload",
+            status="analyzing",
+            title="snap test",
+            analyzed_qa_count=3,
+        )
+    )
     db.commit()
 
-    from app.services.interview.record_admin import poll_record_snapshot as _poll_record_snapshot
+    from app.services.interview.record_admin import (
+        poll_record_snapshot as _poll_record_snapshot,
+    )
+
     snap = _poll_record_snapshot("ir_snap")
     assert isinstance(snap, dict)
     assert snap["status"] == "analyzing"

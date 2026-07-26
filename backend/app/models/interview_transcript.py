@@ -6,6 +6,7 @@ lifecycle differ from the record's, so it lives in its own table. An
 (a soft reference); the hard FK is here on ``record_id`` (CASCADE) so deleting a
 record removes its transcripts.
 """
+
 import uuid
 from datetime import datetime
 
@@ -35,12 +36,20 @@ class InterviewTranscript(Base):
         index=True,
         nullable=False,
     )
-    provider = Column(String, nullable=True)  # local_whisperx | openai | dashscope | mock_composed
+    provider = Column(
+        String, nullable=True
+    )  # local_whisperx | openai | dashscope | mock_composed
     language = Column(String, nullable=True)
     text = Column(Text, nullable=True)
-    segments_json = Column(Text, nullable=True)  # [{start,end,speaker,confidence,text}, ...]
+    segments_json = Column(
+        Text, nullable=True
+    )  # [{start,end,speaker,confidence,text}, ...]
     duration_seconds = Column(Float, nullable=True)
-    status = Column(String, nullable=False, default="pending")  # pending|processing|ready|failed
+    status = Column(
+        String, nullable=False, default="pending"
+    )  # pending|processing|ready|failed
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )

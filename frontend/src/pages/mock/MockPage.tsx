@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MockSetup, type InterviewerStyle, type VoiceMode } from './MockSetup';
+import {
+  loadPreferredVoice,
+  MockSetup,
+  type InterviewerStyle,
+  type TtsVoice,
+  type VoiceMode,
+} from './MockSetup';
 import { MockLive } from './MockLive';
 import { toast } from '@/store/uiStore';
 import {
@@ -17,6 +23,7 @@ type Stage =
       conversationId: string;
       currentQuestion: string;
       voiceMode: VoiceMode;
+      ttsVoice: TtsVoice;
       /** Turns answered before this mount (resume path) — 0 for a fresh start. */
       resumedAnsweredCount: number;
       /** Concurrency token for the first answer (MOCK-3). */
@@ -71,6 +78,7 @@ export function MockPage() {
       conversationId: inProgress.conversationId,
       currentQuestion: inProgress.currentQuestion,
       voiceMode: 'hybrid',
+      ttsVoice: loadPreferredVoice(),
       resumedAnsweredCount: inProgress.answeredCount,
       questionMessageId: inProgress.questionMessageId,
     });
@@ -92,6 +100,7 @@ export function MockPage() {
     jd_text: string;
     interviewer_style: InterviewerStyle;
     voice_mode: VoiceMode;
+    tts_voice: TtsVoice;
   }) => {
     setStarting(true);
     try {
@@ -107,6 +116,7 @@ export function MockPage() {
         conversationId: started.conversation_id,
         currentQuestion: started.current_question,
         voiceMode: payload.voice_mode,
+        ttsVoice: payload.tts_voice,
         resumedAnsweredCount: 0,
         questionMessageId: started.question_message_id ?? null,
       });
@@ -151,6 +161,7 @@ export function MockPage() {
       recordId={stage.recordId}
       initialQuestion={stage.currentQuestion}
       voiceMode={stage.voiceMode}
+      ttsVoice={stage.ttsVoice}
       resumedAnsweredCount={stage.resumedAnsweredCount}
       initialQuestionMessageId={stage.questionMessageId}
       onFinished={onFinished}

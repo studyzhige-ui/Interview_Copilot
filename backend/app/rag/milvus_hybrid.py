@@ -17,6 +17,7 @@ to the caller's ``user_id`` pk. Postgres stays the fact source; Milvus is an
 index-only copy. This module owns the collection schemas directly, so no
 retrieval collection flows through LlamaIndex's vector-store abstraction.
 """
+
 from __future__ import annotations
 
 import logging
@@ -144,7 +145,9 @@ def _assert_collection_dim(client: Any, name: str) -> None:
         # best-effort (log + proceed) rather than throwing uncaught.
         dense_dim = int(dense_dim) if dense_dim is not None else None
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not introspect %s dense dim for validation: %s", name, exc)
+        logger.warning(
+            "Could not introspect %s dense dim for validation: %s", name, exc
+        )
         return
     if dense_dim is not None and dense_dim != settings.EMBEDDING_DIM:
         raise EmbeddingValidationError(
@@ -173,20 +176,30 @@ def ensure_collection(coll: HybridCollection) -> None:
         schema.add_field("user_id", DataType.INT64)
         for s in coll.scalars:
             schema.add_field(
-                s.name, DataType.VARCHAR, max_length=s.max_length, nullable=s.nullable,
+                s.name,
+                DataType.VARCHAR,
+                max_length=s.max_length,
+                nullable=s.nullable,
             )
         schema.add_field(
-            _TEXT_FIELD, DataType.VARCHAR, max_length=_TEXT_MAX,
-            enable_analyzer=True, analyzer_params=_ANALYZER_PARAMS,
+            _TEXT_FIELD,
+            DataType.VARCHAR,
+            max_length=_TEXT_MAX,
+            enable_analyzer=True,
+            analyzer_params=_ANALYZER_PARAMS,
         )
-        schema.add_field(_DENSE_FIELD, DataType.FLOAT_VECTOR, dim=settings.EMBEDDING_DIM)
+        schema.add_field(
+            _DENSE_FIELD, DataType.FLOAT_VECTOR, dim=settings.EMBEDDING_DIM
+        )
         schema.add_field(_SPARSE_FIELD, DataType.SPARSE_FLOAT_VECTOR)
-        schema.add_function(Function(
-            name="bm25_text_to_sparse",
-            function_type=FunctionType.BM25,
-            input_field_names=[_TEXT_FIELD],
-            output_field_names=[_SPARSE_FIELD],
-        ))
+        schema.add_function(
+            Function(
+                name="bm25_text_to_sparse",
+                function_type=FunctionType.BM25,
+                input_field_names=[_TEXT_FIELD],
+                output_field_names=[_SPARSE_FIELD],
+            )
+        )
         index_params = client.prepare_index_params()
         index_params.add_index(
             field_name=_DENSE_FIELD,
@@ -207,7 +220,8 @@ def ensure_collection(coll: HybridCollection) -> None:
         _ensured.add(coll.name)
         logger.info(
             "Created Milvus hybrid collection %s (dense dim=%s + server-side BM25 sparse)",
-            coll.name, settings.EMBEDDING_DIM,
+            coll.name,
+            settings.EMBEDDING_DIM,
         )
 
 
@@ -225,7 +239,9 @@ def validate_existing_dims(*colls: HybridCollection) -> None:
     try:
         client = _get_client()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Skipping startup dim validation; Milvus client unavailable: %s", exc)
+        logger.warning(
+            "Skipping startup dim validation; Milvus client unavailable: %s", exc
+        )
         return
     for coll in colls:
         try:
@@ -233,7 +249,8 @@ def validate_existing_dims(*colls: HybridCollection) -> None:
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Skipping startup dim validation for %s; Milvus unreachable: %s",
-                coll.name, exc,
+                coll.name,
+                exc,
             )
             return
         if exists:
@@ -291,19 +308,28 @@ def hybrid_search(
         return []
     expr = _scope_expr(user_pk, filters)
     dense_req = AnnSearchRequest(
-        data=[query_dense], anns_field=_DENSE_FIELD,
-        param={"metric_type": settings.MILVUS_SIMILARITY_METRIC,
-               "params": {"ef": settings.MILVUS_HNSW_EF_SEARCH}},
-        limit=top_k, expr=expr,
+        data=[query_dense],
+        anns_field=_DENSE_FIELD,
+        param={
+            "metric_type": settings.MILVUS_SIMILARITY_METRIC,
+            "params": {"ef": settings.MILVUS_HNSW_EF_SEARCH},
+        },
+        limit=top_k,
+        expr=expr,
     )
     sparse_req = AnnSearchRequest(
-        data=[query_text], anns_field=_SPARSE_FIELD,
+        data=[query_text],
+        anns_field=_SPARSE_FIELD,
         param={"metric_type": "BM25"},
-        limit=top_k, expr=expr,
+        limit=top_k,
+        expr=expr,
     )
     results = client.hybrid_search(
-        coll.name, [dense_req, sparse_req], ranker=RRFRanker(),
-        limit=top_k, output_fields=coll.output_fields,
+        coll.name,
+        [dense_req, sparse_req],
+        ranker=RRFRanker(),
+        limit=top_k,
+        output_fields=coll.output_fields,
     )
     hits = results[0] if results else []
     out: list[dict[str, Any]] = []

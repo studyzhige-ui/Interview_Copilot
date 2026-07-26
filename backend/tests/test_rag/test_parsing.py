@@ -4,6 +4,7 @@ The concrete parser wrappers load real files via LlamaIndex readers (not unit-
 tested here); these cover the join helper, candidate selection (key-gated), and
 the orchestration's fallback + parser_profile + empty handling with fakes.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -41,13 +42,15 @@ def test_join_documents_skips_empty_segment_without_offset_drift():
     advances the cursor, so the next span's char_start still indexes the join."""
     docs = [
         SimpleNamespace(text="aa", metadata={}),
-        SimpleNamespace(text="", metadata={}),   # dropped
+        SimpleNamespace(text="", metadata={}),  # dropped
         SimpleNamespace(text="cc", metadata={}),
     ]
     md, page_map = _join_documents(docs)
     assert md == "aa\n\ncc"
     assert len(page_map) == 2
-    assert md[page_map[1].char_start:page_map[1].char_end] == "cc"  # span indexes the join
+    assert (
+        md[page_map[1].char_start : page_map[1].char_end] == "cc"
+    )  # span indexes the join
 
 
 def _knobs(monkeypatch, *, key: bool, docling: bool, provider: str):
@@ -71,8 +74,12 @@ def test_candidates_degrade_to_lightweight_when_no_first_class(monkeypatch):
 def test_candidates_docling_primary(monkeypatch):
     _knobs(monkeypatch, key=False, docling=True, provider="docling")
     assert _ids(".pdf") == ["docling", "pymupdf", "simple_reader"]
-    assert _ids(".html") == ["docling", "beautifulsoup", "simple_reader"]  # docling first-class
-    assert _ids(".txt") == ["text", "simple_reader"]       # docling doesn't claim txt
+    assert _ids(".html") == [
+        "docling",
+        "beautifulsoup",
+        "simple_reader",
+    ]  # docling first-class
+    assert _ids(".txt") == ["text", "simple_reader"]  # docling doesn't claim txt
     # xlsx not first-class (docling->markdown-table would misroute the table
     # splitter; deferred to E4) -> dedicated openpyxl lightweight.
     assert _ids(".xlsx") == ["openpyxl", "simple_reader"]
@@ -98,8 +105,15 @@ def test_candidates_docling_primary_with_llama_fallback(monkeypatch):
 def test_candidates_selected_primary_unavailable_degrades(monkeypatch):
     # PARSER_PROVIDER=docling but docling not installed, with a key present.
     _knobs(monkeypatch, key=True, docling=False, provider="docling")
-    assert _ids(".pdf") == ["llamaparse", "pymupdf", "simple_reader"]  # falls to the available first-class
-    assert _ids(".xlsx") == ["openpyxl", "simple_reader"]  # no first-class -> dedicated lightweight
+    assert _ids(".pdf") == [
+        "llamaparse",
+        "pymupdf",
+        "simple_reader",
+    ]  # falls to the available first-class
+    assert _ids(".xlsx") == [
+        "openpyxl",
+        "simple_reader",
+    ]  # no first-class -> dedicated lightweight
 
 
 class _FakeParser:
@@ -120,8 +134,11 @@ class _FakeParser:
 
 def test_parse_document_uses_first_success(monkeypatch):
     good = ParseResult(markdown="ok text", parser_id="good", is_markdown=True)
-    monkeypatch.setattr(reg, "_candidates",
-                        lambda ext: [_FakeParser("good", TIER_FIRST_CLASS, result=good)])
+    monkeypatch.setattr(
+        reg,
+        "_candidates",
+        lambda ext: [_FakeParser("good", TIER_FIRST_CLASS, result=good)],
+    )
 
     out = reg.parse_document("x.pdf")
     assert out.markdown == "ok text" and out.parser_id == "good"
@@ -135,8 +152,11 @@ def test_parse_document_uses_first_success(monkeypatch):
 def test_parse_document_merges_parser_own_warnings(monkeypatch):
     """A parser's own ParseResult.warnings are surfaced in parser_profile."""
     result = ParseResult(markdown="ok", parser_id="p", warnings=["low text quality"])
-    monkeypatch.setattr(reg, "_candidates",
-                        lambda ext: [_FakeParser("p", TIER_FIRST_CLASS, result=result)])
+    monkeypatch.setattr(
+        reg,
+        "_candidates",
+        lambda ext: [_FakeParser("p", TIER_FIRST_CLASS, result=result)],
+    )
 
     out = reg.parse_document("x.pdf")
     assert out.parser_profile["warnings"] == ["low text quality"]
@@ -144,10 +164,14 @@ def test_parse_document_merges_parser_own_warnings(monkeypatch):
 
 def test_parse_document_falls_back_on_failure(monkeypatch):
     recovered = ParseResult(markdown="recovered", parser_id="lw")
-    monkeypatch.setattr(reg, "_candidates", lambda ext: [
-        _FakeParser("first", TIER_FIRST_CLASS, boom=True),
-        _FakeParser("lw", TIER_LIGHTWEIGHT, result=recovered),
-    ])
+    monkeypatch.setattr(
+        reg,
+        "_candidates",
+        lambda ext: [
+            _FakeParser("first", TIER_FIRST_CLASS, boom=True),
+            _FakeParser("lw", TIER_LIGHTWEIGHT, result=recovered),
+        ],
+    )
 
     out = reg.parse_document("x.pdf")
     assert out.parser_id == "lw"
@@ -156,19 +180,38 @@ def test_parse_document_falls_back_on_failure(monkeypatch):
 
 
 def test_parse_document_skips_empty_then_succeeds(monkeypatch):
-    monkeypatch.setattr(reg, "_candidates", lambda ext: [
-        _FakeParser("blank", TIER_FIRST_CLASS, result=ParseResult(markdown="   ", parser_id="blank")),
-        _FakeParser("lw", TIER_LIGHTWEIGHT, result=ParseResult(markdown="real", parser_id="lw")),
-    ])
+    monkeypatch.setattr(
+        reg,
+        "_candidates",
+        lambda ext: [
+            _FakeParser(
+                "blank",
+                TIER_FIRST_CLASS,
+                result=ParseResult(markdown="   ", parser_id="blank"),
+            ),
+            _FakeParser(
+                "lw",
+                TIER_LIGHTWEIGHT,
+                result=ParseResult(markdown="real", parser_id="lw"),
+            ),
+        ],
+    )
     out = reg.parse_document("x.pdf")
     assert out.parser_id == "lw" and out.parser_profile["fallback_used"] is True
 
 
 def test_parse_document_all_empty_raises(monkeypatch):
     from app.rag.cleaning import EmptyContentError
-    monkeypatch.setattr(reg, "_candidates", lambda ext: [
-        _FakeParser("x", TIER_LIGHTWEIGHT, result=ParseResult(markdown="   ", parser_id="x")),
-    ])
+
+    monkeypatch.setattr(
+        reg,
+        "_candidates",
+        lambda ext: [
+            _FakeParser(
+                "x", TIER_LIGHTWEIGHT, result=ParseResult(markdown="   ", parser_id="x")
+            ),
+        ],
+    )
     with pytest.raises(EmptyContentError):
         reg.parse_document("x.pdf")
 
@@ -202,6 +245,7 @@ def test_parser_provider_normalized(monkeypatch):
 
 def test_unknown_parser_provider_warns_and_uses_insertion_order(monkeypatch, caplog):
     import logging
+
     _knobs(monkeypatch, key=True, docling=True, provider="doclng")  # typo
     with caplog.at_level(logging.WARNING):
         ids = _ids(".pdf")
@@ -243,6 +287,7 @@ def test_candidates_first_class_then_lightweight_then_catchall(monkeypatch):
 
 def test_docx_parser_extracts_paragraphs(tmp_path):
     import docx
+
     path = tmp_path / "d.docx"
     document = docx.Document()
     document.add_paragraph("Hello world")
@@ -266,6 +311,7 @@ def test_docx_parser_raises_on_corrupt_file(tmp_path):
 def test_pptx_parser_extracts_slide_text(tmp_path):
     from pptx import Presentation
     from pptx.util import Inches
+
     path = tmp_path / "s.pptx"
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
@@ -280,6 +326,7 @@ def test_pptx_parser_extracts_slide_text(tmp_path):
 
 def test_xlsx_parser_self_describing_rows(tmp_path):
     from openpyxl import Workbook
+
     path = tmp_path / "x.xlsx"
     wb = Workbook()
     ws = wb.active
@@ -296,6 +343,7 @@ def test_xlsx_parser_self_describing_rows(tmp_path):
 def test_xlsx_parser_empty_workbook_yields_empty(tmp_path):
     """An empty / header-only workbook yields no text → parse_document moves on."""
     from openpyxl import Workbook
+
     path = tmp_path / "empty.xlsx"
     wb = Workbook()
     wb.active.append(["just", "headers"])  # header row only, no data rows
@@ -307,6 +355,7 @@ def test_xlsx_parser_multi_sheet_keeps_per_sheet_headers(tmp_path):
     """Multi-sheet workbook: each sheet's rows self-describe with its OWN header
     (the E1 multi-sheet delta is neutralized by self-describing rows)."""
     from openpyxl import Workbook
+
     path = tmp_path / "m.xlsx"
     wb = Workbook()
     s1 = wb.active
@@ -319,8 +368,8 @@ def test_xlsx_parser_multi_sheet_keeps_per_sheet_headers(tmp_path):
     wb.save(str(path))
 
     result = parsers.XlsxParser().parse(str(path))
-    assert "alpha: 1" in result.markdown   # S1 row self-describes with S1's header
-    assert "beta: 2" in result.markdown    # S2 row self-describes with S2's header
+    assert "alpha: 1" in result.markdown  # S1 row self-describes with S1's header
+    assert "beta: 2" in result.markdown  # S2 row self-describes with S2's header
 
 
 def test_html_parser_to_markdown_drops_noise(tmp_path):
@@ -332,7 +381,9 @@ def test_html_parser_to_markdown_drops_noise(tmp_path):
         encoding="utf-8",
     )
     result = parsers.HtmlParser().parse(str(path))
-    assert result.is_markdown is True   # Markdown -> MarkdownNodeParser (not HTMLNodeParser)
+    assert (
+        result.is_markdown is True
+    )  # Markdown -> MarkdownNodeParser (not HTMLNodeParser)
     assert "Real content" in result.markdown and "Heading" in result.markdown
     assert "menu links" not in result.markdown
     assert "var a=1" not in result.markdown and "color:red" not in result.markdown
@@ -344,6 +395,7 @@ def test_html_parse_to_chunks_keeps_content(tmp_path, monkeypatch):
     data loss (Docling-unavailable HTML fallback path)."""
     from llama_index.core import Document
     from app.rag import ingestion
+
     monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
 
     path = tmp_path / "p.html"
@@ -352,10 +404,15 @@ def test_html_parse_to_chunks_keeps_content(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     result = parsers.HtmlParser().parse(path.__fspath__())
-    doc = Document(text=result.markdown, metadata={
-        "source_kind": "user_upload", "user_id": 1, "file_name": "p.html",
-        "is_markdown_parsed": result.is_markdown,
-    })
+    doc = Document(
+        text=result.markdown,
+        metadata={
+            "source_kind": "user_upload",
+            "user_id": 1,
+            "file_name": "p.html",
+            "is_markdown_parsed": result.is_markdown,
+        },
+    )
     nodes = ingestion.get_optimal_nodes(doc)
 
     assert nodes, "HTML chunked to zero nodes — content lost"
@@ -379,10 +436,13 @@ def test_docling_parse_holds_lock_during_convert(monkeypatch):
     class _LockCheckingConverter:
         def convert(self, file_path):
             held["locked_during_convert"] = parsers._docling_lock.locked()
-            return SimpleNamespace(document=SimpleNamespace(
-                export_to_markdown=lambda: "ok", pages={}))
+            return SimpleNamespace(
+                document=SimpleNamespace(export_to_markdown=lambda: "ok", pages={})
+            )
 
-    monkeypatch.setattr(parsers, "_get_docling_converter", lambda: _LockCheckingConverter())
+    monkeypatch.setattr(
+        parsers, "_get_docling_converter", lambda: _LockCheckingConverter()
+    )
     DoclingParser().parse("x.pdf")
     assert held["locked_during_convert"] is True
 
@@ -390,6 +450,7 @@ def test_docling_parse_holds_lock_during_convert(monkeypatch):
 def test_docling_parser_exports_markdown(monkeypatch):
     """DoclingParser converts via the cached converter and returns its Markdown
     (converter mocked so no model download)."""
+
     class _FakeDoc:
         def export_to_markdown(self):
             return "# Title\n\nbody text"
@@ -418,8 +479,11 @@ def test_docling_failure_falls_back_through_registry(monkeypatch):
     # Real candidate list (docling first), but docling.parse() raises -> registry
     # records the warning and falls through to PyMuPDF/SimpleReader. Stub those so
     # the test doesn't touch real files.
-    monkeypatch.setattr(parsers.PyMuPDFParser, "parse",
-                        lambda self, fp: ParseResult(markdown="pdf text", parser_id="pymupdf"))
+    monkeypatch.setattr(
+        parsers.PyMuPDFParser,
+        "parse",
+        lambda self, fp: ParseResult(markdown="pdf text", parser_id="pymupdf"),
+    )
 
     out = reg.parse_document("x.pdf")
     assert out.parser_id == "pymupdf"
@@ -434,6 +498,7 @@ def test_llamaparse_supports_images():
     """LlamaParse claims images too (cloud OCR) so they route to it when it's
     the primary parser (plan §4.1.3 image matrix)."""
     from app.rag.parsing.parsers import LlamaParseParser
+
     p = LlamaParseParser()
     assert p.supports(".pdf") and p.supports(".docx")
     assert p.supports(".png") and p.supports(".jpeg") and p.supports(".tiff")
@@ -457,8 +522,10 @@ def test_ocr_enabled_requires_flag_and_engine(monkeypatch):
 def _fake_docling(monkeypatch, markdown="text"):
     class _FakeConverter:
         def convert(self, file_path):
-            return SimpleNamespace(document=SimpleNamespace(
-                export_to_markdown=lambda: markdown))
+            return SimpleNamespace(
+                document=SimpleNamespace(export_to_markdown=lambda: markdown)
+            )
+
     monkeypatch.setattr(parsers, "_get_docling_converter", lambda: _FakeConverter())
 
 
@@ -505,6 +572,7 @@ def test_parse_document_image_no_first_class_raises_friendly(monkeypatch):
     friendly EmptyContentError, never silently-indexed garbage. parse_document
     raises on the empty candidate list without ever opening the file."""
     from app.rag.cleaning import EmptyContentError
+
     _knobs(monkeypatch, key=False, docling=False, provider="docling")
     with pytest.raises(EmptyContentError):
         reg.parse_document("scan.tiff")
@@ -515,6 +583,7 @@ def test_parse_document_image_no_first_class_raises_friendly(monkeypatch):
 
 def test_llamaparse_supports_legacy_office():
     from app.rag.parsing.parsers import LlamaParseParser
+
     p = LlamaParseParser()
     assert p.supports(".doc") and p.supports(".ppt") and p.supports(".xls")
 
@@ -524,10 +593,10 @@ def test_candidates_legacy_office_first_class_only(monkeypatch):
     text catch-all (a raw .doc/.xls read is garbage). Docling doesn't claim legacy
     formats, so with a key it's [llamaparse]; without any first-class it's empty."""
     _knobs(monkeypatch, key=True, docling=True, provider="llamaparse")
-    assert _ids(".doc") == ["llamaparse"]   # docling doesn't claim legacy office
+    assert _ids(".doc") == ["llamaparse"]  # docling doesn't claim legacy office
     assert _ids(".xls") == ["llamaparse"]
     _knobs(monkeypatch, key=False, docling=True, provider="docling")
-    assert _ids(".ppt") == []               # no first-class for legacy, no catch-all
+    assert _ids(".ppt") == []  # no first-class for legacy, no catch-all
 
 
 def test_parse_legacy_office_via_llamaparse_direct(monkeypatch):
@@ -535,8 +604,11 @@ def test_parse_legacy_office_via_llamaparse_direct(monkeypatch):
     LibreOffice conversion, so legacy_conversion_used is absent."""
     _knobs(monkeypatch, key=True, docling=False, provider="llamaparse")
     monkeypatch.setattr(
-        parsers.LlamaParseParser, "parse",
-        lambda self, fp: ParseResult(markdown="legacy text", parser_id="llamaparse", is_markdown=True),
+        parsers.LlamaParseParser,
+        "parse",
+        lambda self, fp: ParseResult(
+            markdown="legacy text", parser_id="llamaparse", is_markdown=True
+        ),
     )
     out = reg.parse_document("old.doc")
     assert out.parser_id == "llamaparse" and out.markdown == "legacy text"
@@ -547,6 +619,7 @@ def test_parse_legacy_office_no_parser_raises_friendly(monkeypatch):
     """No LlamaParse AND no LibreOffice → a friendly error that names the fixes
     (install LibreOffice / convert to OOXML / configure LlamaParse)."""
     from app.rag.cleaning import EmptyContentError
+
     _knobs(monkeypatch, key=False, docling=False, provider="docling")
     monkeypatch.setattr(reg.shutil, "which", lambda _name: None)  # no soffice on PATH
     with pytest.raises(EmptyContentError) as exc:
@@ -561,11 +634,19 @@ def test_parse_legacy_office_converts_via_libreoffice(monkeypatch):
     _knobs(monkeypatch, key=False, docling=False, provider="docling")
     monkeypatch.setattr(reg.shutil, "which", lambda _name: "/usr/bin/soffice")
     # Stub the conversion (no real LibreOffice here) → a fake .docx path.
-    monkeypatch.setattr(reg, "_soffice_convert",
-                        lambda soffice, fp, target, outdir: "/tmp/converted.docx")
+    monkeypatch.setattr(
+        reg,
+        "_soffice_convert",
+        lambda soffice, fp, target, outdir: "/tmp/converted.docx",
+    )
     # Stub the modern .docx parse so the test doesn't touch a real file.
-    monkeypatch.setattr(parsers.DocxParser, "parse",
-                        lambda self, fp: ParseResult(markdown="converted body", parser_id="python_docx"))
+    monkeypatch.setattr(
+        parsers.DocxParser,
+        "parse",
+        lambda self, fp: ParseResult(
+            markdown="converted body", parser_id="python_docx"
+        ),
+    )
     out = reg.parse_document("old.doc")
     assert out.markdown == "converted body"
     assert out.parser_profile["legacy_conversion_used"] is True

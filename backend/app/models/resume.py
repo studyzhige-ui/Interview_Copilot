@@ -12,6 +12,7 @@ table is created/replaced and parsed into ``raw_text_snapshot`` /
 the time of use and never re-read this row, so editing a resume can't rewrite
 history.
 """
+
 import uuid
 from datetime import datetime
 
@@ -64,11 +65,16 @@ class Resume(Base):
     # Immutable original-text snapshot (business records snapshot from this).
     raw_text_snapshot = Column(Text, nullable=True)
     structured_json = Column(Text, nullable=True)
-    parse_status = Column(String, nullable=False, default="pending")  # pending/ready/failed
+    parse_status = Column(
+        String, nullable=False, default="pending"
+    )  # pending/ready/failed
     parse_error = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
     )
     # Soft delete. Only ``archived_at IS NULL`` rows count toward the
     # max-two / default rules and show on the personal-info page.

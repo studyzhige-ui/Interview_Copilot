@@ -50,12 +50,15 @@ def _clean_json_text(raw: str) -> str:
     return cleaned.strip()
 
 
-async def generate_comprehensive_report(limit: int = 20, user_id: str | None = None) -> dict:
+async def generate_comprehensive_report(
+    limit: int = 20, user_id: str | None = None
+) -> dict:
     if not user_id:
         return {"status": "empty", "message": "missing user id"}
 
     try:
         from app.db.database import SessionLocal
+
         with SessionLocal() as db:
             ability_records = _extract_ability_records(db, user_id=user_id)
         if not ability_records:
@@ -133,29 +136,39 @@ def _normalize_report(parsed: dict, source_count: int = 0) -> dict:
     overall = round(sum(a["v"] for a in axes) / len(axes), 1) if axes else 0
     strongest = max(axes, key=lambda a: a["v"])["k"] if axes else ""
 
-    weaknesses_raw = parsed.get("weaknesses") if isinstance(parsed.get("weaknesses"), list) else []
+    weaknesses_raw = (
+        parsed.get("weaknesses") if isinstance(parsed.get("weaknesses"), list) else []
+    )
     weaknesses: list[dict] = []
     for w in weaknesses_raw:
         if not isinstance(w, dict):
             continue
-        weaknesses.append({
-            "k": str(w.get("topic", "") or w.get("k", "")),
-            "v": float(w.get("v", 0) or 0),
-            "why": str(w.get("flaw", "") or w.get("why", "")),
-            "plan": str(w.get("plan", "")),
-            "docs": w.get("docs", []) if isinstance(w.get("docs"), list) else [],
-            "practice": w.get("practice", []) if isinstance(w.get("practice"), list) else [],
-        })
+        weaknesses.append(
+            {
+                "k": str(w.get("topic", "") or w.get("k", "")),
+                "v": float(w.get("v", 0) or 0),
+                "why": str(w.get("flaw", "") or w.get("why", "")),
+                "plan": str(w.get("plan", "")),
+                "docs": w.get("docs", []) if isinstance(w.get("docs"), list) else [],
+                "practice": w.get("practice", [])
+                if isinstance(w.get("practice"), list)
+                else [],
+            }
+        )
 
-    strengths_raw = parsed.get("strengths") if isinstance(parsed.get("strengths"), list) else []
+    strengths_raw = (
+        parsed.get("strengths") if isinstance(parsed.get("strengths"), list) else []
+    )
     strengths: list[dict] = []
     for s in strengths_raw:
         if not isinstance(s, dict):
             continue
-        strengths.append({
-            "topic": str(s.get("topic", "")),
-            "evidence": str(s.get("evidence", "")),
-        })
+        strengths.append(
+            {
+                "topic": str(s.get("topic", "")),
+                "evidence": str(s.get("evidence", "")),
+            }
+        )
 
     return {
         "status": "success",

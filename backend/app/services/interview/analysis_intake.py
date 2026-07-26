@@ -10,6 +10,7 @@ maps them to 404s. Snapshot extraction failures are non-fatal (the record
 is still created without the snapshot) — the caller decides how loudly to
 log them.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -95,7 +96,9 @@ async def resolve_resume_context(
         from app.services.resume import resume_entity_service
 
         resume = resume_entity_service.get_owned_resume(
-            db, resume_id=resume_id, user_id=user_id,
+            db,
+            resume_id=resume_id,
+            user_id=user_id,
         )
         if resume is None:
             raise ResumeNotFound(resume_id)
@@ -105,8 +108,10 @@ async def resolve_resume_context(
         ctx.resume_text = resume.raw_text_snapshot or ""
     elif resume_file_asset_id:
         resume_upload = get_owned_file_asset(
-            db, file_asset_id=resume_file_asset_id,
-            user_id=user_id, purpose="resume",
+            db,
+            file_asset_id=resume_file_asset_id,
+            user_id=user_id,
+            purpose="resume",
         )
         if resume_upload is None:
             raise ResumeUploadNotFound(resume_file_asset_id)
@@ -120,7 +125,10 @@ async def resolve_resume_context(
         # offload so the caller's event loop isn't pinned. Non-fatal.
         try:
             ctx.resume_text = await asyncio.to_thread(
-                extract_text_snapshot, db, resume_upload.id, user_id,
+                extract_text_snapshot,
+                db,
+                resume_upload.id,
+                user_id,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Resume snapshot extraction failed: %s", exc)
@@ -143,18 +151,29 @@ async def resolve_jd_context(
     used_asset_id: Optional[str] = None
     if not text and jd_file_asset_id:
         jd_upload = get_owned_file_asset(
-            db, file_asset_id=jd_file_asset_id,
-            user_id=user_id, purpose="jd",
+            db,
+            file_asset_id=jd_file_asset_id,
+            user_id=user_id,
+            purpose="jd",
         )
         if jd_upload is not None:
             # Confirm-on-consume; a failed JD upload just means no JD text.
             jd_upload = ensure_uploaded(db, jd_upload)
-        if jd_upload is not None and jd_upload.upload_status in READABLE_UPLOAD_STATUSES:
+        if (
+            jd_upload is not None
+            and jd_upload.upload_status in READABLE_UPLOAD_STATUSES
+        ):
             used_asset_id = jd_upload.id
             try:
-                text = await asyncio.to_thread(
-                    extract_text_snapshot, db, jd_upload.id, user_id,
-                ) or ""
+                text = (
+                    await asyncio.to_thread(
+                        extract_text_snapshot,
+                        db,
+                        jd_upload.id,
+                        user_id,
+                    )
+                    or ""
+                )
             except Exception:  # noqa: BLE001
                 text = ""
     return text, used_asset_id
@@ -202,7 +221,8 @@ def create_record_and_dispatch(
 
     try:
         task = process_interview_analysis.delay(
-            record.id, language=normalize_language(language),
+            record.id,
+            language=normalize_language(language),
         )
     except Exception as exc:  # noqa: BLE001 — broker down / misconfigured
         # The record + consumed upload are already committed. Without this
@@ -212,9 +232,12 @@ def create_record_and_dispatch(
         # there is no reanalyze endpoint for upload records).
         logger.error("analysis dispatch failed for record %s: %s", record.id, exc)
         interview_record_service.set_status(
-            record.id, STATUS_FAILED,
+            record.id,
+            STATUS_FAILED,
             error_message="分析任务派发失败（任务队列暂不可用），请稍后重试。",
         )
         raise
-    interview_record_service.set_status(record.id, STATUS_PENDING, celery_task_id=task.id)
+    interview_record_service.set_status(
+        record.id, STATUS_PENDING, celery_task_id=task.id
+    )
     return record, task

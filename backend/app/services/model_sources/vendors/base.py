@@ -15,6 +15,7 @@ describing the URL path, auth style, response shape, and an optional
     job; this layer just raises ``VendorFetchFailed`` on terminal
     failure so the pipeline can decide what to serve.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -65,6 +66,7 @@ class VendorAdapterSpec:
     deviations (path, auth header, response key); a few (Anthropic,
     Gemini) need the extras below.
     """
+
     # PROVIDERS dict id — joins back to provider defaults for api_base.
     provider: str
 
@@ -111,7 +113,9 @@ class VendorAdapterSpec:
     # image / audio / video / safety / etc. entries the vendor includes
     # in /v1/models. None = keep every row.
     chat_filter: Callable[[dict[str, Any], str], bool] | None = field(
-        default=None, compare=False, hash=False,
+        default=None,
+        compare=False,
+        hash=False,
     )
 
     # Default-when-vendor-doesn't-publish-it values.
@@ -174,7 +178,8 @@ def _coerce_int(val: object, default: int) -> int:
 
 
 def _build_entry(
-    spec: VendorAdapterSpec, raw: dict[str, Any],
+    spec: VendorAdapterSpec,
+    raw: dict[str, Any],
 ) -> tuple[ModelEntry, int] | None:
     """Convert one vendor row to a ModelEntry + recency key. Returns
     None if the row is unusable (missing id, fails chat filter)."""
@@ -183,7 +188,7 @@ def _build_entry(
         return None
     bare = mid
     if spec.strip_id_prefix and bare.startswith(spec.strip_id_prefix):
-        bare = bare[len(spec.strip_id_prefix):]
+        bare = bare[len(spec.strip_id_prefix) :]
     if spec.chat_filter and not spec.chat_filter(raw, bare):
         return None
 
@@ -200,19 +205,23 @@ def _build_entry(
     context_window = spec.fallback_context_window
     if spec.context_window_field:
         context_window = _coerce_int(
-            raw.get(spec.context_window_field), spec.fallback_context_window,
+            raw.get(spec.context_window_field),
+            spec.fallback_context_window,
         )
     max_output = spec.fallback_max_output
     if spec.max_output_field:
         max_output = _coerce_int(
-            raw.get(spec.max_output_field), spec.fallback_max_output,
+            raw.get(spec.max_output_field),
+            spec.fallback_max_output,
         )
 
     # Function-calling support: some vendors flag it explicitly (Gemini
     # has ``supportedGenerationMethods`` with "generateContent"; OpenAI
     # doesn't ship a flag at all). Default to the spec's fallback,
     # which is True for chat models since most modern ones support it.
-    supports_fc = bool(raw.get("supports_function_calling", spec.fallback_supports_function_calling))
+    supports_fc = bool(
+        raw.get("supports_function_calling", spec.fallback_supports_function_calling)
+    )
 
     supports_vision = bool(raw.get("supports_vision", False))
     # Gemini ships ``supportedGenerationMethods`` array; if it includes
@@ -220,7 +229,9 @@ def _build_entry(
     # all vendors expose this so we just OR with whatever they do say.
     methods = raw.get("supportedGenerationMethods")
     if isinstance(methods, list):
-        supports_vision = supports_vision or any("vision" in m.lower() for m in methods if isinstance(m, str))
+        supports_vision = supports_vision or any(
+            "vision" in m.lower() for m in methods if isinstance(m, str)
+        )
 
     entry = ModelEntry(
         provider=spec.provider,
@@ -282,12 +293,16 @@ async def fetch_one_vendor(
                 await asyncio.sleep(0.5)
                 logger.warning(
                     "%s: fetch attempt %d failed (%s) — retrying",
-                    spec.provider, attempt + 1, _redact(exc),
+                    spec.provider,
+                    attempt + 1,
+                    _redact(exc),
                 )
                 continue
             logger.error(
                 "%s: fetch exhausted %d attempts: %s",
-                spec.provider, retries + 1, _redact(exc),
+                spec.provider,
+                retries + 1,
+                _redact(exc),
             )
             raise VendorFetchFailed(
                 f"{spec.provider}: fetch failed after {retries + 1} attempts: {_redact(exc)}",

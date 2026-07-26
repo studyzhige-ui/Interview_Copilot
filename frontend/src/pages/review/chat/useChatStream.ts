@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { toast } from '@/store/uiStore';
 import { extractErr } from '@/api/client';
-import { streamChatSSE } from '@/api/chat';
+import { cancelChatTurn, streamChatTurn } from '@/api/chat';
 import type { ToolResultBlock, ToolUseBlock } from '@/types/api';
 import type { Mode, SessionRuntime } from './types';
 
@@ -22,18 +22,19 @@ export function useChatStream({
   bump: () => void;
   mode: Mode;
 }) {
-  const sendMessage = useCallback((payload: string) => {
+  const startStream = useCallback((payload: string | null, existingTurnId?: string) => {
     if (!activeSessionId) return;
     const r = getRuntime(activeSessionId);
-    if (r.streaming) return;
+    if (r.streaming || (r.turnId && !existingTurnId)) return;
 
-    r.messages.push({ role: 'user', content: payload });
+    if (payload !== null) r.messages.push({ role: 'user', content: payload });
     r.partial = '';
     r.inflightBlocks = [];
     r.inflightSources = [];
     r.status = '';
     r.hidePartialBar = false;
     r.streaming = true;
+    r.turnId = existingTurnId ?? null;
     bump();
 
     const ac = new AbortController();
@@ -52,10 +53,10 @@ export function useChatStream({
       rt.partial = '';
     };
 
-    const finalize = (errMsg?: string) => {
+    const finalize = (errMsg?: string, detached = false) => {
       const rt = getRuntime(sid);
-      flushPartial(rt);
-      if (rt.inflightBlocks.length > 0) {
+      if (!detached) flushPartial(rt);
+      if (!detached && rt.inflightBlocks.length > 0) {
         // Build a flat-content fallback (last text block's body) so any
         // surface that ignores ``blocks`` still has something to show.
         const lastText = [...rt.inflightBlocks].reverse()
@@ -76,10 +77,11 @@ export function useChatStream({
       rt.streaming = false;
       rt.hidePartialBar = false;
       rt.abort = null;
+      if (!detached) rt.turnId = null;
       bump();
     };
 
-    streamChatSSE(sid, payload, {
+    streamChatTurn(sid, payload ?? '', {
       onStatus: (status) => {
         const rt = getRuntime(sid);
         rt.status = status;
@@ -116,7 +118,7 @@ export function useChatStream({
         rt.streaming = true;
         bump();
       },
-      onToolStart: ({ tool, tool_call_id, args_summary, input }) => {
+      onToolStart: ({ tool, tool_call_id, input }) => {
         const rt = getRuntime(sid);
         // Flush any text-before-tool so it lands BEFORE the tool card.
         flushPartial(rt);
@@ -126,21 +128,13 @@ export function useChatStream({
         // ``/chat/transcript`` shape (which already carried
         // ``tc.id``) — pre/post-reload are now byte-identical.
         //
-        // The BlockChain renderer still pairs ``tool_use`` /
-        // ``tool_result`` blocks by ADJACENCY today (use[i] →
-        // result[i+1]); the wire id is groundwork for switching to
-        // id-keyed pairing once an agent dispatches tools in
-        // parallel and adjacency becomes unsafe. Empty string from a
-        // pre-P1-C backend renders the same as it did then.
         const block: ToolUseBlock = {
           type: 'tool_use',
           id: tool_call_id,
           name: tool,
-          // live == replay (AGT-5): the backend now streams the full
-          // parsed input dict alongside the display summary, matching
-          // the persisted tool_use block byte for byte. Older backends
-          // without ``input`` fall back to the summary shim.
-          input: input ?? (args_summary ? { _args_summary: args_summary } : {}),
+          // live == replay: the event and persisted block share the
+          // same parsed input dictionary.
+          input,
         };
         rt.inflightBlocks.push(block);
         rt.status = `🔧 ${tool}`;
@@ -187,30 +181,52 @@ export function useChatStream({
       // the server persists it onto conversations.mode (AGT-4), so a
       // fresh device resumes the same mode without localStorage.
       mode: mode === 'AGENT' ? 'agent' : 'chat',
+      turnId: existingTurnId,
+      onTurnCreated: (turnId) => {
+        getRuntime(sid).turnId = turnId;
+      },
     })
       .then(() => finalize())
       .catch((err: unknown) => {
-        if ((err as { name?: string })?.name === 'AbortError') { finalize(); return; }
-        finalize(extractErr(err, '连接失败'));
+        if ((err as { name?: string })?.name === 'AbortError') {
+          finalize(undefined, Boolean(getRuntime(sid).turnId));
+          return;
+        }
+        const detached = Boolean(getRuntime(sid).turnId);
+        finalize(detached ? undefined : extractErr(err, '连接失败'), detached);
         toast.error(extractErr(err, '发送失败'));
       });
   }, [activeSessionId, getRuntime, bump, mode]);
 
+  const sendMessage = useCallback(
+    (payload: string) => startStream(payload),
+    [startStream],
+  );
+
+  const resumeTurn = useCallback(
+    (turnId: string) => startStream(null, turnId),
+    [startStream],
+  );
+
   /**
-   * Abort the in-flight stream for the active session. Fires the
-   * AbortController that ``sendMessage()`` registered on the runtime; the
-   * SSE reader's ``fetch`` rejects with AbortError, the promise's
-   * ``.catch`` falls into the abort branch, and ``finalize()`` runs
-   * normally — so anything streamed so far becomes the assistant
-   * message and the panel is ready for the next turn.
-   *
-   * No-op when no session is selected or no stream is in flight.
+   * Abort the active server-side turn and close the local subscription.
    */
   const cancel = useCallback(() => {
     if (!activeSessionId) return;
     const rt = getRuntime(activeSessionId);
-    rt.abort?.abort();
+    const abort = rt.abort;
+    if (rt.turnId) {
+      const turnId = rt.turnId;
+      void cancelChatTurn(activeSessionId, turnId)
+        .catch(() => { /* the local abort still takes effect */ })
+        .finally(() => {
+          getRuntime(activeSessionId).turnId = null;
+          abort?.abort();
+        });
+      return;
+    }
+    abort?.abort();
   }, [activeSessionId, getRuntime]);
 
-  return { sendMessage, cancel };
+  return { sendMessage, resumeTurn, cancel };
 }

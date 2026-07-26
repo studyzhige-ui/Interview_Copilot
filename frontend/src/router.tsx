@@ -34,6 +34,9 @@ const LibraryPage = lazy(() =>
 const ModelsPage = lazy(() =>
   import('@/pages/models/ModelsPage').then((m) => ({ default: m.ModelsPage })),
 );
+const CapabilitiesPage = lazy(() =>
+  import('@/pages/capabilities/CapabilitiesPage').then((m) => ({ default: m.CapabilitiesPage })),
+);
 const ProfilePage = lazy(() =>
   import('@/pages/me/ProfilePage').then((m) => ({ default: m.ProfilePage })),
 );
@@ -83,6 +86,7 @@ export const router = createBrowserRouter([
       { path: '/analytics', element: <AnalyticsPage /> },
       { path: '/library', element: <LibraryPage /> },
       { path: '/models', element: <ModelsPage /> },
+      { path: '/capabilities', element: <CapabilitiesPage /> },
       { path: '/me', element: <ProfilePage /> },
     ],
   },

@@ -22,8 +22,10 @@ class TestReadUrlImprovements:
         class _FakeClient:
             async def __aenter__(self):
                 return self
+
             async def __aexit__(self, *a):
                 pass
+
             async def get(self, *a, **kw):
                 return _FakeResponse()
 
@@ -35,8 +37,11 @@ class TestReadUrlImprovements:
 
         from app.agent_runtime.tool_registry import AgentToolContext
         from app.agent_runtime.tools.web import ReadUrlArgs, _read_url_handler
+
         ctx = AgentToolContext(user_id="alice", session_id="s1")
-        result = asyncio.run(_read_url_handler(ReadUrlArgs(url="https://example.com"), ctx))
+        result = asyncio.run(
+            _read_url_handler(ReadUrlArgs(url="https://example.com"), ctx)
+        )
         assert "error" not in result
         assert result["content"].startswith("[External web content below")
         assert "Hello world" in result["content"]
@@ -54,8 +59,10 @@ class TestReadUrlImprovements:
         class _FakeClient:
             async def __aenter__(self):
                 return self
+
             async def __aexit__(self, *a):
                 pass
+
             async def get(self, *a, **kw):
                 return _FakeResponse()
 
@@ -67,8 +74,11 @@ class TestReadUrlImprovements:
 
         from app.agent_runtime.tool_registry import AgentToolContext
         from app.agent_runtime.tools.web import ReadUrlArgs, _read_url_handler
+
         ctx = AgentToolContext(user_id="alice", session_id="s1")
-        result = asyncio.run(_read_url_handler(ReadUrlArgs(url="https://example.com/huge"), ctx))
+        result = asyncio.run(
+            _read_url_handler(ReadUrlArgs(url="https://example.com/huge"), ctx)
+        )
         assert "error" in result
         assert "too large" in result["error"].lower()
 
@@ -86,8 +96,10 @@ class TestReadUrlImprovements:
         class _FakeClient:
             async def __aenter__(self):
                 return self
+
             async def __aexit__(self, *a):
                 pass
+
             async def get(self, *a, **kw):
                 return _FakeResponse()
 
@@ -99,14 +111,18 @@ class TestReadUrlImprovements:
 
         from app.agent_runtime.tool_registry import AgentToolContext
         from app.agent_runtime.tools.web import ReadUrlArgs, _read_url_handler
+
         ctx = AgentToolContext(user_id="alice", session_id="s1")
-        result = asyncio.run(_read_url_handler(ReadUrlArgs(url="https://example.com/long"), ctx))
+        result = asyncio.run(
+            _read_url_handler(ReadUrlArgs(url="https://example.com/long"), ctx)
+        )
         assert result["truncated"] is True
         assert result["char_count"] == _MAX_CONTENT_CHARS
 
     def test_html_noise_tags_stripped(self, monkeypatch):
         """HTML noise tags (nav, footer, script) must be stripped."""
         from app.agent_runtime.tools.web import _html_to_markdown
+
         html = """
         <html><body>
         <nav><a href="/">Home</a><a href="/about">About</a></nav>
@@ -126,13 +142,16 @@ class TestWebSearchErrorHandling:
 
     def test_timeout_returns_error_dict(self, monkeypatch):
         import httpx as _httpx
+
         monkeypatch.setenv("TAVILY_API_KEY", "test-key")
 
         class _TimeoutClient:
             async def __aenter__(self):
                 return self
+
             async def __aexit__(self, *a):
                 pass
+
             async def post(self, *a, **kw):
                 raise _httpx.TimeoutException("timed out")
 
@@ -140,9 +159,13 @@ class TestWebSearchErrorHandling:
 
         from app.agent_runtime.tool_registry import AgentToolContext
         from app.agent_runtime.tools.web import WebSearchArgs, _web_search_handler
+
         ctx = AgentToolContext(user_id="alice", session_id="s1")
-        result = asyncio.run(_web_search_handler(
-            WebSearchArgs(query="test"), ctx,
-        ))
+        result = asyncio.run(
+            _web_search_handler(
+                WebSearchArgs(query="test"),
+                ctx,
+            )
+        )
         assert "error" in result
         assert "timed out" in result["error"].lower()

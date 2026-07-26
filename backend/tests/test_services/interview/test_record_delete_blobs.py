@@ -1,6 +1,7 @@
 """UP-2: deleting an interview record queues blob deletes for the storage
 it exclusively owns (audio recording, ad-hoc JD/resume uploads) instead of
 leaving 500MB orphans in MinIO forever."""
+
 from __future__ import annotations
 
 import pytest
@@ -69,7 +70,10 @@ def test_delete_record_cascade_queues_owned_blob_deletes(db_session):
 
 def test_delete_record_cascade_without_assets_is_clean(db_session):
     record = InterviewRecord(
-        id="ir_plain", user_id=_pk(db_session), source="mock", status="review_ready",
+        id="ir_plain",
+        user_id=_pk(db_session),
+        source="mock",
+        status="review_ready",
     )
     db_session.add(record)
     db_session.commit()
@@ -87,9 +91,14 @@ def test_delete_record_cascade_spares_assets_other_entities_reference(db_session
 
     shared = _asset(db_session, "fa_shared_resume", "resume")
     _asset(db_session, "fa_audio2", "interview_audio")
-    db_session.add(Resume(
-        id="res_1", user_id=_pk(db_session), file_asset_id=shared.id, title="我的简历",
-    ))
+    db_session.add(
+        Resume(
+            id="res_1",
+            user_id=_pk(db_session),
+            file_asset_id=shared.id,
+            title="我的简历",
+        )
+    )
     record = InterviewRecord(
         id="ir_shared",
         user_id=_pk(db_session),

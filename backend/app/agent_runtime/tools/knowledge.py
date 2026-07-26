@@ -18,13 +18,16 @@ logger = logging.getLogger(__name__)
 
 class SearchKnowledgeArgs(BaseModel):
     query: str = Field(
-        ..., min_length=1, max_length=500,
+        ...,
+        min_length=1,
+        max_length=500,
         description="Search query for the knowledge base.",
     )
 
 
 async def _search_knowledge_handler(
-    args: SearchKnowledgeArgs, ctx: AgentToolContext,
+    args: SearchKnowledgeArgs,
+    ctx: AgentToolContext,
 ) -> dict[str, Any]:
     try:
         from app.rag.knowledge_retriever import knowledge_retriever
@@ -41,16 +44,19 @@ async def _search_knowledge_handler(
     chunks = []
     if result and result.chunks:
         for chunk in result.chunks[:5]:
-            chunks.append({
-                "text": chunk.get("text", "")[:1500],
-                "source": chunk.get("source_kind", "knowledge"),
-                "document_title": chunk.get("document_title"),
-                "chunk_id": chunk.get("chunk_id"),
-                "score": (
-                    round(float(chunk.get("score", 0)), 3)
-                    if chunk.get("score") is not None else None
-                ),
-            })
+            chunks.append(
+                {
+                    "text": chunk.get("text", "")[:1500],
+                    "source": chunk.get("source_kind", "knowledge"),
+                    "document_title": chunk.get("document_title"),
+                    "chunk_id": chunk.get("chunk_id"),
+                    "score": (
+                        round(float(chunk.get("score", 0)), 3)
+                        if chunk.get("score") is not None
+                        else None
+                    ),
+                }
+            )
 
     return {
         "query": args.query,
@@ -60,17 +66,19 @@ async def _search_knowledge_handler(
     }
 
 
-registry.register(ToolEntry(
-    name="search_knowledge",
-    description=(
-        "Search the user's knowledge corpus (interview Q&A bank, "
-        "uploaded official docs, anything they've ingested) for "
-        "technical concepts, algorithms, system design topics, etc. "
-        "Reranker decides which chunks are most relevant — no source "
-        "filtering needed at call time."
-    ),
-    args_model=SearchKnowledgeArgs,
-    handler=_search_knowledge_handler,
-    max_result_chars=10_000,
-    emoji="📚",
-))
+registry.register(
+    ToolEntry(
+        name="search_knowledge",
+        description=(
+            "Search the user's knowledge corpus (interview Q&A bank, "
+            "uploaded official docs, anything they've ingested) for "
+            "technical concepts, algorithms, system design topics, etc. "
+            "Reranker decides which chunks are most relevant — no source "
+            "filtering needed at call time."
+        ),
+        args_model=SearchKnowledgeArgs,
+        handler=_search_knowledge_handler,
+        max_result_chars=10_000,
+        emoji="📚",
+    )
+)

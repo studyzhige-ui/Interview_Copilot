@@ -76,7 +76,9 @@ class ResumeService:
         try:
             query = db.query(ResumeSection).filter(ResumeSection.resume_id == resume_id)
             if user_id:
-                query = query.filter(ResumeSection.user_id == resolve_user_pk(db, user_id))
+                query = query.filter(
+                    ResumeSection.user_id == resolve_user_pk(db, user_id)
+                )
             return query.order_by(ResumeSection.order_idx.asc()).all()
         finally:
             db.close()
@@ -114,7 +116,9 @@ class ResumeService:
     # ── Internal ──────────────────────────────────────────────────────
 
     async def _parse_with_llm(
-        self, resume_text: str, user_id: str | None = None,
+        self,
+        resume_text: str,
+        user_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Use LLM to split resume text into structured sections."""
         prompt = PARSE_PROMPT.format(resume_text=resume_text)
@@ -149,7 +153,14 @@ class ResumeService:
         resume_id: str,
         sections_data: list[dict[str, Any]],
     ) -> list[ResumeSection]:
-        valid_types = {"summary", "project", "experience", "education", "skill", "other"}
+        valid_types = {
+            "summary",
+            "project",
+            "experience",
+            "education",
+            "skill",
+            "other",
+        }
         db: Session = SessionLocal()
         persisted: list[ResumeSection] = []
         try:
@@ -162,6 +173,7 @@ class ResumeService:
                 ResumeSection.user_id == user_pk,
             ).delete()
             from app.services.resume.resume_vector_service import resume_vector_service
+
             resume_vector_service.delete_by_resume(resume_id)
 
             for order_idx, item in enumerate(sections_data):
@@ -173,7 +185,9 @@ class ResumeService:
                 if not content:
                     continue
                 metadata = item.get("metadata")
-                metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
+                metadata_json = (
+                    json.dumps(metadata, ensure_ascii=False) if metadata else None
+                )
 
                 section = ResumeSection(
                     id=_generate_section_id(),

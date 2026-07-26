@@ -5,6 +5,7 @@ The mock-start flow creates one runtime row per interview (atomically with the
 end it. This service is the single home for those transitions so the runtime
 never drifts (e.g. two ``in_progress`` rows for one record).
 """
+
 from __future__ import annotations
 
 import json
@@ -84,7 +85,9 @@ def get_active_runtime(db: Session, *, user_id: str) -> MockInterviewRuntime | N
 
 
 def get_runtime_for_record(
-    db: Session, *, interview_record_id: str,
+    db: Session,
+    *,
+    interview_record_id: str,
 ) -> MockInterviewRuntime | None:
     return (
         db.query(MockInterviewRuntime)
@@ -126,7 +129,11 @@ def advance_runtime(
 
 
 def set_status(
-    db: Session, runtime: MockInterviewRuntime, status: str, *, commit: bool = True,
+    db: Session,
+    runtime: MockInterviewRuntime,
+    status: str,
+    *,
+    commit: bool = True,
 ) -> MockInterviewRuntime:
     """Transition status (e.g. processing_review / completed / review_failed).
 
@@ -145,7 +152,9 @@ def set_status(
     return runtime
 
 
-def delete_runtime(db: Session, runtime: MockInterviewRuntime, *, commit: bool = True) -> None:
+def delete_runtime(
+    db: Session, runtime: MockInterviewRuntime, *, commit: bool = True
+) -> None:
     """Hard-delete on active abandon (the record/conversation are cleaned up
     by the caller in the same transaction)."""
     db.delete(runtime)

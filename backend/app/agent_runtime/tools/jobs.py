@@ -46,7 +46,8 @@ class SearchJobsArgs(BaseModel):
 
 
 async def _search_jobs_handler(
-    args: SearchJobsArgs, _ctx: AgentToolContext,
+    args: SearchJobsArgs,
+    _ctx: AgentToolContext,
 ) -> dict[str, Any]:
     target_sites = _lever_sites()
     if not target_sites:
@@ -84,17 +85,19 @@ async def _search_jobs_handler(
                         continue
                     if not _matches_keywords(title, desc, args.keywords):
                         continue
-                    jobs.append({
-                        "site": site,
-                        "job_id": _safe_text(item.get("id")),
-                        "title": title,
-                        "location": loc,
-                        "team": _safe_text(
-                            (item.get("categories") or {}).get("team"),
-                        ),
-                        "hosted_url": _safe_text(item.get("hostedUrl")),
-                        "summary": desc[:280],
-                    })
+                    jobs.append(
+                        {
+                            "site": site,
+                            "job_id": _safe_text(item.get("id")),
+                            "title": title,
+                            "location": loc,
+                            "team": _safe_text(
+                                (item.get("categories") or {}).get("team"),
+                            ),
+                            "hosted_url": _safe_text(item.get("hostedUrl")),
+                            "summary": desc[:280],
+                        }
+                    )
                     if len(jobs) >= args.limit:
                         break
                 if len(jobs) >= args.limit:
@@ -121,10 +124,7 @@ async def _fetch_detail(job_id: str, sites: list[str]) -> dict[str, Any]:
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             for site in sites:
-                url = (
-                    f"{settings.LEVER_API_BASE}/postings/{site}/{job_id}"
-                    "?mode=json"
-                )
+                url = f"{settings.LEVER_API_BASE}/postings/{site}/{job_id}?mode=json"
                 try:
                     resp = await client.get(url)
                 except httpx.TimeoutException:
@@ -164,16 +164,18 @@ async def _fetch_detail(job_id: str, sites: list[str]) -> dict[str, Any]:
     return {"error": "job not found", "job_id": job_id}
 
 
-registry.register(ToolEntry(
-    name="search_jobs",
-    description=(
-        "Search job postings from configured Lever company pages. "
-        "Use keywords to find positions; optionally filter by city. "
-        "Set job_id to fetch a specific posting's full description."
-    ),
-    args_model=SearchJobsArgs,
-    handler=_search_jobs_handler,
-    check_fn=_jobs_available,
-    max_result_chars=12_000,
-    emoji="💼",
-))
+registry.register(
+    ToolEntry(
+        name="search_jobs",
+        description=(
+            "Search job postings from configured Lever company pages. "
+            "Use keywords to find positions; optionally filter by city. "
+            "Set job_id to fetch a specific posting's full description."
+        ),
+        args_model=SearchJobsArgs,
+        handler=_search_jobs_handler,
+        check_fn=_jobs_available,
+        max_result_chars=12_000,
+        emoji="💼",
+    )
+)

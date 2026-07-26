@@ -17,6 +17,7 @@ supports_function_calling) into one record. Splitting at this layer
 lets the provider record be a single source of truth — change
 ``api_base`` once instead of editing every model row for that vendor.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -48,7 +49,7 @@ class ProviderDefaults:
     # Environment-variable name the system reads as a FALLBACK when the
     # user hasn't saved their key via the UI. Per-user encrypted keys
     # (``user_model_credentials`` table) take priority over this env var — see
-    # ``resolve_api_key`` in ``model_registry``.
+    # ``resolve_api_key`` in ``llm_client_factory``.
     api_key_env: str
 
     # simple-icons.org slug for the vendor brand icon. ``None`` falls

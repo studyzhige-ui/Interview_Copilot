@@ -6,6 +6,7 @@ last resort for rows nothing else re-examines.
 * ``sweep_orphan_file_assets`` — presigned uploads whose client vanished
   before confirm/consume.
 """
+
 import logging
 from datetime import datetime, timedelta
 
@@ -38,7 +39,10 @@ logger = logging.getLogger(__name__)
 #   Sweeping it faster matters because the UI's retry card only appears once
 #   the record reaches review_failed.
 _UPLOAD_SWEEP_STATES = (
-    STATUS_PENDING, STATUS_TRANSCRIBING, STATUS_EXTRACTING, STATUS_ANALYZING,
+    STATUS_PENDING,
+    STATUS_TRANSCRIBING,
+    STATUS_EXTRACTING,
+    STATUS_ANALYZING,
 )
 _UPLOAD_STALE_AFTER = timedelta(hours=2)
 _REVIEW_STALE_AFTER = timedelta(minutes=30)
@@ -81,7 +85,10 @@ def sweep_stale_interview_records(self):
             terminal = STATUS_REVIEW_FAILED if rec.source == "mock" else STATUS_FAILED
             logger.warning(
                 "sweeping stale interview record %s: %s (updated %s) -> %s",
-                rec.id, rec.status, rec.updated_at, terminal,
+                rec.id,
+                rec.status,
+                rec.updated_at,
+                terminal,
             )
             rec.status = terminal
             rec.error_message = "分析长时间无进展（任务可能已丢失），请重试。"
@@ -128,7 +135,9 @@ def sweep_orphan_file_assets(self):
         rows = (
             db.query(FileAsset)
             .filter(
-                FileAsset.upload_status.in_((UPLOAD_STATUS_PENDING, UPLOAD_STATUS_FAILED)),
+                FileAsset.upload_status.in_(
+                    (UPLOAD_STATUS_PENDING, UPLOAD_STATUS_FAILED)
+                ),
                 FileAsset.updated_at < cutoff,
                 FileAsset.deleted_at.is_(None),
             )

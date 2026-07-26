@@ -157,7 +157,9 @@ def read_object_head(storage_uri: str, num_bytes: int = 32) -> bytes | None:
     try:
         bucket, key = parse_s3_uri(storage_uri)
         resp = s3_client.get_object(
-            Bucket=bucket, Key=key, Range=f"bytes=0-{num_bytes - 1}",
+            Bucket=bucket,
+            Key=key,
+            Range=f"bytes=0-{num_bytes - 1}",
         )
         return resp["Body"].read()
     except (ClientError, BotoCoreError, ValueError):
@@ -171,7 +173,9 @@ def delete_s3_object(storage_uri: str) -> None:
     s3_client.delete_object(Bucket=bucket, Key=key)
 
 
-def upload_file_to_owned_key(file_obj, object_key: str, content_type: str | None = None) -> str:
+def upload_file_to_owned_key(
+    file_obj, object_key: str, content_type: str | None = None
+) -> str:
     """Upload a file object to a pre-created owned object key.
 
     Returns the URI the bytes actually landed at: ``s3://…`` normally, or a
@@ -215,7 +219,9 @@ def _fallback_local_save(file_obj, relative_path: str) -> str:
     # ``base`` on POSIX, which is exactly the traversal we want to block.
     candidate = Path(relative_path)
     if candidate.is_absolute() or any(part == ".." for part in candidate.parts):
-        raise ValueError(f"Refusing unsafe object key for local save: {relative_path!r}")
+        raise ValueError(
+            f"Refusing unsafe object key for local save: {relative_path!r}"
+        )
 
     full_path = (base_dir / candidate).resolve()
     try:
@@ -268,7 +274,7 @@ def parse_local_uri(uri: str) -> Path:
     """
     if not is_local_uri(uri):
         raise ValueError(f"Not a local URI: {uri!r}")
-    rel = uri[len(LOCAL_URI_PREFIX):].lstrip("/")
+    rel = uri[len(LOCAL_URI_PREFIX) :].lstrip("/")
     candidate = _safe_relative(rel)
     base = Path(settings.STORAGE_DIR).resolve()
     full = (base / candidate).resolve()

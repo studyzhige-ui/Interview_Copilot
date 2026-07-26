@@ -12,6 +12,7 @@ multi-page import; only a document with no usable text anywhere should
 (callers raise :class:`EmptyContentError`). Quality issues are recorded as
 ``warnings`` and never change the text.
 """
+
 from __future__ import annotations
 
 import re

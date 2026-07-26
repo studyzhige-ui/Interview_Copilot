@@ -30,6 +30,7 @@ in the first 4 KiB.
 Image avatars are validated separately by ``app.api.auth`` because they
 have stricter rules (size, dimension-relevant body shape).
 """
+
 from __future__ import annotations
 
 import logging
@@ -47,7 +48,7 @@ logger = logging.getLogger(__name__)
 # point of P6-E. Resume/JD (up to 10 MB) can fit comfortably, but
 # uniform threshold keeps the upload code branch-free.
 _SPOOL_ROLLOVER_BYTES = 1024 * 1024  # 1 MiB
-_DEFAULT_CHUNK_BYTES = 64 * 1024     # 64 KiB
+_DEFAULT_CHUNK_BYTES = 64 * 1024  # 64 KiB
 
 
 # ── Magic-byte signatures ───────────────────────────────────────────────
@@ -95,11 +96,18 @@ def _matches_iso_bmff(body: bytes, brands: tuple[bytes, ...]) -> bool:
 
 # Major brands that count as "audio/video media we'd send to WhisperX".
 _MP4_BRANDS: tuple[bytes, ...] = (
-    b"isom", b"iso2", b"iso5", b"iso6",   # generic MP4 (iso5/6: Safari
-    b"mp41", b"mp42",                     # MediaRecorder audio/mp4)
-    b"M4A ", b"M4B ", b"mp4a",            # audio-only
-    b"qt  ",                              # QuickTime mov
-    b"3gp4", b"3gp5",                     # 3GP
+    b"isom",
+    b"iso2",
+    b"iso5",
+    b"iso6",  # generic MP4 (iso5/6: Safari
+    b"mp41",
+    b"mp42",  # MediaRecorder audio/mp4)
+    b"M4A ",
+    b"M4B ",
+    b"mp4a",  # audio-only
+    b"qt  ",  # QuickTime mov
+    b"3gp4",
+    b"3gp5",  # 3GP
 )
 
 
@@ -218,7 +226,9 @@ def _detect_knowledge_format(head: bytes) -> str | None:
     return None
 
 
-def detect_head_format(head: bytes, content_kind: str, declared_ext: str = "") -> str | None:
+def detect_head_format(
+    head: bytes, content_kind: str, declared_ext: str = ""
+) -> str | None:
     """Magic-detect a 32-byte object head against a PURPOSE_REGISTRY
     ``content_kind``. Returns the detected format label or ``None``.
 
@@ -268,9 +278,8 @@ async def validate_upload_stream(
     ``boto3.upload_fileobj`` directly — both interfaces speak the
     same file-like protocol.
 
-    Pre-P6-E ``validate_upload`` did ``body = await file.read()`` —
-    a single 500 MB audio upload pinned half a gigabyte of RAM per
-    request. 10 concurrent uploads → 5 GB RAM → OOM. Streaming
+    Reading the entire body before validation would let one 500 MB audio
+    upload pin half a gigabyte of RAM. Streaming
     caps per-request RAM at ``_SPOOL_ROLLOVER_BYTES`` (1 MiB);
     everything beyond rolls over to a temp file on disk.
 
@@ -301,7 +310,9 @@ async def validate_upload_stream(
         logger.warning(
             "Rejected upload: purpose=%s filename=%r declared=%r "
             "(magic header didn't match the purpose whitelist)",
-            purpose, file.filename, file.content_type,
+            purpose,
+            file.filename,
+            file.content_type,
         )
         # User-facing error messages — match the legacy text so any
         # FE error-handling regex still works.
@@ -344,33 +355,25 @@ async def validate_upload_stream(
     return detected, total, spool
 
 
-async def validate_upload(
+async def read_validated_upload(
     file: UploadFile,
     purpose: Purpose,
     declared_ext: str = "",
 ) -> bytes:
-    """Backward-compat wrapper — small uploads only.
-
-    Returns the full body as bytes. Internally just reads the
-    streaming spool back into memory, so this is suitable ONLY
-    for uploads whose size cap fits comfortably in RAM (resume
-    + JD at 10 MB each). For 500 MB audio uploads, callers MUST
-    use :func:`validate_upload_stream` directly.
-    """
-    detected, _size, spool = await validate_upload_stream(
-        file, purpose, declared_ext,
+    """Validate a bounded upload and return its bytes."""
+    _detected, _size, spool = await validate_upload_stream(
+        file,
+        purpose,
+        declared_ext,
     )
     try:
         return spool.read()
     finally:
         spool.close()
-    # detected isn't returned by the legacy contract; callers that
-    # need it should migrate to validate_upload_stream.
-    _ = detected
 
 
 __all__ = [
-    "validate_upload",
+    "read_validated_upload",
     "validate_upload_stream",
     "detect_head_format",
     "Purpose",

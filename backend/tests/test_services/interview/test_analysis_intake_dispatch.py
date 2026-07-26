@@ -2,6 +2,7 @@
 ``failed`` (user-visible, terminal) instead of leaving a zombie
 ``pending`` row no worker will ever pick up — and still re-raise so the
 API returns an error."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -44,8 +45,11 @@ def _upload(db):
 
 def _resume_ctx():
     return analysis_intake.ResumeContext(
-        resume_id=None, resume_file_asset_id=None, resume_source=None,
-        resume_title_snapshot=None, resume_text="",
+        resume_id=None,
+        resume_file_asset_id=None,
+        resume_source=None,
+        resume_title_snapshot=None,
+        resume_text="",
     )
 
 
@@ -69,7 +73,9 @@ def test_dispatch_failure_parks_record_failed_and_reraises(db_session, monkeypat
         raise ConnectionError("broker down")
 
     monkeypatch.setattr(
-        analysis_intake, "process_interview_analysis", SimpleNamespace(delay=_raise),
+        analysis_intake,
+        "process_interview_analysis",
+        SimpleNamespace(delay=_raise),
     )
 
     with pytest.raises(ConnectionError):
@@ -105,7 +111,8 @@ def test_dispatch_success_leaves_record_pending_with_task_id(db_session, monkeyp
 
     monkeypatch.setattr(irs_module, "SessionLocal", lambda: _NoClose(db_session))
     monkeypatch.setattr(
-        analysis_intake, "process_interview_analysis",
+        analysis_intake,
+        "process_interview_analysis",
         SimpleNamespace(delay=lambda *a, **k: SimpleNamespace(id="celery-task-9")),
     )
 

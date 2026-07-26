@@ -4,6 +4,7 @@ Every token carries a ``jti`` (random UUID hex) so it can be revoked via
 Redis blacklist on logout or refresh-rotation. See
 ``app.core.token_blacklist``.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -108,12 +109,14 @@ def _build_token(data: dict, expires_delta: timedelta, token_type: str) -> str:
     to_encode = data.copy()
     now = datetime.now(timezone.utc)
     expire = now + expires_delta
-    to_encode.update({
-        "exp": expire,
-        "iat": now,
-        "type": token_type,
-        "jti": uuid.uuid4().hex,
-    })
+    to_encode.update(
+        {
+            "exp": expire,
+            "iat": now,
+            "type": token_type,
+            "jti": uuid.uuid4().hex,
+        }
+    )
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 

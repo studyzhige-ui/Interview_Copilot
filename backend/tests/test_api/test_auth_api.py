@@ -8,6 +8,7 @@ We build our own in-memory SQLite engine instead of using the shared
 ``db_session`` fixture in tests/conftest.py — that fixture references
 ``app.models.interview`` which no longer exists. (See report.)
 """
+
 from __future__ import annotations
 
 import pytest
@@ -62,9 +63,7 @@ def _disable_rate_limiter():
 
 @pytest.fixture
 def db_session_local():
-    engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}
-    )
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
     Base.metadata.create_all(bind=engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     session = Session()
@@ -154,9 +153,11 @@ async def test_send_code_fresh_email_calls_request_code(db_session_local):
 
 @pytest.mark.asyncio
 async def test_register_success_creates_user(db_session_local):
-    with patch("app.api.auth.assert_ip_not_locked", new_callable=AsyncMock), \
-         patch("app.api.auth.verify_code", new_callable=AsyncMock), \
-         patch("app.api.auth.reset_ip_failures", new_callable=AsyncMock):
+    with (
+        patch("app.api.auth.assert_ip_not_locked", new_callable=AsyncMock),
+        patch("app.api.auth.verify_code", new_callable=AsyncMock),
+        patch("app.api.auth.reset_ip_failures", new_callable=AsyncMock),
+    ):
         result = await register_user(
             request=_fake_request(),
             response=MagicMock(),
@@ -184,8 +185,12 @@ async def test_register_duplicate_username_returns_409(db_session_local):
     )
     db_session_local.commit()
 
-    with patch("app.api.auth.assert_ip_not_locked", new_callable=AsyncMock), \
-         patch("app.api.auth.record_verify_failure_for_ip", new_callable=AsyncMock) as mock_fail:
+    with (
+        patch("app.api.auth.assert_ip_not_locked", new_callable=AsyncMock),
+        patch(
+            "app.api.auth.record_verify_failure_for_ip", new_callable=AsyncMock
+        ) as mock_fail,
+    ):
         with pytest.raises(HTTPException) as exc:
             await register_user(
                 request=_fake_request(),
@@ -211,8 +216,12 @@ async def test_register_duplicate_email_returns_409(db_session_local):
     )
     db_session_local.commit()
 
-    with patch("app.api.auth.assert_ip_not_locked", new_callable=AsyncMock), \
-         patch("app.api.auth.record_verify_failure_for_ip", new_callable=AsyncMock) as mock_fail:
+    with (
+        patch("app.api.auth.assert_ip_not_locked", new_callable=AsyncMock),
+        patch(
+            "app.api.auth.record_verify_failure_for_ip", new_callable=AsyncMock
+        ) as mock_fail,
+    ):
         with pytest.raises(HTTPException) as exc:
             await register_user(
                 request=_fake_request(),
@@ -229,13 +238,15 @@ async def test_register_duplicate_email_returns_409(db_session_local):
 async def test_register_bad_code_returns_generic_400(db_session_local):
     from app.services.auth.verification_code_service import CodeError
 
-    with patch("app.api.auth.assert_ip_not_locked", new_callable=AsyncMock), \
-         patch(
-             "app.api.auth.verify_code",
-             new_callable=AsyncMock,
-             side_effect=CodeError("bad"),
-         ), \
-         patch("app.api.auth.record_verify_failure_for_ip", new_callable=AsyncMock):
+    with (
+        patch("app.api.auth.assert_ip_not_locked", new_callable=AsyncMock),
+        patch(
+            "app.api.auth.verify_code",
+            new_callable=AsyncMock,
+            side_effect=CodeError("bad"),
+        ),
+        patch("app.api.auth.record_verify_failure_for_ip", new_callable=AsyncMock),
+    ):
         with pytest.raises(HTTPException) as exc:
             await register_user(
                 request=_fake_request(),
@@ -273,8 +284,10 @@ def test_login_success_returns_token_pair(db_session_local):
     form.password = "pw12345"
 
     result = login_access_token(
-        request=_fake_request(), response=MagicMock(),
-        db=db_session_local, form_data=form,
+        request=_fake_request(),
+        response=MagicMock(),
+        db=db_session_local,
+        form_data=form,
     )
 
     assert result["token_type"] == "bearer"
@@ -299,8 +312,10 @@ def test_login_wrong_password_returns_400(db_session_local):
 
     with pytest.raises(HTTPException) as exc:
         login_access_token(
-            request=_fake_request(), response=MagicMock(),
-            db=db_session_local, form_data=form,
+            request=_fake_request(),
+            response=MagicMock(),
+            db=db_session_local,
+            form_data=form,
         )
     assert exc.value.status_code == 400
 
@@ -311,8 +326,10 @@ def test_login_unknown_user_returns_400(db_session_local):
     form.password = "irrelevant"
     with pytest.raises(HTTPException) as exc:
         login_access_token(
-            request=_fake_request(), response=MagicMock(),
-            db=db_session_local, form_data=form,
+            request=_fake_request(),
+            response=MagicMock(),
+            db=db_session_local,
+            form_data=form,
         )
     assert exc.value.status_code == 400
 
@@ -325,8 +342,10 @@ async def test_refresh_rotates_tokens(db_session_local):
     user = _register_sync(db_session_local, "alice", "pw")
     refresh_token = create_refresh_token(data=token_claims_for(user))
 
-    with patch("app.api.auth.is_revoked", new_callable=AsyncMock, return_value=False), \
-         patch("app.api.auth.revoke", new_callable=AsyncMock) as mock_revoke:
+    with (
+        patch("app.api.auth.is_revoked", new_callable=AsyncMock, return_value=False),
+        patch("app.api.auth.revoke", new_callable=AsyncMock) as mock_revoke,
+    ):
         result = await refresh_access_token(
             request=_fake_request(),
             response=MagicMock(),
@@ -449,7 +468,9 @@ async def test_logout_is_idempotent_with_garbage_access():
 async def test_get_current_user_accepts_valid_token(db_session_local):
     user = _register_sync(db_session_local, "alice", "pw")
     token = create_access_token(data=token_claims_for(user))
-    with patch("app.core.security.is_revoked", new_callable=AsyncMock, return_value=False):
+    with patch(
+        "app.core.security.is_revoked", new_callable=AsyncMock, return_value=False
+    ):
         got = await get_current_user(token=token, db=db_session_local)
     assert got.id == user.id
 
@@ -461,7 +482,9 @@ async def test_get_current_user_rejects_token_version_mismatch(db_session_local)
     token = create_access_token(data=token_claims_for(user))  # version 0
     user.token_version = 1
     db_session_local.commit()
-    with patch("app.core.security.is_revoked", new_callable=AsyncMock, return_value=False):
+    with patch(
+        "app.core.security.is_revoked", new_callable=AsyncMock, return_value=False
+    ):
         with pytest.raises(HTTPException) as exc:
             await get_current_user(token=token, db=db_session_local)
     assert exc.value.status_code == 401
@@ -472,7 +495,9 @@ async def test_get_current_user_rejects_token_without_token_version(db_session_l
     """A legacy token (username sub, no token_version claim) is rejected."""
     user = _register_sync(db_session_local, "alice", "pw")
     legacy = create_access_token(data={"sub": user.username})  # pre-migration shape
-    with patch("app.core.security.is_revoked", new_callable=AsyncMock, return_value=False):
+    with patch(
+        "app.core.security.is_revoked", new_callable=AsyncMock, return_value=False
+    ):
         with pytest.raises(HTTPException) as exc:
             await get_current_user(token=legacy, db=db_session_local)
     assert exc.value.status_code == 401
@@ -499,7 +524,9 @@ async def test_change_password_bumps_version_and_kills_old_tokens(db_session_loc
     assert verify_password("newpw123", user.hashed_password)
 
     # The access token issued before the change now fails the version gate.
-    with patch("app.core.security.is_revoked", new_callable=AsyncMock, return_value=False):
+    with patch(
+        "app.core.security.is_revoked", new_callable=AsyncMock, return_value=False
+    ):
         with pytest.raises(HTTPException) as exc:
             await get_current_user(token=old_access, db=db_session_local)
     assert exc.value.status_code == 401

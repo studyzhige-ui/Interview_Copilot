@@ -24,6 +24,7 @@ def test_read_resume_reads_personal_entity(monkeypatch):
     @contextmanager
     def _fake_session():
         yield object()
+
     monkeypatch.setattr("app.db.database.SessionLocal", _fake_session)
 
     class _Resume:
@@ -40,8 +41,11 @@ def test_read_resume_reads_personal_entity(monkeypatch):
     args = ReadResumeArgs(section_types=[])
 
     default_resume = _Resume(
-        id="rsm_1", title="我的简历", is_default=True,
-        parse_status="ready", raw_text_snapshot="三年后端开发经验，主导推荐系统",
+        id="rsm_1",
+        title="我的简历",
+        is_default=True,
+        parse_status="ready",
+        raw_text_snapshot="三年后端开发经验，主导推荐系统",
     )
     monkeypatch.setattr(
         "app.services.resume.resume_entity_service.list_resumes",
@@ -95,10 +99,12 @@ class TestResumeErrorHandling:
         @contextmanager
         def _fake_session():
             yield object()
+
         monkeypatch.setattr("app.db.database.SessionLocal", _fake_session)
 
         def _boom(db, *, user_id):
             raise RuntimeError("DB unavailable")
+
         monkeypatch.setattr(
             "app.services.resume.resume_entity_service.list_resumes",
             _boom,
@@ -106,6 +112,7 @@ class TestResumeErrorHandling:
 
         from app.agent_runtime.tool_registry import AgentToolContext
         from app.agent_runtime.tools.resume import ReadResumeArgs, _read_resume_handler
+
         ctx = AgentToolContext(user_id="alice", session_id="s1")
         result = asyncio.run(_read_resume_handler(ReadResumeArgs(), ctx))
         assert "error" in result

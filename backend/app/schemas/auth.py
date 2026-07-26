@@ -4,6 +4,7 @@ Mirrors the request / response shapes used by ``app/api/auth.py``.
 Kept as a separate module so handlers, tests, and (eventually) FE
 codegen all reference the same source of truth.
 """
+
 from __future__ import annotations
 
 from typing import Optional
@@ -63,15 +64,7 @@ class MeUpdate(BaseModel):
     # flows. See ``recall_policy`` module docstring for the full
     # contract.
     #
-    # The ``memory_recall_default`` alias keeps in-flight frontend
-    # builds (pre-Stage-H) writing the toggle correctly. Once the
-    # frontend ships with ``global_memory_enabled`` everywhere this
-    # alias can be retired in a follow-up.
-    global_memory_enabled: Optional[bool] = Field(
-        default=None, alias="memory_recall_default",
-    )
-
-    model_config = {"populate_by_name": True}
+    global_memory_enabled: Optional[bool] = None
 
     @field_validator("avatar_url", mode="before")
     @classmethod
@@ -114,18 +107,14 @@ class MeResponse(BaseModel):
     updated_at: str
     # User-level preferences. Today only one knob — surface it on the
     # same /me payload to avoid a second round-trip when the profile
-    # page mounts. The legacy ``memory_recall_default`` alias used to
-    # be emitted here too for pre-Stage-H clients, but the frontend
-    # was migrated and now reads only the canonical name — the alias
-    # emit was dead weight on every /me round-trip (audit cleanup).
-    # ``MeUpdate`` still ACCEPTS the legacy name on input via Pydantic
-    # ``populate_by_name`` so any stale PATCH client keeps working.
+    # page mounts.
     global_memory_enabled: bool = False
 
 
 class AvatarSetRequest(BaseModel):
     """Body for ``POST /me/avatar`` — set the avatar from a confirmed
     ``file_assets(purpose='avatar')`` upload (presigned flow)."""
+
     file_asset_id: str
 
 

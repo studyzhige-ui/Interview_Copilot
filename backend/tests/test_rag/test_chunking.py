@@ -4,6 +4,7 @@ token_count is stamped from the embedding tokenizer and the oversize gate
 uses it. Counting is monkeypatched to a deterministic function so the test
 doesn't depend on a locally-cached embedding model.
 """
+
 from __future__ import annotations
 
 from llama_index.core import Document
@@ -42,7 +43,7 @@ def test_select_splitter_html_has_no_html_strategy():
     (HtmlParser/Docling) → markdown strategy; a stray plain-text HTML (lightweight
     failure) falls to the sentence floor — never HTMLNodeParser, which would
     yield zero nodes from tag-stripped text and silently lose the document."""
-    assert select_splitter("page.html", "", True).id == "markdown"   # parsed → md
+    assert select_splitter("page.html", "", True).id == "markdown"  # parsed → md
     assert select_splitter("page.htm", "", True).id == "markdown"
     assert select_splitter("page.html", "", False).id == "sentence"  # plain-text floor
     assert select_splitter("page.htm", "", False).id == "sentence"
@@ -52,7 +53,10 @@ def test_token_count_stamped_on_every_node(monkeypatch):
     # Deterministic "tokenizer": 1 token per whitespace word.
     monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
 
-    doc = Document(text="alpha beta gamma delta", metadata={"source_kind": "user_upload", "user_id": 1})
+    doc = Document(
+        text="alpha beta gamma delta",
+        metadata={"source_kind": "user_upload", "user_id": 1},
+    )
     nodes = ingestion.get_optimal_nodes(doc)
 
     assert nodes
@@ -67,8 +71,11 @@ def test_diagnostic_annotations_stamped(monkeypatch):
 
     doc = Document(
         text="some plain prose about caching",
-        metadata={"source_kind": "user_upload", "user_id": 1,
-                  "cleaning_profile": {"char_out": 30}},
+        metadata={
+            "source_kind": "user_upload",
+            "user_id": 1,
+            "cleaning_profile": {"char_out": 30},
+        },
     )
     nodes = ingestion.get_optimal_nodes(doc)
 
@@ -143,7 +150,8 @@ def test_markdown_heading_path_and_section_title(monkeypatch):
 
     md = "# Cache\n## Redis\n### Avalanche\n热点 key 失效后大量请求打到数据库。\n"
     doc = Document(
-        text=md, metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "q.md"},
+        text=md,
+        metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "q.md"},
     )
     nodes = ingestion.get_optimal_nodes(doc)
     target = [n for n in nodes if "Avalanche" in n.get_content()]
@@ -173,10 +181,16 @@ def test_parser_provenance_carried_to_chunks(monkeypatch):
     metadata are carried onto every chunk (E1, so they land in metadata_json)."""
     monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
 
-    doc = Document(text="some parsed prose", metadata={
-        "source_kind": "user_upload", "user_id": 1,
-        "parser_id": "pymupdf", "parser_profile": {"tier": "lightweight"}, "ocr_used": False,
-    })
+    doc = Document(
+        text="some parsed prose",
+        metadata={
+            "source_kind": "user_upload",
+            "user_id": 1,
+            "parser_id": "pymupdf",
+            "parser_profile": {"tier": "lightweight"},
+            "ocr_used": False,
+        },
+    )
     nodes = ingestion.get_optimal_nodes(doc)
     assert nodes
     for n in nodes:
@@ -189,7 +203,9 @@ def test_plain_text_chunks_have_no_parser_fields(monkeypatch):
     """ingest_text-style docs (no file parse) carry no parser_* fields."""
     monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
 
-    doc = Document(text="raw text", metadata={"source_kind": "manual_text", "user_id": 1})
+    doc = Document(
+        text="raw text", metadata={"source_kind": "manual_text", "user_id": 1}
+    )
     for n in ingestion.get_optimal_nodes(doc):
         assert "parser_id" not in n.metadata
         assert "parser_profile" not in n.metadata
@@ -199,7 +215,8 @@ def test_splitter_profile_stamped(monkeypatch):
     monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
 
     doc = Document(
-        text="plain prose", metadata={"source_kind": "user_upload", "user_id": 1},
+        text="plain prose",
+        metadata={"source_kind": "user_upload", "user_id": 1},
     )
     nodes = ingestion.get_optimal_nodes(doc)
     assert nodes
@@ -216,8 +233,12 @@ def test_splitter_profile_stamped_on_table_and_code_paths(monkeypatch):
     branches' primary splitter uses different params. splitter_id carries the
     true primary identity; this pins that documented behaviour."""
     monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-    expected = {"chunk_size": 512, "chunk_overlap": 64, "tokenizer": "embedding",
-                "qa_regex_hit": False}
+    expected = {
+        "chunk_size": 512,
+        "chunk_overlap": 64,
+        "tokenizer": "embedding",
+        "qa_regex_hit": False,
+    }
 
     csv = Document(
         text="name,score\nalice,90\nbob,80",
@@ -288,9 +309,13 @@ def test_oversize_gate_uses_embedding_tokenizer(monkeypatch):
         calls["split"] += 1
         return real_get(self, docs, **kw)
 
-    monkeypatch.setattr(ingestion.SentenceSplitter, "get_nodes_from_documents", _counting)
+    monkeypatch.setattr(
+        ingestion.SentenceSplitter, "get_nodes_from_documents", _counting
+    )
 
-    doc = Document(text="short text", metadata={"source_kind": "user_upload", "user_id": 1})
+    doc = Document(
+        text="short text", metadata={"source_kind": "user_upload", "user_id": 1}
+    )
     nodes = ingestion.get_optimal_nodes(doc)
 
     # Secondary split was invoked despite the text being short (char-len would
@@ -419,7 +444,9 @@ def test_oversize_qa_group_routes_through_secondary_gate(monkeypatch):
         calls["split"] += 1
         return real_get(self, docs, **kw)
 
-    monkeypatch.setattr(ingestion.SentenceSplitter, "get_nodes_from_documents", _counting)
+    monkeypatch.setattr(
+        ingestion.SentenceSplitter, "get_nodes_from_documents", _counting
+    )
 
     text = (
         "问题：什么是缓存击穿？\n答案：热点 key 失效后大量请求打到数据库。\n"

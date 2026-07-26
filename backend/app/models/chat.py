@@ -31,7 +31,9 @@ class Conversation(Base):
     __table_args__ = (
         Index(
             "ix_conversations_user_type_arch",
-            "user_id", "type", "archived_at",
+            "user_id",
+            "type",
+            "archived_at",
         ),
         Index("ix_conversations_user_updated", "user_id", "updated_at"),
     )
@@ -55,6 +57,7 @@ class Conversation(Base):
     # ReAct). mock_interview is always chat. Persisted snapshot of the mode the
     # SSE endpoint selects per request.
     mode = Column(String, nullable=False, default="chat")
+    active_turn_id = Column(String, nullable=True)
     # Polymorphic subject binding (weak FK). subject_type whitelist =
     # {interview_record}; general -> NULL, debrief/mock_interview -> the bound
     # interview_record. The app layer validates existence + ownership. (The

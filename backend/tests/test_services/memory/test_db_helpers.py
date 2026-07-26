@@ -19,7 +19,8 @@ def test_session_scope_does_not_close_passed_session():
     from app.services.memory._db_helpers import session_scope
 
     engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False},
+        "sqlite://",
+        connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
     Session = sessionmaker(bind=engine)

@@ -4,6 +4,7 @@ UP-8/UP-10 之后的契约：降级写盘统一返回 ``local://`` URI（不再�
 路径）；legacy 的 ``upload_file_to_s3`` 已删除，业务统一走
 ``upload_file_to_owned_key``。
 """
+
 from io import BytesIO
 from unittest.mock import patch
 
@@ -46,8 +47,10 @@ def test_upload_owned_key_falls_back_on_client_error(tmp_path):
     实际落点的 local:// URI —— 调用方必须持久化这个返回值（UP-8）。"""
     from botocore.exceptions import ClientError
 
-    with patch("app.core.storage.s3_client") as mock_s3, \
-         patch("app.core.storage.settings") as mock_settings:
+    with (
+        patch("app.core.storage.s3_client") as mock_s3,
+        patch("app.core.storage.settings") as mock_settings,
+    ):
         mock_settings.STORAGE_DIR = str(tmp_path)
         mock_s3.upload_fileobj.side_effect = ClientError(
             {"Error": {"Code": "NoSuchBucket", "Message": "test"}}, "PutObject"

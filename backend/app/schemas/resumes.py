@@ -1,4 +1,5 @@
 """Pydantic schemas for the personal-resume HTTP endpoints."""
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

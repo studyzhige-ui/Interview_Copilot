@@ -34,12 +34,23 @@ class HarnessEvent:
     # -- convenience constructors ----------------------------------------
 
     @classmethod
-    def status(cls, message: str, *, step: int = 0, elapsed_ms: float = 0.0) -> "HarnessEvent":
-        return cls(type=HarnessEventType.STATUS, data={"message": message}, step=step, elapsed_ms=elapsed_ms)
+    def status(
+        cls, message: str, *, step: int = 0, elapsed_ms: float = 0.0
+    ) -> "HarnessEvent":
+        return cls(
+            type=HarnessEventType.STATUS,
+            data={"message": message},
+            step=step,
+            elapsed_ms=elapsed_ms,
+        )
 
     @classmethod
     def sources(
-        cls, sources: list[dict[str, Any]], *, step: int = 0, elapsed_ms: float = 0.0,
+        cls,
+        sources: list[dict[str, Any]],
+        *,
+        step: int = 0,
+        elapsed_ms: float = 0.0,
     ) -> "HarnessEvent":
         """The turn's final citation sources (L1 RAG only), aligned 1:1 with
         the ``[K#]`` refs inside [Retrieved Context]. Emitted once, BEFORE
@@ -126,20 +137,41 @@ class HarnessEvent:
 
     @classmethod
     def text(cls, content: str, *, step: int, elapsed_ms: float) -> "HarnessEvent":
-        return cls(type=HarnessEventType.TEXT, data={"content": content}, step=step, elapsed_ms=elapsed_ms)
+        return cls(
+            type=HarnessEventType.TEXT,
+            data={"content": content},
+            step=step,
+            elapsed_ms=elapsed_ms,
+        )
 
     @classmethod
     def text_delta(cls, delta: str, *, step: int, elapsed_ms: float) -> "HarnessEvent":
         """Incremental text chunk from streaming LLM response."""
-        return cls(type=HarnessEventType.TEXT_DELTA, data={"delta": delta}, step=step, elapsed_ms=elapsed_ms)
+        return cls(
+            type=HarnessEventType.TEXT_DELTA,
+            data={"delta": delta},
+            step=step,
+            elapsed_ms=elapsed_ms,
+        )
 
     @classmethod
-    def budget(cls, info: dict[str, Any], *, step: int, elapsed_ms: float) -> "HarnessEvent":
-        return cls(type=HarnessEventType.BUDGET, data=info, step=step, elapsed_ms=elapsed_ms)
+    def budget(
+        cls, info: dict[str, Any], *, step: int, elapsed_ms: float
+    ) -> "HarnessEvent":
+        return cls(
+            type=HarnessEventType.BUDGET, data=info, step=step, elapsed_ms=elapsed_ms
+        )
 
     @classmethod
-    def error(cls, message: str, *, step: int = 0, elapsed_ms: float = 0.0) -> "HarnessEvent":
-        return cls(type=HarnessEventType.ERROR, data={"error": message}, step=step, elapsed_ms=elapsed_ms)
+    def error(
+        cls, message: str, *, step: int = 0, elapsed_ms: float = 0.0
+    ) -> "HarnessEvent":
+        return cls(
+            type=HarnessEventType.ERROR,
+            data={"error": message},
+            step=step,
+            elapsed_ms=elapsed_ms,
+        )
 
     @classmethod
     def done(cls, *, step: int, elapsed_ms: float) -> "HarnessEvent":

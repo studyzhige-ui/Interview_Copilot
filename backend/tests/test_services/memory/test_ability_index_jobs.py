@@ -5,6 +5,7 @@ mocks here — these tests verify the *wiring* (payload → handler → index ca
 the enqueue→drain durable path, and the recall tool's semantic-search branch),
 not Milvus itself.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,7 +21,9 @@ from sqlalchemy.pool import StaticPool
 def _job(payload: dict, job_type: str = "upsert_memory_ability_index"):
     from app.models.outbox_job import OutboxJob
 
-    return OutboxJob(id="job_x", user_id=1, job_type=job_type, payload_json=json.dumps(payload))
+    return OutboxJob(
+        id="job_x", user_id=1, job_type=job_type, payload_json=json.dumps(payload)
+    )
 
 
 # ── handlers (no DB needed — they read the payload) ──────────────────────
@@ -30,8 +33,12 @@ def test_upsert_handler_calls_index_from_payload():
     from app.services.memory import ability_outbox
 
     payload = {
-        "state_id": "mas_1", "user_id": 1, "search_text": "Redis\n穿透",
-        "topic": "Redis", "skill_type": "knowledge_topic", "mastery_level": "weak",
+        "state_id": "mas_1",
+        "user_id": 1,
+        "search_text": "Redis\n穿透",
+        "topic": "Redis",
+        "skill_type": "knowledge_topic",
+        "mastery_level": "weak",
         "summary": "s",
     }
     with patch("app.services.memory.ability_index.upsert_ability") as up:
@@ -55,7 +62,9 @@ def test_delete_handler_calls_index():
     from app.services.memory import ability_outbox
 
     with patch("app.services.memory.ability_index.delete_ability") as dl:
-        ability_outbox._handle_delete(None, _job({"state_id": "mas_9"}, "delete_memory_ability_index"))
+        ability_outbox._handle_delete(
+            None, _job({"state_id": "mas_9"}, "delete_memory_ability_index")
+        )
     dl.assert_called_once_with("mas_9")
 
 
@@ -64,7 +73,10 @@ def test_search_abilities_degrades_to_empty_on_error():
     Milvus hybrid_search) degrades to an empty list, not an exception."""
     from app.services.memory import ability_index
 
-    with patch("app.core.user_identity.resolve_user_pk", side_effect=RuntimeError("backing store down")):
+    with patch(
+        "app.core.user_identity.resolve_user_pk",
+        side_effect=RuntimeError("backing store down"),
+    ):
         assert ability_index.search_abilities("alice", "redis 穿透", top_k=3) == []
 
 
@@ -75,12 +87,14 @@ def test_search_abilities_degrades_to_empty_on_error():
 def seeded(monkeypatch):
     from app.db.database import Base
     import app.models.memory_ability_state  # noqa: F401
-    import app.models.memory_audit_logs     # noqa: F401
-    import app.models.outbox_job            # noqa: F401
-    import app.models.user                  # noqa: F401
+    import app.models.memory_audit_logs  # noqa: F401
+    import app.models.outbox_job  # noqa: F401
+    import app.models.user  # noqa: F401
 
     engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
     Base.metadata.create_all(bind=engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -89,10 +103,12 @@ def seeded(monkeypatch):
     import app.services.memory._memory_audit as audit_mod
     import app.services.memory.memory_ability_state_service as ability_mod
     import app.services.uploads.outbox_service as outbox_mod
+
     for mod in (helpers_mod, audit_mod, ability_mod, outbox_mod):
         monkeypatch.setattr(mod, "SessionLocal", Session, raising=False)
 
     from app.models.user import User
+
     s = Session()
     s.add(User(username="alice", hashed_password="x"))
     s.commit()
@@ -110,8 +126,14 @@ def test_enqueue_then_drain_invokes_index(seeded):
     from app.services.memory import memory_ability_state_service as svc
     from app.services.uploads.outbox_service import run_due_outbox_jobs
 
-    svc.upsert("alice", topic="Redis", skill_type="knowledge_topic",
-               mastery_level="weak", summary="缓存穿透", change_type="patch_realtime")
+    svc.upsert(
+        "alice",
+        topic="Redis",
+        skill_type="knowledge_topic",
+        mastery_level="weak",
+        summary="缓存穿透",
+        change_type="patch_realtime",
+    )
 
     with patch("app.services.memory.ability_index.upsert_ability") as up:
         processed = run_due_outbox_jobs(seeded())
@@ -130,17 +152,29 @@ async def test_recall_memory_query_returns_relevant_abilities():
     from app.services.memory.v3_context_loader import V3MemoryContext
 
     ctx = SimpleNamespace(user_id="alice", session_id="sess1")
-    hits = [{"topic": "Redis", "skill_type": "knowledge_topic",
-             "mastery_level": "weak", "summary": "穿透不熟", "score": 0.9}]
+    hits = [
+        {
+            "topic": "Redis",
+            "skill_type": "knowledge_topic",
+            "mastery_level": "weak",
+            "summary": "穿透不熟",
+            "score": 0.9,
+        }
+    ]
 
-    with patch(
-        "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
-        return_value=True,
-    ), patch(
-        "app.services.memory.v3_context_loader.load_universal",
-        return_value=V3MemoryContext(user_profile_body="- 卷卷"),
-    ), patch(
-        "app.services.memory.ability_index.search_abilities", return_value=hits,
+    with (
+        patch(
+            "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
+            return_value=True,
+        ),
+        patch(
+            "app.services.memory.v3_context_loader.load_universal",
+            return_value=V3MemoryContext(user_profile_body="- 卷卷"),
+        ),
+        patch(
+            "app.services.memory.ability_index.search_abilities",
+            return_value=hits,
+        ),
     ):
         out = await _recall_memory_handler(RecallMemoryArgs(query="redis 穿透"), ctx)
 
@@ -154,15 +188,19 @@ async def test_recall_memory_no_query_skips_search():
     from app.services.memory.v3_context_loader import V3MemoryContext
 
     ctx = SimpleNamespace(user_id="alice", session_id="sess1")
-    with patch(
-        "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
-        return_value=True,
-    ), patch(
-        "app.services.memory.v3_context_loader.load_universal",
-        return_value=V3MemoryContext(),
-    ), patch(
-        "app.services.memory.ability_index.search_abilities",
-    ) as search:
+    with (
+        patch(
+            "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
+            return_value=True,
+        ),
+        patch(
+            "app.services.memory.v3_context_loader.load_universal",
+            return_value=V3MemoryContext(),
+        ),
+        patch(
+            "app.services.memory.ability_index.search_abilities",
+        ) as search,
+    ):
         out = await _recall_memory_handler(RecallMemoryArgs(), ctx)
 
     search.assert_not_called()

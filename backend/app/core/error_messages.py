@@ -19,6 +19,7 @@ arrive as a generic ``APIStatusError`` whose only signal is
 ``status_code`` + the body message — so we classify by status code AND
 message phrase, not exception type alone.
 """
+
 from __future__ import annotations
 
 import openai
@@ -43,9 +44,7 @@ MSG_CONTEXT = (
 MSG_CONNECTION = "无法连接到模型服务，请检查网络连接或稍后再试。"
 MSG_TIMEOUT = "模型响应超时，请重试一次。"
 MSG_SERVER = "模型服务暂时不可用（厂商端繁忙或故障），请稍后再试。"
-MSG_GENERIC = (
-    "系统出了点问题，请稍后再试。如果反复发生，请把这次操作的时间告诉运维。"
-)
+MSG_GENERIC = "系统出了点问题，请稍后再试。如果反复发生，请把这次操作的时间告诉运维。"
 
 # Substring signals (matched case-insensitively against ``str(exc)``).
 _BALANCE_PHRASES = (
@@ -118,7 +117,11 @@ def humanize_error(exc: Exception) -> str:
 
     # Network / timeout. APITimeoutError subclasses APIConnectionError, so
     # test it FIRST.
-    if isinstance(exc, openai.APITimeoutError) or "timeout" in msg or "timed out" in msg:
+    if (
+        isinstance(exc, openai.APITimeoutError)
+        or "timeout" in msg
+        or "timed out" in msg
+    ):
         return MSG_TIMEOUT
     if isinstance(exc, openai.APIConnectionError):
         return MSG_CONNECTION

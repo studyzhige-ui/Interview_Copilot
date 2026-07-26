@@ -23,10 +23,11 @@ import json
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from dotenv import load_dotenv
 # override=True so an empty value in the parent shell (e.g. left over
 # from a prior `unset` or test run) does NOT silently mask a populated
 # value in .env — without this, a single stale ``ANTHROPIC_API_KEY=``
@@ -40,21 +41,27 @@ async def _main() -> int:
         "/v1/models endpoint and print a per-provider summary.",
     )
     parser.add_argument(
-        "--provider", default=None,
+        "--provider",
+        default=None,
         help="Filter output to one provider (e.g. 'openai'). The fetch "
         "still pulls the full JSON — this only narrows the print view.",
     )
-    parser.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
     parser.add_argument(
-        "--verbose", "-v", action="store_true",
+        "--json", action="store_true", help="Emit JSON instead of a table."
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
         help="Show every model id per provider (default: head + count).",
     )
     parser.add_argument(
-        "--write-seed", action="store_true",
+        "--write-seed",
+        action="store_true",
         help="After refreshing, write backend/app/services/model_sources/"
-             "seed_catalog.json with the current catalog snapshot. "
-             "This file ships with the repo so fresh clones show a "
-             "populated Models page before users configure any keys.",
+        "seed_catalog.json with the current catalog snapshot. "
+        "This file ships with the repo so fresh clones show a "
+        "populated Models page before users configure any keys.",
     )
     args = parser.parse_args()
 
@@ -85,14 +92,17 @@ async def _main() -> int:
                 }
                 for e in entries
             ]
-            for provider, entries in grouped.items() if entries
+            for provider, entries in grouped.items()
+            if entries
         }
         seed_path.parent.mkdir(parents=True, exist_ok=True)
         with seed_path.open("w", encoding="utf-8") as f:
             _json.dump(snapshot, f, ensure_ascii=False, indent=2)
         total = sum(len(v) for v in snapshot.values())
-        print(f"Wrote seed catalog: {total} models across "
-              f"{len(snapshot)} providers → {seed_path}")
+        print(
+            f"Wrote seed catalog: {total} models across "
+            f"{len(snapshot)} providers → {seed_path}"
+        )
         print()
 
     # Order rows by PROVIDERS dict iteration so the table matches the
@@ -124,7 +134,9 @@ async def _main() -> int:
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0
 
-    print(f"Catalog refreshed from vendor /v1/models endpoints. {sum(len(v) for v in grouped.values())} chat models total.")
+    print(
+        f"Catalog refreshed from vendor /v1/models endpoints. {sum(len(v) for v in grouped.values())} chat models total."
+    )
     print()
     print(f"{'Provider':<14} {'Models':>7}  Head of available models")
     print("-" * 90)
@@ -133,7 +145,9 @@ async def _main() -> int:
         defaults = PROVIDERS.get(provider)
         label = defaults.display_label if defaults else provider
         if not entries:
-            print(f"{provider:<14} {'0':>7}  ({label}: no API key in .env, or vendor returned no chat models)")
+            print(
+                f"{provider:<14} {'0':>7}  ({label}: no API key in .env, or vendor returned no chat models)"
+            )
             continue
         head = ", ".join(e.model for e in entries[:4])
         more = f" + {len(entries) - 4} more" if len(entries) > 4 else ""

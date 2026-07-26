@@ -1,4 +1,4 @@
-"""Dreaming worker — nightly memory consolidation (Path B).
+"""Dreaming worker — nightly memory consolidation.
 
 Why dreaming
 ============
@@ -9,13 +9,10 @@ session 2 → only then should X get promoted from "trying" to
 "internalised"). Dreaming sees the full conversation window of an
 interview record and can synthesise these multi-session patterns.
 
-Trigger model (Path B — single entry, nightly cron)
-====================================================
-After deliberation we picked **Path B over Path A (per-turn hook)**.
-The short version: post-turn hook + "nightly only" time window are
-contradictory (users don't chat at 03:00); since we have Celery Beat
-and Claude Code's per-turn-hook constraint doesn't apply to us, a
-nightly batch is the right fit for an interview-prep tool.
+Trigger model
+=============
+Celery Beat runs one nightly batch. Realtime extraction remains separate
+and conservative; consolidation works across completed, quiet records.
 
   Celery Beat (worker/celery_app.py beat_schedule)
        ↓ daily 03:30 Asia/Shanghai
@@ -71,7 +68,10 @@ from app.models.user import User
 from app.services.memory import memory_ability_state_service, memory_document_service
 from app.services.memory._dispatch import dispatch_memory_patches
 from app.services.memory import _metrics
-from app.services.memory._extraction_common import format_ability_index, parse_json_patches_ex
+from app.services.memory._extraction_common import (
+    format_ability_index,
+    parse_json_patches_ex,
+)
 from app.services.memory._user_memory_lock import LockNotAcquired, user_memory_lock_sync
 from app.services.memory.prompts import DREAMING_PROMPT
 
@@ -147,7 +147,7 @@ def select_dreamable_users(*, limit: int = 200) -> list[str]:
             )
             .filter(User.is_active.is_(True))
             .order_by(User.last_dreamed_at.asc().nullsfirst())
-            .limit(limit * 4)   # over-fetch then filter on gate 3
+            .limit(limit * 4)  # over-fetch then filter on gate 3
             .all()
         )
 
@@ -160,7 +160,9 @@ def select_dreamable_users(*, limit: int = 200) -> list[str]:
                 out.append(username)
                 logger.info(
                     "dreaming select: user=%s new_messages=%d new_sessions=%d -> dream",
-                    username, counts["messages"], counts["sessions"],
+                    username,
+                    counts["messages"],
+                    counts["sessions"],
                 )
                 if len(out) >= limit:
                     break
@@ -170,7 +172,9 @@ def select_dreamable_users(*, limit: int = 200) -> list[str]:
 
 
 def _count_new_activity_since(
-    db: Session, user_id: str, cursor: datetime | None,
+    db: Session,
+    user_id: str,
+    cursor: datetime | None,
 ) -> dict[str, int]:
     """Counts of new debrief conversation_messages + conversations for
     ``user_id`` since ``cursor`` (None = all-time). Used by gate 3.
@@ -202,7 +206,9 @@ def _count_new_activity_since(
 
 
 def select_records_for_user(
-    user_id: str, *, limit: int = 50,
+    user_id: str,
+    *,
+    limit: int = 50,
 ) -> list[InterviewRecord]:
     """Return records that should be dreamed for ``user_id``.
 
@@ -238,9 +244,9 @@ def select_records_for_user(
         for rec in q.all():
             latest_msg_at = _latest_debrief_message_at(db, rec.id)
             if latest_msg_at is None:
-                continue   # no debrief chat → nothing to consolidate
+                continue  # no debrief chat → nothing to consolidate
             if latest_msg_at > quiet_threshold:
-                continue   # still active
+                continue  # still active
             out.append(rec)
             if len(out) >= limit:
                 break
@@ -250,7 +256,9 @@ def select_records_for_user(
 
 
 def bump_user_last_dreamed_at(
-    user_id: str, *, at: datetime | None = None,
+    user_id: str,
+    *,
+    at: datetime | None = None,
 ) -> None:
     """Move the user's dream cursor. Caller invokes ONCE after finishing
     the per-user dream loop, regardless of whether each individual
@@ -315,7 +323,9 @@ def dream_for_record(record_id: str) -> dict[str, Any]:
 
     db: Session = SessionLocal()
     try:
-        record = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+        record = (
+            db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+        )
         if record is None:
             summary["skipped_reason"] = "record not found"
             return summary
@@ -349,17 +359,20 @@ def dream_for_record(record_id: str) -> dict[str, Any]:
 
 
 def _dream_for_record_locked(
-    record_id: str, user_id: str, summary: dict[str, Any],
+    record_id: str,
+    user_id: str,
+    summary: dict[str, Any],
 ) -> dict[str, Any]:
     with user_memory_lock_sync(user_id, on_timeout="raise"):
-        # Re-check inside the lock. Under Path B's single nightly cron
-        # there's no "another worker" in normal operation, but the
-        # re-check is defensive against operator-triggered ad-hoc
-        # re-runs (and against realtime extraction having bumped
-        # something between our pre-lock read and now).
+        # Re-check inside the lock so manual reruns and realtime extraction
+        # cannot race the nightly batch.
         db = SessionLocal()
         try:
-            record = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            record = (
+                db.query(InterviewRecord)
+                .filter(InterviewRecord.id == record_id)
+                .first()
+            )
             if record is None:
                 summary["skipped_reason"] = "record disappeared"
                 return summary
@@ -388,7 +401,8 @@ def _dream_for_record_locked(
                 record_id=record_id,
                 user_profile=snapshot["user_profile"] or "（空）",
                 learning_strategy=snapshot["learning_strategy"] or "（空）",
-                ability_index="\n".join(snapshot["ability_index"]) or "（暂无能力状态）",
+                ability_index="\n".join(snapshot["ability_index"])
+                or "（暂无能力状态）",
                 record_messages=_format_record_messages(messages),
                 record_debrief_summary=(record.debrief_summary or "（无客观摘要）"),
             )
@@ -398,10 +412,13 @@ def _dream_for_record_locked(
                 # async LLM in run_async via the worker helper.
                 from app.core.llm_client_factory import get_llm_for_role
                 from app.worker.tasks import run_async
-                response = run_async(get_llm_for_role("utility", user_id=user_id).acomplete(
-                    prompt,
-                    response_format={"type": "json_object"},
-                ))
+
+                response = run_async(
+                    get_llm_for_role("utility", user_id=user_id).acomplete(
+                        prompt,
+                        response_format={"type": "json_object"},
+                    )
+                )
                 patches, parse_ok = parse_json_patches_ex(str(response.text))
                 if not parse_ok:
                     # Do NOT bump last_dreamed_at — the record stays
@@ -412,7 +429,9 @@ def _dream_for_record_locked(
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "dreaming: LLM call failed record=%s user=%s: %s",
-                    record_id, user_id, exc,
+                    record_id,
+                    user_id,
+                    exc,
                 )
                 summary["error"] = f"llm_failed: {type(exc).__name__}"
                 return summary
@@ -442,7 +461,9 @@ def _dream_for_record_locked(
         except Exception as exc:  # noqa: BLE001
             db.rollback()
             logger.exception(
-                "dreaming: hard failure record=%s user=%s", record_id, user_id,
+                "dreaming: hard failure record=%s user=%s",
+                record_id,
+                user_id,
             )
             summary["error"] = f"hard_failure: {type(exc).__name__}: {exc}"
         finally:
@@ -450,9 +471,13 @@ def _dream_for_record_locked(
 
     logger.info(
         "dreaming: record=%s user=%s applied=%d dropped=%d skipped=%d reason=%s err=%s",
-        record_id, summary["user_id"], summary["applied"],
-        summary["dropped"], summary["skipped"],
-        summary["skipped_reason"], summary["error"],
+        record_id,
+        summary["user_id"],
+        summary["applied"],
+        summary["dropped"],
+        summary["skipped"],
+        summary["skipped_reason"],
+        summary["error"],
     )
     return summary
 
@@ -473,7 +498,9 @@ def _load_snapshot_for_dream(user_id: str, *, db: Session) -> dict[str, Any]:
     ARE the per-topic content the LLM patches against.
     """
     user_profile = memory_document_service.load(user_id, "user_profile", db=db)
-    learning_strategy = memory_document_service.load(user_id, "learning_strategy", db=db)
+    learning_strategy = memory_document_service.load(
+        user_id, "learning_strategy", db=db
+    )
     states = memory_ability_state_service.load_active(user_id, db=db)
     return {
         "user_profile": (user_profile or "").strip(),
@@ -561,7 +588,9 @@ def _format_record_messages(messages: list[dict]) -> str:
                 "the message below was truncated to fit token budget ...]",
             )
         else:
-            kept.insert(0, "[... single oversized message truncated to fit token budget ...]")
+            kept.insert(
+                0, "[... single oversized message truncated to fit token budget ...]"
+            )
     elif len(kept) < len(rendered):
         kept.insert(
             0,

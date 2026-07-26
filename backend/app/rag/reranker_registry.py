@@ -56,7 +56,9 @@ PROVIDERS: dict[str, RerankerProvider] = {
     ),
     "dashscope": RerankerProvider(
         kind="remote_openai_style",
-        api_base=os.getenv("DASHSCOPE_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        api_base=os.getenv(
+            "DASHSCOPE_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        ),
         api_key_env="DASHSCOPE_API_KEY",
         label="阿里通义",
         china_friendly=True,
@@ -87,7 +89,8 @@ def resolve_reranker() -> ResolvedReranker:
     pid = (settings.RERANKER_PROVIDER or "local").strip().lower()
     if pid not in PROVIDERS:
         logger.warning(
-            "Unknown RERANKER_PROVIDER=%r, falling back to 'local'", pid,
+            "Unknown RERANKER_PROVIDER=%r, falling back to 'local'",
+            pid,
         )
         pid = "local"
     model = (settings.RERANKER_MODEL or "BAAI/bge-reranker-v2-m3").strip()
@@ -102,7 +105,8 @@ def list_providers() -> list[dict[str, Any]]:
             "label": p.label,
             "china_friendly": p.china_friendly,
             "api_key_env": p.api_key_env,
-            "ready": p.kind == "local_hf_crossencoder" or bool(os.getenv(p.api_key_env, "").strip()),
+            "ready": p.kind == "local_hf_crossencoder"
+            or bool(os.getenv(p.api_key_env, "").strip()),
         }
         for pid, p in PROVIDERS.items()
     ]
@@ -189,7 +193,11 @@ class RemoteAPIRerank(BaseNodePostprocessor):
             if idx is None or idx >= len(nodes):
                 continue
             n = nodes[idx]
-            out.append(NodeWithScore(node=n.node, score=float(score) if score is not None else n.score))
+            out.append(
+                NodeWithScore(
+                    node=n.node, score=float(score) if score is not None else n.score
+                )
+            )
         if not out:
             # Every returned index was unusable — same contract as "no
             # results": raise so the caller takes its explicit fallback path
@@ -235,7 +243,10 @@ def build_reranker(top_n: int) -> Any:
                 " to be set in .env"
             )
         logger.info(
-            "Reranker: %s model=%s top_n=%d", p.label, cfg.model, top_n,
+            "Reranker: %s model=%s top_n=%d",
+            p.label,
+            cfg.model,
+            top_n,
         )
         return RemoteAPIRerank(
             api_base=p.api_base,

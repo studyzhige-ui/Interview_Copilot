@@ -14,7 +14,7 @@
  *     list). The dropdown / CRUD UI is hidden; ChatPanel just renders
  *     the chat for whatever sessionId was handed in.
  *
- * The transport is SSE (``streamChatSSE``). Mock-style WebSocket has been
+ * The transport is SSE (``streamChatTurn``). Mock-style WebSocket has been
  * removed — see ``app/api/chat/streaming.py`` for the rationale (GPT /
  * Claude / Gemini all use SSE for one-way text).
  *
@@ -101,7 +101,9 @@ export function ChatPanel({
     useGlobalMemoryToggle(activeSessionId);
   const { profiles, activeRole, activeProfileId, activeModelName, pickModel } =
     useChatModels(mode);
-  const { sendMessage, cancel } = useChatStream({ activeSessionId, getRuntime, bump, mode });
+  const { sendMessage, resumeTurn, cancel } = useChatStream({
+    activeSessionId, getRuntime, bump, mode,
+  });
 
   // ── Refs + dropdown-close-on-outside-click ───────────────────────────
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -119,10 +121,7 @@ export function ChatPanel({
   }, []);
 
   // ── Lazy-load transcript for the active session ──────────────────────
-  // Uses ``/chat/transcript`` (block-aware) rather than ``/chat/history``
-  // (flat-content) — necessary for replaying L2 agent turns with their
-  // tool-call cards. The endpoint always sets ``blocks`` per message,
-  // synthesising a single text block for legacy rows.
+  // The block-aware transcript replays agent tool-call cards.
   useEffect(() => {
     if (!activeSessionId) return;
     const r = getRuntime(activeSessionId);
@@ -140,13 +139,14 @@ export function ChatPanel({
         if (rt.messages.length === 0) rt.messages = resp.messages.map(toUI);
         rt.loadedHistory = true;
         bump();
+        if (resp.active_turn_id && !rt.streaming) resumeTurn(resp.active_turn_id);
       })
       .catch(() => { /* empty / fresh session OR aborted on switch — both fine */ });
     return () => {
       alive = false;
       controller.abort();
     };
-  }, [activeSessionId, getRuntime, bump]);
+  }, [activeSessionId, getRuntime, bump, resumeTurn]);
 
   // Auto-scroll on new content.
   useEffect(() => {
@@ -158,7 +158,8 @@ export function ChatPanel({
   const send = () => {
     const text = input.trim();
     if (!text || !activeSessionId) return;
-    if (getRuntime(activeSessionId).streaming) return;
+    const runtime = getRuntime(activeSessionId);
+    if (runtime.streaming || runtime.turnId) return;
     let payload = text;
     if (attachments.length > 0) {
       const tail = attachments.map((a) => `[附件: ${a.filename} (doc=${a.doc_id})]`).join('\n');

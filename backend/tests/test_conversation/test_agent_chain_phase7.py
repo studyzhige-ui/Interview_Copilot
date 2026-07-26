@@ -1,6 +1,7 @@
 """Phase 7 agent-chain behaviors: profile-driven window (AGT-6), block-aware
 turn weights (AGT-7), ctx-aware tool probes (AGT-9), mode persistence
 (AGT-4)."""
+
 from __future__ import annotations
 
 from app.services.chat.context_assembly_pipeline import TokenBudget, _turn_tokens
@@ -27,10 +28,13 @@ def test_turn_tokens_counts_agent_blocks():
     agent_turn = {
         "content": "final answer",
         "blocks": [
-            {"type": "tool_use", "id": "c1", "name": "web_search",
-             "input": {"query": "x" * 500}},
-            {"type": "tool_result", "tool_use_id": "c1",
-             "content": "y" * 2000},
+            {
+                "type": "tool_use",
+                "id": "c1",
+                "name": "web_search",
+                "input": {"query": "x" * 500},
+            },
+            {"type": "tool_result", "tool_use_id": "c1", "content": "y" * 2000},
             {"type": "text", "text": "final answer"},
         ],
     }
@@ -64,13 +68,28 @@ def test_registry_passes_user_id_to_capable_check_fns():
     reg = ToolRegistry()
     reg._entries = {}
     reg._defaults_loaded = True
+
     async def _h(args, ctx):
         return {}
 
-    reg.register(ToolEntry(name="ctx_tool", description="d", args_model=_Args,
-                           handler=_h, check_fn=ctx_probe))
-    reg.register(ToolEntry(name="env_tool", description="d", args_model=_Args,
-                           handler=_h, check_fn=env_probe))
+    reg.register(
+        ToolEntry(
+            name="ctx_tool",
+            description="d",
+            args_model=_Args,
+            handler=_h,
+            check_fn=ctx_probe,
+        )
+    )
+    reg.register(
+        ToolEntry(
+            name="env_tool",
+            description="d",
+            args_model=_Args,
+            handler=_h,
+            check_fn=env_probe,
+        )
+    )
 
     names = {e.name for e in reg._iter_available(user_id="alice")}
     assert names == {"ctx_tool", "env_tool"}
@@ -85,6 +104,8 @@ def test_tavily_probe_accepts_user_key(monkeypatch):
 
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     assert web._tavily_available() is False
-    monkeypatch.setattr(web, "_resolve_tavily_key", lambda uid: "tvly-x" if uid == "alice" else "")
+    monkeypatch.setattr(
+        web, "_resolve_tavily_key", lambda uid: "tvly-x" if uid == "alice" else ""
+    )
     assert web._tavily_available(user_id="alice") is True
     assert web._tavily_available(user_id="bob") is False

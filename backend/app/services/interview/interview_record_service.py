@@ -8,6 +8,7 @@ record's id.
 The analysis orchestrator (see services/interview/analysis_orchestrator.py)
 drives state transitions; this module is just persistence helpers.
 """
+
 from __future__ import annotations
 
 import json
@@ -127,7 +128,9 @@ class InterviewRecordService:
         try:
             query = db.query(InterviewRecord).filter(InterviewRecord.id == record_id)
             if user_id:
-                query = query.filter(InterviewRecord.user_id == resolve_user_pk(db, user_id))
+                query = query.filter(
+                    InterviewRecord.user_id == resolve_user_pk(db, user_id)
+                )
             return query.first()
         finally:
             db.close()
@@ -199,7 +202,11 @@ class InterviewRecordService:
         if own_db:
             db = SessionLocal()
         try:
-            row = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            row = (
+                db.query(InterviewRecord)
+                .filter(InterviewRecord.id == record_id)
+                .first()
+            )
             if row is None:
                 return
             row.status = status
@@ -234,7 +241,11 @@ class InterviewRecordService:
         if own_db:
             db = SessionLocal()
         try:
-            row = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            row = (
+                db.query(InterviewRecord)
+                .filter(InterviewRecord.id == record_id)
+                .first()
+            )
             if row is None:
                 return
             tr = None
@@ -277,7 +288,11 @@ class InterviewRecordService:
         if own_db:
             db = SessionLocal()
         try:
-            row = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            row = (
+                db.query(InterviewRecord)
+                .filter(InterviewRecord.id == record_id)
+                .first()
+            )
             if row is None or not row.transcript_id:
                 return ""
             tr = (
@@ -295,7 +310,11 @@ class InterviewRecordService:
         (both ``None`` when there is no transcript)."""
         db = SessionLocal()
         try:
-            row = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            row = (
+                db.query(InterviewRecord)
+                .filter(InterviewRecord.id == record_id)
+                .first()
+            )
             if row is None or not row.transcript_id:
                 return {"text": None, "segments_json": None}
             tr = (
@@ -320,11 +339,17 @@ class InterviewRecordService:
         if own_db:
             db = SessionLocal()
         try:
-            row = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            row = (
+                db.query(InterviewRecord)
+                .filter(InterviewRecord.id == record_id)
+                .first()
+            )
             if row is None:
                 return
             row.analysis_json = (
-                analysis if isinstance(analysis, str) else json.dumps(analysis, ensure_ascii=False)
+                analysis
+                if isinstance(analysis, str)
+                else json.dumps(analysis, ensure_ascii=False)
             )
             row.updated_at = datetime.utcnow()
             if own_db:
@@ -356,9 +381,7 @@ class InterviewRecordService:
         try:
             inserted: list[InterviewQA] = []
             existing_count = (
-                db.query(InterviewQA)
-                .filter(InterviewQA.record_id == record_id)
-                .count()
+                db.query(InterviewQA).filter(InterviewQA.record_id == record_id).count()
             )
             for offset, payload in enumerate(qa_inputs):
                 refs = payload.get("grounding_refs")
@@ -381,7 +404,9 @@ class InterviewRecordService:
                     source_segment_start=payload.get("source_segment_start"),
                     source_segment_end=payload.get("source_segment_end"),
                     answer_input_mode=str(payload.get("answer_input_mode") or "text"),
-                    answer_audio_file_asset_id=payload.get("answer_audio_file_asset_id"),
+                    answer_audio_file_asset_id=payload.get(
+                        "answer_audio_file_asset_id"
+                    ),
                     # Optional per-QA classification metadata (usually null).
                     action=payload.get("action"),
                     topic=payload.get("topic"),
@@ -434,7 +459,9 @@ class InterviewRecordService:
             if own_db:
                 db.close()
 
-    def increment_analyzed_count(self, record_id: str, by: int = 1, *, db: Session | None = None) -> None:
+    def increment_analyzed_count(
+        self, record_id: str, by: int = 1, *, db: Session | None = None
+    ) -> None:
         """Bump the per-question progress counter the SSE stream interpolates
         on. Counterpart of ``reset_analyzed_count`` — see its docstring for
         the retry-stacking contract."""
@@ -442,7 +469,11 @@ class InterviewRecordService:
         if own_db:
             db = SessionLocal()
         try:
-            row = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            row = (
+                db.query(InterviewRecord)
+                .filter(InterviewRecord.id == record_id)
+                .first()
+            )
             if row is None:
                 return
             row.analyzed_qa_count = (row.analyzed_qa_count or 0) + by
@@ -455,7 +486,9 @@ class InterviewRecordService:
             if own_db:
                 db.close()
 
-    def reset_analyzed_count(self, record_id: str, *, db: Session | None = None) -> None:
+    def reset_analyzed_count(
+        self, record_id: str, *, db: Session | None = None
+    ) -> None:
         """Zero the per-question progress counter.
 
         Called at the start of the analyzing stage so a Celery retry /
@@ -466,7 +499,11 @@ class InterviewRecordService:
         if own_db:
             db = SessionLocal()
         try:
-            row = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            row = (
+                db.query(InterviewRecord)
+                .filter(InterviewRecord.id == record_id)
+                .first()
+            )
             if row is None:
                 return
             row.analyzed_qa_count = 0

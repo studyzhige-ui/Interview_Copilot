@@ -16,6 +16,7 @@ Two things it adds over the old table:
 Write-heavy, read-rarely (the history UI). ``user_id`` is the stable
 ``users.id``.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -37,7 +38,10 @@ from app.db.database import Base
 # compaction_rewrite: the dreaming-time full-doc size compaction (MEM-5) —
 # audited with full before/after so an over-aggressive rewrite is revertible.
 CHANGE_TYPES = (
-    "patch_realtime", "patch_dreaming", "user_edit", "user_delete",
+    "patch_realtime",
+    "patch_dreaming",
+    "user_edit",
+    "user_delete",
     "compaction_rewrite",
 )
 
@@ -67,7 +71,9 @@ class MemoryAuditEntry(Base):
     # Typed link to the touched row (exactly one is set for a normal patch).
     # SET NULL so deleting a document/state keeps its audit history.
     memory_document_id = Column(
-        String, ForeignKey("memory_documents.id", ondelete="SET NULL"), nullable=True,
+        String,
+        ForeignKey("memory_documents.id", ondelete="SET NULL"),
+        nullable=True,
     )
     memory_ability_state_id = Column(
         String,

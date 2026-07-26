@@ -98,8 +98,6 @@ export async function updateMe(patch: {
   nickname?: string;
   avatar_url?: string;
   bio?: string;
-  /** Canonical (Phase H). Backend also accepts the legacy alias
-   *  ``memory_recall_default`` via Pydantic ``populate_by_name``. */
   global_memory_enabled?: boolean;
 }): Promise<MeResponse> {
   const res = await apiClient.patch('/auth/me', patch);

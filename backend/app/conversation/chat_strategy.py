@@ -10,16 +10,16 @@ No tools, no while loop, no compaction — that's the agent strategy's
 territory. The chat strategy's whole job is "render the right prompt
 and stream one LLM call."
 """
+
 from __future__ import annotations
 
 import logging
 from typing import AsyncGenerator
 
-from llama_index.core import Settings
-
 from app.conversation.events import HarnessEvent
 from app.conversation.strategy import StrategyContext, StrategyResult
 from app.core.llm_client_factory import get_llm_for_role
+from app.core.tokens import token_count as _count_tokens
 from app.services.chat.citation import validate_citations
 from app.services.chat.context_assembly_pipeline import (
     AssembledContext,
@@ -28,12 +28,6 @@ from app.services.chat.context_assembly_pipeline import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-# Token counting: the canonical tokenizer lives in app.core.tokens — a
-# second module-level tiktoken encoder here duplicated init cost and could
-# drift on encoding choice (AGT-6).
-from app.core.tokens import token_count as _count_tokens
 
 
 DIRECT_SYSTEM_PROMPT = """You are Interview Copilot, a concise technical interview assistant.
@@ -87,19 +81,23 @@ class ChatPipelineStrategy:
 
         if ctx.needs_knowledge_retrieval:
             prompt = self.renderer.render_answer_prompt(
-                assembled, system_prompt=RAG_SYSTEM_RULES,
+                assembled,
+                system_prompt=RAG_SYSTEM_RULES,
             )
             llm = get_llm_for_role("primary", user_id=ctx.user_id)
             response_generator = await llm.astream_complete(prompt)
         else:
             prompt = self.renderer.render_answer_prompt(
-                assembled, system_prompt=DIRECT_SYSTEM_PROMPT,
+                assembled,
+                system_prompt=DIRECT_SYSTEM_PROMPT,
             )
             llm = get_llm_for_role("utility", user_id=ctx.user_id)
             response_generator = await llm.astream_complete(prompt)
 
         yield HarnessEvent.status(
-            "正在生成回答...", step=0, elapsed_ms=0,
+            "正在生成回答...",
+            step=0,
+            elapsed_ms=0,
         )
 
         final_answer = ""
@@ -119,7 +117,9 @@ class ChatPipelineStrategy:
         # turn actually had citable sources, so direct chat never warns.
         if ctx.sources:
             validate_citations(
-                final_answer, ctx.sources, retrieval_hit=ctx.retrieval_hit,
+                final_answer,
+                ctx.sources,
+                retrieval_hit=ctx.retrieval_hit,
             )
 
         result.final_answer = final_answer

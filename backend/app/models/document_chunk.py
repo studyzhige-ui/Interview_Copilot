@@ -18,6 +18,7 @@ the same value used as the Milvus retrieval-scope key. CLEANUP #2 moved the whol
 RAG scope key from username to ``users.id``; ingestion writes the pk to both the
 Milvus node metadata and this column, and retrieval filters both by the pk.
 """
+
 import uuid
 from datetime import datetime
 
@@ -88,5 +89,8 @@ class DocumentChunk(Base):
     deleted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
     )

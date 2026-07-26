@@ -9,6 +9,11 @@ import { parseJdForMock } from '@/api/mock';
 
 export type InterviewerStyle = 'friendly' | 'professional' | 'rigorous' | 'pressure';
 export type VoiceMode = 'text' | 'voice' | 'hybrid';
+export type TtsVoice =
+  | 'zh-CN-YunxiNeural'
+  | 'zh-CN-XiaoxiaoNeural'
+  | 'zh-CN-YunjianNeural'
+  | 'zh-CN-XiaoyiNeural';
 
 interface Props {
   onReady: (payload: {
@@ -16,6 +21,7 @@ interface Props {
     jd_text: string;
     interviewer_style: InterviewerStyle;
     voice_mode: VoiceMode;
+    tts_voice: TtsVoice;
   }) => void;
   starting: boolean;
 }
@@ -26,6 +32,25 @@ const STYLE_OPTIONS: Array<{ id: InterviewerStyle; label: string; desc: string }
   { id: 'rigorous', label: '严谨挑剔型', desc: '追问尖锐、追究边界 case' },
   { id: 'pressure', label: '高压面试官', desc: '连珠追问、质疑回答、压力面' },
 ];
+
+const VOICE_PREF_KEY = 'mock.ttsVoice';
+const VOICE_OPTIONS: Array<{ id: TtsVoice; label: string }> = [
+  { id: 'zh-CN-YunxiNeural', label: '云希 · 沉稳男声' },
+  { id: 'zh-CN-XiaoxiaoNeural', label: '晓晓 · 自然女声' },
+  { id: 'zh-CN-YunjianNeural', label: '云健 · 专业男声' },
+  { id: 'zh-CN-XiaoyiNeural', label: '晓伊 · 温和女声' },
+];
+
+export function loadPreferredVoice(): TtsVoice {
+  try {
+    const stored = localStorage.getItem(VOICE_PREF_KEY);
+    const option = VOICE_OPTIONS.find((item) => item.id === stored);
+    if (option) return option.id;
+  } catch {
+    // Storage may be unavailable in privacy-restricted browsers.
+  }
+  return 'zh-CN-YunxiNeural';
+}
 
 type CardKey = 'resume' | 'jd';
 
@@ -44,20 +69,17 @@ export function MockSetup({ onReady, starting }: Props) {
   });
   const [resumeMode, setResumeMode] = useState<'upload' | 'existing'>('existing');
   const [storedResumes, setStoredResumes] = useState<StoredResume[]>([]);
-  const [loadingResumes, setLoadingResumes] = useState(false);
+  const [loadingResumes, setLoadingResumes] = useState(true);
   const [jdMode, setJdMode] = useState<'upload' | 'paste'>('upload');
   const [jdText, setJdText] = useState('');
   const [style, setStyle] = useState<InterviewerStyle>('professional');
-  // Voice mode is no longer user-configurable on Setup — defaults to hybrid
-  // (TTS for interviewer + free text/voice input). Users mute / unmute mid-
-  // interview via the speaker button in MockLive header.
+  const [ttsVoice, setTtsVoice] = useState<TtsVoice>(loadPreferredVoice);
   const voiceMode: VoiceMode = 'hybrid';
   const resumeRef = useRef<HTMLInputElement | null>(null);
   const jdRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let alive = true;
-    setLoadingResumes(true);
     listStoredResumes()
       .then((rs) => {
         if (!alive) return;
@@ -69,6 +91,14 @@ export function MockSetup({ onReady, starting }: Props) {
       .finally(() => { if (alive) setLoadingResumes(false); });
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(VOICE_PREF_KEY, ttsVoice);
+    } catch {
+      // The interview still works when preference persistence is unavailable.
+    }
+  }, [ttsVoice]);
 
   const pickExistingResume = (r: StoredResume) => {
     setCards((c) => ({
@@ -162,15 +192,28 @@ export function MockSetup({ onReady, starting }: Props) {
           />
         </div>
 
-        {/* Preferences: just interviewer style. Voice is always hybrid
-            (TTS + free text/voice answer), mute toggle lives inside MockLive. */}
-        <div className="w-full mt-8">
+        <div className="w-full mt-8 space-y-4">
           <PrefGroup
             label="面试官风格"
             options={STYLE_OPTIONS}
             value={style}
             onChange={setStyle}
           />
+          <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-[0_2px_10px_rgba(15,23,42,0.04)]">
+            <label htmlFor="tts-voice" className="text-[16px] font-semibold text-stone-800">
+              面试官音色
+            </label>
+            <select
+              id="tts-voice"
+              value={ttsVoice}
+              onChange={(event) => setTtsVoice(event.target.value as TtsVoice)}
+              className="mt-3 w-full px-3 py-2.5 bg-white border border-stone-300 rounded-lg text-[14px] text-stone-800 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
+            >
+              {VOICE_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>{option.label}</option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className="mt-9 flex justify-center">
@@ -185,6 +228,7 @@ export function MockSetup({ onReady, starting }: Props) {
                 jd_text: jdText.trim(),
                 interviewer_style: style,
                 voice_mode: voiceMode,
+                tts_voice: ttsVoice,
               })
             }
           >

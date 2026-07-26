@@ -27,6 +27,7 @@ rank order plus a structured :class:`RetrievalState`. The old
 numbering and the final sources array are context assembly's job — NOT
 produced here (retrieval plan §2.7).
 """
+
 import asyncio
 import hashlib
 import logging
@@ -86,7 +87,8 @@ def init_reranker():
             _reranker = build_reranker(top_n=settings.RERANK_TOP_N)
             logger.info(
                 "Reranker ready: provider=%s model=%s",
-                cfg.provider_id, cfg.model,
+                cfg.provider_id,
+                cfg.model,
             )
         except Exception as e:
             # Reranker is part of the configured stack — if it can't load,
@@ -101,8 +103,11 @@ def init_reranker():
 # Pure helpers
 # ---------------------------------------------------------------------------
 
+
 def _hit_in_scope(
-    hit: dict[str, Any], user_pk: int, source_kind: Optional[str] = None,
+    hit: dict[str, Any],
+    user_pk: int,
+    source_kind: Optional[str] = None,
 ) -> bool:
     """Defence-in-depth tenant check on a Milvus hit.
 
@@ -188,14 +193,19 @@ def _hydrate_node_ids(node_ids: list[str]) -> list[dict[str, Any]]:
 def _empty(reason: str, *, fallback_used: bool = False) -> RetrievalResult:
     return RetrievalResult(
         state=RetrievalState(
-            retrieval_hit=False, empty_reason=reason, fallback_used=fallback_used,
+            retrieval_hit=False,
+            empty_reason=reason,
+            fallback_used=fallback_used,
         )
     )
 
 
 async def _gather_hits(
-    dense_q: str, sparse_q: str, user_pk: int,
-    source_kind: Optional[str], top_k: int,
+    dense_q: str,
+    sparse_q: str,
+    user_pk: int,
+    source_kind: Optional[str],
+    top_k: int,
 ) -> list[dict[str, Any]]:
     """One Milvus hybrid pass (dense ANN on the dense query's embedding +
     server-side BM25 on the sparse query), tenant-scoped. Embedding + search
@@ -204,7 +214,8 @@ async def _gather_hits(
     from app.rag import milvus_hybrid
 
     query_dense = await asyncio.to_thread(
-        Settings.embed_model.get_query_embedding, dense_q,
+        Settings.embed_model.get_query_embedding,
+        dense_q,
     )
     hits = await asyncio.to_thread(
         lambda: milvus_hybrid.hybrid_search(
@@ -220,7 +231,9 @@ async def _gather_hits(
 
 
 def _retrieval_specs(
-    dense_q: str, sparse_q: str, sub_queries: Optional[list[dict]],
+    dense_q: str,
+    sparse_q: str,
+    sub_queries: Optional[list[dict]],
 ) -> list[tuple[str, str]]:
     """Build the (dense, sparse) query specs to fan out over.
 
@@ -241,6 +254,7 @@ def _retrieval_specs(
 # ---------------------------------------------------------------------------
 # Core retrieval function
 # ---------------------------------------------------------------------------
+
 
 async def query_knowledge_base(
     *,
@@ -282,7 +296,8 @@ async def query_knowledge_base(
     if user_pk is None:
         logger.warning(
             "query_knowledge_base: principal %r did not resolve to a users.id; "
-            "returning empty (no unscoped retrieval).", user_id,
+            "returning empty (no unscoped retrieval).",
+            user_id,
         )
         return _empty(EMPTY_PRINCIPAL_UNRESOLVED)
 
@@ -296,15 +311,20 @@ async def query_knowledge_base(
     )
     logger.info(
         "RAG hybrid retrieval: user_pk=%s specs=%d top_k=%d source_kind=%s",
-        user_pk, len(specs), per_query_top_k, source_kind,
+        user_pk,
+        len(specs),
+        per_query_top_k,
+        source_kind,
     )
     try:
         # Concurrent fan-out: each spec's embed + Milvus round-trip overlaps
         # the others (capped at MAX_SUB_QUERIES, so bounded).
-        per_spec_hits = await asyncio.gather(*[
-            _gather_hits(d, s, user_pk, source_kind, per_query_top_k)
-            for d, s in specs
-        ])
+        per_spec_hits = await asyncio.gather(
+            *[
+                _gather_hits(d, s, user_pk, source_kind, per_query_top_k)
+                for d, s in specs
+            ]
+        )
     except Exception as exc:  # noqa: BLE001 — degraded search → empty, not a crash
         logger.error("RAG hybrid search unavailable: %s", exc)
         return _empty(EMPTY_MILVUS_UNAVAILABLE)
@@ -357,11 +377,14 @@ async def query_knowledge_base(
     else:
         try:
             processed_nodes = await asyncio.to_thread(
-                _reranker.postprocess_nodes, raw_nodes, QueryBundle(dense_q),
+                _reranker.postprocess_nodes,
+                raw_nodes,
+                QueryBundle(dense_q),
             )
         except RerankerUnavailableError as exc:
             logger.warning(
-                "Reranker unavailable; falling back to RRF order: %s", exc,
+                "Reranker unavailable; falling back to RRF order: %s",
+                exc,
             )
             fallback_used = True
             processed_nodes = raw_nodes
@@ -375,8 +398,7 @@ async def query_knowledge_base(
         score_source = SCORE_SOURCE_RETRIEVER_FALLBACK
     else:
         valid_nodes = [
-            node for node in processed_nodes
-            if _score_passes(node.score, min_score)
+            node for node in processed_nodes if _score_passes(node.score, min_score)
         ][: settings.RERANK_TOP_N]
         score_source = SCORE_SOURCE_RERANKER
         if not valid_nodes:
@@ -411,7 +433,9 @@ async def query_knowledge_base(
         chunks.append(chunk)
 
     logger.info(
-        "RAG retrieval done: %d chunks (score_source=%s)", len(chunks), score_source,
+        "RAG retrieval done: %d chunks (score_source=%s)",
+        len(chunks),
+        score_source,
     )
     return RetrievalResult(
         chunks=chunks,

@@ -7,7 +7,6 @@ name "compaction_service", which collided conceptually with the memory
 domain's doc-size compaction (MEM-5) — hence the move to the chat domain.
 """
 
-
 import logging
 
 from app.core.llm_client_factory import get_llm_for_role
@@ -68,7 +67,10 @@ COMPACTION_PROMPT = """你是一个对话摘要助手。
 
 
 async def summarize_conversation(
-    old_summary: str, conversation: str, *, user_id: str | None = None,
+    old_summary: str,
+    conversation: str,
+    *,
+    user_id: str | None = None,
 ) -> str:
     """The single LLM summarization core — used by BOTH the outer assembly-time
     compaction (``ContextAssemblyPipeline._maybe_compact``) and the inner
@@ -85,7 +87,8 @@ async def summarize_conversation(
     )
     try:
         response = await get_llm_for_role("utility", user_id=user_id).acomplete(
-            prompt, response_format={"type": "json_object"},
+            prompt,
+            response_format={"type": "json_object"},
         )
         new_summary = str(
             _extract_json_payload(str(response.text)).get("summary", "")

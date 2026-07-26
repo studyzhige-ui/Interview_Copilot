@@ -14,6 +14,7 @@ here:
 
 Change a number here and every path moves together.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

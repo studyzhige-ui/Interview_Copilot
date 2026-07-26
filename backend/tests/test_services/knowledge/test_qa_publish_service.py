@@ -5,6 +5,7 @@ content_text = question + improved_answer, back-fills interview_qa.saved_documen
 is idempotent (re-save refreshes the same doc), and unsave removes it + clears the
 ref. The Milvus/embedding index step is stubbed (out of scope for unit tests).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -20,11 +21,18 @@ def test_save_refresh_and_unsave_qa(db_session, monkeypatch):
     user = User(username="alice", hashed_password="x")
     db_session.add(user)
     db_session.flush()
-    rec = InterviewRecord(id="ir_1", user_id=user.id, source="mock", status="review_ready")
+    rec = InterviewRecord(
+        id="ir_1", user_id=user.id, source="mock", status="review_ready"
+    )
     db_session.add(rec)
     qa = InterviewQA(
-        id="qa_1", record_id="ir_1", order_idx=0, phase="technical",
-        question="什么是缓存雪崩?", answer="原始回答", improved_answer="缓存雪崩是指大量缓存同时失效……",
+        id="qa_1",
+        record_id="ir_1",
+        order_idx=0,
+        phase="technical",
+        question="什么是缓存雪崩?",
+        answer="原始回答",
+        improved_answer="缓存雪崩是指大量缓存同时失效……",
     )
     db_session.add(qa)
     db_session.commit()
@@ -37,9 +45,14 @@ def test_save_refresh_and_unsave_qa(db_session, monkeypatch):
 
     monkeypatch.setattr("app.rag.ingestion.ingest_text", _fake_ingest)
 
-    doc = asyncio.run(qa_publish_service.save_qa_to_knowledge(
-        db_session, user_pk=user.id, qa=qa, record=rec,
-    ))
+    doc = asyncio.run(
+        qa_publish_service.save_qa_to_knowledge(
+            db_session,
+            user_pk=user.id,
+            qa=qa,
+            record=rec,
+        )
+    )
     assert doc.source_kind == "improved_qa"
     assert doc.source_ref_type == "interview_qa"
     assert doc.source_ref_id == "qa_1"
@@ -53,12 +66,21 @@ def test_save_refresh_and_unsave_qa(db_session, monkeypatch):
     assert qa2.saved_document_id == doc.id
 
     # Idempotent re-save: refresh the SAME doc, not a second one.
-    doc2 = asyncio.run(qa_publish_service.save_qa_to_knowledge(
-        db_session, user_pk=user.id, qa=qa2, record=rec,
-    ))
+    doc2 = asyncio.run(
+        qa_publish_service.save_qa_to_knowledge(
+            db_session,
+            user_pk=user.id,
+            qa=qa2,
+            record=rec,
+        )
+    )
     assert doc2.id == doc.id
-    assert db_session.query(KnowledgeDocument).filter(
-        KnowledgeDocument.source_ref_id == "qa_1").count() == 1
+    assert (
+        db_session.query(KnowledgeDocument)
+        .filter(KnowledgeDocument.source_ref_id == "qa_1")
+        .count()
+        == 1
+    )
 
     # Unsave: drop the doc (stub the Milvus-touching hard delete) + clear the ref.
     deleted: dict = {}
@@ -72,7 +94,10 @@ def test_save_refresh_and_unsave_qa(db_session, monkeypatch):
         "app.services.knowledge.knowledge_service.hard_delete_knowledge_document",
         _fake_delete,
     )
-    assert qa_publish_service.unsave_qa_from_knowledge(db_session, user_pk=user.id, qa=qa2) is True
+    assert (
+        qa_publish_service.unsave_qa_from_knowledge(db_session, user_pk=user.id, qa=qa2)
+        is True
+    )
     assert deleted["id"] == doc.id
     qa3 = db_session.query(InterviewQA).filter(InterviewQA.id == "qa_1").first()
     assert qa3.saved_document_id is None
@@ -87,10 +112,23 @@ def test_unsave_noop_when_not_saved(db_session):
     user = User(username="bob", hashed_password="x")
     db_session.add(user)
     db_session.flush()
-    db_session.add(InterviewRecord(id="ir_2", user_id=user.id, source="mock", status="review_ready"))
-    qa = InterviewQA(id="qa_2", record_id="ir_2", order_idx=0, phase="technical",
-                     question="q", answer="a")
+    db_session.add(
+        InterviewRecord(
+            id="ir_2", user_id=user.id, source="mock", status="review_ready"
+        )
+    )
+    qa = InterviewQA(
+        id="qa_2",
+        record_id="ir_2",
+        order_idx=0,
+        phase="technical",
+        question="q",
+        answer="a",
+    )
     db_session.add(qa)
     db_session.commit()
 
-    assert qa_publish_service.unsave_qa_from_knowledge(db_session, user_pk=user.id, qa=qa) is False
+    assert (
+        qa_publish_service.unsave_qa_from_knowledge(db_session, user_pk=user.id, qa=qa)
+        is False
+    )

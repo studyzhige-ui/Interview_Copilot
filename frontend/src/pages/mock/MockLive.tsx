@@ -14,7 +14,7 @@ import { abandonMockInterview, getInProgressMock, submitMockAnswer, finishMockIn
 import { extractErr } from '@/api/client';
 import { uploadFileAsset } from '@/api/fileAssets';
 import { useBlocker, useNavigate } from 'react-router-dom';
-import type { VoiceMode } from './MockSetup';
+import type { TtsVoice, VoiceMode } from './MockSetup';
 
 // Web Speech API is reachable on Chrome/Edge **only when the host can reach
 // Google's speech service** — in mainland China the recognizer silently fails
@@ -40,6 +40,7 @@ interface Props {
   /** The opening / current interviewer line (greeting + question), one string. */
   initialQuestion: string;
   voiceMode: VoiceMode;
+  ttsVoice: TtsVoice;
   /** Turns answered before this mount (resume path) — keeps answeredCount
    *  honest after a refresh so the finish button isn't wrongly disabled. */
   resumedAnsweredCount?: number;
@@ -54,7 +55,7 @@ function fmtDuration(ms: number) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnsweredCount = 0, initialQuestionMessageId = null, onFinished, onAbandoned }: Props) {
+export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resumedAnsweredCount = 0, initialQuestionMessageId = null, onFinished, onAbandoned }: Props) {
   const [turns, setTurns] = useState<Turn[]>(
     initialQuestion ? [{ who: 'interviewer', text: initialQuestion }] : [],
   );
@@ -77,7 +78,7 @@ export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnswered
 
   const ttsEnabledByMode = voiceMode === 'voice' || voiceMode === 'hybrid';
   const ttsActive = ttsEnabledByMode && !ttsMuted;
-  const tts = useTts({ enabled: ttsActive });
+  const tts = useTts({ enabled: ttsActive, voice: ttsVoice });
   const speech = useSpeechRecognition('zh-CN');
   const [sttMode, setSttMode] = useState<'whisper' | 'native'>(loadPreferredStt);
   useEffect(() => {
@@ -108,6 +109,8 @@ export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnswered
       const msg = speechMessage ?? '';
       if (/network|service|not-allowed/i.test(msg)) {
         toast.warn('浏览器语音识别不可达，已切到 Whisper');
+        // External speech-service state drives this fallback.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setSttMode('whisper');
       }
     }
@@ -120,6 +123,8 @@ export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnswered
     if (!useNativeStt) return;
     if (speechPhase === 'listening') {
       const combined = (speechFinalText + speechInterim).trimStart();
+      // Mirror the external recognizer's live transcript into the editor.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setTyping(combined);
     }
   }, [useNativeStt, speechPhase, speechFinalText, speechInterim]);
@@ -202,7 +207,7 @@ export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnswered
 
   const [transcribing, setTranscribing] = useState(false);
 
-  // Path A: Web Speech API — partials show in textarea, final commits on stop.
+  // Browser recognition: partials show in the textarea; stop commits the final text.
   const onMicToggleNative = () => {
     if (speech.state.phase === 'listening') {
       speech.stop();
@@ -222,7 +227,7 @@ export function MockLive({ recordId, initialQuestion, voiceMode, resumedAnswered
     }
   };
 
-  // Path B: MediaRecorder → backend transcribe.
+  // Backend recognition: MediaRecorder uploads one clip for transcription.
   const onMicToggleRecorder = async () => {
     if (rec.state === 'recording') {
       const blob = await rec.stop();

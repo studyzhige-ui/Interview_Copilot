@@ -6,6 +6,7 @@ every fallback result. The new contract: any unusable outcome raises
 ``RerankerUnavailableError`` so the retriever takes its EXPLICIT fallback
 path (retrieval plan §2.5).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -25,7 +26,10 @@ def _nodes(*texts: str) -> list[NodeWithScore]:
 
 def _reranker() -> RemoteAPIRerank:
     return RemoteAPIRerank(
-        api_base="https://rerank.example", api_key="k", model="test-model", top_n=5,
+        api_base="https://rerank.example",
+        api_key="k",
+        model="test-model",
+        top_n=5,
     )
 
 

@@ -15,6 +15,7 @@ If Postgres is unreachable the test is skipped — that way `pytest` is
 still green in environments without Docker (e.g. lightweight CI),
 and CI that does spin up PG catches migration breakage.
 """
+
 from __future__ import annotations
 
 import os
@@ -191,8 +192,13 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     # trips the test. ``memory_items`` is in this list since 0003
     # drops it; ``agent_runs``/``agent_steps`` since 0008 drops them.
     legacy = {
-        "interviews", "transcripts", "analysis_results", "interview_states",
-        "memory_items", "agent_runs", "agent_steps",
+        "interviews",
+        "transcripts",
+        "analysis_results",
+        "interview_states",
+        "memory_items",
+        "agent_runs",
+        "agent_steps",
         # mock_interview_sessions dropped in 0040 (CLEANUP) — runtime + interview_qa replace it.
         "mock_interview_sessions",
     }
@@ -206,6 +212,7 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
 
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
         from alembic.script import ScriptDirectory
+
         expected_head = ScriptDirectory.from_config(cfg).get_current_head()
         assert version == expected_head, (
             f"DB should be at the script head {expected_head!r}, got {version!r}"
@@ -241,7 +248,9 @@ def test_hot_query_composite_indexes_exist(fresh_pg_db, monkeypatch):
     }
     for table, ix_name in expectations.items():
         names = {ix["name"] for ix in insp.get_indexes(table)}
-        assert ix_name in names, f"{table} missing composite index {ix_name}: have {names}"
+        assert ix_name in names, (
+            f"{table} missing composite index {ix_name}: have {names}"
+        )
 
     engine.dispose()
 
@@ -271,25 +280,33 @@ def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
         # Both mock_interview_runtime.user_id and interview_records.user_id are
         # integer users.id FKs (CLEANUP #2), so seed a users row and reference
         # its id (1) from both child inserts.
-        conn.execute(text(
-            "INSERT INTO users (id, username, hashed_password) VALUES (1, 'alice', 'x')"
-        ))
-        conn.execute(text(
-            "INSERT INTO interview_records (id, user_id, source, status) "
-            "VALUES ('ir_cascade', 1, 'upload', 'completed')"
-        ))
-        conn.execute(text(
-            "INSERT INTO interview_qa (id, record_id, order_idx, question, answer) "
-            "VALUES ('qa_x', 'ir_cascade', 0, 'q?', 'a.')"
-        ))
-        conn.execute(text(
-            "INSERT INTO mock_interview_runtime "
-            "(id, user_id, interview_record_id, status, stage_index, "
-            "plan_template_key, interviewer_style, voice_mode, "
-            "started_at, last_activity_at, updated_at) "
-            "VALUES ('mir_x', 1, 'ir_cascade', 'completed', 0, "
-            "'general', 'professional', 'hybrid', NOW(), NOW(), NOW())"
-        ))
+        conn.execute(
+            text(
+                "INSERT INTO users (id, username, hashed_password) VALUES (1, 'alice', 'x')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO interview_records (id, user_id, source, status) "
+                "VALUES ('ir_cascade', 1, 'upload', 'completed')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO interview_qa (id, record_id, order_idx, question, answer) "
+                "VALUES ('qa_x', 'ir_cascade', 0, 'q?', 'a.')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO mock_interview_runtime "
+                "(id, user_id, interview_record_id, status, stage_index, "
+                "plan_template_key, interviewer_style, voice_mode, "
+                "started_at, last_activity_at, updated_at) "
+                "VALUES ('mir_x', 1, 'ir_cascade', 'completed', 0, "
+                "'general', 'professional', 'hybrid', NOW(), NOW(), NOW())"
+            )
+        )
 
     # The actual cascade probe. Pre-0009 this would have raised
     # IntegrityError because the FKs had no ondelete clause.
@@ -297,14 +314,18 @@ def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
         conn.execute(text("DELETE FROM interview_records WHERE id = 'ir_cascade'"))
 
     with engine.connect() as conn:
-        qa_left = conn.execute(text(
-            "SELECT count(*) FROM interview_qa WHERE record_id = 'ir_cascade'"
-        )).scalar()
-        runtime_left = conn.execute(text(
-            "SELECT count(*) FROM mock_interview_runtime "
-            "WHERE interview_record_id = 'ir_cascade'"
-        )).scalar()
+        qa_left = conn.execute(
+            text("SELECT count(*) FROM interview_qa WHERE record_id = 'ir_cascade'")
+        ).scalar()
+        runtime_left = conn.execute(
+            text(
+                "SELECT count(*) FROM mock_interview_runtime "
+                "WHERE interview_record_id = 'ir_cascade'"
+            )
+        ).scalar()
     assert qa_left == 0, f"interview_qa not cascaded — {qa_left} orphan rows"
-    assert runtime_left == 0, f"mock_interview_runtime not cascaded — {runtime_left} orphan rows"
+    assert runtime_left == 0, (
+        f"mock_interview_runtime not cascaded — {runtime_left} orphan rows"
+    )
 
     engine.dispose()

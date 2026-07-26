@@ -25,6 +25,7 @@ request, so a shared cache means one nightly refresh warms the entry
 every user reads from. Per-user differences (ready / selected_for /
 enabled) are computed at /catalog read time, not stored here.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -124,18 +125,21 @@ def _resolve_list_models_base(spec: VendorAdapterSpec, defaults_api_base: str) -
 
 
 def _serialize_entries(entries: list[ModelEntry]) -> str:
-    return json.dumps([
-        {
-            "provider": e.provider,
-            "model": e.model,
-            "display_name": e.display_name,
-            "supports_function_calling": e.supports_function_calling,
-            "context_window": e.context_window,
-            "max_output_tokens": e.max_output_tokens,
-            "supports_vision": e.supports_vision,
-        }
-        for e in entries
-    ], ensure_ascii=False)
+    return json.dumps(
+        [
+            {
+                "provider": e.provider,
+                "model": e.model,
+                "display_name": e.display_name,
+                "supports_function_calling": e.supports_function_calling,
+                "context_window": e.context_window,
+                "max_output_tokens": e.max_output_tokens,
+                "supports_vision": e.supports_vision,
+            }
+            for e in entries
+        ],
+        ensure_ascii=False,
+    )
 
 
 def _deserialize_entries(raw: str) -> list[ModelEntry]:
@@ -153,15 +157,19 @@ def _deserialize_entries(raw: str) -> list[ModelEntry]:
         if not isinstance(row, dict):
             continue
         try:
-            out.append(ModelEntry(
-                provider=row["provider"],
-                model=row["model"],
-                display_name=row["display_name"],
-                supports_function_calling=bool(row.get("supports_function_calling", False)),
-                context_window=int(row.get("context_window", 128_000)),
-                max_output_tokens=int(row.get("max_output_tokens", 4_096)),
-                supports_vision=bool(row.get("supports_vision", False)),
-            ))
+            out.append(
+                ModelEntry(
+                    provider=row["provider"],
+                    model=row["model"],
+                    display_name=row["display_name"],
+                    supports_function_calling=bool(
+                        row.get("supports_function_calling", False)
+                    ),
+                    context_window=int(row.get("context_window", 128_000)),
+                    max_output_tokens=int(row.get("max_output_tokens", 4_096)),
+                    supports_vision=bool(row.get("supports_vision", False)),
+                )
+            )
         except (KeyError, TypeError, ValueError):
             continue
     return out
@@ -178,11 +186,13 @@ async def _persist_all(grouped: dict[str, list[ModelEntry]]) -> None:
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "catalog: per-provider cache write failed for %s: %s",
-                provider, exc,
+                provider,
+                exc,
             )
     try:
         await redis_client.set(
-            _redis_key_lkg(), json.dumps(snapshot, ensure_ascii=False),
+            _redis_key_lkg(),
+            json.dumps(snapshot, ensure_ascii=False),
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("catalog: LKG snapshot write failed: %s", exc)
@@ -254,22 +264,27 @@ async def _load_all_from_lkg() -> dict[str, list[ModelEntry]]:
 
 def _resolve_key_for_provider(provider: str, user_id: str | None) -> str:
     """API-key resolution priority for fetching /v1/models:
-       1) user_model_credentials[user_id, provider] (encrypted DB row, P4-E)
-       2) env var named by ProviderDefaults.api_key_env (P6-L)
+    1) user_model_credentials[user_id, provider] (encrypted DB row, P4-E)
+    2) env var named by ProviderDefaults.api_key_env (P6-L)
     """
     defaults = get_provider_defaults(provider)
     if defaults is None:
         return ""
     if user_id:
         try:
-            from app.services.auth.user_api_key_service import get_user_api_key_plaintext
+            from app.services.auth.user_api_key_service import (
+                get_user_api_key_plaintext,
+            )
+
             key = get_user_api_key_plaintext(user_id, provider)
             if key:
                 return key
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "user_api_key lookup failed for %s/%s: %s",
-                user_id, provider, exc,
+                user_id,
+                provider,
+                exc,
             )
     return (os.getenv(defaults.api_key_env) or "").strip()
 
@@ -278,7 +293,8 @@ def _resolve_key_for_provider(provider: str, user_id: str | None) -> str:
 
 
 async def refresh_catalog(
-    *, user_id: str | None = None,
+    *,
+    user_id: str | None = None,
 ) -> dict[str, list[ModelEntry]]:
     """Re-fetch every vendor's /v1/models in parallel and replace the cache.
 
@@ -293,7 +309,9 @@ async def refresh_catalog(
     Without a user_id (cron context), env-only fallback.
     """
     specs = ALL_SPECS
-    api_keys = {s.provider: _resolve_key_for_provider(s.provider, user_id) for s in specs}
+    api_keys = {
+        s.provider: _resolve_key_for_provider(s.provider, user_id) for s in specs
+    }
 
     async def _one(spec: VendorAdapterSpec) -> tuple[str, list[ModelEntry], bool]:
         defaults = get_provider_defaults(spec.provider)
@@ -311,7 +329,9 @@ async def refresh_catalog(
         try:
             entries = await fetch_one_vendor(spec, api_base, api_key)
         except VendorFetchFailed as exc:
-            logger.error("catalog: %s fetch failed (%s) — using LKG", spec.provider, exc)
+            logger.error(
+                "catalog: %s fetch failed (%s) — using LKG", spec.provider, exc
+            )
             entries = await _load_one_from_lkg(spec.provider)
             # LKG entries were stored AFTER curated overrides applied
             # (we persist post-curation), so no second pass here.
@@ -338,7 +358,8 @@ async def refresh_catalog(
         await _persist_all(fresh)
         logger.info(
             "catalog refresh: %d vendors OK, %d total models",
-            success_count, sum(len(e) for e in fresh.values()),
+            success_count,
+            sum(len(e) for e in fresh.values()),
         )
     else:
         logger.error("catalog refresh: ALL vendors failed — cache untouched")
@@ -347,7 +368,9 @@ async def refresh_catalog(
 
 
 async def refresh_catalog_for(
-    provider: str, *, user_id: str | None = None,
+    provider: str,
+    *,
+    user_id: str | None = None,
 ) -> list[ModelEntry]:
     """Refresh ONE vendor's entries. Used by the "user just configured
     their key" hook so the catalog reflects the new state immediately
@@ -371,17 +394,23 @@ async def refresh_catalog_for(
     # Persist just this provider's slice + update LKG.
     try:
         await redis_client.set(
-            _redis_key(provider), _serialize_entries(entries), ex=_CACHE_TTL_S,
+            _redis_key(provider),
+            _serialize_entries(entries),
+            ex=_CACHE_TTL_S,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("catalog: per-provider cache write failed for %s: %s", provider, exc)
+        logger.warning(
+            "catalog: per-provider cache write failed for %s: %s", provider, exc
+        )
     # Update LKG snapshot — merge this provider's fresh slice with
     # whatever's already cached for other providers.
     try:
         existing = await _load_all_from_lkg()
         existing[provider] = entries
         snapshot = {p: _serialize_entries(es) for p, es in existing.items()}
-        await redis_client.set(_redis_key_lkg(), json.dumps(snapshot, ensure_ascii=False))
+        await redis_client.set(
+            _redis_key_lkg(), json.dumps(snapshot, ensure_ascii=False)
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("catalog: LKG merge for %s failed: %s", provider, exc)
     return entries
@@ -425,5 +454,6 @@ _SEED_CATALOG = _load_seed_catalog()
 if _SEED_CATALOG:
     logger.info(
         "model_catalog seed loaded: %d providers, %d total models",
-        len(_SEED_CATALOG), sum(len(es) for es in _SEED_CATALOG.values()),
+        len(_SEED_CATALOG),
+        sum(len(es) for es in _SEED_CATALOG.values()),
     )

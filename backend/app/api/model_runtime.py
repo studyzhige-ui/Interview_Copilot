@@ -8,16 +8,17 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.user import User
-from app.core.model_registry import (
-    _get_all_profiles,
+from app.core.llm_client_factory import (
     _serialize_profile,
     get_async_openai_client,
-    get_profile,
+    profile_ready,
+    validate_role_update,
+)
+from app.core.model_catalog import _get_all_profiles, get_profile
+from app.core.user_model_selection import (
     get_profile_for_role,
     get_runtime_selection,
-    profile_ready,
     update_runtime_selection,
-    validate_role_update,
 )
 from app.rag.embeddings import refresh_primary_llm
 from app.schemas.model_runtime import (
@@ -44,11 +45,14 @@ def _schedule_provider_catalog_refresh(provider: str, username: str) -> None:
         try:
             await refresh_catalog_for(provider, user_id=username)
         except Exception as exc:  # noqa: BLE001 — best-effort
-            logger.warning("post-upsert catalog refresh failed for %s: %s", provider, exc)
+            logger.warning(
+                "post-upsert catalog refresh failed for %s: %s", provider, exc
+            )
 
     task = asyncio.create_task(_run())
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
+
 
 router = APIRouter(tags=["models"])
 
@@ -75,7 +79,8 @@ async def api_model_catalog(
         # serialization layer joins each ``ModelEntry`` with its
         # ``ProviderDefaults`` and tags per-user state (ready /
         # selected_for).
-        from app.core.model_registry import repopulate_profile_cache
+        from app.core.model_catalog import repopulate_profile_cache
+
         grouped = await load_catalog()
         # Hint the sync profile cache with what we just read so chat
         # paths in this process don't take a Redis round-trip on the
@@ -115,9 +120,9 @@ async def refresh_model_catalog(
     on their very next read.
     """
     from app.core.cache import invalidate
-    from app.core.model_registry import repopulate_profile_cache
+    from app.core.model_catalog import repopulate_profile_cache
 
-    grouped = await refresh_catalog()
+    grouped = await refresh_catalog(user_id=current_user.username)
     repopulate_profile_cache(grouped)
     await invalidate(f"models:catalog:{current_user.username}")
 
@@ -175,10 +180,17 @@ async def _ping_one(profile_id: str, user_id: str | None = None) -> dict:
     try:
         profile = get_profile(profile_id)
     except ValueError as exc:
-        return {"profile_id": profile_id, "ok": False, "latency_ms": 0, "error": str(exc)}
+        return {
+            "profile_id": profile_id,
+            "ok": False,
+            "latency_ms": 0,
+            "error": str(exc),
+        }
     if not profile_ready(profile, user_id=user_id):
         return {
-            "profile_id": profile_id, "ok": False, "latency_ms": 0,
+            "profile_id": profile_id,
+            "ok": False,
+            "latency_ms": 0,
             "error": f"未配置 {profile.api_key_env}",
         }
     try:
@@ -194,12 +206,14 @@ async def _ping_one(profile_id: str, user_id: str | None = None) -> dict:
             timeout=10.0,
         )
         return {
-            "profile_id": profile_id, "ok": True,
+            "profile_id": profile_id,
+            "ok": True,
             "latency_ms": int((time.perf_counter() - started) * 1000),
         }
     except asyncio.TimeoutError:
         return {
-            "profile_id": profile_id, "ok": False,
+            "profile_id": profile_id,
+            "ok": False,
             "latency_ms": int((time.perf_counter() - started) * 1000),
             "error": "超时",
         }
@@ -209,8 +223,10 @@ async def _ping_one(profile_id: str, user_id: str | None = None) -> dict:
         # inconsistent with the site-wide friendly-error policy. The raw
         # detail still lands in server logs via the client library.
         from app.core.error_messages import humanize_error
+
         return {
-            "profile_id": profile_id, "ok": False,
+            "profile_id": profile_id,
+            "ok": False,
             "latency_ms": int((time.perf_counter() - started) * 1000),
             "error": humanize_error(exc)[:200],
         }
@@ -230,6 +246,7 @@ def list_my_api_keys(
     "✓ 已配置 (sk-***abcd)" badges per vendor card.
     """
     from app.services.auth.user_api_key_service import list_user_api_keys
+
     return {"keys": list_user_api_keys(current_user.username, db=db)}
 
 
@@ -247,14 +264,19 @@ async def upsert_my_api_key(
     """
     from app.core.cache import invalidate
     from app.services.auth.user_api_key_service import set_user_api_key
+
     try:
         result = set_user_api_key(
-            current_user.username, provider, payload.api_key, db=db,
+            current_user.username,
+            provider,
+            payload.api_key,
+            db=db,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     # Refresh the LLM cache so the next request uses the new key.
-    from app.core.model_registry import clear_llm_cache_for_provider
+    from app.core.llm_client_factory import clear_llm_cache_for_provider
+
     clear_llm_cache_for_provider(provider)
     # MDL-4: refresh THIS provider's catalog slice with the fresh key.
     # Without it, a UI-only-key deployment (no env vars) never advances past
@@ -283,8 +305,10 @@ async def delete_my_api_key(
 ):
     from app.core.cache import invalidate
     from app.services.auth.user_api_key_service import delete_user_api_key
+
     deleted = delete_user_api_key(current_user.username, provider, db=db)
-    from app.core.model_registry import clear_llm_cache_for_provider
+    from app.core.llm_client_factory import clear_llm_cache_for_provider
+
     clear_llm_cache_for_provider(provider)
     # Per-user 60s catalog wrapper needs to drop so the next /catalog read
     # recomputes "ready" flags from the now-empty key state. The 24h
@@ -309,16 +333,20 @@ async def ping_models(
     # env-ready profile in the catalog on each refresh click.
     all_profiles = _get_all_profiles()
     ready_ids = [
-        pid for pid, p in all_profiles.items()
+        pid
+        for pid, p in all_profiles.items()
         if profile_ready(p, user_id=current_user.username)
     ]
     ready_id_set = set(ready_ids)
     skipped = [
         {
-            "profile_id": pid, "ok": False, "latency_ms": 0,
+            "profile_id": pid,
+            "ok": False,
+            "latency_ms": 0,
             "error": f"未配置 {all_profiles[pid].api_key_env}",
         }
-        for pid in all_profiles if pid not in ready_id_set
+        for pid in all_profiles
+        if pid not in ready_id_set
     ]
     pinged = await asyncio.gather(
         *[_ping_one(pid, user_id=current_user.username) for pid in ready_ids]
@@ -350,6 +378,7 @@ async def api_list_providers(
     from app.services.auth.user_provider_settings_service import (
         resolve_all_provider_settings,
     )
+
     settings = resolve_all_provider_settings(current_user.username)
     return {
         "status": "success",
@@ -367,6 +396,7 @@ async def api_get_provider_settings(
     from app.services.auth.user_provider_settings_service import (
         resolve_provider_settings,
     )
+
     resolved = resolve_provider_settings(current_user.username, provider)
     if resolved is None:
         raise HTTPException(
@@ -396,8 +426,17 @@ async def api_update_provider_settings(
     """
     from app.core.cache import invalidate
     from app.services.auth.user_provider_settings_service import (
-        SettingsPatch, upsert_settings,
+        SettingsPatch,
+        upsert_settings,
     )
+
+    raw_patch = body.model_dump(exclude_unset=True)
+    from app.core.edition import current_edition_policy
+
+    try:
+        current_edition_policy().validate_provider_patch(raw_patch)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     patch = SettingsPatch(
         enabled=body.enabled,
@@ -415,7 +454,8 @@ async def api_update_provider_settings(
     # Tear down cached clients so the next chat reads the new api_base
     # / extra_headers. clear_llm_cache_for_provider drops both the
     # LlamaIndex LLM cache and the AsyncOpenAI client pool.
-    from app.core.model_registry import clear_llm_cache_for_provider
+    from app.core.llm_client_factory import clear_llm_cache_for_provider
+
     clear_llm_cache_for_provider(provider)
     await invalidate(f"models:catalog:{current_user.username}")
     return {"status": "saved", "provider": resolved.to_dict()}
@@ -439,7 +479,8 @@ async def api_delete_provider_settings(
     # Cached LLM clients embed the old api_base in their fingerprint,
     # so drop them whether or not a row was present (cheap no-op if
     # there were no entries).
-    from app.core.model_registry import clear_llm_cache_for_provider
+    from app.core.llm_client_factory import clear_llm_cache_for_provider
+
     clear_llm_cache_for_provider(provider)
     await invalidate(f"models:catalog:{current_user.username}")
     return {"status": "deleted" if deleted else "noop"}
@@ -461,6 +502,7 @@ async def api_update_model_runtime(
         raise HTTPException(status_code=400, detail="No model role update provided")
 
     from app.core.cache import invalidate
+
     try:
         for role, profile_id in updates.items():
             validate_role_update(role, profile_id, user_id=current_user.username)

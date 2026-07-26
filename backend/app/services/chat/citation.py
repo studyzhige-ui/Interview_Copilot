@@ -12,6 +12,7 @@ observability:
 It deliberately does NOT judge whether a citation is *faithful* — only that
 the ref id is structurally valid and present.
 """
+
 from __future__ import annotations
 
 import logging
@@ -26,8 +27,8 @@ _CITATION_RE = re.compile(r"\[(K\d+)\]")
 
 @dataclass
 class CitationReport:
-    cited_refs: list[str] = field(default_factory=list)   # refs found in the answer
-    valid_refs: list[str] = field(default_factory=list)   # refs that exist in sources
+    cited_refs: list[str] = field(default_factory=list)  # refs found in the answer
+    valid_refs: list[str] = field(default_factory=list)  # refs that exist in sources
     invalid_refs: list[str] = field(default_factory=list)  # cited but not in sources
     missing_citation: bool = False  # retrieval_hit but answer cited nothing
 
@@ -37,7 +38,10 @@ class CitationReport:
 
 
 def validate_citations(
-    answer: str, sources: list[dict], *, retrieval_hit: bool,
+    answer: str,
+    sources: list[dict],
+    *,
+    retrieval_hit: bool,
 ) -> CitationReport:
     """Check the answer's ``[K#]`` refs against ``sources`` and log warnings.
 
@@ -60,13 +64,14 @@ def validate_citations(
     )
     if invalid:
         logger.warning(
-            "Citation check: answer references unknown sources %s "
-            "(valid refs: %s)", invalid, sorted(source_refs),
+            "Citation check: answer references unknown sources %s (valid refs: %s)",
+            invalid,
+            sorted(source_refs),
         )
     if missing:
         logger.warning(
-            "Citation check: retrieval hit with %d sources but the answer "
-            "cited none.", len(source_refs),
+            "Citation check: retrieval hit with %d sources but the answer cited none.",
+            len(source_refs),
         )
     return report
 

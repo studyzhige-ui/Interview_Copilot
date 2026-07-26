@@ -9,18 +9,16 @@
 # of trivial hygiene fixes.
 
 repos:
-  # ruff handles BOTH lint (replacement for flake8 + isort + a chunk of
-  # bandit) and format (replacement for black). One tool, one config.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.7.4
+    rev: v0.15.12
     hooks:
       - id: ruff
         name: ruff (lint)
         args: [--fix]
-        files: ^backend/
+        files: ^(backend|evaluation|scripts)/
       - id: ruff-format
         name: ruff (format)
-        files: ^backend/
+        files: ^(backend|evaluation|scripts)/
 
   # Stop accidental commits of broken YAML and trailing whitespace —
   # the second one in particular saves a lot of "fix typo" follow-up

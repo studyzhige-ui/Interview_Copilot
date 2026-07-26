@@ -1,4 +1,5 @@
 """Tests for app.core.security — password hashing, JWT issuance/decode, blacklist guard."""
+
 from __future__ import annotations
 
 from datetime import timedelta
@@ -70,7 +71,8 @@ def test_verify_password_accepts_legacy_bcrypt_hash():
     backward-compat purpose."""
     pw = "legacy-from-bcrypt-era"
     legacy_hash = _bcrypt.hashpw(
-        pw.encode("utf-8"), _bcrypt.gensalt(),
+        pw.encode("utf-8"),
+        _bcrypt.gensalt(),
     ).decode("utf-8")
     assert legacy_hash.startswith("$2"), "test fixture must be a bcrypt hash"
     assert verify_password(pw, legacy_hash)
@@ -131,7 +133,8 @@ def test_each_token_has_unique_jti():
 
 def test_create_access_token_respects_custom_expiry():
     token = create_access_token(
-        data={"sub": "alice"}, expires_delta=timedelta(minutes=5),
+        data={"sub": "alice"},
+        expires_delta=timedelta(minutes=5),
     )
     payload = decode_token(token)
     # exp - iat ≈ 300 seconds, allow a couple seconds of slop.
@@ -147,7 +150,8 @@ def test_decode_token_rejects_garbage():
 
 def test_decode_token_rejects_expired_token():
     token = create_access_token(
-        data={"sub": "ghost"}, expires_delta=timedelta(seconds=-1),
+        data={"sub": "ghost"},
+        expires_delta=timedelta(seconds=-1),
     )
     with pytest.raises(JWTError):
         decode_token(token)
@@ -156,7 +160,9 @@ def test_decode_token_rejects_expired_token():
 def test_decode_token_rejects_wrong_signature():
     """A token signed with a different secret must not decode under ours."""
     payload = {"sub": "intruder", "type": "access", "jti": "abc"}
-    forged = jose_jwt.encode(payload, "completely-different-secret", algorithm=settings.ALGORITHM)
+    forged = jose_jwt.encode(
+        payload, "completely-different-secret", algorithm=settings.ALGORITHM
+    )
     with pytest.raises(JWTError):
         decode_token(forged)
 

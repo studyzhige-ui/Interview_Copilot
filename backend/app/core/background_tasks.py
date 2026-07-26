@@ -63,14 +63,27 @@ async def cancel_and_wait_all(timeout: float = 5.0) -> None:
     tasks = list(_background_tasks)
     for task in tasks:
         task.cancel()
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    for task, result in zip(tasks, results):
-        if isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError):
-            logger.warning("Background task %s failed during shutdown: %s", task.get_name(), result)
-    _background_tasks.clear()
-    logger.info("All background tasks drained.")
+    done, pending = await asyncio.wait(tasks, timeout=timeout)
+    if pending:
+        logger.warning(
+            "%d background task(s) did not stop within %.1fs: %s",
+            len(pending),
+            timeout,
+            ", ".join(sorted(task.get_name() for task in pending)),
+        )
+    else:
+        logger.info("All background tasks drained.")
+    _background_tasks.difference_update(done)
 
 
 def pending_count() -> int:
     """Return the number of currently tracked background tasks."""
     return len(_background_tasks)
+
+
+def cancel_background_task(name: str) -> bool:
+    for task in _background_tasks:
+        if task.get_name() == name and not task.done():
+            task.cancel()
+            return True
+    return False

@@ -25,6 +25,7 @@ services). Reads that already hold a trusted business object look an asset up
 by id alone (``get_file_asset``); ownership-sensitive reads use
 ``get_owned_file_asset``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -70,9 +71,7 @@ class UploadTooLarge(ValueError):
     def __init__(self, purpose: str, limit_bytes: int):
         self.purpose = purpose
         self.limit_bytes = limit_bytes
-        super().__init__(
-            f"upload for purpose={purpose} exceeds {limit_bytes} bytes"
-        )
+        super().__init__(f"upload for purpose={purpose} exceeds {limit_bytes} bytes")
 
     @property
     def limit_mb(self) -> int:
@@ -167,13 +166,17 @@ def get_file_asset(db: Session, file_asset_id: str) -> FileAsset | None:
 
 
 def list_user_file_assets(
-    db: Session, *, user_id: str, purpose: str | None = None,
+    db: Session,
+    *,
+    user_id: str,
+    purpose: str | None = None,
 ) -> list[FileAsset]:
     user_pk = resolve_user_pk(db, user_id)
     if user_pk is None:
         return []
     query = db.query(FileAsset).filter(
-        FileAsset.user_id == user_pk, FileAsset.deleted_at.is_(None),
+        FileAsset.user_id == user_pk,
+        FileAsset.deleted_at.is_(None),
     )
     if purpose:
         query = query.filter(FileAsset.purpose == purpose)
@@ -237,7 +240,8 @@ def _verify_pending_asset(db: Session, asset: FileAsset) -> FileAsset:
         and actual_size != asset.size_bytes
     ):
         _fail_asset(
-            db, asset,
+            db,
+            asset,
             f"size mismatch: declared {asset.size_bytes}, stored {actual_size}",
         )
         return asset
@@ -245,7 +249,8 @@ def _verify_pending_asset(db: Session, asset: FileAsset) -> FileAsset:
     spec = get_purpose_spec(asset.purpose)
     if spec is not None and actual_size is not None and actual_size > spec.max_bytes:
         _fail_asset(
-            db, asset,
+            db,
+            asset,
             f"file exceeds the {spec.max_bytes // (1024 * 1024)}MB limit "
             f"for purpose={asset.purpose}",
         )
@@ -272,7 +277,8 @@ def _verify_pending_asset(db: Session, asset: FileAsset) -> FileAsset:
         ext = os.path.splitext(asset.original_filename or "")[1]
         if detect_head_format(head, spec.content_kind, ext) is None:
             _fail_asset(
-                db, asset,
+                db,
+                asset,
                 f"file content does not look like {spec.content_kind} "
                 "(magic-byte check failed)",
             )
@@ -300,7 +306,10 @@ def mark_file_asset_consumed(db: Session, asset: FileAsset) -> None:
 
 
 def presigned_get_urls(
-    db: Session, asset_ids: list[str], *, expiration: int = 1800,
+    db: Session,
+    asset_ids: list[str],
+    *,
+    expiration: int = 1800,
 ) -> dict[str, str]:
     """Batch-mint presigned GET URLs for owned assets (one IN query).
 

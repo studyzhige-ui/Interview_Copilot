@@ -21,6 +21,7 @@ thread into a worker would be unsafe. Each orchestrator opens its
 OWN session inside its own execution context (the engine never sees
 one), and the doc services just plumb whatever they're given through.
 """
+
 from __future__ import annotations
 
 import contextlib

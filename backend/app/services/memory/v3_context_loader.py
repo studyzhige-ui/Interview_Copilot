@@ -16,6 +16,7 @@ learning_strategy doc has a heavier full body gated behind ``load_strategy``.
 When the global memory toggle is OFF (Stage-H), the engine bypasses this module
 and uses ``V3MemoryContext()`` directly — no cross-session memory at all.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,7 +28,12 @@ from app.services.memory import memory_ability_state_service, memory_document_se
 logger = logging.getLogger(__name__)
 
 # Mastery label for rendering an ability line.
-_MASTERY_LABELS = {"weak": "弱", "improving": "进步中", "stable": "稳定", "strong": "强"}
+_MASTERY_LABELS = {
+    "weak": "弱",
+    "improving": "进步中",
+    "stable": "稳定",
+    "strong": "强",
+}
 # Cap ability states injected per turn.
 _MAX_ABILITIES = 50
 
@@ -61,7 +67,9 @@ class V3MemoryContext:
             parts.append("# 能力状态（用户在各主题上的掌握情况）")
             lines = []
             for s in self.ability_states:
-                mastery = _MASTERY_LABELS.get(s.get("mastery_level", ""), s.get("mastery_level", "?"))
+                mastery = _MASTERY_LABELS.get(
+                    s.get("mastery_level", ""), s.get("mastery_level", "?")
+                )
                 line = (
                     f"- [{s.get('topic', '')}] {mastery} ({s.get('skill_type', '')})"
                     f" — {s.get('summary', '') or ''}"
@@ -73,7 +81,9 @@ class V3MemoryContext:
 
         # Strategy: prefer the full body when loaded, else the one-liner.
         if self.active_learning_strategy_body.strip():
-            parts.append("# 学习策略详情\n" + self.active_learning_strategy_body.strip())
+            parts.append(
+                "# 学习策略详情\n" + self.active_learning_strategy_body.strip()
+            )
         elif self.learning_strategy_description.strip():
             parts.append(
                 "# 学习策略概览（如需详情，可调相应工具）\n"
@@ -126,12 +136,16 @@ def load_universal(user_id: str) -> V3MemoryContext:
 
     with session_scope(None) as db:
         return V3MemoryContext(
-            user_profile_body=memory_document_service.load(user_id, "user_profile", db=db),
+            user_profile_body=memory_document_service.load(
+                user_id, "user_profile", db=db
+            ),
             ability_states=_ability_states_to_dicts(
                 memory_ability_state_service.load_active(user_id, db=db)
             ),
             learning_strategy_description=memory_document_service.load_description(
-                user_id, "learning_strategy", db=db,
+                user_id,
+                "learning_strategy",
+                db=db,
             ),
         )
 
@@ -150,6 +164,7 @@ async def attach_active_bodies(
 
     def _sync_body() -> V3MemoryContext:
         from app.services.memory._db_helpers import session_scope
+
         with session_scope(None) as db:
             if load_strategy:
                 body = memory_document_service.load(user_id, "learning_strategy", db=db)

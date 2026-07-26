@@ -1,4 +1,5 @@
 """Tests for the canonical token helpers in ``app.core.tokens``."""
+
 from __future__ import annotations
 
 from app.core import tokens as cm

@@ -21,6 +21,7 @@ Strategy-specific work (loop control, tool dispatch, deterministic
 pipeline orchestration) lives in the strategy implementation. The
 engine is the executive function; the strategy is the action.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -64,11 +65,13 @@ class ConversationEngine:
         session_id: str,
         user_message: str,
         strategy: ExecutionStrategy,
+        turn_id: str | None = None,
     ) -> None:
         self.user_id = user_id
         self.session_id = session_id
         self.user_message = user_message
         self.strategy = strategy
+        self.turn_id = turn_id
 
         self._started_at = time.time()
         self._ctx: StrategyContext | None = None
@@ -120,7 +123,9 @@ class ConversationEngine:
         # / agent turns). Old frontends skip the unknown event type.
         if self._ctx and self._ctx.sources:
             yield HarnessEvent.sources(
-                self._ctx.sources, step=0, elapsed_ms=self._elapsed_ms(),
+                self._ctx.sources,
+                step=0,
+                elapsed_ms=self._elapsed_ms(),
             )
 
         try:
@@ -137,7 +142,9 @@ class ConversationEngine:
             self._turn_status = "failed"
             logger.error(
                 "%s strategy crashed: %s\n%s",
-                self.strategy.name, exc, traceback.format_exc(),
+                self.strategy.name,
+                exc,
+                traceback.format_exc(),
             )
             humanised = self._humanize_exc(exc)
             yield HarnessEvent.error(
@@ -189,15 +196,19 @@ class ConversationEngine:
         # thread before the first await, freezing every concurrent
         # SSE turn for the duration.
         await asyncio.to_thread(
-            transcript_service.ensure_session, self.session_id, self.user_id,
+            transcript_service.ensure_session,
+            self.session_id,
+            self.user_id,
         )
 
         from app.services.memory.recall_policy import (
             is_global_memory_enabled_for_session,
         )
+
         global_memory_on = await asyncio.to_thread(
             is_global_memory_enabled_for_session,
-            self.session_id, self.user_id,
+            self.session_id,
+            self.user_id,
         )
 
         # Step 1: cheap universal load — picks up user_profile + the
@@ -216,7 +227,8 @@ class ConversationEngine:
             # post-P1-F). Dispatching to a worker thread keeps the
             # loop free during the 4-query universal pass.
             universal_ctx = await asyncio.to_thread(
-                load_universal, self.user_id,
+                load_universal,
+                self.user_id,
             )
         else:
             universal_ctx = V3MemoryContext()  # truly empty bundle
@@ -238,14 +250,17 @@ class ConversationEngine:
             query_plan = QueryPlan()  # null plan: no retrieval, no body load
         else:
             meta = await asyncio.to_thread(
-                transcript_service.get_session_meta, self.session_id,
+                transcript_service.get_session_meta,
+                self.session_id,
             )
             if meta is None:
                 recent_turns: list[dict] = []
             else:
                 recent_turns = await asyncio.to_thread(
                     transcript_service.get_recent_turns,
-                    self.session_id, 20, meta["compaction_cursor"],
+                    self.session_id,
+                    20,
+                    meta["compaction_cursor"],
                 )
             query_plan = await plan_query(
                 user_message=self.user_message,
@@ -272,7 +287,8 @@ class ConversationEngine:
                     planner_failed=query_plan.planner_failed,
                 )
             )
-            if query_plan.needs_knowledge_retrieval and not agent_mode else None
+            if query_plan.needs_knowledge_retrieval and not agent_mode
+            else None
         )
 
         bodies_task = (
@@ -283,7 +299,8 @@ class ConversationEngine:
                     load_strategy=query_plan.load_strategy,
                 )
             )
-            if query_plan.load_strategy else None
+            if query_plan.load_strategy
+            else None
         )
 
         if bodies_task is not None:
@@ -303,8 +320,10 @@ class ConversationEngine:
         self._retrieval_hit = bool(_state and _state.retrieval_hit)
         self._fallback_used = bool(_state and _state.fallback_used)
         self._empty_reason = (
-            _state.empty_reason if _state
-            else EMPTY_PLANNER_NO_RETRIEVAL if not self._retrieval_attempted
+            _state.empty_reason
+            if _state
+            else EMPTY_PLANNER_NO_RETRIEVAL
+            if not self._retrieval_attempted
             else None
         )
         self._planner_failed = (
@@ -333,7 +352,9 @@ class ConversationEngine:
         try:
             from app.core.user_model_selection import get_profile_for_role
 
-            _window = get_profile_for_role("primary", user_id=self.user_id).context_window
+            _window = get_profile_for_role(
+                "primary", user_id=self.user_id
+            ).context_window
         except Exception:  # noqa: BLE001 — cold catalog: fall back to default
             _window = None
         assembled = await context_pipeline.assemble_answer_context(
@@ -349,6 +370,7 @@ class ConversationEngine:
             user_id=self.user_id,
             session_id=self.session_id,
             user_message=self.user_message,
+            turn_id=self.turn_id,
             assembled=assembled,
             knowledge_chunks=knowledge_chunks,
             v3_memory_block=v3_memory_block,
@@ -393,15 +415,24 @@ class ConversationEngine:
         # renderer) skip the unknown "sources" block when rendering the body.
         if self._ctx and self._ctx.sources:
             ai_blocks = [*ai_blocks, {"type": "sources", "sources": self._ctx.sources}]
-        await asyncio.to_thread(
-            transcript_service.append_turn,
-            session_id=self.session_id,
-            user_id=self.user_id,
-            user_msg=self.user_message,
-            ai_msg=self._result.final_answer,
-            rewritten_query=self._ctx.rewritten_query,
-            ai_blocks=ai_blocks,
-        )
+        if self.turn_id:
+            await asyncio.to_thread(
+                transcript_service.complete_background_turn,
+                turn_id=self.turn_id,
+                ai_msg=self._result.final_answer,
+                rewritten_query=self._ctx.rewritten_query,
+                ai_blocks=ai_blocks,
+            )
+        else:
+            await asyncio.to_thread(
+                transcript_service.append_turn,
+                session_id=self.session_id,
+                user_id=self.user_id,
+                user_msg=self.user_message,
+                ai_msg=self._result.final_answer,
+                rewritten_query=self._ctx.rewritten_query,
+                ai_blocks=ai_blocks,
+            )
         # AGT-7②: fold the agent loop's autocompact summary into the
         # session so the NEXT turn's assembly starts from it instead of
         # re-summarizing the same history. Cursor moves to the last
@@ -413,7 +444,8 @@ class ConversationEngine:
         if autocompact_summary:
             try:
                 meta = await asyncio.to_thread(
-                    transcript_service.get_session_meta, self.session_id,
+                    transcript_service.get_session_meta,
+                    self.session_id,
                 )
                 turns = await asyncio.to_thread(
                     transcript_service.get_turns_after,
@@ -423,7 +455,8 @@ class ConversationEngine:
                 # The just-persisted pair is the tail; everything before
                 # this turn's user message is covered by the summary.
                 pre_turn = [
-                    m["seq"] for m in turns
+                    m["seq"]
+                    for m in turns
                     if not (m["role"] == "user" and m["content"] == self.user_message)
                 ][: max(0, len(turns) - 2)]
                 new_cursor = pre_turn[-1] if pre_turn else None
@@ -435,7 +468,22 @@ class ConversationEngine:
                         compaction_cursor=new_cursor,
                     )
             except Exception as exc:  # noqa: BLE001 — folding is an optimization
-                logger.warning("autocompact fold failed for %s: %s", self.session_id, exc)
+                logger.warning(
+                    "autocompact fold failed for %s: %s", self.session_id, exc
+                )
+
+    async def persist_background_failure(self, message: str) -> None:
+        if not self.turn_id:
+            return
+        warning = {"type": "text", "text": f"⚠️ {message}"}
+        blocks = [warning, *self._result.assistant_blocks]
+        await asyncio.to_thread(
+            transcript_service.complete_background_turn,
+            turn_id=self.turn_id,
+            ai_msg=self._result.final_answer or warning["text"],
+            rewritten_query=self._ctx.rewritten_query if self._ctx else None,
+            ai_blocks=blocks,
+        )
 
     def _fire_post_turn_maintenance(self) -> None:
         """Realtime memory extraction. Always background — never blocks
@@ -492,10 +540,13 @@ class ConversationEngine:
         humanised = self._humanize_exc(exc)
         logger.error(
             "ConversationEngine._prepare failed: %s\n%s",
-            exc, traceback.format_exc(),
+            exc,
+            traceback.format_exc(),
         )
         yield HarnessEvent.error(
-            humanised, step=0, elapsed_ms=self._elapsed_ms(),
+            humanised,
+            step=0,
+            elapsed_ms=self._elapsed_ms(),
         )
         yield HarnessEvent.done(step=0, elapsed_ms=self._elapsed_ms())
 

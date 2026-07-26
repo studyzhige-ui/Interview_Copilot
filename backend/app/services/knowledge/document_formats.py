@@ -9,26 +9,46 @@ make it business-allowed.
 Enforced at ``POST /knowledge/documents`` (authoritative) and re-checked
 defensively in the worker before ingest. The frontend ``accept`` is UX only.
 """
+
 from __future__ import annotations
 
 import os
 
 # Formats whose parser works TODAY. (json + code files are supported by the
 # current get_optimal_nodes splitters, so they stay in.)
-ALLOWED_KNOWLEDGE_EXTENSIONS = frozenset({
-    ".pdf",
-    ".docx", ".pptx", ".xlsx",
-    ".html", ".htm", ".md", ".markdown", ".txt",
-    ".csv", ".tsv",
-    ".json",
-    ".py", ".java", ".cpp", ".c",
-    # Image documents → on-demand OCR (Docling RapidOCR / LlamaParse cloud), §4.1.2.
-    ".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp",
-    # Legacy Office → LlamaParse direct, or LibreOffice→OOXML→Docling (§4.1.3).
-    # Business-allowed; the parse layer returns a friendly error if the server
-    # has neither LlamaParse configured nor LibreOffice installed.
-    ".doc", ".ppt", ".xls",
-})
+ALLOWED_KNOWLEDGE_EXTENSIONS = frozenset(
+    {
+        ".pdf",
+        ".docx",
+        ".pptx",
+        ".xlsx",
+        ".html",
+        ".htm",
+        ".md",
+        ".markdown",
+        ".txt",
+        ".csv",
+        ".tsv",
+        ".json",
+        ".py",
+        ".java",
+        ".cpp",
+        ".c",
+        # Image documents → on-demand OCR (Docling RapidOCR / LlamaParse cloud), §4.1.2.
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".tiff",
+        ".bmp",
+        ".webp",
+        # Legacy Office → LlamaParse direct, or LibreOffice→OOXML→Docling (§4.1.3).
+        # Business-allowed; the parse layer returns a friendly error if the server
+        # has neither LlamaParse configured nor LibreOffice installed.
+        ".doc",
+        ".ppt",
+        ".xls",
+    }
+)
 
 # Shown in the generic rejection message.
 SUPPORTED_FORMATS_HINT = (
@@ -48,7 +68,8 @@ def _ext(filename: str) -> str:
 
 
 def validate_knowledge_document_format(
-    filename: str, content_type: str | None = None,
+    filename: str,
+    content_type: str | None = None,
 ) -> str:
     """Return the normalized extension if the format is business-allowed; else
     raise :class:`UnsupportedDocumentFormat` with a friendly Chinese message.
@@ -63,7 +84,9 @@ def validate_knowledge_document_format(
     if content_type.startswith(("audio/", "video/")):
         raise UnsupportedDocumentFormat("知识库不支持音视频文件，请上传文档类文件。")
     if not ext:
-        raise UnsupportedDocumentFormat("无法识别文件类型，请上传带扩展名的受支持文档。")
+        raise UnsupportedDocumentFormat(
+            "无法识别文件类型，请上传带扩展名的受支持文档。"
+        )
     if ext not in ALLOWED_KNOWLEDGE_EXTENSIONS:
         raise UnsupportedDocumentFormat(
             f"不支持的文件格式 {ext}。支持：{SUPPORTED_FORMATS_HINT}。"

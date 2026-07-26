@@ -18,6 +18,7 @@ Locked behaviours:
   * Gemini's vendor-supplied displayName survives auto-derive (only
     bare-id entries get rewritten)
 """
+
 from __future__ import annotations
 
 from app.services.model_sources.base import ModelEntry
@@ -32,10 +33,13 @@ from app.services.model_sources.curated import (
 
 def _entry(provider: str, model: str, display_name: str | None = None) -> ModelEntry:
     return ModelEntry(
-        provider=provider, model=model,
+        provider=provider,
+        model=model,
         display_name=display_name or model,
         supports_function_calling=True,
-        context_window=128_000, max_output_tokens=4_096, supports_vision=False,
+        context_window=128_000,
+        max_output_tokens=4_096,
+        supports_vision=False,
     )
 
 
@@ -102,10 +106,10 @@ def test_auto_tier_rank_param_size_not_treated_as_version():
     parameter counts, not versions. These must NOT outrank legit
     version-X models."""
     r_gemma_31b = _auto_tier_rank("gemini", "gemma-4-31b-it")
-    r_qwen_80b  = _auto_tier_rank("qwen", "qwen3-next-80b-a3b-thinking")
+    r_qwen_80b = _auto_tier_rank("qwen", "qwen3-next-80b-a3b-thinking")
     # Both should land in a reasonable mid-range, not floored at 100.
     assert r_gemma_31b > 100, "gemma-4-31b must not be parsed as v31"
-    assert r_qwen_80b  > 100, "qwen3-next-80b must not be parsed as v80"
+    assert r_qwen_80b > 100, "qwen3-next-80b must not be parsed as v80"
 
 
 def test_auto_tier_rank_b_suffix_not_treated_as_version():
@@ -113,13 +117,13 @@ def test_auto_tier_rank_b_suffix_not_treated_as_version():
     Qwen-72B etc.) must be recognised as parameter count, not as
     "version 7" or "version 72". Bare ``qwen-7b-chat`` should rank
     LOWER (= further down the card) than any qwen3.x release."""
-    r_7b   = _auto_tier_rank("qwen", "qwen-7b-chat")
-    r_37   = _auto_tier_rank("qwen", "qwen3.7-max-preview")
+    r_7b = _auto_tier_rank("qwen", "qwen-7b-chat")
+    r_37 = _auto_tier_rank("qwen", "qwen3.7-max-preview")
     r_3max = _auto_tier_rank("qwen", "qwen3-max")
     # qwen-7b-chat has NO version parseable (b suffix excluded) →
     # falls to default ~10000.
     assert r_7b > r_3max, "qwen-7b-chat must rank below qwen3-max"
-    assert r_7b > r_37,   "qwen-7b-chat must rank below qwen3.7-max-preview"
+    assert r_7b > r_37, "qwen-7b-chat must rank below qwen3.7-max-preview"
 
 
 def test_auto_tier_rank_pro_boosts():
@@ -169,12 +173,16 @@ def test_hidden_curated_entries_dropped():
     # No CURATED hidden=True entries exist post-P7-F. Verify the
     # mechanism still works by injecting one in-test.
     from app.services.model_sources import curated as cm
+
     cm.CURATED[("anthropic", "test-hidden-entry")] = ModelOverride(hidden=True)
     try:
-        out = apply_overrides("anthropic", [
-            _entry("anthropic", "claude-opus-4-7", "Claude Opus 4.7"),
-            _entry("anthropic", "test-hidden-entry"),
-        ])
+        out = apply_overrides(
+            "anthropic",
+            [
+                _entry("anthropic", "claude-opus-4-7", "Claude Opus 4.7"),
+                _entry("anthropic", "test-hidden-entry"),
+            ],
+        )
         assert "test-hidden-entry" not in {e.model for e in out}
     finally:
         del cm.CURATED[("anthropic", "test-hidden-entry")]
@@ -186,12 +194,14 @@ def test_anthropic_version_primary_then_tier():
     Opus precedes Sonnet."""
     entries = [
         _entry("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6"),
-        _entry("anthropic", "claude-opus-4-6",   "Claude Opus 4.6"),
-        _entry("anthropic", "claude-opus-4-7",   "Claude Opus 4.7"),
+        _entry("anthropic", "claude-opus-4-6", "Claude Opus 4.6"),
+        _entry("anthropic", "claude-opus-4-7", "Claude Opus 4.7"),
     ]
     out = apply_overrides("anthropic", entries)
     assert [e.model for e in out] == [
-        "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
     ]
 
 
@@ -202,11 +212,11 @@ def test_anthropic_new_release_auto_ranks_to_top():
     → major 4 only) and Anthropic was hand-curated, so the un-curated id
     auto-derived to the bottom of the card."""
     entries = [
-        _entry("anthropic", "claude-opus-4-7",            "Claude Opus 4.7"),
-        _entry("anthropic", "claude-sonnet-4-6",          "Claude Sonnet 4.6"),
-        _entry("anthropic", "claude-haiku-4-5-20251001",  "Claude Haiku 4.5"),
-        _entry("anthropic", "claude-opus-4-8",            "Claude Opus 4.8"),
-        _entry("anthropic", "claude-opus-4-1-20250805",   "Claude Opus 4.1"),
+        _entry("anthropic", "claude-opus-4-7", "Claude Opus 4.7"),
+        _entry("anthropic", "claude-sonnet-4-6", "Claude Sonnet 4.6"),
+        _entry("anthropic", "claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+        _entry("anthropic", "claude-opus-4-8", "Claude Opus 4.8"),
+        _entry("anthropic", "claude-opus-4-1-20250805", "Claude Opus 4.1"),
     ]
     out = apply_overrides("anthropic", entries)
     ids = [e.model for e in out]
@@ -268,8 +278,8 @@ def test_gemini_gemma_sorted_below_gemini():
     """Auto-derive must push Gemma below Gemini even though Gemma
     was released later (vendor's recency sort would have Gemma first)."""
     entries = [
-        _entry("gemini", "gemma-4-31b-it",      display_name="Gemma 4 31B"),
-        _entry("gemini", "gemini-3.5-flash",    display_name="Gemini 3.5 Flash"),
+        _entry("gemini", "gemma-4-31b-it", display_name="Gemma 4 31B"),
+        _entry("gemini", "gemini-3.5-flash", display_name="Gemini 3.5 Flash"),
         _entry("gemini", "gemini-3-pro-preview", display_name="Gemini 3 Pro Preview"),
     ]
     out = apply_overrides("gemini", entries)
@@ -322,8 +332,11 @@ def test_gemini_no_dated_alias_pattern():
     """Gemini's regex isn't in _DATE_SUFFIX_PATTERNS — dated-looking
     ids like ``gemini-2.5-computer-use-preview-10-2025`` pass through."""
     entries = [
-        _entry("gemini", "gemini-2.5-computer-use-preview-10-2025",
-               display_name="Gemini 2.5 Computer Use Preview"),
+        _entry(
+            "gemini",
+            "gemini-2.5-computer-use-preview-10-2025",
+            display_name="Gemini 2.5 Computer Use Preview",
+        ),
     ]
     out = apply_overrides("gemini", entries)
     assert len(out) == 1

@@ -5,6 +5,7 @@ flow, so the server never sees them at upload time. Everything here runs
 at *set*-time (magic-byte check on the object head) or *read*-time
 (translating the stored URI into a browser-fetchable URL).
 """
+
 from __future__ import annotations
 
 import logging
@@ -35,9 +36,9 @@ AVATAR_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 # Each entry: list of valid magic-byte prefixes for the format. WEBP also
 # requires the bytes 8..12 to equal "WEBP" since 4..8 is the file size.
 _MAGIC_PREFIXES: dict[str, tuple[bytes, ...]] = {
-    "image/png":  (b"\x89PNG\r\n\x1a\n",),
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
     "image/jpeg": (b"\xff\xd8\xff",),
-    "image/gif":  (b"GIF87a", b"GIF89a"),
+    "image/gif": (b"GIF87a", b"GIF89a"),
     # WEBP is RIFF + "WEBP" 4 bytes later; handled specially below.
     "image/webp": (b"RIFF",),
 }
@@ -93,15 +94,18 @@ def public_avatar_url(user: User) -> Optional[str]:
             return generate_presigned_get_url(raw, expiration=900)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "Presign avatar GET failed for user=%s: %s", user.username, exc,
+                "Presign avatar GET failed for user=%s: %s",
+                user.username,
+                exc,
             )
             return None
     if raw.startswith(_LOCAL_AVATAR_URI_PREFIX):
         # Strip the ``local://avatars/`` prefix and prepend the static mount
         # so the browser hits FastAPI for the bytes. URL-quote the segments
         # so spaces / unicode in usernames don't break the route.
-        rel_under_mount = raw[len(_LOCAL_AVATAR_URI_PREFIX):]
+        rel_under_mount = raw[len(_LOCAL_AVATAR_URI_PREFIX) :]
         from urllib.parse import quote
+
         return f"{_LOCAL_AVATAR_STATIC_PATH}{quote(rel_under_mount, safe='/')}"
     if raw.startswith("http://") or raw.startswith("https://"):
         return raw
@@ -118,7 +122,9 @@ def public_avatar_url(user: User) -> Optional[str]:
     # Anything else (e.g. ``local://resumes/...``, a stray absolute path) is
     # not avatar-shaped — refuse rather than leak server-internal URIs.
     logger.warning(
-        "Unrecognized avatar_url scheme for user=%s: %r", user.username, raw[:32],
+        "Unrecognized avatar_url scheme for user=%s: %r",
+        user.username,
+        raw[:32],
     )
     return None
 

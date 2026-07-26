@@ -1,4 +1,5 @@
 """OpenAI /v1/models adapter (P7-A)."""
+
 from __future__ import annotations
 
 from .base import VendorAdapterSpec
@@ -10,17 +11,22 @@ from .base import VendorAdapterSpec
 # inspecting the live response (P7-A verification script).
 _NON_CHAT_HINTS = (
     # Non-chat product lines
-    "embed", "embedding",
-    "whisper", "tts", "audio",
-    "dall-e", "image", "moderation",
-    "realtime",                    # gpt-realtime-* — websocket audio API
-    "search-api",                  # gpt-5.5-search-api etc — search wrapper
+    "embed",
+    "embedding",
+    "whisper",
+    "tts",
+    "audio",
+    "dall-e",
+    "image",
+    "moderation",
+    "realtime",  # gpt-realtime-* — websocket audio API
+    "search-api",  # gpt-5.5-search-api etc — search wrapper
     "gpt-image",
-    "computer-use",                # computer-use-preview — agent-only
+    "computer-use",  # computer-use-preview — agent-only
     # Variants that ARE chat but introduce noise / non-determinism
     # (moved here from the old CURATED hidden=True layer):
-    "chat-latest",                 # rolling alias of bare gpt-5.x — non-deterministic
-    "codex",                       # codex / codex-mini / codex-max — coding-agent variant
+    "chat-latest",  # rolling alias of bare gpt-5.x — non-deterministic
+    "codex",  # codex / codex-mini / codex-max — coding-agent variant
 )
 
 
@@ -33,7 +39,7 @@ def _chat_filter(entry: dict, bare_id: str) -> bool:
 
 SPEC = VendorAdapterSpec(
     provider="openai",
-    models_path="/models",          # api_base already includes /v1
+    models_path="/models",  # api_base already includes /v1
     auth_style="bearer",
     created_int_field="created",
     chat_filter=_chat_filter,

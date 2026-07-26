@@ -11,6 +11,7 @@ Notable quirks:
     include ``"generateContent"`` in that array. This is the single
     cleanest non-chat filter of any vendor.
 """
+
 from __future__ import annotations
 
 from .base import VendorAdapterSpec
@@ -27,24 +28,32 @@ def _chat_filter(entry: dict, bare_id: str) -> bool:
     # Defence in depth: drop a few id-namespaced families even when
     # the methods array is missing.
     lower = bare_id.lower()
-    if any(hint in lower for hint in (
-        "imagen", "veo", "lyria", "nano-banana",
-        "embedding", "aqa",
-        "tts", "text-to-speech",
-        "robotics-er",          # gemini-robotics-er-* — robotics-only
-        "antigravity",          # antigravity-preview — agent-only sandbox
-        "deep-research",        # deep-research-* — async research wrapper
-        "computer-use",
-        "native-audio",         # gemini-*-native-audio-* — audio API
-        "image-preview",        # gemini-3.5-flash-image / image-preview
-    )):
+    if any(
+        hint in lower
+        for hint in (
+            "imagen",
+            "veo",
+            "lyria",
+            "nano-banana",
+            "embedding",
+            "aqa",
+            "tts",
+            "text-to-speech",
+            "robotics-er",  # gemini-robotics-er-* — robotics-only
+            "antigravity",  # antigravity-preview — agent-only sandbox
+            "deep-research",  # deep-research-* — async research wrapper
+            "computer-use",
+            "native-audio",  # gemini-*-native-audio-* — audio API
+            "image-preview",  # gemini-3.5-flash-image / image-preview
+        )
+    ):
         return False
     return True
 
 
 SPEC = VendorAdapterSpec(
     provider="gemini",
-    models_path="/models",          # api_base already includes /v1beta/openai → we strip in pipeline below
+    models_path="/models",  # api_base already includes /v1beta/openai → we strip in pipeline below
     auth_style="url-key",
     response_top_key="models",
     id_field="name",

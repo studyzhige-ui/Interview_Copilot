@@ -93,7 +93,9 @@ class HybridRetriever:
 
         merged: dict[str, RetrievalChunk] = {}
         for chunk in vector_chunks:
-            chunk.vector_score = chunk.vector_score if chunk.vector_score is not None else 0.0
+            chunk.vector_score = (
+                chunk.vector_score if chunk.vector_score is not None else 0.0
+            )
             chunk.final_score += 0.6 * chunk.vector_score
             merged[chunk.id] = chunk
 
@@ -107,7 +109,9 @@ class HybridRetriever:
                 chunk.final_score += 0.35 * lexical_score
                 merged[chunk.id] = chunk
             else:
-                existing.lexical_score = max(existing.lexical_score or 0.0, lexical_score)
+                existing.lexical_score = max(
+                    existing.lexical_score or 0.0, lexical_score
+                )
                 existing.final_score += 0.35 * lexical_score
                 existing.metadata.update(chunk.metadata)
 
@@ -118,7 +122,9 @@ class HybridRetriever:
                 chunk.metadata.get("updated_at") or chunk.metadata.get("created_at")
             )
 
-        ranked = sorted(merged.values(), key=lambda item: item.final_score, reverse=True)
+        ranked = sorted(
+            merged.values(), key=lambda item: item.final_score, reverse=True
+        )
         return HybridRetrievalResult(
             chunks=ranked[:final_top_k],
             used_vector=bool(vector_chunks),

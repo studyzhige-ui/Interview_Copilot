@@ -14,6 +14,7 @@ Workflow:
   3. ``backfill_pending`` — (re)index sections whose ``embedding_status != ready``.
   4. ``retrieve`` — dense + BM25 hybrid search, pk-scoped.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -90,7 +91,9 @@ class ResumeVectorService:
                 except Exception as exc:  # noqa: BLE001
                     section.embedding_status = "failed"
                     logger.warning(
-                        "Resume section embedding failed for %s: %s", section.id, exc,
+                        "Resume section embedding failed for %s: %s",
+                        section.id,
+                        exc,
                     )
             db.commit()
             logger.info("Resume section hybrid backfill complete: %s items", count)
@@ -123,8 +126,11 @@ class ResumeVectorService:
         def _search() -> list[dict[str, Any]]:
             query_dense = Settings.embed_model.get_query_embedding(query)
             return milvus_hybrid.hybrid_search(
-                _COLL, query_text=query, query_dense=query_dense,
-                user_pk=user_pk, top_k=top_k,
+                _COLL,
+                query_text=query,
+                query_dense=query_dense,
+                user_pk=user_pk,
+                top_k=top_k,
             )
 
         hits = await asyncio.to_thread(_search)
@@ -135,18 +141,20 @@ class ResumeVectorService:
                 continue
             if allowed and h.get("section_type") not in allowed:
                 continue
-            chunks.append(RetrievalChunk(
-                id=str(h["id"]),
-                text=h["text"],
-                metadata={
-                    "section_id": h["id"],
-                    "user_id": h["user_id"],
-                    "resume_id": h.get("resume_id"),
-                    "section_type": h.get("section_type"),
-                    "title": h.get("title"),
-                },
-                vector_score=float(h["score"]),
-            ))
+            chunks.append(
+                RetrievalChunk(
+                    id=str(h["id"]),
+                    text=h["text"],
+                    metadata={
+                        "section_id": h["id"],
+                        "user_id": h["user_id"],
+                        "resume_id": h.get("resume_id"),
+                        "section_type": h.get("section_type"),
+                        "title": h.get("title"),
+                    },
+                    vector_score=float(h["score"]),
+                )
+            )
         return chunks
 
 

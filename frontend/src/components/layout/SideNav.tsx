@@ -7,6 +7,7 @@ import {
   BarChart3,
   Library,
   Cpu,
+  Puzzle,
   UserRound,
   Pin,
   PinOff,
@@ -14,6 +15,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { Logo } from '@/components/ui/Logo';
+import { useEditionPolicy } from '@/hooks/useEditionPolicy';
 
 interface NavItem {
   to: string;
@@ -28,12 +30,14 @@ const ITEMS: NavItem[] = [
   { to: '/analytics',    label: '能力分析', icon: BarChart3 },
   { to: '/library',      label: '资料库',   icon: Library },
   { to: '/models',       label: '模型',     icon: Cpu },
+  { to: '/capabilities', label: 'Agent 能力', icon: Puzzle },
   { to: '/me',           label: '个人中心', icon: UserRound },
 ];
 
 const PIN_KEY = 'sidenav.pinned';
 
 export function SideNav() {
+  const edition = useEditionPolicy();
   const [pinned, setPinned] = useState<boolean>(() => {
     try {
       const v = localStorage.getItem(PIN_KEY);
@@ -62,7 +66,12 @@ export function SideNav() {
       <div className="h-16 px-3 flex items-center gap-2.5 border-b border-stone-200">
         <Logo size={34} />
         {expanded && (
-          <div className="text-base font-semibold text-stone-800 truncate">Interview Copilot</div>
+          <div className="min-w-0">
+            <div className="text-base font-semibold text-stone-800 truncate">Interview Copilot</div>
+            <div className="text-[10px] uppercase tracking-wide text-stone-400">
+              {edition.data?.edition ?? 'community'}
+            </div>
+          </div>
         )}
       </div>
       <nav className="flex-1 p-2.5 flex flex-col gap-1">

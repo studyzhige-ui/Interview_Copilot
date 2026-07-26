@@ -72,7 +72,7 @@ export function ReviewPage() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useSearchParams();
   const [drafts, setDrafts] = useState<Draft[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [selectedActiveId, setActiveId] = useState<string | null>(null);
   const [detail, setDetail] = useState<InterviewRecordDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [widths, setWidths] = useState(loadWidths);
@@ -107,22 +107,21 @@ export function ReviewPage() {
     [drafts, records],
   );
 
-  useEffect(() => {
-    if (activeId) return;
-    // Don't default off a cached (possibly stale) list: a ?id= deep link
-    // may point at a record created seconds ago (mock finish → /review),
-    // and picking records[0] here would lock the wrong selection (this
-    // effect never runs again once activeId is set). Wait for the
-    // post-mount fetch — the cached rows still render meanwhile.
-    if (!isFetchedAfterMount) return;
+  const defaultActiveId = useMemo(() => {
+    if (!isFetchedAfterMount) return null;
     const wanted = search.get('id');
-    if (wanted && records.some((r) => r.id === wanted)) setActiveId(wanted);
-    else if (records.length > 0) setActiveId(records[0].id);
-    else if (drafts.length > 0) setActiveId(drafts[0].id);
-  }, [activeId, records, drafts, search, isFetchedAfterMount]);
+    if (wanted && records.some((record) => record.id === wanted)) return wanted;
+    return records[0]?.id ?? drafts[0]?.id ?? null;
+  }, [drafts, isFetchedAfterMount, records, search]);
+  const activeId = selectedActiveId ?? defaultActiveId;
 
   useEffect(() => {
-    if (!activeId || isDraft(activeId)) { setDetail(null); return; }
+    if (!activeId || isDraft(activeId)) {
+      // The selected record owns the detail pane; clear stale server data.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDetail(null);
+      return;
+    }
     // Abort the in-flight detail fetch on activeId change — same race
     // shape as the chat-panel transcript loader. Stale writes are
     // already gated by ``alive`` but the backend keeps materialising
@@ -374,15 +373,15 @@ export function ReviewPage() {
   // setAnalyses), so we read it from a ref synced each render. This
   // mirrors the "latest-state-ref" idiom we use elsewhere for
   // AbortController patterns.
-  const analysesRef = useRef(analyses);
-  analysesRef.current = analyses;
   useEffect(() => {
     if (!activeId || !detail || isDraft(activeId)) return;
     const status = (detail.status ?? '').toLowerCase();
     const isAnalyzingStatus = ['pending', 'transcribing', 'extracting', 'analyzing', 'processing_review'].includes(status);
     if (!isAnalyzingStatus) return;
-    if (analysesRef.current[activeId]) return;  // already registered
+    if (analyses[activeId]) return;
 
+    // Materialize a durable runner when server state enters an active phase.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAnalyses((prev) => {
       if (prev[activeId]) return prev;
       return {
@@ -395,7 +394,7 @@ export function ReviewPage() {
         },
       };
     });
-  }, [activeId, detail?.id, detail?.status, detail?.title, detail?.tag]);
+  }, [activeId, analyses, detail]);
 
   // Map of record_id → live progress, used by SessionList to render a pill
   // that shows the current sub-stage (connecting / transcribing / analyzing).
@@ -464,7 +463,7 @@ export function ReviewPage() {
               </button>
             </div>
             <div className="flex-1 min-h-0">
-              <QAPanel detail={detail} loading={detailLoading} />
+              <QAPanel key={detail?.id ?? 'empty'} detail={detail} loading={detailLoading} />
             </div>
           </div>
         );
@@ -501,7 +500,7 @@ export function ReviewPage() {
         />
       );
     }
-    return <QAPanel detail={detail} loading={detailLoading} />;
+    return <QAPanel key={detail?.id ?? 'empty'} detail={detail} loading={detailLoading} />;
   })();
 
   return (

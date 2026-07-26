@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ChevronRight, FileText, Pencil, BookmarkPlus, BookmarkCheck } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Pill } from '@/components/ui/Pill';
@@ -53,10 +53,6 @@ export function QAPanel({ detail, loading }: Props) {
   // Default to the report tab when content first lands; flip to QA only if the
   // user explicitly switches. This matches the design spec.
   const [tab, setTab] = useState<Tab>('report');
-  useEffect(() => {
-    setTab('report');
-  }, [detail?.id]);
-
   if (loading) {
     return (
       <div className="flex-1 min-w-0 overflow-y-auto p-8">

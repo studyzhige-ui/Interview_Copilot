@@ -9,6 +9,7 @@ Everything callers dispatch is re-exported here, so
 tests that patch module globals (e.g. ``SessionLocal``) must target the
 submodule that owns the task.
 """
+
 from app.worker.tasks.runtime import run_async
 from app.worker.tasks.interview import process_interview_analysis
 from app.worker.tasks.ingestion import process_document_ingestion

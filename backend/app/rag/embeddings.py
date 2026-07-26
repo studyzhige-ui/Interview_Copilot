@@ -2,7 +2,8 @@ import logging
 
 from llama_index.core import Settings
 
-from app.core.model_registry import RuntimeLLMProxy, get_llm_for_role, get_profile_for_role
+from app.core.llm_client_factory import RuntimeLLMProxy, get_llm_for_role
+from app.core.user_model_selection import get_profile_for_role
 from app.rag.embedding_registry import build_embedding, resolve_embedding
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,9 @@ def init_rag_settings():
         Settings.embed_model = build_embedding()
         logger.info(
             "RAG embedding ready: provider=%s model=%s dim=%d",
-            cfg.provider_id, cfg.model, cfg.dim,
+            cfg.provider_id,
+            cfg.model,
+            cfg.dim,
         )
     except Exception as e:
         logger.error("Failed to initialize embedding (fatal): %s", e)
@@ -53,7 +56,9 @@ def init_rag_settings():
     from app.rag import milvus_hybrid
 
     milvus_hybrid.validate_existing_dims(
-        milvus_hybrid.KNOWLEDGE, milvus_hybrid.RESUME, milvus_hybrid.ABILITY,
+        milvus_hybrid.KNOWLEDGE,
+        milvus_hybrid.RESUME,
+        milvus_hybrid.ABILITY,
     )
 
     # Primary LLM: resolve eagerly (warm + validated) when the model catalog is
@@ -69,6 +74,7 @@ def init_rag_settings():
         logger.warning(
             "Primary LLM not resolvable at startup (%s); using a lazy proxy "
             "until the model catalog is populated "
-            "(scripts/refresh_models.py or the daily Celery beat).", e,
+            "(scripts/refresh_models.py or the daily Celery beat).",
+            e,
         )
         Settings.llm = RuntimeLLMProxy(role="primary")

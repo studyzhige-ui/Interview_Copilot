@@ -11,6 +11,7 @@ the retrieval flow can be asserted as BEHAVIOUR:
   * every ``empty_reason`` the retriever itself emits;
   * the facade's ``planner_failed`` stamping and the L2 tool's output shape.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -44,8 +45,7 @@ class _ScoringReranker:
 
     def postprocess_nodes(self, nodes, query_bundle=None):
         return [
-            NodeWithScore(node=n.node, score=s)
-            for n, s in zip(nodes, self._scores)
+            NodeWithScore(node=n.node, score=s) for n, s in zip(nodes, self._scores)
         ]
 
 
@@ -68,15 +68,24 @@ def pipeline(monkeypatch):
     ids (all live), no reranker installed (tests set one explicitly).
     """
     ctl = SimpleNamespace(
-        hits=[], user_pk=1, search_exc=None, hydrated=None,
-        hits_by_sparse=None, search_calls=[], fail_on_sparse=None,
+        hits=[],
+        user_pk=1,
+        search_exc=None,
+        hydrated=None,
+        hits_by_sparse=None,
+        search_calls=[],
+        fail_on_sparse=None,
     )
 
     monkeypatch.setattr(
-        retriever, "Settings", SimpleNamespace(embed_model=_FakeEmbed()),
+        retriever,
+        "Settings",
+        SimpleNamespace(embed_model=_FakeEmbed()),
     )
     monkeypatch.setattr(
-        retriever, "resolve_user_pk", lambda db, uid: ctl.user_pk,
+        retriever,
+        "resolve_user_pk",
+        lambda db, uid: ctl.user_pk,
     )
 
     from app.rag import milvus_hybrid
@@ -110,7 +119,11 @@ def pipeline(monkeypatch):
 
 
 async def _run(**kwargs):
-    defaults = {"dense_query": "Redis 缓存雪崩怎么解决", "sparse_query": "Redis 雪崩", "user_id": "alice"}
+    defaults = {
+        "dense_query": "Redis 缓存雪崩怎么解决",
+        "sparse_query": "Redis 雪崩",
+        "user_id": "alice",
+    }
     defaults.update(kwargs)
     return await retriever.query_knowledge_base(**defaults)
 
@@ -262,7 +275,10 @@ async def test_sub_queries_fan_out_merge_and_dedup(pipeline):
     pool is deduped, then a single rerank picks the final top-N."""
     pipeline.hits_by_sparse = {
         "雪崩 kw": [_hit("n1", "雪崩内容", 0.03)],
-        "击穿 kw": [_hit("n2", "击穿内容", 0.03), _hit("n1", "雪崩内容", 0.02)],  # n1 dup
+        "击穿 kw": [
+            _hit("n2", "击穿内容", 0.03),
+            _hit("n1", "雪崩内容", 0.02),
+        ],  # n1 dup
     }
     pipeline.set_reranker(_ScoringReranker([0.9, 0.8]))
 
@@ -277,7 +293,9 @@ async def test_sub_queries_fan_out_merge_and_dedup(pipeline):
 
     # Two sub-query passes, each at the per-sub-query budget.
     assert len(pipeline.search_calls) == 2
-    assert {c["top_k"] for c in pipeline.search_calls} == {settings.SUB_QUERY_FUSION_TOP_K}
+    assert {c["top_k"] for c in pipeline.search_calls} == {
+        settings.SUB_QUERY_FUSION_TOP_K
+    }
     assert {c["query_text"] for c in pipeline.search_calls} == {"雪崩 kw", "击穿 kw"}
     # n1 hit by both sub-queries → deduped to one candidate; 2 unique total.
     assert [c["node_id"] for c in result.chunks] == ["n1", "n2"]
@@ -289,10 +307,12 @@ async def test_sub_queries_capped_at_max(pipeline):
     pipeline.set_reranker(_ScoringReranker([0.9]))
 
     # More sub-queries supplied than MAX_SUB_QUERIES — fan-out is capped.
-    await _run(sub_queries=[
-        {"dense_query": f"q{i}", "sparse_query": f"kw{i}"}
-        for i in range(settings.MAX_SUB_QUERIES + 2)
-    ])
+    await _run(
+        sub_queries=[
+            {"dense_query": f"q{i}", "sparse_query": f"kw{i}"}
+            for i in range(settings.MAX_SUB_QUERIES + 2)
+        ]
+    )
 
     assert len(pipeline.search_calls) == settings.MAX_SUB_QUERIES
 
@@ -319,7 +339,8 @@ async def test_sub_queries_fallback_keeps_higher_scored_dup(pipeline):
     pipeline.set_reranker(_RaisingReranker())
 
     result = await _run(
-        dense_query="overall", sparse_query="overall kw",
+        dense_query="overall",
+        sparse_query="overall kw",
         sub_queries=[
             {"dense_query": "a", "sparse_query": "low kw"},
             {"dense_query": "b", "sparse_query": "high kw"},
@@ -340,10 +361,12 @@ async def test_one_sub_query_milvus_failure_degrades_whole_turn(pipeline):
     pipeline.fail_on_sparse = "bad kw"
     pipeline.set_reranker(_ScoringReranker([0.9]))
 
-    result = await _run(sub_queries=[
-        {"dense_query": "a", "sparse_query": "ok kw"},
-        {"dense_query": "b", "sparse_query": "bad kw"},
-    ])
+    result = await _run(
+        sub_queries=[
+            {"dense_query": "a", "sparse_query": "ok kw"},
+            {"dense_query": "b", "sparse_query": "bad kw"},
+        ]
+    )
 
     assert result.chunks == []
     assert result.state.empty_reason == "milvus_unavailable"
@@ -356,10 +379,14 @@ def test_retrieval_specs_helper():
     specs = retriever._retrieval_specs("D", "S", [])
     assert specs == [("D", "S")]
     # Blank dense side falls back to sparse; blank sub-query dropped.
-    specs = retriever._retrieval_specs("D", "S", [
-        {"dense_query": "a", "sparse_query": ""},
-        {"dense_query": "", "sparse_query": ""},
-    ])
+    specs = retriever._retrieval_specs(
+        "D",
+        "S",
+        [
+            {"dense_query": "a", "sparse_query": ""},
+            {"dense_query": "", "sparse_query": ""},
+        ],
+    )
     assert specs == [("a", "a")]
 
 
@@ -380,7 +407,10 @@ async def test_facade_stamps_planner_failed(monkeypatch):
     monkeypatch.setattr(facade_mod, "query_knowledge_base", fake_query)
 
     result = await facade_mod.knowledge_retriever.retrieve(
-        dense_query="q", sparse_query="kw", user_id="alice", planner_failed=True,
+        dense_query="q",
+        sparse_query="kw",
+        user_id="alice",
+        planner_failed=True,
     )
     assert result.state.planner_failed is True
     assert result.retrieval_hit is True
@@ -392,14 +422,16 @@ async def test_search_knowledge_tool_output_shape(monkeypatch):
 
     async def fake_retrieve(**kwargs):
         return RetrievalResult(
-            chunks=[{
-                "chunk_id": "dch_1",
-                "node_id": "n1",
-                "text": "Redis 缓存雪崩……",
-                "source_kind": "user_upload",
-                "document_title": "Redis 笔记",
-                "score": 0.91,
-            }],
+            chunks=[
+                {
+                    "chunk_id": "dch_1",
+                    "node_id": "n1",
+                    "text": "Redis 缓存雪崩……",
+                    "source_kind": "user_upload",
+                    "document_title": "Redis 笔记",
+                    "score": 0.91,
+                }
+            ],
             state=RetrievalState(retrieval_hit=True),
         )
 

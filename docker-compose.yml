@@ -145,6 +145,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements-community.txt
     container_name: interview_copilot_api
     env_file: .env
     environment:
@@ -223,6 +225,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements-community.txt
     container_name: interview_copilot_worker_transcription
     env_file: .env
     environment:
@@ -255,6 +259,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements-community.txt
     container_name: interview_copilot_worker_light
     env_file: .env
     environment:
@@ -292,6 +298,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements-community.txt
     container_name: interview_copilot_beat
     env_file: .env
     environment:

@@ -10,6 +10,7 @@ Only the local HF embedding ships a local tokenizer. Remote providers
 conservative char-based estimate with a one-time warning (plan §4.5.2). The
 estimate deliberately over-counts a little so the oversize gate stays safe.
 """
+
 from __future__ import annotations
 
 import logging

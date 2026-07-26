@@ -13,6 +13,7 @@ table, no second retry framework). Convention: ``aggregate_id = document_id``.
 Imported by the worker's drain task so the handlers are registered before any
 job runs.
 """
+
 from __future__ import annotations
 
 import logging
@@ -46,7 +47,9 @@ def _handle_milvus_upsert(db: Session, job: OutboxJob) -> None:
 
     document_id = job.aggregate_id
     if not document_id:
-        logger.warning("%s: job %s has no aggregate_id (document_id)", JOB_MILVUS_UPSERT, job.id)
+        logger.warning(
+            "%s: job %s has no aggregate_id (document_id)", JOB_MILVUS_UPSERT, job.id
+        )
         return
     try:
         reindex_document(db, document_id)  # rebuild Milvus + flip chunks indexed
@@ -55,7 +58,9 @@ def _handle_milvus_upsert(db: Session, job: OutboxJob) -> None:
         # the last one exactly when attempts + 1 >= max_attempts.
         if job.attempts + 1 >= job.max_attempts:
             mark_document_index_failed(
-                db, document_id, "向量索引多次重试仍失败，请稍后重新导入该文档。",
+                db,
+                document_id,
+                "向量索引多次重试仍失败，请稍后重新导入该文档。",
             )
         raise
     mark_document_indexed_ready(db, document_id)
@@ -69,7 +74,9 @@ def _handle_milvus_delete(db: Session, job: OutboxJob) -> None:
 
     document_id = job.aggregate_id
     if not document_id:
-        logger.warning("%s: job %s has no aggregate_id (document_id)", JOB_MILVUS_DELETE, job.id)
+        logger.warning(
+            "%s: job %s has no aggregate_id (document_id)", JOB_MILVUS_DELETE, job.id
+        )
         return
     milvus_hybrid.delete_by_field(milvus_hybrid.KNOWLEDGE, "document_id", document_id)
 

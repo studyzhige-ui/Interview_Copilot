@@ -71,6 +71,7 @@ def _avatar_object_key(username: str, mime: str) -> str:
 def _store_blob(body: bytes, object_key: str, mime: str, username: str) -> str:
     """Try S3 first, fall back to local. Mirrors the runtime path in auth.py."""
     import io
+
     try:
         s3_client.upload_fileobj(
             io.BytesIO(body),
@@ -80,7 +81,9 @@ def _store_blob(body: bytes, object_key: str, mime: str, username: str) -> str:
         )
         return storage_uri_for_key(object_key)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("S3 unavailable for user=%s, using local fallback: %s", username, exc)
+        logger.warning(
+            "S3 unavailable for user=%s, using local fallback: %s", username, exc
+        )
     return save_blob_to_local(body, object_key)
 
 
@@ -119,7 +122,9 @@ def migrate(dry_run: bool = False) -> tuple[int, int, int]:
             try:
                 body = base64.b64decode(m.group("b64"), validate=True)
             except (ValueError, base64.binascii.Error) as exc:
-                logger.warning("user=%s base64 decode failed: %s; skipping", user.username, exc)
+                logger.warning(
+                    "user=%s base64 decode failed: %s; skipping", user.username, exc
+                )
                 skipped += 1
                 continue
 
@@ -132,7 +137,10 @@ def migrate(dry_run: bool = False) -> tuple[int, int, int]:
             if dry_run:
                 logger.info(
                     "[dry-run] would migrate user=%s (%d bytes, %s) → %s",
-                    user.username, len(body), mime, object_key,
+                    user.username,
+                    len(body),
+                    mime,
+                    object_key,
                 )
                 migrated += 1
                 continue
@@ -148,13 +156,17 @@ def migrate(dry_run: bool = False) -> tuple[int, int, int]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Migrate legacy data: URL avatars to S3 / local.")
+    parser = argparse.ArgumentParser(
+        description="Migrate legacy data: URL avatars to S3 / local."
+    )
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="List rows that would be migrated without writing anything.",
     )
     parser.add_argument(
-        "--log-level", default="INFO",
+        "--log-level",
+        default="INFO",
         help="Python logging level (DEBUG / INFO / WARNING / ERROR). Default: INFO.",
     )
     args = parser.parse_args(argv)

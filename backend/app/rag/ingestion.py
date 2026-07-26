@@ -59,7 +59,9 @@ def _drop_blank_nodes(all_nodes: list) -> list:
     kept = [n for n in all_nodes if _node_text(n).strip()]
     dropped = len(all_nodes) - len(kept)
     if dropped:
-        logger.warning("Dropped %d blank/whitespace chunk(s) before embedding.", dropped)
+        logger.warning(
+            "Dropped %d blank/whitespace chunk(s) before embedding.", dropped
+        )
     return kept
 
 
@@ -78,7 +80,9 @@ def _embed_texts(texts: list[str]) -> tuple[list, dict]:
     cfg = resolve_embedding()
     batch_size = getattr(Settings.embed_model, "embed_batch_size", None)
     t0 = time.perf_counter()
-    embeddings = Settings.embed_model.get_text_embedding_batch(texts, show_progress=True)
+    embeddings = Settings.embed_model.get_text_embedding_batch(
+        texts, show_progress=True
+    )
     duration_ms = int((time.perf_counter() - t0) * 1000)
 
     if len(embeddings) != len(texts):
@@ -104,8 +108,13 @@ def _embed_texts(texts: list[str]) -> tuple[list, dict]:
 
 
 def _insert_milvus_rows(
-    all_nodes: list, texts: list[str], embeddings: list,
-    *, user_id: int, source_kind: str, document_id: str | None,
+    all_nodes: list,
+    texts: list[str],
+    embeddings: list,
+    *,
+    user_id: int,
+    source_kind: str,
+    document_id: str | None,
 ) -> None:
     """Insert the (precomputed) dense vectors into the Milvus 2.6 hybrid
     collection. The sparse/BM25 vector is produced server-side from ``text`` by
@@ -121,16 +130,20 @@ def _insert_milvus_rows(
         node_id = getattr(node, "node_id", None) or getattr(node, "id_", None)
         if not node_id:
             continue
-        rows.append({
-            "id": str(node_id),
-            "user_id": int(user_id),
-            "source_kind": source_kind,
-            "document_id": document_id,
-            "text": text,
-            "dense": emb,
-        })
+        rows.append(
+            {
+                "id": str(node_id),
+                "user_id": int(user_id),
+                "source_kind": source_kind,
+                "document_id": document_id,
+                "text": text,
+                "dense": emb,
+            }
+        )
     if document_id:
-        milvus_hybrid.delete_by_field(milvus_hybrid.KNOWLEDGE, "document_id", document_id)
+        milvus_hybrid.delete_by_field(
+            milvus_hybrid.KNOWLEDGE, "document_id", document_id
+        )
     milvus_hybrid.insert(milvus_hybrid.KNOWLEDGE, rows)
 
 
@@ -152,15 +165,20 @@ def reindex_document(db, document_id: str) -> int:
 
     chunks = read_indexable_chunks(db, document_id)
     if not chunks:
-        milvus_hybrid.delete_by_field(milvus_hybrid.KNOWLEDGE, "document_id", document_id)
+        milvus_hybrid.delete_by_field(
+            milvus_hybrid.KNOWLEDGE, "document_id", document_id
+        )
         return 0
     texts = [(c.text or "") for c in chunks]
     embeddings, _profile = _embed_texts(texts)
     # Chunks carry .node_id / .text, so _insert_milvus_rows treats them as nodes;
     # user_id / source_kind are uniform per document.
     _insert_milvus_rows(
-        chunks, texts, embeddings,
-        user_id=int(chunks[0].user_id), source_kind=chunks[0].source_kind or "",
+        chunks,
+        texts,
+        embeddings,
+        user_id=int(chunks[0].user_id),
+        source_kind=chunks[0].source_kind or "",
         document_id=document_id,
     )
     mark_chunks_indexed(db, document_id=document_id)
@@ -168,7 +186,11 @@ def reindex_document(db, document_id: str) -> int:
 
 
 def _index_nodes(
-    all_nodes: list, *, user_id: int, source_kind: str, document_id: str | None,
+    all_nodes: list,
+    *,
+    user_id: int,
+    source_kind: str,
+    document_id: str | None,
 ) -> dict:
     """Document-atomic two-phase write (plan §4.6.3), shared by both ingest
     paths so they keep identical Milvus/Postgres semantics:
@@ -195,27 +217,37 @@ def _index_nodes(
     # Phase 1: facts first, as pending (replacement happens here).
     with SessionLocal() as db:
         chunk_info = write_chunks(
-            db, nodes=all_nodes, user_id=user_id, source_kind=source_kind,
-            document_id=document_id, index_status="pending",
+            db,
+            nodes=all_nodes,
+            user_id=user_id,
+            source_kind=source_kind,
+            document_id=document_id,
+            index_status="pending",
         )
     # Phase 2: Milvus rows. On failure, keep the pending facts and queue a
     # reliable upsert retry rather than failing the import.
     try:
         _insert_milvus_rows(
-            all_nodes, texts, embeddings,
-            user_id=user_id, source_kind=source_kind, document_id=document_id,
+            all_nodes,
+            texts,
+            embeddings,
+            user_id=user_id,
+            source_kind=source_kind,
+            document_id=document_id,
         )
     except Exception as exc:  # noqa: BLE001 — queue retry, don't fail the import
         if not document_id:
             raise  # no document_id to key the retry on (defensive NULL path)
         logger.warning(
             "Milvus write failed for document %s; queuing upsert retry: %s",
-            document_id, exc,
+            document_id,
+            exc,
         )
         # Deliberate upward seam (rag → services.knowledge): the outbox is the
         # cross-system reliability layer, and enqueueing the retry job is the
         # only thing this pipeline needs from it — only on this failure path.
         from app.services.knowledge.knowledge_outbox import enqueue_milvus_upsert
+
         with SessionLocal() as db:
             enqueue_milvus_upsert(db, user_pk=user_id, document_id=document_id)
             db.commit()
@@ -280,7 +312,9 @@ def get_optimal_nodes(document: Document) -> list:
 
     # 二次兜底：对超长 chunk 做再切分，确保不超过 embedding 模型 max_seq_length。
     # 超长判定使用真实 embedding tokenizer（plan §4.3），不再用 len(text) 字符估算。
-    secondary_splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+    secondary_splitter = SentenceSplitter(
+        chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
+    )
     final_nodes = []
     for node in nodes:
         text = node.get_content()
@@ -414,10 +448,15 @@ async def ingest_document(
         # rebuildable index copy.
         logger.info(f">>> 索引 {len(all_nodes)} 个节点 (pending→Milvus→indexed)...")
         chunk_info = _index_nodes(
-            all_nodes, user_id=user_id, source_kind=source_kind, document_id=document_id,
+            all_nodes,
+            user_id=user_id,
+            source_kind=source_kind,
+            document_id=document_id,
         )
 
-        logger.info(f">>> 摄取完成: '{file_path}' (source_kind={source_kind}, user_id={user_id})")
+        logger.info(
+            f">>> 摄取完成: '{file_path}' (source_kind={source_kind}, user_id={user_id})"
+        )
 
         # Denormalised document body for knowledge_documents.content_text
         # (display / reindex). Chunks remain the chunk-level fact source.
@@ -427,7 +466,9 @@ async def ingest_document(
             "indexed": chunk_info.get("indexed", True),
             "chunk_count": chunk_info["chunk_count"],
             "node_ids": chunk_info["node_ids"],
-            "ref_doc_ids": list({node.ref_doc_id for node in all_nodes if node.ref_doc_id}),
+            "ref_doc_ids": list(
+                {node.ref_doc_id for node in all_nodes if node.ref_doc_id}
+            ),
             "content_text": full_text,
         }
 
@@ -437,8 +478,11 @@ async def ingest_document(
 
 
 async def ingest_text(
-    text: str, source_kind: str, user_id: int,
-    *, document_id: str | None = None,
+    text: str,
+    source_kind: str,
+    user_id: int,
+    *,
+    document_id: str | None = None,
 ):
     """纯文本节点摄取通道。P0 安全：强制执行多租户隔离。
 
@@ -480,9 +524,14 @@ async def ingest_text(
         # Two-phase document-atomic write (§4.6.3), shared with file ingest:
         # facts pending → Milvus → indexed. document_id NULL only on the
         # defensive document-less path; set for improved_qa etc.
-        logger.info(f"纯文本摄取: 索引 {len(all_nodes)} 个节点 (pending→Milvus→indexed)...")
+        logger.info(
+            f"纯文本摄取: 索引 {len(all_nodes)} 个节点 (pending→Milvus→indexed)..."
+        )
         chunk_info = _index_nodes(
-            all_nodes, user_id=user_id, source_kind=source_kind, document_id=document_id,
+            all_nodes,
+            user_id=user_id,
+            source_kind=source_kind,
+            document_id=document_id,
         )
 
         logger.info(f"文本摄取完成 (source_kind='{source_kind}')。")
@@ -492,7 +541,9 @@ async def ingest_text(
             "indexed": chunk_info.get("indexed", True),
             "chunk_count": chunk_info["chunk_count"],
             "node_ids": chunk_info["node_ids"],
-            "ref_doc_ids": list({node.ref_doc_id for node in all_nodes if node.ref_doc_id}),
+            "ref_doc_ids": list(
+                {node.ref_doc_id for node in all_nodes if node.ref_doc_id}
+            ),
         }
     except Exception as e:
         logger.error(f"文本摄取失败: {e}")

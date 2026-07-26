@@ -1,5 +1,7 @@
 """Tests for the V2 task tool handlers and ToolEntry prompt field."""
-from unittest.mock import patch
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -13,9 +15,13 @@ CTX = AgentToolContext(user_id="u-test", session_id="sess-task-tool-001")
 def _seed_conversation(db_session):
     from app.models.chat import Conversation
 
-    db_session.add(Conversation(
-        id=CTX.session_id, user_id=CTX.user_id, title="tool test",
-    ))
+    db_session.add(
+        Conversation(
+            id=CTX.session_id,
+            user_id=CTX.user_id,
+            title="tool test",
+        )
+    )
     db_session.commit()
 
 
@@ -48,14 +54,59 @@ class TestTaskCreateTool:
 
 class TestTaskUpdateTool:
     @pytest.mark.asyncio
-    async def test_update_status(self, _patch_session_local):
+    async def test_completion_requires_verification(self, _patch_session_local):
         await registry.dispatch("task_create", {"subject": "X"}, CTX)
         result = await registry.dispatch(
             "task_update",
             {"task_id": 1, "status": "completed"},
             CTX,
         )
-        assert result["status"] == "completed"
+        assert result["error"] == "task_requires_verification"
+
+    @pytest.mark.asyncio
+    async def test_independent_verifier_completes_task(
+        self, _patch_session_local, monkeypatch
+    ):
+        await registry.dispatch(
+            "task_create",
+            {
+                "subject": "X",
+                "acceptance_criteria": "The observed value is 3",
+            },
+            CTX,
+        )
+        await registry.dispatch(
+            "task_update",
+            {
+                "task_id": 1,
+                "status": "verifying",
+                "evidence": ["command output: 3"],
+            },
+            CTX,
+        )
+        completion = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="Evidence matches the criterion.\nVERDICT: PASS",
+                    )
+                )
+            ]
+        )
+        client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    create=AsyncMock(return_value=completion),
+                )
+            )
+        )
+        monkeypatch.setattr(
+            "app.agent_runtime.tools.tasks.build_async_openai_client_for_role",
+            lambda role, user_id=None: (client, SimpleNamespace(model="verifier")),
+        )
+        result = await registry.dispatch("task_verify", {"task_id": 1}, CTX)
+        assert result["verdict"] == "PASS"
+        assert result["task"]["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_update_not_found(self, _patch_session_local):
@@ -97,7 +148,14 @@ class TestTaskListTool:
 
 class TestToolEntryPromptField:
     def test_task_tools_have_prompts(self):
-        for name in ("task_create", "task_update", "task_get", "task_list"):
+        for name in (
+            "task_create",
+            "task_update",
+            "task_get",
+            "task_list",
+            "task_verify",
+            "task_checkpoint",
+        ):
             entry = registry.get(name)
             assert entry is not None
             assert entry.prompt, f"{name} should have a non-empty prompt"

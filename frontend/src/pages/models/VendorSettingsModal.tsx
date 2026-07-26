@@ -12,6 +12,7 @@ export function VendorSettingsModal({
   onDeleteKey,
   onSaveSettings,
   onResetSettings,
+  showAdvancedSettings,
 }: {
   info: ProviderInfo;
   apiKeyMasked?: string;
@@ -20,6 +21,7 @@ export function VendorSettingsModal({
   onDeleteKey: () => void;
   onSaveSettings: (patch: { api_base_override?: string; organization_id?: string }) => Promise<boolean>;
   onResetSettings: () => void;
+  showAdvancedSettings: boolean;
 }) {
   const [keyDraft, setKeyDraft] = useState('');
   const [apiBase, setApiBase] = useState(info.api_base_override ?? '');
@@ -38,18 +40,20 @@ export function VendorSettingsModal({
       // 2) Save api_base / org overrides. Pass "" so the backend
       //    treats an empty input as "clear the override" instead of
       //    "don't touch" (which is what undefined would mean).
-      const patch: { api_base_override?: string; organization_id?: string } = {};
-      const apiBaseTrimmed = apiBase.trim();
-      const orgIdTrimmed = orgId.trim();
-      if (apiBaseTrimmed !== (info.api_base_override ?? '')) {
-        patch.api_base_override = apiBaseTrimmed;
-      }
-      if (orgIdTrimmed !== (info.organization_id ?? '')) {
-        patch.organization_id = orgIdTrimmed;
-      }
-      if (Object.keys(patch).length > 0) {
-        const ok = await onSaveSettings(patch);
-        if (!ok) return;
+      if (showAdvancedSettings) {
+        const patch: { api_base_override?: string; organization_id?: string } = {};
+        const apiBaseTrimmed = apiBase.trim();
+        const orgIdTrimmed = orgId.trim();
+        if (apiBaseTrimmed !== (info.api_base_override ?? '')) {
+          patch.api_base_override = apiBaseTrimmed;
+        }
+        if (orgIdTrimmed !== (info.organization_id ?? '')) {
+          patch.organization_id = orgIdTrimmed;
+        }
+        if (Object.keys(patch).length > 0) {
+          const ok = await onSaveSettings(patch);
+          if (!ok) return;
+        }
       }
       onClose();
     } finally {
@@ -112,7 +116,7 @@ export function VendorSettingsModal({
           </div>
 
           {/* Advanced: api_base override + organization_id */}
-          <div className="border-t border-stone-100 pt-4">
+          {showAdvancedSettings && <div className="border-t border-stone-100 pt-4">
             <div className="flex items-center gap-1.5 mb-2">
               <Globe size={13} className="text-stone-500" />
               <span className="text-xs font-semibold text-stone-700">高级（订阅 / 自建网关）</span>
@@ -143,11 +147,11 @@ export function VendorSettingsModal({
               maxLength={100}
               className="w-full px-3 py-2 bg-white border border-stone-300 rounded-md text-sm text-stone-800 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
             />
-          </div>
+          </div>}
 
           {/* Footer actions */}
           <div className="flex items-center justify-between border-t border-stone-100 pt-4">
-            {info.has_user_row ? (
+            {showAdvancedSettings && info.has_user_row ? (
               <button
                 type="button"
                 onClick={async () => { await onResetSettings(); onClose(); }}

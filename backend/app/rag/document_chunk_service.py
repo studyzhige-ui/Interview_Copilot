@@ -5,6 +5,7 @@ This is the project's chunk store — it replaced the LlamaIndex
 here (alongside the Milvus hybrid index); full-text reconstruction reads from
 here. BM25 retrieval is served server-side by Milvus, not from this table.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -50,7 +51,9 @@ def _chunk_metadata_json(node_meta: dict) -> str | None:
     """Build a chunk's ``metadata_json`` from the diagnostic keys present on
     its node — per chunk, not a blanket dict. Returns None when nothing
     diagnostic is present (keeps the column NULL rather than ``{}``)."""
-    payload = {k: node_meta[k] for k in _METADATA_JSON_KEYS if node_meta.get(k) is not None}
+    payload = {
+        k: node_meta[k] for k in _METADATA_JSON_KEYS if node_meta.get(k) is not None
+    }
     return json.dumps(payload, ensure_ascii=False) if payload else None
 
 
@@ -95,7 +98,9 @@ def write_chunks(
                 source_kind=source_kind,
                 chunk_index=idx,
                 text=text,
-                text_hash=hashlib.sha256(text.encode("utf-8")).hexdigest() if text else None,
+                text_hash=hashlib.sha256(text.encode("utf-8")).hexdigest()
+                if text
+                else None,
                 page_start=node_meta.get("page_start"),
                 page_end=node_meta.get("page_end"),
                 token_count=node_meta.get("token_count"),
@@ -130,7 +135,9 @@ def mark_chunks_indexed(
         q = q.filter(DocumentChunk.node_id.in_(node_ids))
     else:
         return 0
-    updated = q.update({DocumentChunk.index_status: "indexed"}, synchronize_session=False)
+    updated = q.update(
+        {DocumentChunk.index_status: "indexed"}, synchronize_session=False
+    )
     if commit:
         db.commit()
     return updated
@@ -153,7 +160,9 @@ def read_indexable_chunks(db: Session, document_id: str) -> list[DocumentChunk]:
     )
 
 
-def read_document_text(db: Session, document_id: str, *, max_chars: int = 20000) -> tuple[str, int]:
+def read_document_text(
+    db: Session, document_id: str, *, max_chars: int = 20000
+) -> tuple[str, int]:
     """Concatenate a document's live chunks in order. Returns (text, chunk_count).
 
     Excludes soft-deleted chunks (``deleted_at`` / ``index_status='deleted'``) so
@@ -177,7 +186,9 @@ def read_document_text(db: Session, document_id: str, *, max_chars: int = 20000)
     return "\n\n".join(pieces)[:max_chars], len(pieces)
 
 
-def delete_document_chunks(db: Session, document_id: str, *, commit: bool = True) -> list[str]:
+def delete_document_chunks(
+    db: Session, document_id: str, *, commit: bool = True
+) -> list[str]:
     """Delete a document's chunks; return their Milvus node_ids for index cleanup."""
     rows = (
         db.query(DocumentChunk.node_id)

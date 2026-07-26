@@ -6,10 +6,9 @@
     after cloning. For everyday startup, use scripts/start.ps1.
 
     What this script does:
-      1. Verify prerequisites (docker, npm, python in supported range)
-      2. Verify you're in an activated venv / conda env (not system Python)
-      3. pip install -r requirements.txt
-      4. Create .env from a template if missing (interactive)
+      1. Choose an edition and create .env if missing
+      2. Verify prerequisites and an isolated Python environment
+      3. Install the edition-appropriate development dependencies
       5. Generate SECRET_KEY if blank
       6. docker compose up -d  +  wait for postgres / redis
       7. alembic upgrade head
@@ -18,7 +17,7 @@
     What this script does NOT do:
       - Create or activate your Python environment. Do that yourself first.
       - Download Whisper / Pyannote model weights. Run
-        `python scripts/init_models.py` separately if you chose full mode.
+        `python scripts/init_models.py` separately for Community local models.
 
 .EXAMPLE
     # Activate your env first, then:
@@ -37,6 +36,7 @@ $env:PYTHONUTF8       = '1'
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $frontendDir = Join-Path $projectRoot 'frontend'
+$envFile = Join-Path $projectRoot '.env'
 
 function Step([string]$msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Ok([string]$msg)   { Write-Host "    $msg" -ForegroundColor Green }
@@ -44,7 +44,34 @@ function Warn([string]$msg) { Write-Host "    $msg" -ForegroundColor Yellow }
 function Fail([string]$msg) { Write-Host "    $msg" -ForegroundColor Red; exit 1 }
 
 # -----------------------------------------------------------------------------
-# 1. Prerequisites
+# 1. Edition
+# -----------------------------------------------------------------------------
+Step 'Configuring edition'
+if (Test-Path $envFile) {
+    $editionMatch = [regex]::Match(
+        (Get-Content -LiteralPath $envFile -Raw -Encoding utf8),
+        '(?m)^APP_EDITION=(cloud|community)\s*$'
+    )
+    $edition = if ($editionMatch.Success) { $editionMatch.Groups[1].Value } else { 'community' }
+    Ok ".env already exists; using $edition edition"
+} else {
+    Write-Host '    Choose an edition:' -ForegroundColor Cyan
+    Write-Host '      [1] Community — GitHub self-hosted edition with full developer controls'
+    Write-Host '      [2] Cloud     — hosted Web profile with managed foundation models'
+    $choice = Read-Host '    Enter 1 or 2'
+    $edition = if ($choice -eq '2') { 'cloud' } else { 'community' }
+    $template = ".env.$edition.example"
+    Copy-Item (Join-Path $projectRoot $template) $envFile
+    Ok "Copied $template -> .env"
+}
+$requirementsFile = if ($edition -eq 'cloud') {
+    'requirements-dev.txt'
+} else {
+    'requirements-community-dev.txt'
+}
+
+# -----------------------------------------------------------------------------
+# 2. Prerequisites
 # -----------------------------------------------------------------------------
 Step 'Checking prerequisites'
 
@@ -54,11 +81,10 @@ foreach ($cmd in @('docker', 'npm', 'python')) {
     }
 }
 
-# Python version: require 3.10 / 3.11 / 3.12. 3.13 has no whisperx/pyannote
-# wheels yet; <3.10 is unsupported by torch 2.x and pydantic v2.
 $pyVer = & python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
-if ($pyVer -notin @('3.10', '3.11', '3.12')) {
-    Fail "Python $pyVer is not supported. Use 3.10, 3.11, or 3.12. (3.13 lacks ML wheels.)"
+$supportedVersions = @('3.11', '3.12', '3.13')
+if ($pyVer -notin $supportedVersions) {
+    Fail "Python $pyVer is not supported for $edition. Use $($supportedVersions -join ', ')."
 }
 Ok "python $pyVer  ($((& python -c 'import sys; print(sys.executable)' 2>&1).Trim()))"
 
@@ -79,35 +105,20 @@ if (-not ($inVenv -or $inConda)) {
 Ok 'isolated environment detected'
 
 # -----------------------------------------------------------------------------
-# 2. Python dependencies
+# 3. Python dependencies
 # -----------------------------------------------------------------------------
 Step 'Installing Python dependencies (this can take 5-15 min on first run)'
 Push-Location $projectRoot
 try {
     & python -m pip install --upgrade pip
-    & python -m pip install -r requirements.txt
+    & python -m pip install -r $requirementsFile
     if ($LASTEXITCODE -ne 0) { Fail 'pip install failed.' }
 } finally { Pop-Location }
-Ok 'requirements.txt installed'
+Ok "$edition development dependencies installed from $requirementsFile"
 
 # -----------------------------------------------------------------------------
-# 3. .env scaffolding
+# 4. Secrets and Docker environment
 # -----------------------------------------------------------------------------
-Step 'Configuring .env'
-$envFile = Join-Path $projectRoot '.env'
-if (Test-Path $envFile) {
-    Ok '.env already exists, leaving it alone'
-} else {
-    Write-Host '    Choose a starting template:' -ForegroundColor Cyan
-    Write-Host '      [1] API-light   — all cloud APIs, no GPU, no model downloads (~5 min to first chat)'
-    Write-Host '      [2] Local-models — embeddings/reranker/ASR run locally (needs GPU for speed)'
-    $choice = Read-Host '    Enter 1 or 2'
-    $template = if ($choice -eq '2') { '.env.example' } else { '.env.example.lite' }
-    Copy-Item (Join-Path $projectRoot $template) $envFile
-    Ok "Copied $template -> .env"
-    Warn 'Remember to fill in your API keys before the first run.'
-}
-
 $envFileForDocker = Join-Path $projectRoot '.env.docker'
 if (-not (Test-Path $envFileForDocker)) {
     Copy-Item (Join-Path $projectRoot '.env.docker.example') $envFileForDocker
@@ -172,8 +183,8 @@ Write-Host '==================================================================' 
 Write-Host ''
 Write-Host '  Next steps:'
 Write-Host '    1. Open .env and fill in any provider API keys you want to use'
-Write-Host '       (DEEPSEEK_API_KEY at minimum, for the LLM).'
-Write-Host '    2. (full mode only) python scripts/init_models.py'
+Write-Host '       or configure the operator-provided default LLM.'
+Write-Host '    2. (Community local models only) python scripts/init_models.py'
 Write-Host '       — downloads Whisper / Pyannote weights for local inference.'
 Write-Host '    3. .\scripts\start.ps1'
 Write-Host '       — every-day startup (uvicorn + celery + vite, single window).'

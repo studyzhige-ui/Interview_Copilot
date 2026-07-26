@@ -4,6 +4,7 @@ Both pipelines render the same ability-state index into their prompt and parse
 the same tolerant JSON-array LLM output, so the mastery labels, the index
 formatter, and the parser live here once instead of being copied into each.
 """
+
 from __future__ import annotations
 
 import json
@@ -27,7 +28,10 @@ MAX_ABILITY_INDEX = 50
 
 
 def format_ability_index(
-    states, cap: int = MAX_ABILITY_INDEX, *, include_age: bool = True,
+    states,
+    cap: int = MAX_ABILITY_INDEX,
+    *,
+    include_age: bool = True,
 ) -> list[str]:
     """Render active ability states as prompt index lines:
     ``- [topic] mastery (skill_type) — summary``.
@@ -46,7 +50,6 @@ def format_ability_index(
                 line += f"（距上次证据 {days} 天）"
         lines.append(line)
     return lines
-
 
 
 # Anchor on ``[{`` ... ``}]`` so leading prose with a stray ``[]`` matches the
@@ -131,5 +134,10 @@ def parse_json_patches(raw_text: str) -> list[dict[str, Any]]:
     return []
 
 
-__all__ = ["MASTERY_LABELS", "MAX_ABILITY_INDEX", "format_ability_index", "parse_json_patches"    "parse_json_patches_ex",
+__all__ = [
+    "MASTERY_LABELS",
+    "MAX_ABILITY_INDEX",
+    "format_ability_index",
+    "parse_json_patches",
+    "parse_json_patches_ex",
 ]

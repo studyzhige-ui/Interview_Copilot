@@ -11,6 +11,7 @@ Each target is applied independently — one failing target never aborts the
 others; we only flag a soft error when *every* attempted target failed (so the
 caller can hold its cursor and retry).
 """
+
 from __future__ import annotations
 
 import logging
@@ -20,7 +21,11 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.memory_ability_state import MASTERY_LEVELS, SKILL_TYPES
-from app.services.memory import _metrics, memory_ability_state_service, memory_document_service
+from app.services.memory import (
+    _metrics,
+    memory_ability_state_service,
+    memory_document_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,10 +88,15 @@ def dispatch_memory_patches(
                 # Retirement is a synthesis-level judgement — only the
                 # dreaming channel may shrink the ledger; a single
                 # conversation must not erase an ability.
-                if change_type != "patch_dreaming" or not topic or skill_type not in SKILL_TYPES:
+                if (
+                    change_type != "patch_dreaming"
+                    or not topic
+                    or skill_type not in SKILL_TYPES
+                ):
                     result.dropped += 1
                     _metrics.incr(
-                        "memory.patch_dropped", target="ability_state",
+                        "memory.patch_dropped",
+                        target="ability_state",
                         reason=(
                             "archive_wrong_channel"
                             if change_type != "patch_dreaming"
@@ -97,7 +107,9 @@ def dispatch_memory_patches(
                     continue
                 try:
                     ok = memory_ability_state_service.archive_by_key(
-                        user_id, topic=topic, skill_type=skill_type,
+                        user_id,
+                        topic=topic,
+                        skill_type=skill_type,
                         change_type=change_type,
                         source_interview_record_id=source_interview_record_id,
                         db=db,
@@ -107,8 +119,10 @@ def dispatch_memory_patches(
                         raise
                     result.dropped += 1
                     _metrics.incr(
-                        "memory.patch_dropped", target="ability_state",
-                        reason="archive_error", change_type=change_type,
+                        "memory.patch_dropped",
+                        target="ability_state",
+                        reason="archive_error",
+                        change_type=change_type,
                     )
                     continue
                 if ok:
@@ -120,11 +134,17 @@ def dispatch_memory_patches(
 
             mastery_level = str(item.get("mastery_level") or "").strip()
             summary = item.get("summary")
-            if not topic or skill_type not in SKILL_TYPES or mastery_level not in MASTERY_LEVELS:
+            if (
+                not topic
+                or skill_type not in SKILL_TYPES
+                or mastery_level not in MASTERY_LEVELS
+            ):
                 result.dropped += 1
                 _metrics.incr(
-                    "memory.patch_dropped", target="ability_state",
-                    reason="invalid_fields", change_type=change_type,
+                    "memory.patch_dropped",
+                    target="ability_state",
+                    reason="invalid_fields",
+                    change_type=change_type,
                 )
                 continue
             try:
@@ -156,12 +176,16 @@ def dispatch_memory_patches(
                     raise
                 logger.error(
                     "dispatch: ability_state upsert failed user=%s topic=%s: %s",
-                    user_id, topic, exc,
+                    user_id,
+                    topic,
+                    exc,
                 )
                 result.dropped += 1
                 _metrics.incr(
-                    "memory.patch_dropped", target="ability_state",
-                    reason="upsert_error", change_type=change_type,
+                    "memory.patch_dropped",
+                    target="ability_state",
+                    reason="upsert_error",
+                    change_type=change_type,
                 )
         result.applied += applied
         result.by_target["ability_state"] = applied
@@ -173,7 +197,9 @@ def dispatch_memory_patches(
         any_attempt = True
         try:
             r = memory_document_service.apply_patches(
-                user_id, doc_type, plist,
+                user_id,
+                doc_type,
+                plist,
                 change_type=change_type,
                 source_conversation_id=source_conversation_id,
                 source_interview_record_id=source_interview_record_id,
@@ -188,7 +214,10 @@ def dispatch_memory_patches(
             if db is not None:
                 raise  # shared session poisoned — let the caller roll back atomically
             logger.error(
-                "dispatch: %s apply_patches failed user=%s: %s", doc_type, user_id, exc,
+                "dispatch: %s apply_patches failed user=%s: %s",
+                doc_type,
+                user_id,
+                exc,
             )
 
     if any_attempt and not any_success:
@@ -198,13 +227,19 @@ def dispatch_memory_patches(
     if result.applied or result.dropped or result.skipped:
         logger.info(
             "dispatch: user=%s applied=%d dropped=%d skipped=%d by=%s",
-            user_id, result.applied, result.dropped, result.skipped, result.by_target,
+            user_id,
+            result.applied,
+            result.dropped,
+            result.skipped,
+            result.by_target,
         )
         # The applied curve (MEM-7); drops are emitted per-reason at each
         # drop site under the single event name memory.patch_dropped.
         if result.applied:
             _metrics.incr(
-                "memory.patch_applied", value=result.applied, change_type=change_type,
+                "memory.patch_applied",
+                value=result.applied,
+                change_type=change_type,
             )
     return result
 

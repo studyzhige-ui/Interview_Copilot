@@ -11,7 +11,13 @@ TORCH_CACHE_DIR = Path(settings.CACHE_DIR) / "torch"
 # under the same managed data/cache root as every other downloaded model.
 DOCLING_CACHE_DIR = Path(settings.CACHE_DIR) / "docling"
 DEAD_PROXY_MARKERS = ("127.0.0.1:9", "localhost:9")
-PROXY_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "GIT_HTTP_PROXY", "GIT_HTTPS_PROXY")
+PROXY_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "GIT_HTTP_PROXY",
+    "GIT_HTTPS_PROXY",
+)
 
 
 def prepare_hf_runtime() -> Path:
@@ -52,7 +58,9 @@ def resolve_local_snapshot(model_id: str) -> str | None:
     if local_model_dir.exists() and any(local_model_dir.iterdir()):
         return str(local_model_dir)
 
-    snapshot_root = HF_CACHE_DIR / f"models--{model_id.replace('/', '--')}" / "snapshots"
+    snapshot_root = (
+        HF_CACHE_DIR / f"models--{model_id.replace('/', '--')}" / "snapshots"
+    )
     if not snapshot_root.exists():
         return None
 

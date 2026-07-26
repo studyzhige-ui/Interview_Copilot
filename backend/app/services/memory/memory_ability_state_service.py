@@ -9,6 +9,7 @@ Same safety properties as ``memory_document_service``: stable-id resolution,
 IntegrityError-retry on the active-uniqueness race, optional ``idempotency_key``
 for retried jobs, and audit on every mutation.
 """
+
 from __future__ import annotations
 
 import json
@@ -49,12 +50,18 @@ def _enqueue_index_upsert(db: Session, *, user_pk: int, row) -> None:
     from app.services.uploads.outbox_service import enqueue_job
 
     enqueue_job(
-        db, user_pk=user_pk, job_type="upsert_memory_ability_index",
-        aggregate_type="memory_ability_state", aggregate_id=row.id,
+        db,
+        user_pk=user_pk,
+        job_type="upsert_memory_ability_index",
+        aggregate_type="memory_ability_state",
+        aggregate_id=row.id,
         payload={
-            "state_id": row.id, "user_id": user_pk,
-            "search_text": row.search_text or "", "topic": row.topic,
-            "skill_type": row.skill_type, "mastery_level": row.mastery_level,
+            "state_id": row.id,
+            "user_id": user_pk,
+            "search_text": row.search_text or "",
+            "topic": row.topic,
+            "skill_type": row.skill_type,
+            "mastery_level": row.mastery_level,
             "summary": row.summary or "",
         },
     )
@@ -64,15 +71,20 @@ def _enqueue_index_delete(db: Session, *, user_pk: int, state_id: str) -> None:
     from app.services.uploads.outbox_service import enqueue_job
 
     enqueue_job(
-        db, user_pk=user_pk, job_type="delete_memory_ability_index",
-        aggregate_type="memory_ability_state", aggregate_id=state_id,
+        db,
+        user_pk=user_pk,
+        job_type="delete_memory_ability_index",
+        aggregate_type="memory_ability_state",
+        aggregate_id=state_id,
         payload={"state_id": state_id},
     )
 
 
 def _validate(skill_type: str, mastery_level: str) -> None:
     if skill_type not in SKILL_TYPES:
-        raise ValueError(f"unknown skill_type {skill_type!r}; expected one of {SKILL_TYPES}")
+        raise ValueError(
+            f"unknown skill_type {skill_type!r}; expected one of {SKILL_TYPES}"
+        )
     if mastery_level not in MASTERY_LEVELS:
         raise ValueError(
             f"unknown mastery_level {mastery_level!r}; expected one of {MASTERY_LEVELS}"
@@ -82,7 +94,9 @@ def _validate(skill_type: str, mastery_level: str) -> None:
 # ── reads ───────────────────────────────────────────────────────────────
 
 
-def load_active(username: str, *, db: Session | None = None) -> list[MemoryAbilityState]:
+def load_active(
+    username: str, *, db: Session | None = None
+) -> list[MemoryAbilityState]:
     """All of the user's active (non-archived) ability states, newest first."""
     with session_scope(db) as session:
         user_pk = resolve_user_pk(session, username)
@@ -100,7 +114,10 @@ def load_active(username: str, *, db: Session | None = None) -> list[MemoryAbili
 
 
 def list_by_mastery(
-    username: str, levels: tuple[str, ...], *, db: Session | None = None,
+    username: str,
+    levels: tuple[str, ...],
+    *,
+    db: Session | None = None,
 ) -> list[MemoryAbilityState]:
     """Active states filtered to the given mastery levels (e.g. weak topics for
     diagnostics)."""
@@ -209,9 +226,15 @@ def upsert(
         db = SessionLocal()
     try:
         row = _upsert_inner(
-            db=db, username=username, topic=topic, skill_type=skill_type,
-            mastery_level=mastery_level, summary=summary, evidence_refs=evidence_refs,
-            last_evidence_at=last_evidence_at, change_type=change_type,
+            db=db,
+            username=username,
+            topic=topic,
+            skill_type=skill_type,
+            mastery_level=mastery_level,
+            summary=summary,
+            evidence_refs=evidence_refs,
+            last_evidence_at=last_evidence_at,
+            change_type=change_type,
             source_conversation_id=source_conversation_id,
             source_interview_record_id=source_interview_record_id,
             idempotency_key=idempotency_key,
@@ -229,9 +252,15 @@ def upsert(
         db = SessionLocal()
         try:
             row = _upsert_inner(
-                db=db, username=username, topic=topic, skill_type=skill_type,
-                mastery_level=mastery_level, summary=summary, evidence_refs=evidence_refs,
-                last_evidence_at=last_evidence_at, change_type=change_type,
+                db=db,
+                username=username,
+                topic=topic,
+                skill_type=skill_type,
+                mastery_level=mastery_level,
+                summary=summary,
+                evidence_refs=evidence_refs,
+                last_evidence_at=last_evidence_at,
+                change_type=change_type,
                 source_conversation_id=source_conversation_id,
                 source_interview_record_id=source_interview_record_id,
                 idempotency_key=idempotency_key,
@@ -253,7 +282,11 @@ def upsert(
 
 
 def _blocked_by_tombstone(
-    db: Session, *, user_pk: int, topic: str, skill_type: str,
+    db: Session,
+    *,
+    user_pk: int,
+    topic: str,
+    skill_type: str,
 ) -> bool:
     """An archived twin younger than the tombstone window exists."""
     return (
@@ -311,15 +344,20 @@ def _upsert_inner(
     # kinds are in the audit trail if this ever needs distinguishing).
     # The user's own edits still work immediately.
     if was_new and change_type in ("patch_realtime", "patch_dreaming"):
-        if _blocked_by_tombstone(db, user_pk=user_pk, topic=topic, skill_type=skill_type):
+        if _blocked_by_tombstone(
+            db, user_pk=user_pk, topic=topic, skill_type=skill_type
+        ):
             _metrics.incr(
                 "memory.patch_dropped",
-                reason="tombstone", target="ability_state",
+                reason="tombstone",
+                target="ability_state",
                 change_type=change_type,
             )
             logger.info(
                 "ability upsert blocked by tombstone user=%s topic=%s/%s",
-                username, topic, skill_type,
+                username,
+                topic,
+                skill_type,
             )
             return None
 
@@ -333,22 +371,30 @@ def _upsert_inner(
     if clamp_reason:
         _metrics.incr(
             "memory.mastery_clamped",
-            reason=clamp_reason, requested=mastery_level,
-            clamped_to=effective_level, change_type=change_type,
+            reason=clamp_reason,
+            requested=mastery_level,
+            clamped_to=effective_level,
+            change_type=change_type,
         )
     mastery_level = effective_level
 
     # Audit bodies carry the mastery value, not just the summary — the
     # "before" level used to be unrecoverable from the trail (MEM-10).
     before = "" if was_new else f"[{row.mastery_level}] {row.summary or ''}"
-    evidence_json = json.dumps(evidence_refs, ensure_ascii=False) if evidence_refs else None
+    evidence_json = (
+        json.dumps(evidence_refs, ensure_ascii=False) if evidence_refs else None
+    )
     search_text = build_search_text(topic, summary)
 
     if was_new:
         row = MemoryAbilityState(
-            user_id=user_pk, topic=topic, skill_type=skill_type,
-            mastery_level=mastery_level, summary=summary,
-            evidence_refs_json=evidence_json, search_text=search_text,
+            user_id=user_pk,
+            topic=topic,
+            skill_type=skill_type,
+            mastery_level=mastery_level,
+            summary=summary,
+            evidence_refs_json=evidence_json,
+            search_text=search_text,
             last_evidence_at=last_evidence_at or datetime.utcnow(),
         )
         db.add(row)
@@ -378,7 +424,7 @@ def _upsert_inner(
         before_body=before,
         after_body=f"[{mastery_level}] {summary or ''}",
         summary=f"{'created' if was_new else 'updated'} ability "
-                f"{topic}/{skill_type} → {mastery_level}",
+        f"{topic}/{skill_type} → {mastery_level}",
         db=db,
     )
     _enqueue_index_upsert(db, user_pk=user_pk, row=row)
@@ -386,7 +432,11 @@ def _upsert_inner(
 
 
 def archive(
-    username: str, *, topic: str, skill_type: str, db: Session | None = None,
+    username: str,
+    *,
+    topic: str,
+    skill_type: str,
+    db: Session | None = None,
 ) -> bool:
     """Retire the active state for ``(user, topic, skill_type)``. Returns True
     if a row was archived."""
@@ -447,7 +497,10 @@ def archive_by_key(
             .first()
         )
         return _archive_row(
-            db, user_pk, row, own_db,
+            db,
+            user_pk,
+            row,
+            own_db,
             change_type=change_type,
             source_interview_record_id=source_interview_record_id,
         )
@@ -507,12 +560,15 @@ def _archive_row(
     row.updated_at = datetime.utcnow()
     db.add(row)
     _memory_audit.record(
-        user_pk=user_pk, change_type=change_type, topic=row.topic,
+        user_pk=user_pk,
+        change_type=change_type,
+        topic=row.topic,
         memory_ability_state_id=row.id,
         source_interview_record_id=source_interview_record_id,
         before_body=before,
         after_body="",
-        summary=f"archived ability {row.topic}/{row.skill_type}", db=db,
+        summary=f"archived ability {row.topic}/{row.skill_type}",
+        db=db,
     )
     _enqueue_index_delete(db, user_pk=user_pk, state_id=row.id)
     if own_db:

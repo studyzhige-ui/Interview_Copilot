@@ -120,7 +120,9 @@ class PostTurnMaintenanceService:
                 db.close()
         except Exception as exc:  # noqa: BLE001
             logger.debug(
-                "_session_record_id: lookup failed for %s: %s", session_id, exc,
+                "_session_record_id: lookup failed for %s: %s",
+                session_id,
+                exc,
             )
             return None
 

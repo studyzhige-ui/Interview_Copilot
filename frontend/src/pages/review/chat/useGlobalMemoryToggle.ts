@@ -12,11 +12,14 @@ import { getSessionGlobalMemory, setSessionGlobalMemory } from '@/api/chat';
  * from the user-level default for subsequent turns.
  */
 export function useGlobalMemoryToggle(activeSessionId: string | null) {
-  const [globalMemoryOn, setGlobalMemoryOn] = useState(false);
+  const [memoryState, setMemoryState] = useState({ sessionId: activeSessionId, enabled: false });
   const [togglingMemory, setTogglingMemory] = useState(false);
+  const globalMemoryOn = memoryState.sessionId === activeSessionId
+    ? memoryState.enabled
+    : false;
 
   useEffect(() => {
-    if (!activeSessionId) { setGlobalMemoryOn(false); return; }
+    if (!activeSessionId) return;
     // Same race shape as the transcript-load effect — abort on
     // session switch so a stale response from session A can't
     // overwrite session B's toggle state, and the backend doesn't
@@ -24,7 +27,9 @@ export function useGlobalMemoryToggle(activeSessionId: string | null) {
     const controller = new AbortController();
     let alive = true;
     getSessionGlobalMemory(activeSessionId, { signal: controller.signal })
-      .then((v) => { if (alive) setGlobalMemoryOn(v); })
+      .then((enabled) => {
+        if (alive) setMemoryState({ sessionId: activeSessionId, enabled });
+      })
       .catch(() => { /* empty / aborted on switch — both fine */ });
     return () => {
       alive = false;
@@ -35,11 +40,11 @@ export function useGlobalMemoryToggle(activeSessionId: string | null) {
   const toggleGlobalMemory = useCallback(async () => {
     if (!activeSessionId || togglingMemory) return;
     const next = !globalMemoryOn;
-    setGlobalMemoryOn(next);
+    setMemoryState({ sessionId: activeSessionId, enabled: next });
     setTogglingMemory(true);
     try { await setSessionGlobalMemory(activeSessionId, next); }
     catch (e) {
-      setGlobalMemoryOn(!next);
+      setMemoryState({ sessionId: activeSessionId, enabled: !next });
       toast.error(extractErr(e, '切换全局记忆失败'));
     } finally { setTogglingMemory(false); }
   }, [activeSessionId, globalMemoryOn, togglingMemory]);

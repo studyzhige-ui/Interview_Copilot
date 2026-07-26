@@ -11,11 +11,11 @@ from pydantic import BaseModel, Field
 class SessionCreateRequest(BaseModel):
     # general | debrief (mock_interview sessions are created by the
     # mock-interview start endpoint, never here).
-    type: str = "general"
+    type: Literal["general", "debrief"] = "general"
     # The interview_record this conversation is about (required for debrief).
     # Bound as subject_type="interview_record", subject_id=<this>.
-    subject_id: str | None = None
-    title: str | None = None
+    subject_id: str | None = Field(default=None, max_length=128)
+    title: str | None = Field(default=None, max_length=120)
 
 
 class SessionCreateResponse(BaseModel):
@@ -36,15 +36,8 @@ class SessionListItem(BaseModel):
     updated_at: str
 
 
-class MessageItem(BaseModel):
-    seq: int
-    role: str
-    content: str
-    created_at: str
-
-
-class SSEChatRequest(BaseModel):
-    message: str
+class ChatTurnRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=100_000)
     # Execution strategy. ``chat`` runs the L1 chat pipeline (planner →
     # answer LLM, no tool use). ``agent`` runs the L2 ReAct loop with the
     # full tool registry. ``None`` = use the conversation's persisted mode
@@ -56,7 +49,7 @@ class SSEChatRequest(BaseModel):
 
 
 class SessionRenameRequest(BaseModel):
-    title: str
+    title: str = Field(min_length=1, max_length=120)
 
 
 class MemoryRecallToggleBody(BaseModel):
@@ -73,6 +66,7 @@ class MemoryRecallToggleBody(BaseModel):
 
 class MockStage(BaseModel):
     """One stage of the (frozen) interview plan, for the progress UI."""
+
     key: str
     title: str
 
@@ -88,13 +82,14 @@ class MockStartRequest(BaseModel):
     # Frozen plan template for this run (phase-1: only "general").
     plan_template_key: str = "general"
     # Interviewer persona for tone. Depth is inferred from JD seniority.
-    interviewer_style: str = "professional"   # friendly|professional|rigorous|pressure
+    interviewer_style: str = "professional"  # friendly|professional|rigorous|pressure
     # Interaction mode. 'hybrid' = AI TTS + user types or speaks freely.
-    voice_mode: str = "hybrid"                # text|voice|hybrid
+    voice_mode: str = "hybrid"  # text|voice|hybrid
 
 
 class MockStartResp(BaseModel):
     """``POST /mock-interviews/start`` — atomic create + opening line."""
+
     interview_record_id: str
     conversation_id: str
     runtime_id: str
@@ -118,6 +113,7 @@ class MockAnswerRequest(BaseModel):
 
 class MockAnswerResp(BaseModel):
     """``POST /mock-interviews/{record_id}/answer`` — next interviewer line."""
+
     interviewer_message: str
     current_stage_key: str
     # Advisory ONLY (MOCK-5): the FE shows a "可以结束了" suggestion banner;
@@ -130,18 +126,21 @@ class MockAnswerResp(BaseModel):
 
 class MockFinishResp(BaseModel):
     """``POST /mock-interviews/{record_id}/finish`` — enter review."""
+
     status: Literal["processing_review"]
     record_id: str
 
 
 class MockRetryReviewResp(BaseModel):
     """``POST /mock-interviews/{record_id}/retry-review``."""
+
     status: Literal["processing_review"]
     record_id: str
 
 
 class MockAbandonResp(BaseModel):
     """``DELETE /mock-interviews/{record_id}`` — abandon an unfinished run."""
+
     status: Literal["deleted"]
     record_id: str
 
@@ -153,6 +152,7 @@ class MockInProgressResp(BaseModel):
     None. Sourced from the user's most recent in_progress
     ``mock_interview_runtime`` row.
     """
+
     has_in_progress: bool
     record_id: str | None = None
     conversation_id: str | None = None
@@ -172,6 +172,7 @@ class MockInProgressResp(BaseModel):
 
 class MockParseJdResp(BaseModel):
     """``POST /mock-interviews/parse-jd``."""
+
     text: str
     filename: str | None = None
     chars: int
@@ -179,6 +180,7 @@ class MockParseJdResp(BaseModel):
 
 class MockTranscribeResp(BaseModel):
     """``POST /mock-interviews/transcribe``."""
+
     text: str
     language: str
     duration_sec: float
@@ -194,8 +196,7 @@ __all__ = [
     "SessionCreateRequest",
     "SessionCreateResponse",
     "SessionListItem",
-    "MessageItem",
-    "SSEChatRequest",
+    "ChatTurnRequest",
     "SessionRenameRequest",
     "MemoryRecallToggleBody",
     # Mock-interview DTOs (mirrored 1:1 by frontend/src/types/api.ts)

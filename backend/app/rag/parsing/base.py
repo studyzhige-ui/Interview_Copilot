@@ -7,6 +7,7 @@ the registry/orchestration in ``parsing.registry`` picks among them (first-class
 primary -> other first-class fallback -> per-format lightweight) and translates
 failures. Output is always Markdown (or best-effort readable text).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -41,6 +42,7 @@ class PageSpan:
     page provenance. Empty for formats with no page concept. The per-span
     fields are produced now but consumed by a later round that maps them to
     ``page_start``/``page_end`` (design §7.1); E1 only uses ``len(page_map)``."""
+
     page: int
     char_start: int
     char_end: int
@@ -56,9 +58,10 @@ class ParseResult:
     All three land in ``document_chunks.metadata_json`` — the producers B4
     reserved as forward keys.
     """
+
     markdown: str
     parser_id: str = ""
-    is_markdown: bool = False          # output is structured Markdown -> MarkdownNodeParser
+    is_markdown: bool = False  # output is structured Markdown -> MarkdownNodeParser
     ocr_used: bool = False
     page_map: list[PageSpan] = field(default_factory=list)
     # A parser's own warnings channel; the orchestration merges these into

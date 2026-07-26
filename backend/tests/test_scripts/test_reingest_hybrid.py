@@ -5,6 +5,7 @@ A soft-deleted document is never re-indexed; category is read from
 knowledge_documents (not Milvus). reindex_document is stubbed here (its own
 rebuild-from-facts behaviour is covered in test_indexing_write_order).
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -22,11 +23,14 @@ from app.models.knowledge import KnowledgeDocument
 @pytest.fixture
 def reingest_db(monkeypatch):
     engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
     Base.metadata.create_all(bind=engine)
     Maker = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     import scripts.reingest_hybrid as rh
+
     monkeypatch.setattr(rh, "SessionLocal", Maker)
     try:
         yield Maker
@@ -49,17 +53,33 @@ def _patch_reindex(monkeypatch):
     """Record reindex_document calls; return 1 'chunk' per document."""
     calls: list[str] = []
     import app.rag.ingestion as ing
-    monkeypatch.setattr(ing, "reindex_document", lambda db, doc_id: calls.append(doc_id) or 1)
+
+    monkeypatch.setattr(
+        ing, "reindex_document", lambda db, doc_id: calls.append(doc_id) or 1
+    )
     return calls
 
 
 def test_reingest_full_skips_soft_deleted(reingest_db, monkeypatch):
-    _seed(reingest_db, [
-        dict(id="d1", user_id=1, title="t", source_kind="user_upload", status="ready"),
-        dict(id="d2", user_id=1, title="t", source_kind="user_upload", status="ready"),
-        dict(id="d3", user_id=2, title="t", source_kind="user_upload", status="ready",
-             deleted_at=datetime.utcnow()),
-    ])
+    _seed(
+        reingest_db,
+        [
+            dict(
+                id="d1", user_id=1, title="t", source_kind="user_upload", status="ready"
+            ),
+            dict(
+                id="d2", user_id=1, title="t", source_kind="user_upload", status="ready"
+            ),
+            dict(
+                id="d3",
+                user_id=2,
+                title="t",
+                source_kind="user_upload",
+                status="ready",
+                deleted_at=datetime.utcnow(),
+            ),
+        ],
+    )
     calls = _patch_reindex(monkeypatch)
     import scripts.reingest_hybrid as rh
 
@@ -70,10 +90,17 @@ def test_reingest_full_skips_soft_deleted(reingest_db, monkeypatch):
 
 
 def test_reingest_by_user(reingest_db, monkeypatch):
-    _seed(reingest_db, [
-        dict(id="d1", user_id=1, title="t", source_kind="user_upload", status="ready"),
-        dict(id="d2", user_id=2, title="t", source_kind="user_upload", status="ready"),
-    ])
+    _seed(
+        reingest_db,
+        [
+            dict(
+                id="d1", user_id=1, title="t", source_kind="user_upload", status="ready"
+            ),
+            dict(
+                id="d2", user_id=2, title="t", source_kind="user_upload", status="ready"
+            ),
+        ],
+    )
     calls = _patch_reindex(monkeypatch)
     import scripts.reingest_hybrid as rh
 
@@ -82,12 +109,27 @@ def test_reingest_by_user(reingest_db, monkeypatch):
 
 
 def test_reingest_by_user_and_category(reingest_db, monkeypatch):
-    _seed(reingest_db, [
-        dict(id="d1", user_id=1, title="t", source_kind="user_upload", status="ready",
-             category="面试题库"),
-        dict(id="d2", user_id=1, title="t", source_kind="user_upload", status="ready",
-             category="笔记"),
-    ])
+    _seed(
+        reingest_db,
+        [
+            dict(
+                id="d1",
+                user_id=1,
+                title="t",
+                source_kind="user_upload",
+                status="ready",
+                category="面试题库",
+            ),
+            dict(
+                id="d2",
+                user_id=1,
+                title="t",
+                source_kind="user_upload",
+                status="ready",
+                category="笔记",
+            ),
+        ],
+    )
     calls = _patch_reindex(monkeypatch)
     import scripts.reingest_hybrid as rh
 
@@ -96,9 +138,14 @@ def test_reingest_by_user_and_category(reingest_db, monkeypatch):
 
 
 def test_reingest_explicit_document_ids(reingest_db, monkeypatch):
-    _seed(reingest_db, [
-        dict(id="d1", user_id=1, title="t", source_kind="user_upload", status="ready"),
-    ])
+    _seed(
+        reingest_db,
+        [
+            dict(
+                id="d1", user_id=1, title="t", source_kind="user_upload", status="ready"
+            ),
+        ],
+    )
     calls = _patch_reindex(monkeypatch)
     import scripts.reingest_hybrid as rh
 
@@ -108,9 +155,14 @@ def test_reingest_explicit_document_ids(reingest_db, monkeypatch):
 
 
 def test_reingest_by_user_with_no_documents(reingest_db, monkeypatch):
-    _seed(reingest_db, [
-        dict(id="d1", user_id=1, title="t", source_kind="user_upload", status="ready"),
-    ])
+    _seed(
+        reingest_db,
+        [
+            dict(
+                id="d1", user_id=1, title="t", source_kind="user_upload", status="ready"
+            ),
+        ],
+    )
     calls = _patch_reindex(monkeypatch)
     import scripts.reingest_hybrid as rh
 
@@ -121,6 +173,7 @@ def test_reingest_by_user_with_no_documents(reingest_db, monkeypatch):
 def test_category_without_user_is_rejected(monkeypatch):
     """--category alone must error (not silently fall through to a full reingest)."""
     import scripts.reingest_hybrid as rh
+
     monkeypatch.setattr("sys.argv", ["reingest_hybrid.py", "--category", "面试题库"])
     with pytest.raises(SystemExit):
         rh.main()

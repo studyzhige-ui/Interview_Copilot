@@ -3,6 +3,7 @@ must fail loud on first use, so a changed embedding model/dim can't silently
 write into an index built for a different dim. Introspection failures degrade
 to best-effort (log + proceed) rather than blocking a working index.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -17,11 +18,13 @@ class _FakeClient:
         self._dim = dim
 
     def describe_collection(self, name):
-        return {"fields": [
-            {"name": "id"},
-            {"name": "dense", "params": {"dim": self._dim}},
-            {"name": "sparse"},
-        ]}
+        return {
+            "fields": [
+                {"name": "id"},
+                {"name": "dense", "params": {"dim": self._dim}},
+                {"name": "sparse"},
+            ]
+        }
 
 
 def test_dim_mismatch_fails_loud():
@@ -46,11 +49,14 @@ def test_uninspectable_dim_proceeds(caplog):
 
 def test_nonnumeric_dim_proceeds():
     """A non-numeric dim degrades to best-effort (no uncaught int() error)."""
+
     class _WeirdClient:
         def describe_collection(self, name):
             return {"fields": [{"name": "dense", "params": {"dim": "oops"}}]}
 
-    milvus_hybrid._assert_collection_dim(_WeirdClient(), "interview_copilot_rag")  # no raise
+    milvus_hybrid._assert_collection_dim(
+        _WeirdClient(), "interview_copilot_rag"
+    )  # no raise
 
 
 # ── validate_existing_dims: startup guard (§4.5.1) ──────────────────────────
@@ -71,8 +77,9 @@ class _StartupClient:
 
 
 def test_validate_existing_dims_raises_on_mismatch(monkeypatch):
-    client = _StartupClient(present=[milvus_hybrid.KNOWLEDGE.name],
-                            dim=settings.EMBEDDING_DIM + 128)
+    client = _StartupClient(
+        present=[milvus_hybrid.KNOWLEDGE.name], dim=settings.EMBEDDING_DIM + 128
+    )
     monkeypatch.setattr(milvus_hybrid, "_get_client", lambda: client)
     with pytest.raises(EmbeddingValidationError):
         milvus_hybrid.validate_existing_dims(milvus_hybrid.KNOWLEDGE)

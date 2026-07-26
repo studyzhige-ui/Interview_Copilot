@@ -1,4 +1,5 @@
 """Resume parse + section-indexing task (light queue)."""
+
 import logging
 
 from app.core.error_messages import humanize_error
@@ -47,9 +48,8 @@ def process_resume_parse(self, resume_id: str):
         # LLM resolution is username-keyed (user_model_credentials joins on
         # users.username) — resolve it once for the sectioner (MDL-1).
         from app.models.user import User
-        owner_username = (
-            db.query(User.username).filter(User.id == owner_pk).scalar()
-        )
+
+        owner_username = db.query(User.username).filter(User.id == owner_pk).scalar()
         file_asset_id = resume.file_asset_id
     finally:
         db.close()
@@ -79,10 +79,14 @@ def process_resume_parse(self, resume_id: str):
 
     try:
         if text:
-            run_async(resume_service.extract_and_store(
-                user_pk=owner_pk, resume_id=resume_id, resume_text=text,
-                user_id=owner_username,
-            ))
+            run_async(
+                resume_service.extract_and_store(
+                    user_pk=owner_pk,
+                    resume_id=resume_id,
+                    resume_text=text,
+                    user_id=owner_username,
+                )
+            )
         db = SessionLocal()
         try:
             resume = db.query(Resume).filter(Resume.id == resume_id).first()

@@ -8,6 +8,7 @@ import { extractErr } from '@/api/client';
 import { KNOWLEDGE_ACCEPT, uploadKnowledgeFile } from '@/api/knowledge';
 import { useIsMounted } from '@/hooks/useIsMounted';
 import type { Attachment, Mode } from './types';
+import { SessionCapabilities } from './SessionCapabilities';
 
 /**
  * Bottom toolbar: mode pill, global-memory toggle, attachment picker,
@@ -94,6 +95,7 @@ export function ChatToolbar({
           ].join(' ')} />
           {mode === 'AGENT' ? <><Bot size={11} /> AGENT</> : <><MessageSquare size={11} /> CHAT</>}
         </button>
+        <SessionCapabilities sessionId={activeSessionId} />
         <button
           onClick={onToggleGlobalMemory}
           disabled={!activeSessionId || togglingMemory}
@@ -162,15 +164,10 @@ export function ChatToolbar({
         {streaming ? (
           <button
             onClick={onCancel}
-            title="停止生成（保留已生成的部分）"
-            aria-label="停止生成"
+            title="停止任务"
+            aria-label="停止任务"
             className="w-9 h-9 rounded-lg bg-danger-500 text-white hover:bg-danger-700 flex items-center justify-center"
           >
-            {/* Filled square = the canonical "stop streaming" affordance
-                shared with every other modern chat UI (ChatGPT, Claude,
-                Gemini). Click → AbortController.abort() → fetch aborts
-                → ``finalize()`` flushes the partial bubble as the
-                assistant message. */}
             <Square size={12} fill="currentColor" />
           </button>
         ) : (

@@ -1,4 +1,5 @@
 """Tests for S0 conservative cleaning (ingestion §4.2)."""
+
 from __future__ import annotations
 
 import pytest
@@ -41,6 +42,7 @@ def test_strips_leading_trailing_blank_lines():
 
 def test_nfc_normalization_is_applied():
     import unicodedata
+
     decomposed = "é"  # e + combining acute
     out, _ = clean_text(decomposed)
     assert out == unicodedata.normalize("NFC", decomposed)

@@ -19,6 +19,7 @@ export type Mode = 'CHAT' | 'AGENT';
 
 export interface SessionRuntime {
   abort: AbortController | null;  // in-flight SSE aborter (null between turns)
+  turnId: string | null;
   messages: UIMessage[];
   /** Streaming-only state — text being typed RIGHT NOW that hasn't
    *  yet been flushed into ``inflightBlocks`` as a finalized text block. */

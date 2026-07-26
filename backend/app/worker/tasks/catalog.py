@@ -16,6 +16,7 @@ the workday so production users never collide with the refresh
 window, and well after the dreaming batch (03:30) so the two heavy
 jobs don't share the LLM/network at the same moment.
 """
+
 import logging
 
 from app.worker.celery_app import celery_app
@@ -44,7 +45,7 @@ def refresh_model_catalog_task(self):
     snapshot. When ALL vendors fail (genuine network outage) the
     cache is NOT touched and we keep serving whatever was last good.
     """
-    from app.core.model_registry import repopulate_profile_cache
+    from app.core.model_catalog import repopulate_profile_cache
     from app.services.model_sources.pipeline import refresh_catalog
 
     async def _run():
@@ -60,7 +61,8 @@ def refresh_model_catalog_task(self):
     empty_vendors = [p for p, n in per_vendor.items() if n == 0]
     logger.info(
         "refresh_model_catalog: total_models=%d per_vendor=%s",
-        total, per_vendor,
+        total,
+        per_vendor,
     )
     if empty_vendors:
         # An empty vendor here usually means the deployment env is
@@ -70,6 +72,7 @@ def refresh_model_catalog_task(self):
         logger.warning(
             "refresh_model_catalog: %d vendor(s) returned 0 chat models "
             "(missing API key on cron host?): %s",
-            len(empty_vendors), empty_vendors,
+            len(empty_vendors),
+            empty_vendors,
         )
     return {"per_vendor": per_vendor, "total": total}

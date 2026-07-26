@@ -17,6 +17,7 @@ What lives here:
     runtime selection changes are picked up without recreating
     the proxy
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -60,7 +61,10 @@ def resolve_api_key(profile: ModelProfile, user_id: str | None = None) -> str:
     """
     if user_id:
         try:
-            from app.services.auth.user_api_key_service import get_user_api_key_plaintext
+            from app.services.auth.user_api_key_service import (
+                get_user_api_key_plaintext,
+            )
+
             user_key = get_user_api_key_plaintext(user_id, profile.provider)
             if user_key:
                 return user_key
@@ -76,16 +80,20 @@ def resolve_api_key(profile: ModelProfile, user_id: str | None = None) -> str:
 class _UserProviderOverrides:
     """Cached snapshot of one (user, provider) row used at chat-completion
     time. Pulled from ``user_model_provider_settings``."""
+
     api_base: str
     organization_id: str | None
     extra_headers: dict[str, str]
 
 
-_NO_OVERRIDES = _UserProviderOverrides(api_base="", organization_id=None, extra_headers={})
+_NO_OVERRIDES = _UserProviderOverrides(
+    api_base="", organization_id=None, extra_headers={}
+)
 
 
 def _load_user_provider_overrides(
-    profile: ModelProfile, user_id: str | None,
+    profile: ModelProfile,
+    user_id: str | None,
 ) -> _UserProviderOverrides:
     """Single DB read for the per-user (api_base / org_id / extra_headers).
 
@@ -94,7 +102,9 @@ def _load_user_provider_overrides(
     api_base in that case. We do ONE query and return all three fields
     together so chat completion isn't hit by three sequential queries.
     """
-    if not user_id:
+    from app.core.edition import current_edition_policy
+
+    if not user_id or not current_edition_policy().allow_provider_connection_overrides:
         return _NO_OVERRIDES
     try:
         from app.db.database import SessionLocal
@@ -127,7 +137,9 @@ def _load_user_provider_overrides(
     except Exception as exc:  # noqa: BLE001 — never crash chat on DB blip
         logger.warning(
             "user_model_provider_settings lookup failed for user=%s provider=%s: %s",
-            user_id, profile.provider, exc,
+            user_id,
+            profile.provider,
+            exc,
         )
         return _NO_OVERRIDES
 
@@ -149,7 +161,9 @@ def _resolve_api_base(profile: ModelProfile, user_id: str | None = None) -> str:
 # Bound at 256 entries — ~10 active users × 25 profiles. Each evicted
 # client is closed gracefully so the underlying TCP pool releases.
 _ASYNC_OPENAI_CACHE_MAX = 256
-_async_openai_cache: "OrderedDict[tuple[str | None, str], tuple[str, AsyncOpenAI]]" = OrderedDict()
+_async_openai_cache: "OrderedDict[tuple[str | None, str], tuple[str, AsyncOpenAI]]" = (
+    OrderedDict()
+)
 
 
 def _key_fingerprint(api_key: str) -> str:
@@ -178,7 +192,9 @@ def _close_client_quietly(client: AsyncOpenAI) -> None:
             result.close()
 
 
-def get_async_openai_client(profile: ModelProfile, user_id: str | None = None) -> AsyncOpenAI:
+def get_async_openai_client(
+    profile: ModelProfile, user_id: str | None = None
+) -> AsyncOpenAI:
     """Return a process-cached ``AsyncOpenAI`` for ``profile`` + ``user_id``.
 
     Auto-invalidates when the user changes ANY of (api_key, api_base,
@@ -251,13 +267,16 @@ def clear_llm_cache_for_provider(provider: str) -> None:
     with _llm_cache_lock:
         # LlamaIndex LLM cache: key is (user_id, role, profile_id)
         to_drop_llm = [
-            key for key in _llm_cache if isinstance(key[2], str) and key[2].startswith(prefix)
+            key
+            for key in _llm_cache
+            if isinstance(key[2], str) and key[2].startswith(prefix)
         ]
         for k in to_drop_llm:
             _llm_cache.pop(k, None)
         # AsyncOpenAI cache: key is (user_id, profile_id)
         to_drop_async = [
-            key for key in _async_openai_cache
+            key
+            for key in _async_openai_cache
             if isinstance(key[1], str) and key[1].startswith(prefix)
         ]
         for k in to_drop_async:
@@ -267,7 +286,8 @@ def clear_llm_cache_for_provider(provider: str) -> None:
 
 
 def ready_profile_ids(
-    profiles: dict[str, ModelProfile], user_id: str | None = None,
+    profiles: dict[str, ModelProfile],
+    user_id: str | None = None,
 ) -> set[str]:
     """Profile ids whose provider key actually RESOLVES for the caller.
 
@@ -297,13 +317,17 @@ def profile_ready(profile: ModelProfile, user_id: str | None = None) -> bool:
     With ``user_id`` we check ``user_model_credentials`` first, then env.
     Without ``user_id`` we fall back to env-only (legacy / ping path).
     """
-    return bool(resolve_api_key(profile, user_id=user_id)) and bool(profile.model.strip())
+    return bool(resolve_api_key(profile, user_id=user_id)) and bool(
+        profile.model.strip()
+    )
 
 
 # ── Catalog serialization ───────────────────────────────────────────────
 
 
-def _serialize_profile(profile: ModelProfile, selection: dict, user_id: str | None) -> dict[str, Any]:
+def _serialize_profile(
+    profile: ModelProfile, selection: dict, user_id: str | None
+) -> dict[str, Any]:
     return {
         **asdict(profile),
         "ready": profile_ready(profile, user_id=user_id),
@@ -325,7 +349,9 @@ def list_profiles(user_id: str | None = None) -> list[dict[str, Any]]:
     return [_serialize_profile(p, selection, user_id) for p in profiles.values()]
 
 
-def validate_role_update(role: str, profile_id: str, user_id: str | None = None) -> ModelProfile:
+def validate_role_update(
+    role: str, profile_id: str, user_id: str | None = None
+) -> ModelProfile:
     profile = get_profile(profile_id)
     if not profile_ready(profile, user_id=user_id):
         raise ValueError(
@@ -422,6 +448,7 @@ class RuntimeLLMProxy:
     ``build_async_openai_client_for_role(role, user_id=...)`` from the
     conversation engine instead.
     """
+
     def __init__(self, role: str):
         self.role = role
 

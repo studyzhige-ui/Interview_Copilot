@@ -2,9 +2,9 @@
 
 Two independent axes:
 
-  * **Transcription** (ASR) — selected by ``TRANSCRIPTION_PROFILE_ID`` via
-    ``transcription_registry``. Local WhisperX OR a remote OpenAI-style
-    /v1/audio/transcriptions endpoint.
+  * **Transcription** (ASR) — selected by ``TRANSCRIPTION_PROVIDER`` and
+    ``TRANSCRIPTION_MODEL`` via ``transcription_registry``. The provider may
+    be local WhisperX or a remote OpenAI-compatible endpoint.
   * **Diarization** (speaker separation) — Pyannote, selected by
     ``DIARIZATION_MODE``:
         ``auto``     — load when ASR is local-whisperx (whisperx bundles it
@@ -21,8 +21,6 @@ don't need updates.
 import logging
 from typing import Any, Optional
 
-import torch
-
 from app.core.config import settings
 from app.core.hf_runtime import prepare_hf_runtime, resolve_local_snapshot
 
@@ -35,11 +33,23 @@ whisper_model = None
 diarize_model = None
 
 
+def _local_device() -> str:
+    try:
+        import torch
+    except ImportError as exc:
+        raise RuntimeError(
+            "Local speech models require requirements-community.txt"
+        ) from exc
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
 # ── Decisions ──────────────────────────────────────────────────────────
 
 
 def _is_local_asr_active() -> bool:
-    return (settings.TRANSCRIPTION_PROVIDER or "local_whisperx").strip().lower() == "local_whisperx"
+    return (
+        settings.TRANSCRIPTION_PROVIDER or "local_whisperx"
+    ).strip().lower() == "local_whisperx"
 
 
 def _should_load_diarization() -> bool:
@@ -48,7 +58,7 @@ def _should_load_diarization() -> bool:
     if mode == "none":
         return False
     if mode == "pyannote":
-        return True   # hybrid mode forces load
+        return True  # hybrid mode forces load
     # mode == "auto"
     return _is_local_asr_active()
 
@@ -64,7 +74,7 @@ def _init_whisper_only():
     if not _is_local_asr_active():
         return  # remote ASR active → no WhisperX needed
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = _local_device()
     compute_type = "float16" if device == "cuda" else "int8"
     logger.info(f"WhisperX 加载：device={device.upper()} compute={compute_type}")
 
@@ -72,10 +82,13 @@ def _init_whisper_only():
     # TRANSCRIPTION_MODEL doubles as the local-whisperx HF id (faster-whisper
     # CTranslate2 weights live there). Resolve to the on-disk snapshot first
     # so we never fall through to a network download at request time.
-    whisper_id = (settings.TRANSCRIPTION_MODEL or "Systran/faster-whisper-large-v3").strip()
+    whisper_id = (
+        settings.TRANSCRIPTION_MODEL or "Systran/faster-whisper-large-v3"
+    ).strip()
     local_whisper_path = resolve_local_snapshot(whisper_id)
     if local_whisper_path is None:
         from app.core.hf_runtime import format_missing_model_error
+
         raise RuntimeError(
             format_missing_model_error(
                 model_id=whisper_id,
@@ -85,6 +98,7 @@ def _init_whisper_only():
             )
         )
     import whisperx
+
     whisper_model = whisperx.load_model(
         local_whisper_path,
         device,
@@ -107,11 +121,12 @@ def _init_diarize_only():
     if not _should_load_diarization():
         return
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = _local_device()
     prepare_hf_runtime()
     diarization_model_path = resolve_local_snapshot(settings.DIARIZATION_MODEL_ID)
     if diarization_model_path is None:
         from app.core.hf_runtime import format_missing_model_error
+
         raise RuntimeError(
             format_missing_model_error(
                 model_id=settings.DIARIZATION_MODEL_ID,
@@ -125,6 +140,7 @@ def _init_diarize_only():
     # format as the pure-local path, so downstream alignment / formatting
     # code is identical regardless of which ASR produced the words.
     from whisperx.diarize import DiarizationPipeline
+
     diarize_model = DiarizationPipeline(
         model_name=diarization_model_path,
         device=device,
@@ -137,7 +153,7 @@ def init_whisper_model():
 
     Called from the Celery ``worker_process_init`` signal so each worker
     pays the cold-load cost once at startup, not on the first request.
-    The function is conservative: if the active profile is fully remote
+    The function is conservative: if the active provider is fully remote
     AND DIARIZATION_MODE != 'pyannote', this is a complete no-op.
     """
     if not _is_local_asr_active() and not _should_load_diarization():
@@ -181,9 +197,9 @@ def _run_whisperx_sync(file_path: str, language: str | None = "zh") -> str:
     """
     if not whisper_model:
         raise RuntimeError(
-            "Local WhisperX is not loaded. Either set TRANSCRIPTION_PROFILE_ID="
-            "local-whisperx and let the worker init load it, or pick a remote "
-            "profile."
+            "Local WhisperX is not loaded. Set TRANSCRIPTION_PROVIDER="
+            "local_whisperx and let the worker initialize it, or configure a "
+            "remote transcription provider."
         )
     if whisper_model == "mock_model":
         return (
@@ -197,7 +213,9 @@ def _run_whisperx_sync(file_path: str, language: str | None = "zh") -> str:
 
     audio = whisperx.load_audio(file_path)
     # WhisperX raises if we pass an unknown string, so map "auto" → None.
-    effective_lang = None if (language or "").strip().lower() in {"", "auto"} else language
+    effective_lang = (
+        None if (language or "").strip().lower() in {"", "auto"} else language
+    )
     kwargs: dict = {"batch_size": 16}
     if effective_lang:
         kwargs["language"] = effective_lang
@@ -293,13 +311,19 @@ async def transcribe_media(file_path: str, language: str = "zh") -> str:
     back into this module's ``align_remote_words_with_local_diarization``
     to produce speaker-separated output.
     """
-    from app.services.voice.transcription_registry import resolve_transcription, transcribe
+    from app.services.voice.transcription_registry import (
+        resolve_transcription,
+        transcribe,
+    )
 
     cfg = resolve_transcription()
     try:
         logger.info(
             "Transcribing %s via provider=%s model=%s language=%s",
-            file_path, cfg.provider_id, cfg.model, language,
+            file_path,
+            cfg.provider_id,
+            cfg.model,
+            language,
         )
         # Pass language through; remote providers map "auto" → None.
         # Local WhisperX (_run_whisperx_sync) also honours None for auto.

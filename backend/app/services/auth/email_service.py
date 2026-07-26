@@ -37,7 +37,9 @@ def _send_sync(to_email: str, subject: str, body: str) -> None:
                 server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
             server.send_message(msg)
     else:
-        with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, context=context, timeout=10) as server:
+        with smtplib.SMTP_SSL(
+            settings.SMTP_HOST, settings.SMTP_PORT, context=context, timeout=10
+        ) as server:
             if settings.SMTP_USER:
                 server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
             server.send_message(msg)
@@ -61,7 +63,9 @@ async def send_email(to_email: str, subject: str, body: str) -> bool:
         logger.warning(
             "[email] SMTP not configured — body printed below.\n"
             "  To:      %s\n  Subject: %s\n  Body:    %s",
-            to_email, subject, body,
+            to_email,
+            subject,
+            body,
         )
         return True
     try:
@@ -73,13 +77,18 @@ async def send_email(to_email: str, subject: str, body: str) -> bool:
         # environment, gate this on settings.DEBUG.
         logger.info(
             "[email] sent OK.\n  To:      %s\n  Subject: %s\n  Body:    %s",
-            to_email, subject, body,
+            to_email,
+            subject,
+            body,
         )
         return True
     except Exception as exc:  # noqa: BLE001
         logger.error(
             "[email] SMTP send FAILED — body printed below.\n"
             "  To:      %s\n  Subject: %s\n  Body:    %s\n  Error:   %s",
-            to_email, subject, body, exc,
+            to_email,
+            subject,
+            body,
+            exc,
         )
         return False

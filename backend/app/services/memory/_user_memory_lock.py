@@ -80,6 +80,7 @@ def _emit_degraded(user_id: str, reason: str, *, sync: bool) -> None:
         variant="sync" if sync else "async",
     )
 
+
 # 5 minutes is comfortably above the slowest LLM call we issue inside
 # the lock (dreaming, currently ~30-60s). Hardcoded — operators can
 # override per-call if they ever need to.
@@ -133,9 +134,14 @@ async def user_memory_lock(
         while waited < _WAIT_TIMEOUT_SEC:
             try:
                 # SET key value NX EX seconds → returns True iff set.
-                acquired = bool(await redis_client.set(
-                    key, token, nx=True, ex=timeout_sec,
-                ))
+                acquired = bool(
+                    await redis_client.set(
+                        key,
+                        token,
+                        nx=True,
+                        ex=timeout_sec,
+                    )
+                )
             except Exception as exc:  # noqa: BLE001
                 # Redis down — degrade to no-lock mode. One warning,
                 # then carry on. We don't want every chat turn to spam
@@ -143,7 +149,8 @@ async def user_memory_lock(
                 logger.warning(
                     "user_memory_lock: Redis unavailable for user=%s, "
                     "proceeding without lock: %s",
-                    user_id, exc,
+                    user_id,
+                    exc,
                 )
                 _emit_degraded(user_id, "redis_down", sync=False)
                 yield
@@ -164,7 +171,8 @@ async def user_memory_lock(
             logger.warning(
                 "user_memory_lock: timed out waiting for user=%s after %.1fs, "
                 "proceeding without lock",
-                user_id, waited,
+                user_id,
+                waited,
             )
             _emit_degraded(user_id, "wait_timeout", sync=False)
 
@@ -187,7 +195,9 @@ async def user_memory_lock(
                 logger.warning(
                     "user_memory_lock: release failed for user=%s "
                     "(token=%s): %s — lock will auto-expire",
-                    user_id, token[:6], exc,
+                    user_id,
+                    token[:6],
+                    exc,
                 )
 
 
@@ -236,7 +246,8 @@ def user_memory_lock_sync(
         logger.warning(
             "user_memory_lock_sync: Redis client init failed for user=%s, "
             "proceeding without lock: %s",
-            user_id, exc,
+            user_id,
+            exc,
         )
         _emit_degraded(user_id, "redis_down", sync=True)
         yield
@@ -250,11 +261,14 @@ def user_memory_lock_sync(
                 acquired = bool(client.set(key, token, nx=True, ex=timeout_sec))
             except Exception as exc:  # noqa: BLE001
                 if on_timeout == "raise":
-                    raise LockNotAcquired(f"redis unavailable for user={user_id}") from exc
+                    raise LockNotAcquired(
+                        f"redis unavailable for user={user_id}"
+                    ) from exc
                 logger.warning(
                     "user_memory_lock_sync: Redis unavailable for user=%s, "
                     "proceeding without lock: %s",
-                    user_id, exc,
+                    user_id,
+                    exc,
                 )
                 _emit_degraded(user_id, "redis_down", sync=True)
                 yield
@@ -272,7 +286,8 @@ def user_memory_lock_sync(
             logger.warning(
                 "user_memory_lock_sync: timed out waiting for user=%s after %.1fs, "
                 "proceeding without lock",
-                user_id, waited,
+                user_id,
+                waited,
             )
             _emit_degraded(user_id, "wait_timeout", sync=True)
 
@@ -290,7 +305,9 @@ def user_memory_lock_sync(
                 logger.warning(
                     "user_memory_lock_sync: release failed for user=%s "
                     "(token=%s): %s — lock will auto-expire",
-                    user_id, token[:6], exc,
+                    user_id,
+                    token[:6],
+                    exc,
                 )
         # Shared pooled client (app.db.redis) — never closed here.
 

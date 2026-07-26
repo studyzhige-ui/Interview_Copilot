@@ -1,11 +1,11 @@
-"""Chat-session CRUD + history + transcript + memory-recall toggle.
+"""Chat-session CRUD, transcript, and global-memory toggle.
 
 Hierarchy (post-0018): an interview_record has N conversations; each
 session is a self-contained chat thread. No sub-conversation level.
 """
 
 import logging
-from typing import List
+from typing import List, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -17,7 +17,6 @@ from app.models.chat import ConversationMessage, Conversation, generate_uuid
 from app.models.user import User
 from app.schemas.chat import (
     MemoryRecallToggleBody,
-    MessageItem,
     SessionCreateRequest,
     SessionCreateResponse,
     SessionListItem,
@@ -43,20 +42,21 @@ def _session_list_label(row: Conversation) -> str:
         return "面试复盘"
     return "通用对话"
 
+
 router = APIRouter(tags=["chat"])
 
 
 @router.post("/chat/sessions", response_model=SessionCreateResponse)
 def create_chat_session(
-    request: SessionCreateRequest | None = None,
+    request: SessionCreateRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    req = request or SessionCreateRequest()
+    req = request
     # mock_interview conversations are created by the mock-interview start
     # endpoint (it owns the atomic record + conversation + runtime creation),
     # never here. This endpoint only opens general / debrief chats.
-    conv_type = req.type if req.type in {"general", "debrief"} else "general"
+    conv_type = req.type
 
     subject_type: str | None = None
     subject_id: str | None = None
@@ -64,10 +64,15 @@ def create_chat_session(
         if not req.subject_id:
             raise HTTPException(status_code=400, detail="debrief 对话必须绑定面试记录")
         from app.models.interview_record import InterviewRecord
-        record = db.query(InterviewRecord).filter(
-            InterviewRecord.id == req.subject_id,
-            InterviewRecord.user_id == resolve_user_pk(db, current_user.username),
-        ).first()
+
+        record = (
+            db.query(InterviewRecord)
+            .filter(
+                InterviewRecord.id == req.subject_id,
+                InterviewRecord.user_id == resolve_user_pk(db, current_user.username),
+            )
+            .first()
+        )
         if record is None:
             raise HTTPException(status_code=404, detail="Interview record not found")
         subject_type = "interview_record"
@@ -99,11 +104,14 @@ def create_chat_session(
         db.rollback()
         logger.exception(
             "create_chat_session failed (user=%s, type=%s, subject_id=%s): %s",
-            current_user.username, conv_type, req.subject_id, exc,
+            current_user.username,
+            conv_type,
+            req.subject_id,
+            exc,
         )
         raise HTTPException(
             status_code=500,
-            detail=f"创建对话失败: {type(exc).__name__}: {exc}",
+            detail="创建对话失败",
         ) from exc
 
 
@@ -113,20 +121,19 @@ def list_conversations(
     db: Session = Depends(get_db),
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
-    type: str | None = Query(None, description="Filter: general/debrief/mock_interview"),
-    subject_id: str | None = Query(None, description="Filter: tie to a specific interview record"),
+    type: Literal["general", "debrief", "mock_interview"] | None = Query(None),
+    subject_id: str | None = Query(
+        None, description="Filter: tie to a specific interview record"
+    ),
 ):
-    q = db.query(Conversation).filter(Conversation.user_id == resolve_user_pk(db, current_user.username))
+    q = db.query(Conversation).filter(
+        Conversation.user_id == resolve_user_pk(db, current_user.username)
+    )
     if type:
         q = q.filter(Conversation.type == type)
     if subject_id:
         q = q.filter(Conversation.subject_id == subject_id)
-    rows = (
-        q.order_by(Conversation.updated_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+    rows = q.order_by(Conversation.updated_at.desc()).offset(offset).limit(limit).all()
     return [
         SessionListItem(
             session_id=row.id,
@@ -141,53 +148,21 @@ def list_conversations(
     ]
 
 
-@router.get("/chat/history", response_model=List[MessageItem])
-def get_chat_history(
-    session_id: str = Query(...),
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-    offset: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
-):
-    session_row = db.query(Conversation).filter(Conversation.id == session_id).first()
-    if not session_row or session_row.user_id != resolve_user_pk(db, current_user.username):
-        raise HTTPException(status_code=404, detail="Session not found or access denied")
-
-    rows = (
-        db.query(ConversationMessage)
-        .filter(ConversationMessage.conversation_id == session_id)
-        .order_by(ConversationMessage.seq.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
-    rows.reverse()
-    return [
-        MessageItem(
-            seq=row.seq,
-            role=row.role,
-            content=row.content,
-            created_at=row.created_at.isoformat() if row.created_at else "",
-        )
-        for row in rows
-    ]
-
-
 @router.patch("/chat/sessions/{session_id}/title")
 def update_session_title(
     session_id: str,
-    payload: SessionRenameRequest | None = None,
-    title: str | None = Query(default=None, description="Legacy: title via query param"),
+    payload: SessionRenameRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    new_title = (payload.title if payload and payload.title else title) or ""
-    new_title = new_title.strip()
+    new_title = payload.title.strip()
     if not new_title:
         raise HTTPException(status_code=400, detail="title 不能为空")
     row = db.query(Conversation).filter(Conversation.id == session_id).first()
     if not row or row.user_id != resolve_user_pk(db, current_user.username):
-        raise HTTPException(status_code=404, detail="Session not found or access denied")
+        raise HTTPException(
+            status_code=404, detail="Session not found or access denied"
+        )
     row.title = new_title
     db.commit()
     return {"status": "success", "session_id": session_id, "new_title": new_title}
@@ -201,7 +176,17 @@ def delete_chat_session(
 ):
     row = db.query(Conversation).filter(Conversation.id == session_id).first()
     if not row or row.user_id != resolve_user_pk(db, current_user.username):
-        raise HTTPException(status_code=404, detail="Session not found or access denied")
+        raise HTTPException(
+            status_code=404, detail="Session not found or access denied"
+        )
+    if row.active_turn_id:
+        from app.models.conversation_turn import ConversationTurn
+
+        active = db.get(ConversationTurn, row.active_turn_id)
+        if active is not None and active.status in {"pending", "running"}:
+            raise HTTPException(
+                status_code=409, detail="Cannot delete a session with an active turn"
+            )
     try:
         db.query(ConversationMessage).filter(
             ConversationMessage.conversation_id == session_id
@@ -213,11 +198,13 @@ def delete_chat_session(
         db.rollback()
         logger.exception(
             "delete_chat_session failed (id=%s user=%s): %s",
-            session_id, current_user.username, exc,
+            session_id,
+            current_user.username,
+            exc,
         )
         raise HTTPException(
             status_code=500,
-            detail=f"删除对话失败: {type(exc).__name__}: {exc}",
+            detail="删除对话失败",
         ) from exc
 
 
@@ -228,17 +215,22 @@ def get_full_transcript(
     db: Session = Depends(get_db),
 ):
     session_row = db.query(Conversation).filter(Conversation.id == session_id).first()
-    if not session_row or session_row.user_id != resolve_user_pk(db, current_user.username):
-        raise HTTPException(status_code=404, detail="Session not found or access denied")
+    if not session_row or session_row.user_id != resolve_user_pk(
+        db, current_user.username
+    ):
+        raise HTTPException(
+            status_code=404, detail="Session not found or access denied"
+        )
 
-    meta = transcript_service.get_session_meta(session_id)
-    messages = transcript_service.get_full_transcript(session_id)
+    meta = transcript_service.get_session_meta(session_id, db=db)
+    messages = transcript_service.get_full_transcript(session_id, db=db)
     return {
         "status": "success",
         "session_id": session_id,
         "type": meta["type"] if meta else "general",
         "turn_count": meta["turn_count"] if meta else 0,
         "compaction_cursor": meta["compaction_cursor"] if meta else 0,
+        "active_turn_id": session_row.active_turn_id,
         "messages": messages,
         "total_messages": len(messages),
     }
@@ -251,21 +243,26 @@ def get_full_transcript(
 # flip it. The interview_fact recall path checks this on every turn.
 
 
-@router.get("/chat/sessions/{session_id}/memory-recall")
+@router.get("/chat/sessions/{session_id}/global-memory")
 def get_session_memory_recall(
     session_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     session_row = db.query(Conversation).filter(Conversation.id == session_id).first()
-    if not session_row or session_row.user_id != resolve_user_pk(db, current_user.username):
-        raise HTTPException(status_code=404, detail="Session not found or access denied")
+    if not session_row or session_row.user_id != resolve_user_pk(
+        db, current_user.username
+    ):
+        raise HTTPException(
+            status_code=404, detail="Session not found or access denied"
+        )
     from app.services.memory.recall_policy import is_global_memory_enabled_for_session
+
     effective = is_global_memory_enabled_for_session(session_id, current_user.username)
     return {"status": "success", "session_id": session_id, "enabled": effective}
 
 
-@router.post("/chat/sessions/{session_id}/memory-recall")
+@router.post("/chat/sessions/{session_id}/global-memory")
 def set_session_memory_recall(
     session_id: str,
     body: MemoryRecallToggleBody,
@@ -273,8 +270,17 @@ def set_session_memory_recall(
     db: Session = Depends(get_db),
 ):
     session_row = db.query(Conversation).filter(Conversation.id == session_id).first()
-    if not session_row or session_row.user_id != resolve_user_pk(db, current_user.username):
-        raise HTTPException(status_code=404, detail="Session not found or access denied")
+    if not session_row or session_row.user_id != resolve_user_pk(
+        db, current_user.username
+    ):
+        raise HTTPException(
+            status_code=404, detail="Session not found or access denied"
+        )
     from app.services.memory.recall_policy import set_session_global_memory
+
     set_session_global_memory(session_id, current_user.username, body.enabled)
-    return {"status": "success", "session_id": session_id, "enabled": bool(body.enabled)}
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "enabled": bool(body.enabled),
+    }

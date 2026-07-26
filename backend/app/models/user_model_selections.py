@@ -11,6 +11,7 @@ Keyed by the stable ``users.id`` (FK, ON DELETE CASCADE) with a unique
 system model catalog is NOT in the DB — ``profile_id`` is validated against
 the live catalog (code / Redis) at read/write time.
 """
+
 from datetime import datetime
 
 from sqlalchemy import (
@@ -46,5 +47,8 @@ class UserModelSelection(Base):
     profile_id = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
     )

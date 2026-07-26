@@ -18,9 +18,7 @@ hosts the lower-layer building blocks the strategy depends on:
   * :mod:`react_agent`         — :class:`AgentBudget` dataclass +
                                   SSE event formatting helpers
 
-External callers should reach for ``app.conversation`` — the legacy
-``run_react_agent`` / ``run_react_agent_stream`` shims that wrapped
-``ConversationEngine`` for the retired ``/agent/react/*`` API routes
-were removed in the audit cleanup. ``/chat/sse`` (mode=agent) is the
-sole entry point now.
+External callers should reach for ``app.conversation``. Agent execution
+enters through durable conversation turns; this package exposes runtime
+primitives only.
 """

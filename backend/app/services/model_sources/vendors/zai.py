@@ -7,6 +7,7 @@ glm-5 etc) with ``created`` unix timestamps.
 
 All entries returned are chat models — no filter needed.
 """
+
 from __future__ import annotations
 
 from .base import VendorAdapterSpec
@@ -14,7 +15,7 @@ from .base import VendorAdapterSpec
 
 SPEC = VendorAdapterSpec(
     provider="zai",
-    models_path="/models",          # api_base = open.bigmodel.cn/api/paas/v4
+    models_path="/models",  # api_base = open.bigmodel.cn/api/paas/v4
     auth_style="bearer",
     created_int_field="created",
     chat_filter=None,

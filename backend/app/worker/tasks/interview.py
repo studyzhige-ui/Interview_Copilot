@@ -1,4 +1,5 @@
 """Interview-analysis pipeline task (heavy queue — needs Whisper)."""
+
 import logging
 
 from app.core.error_messages import humanize_error
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
     autoretry_for=(ConnectionError, TimeoutError, OSError),
     retry_backoff=True,
     retry_backoff_max=120,
-    retry_jitter=True,          # avoid thundering herd on transient outages
+    retry_jitter=True,  # avoid thundering herd on transient outages
     max_retries=3,
     # Reliability: acks_late + time bounds. Keep both ceilings well below
     # the broker visibility_timeout (3700s) so a hung task is reclaimed and
@@ -24,8 +25,8 @@ logger = logging.getLogger(__name__)
     # 30 min budgets a GPU/cloud-ASR deployment. On CPU-only WhisperX a
     # 60-minute recording can exceed this — raise via env-specific config
     # if you deploy transcription on CPU.
-    time_limit=1800,            # 30 min hard
-    soft_time_limit=1740,       # 1 min before hard kill
+    time_limit=1800,  # 30 min hard
+    soft_time_limit=1740,  # 1 min before hard kill
 )
 def process_interview_analysis(self, record_id: str, language: str = "zh"):
     """Run the unified analysis pipeline for an InterviewRecord.
@@ -56,9 +57,15 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
         if row is not None and row.status in ("completed", "review_ready"):
             logger.info(
                 "[Task %s] InterviewRecord %s already terminal (%s); skipping re-run.",
-                self.request.id, record_id, row.status,
+                self.request.id,
+                record_id,
+                row.status,
             )
-            return {"status": "skipped", "record_id": record_id, "reason": "already_terminal"}
+            return {
+                "status": "skipped",
+                "record_id": record_id,
+                "reason": "already_terminal",
+            }
     finally:
         db.close()
 
@@ -116,7 +123,10 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
                         .first()
                     )
                     if rec is not None and rec.status not in {
-                        "completed", "failed", "review_ready", "review_failed",
+                        "completed",
+                        "failed",
+                        "review_ready",
+                        "review_failed",
                     }:
                         interview_record_service.set_status(
                             record_id,
@@ -130,11 +140,15 @@ def process_interview_analysis(self, record_id: str, language: str = "zh"):
             logger.error(
                 "Failed to mark interview %s as failed after task crash: %s "
                 "(original error follows)",
-                record_id, recovery_exc,
+                record_id,
+                recovery_exc,
             )
 
         logger.error(
             "Interview analysis task failed for %s (attempt %d/%d): %s",
-            record_id, self.request.retries + 1, self.max_retries + 1, exc,
+            record_id,
+            self.request.retries + 1,
+            self.max_retries + 1,
+            exc,
         )
         raise

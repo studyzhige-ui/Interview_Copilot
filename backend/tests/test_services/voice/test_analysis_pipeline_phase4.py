@@ -1,5 +1,6 @@
 """Phase 4 analysis-pipeline behaviors: span extraction (ANA-2), reused
 qa_pairs (ANA-1), grading-failure policy (ANA-6)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -93,8 +94,12 @@ def test_extraction_slices_original_text_from_spans():
 def test_extraction_drops_pairs_with_invented_lines():
     payload = {
         "qa_pairs": [
-            {"question_lines": [[100, 120]], "answer_lines": [[130, 140]],
-             "question_summary": "hallucinated", "phase": "general"},
+            {
+                "question_lines": [[100, 120]],
+                "answer_lines": [[130, 140]],
+                "question_summary": "hallucinated",
+                "phase": "general",
+            },
         ]
     }
     llm = _FakeLLM(AsyncMock(return_value=_resp(payload)))
@@ -112,12 +117,21 @@ def test_analyze_interview_skips_extraction_when_pairs_given(monkeypatch):
     monkeypatch.setattr(svc, "extract_qa_pairs_with_llm", _boom)
 
     graded = {
-        "score": 7, "critique": "还行", "improved_answer": "", "tags": [],
+        "score": 7,
+        "critique": "还行",
+        "improved_answer": "",
+        "tags": [],
     }
     synthesis = {
-        "overall": {"score": 7, "summary": "ok", "strengths": [], "weaknesses": [],
-                    "key_growth_areas": []},
-        "phase_summary": [], "skill_radar": {},
+        "overall": {
+            "score": 7,
+            "summary": "ok",
+            "strengths": [],
+            "weaknesses": [],
+            "key_growth_areas": [],
+        },
+        "phase_summary": [],
+        "skill_radar": {},
     }
     calls = {"n": 0}
 
@@ -127,15 +141,24 @@ def test_analyze_interview_skips_extraction_when_pairs_given(monkeypatch):
         return _resp(graded) if calls["n"] <= 1 else _resp(synthesis)
 
     monkeypatch.setattr(
-        svc, "get_llm_for_role", lambda role, user_id=None: _FakeLLM(_acomplete),
+        svc,
+        "get_llm_for_role",
+        lambda role, user_id=None: _FakeLLM(_acomplete),
     )
 
-    report = asyncio.run(svc.analyze_interview(
-        "transcript text",
-        qa_pairs=[{
-            "index": 1, "question": "Q1", "answer": "A1", "phase": "technical",
-        }],
-    ))
+    report = asyncio.run(
+        svc.analyze_interview(
+            "transcript text",
+            qa_pairs=[
+                {
+                    "index": 1,
+                    "question": "Q1",
+                    "answer": "A1",
+                    "phase": "technical",
+                }
+            ],
+        )
+    )
     # The provided pair actually flowed through grading + synthesis.
     assert report["per_question"][0]["question"] == "Q1"
     assert report["per_question"][0]["score"] == 7.0
@@ -148,10 +171,14 @@ def test_analyze_interview_skips_extraction_when_pairs_given(monkeypatch):
 def test_failed_question_scores_none_not_zero(monkeypatch):
     monkeypatch.setattr(svc, "_ANALYSIS_RETRY_BASE_S", 0.0)
     llm = _FakeLLM(AsyncMock(side_effect=RuntimeError("provider 500")))
-    out = asyncio.run(svc._analyze_single_question(
-        {"index": 3, "question": "Q", "answer": "A", "phase": "technical"},
-        context_text="", total_questions=5, llm=llm,
-    ))
+    out = asyncio.run(
+        svc._analyze_single_question(
+            {"index": 3, "question": "Q", "answer": "A", "phase": "technical"},
+            context_text="",
+            total_questions=5,
+            llm=llm,
+        )
+    )
     assert out["score"] is None
     assert out["analysis_failed"] is True
     # retried before giving up
@@ -162,21 +189,39 @@ def test_retry_succeeds_on_second_attempt(monkeypatch):
     monkeypatch.setattr(svc, "_ANALYSIS_RETRY_BASE_S", 0.0)
     ok = _resp({"score": 8, "critique": "好", "improved_answer": "", "tags": []})
     llm = _FakeLLM(AsyncMock(side_effect=[RuntimeError("blip"), ok]))
-    out = asyncio.run(svc._analyze_single_question(
-        {"index": 1, "question": "Q", "answer": "A", "phase": "technical"},
-        context_text="", total_questions=1, llm=llm,
-    ))
+    out = asyncio.run(
+        svc._analyze_single_question(
+            {"index": 1, "question": "Q", "answer": "A", "phase": "technical"},
+            context_text="",
+            total_questions=1,
+            llm=llm,
+        )
+    )
     assert out["score"] == 8.0
     assert "analysis_failed" not in out
 
 
 def test_synthesis_excludes_failed_and_reports_count():
     per_question = [
-        {"index": 1, "phase": "technical", "question": "Q1", "answer": "A1",
-         "score": 8.0, "critique": "好", "tags": []},
-        {"index": 2, "phase": "technical", "question": "Q2", "answer": "A2",
-         "score": None, "critique": "该题分析失败", "tags": [],
-         "analysis_failed": True},
+        {
+            "index": 1,
+            "phase": "technical",
+            "question": "Q1",
+            "answer": "A1",
+            "score": 8.0,
+            "critique": "好",
+            "tags": [],
+        },
+        {
+            "index": 2,
+            "phase": "technical",
+            "question": "Q2",
+            "answer": "A2",
+            "score": None,
+            "critique": "该题分析失败",
+            "tags": [],
+            "analysis_failed": True,
+        },
     ]
     # Synthesis LLM fails → fallback aggregation path (deterministic).
     llm = _FakeLLM(AsyncMock(side_effect=RuntimeError("down")))
@@ -192,11 +237,20 @@ def test_resolve_span_pairs_remaps_parent_after_drops():
     lines = ["Q one", "A one", "Q two", "A two"]
     raw = [
         {"question_lines": [[99, 99]], "answer_lines": [[99, 99]]},  # dropped
-        {"question_lines": [[1, 1]], "answer_lines": [[2, 2]],
-         "question_summary": "第一题", "phase": "technical"},
-        {"question_lines": [[3, 3]], "answer_lines": [[4, 4]],
-         "question_summary": "追问", "phase": "technical",
-         "is_follow_up": True, "parent_qa_index": 2},  # LLM ordinal of Q one
+        {
+            "question_lines": [[1, 1]],
+            "answer_lines": [[2, 2]],
+            "question_summary": "第一题",
+            "phase": "technical",
+        },
+        {
+            "question_lines": [[3, 3]],
+            "answer_lines": [[4, 4]],
+            "question_summary": "追问",
+            "phase": "technical",
+            "is_follow_up": True,
+            "parent_qa_index": 2,
+        },  # LLM ordinal of Q one
     ]
     pairs = svc._resolve_span_pairs(raw, lines)
     assert len(pairs) == 2
@@ -216,22 +270,40 @@ def test_chunked_dedup_prefers_fuller_boundary_pair(monkeypatch):
     async def _fake_single(chunk_lines, resume_context="", *, llm, line_offset=0):
         # Chunk 1 (offset 0): emits a stub pair cut at its window edge.
         if line_offset == 0:
-            return [{
-                "index": 1, "question": "Q", "answer": "A-stub",
-                "question_summary": "", "phase": "general",
-                "is_follow_up": False, "parent_index": None,
-                "_start_line": 8, "_end_line": 10, "_q_start": 8, "_q_end": 8,
-            }]
+            return [
+                {
+                    "index": 1,
+                    "question": "Q",
+                    "answer": "A-stub",
+                    "question_summary": "",
+                    "phase": "general",
+                    "is_follow_up": False,
+                    "parent_index": None,
+                    "_start_line": 8,
+                    "_end_line": 10,
+                    "_q_start": 8,
+                    "_q_end": 8,
+                }
+            ]
         # Chunk 2: same question (global line 8) with the full answer.
-        return [{
-            "index": 1, "question": "Q", "answer": "A-full",
-            "question_summary": "", "phase": "general",
-            "is_follow_up": False, "parent_index": None,
-            "_start_line": 8, "_end_line": 14, "_q_start": 8, "_q_end": 8,
-        }]
+        return [
+            {
+                "index": 1,
+                "question": "Q",
+                "answer": "A-full",
+                "question_summary": "",
+                "phase": "general",
+                "is_follow_up": False,
+                "parent_index": None,
+                "_start_line": 8,
+                "_end_line": 14,
+                "_q_start": 8,
+                "_q_end": 8,
+            }
+        ]
 
     monkeypatch.setattr(svc, "_extract_single_pass", _fake_single)
     pairs = asyncio.run(svc._extract_chunked(lines, "", 40, llm=object()))
     assert len(pairs) == 1
-    assert pairs[0]["answer"] == "A-full"      # fuller version won
-    assert "_start_line" not in pairs[0]        # bookkeeping stripped
+    assert pairs[0]["answer"] == "A-full"  # fuller version won
+    assert "_start_line" not in pairs[0]  # bookkeeping stripped

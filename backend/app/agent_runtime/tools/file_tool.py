@@ -26,14 +26,33 @@ _MAX_READ_LIMIT = 50_000
 
 
 class ReadFileArgs(BaseModel):
-    upload_id: str = Field(default="", description="Specific upload ID to read. Leave empty to read the latest file of a given purpose.")
-    purpose: str = Field(default="", description="File purpose filter: 'jd', 'agent_output', or empty for any. For the candidate's RESUME prefer the read_resume tool (structured sections); use read_file(purpose='resume') only for raw ad-hoc resume uploads.")
-    path: str = Field(default="", description="Path to a large persisted tool output (shown inside a <persisted-output> block) to read back. Takes precedence over upload_id/purpose.")
-    offset: int = Field(default=0, ge=0, description="Character offset to start reading from. Pass the previous response's next_offset to page through a large file.")
-    limit: int = Field(default=_DEFAULT_READ_LIMIT, ge=1, description="Max characters to return per call (default 20000, capped at 50000).")
+    upload_id: str = Field(
+        default="",
+        description="Specific upload ID to read. Leave empty to read the latest file of a given purpose.",
+    )
+    purpose: str = Field(
+        default="",
+        description="File purpose filter: 'jd', 'agent_output', or empty for any. For the candidate's RESUME prefer the read_resume tool (structured sections); use read_file(purpose='resume') only for raw ad-hoc resume uploads.",
+    )
+    path: str = Field(
+        default="",
+        description="Path to a large persisted tool output (shown inside a <persisted-output> block) to read back. Takes precedence over upload_id/purpose.",
+    )
+    offset: int = Field(
+        default=0,
+        ge=0,
+        description="Character offset to start reading from. Pass the previous response's next_offset to page through a large file.",
+    )
+    limit: int = Field(
+        default=_DEFAULT_READ_LIMIT,
+        ge=1,
+        description="Max characters to return per call (default 20000, capped at 50000).",
+    )
 
 
-async def _read_file_handler(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]:
+async def _read_file_handler(
+    args: ReadFileArgs, ctx: AgentToolContext
+) -> dict[str, Any]:
     # The whole body does sync DB + sync S3 I/O — both block the event
     # loop. Offload to a thread so the agent loop stays responsive on
     # slow storage backends. SessionLocal isn't thread-safe across
@@ -50,7 +69,10 @@ def _read_file_sync(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]
 
         target = resolve_persisted_path(ctx.session_id, args.path)
         if target is None:
-            return {"error": "Persisted file not found or not accessible", "path": args.path}
+            return {
+                "error": "Persisted file not found or not accessible",
+                "path": args.path,
+            }
         content = target.read_text(encoding="utf-8", errors="replace")
         return _paginate(content, args, {"path": str(target)})
 
@@ -66,11 +88,15 @@ def _read_file_sync(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]
     try:
         if args.upload_id:
             upload = get_owned_file_asset(
-                db, file_asset_id=args.upload_id, user_id=ctx.user_id,
+                db,
+                file_asset_id=args.upload_id,
+                user_id=ctx.user_id,
             )
         else:
             assets = list_user_file_assets(
-                db, user_id=ctx.user_id, purpose=args.purpose or None,
+                db,
+                user_id=ctx.user_id,
+                purpose=args.purpose or None,
             )
             # Most recent VERIFIED file (desc order) — a dangling
             # pending_upload row must not shadow the real latest file.
@@ -80,7 +106,11 @@ def _read_file_sync(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]
             )
 
         if upload is None:
-            return {"error": "No file found", "purpose": args.purpose, "upload_id": args.upload_id}
+            return {
+                "error": "No file found",
+                "purpose": args.purpose,
+                "upload_id": args.upload_id,
+            }
         if upload.upload_status not in READABLE_UPLOAD_STATUSES:
             # pending_upload = never verified (bytes may not even exist);
             # failed = rejected by validation; deleted = gone. Serving any
@@ -136,6 +166,7 @@ def _read_upload_content(upload) -> str:
     if storage_uri.startswith("local://"):
         try:
             from app.core.storage import parse_local_uri
+
             path = parse_local_uri(storage_uri)
             if path.is_file():
                 return path.read_text(encoding="utf-8", errors="replace")
@@ -146,6 +177,7 @@ def _read_upload_content(upload) -> str:
     if storage_uri.startswith("s3://"):
         try:
             from app.core.storage import s3_client, parse_s3_uri
+
             bucket, key = parse_s3_uri(storage_uri)
             response = s3_client.get_object(Bucket=bucket, Key=key)
             raw = response["Body"].read()
@@ -156,6 +188,7 @@ def _read_upload_content(upload) -> str:
 
     try:
         from pathlib import Path
+
         path = Path(storage_uri)
         if path.exists():
             return path.read_text(encoding="utf-8", errors="replace")
@@ -167,12 +200,22 @@ def _read_upload_content(upload) -> str:
 
 # ── write_file ───────────────────────────────────────────────────────────
 
+
 class WriteFileArgs(BaseModel):
-    filename: str = Field(..., min_length=1, max_length=200, description="Output filename (e.g. 'study_plan.md')")
-    content: str = Field(..., min_length=1, description="File content to write (Markdown or plain text)")
+    filename: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="Output filename (e.g. 'study_plan.md')",
+    )
+    content: str = Field(
+        ..., min_length=1, description="File content to write (Markdown or plain text)"
+    )
 
 
-async def _write_file_handler(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, Any]:
+async def _write_file_handler(
+    args: WriteFileArgs, ctx: AgentToolContext
+) -> dict[str, Any]:
     # Sync DB + sync S3 upload — offload to thread so agent step isn't
     # blocked on storage latency.
     return await asyncio.to_thread(_write_file_sync, args, ctx)
@@ -189,11 +232,14 @@ def _write_file_sync(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, An
             user_id=ctx.user_id,
             filename=args.filename,
             purpose="agent_output",
-            content_type="text/markdown" if args.filename.endswith(".md") else "text/plain",
+            content_type="text/markdown"
+            if args.filename.endswith(".md")
+            else "text/plain",
             size_bytes=len(args.content.encode("utf-8")),
         )
 
         from app.core.storage import upload_file_to_owned_key
+
         file_obj = io.BytesIO(args.content.encode("utf-8"))
         actual_uri = upload_file_to_owned_key(
             file_obj,
@@ -207,6 +253,7 @@ def _write_file_sync(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, An
             upload.storage_uri = actual_uri
 
         from app.services.uploads.file_asset_service import mark_file_asset_consumed
+
         mark_file_asset_consumed(db, upload)
         db.commit()
 
@@ -231,20 +278,24 @@ def _write_file_sync(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, An
 # the persist→read→persist infinite loop.
 # The tool_result_storage module also lists read_file in _NEVER_PERSIST_TOOLS
 # as a second layer of protection.
-registry.register(ToolEntry(
-    name="read_file",
-    description="Read content of a user-uploaded file (resume, JD, notes). Specify upload_id for a specific file, or purpose ('resume', 'jd') to read the latest file of that type.",
-    args_model=ReadFileArgs,
-    handler=_read_file_handler,
-    max_result_chars=200_000,
-    emoji="📂",
-))
+registry.register(
+    ToolEntry(
+        name="read_file",
+        description="Read content of a user-uploaded file (resume, JD, notes). Specify upload_id for a specific file, or purpose ('resume', 'jd') to read the latest file of that type.",
+        args_model=ReadFileArgs,
+        handler=_read_file_handler,
+        max_result_chars=200_000,
+        emoji="📂",
+    )
+)
 
-registry.register(ToolEntry(
-    name="write_file",
-    description="Export structured output as a downloadable file. Use for study plans, analysis reports, preparation guides, learning notes, etc. Supports Markdown and plain text.",
-    args_model=WriteFileArgs,
-    handler=_write_file_handler,
-    max_result_chars=2000,
-    emoji="💾",
-))
+registry.register(
+    ToolEntry(
+        name="write_file",
+        description="Export structured output as a downloadable file. Use for study plans, analysis reports, preparation guides, learning notes, etc. Supports Markdown and plain text.",
+        args_model=WriteFileArgs,
+        handler=_write_file_handler,
+        max_result_chars=2000,
+        emoji="💾",
+    )
+)

@@ -11,6 +11,22 @@ import asyncio
 import pytest
 
 
+def _stub_empty_tool_catalog(monkeypatch):
+    from types import SimpleNamespace
+
+    async def create(*_args, **_kwargs):
+        return SimpleNamespace(
+            user_pk=1,
+            format_prompt=lambda: "",
+            get_openai_schemas=lambda: [],
+        )
+
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.TurnToolCatalog.create",
+        create,
+    )
+
+
 def test_graceful_fallback_uses_accumulated_blocks():
     """When the agent loop crashes mid-turn, the fallback message
     MUST mention which tools ran and surface any LLM-emitted reasoning
@@ -20,8 +36,14 @@ def test_graceful_fallback_uses_accumulated_blocks():
     blocks = [
         {"type": "text", "text": "好的，我来帮你找 Agent 相关的工作。"},
         {"type": "tool_use", "name": "search_jobs", "id": "x", "input": {}},
-        {"type": "tool_result", "tool_use_id": "x", "is_error": False,
-         "summary": "返回 0 条结果", "content": "{}", "latency_ms": 1300},
+        {
+            "type": "tool_result",
+            "tool_use_id": "x",
+            "is_error": False,
+            "summary": "返回 0 条结果",
+            "content": "{}",
+            "latency_ms": 1300,
+        },
     ]
     msg = _build_graceful_fallback(blocks, error_message="rate_limit_exceeded")
 
@@ -86,11 +108,15 @@ def test_reasoning_content_roundtrips_into_next_assistant_message(monkeypatch):
         # Step 2: visible text
         yield _FakeChunk(content="好的，我先查一下。")
         # Step 3: tool call
-        yield _FakeChunk(tool_call=SimpleNamespace(
-            index=0,
-            id="call_x",
-            function=SimpleNamespace(name="search_jobs", arguments='{"keywords":"AI"}'),
-        ))
+        yield _FakeChunk(
+            tool_call=SimpleNamespace(
+                index=0,
+                id="call_x",
+                function=SimpleNamespace(
+                    name="search_jobs", arguments='{"keywords":"AI"}'
+                ),
+            )
+        )
         # Usage (terminator)
         yield _FakeChunk(usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5))
 
@@ -101,7 +127,10 @@ def test_reasoning_content_roundtrips_into_next_assistant_message(monkeypatch):
 
     async def drain():
         async for _ in strategy._consume_stream(
-            fake_stream(), budget, tool_calls_acc, reasoning_acc,
+            fake_stream(),
+            budget,
+            tool_calls_acc,
+            reasoning_acc,
         ):
             pass
 
@@ -149,7 +178,9 @@ def test_agent_system_block_keeps_manifest_before_grounding_for_prompt_cache():
     assert system_block.index("Available tools:") < system_block.index("[Memory]")
     # Stable prefix (summary, recent turns) precedes the per-turn grounding.
     assert system_block.index("[Context Summary]") < system_block.index("[Memory]")
-    assert system_block.index("[Recent Turns]") < system_block.index("[Retrieved Context]")
+    assert system_block.index("[Recent Turns]") < system_block.index(
+        "[Retrieved Context]"
+    )
     # The query is rendered as the user message, not wedged in the system block.
     assert "the user query" not in system_block
 
@@ -160,15 +191,30 @@ def test_reconstruct_history_messages_rebuilds_tool_roundtrips():
     from app.conversation.agent_strategy import _reconstruct_history_messages
 
     turns = [
-        {"role": "User", "content": "find redis stuff",
-         "blocks": [{"type": "text", "text": "find redis stuff"}]},
-        {"role": "Agent", "content": "Here's what I found.", "blocks": [
-            {"type": "text", "text": "Let me search."},
-            {"type": "tool_use", "id": "tc1", "name": "search_knowledge",
-             "input": {"query": "redis"}},
-            {"type": "tool_result", "tool_use_id": "tc1", "content": "redis docs ..."},
-            {"type": "text", "text": "Here's what I found."},
-        ]},
+        {
+            "role": "User",
+            "content": "find redis stuff",
+            "blocks": [{"type": "text", "text": "find redis stuff"}],
+        },
+        {
+            "role": "Agent",
+            "content": "Here's what I found.",
+            "blocks": [
+                {"type": "text", "text": "Let me search."},
+                {
+                    "type": "tool_use",
+                    "id": "tc1",
+                    "name": "search_knowledge",
+                    "input": {"query": "redis"},
+                },
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "tc1",
+                    "content": "redis docs ...",
+                },
+                {"type": "text", "text": "Here's what I found."},
+            ],
+        },
     ]
 
     msgs = _reconstruct_history_messages(turns)
@@ -179,7 +225,11 @@ def test_reconstruct_history_messages_rebuilds_tool_roundtrips():
     assert asst["tool_calls"][0]["id"] == "tc1"
     assert asst["tool_calls"][0]["function"]["name"] == "search_knowledge"
     assert "redis" in asst["tool_calls"][0]["function"]["arguments"]
-    assert msgs[2] == {"role": "tool", "tool_call_id": "tc1", "content": "redis docs ..."}
+    assert msgs[2] == {
+        "role": "tool",
+        "tool_call_id": "tc1",
+        "content": "redis docs ...",
+    }
 
 
 def test_reconstruct_history_messages_legacy_text_only():
@@ -187,8 +237,11 @@ def test_reconstruct_history_messages_legacy_text_only():
     from app.conversation.agent_strategy import _reconstruct_history_messages
 
     turns = [
-        {"role": "Agent", "content": "plain answer",
-         "blocks": [{"type": "text", "text": "plain answer"}]},
+        {
+            "role": "Agent",
+            "content": "plain answer",
+            "blocks": [{"type": "text", "text": "plain answer"}],
+        },
     ]
     msgs = _reconstruct_history_messages(turns)
     assert msgs == [{"role": "assistant", "content": "plain answer"}]
@@ -230,8 +283,10 @@ def test_tool_call_id_propagates_from_strategy_to_sse_events(monkeypatch):
 
     strategy = AgentLoopStrategy()
     ctx = StrategyContext(
-        user_id="alice", session_id="s1",
-        user_message="test", assembled=None,
+        user_id="alice",
+        session_id="s1",
+        user_message="test",
+        assembled=None,
     )
     budget = AgentBudget(started_at=0.0)
     budget.consume_step()
@@ -246,7 +301,9 @@ def test_tool_call_id_propagates_from_strategy_to_sse_events(monkeypatch):
 
     async def drain():
         async for ev in strategy._execute_tools(
-            ctx=ctx, messages=messages, blocks=blocks,
+            ctx=ctx,
+            messages=messages,
+            blocks=blocks,
             tool_calls_acc=tool_calls_acc,
             assistant_content="",
             reasoning_content="",
@@ -325,8 +382,10 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
     # Build the minimum input set for _execute_tools.
     strategy = AgentLoopStrategy()
     ctx = StrategyContext(
-        user_id="alice", session_id="s1",
-        user_message="test", assembled=None,
+        user_id="alice",
+        session_id="s1",
+        user_message="test",
+        assembled=None,
     )
     budget = AgentBudget(started_at=0.0)
     budget.consume_step()  # so steps > 0 like the real loop
@@ -342,7 +401,9 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
     # ── Branch 1: non-empty reasoning_content → key MUST be present ──
     async def run_with_reasoning():
         async for _ in strategy._execute_tools(
-            ctx=ctx, messages=messages, blocks=blocks,
+            ctx=ctx,
+            messages=messages,
+            blocks=blocks,
             tool_calls_acc=tool_calls_acc,
             assistant_content="visible text from LLM",
             reasoning_content="hidden thinking trace — this MUST round-trip back",
@@ -377,7 +438,9 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
 
     async def run_without_reasoning():
         async for _ in strategy._execute_tools(
-            ctx=ctx, messages=messages2, blocks=[],
+            ctx=ctx,
+            messages=messages2,
+            blocks=[],
             tool_calls_acc=tool_calls_acc2,
             assistant_content="visible text",
             reasoning_content="",  # plain model, no thinking trace
@@ -483,6 +546,7 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
     # Stub OpenAI client + profile so we don't need a real LLM.
     class _StubProfile:
         model = "stub"
+
     monkeypatch.setattr(
         "app.conversation.agent_strategy.build_async_openai_client_for_role",
         lambda role, user_id=None: (object(), _StubProfile()),
@@ -493,9 +557,16 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
         def __init__(self, profile=None, user_id=None):
             self.profile = profile
             self.last_summary = None
-        async def compress(self, messages): return messages, False
-        def reset_circuit_breaker(self): pass
-        async def on_context_too_long(self, messages): return messages, False
+
+        async def compress(self, messages):
+            return messages, False
+
+        def reset_circuit_breaker(self):
+            pass
+
+        async def on_context_too_long(self, messages):
+            return messages, False
+
     monkeypatch.setattr(
         "app.conversation.agent_strategy.QueryLoopCompactor",
         _StubCompactor,
@@ -506,16 +577,19 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
         "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
         lambda sid, uid: True,
     )
+    _stub_empty_tool_catalog(monkeypatch)
 
     # Make the inner LLM-stream call blow up — this is the crash we're
     # asserting routes through the fallback.
     async def boom(*args, **kwargs):
         raise RuntimeError("simulated_llm_failure")
+
     monkeypatch.setattr(AgentLoopStrategy, "_call_llm_stream", boom)
 
     strategy = AgentLoopStrategy()
     ctx = StrategyContext(
-        user_id="alice", session_id="s1",
+        user_id="alice",
+        session_id="s1",
         user_message="任何输入都会触发 boom",
         assembled=None,
     )
@@ -554,6 +628,7 @@ def test_strategy_crash_yields_humanized_error_event(monkeypatch):
 
     class _StubProfile:
         model = "stub"
+
     monkeypatch.setattr(
         "app.conversation.agent_strategy.build_async_openai_client_for_role",
         lambda role, user_id=None: (object(), _StubProfile()),
@@ -563,9 +638,16 @@ def test_strategy_crash_yields_humanized_error_event(monkeypatch):
         def __init__(self, profile=None, user_id=None):
             self.profile = profile
             self.last_summary = None
-        async def compress(self, messages): return messages, False
-        def reset_circuit_breaker(self): pass
-        async def on_context_too_long(self, messages): return messages, False
+
+        async def compress(self, messages):
+            return messages, False
+
+        def reset_circuit_breaker(self):
+            pass
+
+        async def on_context_too_long(self, messages):
+            return messages, False
+
     monkeypatch.setattr(
         "app.conversation.agent_strategy.QueryLoopCompactor",
         _StubCompactor,
@@ -574,19 +656,24 @@ def test_strategy_crash_yields_humanized_error_event(monkeypatch):
         "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
         lambda sid, uid: True,
     )
+    _stub_empty_tool_catalog(monkeypatch)
 
     # DeepSeek-style 402 insufficient-balance error on the first LLM call.
     class _Boom402(Exception):
         status_code = 402
+
         def __str__(self):
             return "Error code: 402 - Insufficient account balance"
+
     async def boom(*args, **kwargs):
         raise _Boom402()
+
     monkeypatch.setattr(AgentLoopStrategy, "_call_llm_stream", boom)
 
     strategy = AgentLoopStrategy()
     ctx = StrategyContext(
-        user_id="alice", session_id="s1",
+        user_id="alice",
+        session_id="s1",
         user_message="任何输入都会触发 402",
         assembled=None,
     )
@@ -635,13 +722,18 @@ class TestToolMetrics:
         )
 
         from app.agent_runtime.react_agent import AgentBudget
-        from app.conversation.agent_strategy import AgentLoopStrategy, _ToolCallAccumulator
+        from app.conversation.agent_strategy import (
+            AgentLoopStrategy,
+            _ToolCallAccumulator,
+        )
         from app.conversation.strategy import StrategyContext
 
         strategy = AgentLoopStrategy()
         ctx = StrategyContext(
-            user_id="alice", session_id="s1",
-            user_message="test", assembled=None,
+            user_id="alice",
+            session_id="s1",
+            user_message="test",
+            assembled=None,
         )
         budget = AgentBudget(started_at=0.0)
         budget.consume_step()
@@ -656,11 +748,16 @@ class TestToolMetrics:
         target_logger.addHandler(handler)
         try:
             async for _ in strategy._execute_tools(
-                ctx=ctx, messages=[], blocks=[],
+                ctx=ctx,
+                messages=[],
+                blocks=[],
                 tool_calls_acc=[
-                    _ToolCallAccumulator(id="call_1", name="recall_memory", arguments="{}"),
+                    _ToolCallAccumulator(
+                        id="call_1", name="recall_memory", arguments="{}"
+                    ),
                 ],
-                assistant_content="", reasoning_content="",
+                assistant_content="",
+                reasoning_content="",
                 budget=budget,
             ):
                 pass

@@ -5,6 +5,7 @@ Business logic lives in ``app.services.interview`` (analysis_intake for
 the /analyze flow, record_admin for owned-record maintenance,
 interview_record_service for record persistence).
 """
+
 import asyncio
 import json
 from typing import List, Optional
@@ -26,7 +27,9 @@ from app.schemas.interview import (
     QAEditRequest,
     SaveQARequest,
 )
-from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
+from app.services.analytics.diagnostics_report_service import (
+    generate_comprehensive_report,
+)
 from app.services.interview import analysis_intake, record_admin
 from app.services.interview.interview_record_service import (
     STATUS_ANALYZING,
@@ -102,7 +105,9 @@ async def analyze_interview_endpoint(
         if upload is None:
             raise HTTPException(status_code=404, detail="Audio upload not found")
         if upload.upload_status == UPLOAD_STATUS_CONSUMED:
-            raise HTTPException(status_code=409, detail="Audio upload has already been consumed")
+            raise HTTPException(
+                status_code=409, detail="Audio upload has already been consumed"
+            )
         # Confirm-on-consume (UP-1): verification (exists / size cap / magic)
         # can't be skipped by never calling /confirm.
         upload = require_uploaded(db, upload, "音频文件")
@@ -171,7 +176,9 @@ async def reanalyze_interview_record(
         raise HTTPException(status_code=404, detail="Interview record not found")
     try:
         task = await asyncio.to_thread(
-            lambda: record_admin.reanalyze_record(db, record, drop_qa=from_stage == "extract"),
+            lambda: record_admin.reanalyze_record(
+                db, record, drop_qa=from_stage == "extract"
+            ),
         )
     except record_admin.ReanalyzeNotAllowed as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -206,7 +213,9 @@ async def get_analytics_report(
     try:
         return await generate_comprehensive_report(limit, user_id=current_user.username)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"Failed to generate report: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Failed to generate report: {exc}"
+        ) from exc
 
 
 # ── InterviewRecord endpoints ─────────────────────────────────────────
@@ -219,7 +228,9 @@ def list_interview_records(
     limit: int = Query(20, ge=1, le=100),
 ):
     records = interview_record_service.list_by_user(
-        current_user.username, offset=offset, limit=limit,
+        current_user.username,
+        offset=offset,
+        limit=limit,
     )
     return [
         InterviewRecordListItem(
@@ -237,6 +248,7 @@ def list_interview_records(
 @router.get("/interview-records/{record_id}")
 def get_interview_record(
     record_id: str,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     record = interview_record_service.get(record_id, current_user.username)
@@ -271,7 +283,9 @@ def get_interview_record(
         "error_message": record.error_message,
         "created_at": record.created_at.isoformat() if record.created_at else "",
         "updated_at": record.updated_at.isoformat() if record.updated_at else "",
-        "completed_at": record.completed_at.isoformat() if record.completed_at else None,
+        "completed_at": record.completed_at.isoformat()
+        if record.completed_at
+        else None,
     }
 
 
@@ -291,7 +305,12 @@ def _serialize_qa_rows(db: Session, qa_rows: list[InterviewQA]) -> list[dict]:
     from app.services.uploads.file_asset_service import presigned_get_urls
 
     urls = presigned_get_urls(
-        db, [qa.answer_audio_file_asset_id for qa in qa_rows if qa.answer_audio_file_asset_id],
+        db,
+        [
+            qa.answer_audio_file_asset_id
+            for qa in qa_rows
+            if qa.answer_audio_file_asset_id
+        ],
     )
     return [_serialize_qa(qa, audio_urls=urls) for qa in qa_rows]
 
@@ -335,9 +354,13 @@ def get_interview_record_summary(
     current_user: User = Depends(get_current_user),
 ):
     """Short analysis summary for context injection (slot 2)."""
-    summary = interview_record_service.get_analysis_summary(record_id, current_user.username)
+    summary = interview_record_service.get_analysis_summary(
+        record_id, current_user.username
+    )
     if not summary:
-        raise HTTPException(status_code=404, detail="Interview record or analysis not found")
+        raise HTTPException(
+            status_code=404, detail="Interview record or analysis not found"
+        )
     return {"summary": summary}
 
 
@@ -352,11 +375,19 @@ def update_interview_record(
     if record is None:
         raise HTTPException(status_code=404, detail="Interview record not found")
     changed = record_admin.update_record_fields(
-        db, record, title=payload.title, tag=payload.tag,
+        db,
+        record,
+        title=payload.title,
+        tag=payload.tag,
     )
     if not changed:
         raise HTTPException(status_code=400, detail="No field to update")
-    return {"status": "success", "id": record.id, "title": record.title, "tag": record.tag}
+    return {
+        "status": "success",
+        "id": record.id,
+        "title": record.title,
+        "tag": record.tag,
+    }
 
 
 @router.delete("/interview-records/{record_id}")
@@ -380,13 +411,17 @@ def delete_interview_record(
 
     try:
         stats = record_admin.delete_record_cascade(
-            db, record, cascade_knowledge=cascade_knowledge,
+            db,
+            record,
+            cascade_knowledge=cascade_knowledge,
         )
         return {"status": "success", "id": record_id, **stats}
     except Exception as exc:  # noqa: BLE001
         logging.getLogger(__name__).exception(
             "delete_interview_record failed for record_id=%s user=%s: %s",
-            record_id, current_user.username, exc,
+            record_id,
+            current_user.username,
+            exc,
         )
         raise HTTPException(
             status_code=500,
@@ -404,8 +439,10 @@ def edit_interview_qa(
 ):
     """Edit a single InterviewQA row by id."""
     qa = record_admin.get_owned_qa(
-        db, user_pk=resolve_user_pk(db, current_user.username),
-        record_id=record_id, qa_id=qa_id,
+        db,
+        user_pk=resolve_user_pk(db, current_user.username),
+        record_id=record_id,
+        qa_id=qa_id,
     )
     if qa is None:
         raise HTTPException(status_code=404, detail="QA row not found")
@@ -441,11 +478,15 @@ async def save_qa_to_knowledge_endpoint(
     question + improved_answer, indexes it, and backfills ``saved_document_id``.
     """
     user_pk = resolve_user_pk(db, current_user.username)
-    qa = record_admin.get_owned_qa(db, user_pk=user_pk, record_id=record_id, qa_id=qa_id)
+    qa = record_admin.get_owned_qa(
+        db, user_pk=user_pk, record_id=record_id, qa_id=qa_id
+    )
     if qa is None:
         raise HTTPException(status_code=404, detail="QA row not found")
     if not (qa.improved_answer or "").strip():
-        raise HTTPException(status_code=400, detail="该题暂无改进回答，无法保存到知识库")
+        raise HTTPException(
+            status_code=400, detail="该题暂无改进回答，无法保存到知识库"
+        )
     record = record_admin.get_owned_record(db, record_id, current_user.username)
     if record is None:
         raise HTTPException(status_code=404, detail="Interview record not found")
@@ -453,15 +494,21 @@ async def save_qa_to_knowledge_endpoint(
         DEFAULT_CATEGORY,
         save_qa_to_knowledge,
     )
+
     try:
         doc = await save_qa_to_knowledge(
-            db, user_pk=user_pk, qa=qa, record=record,
+            db,
+            user_pk=user_pk,
+            qa=qa,
+            record=record,
             category=(body.category or "").strip() or DEFAULT_CATEGORY,
         )
     except Exception as exc:  # noqa: BLE001
         from app.core.error_messages import humanize_error
+
         raise HTTPException(
-            status_code=500, detail=f"保存到知识库失败：{humanize_error(exc)}",
+            status_code=500,
+            detail=f"保存到知识库失败：{humanize_error(exc)}",
         ) from exc
     return {
         "status": "success",
@@ -479,10 +526,13 @@ def unsave_qa_from_knowledge_endpoint(
 ):
     """Remove the knowledge document previously saved from this QA."""
     user_pk = resolve_user_pk(db, current_user.username)
-    qa = record_admin.get_owned_qa(db, user_pk=user_pk, record_id=record_id, qa_id=qa_id)
+    qa = record_admin.get_owned_qa(
+        db, user_pk=user_pk, record_id=record_id, qa_id=qa_id
+    )
     if qa is None:
         raise HTTPException(status_code=404, detail="QA row not found")
     from app.services.knowledge.qa_publish_service import unsave_qa_from_knowledge
+
     removed = unsave_qa_from_knowledge(db, user_pk=user_pk, qa=qa)
     return {"status": "success", "removed": removed}
 
@@ -529,7 +579,9 @@ async def interview_record_events_stream(
     the top does one short read; the generator opens its own sessions.
     """
     if not await asyncio.to_thread(
-        record_admin.record_exists_for_user, record_id, current_user.username,
+        record_admin.record_exists_for_user,
+        record_id,
+        current_user.username,
     ):
         raise HTTPException(status_code=404, detail="Interview record not found")
 
@@ -545,7 +597,9 @@ async def interview_record_events_stream(
         stage_entered_tick = 0
         try:
             for tick in range(MAX_TICKS):
-                snap = await asyncio.to_thread(record_admin.poll_record_snapshot, record_id)
+                snap = await asyncio.to_thread(
+                    record_admin.poll_record_snapshot, record_id
+                )
                 if snap is None:
                     yield f"data: {json.dumps({'type': 'error', 'message': 'record disappeared'})}\n\n"
                     return
@@ -565,53 +619,71 @@ async def interview_record_events_stream(
                     else:
                         # No sub-progress signal — slow creep, honest cap.
                         ticks_in_stage = tick - stage_entered_tick
-                        percent = min(hi - 1, lo + ticks_in_stage // _CREEP_TICKS_PER_PERCENT)
+                        percent = min(
+                            hi - 1, lo + ticks_in_stage // _CREEP_TICKS_PER_PERCENT
+                        )
                     # Monotonic guard: interpolation can start below where
                     # creep already got to (qa_total lands mid-stage) and a
                     # retry resets the counter — never move the bar backwards.
                     percent = max(percent, last_percent)
                     last_percent = percent
-                    yield "data: " + json.dumps(
-                        {
-                            "type": "progress",
-                            "status": status,
-                            "percent": percent,
-                            "analyzed_qa_count": snap["analyzed_qa_count"],
-                            "qa_total": snap.get("qa_total") or 0,
-                        },
-                        ensure_ascii=False,
-                    ) + "\n\n"
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "type": "progress",
+                                "status": status,
+                                "percent": percent,
+                                "analyzed_qa_count": snap["analyzed_qa_count"],
+                                "qa_total": snap.get("qa_total") or 0,
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    )
 
                 if status in _TERMINAL_DONE:
                     overall = {}
                     if snap["analysis_json"]:
                         try:
-                            overall = (json.loads(snap["analysis_json"]) or {}).get("overall", {})
+                            overall = (json.loads(snap["analysis_json"]) or {}).get(
+                                "overall", {}
+                            )
                         except json.JSONDecodeError:
                             overall = {}
-                    yield "data: " + json.dumps(
-                        {
-                            "type": "done",
-                            "record_id": snap["id"],
-                            "status": status,
-                            "percent": 100,
-                            "analysis": {
-                                "score": overall.get("score"),
-                                "summary": overall.get("summary") or overall.get("feedback") or "",
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "type": "done",
+                                "record_id": snap["id"],
+                                "status": status,
+                                "percent": 100,
+                                "analysis": {
+                                    "score": overall.get("score"),
+                                    "summary": overall.get("summary")
+                                    or overall.get("feedback")
+                                    or "",
+                                },
                             },
-                        },
-                        ensure_ascii=False,
-                    ) + "\n\n"
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    )
                     return
                 if status in _TERMINAL_FAILED:
-                    yield "data: " + json.dumps(
-                        {
-                            "type": "error",
-                            "status": status,
-                            "message": snap["error_message"] or "分析失败",
-                        },
-                        ensure_ascii=False,
-                    ) + "\n\n"
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "type": "error",
+                                "status": status,
+                                "message": snap["error_message"] or "分析失败",
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    )
                     return
                 if band is None:
                     # Non-terminal but unbanded — e.g. a failed finish
@@ -619,10 +691,18 @@ async def interview_record_events_stream(
                     # while we were streaming. There is no run to watch any
                     # more; end the stream instead of polling a dead record
                     # for the remaining 30 minutes.
-                    yield "data: " + json.dumps(
-                        {"type": "error", "status": status, "message": "分析已中止"},
-                        ensure_ascii=False,
-                    ) + "\n\n"
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "type": "error",
+                                "status": status,
+                                "message": "分析已中止",
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    )
                     return
                 await asyncio.sleep(POLL_INTERVAL)
             yield f"data: {json.dumps({'type': 'error', 'message': 'timeout'})}\n\n"

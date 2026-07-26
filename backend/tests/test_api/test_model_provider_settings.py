@@ -11,6 +11,7 @@ Security-critical assertions:
   - extra_headers_json schema + reserved-name blocklist (Authorization etc.)
   - 4xx returns instead of 500 on bad input
 """
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -44,7 +45,9 @@ def client():
 def test_list_providers_returns_every_provider(client, monkeypatch):
     """Frontend renders both enabled + opt-in cards from this one call."""
     # Stub the resolver to avoid hitting the real DB.
-    from app.services.auth.user_provider_settings_service import ResolvedProviderSettings
+    from app.services.auth.user_provider_settings_service import (
+        ResolvedProviderSettings,
+    )
 
     def fake_resolve_all(user_id, **_kw):
         return [
@@ -63,6 +66,7 @@ def test_list_providers_returns_every_provider(client, monkeypatch):
             )
             for pid, d in PROVIDERS.items()
         ]
+
     monkeypatch.setattr(
         "app.services.auth.user_provider_settings_service.resolve_all_provider_settings",
         fake_resolve_all,
@@ -88,7 +92,9 @@ def test_get_single_provider_404_when_unknown(client):
 
 
 def test_get_single_provider_returns_shape(client, monkeypatch):
-    from app.services.auth.user_provider_settings_service import ResolvedProviderSettings
+    from app.services.auth.user_provider_settings_service import (
+        ResolvedProviderSettings,
+    )
 
     def fake_resolve(user_id, provider, **_kw):
         if provider not in PROVIDERS:
@@ -107,6 +113,7 @@ def test_get_single_provider_returns_shape(client, monkeypatch):
             api_key_env=d.api_key_env,
             has_user_api_key=False,
         )
+
     monkeypatch.setattr(
         "app.services.auth.user_provider_settings_service.resolve_provider_settings",
         fake_resolve,
@@ -134,8 +141,6 @@ def test_patch_rejects_http_api_base(client):
 
 def test_patch_rejects_private_api_base(client):
     """SSRF guard: a host resolving to RFC1918 must be refused."""
-    import socket
-
     fake_dns = [(0, 0, 0, "", ("10.0.0.5", 0))]
     with patch("app.core.ssrf.socket.getaddrinfo", return_value=fake_dns):
         resp = client.patch(
@@ -169,7 +174,7 @@ def test_patch_rejects_extra_headers_reserved_name(client):
 
 
 def test_patch_rejects_extra_headers_too_many(client):
-    big = '{' + ",".join(f'"H{i}":"v"' for i in range(11)) + '}'
+    big = "{" + ",".join(f'"H{i}":"v"' for i in range(11)) + "}"
     resp = client.patch(
         "/api/v1/models/providers/openai",
         json={"extra_headers_json": big},
@@ -204,6 +209,18 @@ def test_patch_rejects_organization_with_control_chars(client):
     assert "control characters" in resp.json()["detail"][0]["msg"]
 
 
+def test_cloud_rejects_provider_connection_override(client, monkeypatch):
+    monkeypatch.setattr("app.core.config.settings.APP_EDITION", "cloud")
+    fake_dns = [(0, 0, 0, "", ("8.8.8.8", 0))]
+    with patch("app.core.ssrf.socket.getaddrinfo", return_value=fake_dns):
+        resp = client.patch(
+            "/api/v1/models/providers/openai",
+            json={"api_base_override": "https://gateway.example.com/v1"},
+        )
+    assert resp.status_code == 400
+    assert "official provider endpoints" in resp.json()["detail"]
+
+
 def test_patch_returns_404_on_unknown_provider(client, monkeypatch):
     """Pydantic body accepts the JSON, but the service rejects unknown provider."""
     fake_dns = [(0, 0, 0, "", ("8.8.8.8", 0))]
@@ -217,9 +234,12 @@ def test_patch_returns_404_on_unknown_provider(client, monkeypatch):
 
 def test_patch_happy_path_saves_and_invalidates(client, monkeypatch):
     """Valid override persists; LLM client cache + 60s wrapper get cleared."""
-    from app.services.auth.user_provider_settings_service import ResolvedProviderSettings
+    from app.services.auth.user_provider_settings_service import (
+        ResolvedProviderSettings,
+    )
 
     saved = {}
+
     def fake_upsert(user_id, provider, patch_obj, **_kw):
         saved["user_id"] = user_id
         saved["provider"] = provider
@@ -227,15 +247,21 @@ def test_patch_happy_path_saves_and_invalidates(client, monkeypatch):
         saved["api_base"] = patch_obj.api_base_override
         d = PROVIDERS[provider]
         return ResolvedProviderSettings(
-            provider=provider, display_label=d.display_label,
-            icon_slug=d.icon_slug, enabled=True, has_user_row=True,
+            provider=provider,
+            display_label=d.display_label,
+            icon_slug=d.icon_slug,
+            enabled=True,
+            has_user_row=True,
             api_base=patch_obj.api_base_override or d.default_api_base,
             api_base_override=patch_obj.api_base_override,
-            organization_id=None, extra_headers_json=None,
-            api_key_env=d.api_key_env, has_user_api_key=False,
+            organization_id=None,
+            extra_headers_json=None,
+            api_key_env=d.api_key_env,
+            has_user_api_key=False,
         )
 
     clear_calls = {"n": 0, "provider": None}
+
     def fake_clear(provider):
         clear_calls["n"] += 1
         clear_calls["provider"] = provider
@@ -244,14 +270,18 @@ def test_patch_happy_path_saves_and_invalidates(client, monkeypatch):
         return None
 
     monkeypatch.setattr(
-        "app.services.auth.user_provider_settings_service.upsert_settings", fake_upsert,
+        "app.services.auth.user_provider_settings_service.upsert_settings",
+        fake_upsert,
     )
     monkeypatch.setattr(
-        "app.core.model_registry.clear_llm_cache_for_provider", fake_clear,
+        "app.core.llm_client_factory.clear_llm_cache_for_provider",
+        fake_clear,
     )
     fake_dns = [(0, 0, 0, "", ("8.8.8.8", 0))]
-    with patch("app.core.ssrf.socket.getaddrinfo", return_value=fake_dns), \
-         patch("app.core.cache.invalidate", side_effect=fake_invalidate):
+    with (
+        patch("app.core.ssrf.socket.getaddrinfo", return_value=fake_dns),
+        patch("app.core.cache.invalidate", side_effect=fake_invalidate),
+    ):
         resp = client.patch(
             "/api/v1/models/providers/openai",
             json={
@@ -262,34 +292,48 @@ def test_patch_happy_path_saves_and_invalidates(client, monkeypatch):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "saved"
-    assert body["provider"]["api_base_override"] == "https://my-enterprise.example.com/v1"
+    assert (
+        body["provider"]["api_base_override"] == "https://my-enterprise.example.com/v1"
+    )
     assert saved["api_base"] == "https://my-enterprise.example.com/v1"
     assert clear_calls["provider"] == "openai", "must clear cached LLM client"
 
 
 def test_patch_clear_via_empty_string(client, monkeypatch):
     """Sending ``api_base_override=""`` clears the override — not a validation error."""
-    from app.services.auth.user_provider_settings_service import ResolvedProviderSettings
+    from app.services.auth.user_provider_settings_service import (
+        ResolvedProviderSettings,
+    )
 
     captured = {}
+
     def fake_upsert(user_id, provider, patch_obj, **_kw):
         captured["api_base"] = patch_obj.api_base_override
         d = PROVIDERS[provider]
         return ResolvedProviderSettings(
-            provider=provider, display_label=d.display_label,
-            icon_slug=d.icon_slug, enabled=True, has_user_row=True,
-            api_base=d.default_api_base, api_base_override=None,
-            organization_id=None, extra_headers_json=None,
-            api_key_env=d.api_key_env, has_user_api_key=False,
+            provider=provider,
+            display_label=d.display_label,
+            icon_slug=d.icon_slug,
+            enabled=True,
+            has_user_row=True,
+            api_base=d.default_api_base,
+            api_base_override=None,
+            organization_id=None,
+            extra_headers_json=None,
+            api_key_env=d.api_key_env,
+            has_user_api_key=False,
         )
 
     async def fake_invalidate(*_a, **_kw):
         return None
 
     monkeypatch.setattr(
-        "app.services.auth.user_provider_settings_service.upsert_settings", fake_upsert,
+        "app.services.auth.user_provider_settings_service.upsert_settings",
+        fake_upsert,
     )
-    monkeypatch.setattr("app.core.model_registry.clear_llm_cache_for_provider", lambda *_: None)
+    monkeypatch.setattr(
+        "app.core.llm_client_factory.clear_llm_cache_for_provider", lambda *_: None
+    )
     with patch("app.core.cache.invalidate", side_effect=fake_invalidate):
         resp = client.patch(
             "/api/v1/models/providers/openai",
@@ -309,9 +353,10 @@ def test_delete_provider_settings_clears_cache(client, monkeypatch):
         lambda *_a, **_kw: True,
     )
     monkeypatch.setattr(
-        "app.core.model_registry.clear_llm_cache_for_provider",
+        "app.core.llm_client_factory.clear_llm_cache_for_provider",
         lambda *_: clear_calls.__setitem__("n", clear_calls["n"] + 1),
     )
+
     async def fake_invalidate(*_a, **_kw):
         return None
 
@@ -328,8 +373,10 @@ def test_delete_provider_settings_noop_when_no_row(client, monkeypatch):
         lambda *_a, **_kw: False,
     )
     monkeypatch.setattr(
-        "app.core.model_registry.clear_llm_cache_for_provider", lambda *_: None,
+        "app.core.llm_client_factory.clear_llm_cache_for_provider",
+        lambda *_: None,
     )
+
     async def fake_invalidate(*_a, **_kw):
         return None
 

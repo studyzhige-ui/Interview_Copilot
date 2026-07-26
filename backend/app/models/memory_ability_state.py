@@ -16,6 +16,7 @@ from) knowledge retrieval.
 ``user_id`` is the stable ``users.id`` (resolved from the runtime username via
 ``app.core.user_identity.resolve_user_pk``).
 """
+
 from __future__ import annotations
 
 import uuid
@@ -57,7 +58,9 @@ class MemoryAbilityState(Base):
         # only to live rows; archived rows keep the history and are excluded.
         Index(
             "uq_ability_state_active",
-            "user_id", "topic", "skill_type",
+            "user_id",
+            "topic",
+            "skill_type",
             unique=True,
             postgresql_where=text("archived_at IS NULL"),
             sqlite_where=text("archived_at IS NULL"),
@@ -94,7 +97,10 @@ class MemoryAbilityState(Base):
     last_evidence_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
     )
     # Set when the state is retired (superseded or no longer relevant); NULL =
     # active. Archiving (not hard delete) keeps the audit trail coherent.

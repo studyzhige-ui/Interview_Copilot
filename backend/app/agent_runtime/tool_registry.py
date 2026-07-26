@@ -14,7 +14,8 @@ Key differences from the old ``tools.py``:
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from types import MappingProxyType
+from typing import Any, Awaitable, Callable, Mapping
 
 from pydantic import BaseModel, ValidationError
 
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 # ── Context passed to every tool handler ─────────────────────────────────
 
+
 @dataclass
 class AgentToolContext:
     user_id: str
@@ -32,6 +34,7 @@ class AgentToolContext:
 
 
 # ── Tool Entry ───────────────────────────────────────────────────────────
+
 
 @dataclass
 class ToolEntry:
@@ -52,7 +55,64 @@ class ToolEntry:
     prompt: str = ""
 
 
+@dataclass(frozen=True)
+class ToolRegistryView:
+    """A turn-local immutable snapshot of available built-in entries."""
+
+    entries: Mapping[str, ToolEntry]
+
+    def get_openai_schemas(self, **_kwargs: Any) -> list[dict[str, Any]]:
+        return [
+            _pydantic_to_openai_schema(entry.name, entry.description, entry.args_model)
+            for entry in self.entries.values()
+        ]
+
+    def format_manifest(self, **_kwargs: Any) -> str:
+        manifest = []
+        for entry in self.entries.values():
+            schema = _pydantic_to_openai_schema(
+                entry.name,
+                entry.description,
+                entry.args_model,
+            )
+            manifest.append(
+                {
+                    "name": entry.name,
+                    "description": entry.description,
+                    "parameters": schema["function"]["parameters"],
+                }
+            )
+        return json.dumps(manifest, ensure_ascii=False, indent=2)
+
+    def format_tool_prompts(self, **_kwargs: Any) -> str:
+        sections = [
+            f"## {entry.name}\n{entry.prompt}"
+            for entry in self.entries.values()
+            if entry.prompt
+        ]
+        return "\n\n# Tool guidance\n\n" + "\n\n".join(sections) if sections else ""
+
+    async def dispatch(
+        self,
+        name: str,
+        raw_args: dict[str, Any],
+        ctx: AgentToolContext,
+    ) -> dict[str, Any]:
+        entry = self.entries.get(name)
+        if entry is None:
+            return {"error": "unknown_tool", "tool_name": name}
+        return await _dispatch_entry(entry, raw_args, ctx)
+
+    def __contains__(self, name: str) -> bool:
+        return name in self.entries
+
+    @property
+    def tool_names(self) -> list[str]:
+        return list(self.entries)
+
+
 # ── Schema generation (Pydantic → OpenAI function calling) ───────────────
+
 
 def _clean_schema(obj: Any) -> Any:
     """Recursively strip Pydantic-specific keys from a JSON Schema object.
@@ -73,7 +133,9 @@ def _clean_schema(obj: Any) -> Any:
     return obj
 
 
-def _pydantic_to_openai_schema(name: str, description: str, model: type[BaseModel]) -> dict[str, Any]:
+def _pydantic_to_openai_schema(
+    name: str, description: str, model: type[BaseModel]
+) -> dict[str, Any]:
     """Convert a Pydantic model to an OpenAI function-calling tool schema."""
     json_schema = model.model_json_schema()
 
@@ -107,6 +169,7 @@ def _pydantic_to_openai_schema(name: str, description: str, model: type[BaseMode
 
 
 # ── Registry ─────────────────────────────────────────────────────────────
+
 
 class ToolRegistry:
     """Process-level tool registration centre."""
@@ -145,7 +208,10 @@ class ToolRegistry:
         return self._entries.get(name)
 
     def _iter_available(
-        self, *, exclude: set[str] | None = None, user_id: str | None = None,
+        self,
+        *,
+        exclude: set[str] | None = None,
+        user_id: str | None = None,
     ) -> list[ToolEntry]:
         """Return entries passing check_fn and not in *exclude*.
 
@@ -189,7 +255,10 @@ class ToolRegistry:
         ]
 
     def format_manifest(
-        self, *, exclude: set[str] | None = None, user_id: str | None = None,
+        self,
+        *,
+        exclude: set[str] | None = None,
+        user_id: str | None = None,
     ) -> str:
         """Human-readable tool manifest for the system prompt.
 
@@ -200,13 +269,17 @@ class ToolRegistry:
         manifest = []
         for entry in self._iter_available(exclude=exclude, user_id=user_id):
             schema = _pydantic_to_openai_schema(
-                entry.name, entry.description, entry.args_model,
+                entry.name,
+                entry.description,
+                entry.args_model,
             )
-            manifest.append({
-                "name": entry.name,
-                "description": entry.description,
-                "parameters": schema["function"]["parameters"],
-            })
+            manifest.append(
+                {
+                    "name": entry.name,
+                    "description": entry.description,
+                    "parameters": schema["function"]["parameters"],
+                }
+            )
         return json.dumps(manifest, ensure_ascii=False, indent=2)
 
     def format_tool_prompts(self, *, exclude: set[str] | None = None) -> str:
@@ -239,24 +312,19 @@ class ToolRegistry:
         if entry is None:
             return {"error": "unknown_tool", "tool_name": name}
 
-        # Validate args
-        args_json = json.dumps(raw_args, ensure_ascii=False)
-        if len(args_json) > settings.AGENT_MAX_TOOL_ARG_CHARS:
-            return {"error": "tool_args_too_large", "tool_name": name}
+        return await _dispatch_entry(entry, raw_args, ctx)
 
-        try:
-            validated = entry.args_model.model_validate(raw_args)
-        except ValidationError as exc:
-            return {
-                "error": "tool_args_validation_failed",
-                "tool_name": name,
-                "details": exc.errors(),
-            }
-
-        # Execute
-        result = await entry.handler(validated, ctx)
-
-        return result
+    def snapshot(
+        self,
+        *,
+        exclude: set[str] | None = None,
+        user_id: str | None = None,
+    ) -> ToolRegistryView:
+        entries = {
+            entry.name: entry
+            for entry in self._iter_available(exclude=exclude, user_id=user_id)
+        }
+        return ToolRegistryView(MappingProxyType(entries))
 
     @property
     def tool_names(self) -> list[str]:
@@ -273,7 +341,27 @@ class ToolRegistry:
 registry = ToolRegistry()
 
 
+async def _dispatch_entry(
+    entry: ToolEntry,
+    raw_args: dict[str, Any],
+    ctx: AgentToolContext,
+) -> dict[str, Any]:
+    args_json = json.dumps(raw_args, ensure_ascii=False)
+    if len(args_json) > settings.AGENT_MAX_TOOL_ARG_CHARS:
+        return {"error": "tool_args_too_large", "tool_name": entry.name}
+    try:
+        validated = entry.args_model.model_validate(raw_args)
+    except ValidationError as exc:
+        return {
+            "error": "tool_args_validation_failed",
+            "tool_name": entry.name,
+            "details": exc.errors(),
+        }
+    return await entry.handler(validated, ctx)
+
+
 # ── Utility functions (carried over from old tools.py) ───────────────────
+
 
 def parse_tool_arguments(raw_arguments: str) -> dict[str, Any]:
     if not raw_arguments:

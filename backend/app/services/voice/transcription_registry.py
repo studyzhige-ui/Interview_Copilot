@@ -64,7 +64,9 @@ PROVIDERS: dict[str, TranscriptionProvider] = {
     ),
     "dashscope": TranscriptionProvider(
         kind="openai_compat",
-        api_base=os.getenv("DASHSCOPE_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        api_base=os.getenv(
+            "DASHSCOPE_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        ),
         api_key_env="DASHSCOPE_API_KEY",
         label="阿里通义",
         china_friendly=True,
@@ -83,7 +85,8 @@ def resolve_transcription() -> ResolvedTranscription:
     pid = (settings.TRANSCRIPTION_PROVIDER or "local_whisperx").strip().lower()
     if pid not in PROVIDERS:
         logger.warning(
-            "Unknown TRANSCRIPTION_PROVIDER=%r, falling back to 'local_whisperx'", pid,
+            "Unknown TRANSCRIPTION_PROVIDER=%r, falling back to 'local_whisperx'",
+            pid,
         )
         pid = "local_whisperx"
     model = (settings.TRANSCRIPTION_MODEL or "Systran/faster-whisper-large-v3").strip()
@@ -99,7 +102,8 @@ def list_providers() -> list[dict[str, Any]]:
             "china_friendly": p.china_friendly,
             "supports_word_timestamps": p.supports_word_timestamps,
             "api_key_env": p.api_key_env,
-            "ready": p.kind == "local_whisperx" or bool(os.getenv(p.api_key_env, "").strip()),
+            "ready": p.kind == "local_whisperx"
+            or bool(os.getenv(p.api_key_env, "").strip()),
         }
         for pid, p in PROVIDERS.items()
     ]
@@ -131,6 +135,7 @@ async def transcribe(file_path: str, language: Optional[str] = "zh") -> str:
 
     if p.kind == "local_whisperx":
         from app.services.voice.audio_transcription_service import _run_whisperx_sync
+
         # Forward the language hint to WhisperX. Forcing the language is
         # the single largest accuracy improvement on clean monolingual
         # audio because Whisper's auto-detect is noisy on short clips.
@@ -148,7 +153,8 @@ class LocalProviderOnly(RuntimeError):
 
 
 def _openai_compat_request_parts(
-    cfg: ResolvedTranscription, file_path: str,
+    cfg: ResolvedTranscription,
+    file_path: str,
 ) -> tuple[str, dict[str, str], dict[str, Any]]:
     """Shared request scaffolding for the OpenAI-compatible ASR calls:
     (url, headers, files). Raises RuntimeError when the provider's env key
@@ -257,13 +263,15 @@ async def _transcribe_openai_compat(
         flat = flat.strip()
         logger.info(
             "Hybrid mode: provider %s did not return word timestamps; "
-            "skipping local diarization.", cfg.provider_id,
+            "skipping local diarization.",
+            cfg.provider_id,
         )
         return f"**[Speaker 1]**: {flat}" if flat else ""
 
     from app.services.voice.audio_transcription_service import (
         align_remote_words_with_local_diarization,
     )
+
     return await asyncio.to_thread(
         align_remote_words_with_local_diarization,
         file_path,

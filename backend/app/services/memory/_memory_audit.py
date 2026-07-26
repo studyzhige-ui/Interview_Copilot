@@ -13,6 +13,7 @@ Adds ``already_applied`` so a retried extraction job can detect it has already
 applied (and audited) a given patch and skip both the re-apply and the
 duplicate audit row.
 """
+
 from __future__ import annotations
 
 import logging
@@ -63,7 +64,9 @@ def record(
 ) -> None:
     """Write one audit entry (see module docstring for the session contract)."""
     if change_type not in CHANGE_TYPES:
-        logger.warning("memory_audit: invalid change_type %r — skipping write", change_type)
+        logger.warning(
+            "memory_audit: invalid change_type %r — skipping write", change_type
+        )
         return
 
     row = MemoryAuditEntry(
@@ -99,7 +102,9 @@ def record(
             pass
         logger.warning(
             "memory_audit: write failed for user=%s change=%s: %s",
-            user_pk, change_type, exc,
+            user_pk,
+            change_type,
+            exc,
         )
     finally:
         own.close()

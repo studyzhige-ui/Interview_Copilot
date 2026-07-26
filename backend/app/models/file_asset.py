@@ -12,6 +12,7 @@ Keyed by the stable ``users.id`` (FK, ON DELETE CASCADE). Persistent business
 files only ever arrive via the presigned upload-url + confirm flow; there is
 no server-receives-bytes "direct upload" business path.
 """
+
 import uuid
 from datetime import datetime
 
@@ -60,7 +61,10 @@ class FileAsset(Base):
     # Raw-file lifecycle: pending_upload -> uploaded -> consumed, with
     # delete_pending / deleted / failed as terminal/cleanup states.
     upload_status = Column(
-        String, index=True, default="pending_upload", nullable=False,
+        String,
+        index=True,
+        default="pending_upload",
+        nullable=False,
     )
     # Confirm-time check: pending -> passed/failed (or skipped). ``passed``
     # means the object EXISTS and its size reconciles with what the client
@@ -71,6 +75,9 @@ class FileAsset(Base):
     validation_error = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
     )
     deleted_at = Column(DateTime, nullable=True)

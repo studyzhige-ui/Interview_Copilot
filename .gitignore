@@ -1,21 +1,17 @@
 # Environments
 .env
 .env.*
-!.env.example
-!.env.example.lite
+!.env.cloud.example
+!.env.community.example
 !.env.docker.example
 
 # User-local prompt scratchpad (not project content)
 docs/prompts/
 
-# Local RAG quality harness — uses a hand-curated 835-row golden dataset
-# scraped from copyrighted PDFs; kept off GitHub for that reason. The
-# harness itself runs locally via scripts/ + the bundled golden_dataset.jsonl.
-# The new evaluation/rag/ subsystem (Phase D) also stays local (code + datasets)
-# per user preference — eval is a local testing asset, not committed.
-# rag_eval_corpus/ holds the downloaded source docs (copyrighted PDFs/pages)
-# built by scripts/build_rag_corpus.py — same policy, local only.
-evaluation/
+# Evaluation code and docs are part of Community. The private golden dataset
+# and its source documents are not distributable; use the tracked example as
+# the schema/template for a project-owned dataset.
+evaluation/golden_dataset.jsonl
 rag_eval_corpus/
 .venv/
 env/

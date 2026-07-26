@@ -42,7 +42,10 @@ class InterviewRecord(Base):
     # caller's username via resolve_user_pk; the dreaming worker bridges this
     # back to the username for the memory dispatch (memory keys on username).
     user_id = Column(
-        Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False,
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
     )
     source = Column(String, nullable=False)  # "upload" | "mock"
 
@@ -63,20 +66,26 @@ class InterviewRecord(Base):
     # used as context; ``resume_source`` records where the resume came from.
     # History reads the *_snapshot fields below — never re-reads `resumes`, so
     # editing/deleting a personal resume can't rewrite a past interview.
-    resume_id = Column(String, ForeignKey("resumes.id", ondelete="SET NULL"), nullable=True)
-    resume_source = Column(String, nullable=True)  # personal_resume | context_upload | none
+    resume_id = Column(
+        String, ForeignKey("resumes.id", ondelete="SET NULL"), nullable=True
+    )
+    resume_source = Column(
+        String, nullable=True
+    )  # personal_resume | context_upload | none
     resume_title_snapshot = Column(String, nullable=True)
 
     # Snapshots (immutable; survive source file/resume deletion)
     resume_text_snapshot = Column(Text, nullable=True)
     jd_text_snapshot = Column(Text, nullable=True)
-    resume_structured_snapshot_json = Column(Text, nullable=True)  # ResumeEvidence w/ ref_ids
-    jd_structured_json = Column(Text, nullable=True)               # JDRequirements w/ ref_ids
+    resume_structured_snapshot_json = Column(
+        Text, nullable=True
+    )  # ResumeEvidence w/ ref_ids
+    jd_structured_json = Column(Text, nullable=True)  # JDRequirements w/ ref_ids
 
     # Current transcript reference — full text/segments live in the dedicated
     # interview_transcripts table (soft ref; the hard FK is on that table).
     transcript_id = Column(String, index=True, nullable=True)
-    interview_plan = Column(Text, nullable=True)            # generate_plan() output (mock only)
+    interview_plan = Column(Text, nullable=True)  # generate_plan() output (mock only)
 
     # Top-level analysis result (per-question rows in interview_qa)
     analysis_json = Column(Text, nullable=True)
@@ -98,7 +107,9 @@ class InterviewRecord(Base):
     error_message = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
     completed_at = Column(DateTime, nullable=True)
 
     # Dreaming cursor: when the dreaming worker last distilled this

@@ -1,4 +1,5 @@
 """Tests for the file-asset + outbox services (UPLOAD-FILE-ASSETS)."""
+
 from __future__ import annotations
 
 import json
@@ -32,7 +33,9 @@ def _stub_presign(monkeypatch):
         }
 
     monkeypatch.setattr(
-        file_asset_service, "generate_presigned_upload_url_for_key", _fake,
+        file_asset_service,
+        "generate_presigned_upload_url_for_key",
+        _fake,
     )
     return calls
 
@@ -46,10 +49,14 @@ def _stub_magic_gate(monkeypatch):
     from app.services.uploads import file_validation
 
     monkeypatch.setattr(
-        file_asset_service, "read_object_head", lambda uri, num_bytes=32: b"stub-head",
+        file_asset_service,
+        "read_object_head",
+        lambda uri, num_bytes=32: b"stub-head",
     )
     monkeypatch.setattr(
-        file_validation, "detect_head_format", lambda head, kind, ext="": "stub",
+        file_validation,
+        "detect_head_format",
+        lambda head, kind, ext="": "stub",
     )
 
 
@@ -58,7 +65,10 @@ def test_create_file_asset_resolves_user_and_returns_url(db_session):
     db_session.commit()
 
     asset, url_info = file_asset_service.create_file_asset(
-        db_session, user_id="alice", filename="cv.pdf", purpose="resume",
+        db_session,
+        user_id="alice",
+        filename="cv.pdf",
+        purpose="resume",
         size_bytes=100,
     )
     assert asset.id.startswith("fa_")
@@ -71,7 +81,10 @@ def test_create_file_asset_resolves_user_and_returns_url(db_session):
 def test_create_file_asset_unknown_user_raises(db_session):
     with pytest.raises(ValueError):
         file_asset_service.create_file_asset(
-            db_session, user_id="ghost", filename="x.pdf", purpose="resume",
+            db_session,
+            user_id="ghost",
+            filename="x.pdf",
+            purpose="resume",
         )
 
 
@@ -79,15 +92,21 @@ def test_confirm_passes_when_object_present(db_session, monkeypatch):
     _make_user(db_session)
     db_session.commit()
     asset, _ = file_asset_service.create_file_asset(
-        db_session, user_id="alice", filename="a.mp3", purpose="interview_audio",
+        db_session,
+        user_id="alice",
+        filename="a.mp3",
+        purpose="interview_audio",
         size_bytes=2048,
     )
     monkeypatch.setattr(
-        file_asset_service, "head_object",
+        file_asset_service,
+        "head_object",
         lambda uri: {"size_bytes": 2048, "content_type": "audio/mpeg"},
     )
     confirmed = file_asset_service.confirm_file_asset(
-        db_session, file_asset_id=asset.id, user_id="alice",
+        db_session,
+        file_asset_id=asset.id,
+        user_id="alice",
     )
     assert confirmed.upload_status == "uploaded"
     assert confirmed.validation_status == "passed"
@@ -97,18 +116,27 @@ def test_confirm_missing_object_fails_and_enqueues_cleanup(db_session, monkeypat
     _make_user(db_session)
     db_session.commit()
     asset, _ = file_asset_service.create_file_asset(
-        db_session, user_id="alice", filename="a.mp3", purpose="interview_audio",
+        db_session,
+        user_id="alice",
+        filename="a.mp3",
+        purpose="interview_audio",
     )
     monkeypatch.setattr(file_asset_service, "head_object", lambda uri: None)
     confirmed = file_asset_service.confirm_file_asset(
-        db_session, file_asset_id=asset.id, user_id="alice",
+        db_session,
+        file_asset_id=asset.id,
+        user_id="alice",
     )
     assert confirmed.upload_status == "failed"
     assert confirmed.validation_status == "failed"
     # A cleanup job was enqueued for the orphaned object.
-    job = db_session.query(OutboxJob).filter(
-        OutboxJob.job_type == "cleanup_failed_upload",
-    ).first()
+    job = (
+        db_session.query(OutboxJob)
+        .filter(
+            OutboxJob.job_type == "cleanup_failed_upload",
+        )
+        .first()
+    )
     assert job is not None and job.aggregate_id == asset.id
 
 
@@ -116,15 +144,21 @@ def test_confirm_size_mismatch_fails(db_session, monkeypatch):
     _make_user(db_session)
     db_session.commit()
     asset, _ = file_asset_service.create_file_asset(
-        db_session, user_id="alice", filename="a.pdf", purpose="resume",
+        db_session,
+        user_id="alice",
+        filename="a.pdf",
+        purpose="resume",
         size_bytes=100,
     )
     monkeypatch.setattr(
-        file_asset_service, "head_object",
+        file_asset_service,
+        "head_object",
         lambda uri: {"size_bytes": 999, "content_type": None},
     )
     confirmed = file_asset_service.confirm_file_asset(
-        db_session, file_asset_id=asset.id, user_id="alice",
+        db_session,
+        file_asset_id=asset.id,
+        user_id="alice",
     )
     assert confirmed.validation_status == "failed"
     assert "size mismatch" in confirmed.validation_error
@@ -135,15 +169,28 @@ def test_get_owned_file_asset_enforces_ownership(db_session):
     _make_user(db_session, "bob")
     db_session.commit()
     asset, _ = file_asset_service.create_file_asset(
-        db_session, user_id="alice", filename="a.pdf", purpose="resume",
+        db_session,
+        user_id="alice",
+        filename="a.pdf",
+        purpose="resume",
     )
-    assert file_asset_service.get_owned_file_asset(
-        db_session, file_asset_id=asset.id, user_id="alice",
-    ) is not None
+    assert (
+        file_asset_service.get_owned_file_asset(
+            db_session,
+            file_asset_id=asset.id,
+            user_id="alice",
+        )
+        is not None
+    )
     # Bob can't see alice's asset.
-    assert file_asset_service.get_owned_file_asset(
-        db_session, file_asset_id=asset.id, user_id="bob",
-    ) is None
+    assert (
+        file_asset_service.get_owned_file_asset(
+            db_session,
+            file_asset_id=asset.id,
+            user_id="bob",
+        )
+        is None
+    )
 
 
 # ── outbox ──────────────────────────────────────────────────────────────────
@@ -153,13 +200,19 @@ def test_enqueue_job_is_idempotent(db_session):
     user = _make_user(db_session)
     db_session.commit()
     j1 = outbox_service.enqueue_job(
-        db_session, user_pk=user.id, job_type="delete_object",
-        payload={"storage_uri": "s3://b/k"}, idempotency_key="k1",
+        db_session,
+        user_pk=user.id,
+        job_type="delete_object",
+        payload={"storage_uri": "s3://b/k"},
+        idempotency_key="k1",
     )
     db_session.commit()
     j2 = outbox_service.enqueue_job(
-        db_session, user_pk=user.id, job_type="delete_object",
-        payload={"storage_uri": "s3://b/k"}, idempotency_key="k1",
+        db_session,
+        user_pk=user.id,
+        job_type="delete_object",
+        payload={"storage_uri": "s3://b/k"},
+        idempotency_key="k1",
     )
     db_session.commit()
     assert j1.id == j2.id
@@ -170,15 +223,21 @@ def test_run_due_outbox_jobs_runs_handler(db_session, monkeypatch):
     user = _make_user(db_session)
     db_session.commit()
     outbox_service.enqueue_job(
-        db_session, user_pk=user.id, job_type="delete_object",
-        payload={"storage_uri": "local://tmp/x"}, idempotency_key="d1",
+        db_session,
+        user_pk=user.id,
+        job_type="delete_object",
+        payload={"storage_uri": "local://tmp/x"},
+        idempotency_key="d1",
     )
     db_session.commit()
 
     seen = {}
     monkeypatch.setitem(
-        outbox_service._HANDLERS, "delete_object",
-        lambda db, job: seen.update({"uri": json.loads(job.payload_json)["storage_uri"]}),
+        outbox_service._HANDLERS,
+        "delete_object",
+        lambda db, job: seen.update(
+            {"uri": json.loads(job.payload_json)["storage_uri"]}
+        ),
     )
     processed = outbox_service.run_due_outbox_jobs(db_session)
     assert processed == 1
@@ -191,8 +250,12 @@ def test_run_due_outbox_jobs_retries_on_failure(db_session, monkeypatch):
     user = _make_user(db_session)
     db_session.commit()
     outbox_service.enqueue_job(
-        db_session, user_pk=user.id, job_type="delete_object",
-        payload={}, idempotency_key="f1", max_attempts=3,
+        db_session,
+        user_pk=user.id,
+        job_type="delete_object",
+        payload={},
+        idempotency_key="f1",
+        max_attempts=3,
     )
     db_session.commit()
 
@@ -215,7 +278,10 @@ def test_create_file_asset_rejects_unknown_purpose(db_session):
     db_session.commit()
     with pytest.raises(file_asset_service.UnknownUploadPurpose):
         file_asset_service.create_file_asset(
-            db_session, user_id="alice", filename="x.bin", purpose="mystery",
+            db_session,
+            user_id="alice",
+            filename="x.bin",
+            purpose="mystery",
         )
 
 
@@ -224,7 +290,10 @@ def test_create_file_asset_rejects_oversized_declaration(db_session):
     db_session.commit()
     with pytest.raises(file_asset_service.UploadTooLarge):
         file_asset_service.create_file_asset(
-            db_session, user_id="alice", filename="cv.pdf", purpose="resume",
+            db_session,
+            user_id="alice",
+            filename="cv.pdf",
+            purpose="resume",
             size_bytes=21 * 1024 * 1024,  # registry cap: 20MB
         )
 
@@ -235,15 +304,21 @@ def test_confirm_rejects_actual_size_over_cap(db_session, monkeypatch):
     _make_user(db_session)
     db_session.commit()
     asset, _ = file_asset_service.create_file_asset(
-        db_session, user_id="alice", filename="cv.pdf", purpose="resume",
+        db_session,
+        user_id="alice",
+        filename="cv.pdf",
+        purpose="resume",
         size_bytes=None,  # nothing declared -> size-reconcile can't catch it
     )
     monkeypatch.setattr(
-        file_asset_service, "head_object",
+        file_asset_service,
+        "head_object",
         lambda uri: {"size_bytes": 21 * 1024 * 1024, "content_type": None},
     )
     confirmed = file_asset_service.confirm_file_asset(
-        db_session, file_asset_id=asset.id, user_id="alice",
+        db_session,
+        file_asset_id=asset.id,
+        user_id="alice",
     )
     assert confirmed.upload_status == "failed"
     assert "limit" in (confirmed.validation_error or "")
@@ -256,26 +331,38 @@ def test_confirm_rejects_wrong_magic(db_session, monkeypatch):
     _make_user(db_session)
     db_session.commit()
     asset, _ = file_asset_service.create_file_asset(
-        db_session, user_id="alice", filename="cv.pdf", purpose="resume",
+        db_session,
+        user_id="alice",
+        filename="cv.pdf",
+        purpose="resume",
         size_bytes=64,
     )
     monkeypatch.setattr(
-        file_asset_service, "head_object",
+        file_asset_service,
+        "head_object",
         lambda uri: {"size_bytes": 64, "content_type": "application/pdf"},
     )
     monkeypatch.setattr(
-        file_validation, "detect_head_format", lambda head, kind, ext="": None,
+        file_validation,
+        "detect_head_format",
+        lambda head, kind, ext="": None,
     )
     confirmed = file_asset_service.confirm_file_asset(
-        db_session, file_asset_id=asset.id, user_id="alice",
+        db_session,
+        file_asset_id=asset.id,
+        user_id="alice",
     )
     assert confirmed.upload_status == "failed"
     assert "magic" in (confirmed.validation_error or "")
     # Cleanup for the rejected object was queued.
-    job = db_session.query(OutboxJob).filter(
-        OutboxJob.job_type == "cleanup_failed_upload",
-        OutboxJob.aggregate_id == asset.id,
-    ).first()
+    job = (
+        db_session.query(OutboxJob)
+        .filter(
+            OutboxJob.job_type == "cleanup_failed_upload",
+            OutboxJob.aggregate_id == asset.id,
+        )
+        .first()
+    )
     assert job is not None
 
 
@@ -284,11 +371,15 @@ def test_ensure_uploaded_verifies_pending_asset(db_session, monkeypatch):
     _make_user(db_session)
     db_session.commit()
     asset, _ = file_asset_service.create_file_asset(
-        db_session, user_id="alice", filename="a.mp3", purpose="interview_audio",
+        db_session,
+        user_id="alice",
+        filename="a.mp3",
+        purpose="interview_audio",
         size_bytes=2048,
     )
     monkeypatch.setattr(
-        file_asset_service, "head_object",
+        file_asset_service,
+        "head_object",
         lambda uri: {"size_bytes": 2048, "content_type": "audio/mpeg"},
     )
     out = file_asset_service.ensure_uploaded(db_session, asset)
@@ -300,12 +391,16 @@ def test_ensure_uploaded_never_regresses_consumed(db_session, monkeypatch):
     _make_user(db_session)
     db_session.commit()
     asset, _ = file_asset_service.create_file_asset(
-        db_session, user_id="alice", filename="a.mp3", purpose="interview_audio",
+        db_session,
+        user_id="alice",
+        filename="a.mp3",
+        purpose="interview_audio",
     )
     asset.upload_status = "consumed"
     db_session.commit()
     monkeypatch.setattr(
-        file_asset_service, "head_object",
+        file_asset_service,
+        "head_object",
         lambda uri: (_ for _ in ()).throw(AssertionError("must not HEAD")),
     )
     out = file_asset_service.ensure_uploaded(db_session, asset)
@@ -318,15 +413,22 @@ def test_enqueue_asset_blob_delete_is_idempotent(db_session):
     _make_user(db_session)
     db_session.commit()
     asset, _ = file_asset_service.create_file_asset(
-        db_session, user_id="alice", filename="a.mp3", purpose="interview_audio",
+        db_session,
+        user_id="alice",
+        filename="a.mp3",
+        purpose="interview_audio",
     )
     file_asset_service.enqueue_asset_blob_delete(db_session, asset)
     file_asset_service.enqueue_asset_blob_delete(db_session, asset)
     db_session.commit()
-    jobs = db_session.query(OutboxJob).filter(
-        OutboxJob.job_type == "delete_object",
-        OutboxJob.aggregate_id == asset.id,
-    ).all()
+    jobs = (
+        db_session.query(OutboxJob)
+        .filter(
+            OutboxJob.job_type == "delete_object",
+            OutboxJob.aggregate_id == asset.id,
+        )
+        .all()
+    )
     assert len(jobs) == 1
     assert json.loads(jobs[0].payload_json)["storage_uri"] == asset.storage_uri
 
@@ -336,11 +438,17 @@ def test_presign_ttl_follows_purpose(db_session, _stub_presign):
     _make_user(db_session)
     db_session.commit()
     file_asset_service.create_file_asset(
-        db_session, user_id="alice", filename="a.mp3", purpose="interview_audio",
+        db_session,
+        user_id="alice",
+        filename="a.mp3",
+        purpose="interview_audio",
     )
     assert _stub_presign["expiration"] == 3600
     file_asset_service.create_file_asset(
-        db_session, user_id="alice", filename="cv.pdf", purpose="resume",
+        db_session,
+        user_id="alice",
+        filename="cv.pdf",
+        purpose="resume",
     )
     assert _stub_presign["expiration"] == 600
 
@@ -351,18 +459,26 @@ def test_transient_head_read_failure_keeps_asset_pending(db_session, monkeypatch
     _make_user(db_session)
     db_session.commit()
     asset, _ = file_asset_service.create_file_asset(
-        db_session, user_id="alice", filename="a.mp3", purpose="interview_audio",
+        db_session,
+        user_id="alice",
+        filename="a.mp3",
+        purpose="interview_audio",
         size_bytes=2048,
     )
     monkeypatch.setattr(
-        file_asset_service, "head_object",
+        file_asset_service,
+        "head_object",
         lambda uri: {"size_bytes": 2048, "content_type": "audio/mpeg"},
     )
     monkeypatch.setattr(
-        file_asset_service, "read_object_head", lambda uri, num_bytes=32: None,
+        file_asset_service,
+        "read_object_head",
+        lambda uri, num_bytes=32: None,
     )
     out = file_asset_service.confirm_file_asset(
-        db_session, file_asset_id=asset.id, user_id="alice",
+        db_session,
+        file_asset_id=asset.id,
+        user_id="alice",
     )
     assert out.upload_status == "pending_upload"
     assert out.validation_error  # user-visible retry hint
@@ -370,9 +486,13 @@ def test_transient_head_read_failure_keeps_asset_pending(db_session, monkeypatch
 
     # And a later retry (storage recovered) succeeds.
     monkeypatch.setattr(
-        file_asset_service, "read_object_head", lambda uri, num_bytes=32: b"ID3ok",
+        file_asset_service,
+        "read_object_head",
+        lambda uri, num_bytes=32: b"ID3ok",
     )
     out = file_asset_service.confirm_file_asset(
-        db_session, file_asset_id=asset.id, user_id="alice",
+        db_session,
+        file_asset_id=asset.id,
+        user_id="alice",
     )
     assert out.upload_status == "uploaded"

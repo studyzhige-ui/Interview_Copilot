@@ -3,6 +3,7 @@
 Uses the same local-SQLite idiom as tests/test_services/interview — the
 sweeper opens its own SessionLocal, so we monkeypatch the module's.
 """
+
 from datetime import datetime, timedelta
 
 import pytest
@@ -90,7 +91,9 @@ def _record(db, *, source: str, status: str, age: timedelta):
 def test_stale_upload_record_swept_to_failed(sweeper_db):
     from app.worker.tasks import maintenance
 
-    rec = _record(sweeper_db, source="upload", status="analyzing", age=timedelta(hours=3))
+    rec = _record(
+        sweeper_db, source="upload", status="analyzing", age=timedelta(hours=3)
+    )
     result = maintenance.sweep_stale_interview_records.run()
 
     sweeper_db.refresh(rec)
@@ -102,7 +105,9 @@ def test_stale_upload_record_swept_to_failed(sweeper_db):
 def test_stale_mock_review_swept_to_review_failed_after_30min(sweeper_db):
     from app.worker.tasks import maintenance
 
-    rec = _record(sweeper_db, source="mock", status="processing_review", age=timedelta(minutes=45))
+    rec = _record(
+        sweeper_db, source="mock", status="processing_review", age=timedelta(minutes=45)
+    )
     result = maintenance.sweep_stale_interview_records.run()
 
     sweeper_db.refresh(rec)
@@ -113,8 +118,12 @@ def test_stale_mock_review_swept_to_review_failed_after_30min(sweeper_db):
 def test_fresh_inflight_records_not_swept(sweeper_db):
     from app.worker.tasks import maintenance
 
-    upload = _record(sweeper_db, source="upload", status="transcribing", age=timedelta(hours=1))
-    review = _record(sweeper_db, source="mock", status="processing_review", age=timedelta(minutes=10))
+    upload = _record(
+        sweeper_db, source="upload", status="transcribing", age=timedelta(hours=1)
+    )
+    review = _record(
+        sweeper_db, source="mock", status="processing_review", age=timedelta(minutes=10)
+    )
     result = maintenance.sweep_stale_interview_records.run()
 
     sweeper_db.refresh(upload)
@@ -127,8 +136,12 @@ def test_fresh_inflight_records_not_swept(sweeper_db):
 def test_terminal_and_mock_in_progress_records_untouched(sweeper_db):
     from app.worker.tasks import maintenance
 
-    done = _record(sweeper_db, source="upload", status="completed", age=timedelta(days=2))
-    live = _record(sweeper_db, source="mock", status="mock_in_progress", age=timedelta(days=2))
+    done = _record(
+        sweeper_db, source="upload", status="completed", age=timedelta(days=2)
+    )
+    live = _record(
+        sweeper_db, source="mock", status="mock_in_progress", age=timedelta(days=2)
+    )
     result = maintenance.sweep_stale_interview_records.run()
 
     sweeper_db.refresh(done)
@@ -185,10 +198,14 @@ def test_orphan_pending_upload_swept_with_blob_cleanup(orphan_db):
     assert result == {"swept": 1}
     assert asset.upload_status == "deleted"
     assert asset.deleted_at is not None
-    job = orphan_db.query(OutboxJob).filter(
-        OutboxJob.job_type == "delete_object",
-        OutboxJob.aggregate_id == asset.id,
-    ).first()
+    job = (
+        orphan_db.query(OutboxJob)
+        .filter(
+            OutboxJob.job_type == "delete_object",
+            OutboxJob.aggregate_id == asset.id,
+        )
+        .first()
+    )
     assert job is not None
 
 
@@ -204,9 +221,13 @@ def test_orphan_failed_row_marked_deleted_without_second_enqueue(orphan_db):
     assert asset.upload_status == "deleted"
     # cleanup was _fail_asset's job at failure time — the sweeper must not
     # queue a duplicate delete_object job for a failed asset.
-    jobs = orphan_db.query(OutboxJob).filter(
-        OutboxJob.aggregate_id == asset.id,
-    ).all()
+    jobs = (
+        orphan_db.query(OutboxJob)
+        .filter(
+            OutboxJob.aggregate_id == asset.id,
+        )
+        .all()
+    )
     assert jobs == []
 
 

@@ -1,13 +1,13 @@
 """Tests for the session-scoped task CRUD layer."""
+
 import pytest
 
 from app.services.chat.session_task_service import (
-    count_incomplete,
     create_task,
-    delete_task,
     get_task,
     list_incomplete,
     list_tasks,
+    record_verification,
     update_task,
 )
 
@@ -19,11 +19,13 @@ def _seed_conversation(db_session):
     """Insert a parent conversation row so the FK constraint is satisfied."""
     from app.models.chat import Conversation
 
-    db_session.add(Conversation(
-        id=SESSION_ID,
-        user_id="u1",
-        title="task test",
-    ))
+    db_session.add(
+        Conversation(
+            id=SESSION_ID,
+            user_id="u1",
+            title="task test",
+        )
+    )
     db_session.commit()
 
 
@@ -60,8 +62,11 @@ def test_update_task_status(db_session):
 def test_update_task_subject_and_description(db_session):
     create_task(db_session, SESSION_ID, "Old subject")
     updated = update_task(
-        db_session, SESSION_ID, 1,
-        subject="New subject", description="New desc",
+        db_session,
+        SESSION_ID,
+        1,
+        subject="New subject",
+        description="New desc",
     )
     assert updated["subject"] == "New subject"
     assert updated["description"] == "New desc"
@@ -89,31 +94,43 @@ def test_list_tasks_empty(db_session):
     assert list_tasks(db_session, SESSION_ID) == []
 
 
-def test_delete_task(db_session):
-    create_task(db_session, SESSION_ID, "Doomed")
-    assert delete_task(db_session, SESSION_ID, 1) is True
-    assert get_task(db_session, SESSION_ID, 1) is None
-
-
-def test_delete_task_not_found(db_session):
-    assert delete_task(db_session, SESSION_ID, 999) is False
-
-
-def test_count_incomplete(db_session):
-    create_task(db_session, SESSION_ID, "A")
-    create_task(db_session, SESSION_ID, "B")
-    update_task(db_session, SESSION_ID, 1, status="completed")
-    assert count_incomplete(db_session, SESSION_ID) == 1
-
-
 def test_list_incomplete(db_session):
-    create_task(db_session, SESSION_ID, "Done")
+    create_task(db_session, SESSION_ID, "Done", acceptance_criteria="done")
     create_task(db_session, SESSION_ID, "Pending")
     create_task(db_session, SESSION_ID, "WIP")
-    update_task(db_session, SESSION_ID, 1, status="completed")
+    update_task(db_session, SESSION_ID, 1, status="verifying", evidence=["done output"])
+    record_verification(db_session, SESSION_ID, 1, verdict="PASS", notes="verified")
     update_task(db_session, SESSION_ID, 3, status="in_progress")
     incomplete = list_incomplete(db_session, SESSION_ID)
     assert {t["task_id"] for t in incomplete} == {2, 3}
+
+
+def test_dependency_blocks_start_until_prerequisite_is_verified(db_session):
+    create_task(db_session, SESSION_ID, "First", acceptance_criteria="first done")
+    create_task(
+        db_session,
+        SESSION_ID,
+        "Second",
+        blocked_by=[1],
+        acceptance_criteria="second done",
+    )
+    blocked = update_task(db_session, SESSION_ID, 2, status="in_progress")
+    assert blocked["error"] == "task_blocked"
+    update_task(
+        db_session, SESSION_ID, 1, status="verifying", evidence=["first output"]
+    )
+    record_verification(db_session, SESSION_ID, 1, verdict="PASS", notes="verified")
+    assert (
+        update_task(db_session, SESSION_ID, 2, status="in_progress")["status"]
+        == "in_progress"
+    )
+
+
+def test_dependency_cycle_is_rejected(db_session):
+    create_task(db_session, SESSION_ID, "First")
+    create_task(db_session, SESSION_ID, "Second", blocked_by=[1])
+    result = update_task(db_session, SESSION_ID, 1, blocked_by=[2])
+    assert result["error"] == "task_dependency_cycle"
 
 
 def test_task_ids_scoped_per_session(db_session):

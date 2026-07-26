@@ -22,6 +22,7 @@ Events we emit
 Both events are fire-and-forget — failures inside ``incr`` are swallowed
 so the metric pipeline never breaks the path it observes.
 """
+
 from __future__ import annotations
 
 import json
@@ -43,6 +44,7 @@ def _resolve_metrics_path() -> Path | None:
     """
     try:
         from app.core.config import settings  # local import — cycles
+
         log_dir = Path(settings.LOG_DIR)
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir / "metrics.jsonl"

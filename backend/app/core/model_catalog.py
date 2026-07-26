@@ -19,6 +19,7 @@ What lives here:
                             sees the new entries without a round-trip
   * ``get_profile``       — by-id lookup against the warmed cache
 """
+
 from __future__ import annotations
 
 import json
@@ -53,6 +54,7 @@ class ModelProfile:
     chat call site, every LLM-build call — pull these via
     ``get_profile`` / ``get_profile_for_role``.
     """
+
     id: str
     provider: str
     display_name: str
@@ -87,10 +89,10 @@ ROLE_DEFAULTS: dict[str, str] = {
     #                    caller, else the user's primary selection, else any
     #                    profile the user is ready for (see
     #                    ``get_profile_for_role``).
-    "primary":        "deepseek/deepseek-chat",
-    "agent":          "deepseek/deepseek-chat",
+    "primary": "deepseek/deepseek-chat",
+    "agent": "deepseek/deepseek-chat",
     "mock_interview": "deepseek/deepseek-chat",
-    "utility":        "deepseek/deepseek-chat",
+    "utility": "deepseek/deepseek-chat",
 }
 
 # Roles the user can bind on the Models page / PUT /models/runtime. utility
@@ -213,7 +215,10 @@ def _ensure_cache_warm() -> dict[str, ModelProfile]:
     global _profile_cache_loaded_at
     now = time()
     with _profile_cache_lock:
-        if _profile_cache and (now - _profile_cache_loaded_at) < _PROFILE_CACHE_REFRESH_S:
+        if (
+            _profile_cache
+            and (now - _profile_cache_loaded_at) < _PROFILE_CACHE_REFRESH_S
+        ):
             return _profile_cache
     # Slow path — Redis read outside the lock (Redis ops are blocking
     # I/O; holding the lock across them would serialise all chat

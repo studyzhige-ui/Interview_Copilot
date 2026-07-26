@@ -21,8 +21,12 @@ def test_recall_memory_returns_v3_bundle_keys(monkeypatch):
     bundle = V3MemoryContext(
         user_profile_body="- 目标：后端岗位",
         ability_states=[
-            {"topic": "Redis", "skill_type": "knowledge_topic",
-             "mastery_level": "weak", "summary": "穿透没搞懂"},
+            {
+                "topic": "Redis",
+                "skill_type": "knowledge_topic",
+                "mastery_level": "weak",
+                "summary": "穿透没搞懂",
+            },
         ],
         learning_strategy_description="先分析根因",
     )
@@ -37,7 +41,8 @@ def test_recall_memory_returns_v3_bundle_keys(monkeypatch):
         return ctx
 
     monkeypatch.setattr(
-        "app.services.memory.v3_context_loader.attach_active_bodies", fake_attach,
+        "app.services.memory.v3_context_loader.attach_active_bodies",
+        fake_attach,
     )
 
     ctx = AgentToolContext(user_id="alice", session_id="s1")
@@ -70,7 +75,8 @@ def test_recall_memory_disabled_when_global_memory_off(monkeypatch):
         raise AssertionError("load_universal called despite memory toggle OFF")
 
     monkeypatch.setattr(
-        "app.services.memory.v3_context_loader.load_universal", _boom,
+        "app.services.memory.v3_context_loader.load_universal",
+        _boom,
     )
 
     ctx = AgentToolContext(user_id="alice", session_id="s1")
@@ -81,8 +87,8 @@ def test_recall_memory_disabled_when_global_memory_off(monkeypatch):
 
 def test_save_memory_routes_target_to_v3_services(monkeypatch):
     """``save_memory`` dispatches by ``target``:
-      * ability_state → memory_ability_state_service.upsert (topic/skill/level)
-      * user_profile / learning_strategy → memory_document_service.apply_patches
+    * ability_state → memory_ability_state_service.upsert (topic/skill/level)
+    * user_profile / learning_strategy → memory_document_service.apply_patches
     """
     import asyncio
     from dataclasses import dataclass
@@ -102,7 +108,8 @@ def test_save_memory_routes_target_to_v3_services(monkeypatch):
         yield
 
     monkeypatch.setattr(
-        "app.services.memory._user_memory_lock.user_memory_lock", _noop_lock,
+        "app.services.memory._user_memory_lock.user_memory_lock",
+        _noop_lock,
     )
 
     ability_calls: list[dict] = []
@@ -112,7 +119,8 @@ def test_save_memory_routes_target_to_v3_services(monkeypatch):
         return object()
 
     monkeypatch.setattr(
-        "app.services.memory.memory_ability_state_service.upsert", fake_upsert,
+        "app.services.memory.memory_ability_state_service.upsert",
+        fake_upsert,
     )
 
     @dataclass
@@ -128,30 +136,37 @@ def test_save_memory_routes_target_to_v3_services(monkeypatch):
         return _PR()
 
     monkeypatch.setattr(
-        "app.services.memory.memory_document_service.apply_patches", fake_apply,
+        "app.services.memory.memory_document_service.apply_patches",
+        fake_apply,
     )
 
     ctx = AgentToolContext(user_id="alice", session_id="s1")
 
     # ── ability_state target ──
-    out = asyncio.run(_save_memory_handler(
-        SaveMemoryArgs(
-            target="ability_state", topic="Redis 缓存穿透",
-            skill_type="knowledge_topic", mastery_level="weak",
-            summary="不懂布隆过滤器",
-        ),
-        ctx,
-    ))
+    out = asyncio.run(
+        _save_memory_handler(
+            SaveMemoryArgs(
+                target="ability_state",
+                topic="Redis 缓存穿透",
+                skill_type="knowledge_topic",
+                mastery_level="weak",
+                summary="不懂布隆过滤器",
+            ),
+            ctx,
+        )
+    )
     assert out["target"] == "ability_state"
     assert ability_calls and ability_calls[0]["topic"] == "Redis 缓存穿透"
     assert ability_calls[0]["skill_type"] == "knowledge_topic"
     assert ability_calls[0]["mastery_level"] == "weak"
 
     # ── learning_strategy target → doc apply_patches ──
-    out = asyncio.run(_save_memory_handler(
-        SaveMemoryArgs(target="learning_strategy", fact="先分析根因再给方案"),
-        ctx,
-    ))
+    out = asyncio.run(
+        _save_memory_handler(
+            SaveMemoryArgs(target="learning_strategy", fact="先分析根因再给方案"),
+            ctx,
+        )
+    )
     assert out["target"] == "learning_strategy"
     assert out["applied"] == 1
     assert doc_calls and doc_calls[-1]["doc_type"] == "learning_strategy"
@@ -176,12 +191,16 @@ def test_save_memory_rejects_unknown_target(monkeypatch):
         yield
 
     monkeypatch.setattr(
-        "app.services.memory._user_memory_lock.user_memory_lock", _noop_lock,
+        "app.services.memory._user_memory_lock.user_memory_lock",
+        _noop_lock,
     )
 
     ctx = AgentToolContext(user_id="alice", session_id="s1")
-    out = asyncio.run(_save_memory_handler(
-        SaveMemoryArgs(target="habit", fact="x"), ctx,
-    ))
+    out = asyncio.run(
+        _save_memory_handler(
+            SaveMemoryArgs(target="habit", fact="x"),
+            ctx,
+        )
+    )
     assert "error" in out
     assert "ability_state" in out["valid"]

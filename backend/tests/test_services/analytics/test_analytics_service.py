@@ -5,6 +5,7 @@ The diagnostic input now comes from the active ``memory_ability_states`` via
 that extractor (and the LLM) so these tests cover the report-assembly logic,
 not the data source.
 """
+
 import json
 
 import pytest
@@ -16,35 +17,54 @@ _SVC = "app.services.analytics.diagnostics_report_service"
 @pytest.mark.asyncio
 async def test_generate_report_empty_when_no_ability_records():
     with patch(f"{_SVC}._extract_ability_records", return_value=[]):
-        from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
+        from app.services.analytics.diagnostics_report_service import (
+            generate_comprehensive_report,
+        )
+
         result = await generate_comprehensive_report(limit=20, user_id="u1")
         assert result["status"] == "empty"
 
 
 @pytest.mark.asyncio
 async def test_generate_report_empty_when_no_user():
-    from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
+    from app.services.analytics.diagnostics_report_service import (
+        generate_comprehensive_report,
+    )
+
     result = await generate_comprehensive_report(limit=20, user_id=None)
     assert result["status"] == "empty"
 
 
 @pytest.mark.asyncio
 async def test_generate_report_successful_json_parse():
-    memories = [{"content": "我在 Redis 分布式锁上得了 3 分", "score": 3.0, "time": "2026-01-01T00:00:00"}]
-    report_json = json.dumps({
-        "overall_evaluation": "技术薄弱",
-        "strengths": [],
-        "weaknesses": [{"topic": "Redis", "flaw": "概念混乱", "plan": "重读源码"}],
-        "skill_radar": {"算法": 5.0},
-    })
+    memories = [
+        {
+            "content": "我在 Redis 分布式锁上得了 3 分",
+            "score": 3.0,
+            "time": "2026-01-01T00:00:00",
+        }
+    ]
+    report_json = json.dumps(
+        {
+            "overall_evaluation": "技术薄弱",
+            "strengths": [],
+            "weaknesses": [{"topic": "Redis", "flaw": "概念混乱", "plan": "重读源码"}],
+            "skill_radar": {"算法": 5.0},
+        }
+    )
     mock_response = MagicMock()
     mock_response.text = report_json
 
-    with patch(f"{_SVC}._extract_ability_records", return_value=memories), \
-         patch(f"{_SVC}.get_llm_for_role") as factory_mock:
+    with (
+        patch(f"{_SVC}._extract_ability_records", return_value=memories),
+        patch(f"{_SVC}.get_llm_for_role") as factory_mock,
+    ):
         llm_mock = factory_mock.return_value
         llm_mock.acomplete = AsyncMock(return_value=mock_response)
-        from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
+        from app.services.analytics.diagnostics_report_service import (
+            generate_comprehensive_report,
+        )
+
         result = await generate_comprehensive_report(limit=20, user_id="u1")
 
     assert result["status"] == "success"
@@ -59,11 +79,16 @@ async def test_generate_report_strips_markdown_codeblock():
     mock_response = MagicMock()
     mock_response.text = raw
 
-    with patch(f"{_SVC}._extract_ability_records", return_value=memories), \
-         patch(f"{_SVC}.get_llm_for_role") as factory_mock:
+    with (
+        patch(f"{_SVC}._extract_ability_records", return_value=memories),
+        patch(f"{_SVC}.get_llm_for_role") as factory_mock,
+    ):
         llm_mock = factory_mock.return_value
         llm_mock.acomplete = AsyncMock(return_value=mock_response)
-        from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
+        from app.services.analytics.diagnostics_report_service import (
+            generate_comprehensive_report,
+        )
+
         result = await generate_comprehensive_report(limit=20, user_id="u1")
 
     assert result["status"] == "success"
@@ -75,11 +100,16 @@ async def test_generate_report_fallback_on_invalid_json():
     mock_response = MagicMock()
     mock_response.text = "这不是合法的 JSON 格式"
 
-    with patch(f"{_SVC}._extract_ability_records", return_value=memories), \
-         patch(f"{_SVC}.get_llm_for_role") as factory_mock:
+    with (
+        patch(f"{_SVC}._extract_ability_records", return_value=memories),
+        patch(f"{_SVC}.get_llm_for_role") as factory_mock,
+    ):
         llm_mock = factory_mock.return_value
         llm_mock.acomplete = AsyncMock(return_value=mock_response)
-        from app.services.analytics.diagnostics_report_service import generate_comprehensive_report
+        from app.services.analytics.diagnostics_report_service import (
+            generate_comprehensive_report,
+        )
+
         result = await generate_comprehensive_report(limit=20, user_id="u1")
 
     assert result["status"] == "fallback"

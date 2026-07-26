@@ -1,4 +1,5 @@
-"""Memory dreaming tasks (Path B autoDream, light queue)."""
+"""Nightly memory-consolidation tasks for the light worker."""
+
 import logging
 
 from app.worker.celery_app import celery_app
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
     soft_time_limit=840,
 )
 def scan_and_dream_batch_task(self):
-    """Nightly batch entry — Path B autoDream.
+    """Run the nightly memory-consolidation batch.
 
     Wakes up via Celery Beat at 03:30 Asia/Shanghai. Walks every user
     that passes the per-user gates (>=24h cursor + activity volume)
@@ -36,11 +37,13 @@ def scan_and_dream_batch_task(self):
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "scan_and_dream_batch: dispatch failed for user=%s: %s",
-                uid, exc,
+                uid,
+                exc,
             )
     logger.info(
         "scan_and_dream_batch: dispatched %d dream tasks (of %d eligible users)",
-        dispatched, len(users),
+        dispatched,
+        len(users),
     )
     return {"dispatched": dispatched, "users": len(users)}
 
@@ -86,7 +89,12 @@ def dream_for_user_task(self, user_id: str):
         user_pk = resolve_user_pk(db, user_id)
         if user_pk is not None:
             for rec in records:
-                if extraction_jobs.enqueue_dreaming(db, user_pk=user_pk, record_id=rec.id) is not None:
+                if (
+                    extraction_jobs.enqueue_dreaming(
+                        db, user_pk=user_pk, record_id=rec.id
+                    )
+                    is not None
+                ):
                     enqueued += 1
             db.commit()
     except Exception:
@@ -100,6 +108,8 @@ def dream_for_user_task(self, user_id: str):
     bump_user_last_dreamed_at(user_id, at=scan_started_at)
     logger.info(
         "dream_for_user: user=%s candidates=%d enqueued=%d",
-        user_id, len(records), enqueued,
+        user_id,
+        len(records),
+        enqueued,
     )
     return {"user_id": user_id, "candidates": len(records), "enqueued": enqueued}

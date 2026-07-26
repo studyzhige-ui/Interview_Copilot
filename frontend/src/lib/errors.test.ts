@@ -21,8 +21,8 @@ function axiosError(status: number, detail?: string): AxiosError {
 }
 
 describe('loginErr', () => {
-  it('maps the canonical "Incorrect email or password" detail to Chinese', () => {
-    const e = axiosError(401, 'Incorrect email or password');
+  it('returns the canonical backend login detail', () => {
+    const e = axiosError(400, '用户名或密码错误');
     expect(loginErr(e)).toBe('用户名或密码错误');
   });
 
@@ -43,14 +43,19 @@ describe('loginErr', () => {
 });
 
 describe('registerErr', () => {
-  it('maps the anti-enumeration generic 400 detail to the login-nudge message', () => {
+  it('returns the anti-enumeration generic detail', () => {
     const e = axiosError(400, '注册失败，请检查输入或重试');
-    expect(registerErr(e)).toContain('如果该邮箱已注册');
+    expect(registerErr(e)).toBe('注册失败，请检查输入或重试');
   });
 
-  it('keeps legacy specific-cause mappings working for older backends', () => {
-    const e = axiosError(400, '验证码错误');
-    expect(registerErr(e)).toBe('验证码错误');
+  it('reads structured conflict details', () => {
+    const e = {
+      response: {
+        status: 409,
+        data: { detail: { code: 'EMAIL_ALREADY_REGISTERED', message: '该邮箱已注册，请直接登录' } },
+      },
+    };
+    expect(registerErr(e)).toBe('该邮箱已注册，请直接登录');
   });
 });
 

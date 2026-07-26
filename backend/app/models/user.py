@@ -61,4 +61,6 @@ class User(Base):
     # table (one row per role, keyed by the stable users.id) — see
     # app.models.user_model_selections / app.core.user_model_selection.
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )

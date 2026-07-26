@@ -9,6 +9,7 @@ memory write.
 Imported by the worker's drain task so the handlers are registered before any
 job runs.
 """
+
 from __future__ import annotations
 
 import json

@@ -33,9 +33,9 @@ celery_app.conf.update(
     # worker. This is the forward-compatible fix — no Celery major-version bump.
     broker_connection_retry_on_startup=True,
     task_track_started=True,
-    task_time_limit=3600,        # Hard kill at 60 min (transcription headroom).
-    task_soft_time_limit=3540,   # 1 min before hard kill, raise SoftTimeLimitExceeded
-                                 # so handlers can flush partial state.
+    task_time_limit=3600,  # Hard kill at 60 min (transcription headroom).
+    task_soft_time_limit=3540,  # 1 min before hard kill, raise SoftTimeLimitExceeded
+    # so handlers can flush partial state.
     # ── Task routing ────────────────────────────────────────────────────
     # Two-queue split (introduced when the worker fleet was unified
     # against the user's "transcription is heavy, dreaming is light"
@@ -88,12 +88,12 @@ celery_app.conf.update(
     # — important with our --pool=solo single-task model.
     worker_prefetch_multiplier=1,
     # ── Beat schedule ───────────────────────────────────────────────────
-    # Memory dreaming (Path B): nightly batch at 03:30 Asia/Shanghai.
+    # Memory consolidation: nightly batch at 03:30 Asia/Shanghai.
     # Iterates eligible users (gate 1: >=24h since last_dreamed_at AND
     # gate 3: enough new chat activity), then dreams each user's
     # silent records. See ``dreaming_worker`` docstring for full gate
     # logic. This is the ONLY trigger — there's no per-record completion
-    # hook, no per-turn hook (Path B over Path A decision; see the
+    # hook, no per-turn hook (see the
     # ``dreaming_worker`` module docstring).
     #
     # Model catalog refresh (P6-K): daily at 04:00 Asia/Shanghai. Hits
@@ -184,14 +184,17 @@ def init_worker_models(**kwargs):
     # LangSmith — must run BEFORE any LLM client is created (init_rag_settings
     # constructs them). No-op when LANGSMITH_TRACING isn't set in .env.
     from app.core.llm_tracing import setup_llm_tracing
+
     setup_llm_tracing()
 
     from app.rag.embeddings import init_rag_settings
+
     init_rag_settings()
 
     if _worker_subscribes_to("transcription"):
         logger.info(">>> Transcription worker — warming Whisper + diarization...")
         from app.services.voice.audio_transcription_service import init_whisper_model
+
         init_whisper_model()
         logger.info(">>> Transcription worker model warmup complete.")
     else:

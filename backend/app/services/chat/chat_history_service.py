@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.chat import ConversationMessage, Conversation, generate_uuid
+from app.models.conversation_turn import ConversationTurn
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,14 @@ class TranscriptService:
         """
         db: Session = SessionLocal()
         try:
-            session_row = db.query(Conversation).filter(Conversation.id == session_id).first()
+            session_row = (
+                db.query(Conversation)
+                .filter(
+                    Conversation.id == session_id,
+                )
+                .with_for_update()
+                .one_or_none()
+            )
             if session_row is None:
                 session_row = Conversation(
                     id=session_id,
@@ -90,28 +98,103 @@ class TranscriptService:
             )
             next_seq = (max_seq + 1) if max_seq else 1
 
-            db.add(ConversationMessage(
-                conversation_id=session_id, seq=next_seq, role="User",
-                content=user_msg,
-                content_blocks_json=(
-                    json.dumps(user_blocks, ensure_ascii=False)
-                    if user_blocks else None
-                ),
-                rewritten_query=rewritten_query,
-            ))
-            db.add(ConversationMessage(
-                conversation_id=session_id, seq=next_seq + 1, role="Agent",
-                content=ai_msg,
-                content_blocks_json=(
-                    json.dumps(ai_blocks, ensure_ascii=False)
-                    if ai_blocks else None
-                ),
-            ))
+            db.add(
+                ConversationMessage(
+                    conversation_id=session_id,
+                    seq=next_seq,
+                    role="User",
+                    content=user_msg,
+                    content_blocks_json=(
+                        json.dumps(user_blocks, ensure_ascii=False)
+                        if user_blocks
+                        else None
+                    ),
+                    rewritten_query=rewritten_query,
+                )
+            )
+            db.add(
+                ConversationMessage(
+                    conversation_id=session_id,
+                    seq=next_seq + 1,
+                    role="Agent",
+                    content=ai_msg,
+                    content_blocks_json=(
+                        json.dumps(ai_blocks, ensure_ascii=False) if ai_blocks else None
+                    ),
+                )
+            )
 
             session_row.turn_count = (session_row.turn_count or 0) + 1
             session_row.updated_at = datetime.utcnow()
             db.commit()
             return next_seq + 1
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    def complete_background_turn(
+        self,
+        *,
+        turn_id: str,
+        ai_msg: str,
+        rewritten_query: str | None = None,
+        ai_blocks: list[dict] | None = None,
+    ) -> int:
+        """Idempotently append the assistant half of a reserved turn."""
+        db: Session = SessionLocal()
+        try:
+            turn = (
+                db.query(ConversationTurn)
+                .filter(
+                    ConversationTurn.id == turn_id,
+                )
+                .with_for_update()
+                .one_or_none()
+            )
+            if turn is None:
+                raise ValueError(f"Conversation turn {turn_id} does not exist")
+            if turn.assistant_message_seq is not None:
+                return turn.assistant_message_seq
+
+            user_row = (
+                db.query(ConversationMessage)
+                .filter(
+                    ConversationMessage.conversation_id == turn.conversation_id,
+                    ConversationMessage.seq == turn.user_message_seq,
+                )
+                .one_or_none()
+            )
+            if user_row is not None:
+                user_row.rewritten_query = rewritten_query
+
+            max_seq = (
+                db.query(func.max(ConversationMessage.seq))
+                .filter(
+                    ConversationMessage.conversation_id == turn.conversation_id,
+                )
+                .scalar()
+            )
+            assistant_seq = (max_seq or 0) + 1
+            db.add(
+                ConversationMessage(
+                    conversation_id=turn.conversation_id,
+                    seq=assistant_seq,
+                    role="Agent",
+                    content=ai_msg,
+                    content_blocks_json=(
+                        json.dumps(ai_blocks, ensure_ascii=False) if ai_blocks else None
+                    ),
+                )
+            )
+            conversation = db.get(Conversation, turn.conversation_id)
+            if conversation is not None:
+                conversation.turn_count = (conversation.turn_count or 0) + 1
+                conversation.updated_at = datetime.utcnow()
+            turn.assistant_message_seq = assistant_seq
+            db.commit()
+            return assistant_seq
         except Exception:
             db.rollback()
             raise
@@ -190,8 +273,14 @@ class TranscriptService:
         finally:
             db.close()
 
-    def get_full_transcript(self, session_id: str) -> list[dict]:
-        db: Session = SessionLocal()
+    def get_full_transcript(
+        self,
+        session_id: str,
+        *,
+        db: Session | None = None,
+    ) -> list[dict]:
+        owns_session = db is None
+        db = db or SessionLocal()
         try:
             rows = (
                 db.query(ConversationMessage)
@@ -201,10 +290,17 @@ class TranscriptService:
             )
             return [self._message_to_dict(row) for row in rows]
         finally:
-            db.close()
+            if owns_session:
+                db.close()
 
-    def get_session_meta(self, session_id: str) -> dict | None:
-        db: Session = SessionLocal()
+    def get_session_meta(
+        self,
+        session_id: str,
+        *,
+        db: Session | None = None,
+    ) -> dict | None:
+        owns_session = db is None
+        db = db or SessionLocal()
         try:
             row = db.query(Conversation).filter(Conversation.id == session_id).first()
             if row is None:
@@ -223,7 +319,8 @@ class TranscriptService:
                 "summary": row.summary or "",
             }
         finally:
-            db.close()
+            if owns_session:
+                db.close()
 
     def update_session_fields(self, session_id: str, **kwargs) -> None:
         db: Session = SessionLocal()

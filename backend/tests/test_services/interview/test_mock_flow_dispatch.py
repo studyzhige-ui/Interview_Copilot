@@ -5,6 +5,7 @@ broker failure — finish revives the runtime (user hits 结束面试 again),
 retry must NOT (the interview is over; an ACTIVE runtime would resurface
 a finished interview in the resume banner).
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -30,12 +31,16 @@ def _seed_user(db_session):
 
 def _make_run(db, *, status: str, runtime_status: str):
     record = interview_record_service.create_for_mock(
-        user_id="alice", title="模拟面试", db=db,
+        user_id="alice",
+        title="模拟面试",
+        db=db,
     )
     record.status = status
     db.add(record)
     runtime = mock_runtime_service.create_runtime(
-        db, user_id="alice", interview_record_id=record.id,
+        db,
+        user_id="alice",
+        interview_record_id=record.id,
         plan=[{"key": "self_intro", "title": "自我介绍"}],
     )
     if runtime_status != mock_runtime_service.ACTIVE_STATUS:
@@ -49,16 +54,21 @@ def _broker_down(monkeypatch):
         raise ConnectionError("broker down")
 
     monkeypatch.setattr(
-        mock_flow, "process_interview_analysis", SimpleNamespace(delay=_raise),
+        mock_flow,
+        "process_interview_analysis",
+        SimpleNamespace(delay=_raise),
     )
 
 
 def test_finish_dispatch_failure_rolls_back_to_in_progress_and_reactivates(
-    db_session, monkeypatch,
+    db_session,
+    monkeypatch,
 ):
     # Finish endpoint flips both to processing_review before dispatching.
     record, runtime = _make_run(
-        db_session, status=STATUS_PROCESSING_REVIEW, runtime_status="processing_review",
+        db_session,
+        status=STATUS_PROCESSING_REVIEW,
+        runtime_status="processing_review",
     )
     _broker_down(monkeypatch)
 
@@ -72,16 +82,21 @@ def test_finish_dispatch_failure_rolls_back_to_in_progress_and_reactivates(
 
 
 def test_retry_dispatch_failure_rolls_back_to_review_failed_only(
-    db_session, monkeypatch,
+    db_session,
+    monkeypatch,
 ):
     record, runtime = _make_run(
-        db_session, status=STATUS_PROCESSING_REVIEW, runtime_status="processing_review",
+        db_session,
+        status=STATUS_PROCESSING_REVIEW,
+        runtime_status="processing_review",
     )
     _broker_down(monkeypatch)
 
     with pytest.raises(ConnectionError):
         mock_flow.dispatch_review(
-            db_session, record.id, rollback_status=STATUS_REVIEW_FAILED,
+            db_session,
+            record.id,
+            rollback_status=STATUS_REVIEW_FAILED,
         )
 
     db_session.refresh(record)
@@ -93,10 +108,13 @@ def test_retry_dispatch_failure_rolls_back_to_review_failed_only(
 
 def test_dispatch_success_stamps_task_id_and_processing_review(db_session, monkeypatch):
     record, _ = _make_run(
-        db_session, status=STATUS_MOCK_IN_PROGRESS, runtime_status="in_progress",
+        db_session,
+        status=STATUS_MOCK_IN_PROGRESS,
+        runtime_status="in_progress",
     )
     monkeypatch.setattr(
-        mock_flow, "process_interview_analysis",
+        mock_flow,
+        "process_interview_analysis",
         SimpleNamespace(delay=lambda *a, **k: SimpleNamespace(id="celery-task-1")),
     )
 

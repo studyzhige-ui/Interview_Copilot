@@ -13,33 +13,47 @@ def test_tool_start_and_tool_done_carry_tool_call_id():
     start = HarnessEvent.tool_start(
         "search_jobs",
         "keywords=AI Agent",
-        step=1, elapsed_ms=10.0,
+        step=1,
+        elapsed_ms=10.0,
         tool_call_id="call_AbC123",
     )
     assert start.to_dict()["data"]["tool_call_id"] == "call_AbC123"
     assert start.to_dict()["data"]["tool"] == "search_jobs"
 
     done = HarnessEvent.tool_done(
-        "search_jobs", "返回 5 条结果",
-        step=1, elapsed_ms=120.0,
-        tool_latency_ms=80.0, is_error=False,
+        "search_jobs",
+        "返回 5 条结果",
+        step=1,
+        elapsed_ms=120.0,
+        tool_latency_ms=80.0,
+        is_error=False,
         result_content='{"count":5}',
         tool_call_id="call_AbC123",
     )
     assert done.to_dict()["data"]["tool_call_id"] == "call_AbC123"
     # Pairs with the start event by id.
-    assert done.to_dict()["data"]["tool_call_id"] == start.to_dict()["data"]["tool_call_id"]
+    assert (
+        done.to_dict()["data"]["tool_call_id"]
+        == start.to_dict()["data"]["tool_call_id"]
+    )
 
     # Back-compat: omitting tool_call_id yields the empty string, not
     # a missing key. The FE's ``String(data.tool_call_id ?? '')``
     # coerce always lands on a defined value.
     start_compat = HarnessEvent.tool_start(
-        "x", "y", step=0, elapsed_ms=0.0,
+        "x",
+        "y",
+        step=0,
+        elapsed_ms=0.0,
     )
     assert start_compat.to_dict()["data"]["tool_call_id"] == ""
     done_compat = HarnessEvent.tool_done(
-        "x", "y", step=0, elapsed_ms=0.0,
-        tool_latency_ms=0.0, is_error=False,
+        "x",
+        "y",
+        step=0,
+        elapsed_ms=0.0,
+        tool_latency_ms=0.0,
+        is_error=False,
     )
     assert done_compat.to_dict()["data"]["tool_call_id"] == ""
 
@@ -56,8 +70,10 @@ def test_tool_done_event_carries_full_result_content():
     ev = HarnessEvent.tool_done(
         "search_jobs",
         "返回 5 条结果",
-        step=1, elapsed_ms=120.0,
-        tool_latency_ms=80.0, is_error=False,
+        step=1,
+        elapsed_ms=120.0,
+        tool_latency_ms=80.0,
+        is_error=False,
         result_content='{"source":"lever","count":5,"jobs":[...]}',
     )
     payload = ev.to_dict()
@@ -71,8 +87,11 @@ def test_tool_done_event_carries_full_result_content():
     # string, not a missing key — so the frontend's String(...) coerce
     # always lands on a defined value.
     ev2 = HarnessEvent.tool_done(
-        "search_jobs", "返回 0 条结果",
-        step=1, elapsed_ms=120.0,
-        tool_latency_ms=80.0, is_error=False,
+        "search_jobs",
+        "返回 0 条结果",
+        step=1,
+        elapsed_ms=120.0,
+        tool_latency_ms=80.0,
+        is_error=False,
     )
     assert ev2.to_dict()["data"]["result_content"] == ""

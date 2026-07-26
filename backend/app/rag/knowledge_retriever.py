@@ -12,6 +12,7 @@ and the facade stamps planner state onto the returned
 reranker decides which chunks survive. Pass an explicit ``source_kind`` only
 when a caller has a hard reason to scope to one corpus.
 """
+
 from app.rag.retrieval_state import RetrievalResult
 from app.rag.retriever import query_knowledge_base
 

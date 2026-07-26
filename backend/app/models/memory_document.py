@@ -21,6 +21,7 @@ prompt doesn't have to carry the full body every turn.
 ``user_id`` is the stable ``users.id`` (the runtime threads a username and the
 service resolves it via ``app.core.user_identity.resolve_user_pk``).
 """
+
 from __future__ import annotations
 
 import uuid
@@ -74,5 +75,8 @@ class MemoryDocument(Base):
     last_discussed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
     )

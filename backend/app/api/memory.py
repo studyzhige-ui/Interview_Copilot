@@ -39,7 +39,9 @@ def _ability_payload(s) -> dict:
         "skill_type": s.skill_type,
         "mastery_level": s.mastery_level,
         "summary": s.summary or "",
-        "last_evidence_at": s.last_evidence_at.isoformat() if s.last_evidence_at else None,
+        "last_evidence_at": s.last_evidence_at.isoformat()
+        if s.last_evidence_at
+        else None,
         "updated_at": s.updated_at.isoformat() if s.updated_at else None,
     }
 
@@ -55,9 +57,13 @@ def memory_overview(current_user: User = Depends(get_current_user)):
     user_id = current_user.username
     with session_scope(None) as db:
         return {
-            "user_profile_body": memory_document_service.load(user_id, "user_profile", db=db),
+            "user_profile_body": memory_document_service.load(
+                user_id, "user_profile", db=db
+            ),
             "learning_strategy_body": memory_document_service.load(
-                user_id, "learning_strategy", db=db,
+                user_id,
+                "learning_strategy",
+                db=db,
             ),
             "ability_states": [
                 _ability_payload(s)
@@ -85,7 +91,9 @@ def delete_ability_state(
     current_user: User = Depends(get_current_user),
 ):
     with user_memory_lock_sync(current_user.username):
-        archived = memory_ability_state_service.archive_by_id(current_user.username, state_id)
+        archived = memory_ability_state_service.archive_by_id(
+            current_user.username, state_id
+        )
     if not archived:
         raise HTTPException(status_code=404, detail="ability state not found")
     return {"status": "success", "id": state_id}
@@ -99,7 +107,9 @@ def _edit_doc(username: str, doc_type: str, payload: DocBodyRequest) -> dict:
     try:
         with user_memory_lock_sync(username):
             saved = memory_document_service.upsert_user_edit(
-                username, doc_type, payload.body,
+                username,
+                doc_type,
+                payload.body,
                 base_updated_at=payload.base_updated_at,
             )
     except memory_document_service.StaleDocumentEdit as exc:
@@ -125,7 +135,9 @@ def edit_user_profile(
 
 @router.get("/memory/learning-strategy")
 def get_learning_strategy(current_user: User = Depends(get_current_user)):
-    return memory_document_service.load_with_meta(current_user.username, "learning_strategy")
+    return memory_document_service.load_with_meta(
+        current_user.username, "learning_strategy"
+    )
 
 
 @router.put("/memory/learning-strategy")
@@ -151,7 +163,7 @@ def list_memory_audit(
     change_type: str | None = Query(
         None,
         description="Filter to one change_type "
-                    "(patch_realtime/patch_dreaming/user_edit/user_delete).",
+        "(patch_realtime/patch_dreaming/user_edit/user_delete).",
     ),
     since: datetime | None = Query(
         None, description="Only entries created at or after this ISO-8601 timestamp."
@@ -188,7 +200,9 @@ def list_memory_audit(
         q = q.filter(MemoryAuditEntry.created_at >= since)
 
     total = q.count()
-    rows = q.order_by(MemoryAuditEntry.created_at.desc()).offset(offset).limit(limit).all()
+    rows = (
+        q.order_by(MemoryAuditEntry.created_at.desc()).offset(offset).limit(limit).all()
+    )
     return {
         "total": total,
         "limit": limit,
@@ -221,7 +235,8 @@ def get_memory_audit_entry(
         db.query(MemoryAuditEntry)
         .filter(MemoryAuditEntry.id == entry_id, MemoryAuditEntry.user_id == user_pk)
         .first()
-        if user_pk is not None else None
+        if user_pk is not None
+        else None
     )
     if row is None:
         raise HTTPException(status_code=404, detail="audit entry not found")

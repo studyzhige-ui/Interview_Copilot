@@ -1,4 +1,5 @@
 """测试 telemetry_service 的 JSONL 写入与异常容错。"""
+
 import json
 import pytest
 from unittest.mock import patch
@@ -47,9 +48,13 @@ async def test_log_interaction_rag_fields_default_false(tmp_path):
         from app.services.analytics.telemetry_service import log_interaction_metrics
 
         await log_interaction_metrics(
-            session_id="s3", user_id="u3", latency=0.1,
-            prompt_tokens=1, completion_tokens=1,
-            retrieval_attempted=False, retrieval_hit=False,
+            session_id="s3",
+            user_id="u3",
+            latency=0.1,
+            prompt_tokens=1,
+            completion_tokens=1,
+            retrieval_attempted=False,
+            retrieval_hit=False,
         )
     data = json.loads(log_file.read_text(encoding="utf-8").strip())
     assert data["planner_failed"] is False
@@ -60,12 +65,19 @@ async def test_log_interaction_rag_fields_default_false(tmp_path):
 @pytest.mark.asyncio
 async def test_log_interaction_does_not_raise_on_write_error():
     """写入失败时，telemetry 不应抛出异常（旁路容错）。"""
-    with patch("app.services.analytics.telemetry_service._write_log_sync", side_effect=PermissionError("denied")):
+    with patch(
+        "app.services.analytics.telemetry_service._write_log_sync",
+        side_effect=PermissionError("denied"),
+    ):
         from app.services.analytics.telemetry_service import log_interaction_metrics
 
         # 应静默失败，不抛异常
         await log_interaction_metrics(
-            session_id="s2", user_id="u2", latency=1.0,
-            prompt_tokens=0, completion_tokens=0,
-            retrieval_attempted=False, retrieval_hit=False
+            session_id="s2",
+            user_id="u2",
+            latency=1.0,
+            prompt_tokens=0,
+            completion_tokens=0,
+            retrieval_attempted=False,
+            retrieval_hit=False,
         )

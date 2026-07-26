@@ -17,10 +17,15 @@ class TestInterviewHistoryErrorHandling:
 
         from app.agent_runtime.tool_registry import AgentToolContext
         from app.agent_runtime.tools.interview_history import (
-            ReadInterviewHistoryArgs, _read_interview_history_handler,
+            ReadInterviewHistoryArgs,
+            _read_interview_history_handler,
         )
+
         ctx = AgentToolContext(user_id="alice", session_id="s1")
-        result = asyncio.run(_read_interview_history_handler(
-            ReadInterviewHistoryArgs(), ctx,
-        ))
+        result = asyncio.run(
+            _read_interview_history_handler(
+                ReadInterviewHistoryArgs(),
+                ctx,
+            )
+        )
         assert "error" in result

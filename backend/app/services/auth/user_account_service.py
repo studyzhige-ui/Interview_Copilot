@@ -3,6 +3,7 @@
 The router keeps the HTTP/auth-protocol flow (token minting, code
 verification, status mapping); the direct ``users``-table work lives here.
 """
+
 from __future__ import annotations
 
 from datetime import datetime

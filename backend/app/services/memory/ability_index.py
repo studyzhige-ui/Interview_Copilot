@@ -10,6 +10,7 @@ read helper degrades to an empty list (never breaks a turn) and never issues an
 unscoped query. No LlamaIndex vector store — search text is embedded directly
 and BM25 is computed server-side by Milvus.
 """
+
 from __future__ import annotations
 
 import logging
@@ -26,7 +27,12 @@ _COLL = milvus_hybrid.ABILITY
 
 
 def _index_text(
-    *, search_text: str, topic: str, skill_type: str, mastery_level: str, summary: str | None,
+    *,
+    search_text: str,
+    topic: str,
+    skill_type: str,
+    mastery_level: str,
+    summary: str | None,
 ) -> str:
     """Text indexed for BM25 + dense. Prefer the prebuilt ``search_text``;
     otherwise compose from the structured fields."""
@@ -49,22 +55,30 @@ def upsert_ability(
     """Index (or re-index) one ability state — delete-then-insert by ``state_id``.
     ``user_id`` is the stable users.id pk. Raises on failure so the outbox retries."""
     text = _index_text(
-        search_text=search_text, topic=topic, skill_type=skill_type,
-        mastery_level=mastery_level, summary=summary,
+        search_text=search_text,
+        topic=topic,
+        skill_type=skill_type,
+        mastery_level=mastery_level,
+        summary=summary,
     )
     if not text:
         return
     milvus_hybrid.delete_by_field(_COLL, "id", state_id)
-    milvus_hybrid.insert(_COLL, [{
-        "id": state_id,
-        "user_id": int(user_id),
-        "topic": topic or "",
-        "skill_type": skill_type or "",
-        "mastery_level": mastery_level or "",
-        "summary": summary or "",
-        "text": text,
-        "dense": Settings.embed_model.get_text_embedding(text),
-    }])
+    milvus_hybrid.insert(
+        _COLL,
+        [
+            {
+                "id": state_id,
+                "user_id": int(user_id),
+                "topic": topic or "",
+                "skill_type": skill_type or "",
+                "mastery_level": mastery_level or "",
+                "summary": summary or "",
+                "text": text,
+                "dense": Settings.embed_model.get_text_embedding(text),
+            }
+        ],
+    )
 
 
 def delete_ability(state_id: str) -> None:
@@ -72,7 +86,9 @@ def delete_ability(state_id: str) -> None:
     milvus_hybrid.delete_by_field(_COLL, "id", state_id)
 
 
-def search_abilities(user_id: str, query: str, top_k: int | None = None) -> list[dict[str, Any]]:
+def search_abilities(
+    user_id: str, query: str, top_k: int | None = None
+) -> list[dict[str, Any]]:
     """Return the user's most topic-relevant ability states for ``query``.
 
     ``user_id`` is the username principal; it's resolved to the stable users.id
@@ -93,19 +109,25 @@ def search_abilities(user_id: str, query: str, top_k: int | None = None) -> list
             return []
         query_dense = Settings.embed_model.get_query_embedding(query)
         hits = milvus_hybrid.hybrid_search(
-            _COLL, query_text=query, query_dense=query_dense, user_pk=user_pk, top_k=top_k,
+            _COLL,
+            query_text=query,
+            query_dense=query_dense,
+            user_pk=user_pk,
+            top_k=top_k,
         )
         out: list[dict[str, Any]] = []
         for h in hits:
             if h.get("user_id") != user_pk:  # defence-in-depth on the tenant filter
                 continue
-            out.append({
-                "topic": h.get("topic", ""),
-                "skill_type": h.get("skill_type", ""),
-                "mastery_level": h.get("mastery_level", ""),
-                "summary": h.get("summary", ""),
-                "score": float(h.get("score", 0.0) or 0.0),
-            })
+            out.append(
+                {
+                    "topic": h.get("topic", ""),
+                    "skill_type": h.get("skill_type", ""),
+                    "mastery_level": h.get("mastery_level", ""),
+                    "summary": h.get("summary", ""),
+                    "score": float(h.get("score", 0.0) or 0.0),
+                }
+            )
         return out
     except Exception as exc:  # noqa: BLE001 — degrade safely, never break a turn
         logger.warning("ability search failed for %s: %s", user_id, exc)

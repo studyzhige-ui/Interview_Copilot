@@ -149,7 +149,9 @@ def _render(record: InterviewRecord, qa_rows: list[InterviewQA]) -> str:
         # critiques / improved-answers stay in the database and get pulled
         # on demand by the agent's RAG layer when a specific Q is discussed.
         ranked = sorted(qa_rows, key=lambda r: r.order_idx)[:_PER_QUESTION_TAKE]
-        qa_bits = [f"## 题目清单（共 {len(qa_rows)} 题，列出前 {len(ranked)} 题；详情按需通过 RAG 拉取）"]
+        qa_bits = [
+            f"## 题目清单（共 {len(qa_rows)} 题，列出前 {len(ranked)} 题；详情按需通过 RAG 拉取）"
+        ]
         for qa in ranked:
             q = (qa.question or "").strip()
             score_str = f" · 评分 {qa.score}" if qa.score is not None else ""
@@ -167,10 +169,15 @@ def _render(record: InterviewRecord, qa_rows: list[InterviewQA]) -> str:
     if (record.debrief_summary or "").strip():
         lines.append(f"## 本次面试浓缩摘要\n{record.debrief_summary.strip()}")
     else:
-        from app.services.interview.interview_record_service import interview_record_service
+        from app.services.interview.interview_record_service import (
+            interview_record_service,
+        )
+
         full = interview_record_service.get_transcript_text(record.id).strip()
         if full and len(full) <= _TRANSCRIPT_HARD_CAP_CHARS:
-            lines.append(f"## 原始转录（debrief_summary 缺失，回退到全文，{len(full)} 字符）\n{full}")
+            lines.append(
+                f"## 原始转录（debrief_summary 缺失，回退到全文，{len(full)} 字符）\n{full}"
+            )
         elif full:
             head = full[:_TRANSCRIPT_HARD_CAP_CHARS]
             lines.append(
@@ -190,13 +197,19 @@ def _render(record: InterviewRecord, qa_rows: list[InterviewQA]) -> str:
     # disclosure.
     upload_bits = []
     if record.audio_file_asset_id:
-        upload_bits.append(f"- 音视频文件已上传 (file_asset_id={record.audio_file_asset_id})")
+        upload_bits.append(
+            f"- 音视频文件已上传 (file_asset_id={record.audio_file_asset_id})"
+        )
     if record.resume_id:
         upload_bits.append(f"- 使用个人简历 (resume_id={record.resume_id})")
     if record.resume_file_asset_id:
-        upload_bits.append(f"- 简历已上传 (file_asset_id={record.resume_file_asset_id})")
+        upload_bits.append(
+            f"- 简历已上传 (file_asset_id={record.resume_file_asset_id})"
+        )
     if record.jd_file_asset_id:
-        upload_bits.append(f"- 岗位 JD 已上传 (file_asset_id={record.jd_file_asset_id})")
+        upload_bits.append(
+            f"- 岗位 JD 已上传 (file_asset_id={record.jd_file_asset_id})"
+        )
     if upload_bits:
         lines.append("## 关联文件\n" + "\n".join(upload_bits))
 
@@ -217,7 +230,7 @@ def _truncate(s: str, n: int) -> str:
     s = s.strip().replace("\r\n", "\n")
     if len(s) <= n:
         return s
-    return s[: n].rstrip() + "…"
+    return s[:n].rstrip() + "…"
 
 
 __all__ = ["build_interview_reference"]

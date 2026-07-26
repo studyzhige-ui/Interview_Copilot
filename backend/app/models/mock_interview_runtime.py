@@ -18,6 +18,7 @@ Lifecycle: the mock-start flow atomically creates an ``interview_records`` row
 ``user_id`` is the stable ``users.id`` FK; the runtime service resolves the
 caller's username via ``app.core.user_identity.resolve_user_pk``.
 """
+
 import uuid
 from datetime import datetime
 
@@ -47,7 +48,10 @@ class MockInterviewRuntime(Base):
 
     id = Column(String, primary_key=True, default=generate_runtime_id, index=True)
     user_id = Column(
-        Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False,
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
     )
     interview_record_id = Column(
         String,
@@ -56,7 +60,9 @@ class MockInterviewRuntime(Base):
         nullable=False,
     )
     conversation_id = Column(
-        String, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=True,
+        String,
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=True,
     )
     # Runtime status: in_progress (live) → processing_review → completed,
     # or review_failed if scoring errors out.
@@ -82,5 +88,8 @@ class MockInterviewRuntime(Base):
     # Bumped on every answer (advance_runtime); drives "resume most-recent".
     last_activity_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
     )

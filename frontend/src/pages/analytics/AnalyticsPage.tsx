@@ -28,7 +28,7 @@ function normalize(raw: unknown): NormalizedReport | { empty: true; message: str
     return { empty: true, message: typeof obj.message === 'string' ? obj.message : '暂无数据' };
   }
 
-  // Try canonical shape from BACKEND_INTEGRATION.md
+  // Prefer the current report schema.
   let axes: RadarAxis[] = Array.isArray(obj.axes)
     ? (obj.axes as { k?: unknown; v?: unknown }[])
         .map((a) => ({ k: String(a.k ?? ''), v: Number(a.v ?? 0) }))
@@ -91,7 +91,9 @@ export function AnalyticsPage() {
     }
   };
 
-  useEffect(() => { refresh(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+  // Initial data synchronization is intentionally effect-driven.
+  // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps
+  useEffect(() => { void refresh(); }, []);
 
   if (loading) {
     return (

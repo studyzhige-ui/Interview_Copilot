@@ -9,6 +9,7 @@ predicate.
 Adding a new vendor = drop a new file in this package + import it
 into ``ALL_SPECS`` below. No edit to the pipeline.
 """
+
 from .base import VendorAdapterSpec, fetch_one_vendor
 
 # Default-enabled (the 9 vendors we ship support for, all with

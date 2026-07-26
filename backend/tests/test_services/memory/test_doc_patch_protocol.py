@@ -6,6 +6,7 @@ old checkpoint-3 F4 coverage when the single-doc service it used to live behind
 was deleted in MEM-CUTOVER — the protocol itself is unchanged and still load-
 bearing, so it keeps direct tests.
 """
+
 from __future__ import annotations
 
 from app.services.memory._doc_patch_protocol import _normalize_line, apply_patches
@@ -46,19 +47,25 @@ def test_add_appends_then_idempotent():
 
 def test_add_into_named_section():
     body = "## 已掌握的认知\n- a"
-    r = apply_patches(body, [{"op": "add", "section": "已掌握的认知", "new_line": "- b"}])
+    r = apply_patches(
+        body, [{"op": "add", "section": "已掌握的认知", "new_line": "- b"}]
+    )
     assert r.applied == 1
     lines = r.body.splitlines()
     assert "- a" in lines and "- b" in lines
 
 
 def test_update_replaces_matching_line():
-    r = apply_patches("- old", [{"op": "update", "match_line": "- old", "new_line": "- new"}])
+    r = apply_patches(
+        "- old", [{"op": "update", "match_line": "- old", "new_line": "- new"}]
+    )
     assert r.applied == 1 and "- new" in r.body and "- old" not in r.body
 
 
 def test_update_drops_when_no_match():
-    r = apply_patches("- a", [{"op": "update", "match_line": "- nope", "new_line": "- x"}])
+    r = apply_patches(
+        "- a", [{"op": "update", "match_line": "- nope", "new_line": "- x"}]
+    )
     assert r.dropped == 1 and r.applied == 0 and r.body == "- a"
 
 

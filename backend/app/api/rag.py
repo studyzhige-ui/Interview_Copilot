@@ -23,7 +23,10 @@ from app.services.knowledge.document_formats import (
     UnsupportedDocumentFormat,
     validate_knowledge_document_format,
 )
-from app.services.knowledge.knowledge_service import default_title, hard_delete_knowledge_document
+from app.services.knowledge.knowledge_service import (
+    default_title,
+    hard_delete_knowledge_document,
+)
 from app.api.file_assets import require_uploaded, upload_too_large_http
 from app.services.uploads.file_asset_service import (
     UPLOAD_STATUS_CONSUMED,
@@ -150,7 +153,9 @@ async def create_knowledge_document(
         if upload is None:
             raise HTTPException(status_code=404, detail="Upload not found")
         if upload.upload_status == UPLOAD_STATUS_CONSUMED:
-            raise HTTPException(status_code=409, detail="Upload has already been consumed")
+            raise HTTPException(
+                status_code=409, detail="Upload has already been consumed"
+            )
         # Confirm-on-consume (UP-1): verification (exists / size cap / magic)
         # can't be skipped by never calling /confirm.
         upload = require_uploaded(db, upload, "文档")
@@ -159,7 +164,9 @@ async def create_knowledge_document(
         # bytes never traverse the API (presigned upload), so this checks the
         # declared extension/content_type before any worker work is dispatched.
         try:
-            validate_knowledge_document_format(upload.original_filename, upload.content_type)
+            validate_knowledge_document_format(
+                upload.original_filename, upload.content_type
+            )
         except UnsupportedDocumentFormat as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -244,7 +251,10 @@ async def list_knowledge_documents(
     if source_kind:
         query = query.filter(KnowledgeDocument.source_kind == source_kind.value)
     documents = query.order_by(KnowledgeDocument.updated_at.desc()).all()
-    return {"status": "success", "documents": [_document_payload(doc) for doc in documents]}
+    return {
+        "status": "success",
+        "documents": [_document_payload(doc) for doc in documents],
+    }
 
 
 @router.get("/knowledge/documents/{document_id}")
@@ -276,7 +286,10 @@ async def update_knowledge_document(
 ):
     document = (
         db.query(KnowledgeDocument)
-        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username))
+        .filter(
+            KnowledgeDocument.id == document_id,
+            KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username),
+        )
         .first()
     )
     if document is None:
@@ -299,7 +312,10 @@ async def delete_knowledge_document(
 ):
     document = (
         db.query(KnowledgeDocument)
-        .filter(KnowledgeDocument.id == document_id, KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username))
+        .filter(
+            KnowledgeDocument.id == document_id,
+            KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username),
+        )
         .first()
     )
     if document is None:
@@ -309,7 +325,9 @@ async def delete_knowledge_document(
     except Exception as exc:  # noqa: BLE001
         db.rollback()
         logger.error("Knowledge document deletion failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to delete document: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete document: {exc}"
+        ) from exc
     # The document's Milvus vectors were dropped by hard_delete_knowledge_document
     # (milvus_hybrid.delete_by_field); BM25 is server-side in Milvus now, so
     # there's no client-side cache to invalidate.
@@ -333,5 +351,7 @@ async def list_knowledge_categories(
     )
     return {
         "status": "success",
-        "categories": [{"category": category, "count": count} for category, count in rows],
+        "categories": [
+            {"category": category, "count": count} for category, count in rows
+        ],
     }

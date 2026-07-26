@@ -4,6 +4,7 @@ CRUD over the user's (at most two) personal resumes, enforcing the
 default / max-two / auto-promote rules in the service layer. Resumes are a
 personal-profile asset — they never enter the knowledge base.
 """
+
 from __future__ import annotations
 
 import logging
@@ -56,7 +57,10 @@ def list_resumes(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return [_serialize(r) for r in resume_entity_service.list_resumes(db, user_id=current_user.username)]
+    return [
+        _serialize(r)
+        for r in resume_entity_service.list_resumes(db, user_id=current_user.username)
+    ]
 
 
 @router.post("/resumes", response_model=ResumeResponse)
@@ -118,7 +122,9 @@ def set_default(
     db: Session = Depends(get_db),
 ):
     resume = resume_entity_service.set_default_resume(
-        db, user_id=current_user.username, resume_id=resume_id,
+        db,
+        user_id=current_user.username,
+        resume_id=resume_id,
     )
     if resume is None:
         raise HTTPException(status_code=404, detail="简历不存在")
@@ -135,7 +141,9 @@ def delete_resume(
     db: Session = Depends(get_db),
 ):
     ok = resume_entity_service.delete_resume(
-        db, user_id=current_user.username, resume_id=resume_id,
+        db,
+        user_id=current_user.username,
+        resume_id=resume_id,
     )
     if not ok:
         raise HTTPException(status_code=404, detail="简历不存在")

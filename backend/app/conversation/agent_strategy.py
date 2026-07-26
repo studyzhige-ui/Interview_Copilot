@@ -24,13 +24,17 @@ the audit cleanup — LangSmith covers the same surface with a UI for
 free, and the user-facing tool cards still come from
 ``conversation_messages.content_blocks_json``.
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import time
+import uuid
 from typing import Any, AsyncGenerator
+
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.agent_runtime.context_compactor import QueryLoopCompactor
 from app.agent_runtime.react_agent import (
@@ -41,6 +45,7 @@ from app.agent_runtime.react_agent import (
 )
 from app.agent_runtime.retry_utils import call_with_retry
 from app.agent_runtime.tool_call_streaming import _ToolCallAccumulator
+from app.agent_runtime.tool_call_executor import execute_tool_call, persist_turn_budget
 from app.agent_runtime.tool_registry import (
     AgentToolContext,
     parse_tool_arguments,
@@ -51,11 +56,12 @@ from app.agent_runtime.tool_result_storage import (
     enforce_turn_budget,
     maybe_persist_result,
 )
+from app.agent_runtime.turn_tool_catalog import TurnToolCatalog
 from app.conversation.events import HarnessEvent
 from app.conversation.strategy import StrategyContext, StrategyResult
 from app.core.config import settings
 from app.core.error_messages import humanize_error
-from app.core.model_registry import build_async_openai_client_for_role
+from app.core.llm_client_factory import build_async_openai_client_for_role
 
 # Trigger tool self-registration on first import.
 import app.agent_runtime.tools  # noqa: F401
@@ -126,21 +132,18 @@ def _build_graceful_fallback(
         parts.append(str(text_blocks[-1].get("text") or "").strip())
 
     if tool_use_blocks:
-        tool_names = ", ".join(
-            sorted({b.get("name", "?") for b in tool_use_blocks})
-        )
+        tool_names = ", ".join(sorted({b.get("name", "?") for b in tool_use_blocks}))
         empty_or_error = sum(
-            1 for b in tool_result_blocks
-            if b.get("is_error") or "未找到" in (b.get("summary") or "")
+            1
+            for b in tool_result_blocks
+            if b.get("is_error")
+            or "未找到" in (b.get("summary") or "")
             or "0 条" in (b.get("summary") or "")
             or "⊘" in (b.get("summary") or "")
         )
         parts.append(
             f"\n\n---\n本轮我已尝试调用：{tool_names}"
-            + (
-                f"（其中 {empty_or_error} 个未返回有效数据）"
-                if empty_or_error else ""
-            )
+            + (f"（其中 {empty_or_error} 个未返回有效数据）" if empty_or_error else "")
             + "。"
         )
 
@@ -212,21 +215,30 @@ def _reconstruct_history_messages(turns: list[dict]) -> list[dict[str, Any]]:
             if btype == "text":
                 text_parts.append(str(block.get("text") or ""))
             elif btype == "tool_use":
-                tool_calls.append({
-                    "id": block.get("id", ""),
-                    "type": "function",
-                    "function": {
-                        "name": block.get("name", ""),
-                        "arguments": json.dumps(block.get("input") or {}, ensure_ascii=False),
-                    },
-                })
+                tool_calls.append(
+                    {
+                        "id": block.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": block.get("name", ""),
+                            "arguments": json.dumps(
+                                block.get("input") or {}, ensure_ascii=False
+                            ),
+                        },
+                    }
+                )
             elif btype == "tool_result":
-                tool_messages.append({
-                    "role": "tool",
-                    "tool_call_id": block.get("tool_use_id", ""),
-                    "content": str(block.get("content") or ""),
-                })
-        assistant: dict[str, Any] = {"role": "assistant", "content": "".join(text_parts)}
+                tool_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": block.get("tool_use_id", ""),
+                        "content": str(block.get("content") or ""),
+                    }
+                )
+        assistant: dict[str, Any] = {
+            "role": "assistant",
+            "content": "".join(text_parts),
+        }
         if tool_calls:
             assistant["tool_calls"] = tool_calls
         messages.append(assistant)
@@ -254,7 +266,8 @@ class AgentLoopStrategy:
         # ── Per-turn state ────────────────────────────────────────
         budget = AgentBudget(started_at=time.perf_counter())
         client, profile = build_async_openai_client_for_role(
-            "agent", user_id=ctx.user_id,
+            "agent",
+            user_id=ctx.user_id,
         )
         compactor = QueryLoopCompactor(profile=profile, user_id=ctx.user_id)
 
@@ -275,13 +288,24 @@ class AgentLoopStrategy:
         excluded_tools: set[str] = (
             set() if ctx.global_memory_on else {"recall_memory", "save_memory"}
         )
-        tool_schemas = registry.get_openai_schemas(
-            exclude=excluded_tools, user_id=ctx.user_id,
+        tool_catalog = await TurnToolCatalog.create(
+            ctx.user_id,
+            session_id=ctx.session_id,
+            turn_id=ctx.turn_id,
+            exclude=excluded_tools,
         )
-        manifest_text = registry.format_manifest(
-            exclude=excluded_tools, user_id=ctx.user_id,
+        await persist_turn_budget(
+            ctx.turn_id,
+            {
+                **budget.to_dict(),
+                "limits": {
+                    "max_steps": settings.AGENT_MAX_STEPS,
+                    "tool_timeout_seconds": settings.AGENT_TOOL_TIMEOUT_SECONDS,
+                    "max_tool_argument_chars": settings.AGENT_MAX_TOOL_ARG_CHARS,
+                },
+            },
         )
-        tool_prompts_text = registry.format_tool_prompts(exclude=excluded_tools)
+        recovery_text = await self._load_recovery_context(ctx.session_id)
 
         # Developer trace observability is handled by LangSmith
         # (``wrap_openai`` in core/llm_tracing.py captures every LLM
@@ -303,7 +327,14 @@ class AgentLoopStrategy:
         # instead, so the model has a user turn to answer and the loop can
         # append assistant/tool turns after it.
         from app.services.chat.context_assembly_pipeline import prompt_renderer
-        agent_system_prompt = f"{SYSTEM_PROMPT}\n\nAvailable tools:\n{manifest_text}{tool_prompts_text}"
+
+        agent_system_prompt = f"{SYSTEM_PROMPT}\n\n{tool_catalog.format_prompt()}"
+        if recovery_text:
+            agent_system_prompt += (
+                "\n\n# Durable long-task recovery state\n"
+                "Resume from this state without repeating successful work. "
+                "Re-check stale external facts when necessary.\n" + recovery_text
+            )
         history_messages: list[dict[str, Any]] = []
         if ctx.assembled is not None:
             # L2 skips the flattened [Recent Turns] slot — prior turns are
@@ -340,7 +371,7 @@ class AgentLoopStrategy:
                 client=client,
                 profile=profile,
                 compactor=compactor,
-                tool_schemas=tool_schemas,
+                tool_catalog=tool_catalog,
             ):
                 if event.type.value == "text":
                     final_answer = event.data.get("content", "")
@@ -383,7 +414,8 @@ class AgentLoopStrategy:
             final_answer = (
                 f"Agent 执行因预算策略停止: {budget.stop_reason}. "
                 "请缩小目标范围后重试。"
-                if budget.stop_reason else "Agent 无法生成最终回答。"
+                if budget.stop_reason
+                else "Agent 无法生成最终回答。"
             )
             blocks.append({"type": "text", "text": final_answer})
             # live == replay (AGT-5): a synthetic tail (budget stop / crash
@@ -409,6 +441,18 @@ class AgentLoopStrategy:
         result.tool_calls = budget.tool_calls
         result.steps_used = budget.steps
         result.stop_reason = budget.stop_reason
+        await persist_turn_budget(
+            ctx.turn_id,
+            {
+                **budget.to_dict(),
+                "stop_reason": budget.stop_reason,
+                "limits": {
+                    "max_steps": settings.AGENT_MAX_STEPS,
+                    "tool_timeout_seconds": settings.AGENT_TOOL_TIMEOUT_SECONDS,
+                    "max_tool_argument_chars": settings.AGENT_MAX_TOOL_ARG_CHARS,
+                },
+            },
+        )
 
         # Final budget event for the FE's BudgetInfo handler. LangSmith
         # captures the same fields via the OpenAI wrap, but the FE
@@ -432,12 +476,12 @@ class AgentLoopStrategy:
         client: Any,
         profile: Any,
         compactor: QueryLoopCompactor,
-        tool_schemas: list[dict[str, Any]],
+        tool_catalog: TurnToolCatalog,
     ) -> AsyncGenerator[HarnessEvent, None]:
         # Track which text we've already emitted as a block so the
         # final pass doesn't double-count.
         pending_text_for_block = ""
-        stop_hook_fired = False
+        stop_hook_count = 0
 
         while True:
             # Budget check
@@ -462,8 +506,12 @@ class AgentLoopStrategy:
                 break
 
             stream, _ = await self._call_llm_stream(
-                client=client, profile=profile, messages=messages,
-                tool_schemas=tool_schemas, compactor=compactor, budget=budget,
+                client=client,
+                profile=profile,
+                messages=messages,
+                tool_schemas=tool_catalog.get_openai_schemas(),
+                compactor=compactor,
+                budget=budget,
             )
 
             assistant_content = ""
@@ -474,7 +522,10 @@ class AgentLoopStrategy:
             reasoning_acc: list[str] = []
 
             async for ev in self._consume_stream(
-                stream, budget, tool_calls_acc, reasoning_acc,
+                stream,
+                budget,
+                tool_calls_acc,
+                reasoning_acc,
             ):
                 if isinstance(ev, HarnessEvent):
                     yield ev
@@ -490,18 +541,24 @@ class AgentLoopStrategy:
             if assistant_content:
                 pending_text_for_block += assistant_content
                 if tool_calls_acc:
-                    blocks.append({
-                        "type": "text", "text": pending_text_for_block.strip(),
-                    })
+                    blocks.append(
+                        {
+                            "type": "text",
+                            "text": pending_text_for_block.strip(),
+                        }
+                    )
                     pending_text_for_block = ""
 
             if tool_calls_acc:
                 async for ev in self._execute_tools(
-                    ctx=ctx, messages=messages, blocks=blocks,
+                    ctx=ctx,
+                    messages=messages,
+                    blocks=blocks,
                     tool_calls_acc=tool_calls_acc,
                     assistant_content=assistant_content,
                     reasoning_content="".join(reasoning_acc),
                     budget=budget,
+                    tool_catalog=tool_catalog,
                 ):
                     yield ev
                 continue
@@ -513,25 +570,29 @@ class AgentLoopStrategy:
                 # nudge and let the loop continue — the model can then
                 # update its tasks or incorporate the reminder. The flag
                 # ensures we fire at most once per turn.
-                if not stop_hook_fired:
+                if stop_hook_count < 2:
                     incomplete = await self._check_incomplete_tasks(ctx.session_id)
                     if incomplete:
-                        stop_hook_fired = True
-                        messages.append({
-                            "role": "assistant",
-                            "content": assistant_content,
-                        })
-                        messages.append({
-                            "role": "user",
-                            "content": (
-                                f"你还有 {len(incomplete)} 个未完成的任务：\n"
-                                + "\n".join(
-                                    f"- [{t['status']}] #{t['task_id']}: {t['subject']}"
-                                    for t in incomplete
-                                )
-                                + "\n请确认这些任务是否都已完成，用 task_update 更新状态后再给出最终回答。"
-                            ),
-                        })
+                        stop_hook_count += 1
+                        messages.append(
+                            {
+                                "role": "assistant",
+                                "content": assistant_content,
+                            }
+                        )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"你还有 {len(incomplete)} 个未完成的任务：\n"
+                                    + "\n".join(
+                                        f"- [{t['status']}] #{t['task_id']}: {t['subject']}"
+                                        for t in incomplete
+                                    )
+                                    + "\n请继续执行；记录验收证据、进入 verifying，并用 task_verify 完成独立验证。"
+                                ),
+                            }
+                        )
                         continue
 
                 # Final answer — terminator for the loop. NB:
@@ -546,16 +607,19 @@ class AgentLoopStrategy:
                 # scratch. Discarding is correct.
                 blocks.append({"type": "text", "text": assistant_content})
                 yield HarnessEvent.text(
-                    assistant_content, step=budget.steps,
+                    assistant_content,
+                    step=budget.steps,
                     elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
                 )
                 break
 
             # Empty response → nudge for an explicit final answer.
-            messages.append({
-                "role": "user",
-                "content": "Please provide a final answer now based on gathered tool outputs.",
-            })
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "Please provide a final answer now based on gathered tool outputs.",
+                }
+            )
 
     # ── Stop hook helper ───────────────────────────────────────────
 
@@ -568,11 +632,44 @@ class AgentLoopStrategy:
         def _sync() -> list[dict[str, Any]]:
             db = SessionLocal()
             try:
-                return session_task_service.list_incomplete(db, session_id)
+                return [
+                    task
+                    for task in session_task_service.list_incomplete(db, session_id)
+                    if task["status"] != "blocked"
+                ]
             finally:
                 db.close()
 
         return await asyncio.to_thread(_sync)
+
+    @staticmethod
+    async def _load_recovery_context(session_id: str) -> str:
+        from app.db.database import SessionLocal
+        from app.services.chat import agent_recovery_service
+
+        def _sync() -> dict:
+            db = SessionLocal()
+            try:
+                return agent_recovery_service.load_recovery_state(
+                    db, session_id, journal_limit=6
+                )
+            finally:
+                db.close()
+
+        try:
+            state = await asyncio.to_thread(_sync)
+        except SQLAlchemyError:
+            return ""
+        for event in state["recent_events"]:
+            result = str(event["payload"].get("result") or "")
+            event["payload"]["result"] = result[:1000]
+        if (
+            not state["checkpoint"]
+            and not state["tasks"]
+            and not state["recent_events"]
+        ):
+            return ""
+        return json.dumps(state, ensure_ascii=False, indent=2)
 
     # ── LLM streaming primitives ──────────────────────────────────
 
@@ -606,7 +703,8 @@ class AgentLoopStrategy:
 
         started = time.perf_counter()
         stream = await call_with_retry(
-            _make_call, max_retries=3,
+            _make_call,
+            max_retries=3,
             on_context_too_long=_on_context_too_long,
         )
         return stream, round((time.perf_counter() - started) * 1000, 2)
@@ -632,13 +730,13 @@ class AgentLoopStrategy:
         otherwise — see issue C in commit message).
         """
         index_map: dict[int, _ToolCallAccumulator] = {}
-        saw_tool_call = False
-
         async for chunk in stream:
             if hasattr(chunk, "usage") and chunk.usage is not None:
                 usage = chunk.usage
                 budget.prompt_tokens += int(getattr(usage, "prompt_tokens", 0) or 0)
-                budget.completion_tokens += int(getattr(usage, "completion_tokens", 0) or 0)
+                budget.completion_tokens += int(
+                    getattr(usage, "completion_tokens", 0) or 0
+                )
 
             if not chunk.choices:
                 continue
@@ -663,19 +761,22 @@ class AgentLoopStrategy:
                 # blocks, so it MUST also stream — the old saw_tool_call
                 # gate made replay show text the live viewer never saw.
                 yield HarnessEvent.text_delta(
-                    delta.content, step=budget.steps,
+                    delta.content,
+                    step=budget.steps,
                     elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
                 )
 
             if delta.tool_calls:
-                saw_tool_call = True
                 for tc_delta in delta.tool_calls:
                     idx = tc_delta.index
                     if idx not in index_map:
                         acc = _ToolCallAccumulator(
                             id=tc_delta.id or "",
-                            name=(tc_delta.function.name
-                                  if tc_delta.function and tc_delta.function.name else ""),
+                            name=(
+                                tc_delta.function.name
+                                if tc_delta.function and tc_delta.function.name
+                                else ""
+                            ),
                             arguments="",
                         )
                         index_map[idx] = acc
@@ -702,6 +803,7 @@ class AgentLoopStrategy:
         assistant_content: str,
         reasoning_content: str,
         budget: AgentBudget,
+        tool_catalog: TurnToolCatalog | None = None,
     ) -> AsyncGenerator[HarnessEvent, None]:
         # ``reasoning_content`` (thinking-mode trace) MUST round-trip
         # back to the API on the next assistant message — otherwise
@@ -710,6 +812,11 @@ class AgentLoopStrategy:
         # passed back to the API". We attach it conditionally so plain
         # (non-thinking) models that never produce reasoning_content
         # don't get a confusing empty field.
+        for tool_call in tool_calls_acc:
+            if not tool_call.id or tool_call.id in budget.tool_call_ids:
+                tool_call.id = f"call_{uuid.uuid4().hex}"
+            budget.tool_call_ids.add(tool_call.id)
+
         assistant_msg: dict[str, Any] = {
             "role": "assistant",
             "content": assistant_content,
@@ -722,6 +829,7 @@ class AgentLoopStrategy:
         turn_tool_messages: list[dict[str, Any]] = []
         nudge_repeat = 0
         nudge_tool = ""
+        replan_message = ""
 
         for tc in tool_calls_acc:
             tool_name = tc.name
@@ -743,7 +851,8 @@ class AgentLoopStrategy:
             }
 
             yield HarnessEvent.tool_start(
-                tool_name, _args_summary(tc.arguments),
+                tool_name,
+                _args_summary(tc.arguments),
                 step=budget.steps,
                 elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
                 tool_call_id=tc.id,
@@ -753,40 +862,43 @@ class AgentLoopStrategy:
             )
 
             observation: dict[str, Any]
-            if tool_name not in registry:
-                observation = {"error": "unknown_tool", "tool_name": tool_name}
-                tool_error = True
-            else:
-                try:
-                    tool_ctx = AgentToolContext(
-                        user_id=ctx.user_id, session_id=ctx.session_id,
-                    )
-                    observation = await asyncio.wait_for(
-                        registry.dispatch(tool_name, parsed_args, tool_ctx),
-                        timeout=settings.AGENT_TOOL_TIMEOUT_SECONDS,
-                    )
-                    if "error" in observation:
-                        tool_error = True
-                except asyncio.TimeoutError:
-                    observation = {"error": "tool_timeout", "tool_name": tool_name}
-                    tool_error = True
-                except ValueError as exc:
-                    observation = {"error": str(exc)}
-                    tool_error = True
-                except Exception as exc:  # noqa: BLE001
-                    observation = {"error": "tool_execution_failed", "detail": str(exc)}
-                    tool_error = True
+            dispatcher = tool_catalog or registry
+            tool_ctx = AgentToolContext(
+                user_id=ctx.user_id,
+                session_id=ctx.session_id,
+            )
+
+            async def dispatch() -> dict[str, Any]:
+                if tool_name not in dispatcher:
+                    return {"error": "unknown_tool", "tool_name": tool_name}
+                return await dispatcher.dispatch(tool_name, parsed_args, tool_ctx)
+
+            observation = await execute_tool_call(
+                call_id=tc.id,
+                turn_id=ctx.turn_id,
+                session_id=ctx.session_id,
+                user_id=tool_catalog.user_pk if tool_catalog else 0,
+                tool_name=tool_name,
+                arguments=parsed_args,
+                timeout_seconds=settings.AGENT_TOOL_TIMEOUT_SECONDS,
+                dispatch=dispatch,
+            )
+            tool_error = "error" in observation
 
             signature = f"{tool_name}\x00{tc.arguments}"
             repeat_count = budget.consume_tool_call(tool_name, signature)
+            await persist_turn_budget(ctx.turn_id, budget.to_dict())
             if repeat_count in (_REPEAT_NUDGE_SOFT, _REPEAT_NUDGE_FIRM):
                 nudge_repeat, nudge_tool = repeat_count, tool_name
             latency_ms = round((time.perf_counter() - tool_started) * 1000, 2)
 
             logger.info(
                 "tool_metric | tool=%s latency_ms=%.1f is_error=%s result_chars=%d step=%d",
-                tool_name, latency_ms, tool_error,
-                len(safe_json_dumps(observation)), budget.steps,
+                tool_name,
+                latency_ms,
+                tool_error,
+                len(safe_json_dumps(observation)),
+                budget.steps,
             )
 
             # Persist large tool results to disk; the LLM context only
@@ -801,7 +913,14 @@ class AgentLoopStrategy:
                 tool_call_id=tc.id,
                 session_id=ctx.session_id,
             )
-
+            incident = budget.observe_tool_result(
+                tool_name,
+                signature,
+                result_text,
+                is_error=tool_error,
+            )
+            if incident:
+                replan_message = incident
             tool_msg = {
                 "role": "tool",
                 "tool_call_id": tc.id,
@@ -817,20 +936,24 @@ class AgentLoopStrategy:
             # uses ``content`` to render the expanded view and
             # ``summary`` as the always-visible folded label.
             blocks.append(tool_use_block)
-            blocks.append({
-                "type": "tool_result",
-                "tool_use_id": tc.id,
-                "is_error": tool_error,
-                "latency_ms": latency_ms,
-                "summary": _result_summary(observation),
-                "content": result_text,
-            })
+            blocks.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tc.id,
+                    "is_error": tool_error,
+                    "latency_ms": latency_ms,
+                    "summary": _result_summary(observation),
+                    "content": result_text,
+                }
+            )
 
             yield HarnessEvent.tool_done(
-                tool_name, _result_summary(observation),
+                tool_name,
+                _result_summary(observation),
                 step=budget.steps,
                 elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
-                tool_latency_ms=latency_ms, is_error=tool_error,
+                tool_latency_ms=latency_ms,
+                is_error=tool_error,
                 # Ship the full result text on the wire so the live
                 # tool card can render the expanded view without a
                 # refresh. ``result_text`` is already capped at the
@@ -853,10 +976,20 @@ class AgentLoopStrategy:
         # is the only hard limit). Placed after the results so the
         # assistant(tool_calls)→tool→tool pairing stays intact.
         if nudge_repeat:
-            messages.append({
-                "role": "user",
-                "content": _repeat_call_nudge(nudge_tool, nudge_repeat),
-            })
+            messages.append(
+                {
+                    "role": "user",
+                    "content": _repeat_call_nudge(nudge_tool, nudge_repeat),
+                }
+            )
+        if replan_message:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": replan_message
+                    + " Update the task/checkpoint state before continuing.",
+                }
+            )
 
 
 __all__ = ["AgentLoopStrategy"]

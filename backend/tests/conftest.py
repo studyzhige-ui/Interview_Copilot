@@ -13,6 +13,7 @@ What lives here vs. per-file fixtures
 If a test directory needs its own engine (e.g. spinning up real Postgres),
 it can ignore these fixtures and create its own — they're independent.
 """
+
 import os
 import sys
 from unittest.mock import MagicMock
@@ -60,6 +61,7 @@ def test_engine():
     )
 
     from app.db.database import Base
+
     # app.models.__init__ imports every model module, so this single import
     # registers all tables on Base.metadata. New models only need to be added
     # to app/models/__init__.py (alembic/env.py relies on the same package).
@@ -111,6 +113,7 @@ def db_session(test_engine):
 def _disable_rate_limiter():
     try:
         from app.core.rate_limit import limiter
+
         prev = limiter.enabled
         limiter.enabled = False
         yield

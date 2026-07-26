@@ -11,6 +11,7 @@ circuiting a superseded/retried job. These tests pin:
     is an idempotent no-op when a later job already passed the range
   * the dreaming enqueue guard avoids piling up duplicate jobs per record
 """
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
@@ -60,11 +61,15 @@ def test_post_turn_enqueues_realtime_job(monkeypatch):
             updates.append(kwargs)
 
     def fake_enqueue(*, session_id, user_id, record_id, upto_seq):
-        calls.append({"session_id": session_id, "user_id": user_id, "upto_seq": upto_seq})
+        calls.append(
+            {"session_id": session_id, "user_id": user_id, "upto_seq": upto_seq}
+        )
 
     service = module.PostTurnMaintenanceService()
     monkeypatch.setattr(module, "transcript_service", FakeTranscriptService())
-    monkeypatch.setattr(module.extraction_jobs, "enqueue_realtime_extraction", fake_enqueue)
+    monkeypatch.setattr(
+        module.extraction_jobs, "enqueue_realtime_extraction", fake_enqueue
+    )
     asyncio.run(service.run("s1", "alice"))
 
     # Enqueued for the full pending range; cursor NOT advanced here (the job does).
@@ -79,8 +84,12 @@ def test_post_turn_no_job_when_no_pending(monkeypatch):
 
     class FakeTranscriptService:
         def get_session_meta(self, session_id):
-            return {"compaction_cursor": 0, "memory_extraction_cursor": 0,
-                    "type": "general", "turn_count": 0}
+            return {
+                "compaction_cursor": 0,
+                "memory_extraction_cursor": 0,
+                "type": "general",
+                "turn_count": 0,
+            }
 
         def get_recent_turns(self, session_id, max_turns, after_seq):
             return []
@@ -91,7 +100,8 @@ def test_post_turn_no_job_when_no_pending(monkeypatch):
     service = module.PostTurnMaintenanceService()
     monkeypatch.setattr(module, "transcript_service", FakeTranscriptService())
     monkeypatch.setattr(
-        module.extraction_jobs, "enqueue_realtime_extraction",
+        module.extraction_jobs,
+        "enqueue_realtime_extraction",
         lambda **k: calls.append(k),
     )
     asyncio.run(service.run("s1", "alice"))
@@ -105,15 +115,21 @@ def test_post_turn_no_job_when_memory_disabled(monkeypatch):
 
     class FakeTranscriptService:
         def get_session_meta(self, session_id):
-            return {"compaction_cursor": 0, "memory_extraction_cursor": 0,
-                    "type": "general", "turn_count": 1}
+            return {
+                "compaction_cursor": 0,
+                "memory_extraction_cursor": 0,
+                "type": "general",
+                "turn_count": 1,
+            }
+
         def get_recent_turns(self, session_id, max_turns, after_seq):
             return [{"seq": 1, "role": "User", "content": "q"}]
 
     service = module.PostTurnMaintenanceService()
     monkeypatch.setattr(module, "transcript_service", FakeTranscriptService())
     monkeypatch.setattr(
-        module.extraction_jobs, "enqueue_realtime_extraction",
+        module.extraction_jobs,
+        "enqueue_realtime_extraction",
         lambda **k: calls.append(k),
     )
     asyncio.run(service.run("s1", "alice", allow_memory_write=False))
@@ -126,11 +142,14 @@ def test_post_turn_no_job_when_memory_disabled(monkeypatch):
 @pytest.fixture
 def mem_maker(monkeypatch):
     engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
     Base.metadata.create_all(bind=engine)
     Maker = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     from app.services.memory import realtime_extraction as rt
+
     monkeypatch.setattr(rt, "SessionLocal", Maker)
     return Maker
 
@@ -144,10 +163,15 @@ def _seed_conv(Maker, *, cursor: int):
         u = User(username="alice", hashed_password="x")
         db.add(u)
         db.flush()
-        db.add(Conversation(
-            id="s1", user_id=u.id, title="t", type="general",
-            memory_extraction_cursor=cursor,
-        ))
+        db.add(
+            Conversation(
+                id="s1",
+                user_id=u.id,
+                title="t",
+                type="general",
+                memory_extraction_cursor=cursor,
+            )
+        )
         db.commit()
     finally:
         db.close()
@@ -155,15 +179,22 @@ def _seed_conv(Maker, *, cursor: int):
 
 def _cursor(Maker) -> int:
     from app.models.chat import Conversation
+
     db = Maker()
     try:
-        return db.query(Conversation).filter(Conversation.id == "s1").first().memory_extraction_cursor
+        return (
+            db.query(Conversation)
+            .filter(Conversation.id == "s1")
+            .first()
+            .memory_extraction_cursor
+        )
     finally:
         db.close()
 
 
 def _resp(text):
     from unittest.mock import MagicMock
+
     r = MagicMock()
     r.text = text
     return r
@@ -191,12 +222,16 @@ def test_realtime_superseded_is_noop(mem_maker, monkeypatch):
 
     _seed_conv(mem_maker, cursor=10)
     acomplete = AsyncMock(return_value=_resp("[]"))
-    monkeypatch.setattr(rt, "get_llm_for_role", lambda role, user_id=None: _fake_llm(acomplete))
+    monkeypatch.setattr(
+        rt, "get_llm_for_role", lambda role, user_id=None: _fake_llm(acomplete)
+    )
 
-    res = rt.run_realtime_extraction(session_id="s1", user_id="alice", record_id=None, upto_seq=8)
+    res = rt.run_realtime_extraction(
+        session_id="s1", user_id="alice", record_id=None, upto_seq=8
+    )
     assert res.skipped_reason == "superseded"
     assert acomplete.await_count == 0  # short-circuited before the LLM
-    assert _cursor(mem_maker) == 10    # unchanged
+    assert _cursor(mem_maker) == 10  # unchanged
 
 
 def test_realtime_success_advances_cursor(mem_maker, monkeypatch):
@@ -206,13 +241,22 @@ def test_realtime_success_advances_cursor(mem_maker, monkeypatch):
 
     _seed_conv(mem_maker, cursor=0)
     monkeypatch.setattr(
-        chat_history_service.transcript_service, "get_messages_in_range",
-        lambda session_id, start, end: [{"seq": 1, "role": "user", "content": "我懂了"}],
+        chat_history_service.transcript_service,
+        "get_messages_in_range",
+        lambda session_id, start, end: [
+            {"seq": 1, "role": "user", "content": "我懂了"}
+        ],
     )
     # no strong signals → 0 patches, still a success
-    monkeypatch.setattr(rt, "get_llm_for_role", lambda role, user_id=None: _fake_llm(AsyncMock(return_value=_resp("[]"))))
+    monkeypatch.setattr(
+        rt,
+        "get_llm_for_role",
+        lambda role, user_id=None: _fake_llm(AsyncMock(return_value=_resp("[]"))),
+    )
 
-    res = rt.run_realtime_extraction(session_id="s1", user_id="alice", record_id=None, upto_seq=3)
+    res = rt.run_realtime_extraction(
+        session_id="s1", user_id="alice", record_id=None, upto_seq=3
+    )
     assert res.advanced_to == 3
     assert _cursor(mem_maker) == 3
 
@@ -224,16 +268,22 @@ def test_realtime_failure_holds_cursor(mem_maker, monkeypatch):
 
     _seed_conv(mem_maker, cursor=0)
     monkeypatch.setattr(
-        chat_history_service.transcript_service, "get_messages_in_range",
+        chat_history_service.transcript_service,
+        "get_messages_in_range",
         lambda session_id, start, end: [{"seq": 1, "role": "user", "content": "x"}],
     )
     monkeypatch.setattr(
-        rt, "get_llm_for_role",
-        lambda role, user_id=None: _fake_llm(AsyncMock(side_effect=RuntimeError("llm down"))),
+        rt,
+        "get_llm_for_role",
+        lambda role, user_id=None: _fake_llm(
+            AsyncMock(side_effect=RuntimeError("llm down"))
+        ),
     )
 
     with pytest.raises(RuntimeError):
-        rt.run_realtime_extraction(session_id="s1", user_id="alice", record_id=None, upto_seq=3)
+        rt.run_realtime_extraction(
+            session_id="s1", user_id="alice", record_id=None, upto_seq=3
+        )
     assert _cursor(mem_maker) == 0  # held → retried later
 
 
@@ -258,10 +308,14 @@ def test_enqueue_dreaming_skips_when_in_flight(mem_maker):
         second = extraction_jobs.enqueue_dreaming(db, user_pk=u.id, record_id="ir_1")
         db.commit()
         assert second is None
-        count = db.query(OutboxJob).filter(
-            OutboxJob.job_type == "extract_memory_dreaming",
-            OutboxJob.aggregate_id == "ir_1",
-        ).count()
+        count = (
+            db.query(OutboxJob)
+            .filter(
+                OutboxJob.job_type == "extract_memory_dreaming",
+                OutboxJob.aggregate_id == "ir_1",
+            )
+            .count()
+        )
         assert count == 1
     finally:
         db.close()

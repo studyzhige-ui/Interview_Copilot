@@ -11,6 +11,7 @@ Filter strategy: keep ids that start with ``qwen`` or ``qwq`` (Qwen
 brand prefixes); drop everything else. Also drop embedding / audio /
 image / video / TTS variants of Qwen itself.
 """
+
 from __future__ import annotations
 
 from .base import VendorAdapterSpec
@@ -18,12 +19,20 @@ from .base import VendorAdapterSpec
 
 _QWEN_PREFIXES = ("qwen", "qwq")
 _NON_CHAT_HINTS = (
-    "embedding", "embed-", "rerank", "reranker",
-    "asr", "tts", "audio",
-    "image", "img", "vl-image", "wanx",      # wanx = Aliyun image gen
+    "embedding",
+    "embed-",
+    "rerank",
+    "reranker",
+    "asr",
+    "tts",
+    "audio",
+    "image",
+    "img",
+    "vl-image",
+    "wanx",  # wanx = Aliyun image gen
     "video",
-    "math-",                                  # qwen-math-* — specialty models, not general chat
-    "moe-",                                   # qwen-moe-* — research / not general use
+    "math-",  # qwen-math-* — specialty models, not general chat
+    "moe-",  # qwen-moe-* — research / not general use
 )
 
 
@@ -41,7 +50,7 @@ def _chat_filter(entry: dict, bare_id: str) -> bool:
 
 SPEC = VendorAdapterSpec(
     provider="qwen",
-    models_path="/models",      # api_base = dashscope.aliyuncs.com/compatible-mode/v1
+    models_path="/models",  # api_base = dashscope.aliyuncs.com/compatible-mode/v1
     auth_style="bearer",
     created_int_field="created",
     chat_filter=_chat_filter,

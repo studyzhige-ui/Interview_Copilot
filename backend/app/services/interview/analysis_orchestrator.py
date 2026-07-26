@@ -17,6 +17,7 @@ Side-effects:
 State writes use short transactions so the SSE poller observes intermediate
 states. Long LLM calls happen outside any open transaction.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -64,7 +65,11 @@ class InterviewAnalysisOrchestrator:
     async def _run_async(self, record_id: str, language: str = "zh") -> dict[str, Any]:
         db = SessionLocal()
         try:
-            record = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            record = (
+                db.query(InterviewRecord)
+                .filter(InterviewRecord.id == record_id)
+                .first()
+            )
             if record is None:
                 return {"status": "missing", "record_id": record_id}
             source = record.source
@@ -101,26 +106,35 @@ class InterviewAnalysisOrchestrator:
                 if transcript.strip():
                     logger.info(
                         "stage gate: reusing persisted transcript for %s (%d chars)",
-                        record_id, len(transcript),
+                        record_id,
+                        len(transcript),
                     )
                 else:
-                    transcript = await self._stage_transcribe(record_id, language=language)
+                    transcript = await self._stage_transcribe(
+                        record_id, language=language
+                    )
 
                 qa_pairs = self._load_existing_qa_shells(record_id)
                 if qa_pairs:
                     logger.info(
                         "stage gate: reusing %d persisted QA shells for %s",
-                        len(qa_pairs), record_id,
+                        len(qa_pairs),
+                        record_id,
                     )
                 else:
                     qa_pairs = await self._stage_extract(
-                        record_id, transcript, resume_text, user_id=owner_username,
+                        record_id,
+                        transcript,
+                        resume_text,
+                        user_id=owner_username,
                     )
             else:  # mock
                 qa_pairs = self._load_mock_qa(record_id)
                 transcript = self._compose_transcript_from_qa(qa_pairs)
                 interview_record_service.set_transcript(
-                    record_id, transcript=transcript, provider="mock_composed",
+                    record_id,
+                    transcript=transcript,
+                    provider="mock_composed",
                 )
 
             # Persist QA shells (so SSE can show "X of Y analyzed" early on)
@@ -146,7 +160,9 @@ class InterviewAnalysisOrchestrator:
             #   upload: noisy ASR transcript → 3-stage MapReduce pipeline
             #   mock  : pre-structured Q&A   → batched scoring with sliding window
             if source == "upload":
-                from app.services.voice.interview_analysis_service import analyze_interview
+                from app.services.voice.interview_analysis_service import (
+                    analyze_interview,
+                )
 
                 report = await analyze_interview(
                     transcript,
@@ -186,7 +202,8 @@ class InterviewAnalysisOrchestrator:
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "debrief_summary generation failed for %s (non-fatal): %s",
-                    record_id, exc,
+                    record_id,
+                    exc,
                 )
             interview_record_service.set_status(record_id, done_status)
             # Event-driven dreaming (MEM-9): a finished analysis is exactly
@@ -204,9 +221,11 @@ class InterviewAnalysisOrchestrator:
                     from app.services.uploads.outbox_service import enqueue_job
 
                     with SessionLocal() as odb:
-                        rec_row = odb.query(InterviewRecord).filter(
-                            InterviewRecord.id == record_id
-                        ).first()
+                        rec_row = (
+                            odb.query(InterviewRecord)
+                            .filter(InterviewRecord.id == record_id)
+                            .first()
+                        )
                         if rec_row is not None:
                             enqueue_job(
                                 odb,
@@ -216,13 +235,15 @@ class InterviewAnalysisOrchestrator:
                                 aggregate_id=record_id,
                                 payload={"username": owner_username},
                                 idempotency_key=f"dream_check:{record_id}",
-                                run_after=datetime.utcnow() + _td(hours=RECORD_QUIET_HOURS),
+                                run_after=datetime.utcnow()
+                                + _td(hours=RECORD_QUIET_HOURS),
                             )
                             odb.commit()
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "event-driven dream scheduling failed for %s: %s",
-                        record_id, exc,
+                        record_id,
+                        exc,
                     )
             return {"status": done_status, "record_id": record_id}
 
@@ -248,11 +269,17 @@ class InterviewAnalysisOrchestrator:
 
         db = SessionLocal()
         try:
-            record = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            record = (
+                db.query(InterviewRecord)
+                .filter(InterviewRecord.id == record_id)
+                .first()
+            )
             if record is None:
                 raise RuntimeError(f"Record {record_id} disappeared mid-pipeline")
             if not record.audio_file_asset_id:
-                raise RuntimeError(f"Upload record {record_id} has no audio_file_asset_id")
+                raise RuntimeError(
+                    f"Upload record {record_id} has no audio_file_asset_id"
+                )
 
             # record.user_id is the stable users.id (CLEANUP #2), as is the
             # FileAsset's — fetch by id (trusted worker context) + compare pks.
@@ -280,8 +307,10 @@ class InterviewAnalysisOrchestrator:
         try:
             transcript = await transcribe_media(local_path, language=language)
             interview_record_service.set_transcript(
-                record_id, transcript=transcript,
-                provider="local_whisperx", language=language,
+                record_id,
+                transcript=transcript,
+                provider="local_whisperx",
+                language=language,
             )
             return transcript
         finally:
@@ -289,8 +318,12 @@ class InterviewAnalysisOrchestrator:
                 os.unlink(local_path)
 
     async def _stage_extract(
-        self, record_id: str, transcript: str, resume_text: str,
-        *, user_id: str | None = None,
+        self,
+        record_id: str,
+        transcript: str,
+        resume_text: str,
+        *,
+        user_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """LLM extracts structured Q&A pairs from the diarized transcript."""
         from app.services.voice.interview_analysis_service import (
@@ -299,7 +332,9 @@ class InterviewAnalysisOrchestrator:
 
         interview_record_service.set_status(record_id, STATUS_EXTRACTING)
         qa_pairs = await extract_qa_pairs_with_llm(
-            transcript, resume_text, user_id=user_id,
+            transcript,
+            resume_text,
+            user_id=user_id,
         )
         return qa_pairs or []
 
@@ -394,29 +429,41 @@ class InterviewAnalysisOrchestrator:
                 # unanswered (two interviewer lines in a row), the latest wins.
                 pending_q = content or pending_q
                 stage_key = next(
-                    (str(b.get("stage_key") or "") for b in _blocks(r)
-                     if isinstance(b, dict) and b.get("type") == "stage"),
+                    (
+                        str(b.get("stage_key") or "")
+                        for b in _blocks(r)
+                        if isinstance(b, dict) and b.get("type") == "stage"
+                    ),
                     "",
                 )
-                pending_phase = stage_to_phase.get(stage_key, "general") if stage_key else pending_phase
+                pending_phase = (
+                    stage_to_phase.get(stage_key, "general")
+                    if stage_key
+                    else pending_phase
+                )
             elif role.startswith(("user", "candidate")):
                 audio_asset = next(
-                    (str(b.get("file_asset_id") or "") for b in _blocks(r)
-                     if isinstance(b, dict) and b.get("type") == "audio"),
+                    (
+                        str(b.get("file_asset_id") or "")
+                        for b in _blocks(r)
+                        if isinstance(b, dict) and b.get("type") == "audio"
+                    ),
                     None,
                 )
                 if pending_q:
-                    qa_pairs.append({
-                        "question": pending_q,
-                        "answer": content,
-                        "phase": pending_phase,
-                        "is_follow_up": False,
-                        "topic": None,
-                        "action": None,
-                        "answer_quality": None,
-                        "answer_audio_file_asset_id": audio_asset or None,
-                        "answer_input_mode": "voice" if audio_asset else "text",
-                    })
+                    qa_pairs.append(
+                        {
+                            "question": pending_q,
+                            "answer": content,
+                            "phase": pending_phase,
+                            "is_follow_up": False,
+                            "topic": None,
+                            "action": None,
+                            "answer_quality": None,
+                            "answer_audio_file_asset_id": audio_asset or None,
+                            "answer_input_mode": "voice" if audio_asset else "text",
+                        }
+                    )
                     pending_q = None
                 elif qa_pairs and content:
                     # Consecutive candidate messages (a two-phase-transaction
@@ -456,7 +503,9 @@ class InterviewAnalysisOrchestrator:
             )
             if existing >= len(qa_pairs):
                 return
-            interview_record_service.bulk_insert_qa(record_id, qa_pairs[existing:], db=db)
+            interview_record_service.bulk_insert_qa(
+                record_id, qa_pairs[existing:], db=db
+            )
             db.commit()
         except Exception:
             db.rollback()
@@ -492,12 +541,20 @@ class InterviewAnalysisOrchestrator:
                     # returned more questions. Create the missing row.
                     interview_record_service.bulk_insert_qa(
                         record_id,
-                        [{"question": pq.get("question", ""), "answer": pq.get("answer", "")}],
+                        [
+                            {
+                                "question": pq.get("question", ""),
+                                "answer": pq.get("answer", ""),
+                            }
+                        ],
                         db=db,
                     )
                     row = (
                         db.query(InterviewQA)
-                        .filter(InterviewQA.record_id == record_id, InterviewQA.order_idx == idx)
+                        .filter(
+                            InterviewQA.record_id == record_id,
+                            InterviewQA.order_idx == idx,
+                        )
                         .first()
                     )
                     if row is None:
@@ -516,6 +573,7 @@ class InterviewAnalysisOrchestrator:
                 if pq.get("phase"):
                     row.phase = pq["phase"]
                 from datetime import datetime as _dt
+
                 row.analyzed_at = _dt.utcnow()
 
             top_level = {
@@ -524,7 +582,11 @@ class InterviewAnalysisOrchestrator:
                 "phase_summary": report.get("phase_summary", {}),
                 "meta": report.get("meta") or report.get("interview_metadata") or {},
             }
-            rec = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            rec = (
+                db.query(InterviewRecord)
+                .filter(InterviewRecord.id == record_id)
+                .first()
+            )
             if rec is not None:
                 rec.analysis_json = json.dumps(top_level, ensure_ascii=False)
                 rec.analyzed_qa_count = len(per_question)
@@ -535,9 +597,11 @@ class InterviewAnalysisOrchestrator:
         finally:
             db.close()
 
-
     async def _generate_debrief_summary(
-        self, record_id: str, *, user_id: str | None = None,
+        self,
+        record_id: str,
+        *,
+        user_id: str | None = None,
     ) -> None:
         """LLM-produced 200-400 字 summary of one finished interview.
 
@@ -556,7 +620,11 @@ class InterviewAnalysisOrchestrator:
         # we don't see a half-applied state.
         db: Session = SessionLocal()
         try:
-            rec = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            rec = (
+                db.query(InterviewRecord)
+                .filter(InterviewRecord.id == record_id)
+                .first()
+            )
             if rec is None:
                 return
             existing_summary = (rec.debrief_summary or "").strip()
@@ -605,9 +673,15 @@ class InterviewAnalysisOrchestrator:
                     if overall.get("summary"):
                         pieces.append(f"综合评语: {overall['summary']}")
                     if overall.get("strengths"):
-                        pieces.append("亮点: " + " / ".join(str(s) for s in overall["strengths"][:5]))
+                        pieces.append(
+                            "亮点: "
+                            + " / ".join(str(s) for s in overall["strengths"][:5])
+                        )
                     if overall.get("weaknesses"):
-                        pieces.append("待提升: " + " / ".join(str(w) for w in overall["weaknesses"][:5]))
+                        pieces.append(
+                            "待提升: "
+                            + " / ".join(str(w) for w in overall["weaknesses"][:5])
+                        )
                     overall_text = "\n".join(pieces)
         except (json.JSONDecodeError, TypeError):
             overall_text = ""
@@ -628,7 +702,7 @@ class InterviewAnalysisOrchestrator:
             f"## 转录片段（前 3000 字符，仅参考）\n{transcript_excerpt or '（无转录）'}\n\n"
             "**输出格式（严格 JSON，不要任何额外文字）**：\n"
             '{"tag": "<推断或保留的标签>", "summary": "<200-400 字浓缩摘要，覆盖：'
-            '岗位方向 / 主要话题 / 候选人表现亮点 / 待改进点 / 整体评价。不要罗列原题，'
+            "岗位方向 / 主要话题 / 候选人表现亮点 / 待改进点 / 整体评价。不要罗列原题，"
             '描述要凝练成段落。>"}\n'
         )
 
@@ -646,7 +720,11 @@ class InterviewAnalysisOrchestrator:
 
         db = SessionLocal()
         try:
-            rec = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
+            rec = (
+                db.query(InterviewRecord)
+                .filter(InterviewRecord.id == record_id)
+                .first()
+            )
             if rec is None:
                 return
             rec.debrief_summary = summary[:1500]  # generous cap; prompt asked for 400
@@ -657,7 +735,9 @@ class InterviewAnalysisOrchestrator:
             db.commit()
             logger.info(
                 "debrief_summary written for %s (%d chars; tag=%r)",
-                record_id, len(summary), rec.tag,
+                record_id,
+                len(summary),
+                rec.tag,
             )
         except Exception:
             db.rollback()

@@ -1,4 +1,5 @@
 """Pydantic schemas for the unified file-asset upload API."""
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

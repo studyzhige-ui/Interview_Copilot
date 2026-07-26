@@ -1,4 +1,5 @@
 """Tests for mock_interview_runtime lifecycle (CONVERSATION-MOCK)."""
+
 from __future__ import annotations
 
 import json
@@ -14,17 +15,22 @@ def _seed_users(db_session):
     a matching ``users`` row must exist."""
     from app.models.user import User
 
-    db_session.add_all([
-        User(username="alice", hashed_password="x"),
-        User(username="bob", hashed_password="x"),
-    ])
+    db_session.add_all(
+        [
+            User(username="alice", hashed_password="x"),
+            User(username="bob", hashed_password="x"),
+        ]
+    )
     db_session.flush()
 
 
 def _create(db, user_id="alice", record_id="ir_1", **kw):
     return svc.create_runtime(
-        db, user_id=user_id, interview_record_id=record_id,
-        plan=[{"key": "self_intro", "title": "自我介绍"}], **kw,
+        db,
+        user_id=user_id,
+        interview_record_id=record_id,
+        plan=[{"key": "self_intro", "title": "自我介绍"}],
+        **kw,
     )
 
 
@@ -58,9 +64,12 @@ def test_advance_runtime_updates_position(db_session):
     r = _create(db_session)
     before = r.last_activity_at
     svc.advance_runtime(
-        db_session, r,
-        current_stage_key="role_technical_assessment", stage_index=2,
-        current_question_text="讲讲你对索引的理解", current_question_message_id=42,
+        db_session,
+        r,
+        current_stage_key="role_technical_assessment",
+        stage_index=2,
+        current_question_text="讲讲你对索引的理解",
+        current_question_message_id=42,
     )
     assert r.current_stage_key == "role_technical_assessment"
     assert r.stage_index == 2

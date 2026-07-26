@@ -191,8 +191,7 @@ export interface ChatMessageItem {
   /** Flat-text fallback. For agent turns this is the LAST text block
    *  joined; ``blocks`` is the source of truth when present. */
   content: string;
-  /** Anthropic-style content blocks. Always populated by
-   *  ``/chat/transcript``; legacy ``/chat/history`` omits this. */
+  /** Structured content blocks returned by the transcript endpoint. */
   blocks?: ContentBlock[];
   /** Planner's rewritten query for the turn — agent-mode only. */
   rewritten_query?: string | null;
@@ -205,6 +204,7 @@ export interface ChatTranscriptResp {
   type: string;
   turn_count: number;
   compaction_cursor: number;
+  active_turn_id: string | null;
   messages: ChatMessageItem[];
   total_messages: number;
 }

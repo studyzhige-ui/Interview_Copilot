@@ -19,7 +19,16 @@ import logging
 import os
 import tempfile
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -60,7 +69,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["mock"])
 
 
-def _owned_mock_record_or_404(db: Session, record_id: str, username: str) -> InterviewRecord:
+def _owned_mock_record_or_404(
+    db: Session, record_id: str, username: str
+) -> InterviewRecord:
     record = mock_flow.get_owned_mock_record(db, record_id, username)
     if record is None:
         raise HTTPException(status_code=404, detail="Mock interview not found")
@@ -68,13 +79,20 @@ def _owned_mock_record_or_404(db: Session, record_id: str, username: str) -> Int
 
 
 def _verify_start_upload(
-    db: Session, file_asset_id: str | None, purpose: str, noun: str, username: str,
+    db: Session,
+    file_asset_id: str | None,
+    purpose: str,
+    noun: str,
+    username: str,
 ) -> None:
     """Ownership + confirm-on-consume gate for an optional start-time upload."""
     if not file_asset_id:
         return
     upload = get_owned_file_asset(
-        db, file_asset_id=file_asset_id, user_id=username, purpose=purpose,
+        db,
+        file_asset_id=file_asset_id,
+        user_id=username,
+        purpose=purpose,
     )
     if upload is None:
         raise HTTPException(status_code=404, detail=f"{noun}不存在或无权访问")
@@ -99,11 +117,17 @@ async def start_mock_interview(
     # start_mock dirties the session — require_uploaded/ensure_uploaded commit
     # internally, which would otherwise break start_mock's one-transaction
     # contract by committing partial state.
-    _verify_start_upload(db, body.resume_file_asset_id, "resume", "简历文件", current_user.username)
-    _verify_start_upload(db, body.jd_file_asset_id, "jd", "JD 文件", current_user.username)
+    _verify_start_upload(
+        db, body.resume_file_asset_id, "resume", "简历文件", current_user.username
+    )
+    _verify_start_upload(
+        db, body.jd_file_asset_id, "jd", "JD 文件", current_user.username
+    )
     # MOCK-3: one active run per user — a second /start would orphan the
     # first runtime (invisible to the resume banner once superseded).
-    existing = mock_runtime_service.get_active_runtime(db, user_id=current_user.username)
+    existing = mock_runtime_service.get_active_runtime(
+        db, user_id=current_user.username
+    )
     if existing is not None:
         raise HTTPException(
             status_code=409,
@@ -124,9 +148,12 @@ async def start_mock_interview(
         await asyncio.to_thread(db.commit)
     except Exception as exc:  # noqa: BLE001
         db.rollback()
-        logger.exception("mock start failed for user=%s: %s", current_user.username, exc)
+        logger.exception(
+            "mock start failed for user=%s: %s", current_user.username, exc
+        )
         raise HTTPException(
-            status_code=500, detail=f"开始模拟面试失败：{humanize_error(exc)}",
+            status_code=500,
+            detail=f"开始模拟面试失败：{humanize_error(exc)}",
         ) from exc
 
     plan = started.plan
@@ -157,7 +184,9 @@ async def submit_mock_answer(
     """One turn: persist the candidate's answer, generate the next interviewer
     line from the plan + stage + recent messages, persist it, advance runtime."""
     record = _owned_mock_record_or_404(db, record_id, current_user.username)
-    runtime = mock_runtime_service.get_runtime_for_record(db, interview_record_id=record_id)
+    runtime = mock_runtime_service.get_runtime_for_record(
+        db, interview_record_id=record_id
+    )
     if runtime is None or runtime.status != mock_runtime_service.ACTIVE_STATUS:
         raise HTTPException(status_code=400, detail="该模拟面试不在进行中")
     if not runtime.conversation_id:
@@ -197,7 +226,8 @@ async def submit_mock_answer(
         # clip consumption from above.
         db.rollback()
         raise HTTPException(
-            status_code=409, detail="面试已推进到新问题，请刷新后继续",
+            status_code=409,
+            detail="面试已推进到新问题，请刷新后继续",
         ) from exc
     except Exception as exc:  # noqa: BLE001
         # Phase A commits internally; this rollback covers a phase-B failure
@@ -238,7 +268,9 @@ async def finish_mock_interview(
             status_code=409,
             detail="该面试不在进行中（复盘可能已在生成或已完成）",
         )
-    runtime = mock_runtime_service.get_runtime_for_record(db, interview_record_id=record_id)
+    runtime = mock_runtime_service.get_runtime_for_record(
+        db, interview_record_id=record_id
+    )
 
     # Require at least one answered turn — an interview with no candidate
     # answers has nothing to review (the FE also gates this, defense in depth).
@@ -248,7 +280,9 @@ async def finish_mock_interview(
 
     record.status = STATUS_PROCESSING_REVIEW
     if runtime is not None:
-        mock_runtime_service.set_status(db, runtime, mock_runtime_service.PROCESSING_STATUS, commit=False)
+        mock_runtime_service.set_status(
+            db, runtime, mock_runtime_service.PROCESSING_STATUS, commit=False
+        )
     await asyncio.to_thread(db.commit)
 
     try:
@@ -262,7 +296,9 @@ async def finish_mock_interview(
     return MockFinishResp(status="processing_review", record_id=record_id)
 
 
-@router.post("/mock-interviews/{record_id}/retry-review", response_model=MockRetryReviewResp)
+@router.post(
+    "/mock-interviews/{record_id}/retry-review", response_model=MockRetryReviewResp
+)
 @limiter.limit(RATE_EXPENSIVE)
 async def retry_mock_review(
     request: Request,
@@ -277,16 +313,22 @@ async def retry_mock_review(
     if record.status not in (STATUS_REVIEW_FAILED, STATUS_PROCESSING_REVIEW):
         raise HTTPException(status_code=400, detail="当前状态不可重试复盘")
 
-    runtime = mock_runtime_service.get_runtime_for_record(db, interview_record_id=record_id)
+    runtime = mock_runtime_service.get_runtime_for_record(
+        db, interview_record_id=record_id
+    )
     record.status = STATUS_PROCESSING_REVIEW
     if runtime is not None:
-        mock_runtime_service.set_status(db, runtime, mock_runtime_service.PROCESSING_STATUS, commit=False)
+        mock_runtime_service.set_status(
+            db, runtime, mock_runtime_service.PROCESSING_STATUS, commit=False
+        )
     await asyncio.to_thread(db.commit)
 
     try:
         await asyncio.to_thread(
             mock_flow.dispatch_review,
-            db, record_id, rollback_status=STATUS_REVIEW_FAILED,
+            db,
+            record_id,
+            rollback_status=STATUS_REVIEW_FAILED,
         )
     except Exception as exc:  # noqa: BLE001 — dispatch_review already rolled back
         raise HTTPException(
@@ -316,7 +358,9 @@ async def abandon_mock_interview(
     if record.status != STATUS_MOCK_IN_PROGRESS:
         raise HTTPException(status_code=400, detail="只能放弃进行中的模拟面试")
 
-    runtime = mock_runtime_service.get_runtime_for_record(db, interview_record_id=record_id)
+    runtime = mock_runtime_service.get_runtime_for_record(
+        db, interview_record_id=record_id
+    )
 
     try:
         mock_flow.abandon_mock(db, record, runtime)
@@ -325,7 +369,8 @@ async def abandon_mock_interview(
         db.rollback()
         logger.exception("abandon mock failed for %s: %s", record_id, exc)
         raise HTTPException(
-            status_code=500, detail=f"放弃失败: {type(exc).__name__}: {exc}",
+            status_code=500,
+            detail=f"放弃失败: {type(exc).__name__}: {exc}",
         ) from exc
 
     return MockAbandonResp(status="deleted", record_id=record_id)
@@ -358,7 +403,8 @@ async def get_in_progress_mock(
     # disabled until the user answered one more question.
     answered = (
         mock_flow.count_answered_turns(db, runtime.conversation_id)
-        if runtime.conversation_id else 0
+        if runtime.conversation_id
+        else 0
     )
     return MockInProgressResp(
         has_in_progress=True,
@@ -388,14 +434,16 @@ async def parse_jd_for_mock(
     _current_user: User = Depends(get_current_user),
 ):
     """Parse a JD file inline and return its plain text. Does NOT persist."""
-    from app.services.uploads.file_validation import validate_upload
+    from app.services.uploads.file_validation import read_validated_upload
     from app.services.voice.file_parser import extract_resume_text
 
     if file.size is not None and file.size > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="JD 文件过大（限制 10MB）")
 
     declared_ext = os.path.splitext(file.filename or "")[1].lower() or ".pdf"
-    contents = await validate_upload(file, purpose="jd", declared_ext=declared_ext)
+    contents = await read_validated_upload(
+        file, purpose="jd", declared_ext=declared_ext
+    )
 
     with tempfile.NamedTemporaryFile(suffix=declared_ext, delete=False) as tf:
         local_path = tf.name
@@ -435,12 +483,12 @@ async def transcribe_short_clip(
     current_user: User = Depends(get_current_user),
 ):
     """Transcribe a short audio clip (webm/opus/mp3/wav) to text."""
-    from app.services.uploads.file_validation import validate_upload
+    from app.services.uploads.file_validation import read_validated_upload
 
     if file.size is not None and file.size > 25 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="音频过大（限制 25MB）")
 
-    contents = await validate_upload(file, purpose="audio_clip")
+    contents = await read_validated_upload(file, purpose="audio_clip")
 
     suffix = os.path.splitext(file.filename or "")[1] or ".webm"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
@@ -456,11 +504,14 @@ async def transcribe_short_clip(
 
         try:
             text = await transcription_registry.transcribe_plain(
-                local_path, language=language,
+                local_path,
+                language=language,
             )
             logger.info(
                 "transcribe ok: provider=remote user=%s lang=%s duration=0.0 text_chars=%d",
-                current_user.username, language, len(text),
+                current_user.username,
+                language,
+                len(text),
             )
             return {"text": text, "language": language or "", "duration_sec": 0.0}
         except transcription_registry.LocalProviderOnly:
@@ -470,7 +521,8 @@ async def transcribe_short_clip(
             # never leak the raw env-var message to the client.
             logger.error("Short-clip remote transcription unavailable: %s", exc)
             raise HTTPException(
-                status_code=503, detail="转写服务未配置或暂不可用，请稍后重试",
+                status_code=503,
+                detail="转写服务未配置或暂不可用，请稍后重试",
             ) from exc
 
         from app.services.voice import audio_transcription_service as ats
@@ -483,9 +535,12 @@ async def transcribe_short_clip(
                     try:
                         await asyncio.to_thread(ats.init_whisper_model)
                     except Exception as exc:  # noqa: BLE001
-                        logger.error("WhisperX init failed in transcribe endpoint: %s", exc)
+                        logger.error(
+                            "WhisperX init failed in transcribe endpoint: %s", exc
+                        )
                         raise HTTPException(
-                            status_code=503, detail="转写模型未就绪，请稍后重试",
+                            status_code=503,
+                            detail="转写模型未就绪，请稍后重试",
                         ) from exc
 
         import whisperx  # type: ignore
@@ -495,14 +550,19 @@ async def transcribe_short_clip(
         if language and language.lower() != "auto":
             kwargs["language"] = language
         async with _whisper_lock:
-            result = await asyncio.to_thread(ats.whisper_model.transcribe, audio, **kwargs)
+            result = await asyncio.to_thread(
+                ats.whisper_model.transcribe, audio, **kwargs
+            )
         segments = result.get("segments", []) if isinstance(result, dict) else []
         text = " ".join((seg.get("text", "") or "").strip() for seg in segments).strip()
         detected = result.get("language", "") if isinstance(result, dict) else ""
         duration_sec = float(len(audio)) / 16000.0 if hasattr(audio, "__len__") else 0.0
         logger.info(
             "transcribe ok: provider=local user=%s lang=%s duration=%.1f text_chars=%d",
-            current_user.username, detected, duration_sec, len(text),
+            current_user.username,
+            detected,
+            duration_sec,
+            len(text),
         )
         return {"text": text, "language": detected, "duration_sec": duration_sec}
     except HTTPException:
@@ -510,7 +570,8 @@ async def transcribe_short_clip(
     except Exception as exc:  # noqa: BLE001
         logger.error("Short-clip transcription failed: %s", exc)
         raise HTTPException(
-            status_code=500, detail=f"转写失败：{humanize_error(exc)}",
+            status_code=500,
+            detail=f"转写失败：{humanize_error(exc)}",
         ) from exc
     finally:
         try:

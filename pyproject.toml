@@ -2,8 +2,8 @@
 #
 # Dependencies stay in requirements.txt (pip install -r) — this project is
 # deployed as an app, not published as a package, so there is no build
-# backend here. This file exists so tool config (pytest today, linters
-# tomorrow) lives in one standard place instead of scattered ini files.
+# backend here. This file keeps test and static-analysis configuration in one
+# standard place instead of scattering tool-specific files.
 
 [project]
 name = "interview-copilot"

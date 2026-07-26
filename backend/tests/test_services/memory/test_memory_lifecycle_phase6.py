@@ -2,6 +2,7 @@
 tombstone via dispatch (MEM-2), dreaming archive op (MEM-9), strict parse
 (MEM-7), lock raise mode (MEM-6), optimistic doc edits (MEM-3), tiered
 truncation (MEM-8), doc compaction (MEM-5)."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -32,7 +33,9 @@ def _seed_user(db_session, monkeypatch):
     import app.services.memory.memory_document_service as docs_mod
     from tests.conftest import patch_session_locals
 
-    patch_session_locals(monkeypatch, db_session, abil_mod, docs_mod, audit_mod, dbh_mod)
+    patch_session_locals(
+        monkeypatch, db_session, abil_mod, docs_mod, audit_mod, dbh_mod
+    )
 
 
 # ── MEM-4: mastery discipline ────────────────────────────────────────────
@@ -40,40 +43,84 @@ def _seed_user(db_session, monkeypatch):
 
 def test_realtime_cannot_mint_strong_without_evidence():
     row = abil.upsert(
-        "alice", topic="K8s", skill_type="knowledge_topic",
-        mastery_level="strong", summary="自称精通", change_type="patch_realtime",
+        "alice",
+        topic="K8s",
+        skill_type="knowledge_topic",
+        mastery_level="strong",
+        summary="自称精通",
+        change_type="patch_realtime",
     )
     # New row via realtime: one step from nothing → weak; strong impossible.
     assert row.mastery_level == "weak"
 
 
 def test_realtime_steps_up_one_level_at_a_time():
-    abil.upsert("alice", topic="Redis", skill_type="knowledge_topic",
-                mastery_level="weak", summary="s", change_type="patch_realtime")
-    row = abil.upsert("alice", topic="Redis", skill_type="knowledge_topic",
-                      mastery_level="strong", summary="s", change_type="patch_realtime")
+    abil.upsert(
+        "alice",
+        topic="Redis",
+        skill_type="knowledge_topic",
+        mastery_level="weak",
+        summary="s",
+        change_type="patch_realtime",
+    )
+    row = abil.upsert(
+        "alice",
+        topic="Redis",
+        skill_type="knowledge_topic",
+        mastery_level="strong",
+        summary="s",
+        change_type="patch_realtime",
+    )
     assert row.mastery_level == "improving"  # weak +1, not weak→strong
 
 
 def test_realtime_strong_requires_evidence_even_from_stable():
-    abil.upsert("alice", topic="MQ", skill_type="knowledge_topic",
-                mastery_level="stable", summary="s", change_type="patch_dreaming")
-    no_ev = abil.upsert("alice", topic="MQ", skill_type="knowledge_topic",
-                        mastery_level="strong", summary="s", change_type="patch_realtime")
+    abil.upsert(
+        "alice",
+        topic="MQ",
+        skill_type="knowledge_topic",
+        mastery_level="stable",
+        summary="s",
+        change_type="patch_dreaming",
+    )
+    no_ev = abil.upsert(
+        "alice",
+        topic="MQ",
+        skill_type="knowledge_topic",
+        mastery_level="strong",
+        summary="s",
+        change_type="patch_realtime",
+    )
     assert no_ev.mastery_level == "stable"
     with_ev = abil.upsert(
-        "alice", topic="MQ", skill_type="knowledge_topic",
-        mastery_level="strong", summary="s", change_type="patch_realtime",
+        "alice",
+        topic="MQ",
+        skill_type="knowledge_topic",
+        mastery_level="strong",
+        summary="s",
+        change_type="patch_realtime",
         evidence_refs=[{"type": "qa", "id": "qa_1"}],
     )
     assert with_ev.mastery_level == "strong"
 
 
 def test_downgrade_always_allowed():
-    abil.upsert("alice", topic="GC", skill_type="knowledge_topic",
-                mastery_level="strong", summary="s", change_type="patch_dreaming")
-    row = abil.upsert("alice", topic="GC", skill_type="knowledge_topic",
-                      mastery_level="weak", summary="忘光了", change_type="patch_realtime")
+    abil.upsert(
+        "alice",
+        topic="GC",
+        skill_type="knowledge_topic",
+        mastery_level="strong",
+        summary="s",
+        change_type="patch_dreaming",
+    )
+    row = abil.upsert(
+        "alice",
+        topic="GC",
+        skill_type="knowledge_topic",
+        mastery_level="weak",
+        summary="忘光了",
+        change_type="patch_realtime",
+    )
     assert row.mastery_level == "weak"
 
 
@@ -81,34 +128,66 @@ def test_downgrade_always_allowed():
 
 
 def test_dispatch_archive_op_dreaming_only(db_session):
-    abil.upsert("alice", topic="旧栈", skill_type="knowledge_topic",
-                mastery_level="stable", summary="s", change_type="patch_dreaming")
+    abil.upsert(
+        "alice",
+        topic="旧栈",
+        skill_type="knowledge_topic",
+        mastery_level="stable",
+        summary="s",
+        change_type="patch_dreaming",
+    )
 
     # Realtime may not archive.
     r = _dispatch.dispatch_memory_patches(
-        user_id="alice", change_type="patch_realtime",
-        patches=[{"target": "ability_state", "op": "archive",
-                  "topic": "旧栈", "skill_type": "knowledge_topic"}],
+        user_id="alice",
+        change_type="patch_realtime",
+        patches=[
+            {
+                "target": "ability_state",
+                "op": "archive",
+                "topic": "旧栈",
+                "skill_type": "knowledge_topic",
+            }
+        ],
     )
     assert r.dropped == 1
     assert len(abil.load_active("alice")) == 1
 
     # Dreaming may.
     r = _dispatch.dispatch_memory_patches(
-        user_id="alice", change_type="patch_dreaming",
-        patches=[{"target": "ability_state", "op": "archive",
-                  "topic": "旧栈", "skill_type": "knowledge_topic"}],
+        user_id="alice",
+        change_type="patch_dreaming",
+        patches=[
+            {
+                "target": "ability_state",
+                "op": "archive",
+                "topic": "旧栈",
+                "skill_type": "knowledge_topic",
+            }
+        ],
     )
     assert r.applied == 1
     assert abil.load_active("alice") == []
 
 
 def test_dreaming_blocked_by_user_tombstone():
-    abil.upsert("alice", topic="幻觉", skill_type="knowledge_topic",
-                mastery_level="weak", summary="s", change_type="patch_realtime")
+    abil.upsert(
+        "alice",
+        topic="幻觉",
+        skill_type="knowledge_topic",
+        mastery_level="weak",
+        summary="s",
+        change_type="patch_realtime",
+    )
     assert abil.archive("alice", topic="幻觉", skill_type="knowledge_topic") is True
-    blocked = abil.upsert("alice", topic="幻觉", skill_type="knowledge_topic",
-                          mastery_level="weak", summary="回魂", change_type="patch_dreaming")
+    blocked = abil.upsert(
+        "alice",
+        topic="幻觉",
+        skill_type="knowledge_topic",
+        mastery_level="weak",
+        summary="回魂",
+        change_type="patch_dreaming",
+    )
     assert blocked is None
 
 
@@ -156,20 +235,26 @@ def test_stale_doc_edit_rejected():
 
     # Background write lands between the user's GET and PUT.
     docs.apply_patches(
-        "alice", "user_profile",
+        "alice",
+        "user_profile",
         [{"op": "add", "new_line": "- 后台补充"}],
         change_type="patch_realtime",
     )
     with pytest.raises(docs.StaleDocumentEdit):
         docs.upsert_user_edit(
-            "alice", "user_profile", "第二版（会抹掉后台行）",
+            "alice",
+            "user_profile",
+            "第二版（会抹掉后台行）",
             base_updated_at=meta["updated_at"],
         )
     # A fresh token passes; the returned token comes from the save
     # transaction itself (not a racy post-lock re-read).
     fresh = docs.load_with_meta("alice", "user_profile")
     saved = docs.upsert_user_edit(
-        "alice", "user_profile", "第二版", base_updated_at=fresh["updated_at"],
+        "alice",
+        "user_profile",
+        "第二版",
+        base_updated_at=fresh["updated_at"],
     )
     assert saved["body"] == "第二版"
     assert saved["updated_at"]
@@ -185,7 +270,9 @@ def test_context_cap_keeps_all_growth_states(monkeypatch):
 
     def _state(i, level, days_old=0):
         return SimpleNamespace(
-            topic=f"t{i}", skill_type="knowledge_topic", mastery_level=level,
+            topic=f"t{i}",
+            skill_type="knowledge_topic",
+            mastery_level=level,
             summary="s",
             last_evidence_at=datetime.utcnow() - timedelta(days=days_old),
         )
@@ -200,7 +287,9 @@ def test_context_cap_keeps_all_growth_states(monkeypatch):
     assert weak_topics == {"t10", "t11", "t12"}
     assert len(dicts) == 5
     # Stale annotation present for the 90-day-old entries (MEM-1).
-    assert all(d.get("stale_days", 0) >= 89 for d in dicts if d["mastery_level"] == "weak")
+    assert all(
+        d.get("stale_days", 0) >= 89 for d in dicts if d["mastery_level"] == "weak"
+    )
 
 
 # ── MEM-5: doc compaction ────────────────────────────────────────────────
@@ -276,10 +365,17 @@ def test_metrics_emitted_for_clamp_drop_and_apply(monkeypatch):
 
     # applied + clamped
     _dispatch.dispatch_memory_patches(
-        user_id="alice", change_type="patch_realtime",
-        patches=[{"target": "ability_state", "topic": "K8s",
-                  "skill_type": "knowledge_topic", "mastery_level": "strong",
-                  "summary": "自称精通"}],
+        user_id="alice",
+        change_type="patch_realtime",
+        patches=[
+            {
+                "target": "ability_state",
+                "topic": "K8s",
+                "skill_type": "knowledge_topic",
+                "mastery_level": "strong",
+                "summary": "自称精通",
+            }
+        ],
     )
     names = [e for e, _ in events]
     assert "memory.mastery_clamped" in names
@@ -288,24 +384,49 @@ def test_metrics_emitted_for_clamp_drop_and_apply(monkeypatch):
     # invalid fields → single unified drop event with a reason label
     events.clear()
     _dispatch.dispatch_memory_patches(
-        user_id="alice", change_type="patch_realtime",
-        patches=[{"target": "ability_state", "topic": "", "skill_type": "nope",
-                  "mastery_level": "weak"}],
+        user_id="alice",
+        change_type="patch_realtime",
+        patches=[
+            {
+                "target": "ability_state",
+                "topic": "",
+                "skill_type": "nope",
+                "mastery_level": "weak",
+            }
+        ],
     )
-    drops = [(e, l) for e, l in events if e == "memory.patch_dropped"]
+    drops = [
+        (event, labels) for event, labels in events if event == "memory.patch_dropped"
+    ]
     assert drops and drops[0][1]["reason"] == "invalid_fields"
     assert not any(e == "memory.patch_dropped_total" for e, _ in events)
 
 
 def test_tombstone_drop_emits_reason(monkeypatch):
     events = _capture_metrics(monkeypatch)
-    abil.upsert("alice", topic="鬼影", skill_type="knowledge_topic",
-                mastery_level="weak", summary="s", change_type="patch_realtime")
+    abil.upsert(
+        "alice",
+        topic="鬼影",
+        skill_type="knowledge_topic",
+        mastery_level="weak",
+        summary="s",
+        change_type="patch_realtime",
+    )
     assert abil.archive("alice", topic="鬼影", skill_type="knowledge_topic") is True
     events.clear()
-    blocked = abil.upsert("alice", topic="鬼影", skill_type="knowledge_topic",
-                          mastery_level="weak", summary="回魂", change_type="patch_realtime")
+    blocked = abil.upsert(
+        "alice",
+        topic="鬼影",
+        skill_type="knowledge_topic",
+        mastery_level="weak",
+        summary="回魂",
+        change_type="patch_realtime",
+    )
     assert blocked is None
-    assert ("memory.patch_dropped", ) [0] in [e for e, _ in events]
-    reasons = [l.get("reason") for e, l in events if e == "memory.patch_dropped"]
+    assert ("memory.patch_dropped",)[0] in [e for e, _ in events]
+    reasons = [
+        labels.get("reason")
+        for event, labels in events
+        if event == "memory.patch_dropped"
+    ]
     assert "tombstone" in reasons

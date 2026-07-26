@@ -1,4 +1,4 @@
-@import '../../design_handoff_interview_copilot/colors_and_type.css';
+@import './tokens.css';
 
 @tailwind base;
 @tailwind components;

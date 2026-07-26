@@ -33,7 +33,9 @@ class ResumeSection(Base):
         index=True,
         nullable=False,
     )
-    section_type = Column(String, index=True, nullable=False)  # summary|project|experience|education|skill|other
+    section_type = Column(
+        String, index=True, nullable=False
+    )  # summary|project|experience|education|skill|other
     title = Column(String, nullable=False)
     content = Column(Text, nullable=False)
     metadata_json = Column(Text, nullable=True)

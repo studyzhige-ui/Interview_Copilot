@@ -1,5 +1,21 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import type { Mode } from './types';
+
+function readDraft(key: string | null): string {
+  if (!key) return '';
+  try { return localStorage.getItem(key) ?? ''; }
+  catch { return ''; }
+}
+
+function readMode(key: string | null, serverMode?: string): Mode {
+  if (key) {
+    try {
+      const value = localStorage.getItem(key);
+      if (value === 'AGENT' || value === 'CHAT') return value;
+    } catch { /* use server value */ }
+  }
+  return serverMode === 'agent' ? 'AGENT' : 'CHAT';
+}
 
 /**
  * Draft persists per-session in localStorage so navigating away
@@ -15,25 +31,19 @@ import type { Mode } from './types';
  */
 export function useSessionDraft(activeSessionId: string | null) {
   const draftStorageKey = activeSessionId ? `chat-draft:${activeSessionId}` : null;
-  const [input, setInputState] = useState<string>(() => {
-    if (!draftStorageKey) return '';
-    try { return localStorage.getItem(draftStorageKey) ?? ''; }
-    catch { return ''; }
-  });
+  const [draft, setDraft] = useState(() => ({
+    key: draftStorageKey,
+    value: readDraft(draftStorageKey),
+  }));
+  const input = draft.key === draftStorageKey ? draft.value : readDraft(draftStorageKey);
   const setInput = useCallback((next: string) => {
-    setInputState(next);
+    setDraft({ key: draftStorageKey, value: next });
     if (draftStorageKey) {
       try {
         if (next) localStorage.setItem(draftStorageKey, next);
         else localStorage.removeItem(draftStorageKey);
       } catch { /* quota / privacy mode */ }
     }
-  }, [draftStorageKey]);
-  // Re-read draft when the active session changes (sidebar switch).
-  useEffect(() => {
-    if (!draftStorageKey) { setInputState(''); return; }
-    try { setInputState(localStorage.getItem(draftStorageKey) ?? ''); }
-    catch { /* ignore */ }
   }, [draftStorageKey]);
   return { input, setInput };
 }
@@ -49,35 +59,25 @@ export function useSessionDraft(activeSessionId: string | null) {
  */
 export function useSessionMode(activeSessionId: string | null, serverMode?: string) {
   const modeStorageKey = activeSessionId ? `chat-mode:${activeSessionId}` : null;
-  const [mode, setModeState] = useState<Mode>(() => {
-    if (!modeStorageKey) return 'CHAT';
-    try {
-      const v = localStorage.getItem(modeStorageKey);
-      if (v === 'AGENT' || v === 'CHAT') return v;
-    } catch { /* fall through */ }
-    // AGT-4: no local entry (fresh device) — the server's persisted
-    // conversations.mode is authoritative instead of silently CHAT.
-    return serverMode === 'agent' ? 'AGENT' : 'CHAT';
-  });
+  const [modeState, setModeState] = useState(() => ({
+    key: modeStorageKey,
+    value: readMode(modeStorageKey, serverMode),
+  }));
+  const mode = modeState.key === modeStorageKey
+    ? modeState.value
+    : readMode(modeStorageKey, serverMode);
   const setMode = useCallback((next: Mode | ((prev: Mode) => Mode)) => {
     setModeState((prev) => {
-      const resolved = typeof next === 'function' ? next(prev) : next;
+      const current = prev.key === modeStorageKey
+        ? prev.value
+        : readMode(modeStorageKey, serverMode);
+      const resolved = typeof next === 'function' ? next(current) : next;
       if (modeStorageKey) {
         try { localStorage.setItem(modeStorageKey, resolved); } catch { /* quota */ }
       }
-      return resolved;
+      return { key: modeStorageKey, value: resolved };
     });
-  }, [modeStorageKey]);
-  // When the active session changes (sidebar switch), re-read mode for
-  // the newly-active session. Without this, switching from an AGENT
-  // session back to a CHAT one would show the wrong pill.
-  useEffect(() => {
-    if (!modeStorageKey) return;
-    try {
-      const v = localStorage.getItem(modeStorageKey);
-      setModeState(v === 'AGENT' ? 'AGENT' : 'CHAT');
-    } catch { /* ignore */ }
-  }, [modeStorageKey]);
+  }, [modeStorageKey, serverMode]);
   return { mode, setMode };
 }
 

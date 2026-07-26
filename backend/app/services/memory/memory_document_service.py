@@ -15,6 +15,7 @@ patch protocol. Mirrors the old single-doc services' safety properties:
 The runtime threads a ``username``; this service resolves it to the stable
 ``users.id`` via ``resolve_user_pk``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -29,7 +30,10 @@ from app.db.database import SessionLocal
 from app.models.memory_document import DOC_TYPES, MemoryDocument
 from app.services.memory import _memory_audit
 from app.services.memory._db_helpers import session_scope
-from app.services.memory._doc_patch_protocol import PatchResult, apply_patches as patch_body
+from app.services.memory._doc_patch_protocol import (
+    PatchResult,
+    apply_patches as patch_body,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +46,9 @@ class UnknownUser(Exception):
 
 def _validate_doc_type(doc_type: str) -> None:
     if doc_type not in DOC_TYPES:
-        raise ValueError(f"unknown memory doc_type {doc_type!r}; expected one of {DOC_TYPES}")
+        raise ValueError(
+            f"unknown memory doc_type {doc_type!r}; expected one of {DOC_TYPES}"
+        )
 
 
 def _derive_one_liner(body: str) -> str:
@@ -236,7 +242,7 @@ def _apply_inner(
         before_body=before_body,
         after_body=new_body,
         summary=f"{'created' if was_new else 'updated'} "
-                f"(applied={result.applied}, dropped={result.dropped})",
+        f"(applied={result.applied}, dropped={result.dropped})",
         db=db,
     )
     return result
@@ -261,7 +267,9 @@ def load_with_meta(username: str, doc_type: str, *, db: Session | None = None) -
             return {"body": "", "updated_at": None}
         row = (
             db.query(MemoryDocument)
-            .filter(MemoryDocument.user_id == user_pk, MemoryDocument.doc_type == doc_type)
+            .filter(
+                MemoryDocument.user_id == user_pk, MemoryDocument.doc_type == doc_type
+            )
             .first()
         )
         if row is None:
@@ -276,8 +284,11 @@ def load_with_meta(username: str, doc_type: str, *, db: Session | None = None) -
 
 
 def upsert_user_edit(
-    username: str, doc_type: str, new_body: str,
-    *, base_updated_at: str | None = None,
+    username: str,
+    doc_type: str,
+    new_body: str,
+    *,
+    base_updated_at: str | None = None,
 ) -> dict:
     """Persist a user-edited body verbatim. Returns the stored body.
 
@@ -295,7 +306,9 @@ def upsert_user_edit(
             raise UnknownUser(username)
         row = (
             db.query(MemoryDocument)
-            .filter(MemoryDocument.user_id == user_pk, MemoryDocument.doc_type == doc_type)
+            .filter(
+                MemoryDocument.user_id == user_pk, MemoryDocument.doc_type == doc_type
+            )
             .first()
         )
         if base_updated_at and row is not None and row.updated_at is not None:
@@ -351,7 +364,9 @@ DOC_MAX_CHARS = 6000
 DOC_COMPACT_TARGET_LINES = DOC_MAX_LINES // 2
 
 
-def compact_if_oversized(username: str, doc_type: str, *, user_id_for_llm: str | None = None) -> bool:
+def compact_if_oversized(
+    username: str, doc_type: str, *, user_id_for_llm: str | None = None
+) -> bool:
     """LLM-rewrite ``doc_type`` when it exceeds the size ceiling.
 
     Returns True iff a rewrite was applied. Sync (dreaming worker context);
@@ -378,7 +393,9 @@ def compact_if_oversized(username: str, doc_type: str, *, user_id_for_llm: str |
             body=current,
         )
         response = run_async(
-            get_llm_for_role("utility", user_id=user_id_for_llm or username).acomplete(prompt)
+            get_llm_for_role("utility", user_id=user_id_for_llm or username).acomplete(
+                prompt
+            )
         )
         new_body = str(response.text).strip()
         # Sanity floor: an empty/absurdly small rewrite of a large doc is a
@@ -386,7 +403,8 @@ def compact_if_oversized(username: str, doc_type: str, *, user_id_for_llm: str |
         if not new_body or len(new_body) < min(200, len(current) // 10):
             logger.warning(
                 "doc compaction rejected (suspiciously small) user=%s doc=%s",
-                username, doc_type,
+                username,
+                doc_type,
             )
             return False
 
@@ -397,7 +415,10 @@ def compact_if_oversized(username: str, doc_type: str, *, user_id_for_llm: str |
                 return False
             row = (
                 db.query(MemoryDocument)
-                .filter(MemoryDocument.user_id == user_pk, MemoryDocument.doc_type == doc_type)
+                .filter(
+                    MemoryDocument.user_id == user_pk,
+                    MemoryDocument.doc_type == doc_type,
+                )
                 .first()
             )
             if row is None:
@@ -420,7 +441,10 @@ def compact_if_oversized(username: str, doc_type: str, *, user_id_for_llm: str |
             db.commit()
             logger.info(
                 "doc compaction applied user=%s doc=%s %d→%d chars",
-                username, doc_type, len(before_body), len(new_body),
+                username,
+                doc_type,
+                len(before_body),
+                len(new_body),
             )
             return True
         except Exception:
@@ -429,7 +453,9 @@ def compact_if_oversized(username: str, doc_type: str, *, user_id_for_llm: str |
         finally:
             db.close()
     except Exception as exc:  # noqa: BLE001 — best-effort by contract
-        logger.warning("doc compaction failed user=%s doc=%s: %s", username, doc_type, exc)
+        logger.warning(
+            "doc compaction failed user=%s doc=%s: %s", username, doc_type, exc
+        )
         return False
 
 

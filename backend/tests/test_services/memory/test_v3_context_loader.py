@@ -15,6 +15,7 @@ v3 memory tests — we run on a dedicated in-memory engine and rebind every
 service's ``SessionLocal`` to it, then seed a ``users`` row (the services
 resolve a username → ``users.id``).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -29,9 +30,9 @@ from sqlalchemy.pool import StaticPool
 def engine_and_session():
     from app.db.database import Base
     import app.models.memory_ability_state  # noqa: F401
-    import app.models.memory_audit_logs     # noqa: F401
-    import app.models.memory_document       # noqa: F401
-    import app.models.user                  # noqa: F401
+    import app.models.memory_audit_logs  # noqa: F401
+    import app.models.memory_document  # noqa: F401
+    import app.models.user  # noqa: F401
 
     engine = create_engine(
         "sqlite://",
@@ -61,10 +62,12 @@ def seeded(engine_and_session, monkeypatch):
     import app.services.memory._memory_audit as audit_mod
     import app.services.memory.memory_ability_state_service as ability_mod
     import app.services.memory.memory_document_service as doc_mod
+
     for mod in (helpers_mod, audit_mod, ability_mod, doc_mod):
         monkeypatch.setattr(mod, "SessionLocal", Session, raising=False)
 
     from app.models.user import User
+
     s = Session()
     s.add(User(username="alice", hashed_password="x"))
     s.commit()
@@ -83,18 +86,24 @@ def test_load_universal_returns_profile_abilities_and_strategy_oneliner(seeded):
     )
 
     memory_document_service.apply_patches(
-        "alice", "user_profile",
+        "alice",
+        "user_profile",
         [{"op": "add", "new_line": "- 目标：后端岗位"}],
         change_type="patch_realtime",
     )
     memory_document_service.apply_patches(
-        "alice", "learning_strategy",
+        "alice",
+        "learning_strategy",
         [{"op": "add", "new_line": "- 先讲思路再写代码"}],
         change_type="patch_realtime",
     )
     memory_ability_state_service.upsert(
-        "alice", topic="Redis 缓存穿透", skill_type="knowledge_topic",
-        mastery_level="weak", summary="不懂布隆过滤器", change_type="patch_realtime",
+        "alice",
+        topic="Redis 缓存穿透",
+        skill_type="knowledge_topic",
+        mastery_level="weak",
+        summary="不懂布隆过滤器",
+        change_type="patch_realtime",
     )
 
     ctx = v3_context_loader.load_universal("alice")
@@ -135,7 +144,8 @@ def test_attach_active_bodies_loads_strategy_when_asked(seeded):
     from app.services.memory import memory_document_service, v3_context_loader
 
     memory_document_service.apply_patches(
-        "alice", "learning_strategy",
+        "alice",
+        "learning_strategy",
         [{"op": "add", "new_line": "- STAR 法已内化"}],
         change_type="patch_realtime",
     )
@@ -143,9 +153,13 @@ def test_attach_active_bodies_loads_strategy_when_asked(seeded):
     ctx = v3_context_loader.load_universal("alice")
     assert ctx.active_learning_strategy_body == ""  # not loaded by universal pass
 
-    ctx = asyncio.run(v3_context_loader.attach_active_bodies(
-        ctx, user_id="alice", load_strategy=True,
-    ))
+    ctx = asyncio.run(
+        v3_context_loader.attach_active_bodies(
+            ctx,
+            user_id="alice",
+            load_strategy=True,
+        )
+    )
     assert "STAR" in ctx.active_learning_strategy_body
 
 
@@ -155,15 +169,20 @@ def test_attach_active_bodies_skips_strategy_when_not_asked(seeded):
     from app.services.memory import memory_document_service, v3_context_loader
 
     memory_document_service.apply_patches(
-        "alice", "learning_strategy",
+        "alice",
+        "learning_strategy",
         [{"op": "add", "new_line": "- 不该被加载的正文"}],
         change_type="patch_realtime",
     )
 
     ctx = v3_context_loader.load_universal("alice")
-    ctx = asyncio.run(v3_context_loader.attach_active_bodies(
-        ctx, user_id="alice", load_strategy=False,
-    ))
+    ctx = asyncio.run(
+        v3_context_loader.attach_active_bodies(
+            ctx,
+            user_id="alice",
+            load_strategy=False,
+        )
+    )
     assert ctx.active_learning_strategy_body == ""
 
 
@@ -179,8 +198,12 @@ def test_render_includes_profile_abilities_and_strategy_oneliner():
     ctx = V3MemoryContext(
         user_profile_body="- 用户：alice",
         ability_states=[
-            {"topic": "Redis", "skill_type": "knowledge_topic",
-             "mastery_level": "weak", "summary": "穿透没搞懂"},
+            {
+                "topic": "Redis",
+                "skill_type": "knowledge_topic",
+                "mastery_level": "weak",
+                "summary": "穿透没搞懂",
+            },
         ],
         learning_strategy_description="先分析根因",
         active_learning_strategy_body="",
@@ -247,7 +270,8 @@ def test_attach_active_bodies_yields_event_loop_via_to_thread(monkeypatch):
     import asyncio
     import time
     from app.services.memory.v3_context_loader import (
-        V3MemoryContext, attach_active_bodies,
+        V3MemoryContext,
+        attach_active_bodies,
     )
 
     BLOCK_SECONDS = 0.05  # 50ms simulated DB read
@@ -282,8 +306,9 @@ def test_attach_active_bodies_yields_event_loop_via_to_thread(monkeypatch):
         marker_task = asyncio.create_task(concurrent_marker(t0))
         bodies_task = asyncio.create_task(
             attach_active_bodies(
-                ctx, user_id="alice",
-                load_strategy=True,    # 1 sleepy_load on a worker thread
+                ctx,
+                user_id="alice",
+                load_strategy=True,  # 1 sleepy_load on a worker thread
             )
         )
         await bodies_task

@@ -14,16 +14,33 @@ logger = logging.getLogger(__name__)
 
 # ── Format whitelists ────────────────────────────────────────────────────
 
-ALLOWED_MEDIA_EXTENSIONS: frozenset[str] = frozenset({
-    # Audio
-    ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".wma", ".aac",
-    # Video (WhisperX/ffmpeg auto-extracts audio track)
-    ".mp4", ".mkv", ".avi", ".mov", ".webm",
-})
+ALLOWED_MEDIA_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        # Audio
+        ".mp3",
+        ".wav",
+        ".m4a",
+        ".flac",
+        ".ogg",
+        ".wma",
+        ".aac",
+        # Video (WhisperX/ffmpeg auto-extracts audio track)
+        ".mp4",
+        ".mkv",
+        ".avi",
+        ".mov",
+        ".webm",
+    }
+)
 
-ALLOWED_RESUME_EXTENSIONS: frozenset[str] = frozenset({
-    ".pdf", ".docx", ".txt", ".md",
-})
+ALLOWED_RESUME_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".pdf",
+        ".docx",
+        ".txt",
+        ".md",
+    }
+)
 
 
 def validate_media_format(filename: str) -> bool:
@@ -39,6 +56,7 @@ def validate_resume_format(filename: str) -> bool:
 
 
 # ── Resume text extraction ───────────────────────────────────────────────
+
 
 def extract_resume_text(file_path: str) -> str:
     """Extract plain text from a resume file.
@@ -93,6 +111,7 @@ def _extract_pdf(file_path: str) -> str:
         api_key = (settings.LLAMA_CLOUD_API_KEY or "").strip()
         if api_key and not api_key.startswith("your_"):
             import nest_asyncio
+
             nest_asyncio.apply()
             from llama_parse import LlamaParse
 

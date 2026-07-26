@@ -13,6 +13,7 @@ What lives here:
   * ``get_profile_for_role`` — resolve role → ModelProfile with the
     catalog fallback chain
 """
+
 from __future__ import annotations
 
 import logging
@@ -87,7 +88,9 @@ def _load_user_selection(user_id: str) -> dict[str, str]:
         return {str(role): str(pid) for role, pid in rows}
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "Failed to load model selection for user=%s: %s", user_id, exc,
+            "Failed to load model selection for user=%s: %s",
+            user_id,
+            exc,
         )
         return dict(ROLE_DEFAULTS)
 
@@ -110,10 +113,12 @@ def _save_user_selection(user_id: str, selection: dict[str, str]) -> None:
         db.query(UserModelSelection).filter(
             UserModelSelection.user_id == user_pk,
         ).delete(synchronize_session=False)
-        db.add_all([
-            UserModelSelection(user_id=user_pk, role=role, profile_id=pid)
-            for role, pid in selection.items()
-        ])
+        db.add_all(
+            [
+                UserModelSelection(user_id=user_pk, role=role, profile_id=pid)
+                for role, pid in selection.items()
+            ]
+        )
         db.commit()
 
 
@@ -131,7 +136,8 @@ def get_runtime_selection(user_id: str | None = None) -> dict[str, str]:
 
 
 def persist_runtime_selection(
-    selection: dict[str, str], user_id: str,
+    selection: dict[str, str],
+    user_id: str,
 ) -> dict[str, str]:
     """Save ``selection`` for ``user_id``. Returns the normalized form."""
     normalized = _normalize_selection(selection)
@@ -141,12 +147,14 @@ def persist_runtime_selection(
     # next chat constructs a fresh LLM honouring the new selection.
     # Lazy import to avoid circular dep with llm_client_factory.
     from app.core.llm_client_factory import _clear_llm_instance_cache
+
     _clear_llm_instance_cache()
     return normalized
 
 
 def update_runtime_selection(
-    updates: dict[str, str], user_id: str,
+    updates: dict[str, str],
+    user_id: str,
 ) -> dict[str, str]:
     current = get_runtime_selection(user_id)
     current.update({k: v for k, v in updates.items() if v is not None})
@@ -182,7 +190,8 @@ def get_profile_for_role(role: str, user_id: str | None = None) -> ModelProfile:
 
     selected_pid = selection.get(role) or ROLE_DEFAULTS.get(role)
     catalog_rest = sorted(
-        profiles.values(), key=lambda p: (not p.supports_function_calling, p.id),
+        profiles.values(),
+        key=lambda p: (not p.supports_function_calling, p.id),
     )
     candidates: list[tuple[str | None, str]] = [
         (selected_pid, "selection"),
@@ -213,7 +222,11 @@ def get_profile_for_role(role: str, user_id: str | None = None) -> ModelProfile:
     if why != "selection":
         logger.warning(
             "model selection degraded: role=%s user=%s wanted=%s -> %s (%s)",
-            role, user_id, selected_pid, profile.id, why,
+            role,
+            user_id,
+            selected_pid,
+            profile.id,
+            why,
         )
     return profile
 

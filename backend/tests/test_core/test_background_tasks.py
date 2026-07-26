@@ -1,4 +1,5 @@
 """Tests for app.core.background_tasks — lifecycle, exception logging, drain."""
+
 from __future__ import annotations
 
 import asyncio
@@ -99,5 +100,7 @@ async def test_cancelled_task_does_not_log_as_error(caplog):
             pass
         await asyncio.sleep(0)
 
-    error_messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    error_messages = [
+        r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR
+    ]
     assert not any("cancelled_one" in m for m in error_messages), error_messages

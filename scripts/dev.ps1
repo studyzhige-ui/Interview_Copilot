@@ -144,7 +144,7 @@ function Invoke-EnsureCondaEnv {
         Write-Host '  If missing, create it (Python 3.10 / 3.11 / 3.12 all work):' -ForegroundColor Yellow
         Write-Host "      conda create -n $WantEnv python=3.11 -y" -ForegroundColor White
         Write-Host "      conda activate $WantEnv" -ForegroundColor White
-        Write-Host '      pip install -r requirements.txt' -ForegroundColor White
+        Write-Host '      pip install -r requirements-dev.txt' -ForegroundColor White
         Write-Error "Conda activate failed for env '$WantEnv'."
     }
 
@@ -159,7 +159,7 @@ function Invoke-EnsureCondaEnv {
         Write-Host "      conda env remove -n $WantEnv -y" -ForegroundColor White
         Write-Host "      conda create -n $WantEnv python=3.11 -y" -ForegroundColor White
         Write-Host "      conda activate $WantEnv" -ForegroundColor White
-        Write-Host '      pip install -r requirements.txt' -ForegroundColor White
+        Write-Host '      pip install -r requirements-dev.txt' -ForegroundColor White
         Write-Error "Conda env '$WantEnv' has no Python."
     }
     return $pyExe
@@ -178,11 +178,11 @@ if ($RunBackend) {
         Write-Error 'docker not on PATH. Install Docker Desktop, or pass -SkipDocker.'
     }
 
-    # Backend deps sanity check — catches "you forgot pip install -r requirements.txt".
+    # Backend deps sanity check — catches a missing development install.
     & python -c "import fastapi, alembic, uvicorn, celery, slowapi" 2>$null
     if ($LASTEXITCODE -ne 0) {
         Write-Host '  Backend Python deps missing.' -ForegroundColor Red
-        Write-Host '  Fix: pip install -r requirements.txt' -ForegroundColor Yellow
+        Write-Host '  Fix: pip install -r requirements-dev.txt' -ForegroundColor Yellow
         Write-Error 'Backend deps check failed.'
     }
     Say 'Init' 'Backend deps OK (fastapi, alembic, uvicorn, celery, slowapi)' Green

@@ -43,7 +43,9 @@ class TTSService:
                 buffer.write(chunk["data"])
 
         audio_bytes = buffer.getvalue()
-        logger.debug("TTS synthesized %d bytes for %d chars", len(audio_bytes), len(text))
+        logger.debug(
+            "TTS synthesized %d bytes for %d chars", len(audio_bytes), len(text)
+        )
         return audio_bytes
 
 

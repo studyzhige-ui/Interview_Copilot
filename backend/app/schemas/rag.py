@@ -4,6 +4,7 @@ Mirrors the request shapes used by ``app/api/rag.py``: presigned-URL
 issuance for knowledge uploads, KnowledgeDocument CRUD, and the
 ``/rag/query`` LLM-grounding endpoint.
 """
+
 from __future__ import annotations
 
 from enum import Enum
@@ -23,6 +24,7 @@ class SourceKindEnum(str, Enum):
     - ``improved_qa``: a QA improved-answer the user saved from an interview.
     - ``manual_text``: a directly pasted/hand-written doc (reserved).
     """
+
     user_upload = "user_upload"
     improved_qa = "improved_qa"
     manual_text = "manual_text"
@@ -30,6 +32,7 @@ class SourceKindEnum(str, Enum):
 
 class KnowledgeUploadRequest(BaseModel):
     """``POST /knowledge/upload`` — get a presigned URL for the raw blob."""
+
     filename: str
     content_type: Optional[str] = "application/octet-stream"
     size_bytes: Optional[int] = None
@@ -37,6 +40,7 @@ class KnowledgeUploadRequest(BaseModel):
 
 class KnowledgeDocumentCreateRequest(BaseModel):
     """``POST /knowledge/documents`` — register an uploaded blob as a doc."""
+
     upload_id: str  # the file_assets.id of the confirmed upload
     source_kind: SourceKindEnum = SourceKindEnum.user_upload
     title: Optional[str] = None
@@ -45,14 +49,18 @@ class KnowledgeDocumentCreateRequest(BaseModel):
 
 class KnowledgeDocumentUpdateRequest(BaseModel):
     """``PATCH /knowledge/documents/{doc_id}`` request body."""
+
     title: Optional[str] = None
     category: Optional[str] = None
 
 
 class QueryRequest(BaseModel):
     """``POST /rag/query`` — user question grounded against the KB."""
+
     query: str = Field(..., description="User question directed at the LLM")
-    source_kind: Optional[SourceKindEnum] = Field(None, description="Optional metadata filter bounds")
+    source_kind: Optional[SourceKindEnum] = Field(
+        None, description="Optional metadata filter bounds"
+    )
 
 
 __all__ = [

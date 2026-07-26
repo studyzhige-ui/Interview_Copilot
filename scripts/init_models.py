@@ -40,22 +40,16 @@ DEFAULT_HF_ENDPOINT = "https://hf-mirror.com"
 #     ``vocabulary.json`` and added ``preprocessor_config.json``), we just
 #     get the new file automatically — no code change needed.
 
-# ── Model defaults (must match .env.example) ────────────────────────────
+# ── Community local-model defaults ─────────────────────────────────────
 
-# Env-var → default model name. New shape: each role reads from a single
-# *_MODEL env (matches backend/app/core/config.py). The legacy *_MODEL_ID
-# names are kept as aliases so old .env files keep working during transition.
+# Environment variable → default model name. These names match
+# backend/app/core/config.py exactly.
 MODEL_DEFAULTS = {
     "EMBEDDING_MODEL": "BAAI/bge-m3",
     "RERANKER_MODEL": "BAAI/bge-reranker-v2-m3",
     "TRANSCRIPTION_MODEL": "Systran/faster-whisper-large-v3",
     "DIARIZATION_MODEL_ID": "pyannote-community/speaker-diarization-community-1",
 }
-
-
-def _read_model_env(primary: str, legacy: str, fallback: str) -> str:
-    """Read a model env var, preferring the new name + falling back to the legacy one."""
-    return (os.getenv(primary) or os.getenv(legacy) or fallback).strip()
 
 # ── Size lookup: query HuggingFace live; no hardcoded fallback ───────────
 #
@@ -92,6 +86,7 @@ def get_remote_size(repo_id: str) -> str:
         return _size_cache[repo_id]
     try:
         from huggingface_hub import HfApi
+
         info = HfApi().model_info(repo_id, files_metadata=True)
         total = sum(s.size or 0 for s in info.siblings)
         result = _humanize_bytes(total) if total > 0 else "size unknown"
@@ -111,7 +106,13 @@ def prepare_runtime(hf_endpoint: str) -> None:
     TORCH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     # Clear dead local proxies that block HuggingFace downloads
-    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "GIT_HTTP_PROXY", "GIT_HTTPS_PROXY"):
+    for key in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "GIT_HTTP_PROXY",
+        "GIT_HTTPS_PROXY",
+    ):
         value = os.getenv(key, "")
         if "127.0.0.1:9" in value or "localhost:9" in value:
             os.environ.pop(key, None)
@@ -196,7 +197,9 @@ def _provider_status(role: str) -> tuple[bool, str, str]:
                 pid = f"{pid} + DIARIZATION_MODE=pyannote (hybrid)"
     else:
         return True, "(unknown role)", ""
-    reason = f"provider {pid!r} → " + ("download local copy" if local else "remote, skip")
+    reason = f"provider {pid!r} → " + (
+        "download local copy" if local else "remote, skip"
+    )
     return local, pid, reason
 
 
@@ -207,17 +210,16 @@ def main() -> None:
         description="Download local models for Interview Copilot.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
-Models are configured in .env (or .env.example). The script reads the
-*PROFILE_ID variables you've set and downloads ONLY the models that
-correspond to a ``local-*`` profile — lite-mode profiles (siliconflow-* /
-openai-* / etc.) are skipped automatically since the data lives at the
-provider, not on your disk.
+Models are configured in .env (start from .env.community.example). The script reads the
+provider variables you've set and downloads only models assigned to local
+providers. Remote-provider roles are skipped because their model data stays
+with the provider.
 
 Examples:
   python scripts/init_models.py                  # Download all locally-configured models
   python scripts/init_models.py --only embedding # Embedding only
   python scripts/init_models.py --dry-run        # Show plan without downloading
-  python scripts/init_models.py --force-all      # Ignore PROFILE_ID guards (legacy behaviour)
+  python scripts/init_models.py --force-all      # Pre-download every configured local model
 """,
     )
     parser.add_argument(
@@ -239,19 +241,24 @@ Examples:
     parser.add_argument(
         "--force-all",
         action="store_true",
-        help="Bypass PROFILE_ID guards and download every model anyway "
-             "(useful when pre-warming a machine that might switch to full mode later).",
+        help="Download every configured model, including roles currently using "
+        "remote providers.",
     )
     args = parser.parse_args()
 
-    # Read model IDs from environment. New names are *_MODEL (no _ID suffix);
-    # the legacy *_MODEL_ID names are honoured as fallbacks so a stale .env
-    # still downloads the right thing.
     models = {
-        "embedding":   _read_model_env("EMBEDDING_MODEL",      "EMBEDDING_MODEL_ID",      MODEL_DEFAULTS["EMBEDDING_MODEL"]),
-        "reranker":    _read_model_env("RERANKER_MODEL",       "RERANKER_MODEL_ID",       MODEL_DEFAULTS["RERANKER_MODEL"]),
-        "whisper":     _read_model_env("TRANSCRIPTION_MODEL",  "WHISPER_MODEL_ID",        MODEL_DEFAULTS["TRANSCRIPTION_MODEL"]),
-        "diarization": os.getenv("DIARIZATION_MODEL_ID", MODEL_DEFAULTS["DIARIZATION_MODEL_ID"]),
+        "embedding": os.getenv(
+            "EMBEDDING_MODEL", MODEL_DEFAULTS["EMBEDDING_MODEL"]
+        ).strip(),
+        "reranker": os.getenv(
+            "RERANKER_MODEL", MODEL_DEFAULTS["RERANKER_MODEL"]
+        ).strip(),
+        "whisper": os.getenv(
+            "TRANSCRIPTION_MODEL", MODEL_DEFAULTS["TRANSCRIPTION_MODEL"]
+        ).strip(),
+        "diarization": os.getenv(
+            "DIARIZATION_MODEL_ID", MODEL_DEFAULTS["DIARIZATION_MODEL_ID"]
+        ),
     }
 
     # Print configuration summary
@@ -274,7 +281,7 @@ Examples:
         if args.only not in ("all", role):
             continue
         repo_id = models[role]
-        # Profile gate — skip lite-mode roles unless --force-all.
+        # Provider gate: remote roles need no local model download.
         needs_local, provider_id, reason = _provider_status(role)
         if not needs_local and not args.force_all:
             print(f"  {role:>13}: {repo_id}")
@@ -283,7 +290,9 @@ Examples:
             continue
         already = is_already_downloaded(repo_id)
         size = get_remote_size(repo_id)
-        status = "[ok]   already downloaded" if already else f"[get]  will download ({size})"
+        status = (
+            "[ok]   already downloaded" if already else f"[get]  will download ({size})"
+        )
         print(f"  {role:>13}: {repo_id}")
         print(f"                {status}    [{reason}]")
         if not already:
@@ -314,10 +323,15 @@ Examples:
             print(f"[{role}] [done] Ready: {target}")
         except Exception as exc:
             print(f"[{role}] [fail] {exc}", file=sys.stderr)
-            print(f"[{role}]   Try running with --hf-endpoint https://huggingface.co", file=sys.stderr)
+            print(
+                f"[{role}]   Try running with --hf-endpoint https://huggingface.co",
+                file=sys.stderr,
+            )
 
     print()
-    print("Done. Start the API server with: cd backend && uvicorn app.main:app --reload --port 8080")
+    print(
+        "Done. Start the API server with: cd backend && uvicorn app.main:app --reload --port 8080"
+    )
 
 
 if __name__ == "__main__":

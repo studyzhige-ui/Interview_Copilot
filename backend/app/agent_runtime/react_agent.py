@@ -3,11 +3,9 @@
 The actual agent loop lives in
 :class:`app.conversation.agent_strategy.AgentLoopStrategy`, and the
 per-conversation lifecycle in
-:class:`app.conversation.engine.ConversationEngine`. The legacy
-``run_react_agent`` / ``run_react_agent_stream`` shims that wrapped
-the engine for the old ``/agent/react/*`` endpoints were deleted in
-the audit cleanup — the unified ``/chat/sse`` (mode=agent) is the
-sole entry point now.
+:class:`app.conversation.engine.ConversationEngine`. Agent turns enter
+through the durable conversation-turn API; this module only provides
+loop primitives.
 
 What this module retains:
 
@@ -16,9 +14,11 @@ What this module retains:
   - ``_args_summary``      — short label for the SSE tool_start event
   - ``_result_summary``    — short label for the SSE tool_done event
 """
+
 from __future__ import annotations
 
 import time
+import hashlib
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
@@ -47,6 +47,11 @@ class AgentBudget:
     stop_reason: str | None = None
     tool_usage: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     tool_signatures: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    tool_call_ids: set[str] = field(default_factory=set)
+    last_failed_outcome: tuple[str, str] | None = None
+    failed_outcome_streak: int = 0
+    last_action: tuple[str, str] | None = None
+    no_progress_streak: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -84,6 +89,41 @@ class AgentBudget:
         if self.steps > 0:
             self.steps -= 1
 
+    def observe_tool_result(
+        self,
+        tool_name: str,
+        signature: str,
+        result: str,
+        *,
+        is_error: bool,
+    ) -> str | None:
+        """Detect repeated failures or unchanged outcomes and request replanning."""
+        fingerprint = hashlib.sha256(result.encode("utf-8")).hexdigest()[:16]
+        failed = (signature, fingerprint)
+        if is_error:
+            self.failed_outcome_streak = (
+                self.failed_outcome_streak + 1
+                if self.last_failed_outcome == failed
+                else 1
+            )
+            self.last_failed_outcome = failed
+        else:
+            self.failed_outcome_streak = 0
+            self.last_failed_outcome = None
+
+        action = (tool_name, fingerprint)
+        self.no_progress_streak = (
+            self.no_progress_streak + 1 if self.last_action == action else 1
+        )
+        self.last_action = action
+        if self.failed_outcome_streak >= 3:
+            self.failed_outcome_streak = 0
+            return "The same tool call failed with the same outcome three times. Stop retrying and replan."
+        if self.no_progress_streak >= 4:
+            self.no_progress_streak = 0
+            return "Four tool actions produced no new outcome. Pause the current approach and replan from the evidence."
+        return None
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "steps": self.steps,
@@ -102,9 +142,12 @@ def _tool_call_payload(tool_call: Any) -> dict[str, Any]:
         "id": tool_call.id,
         "type": "function",
         "function": {
-            "name": tool_call.name if hasattr(tool_call, "name") else tool_call.function.name,
-            "arguments": tool_call.arguments if hasattr(tool_call, "arguments")
-                          else tool_call.function.arguments,
+            "name": tool_call.name
+            if hasattr(tool_call, "name")
+            else tool_call.function.name,
+            "arguments": tool_call.arguments
+            if hasattr(tool_call, "arguments")
+            else tool_call.function.arguments,
         },
     }
 
@@ -113,6 +156,7 @@ def _args_summary(raw_args: str) -> str:
     """Short summary of tool arguments for event display."""
     try:
         import json
+
         parsed = json.loads(raw_args) if raw_args else {}
         parts = []
         for k, v in list(parsed.items())[:3]:

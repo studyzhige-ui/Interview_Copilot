@@ -4,6 +4,7 @@ These pin that every foreseeable upstream failure maps to a specific,
 actionable Chinese message — so L1 chat, L2 agent, and the SSE net all
 show the user what to DO, never a raw ``Error code: 402 - {...}`` dump.
 """
+
 from __future__ import annotations
 
 from app.core import error_messages as em
@@ -23,13 +24,18 @@ class _ApiErr(Exception):
 def test_insufficient_balance_402_is_actionable():
     # The reported bug: a model pointed at an expired / empty subscription
     # returns HTTP 402. Must read as the balance message, not generic.
-    assert humanize_error(_ApiErr(402, "Insufficient account balance")) == em.MSG_BALANCE
+    assert (
+        humanize_error(_ApiErr(402, "Insufficient account balance")) == em.MSG_BALANCE
+    )
     # Phrase-only (no status code) still classifies.
     assert humanize_error(Exception("insufficient_balance")) == em.MSG_BALANCE
     assert humanize_error(Exception("账户余额不足，已欠费")) == em.MSG_BALANCE
     # A 402 that ALSO looks like a bad request still reads as balance
     # (balance is checked first — it's the more actionable signal).
-    assert humanize_error(_ApiErr(402, "bad request: insufficient_balance")) == em.MSG_BALANCE
+    assert (
+        humanize_error(_ApiErr(402, "bad request: insufficient_balance"))
+        == em.MSG_BALANCE
+    )
 
 
 def test_auth_errors_point_to_model_settings():
@@ -43,11 +49,16 @@ def test_rate_limit():
 
 def test_model_not_found():
     assert humanize_error(_ApiErr(404, "not found")) == em.MSG_MODEL_NOT_FOUND
-    assert humanize_error(Exception("the model `foo` does not exist")) == em.MSG_MODEL_NOT_FOUND
+    assert (
+        humanize_error(Exception("the model `foo` does not exist"))
+        == em.MSG_MODEL_NOT_FOUND
+    )
 
 
 def test_context_too_long():
-    assert humanize_error(Exception("maximum context length exceeded")) == em.MSG_CONTEXT
+    assert (
+        humanize_error(Exception("maximum context length exceeded")) == em.MSG_CONTEXT
+    )
 
 
 def test_timeout():

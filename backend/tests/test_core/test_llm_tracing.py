@@ -1,4 +1,5 @@
 """Tests for app.core.llm_tracing — opt-in LangSmith monkey-patch of openai.OpenAI."""
+
 from __future__ import annotations
 
 import importlib
@@ -24,6 +25,7 @@ def fresh_tracing(monkeypatch):
     saved_async = openai.AsyncOpenAI
 
     import app.core.llm_tracing as llm_tracing
+
     llm_tracing = importlib.reload(llm_tracing)
     monkeypatch.setattr(llm_tracing, "_ensure_dotenv_loaded", lambda: None)
 
@@ -66,7 +68,9 @@ def test_setup_is_noop_when_tracing_false(monkeypatch, fresh_tracing):
     assert openai.OpenAI is before_sync
 
 
-def test_setup_warns_when_tracing_true_but_no_api_key(monkeypatch, fresh_tracing, caplog):
+def test_setup_warns_when_tracing_true_but_no_api_key(
+    monkeypatch, fresh_tracing, caplog
+):
     import openai
 
     monkeypatch.setenv("LANGSMITH_TRACING", "true")

@@ -1,4 +1,5 @@
 """ANA-5: transcribe_plain provider dispatch (remote-first short clips)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -10,7 +11,8 @@ from app.services.voice import transcription_registry as reg
 
 def test_local_provider_raises_localprovideronly(monkeypatch):
     monkeypatch.setattr(
-        reg, "resolve_transcription",
+        reg,
+        "resolve_transcription",
         lambda: reg.ResolvedTranscription(
             provider_id="local_whisperx",
             provider=reg.PROVIDERS["local_whisperx"],
@@ -27,9 +29,12 @@ def test_remote_provider_without_key_raises_runtime_error(monkeypatch, tmp_path)
     )
     provider = reg.PROVIDERS[remote_id]
     monkeypatch.setattr(
-        reg, "resolve_transcription",
+        reg,
+        "resolve_transcription",
         lambda: reg.ResolvedTranscription(
-            provider_id=remote_id, provider=provider, model="whisper-x",
+            provider_id=remote_id,
+            provider=provider,
+            model="whisper-x",
         ),
     )
     monkeypatch.delenv(provider.api_key_env, raising=False)

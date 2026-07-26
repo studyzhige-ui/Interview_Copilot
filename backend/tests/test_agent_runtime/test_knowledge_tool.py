@@ -17,11 +17,16 @@ class TestKnowledgeErrorHandling:
 
         from app.agent_runtime.tool_registry import AgentToolContext
         from app.agent_runtime.tools.knowledge import (
-            SearchKnowledgeArgs, _search_knowledge_handler,
+            SearchKnowledgeArgs,
+            _search_knowledge_handler,
         )
+
         ctx = AgentToolContext(user_id="alice", session_id="s1")
-        result = asyncio.run(_search_knowledge_handler(
-            SearchKnowledgeArgs(query="redis"), ctx,
-        ))
+        result = asyncio.run(
+            _search_knowledge_handler(
+                SearchKnowledgeArgs(query="redis"),
+                ctx,
+            )
+        )
         assert "error" in result
         assert "redis" in result["query"]

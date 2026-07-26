@@ -1,6 +1,6 @@
 """Add users.last_dreamed_at for the autoDream cursor.
 
-The Path B nightly dreaming worker (``app.services.memory.dreaming_worker``)
+The nightly dreaming worker (``app.services.memory.dreaming_worker``)
 now uses a per-user cursor instead of per-record. The cursor's role is
 analogous to Claude Code's ``.consolidate-lock`` file mtime — it gates
 the next dream attempt for the user behind:

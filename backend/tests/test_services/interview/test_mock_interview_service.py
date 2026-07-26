@@ -8,6 +8,7 @@ surface is:
   - stages_from_plan_json        (parse the frozen stage list back out)
   - generate_next_turn           (one LLM call per answer, no retry/validation)
 """
+
 import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -54,7 +55,9 @@ def test_prefix_hash_is_short_and_stable():
 
 def test_generate_plan_freezes_general_template():
     plan = generate_plan(
-        resume_context="r", jd_context="j", interviewer_style="professional",
+        resume_context="r",
+        jd_context="j",
+        interviewer_style="professional",
         plan_template_key="general",
     )
     assert plan.template_key == "general"
@@ -82,9 +85,12 @@ def test_unknown_template_falls_back_to_general():
 
 
 def test_stages_from_plan_json_parses_and_falls_back():
-    good = json.dumps({"stages": [{"key": "a", "title": "甲"}, {"key": "b", "title": "乙"}]})
+    good = json.dumps(
+        {"stages": [{"key": "a", "title": "甲"}, {"key": "b", "title": "乙"}]}
+    )
     assert stages_from_plan_json(good) == [
-        {"key": "a", "title": "甲"}, {"key": "b", "title": "乙"},
+        {"key": "a", "title": "甲"},
+        {"key": "b", "title": "乙"},
     ]
     # Garbage / empty → the canonical general template.
     assert stages_from_plan_json("not json") == GENERAL_PLAN_TEMPLATE
@@ -96,27 +102,38 @@ def test_stages_from_plan_json_parses_and_falls_back():
 
 
 def _stages():
-    return [{"key": k, "title": k} for k in (
-        "self_intro", "resume_project_deep_dive", "role_technical_assessment",
-        "candidate_questions",
-    )]
+    return [
+        {"key": k, "title": k}
+        for k in (
+            "self_intro",
+            "resume_project_deep_dive",
+            "role_technical_assessment",
+            "candidate_questions",
+        )
+    ]
 
 
 def test_generate_next_turn_parses_llm_output():
     resp = MagicMock()
-    resp.text = json.dumps({
-        "message": "好的。能讲讲你最近的项目吗？",
-        "stage_key": "resume_project_deep_dive",
-        "ready_to_finish": False,
-    })
+    resp.text = json.dumps(
+        {
+            "message": "好的。能讲讲你最近的项目吗？",
+            "stage_key": "resume_project_deep_dive",
+            "ready_to_finish": False,
+        }
+    )
     with patch.object(mod, "get_llm_for_role") as _factory:
         mock_llm = _factory.return_value
         mock_llm.acomplete = AsyncMock(return_value=resp)
-        turn = asyncio.run(generate_next_turn(
-            prefix="P", stages=_stages(), current_stage_key="self_intro",
-            recent_messages=[{"role": "assistant", "content": "请自我介绍"}],
-            user_answer="我是候选人",
-        ))
+        turn = asyncio.run(
+            generate_next_turn(
+                prefix="P",
+                stages=_stages(),
+                current_stage_key="self_intro",
+                recent_messages=[{"role": "assistant", "content": "请自我介绍"}],
+                user_answer="我是候选人",
+            )
+        )
     assert isinstance(turn, NextTurn)
     assert turn.interviewer_message.startswith("好的")
     assert turn.next_stage_key == "resume_project_deep_dive"
@@ -127,14 +144,21 @@ def test_generate_next_turn_parses_llm_output():
 def test_generate_next_turn_rejects_unknown_stage_key():
     """An LLM-hallucinated stage outside the plan keeps the current stage."""
     resp = MagicMock()
-    resp.text = json.dumps({"message": "继续", "stage_key": "made_up", "ready_to_finish": False})
+    resp.text = json.dumps(
+        {"message": "继续", "stage_key": "made_up", "ready_to_finish": False}
+    )
     with patch.object(mod, "get_llm_for_role") as _factory:
         mock_llm = _factory.return_value
         mock_llm.acomplete = AsyncMock(return_value=resp)
-        turn = asyncio.run(generate_next_turn(
-            prefix="P", stages=_stages(), current_stage_key="role_technical_assessment",
-            recent_messages=[], user_answer="answer",
-        ))
+        turn = asyncio.run(
+            generate_next_turn(
+                prefix="P",
+                stages=_stages(),
+                current_stage_key="role_technical_assessment",
+                recent_messages=[],
+                user_answer="answer",
+            )
+        )
     assert turn.next_stage_key == "role_technical_assessment"
 
 
@@ -146,10 +170,15 @@ def test_generate_next_turn_survives_parse_failure():
     with patch.object(mod, "get_llm_for_role") as _factory:
         mock_llm = _factory.return_value
         mock_llm.acomplete = AsyncMock(return_value=resp)
-        turn = asyncio.run(generate_next_turn(
-            prefix="P", stages=_stages(), current_stage_key="self_intro",
-            recent_messages=[], user_answer="answer",
-        ))
+        turn = asyncio.run(
+            generate_next_turn(
+                prefix="P",
+                stages=_stages(),
+                current_stage_key="self_intro",
+                recent_messages=[],
+                user_answer="answer",
+            )
+        )
     assert isinstance(turn, NextTurn)
     assert turn.interviewer_message  # non-empty fallback
     assert turn.next_stage_key == "self_intro"

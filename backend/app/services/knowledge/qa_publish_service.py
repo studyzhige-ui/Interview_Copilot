@@ -6,6 +6,7 @@ original answer / score / critique / transcript provenance stay on the QA row.
 ``interview_qa.saved_document_id`` is the back-reference. Re-saving refreshes the
 same doc (idempotent reindex: ingest delete-replaces the doc's chunks + Milvus).
 """
+
 from __future__ import annotations
 
 import logging
@@ -79,7 +80,9 @@ async def save_qa_to_knowledge(
     from app.rag.ingestion import ingest_text
 
     result = await ingest_text(
-        text=content_text, source_kind="improved_qa", user_id=user_pk,
+        text=content_text,
+        source_kind="improved_qa",
+        user_id=user_pk,
         document_id=doc.id,
     )
     doc.chunk_count = int(result.get("chunk_count") or 0) if result else 0
@@ -106,7 +109,9 @@ def unsave_qa_from_knowledge(db: Session, *, user_pk: int, qa: InterviewQA) -> b
         .first()
     )
     if doc is not None:
-        from app.services.knowledge.knowledge_service import hard_delete_knowledge_document
+        from app.services.knowledge.knowledge_service import (
+            hard_delete_knowledge_document,
+        )
 
         hard_delete_knowledge_document(db, doc)
     qa.saved_document_id = None
@@ -115,7 +120,9 @@ def unsave_qa_from_knowledge(db: Session, *, user_pk: int, qa: InterviewQA) -> b
     return True
 
 
-def delete_saved_qa_docs_for_record(db: Session, *, user_pk: int, record_id: str) -> int:
+def delete_saved_qa_docs_for_record(
+    db: Session, *, user_pk: int, record_id: str
+) -> int:
     """Hard-delete every improved_qa knowledge doc produced by a record's QAs.
 
     Used when an interview is deleted and the user opts to also remove the
@@ -139,5 +146,7 @@ def delete_saved_qa_docs_for_record(db: Session, *, user_pk: int, record_id: str
             hard_delete_knowledge_document(db, doc)
             removed += 1
         except Exception as exc:  # noqa: BLE001 — best-effort cascade
-            logger.warning("cascade delete of improved_qa doc %s failed: %s", doc.id, exc)
+            logger.warning(
+                "cascade delete of improved_qa doc %s failed: %s", doc.id, exc
+            )
     return removed

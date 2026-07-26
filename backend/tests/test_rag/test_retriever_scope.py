@@ -12,6 +12,7 @@ helpers that gate scope, dedup and scoring:
   * ``RetrievalState`` / ``RetrievalResult`` — the structured-state contract
     that replaced the ``[SYSTEM_EMPTY_WARNING]`` sentinel protocol.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -159,7 +160,10 @@ def test_retrieval_state_defaults_and_dict_shape():
     assert state.planner_failed is False
     assert state.fallback_used is False
     assert set(state.to_dict()) == {
-        "retrieval_hit", "empty_reason", "planner_failed", "fallback_used",
+        "retrieval_hit",
+        "empty_reason",
+        "planner_failed",
+        "fallback_used",
     }
 
 

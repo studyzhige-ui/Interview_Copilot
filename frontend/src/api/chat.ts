@@ -2,7 +2,6 @@ import { apiClient, authedFetch } from './client';
 import type {
   ChatSessionCreateResp,
   ChatSessionListItem,
-  ChatMessageItem,
   ChatTranscriptResp,
   Source,
 } from '@/types/api';
@@ -39,9 +38,8 @@ import type {
  *   - error       data.error     terminal: promise rejects
  *   - done                       terminal: promise resolves
  *
- * Cancellation: pass an AbortController.signal in ``opts.signal`` —
- * the active fetch is aborted, the server-side generator yields its
- * cleanup hook, and the promise rejects with the signal's reason.
+ * Aborting the signal detaches this subscription. The chat toolbar first
+ * requests server-side turn cancellation, then aborts this stream.
  */
 
 /** Mirrors HarnessEventType in backend/app/agent_runtime/harness_events.py. */
@@ -70,12 +68,11 @@ export interface ToolStartInfo {
    *  live-stream tool_use/tool_result blocks by id rather than FIFO
    *  order — robust to parallel tool calls and makes the live shape
    *  match what ``/chat/transcript`` persists. Empty string from
-   *  older backends; renderer falls back to FIFO-by-order then. */
+   *  matching ``tool_done`` event. */
   tool_call_id: string;
   /** Full parsed input dict (AGT-5, live == replay) — matches the
-   *  persisted tool_use block. Absent on older backends. */
-  input?: Record<string, unknown>;
-  args_summary: string;
+   *  persisted tool_use block. */
+  input: Record<string, unknown>;
   step: number;
   elapsed_ms: number;
 }
@@ -106,7 +103,7 @@ export interface ToolDoneInfo {
  *
  * All fields are always present on the wire — the backend never omits
  * one, so callers may treat them as required (the wire→type cast in
- * ``streamChatSSE`` trusts this).
+ * ``streamChatTurn`` trusts this).
  */
 export interface BudgetInfo {
   /** ReAct steps consumed this turn. */
@@ -151,190 +148,158 @@ export interface StreamChatHandlers {
  *  AGENT pill is decorative and the LLM never sees a single tool. */
 export type ChatMode = 'chat' | 'agent';
 
-export interface StreamChatOpts {
+export interface StreamChatOptions {
   signal?: AbortSignal;
-  /** Defaults to ``'chat'`` for back-compat. */
+  /** Defaults to the direct chat strategy. */
   mode?: ChatMode;
+  /** Subscribe to an already-running turn instead of creating one. */
+  turnId?: string;
+  onTurnCreated?: (turnId: string) => void;
 }
 
-export async function streamChatSSE(
-  sessionId: string,
-  message: string,
-  handlers: StreamChatHandlers,
-  opts: StreamChatOpts = {},
-): Promise<void> {
-  const baseURL = (apiClient.defaults.baseURL ?? '').replace(/\/+$/, '');
-  const url = `${baseURL}/chat/sse/${encodeURIComponent(sessionId)}`;
-  // ``authedFetch`` mirrors the axios interceptor's auth flow for non-
-  // axios paths: attaches the bearer, refreshes once on 401, redirects
-  // to /auth if refresh itself fails. Without this an expired access
-  // token shows up as "连接中断: Could not validate credentials" and
-  // the user is stuck — fetch doesn't go through axios so the response
-  // interceptor at client.ts:62 never sees the 401.
-  const resp = await authedFetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-    },
-    body: JSON.stringify({ message, mode: opts.mode ?? 'chat' }),
-    signal: opts.signal,
-  });
-  if (!resp.ok || !resp.body) {
-    let detail = `HTTP ${resp.status}`;
-    try {
-      const j = await resp.json();
-      if (j?.detail) detail = String(j.detail);
-    } catch { /* not json — keep status */ }
-    throw new Error(detail);
+function dispatchHarnessEvent(evt: HarnessEvent, handlers: StreamChatHandlers): boolean {
+  if (!evt || typeof evt.type !== 'string') return false;
+  const data = (evt.data ?? {}) as Record<string, unknown>;
+  const step = typeof evt.step === 'number' ? evt.step : 0;
+  const elapsed = typeof evt.elapsed_ms === 'number' ? evt.elapsed_ms : 0;
+  switch (evt.type) {
+    case 'status': handlers.onStatus?.(String(data.message ?? '')); break;
+    case 'sources':
+      handlers.onSources?.(Array.isArray(data.sources) ? data.sources as Source[] : []);
+      break;
+    case 'text_delta': handlers.onTextDelta?.(String(data.delta ?? ''), step); break;
+    case 'text': handlers.onText?.(String(data.content ?? ''), step); break;
+    case 'tool_start':
+      handlers.onToolStart?.({
+        tool: String(data.tool ?? ''),
+        tool_call_id: String(data.tool_call_id ?? ''),
+        input: data.input && typeof data.input === 'object'
+          ? data.input as Record<string, unknown>
+          : {},
+        step,
+        elapsed_ms: elapsed,
+      });
+      break;
+    case 'tool_done':
+      handlers.onToolDone?.({
+        tool: String(data.tool ?? ''),
+        tool_call_id: String(data.tool_call_id ?? ''),
+        result_summary: String(data.result_summary ?? ''),
+        result_content: String(data.result_content ?? ''),
+        tool_latency_ms: Number(data.tool_latency_ms ?? 0),
+        is_error: Boolean(data.is_error),
+        step,
+        elapsed_ms: elapsed,
+      });
+      break;
+    case 'budget': handlers.onBudget?.(data as unknown as BudgetInfo, step); break;
+    case 'error': handlers.onStreamError?.(String(data.error ?? 'stream error')); break;
+    case 'done': return true;
+    default:
+      // eslint-disable-next-line no-console
+      console.debug('[sse] unknown event type', evt.type, data);
   }
+  return false;
+}
 
-  // SSE frame parser. Lines arrive as ``data: <json>\n`` and frames are
-  // delimited by a blank line (``\n\n``). The decoder may split a frame
-  // across chunks, so we buffer.
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  // ── Idle watchdog ─────────────────────────────────────────────────
-  // If the backend worker stalls or the proxy silently drops the
-  // connection without a FIN, ``reader.read()`` will hang forever
-  // and the UI will be stuck on "AI 正在生成…" until the user
-  // manually clicks Stop. Aborting the fetch on a 60s data-gap
-  // surfaces the stall as an error event the caller's .catch()
-  // path already handles. Externally-supplied opts.signal is
-  // unaffected — we hook into the same AbortController surface.
-  const idleAc = new AbortController();
-  const externalSignal = opts.signal;
-  // Register the reader-cancel listener BEFORE bridging external →
-  // idle, so the "external signal already aborted" path still wires
-  // the cancel correctly. Pre-fix ordering called ``idleAc.abort()``
-  // synchronously inside the if-aborted branch before the cancel
-  // listener was attached — the once-listener registered on line
-  // below would never fire (abort already happened). fetch was
-  // already rejected by the external signal so it never reached us,
-  // but the code-self-consistency was wrong.
-  idleAc.signal.addEventListener('abort', () => {
-    try { reader.cancel(); } catch { /* ignore */ }
-  }, { once: true });
-  if (externalSignal) {
-    if (externalSignal.aborted) idleAc.abort();
-    else externalSignal.addEventListener('abort', () => idleAc.abort(), { once: true });
-  }
-  const IDLE_TIMEOUT_MS = 60_000;
-  let idleTimer: ReturnType<typeof setTimeout> | null = null;
-  const armIdle = () => {
+async function readTurnEvents(
+  url: string,
+  cursor: { value: string },
+  handlers: StreamChatHandlers,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal?.addEventListener('abort', abort, { once: true });
+  let timedOut = false;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const armTimeout = () => {
     if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => idleAc.abort(), IDLE_TIMEOUT_MS);
+    idleTimer = setTimeout(() => { timedOut = true; abort(); }, 60_000);
   };
-  armIdle();
+  armTimeout();
   try {
+    const separator = url.includes('?') ? '&' : '?';
+    const resp = await authedFetch(
+      `${url}${separator}after=${encodeURIComponent(cursor.value)}`,
+      { headers: { Accept: 'text/event-stream' }, signal: controller.signal },
+    );
+    if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+    reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
     for (;;) {
       const { value, done } = await reader.read();
-      if (done) return;
-      armIdle();
-      buf += decoder.decode(value, { stream: true });
+      if (done) return false;
+      armTimeout();
+      buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
       let idx: number;
       while ((idx = buf.indexOf('\n\n')) !== -1) {
         const frame = buf.slice(0, idx);
         buf = buf.slice(idx + 2);
-        // A frame can be multiple ``data:`` lines; concatenate the
-        // payloads per the SSE spec. Comment lines (starting ``:``)
-        // are heartbeats — skip.
-        const payload = frame
-          .split('\n')
-          .filter((l) => l.startsWith('data:'))
-          .map((l) => l.slice(5).trimStart())
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('id:')) cursor.value = line.slice(3).trim();
+        }
+        const payload = frame.split('\n')
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
           .join('\n');
         if (!payload) continue;
-        let evt: HarnessEvent;
-        try { evt = JSON.parse(payload) as HarnessEvent; }
-        catch { continue; }
-        if (!evt || typeof evt.type !== 'string') continue;
-        const data = (evt.data ?? {}) as Record<string, unknown>;
-        const step = typeof evt.step === 'number' ? evt.step : 0;
-        const elapsed = typeof evt.elapsed_ms === 'number' ? evt.elapsed_ms : 0;
-        switch (evt.type) {
-          case 'status':
-            handlers.onStatus?.(String(data.message ?? ''));
-            break;
-          case 'sources':
-            handlers.onSources?.(
-              Array.isArray(data.sources) ? (data.sources as Source[]) : [],
-            );
-            break;
-          case 'text_delta':
-            handlers.onTextDelta?.(String(data.delta ?? ''), step);
-            break;
-          case 'text':
-            handlers.onText?.(String(data.content ?? ''), step);
-            break;
-          case 'tool_start':
-            handlers.onToolStart?.({
-              tool: String(data.tool ?? ''),
-              tool_call_id: String(data.tool_call_id ?? ''),
-              args_summary: String(data.args_summary ?? ''),
-              input: (data.input && typeof data.input === 'object')
-                ? data.input as Record<string, unknown>
-                : undefined,
-              step, elapsed_ms: elapsed,
-            });
-            break;
-          case 'tool_done':
-            handlers.onToolDone?.({
-              tool: String(data.tool ?? ''),
-              tool_call_id: String(data.tool_call_id ?? ''),
-              result_summary: String(data.result_summary ?? ''),
-              result_content: String(data.result_content ?? ''),
-              tool_latency_ms: Number(data.tool_latency_ms ?? 0),
-              is_error: Boolean(data.is_error),
-              step, elapsed_ms: elapsed,
-            });
-            break;
-          case 'budget':
-            // Wire→type cast: the backend's AgentBudget.to_dict() always
-            // emits every BudgetInfo field, so we trust the shape. TS
-            // requires the ``unknown`` hop because BudgetInfo's required
-            // fields don't structurally overlap with the generic
-            // ``Record<string, unknown>`` form of the parsed JSON.
-            handlers.onBudget?.(data as unknown as BudgetInfo, step);
-            break;
-          case 'error':
-            // live == replay (AGT-5): an agent error is a TERMINAL EVENT
-            // rendered into the transcript, not a thrown exception. The
-            // backend follows it with the graceful-fallback text (persisted
-            // in blocks) and possibly a trailing ``done`` — throwing here
-            // used to discard both and show a generic 连接中断 that looked
-            // nothing like what a reload rendered.
-            handlers.onStreamError?.(String(data.error ?? 'stream error'));
-            break;
-          case 'done':
-            return;
-          default:
-            // Forward-compat: unknown event types are silently skipped
-            // rather than throwing — lets the backend add new event
-            // types without lockstep frontend deploys. We log under
-            // ``debug`` so a dev with the console open spots a wire
-            // drift without a debugger.
-            // eslint-disable-next-line no-console
-            console.debug('[sse] unknown event type', evt.type, data);
-            break;
-        }
+        try {
+          if (dispatchHarnessEvent(JSON.parse(payload) as HarnessEvent, handlers)) return true;
+        } catch { /* malformed forward-compatible event */ }
       }
     }
-  } catch (err) {
-    // Distinguish the watchdog-triggered abort from a user cancel
-    // so the UI can render "stream timed out" instead of a silent
-    // close. ``opts.signal?.aborted`` is true only if the user
-    // pressed Stop; if idleAc fired without user input that's the
-    // watchdog.
-    if (idleAc.signal.aborted && !externalSignal?.aborted) {
-      throw new Error('连接超时：服务端 60s 无数据响应，已中断');
-    }
-    throw err;
+  } catch (error) {
+    if (timedOut && !signal?.aborted) throw new Error('连接超时：服务端 60s 无数据响应');
+    throw error;
   } finally {
     if (idleTimer) clearTimeout(idleTimer);
-    try { reader.releaseLock(); } catch { /* ignore */ }
+    try { reader?.releaseLock(); } catch { /* already released */ }
+    signal?.removeEventListener('abort', abort);
   }
+}
+
+export async function streamChatTurn(
+  sessionId: string,
+  message: string,
+  handlers: StreamChatHandlers,
+  opts: StreamChatOptions = {},
+): Promise<void> {
+  const baseURL = (apiClient.defaults.baseURL ?? '').replace(/\/+$/, '');
+  let turnId = opts.turnId;
+  if (!turnId) {
+    const response = await apiClient.post(
+      `/chat/${encodeURIComponent(sessionId)}/turns`,
+      { message, mode: opts.mode ?? 'chat' },
+      { signal: opts.signal },
+    );
+    turnId = String(response.data.turn_id);
+    opts.onTurnCreated?.(turnId);
+  }
+  const url = `${baseURL}/chat/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/events`;
+  const cursor = { value: '0-0' };
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      if (await readTurnEvents(url, cursor, handlers, opts.signal)) return;
+    } catch (error) {
+      if (opts.signal?.aborted || attempt === 5) throw error;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const timerId = setTimeout(resolve, Math.min(250 * 2 ** attempt, 2_000));
+      opts.signal?.addEventListener('abort', () => {
+        clearTimeout(timerId);
+        reject(new DOMException('Aborted', 'AbortError'));
+      }, { once: true });
+    });
+  }
+}
+
+export async function cancelChatTurn(sessionId: string, turnId: string): Promise<void> {
+  await apiClient.post(
+    `/chat/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/cancel`,
+  );
 }
 
 export async function createChatSession(payload: {
@@ -360,21 +325,9 @@ export async function listChatSessions(
   return res.data;
 }
 
-export async function getChatHistory(
-  sessionId: string,
-  offset = 0,
-  limit = 100,
-): Promise<ChatMessageItem[]> {
-  const res = await apiClient.get('/chat/history', {
-    params: { session_id: sessionId, offset, limit },
-  });
-  return res.data;
-}
-
 /**
- * Block-aware history loader — preferred over ``getChatHistory`` for any
- * UI that needs to replay an L2 agent turn (tool-use / tool-result
- * cards). Returns the full transcript (no pagination) plus session meta.
+ * Block-aware transcript loader for replaying direct-chat and agent turns.
+ * Returns the full transcript (no pagination) plus session metadata.
  *
  * The backend ALWAYS attaches ``blocks[]`` to every message — for
  * legacy rows with no ``content_blocks_json`` it synthesises a single
@@ -400,7 +353,6 @@ export async function getChatTranscript(
 }
 
 export async function renameChatSession(sessionId: string, title: string): Promise<void> {
-  // Backend now prefers JSON body; query param kept as fallback for compat.
   await apiClient.patch(`/chat/sessions/${encodeURIComponent(sessionId)}/title`, { title });
 }
 
@@ -415,15 +367,12 @@ export async function deleteChatSession(sessionId: string): Promise<void> {
 // value: per-session override → user-level default → False, so the switch UI
 // never lies about what the next turn will inject.
 //
-// Note: the endpoint path is still ``/memory-recall`` for back-compat
-// (renaming a public URL is more expensive than the function alias).
-
 export async function getSessionGlobalMemory(
   sessionId: string,
   opts: { signal?: AbortSignal } = {},
 ): Promise<boolean> {
   const res = await apiClient.get(
-    `/chat/sessions/${encodeURIComponent(sessionId)}/memory-recall`,
+    `/chat/sessions/${encodeURIComponent(sessionId)}/global-memory`,
     { signal: opts.signal },
   );
   return Boolean(res.data?.enabled);
@@ -434,7 +383,7 @@ export async function setSessionGlobalMemory(
   enabled: boolean,
 ): Promise<void> {
   await apiClient.post(
-    `/chat/sessions/${encodeURIComponent(sessionId)}/memory-recall`,
+    `/chat/sessions/${encodeURIComponent(sessionId)}/global-memory`,
     { enabled },
   );
 }

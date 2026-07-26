@@ -10,6 +10,7 @@ import { useMemo, useState } from 'react';
 import { RefreshCw, Activity, Sparkles, Plus } from 'lucide-react';
 import { Pill } from '@/components/ui/Pill';
 import { Spinner } from '@/components/ui/Spinner';
+import { useEditionPolicy } from '@/hooks/useEditionPolicy';
 import type { ModelProfile } from '@/types/api';
 import { ROLE_DESC, ROLES } from './constants';
 import { useModelsData } from './useModelsData';
@@ -17,6 +18,7 @@ import { VendorCard } from './VendorCard';
 import { ShowMoreProvidersModal } from './ShowMoreProvidersModal';
 
 export function ModelsPage() {
+  const edition = useEditionPolicy();
   const {
     loading, profiles, providers, apiKeys, selection, pingResults,
     pinging, refreshingCatalog,
@@ -59,8 +61,16 @@ export function ModelsPage() {
   return (
     <div className="p-8 max-w-7xl mx-auto">
       <div className="flex items-center gap-3 mb-4">
-        <h2 className="text-2xl font-semibold text-stone-800">模型配置</h2>
-        <span className="text-sm text-stone-500">点卡片上的角色标签即可切换</span>
+        <div>
+          <h2 className="text-2xl font-semibold text-stone-800">
+            {edition.data?.edition === 'cloud' ? 'LLM 模型' : '模型配置'}
+          </h2>
+          <p className="mt-1 text-sm text-stone-500">
+            {edition.data?.edition === 'cloud'
+              ? '选择偏好的对话模型；语音、检索与排序能力由平台统一提供。'
+              : '配置模型提供商，并为不同对话角色选择模型。'}
+          </p>
+        </div>
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => setShowMoreOpen(true)}
@@ -132,6 +142,7 @@ export function ModelsPage() {
             onDeleteKey={() => onDeleteKey(g.info.provider)}
             onSaveSettings={(patch) => onSaveProviderSettings(g.info.provider, patch)}
             onResetSettings={() => onResetProvider(g.info.provider)}
+            showAdvancedSettings={edition.data?.show_advanced_model_settings ?? false}
           />
         ))}
       </div>

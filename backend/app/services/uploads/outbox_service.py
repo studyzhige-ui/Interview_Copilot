@@ -9,6 +9,7 @@ This package registers the object-storage cleanup handlers
 (``delete_object`` / ``cleanup_failed_upload``). Later packages register their
 own job types (ingest / transcribe / memory) against the same table + runner.
 """
+
 from __future__ import annotations
 
 import json
@@ -32,7 +33,9 @@ _BACKOFF_BASE_SECONDS = 60
 _BACKOFF_CAP_SECONDS = 3600
 
 
-def register_handler(job_type: str, handler: Callable[[Session, OutboxJob], None]) -> None:
+def register_handler(
+    job_type: str, handler: Callable[[Session, OutboxJob], None]
+) -> None:
     _HANDLERS[job_type] = handler
 
 
@@ -132,15 +135,22 @@ def run_due_outbox_jobs(db: Session, *, limit: int = 50) -> int:
             job.attempts += 1
             logger.warning(
                 "outbox job %s reclaimed from stale lock (locked_by=%s since %s, attempt %d)",
-                job.id, job.locked_by, job.locked_at, job.attempts,
+                job.id,
+                job.locked_by,
+                job.locked_at,
+                job.attempts,
             )
             if job.attempts >= job.max_attempts:
                 job.status = "dead"
-                job.last_error = "worker died mid-run repeatedly (stale-lock reclaim limit)"
+                job.last_error = (
+                    "worker died mid-run repeatedly (stale-lock reclaim limit)"
+                )
                 job.locked_at = None
                 job.locked_by = None
                 db.add(job)
-                logger.error("outbox job %s dead after %d crashed attempts", job.id, job.attempts)
+                logger.error(
+                    "outbox job %s dead after %d crashed attempts", job.id, job.attempts
+                )
                 continue
         job.status = "running"
         job.locked_at = datetime.utcnow()
@@ -163,12 +173,26 @@ def run_due_outbox_jobs(db: Session, *, limit: int = 50) -> int:
             job.last_error = str(exc)[:2000]
             if job.attempts >= job.max_attempts:
                 job.status = "dead"
-                logger.error("outbox job %s dead after %d attempts: %s", job.id, job.attempts, exc)
+                logger.error(
+                    "outbox job %s dead after %d attempts: %s",
+                    job.id,
+                    job.attempts,
+                    exc,
+                )
             else:
                 job.status = "failed"
-                delay = min(_BACKOFF_BASE_SECONDS * (4 ** (job.attempts - 1)), _BACKOFF_CAP_SECONDS)
+                delay = min(
+                    _BACKOFF_BASE_SECONDS * (4 ** (job.attempts - 1)),
+                    _BACKOFF_CAP_SECONDS,
+                )
                 job.next_run_at = datetime.utcnow() + timedelta(seconds=delay)
-                logger.warning("outbox job %s failed (attempt %d), retrying in %ds: %s", job.id, job.attempts, delay, exc)
+                logger.warning(
+                    "outbox job %s failed (attempt %d), retrying in %ds: %s",
+                    job.id,
+                    job.attempts,
+                    delay,
+                    exc,
+                )
         finally:
             job.locked_at = None
             job.locked_by = None
@@ -208,7 +232,9 @@ def _handle_delete_object(db: Session, job: OutboxJob) -> None:
     elif storage_uri.startswith("s3://"):
         delete_s3_object(storage_uri)
     else:
-        logger.debug("delete_object: unhandled storage scheme, skipping: %s", storage_uri)
+        logger.debug(
+            "delete_object: unhandled storage scheme, skipping: %s", storage_uri
+        )
 
 
 register_handler("delete_object", _handle_delete_object)

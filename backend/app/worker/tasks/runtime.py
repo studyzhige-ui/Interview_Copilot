@@ -3,6 +3,7 @@
 Each Celery worker thread gets its own persistent event loop, avoiding the
 overhead of creating/destroying a loop on every task invocation.
 """
+
 import asyncio
 import threading
 

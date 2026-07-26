@@ -36,7 +36,7 @@ from app.agent_runtime.context_window import (
 from app.agent_runtime.tool_result_storage import is_persisted_content
 
 if TYPE_CHECKING:
-    from app.core.model_registry import ModelProfile
+    from app.core.model_catalog import ModelProfile
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +45,17 @@ logger = logging.getLogger(__name__)
 # Tools whose results can be deleted after use.  Aligned with Claude Code's
 # COMPACTABLE_TOOLS — only "read-once" tool outputs that the model has already
 # consumed in its reasoning.
-COMPACTABLE_TOOLS: frozenset[str] = frozenset({
-    "web_search",
-    "read_url",
-    "read_file",
-    "write_file",
-    "search_knowledge",
-    "read_interview_history",
-    "search_jobs",
-})
+COMPACTABLE_TOOLS: frozenset[str] = frozenset(
+    {
+        "web_search",
+        "read_url",
+        "read_file",
+        "write_file",
+        "search_knowledge",
+        "read_interview_history",
+        "search_jobs",
+    }
+)
 
 # How many compactable tool results to keep (globally, most recent by position).
 _KEEP_RECENT = 5
@@ -231,7 +233,8 @@ class QueryLoopCompactor:
         }
         logger.info(
             "autocompact: summarized %d messages → 1 summary + %d kept verbatim",
-            len(to_summarize), len(tail),
+            len(to_summarize),
+            len(tail),
         )
         return messages[:head_end] + [summary_msg] + tail
 
@@ -268,15 +271,18 @@ class QueryLoopCompactor:
         result = list(messages)
 
         for tcid in orphaned_calls:
-            result.append({
-                "role": "tool",
-                "tool_call_id": tcid,
-                "content": "[Result unavailable — pruned during context management]",
-            })
+            result.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tcid,
+                    "content": "[Result unavailable — pruned during context management]",
+                }
+            )
 
         if orphaned_results:
             result = [
-                msg for msg in result
+                msg
+                for msg in result
                 if not (
                     msg.get("role") == "tool"
                     and msg.get("tool_call_id") in orphaned_results

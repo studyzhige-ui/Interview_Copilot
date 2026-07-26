@@ -21,6 +21,7 @@ No edits to pipeline / API / FE needed.
 every new user's Models page). Everything else is False (must opt-in
 via "显示更多厂商" picker).
 """
+
 from __future__ import annotations
 
 import os
@@ -60,7 +61,9 @@ PROVIDERS: dict[str, ProviderDefaults] = {
     "anthropic": ProviderDefaults(
         id="anthropic",
         display_label="Anthropic",
-        default_api_base=os.getenv("ANTHROPIC_API_BASE", "https://api.anthropic.com/v1"),
+        default_api_base=os.getenv(
+            "ANTHROPIC_API_BASE", "https://api.anthropic.com/v1"
+        ),
         api_key_env="ANTHROPIC_API_KEY",
         icon_slug="anthropic",
         enabled_by_default=True,
@@ -107,7 +110,8 @@ PROVIDERS: dict[str, ProviderDefaults] = {
         id="zai",
         display_label="智谱 GLM",
         default_api_base=os.getenv(
-            "ZHIPU_API_BASE", "https://open.bigmodel.cn/api/paas/v4",
+            "ZHIPU_API_BASE",
+            "https://open.bigmodel.cn/api/paas/v4",
         ),
         api_key_env="ZHIPU_API_KEY",
         icon_slug=None,
@@ -121,7 +125,8 @@ PROVIDERS: dict[str, ProviderDefaults] = {
         id="xiaomi",
         display_label="小米 MiMo",
         default_api_base=os.getenv(
-            "MIMO_API_BASE", "https://api.xiaomimimo.com/v1",
+            "MIMO_API_BASE",
+            "https://api.xiaomimimo.com/v1",
         ),
         api_key_env="MIMO_API_KEY",
         icon_slug="xiaomi",
@@ -135,13 +140,13 @@ PROVIDERS: dict[str, ProviderDefaults] = {
         id="nvidia_nim",
         display_label="NVIDIA",
         default_api_base=os.getenv(
-            "NVIDIA_API_BASE", "https://integrate.api.nvidia.com/v1",
+            "NVIDIA_API_BASE",
+            "https://integrate.api.nvidia.com/v1",
         ),
         api_key_env="NVIDIA_API_KEY",
         icon_slug="nvidia",
         enabled_by_default=True,
     ),
-
     # ── Opt-in providers (hidden until user enables via UI) ─────────────
     # All of these expose an OpenAI-compatible /v1/models endpoint —
     # once the user toggles them on AND configures a key, models
@@ -157,7 +162,9 @@ PROVIDERS: dict[str, ProviderDefaults] = {
     "cohere": ProviderDefaults(
         id="cohere",
         display_label="Cohere",
-        default_api_base=os.getenv("COHERE_API_BASE", "https://api.cohere.ai/compatibility/v1"),
+        default_api_base=os.getenv(
+            "COHERE_API_BASE", "https://api.cohere.ai/compatibility/v1"
+        ),
         api_key_env="COHERE_API_KEY",
         icon_slug="cohere",
         enabled_by_default=False,
@@ -174,7 +181,8 @@ PROVIDERS: dict[str, ProviderDefaults] = {
         id="together_ai",
         display_label="Together AI",
         default_api_base=os.getenv(
-            "TOGETHER_API_BASE", "https://api.together.xyz/v1",
+            "TOGETHER_API_BASE",
+            "https://api.together.xyz/v1",
         ),
         api_key_env="TOGETHER_API_KEY",
         icon_slug=None,
@@ -184,7 +192,8 @@ PROVIDERS: dict[str, ProviderDefaults] = {
         id="fireworks_ai",
         display_label="Fireworks AI",
         default_api_base=os.getenv(
-            "FIREWORKS_API_BASE", "https://api.fireworks.ai/inference/v1",
+            "FIREWORKS_API_BASE",
+            "https://api.fireworks.ai/inference/v1",
         ),
         api_key_env="FIREWORKS_API_KEY",
         icon_slug=None,
@@ -213,7 +222,9 @@ PROVIDERS: dict[str, ProviderDefaults] = {
     "novita": ProviderDefaults(
         id="novita",
         display_label="Novita AI (聚合)",
-        default_api_base=os.getenv("NOVITA_API_BASE", "https://api.novita.ai/v3/openai"),
+        default_api_base=os.getenv(
+            "NOVITA_API_BASE", "https://api.novita.ai/v3/openai"
+        ),
         api_key_env="NOVITA_API_KEY",
         icon_slug=None,
         enabled_by_default=False,

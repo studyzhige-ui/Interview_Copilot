@@ -15,6 +15,7 @@ Keyed by the stable ``users.id`` (FK, ON DELETE CASCADE). ``aggregate_type`` /
 ``aggregate_id`` point at the business object the job acts on. Job-type-specific
 parameters live in ``payload_json``.
 """
+
 import uuid
 from datetime import datetime
 
@@ -43,7 +44,9 @@ class OutboxJob(Base):
         Index("ix_outbox_jobs_status_next_run", "status", "next_run_at"),
         # Idempotency: a (job_type, idempotency_key) pair enqueues once.
         UniqueConstraint(
-            "job_type", "idempotency_key", name="uq_outbox_jobs_type_idem",
+            "job_type",
+            "idempotency_key",
+            name="uq_outbox_jobs_type_idem",
         ),
     )
 
@@ -76,5 +79,8 @@ class OutboxJob(Base):
     locked_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
     )

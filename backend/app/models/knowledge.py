@@ -17,19 +17,22 @@ class KnowledgeDocument(Base):
     # index is named ``ix_knowledge_docs_user_category`` despite living
     # on the ``knowledge_documents`` table (legacy from when the table
     # was named ``knowledge_docs``). See alembic 0001_baseline:318.
-    __table_args__ = (
-        Index("ix_knowledge_docs_user_category", "user_id", "category"),
-    )
+    __table_args__ = (Index("ix_knowledge_docs_user_category", "user_id", "category"),)
 
     id = Column(String, primary_key=True, default=generate_document_id, index=True)
     # Stable users.id FK (CLEANUP #2). The library API resolves the caller's
     # username via resolve_user_pk; the same pk is the Milvus / document_chunks
     # retrieval-scope key.
     user_id = Column(
-        Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False,
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
     )
     # Source file, if any. NULL for improved_qa / manual_text (no uploaded file).
-    file_asset_id = Column(String, ForeignKey("file_assets.id"), index=True, nullable=True)
+    file_asset_id = Column(
+        String, ForeignKey("file_assets.id"), index=True, nullable=True
+    )
     title = Column(String, nullable=False)
     category = Column(String, index=True, default="默认", nullable=False)
     # System source kind: user_upload | improved_qa | manual_text.
@@ -58,6 +61,8 @@ class KnowledgeDocument(Base):
     # before the async Milvus index delete completes.
     deleted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
 
     upload = relationship("FileAsset")

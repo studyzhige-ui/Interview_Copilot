@@ -3,9 +3,10 @@
 The endpoints lean heavily on registry helpers and a Redis-backed cache;
 we patch those out so tests don't reach external services.
 """
+
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
@@ -35,18 +36,26 @@ def client():
 def test_models_catalog_returns_selection_and_profiles(client, monkeypatch):
     """Catalog is sourced from the pipeline cache. We stub the pipeline
     load + the sync profile cache used to serialise the response."""
-    from app.core.model_registry import ModelProfile
+    from app.core.model_catalog import ModelProfile
 
     fake_profiles = {
         "openai/gpt-4o": ModelProfile(
-            id="openai/gpt-4o", provider="openai", display_name="GPT-4o",
-            model="gpt-4o", api_base="https://x",
-            api_key_env="OPENAI_API_KEY", supports_function_calling=True,
+            id="openai/gpt-4o",
+            provider="openai",
+            display_name="GPT-4o",
+            model="gpt-4o",
+            api_base="https://x",
+            api_key_env="OPENAI_API_KEY",
+            supports_function_calling=True,
         ),
         "openai/gpt-4o-mini": ModelProfile(
-            id="openai/gpt-4o-mini", provider="openai", display_name="GPT-4o Mini",
-            model="gpt-4o-mini", api_base="https://x",
-            api_key_env="OPENAI_API_KEY", supports_function_calling=True,
+            id="openai/gpt-4o-mini",
+            provider="openai",
+            display_name="GPT-4o Mini",
+            model="gpt-4o-mini",
+            api_base="https://x",
+            api_key_env="OPENAI_API_KEY",
+            supports_function_calling=True,
         ),
     }
     monkeypatch.setattr(model_runtime_mod, "_get_all_profiles", lambda: fake_profiles)
@@ -54,14 +63,16 @@ def test_models_catalog_returns_selection_and_profiles(client, monkeypatch):
         model_runtime_mod,
         "get_runtime_selection",
         lambda user_id=None: {
-            "primary": "openai/gpt-4o", "fast": "openai/gpt-4o-mini",
-            "agent": "openai/gpt-4o", "mock_interview": "openai/gpt-4o",
+            "primary": "openai/gpt-4o",
+            "fast": "openai/gpt-4o-mini",
+            "agent": "openai/gpt-4o",
+            "mock_interview": "openai/gpt-4o",
         },
     )
     # profile_ready imported from registry — stub to True so the
     # serialiser sets ready=True without needing env vars set.
     monkeypatch.setattr(
-        "app.core.model_registry.profile_ready",
+        "app.core.llm_client_factory.profile_ready",
         lambda profile, user_id=None: True,
     )
 
@@ -80,7 +91,10 @@ def test_models_catalog_returns_selection_and_profiles(client, monkeypatch):
     body = resp.json()
     assert body["status"] == "success"
     assert body["selection"]["primary"] == "openai/gpt-4o"
-    assert {p["id"] for p in body["profiles"]} == {"openai/gpt-4o", "openai/gpt-4o-mini"}
+    assert {p["id"] for p in body["profiles"]} == {
+        "openai/gpt-4o",
+        "openai/gpt-4o-mini",
+    }
 
 
 # ── /models/runtime (GET) ─────────────────────────────────────────────────
@@ -90,7 +104,12 @@ def test_models_runtime_get_resolves_each_role(client, monkeypatch):
     monkeypatch.setattr(
         model_runtime_mod,
         "get_runtime_selection",
-        lambda user_id=None: {"primary": "p1", "fast": "p1", "agent": "p2", "mock_interview": "p1"},
+        lambda user_id=None: {
+            "primary": "p1",
+            "fast": "p1",
+            "agent": "p2",
+            "mock_interview": "p1",
+        },
     )
 
     class FakeProfile:
@@ -109,7 +128,12 @@ def test_models_runtime_get_resolves_each_role(client, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "success"
-    assert set(body["resolved"].keys()) == {"primary", "agent", "mock_interview", "utility"}
+    assert set(body["resolved"].keys()) == {
+        "primary",
+        "agent",
+        "mock_interview",
+        "utility",
+    }
     assert body["resolved"]["primary"]["profile_id"] == "p_primary"
 
 
@@ -187,12 +211,16 @@ def test_upsert_api_key_invalidates_caches(client, monkeypatch):
     async def fake_invalidate(*_names):
         return None
 
-    with patch(
-        "app.services.auth.user_api_key_service.set_user_api_key",
-        return_value={"provider": "openai"},
-    ) as set_key, \
-         patch("app.core.cache.invalidate", side_effect=fake_invalidate), \
-         patch("app.core.model_registry.clear_llm_cache_for_provider") as clear_cache:
+    with (
+        patch(
+            "app.services.auth.user_api_key_service.set_user_api_key",
+            return_value={"provider": "openai"},
+        ) as set_key,
+        patch("app.core.cache.invalidate", side_effect=fake_invalidate),
+        patch(
+            "app.core.llm_client_factory.clear_llm_cache_for_provider"
+        ) as clear_cache,
+    ):
         resp = client.put(
             "/api/v1/models/api-keys/openai",
             json={"api_key": "sk-test-1234"},
@@ -220,10 +248,14 @@ def test_delete_api_key_reports_status(client):
     async def fake_invalidate(*_names):
         return None
 
-    with patch(
-        "app.services.auth.user_api_key_service.delete_user_api_key", return_value=True,
-    ), patch("app.core.cache.invalidate", side_effect=fake_invalidate), \
-       patch("app.core.model_registry.clear_llm_cache_for_provider"):
+    with (
+        patch(
+            "app.services.auth.user_api_key_service.delete_user_api_key",
+            return_value=True,
+        ),
+        patch("app.core.cache.invalidate", side_effect=fake_invalidate),
+        patch("app.core.llm_client_factory.clear_llm_cache_for_provider"),
+    ):
         resp = client.delete("/api/v1/models/api-keys/openai")
     assert resp.status_code == 200
     assert resp.json()["status"] == "deleted"
@@ -247,7 +279,8 @@ def test_ping_models_pings_only_user_ready_profiles(client, monkeypatch):
     monkeypatch.setattr(model_runtime_mod, "_get_all_profiles", lambda: fake_profiles)
     # Only p1 is ready for this user.
     monkeypatch.setattr(
-        model_runtime_mod, "profile_ready",
+        model_runtime_mod,
+        "profile_ready",
         lambda profile, user_id=None: profile.id == "p1",
     )
 
@@ -263,8 +296,8 @@ def test_ping_models_pings_only_user_ready_profiles(client, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     ids = sorted(r["profile_id"] for r in body["results"])
-    assert ids == ["p1", "p2"]          # still one row per profile
-    assert pinged == ["p1"]             # but only the ready one was pinged
+    assert ids == ["p1", "p2"]  # still one row per profile
+    assert pinged == ["p1"]  # but only the ready one was pinged
     by_id = {r["profile_id"]: r for r in body["results"]}
     assert by_id["p1"]["ok"] is True
     assert by_id["p2"]["ok"] is False and "未配置" in by_id["p2"]["error"]
@@ -275,7 +308,8 @@ def test_upsert_key_schedules_provider_catalog_refresh(client, monkeypatch):
     deployments advance past the seed catalog immediately."""
     scheduled: list[tuple[str, str]] = []
     monkeypatch.setattr(
-        model_runtime_mod, "_schedule_provider_catalog_refresh",
+        model_runtime_mod,
+        "_schedule_provider_catalog_refresh",
         lambda provider, username: scheduled.append((provider, username)),
     )
     monkeypatch.setattr(
@@ -283,7 +317,8 @@ def test_upsert_key_schedules_provider_catalog_refresh(client, monkeypatch):
         lambda user, provider, key, db=None: {"provider": provider, "masked": "sk-***"},
     )
     resp = client.put(
-        "/api/v1/models/api-keys/openai", json={"api_key": "sk-test-123456789"},
+        "/api/v1/models/api-keys/openai",
+        json={"api_key": "sk-test-123456789"},
     )
     assert resp.status_code == 200
     assert scheduled and scheduled[0][0] == "openai"

@@ -5,6 +5,7 @@ model ``supports_*`` flags. Live verification returned 9 entries
 including ``kimi-k2.6`` (latest) and ``moonshot-v1-*-vision-preview``.
 All chat — no filter needed.
 """
+
 from __future__ import annotations
 
 from .base import VendorAdapterSpec

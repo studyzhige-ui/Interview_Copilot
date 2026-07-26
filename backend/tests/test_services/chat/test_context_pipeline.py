@@ -1,4 +1,5 @@
 """SLOT_ORDER + renderer contract tests for the context pipeline."""
+
 import asyncio
 
 from app.services.chat.context_assembly_pipeline import (
@@ -60,19 +61,17 @@ def test_renderer_skips_empty_slots():
         f"system_prompt should render without a tag header; got {prompt[:60]!r}"
     )
     assert "[Memory]" in prompt
-    assert "[Record Context]" not in prompt        # debrief slot empty
-    assert "[Retrieved Context]" not in prompt     # no RAG
-    assert "[Context Summary]" not in prompt       # no summary
-    assert "[Recent Turns]" not in prompt          # empty list
+    assert "[Record Context]" not in prompt  # debrief slot empty
+    assert "[Retrieved Context]" not in prompt  # no RAG
+    assert "[Context Summary]" not in prompt  # no summary
+    assert "[Recent Turns]" not in prompt  # empty list
 
 
 def test_slot_order_has_no_duplicate_fields():
     """SLOT_ORDER is the single source of truth — make sure no field
     is listed twice (would silently double-render that slot)."""
     fields = [entry[0] for entry in SLOT_ORDER]
-    assert len(fields) == len(set(fields)), (
-        f"Duplicate field in SLOT_ORDER: {fields}"
-    )
+    assert len(fields) == len(set(fields)), f"Duplicate field in SLOT_ORDER: {fields}"
 
 
 def test_rewrite_context_skips_heavy_slots():
@@ -116,12 +115,14 @@ def test_debrief_reference_auto_inject_fires_only_in_debrief_mode(monkeypatch):
 
     # Patch the lazy import target.
     import app.services.chat.interview_reference as ir_mod
+
     monkeypatch.setattr(ir_mod, "build_interview_reference", fake_build)
 
     # Stub transcript_service for both meta + recent turns.
     class FakeTranscript:
         def __init__(self, mode: str):
             self.mode = mode
+
         def get_session_meta(self, session_id):
             return {
                 "session_id": session_id,
@@ -131,6 +132,7 @@ def test_debrief_reference_auto_inject_fires_only_in_debrief_mode(monkeypatch):
                 "subject_id": "ir_42" if self.mode != "general" else None,
                 "compaction_cursor": 0,
             }
+
         def get_turns_after(self, session_id, after_seq=0):
             return []
 
@@ -138,22 +140,28 @@ def test_debrief_reference_auto_inject_fires_only_in_debrief_mode(monkeypatch):
 
     # Case 1 — debrief mode: auto-inject fires.
     monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript("debrief"))
-    ctx = asyncio.run(pipeline.assemble_answer_context(session_id="s1", current_query="q"))
+    ctx = asyncio.run(
+        pipeline.assemble_answer_context(session_id="s1", current_query="q")
+    )
     assert ctx.debrief_reference == "[Manifest for ir_42]"
     assert ("ir_42", "alice") in fetch_calls
     fetch_calls.clear()
 
     # Case 2 — general mode: no fetch, slot stays empty.
     monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript("general"))
-    ctx = asyncio.run(pipeline.assemble_answer_context(session_id="s2", current_query="q"))
+    ctx = asyncio.run(
+        pipeline.assemble_answer_context(session_id="s2", current_query="q")
+    )
     assert ctx.debrief_reference == ""
     assert fetch_calls == []
 
     # Case 3 — caller-supplied wins, no fetch even in debrief.
     monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript("debrief"))
-    ctx = asyncio.run(pipeline.assemble_answer_context(
-        session_id="s1", current_query="q", debrief_reference="[Custom]"
-    ))
+    ctx = asyncio.run(
+        pipeline.assemble_answer_context(
+            session_id="s1", current_query="q", debrief_reference="[Custom]"
+        )
+    )
     assert ctx.debrief_reference == "[Custom]"
     assert fetch_calls == []
 
@@ -175,7 +183,7 @@ def test_summary_comes_from_summary_column(monkeypatch):
                 "turn_count": 0,
                 "compaction_cursor": 0,
                 "memory_extraction_cursor": 0,
-                "summary": "## 当前状态\n聚焦 redis 缓存",      # dedicated column
+                "summary": "## 当前状态\n聚焦 redis 缓存",  # dedicated column
             }
 
         def get_turns_after(self, session_id, after_seq=0):
@@ -184,7 +192,9 @@ def test_summary_comes_from_summary_column(monkeypatch):
     pipeline = ContextAssemblyPipeline()
     monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
 
-    ctx = asyncio.run(pipeline.assemble_answer_context(session_id="s", current_query="q"))
+    ctx = asyncio.run(
+        pipeline.assemble_answer_context(session_id="s", current_query="q")
+    )
     assert ctx.summary == "## 当前状态\n聚焦 redis 缓存"
 
     rendered = pipeline.renderer.render_answer_prompt(ctx, system_prompt="rules")
@@ -209,15 +219,22 @@ def test_assemble_loads_all_turns_after_cursor(monkeypatch):
     class FakeTranscript:
         def get_session_meta(self, session_id):
             return {
-                "user_id": "alice", "type": "general", "subject_type": None,
-                "subject_id": None, "compaction_cursor": 0, "summary": "",
+                "user_id": "alice",
+                "type": "general",
+                "subject_type": None,
+                "subject_id": None,
+                "compaction_cursor": 0,
+                "summary": "",
             }
+
         def get_turns_after(self, session_id, after_seq=0):
             return [t for t in turns if t["seq"] > after_seq]
 
     monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
     pipeline = ContextAssemblyPipeline()
-    ctx = asyncio.run(pipeline.assemble_answer_context(session_id="s", current_query="q"))
+    ctx = asyncio.run(
+        pipeline.assemble_answer_context(session_id="s", current_query="q")
+    )
 
     # All 50 messages should be present (after sanitize + repair_pairs
     # drops the leading Agent and trailing User if needed).
@@ -232,7 +249,10 @@ def test_threshold_compaction_fires_and_advances_cursor(monkeypatch):
     old turns are summarized, cursor advances, and only protected tail
     turns remain verbatim."""
     from app.services.chat import context_assembly_pipeline as pipeline_mod
-    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline, TokenBudget
+    from app.services.chat.context_assembly_pipeline import (
+        ContextAssemblyPipeline,
+        TokenBudget,
+    )
 
     updates: list[dict] = []
 
@@ -246,11 +266,17 @@ def test_threshold_compaction_fires_and_advances_cursor(monkeypatch):
     class FakeTranscript:
         def get_session_meta(self, session_id):
             return {
-                "user_id": "alice", "type": "general", "subject_type": None,
-                "subject_id": None, "compaction_cursor": 0, "summary": "",
+                "user_id": "alice",
+                "type": "general",
+                "subject_type": None,
+                "subject_id": None,
+                "compaction_cursor": 0,
+                "summary": "",
             }
+
         def get_turns_after(self, session_id, after_seq=0):
             return [t for t in turns if t["seq"] > after_seq]
+
         def update_session_fields(self, session_id, **kwargs):
             updates.append(kwargs)
 
@@ -259,6 +285,7 @@ def test_threshold_compaction_fires_and_advances_cursor(monkeypatch):
 
     async def fake_summarize(old, conv, *, user_id=None):
         return "COMPRESSED SUMMARY"
+
     monkeypatch.setattr(cs_mod, "summarize_conversation", fake_summarize)
 
     monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
@@ -269,7 +296,9 @@ def test_threshold_compaction_fires_and_advances_cursor(monkeypatch):
     budget.COMPRESS_THRESHOLD_RATIO = 0.5  # 1000 tokens threshold
     pipeline = ContextAssemblyPipeline(budget=budget)
 
-    ctx = asyncio.run(pipeline.assemble_answer_context(session_id="s", current_query="q"))
+    ctx = asyncio.run(
+        pipeline.assemble_answer_context(session_id="s", current_query="q")
+    )
 
     # Compaction should have fired — cursor advanced, summary updated.
     assert len(updates) == 1
@@ -295,17 +324,25 @@ def test_no_compaction_when_under_threshold(monkeypatch):
     class FakeTranscript:
         def get_session_meta(self, session_id):
             return {
-                "user_id": "alice", "type": "general", "subject_type": None,
-                "subject_id": None, "compaction_cursor": 0, "summary": "",
+                "user_id": "alice",
+                "type": "general",
+                "subject_type": None,
+                "subject_id": None,
+                "compaction_cursor": 0,
+                "summary": "",
             }
+
         def get_turns_after(self, session_id, after_seq=0):
             return [t for t in turns if t["seq"] > after_seq]
+
         def update_session_fields(self, session_id, **kwargs):
             updates.append(kwargs)
 
     monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
     pipeline = ContextAssemblyPipeline()
-    ctx = asyncio.run(pipeline.assemble_answer_context(session_id="s", current_query="q"))
+    ctx = asyncio.run(
+        pipeline.assemble_answer_context(session_id="s", current_query="q")
+    )
 
     assert len(ctx.recent_turns) == 2
     assert updates == []  # no compaction triggered
@@ -341,7 +378,9 @@ def test_build_retrieved_context_numbers_and_aligns_sources():
     pipeline = ContextAssemblyPipeline()
     chunks = [
         _chunk("n1", "Redis 缓存击穿……", page_start=3, page_end=3, chunk_index=12),
-        _chunk("n2", "缓存穿透……", section_title="缓存异常场景", chunk_index=4, score=0.82),
+        _chunk(
+            "n2", "缓存穿透……", section_title="缓存异常场景", chunk_index=4, score=0.82
+        ),
     ]
     text, sources = pipeline._build_retrieved_context(chunks)
 
@@ -405,7 +444,9 @@ def test_build_retrieved_context_stops_at_budget():
     budget = TokenBudget()
     budget.RETRIEVED_CONTEXT_BUDGET = 30
     pipeline = ContextAssemblyPipeline(budget=budget)
-    chunks = [_chunk(f"n{i}", "缓存雪崩的解决方案包括过期时间随机化。" * 2) for i in range(5)]
+    chunks = [
+        _chunk(f"n{i}", "缓存雪崩的解决方案包括过期时间随机化。" * 2) for i in range(5)
+    ]
     _, sources = pipeline._build_retrieved_context(chunks)
 
     # First chunk always lands; later chunks stop once the budget is hit.
@@ -419,8 +460,12 @@ def test_assemble_answer_context_populates_sources(monkeypatch):
     class FakeTranscript:
         def get_session_meta(self, session_id):
             return {
-                "user_id": "alice", "type": "general", "subject_type": None,
-                "subject_id": None, "compaction_cursor": 0, "summary": "",
+                "user_id": "alice",
+                "type": "general",
+                "subject_type": None,
+                "subject_id": None,
+                "compaction_cursor": 0,
+                "summary": "",
             }
 
         def get_turns_after(self, session_id, after_seq=0):
@@ -429,10 +474,13 @@ def test_assemble_answer_context_populates_sources(monkeypatch):
     monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
     pipeline = ContextAssemblyPipeline()
 
-    ctx = asyncio.run(pipeline.assemble_answer_context(
-        session_id="s", current_query="q",
-        knowledge_chunks=[_chunk("n1", "Redis 缓存击穿……")],
-    ))
+    ctx = asyncio.run(
+        pipeline.assemble_answer_context(
+            session_id="s",
+            current_query="q",
+            knowledge_chunks=[_chunk("n1", "Redis 缓存击穿……")],
+        )
+    )
     assert ctx.sources and ctx.sources[0]["ref"] == "K1"
     assert "[K1]" in ctx.retrieved_context
 

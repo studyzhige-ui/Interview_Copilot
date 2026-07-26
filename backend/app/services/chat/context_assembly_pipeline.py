@@ -40,6 +40,7 @@ This module is distinct from
 compresses the running message list inside a single L2 agent
 execution (different problem, different file).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -61,6 +62,7 @@ logger = logging.getLogger(__name__)
 
 # ── Token budget ─────────────────────────────────────────────────────────
 # Designed for 1M-context models (DeepSeek V4 / Mimo).
+
 
 class TokenBudget:
     # Default window is a safe LOWER bound fallback; the engine passes the
@@ -151,13 +153,13 @@ SLOT_ORDER: list[tuple[str, str | None, _SlotRenderer]] = [
     # Cache-stable prefix first (system / record / summary / recent turns),
     # then the per-turn-variable grounding (memory + RAG), then the query —
     # so a per-turn grounding change can't invalidate the cached prefix.
-    ("system_prompt",           None,                      None),
-    ("debrief_reference",      "[Record Context]",        None),
-    ("summary",                "[Context Summary]",       None),
-    ("recent_turns",           "[Recent Turns]",          _render_recent_turns),
-    ("memory_block",           "[Memory]",                None),
-    ("retrieved_context",      "[Retrieved Context]",     None),
-    ("current_input",          "[Current Query]",         None),
+    ("system_prompt", None, None),
+    ("debrief_reference", "[Record Context]", None),
+    ("summary", "[Context Summary]", None),
+    ("recent_turns", "[Recent Turns]", _render_recent_turns),
+    ("memory_block", "[Memory]", None),
+    ("retrieved_context", "[Retrieved Context]", None),
+    ("current_input", "[Current Query]", None),
 ]
 
 
@@ -242,7 +244,6 @@ def _turn_tokens(m: dict) -> int:
 
 
 class ContextAssemblyPipeline:
-
     def __init__(
         self,
         budget: TokenBudget | None = None,
@@ -303,7 +304,8 @@ class ContextAssemblyPipeline:
         model_context_window: int | None = None,
     ) -> AssembledContext:
         meta = await asyncio.to_thread(
-            transcript_service.get_session_meta, session_id,
+            transcript_service.get_session_meta,
+            session_id,
         )
         if meta is None:
             all_turns: list[dict] = []
@@ -330,7 +332,10 @@ class ContextAssemblyPipeline:
             + count_tokens(debrief_reference)
         )
 
-        if turns_tokens + overhead_tokens > compress_threshold and len(cleaned_turns) > self.budget.COMPRESS_PROTECT_LAST_N:
+        if (
+            turns_tokens + overhead_tokens > compress_threshold
+            and len(cleaned_turns) > self.budget.COMPRESS_PROTECT_LAST_N
+        ):
             cleaned_turns, old_summary = await self._maybe_compact(
                 session_id=session_id,
                 user_id=user_id,
@@ -346,11 +351,7 @@ class ContextAssemblyPipeline:
         # dedicated columns (type / subject_type / subject_id).
         # ``skip_debrief_autoinject`` lets the lightweight rewrite path bail
         # out before the SQL round-trip.
-        if (
-            not skip_debrief_autoinject
-            and not debrief_reference
-            and meta is not None
-        ):
+        if not skip_debrief_autoinject and not debrief_reference and meta is not None:
             conv_type = meta.get("type")
             record_id = (
                 meta.get("subject_id")
@@ -358,7 +359,10 @@ class ContextAssemblyPipeline:
                 else None
             )
             if conv_type == "debrief" and record_id:
-                from app.services.chat.interview_reference import build_interview_reference
+                from app.services.chat.interview_reference import (
+                    build_interview_reference,
+                )
+
                 ref = build_interview_reference(record_id, meta["user_id"])
                 if ref:
                     debrief_reference = ref
@@ -366,7 +370,8 @@ class ContextAssemblyPipeline:
                 logger.warning(
                     "type=%r has subject_id=%s but isn't debrief; "
                     "reference slot stays empty",
-                    conv_type, record_id,
+                    conv_type,
+                    record_id,
                 )
 
         # RAG retrieved-context: only knowledge_chunks now. The legacy
@@ -416,16 +421,16 @@ class ContextAssemblyPipeline:
         if not to_compress:
             return cleaned_turns, old_summary
 
-        conversation = "\n".join(
-            f"{m['role']}: {m['content']}" for m in to_compress
-        )
+        conversation = "\n".join(f"{m['role']}: {m['content']}" for m in to_compress)
 
         from app.services.chat.conversation_summarizer import summarize_conversation
 
         # NB: meta["user_id"] is the integer pk — the summarizer needs the
         # username principal, threaded from the engine (dual-review fix).
         new_summary = await summarize_conversation(
-            old_summary, conversation, user_id=user_id,
+            old_summary,
+            conversation,
+            user_id=user_id,
         )
         if not new_summary:
             return cleaned_turns, old_summary
@@ -441,7 +446,10 @@ class ContextAssemblyPipeline:
         logger.info(
             "Assembly-time compaction for session %s: compressed %d messages, "
             "cursor advanced to seq %d, summary=%d tokens",
-            session_id, len(to_compress), new_cursor, count_tokens(new_summary),
+            session_id,
+            len(to_compress),
+            new_cursor,
+            count_tokens(new_summary),
         )
 
         return to_keep, new_summary
@@ -449,7 +457,8 @@ class ContextAssemblyPipeline:
     # ── [K#] + sources (the sole owner of citation numbering) ──────────
 
     def _build_retrieved_context(
-        self, chunks: list[dict] | None,
+        self,
+        chunks: list[dict] | None,
     ) -> tuple[str, list[dict]]:
         """Number the budget-trimmed chunks [K1], [K2], … and build the
         sources array aligned 1:1 with those refs.
@@ -512,7 +521,9 @@ class ContextAssemblyPipeline:
         return " ".join(segments)
 
     @staticmethod
-    def _build_source(ref: str, chunk: dict, rendered_text: str, truncated: bool) -> dict:
+    def _build_source(
+        ref: str, chunk: dict, rendered_text: str, truncated: bool
+    ) -> dict:
         """One sources-array entry — the retrieval plan §2.7 source schema.
         ``text_preview`` is for the source-card UI, not the answer prompt."""
         source = {
@@ -555,7 +566,8 @@ class ContextAssemblyPipeline:
                     # Anthropic-style blocks (text / tool_use / tool_result)
                     # kept so the L2 agent can reconstruct prior tool roundtrips
                     # as real messages. L1 ignores them (renders content text).
-                    "blocks": message.get("blocks") or [{"type": "text", "text": content}],
+                    "blocks": message.get("blocks")
+                    or [{"type": "text", "text": content}],
                 }
             )
         return sanitized

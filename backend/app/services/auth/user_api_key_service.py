@@ -32,60 +32,18 @@ working (they only see #2).
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import logging
 from contextlib import contextmanager
-from typing import Iterable, Optional
+from typing import Optional
 
-from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.core.secrets import decrypt_secret, encrypt_secret, encrypted_with_primary
 from app.db.database import SessionLocal
 from app.core.user_identity import resolve_user_pk
 from app.models.user_model_credentials import UserModelCredential
 
 logger = logging.getLogger(__name__)
-
-
-# ── Fernet key derivation ──────────────────────────────────────────────
-
-
-def _derive_fernet_key(secret: str) -> bytes:
-    """SHA-256(secret) → 32 bytes → urlsafe-b64 → valid Fernet key."""
-    digest = hashlib.sha256(secret.encode("utf-8")).digest()
-    return base64.urlsafe_b64encode(digest)
-
-
-def _collect_secrets() -> list[str]:
-    """Primary first, then any retired keys from SECRET_KEYS_OLD.
-
-    Order matters: ``MultiFernet`` encrypts with the FIRST key and decrypts
-    by trying every key in order. So primary stays primary.
-    """
-    primary = (settings.SECRET_KEY or "").strip()
-    olds: Iterable[str] = (
-        s.strip() for s in (settings.SECRET_KEYS_OLD or "").split(",")
-    )
-    if not primary:
-        return []
-    return [primary, *(s for s in olds if s and s != primary)]
-
-
-def _build_fernet() -> Optional[MultiFernet]:
-    secrets_list = _collect_secrets()
-    if not secrets_list:
-        logger.error(
-            "SECRET_KEY is empty — user API key encryption disabled. "
-            "Configure SECRET_KEY in .env before storing any provider keys."
-        )
-        return None
-    return MultiFernet([Fernet(_derive_fernet_key(s)) for s in secrets_list])
-
-
-# Built once at import. Tests can monkey-patch ``_fernet`` if needed.
-_fernet: Optional[MultiFernet] = _build_fernet()
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -169,40 +127,6 @@ def _cache_put(key: tuple[str, str], plaintext: str) -> None:
             _decrypt_cache.popitem(last=False)  # evict LRU
 
 
-def _encrypt(plaintext: str) -> str:
-    if _fernet is None:
-        raise RuntimeError("Encryption is unavailable: SECRET_KEY not configured")
-    return _fernet.encrypt(plaintext.encode("utf-8")).decode("utf-8")
-
-
-def _decrypt(ciphertext: str) -> Optional[str]:
-    """Decrypt with the primary key or any legacy key. Returns None on failure."""
-    if _fernet is None:
-        return None
-    try:
-        return _fernet.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
-    except InvalidToken:
-        return None
-
-
-def _is_encrypted_with_primary(ciphertext: str) -> bool:
-    """True iff the ciphertext was produced with the *current* primary key.
-
-    Used by the lazy-re-encrypt path: if a payload decrypted with an old
-    key we want to re-encrypt under the new one. ``MultiFernet`` doesn't
-    expose "which key won?" directly, so we check by trying decrypt with
-    a single-key Fernet built from the primary alone.
-    """
-    primary = (settings.SECRET_KEY or "").strip()
-    if not primary:
-        return True  # nothing better we can do
-    try:
-        Fernet(_derive_fernet_key(primary)).decrypt(ciphertext.encode("utf-8"))
-        return True
-    except InvalidToken:
-        return False
-
-
 # ── Public API ─────────────────────────────────────────────────────────
 
 
@@ -218,7 +142,7 @@ def set_user_api_key(
     if not plaintext:
         raise ValueError("API key is empty")
 
-    ciphertext = _encrypt(plaintext)
+    ciphertext = encrypt_secret(plaintext)
     masked = _mask(plaintext)
 
     with _session(db) as s:
@@ -334,30 +258,34 @@ def get_user_api_key_plaintext(
         if row is None:
             return None
 
-        plaintext = _decrypt(row.key_ciphertext)
+        plaintext = decrypt_secret(row.key_ciphertext)
         if plaintext is None:
             logger.error(
                 "Failed to decrypt API key for user=%s provider=%s — "
                 "SECRET_KEY rotated without a SECRET_KEYS_OLD entry?",
-                user_id, provider,
+                user_id,
+                provider,
             )
             return None
 
         # Lazy migration: if a legacy key decrypted us, re-write under the
         # current primary. Best-effort — even if the commit fails we still
         # return the plaintext for the caller.
-        if not _is_encrypted_with_primary(row.key_ciphertext):
+        if not encrypted_with_primary(row.key_ciphertext):
             try:
-                row.key_ciphertext = _encrypt(plaintext)
+                row.key_ciphertext = encrypt_secret(plaintext)
                 s.commit()
                 logger.info(
                     "Re-encrypted user_api_key under new SECRET_KEY: user=%s provider=%s",
-                    user_id, provider,
+                    user_id,
+                    provider,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "Lazy re-encrypt failed for user=%s provider=%s: %s",
-                    user_id, provider, exc,
+                    user_id,
+                    provider,
+                    exc,
                 )
                 s.rollback()
 

@@ -8,6 +8,7 @@ don't need any curated overrides for Claude.
 Note the special auth: ``x-api-key`` header (NOT Bearer) plus the
 ``anthropic-version`` date pin Anthropic requires on EVERY request.
 """
+
 from __future__ import annotations
 
 from .base import VendorAdapterSpec

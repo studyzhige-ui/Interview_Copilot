@@ -32,6 +32,7 @@ Output (:class:`QueryPlan`):
       Runtime flag set ONLY by the failure fallback (planner crashed →
       original-question retrieval). Never part of the LLM's JSON schema.
 """
+
 from __future__ import annotations
 
 import json
@@ -152,7 +153,7 @@ async def plan_query(
         )
         memory_output_keys = '  "load_strategy": true | false,\n'
     else:
-        memory_files_slot = ""   # privacy mode: omit the whole slot
+        memory_files_slot = ""  # privacy mode: omit the whole slot
         memory_output_keys = '  "load_strategy": false,\n'
 
     system_prompt = (
@@ -212,10 +213,11 @@ async def plan_query(
             # Drop empty sub-queries and enforce the defensive hard cap
             # (the engine/retriever cap too, but keep the plan itself clean).
             valid_subs = [
-                sq for sq in plan.sub_queries
+                sq
+                for sq in plan.sub_queries
                 if sq.dense_query.strip() or sq.sparse_query.strip()
             ]
-            plan.sub_queries = valid_subs[:settings.MAX_SUB_QUERIES]
+            plan.sub_queries = valid_subs[: settings.MAX_SUB_QUERIES]
         else:
             plan.dense_query = ""
             plan.sparse_query = ""
@@ -228,7 +230,8 @@ async def plan_query(
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Query planner failed, falling back to original-question "
-            "retrieval (planner_failed=True): %s", exc,
+            "retrieval (planner_failed=True): %s",
+            exc,
         )
         return fallback_query_plan(user_message)
 

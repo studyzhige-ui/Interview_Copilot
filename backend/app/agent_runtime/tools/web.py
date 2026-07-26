@@ -46,8 +46,15 @@ _MAX_CONTENT_CHARS = 80_000
 # HTML tags stripped during Markdown conversion — noise that adds no
 # informational value for the model.
 _STRIP_TAGS = [
-    "script", "style", "nav", "footer", "noscript",
-    "iframe", "form", "svg", "img",
+    "script",
+    "style",
+    "nav",
+    "footer",
+    "noscript",
+    "iframe",
+    "form",
+    "svg",
+    "img",
 ]
 
 # Prompt-injection defense marker prepended to external web content.
@@ -59,6 +66,7 @@ _EXTERNAL_CONTENT_NOTICE = (
 
 
 # ── web_search ──────────────────────────────────────────────────────────
+
 
 class WebSearchArgs(BaseModel):
     query: str = Field(..., min_length=1, max_length=300, description="Search query")
@@ -78,6 +86,7 @@ def _resolve_tavily_key(user_id: str | None) -> str:
             from app.services.auth.user_api_key_service import (
                 get_user_api_key_plaintext,
             )
+
             per_user = get_user_api_key_plaintext(user_id, "tavily")
             if per_user:
                 return per_user
@@ -87,7 +96,8 @@ def _resolve_tavily_key(user_id: str | None) -> str:
 
 
 async def _web_search_handler(
-    args: WebSearchArgs, ctx: AgentToolContext,
+    args: WebSearchArgs,
+    ctx: AgentToolContext,
 ) -> dict[str, Any]:
     api_key = _resolve_tavily_key(ctx.user_id)
     if not api_key:
@@ -119,11 +129,13 @@ async def _web_search_handler(
 
     results = []
     for item in data.get("results", []):
-        results.append({
-            "title": item.get("title", ""),
-            "url": item.get("url", ""),
-            "description": item.get("content", "")[:300],
-        })
+        results.append(
+            {
+                "title": item.get("title", ""),
+                "url": item.get("url", ""),
+                "description": item.get("content", "")[:300],
+            }
+        )
     return {
         "source": "tavily",
         "query": args.query,
@@ -134,15 +146,19 @@ async def _web_search_handler(
 
 # ── read_url ────────────────────────────────────────────────────────────
 
+
 class ReadUrlArgs(BaseModel):
     url: str = Field(
-        ..., min_length=1, max_length=2000,
+        ...,
+        min_length=1,
+        max_length=2000,
         description="URL to extract content from",
     )
 
 
 async def _read_url_handler(
-    args: ReadUrlArgs, _ctx: AgentToolContext,
+    args: ReadUrlArgs,
+    _ctx: AgentToolContext,
 ) -> dict[str, Any]:
     timeout = httpx.Timeout(30.0)
     headers = {
@@ -159,7 +175,8 @@ async def _read_url_handler(
 
     try:
         async with httpx.AsyncClient(
-            timeout=timeout, follow_redirects=False,
+            timeout=timeout,
+            follow_redirects=False,
         ) as client:
             current_url = args.url
             resp = None
@@ -176,7 +193,8 @@ async def _read_url_handler(
                 except _UrlNotSafe as exc:
                     logger.warning(
                         "read_url refused redirect target=%r: %s",
-                        next_url, exc,
+                        next_url,
+                        exc,
                     )
                     return {
                         "error": f"refused redirect to unsafe url: {exc}",
@@ -195,7 +213,7 @@ async def _read_url_handler(
         if len(raw_bytes) > _MAX_HTTP_BYTES:
             size_mb = len(raw_bytes) / (1024 * 1024)
             return {
-                "error": f"Page too large ({size_mb:.1f} MB, limit {_MAX_HTTP_BYTES // (1024*1024)} MB)",
+                "error": f"Page too large ({size_mb:.1f} MB, limit {_MAX_HTTP_BYTES // (1024 * 1024)} MB)",
                 "url": args.url,
             }
 
@@ -249,14 +267,19 @@ def _html_to_markdown(html: str) -> str:
         text = md(str(soup))
     except ImportError:
         import re
+
         for tag in _STRIP_TAGS:
             # Match both paired tags (<tag>...</tag>) and self-closing (<tag />).
             html = re.sub(
-                rf"<{tag}\b[^>]*/\s*>", "", html,
+                rf"<{tag}\b[^>]*/\s*>",
+                "",
+                html,
                 flags=re.IGNORECASE,
             )
             html = re.sub(
-                rf"<{tag}\b[^>]*>.*?</{tag}>", "", html,
+                rf"<{tag}\b[^>]*>.*?</{tag}>",
+                "",
+                html,
                 flags=re.DOTALL | re.IGNORECASE,
             )
         text = re.sub(r"<[^>]+>", "", html)
@@ -279,40 +302,47 @@ def _html_to_markdown(html: str) -> str:
 
 def _extract_title(html: str) -> str:
     import re
+
     match = re.search(
-        r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL,
+        r"<title[^>]*>(.*?)</title>",
+        html,
+        re.IGNORECASE | re.DOTALL,
     )
     return match.group(1).strip()[:200] if match else ""
 
 
 # ── Registration ────────────────────────────────────────────────────────
 
-registry.register(ToolEntry(
-    name="web_search",
-    description=(
-        "Search the internet via Tavily. Returns titles, URLs, and "
-        "short descriptions. Use for company info, interview "
-        "experiences, technical articles, salary data, etc. Follow "
-        "up with read_url to read a specific page in detail."
-    ),
-    args_model=WebSearchArgs,
-    handler=_web_search_handler,
-    check_fn=_tavily_available,
-    max_result_chars=12_000,
-    emoji="🔍",
-))
+registry.register(
+    ToolEntry(
+        name="web_search",
+        description=(
+            "Search the internet via Tavily. Returns titles, URLs, and "
+            "short descriptions. Use for company info, interview "
+            "experiences, technical articles, salary data, etc. Follow "
+            "up with read_url to read a specific page in detail."
+        ),
+        args_model=WebSearchArgs,
+        handler=_web_search_handler,
+        check_fn=_tavily_available,
+        max_result_chars=12_000,
+        emoji="🔍",
+    )
+)
 
-registry.register(ToolEntry(
-    name="read_url",
-    description=(
-        "Fetch a web page and extract its text content as Markdown. "
-        "Handles long pages: content up to 80K chars is returned "
-        "(automatically offloaded to disk if large — use read_file "
-        "to page through). Use after web_search to read specific "
-        "pages in detail."
-    ),
-    args_model=ReadUrlArgs,
-    handler=_read_url_handler,
-    max_result_chars=16_000,
-    emoji="📄",
-))
+registry.register(
+    ToolEntry(
+        name="read_url",
+        description=(
+            "Fetch a web page and extract its text content as Markdown. "
+            "Handles long pages: content up to 80K chars is returned "
+            "(automatically offloaded to disk if large — use read_file "
+            "to page through). Use after web_search to read specific "
+            "pages in detail."
+        ),
+        args_model=ReadUrlArgs,
+        handler=_read_url_handler,
+        max_result_chars=16_000,
+        emoji="📄",
+    )
+)

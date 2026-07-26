@@ -40,9 +40,14 @@ def test_mock_answer_resp_matches_endpoint_dict_shape():
     assert resp.model_dump() == {**_VALID_ANSWER_RESP, "question_message_id": None}
 
 
-@pytest.mark.parametrize("missing", [
-    "interviewer_message", "current_stage_key", "is_ready_to_finish",
-])
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "interviewer_message",
+        "current_stage_key",
+        "is_ready_to_finish",
+    ],
+)
 def test_mock_answer_resp_requires_all_fields(missing):
     payload = {k: v for k, v in _VALID_ANSWER_RESP.items() if k != missing}
     with pytest.raises(ValidationError):
@@ -72,6 +77,10 @@ def test_mock_start_resp_accepts_full_valid_payload():
 
 @pytest.mark.parametrize("missing", ["key", "title"])
 def test_mock_stage_requires_both_fields(missing):
-    payload = {k: v for k, v in {"key": "self_intro", "title": "自我介绍"}.items() if k != missing}
+    payload = {
+        k: v
+        for k, v in {"key": "self_intro", "title": "自我介绍"}.items()
+        if k != missing
+    }
     with pytest.raises(ValidationError):
         MockStage(**payload)

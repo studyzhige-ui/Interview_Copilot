@@ -10,12 +10,10 @@ Locks the two guarantees the worker-split depends on:
      load Whisper for nothing; if it always returns True, the dreaming
      worker would crash on missing GPU memory.
 """
+
 from __future__ import annotations
 
-import os
 import sys
-
-import pytest
 
 
 # ── Routing ────────────────────────────────────────────────────────────
@@ -23,12 +21,14 @@ import pytest
 
 def test_heavy_task_routes_to_transcription_queue():
     from app.worker.celery_app import celery_app
+
     routes = celery_app.conf.task_routes
     assert routes["tasks.process_interview_analysis"]["queue"] == "transcription"
 
 
 def test_light_tasks_route_to_default_queue():
     from app.worker.celery_app import celery_app
+
     routes = celery_app.conf.task_routes
     light = [
         "tasks.process_document_ingestion",
@@ -47,11 +47,9 @@ def test_every_registered_task_has_a_route():
     is visible at PR time and the author can confirm 'yes, default
     is right for this' rather than leaving it accidental."""
     from app.worker.celery_app import celery_app
+
     routes = celery_app.conf.task_routes
-    registered = {
-        name for name in celery_app.tasks
-        if name.startswith("tasks.")
-    }
+    registered = {name for name in celery_app.tasks if name.startswith("tasks.")}
     unrouted = registered - set(routes.keys())
     assert not unrouted, (
         f"Tasks defined without explicit route: {sorted(unrouted)}. "
@@ -76,7 +74,8 @@ def test_worker_subscribes_to_via_argv_long(monkeypatch):
 
     monkeypatch.delenv("CELERY_QUEUES", raising=False)
     monkeypatch.setattr(
-        sys, "argv",
+        sys,
+        "argv",
         ["celery", "worker", "--queues", "default"],
     )
     assert mod._worker_subscribes_to("default") is True
@@ -88,7 +87,8 @@ def test_worker_subscribes_to_via_argv_equals(monkeypatch):
 
     monkeypatch.delenv("CELERY_QUEUES", raising=False)
     monkeypatch.setattr(
-        sys, "argv",
+        sys,
+        "argv",
         ["celery", "worker", "--queues=transcription,default"],
     )
     assert mod._worker_subscribes_to("transcription") is True
@@ -101,7 +101,8 @@ def test_worker_subscribes_to_via_argv_short_q(monkeypatch):
 
     monkeypatch.delenv("CELERY_QUEUES", raising=False)
     monkeypatch.setattr(
-        sys, "argv",
+        sys,
+        "argv",
         ["celery", "worker", "-Q", "transcription"],
     )
     assert mod._worker_subscribes_to("transcription") is True

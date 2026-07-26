@@ -8,6 +8,7 @@ The service layer here is thin — just enough to encapsulate session
 handling + idempotent upsert so the API layer doesn't deal with
 SQLAlchemy directly.
 """
+
 from __future__ import annotations
 
 import json
@@ -18,6 +19,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.edition import current_edition_policy
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.user_model_provider_settings import UserModelProviderSettings
@@ -39,17 +41,18 @@ class ResolvedProviderSettings:
     caller gets a complete record — defaults filled in for any
     unoverridden field.
     """
+
     provider: str
     display_label: str
     icon_slug: str | None
-    enabled: bool                        # effective (default OR user-set)
-    has_user_row: bool                   # True if user_provider_settings has a row
-    api_base: str                        # effective (default if no override)
-    api_base_override: str | None        # user's override, if any
+    enabled: bool  # effective (default OR user-set)
+    has_user_row: bool  # True if user_provider_settings has a row
+    api_base: str  # effective (default if no override)
+    api_base_override: str | None  # user's override, if any
     organization_id: str | None
     extra_headers_json: str | None
     api_key_env: str
-    has_user_api_key: bool               # whether user_model_credentials[provider] exists
+    has_user_api_key: bool  # whether user_model_credentials[provider] exists
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -65,12 +68,15 @@ def _session(db: Session | None) -> Session:
     if db is not None:
         # Caller manages lifecycle.
         from contextlib import nullcontext
+
         return nullcontext(db)  # type: ignore[return-value]
     return SessionLocal()
 
 
 def _get_row(
-    db: Session, user_pk: int | None, provider: str,
+    db: Session,
+    user_pk: int | None,
+    provider: str,
 ) -> UserModelProviderSettings | None:
     if user_pk is None:
         return None
@@ -90,6 +96,7 @@ def _has_user_credential(db: Session, user_pk: int | None, provider: str) -> boo
     if user_pk is None:
         return False
     from app.models.user_model_credentials import UserModelCredential
+
     return (
         db.query(UserModelCredential.id)
         .filter(
@@ -104,7 +111,10 @@ def _has_user_credential(db: Session, user_pk: int | None, provider: str) -> boo
 
 
 def resolve_provider_settings(
-    user_id: str, provider: str, *, db: Session | None = None,
+    user_id: str,
+    provider: str,
+    *,
+    db: Session | None = None,
 ) -> ResolvedProviderSettings | None:
     """Return the effective settings for one (user, provider).
 
@@ -117,12 +127,16 @@ def resolve_provider_settings(
         user_pk = resolve_user_pk(s, user_id)
         row = _get_row(s, user_pk, provider)
         return _resolve_one(
-            defaults, row, has_key=_has_user_credential(s, user_pk, provider),
+            defaults,
+            row,
+            has_key=_has_user_credential(s, user_pk, provider),
         )
 
 
 def resolve_all_provider_settings(
-    user_id: str, *, db: Session | None = None,
+    user_id: str,
+    *,
+    db: Session | None = None,
 ) -> list[ResolvedProviderSettings]:
     """Return effective settings for EVERY provider in ``PROVIDERS``.
 
@@ -141,13 +155,19 @@ def resolve_all_provider_settings(
         # Existence check for ALL providers in one query (per-provider
         # query would be N+1).
         from app.models.user_model_credentials import UserModelCredential
+
         keys_present = {
-            row[0] for row in s.query(UserModelCredential.provider)
+            row[0]
+            for row in s.query(UserModelCredential.provider)
             .filter(UserModelCredential.user_id == user_pk)
             .all()
         }
         return [
-            _resolve_one(defaults, rows_by_provider.get(provider), has_key=provider in keys_present)
+            _resolve_one(
+                defaults,
+                rows_by_provider.get(provider),
+                has_key=provider in keys_present,
+            )
             for provider, defaults in PROVIDERS.items()
         ]
 
@@ -158,16 +178,20 @@ def _resolve_one(
     *,
     has_key: bool,
 ) -> ResolvedProviderSettings:
+    allow_overrides = current_edition_policy().allow_provider_connection_overrides
+    api_base_override = row.api_base_override if row and allow_overrides else None
+    organization_id = row.organization_id if row and allow_overrides else None
+    extra_headers_json = row.extra_headers_json if row and allow_overrides else None
     return ResolvedProviderSettings(
         provider=defaults.id,
         display_label=defaults.display_label,
         icon_slug=defaults.icon_slug,
         enabled=row.enabled if row is not None else defaults.enabled_by_default,
         has_user_row=row is not None,
-        api_base=row.api_base_override if (row and row.api_base_override) else defaults.default_api_base,
-        api_base_override=row.api_base_override if row else None,
-        organization_id=row.organization_id if row else None,
-        extra_headers_json=row.extra_headers_json if row else None,
+        api_base=api_base_override or defaults.default_api_base,
+        api_base_override=api_base_override,
+        organization_id=organization_id,
+        extra_headers_json=extra_headers_json,
         api_key_env=defaults.api_key_env,
         has_user_api_key=has_key,
     )
@@ -182,6 +206,7 @@ class SettingsPatch:
     it; an explicit ``api_base_override=""`` clears the override (back
     to default).
     """
+
     enabled: bool | None = None
     api_base_override: str | None = None
     organization_id: str | None = None
@@ -195,8 +220,11 @@ _CLEAR = object()
 
 
 def upsert_settings(
-    user_id: str, provider: str, patch: SettingsPatch,
-    *, db: Session | None = None,
+    user_id: str,
+    provider: str,
+    patch: SettingsPatch,
+    *,
+    db: Session | None = None,
 ) -> ResolvedProviderSettings:
     """Create-or-update the user's settings row for one provider.
 
@@ -241,7 +269,10 @@ def upsert_settings(
 
 
 def delete_settings(
-    user_id: str, provider: str, *, db: Session | None = None,
+    user_id: str,
+    provider: str,
+    *,
+    db: Session | None = None,
 ) -> bool:
     """Remove the user's overrides row for one provider, reverting to
     defaults. Returns ``True`` if a row was deleted, ``False`` if there

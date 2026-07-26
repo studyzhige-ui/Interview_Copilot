@@ -10,6 +10,7 @@ Product constraints (RFC §6.10):
 (``resolve_user_pk``). The "at most one default" invariant is also backstopped
 by a partial unique index on the table.
 """
+
 from __future__ import annotations
 
 from datetime import datetime

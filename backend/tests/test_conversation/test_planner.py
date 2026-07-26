@@ -16,6 +16,7 @@ to exercise:
   * failure fallback → original-question retrieval flagged planner_failed
   * the prompt-assembly order: user_message ends up exactly ONCE at the end.
 """
+
 import asyncio
 import json
 from dataclasses import dataclass
@@ -40,7 +41,10 @@ class _FakeLLM:
 
 def _patch_llm(monkeypatch, fake_llm):
     from app.conversation import query_planner as planner
-    monkeypatch.setattr(planner, "get_llm_for_role", lambda role, user_id=None: fake_llm)
+
+    monkeypatch.setattr(
+        planner, "get_llm_for_role", lambda role, user_id=None: fake_llm
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -60,11 +64,13 @@ def test_plan_query_parses_full_json_response(monkeypatch):
     fake = _FakeLLM(json.dumps(payload))
     _patch_llm(monkeypatch, fake)
 
-    plan = asyncio.run(planner.plan_query(
-        user_message="那这个怎么答？",
-        recent_turns=[{"role": "User", "content": "Redis cache avalanche"}],
-        learning_strategy_description="先分析根因",
-    ))
+    plan = asyncio.run(
+        planner.plan_query(
+            user_message="那这个怎么答？",
+            recent_turns=[{"role": "User", "content": "Redis cache avalanche"}],
+            learning_strategy_description="先分析根因",
+        )
+    )
 
     assert plan.needs_knowledge_retrieval is True
     assert plan.dense_query == payload["dense_query"]
@@ -89,13 +95,19 @@ def test_plan_query_extracts_json_from_prose_wrapper(monkeypatch):
         "sparse_query": "HNSW indexing graph nearest neighbour",
         "load_strategy": False,
     }
-    wrapped = "Sure! Here's the plan:\n" + json.dumps(payload) + "\nLet me know if you need more."
+    wrapped = (
+        "Sure! Here's the plan:\n"
+        + json.dumps(payload)
+        + "\nLet me know if you need more."
+    )
     _patch_llm(monkeypatch, _FakeLLM(wrapped))
 
-    plan = asyncio.run(planner.plan_query(
-        user_message="How does HNSW work?",
-        recent_turns=[],
-    ))
+    plan = asyncio.run(
+        planner.plan_query(
+            user_message="How does HNSW work?",
+            recent_turns=[],
+        )
+    )
     assert plan.needs_knowledge_retrieval is True
     assert plan.load_strategy is False
 
@@ -123,11 +135,13 @@ def test_plan_query_prompt_has_user_message_exactly_once_at_end(monkeypatch):
     _patch_llm(monkeypatch, fake)
 
     user_msg = "Explain Redis cache avalanche please"
-    asyncio.run(planner.plan_query(
-        user_message=user_msg,
-        recent_turns=[{"role": "User", "content": "something earlier"}],
-        learning_strategy_description="先分析根因",
-    ))
+    asyncio.run(
+        planner.plan_query(
+            user_message=user_msg,
+            recent_turns=[{"role": "User", "content": "something earlier"}],
+            learning_strategy_description="先分析根因",
+        )
+    )
 
     sent_prompt = fake.calls[0][0][0]  # first positional arg = the prompt string
     assert sent_prompt.count(user_msg) == 1, (
@@ -159,10 +173,12 @@ def test_plan_query_handles_direct_chat_mode(monkeypatch):
     }
     _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
 
-    plan = asyncio.run(planner.plan_query(
-        user_message="hi",
-        recent_turns=[],
-    ))
+    plan = asyncio.run(
+        planner.plan_query(
+            user_message="hi",
+            recent_turns=[],
+        )
+    )
     assert plan.needs_knowledge_retrieval is False
     assert plan.dense_query == ""
     assert plan.sparse_query == ""
@@ -187,12 +203,14 @@ def test_plan_query_honours_load_strategy_true(monkeypatch):
     }
     _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
 
-    plan = asyncio.run(planner.plan_query(
-        user_message="我该怎么准备行为面？",
-        recent_turns=[],
-        learning_strategy_description="STAR 法",
-        global_memory_on=True,
-    ))
+    plan = asyncio.run(
+        planner.plan_query(
+            user_message="我该怎么准备行为面？",
+            recent_turns=[],
+            learning_strategy_description="STAR 法",
+            global_memory_on=True,
+        )
+    )
     assert plan.load_strategy is True
 
 
@@ -211,12 +229,14 @@ def test_plan_query_prompt_includes_strategy_oneliner_when_memory_on(monkeypatch
     fake = _FakeLLM(json.dumps(payload))
     _patch_llm(monkeypatch, fake)
 
-    asyncio.run(planner.plan_query(
-        user_message="hi",
-        recent_turns=[],
-        learning_strategy_description="STAR 法已内化",
-        global_memory_on=True,
-    ))
+    asyncio.run(
+        planner.plan_query(
+            user_message="hi",
+            recent_turns=[],
+            learning_strategy_description="STAR 法已内化",
+            global_memory_on=True,
+        )
+    )
     sent_prompt = fake.calls[0][0][0]
     assert "[Available Memory Files]" in sent_prompt
     assert "STAR 法已内化" in sent_prompt
@@ -242,9 +262,12 @@ def test_plan_query_parses_sub_queries(monkeypatch):
     }
     _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
 
-    plan = asyncio.run(planner.plan_query(
-        user_message="雪崩和击穿分别怎么解决？", recent_turns=[],
-    ))
+    plan = asyncio.run(
+        planner.plan_query(
+            user_message="雪崩和击穿分别怎么解决？",
+            recent_turns=[],
+        )
+    )
     assert len(plan.sub_queries) == 2
     assert plan.sub_queries[0].dense_query == "Redis 缓存雪崩怎么解决"
     assert plan.sub_queries[1].sparse_query == "Redis 缓存击穿"
@@ -255,10 +278,11 @@ def test_plan_query_drops_empty_sub_queries(monkeypatch):
 
     payload = {
         "needs_knowledge_retrieval": True,
-        "dense_query": "x", "sparse_query": "x",
+        "dense_query": "x",
+        "sparse_query": "x",
         "sub_queries": [
             {"dense_query": "real", "sparse_query": "real"},
-            {"dense_query": "", "sparse_query": ""},   # empty → dropped
+            {"dense_query": "", "sparse_query": ""},  # empty → dropped
         ],
         "load_strategy": False,
     }
@@ -275,7 +299,8 @@ def test_plan_query_caps_sub_queries_at_max(monkeypatch):
 
     payload = {
         "needs_knowledge_retrieval": True,
-        "dense_query": "x", "sparse_query": "x",
+        "dense_query": "x",
+        "sparse_query": "x",
         "sub_queries": [
             {"dense_query": f"q{i}", "sparse_query": f"kw{i}"} for i in range(8)
         ],
@@ -292,7 +317,8 @@ def test_plan_query_clears_sub_queries_when_rag_off(monkeypatch):
 
     payload = {
         "needs_knowledge_retrieval": False,
-        "dense_query": "", "sparse_query": "",
+        "dense_query": "",
+        "sparse_query": "",
         "sub_queries": [{"dense_query": "stray", "sparse_query": "stray"}],
         "load_strategy": False,
     }
@@ -305,10 +331,16 @@ def test_plan_query_clears_sub_queries_when_rag_off(monkeypatch):
 def test_planner_prompt_advertises_sub_queries(monkeypatch):
     from app.conversation import query_planner as planner
 
-    fake = _FakeLLM(json.dumps({
-        "needs_knowledge_retrieval": False, "dense_query": "",
-        "sparse_query": "", "load_strategy": False,
-    }))
+    fake = _FakeLLM(
+        json.dumps(
+            {
+                "needs_knowledge_retrieval": False,
+                "dense_query": "",
+                "sparse_query": "",
+                "load_strategy": False,
+            }
+        )
+    )
     _patch_llm(monkeypatch, fake)
 
     asyncio.run(planner.plan_query(user_message="hi", recent_turns=[]))
@@ -330,16 +362,18 @@ def test_plan_query_with_recall_off_clears_memory_fields(monkeypatch):
         "needs_knowledge_retrieval": True,
         "dense_query": "x",
         "sparse_query": "x",
-        "load_strategy": True,   # LLM ignored our instruction
+        "load_strategy": True,  # LLM ignored our instruction
     }
     _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
 
-    plan = asyncio.run(planner.plan_query(
-        user_message="x",
-        recent_turns=[],
-        learning_strategy_description="STAR 法",
-        global_memory_on=False,
-    ))
+    plan = asyncio.run(
+        planner.plan_query(
+            user_message="x",
+            recent_turns=[],
+            learning_strategy_description="STAR 法",
+            global_memory_on=False,
+        )
+    )
     assert plan.load_strategy is False
 
 
@@ -357,12 +391,14 @@ def test_plan_query_with_recall_off_omits_memory_section_from_prompt(monkeypatch
     fake = _FakeLLM(json.dumps(payload))
     _patch_llm(monkeypatch, fake)
 
-    asyncio.run(planner.plan_query(
-        user_message="hi",
-        recent_turns=[],
-        learning_strategy_description="STAR (5) ...",
-        global_memory_on=False,
-    ))
+    asyncio.run(
+        planner.plan_query(
+            user_message="hi",
+            recent_turns=[],
+            learning_strategy_description="STAR (5) ...",
+            global_memory_on=False,
+        )
+    )
 
     sent_prompt = fake.calls[0][0][0]
     assert "[Available Memory Files]" not in sent_prompt
@@ -388,10 +424,12 @@ def test_plan_query_backfills_missing_dense_and_sparse(monkeypatch):
     }
     _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
 
-    plan = asyncio.run(planner.plan_query(
-        user_message="Explain Kafka consumer rebalance",
-        recent_turns=[],
-    ))
+    plan = asyncio.run(
+        planner.plan_query(
+            user_message="Explain Kafka consumer rebalance",
+            recent_turns=[],
+        )
+    )
     assert plan.dense_query == "Explain Kafka consumer rebalance"
     assert "Kafka" in plan.sparse_query
 
@@ -410,10 +448,12 @@ def test_plan_query_drops_dense_sparse_when_rag_off(monkeypatch):
     }
     _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
 
-    plan = asyncio.run(planner.plan_query(
-        user_message="how are you",
-        recent_turns=[],
-    ))
+    plan = asyncio.run(
+        planner.plan_query(
+            user_message="how are you",
+            recent_turns=[],
+        )
+    )
     assert plan.dense_query == ""
     assert plan.sparse_query == ""
 
@@ -431,10 +471,12 @@ def test_plan_query_falls_back_on_non_json_response(monkeypatch):
 
     _patch_llm(monkeypatch, _FakeLLM("sorry I cannot answer right now."))
 
-    plan = asyncio.run(planner.plan_query(
-        user_message="Tell me about Redis caching.",
-        recent_turns=[{"role": "User", "content": "earlier discussed concurrency"}],
-    ))
+    plan = asyncio.run(
+        planner.plan_query(
+            user_message="Tell me about Redis caching.",
+            recent_turns=[{"role": "User", "content": "earlier discussed concurrency"}],
+        )
+    )
     assert plan.needs_knowledge_retrieval is True
     assert plan.planner_failed is True
     assert plan.dense_query == "Tell me about Redis caching."
@@ -452,12 +494,16 @@ def test_plan_query_falls_back_when_llm_raises(monkeypatch):
         async def acomplete(self, *args, **kwargs):
             raise RuntimeError("upstream provider 503")
 
-    monkeypatch.setattr(planner, "get_llm_for_role", lambda role, user_id=None: BoomLLM())
+    monkeypatch.setattr(
+        planner, "get_llm_for_role", lambda role, user_id=None: BoomLLM()
+    )
 
-    plan = asyncio.run(planner.plan_query(
-        user_message="anything",
-        recent_turns=[],
-    ))
+    plan = asyncio.run(
+        planner.plan_query(
+            user_message="anything",
+            recent_turns=[],
+        )
+    )
     assert plan.needs_knowledge_retrieval is True
     assert plan.planner_failed is True
     assert plan.dense_query == "anything"
@@ -474,10 +520,12 @@ def test_plan_query_valid_json_unknown_fields_defaults_no_retrieval(monkeypatch)
     bad = json.dumps({"some_unknown_field": "value"})
     _patch_llm(monkeypatch, _FakeLLM(bad))
 
-    plan = asyncio.run(planner.plan_query(
-        user_message="hi there",
-        recent_turns=[],
-    ))
+    plan = asyncio.run(
+        planner.plan_query(
+            user_message="hi there",
+            recent_turns=[],
+        )
+    )
     assert plan.needs_knowledge_retrieval is False
     assert plan.planner_failed is False
     assert plan.load_strategy is False
@@ -493,7 +541,7 @@ def test_plan_query_success_path_never_sets_planner_failed(monkeypatch):
         "dense_query": "x",
         "sparse_query": "x",
         "load_strategy": False,
-        "planner_failed": True,   # model tries to inject — must be ignored
+        "planner_failed": True,  # model tries to inject — must be ignored
     }
     _patch_llm(monkeypatch, _FakeLLM(json.dumps(payload)))
 
@@ -506,10 +554,16 @@ def test_planner_prompt_schema_omits_planner_failed(monkeypatch):
     runtime flag, not a model decision."""
     from app.conversation import query_planner as planner
 
-    fake = _FakeLLM(json.dumps({
-        "needs_knowledge_retrieval": False, "dense_query": "",
-        "sparse_query": "", "load_strategy": False,
-    }))
+    fake = _FakeLLM(
+        json.dumps(
+            {
+                "needs_knowledge_retrieval": False,
+                "dense_query": "",
+                "sparse_query": "",
+                "load_strategy": False,
+            }
+        )
+    )
     _patch_llm(monkeypatch, fake)
 
     asyncio.run(planner.plan_query(user_message="hi", recent_turns=[]))

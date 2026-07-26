@@ -42,9 +42,9 @@ logger = logging.getLogger(__name__)
 
 
 ProviderKind = Literal[
-    "local_huggingface",   # in-process HuggingFaceEmbedding
-    "openai",              # OpenAI's official endpoint shape (uses dimensions= param)
-    "openai_compat",       # /v1/embeddings drop-in (SiliconFlow / Jina / DashScope / etc)
+    "local_huggingface",  # in-process HuggingFaceEmbedding
+    "openai",  # OpenAI's official endpoint shape (uses dimensions= param)
+    "openai_compat",  # /v1/embeddings drop-in (SiliconFlow / Jina / DashScope / etc)
 ]
 
 
@@ -64,7 +64,7 @@ class EmbeddingProvider:
     kind: ProviderKind
     api_base: str = ""
     api_key_env: str = ""
-    label: str = ""           # human display name for logs / docs
+    label: str = ""  # human display name for logs / docs
     china_friendly: bool = False
 
 
@@ -98,7 +98,9 @@ PROVIDERS: dict[str, EmbeddingProvider] = {
     ),
     "dashscope": EmbeddingProvider(
         kind="openai_compat",
-        api_base=os.getenv("DASHSCOPE_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        api_base=os.getenv(
+            "DASHSCOPE_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        ),
         api_key_env="DASHSCOPE_API_KEY",
         label="阿里通义",
         china_friendly=True,
@@ -119,6 +121,7 @@ PROVIDERS: dict[str, EmbeddingProvider] = {
 @dataclass(frozen=True)
 class ResolvedEmbedding:
     """The trio actually fed to the factory: which provider, which model, what dim."""
+
     provider_id: str
     provider: EmbeddingProvider
     model: str
@@ -132,12 +135,15 @@ def resolve_embedding() -> ResolvedEmbedding:
         logger.warning(
             "Unknown EMBEDDING_PROVIDER=%r, falling back to 'local'. "
             "Known providers: %s",
-            pid, ", ".join(PROVIDERS),
+            pid,
+            ", ".join(PROVIDERS),
         )
         pid = "local"
     model = (settings.EMBEDDING_MODEL or "BAAI/bge-m3").strip()
     dim = int(settings.EMBEDDING_DIM or 1024)
-    return ResolvedEmbedding(provider_id=pid, provider=PROVIDERS[pid], model=model, dim=dim)
+    return ResolvedEmbedding(
+        provider_id=pid, provider=PROVIDERS[pid], model=model, dim=dim
+    )
 
 
 def list_providers() -> list[dict[str, Any]]:
@@ -149,7 +155,8 @@ def list_providers() -> list[dict[str, Any]]:
             "label": p.label,
             "china_friendly": p.china_friendly,
             "api_key_env": p.api_key_env,
-            "ready": p.kind == "local_huggingface" or bool(os.getenv(p.api_key_env, "").strip()),
+            "ready": p.kind == "local_huggingface"
+            or bool(os.getenv(p.api_key_env, "").strip()),
         }
         for pid, p in PROVIDERS.items()
     ]
@@ -178,7 +185,9 @@ def build_embedding() -> Any:
         model_name = resolve_local_snapshot(cfg.model) or cfg.model
         logger.info(
             "Embedding: local HF model=%s device=%s dim=%d",
-            cfg.model, device, cfg.dim,
+            cfg.model,
+            device,
+            cfg.dim,
         )
         return HuggingFaceEmbedding(
             model_name=model_name,
@@ -195,6 +204,7 @@ def build_embedding() -> Any:
 
     if p.kind == "openai":
         from llama_index.embeddings.openai import OpenAIEmbedding
+
         logger.info("Embedding: OpenAI model=%s dim=%d", cfg.model, cfg.dim)
         return OpenAIEmbedding(
             model=cfg.model,
@@ -213,7 +223,9 @@ def build_embedding() -> Any:
             ) from exc
         logger.info(
             "Embedding: %s model=%s dim=%d",
-            cfg.provider.label, cfg.model, cfg.dim,
+            cfg.provider.label,
+            cfg.model,
+            cfg.dim,
         )
         return OpenAILikeEmbedding(
             model_name=cfg.model,

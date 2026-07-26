@@ -6,6 +6,7 @@ with an unsupported format must be marked ``failed`` and NOT retried, and
 must never reach the parser. The validator itself is unit-tested in
 test_document_formats; this pins the worker's no-retry handling.
 """
+
 from __future__ import annotations
 
 from typing import Iterator
@@ -27,11 +28,14 @@ def worker_db(monkeypatch) -> Iterator[sessionmaker]:
     ``SessionLocal`` — the task opens/closes its OWN session on this engine,
     so it can't disturb a seed session."""
     engine = create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool,
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
     Base.metadata.create_all(bind=engine)
     Maker = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     import app.worker.tasks.ingestion as tasks_mod
+
     monkeypatch.setattr(tasks_mod, "SessionLocal", Maker)
     try:
         yield Maker
@@ -44,16 +48,23 @@ def _seed_doc(maker: sessionmaker, *, filename: str, status: str = "processing")
     db: Session = maker()
     try:
         asset = FileAsset(
-            id="fa_w1", user_id=1, purpose="knowledge_document",
+            id="fa_w1",
+            user_id=1,
+            purpose="knowledge_document",
             original_filename=filename,
             object_key="uploads/1/fa_w1/" + filename,
             storage_uri="s3://b/uploads/1/fa_w1/" + filename,
             upload_status="uploaded",
         )
         doc = KnowledgeDocument(
-            id="kdoc_w1", user_id=1, file_asset_id="fa_w1",
-            title="t", source_kind="user_upload", status=status,
-            storage_uri=asset.storage_uri, object_key=asset.object_key,
+            id="kdoc_w1",
+            user_id=1,
+            file_asset_id="fa_w1",
+            title="t",
+            source_kind="user_upload",
+            status=status,
+            storage_uri=asset.storage_uri,
+            object_key=asset.object_key,
         )
         db.add_all([asset, doc])
         db.commit()
@@ -68,9 +79,13 @@ def test_worker_rejects_unsupported_format_without_retry(worker_db, monkeypatch)
     # If the parser is ever reached, fail loudly — the format gate must
     # short-circuit before download/ingest.
     import app.rag.ingestion as ingestion_mod
+
     monkeypatch.setattr(
-        ingestion_mod, "ingest_document",
-        lambda *a, **k: pytest.fail("ingest_document must not run for a rejected format"),
+        ingestion_mod,
+        "ingest_document",
+        lambda *a, **k: pytest.fail(
+            "ingest_document must not run for a rejected format"
+        ),
     )
 
     doc_id = _seed_doc(worker_db, filename="malware.exe")
@@ -94,9 +109,13 @@ def test_worker_rejects_unsupported_format(worker_db, monkeypatch):
     from app.worker.tasks import process_document_ingestion
 
     import app.rag.ingestion as ingestion_mod
+
     monkeypatch.setattr(
-        ingestion_mod, "ingest_document",
-        lambda *a, **k: pytest.fail("ingest_document must not run for a rejected format"),
+        ingestion_mod,
+        "ingest_document",
+        lambda *a, **k: pytest.fail(
+            "ingest_document must not run for a rejected format"
+        ),
     )
 
     doc_id = _seed_doc(worker_db, filename="malware.exe")
@@ -111,7 +130,9 @@ def test_worker_rejects_unsupported_format(worker_db, monkeypatch):
         db.close()
 
 
-def test_worker_marks_failed_on_empty_after_cleaning_without_retry(worker_db, monkeypatch):
+def test_worker_marks_failed_on_empty_after_cleaning_without_retry(
+    worker_db, monkeypatch
+):
     """EmptyContentError from ingest (S0 cleaning left no usable text) is a
     permanent failure: friendly message, no retry."""
     from app.rag.cleaning import EmptyContentError
@@ -119,15 +140,20 @@ def test_worker_marks_failed_on_empty_after_cleaning_without_retry(worker_db, mo
 
     # Get past the download (no real S3) so ingest is reached.
     import app.core.storage as storage_mod
+
     monkeypatch.setattr(
-        storage_mod, "download_file_from_s3",
+        storage_mod,
+        "download_file_from_s3",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),
     )
 
     async def _empty(*a, **k):
-        raise EmptyContentError("文档清洗后没有可用文本，请确认文件内容非空且为可读文本。")
+        raise EmptyContentError(
+            "文档清洗后没有可用文本，请确认文件内容非空且为可读文本。"
+        )
 
     import app.rag.ingestion as ingestion_mod
+
     monkeypatch.setattr(ingestion_mod, "ingest_document", _empty)
 
     doc_id = _seed_doc(worker_db, filename="notes.txt")
@@ -150,18 +176,25 @@ def test_worker_keeps_processing_when_index_queued(worker_db, monkeypatch):
     from app.worker.tasks import process_document_ingestion
 
     import app.core.storage as storage_mod
+
     monkeypatch.setattr(
-        storage_mod, "download_file_from_s3",
+        storage_mod,
+        "download_file_from_s3",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),
     )
 
     async def _queued(*a, **k):
         return {
-            "success": True, "indexed": False, "chunk_count": 2,
-            "node_ids": ["n1", "n2"], "ref_doc_ids": [], "content_text": "body",
+            "success": True,
+            "indexed": False,
+            "chunk_count": 2,
+            "node_ids": ["n1", "n2"],
+            "ref_doc_ids": [],
+            "content_text": "body",
         }
 
     import app.rag.ingestion as ingestion_mod
+
     monkeypatch.setattr(ingestion_mod, "ingest_document", _queued)
 
     doc_id = _seed_doc(worker_db, filename="notes.txt")
@@ -171,22 +204,26 @@ def test_worker_keeps_processing_when_index_queued(worker_db, monkeypatch):
     db = worker_db()
     try:
         doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == doc_id).first()
-        assert doc.status == "processing"   # not 'ready' until the index lands
-        assert doc.chunk_count == 2          # facts are saved
+        assert doc.status == "processing"  # not 'ready' until the index lands
+        assert doc.chunk_count == 2  # facts are saved
         assert "重试" in (doc.error_message or "")
     finally:
         db.close()
 
 
-def test_worker_marks_failed_on_embedding_validation_without_retry(worker_db, monkeypatch):
+def test_worker_marks_failed_on_embedding_validation_without_retry(
+    worker_db, monkeypatch
+):
     """A dimension/count mismatch (EmbeddingValidationError) is a permanent
     config error: friendly message surfaced via str(exc), no retry (B6 §4.5.3)."""
     from app.rag.embedding_registry import EmbeddingValidationError
     from app.worker.tasks import process_document_ingestion
 
     import app.core.storage as storage_mod
+
     monkeypatch.setattr(
-        storage_mod, "download_file_from_s3",
+        storage_mod,
+        "download_file_from_s3",
         lambda uri, path: open(path, "w", encoding="utf-8").close(),
     )
 
@@ -196,6 +233,7 @@ def test_worker_marks_failed_on_embedding_validation_without_retry(worker_db, mo
         )
 
     import app.rag.ingestion as ingestion_mod
+
     monkeypatch.setattr(ingestion_mod, "ingest_document", _dim_mismatch)
 
     doc_id = _seed_doc(worker_db, filename="notes.txt")

@@ -80,7 +80,9 @@ def is_global_memory_enabled_for_session(session_id: str, user_id: str) -> bool:
     except Exception as exc:  # noqa: BLE001 — degrade safely, never block answering
         logger.warning(
             "recall_policy: lookup failed for %s/%s: %s",
-            session_id, user_id, exc,
+            session_id,
+            user_id,
+            exc,
         )
         return False
     finally:

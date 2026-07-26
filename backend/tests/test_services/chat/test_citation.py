@@ -1,4 +1,5 @@
 """Tests for the lightweight citation check (generation plan §2.5)."""
+
 from __future__ import annotations
 
 from app.services.chat.citation import validate_citations
@@ -45,7 +46,9 @@ def test_missing_citation_when_retrieval_hit():
 def test_no_missing_warning_without_retrieval_hit():
     """A turn with no retrieved evidence isn't expected to cite anything."""
     report = validate_citations(
-        "这是一个通用回答。", sources=[], retrieval_hit=False,
+        "这是一个通用回答。",
+        sources=[],
+        retrieval_hit=False,
     )
     assert report.missing_citation is False
     assert report.ok is True
@@ -53,7 +56,9 @@ def test_no_missing_warning_without_retrieval_hit():
 
 def test_duplicate_refs_deduped_in_order():
     report = validate_citations(
-        "[K2] ... [K1] ... [K2] again", _sources("K1", "K2"), retrieval_hit=True,
+        "[K2] ... [K1] ... [K2] again",
+        _sources("K1", "K2"),
+        retrieval_hit=True,
     )
     assert report.cited_refs == ["K2", "K1"]
 

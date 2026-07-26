@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/store/uiStore';
 import { getModelsCatalog, getModelsRuntime, updateModelsRuntime } from '@/api/models';
@@ -32,10 +32,6 @@ export function useChatModels(mode: Mode) {
   // Local optimistic override on top of the server-resolved selection —
   // rolls back on save failure, exactly like the pre-split setState flow.
   const [localSelection, setLocalSelection] = useState<Partial<Record<ModelRole, string>>>({});
-  // Once a fresh runtime lands (e.g. the post-pick invalidation refetch),
-  // the server value already reflects the pick — drop the overrides so
-  // they can't mask later server-side changes (Models page, other tab).
-  useEffect(() => { setLocalSelection({}); }, [runtime]);
   const selection = {
     primary: localSelection.primary ?? runtime?.resolved?.primary?.profile_id ?? '',
     agent: localSelection.agent ?? runtime?.resolved?.agent?.profile_id ?? '',
@@ -59,8 +55,11 @@ export function useChatModels(mode: Mode) {
       toast.success(`已切换 ${activeRole === 'agent' ? 'Agent' : '主对话'}：${p.display_name}`);
       // The catalog carries ``selection`` too — refresh both so the
       // Models page reflects the pick without waiting out staleTime.
-      queryClient.invalidateQueries({ queryKey: ['models', 'runtime'] });
-      queryClient.invalidateQueries({ queryKey: ['models', 'catalog'] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['models', 'runtime'] }),
+        queryClient.invalidateQueries({ queryKey: ['models', 'catalog'] }),
+      ]);
+      setLocalSelection({});
       return true;
     } catch {
       setLocalSelection((s) => ({ ...s, [activeRole]: prev }));

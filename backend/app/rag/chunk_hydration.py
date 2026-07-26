@@ -20,6 +20,7 @@ legacy index rows whose chunk rows were removed by migration (e.g. the old
 personal_memory corpus, dropped in 0039) — replacing the explicit
 source_kind exclusion the retriever used to carry.
 """
+
 from __future__ import annotations
 
 import json

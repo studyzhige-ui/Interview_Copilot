@@ -48,8 +48,8 @@ class ExtractionResult:
     dropped: int = 0
     skipped: int = 0
     by_target: dict[str, int] = field(default_factory=dict)
-    advanced_to: int | None = None       # cursor value after a successful pass
-    skipped_reason: str | None = None     # set when the pass was a no-op
+    advanced_to: int | None = None  # cursor value after a successful pass
+    skipped_reason: str | None = None  # set when the pass was a no-op
 
 
 def run_realtime_extraction(
@@ -87,7 +87,9 @@ def run_realtime_extraction(
                 return ExtractionResult(skipped_reason="superseded")
 
             messages = transcript_service.get_messages_in_range(
-                session_id, cursor + 1, upto_seq,
+                session_id,
+                cursor + 1,
+                upto_seq,
             )
             if not messages:
                 conv.memory_extraction_cursor = upto_seq
@@ -97,18 +99,22 @@ def run_realtime_extraction(
             # Snapshot reads share this db so they're consistent with the
             # writes that follow in the same transaction.
             user_profile = memory_document_service.load(user_id, "user_profile", db=db)
-            learning_strategy = memory_document_service.load(user_id, "learning_strategy", db=db)
+            learning_strategy = memory_document_service.load(
+                user_id, "learning_strategy", db=db
+            )
             states = memory_ability_state_service.load_active(user_id, db=db)
             prompt = REALTIME_EXTRACTION_PROMPT.format(
                 user_profile=(user_profile or "").strip() or "（空）",
                 learning_strategy=(learning_strategy or "").strip() or "（空）",
-                ability_index="\n".join(format_ability_index(states)) or "（暂无能力状态）",
+                ability_index="\n".join(format_ability_index(states))
+                or "（暂无能力状态）",
                 conversation=_format_conversation(messages),
             )
 
             response = run_async(
-                get_llm_for_role("utility", user_id=user_id)
-                .acomplete(prompt, response_format={"type": "json_object"})
+                get_llm_for_role("utility", user_id=user_id).acomplete(
+                    prompt, response_format={"type": "json_object"}
+                )
             )
             patches, parse_ok = parse_json_patches_ex(str(response.text))
             if not parse_ok:

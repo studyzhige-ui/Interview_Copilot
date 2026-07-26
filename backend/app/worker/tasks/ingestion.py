@@ -1,4 +1,5 @@
 """Knowledge-document ingestion task (light queue)."""
+
 import logging
 
 from app.core.error_messages import humanize_error
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
     retry_jitter=True,
     max_retries=3,
     acks_late=True,
-    time_limit=1200,            # 20 min hard
+    time_limit=1200,  # 20 min hard
     soft_time_limit=1140,
 )
 def process_document_ingestion(self, document_id: str):
@@ -51,9 +52,16 @@ def process_document_ingestion(self, document_id: str):
     is_temp_file = False
 
     try:
-        document = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+        document = (
+            db.query(KnowledgeDocument)
+            .filter(KnowledgeDocument.id == document_id)
+            .first()
+        )
         if document is None:
-            return {"status": "failed", "error": f"Knowledge document not found: {document_id}"}
+            return {
+                "status": "failed",
+                "error": f"Knowledge document not found: {document_id}",
+            }
         # document.user_id is the stable users.id (CLEANUP #2), as is the
         # FileAsset's — compare directly + use it for the pk-namespaced
         # object_key prefix below. The Milvus / document_chunks index now keys on
@@ -65,14 +73,19 @@ def process_document_ingestion(self, document_id: str):
         if document.upload.purpose != "knowledge_document":
             raise ValueError("Knowledge document upload has invalid purpose")
         if document.status not in {"processing", "failed"}:
-            return {"status": "skipped", "document_id": document_id, "current_status": document.status}
+            return {
+                "status": "skipped",
+                "document_id": document_id,
+                "current_status": document.status,
+            }
 
         # Defensive format re-check (ingestion §4.1.2) — the API already
         # gated this, but a stale dispatch or a direct DB insert must not
         # reach the parser with an unsupported format. Raises
         # UnsupportedDocumentFormat (a permanent error) handled below.
         validate_knowledge_document_format(
-            document.upload.original_filename, document.upload.content_type,
+            document.upload.original_filename,
+            document.upload.content_type,
         )
 
         if not document.storage_uri.startswith("s3://"):
@@ -82,7 +95,9 @@ def process_document_ingestion(self, document_id: str):
         if not document.object_key.startswith(expected_prefix):
             raise ValueError("Knowledge upload object key does not match owner prefix")
 
-        logger.info("[Task %s] Downloading S3 document for RAG ingestion.", self.request.id)
+        logger.info(
+            "[Task %s] Downloading S3 document for RAG ingestion.", self.request.id
+        )
         _, ext = os.path.splitext(document.object_key)
         tmp_fd, local_file_path = tempfile.mkstemp(suffix=ext)
         os.close(tmp_fd)
@@ -90,7 +105,9 @@ def process_document_ingestion(self, document_id: str):
         try:
             download_file_from_s3(document.storage_uri, local_file_path)
             is_temp_file = True
-            logger.info("[Task %s] Document downloaded to %s", self.request.id, local_file_path)
+            logger.info(
+                "[Task %s] Document downloaded to %s", self.request.id, local_file_path
+            )
         except Exception:
             if os.path.exists(local_file_path):
                 os.unlink(local_file_path)
@@ -126,7 +143,9 @@ def process_document_ingestion(self, document_id: str):
             document.error_message = "向量索引暂时不可用，正在后台重试，稍后可用。"
             db.add(document)
             db.commit()
-            logger.warning("[Task %s] Facts saved; Milvus write queued for retry.", self.request.id)
+            logger.warning(
+                "[Task %s] Facts saved; Milvus write queued for retry.", self.request.id
+            )
             return {"status": "indexing_queued", "document_id": document_id}
 
         document.status = "failed"
@@ -136,7 +155,11 @@ def process_document_ingestion(self, document_id: str):
         logger.warning("[Task %s] Document was empty or unparseable.", self.request.id)
         return {"status": "failed", "error": "Empty or unparseable document"}
 
-    except (UnsupportedDocumentFormat, EmptyContentError, EmbeddingValidationError) as exc:
+    except (
+        UnsupportedDocumentFormat,
+        EmptyContentError,
+        EmbeddingValidationError,
+    ) as exc:
         # Permanent content/format/embedding error (unsupported format, S0
         # cleaning left no usable text, or a dimension/count mismatch that no
         # retry can fix) — friendly Chinese message, NO retry. document is
@@ -177,16 +200,24 @@ def process_document_ingestion(self, document_id: str):
             except Exception as recovery_exc:  # noqa: BLE001
                 logger.error(
                     "Failed to update document %s status after task crash: %s",
-                    document.id, recovery_exc,
+                    document.id,
+                    recovery_exc,
                 )
         logger.error(
             "[Task %s] RAG ingestion task failed (attempt %d/%d): %s",
-            self.request.id, self.request.retries + 1, self.max_retries + 1, exc,
+            self.request.id,
+            self.request.retries + 1,
+            self.max_retries + 1,
+            exc,
         )
         raise
 
     finally:
         if is_temp_file and os.path.exists(local_file_path):
             os.unlink(local_file_path)
-            logger.info("[Task %s] Removed temporary document: %s", self.request.id, local_file_path)
+            logger.info(
+                "[Task %s] Removed temporary document: %s",
+                self.request.id,
+                local_file_path,
+            )
         db.close()

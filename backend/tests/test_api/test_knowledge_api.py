@@ -3,6 +3,7 @@
 We patch storage (presigned URL) and Celery dispatch so tests don't touch
 S3 or Redis.
 """
+
 from __future__ import annotations
 
 from typing import Iterator
@@ -50,10 +51,12 @@ def db() -> Iterator[Session]:
     # Seed the principals the route resolves usernames against. ``alice`` is the
     # dependency-overridden current user; ``bob`` is the foreign-owner case used
     # by the IDOR / 404 tests. FileAsset rows below reference their integer ids.
-    session.add_all([
-        User(username="alice", hashed_password="x"),
-        User(username="bob", hashed_password="x"),
-    ])
+    session.add_all(
+        [
+            User(username="alice", hashed_password="x"),
+            User(username="bob", hashed_password="x"),
+        ]
+    )
     session.commit()
     try:
         yield session
@@ -94,7 +97,9 @@ def test_rag_query_delegates_to_retriever(client):
         assert sparse_query == "what is redis"
         assert source_kind == "user_upload"
         return RetrievalResult(
-            chunks=[{"chunk_id": "dch_1", "node_id": "n1", "text": "redis", "score": 0.9}],
+            chunks=[
+                {"chunk_id": "dch_1", "node_id": "n1", "text": "redis", "score": 0.9}
+            ],
             state=RetrievalState(retrieval_hit=True),
         )
 
@@ -149,16 +154,18 @@ def test_create_upload_url_creates_user_upload(client, db: Session):
 
 
 def test_create_document_404_when_upload_not_owned(client, db: Session):
-    db.add(FileAsset(
-        id="upl_b",
-        user_id=_uid(db, "bob"),
-        purpose="knowledge_document",
-        original_filename="r.pdf",
-        storage_uri="s3://b/uploads/bob/upl_b/r.pdf",
-        object_key="uploads/bob/upl_b/r.pdf",
-        upload_status="uploaded",
-        validation_status="passed",
-    ))
+    db.add(
+        FileAsset(
+            id="upl_b",
+            user_id=_uid(db, "bob"),
+            purpose="knowledge_document",
+            original_filename="r.pdf",
+            storage_uri="s3://b/uploads/bob/upl_b/r.pdf",
+            object_key="uploads/bob/upl_b/r.pdf",
+            upload_status="uploaded",
+            validation_status="passed",
+        )
+    )
     db.commit()
     resp = client.post(
         "/api/v1/knowledge/documents",
@@ -170,16 +177,18 @@ def test_create_document_404_when_upload_not_owned(client, db: Session):
 def test_create_document_rejects_unsupported_format(client, db: Session):
     """The §4.1.2 whitelist gate: an unsupported extension is rejected with a
     400 before any document row is created or worker dispatched."""
-    db.add(FileAsset(
-        id="upl_x",
-        user_id=_uid(db, "alice"),
-        purpose="knowledge_document",
-        original_filename="malware.exe",
-        storage_uri="s3://b/uploads/alice/upl_x/malware.exe",
-        object_key="uploads/alice/upl_x/malware.exe",
-        upload_status="uploaded",
-        validation_status="passed",
-    ))
+    db.add(
+        FileAsset(
+            id="upl_x",
+            user_id=_uid(db, "alice"),
+            purpose="knowledge_document",
+            original_filename="malware.exe",
+            storage_uri="s3://b/uploads/alice/upl_x/malware.exe",
+            object_key="uploads/alice/upl_x/malware.exe",
+            upload_status="uploaded",
+            validation_status="passed",
+        )
+    )
     db.commit()
     with patch("app.api.rag.process_document_ingestion") as mock_proc:
         resp = client.post(
@@ -196,16 +205,18 @@ def test_create_document_accepts_legacy_office(client, db: Session):
     """Legacy Office (.doc/.ppt/.xls) is business-allowed now (LlamaParse direct
     or a server-side LibreOffice conversion handle it at parse time) — the upload
     is accepted + dispatched, no longer rejected with a 400."""
-    db.add(FileAsset(
-        id="upl_legacy",
-        user_id=_uid(db, "alice"),
-        purpose="knowledge_document",
-        original_filename="old.doc",
-        storage_uri="s3://b/uploads/alice/upl_legacy/old.doc",
-        object_key="uploads/alice/upl_legacy/old.doc",
-        upload_status="uploaded",
-        validation_status="passed",
-    ))
+    db.add(
+        FileAsset(
+            id="upl_legacy",
+            user_id=_uid(db, "alice"),
+            purpose="knowledge_document",
+            original_filename="old.doc",
+            storage_uri="s3://b/uploads/alice/upl_legacy/old.doc",
+            object_key="uploads/alice/upl_legacy/old.doc",
+            upload_status="uploaded",
+            validation_status="passed",
+        )
+    )
     db.commit()
     fake_task = MagicMock()
     fake_task.id = "task-legacy"
@@ -220,16 +231,18 @@ def test_create_document_accepts_legacy_office(client, db: Session):
 
 
 def test_create_document_dispatches_celery_with_document_id(client, db: Session):
-    db.add(FileAsset(
-        id="upl_a",
-        user_id=_uid(db, "alice"),
-        purpose="knowledge_document",
-        original_filename="redis.pdf",
-        storage_uri="s3://b/uploads/alice/upl_a/redis.pdf",
-        object_key="uploads/alice/upl_a/redis.pdf",
-        upload_status="uploaded",
-        validation_status="passed",
-    ))
+    db.add(
+        FileAsset(
+            id="upl_a",
+            user_id=_uid(db, "alice"),
+            purpose="knowledge_document",
+            original_filename="redis.pdf",
+            storage_uri="s3://b/uploads/alice/upl_a/redis.pdf",
+            object_key="uploads/alice/upl_a/redis.pdf",
+            upload_status="uploaded",
+            validation_status="passed",
+        )
+    )
     db.commit()
 
     fake_task = MagicMock()
@@ -255,16 +268,18 @@ def test_create_document_dispatches_celery_with_document_id(client, db: Session)
 
 
 def test_create_document_marks_failed_when_dispatch_explodes(client, db: Session):
-    db.add(FileAsset(
-        id="upl_a",
-        user_id=_uid(db, "alice"),
-        purpose="knowledge_document",
-        original_filename="r.pdf",
-        storage_uri="s3://b/uploads/alice/upl_a/r.pdf",
-        object_key="uploads/alice/upl_a/r.pdf",
-        upload_status="uploaded",
-        validation_status="passed",
-    ))
+    db.add(
+        FileAsset(
+            id="upl_a",
+            user_id=_uid(db, "alice"),
+            purpose="knowledge_document",
+            original_filename="r.pdf",
+            storage_uri="s3://b/uploads/alice/upl_a/r.pdf",
+            object_key="uploads/alice/upl_a/r.pdf",
+            upload_status="uploaded",
+            validation_status="passed",
+        )
+    )
     db.commit()
 
     with patch("app.api.rag.process_document_ingestion") as mock_proc:
@@ -277,9 +292,11 @@ def test_create_document_marks_failed_when_dispatch_explodes(client, db: Session
 
     # The document row should now exist with status='failed' so the UI
     # surfaces a real error rather than a forever-processing row.
-    rows = db.query(KnowledgeDocument).filter(
-        KnowledgeDocument.user_id == _uid(db, "alice")
-    ).all()
+    rows = (
+        db.query(KnowledgeDocument)
+        .filter(KnowledgeDocument.user_id == _uid(db, "alice"))
+        .all()
+    )
     assert len(rows) == 1
     assert rows[0].status == "failed"
     assert "redis broker offline" in (rows[0].error_message or "")
@@ -290,27 +307,31 @@ def test_create_document_marks_failed_when_dispatch_explodes(client, db: Session
 
 def test_list_documents_is_user_scoped(client, db: Session):
     for user in ("alice", "bob"):
-        db.add(FileAsset(
-            id=f"upl_{user}",
-            user_id=_uid(db, user),
-            purpose="knowledge_document",
-            original_filename=f"{user}.pdf",
-            storage_uri=f"s3://b/uploads/{user}/upl_{user}/{user}.pdf",
-            object_key=f"uploads/{user}/upl_{user}/{user}.pdf",
-            upload_status="consumed",
-            validation_status="passed",
-        ))
-        db.add(KnowledgeDocument(
-            id=f"doc_{user}",
-            user_id=_uid(db, user),
-            file_asset_id=f"upl_{user}",
-            title=f"{user} doc",
-            category="默认",
-            source_kind="user_upload",
-            storage_uri=f"s3://b/uploads/{user}/upl_{user}/{user}.pdf",
-            object_key=f"uploads/{user}/upl_{user}/{user}.pdf",
-            status="ready",
-        ))
+        db.add(
+            FileAsset(
+                id=f"upl_{user}",
+                user_id=_uid(db, user),
+                purpose="knowledge_document",
+                original_filename=f"{user}.pdf",
+                storage_uri=f"s3://b/uploads/{user}/upl_{user}/{user}.pdf",
+                object_key=f"uploads/{user}/upl_{user}/{user}.pdf",
+                upload_status="consumed",
+                validation_status="passed",
+            )
+        )
+        db.add(
+            KnowledgeDocument(
+                id=f"doc_{user}",
+                user_id=_uid(db, user),
+                file_asset_id=f"upl_{user}",
+                title=f"{user} doc",
+                category="默认",
+                source_kind="user_upload",
+                storage_uri=f"s3://b/uploads/{user}/upl_{user}/{user}.pdf",
+                object_key=f"uploads/{user}/upl_{user}/{user}.pdf",
+                status="ready",
+            )
+        )
     db.commit()
     resp = client.get("/api/v1/knowledge/documents")
     assert resp.status_code == 200
@@ -320,36 +341,56 @@ def test_list_documents_is_user_scoped(client, db: Session):
 
 
 def test_list_documents_filters_by_category(client, db: Session):
-    db.add(FileAsset(
-        id="upl_a",
-        user_id=_uid(db, "alice"),
-        purpose="knowledge_document",
-        original_filename="r.pdf",
-        storage_uri="s3://b/x",
-        object_key="x",
-        upload_status="consumed",
-        validation_status="passed",
-    ))
-    db.add(KnowledgeDocument(
-        id="doc_a", user_id=_uid(db, "alice"), file_asset_id="upl_a", title="A",
-        category="Redis", source_kind="user_upload",
-        storage_uri="s3://b/x", object_key="x", status="ready",
-    ))
-    db.add(FileAsset(
-        id="upl_b",
-        user_id=_uid(db, "alice"),
-        purpose="knowledge_document",
-        original_filename="r.pdf",
-        storage_uri="s3://b/y",
-        object_key="y",
-        upload_status="consumed",
-        validation_status="passed",
-    ))
-    db.add(KnowledgeDocument(
-        id="doc_b", user_id=_uid(db, "alice"), file_asset_id="upl_b", title="B",
-        category="Java", source_kind="user_upload",
-        storage_uri="s3://b/y", object_key="y", status="ready",
-    ))
+    db.add(
+        FileAsset(
+            id="upl_a",
+            user_id=_uid(db, "alice"),
+            purpose="knowledge_document",
+            original_filename="r.pdf",
+            storage_uri="s3://b/x",
+            object_key="x",
+            upload_status="consumed",
+            validation_status="passed",
+        )
+    )
+    db.add(
+        KnowledgeDocument(
+            id="doc_a",
+            user_id=_uid(db, "alice"),
+            file_asset_id="upl_a",
+            title="A",
+            category="Redis",
+            source_kind="user_upload",
+            storage_uri="s3://b/x",
+            object_key="x",
+            status="ready",
+        )
+    )
+    db.add(
+        FileAsset(
+            id="upl_b",
+            user_id=_uid(db, "alice"),
+            purpose="knowledge_document",
+            original_filename="r.pdf",
+            storage_uri="s3://b/y",
+            object_key="y",
+            upload_status="consumed",
+            validation_status="passed",
+        )
+    )
+    db.add(
+        KnowledgeDocument(
+            id="doc_b",
+            user_id=_uid(db, "alice"),
+            file_asset_id="upl_b",
+            title="B",
+            category="Java",
+            source_kind="user_upload",
+            storage_uri="s3://b/y",
+            object_key="y",
+            status="ready",
+        )
+    )
     db.commit()
     resp = client.get("/api/v1/knowledge/documents", params={"category": "Redis"})
     assert resp.status_code == 200
@@ -361,32 +402,62 @@ def test_list_documents_filters_by_category(client, db: Session):
 
 
 def test_get_document_404_for_other_user(client, db: Session):
-    db.add(FileAsset(
-        id="upl_b", user_id=_uid(db, "bob"), purpose="knowledge_document",
-        original_filename="r.pdf", storage_uri="s3://b/x",
-        object_key="x", upload_status="consumed", validation_status="passed",
-    ))
-    db.add(KnowledgeDocument(
-        id="doc_b", user_id=_uid(db, "bob"), file_asset_id="upl_b", title="B",
-        category="默认", source_kind="user_upload",
-        storage_uri="s3://b/x", object_key="x", status="ready",
-    ))
+    db.add(
+        FileAsset(
+            id="upl_b",
+            user_id=_uid(db, "bob"),
+            purpose="knowledge_document",
+            original_filename="r.pdf",
+            storage_uri="s3://b/x",
+            object_key="x",
+            upload_status="consumed",
+            validation_status="passed",
+        )
+    )
+    db.add(
+        KnowledgeDocument(
+            id="doc_b",
+            user_id=_uid(db, "bob"),
+            file_asset_id="upl_b",
+            title="B",
+            category="默认",
+            source_kind="user_upload",
+            storage_uri="s3://b/x",
+            object_key="x",
+            status="ready",
+        )
+    )
     db.commit()
     resp = client.get("/api/v1/knowledge/documents/doc_b")
     assert resp.status_code == 404
 
 
 def test_patch_document_updates_title_and_category(client, db: Session):
-    db.add(FileAsset(
-        id="upl_a", user_id=_uid(db, "alice"), purpose="knowledge_document",
-        original_filename="r.pdf", storage_uri="s3://b/x",
-        object_key="x", upload_status="consumed", validation_status="passed",
-    ))
-    db.add(KnowledgeDocument(
-        id="doc_a", user_id=_uid(db, "alice"), file_asset_id="upl_a", title="old",
-        category="默认", source_kind="user_upload",
-        storage_uri="s3://b/x", object_key="x", status="ready",
-    ))
+    db.add(
+        FileAsset(
+            id="upl_a",
+            user_id=_uid(db, "alice"),
+            purpose="knowledge_document",
+            original_filename="r.pdf",
+            storage_uri="s3://b/x",
+            object_key="x",
+            upload_status="consumed",
+            validation_status="passed",
+        )
+    )
+    db.add(
+        KnowledgeDocument(
+            id="doc_a",
+            user_id=_uid(db, "alice"),
+            file_asset_id="upl_a",
+            title="old",
+            category="默认",
+            source_kind="user_upload",
+            storage_uri="s3://b/x",
+            object_key="x",
+            status="ready",
+        )
+    )
     db.commit()
     resp = client.patch(
         "/api/v1/knowledge/documents/doc_a",
@@ -400,16 +471,31 @@ def test_patch_document_updates_title_and_category(client, db: Session):
 
 
 def test_delete_document_calls_hard_delete(client, db: Session):
-    db.add(FileAsset(
-        id="upl_a", user_id=_uid(db, "alice"), purpose="knowledge_document",
-        original_filename="r.pdf", storage_uri="s3://b/x",
-        object_key="x", upload_status="consumed", validation_status="passed",
-    ))
-    db.add(KnowledgeDocument(
-        id="doc_a", user_id=_uid(db, "alice"), file_asset_id="upl_a", title="t",
-        category="默认", source_kind="user_upload",
-        storage_uri="s3://b/x", object_key="x", status="ready",
-    ))
+    db.add(
+        FileAsset(
+            id="upl_a",
+            user_id=_uid(db, "alice"),
+            purpose="knowledge_document",
+            original_filename="r.pdf",
+            storage_uri="s3://b/x",
+            object_key="x",
+            upload_status="consumed",
+            validation_status="passed",
+        )
+    )
+    db.add(
+        KnowledgeDocument(
+            id="doc_a",
+            user_id=_uid(db, "alice"),
+            file_asset_id="upl_a",
+            title="t",
+            category="默认",
+            source_kind="user_upload",
+            storage_uri="s3://b/x",
+            object_key="x",
+            status="ready",
+        )
+    )
     db.commit()
     with patch("app.api.rag.hard_delete_knowledge_document") as mock_del:
         resp = client.delete("/api/v1/knowledge/documents/doc_a")
@@ -430,31 +516,51 @@ def test_hard_delete_guard_uses_pk_namespaced_prefix(db: Session, monkeypatch):
     monkeypatch.setattr(ks, "delete_document_vectors_and_chunks", lambda db, d: None)
 
     ok = KnowledgeDocument(
-        id="kdoc_ok", user_id=uid, file_asset_id="fa_ok", title="r", category="默认",
-        source_kind="user_upload", storage_uri=f"s3://b/uploads/{uid}/fa_ok/r.pdf",
-        object_key=f"uploads/{uid}/fa_ok/r.pdf", status="ready",
+        id="kdoc_ok",
+        user_id=uid,
+        file_asset_id="fa_ok",
+        title="r",
+        category="默认",
+        source_kind="user_upload",
+        storage_uri=f"s3://b/uploads/{uid}/fa_ok/r.pdf",
+        object_key=f"uploads/{uid}/fa_ok/r.pdf",
+        status="ready",
     )
     db.add(ok)
     db.commit()
-    monkeypatch.setattr(ks, "parse_s3_uri", lambda uri: ("b", f"uploads/{uid}/fa_ok/r.pdf"))
+    monkeypatch.setattr(
+        ks, "parse_s3_uri", lambda uri: ("b", f"uploads/{uid}/fa_ok/r.pdf")
+    )
     ks.hard_delete_knowledge_document(db, ok)  # pk-prefixed key → guard passes
     # Blob delete rides the outbox now (UP-2) — the job must be queued.
     from app.models.outbox_job import OutboxJob
 
-    job = db.query(OutboxJob).filter(
-        OutboxJob.job_type == "delete_object",
-        OutboxJob.aggregate_id == "kdoc_ok",
-    ).first()
+    job = (
+        db.query(OutboxJob)
+        .filter(
+            OutboxJob.job_type == "delete_object",
+            OutboxJob.aggregate_id == "kdoc_ok",
+        )
+        .first()
+    )
     assert job is not None
 
     foreign = KnowledgeDocument(
-        id="kdoc_bad", user_id=uid, file_asset_id="fa_bad", title="x", category="c",
-        source_kind="user_upload", storage_uri="s3://b/uploads/999/fa_bad/x.pdf",
-        object_key="uploads/999/fa_bad/x.pdf", status="ready",
+        id="kdoc_bad",
+        user_id=uid,
+        file_asset_id="fa_bad",
+        title="x",
+        category="c",
+        source_kind="user_upload",
+        storage_uri="s3://b/uploads/999/fa_bad/x.pdf",
+        object_key="uploads/999/fa_bad/x.pdf",
+        status="ready",
     )
     db.add(foreign)
     db.commit()
-    monkeypatch.setattr(ks, "parse_s3_uri", lambda uri: ("b", "uploads/999/fa_bad/x.pdf"))
+    monkeypatch.setattr(
+        ks, "parse_s3_uri", lambda uri: ("b", "uploads/999/fa_bad/x.pdf")
+    )
     with pytest.raises(ValueError):
         ks.hard_delete_knowledge_document(db, foreign)
 
@@ -464,16 +570,31 @@ def test_hard_delete_guard_uses_pk_namespaced_prefix(db: Session, monkeypatch):
 
 def test_list_categories_returns_counts(client, db: Session):
     for i, cat in enumerate(["Redis", "Redis", "Java"]):
-        db.add(FileAsset(
-            id=f"upl_{i}", user_id=_uid(db, "alice"), purpose="knowledge_document",
-            original_filename=f"r{i}.pdf", storage_uri=f"s3://b/{i}",
-            object_key=f"{i}", upload_status="consumed", validation_status="passed",
-        ))
-        db.add(KnowledgeDocument(
-            id=f"doc_{i}", user_id=_uid(db, "alice"), file_asset_id=f"upl_{i}", title=f"t{i}",
-            category=cat, source_kind="user_upload",
-            storage_uri=f"s3://b/{i}", object_key=f"{i}", status="ready",
-        ))
+        db.add(
+            FileAsset(
+                id=f"upl_{i}",
+                user_id=_uid(db, "alice"),
+                purpose="knowledge_document",
+                original_filename=f"r{i}.pdf",
+                storage_uri=f"s3://b/{i}",
+                object_key=f"{i}",
+                upload_status="consumed",
+                validation_status="passed",
+            )
+        )
+        db.add(
+            KnowledgeDocument(
+                id=f"doc_{i}",
+                user_id=_uid(db, "alice"),
+                file_asset_id=f"upl_{i}",
+                title=f"t{i}",
+                category=cat,
+                source_kind="user_upload",
+                storage_uri=f"s3://b/{i}",
+                object_key=f"{i}",
+                status="ready",
+            )
+        )
     db.commit()
     resp = client.get("/api/v1/knowledge/categories")
     assert resp.status_code == 200

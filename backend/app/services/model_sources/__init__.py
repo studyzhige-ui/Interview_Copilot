@@ -24,6 +24,7 @@ Public API:
     refresh_catalog() / refresh_catalog_for(provider)
     load_catalog() / load_catalog_for(provider)
 """
+
 from .base import ModelEntry, ProviderDefaults
 from .providers import PROVIDERS, get_provider_defaults, known_provider_ids
 from .pipeline import (

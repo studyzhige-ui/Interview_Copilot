@@ -1,4 +1,5 @@
 """Tests for the resumes entity business rules (RESUME-INTERVIEW)."""
+
 from __future__ import annotations
 
 import pytest
@@ -54,7 +55,9 @@ def test_delete_default_auto_promotes_other(db_session):
     _user(db_session)
     r1 = _create(db_session, title="A")  # default
     r2 = _create(db_session, title="B")
-    assert resume_entity_service.delete_resume(db_session, user_id="alice", resume_id=r1.id)
+    assert resume_entity_service.delete_resume(
+        db_session, user_id="alice", resume_id=r1.id
+    )
     db_session.refresh(r2)
     assert r2.is_default is True  # promoted
     # And only one active resume remains.
@@ -65,7 +68,9 @@ def test_delete_non_default_keeps_default(db_session):
     _user(db_session)
     r1 = _create(db_session, title="A")  # default
     r2 = _create(db_session, title="B")
-    assert resume_entity_service.delete_resume(db_session, user_id="alice", resume_id=r2.id)
+    assert resume_entity_service.delete_resume(
+        db_session, user_id="alice", resume_id=r2.id
+    )
     db_session.refresh(r1)
     assert r1.is_default is True
 
@@ -73,7 +78,9 @@ def test_delete_non_default_keeps_default(db_session):
 def test_delete_last_resume_leaves_none_default(db_session):
     _user(db_session)
     r1 = _create(db_session, title="A")
-    assert resume_entity_service.delete_resume(db_session, user_id="alice", resume_id=r1.id)
+    assert resume_entity_service.delete_resume(
+        db_session, user_id="alice", resume_id=r1.id
+    )
     assert resume_entity_service.list_resumes(db_session, user_id="alice") == []
 
 
@@ -81,7 +88,9 @@ def test_set_default_switches(db_session):
     _user(db_session)
     r1 = _create(db_session, title="A")
     r2 = _create(db_session, title="B")
-    resume_entity_service.set_default_resume(db_session, user_id="alice", resume_id=r2.id)
+    resume_entity_service.set_default_resume(
+        db_session, user_id="alice", resume_id=r2.id
+    )
     db_session.refresh(r1)
     db_session.refresh(r2)
     assert r1.is_default is False
@@ -93,7 +102,10 @@ def test_replace_archives_old_and_inherits_default(db_session):
     r1 = _create(db_session, title="A")  # default
     r2 = _create(db_session, title="B")
     new = resume_entity_service.replace_resume(
-        db_session, user_id="alice", replaced_resume_id=r1.id, title="A2",
+        db_session,
+        user_id="alice",
+        replaced_resume_id=r1.id,
+        title="A2",
     )
     db_session.refresh(r1)
     assert r1.archived_at is not None
@@ -109,5 +121,13 @@ def test_ownership_isolation(db_session):
     _user(db_session, "alice")
     _user(db_session, "bob")
     r = _create(db_session, "alice", title="A")
-    assert resume_entity_service.get_owned_resume(db_session, resume_id=r.id, user_id="bob") is None
-    assert resume_entity_service.delete_resume(db_session, user_id="bob", resume_id=r.id) is False
+    assert (
+        resume_entity_service.get_owned_resume(
+            db_session, resume_id=r.id, user_id="bob"
+        )
+        is None
+    )
+    assert (
+        resume_entity_service.delete_resume(db_session, user_id="bob", resume_id=r.id)
+        is False
+    )

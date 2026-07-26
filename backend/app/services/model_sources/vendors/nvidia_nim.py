@@ -12,6 +12,7 @@ base.py's _coerce_timestamp already drops anything older than
 
 Heavy chat-only filtering is required.
 """
+
 from __future__ import annotations
 
 from .base import VendorAdapterSpec
@@ -22,22 +23,38 @@ from .base import VendorAdapterSpec
 # entries, ~60% are non-chat).
 _NON_CHAT_HINTS = (
     # Embeddings
-    "/embed", "-embed-", "embedqa", "/nv-embed",
+    "/embed",
+    "-embed-",
+    "embedqa",
+    "/nv-embed",
     # Safety / guard / topic-control
-    "guard", "safety", "topic-control",
-    "content-safety", "topic_control",
+    "guard",
+    "safety",
+    "topic-control",
+    "content-safety",
+    "topic_control",
     # OCR / parse / retriever
-    "nemoretriever", "retriever",
-    "nemotron-parse", "/parse",
+    "nemoretriever",
+    "retriever",
+    "nemotron-parse",
+    "/parse",
     # Speech / translate
-    "riva-", "asr-", "tts-",
+    "riva-",
+    "asr-",
+    "tts-",
     # Vision-only / image
-    "nvclip", "vila", "neva-", "kosmos", "fuyu", "deplot",
+    "nvclip",
+    "vila",
+    "neva-",
+    "kosmos",
+    "fuyu",
+    "deplot",
     "synthetic-video-detector",
     # Reward models (training only)
     "reward",
     # Domain-specific non-chat
-    "gliner", "gemma-3n-",       # tiny inference models
+    "gliner",
+    "gemma-3n-",  # tiny inference models
 )
 
 
@@ -50,9 +67,9 @@ def _chat_filter(entry: dict, bare_id: str) -> bool:
 
 SPEC = VendorAdapterSpec(
     provider="nvidia_nim",
-    models_path="/models",          # api_base = integrate.api.nvidia.com/v1
+    models_path="/models",  # api_base = integrate.api.nvidia.com/v1
     auth_style="bearer",
-    created_int_field="created",    # all sentinel; _coerce_timestamp drops it
+    created_int_field="created",  # all sentinel; _coerce_timestamp drops it
     chat_filter=_chat_filter,
     fallback_context_window=128_000,
     fallback_max_output=4_096,

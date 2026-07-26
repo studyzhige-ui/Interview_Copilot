@@ -24,13 +24,15 @@ class ReadInterviewHistoryArgs(BaseModel):
 
 
 async def _read_interview_history_handler(
-    args: ReadInterviewHistoryArgs, ctx: AgentToolContext,
+    args: ReadInterviewHistoryArgs,
+    ctx: AgentToolContext,
 ) -> dict[str, Any]:
     return await asyncio.to_thread(_read_interview_history_sync, args, ctx)
 
 
 def _read_interview_history_sync(
-    args: ReadInterviewHistoryArgs, ctx: AgentToolContext,
+    args: ReadInterviewHistoryArgs,
+    ctx: AgentToolContext,
 ) -> dict[str, Any]:
     try:
         from app.services.interview.interview_record_service import (
@@ -87,30 +89,34 @@ def _list_records(args, ctx, service) -> dict[str, Any]:
             except json.JSONDecodeError:
                 pass
         overall = a.get("overall", {})
-        items.append({
-            "record_id": r.id,
-            "source": r.source,
-            "title": r.title,
-            "status": r.status,
-            "created_at": r.created_at.isoformat() if r.created_at else "",
-            "overall_score": overall.get("score"),
-            "overall_summary": str(
-                overall.get("summary") or overall.get("feedback", ""),
-            )[:200],
-        })
+        items.append(
+            {
+                "record_id": r.id,
+                "source": r.source,
+                "title": r.title,
+                "status": r.status,
+                "created_at": r.created_at.isoformat() if r.created_at else "",
+                "overall_score": overall.get("score"),
+                "overall_summary": str(
+                    overall.get("summary") or overall.get("feedback", ""),
+                )[:200],
+            }
+        )
     return {"count": len(items), "records": items}
 
 
-registry.register(ToolEntry(
-    name="read_interview_history",
-    description=(
-        "Read past interview records and analysis. Without record_id: "
-        "lists recent interviews with scores. With record_id: returns "
-        "detailed analysis including strengths, weaknesses, and "
-        "improvement suggestions."
-    ),
-    args_model=ReadInterviewHistoryArgs,
-    handler=_read_interview_history_handler,
-    max_result_chars=10_000,
-    emoji="📊",
-))
+registry.register(
+    ToolEntry(
+        name="read_interview_history",
+        description=(
+            "Read past interview records and analysis. Without record_id: "
+            "lists recent interviews with scores. With record_id: returns "
+            "detailed analysis including strengths, weaknesses, and "
+            "improvement suggestions."
+        ),
+        args_model=ReadInterviewHistoryArgs,
+        handler=_read_interview_history_handler,
+        max_result_chars=10_000,
+        emoji="📊",
+    )
+)

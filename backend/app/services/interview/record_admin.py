@@ -5,6 +5,7 @@ lookups, field updates, analysis cancellation, the full cascade delete, and
 the SSE poll snapshot. All functions are synchronous; the SSE caller wraps
 them in ``asyncio.to_thread``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -25,7 +26,9 @@ from app.services.interview.interview_record_service import (
 logger = logging.getLogger(__name__)
 
 
-def get_owned_record(db: Session, record_id: str, username: str) -> InterviewRecord | None:
+def get_owned_record(
+    db: Session, record_id: str, username: str
+) -> InterviewRecord | None:
     """The record iff it exists and belongs to *username* (else None)."""
     return (
         db.query(InterviewRecord)
@@ -37,7 +40,9 @@ def get_owned_record(db: Session, record_id: str, username: str) -> InterviewRec
     )
 
 
-def get_owned_qa(db: Session, *, user_pk, record_id: str, qa_id: str) -> InterviewQA | None:
+def get_owned_qa(
+    db: Session, *, user_pk, record_id: str, qa_id: str
+) -> InterviewQA | None:
     """A QA row iff it belongs to *record_id* and that record to *user_pk*."""
     return (
         db.query(InterviewQA)
@@ -60,11 +65,16 @@ def cancel_analysis(db: Session, record: InterviewRecord) -> bool:
     if record.celery_task_id:
         try:
             from app.worker.celery_app import celery_app
-            celery_app.control.revoke(record.celery_task_id, terminate=True, signal="SIGTERM")
+
+            celery_app.control.revoke(
+                record.celery_task_id, terminate=True, signal="SIGTERM"
+            )
             revoked = True
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "Failed to revoke celery task %s: %s", record.celery_task_id, exc,
+                "Failed to revoke celery task %s: %s",
+                record.celery_task_id,
+                exc,
             )
     record.status = STATUS_FAILED
     record.error_message = "cancelled"
@@ -176,7 +186,9 @@ def reanalyze_record(db: Session, record: InterviewRecord, *, drop_qa: bool = Fa
     from app.worker.tasks import process_interview_analysis
 
     if record.source != "upload":
-        raise ReanalyzeNotAllowed("仅上传录音的记录支持重新分析（模拟面试请用重试复盘）")
+        raise ReanalyzeNotAllowed(
+            "仅上传录音的记录支持重新分析（模拟面试请用重试复盘）"
+        )
     if record.status not in (STATUS_COMPLETED, STATUS_FAILED):
         raise ReanalyzeNotAllowed("记录当前状态不支持重新分析")
 
@@ -213,13 +225,18 @@ def reanalyze_record(db: Session, record: InterviewRecord, *, drop_qa: bool = Fa
     except Exception as exc:  # noqa: BLE001 — broker down / misconfigured
         logger.error("reanalyze dispatch failed for %s: %s", record.id, exc)
         interview_record_service.set_status(
-            record.id, STATUS_FAILED,
-            error_message=REANALYZE_DISPATCH_FAILED_MSG, db=db,
+            record.id,
+            STATUS_FAILED,
+            error_message=REANALYZE_DISPATCH_FAILED_MSG,
+            db=db,
         )
         db.commit()
         raise
     interview_record_service.set_status(
-        record.id, STATUS_PENDING, celery_task_id=task.id, db=db,
+        record.id,
+        STATUS_PENDING,
+        celery_task_id=task.id,
+        db=db,
     )
     db.commit()
     return task
@@ -269,8 +286,11 @@ def delete_record_cascade(
         from app.services.knowledge.qa_publish_service import (
             delete_saved_qa_docs_for_record,
         )
+
         removed_docs = delete_saved_qa_docs_for_record(
-            db, user_pk=record.user_id, record_id=record_id,
+            db,
+            user_pk=record.user_id,
+            record_id=record_id,
         )
 
     try:
@@ -298,9 +318,9 @@ def delete_record_cascade(
             db.query(ConversationMessage).filter(
                 ConversationMessage.conversation_id.in_(session_ids)
             ).delete(synchronize_session=False)
-            db.query(Conversation).filter(
-                Conversation.id.in_(session_ids)
-            ).delete(synchronize_session=False)
+            db.query(Conversation).filter(Conversation.id.in_(session_ids)).delete(
+                synchronize_session=False
+            )
         # mock_interview_runtime has ON DELETE CASCADE on interview_records, but
         # SQLite (tests) doesn't enforce FK cascades — delete it explicitly so
         # behavior is uniform across Postgres and SQLite (no orphan runtime).
@@ -312,7 +332,8 @@ def delete_record_cascade(
         db.commit()
         logger.info(
             "Deleted interview_record=%s with %d session(s)",
-            record_id, len(session_ids),
+            record_id,
+            len(session_ids),
         )
         return {
             "deleted_sessions": len(session_ids),
@@ -339,20 +360,14 @@ def poll_record_snapshot(record_id: str) -> dict | None:
     DB_POOL_SIZE=20 pool and the loop would stall on every query.
     """
     with SessionLocal() as db:
-        row = (
-            db.query(InterviewRecord)
-            .filter(InterviewRecord.id == record_id)
-            .first()
-        )
+        row = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
         if row is None:
             return None
         # Denominator for the analyzing-stage progress interpolation: the
         # QA shells are persisted before the analyzing status flips, so by
         # the time the FE needs a percent this is stable.
         qa_total = (
-            db.query(InterviewQA)
-            .filter(InterviewQA.record_id == record_id)
-            .count()
+            db.query(InterviewQA).filter(InterviewQA.record_id == record_id).count()
         )
         return {
             "id": row.id,
