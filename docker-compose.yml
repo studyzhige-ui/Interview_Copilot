@@ -211,12 +211,40 @@ services:
     networks:
       - copilot_net
 
-  # ── Worker fleet split: heavy (transcription) + light (memory etc.) ──
-  # Whisper alone is ~1.5 GB GPU; the dreaming / ingestion tasks don't
-  # need it. By subscribing each worker to ONE queue we avoid loading
-  # Whisper on the light worker (see celery_app.py init_worker_models
-  # for the conditional load). task_routes in celery config wires each
-  # task name to its queue; here we just start one worker per queue.
+  # ── Worker fleet: conversations + voice + durable pipeline + control ──
+  # Each process subscribes to one workload class so slow ASR, parsing and
+  # long Agent turns cannot block one another or load unrelated models.
+
+  worker-turns:
+    profiles: [full]
+    build: *backend-build
+    container_name: interview_copilot_worker_turns
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-interview_copilot}
+      REDIS_URL: redis://redis:6379/0
+      MILVUS_URI: http://milvus-standalone:19530
+      AWS_ENDPOINT_URL: http://minio:9000
+      CELERY_QUEUES: "turns"
+    command:
+      - celery
+      - -A
+      - app.worker.celery_app.celery_app
+      - worker
+      - --loglevel=info
+      - --pool=threads
+      - --concurrency=${TURN_WORKER_CONCURRENCY:-2}
+      - --queues=turns
+      - --hostname=turns@%h
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+      milvus-standalone:
+        condition: service_healthy
+    networks:
+      - copilot_net
 
   worker-transcription:
     profiles: [full]
@@ -248,6 +276,36 @@ services:
     networks:
       - copilot_net
 
+  worker-pipeline:
+    profiles: [full]
+    build: *backend-build
+    container_name: interview_copilot_worker_pipeline
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-interview_copilot}
+      REDIS_URL: redis://redis:6379/0
+      MILVUS_URI: http://milvus-standalone:19530
+      AWS_ENDPOINT_URL: http://minio:9000
+      CELERY_QUEUES: "pipeline"
+    command:
+      - celery
+      - -A
+      - app.worker.celery_app.celery_app
+      - worker
+      - --loglevel=info
+      - --pool=solo
+      - --queues=pipeline
+      - --hostname=pipeline@%h
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+      milvus-standalone:
+        condition: service_healthy
+    networks:
+      - copilot_net
+
   worker-light:
     profiles: [full]
     build: *backend-build
@@ -265,8 +323,8 @@ services:
       - app.worker.celery_app.celery_app
       - worker
       - --loglevel=info
-      # Light tasks are LLM-bound (lots of waiting on the API), so a
-      # thread pool with modest concurrency beats --pool=solo.
+      # Control and scheduled jobs spend most of their time on database or
+      # remote API I/O, so a modest thread pool is appropriate.
       - --pool=threads
       - --concurrency=4
       - --queues=default

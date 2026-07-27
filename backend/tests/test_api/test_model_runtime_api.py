@@ -64,9 +64,6 @@ def test_models_catalog_returns_selection_and_profiles(client, monkeypatch):
         "get_runtime_selection",
         lambda user_id=None: {
             "primary": "openai/gpt-4o",
-            "fast": "openai/gpt-4o-mini",
-            "agent": "openai/gpt-4o",
-            "mock_interview": "openai/gpt-4o",
         },
     )
     # profile_ready imported from registry — stub to True so the
@@ -106,9 +103,6 @@ def test_models_runtime_get_resolves_each_role(client, monkeypatch):
         "get_runtime_selection",
         lambda user_id=None: {
             "primary": "p1",
-            "fast": "p1",
-            "agent": "p2",
-            "mock_interview": "p1",
         },
     )
 
@@ -124,17 +118,19 @@ def test_models_runtime_get_resolves_each_role(client, monkeypatch):
         "get_profile_for_role",
         lambda role, user_id=None: FakeProfile(f"p_{role}"),
     )
+    monkeypatch.setattr(
+        model_runtime_mod,
+        "get_internal_model_profile",
+        lambda role: FakeProfile(f"p_{role}"),
+    )
     resp = client.get("/api/v1/models/runtime")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "success"
-    assert set(body["resolved"].keys()) == {
-        "primary",
-        "agent",
-        "mock_interview",
-        "utility",
-    }
+    assert set(body["resolved"].keys()) == {"primary"}
     assert body["resolved"]["primary"]["profile_id"] == "p_primary"
+    assert set(body["internal"].keys()) == {"router", "worker"}
+    assert body["internal"]["router"]["profile_id"] == "p_router"
 
 
 # ── /models/runtime (PUT) ─────────────────────────────────────────────────
@@ -156,10 +152,7 @@ def test_update_runtime_validates_and_persists(client, monkeypatch):
         # so per-user storage is enforced at the call boundary.
         assert user_id, "endpoint must pass current_user.username"
         return {
-            "primary": "p1",
-            "fast": "p1",
-            "agent": updates.get("agent", "p2"),
-            "mock_interview": "p1",
+            "primary": updates.get("primary", "p1"),
         }
 
     def fake_refresh():
@@ -173,11 +166,11 @@ def test_update_runtime_validates_and_persists(client, monkeypatch):
     monkeypatch.setattr(model_runtime_mod, "refresh_primary_llm", fake_refresh)
 
     with patch("app.core.cache.invalidate", side_effect=fake_invalidate):
-        resp = client.put("/api/v1/models/runtime", json={"agent": "p_new"})
+        resp = client.put("/api/v1/models/runtime", json={"primary": "p_new"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "success"
-    assert body["selection"]["agent"] == "p_new"
+    assert body["selection"]["primary"] == "p_new"
     assert calls["validate"] == 1
     assert calls["refresh"] == 1
 
@@ -188,7 +181,7 @@ def test_update_runtime_translates_value_error_to_400(client, monkeypatch):
 
     monkeypatch.setattr(model_runtime_mod, "validate_role_update", bad_validate)
 
-    resp = client.put("/api/v1/models/runtime", json={"agent": "garbage"})
+    resp = client.put("/api/v1/models/runtime", json={"primary": "garbage"})
     assert resp.status_code == 400
     assert "invalid profile id" in resp.json()["detail"]
 

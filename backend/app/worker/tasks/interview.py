@@ -1,4 +1,4 @@
-"""Interview-analysis pipeline task (heavy queue — needs Whisper)."""
+"""Upload-analysis and mock-review task entry points."""
 
 import logging
 
@@ -10,25 +10,38 @@ from app.worker.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
+_TASK_OPTIONS = {
+    "bind": True,
+    "autoretry_for": (ConnectionError, TimeoutError, OSError),
+    "retry_backoff": True,
+    "retry_backoff_max": 120,
+    "retry_jitter": True,
+    "max_retries": 3,
+    "acks_late": True,
+    "time_limit": 1800,
+    "soft_time_limit": 1740,
+}
+
+
 @celery_app.task(
-    bind=True,
     name="tasks.process_interview_analysis",
-    autoretry_for=(ConnectionError, TimeoutError, OSError),
-    retry_backoff=True,
-    retry_backoff_max=120,
-    retry_jitter=True,  # avoid thundering herd on transient outages
-    max_retries=3,
-    # Reliability: acks_late + time bounds. Keep both ceilings well below
-    # the broker visibility_timeout (3700s) so a hung task is reclaimed and
-    # re-delivered before Redis would re-deliver on its own.
-    acks_late=True,
-    # 30 min budgets a GPU/cloud-ASR deployment. On CPU-only WhisperX a
-    # 60-minute recording can exceed this — raise via env-specific config
-    # if you deploy transcription on CPU.
-    time_limit=1800,  # 30 min hard
-    soft_time_limit=1740,  # 1 min before hard kill
+    **_TASK_OPTIONS,
 )
 def process_interview_analysis(self, record_id: str, language: str = "zh"):
+    """Analyze an uploaded recording on the transcription queue."""
+    return _run_interview_pipeline(self, record_id, language=language)
+
+
+@celery_app.task(
+    name="tasks.process_mock_interview_review",
+    **_TASK_OPTIONS,
+)
+def process_mock_interview_review(self, record_id: str):
+    """Score an already-structured mock interview without loading voice models."""
+    return _run_interview_pipeline(self, record_id, language="zh")
+
+
+def _run_interview_pipeline(self, record_id: str, *, language: str):
     """Run the unified analysis pipeline for an InterviewRecord.
 
     The orchestrator handles both source='upload' (audio → ASR → analysis)

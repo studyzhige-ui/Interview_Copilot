@@ -61,10 +61,11 @@ def _engine(monkeypatch, *, sources, capture: dict):
         capture["ai_blocks"] = ai_blocks
 
     monkeypatch.setattr(engine_mod.transcript_service, "append_turn", fake_append_turn)
-    monkeypatch.setattr(
-        ConversationEngine, "_fire_post_turn_maintenance", lambda self: None
-    )
-    monkeypatch.setattr(ConversationEngine, "_fire_telemetry", lambda self: None)
+
+    async def _noop_telemetry(self):
+        return None
+
+    monkeypatch.setattr(ConversationEngine, "_fire_telemetry", _noop_telemetry)
     return engine
 
 

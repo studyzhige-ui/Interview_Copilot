@@ -316,17 +316,31 @@ async def query_knowledge_base(
         per_query_top_k,
         source_kind,
     )
-    try:
-        # Concurrent fan-out: each spec's embed + Milvus round-trip overlaps
-        # the others (capped at MAX_SUB_QUERIES, so bounded).
-        per_spec_hits = await asyncio.gather(
-            *[
-                _gather_hits(d, s, user_pk, source_kind, per_query_top_k)
-                for d, s in specs
-            ]
+    # Concurrent fan-out: each spec's embed + Milvus round-trip overlaps the
+    # others (capped at MAX_SUB_QUERIES). One failed sub-query must not discard
+    # useful candidates returned by the other independent intents.
+    gathered = await asyncio.gather(
+        *[_gather_hits(d, s, user_pk, source_kind, per_query_top_k) for d, s in specs],
+        return_exceptions=True,
+    )
+    per_spec_hits: list[list[dict[str, Any]]] = []
+    for index, result in enumerate(gathered):
+        if isinstance(result, asyncio.CancelledError):
+            raise result
+        if isinstance(result, BaseException):
+            logger.warning(
+                "RAG sub-query %d/%d failed: %s",
+                index + 1,
+                len(specs),
+                result,
+            )
+            continue
+        per_spec_hits.append(result)
+    if not per_spec_hits:
+        logger.error(
+            "RAG hybrid search unavailable for all %d query spec(s)",
+            len(specs),
         )
-    except Exception as exc:  # noqa: BLE001 — degraded search → empty, not a crash
-        logger.error("RAG hybrid search unavailable: %s", exc)
         return _empty(EMPTY_MILVUS_UNAVAILABLE)
 
     hits = [h for spec_hits in per_spec_hits for h in spec_hits]

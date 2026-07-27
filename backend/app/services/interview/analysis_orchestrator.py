@@ -31,10 +31,12 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
+from app.core.error_messages import humanize_error
 from app.models.chat import Conversation, ConversationMessage
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
 from app.models.interview_transcript import InterviewTranscript
+from app.prompts.interview import DEBRIEF_SUMMARY_PROMPT
 from app.services.uploads.file_asset_service import get_file_asset
 from app.services.interview.interview_record_service import (
     STATUS_ANALYZING,
@@ -250,7 +252,9 @@ class InterviewAnalysisOrchestrator:
         except Exception as exc:
             logger.exception("Orchestrator failed for %s: %s", record_id, exc)
             interview_record_service.set_status(
-                record_id, fail_status, error_message=str(exc)
+                record_id,
+                fail_status,
+                error_message=f"分析失败：{humanize_error(exc)}"[:500],
             )
             raise
 
@@ -690,26 +694,21 @@ class InterviewAnalysisOrchestrator:
         # text (the chat's RAG layer can pull full transcript on demand).
         transcript_excerpt = transcript[:3000] if transcript else ""
 
-        prompt = (
-            "你正在为一份面试记录写一段浓缩的复盘摘要，这段摘要会作为后续所有对话的"
-            "**恒定前导上下文**（命中 prompt cache），所以要密度高、信息全、200-400 字之间。\n\n"
-            "请同时推断一个合适的标签（中文，不超过 8 字），用于该面试的分类。如果用户已设"
-            "标签则尊重原值不动。\n\n"
-            f"## 面试标题\n{title or '（未填）'}\n\n"
-            f"## 用户已选标签\n{tag or '（未填，请推断）'}\n\n"
-            f"## 分析概览\n{overall_text or '（无）'}\n\n"
-            f"## 题目清单\n{chr(10).join(qa_lines) or '（无 QA）'}\n\n"
-            f"## 转录片段（前 3000 字符，仅参考）\n{transcript_excerpt or '（无转录）'}\n\n"
-            "**输出格式（严格 JSON，不要任何额外文字）**：\n"
-            '{"tag": "<推断或保留的标签>", "summary": "<200-400 字浓缩摘要，覆盖：'
-            "岗位方向 / 主要话题 / 候选人表现亮点 / 待改进点 / 整体评价。不要罗列原题，"
-            '描述要凝练成段落。>"}\n'
+        prompt = DEBRIEF_SUMMARY_PROMPT.format(
+            title=title or "（未填）",
+            tag=tag or "（未填，请推断）",
+            overall_text=overall_text or "（无）",
+            qa_lines="\n".join(qa_lines) or "（无 QA）",
+            transcript_excerpt=transcript_excerpt or "（无转录）",
         )
 
-        from app.core.llm_client_factory import get_llm_for_role
+        from app.core.llm_client_factory import get_internal_llm
         from app.services.memory._json_payload import _extract_json_payload
 
-        response = await get_llm_for_role("utility", user_id=user_id).acomplete(prompt)
+        response = await get_internal_llm("worker").acomplete(
+            prompt,
+            response_format={"type": "json_object"},
+        )
         payload = _extract_json_payload(str(response.text))
         if not isinstance(payload, dict):
             return

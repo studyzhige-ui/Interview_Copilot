@@ -34,17 +34,15 @@ _selection_lock = Lock()
 def _normalize_selection(raw: dict[str, str]) -> dict[str, str]:
     """Clamp a raw selection dict to known-valid profile ids.
 
-    Unknown ids fall back to ROLE_DEFAULTS for that role. Agent role
-    additionally requires function-calling support; a non-FC selection
-    is replaced by ROLE_DEFAULTS["agent"]. Retired alias safeguards
-    (the legacy ``deepseek-chat`` / ``deepseek-reasoner`` short ids
+    Unknown ids fall back to ROLE_DEFAULTS for that role. Retired alias
+    safeguards (the legacy ``deepseek-chat`` / ``deepseek-reasoner`` short ids
     from pre-P6-L) are still dropped so old persisted selections
     upgrade cleanly without surfacing as "missing profile" errors.
     """
     profiles = model_catalog._get_all_profiles()
     selection = dict(ROLE_DEFAULTS)
-    # Only user-facing roles are read from input — ``utility`` is a system
-    # role and always resolves automatically (see get_profile_for_role).
+    # Only user-facing roles are read from input. Platform-owned internal
+    # roles never enter the per-user selection map.
     for role in USER_SELECTABLE_ROLES:
         candidate = raw.get(role)
         # Drop pre-P6-L bare ids (no "provider/" prefix). They aren't
@@ -54,13 +52,6 @@ def _normalize_selection(raw: dict[str, str]) -> dict[str, str]:
         if candidate in profiles:
             selection[role] = candidate
 
-    # Agent role guard: if the selected agent profile doesn't support
-    # function calling (or isn't in the cache), fall back to the role
-    # default. The lookup tolerates a missing default too — we just
-    # keep whatever's in selection and let downstream surface the error.
-    agent_profile = profiles.get(selection["agent"])
-    if agent_profile is None or not agent_profile.supports_function_calling:
-        selection["agent"] = ROLE_DEFAULTS["agent"]
     return selection
 
 
@@ -172,13 +163,15 @@ def get_profile_for_role(role: str, user_id: str | None = None) -> ModelProfile:
                             behaviour for a caller with zero keys, so the
                             provider call surfaces a visible auth error
                             instead of failing here.
-    Agent candidates must support function calling in BOTH passes. Any
-    result that isn't the user's own selection logs a degradation warning.
+    Agent-mode compatibility is checked when Agent mode starts.
 
     Pre-MDL-1 this ignored readiness entirely: a new user with only an
     OpenAI key kept resolving to the deepseek defaults and every chat
     401'd while the Models page showed green.
     """
+    if role not in USER_SELECTABLE_ROLES:
+        raise ValueError(f"Unknown user-selectable model role: {role}")
+
     # Lazy import — llm_client_factory imports this module at its top, so
     # the reverse edge must stay function-local (same pattern as the cache
     # clear in persist_runtime_selection).
@@ -205,8 +198,6 @@ def get_profile_for_role(role: str, user_id: str | None = None) -> ModelProfile:
             if not pid or pid not in profiles:
                 continue
             profile = profiles[pid]
-            if role == "agent" and not profile.supports_function_calling:
-                continue
             if require_ready and pid not in ready:
                 continue
             return profile, why

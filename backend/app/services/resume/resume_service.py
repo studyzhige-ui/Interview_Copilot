@@ -4,7 +4,7 @@ Workflow:
   1. User uploads a resume (PDF/DOCX/TXT)
   2. extract_and_store() parses content, splits into typed sections
      (summary, project, education, skill), stores in resume_sections table
-  3. Optionally vectorizes each section into Milvus for later retrieval
+  3. Enqueues a durable Milvus rebuild in the same transaction
 
 Supported section types:
   - "summary"   — personal summary / objective
@@ -22,32 +22,10 @@ from sqlalchemy.orm import Session
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.resume_section import ResumeSection, _generate_section_id
-from app.core.llm_client_factory import get_llm_for_role
+from app.core.llm_client_factory import get_internal_llm
+from app.prompts.resume import RESUME_PARSE_PROMPT
 
 logger = logging.getLogger(__name__)
-
-
-PARSE_PROMPT = """你是一个简历解析助手。请将以下简历文本拆分为结构化段落。
-
-输出要求：
-- 只输出合法 JSON 数组
-- 每个元素包含:
-  - section_type: "summary" | "project" | "education" | "skill"
-  - title: 段落标题（如 "推荐系统项目" 或 "本科教育"）
-  - content: 段落全文（保留原文，不要修改）
-  - metadata: 可选的额外结构化信息（如技术栈、时间等）
-
-规则：
-- 把每一段项目经历拆成独立条目
-- 如果简历有个人简介/目标岗位，归为 summary
-- 技能列表归为 skill
-- 教育背景归为 education
-- 不要遗漏任何段落
-- 如果某段不属于上述任何类型，归为 summary
-
-简历文本：
-{resume_text}
-"""
 
 
 class ResumeService:
@@ -60,12 +38,11 @@ class ResumeService:
         user_id: str | None = None,
     ) -> list[ResumeSection]:
         """Parse a resume entity's text into typed sections, persist them
-        (keyed by ``resume_id``), and index each into the resume Milvus
-        collection. ``user_pk`` is the stable users.id (redundant scope key)."""
+        (keyed by ``resume_id``), and enqueue its Milvus rebuild.
+
+        ``user_pk`` is the stable users.id (redundant scope key)."""
         sections_data = await self._parse_with_llm(resume_text, user_id=user_id)
-        sections = self._persist_sections(user_pk, resume_id, sections_data)
-        self._vectorize_sections(sections)
-        return sections
+        return self._persist_sections(user_pk, resume_id, sections_data)
 
     def get_sections_by_resume(
         self,
@@ -121,9 +98,9 @@ class ResumeService:
         user_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Use LLM to split resume text into structured sections."""
-        prompt = PARSE_PROMPT.format(resume_text=resume_text)
+        prompt = RESUME_PARSE_PROMPT.format(resume_text=resume_text)
         try:
-            response = await get_llm_for_role("utility", user_id=user_id).acomplete(
+            response = await get_internal_llm("worker").acomplete(
                 prompt,
                 response_format={"type": "json_object"},
             )
@@ -164,17 +141,13 @@ class ResumeService:
         db: Session = SessionLocal()
         persisted: list[ResumeSection] = []
         try:
-            # Remove old sections for this resume (re-parse scenario) — from BOTH
-            # Postgres and the Milvus hybrid index, else the old section vectors
-            # orphan in Milvus. The fresh sections are re-indexed by
-            # _vectorize_sections right after.
+            # Postgres is the fact source. The same transaction also queues a
+            # rebuild, so a Milvus outage cannot lose the cleanup or leave the
+            # resume permanently half-indexed.
             db.query(ResumeSection).filter(
                 ResumeSection.resume_id == resume_id,
                 ResumeSection.user_id == user_pk,
             ).delete()
-            from app.services.resume.resume_vector_service import resume_vector_service
-
-            resume_vector_service.delete_by_resume(resume_id)
 
             for order_idx, item in enumerate(sections_data):
                 section_type = str(item.get("section_type") or "summary").strip()
@@ -203,6 +176,15 @@ class ResumeService:
                 db.add(section)
                 persisted.append(section)
 
+            from app.models.resume import Resume
+            from app.services.resume.resume_outbox import enqueue_resume_reindex
+
+            resume = db.query(Resume).filter(Resume.id == resume_id).first()
+            if resume is not None:
+                resume.parse_status = "processing"
+                resume.parse_error = None
+                db.add(resume)
+            enqueue_resume_reindex(db, user_pk=user_pk, resume_id=resume_id)
             db.commit()
             for section in persisted:
                 db.expunge(section)
@@ -210,35 +192,6 @@ class ResumeService:
         except Exception:
             db.rollback()
             raise
-        finally:
-            db.close()
-
-    @staticmethod
-    def _vectorize_sections(sections: list[ResumeSection]) -> None:
-        """Best-effort vectorization — failures are logged, not raised."""
-        try:
-            from app.services.resume.resume_vector_service import resume_vector_service
-        except Exception:  # noqa: BLE001
-            logger.warning("Resume vector service unavailable, skipping vectorization")
-            return
-
-        db: Session = SessionLocal()
-        try:
-            for section in sections:
-                try:
-                    # Re-attach to this session for the flush
-                    merged = db.merge(section)
-                    resume_vector_service.upsert_section(merged, db=db)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "Resume section vectorization failed for %s: %s",
-                        section.id,
-                        exc,
-                    )
-            db.commit()
-        except Exception as exc:  # noqa: BLE001
-            db.rollback()
-            logger.error("Resume vectorization batch failed: %s", exc)
         finally:
             db.close()
 

@@ -39,10 +39,10 @@ export function TopBar({ pageTitle }: { pageTitle?: string }) {
     return () => document.removeEventListener('mousedown', onDoc);
   }, []);
 
-  const displayName = me?.nickname || username || '?';
+  const displayName = me?.nickname || me?.username || '?';
   const avatarUrl = me?.avatar_url;
   const initial = displayName.slice(0, 1).toUpperCase();
-  const colorCls = pickColor(username ?? '');
+  const colorCls = pickColor(me?.username ?? username ?? '');
 
   return (
     <header className="h-16 bg-white border-b border-stone-200 flex items-center px-6 shrink-0">

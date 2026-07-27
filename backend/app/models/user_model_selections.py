@@ -1,10 +1,8 @@
-"""Per-user model-role selection (one row per role).
+"""Per-user answer-model selection.
 
-Replaces the old ``users.model_selection_json`` blob: each role the user has
-chosen a model for (``primary`` / ``fast`` / ``agent`` / ``mock_interview`` /
-...) is one row mapping to a ``profile_id`` (``"{provider}/{model}"``), the
-key the runtime catalog resolves. A missing role row = fall back to
-``ROLE_DEFAULTS``.
+The only current role is ``primary``. Chat, Agent and mock interview share
+that answer model; platform-owned router/worker models never enter this table.
+A missing row falls back to ``ROLE_DEFAULTS``.
 
 Keyed by the stable ``users.id`` (FK, ON DELETE CASCADE) with a unique
 (user_id, role) constraint so each role resolves to exactly one model. The
@@ -39,7 +37,7 @@ class UserModelSelection(Base):
         index=True,
         nullable=False,
     )
-    # Role this selection drives: primary / fast / agent / mock_interview / ...
+    # Reserved for the canonical "primary" answer role.
     role = Column(String(32), nullable=False)
     # "{provider}/{model}" — the runtime catalog key. The provider/model split
     # is derivable from this; we store the single canonical id the resolver

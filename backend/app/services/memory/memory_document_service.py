@@ -380,8 +380,8 @@ def compact_if_oversized(
         if len(lines) <= DOC_MAX_LINES and len(current or "") <= DOC_MAX_CHARS:
             return False
 
-        from app.core.llm_client_factory import get_llm_for_role
-        from app.services.memory.prompts import DOC_COMPACT_PROMPT
+        from app.core.llm_client_factory import get_internal_llm
+        from app.prompts.memory import DOC_COMPACT_PROMPT
         from app.worker.tasks import run_async
 
         labels = {"user_profile": "用户画像", "learning_strategy": "学习策略"}
@@ -392,11 +392,7 @@ def compact_if_oversized(
             max_lines=DOC_COMPACT_TARGET_LINES,
             body=current,
         )
-        response = run_async(
-            get_llm_for_role("utility", user_id=user_id_for_llm or username).acomplete(
-                prompt
-            )
-        )
+        response = run_async(get_internal_llm("worker").acomplete(prompt))
         new_body = str(response.text).strip()
         # Sanity floor: an empty/absurdly small rewrite of a large doc is a
         # model failure, not a compaction — keep the original.

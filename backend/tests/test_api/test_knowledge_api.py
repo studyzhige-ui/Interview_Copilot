@@ -247,8 +247,16 @@ def test_create_document_dispatches_celery_with_document_id(client, db: Session)
 
     fake_task = MagicMock()
     fake_task.id = "task-1"
-    with patch("app.api.rag.process_document_ingestion") as mock_proc:
-        mock_proc.delay.return_value = fake_task
+    with (
+        patch.object(db, "commit", wraps=db.commit) as commit_spy,
+        patch("app.api.rag.process_document_ingestion") as mock_proc,
+    ):
+
+        def dispatch(document_id):
+            assert commit_spy.call_count >= 1
+            return fake_task
+
+        mock_proc.delay.side_effect = dispatch
         resp = client.post(
             "/api/v1/knowledge/documents",
             json={
@@ -299,7 +307,7 @@ def test_create_document_marks_failed_when_dispatch_explodes(client, db: Session
     )
     assert len(rows) == 1
     assert rows[0].status == "failed"
-    assert "redis broker offline" in (rows[0].error_message or "")
+    assert rows[0].error_message == "后台处理队列暂时不可用，请稍后重试。"
 
 
 # ── /knowledge/documents (GET list) ───────────────────────────────────────

@@ -62,38 +62,12 @@ from app.conversation.strategy import StrategyContext, StrategyResult
 from app.core.config import settings
 from app.core.error_messages import humanize_error
 from app.core.llm_client_factory import build_async_openai_client_for_role
+from app.prompts.agent import AGENT_SYSTEM_PROMPT
 
 # Trigger tool self-registration on first import.
 import app.agent_runtime.tools  # noqa: F401
 
 logger = logging.getLogger(__name__)
-
-
-SYSTEM_PROMPT = """你是 Interview Copilot 的执行 Agent，通过调用工具帮助用户完成面试准备相关的复杂任务。
-
-# 能力
-- 分析岗位要求（JD）与用户能力之间的差距
-- 基于面试历史识别薄弱环节，制定学习计划
-- 检索互联网与知识库，获取面经、公司信息、技术资料
-- 将重要结论沉淀到记忆（仅当全局记忆开启），并可导出分析报告与学习笔记为文件
-
-# 工具使用原则
-- 先判断再调用：先想清楚问题是否需要工具、需要哪个，不要一上来就并发调用多个工具。
-- 工具是数据增强，不是知识替代：能用自身知识直接回答的（公司、技术栈、框架对比、最佳实践、常见面试题等）直接回答；工具只用于补充时效性强的、用户私有的、你不掌握的数据。
-- 主动组合：单个工具结果不足时，主动用其它工具补全后再作答。
-- 尊重工具状态：工具返回 disabled 时不再调用；工具未出现在 manifest 中即表示该功能未启用，不要假装会用。
-- 复杂多步任务时，先用 task_create 拆分和追踪你的工作进度，逐步执行并更新状态；简单问题无需使用。
-
-# 错误处理
-- 工具失败或返回空不等于任务失败：结合已有领域知识与部分工具结果，仍要给出有用的回答。
-- 友好转译失败：不直接抛出技术报错，也不以「失败，请重试」收尾；说明缺少了哪些信息，并给出具体的下一步建议。
-
-# 输出规则
-- 给出结构化、可执行的建议。
-- 不编造工具未返回的数据。
-- 知识 / 概念类问题直接回答，不绕弯调工具。
-- 始终为用户留下至少一个可以立刻执行的下一步。
-"""
 
 
 def _build_graceful_fallback(
@@ -266,9 +240,13 @@ class AgentLoopStrategy:
         # ── Per-turn state ────────────────────────────────────────
         budget = AgentBudget(started_at=time.perf_counter())
         client, profile = build_async_openai_client_for_role(
-            "agent",
+            "primary",
             user_id=ctx.user_id,
         )
+        if not getattr(profile, "supports_function_calling", True):
+            raise ValueError(
+                "当前回答模型不支持工具调用，请在模型页面选择支持 Function Calling 的模型。"
+            )
         compactor = QueryLoopCompactor(profile=profile, user_id=ctx.user_id)
 
         # Per-turn tool gating. When the global-memory toggle is OFF
@@ -316,7 +294,7 @@ class AgentLoopStrategy:
 
         # Build the agent's context through the SAME shared pipeline as L1
         # chat (one SLOT_ORDER, no separate agent assembler). L2 differs only
-        # in the system-prompt slot: it carries the agent's SYSTEM_PROMPT +
+        # in the system-prompt slot: it carries AGENT_SYSTEM_PROMPT +
         # the tool manifest — tools ARE part of the system prompt. SLOT_ORDER
         # owns the cache-stable ordering: the stable prefix (system / summary /
         # recent turns) precedes the per-turn grounding (memory / RAG) inside
@@ -328,7 +306,7 @@ class AgentLoopStrategy:
         # append assistant/tool turns after it.
         from app.services.chat.context_assembly_pipeline import prompt_renderer
 
-        agent_system_prompt = f"{SYSTEM_PROMPT}\n\n{tool_catalog.format_prompt()}"
+        agent_system_prompt = f"{AGENT_SYSTEM_PROMPT}\n\n{tool_catalog.format_prompt()}"
         if recovery_text:
             agent_system_prompt += (
                 "\n\n# Durable long-task recovery state\n"

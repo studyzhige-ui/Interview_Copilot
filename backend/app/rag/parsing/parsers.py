@@ -102,11 +102,9 @@ class LlamaParseParser:
 
 
 _docling_converter = None
-# Docling reuses one pipeline per converter and its convert() is NOT thread-safe;
-# ingestion runs in a THREADED Celery pool (worker-light: --pool=threads
-# --concurrency=4), so this lock guards lazy construction AND serializes convert()
-# across threads. Serializing the (heavy, background) parse is an acceptable cost;
-# non-Docling parses don't take this lock.
+# Docling reuses one pipeline per converter and its convert() is not thread-safe.
+# The pipeline worker is solo today, but the lock keeps this module correct when
+# called from tests, an API process, or a future threaded deployment.
 _docling_lock = Lock()
 
 _ocr_available_cache: bool | None = None

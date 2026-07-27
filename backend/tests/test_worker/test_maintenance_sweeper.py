@@ -153,6 +153,74 @@ def test_terminal_and_mock_in_progress_records_untouched(sweeper_db):
     assert live.status == "mock_in_progress"
 
 
+# ── Lost pipeline dispatch recovery ─────────────────────────────────────
+
+
+def test_stale_factless_pipeline_rows_are_redispatched(db_session, monkeypatch):
+    from app.models.file_asset import FileAsset
+    from app.models.knowledge import KnowledgeDocument
+    from app.models.resume import Resume
+    from app.models.user import User
+    from app.worker.tasks import maintenance
+    from app.worker.tasks import ingestion, resume as resume_tasks
+
+    user = User(username="pipeline-sweeper", hashed_password="x")
+    db_session.add(user)
+    db_session.flush()
+    asset = FileAsset(
+        id="fa_pipeline_stale",
+        user_id=user.id,
+        purpose="knowledge_document",
+        original_filename="notes.pdf",
+        object_key=f"uploads/{user.id}/fa_pipeline_stale/notes.pdf",
+        storage_uri="s3://bucket/notes.pdf",
+        upload_status="consumed",
+    )
+    document = KnowledgeDocument(
+        id="kdoc_pipeline_stale",
+        user_id=user.id,
+        file_asset_id=asset.id,
+        title="Notes",
+        source_kind="user_upload",
+        status="processing",
+        updated_at=datetime.utcnow() - timedelta(hours=3),
+    )
+    resume = Resume(
+        id="rsm_pipeline_stale",
+        user_id=user.id,
+        title="CV",
+        parse_status="pending",
+        is_default=True,
+        updated_at=datetime.utcnow() - timedelta(hours=3),
+    )
+    db_session.add_all([asset, document, resume])
+    db_session.commit()
+    monkeypatch.setattr(maintenance, "SessionLocal", lambda: _CtxSession(db_session))
+
+    class _Task:
+        id = "task-recovered"
+
+    knowledge_calls: list[str] = []
+    resume_calls: list[str] = []
+    monkeypatch.setattr(
+        ingestion.process_document_ingestion,
+        "delay",
+        lambda value: knowledge_calls.append(value) or _Task(),
+    )
+    monkeypatch.setattr(
+        resume_tasks.process_resume_parse,
+        "delay",
+        lambda value: resume_calls.append(value) or _Task(),
+    )
+
+    result = maintenance.sweep_stale_pipeline_records.run()
+
+    assert result == {"dispatched": 2, "knowledge": 1, "resumes": 1}
+    assert knowledge_calls == [document.id]
+    assert resume_calls == [resume.id]
+    assert document.task_id == "task-recovered"
+
+
 # ── UP-3: orphan file-asset sweeper ─────────────────────────────────────
 
 

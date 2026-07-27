@@ -25,18 +25,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _dispatch_resume_parse(resume: Resume) -> None:
-    """Best-effort: parse the resume into ``resume_sections`` + index them
-    (RFC §6.5). The entity is already persisted; a dispatch failure just
-    leaves ``parse_status`` for a later retry."""
+def _dispatch_resume_parse(db: Session, resume: Resume) -> None:
+    """Dispatch parsing after the entity commit and guarantee a visible state."""
     if not (resume.file_asset_id or (resume.raw_text_snapshot or "").strip()):
         return
     try:
         from app.worker.tasks import process_resume_parse
 
         process_resume_parse.delay(resume.id)
-    except Exception:  # noqa: BLE001
-        logger.warning("resume parse dispatch failed for %s", resume.id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("resume parse dispatch failed for %s: %s", resume.id, exc)
+        resume.parse_status = "failed"
+        resume.parse_error = "简历解析任务派发失败，请稍后重新上传。"
+        db.add(resume)
+        db.commit()
 
 
 def _serialize(r: Resume) -> ResumeResponse:
@@ -83,7 +85,7 @@ def create_resume(
         )
     except resume_entity_service.ResumeLimitError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    _dispatch_resume_parse(resume)
+    _dispatch_resume_parse(db, resume)
     return _serialize(resume)
 
 
@@ -108,7 +110,7 @@ def replace_resume(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    _dispatch_resume_parse(resume)
+    _dispatch_resume_parse(db, resume)
     return _serialize(resume)
 
 

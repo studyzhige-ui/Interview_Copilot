@@ -45,6 +45,17 @@ def process_resume_parse(self, resume_id: str):
             return {"status": "missing", "resume_id": resume_id}
         text = (resume.raw_text_snapshot or "").strip()
         owner_pk = resume.user_id
+        if resume.parse_status == "ready":
+            from app.models.resume_section import ResumeSection
+
+            has_sections = (
+                db.query(ResumeSection.id)
+                .filter(ResumeSection.resume_id == resume_id)
+                .first()
+                is not None
+            )
+            if has_sections:
+                return {"status": "skipped", "resume_id": resume_id}
         # LLM resolution is username-keyed (user_model_credentials joins on
         # users.username) — resolve it once for the sectioner (MDL-1).
         from app.models.user import User
@@ -93,13 +104,14 @@ def process_resume_parse(self, resume_id: str):
             if resume is not None:
                 if text and not (resume.raw_text_snapshot or "").strip():
                     resume.raw_text_snapshot = text[:20000]
-                resume.parse_status = "ready" if text else "failed"
-                resume.parse_error = None if text else "No extractable resume text"
+                if not text:
+                    resume.parse_status = "failed"
+                    resume.parse_error = "No extractable resume text"
                 db.add(resume)
                 db.commit()
         finally:
             db.close()
-        return {"status": "ready" if text else "failed", "resume_id": resume_id}
+        return {"status": "processing" if text else "failed", "resume_id": resume_id}
     except Exception as exc:  # noqa: BLE001
         db = SessionLocal()
         try:

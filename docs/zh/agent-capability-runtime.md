@@ -19,8 +19,8 @@ Skill 与 MCP 的配置属于用户，但运行时状态不能注册到进程级
 - 会话权限默认继承用户级启用状态；`deny` 会在下一个 turn 的快照中移除对应 Skill 或 MCP Server。已有 turn 不受中途配置变化影响。
 - Skill 正文和 MCP Schema 都是延迟加载：Skill 列表只读取元数据；MCP 工具先发现名称，`tool_search` 后才把完整 Schema 加入本 turn。
 - 前端停止按钮会调用服务端取消接口。任务取消沿 asyncio 任务传播到当前 Tool Call；MCP 调用取消时连接会关闭，审计状态写为 `cancelled`。
-- 后台 turn 由 Worker 原子领取，`owner_id + heartbeat_at` 构成执行租约；终态提交必须仍持有该租约，过期任务由周期性 stale 回收器幂等关闭。
+- 后台 turn 由独立 `turns` Worker 原子领取，`owner_id + heartbeat_at` 构成执行租约；Web API 只创建任务和转发事件。终态提交必须仍持有该租约，过期任务由周期性 stale 回收器幂等关闭。
 
 ## 数据库升级
 
-运行 `alembic upgrade head`。`0047_capability_runtime_layers` 创建会话状态、工具调用审计及 turn 快照；`0048` 删除重复的旧审计表；`0049` 增加 turn owner 与 heartbeat 租约字段。
+运行 `alembic upgrade head`。`0047_capability_runtime_layers` 创建会话状态、工具调用审计及 turn 快照；`0048` 删除重复的旧审计表；`0049` 增加 turn owner 与 heartbeat 租约字段；`0050` 清理已废弃的多回答模型角色。

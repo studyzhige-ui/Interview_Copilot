@@ -62,10 +62,6 @@ export function useModelsData() {
   const serverSelection = catalogQuery.data?.selection;
   const selection: Record<ModelRole, string> = {
     primary: selectionOverride.primary ?? serverSelection?.primary ?? '',
-    agent: selectionOverride.agent ?? serverSelection?.agent ?? '',
-    mock_interview: selectionOverride.mock_interview
-      ?? serverSelection?.mock_interview
-      ?? '',
   };
 
   const [pingResults, setPingResults] = useState<Record<string, ModelPingResult>>({});

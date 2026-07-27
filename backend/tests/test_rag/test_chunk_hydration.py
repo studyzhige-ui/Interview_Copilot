@@ -2,10 +2,8 @@
 hydrate + live-check step that turns Milvus node ids into fully-attributed
 chunk dicts.
 
-Covers rank-order preservation, the live check (soft-deleted chunk,
-``index_status='deleted'``, dead/deleting document, ghost node ids), the
-``failed`` index_status NOT hiding a chunk (Postgres text stays the fact
-source), file-asset attribution and ``metadata_json`` parsing.
+Covers rank-order preservation, the live check (only indexed chunks belonging
+to ready documents), file-asset attribution and ``metadata_json`` parsing.
 """
 
 from __future__ import annotations
@@ -165,16 +163,16 @@ def test_hydrate_drops_dead_chunks_and_documents(db: Session):
     assert [c["node_id"] for c in out] == ["n-live"]
 
 
-def test_hydrate_keeps_failed_index_status(db: Session):
-    """``failed`` describes the Milvus copy, not the fact text — a hit that
-    somehow resolves to a failed-index chunk still hydrates (ingestion plan
-    §4.4.1)."""
+def test_hydrate_drops_unready_chunk_and_document_states(db: Session):
     uid = _seed_user(db)
     doc = _seed_doc(db, uid)
     _seed_chunk(db, doc, uid, "n-failed", index_status="failed")
+    _seed_chunk(db, doc, uid, "n-pending", index_status="pending")
+    processing = _seed_doc(db, uid, status="processing", suffix="processing")
+    _seed_chunk(db, processing, uid, "n-processing-doc")
 
-    out = hydrate_chunks(db, ["n-failed"])
-    assert [c["node_id"] for c in out] == ["n-failed"]
+    out = hydrate_chunks(db, ["n-failed", "n-pending", "n-processing-doc"])
+    assert out == []
 
 
 def test_hydrate_fileless_document(db: Session):

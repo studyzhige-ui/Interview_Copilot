@@ -13,6 +13,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
+from app.core.error_messages import humanize_error
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
 from app.models.knowledge import KnowledgeDocument
@@ -67,7 +68,8 @@ async def save_qa_to_knowledge(
     doc.title = (qa.question or "改进问答").strip()[:120] or "改进问答"
     doc.content_text = content_text
     doc.category = category
-    doc.status = "ready"
+    doc.status = "processing"
+    doc.error_message = None
     doc.deleted_at = None
     db.add(doc)
     db.flush()  # assign doc.id
@@ -79,13 +81,25 @@ async def save_qa_to_knowledge(
     # Index the QA as one natural unit (Markdown content_text -> chunks + Milvus).
     from app.rag.ingestion import ingest_text
 
-    result = await ingest_text(
-        text=content_text,
-        source_kind="improved_qa",
-        user_id=user_pk,
-        document_id=doc.id,
-    )
+    try:
+        result = await ingest_text(
+            text=content_text,
+            source_kind="improved_qa",
+            user_id=user_pk,
+            document_id=doc.id,
+        )
+    except Exception as exc:
+        doc.status = "failed"
+        doc.error_message = f"索引失败：{humanize_error(exc)}"[:500]
+        db.add(doc)
+        db.commit()
+        raise
     doc.chunk_count = int(result.get("chunk_count") or 0) if result else 0
+    indexed = bool(result and result.get("indexed", True))
+    doc.status = "ready" if indexed else "processing"
+    doc.error_message = (
+        None if indexed else "向量索引暂时不可用，正在后台重试，稍后可用。"
+    )
     db.add(doc)
     db.commit()
     db.refresh(doc)

@@ -17,6 +17,7 @@ export async function getModelsRuntime(): Promise<ModelRuntime> {
   return {
     selection: res.data?.selection ?? {},
     resolved: res.data?.resolved ?? {},
+    internal: res.data?.internal ?? {},
   };
 }
 

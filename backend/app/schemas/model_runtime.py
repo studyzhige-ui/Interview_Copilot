@@ -33,15 +33,9 @@ _SYSTEM_RESERVED_HEADER_NAMES = {
 
 
 class RuntimeSelectionUpdateRequest(BaseModel):
-    """``PATCH /models/selection`` — pick which profile drives each role."""
+    """``PATCH /models/selection`` — choose the user's answer model."""
 
     primary: str | None = Field(default=None, description="Primary LLM profile id")
-    agent: str | None = Field(
-        default=None, description="Function-calling agent profile id"
-    )
-    mock_interview: str | None = Field(
-        default=None, description="Mock-interview plan / interviewer LLM"
-    )
 
 
 class APIKeyUpsertRequest(BaseModel):

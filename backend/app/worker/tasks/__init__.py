@@ -11,7 +11,11 @@ submodule that owns the task.
 """
 
 from app.worker.tasks.runtime import run_async
-from app.worker.tasks.interview import process_interview_analysis
+from app.worker.tasks.chat import process_conversation_turn
+from app.worker.tasks.interview import (
+    process_interview_analysis,
+    process_mock_interview_review,
+)
 from app.worker.tasks.ingestion import process_document_ingestion
 from app.worker.tasks.resume import process_resume_parse
 from app.worker.tasks.memory import dream_for_user_task, scan_and_dream_batch_task
@@ -20,11 +24,14 @@ from app.worker.tasks.outbox import drain_outbox_jobs
 from app.worker.tasks.maintenance import (
     sweep_orphan_file_assets,
     sweep_stale_interview_records,
+    sweep_stale_pipeline_records,
 )
 
 __all__ = [
     "run_async",
+    "process_conversation_turn",
     "process_interview_analysis",
+    "process_mock_interview_review",
     "process_document_ingestion",
     "process_resume_parse",
     "dream_for_user_task",
@@ -33,4 +40,5 @@ __all__ = [
     "drain_outbox_jobs",
     "sweep_orphan_file_assets",
     "sweep_stale_interview_records",
+    "sweep_stale_pipeline_records",
 ]

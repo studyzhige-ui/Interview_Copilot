@@ -179,7 +179,7 @@ def test_enqueue_then_drain_runs_registered_handler(db_session, monkeypatch):
     assert job.status == "succeeded"
 
 
-def test_delete_no_outbox_when_milvus_succeeds(db_session, monkeypatch):
+def test_delete_always_uses_transactional_outbox(db_session):
     from app.services.knowledge import knowledge_service as ks
 
     db_session.add(
@@ -203,10 +203,6 @@ def test_delete_no_outbox_when_milvus_succeeds(db_session, monkeypatch):
     )
     db_session.commit()
 
-    import app.rag.milvus_hybrid as mh
-
-    monkeypatch.setattr(mh, "delete_by_field", lambda *a, **k: None)
-
     doc = (
         db_session.query(KnowledgeDocument)
         .filter(KnowledgeDocument.id == "kdoc_ok")
@@ -214,10 +210,8 @@ def test_delete_no_outbox_when_milvus_succeeds(db_session, monkeypatch):
     )
     ks.delete_document_vectors_and_chunks(db_session, doc)
 
-    assert (
-        db_session.query(OutboxJob).filter(OutboxJob.aggregate_id == "kdoc_ok").count()
-        == 0
-    )
+    job = db_session.query(OutboxJob).filter(OutboxJob.aggregate_id == "kdoc_ok").one()
+    assert job.job_type == "milvus_delete_document"
 
 
 # ── C2: milvus_upsert_document — ingest write-failure recovery ───────────────

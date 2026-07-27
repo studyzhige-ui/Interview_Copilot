@@ -73,7 +73,7 @@ from app.services.memory._extraction_common import (
     parse_json_patches_ex,
 )
 from app.services.memory._user_memory_lock import LockNotAcquired, user_memory_lock_sync
-from app.services.memory.prompts import DREAMING_PROMPT
+from app.prompts.memory import DREAMING_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -410,11 +410,11 @@ def _dream_for_record_locked(
             try:
                 # NB: this is a sync call from a sync worker — wrap the
                 # async LLM in run_async via the worker helper.
-                from app.core.llm_client_factory import get_llm_for_role
+                from app.core.llm_client_factory import get_internal_llm
                 from app.worker.tasks import run_async
 
                 response = run_async(
-                    get_llm_for_role("utility", user_id=user_id).acomplete(
+                    get_internal_llm("worker").acomplete(
                         prompt,
                         response_format={"type": "json_object"},
                     )

@@ -13,9 +13,6 @@ export function ModelRow({
   onAssign: (role: ModelRole) => void;
   ping?: ModelPingResult;
 }) {
-  const isRoleAvailable = (role: ModelRole) =>
-    role === 'agent' ? profile.supports_function_calling : true;
-
   const dotColor = ping
     ? ping.ok
       ? 'bg-success-500'
@@ -83,7 +80,7 @@ export function ModelRow({
       >
         {ROLES.map((r) => {
           const active = selectedRoles.includes(r);
-          const available = isRoleAvailable(r) && profile.ready;
+          const available = profile.ready;
           return (
             <button
               key={r}
@@ -92,8 +89,6 @@ export function ModelRow({
               title={
                 !profile.ready
                   ? `需配置 ${profile.api_key_env}`
-                  : r === 'agent' && !profile.supports_function_calling
-                  ? '该模型不支持函数调用'
                   : ROLE_DESC[r].label
               }
               className={[

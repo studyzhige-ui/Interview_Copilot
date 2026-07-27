@@ -68,10 +68,12 @@ Community 也可以把 `*_PROVIDER` 改为云端 API。版本边界和模型运�
 uvicorn app.main:app --app-dir backend --reload --port 8080
 ```
 
-任务 Worker：
+任务 Worker（以下三条命令分别在三个终端运行；也可直接使用启动脚本）：
 
 ```bash
-celery -A app.worker.celery_app.celery_app worker --workdir backend --pool=solo
+celery -A app.worker.celery_app.celery_app worker --workdir backend --pool=solo --queues=default,pipeline,transcription
+celery -A app.worker.celery_app.celery_app worker --workdir backend --pool=threads --concurrency=2 --queues=turns
+celery -A app.worker.celery_app.celery_app beat --workdir backend
 ```
 
 前端：
@@ -86,7 +88,7 @@ npm run dev
 ## 5. 验证
 
 1. 注册账户。
-2. 使用平台默认 LLM，或保存个人 LLM API Key。
+2. 选择最终回答模型，并按需保存个人 LLM API Key；内部规划模型由部署方提供。
 3. 上传简历与 JD。
 4. 完成一次模拟面试。
 5. 添加可选 Skill 和 MCP。

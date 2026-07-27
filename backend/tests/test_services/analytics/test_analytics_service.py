@@ -57,7 +57,7 @@ async def test_generate_report_successful_json_parse():
 
     with (
         patch(f"{_SVC}._extract_ability_records", return_value=memories),
-        patch(f"{_SVC}.get_llm_for_role") as factory_mock,
+        patch(f"{_SVC}.get_internal_llm") as factory_mock,
     ):
         llm_mock = factory_mock.return_value
         llm_mock.acomplete = AsyncMock(return_value=mock_response)
@@ -81,7 +81,7 @@ async def test_generate_report_strips_markdown_codeblock():
 
     with (
         patch(f"{_SVC}._extract_ability_records", return_value=memories),
-        patch(f"{_SVC}.get_llm_for_role") as factory_mock,
+        patch(f"{_SVC}.get_internal_llm") as factory_mock,
     ):
         llm_mock = factory_mock.return_value
         llm_mock.acomplete = AsyncMock(return_value=mock_response)
@@ -102,7 +102,7 @@ async def test_generate_report_fallback_on_invalid_json():
 
     with (
         patch(f"{_SVC}._extract_ability_records", return_value=memories),
-        patch(f"{_SVC}.get_llm_for_role") as factory_mock,
+        patch(f"{_SVC}.get_internal_llm") as factory_mock,
     ):
         llm_mock = factory_mock.return_value
         llm_mock.acomplete = AsyncMock(return_value=mock_response)

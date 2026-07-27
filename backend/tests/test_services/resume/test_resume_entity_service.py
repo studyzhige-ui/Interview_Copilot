@@ -23,7 +23,7 @@ def test_first_resume_becomes_default(db_session):
     _user(db_session)
     r = _create(db_session, title="A", raw_text_snapshot="cv A")
     assert r.is_default is True
-    assert r.parse_status == "ready"  # had text
+    assert r.parse_status == "pending"
 
 
 def test_second_resume_keeps_existing_default(db_session):

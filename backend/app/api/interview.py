@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.rate_limit import RATE_EXPENSIVE, limiter
+from app.core.error_messages import humanize_error
 from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
@@ -151,7 +152,7 @@ async def analyze_interview_endpoint(
         raise
     except Exception as exc:  # noqa: BLE001
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=humanize_error(exc)) from exc
 
 
 @router.post("/interview-records/{record_id}/reanalyze")
@@ -213,9 +214,7 @@ async def get_analytics_report(
     try:
         return await generate_comprehensive_report(limit, user_id=current_user.username)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=500, detail=f"Failed to generate report: {exc}"
-        ) from exc
+        raise HTTPException(status_code=500, detail=humanize_error(exc)) from exc
 
 
 # ── InterviewRecord endpoints ─────────────────────────────────────────
@@ -425,7 +424,7 @@ def delete_interview_record(
         )
         raise HTTPException(
             status_code=500,
-            detail=f"删除失败: {type(exc).__name__}: {exc}",
+            detail=humanize_error(exc),
         ) from exc
 
 

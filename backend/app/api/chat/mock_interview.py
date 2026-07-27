@@ -370,7 +370,7 @@ async def abandon_mock_interview(
         logger.exception("abandon mock failed for %s: %s", record_id, exc)
         raise HTTPException(
             status_code=500,
-            detail=f"放弃失败: {type(exc).__name__}: {exc}",
+            detail=humanize_error(exc),
         ) from exc
 
     return MockAbandonResp(status="deleted", record_id=record_id)
@@ -454,7 +454,10 @@ async def parse_jd_for_mock(
         return {"text": text, "filename": file.filename, "chars": len(text)}
     except Exception as exc:  # noqa: BLE001
         logger.error("parse_jd_for_mock failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"JD 解析失败: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail="JD 解析失败，请确认文件格式后重试。",
+        ) from exc
     finally:
         try:
             os.unlink(local_path)

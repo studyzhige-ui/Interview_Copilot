@@ -311,8 +311,8 @@ def test_compact_rewrites_oversized_doc(monkeypatch):
             return SimpleNamespace(text=rewritten)
 
     monkeypatch.setattr(
-        "app.core.llm_client_factory.get_llm_for_role",
-        lambda role, user_id=None: _LLM(),
+        "app.core.llm_client_factory.get_internal_llm",
+        lambda role: _LLM(),
     )
     monkeypatch.setattr(
         "app.worker.tasks.run_async",
@@ -332,8 +332,8 @@ def test_compact_rejects_suspiciously_small_rewrite(monkeypatch):
             return SimpleNamespace(text="没了")
 
     monkeypatch.setattr(
-        "app.core.llm_client_factory.get_llm_for_role",
-        lambda role, user_id=None: _LLM(),
+        "app.core.llm_client_factory.get_internal_llm",
+        lambda role: _LLM(),
     )
     monkeypatch.setattr(
         "app.worker.tasks.run_async",

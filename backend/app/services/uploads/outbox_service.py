@@ -96,10 +96,10 @@ def run_due_outbox_jobs(db: Session, *, limit: int = 50) -> int:
     # Stale-lock recovery: a worker that is SIGKILLed after the claim commit
     # leaves the job at status='running' with locked_at set — the finally
     # block never runs, and without this clause the job would be invisible
-    # to every future claim forever (the reliability layer's own reliability
-    # hole). 10 minutes is far above the drain task's 120s time_limit, so a
-    # live run can never be stolen.
-    stale_cutoff = now - timedelta(minutes=10)
+    # to every future claim forever. The drain task has a 15-minute hard
+    # limit, so the lease must be longer than that or another worker could
+    # steal a live LLM/indexing job.
+    stale_cutoff = now - timedelta(minutes=20)
     # Atomic claim: lock a due batch with FOR UPDATE SKIP LOCKED and flip it to
     # ``running`` in ONE transaction, so two concurrent workers never grab the
     # same job. SKIP LOCKED is a no-op on sqlite (unit tests run single-

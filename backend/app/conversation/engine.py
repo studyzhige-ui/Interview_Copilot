@@ -11,9 +11,8 @@ Owns every concern that is identical between chat and agent paths:
   4. Per-turn execution .......  delegated to ExecutionStrategy
   5. Persistence ..............  transcript_service.append_turn with
                                   Claude-Code-style content blocks
-  6. Post-turn maintenance ....  realtime extraction (via post-turn
-                                  maintenance service, kicked into
-                                  background)
+  6. Durable maintenance ......  realtime extraction outbox job committed
+                                  atomically with the assistant reply
   7. Error handling ...........  _humanize_exc — translates upstream
                                   exceptions into actionable Chinese
 
@@ -36,14 +35,12 @@ from app.conversation.strategy import (
     StrategyContext,
     StrategyResult,
 )
-from app.core.background_tasks import safe_background_task
 from app.core.error_messages import humanize_error
 from app.conversation.query_planner import QueryPlan, plan_query
 from app.rag.knowledge_retriever import knowledge_retriever
 from app.rag.retrieval_state import EMPTY_PLANNER_NO_RETRIEVAL
 from app.services.chat.chat_history_service import transcript_service
 from app.services.chat.context_assembly_pipeline import context_pipeline
-from app.services.memory.post_turn_maintenance import post_turn_maintenance_service
 from app.services.memory.v3_context_loader import (
     V3MemoryContext,
     attach_active_bodies,
@@ -162,8 +159,13 @@ class ConversationEngine:
                 await self._persist_turn()
             except Exception as exc:  # noqa: BLE001
                 logger.error("transcript persistence failed: %s", exc)
-            self._fire_post_turn_maintenance()
-        self._fire_telemetry()
+                self._turn_status = "failed"
+                yield HarnessEvent.error(
+                    "回答已生成，但保存失败，请重新发送本轮问题。",
+                    step=self._result.steps_used,
+                    elapsed_ms=self._elapsed_ms(),
+                )
+        await self._fire_telemetry()
 
         yield HarnessEvent.done(
             step=self._result.steps_used,
@@ -267,7 +269,6 @@ class ConversationEngine:
                 recent_turns=recent_turns,
                 learning_strategy_description=universal_ctx.learning_strategy_description,
                 global_memory_on=global_memory_on,
-                user_id=self.user_id,
             )
 
         # Step 3: concurrent RAG + memory body loads.
@@ -415,6 +416,10 @@ class ConversationEngine:
         # renderer) skip the unknown "sources" block when rendering the body.
         if self._ctx and self._ctx.sources:
             ai_blocks = [*ai_blocks, {"type": "sources", "sources": self._ctx.sources}]
+        enqueue_memory = bool(
+            self._ctx.global_memory_on
+            and not (self._result.extras or {}).get("degraded")
+        )
         if self.turn_id:
             await asyncio.to_thread(
                 transcript_service.complete_background_turn,
@@ -422,6 +427,8 @@ class ConversationEngine:
                 ai_msg=self._result.final_answer,
                 rewritten_query=self._ctx.rewritten_query,
                 ai_blocks=ai_blocks,
+                enqueue_memory=enqueue_memory,
+                memory_user_id=self.user_id,
             )
         else:
             await asyncio.to_thread(
@@ -432,6 +439,7 @@ class ConversationEngine:
                 ai_msg=self._result.final_answer,
                 rewritten_query=self._ctx.rewritten_query,
                 ai_blocks=ai_blocks,
+                enqueue_memory=enqueue_memory,
             )
         # AGT-7②: fold the agent loop's autocompact summary into the
         # session so the NEXT turn's assembly starts from it instead of
@@ -485,52 +493,21 @@ class ConversationEngine:
             ai_blocks=blocks,
         )
 
-    def _fire_post_turn_maintenance(self) -> None:
-        """Realtime memory extraction. Always background — never blocks
-        the SSE done event. Only called when ``_turn_status`` is
-        ``completed`` (gated in submit_message)."""
-        if not self._result.final_answer:
-            return
-        # Degraded turns (agent crash → graceful fallback text) must not
-        # feed the extractor: the fallback embeds raw error detail, and
-        # extracting from it manufactures fake facts about the user.
-        if self._result.extras.get("degraded"):
-            logger.info("post-turn extraction skipped: degraded turn")
-            return
-        safe_background_task(
-            post_turn_maintenance_service.run(
-                self.session_id,
-                self.user_id,
-                # The global-memory toggle is the CROSS-SESSION memory gate
-                # in BOTH directions (Claude Code's isAutoMemoryEnabled
-                # semantics): off = don't inject AND don't write. The other
-                # three gates (injection, tool manifest, tool handler)
-                # already honour it; this was the leak.
-                allow_memory_write=self._ctx.global_memory_on if self._ctx else False,
-            )
-        )
-
-    def _fire_telemetry(self) -> None:
-        safe_background_task(
-            log_interaction_metrics(
-                session_id=self.session_id,
-                user_id=self.user_id,
-                latency=time.time() - self._started_at,
-                prompt_tokens=self._result.prompt_tokens,
-                completion_tokens=self._result.completion_tokens,
-                retrieval_attempted=self._retrieval_attempted,
-                retrieval_hit=self._retrieval_hit,
-                # RAG degradation signals (retrieval plan §2.1/§2.5/§2.7) —
-                # so a persistently failing planner or reranker shows up as
-                # fallback_rate / planner_failure_rate instead of silently.
-                planner_failed=self._planner_failed,
-                fallback_used=self._fallback_used,
-                empty_reason=self._empty_reason,
-                # L2 strategy populates this with its budget stop reason;
-                # None on L1. Pulled from result so the post-mortem trail
-                # covers both paths.
-                stop_reason=self._result.stop_reason,
-            )
+    async def _fire_telemetry(self) -> None:
+        # Await the cheap local append so this also completes when the engine
+        # runs inside a Celery thread whose event loop stops after the task.
+        await log_interaction_metrics(
+            session_id=self.session_id,
+            user_id=self.user_id,
+            latency=time.time() - self._started_at,
+            prompt_tokens=self._result.prompt_tokens,
+            completion_tokens=self._result.completion_tokens,
+            retrieval_attempted=self._retrieval_attempted,
+            retrieval_hit=self._retrieval_hit,
+            planner_failed=self._planner_failed,
+            fallback_used=self._fallback_used,
+            empty_reason=self._empty_reason,
+            stop_reason=self._result.stop_reason,
         )
 
     # ── Error humanisation ────────────────────────────────────────

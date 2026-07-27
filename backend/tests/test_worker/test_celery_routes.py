@@ -1,4 +1,4 @@
-"""Phase G regression — celery task routing + per-queue model load.
+"""Celery task routing + per-queue model loading regression tests.
 
 Locks the two guarantees the worker-split depends on:
 
@@ -26,19 +26,53 @@ def test_heavy_task_routes_to_transcription_queue():
     assert routes["tasks.process_interview_analysis"]["queue"] == "transcription"
 
 
-def test_light_tasks_route_to_default_queue():
+def test_mock_review_routes_to_control_queue():
+    from app.worker.celery_app import celery_app
+
+    assert (
+        celery_app.conf.task_routes["tasks.process_mock_interview_review"]["queue"]
+        == "default"
+    )
+
+
+def test_conversation_turn_routes_to_isolated_queue():
+    from app.worker.celery_app import celery_app
+
+    assert (
+        celery_app.conf.task_routes["tasks.process_conversation_turn"]["queue"]
+        == "turns"
+    )
+
+
+def test_pipeline_tasks_route_to_pipeline_queue():
     from app.worker.celery_app import celery_app
 
     routes = celery_app.conf.task_routes
-    light = [
+    pipeline = [
         "tasks.process_document_ingestion",
+        "tasks.process_resume_parse",
+        "tasks.drain_outbox_jobs",
+    ]
+    for name in pipeline:
+        assert routes[name]["queue"] == "pipeline", (
+            f"{name} should land on pipeline queue, got {routes[name]}"
+        )
+
+
+def test_control_tasks_route_to_default_queue():
+    from app.worker.celery_app import celery_app
+
+    routes = celery_app.conf.task_routes
+    control = [
         "tasks.dream_for_user",
         "tasks.scan_and_dream_batch",
+        "tasks.refresh_model_catalog",
+        "tasks.sweep_stale_interview_records",
+        "tasks.sweep_stale_pipeline_records",
+        "tasks.sweep_orphan_file_assets",
     ]
-    for name in light:
-        assert routes[name]["queue"] == "default", (
-            f"{name} should land on default queue, got {routes[name]}"
-        )
+    for name in control:
+        assert routes[name]["queue"] == "default"
 
 
 def test_every_registered_task_has_a_route():
@@ -120,3 +154,32 @@ def test_worker_subscribes_to_returns_false_when_no_queue_signal(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["celery", "worker"])
     assert mod._worker_subscribes_to("transcription") is False
     assert mod._worker_subscribes_to("default") is False
+
+
+def test_task_prerun_loads_only_the_runtime_required_by_task(monkeypatch):
+    from app.worker import celery_app as mod
+
+    calls: list[dict[str, bool]] = []
+    monkeypatch.setattr(
+        mod,
+        "_ensure_worker_runtime",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    class Task:
+        def __init__(self, name: str):
+            self.name = name
+
+    mod.ensure_task_runtime(task=Task("tasks.process_document_ingestion"))
+    mod.ensure_task_runtime(task=Task("tasks.process_conversation_turn"))
+    mod.ensure_task_runtime(task=Task("tasks.process_interview_analysis"))
+    mod.ensure_task_runtime(task=Task("tasks.process_mock_interview_review"))
+    mod.ensure_task_runtime(task=Task("tasks.refresh_model_catalog"))
+
+    assert calls == [
+        {"embedding": True, "reranker": False, "voice": False},
+        {"embedding": True, "reranker": True, "voice": False},
+        {"embedding": False, "reranker": False, "voice": True},
+        {"embedding": False, "reranker": False, "voice": False},
+        {"embedding": False, "reranker": False, "voice": False},
+    ]

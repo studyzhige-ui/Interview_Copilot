@@ -55,7 +55,7 @@ def _broker_down(monkeypatch):
 
     monkeypatch.setattr(
         mock_flow,
-        "process_interview_analysis",
+        "process_mock_interview_review",
         SimpleNamespace(delay=_raise),
     )
 
@@ -114,7 +114,7 @@ def test_dispatch_success_stamps_task_id_and_processing_review(db_session, monke
     )
     monkeypatch.setattr(
         mock_flow,
-        "process_interview_analysis",
+        "process_mock_interview_review",
         SimpleNamespace(delay=lambda *a, **k: SimpleNamespace(id="celery-task-1")),
     )
 

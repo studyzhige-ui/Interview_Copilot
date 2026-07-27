@@ -99,7 +99,7 @@ export function ChatPanel({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const { globalMemoryOn, togglingMemory, toggleGlobalMemory } =
     useGlobalMemoryToggle(activeSessionId);
-  const { profiles, activeRole, activeProfileId, activeModelName, pickModel } =
+  const { profiles, activeProfileId, activeModelName, pickModel } =
     useChatModels(mode);
   const { sendMessage, resumeTurn, cancel } = useChatStream({
     activeSessionId, getRuntime, bump, mode,
@@ -201,22 +201,21 @@ export function ChatPanel({
         <div ref={modelRef} className="relative shrink-0">
           <button
             onClick={() => setModelOpen((v) => !v)}
-            title={`${activeRole === 'agent' ? 'Agent' : '主对话'} 当前模型`}
+            title="当前回答模型"
             className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-stone-200 bg-stone-50 text-stone-700 text-xs hover:bg-stone-100 font-mono"
           >
-            <Sparkles size={12} className={activeRole === 'agent' ? 'text-primary-500' : 'text-accent-700'} />
-            <span className="text-[10px] text-stone-400">{activeRole === 'agent' ? 'A:' : ''}</span>
+            <Sparkles size={12} className="text-accent-700" />
             <span className="truncate max-w-[100px]">{activeModelName}</span>
             <ChevronDown size={12} className="text-stone-400" />
           </button>
           {modelOpen && (
             <div className="absolute top-full right-0 mt-1 w-[260px] max-h-[340px] overflow-y-auto p-1 bg-white border border-stone-200 rounded-lg shadow-lg z-30">
               <div className="px-2.5 py-1.5 text-[11px] text-stone-500 border-b border-stone-100 mb-1">
-                选择「{activeRole === 'agent' ? 'Agent · 工具调用' : '主对话'}」的模型
+                选择回答模型{mode === 'AGENT' ? '（Agent 模式需支持工具调用）' : ''}
               </div>
               {profiles.length === 0 && <div className="px-2.5 py-2 text-xs text-stone-400">载入中…</div>}
               {profiles
-                .filter((p) => activeRole !== 'agent' || p.supports_function_calling)
+                .filter((p) => mode !== 'AGENT' || p.supports_function_calling)
                 .map((p) => {
                   const sel = p.id === activeProfileId;
                   return (

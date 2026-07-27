@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.user_identity import resolve_user_pk
 from app.models.resume import Resume
+from app.models.user import User
 
 MAX_ACTIVE_RESUMES = 2
 
@@ -36,6 +37,50 @@ def _active_resumes(db: Session, user_pk: int) -> list[Resume]:
     )
 
 
+def _lock_user(db: Session, username: str) -> int:
+    """Serialize mutations that maintain per-user resume invariants."""
+    user_pk = (
+        db.query(User.id).filter(User.username == username).with_for_update().scalar()
+    )
+    if user_pk is None:
+        raise ValueError(f"Unknown user: {username}")
+    return user_pk
+
+
+def _create_resume_locked(
+    db: Session,
+    *,
+    user_pk: int,
+    file_asset_id: str | None,
+    title: str | None,
+    raw_text_snapshot: str | None,
+    structured_json: str | None,
+    make_default: bool | None,
+) -> Resume:
+    active = _active_resumes(db, user_pk)
+    if len(active) >= MAX_ACTIVE_RESUMES:
+        raise ResumeLimitError("已有两份简历，请替换其中一份")
+
+    should_default = len(active) == 0 or bool(make_default)
+    if should_default:
+        for resume in active:
+            resume.is_default = False
+        db.flush()
+
+    resume = Resume(
+        user_id=user_pk,
+        file_asset_id=file_asset_id,
+        title=title or "我的简历",
+        is_default=should_default,
+        raw_text_snapshot=raw_text_snapshot,
+        structured_json=structured_json,
+        parse_status="pending",
+    )
+    db.add(resume)
+    db.flush()
+    return resume
+
+
 def list_resumes(db: Session, *, user_id: str) -> list[Resume]:
     user_pk = resolve_user_pk(db, user_id)
     if user_pk is None:
@@ -49,7 +94,11 @@ def get_owned_resume(db: Session, *, resume_id: str, user_id: str) -> Resume | N
         return None
     return (
         db.query(Resume)
-        .filter(Resume.id == resume_id, Resume.user_id == user_pk)
+        .filter(
+            Resume.id == resume_id,
+            Resume.user_id == user_pk,
+            Resume.archived_at.is_(None),
+        )
         .first()
     )
 
@@ -70,32 +119,16 @@ def create_resume(
     existing default) unless ``make_default``; 2 active -> ``ResumeLimitError``
     (the caller must replace one via :func:`replace_resume`).
     """
-    user_pk = resolve_user_pk(db, user_id)
-    if user_pk is None:
-        raise ValueError(f"Unknown user: {user_id}")
-
-    active = _active_resumes(db, user_pk)
-    if len(active) >= MAX_ACTIVE_RESUMES:
-        raise ResumeLimitError(
-            "已有两份简历，请替换其中一份",
-        )
-
-    should_default = len(active) == 0 or bool(make_default)
-    if should_default:
-        for r in active:
-            r.is_default = False
-        db.flush()
-
-    resume = Resume(
-        user_id=user_pk,
+    user_pk = _lock_user(db, user_id)
+    resume = _create_resume_locked(
+        db,
+        user_pk=user_pk,
         file_asset_id=file_asset_id,
-        title=title or "我的简历",
-        is_default=should_default,
+        title=title,
         raw_text_snapshot=raw_text_snapshot,
         structured_json=structured_json,
-        parse_status="ready" if raw_text_snapshot else "pending",
+        make_default=make_default,
     )
-    db.add(resume)
     db.commit()
     db.refresh(resume)
     return resume
@@ -116,28 +149,50 @@ def replace_resume(
     The new resume inherits default-ness from the one it replaces, so the
     user's default doesn't silently move.
     """
-    old = get_owned_resume(db, resume_id=replaced_resume_id, user_id=user_id)
-    if old is None or old.archived_at is not None:
+    user_pk = _lock_user(db, user_id)
+    old = (
+        db.query(Resume)
+        .filter(
+            Resume.id == replaced_resume_id,
+            Resume.user_id == user_pk,
+            Resume.archived_at.is_(None),
+        )
+        .first()
+    )
+    if old is None:
         raise ValueError("要替换的简历不存在")
     inherit_default = bool(old.is_default)
     old.is_default = False
     old.archived_at = datetime.utcnow()
     db.add(old)
     db.flush()
-    return create_resume(
+    resume = _create_resume_locked(
         db,
-        user_id=user_id,
+        user_pk=user_pk,
         file_asset_id=file_asset_id,
         title=title,
         raw_text_snapshot=raw_text_snapshot,
         structured_json=structured_json,
         make_default=inherit_default,
     )
+    db.commit()
+    db.refresh(resume)
+    return resume
 
 
 def set_default_resume(db: Session, *, user_id: str, resume_id: str) -> Resume | None:
-    resume = get_owned_resume(db, resume_id=resume_id, user_id=user_id)
-    if resume is None or resume.archived_at is not None:
+    user_pk = _lock_user(db, user_id)
+    resume = (
+        db.query(Resume)
+        .filter(
+            Resume.id == resume_id,
+            Resume.user_id == user_pk,
+            Resume.archived_at.is_(None),
+        )
+        .first()
+    )
+    if resume is None:
+        db.rollback()
         return None
     # Clear all defaults first (flush), THEN set the target — never two
     # defaults transiently, which the partial unique index would reject.
@@ -153,13 +208,26 @@ def set_default_resume(db: Session, *, user_id: str, resume_id: str) -> Resume |
 def delete_resume(db: Session, *, user_id: str, resume_id: str) -> bool:
     """Soft-delete (archive). If it was the default, auto-promote the other
     active resume so an active set always has exactly one default."""
-    resume = get_owned_resume(db, resume_id=resume_id, user_id=user_id)
-    if resume is None or resume.archived_at is not None:
+    user_pk = _lock_user(db, user_id)
+    resume = (
+        db.query(Resume)
+        .filter(
+            Resume.id == resume_id,
+            Resume.user_id == user_pk,
+            Resume.archived_at.is_(None),
+        )
+        .first()
+    )
+    if resume is None:
+        db.rollback()
         return False
     was_default = resume.is_default
     resume.is_default = False
     resume.archived_at = datetime.utcnow()
     db.add(resume)
+    from app.services.resume.resume_outbox import enqueue_resume_reindex
+
+    enqueue_resume_reindex(db, user_pk=resume.user_id, resume_id=resume.id)
     db.flush()
     if was_default:
         remaining = _active_resumes(db, resume.user_id)

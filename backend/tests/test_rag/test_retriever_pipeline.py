@@ -354,9 +354,8 @@ async def test_sub_queries_fallback_keeps_higher_scored_dup(pipeline):
     assert result.chunks[0]["score"] == pytest.approx(0.05)
 
 
-async def test_one_sub_query_milvus_failure_degrades_whole_turn(pipeline):
-    """gather propagates a single sub-query's Milvus failure → the whole turn
-    degrades to milvus_unavailable (no partial-success semantics)."""
+async def test_one_sub_query_failure_keeps_other_intent_results(pipeline):
+    """Independent multi-intent retrieval keeps successful branches."""
     pipeline.hits_by_sparse = {"ok kw": [_hit("n1", "x", 0.03)]}
     pipeline.fail_on_sparse = "bad kw"
     pipeline.set_reranker(_ScoringReranker([0.9]))
@@ -368,8 +367,8 @@ async def test_one_sub_query_milvus_failure_degrades_whole_turn(pipeline):
         ]
     )
 
-    assert result.chunks == []
-    assert result.state.empty_reason == "milvus_unavailable"
+    assert [chunk["node_id"] for chunk in result.chunks] == ["n1"]
+    assert result.state.retrieval_hit is True
 
 
 def test_retrieval_specs_helper():

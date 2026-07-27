@@ -24,7 +24,13 @@ import tiktoken
 
 from llama_index.core.llms import LLM
 
-from app.core.llm_client_factory import get_llm_for_role
+from app.core.llm_client_factory import get_internal_llm, get_llm_for_role
+from app.prompts.voice_analysis import (
+    BATCH_ANALYSIS_PROMPT,
+    PER_QUESTION_ANALYSIS_PROMPT,
+    QA_EXTRACTION_PROMPT,
+    SYNTHESIS_PROMPT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,42 +80,6 @@ def _clean_json_response(raw_text: str) -> dict[str, Any]:
 # DeepSeek V4 Flash supports 1M context; we stay well within limits.
 _EXTRACTION_MAX_TOKENS = 120_000
 
-_LLM_EXTRACTION_PROMPT = """\
-[硬性约束] 全部输出使用简体中文。即便原始转录里出现繁体字、英文术语，最终回复也用简体中文表达（专有名词、代码标识符保留原文）。
-
-你是一名专业的面试对话分析专家。下面是一场面试录音的语音转录文本（ASR 输出，可能有错别字和口语化表达）。**每一行都带有行号标签（如 L12|）。**
-
-转录文本：
----
-{transcript}
----
-
-{resume_hint}
-
-你的任务：仔细阅读整段对话，从中提取面试官与候选人之间的所有问答交互（QA pairs）。**不要复述原文** —— 对每个问答对，只输出它覆盖的行号区间，系统会用行号切回原文。
-
-提取规则：
-1. **角色识别**：根据对话内容判断谁是面试官（提问方）、谁是候选人（回答方）。
-2. **问题区间**：question_lines 覆盖面试官就这个话题说的所有行（包括评论、过渡、闲聊）。
-3. **回答区间**：answer_lines 覆盖候选人针对该话题的所有行。如果回答被打断后继续，用多个区间表示（例如 [[5,8],[10,12]]）。
-4. **追问识别**：如果面试官针对候选人的某个回答继续追问，标记 is_follow_up 并在 parent_qa_index 关联原始问题的序号（从 1 开始）。
-5. **区间必须来自给出的行号**，不要发明行号；同一行可以同时属于相邻问答对（例如一句话既是回应又是新问题）。
-6. **问题概括**：question_summary 用一句简短的话概括这道题/话题的核心内容（15字以内）。
-
-输出纯 JSON，不要任何解释文字：
-{{
-  "qa_pairs": [
-    {{
-      "question_lines": [[3, 4]],
-      "answer_lines": [[5, 9]],
-      "question_summary": "简短概括",
-      "phase": "self_intro 或 resume_deep_dive 或 technical 或 behavioral 或 reverse_qa 或 general",
-      "is_follow_up": false,
-      "parent_qa_index": null
-    }}
-  ]
-}}"""
-
 
 async def extract_qa_pairs_with_llm(
     transcript: str,
@@ -142,10 +112,10 @@ async def extract_qa_pairs_with_llm(
         "Stage 1: transcript has %d tokens / %d lines.", token_count, len(lines)
     )
 
-    # Resolve the owner's utility LLM ONCE and thread the instance down --
+    # Resolve the platform worker LLM once and thread the instance down.
     # per-chunk re-resolution would re-hit the credential lookup for every
     # chunk (MDL-1: the owner's selection/keys drive background analysis).
-    llm = get_llm_for_role("utility", user_id=user_id)
+    llm = get_internal_llm("worker")
     if token_count <= _EXTRACTION_MAX_TOKENS:
         return _strip_span_bookkeeping(
             await _extract_single_pass(lines, resume_context, llm=llm)
@@ -175,7 +145,7 @@ async def _extract_single_pass(
     numbered = "\n".join(
         f"L{line_offset + i}|{ln}" for i, ln in enumerate(lines, start=1)
     )
-    prompt = _LLM_EXTRACTION_PROMPT.format(
+    prompt = QA_EXTRACTION_PROMPT.format(
         transcript=numbered,
         resume_hint=resume_hint,
     )
@@ -440,30 +410,6 @@ async def _acomplete_json_with_retry(llm: LLM, prompt: str) -> dict[str, Any]:
 
 _SLIDING_WINDOW_SIZE = 3  # include up to 3 preceding QA pairs
 
-_PER_QUESTION_PROMPT = """\
-[硬性约束] 全部输出使用简体中文。即便原始转录里出现繁体字、英文术语，最终回复也用简体中文表达（专有名词、代码标识符保留原文）。
-
-你是一名资深且严格的技术面试官。请对下面这道面试题的候选人回答进行深度分析。
-
-{resume_section}
-{jd_section}
-{context_section}
-
-【当前题目（第 {index} 题，共 {total} 题）】
-面试官问题：
-{question}
-
-候选人回答：
-{answer}
-
-请输出纯 JSON（不要 markdown 代码块，不要解释文字）：
-{{
-  "score": 0到10的评分,
-  "critique": "不足之处的详细点评（指出技术缺陷、遗漏点、错误点，200字以内）",
-  "improved_answer": "更完整、更严谨的参考答案",
-  "tags": ["知识点标签1", "标签2"]
-}}"""
-
 
 def _build_sliding_context(
     qa_pairs: list[dict[str, Any]],
@@ -523,7 +469,7 @@ async def _analyze_single_question(
     if jd_context:
         jd_section = f"目标岗位 JD：\n{jd_context[:500]}"
 
-    prompt = _PER_QUESTION_PROMPT.format(
+    prompt = PER_QUESTION_ANALYSIS_PROMPT.format(
         resume_section=resume_section,
         jd_section=jd_section,
         context_section=context_text,
@@ -567,65 +513,6 @@ async def _analyze_single_question(
 # ══════════════════════════════════════════════════════════════════════════
 # Stage 3: Global Synthesis Report (Reduce)
 # ══════════════════════════════════════════════════════════════════════════
-
-_SYNTHESIS_PROMPT = """\
-[硬性约束] 全部输出使用简体中文。即便原始转录里出现繁体字、英文术语，最终回复也用简体中文表达（专有名词、代码标识符保留原文）。
-
-你是一位经验丰富的技术教练，正在帮助下面这位候选人复盘他刚结束的一场模拟面试。
-**这不是把关人，而是成长陪练**：你的目标是用最高信号量的方式告诉他下一步该练什么。
-不要给"建议通过 / 不建议通过"这种判决；不要打字母等级。
-
-═════════ 候选人简历（全文） ═════════
-{resume_context}
-
-═════════ 目标岗位 JD（全文） ═════════
-{jd_context}
-
-═════════ 逐题分析摘要 ═════════
-{per_question_summary}
-
-═════════ 你的任务 ═════════
-
-输出一份成长导向的综合复盘。请严格按下面 JSON schema 输出（不要 markdown 代码块、不要前后说明）：
-
-{{
-  "interview_metadata": {{
-    "total_questions": 题目总数,
-    "phases": ["检测到的面试阶段 phase_id 列表"]
-  }},
-  "overall": {{
-    "score": 0-10 的综合自我基准分（仅供候选人观察自己进步，不要解读为及格线）,
-    "summary": "1-2 句话整体评语，口语化，不要书面化",
-    "strengths": ["3 条最突出的亮点，每条 ≤ 40 字，落在简历+JD 交集上"],
-    "weaknesses": ["3 条最需改进的地方，每条 ≤ 40 字，具体到知识点或表达层面"],
-    "key_growth_areas": [
-      {{
-        "area": "具体能力领域（如 '分布式一致性' / 'STAR 表达' / 'Redis 失效策略'）",
-        "current_level": "weak | partial | good | strong",
-        "next_step": "下一周可以做的具体动作 1-2 句（如 '读 MIT 6.824 lec 7 关于 Raft 选举'）"
-      }}
-    ]
-  }},
-  "phase_summary": [
-    {{
-      "phase": "阶段 phase_id",
-      "phase_name": "阶段中文名",
-      "score": 该阶段平均分（0-10）,
-      "question_count": 该阶段题目数,
-      "summary": "该阶段表现要点 1-2 句"
-    }}
-  ],
-  "skill_radar": {{
-    "系统设计": 0-10, "编码能力": 0-10,
-    "基础知识": 0-10, "沟通表达": 0-10, "项目经验": 0-10
-  }}
-}}
-
-要求：
-- key_growth_areas 至少 2 条，最多 4 条。这是用户最在意的部分 —— 要具体可执行，不要"加强基础"这种空话。
-- strengths / weaknesses 不要重复 phase_summary 已经讲的，去重。
-- 所有文本中文，口语化但保持专业。
-"""
 
 _PHASE_NAME_MAP: dict[str, str] = {
     "self_intro": "自我介绍",
@@ -689,14 +576,17 @@ async def _synthesize_report(
     resume_for_prefix = (resume_context or "")[:16000]
     jd_for_prefix = (jd_context or "")[:8000]
 
-    prompt = _SYNTHESIS_PROMPT.format(
+    prompt = SYNTHESIS_PROMPT.format(
         resume_context=resume_for_prefix,
         jd_context=jd_for_prefix,
         per_question_summary="\n\n".join(summary_lines),
     )
 
     try:
-        response = await llm.acomplete(prompt)
+        response = await llm.acomplete(
+            prompt,
+            response_format={"type": "json_object"},
+        )
         synthesis = _clean_json_response(response.text)
         overall_in = synthesis.get("overall") or {}
 
@@ -872,61 +762,6 @@ async def analyze_interview(
 # The output shape matches `_analyze_single_question`, so `_synthesize_report`
 # can consume it unchanged.
 
-_BATCH_PROMPT_PREFIX = """[硬性约束] 全部输出使用简体中文。即便原始转录里出现繁体字、英文术语，最终回复也用简体中文表达（专有名词、代码标识符保留原文）。
-
-你是一位严格但建设性的资深技术面试官，正在对一场面试的结果做细致复盘。
-所有判断必须基于下面这位候选人的简历 + 目标岗位 JD。
-
-═════════ 候选人简历（全文） ═════════
-{resume_context}
-
-═════════ 目标岗位 JD（全文） ═════════
-{jd_context}
-
-═════════ 复盘任务说明 ═════════
-请对【本批待评分】中的每道题打分并点评，**只评本批的题**，前后窗口仅作上下文参考。
-
-【分阶段评分维度】（按本题的 phase 选用，各维度 0-2.5 分，总分 0-10）
-- technical / resume_deep_dive:
-    技术准确性 / 深度（不止描述还讲了原理或权衡） / 边界考虑（失败 case、限制、替代方案） / 表达清晰
-- behavioral:
-    Situation 背景具体（时间、团队、规模） /
-    Task 自己角色明确 /
-    Action 具体动作（不是「我们」糊弄） /
-    Result 量化或可验证的结果
-- self_intro / reverse_qa:
-    采用单维度宽松打分（结构清晰 / 信息完整 / 表达自然）
-
-如果一道题携带 `prior_quality` 字段（面试过程中预先标注的质量标签：weak/partial/good/strong），
-**作为参考先验**，但不要直接复制 —— 你看到完整的简历和 JD，可以给更准确的分数。
-"""
-
-_BATCH_PROMPT = (
-    _BATCH_PROMPT_PREFIX
-    + """
-【前置上下文（只读，不评分）】
-{prev_ctx}
-
-【本批待评分】
-{batch_block}
-
-【后置上下文（只读，不评分）】
-{next_ctx}
-
-输出严格 JSON：
-{{
-  "results": [
-    {{
-      "index": 本批中的题目序号（用 index 字段原样回传）,
-      "score": 0-10,
-      "critique": "200 字以内的点评，按上面对应 phase 的维度分点指出缺陷与亮点",
-      "improved_answer": "更完整、更严谨的参考答案",
-      "tags": ["知识点1", "标签2"]
-    }}
-  ]
-}}"""
-)
-
 
 def _render_qa_block(qa: dict[str, Any], label: str) -> str:
     topic = qa.get("topic") or ""
@@ -966,7 +801,7 @@ async def _analyze_batch(
     next_ctx = "\n\n".join(_render_qa_block(q, "[后]") for q in next_window) or "（无）"
     batch_block = "\n\n".join(_render_qa_block(q, "[本批]") for q in batch)
 
-    prompt = _BATCH_PROMPT.format(
+    prompt = BATCH_ANALYSIS_PROMPT.format(
         resume_context=resume_for_prefix,
         jd_context=jd_for_prefix,
         prev_ctx=prev_ctx,

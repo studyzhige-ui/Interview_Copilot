@@ -558,8 +558,8 @@ def test_autocompact_summarizes_body_keeps_head_and_tail(monkeypatch):
 
     monkeypatch.setattr(
         sys.modules["app.services.chat.conversation_summarizer"],
-        "get_llm_for_role",
-        lambda role, user_id=None: _StubLLM(),
+        "get_internal_llm",
+        lambda role: _StubLLM(),
     )
 
     pipeline = QueryLoopCompactor(profile=_profile())

@@ -56,19 +56,13 @@ def enqueue_realtime_extraction(
         user_pk = resolve_user_pk(db, user_id)
         if user_pk is None:
             return
-        enqueue_job(
+        enqueue_realtime_extraction_in_transaction(
             db,
             user_pk=user_pk,
-            job_type=REALTIME_JOB,
-            aggregate_type="conversation",
-            aggregate_id=session_id,
-            payload={
-                "session_id": session_id,
-                "user_id": user_id,
-                "record_id": record_id,
-                "upto_seq": upto_seq,
-            },
-            idempotency_key=f"rt:{session_id}:{upto_seq}",
+            session_id=session_id,
+            user_id=user_id,
+            record_id=record_id,
+            upto_seq=upto_seq,
         )
         db.commit()
     except Exception as exc:  # noqa: BLE001 — enqueue is best-effort; the cursor
@@ -77,6 +71,32 @@ def enqueue_realtime_extraction(
         logger.warning("enqueue_realtime_extraction failed for %s: %s", session_id, exc)
     finally:
         db.close()
+
+
+def enqueue_realtime_extraction_in_transaction(
+    db: Session,
+    *,
+    user_pk: int,
+    session_id: str,
+    user_id: str,
+    record_id: str | None,
+    upto_seq: int,
+) -> OutboxJob | None:
+    """Add extraction to the transaction that persisted the assistant reply."""
+    return enqueue_job(
+        db,
+        user_pk=user_pk,
+        job_type=REALTIME_JOB,
+        aggregate_type="conversation",
+        aggregate_id=session_id,
+        payload={
+            "session_id": session_id,
+            "user_id": user_id,
+            "record_id": record_id,
+            "upto_seq": upto_seq,
+        },
+        idempotency_key=f"rt:{session_id}:{upto_seq}",
+    )
 
 
 def enqueue_dreaming(db: Session, *, user_pk: int, record_id: str) -> OutboxJob | None:
@@ -151,6 +171,7 @@ __all__ = [
     "REALTIME_JOB",
     "DREAMING_JOB",
     "enqueue_realtime_extraction",
+    "enqueue_realtime_extraction_in_transaction",
     "enqueue_dreaming",
 ]
 

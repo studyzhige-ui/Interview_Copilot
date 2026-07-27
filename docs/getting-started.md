@@ -69,10 +69,12 @@ Backend:
 uvicorn app.main:app --app-dir backend --reload --port 8080
 ```
 
-Worker:
+Workers (run the three commands in separate terminals, or use the launcher):
 
 ```bash
-celery -A app.worker.celery_app.celery_app worker --workdir backend --pool=solo
+celery -A app.worker.celery_app.celery_app worker --workdir backend --pool=solo --queues=default,pipeline,transcription
+celery -A app.worker.celery_app.celery_app worker --workdir backend --pool=threads --concurrency=2 --queues=turns
+celery -A app.worker.celery_app.celery_app beat --workdir backend
 ```
 
 Frontend:
@@ -85,7 +87,8 @@ npm run dev
 ## First-use checklist
 
 1. Register an account.
-2. Configure at least one LLM provider or use an operator-provided default.
+2. Select an answer model and configure its key if needed; the deployment
+   supplies the internal router/worker model.
 3. Upload a resume and job description.
 4. Run a mock interview.
 5. Add optional Skills and MCP servers.

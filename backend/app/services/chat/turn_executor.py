@@ -12,7 +12,6 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.conversation.events import HarnessEvent
-from app.core.background_tasks import safe_background_task
 from app.core.config import settings
 from app.core.error_messages import humanize_error
 from app.db.database import SessionLocal
@@ -51,6 +50,11 @@ def create_turn(
             Conversation.user_id == user_id,
         )
         .with_for_update()
+        # ``conversation`` was normally loaded earlier by the API, so it is
+        # already present in this Session's identity map. Force the locked
+        # SELECT to refresh it; otherwise concurrent waiters can keep seeing
+        # the pre-lock ``active_turn_id=None`` snapshot and all create a turn.
+        .populate_existing()
         .one()
     )
     if locked.active_turn_id:
@@ -103,6 +107,34 @@ def cancel_pending_turn(db: Session, turn_id: str, user_id: int) -> bool:
         return False
     row.status = "cancelled"
     row.error = "Turn cancelled"
+    row.completed_at = datetime.utcnow()
+    conversation = db.get(Conversation, row.conversation_id)
+    if conversation and conversation.active_turn_id == turn_id:
+        conversation.active_turn_id = None
+    db.commit()
+    return True
+
+
+def fail_pending_turn(
+    db: Session,
+    turn_id: str,
+    user_id: int,
+    error: str,
+) -> bool:
+    """Fail a durable turn when it could not be sent to the worker queue."""
+    row = (
+        db.query(ConversationTurn)
+        .filter(
+            ConversationTurn.id == turn_id,
+            ConversationTurn.user_id == user_id,
+        )
+        .with_for_update()
+        .one_or_none()
+    )
+    if row is None or row.status != "pending":
+        return False
+    row.status = "failed"
+    row.error = error
     row.completed_at = datetime.utcnow()
     conversation = db.get(Conversation, row.conversation_id)
     if conversation and conversation.active_turn_id == turn_id:
@@ -283,7 +315,10 @@ async def execute_turn(turn_id: str) -> None:
 
 
 def schedule_turn(turn_id: str) -> None:
-    safe_background_task(execute_turn(turn_id), name=f"chat-turn:{turn_id}")
+    """Dispatch a durable turn to the isolated conversation-worker queue."""
+    from app.worker.tasks import process_conversation_turn
+
+    process_conversation_turn.delay(turn_id)
 
 
 async def fail_orphaned_turns() -> int:

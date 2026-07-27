@@ -1,8 +1,9 @@
 import logging
+from threading import Lock
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import worker_process_init
+from celery.signals import task_prerun, worker_process_init
 
 from app.core.config import settings
 
@@ -12,6 +13,7 @@ from app.core.config import settings
 # application already logs redacted fetch errors itself (vendors/base.py
 # _redact); the library's request log adds nothing but the leak.
 logging.getLogger("httpx").setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
 
 
 celery_app = Celery(
@@ -37,33 +39,35 @@ celery_app.conf.update(
     task_soft_time_limit=3540,  # 1 min before hard kill, raise SoftTimeLimitExceeded
     # so handlers can flush partial state.
     # ── Task routing ────────────────────────────────────────────────────
-    # Two-queue split (introduced when the worker fleet was unified
-    # against the user's "transcription is heavy, dreaming is light"
-    # concern):
+    # Four queues keep incompatible workloads from blocking one another:
     #
-    #   transcription queue  → heavy worker, loads Whisper (~1.5 GB GPU)
-    #   default queue        → light worker, no Whisper (just LLM client)
+    #   turns         → long-lived chat/Agent turns with reconnectable SSE
+    #   transcription → serialized ASR/diarization, loads voice models
+    #   pipeline      → serialized parsing/embedding/durable outbox work
+    #   default       → short control, catalog and scheduling jobs
     #
-    # Operators run TWO worker processes — see docker-compose.yml's
-    # worker-transcription / worker-light services. Both subscribe to
-    # the same broker; queue subscription is the routing primitive.
+    # Container deployments run one process per queue; local scripts run one
+    # solo worker subscribed to all three. Queue subscription is the routing
+    # primitive in both cases.
     task_default_queue="default",
     task_routes={
+        "tasks.process_conversation_turn": {"queue": "turns"},
         # ── Heavy: needs Whisper + diarization model ──
         "tasks.process_interview_analysis": {"queue": "transcription"},
-        # ── Light: LLM / embedding / DB only ──
-        "tasks.process_document_ingestion": {"queue": "default"},
-        # Resume parse (LLM sectioning + S3 download + embed) is light.
-        "tasks.process_resume_parse": {"queue": "default"},
+        # ── Durable content pipeline: parsing / embedding / outbox handlers ──
+        "tasks.process_document_ingestion": {"queue": "pipeline"},
+        "tasks.process_resume_parse": {"queue": "pipeline"},
+        "tasks.drain_outbox_jobs": {"queue": "pipeline"},
+        # ── Short control/background jobs ──
         "tasks.dream_for_user": {"queue": "default"},
         "tasks.scan_and_dream_batch": {"queue": "default"},
+        "tasks.process_mock_interview_review": {"queue": "default"},
         # Catalog refresh is pure outbound HTTP — no GPU, no heavy
         # in-process model. Lands on the light queue alongside dreaming.
         "tasks.refresh_model_catalog": {"queue": "default"},
-        # Outbox drain: object-storage / index cleanup. DB + storage I/O.
-        "tasks.drain_outbox_jobs": {"queue": "default"},
         # Zombie sweeper: pure DB scan.
         "tasks.sweep_stale_interview_records": {"queue": "default"},
+        "tasks.sweep_stale_pipeline_records": {"queue": "default"},
         "tasks.sweep_orphan_file_assets": {"queue": "default"},
     },
     # ── Reliability ─────────────────────────────────────────────────────
@@ -128,6 +132,10 @@ celery_app.conf.update(
             "task": "tasks.sweep_stale_interview_records",
             "schedule": crontab(minute="*/10"),
         },
+        "stale-pipeline-sweep": {
+            "task": "tasks.sweep_stale_pipeline_records",
+            "schedule": crontab(minute="5-59/10"),
+        },
         # Daily orphan-upload cleanup (UP-3) — off-peak, after the memory
         # dreaming batch.
         "uploads-sweep-orphans-daily": {
@@ -146,8 +154,7 @@ def _worker_subscribes_to(queue_name: str) -> bool:
     Two ways the queue is signalled:
       * Explicit ``--queues transcription`` flag on the command line
       * ``CELERY_QUEUES`` env var set by the docker-compose service
-        (a belt to the CLI braces — see worker-transcription /
-        worker-light services for the wiring)
+        (a belt to the CLI braces — see the worker services in compose)
 
     If neither is set, the worker defaults to the configured
     ``task_default_queue`` ('default'), meaning it does NOT subscribe
@@ -170,35 +177,88 @@ def _worker_subscribes_to(queue_name: str) -> bool:
     return False
 
 
+_runtime_lock = Lock()
+_embedding_runtime_ready = False
+_reranker_runtime_ready = False
+_voice_runtime_ready = False
+
+
+def _ensure_worker_runtime(
+    *,
+    embedding: bool = False,
+    reranker: bool = False,
+    voice: bool = False,
+) -> None:
+    """Lazily initialize only the models required by the current queue/task."""
+    global _embedding_runtime_ready, _reranker_runtime_ready, _voice_runtime_ready
+    with _runtime_lock:
+        # Must run before any LLM client is created. Idempotent when disabled.
+        from app.core.llm_tracing import setup_llm_tracing
+
+        setup_llm_tracing()
+
+        if embedding and not _embedding_runtime_ready:
+            from app.rag.embeddings import init_rag_settings
+
+            # Workers never generate user-facing answers, so do not resolve or
+            # warm the user's/default answer model here.
+            init_rag_settings(include_primary_llm=False)
+            _embedding_runtime_ready = True
+            logger.info(">>> Worker embedding runtime ready.")
+
+        if reranker and not _reranker_runtime_ready:
+            from app.rag.retriever import init_reranker
+
+            init_reranker()
+            _reranker_runtime_ready = True
+            logger.info(">>> Worker reranker runtime ready.")
+
+        if voice and not _voice_runtime_ready:
+            from app.services.voice.audio_transcription_service import (
+                init_whisper_model,
+            )
+
+            init_whisper_model()
+            _voice_runtime_ready = True
+            logger.info(">>> Worker voice runtime ready.")
+
+
 @worker_process_init.connect
 def init_worker_models(**kwargs):
-    """Warm model resources when each Celery worker process starts.
+    """Warm only queue-specific heavyweight resources.
 
-    Whisper is only loaded on workers that subscribe to the
-    ``transcription`` queue — light workers (memory dreaming /
-    document ingestion) save ~1.5 GB GPU by skipping it.
+    ``task_prerun`` below is the correctness fallback for thread/solo pools
+    where process-init signal behaviour differs.
     """
-    import logging
-
-    logger = logging.getLogger(__name__)
-    # LangSmith — must run BEFORE any LLM client is created (init_rag_settings
-    # constructs them). No-op when LANGSMITH_TRACING isn't set in .env.
     from app.core.llm_tracing import setup_llm_tracing
 
     setup_llm_tracing()
-
-    from app.rag.embeddings import init_rag_settings
-
-    init_rag_settings()
-
-    if _worker_subscribes_to("transcription"):
+    if _worker_subscribes_to("turns"):
+        logger.info(">>> Conversation worker — warming RAG runtime...")
+        _ensure_worker_runtime(embedding=True, reranker=True)
+    elif _worker_subscribes_to("transcription"):
         logger.info(">>> Transcription worker — warming Whisper + diarization...")
-        from app.services.voice.audio_transcription_service import init_whisper_model
-
-        init_whisper_model()
-        logger.info(">>> Transcription worker model warmup complete.")
+        _ensure_worker_runtime(voice=True)
+    elif _worker_subscribes_to("pipeline"):
+        logger.info(">>> Pipeline worker — warming embedding runtime...")
+        _ensure_worker_runtime(embedding=True)
     else:
-        logger.info(
-            ">>> Light worker (no Whisper). Subscribed queues: %s",
-            kwargs.get("sender", "<unknown>"),
-        )
+        logger.info(">>> Control worker — no heavyweight model warmup.")
+
+
+_EMBEDDING_TASKS = {
+    "tasks.process_conversation_turn",
+    "tasks.process_document_ingestion",
+    "tasks.drain_outbox_jobs",
+}
+
+
+@task_prerun.connect
+def ensure_task_runtime(task=None, **kwargs):
+    """Guarantee task prerequisites even when process-init did not fire."""
+    task_name = getattr(task, "name", "")
+    _ensure_worker_runtime(
+        embedding=task_name in _EMBEDDING_TASKS,
+        reranker=task_name == "tasks.process_conversation_turn",
+        voice=task_name == "tasks.process_interview_analysis",
+    )

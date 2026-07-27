@@ -7,6 +7,7 @@ import pytest
 from app.models.chat import Conversation
 from app.models.chat import ConversationMessage
 from app.models.conversation_turn import ConversationTurn
+from app.models.outbox_job import OutboxJob
 from app.models.user import User
 from app.services.chat import turn_executor
 from app.services.chat import chat_history_service
@@ -216,7 +217,12 @@ def test_complete_background_turn_is_idempotent(db_session, monkeypatch):
     )
 
     service = chat_history_service.transcript_service
-    first = service.complete_background_turn(turn_id=turn.id, ai_msg="answer")
+    first = service.complete_background_turn(
+        turn_id=turn.id,
+        ai_msg="answer",
+        enqueue_memory=True,
+        memory_user_id=user.username,
+    )
     second = service.complete_background_turn(turn_id=turn.id, ai_msg="duplicate")
 
     assert first == second == 2
@@ -230,3 +236,12 @@ def test_complete_background_turn_is_idempotent(db_session, monkeypatch):
         == 1
     )
     assert conversation.turn_count == 1
+    job = (
+        db_session.query(OutboxJob)
+        .filter_by(
+            job_type="extract_memory_realtime",
+            aggregate_id=conversation.id,
+        )
+        .one()
+    )
+    assert job.status == "pending"

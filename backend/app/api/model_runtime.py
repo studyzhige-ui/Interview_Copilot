@@ -14,7 +14,15 @@ from app.core.llm_client_factory import (
     profile_ready,
     validate_role_update,
 )
-from app.core.model_catalog import _get_all_profiles, get_profile
+from app.core.internal_models import (
+    INTERNAL_MODEL_ROLES,
+    get_internal_model_profile,
+)
+from app.core.model_catalog import (
+    USER_SELECTABLE_ROLES,
+    _get_all_profiles,
+    get_profile,
+)
 from app.core.user_model_selection import (
     get_profile_for_role,
     get_runtime_selection,
@@ -146,6 +154,7 @@ async def api_model_runtime(
 ):
     uid = current_user.username
     selection = get_runtime_selection(user_id=uid)
+    user_roles = USER_SELECTABLE_ROLES
     return {
         "status": "success",
         "selection": selection,
@@ -156,14 +165,21 @@ async def api_model_runtime(
                 "model": profile.model,
                 "display_name": profile.display_name,
             }
-            for role, profile in {
-                "primary": get_profile_for_role("primary", user_id=uid),
-                "agent": get_profile_for_role("agent", user_id=uid),
-                "mock_interview": get_profile_for_role("mock_interview", user_id=uid),
-                # System role — returned for observability (which model
-                # handles planner/memory/extraction calls); not a picker.
-                "utility": get_profile_for_role("utility", user_id=uid),
-            }.items()
+            for role, profile in (
+                (role, get_profile_for_role(role, user_id=uid)) for role in user_roles
+            )
+        },
+        "internal": {
+            role: {
+                "profile_id": profile.id,
+                "provider": profile.provider,
+                "model": profile.model,
+                "display_name": profile.display_name,
+            }
+            for role, profile in (
+                (role, get_internal_model_profile(role))
+                for role in INTERNAL_MODEL_ROLES
+            )
         },
     }
 
@@ -519,4 +535,6 @@ async def api_update_model_runtime(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to update runtime model selection: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        from app.core.error_messages import humanize_error
+
+        raise HTTPException(status_code=500, detail=humanize_error(exc)) from exc

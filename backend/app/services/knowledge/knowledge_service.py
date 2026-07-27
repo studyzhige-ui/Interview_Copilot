@@ -33,31 +33,12 @@ def default_title(upload: FileAsset) -> str:
 def delete_document_vectors_and_chunks(
     db: Session, document: KnowledgeDocument
 ) -> None:
-    """Delete a document's chunk facts (Postgres ``document_chunks``) then its
-    Milvus index rows (keyed by document_id).
-
-    Facts go first — the read path is correct the moment they're gone. If the
-    Milvus delete fails (outage), it's queued as a ``milvus_delete_document``
-    outbox job for reliable retry rather than raising or leaking un-cleaned
-    vectors (plan §4.6.3). Visibility is already decided by Postgres state, so
-    the queued cleanup never makes a deleted document reappear."""
-    from app.rag import milvus_hybrid
+    """Delete chunk facts and enqueue the external index cleanup atomically."""
     from app.rag.document_chunk_service import delete_document_chunks
     from app.services.knowledge.knowledge_outbox import enqueue_milvus_delete
 
     delete_document_chunks(db, document.id)
-    try:
-        milvus_hybrid.delete_by_field(
-            milvus_hybrid.KNOWLEDGE, "document_id", document.id
-        )
-    except Exception as exc:  # noqa: BLE001 — queue a reliable retry, don't fail the delete
-        logger.warning(
-            "Milvus delete failed for document %s; queuing outbox retry: %s",
-            document.id,
-            exc,
-        )
-        enqueue_milvus_delete(db, user_pk=document.user_id, document_id=document.id)
-        db.commit()  # facts already committed above; this persists just the retry job
+    enqueue_milvus_delete(db, user_pk=document.user_id, document_id=document.id)
 
 
 def mark_document_indexed_ready(db: Session, document_id: str) -> None:
@@ -111,31 +92,10 @@ def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> 
                 "Refusing to delete knowledge object outside the owned upload prefix"
             )
 
-    # Mark deleted FIRST so RAG / list read paths exclude this doc immediately,
-    # even before the (async-ish) chunk + Milvus deletes below complete.
-    document.status = "deleting"
-    document.deleted_at = datetime.utcnow()
-    document.updated_at = datetime.utcnow()
-    db.add(document)
-    db.commit()
-
-    try:
-        delete_document_vectors_and_chunks(db, document)
-    except Exception as exc:
-        document.status = "delete_failed"
-        document.error_message = str(exc)
-        document.updated_at = datetime.utcnow()
-        db.add(document)
-        db.commit()
-        raise
-
-    # Blob delete rides the outbox (UP-2), enqueued only AFTER the vector/
-    # chunk delete succeeded and committed together with the row deletes: a
-    # vectors failure then parks the doc in delete_failed with its object
-    # intact (retryable), and a crash between the vectors delete and this
-    # commit leaks a blob (recoverable) instead of stranding a doc row that
-    # points at nothing. A storage blip can't park the doc in delete_failed
-    # either way — the outbox retries until the object is gone.
+    # Facts disappear and both external cleanups enter the outbox in one
+    # transaction. A crash is therefore all-or-nothing from the application's
+    # perspective; Milvus/object-store outages only delay cleanup.
+    delete_document_vectors_and_chunks(db, document)
     if has_object:
         from app.services.uploads.outbox_service import enqueue_job
 

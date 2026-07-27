@@ -39,7 +39,7 @@ from app.services.interview.interview_record_service import (
     STATUS_PROCESSING_REVIEW,
     interview_record_service,
 )
-from app.worker.tasks import process_interview_analysis
+from app.worker.tasks import process_mock_interview_review
 
 logger = logging.getLogger(__name__)
 
@@ -543,7 +543,7 @@ def dispatch_review(
       resume banner.
     """
     try:
-        task = process_interview_analysis.delay(record_id)
+        task = process_mock_interview_review.delay(record_id)
     except Exception as exc:  # noqa: BLE001 — broker down / misconfigured
         logger.error("review dispatch failed for record %s: %s", record_id, exc)
         interview_record_service.set_status(record_id, rollback_status, db=db)

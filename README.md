@@ -6,22 +6,24 @@ memory, user Skills, and MCP tools.
 
 The repository ships one shared product core in two editions:
 
-- **Interview Copilot Cloud** — a hosted Web product. Users choose their LLM,
-  Skills, remote MCP servers, and voice; the operator manages retrieval and
-  speech infrastructure.
+- **Interview Copilot Cloud** — a hosted Web product. Users choose their answer
+  LLM, Skills, remote MCP servers, and voice; the operator manages internal
+  routing, background models, retrieval, and speech infrastructure.
 - **Interview Copilot Community** — the GitHub self-hosted edition. Developers
   can replace providers, run local models, use custom endpoints, and enable
   local stdio MCP.
 
 [中文说明](docs/zh/README.md) · [Edition architecture](docs/architecture/editions.md)
 · [2026-07 consolidation report](docs/reports/consolidation-2026-07-26.md)
+· [Core systems audit](docs/reports/core-systems-audit-2026-07-27.md)
 
 ## Core features
 
 - Mock interviews grounded in a resume and job description
 - Audio transcription, speaker-aware review, scoring, and skill radar
 - Hybrid RAG with Milvus, reranking, citations, and document lifecycle support
-- Per-user LLM credentials and role-based model selection
+- Per-user credentials and one answer-model preference shared by chat, Agent,
+  and mock interview
 - Long-running agent turns with reconnectable event streams and cancellation
 - User-scoped Skills, MCP servers, session permissions, and immutable turn tools
 - PostgreSQL, Redis/Celery, Milvus, and S3-compatible object storage

@@ -8,8 +8,9 @@ Edition checks are enforced by the backend and exposed to the frontend through
 
 | Surface | Cloud | Community |
 |---|---|---|
-| User LLM keys and model selection | Enabled | Enabled |
+| User answer-model keys and selection | Enabled | Enabled |
 | Official LLM providers | Enabled | Enabled |
+| Internal router and worker models | Operator managed | Deployment configurable |
 | Custom provider endpoint and headers | Disabled | Enabled |
 | User Skills | Enabled | Enabled |
 | Remote Streamable HTTP MCP | Enabled | Enabled |
@@ -26,6 +27,8 @@ APP_EDITION=community
 
 Model provider settings remain independent. A Community deployment can use
 remote APIs, and a Cloud operator can run managed models on its own servers.
+Users never select the internal router/worker model or provide its credential.
+Both internal roles currently use `deepseek/deepseek-v4-flash`.
 
 ## Capability resolution
 

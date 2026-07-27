@@ -6,6 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.rate_limit import RATE_EXPENSIVE, RATE_UPLOAD, limiter
+from app.core.error_messages import humanize_error
 from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
@@ -75,7 +76,7 @@ async def api_query_knowledge_base(
         }
     except Exception as exc:  # noqa: BLE001
         logger.error("RAG query API failed: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=humanize_error(exc)) from exc
 
 
 def _document_payload(document: KnowledgeDocument) -> dict:
@@ -182,24 +183,22 @@ async def create_knowledge_document(
         )
         db.add(document)
         mark_file_asset_consumed(db, upload)
-        # Flush so document.id is assigned and the row is visible to the
-        # Celery worker when it queries (commit happens below, BEFORE we
-        # dispatch — otherwise the worker can race ahead of our commit and
-        # see no row). We don't dispatch yet because Celery.delay() can fail
-        # (Redis broker outage) and we want the option to mark the document
-        # as failed in the same DB session.
+        # Commit before dispatch. A flush is not visible to the Celery worker,
+        # so dispatching between flush and commit races with a fast worker that
+        # queries the document from another database connection.
         db.flush()
         document_id = document.id
+        db.commit()
+        db.refresh(document)
 
         try:
             task = process_document_ingestion.delay(document_id)
         except Exception as exc:  # noqa: BLE001
-            # Dispatch failed — record it on the document so the UI surfaces
-            # a real error instead of a forever-processing row, then commit
-            # everything in one transaction.
+            # The document is already durable and visible. Park it in a
+            # terminal state so a broker outage cannot leave a zombie.
             logger.error("Celery dispatch failed for document %s: %s", document_id, exc)
             document.status = "failed"
-            document.error_message = f"task dispatch failed: {exc}"[:500]
+            document.error_message = "后台处理队列暂时不可用，请稍后重试。"
             db.commit()
             raise HTTPException(
                 status_code=503,
@@ -222,7 +221,7 @@ async def create_knowledge_document(
         logger.error("Ingestion API dispatch error: %s", exc)
         raise HTTPException(
             status_code=500,
-            detail=f"Internal error dispatching ingestion: {exc}",
+            detail=humanize_error(exc),
         ) from exc
 
 
@@ -325,12 +324,9 @@ async def delete_knowledge_document(
     except Exception as exc:  # noqa: BLE001
         db.rollback()
         logger.error("Knowledge document deletion failed: %s", exc)
-        raise HTTPException(
-            status_code=500, detail=f"Failed to delete document: {exc}"
-        ) from exc
-    # The document's Milvus vectors were dropped by hard_delete_knowledge_document
-    # (milvus_hybrid.delete_by_field); BM25 is server-side in Milvus now, so
-    # there's no client-side cache to invalidate.
+        raise HTTPException(status_code=500, detail=humanize_error(exc)) from exc
+    # Postgres facts are gone now; external index/blob cleanup is durable in
+    # the outbox and can finish asynchronously.
     return {"status": "success"}
 
 

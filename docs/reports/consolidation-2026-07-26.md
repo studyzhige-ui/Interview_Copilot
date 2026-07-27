@@ -1,7 +1,10 @@
 # Interview Copilot 项目收口报告
 
 日期：2026-07-26
-工作分支：`feat/rag-optimization`
+工作分支：`main`
+
+核心系统的后续审查与可靠性改造见
+[`core-systems-audit-2026-07-27.md`](core-systems-audit-2026-07-27.md)。
 
 ## 1. 收口结论
 
@@ -10,7 +13,8 @@
 | 能力 | Interview Copilot Cloud | Interview Copilot Community |
 |---|---|---|
 | 交付形态 | 托管 Web 产品 | GitHub 自部署与学习项目 |
-| 用户可选 LLM、个人 Key、模型角色 | 支持 | 支持 |
+| 用户可选回答 LLM、个人 Key | 支持 | 支持 |
+| 内部 Router/Worker 模型 | 平台托管 | 部署者配置 |
 | 用户 Skill | 支持 | 支持 |
 | 用户远程 MCP | 支持 | 支持 |
 | stdio MCP | 禁止 | 部署者显式开启 |
@@ -62,7 +66,7 @@ MCP 还具备：
 
 长任务不再依赖浏览器连接存活：
 
-- 请求先创建持久化 `ConversationTurn`，后台 Worker 原子领取；
+- 请求先创建持久化 `ConversationTurn`，独立 `turns` Worker 原子领取；
 - SSE 只订阅事件，刷新或断线后可重新连接；
 - `owner_id + heartbeat_at` 构成执行租约，失去所有权的 Worker 不能提交终态；
 - 取消会传播到当前工具调用并写入审计；
@@ -171,11 +175,11 @@ Cloud 真正上线仍需要代码仓库之外的运营能力：
 
 最终结果：
 
-- 后端：`999 passed, 5 skipped`；唯一 warning 来自 LangSmith 第三方包的弃用提示；
+- 后端：`1019 passed, 1 skipped`；唯一 warning 来自 LangSmith 第三方包的弃用提示；
 - 前端：7 个测试文件、34 个测试全部通过；
-- Python：362 个文件通过 Ruff format check，Ruff lint 零错误；
+- Python：Ruff lint 零错误，compileall 通过；
 - TypeScript、ESLint 零 warning、Vite production build 全部通过；
-- Alembic：`0049_turn_ownership` 为唯一 Head；
+- Alembic：`0050_single_answer_model` 为唯一 Head；
 - Cloud 轻依赖冷启动边界测试通过；
 - 两份环境模板、PowerShell/Bash 安装脚本、YAML、Community Compose 与
   Git whitespace 检查全部通过。

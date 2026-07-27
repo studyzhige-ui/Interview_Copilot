@@ -76,28 +76,15 @@ class ModelProfile:
 # to the first function-calling profile in the catalog so the system
 # never deadlocks on a missing default.
 ROLE_DEFAULTS: dict[str, str] = {
-    # Three USER-FACING roles (selectable on the Models page):
-    #   primary        — chat / debrief default model (must support function
-    #                    calling when the user toggles the AGENT panel button)
-    #   agent          — agentic / tool-use chains (function calling required)
-    #   mock_interview — drives mock-interview plan + interviewer responses
-    # One SYSTEM role (never selectable, resolved automatically):
-    #   utility        — high-volume low-stakes internal calls: query planner,
-    #                    QA extraction, memory extraction/dreaming/compaction,
-    #                    resume parsing, diagnostics. Formerly named "fast".
-    #                    Resolution order: this default if ready for the
-    #                    caller, else the user's primary selection, else any
-    #                    profile the user is ready for (see
-    #                    ``get_profile_for_role``).
-    "primary": "deepseek/deepseek-chat",
-    "agent": "deepseek/deepseek-chat",
-    "mock_interview": "deepseek/deepseek-chat",
-    "utility": "deepseek/deepseek-chat",
+    # The one user-facing answer model. Chat, Agent and mock interviewing all
+    # honor this preference; internal routing/background roles are separate.
+    "primary": "deepseek/deepseek-v4-pro",
 }
 
-# Roles the user can bind on the Models page / PUT /models/runtime. utility
-# is deliberately absent — it's a system role.
-USER_SELECTABLE_ROLES: tuple[str, ...] = ("primary", "agent", "mock_interview")
+# Roles the user can bind on the Models page / PUT /models/runtime. Internal
+# router/worker roles live in ``app.core.internal_models`` and never enter
+# per-user selection.
+USER_SELECTABLE_ROLES: tuple[str, ...] = ("primary",)
 
 
 # ── Profile cache ───────────────────────────────────────────────────────
@@ -252,6 +239,7 @@ def get_profile(profile_id: str) -> ModelProfile:
 __all__ = [
     "ModelProfile",
     "ROLE_DEFAULTS",
+    "USER_SELECTABLE_ROLES",
     "repopulate_profile_cache",
     "_get_all_profiles",
     "get_profile",

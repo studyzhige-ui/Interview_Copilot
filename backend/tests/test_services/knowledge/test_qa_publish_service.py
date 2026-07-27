@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 
 def test_save_refresh_and_unsave_qa(db_session, monkeypatch):
     from app.models.interview_qa import InterviewQA
@@ -132,3 +134,93 @@ def test_unsave_noop_when_not_saved(db_session):
         qa_publish_service.unsave_qa_from_knowledge(db_session, user_pk=user.id, qa=qa)
         is False
     )
+
+
+def test_save_stays_processing_while_index_retry_is_queued(db_session, monkeypatch):
+    from app.models.interview_qa import InterviewQA
+    from app.models.interview_record import InterviewRecord
+    from app.models.user import User
+    from app.services.knowledge import qa_publish_service
+
+    user = User(username="queued", hashed_password="x")
+    db_session.add(user)
+    db_session.flush()
+    rec = InterviewRecord(
+        id="ir_queued", user_id=user.id, source="mock", status="review_ready"
+    )
+    qa = InterviewQA(
+        id="qa_queued",
+        record_id=rec.id,
+        order_idx=0,
+        phase="technical",
+        question="q",
+        answer="a",
+        improved_answer="better",
+    )
+    db_session.add_all([rec, qa])
+    db_session.commit()
+
+    async def queued_ingest(**_kwargs):
+        return {"chunk_count": 1, "indexed": False}
+
+    monkeypatch.setattr("app.rag.ingestion.ingest_text", queued_ingest)
+
+    doc = asyncio.run(
+        qa_publish_service.save_qa_to_knowledge(
+            db_session,
+            user_pk=user.id,
+            qa=qa,
+            record=rec,
+        )
+    )
+    assert doc.status == "processing"
+    assert "重试" in (doc.error_message or "")
+
+
+def test_save_marks_document_failed_when_indexing_fails(db_session, monkeypatch):
+    from app.models.interview_qa import InterviewQA
+    from app.models.interview_record import InterviewRecord
+    from app.models.knowledge import KnowledgeDocument
+    from app.models.user import User
+    from app.services.knowledge import qa_publish_service
+
+    user = User(username="failed", hashed_password="x")
+    db_session.add(user)
+    db_session.flush()
+    rec = InterviewRecord(
+        id="ir_failed", user_id=user.id, source="mock", status="review_ready"
+    )
+    qa = InterviewQA(
+        id="qa_failed",
+        record_id=rec.id,
+        order_idx=0,
+        phase="technical",
+        question="q",
+        answer="a",
+        improved_answer="better",
+    )
+    db_session.add_all([rec, qa])
+    db_session.commit()
+
+    async def failed_ingest(**_kwargs):
+        raise RuntimeError("embedding unavailable")
+
+    monkeypatch.setattr("app.rag.ingestion.ingest_text", failed_ingest)
+
+    with pytest.raises(RuntimeError, match="embedding unavailable"):
+        asyncio.run(
+            qa_publish_service.save_qa_to_knowledge(
+                db_session,
+                user_pk=user.id,
+                qa=qa,
+                record=rec,
+            )
+        )
+
+    doc = (
+        db_session.query(KnowledgeDocument)
+        .filter(KnowledgeDocument.source_ref_id == qa.id)
+        .one()
+    )
+    assert doc.status == "failed"
+    assert doc.error_message

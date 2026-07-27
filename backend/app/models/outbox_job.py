@@ -57,11 +57,8 @@ class OutboxJob(Base):
         index=True,
         nullable=False,
     )
-    # Registered today: delete_object / cleanup_failed_upload /
-    # upsert_memory_ability_index / delete_memory_ability_index.
-    # Planned (handlers land with their packages): delete_milvus_chunks /
-    # parse_resume / ingest_knowledge_document / transcribe_interview_audio /
-    # parse_jd_snapshot. (Realtime memory extraction stays inline — not a job.)
+    # Registered handlers cover object cleanup, knowledge/resume/ability index
+    # synchronization, realtime memory extraction, and dreaming.
     job_type = Column(String, index=True, nullable=False)
     aggregate_type = Column(String, nullable=True)
     aggregate_id = Column(String, nullable=True)

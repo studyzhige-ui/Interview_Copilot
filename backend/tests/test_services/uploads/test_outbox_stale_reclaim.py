@@ -44,7 +44,7 @@ def test_stale_running_job_is_reclaimed_and_rerun(db_session, monkeypatch):
         lambda db, job: ran.append(job.id),
     )
     job = _enqueue(db_session, "t_reclaim", "agg1")
-    _orphan(db_session, job, age=timedelta(minutes=11))
+    _orphan(db_session, job, age=timedelta(minutes=21))
 
     outbox_service.run_due_outbox_jobs(db_session)
 
@@ -64,7 +64,7 @@ def test_fresh_running_lock_is_not_stolen(db_session, monkeypatch):
         lambda db, job: ran.append(job.id),
     )
     job = _enqueue(db_session, "t_fresh", "agg2")
-    _orphan(db_session, job, age=timedelta(minutes=2))
+    _orphan(db_session, job, age=timedelta(minutes=16))
 
     outbox_service.run_due_outbox_jobs(db_session)
 
@@ -83,7 +83,7 @@ def test_crash_looping_job_reaches_dead_without_running(db_session, monkeypatch)
     )
     job = _enqueue(db_session, "t_loop", "agg3")
     # 4 prior attempts + this reclaim = max_attempts (5) → dead, not re-run.
-    _orphan(db_session, job, age=timedelta(minutes=11), attempts=4)
+    _orphan(db_session, job, age=timedelta(minutes=21), attempts=4)
 
     outbox_service.run_due_outbox_jobs(db_session)
 
@@ -102,7 +102,7 @@ def test_due_pending_job_still_claimed_alongside_reclaim(db_session, monkeypatch
         lambda db, job: ran.append(job.id),
     )
     stale = _enqueue(db_session, "t_mix", "agg4")
-    _orphan(db_session, stale, age=timedelta(minutes=11))
+    _orphan(db_session, stale, age=timedelta(minutes=21))
     fresh = _enqueue(db_session, "t_mix", "agg5")
 
     outbox_service.run_due_outbox_jobs(db_session)

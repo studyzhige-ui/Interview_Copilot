@@ -153,7 +153,7 @@ def test_agent_system_block_keeps_manifest_before_grounding_for_prompt_cache():
     block — so a grounding change can't evict the cached prefix. The query is
     NOT in the system block (it's sent as the user message)."""
     from app.agent_runtime.tool_registry import registry
-    from app.conversation.agent_strategy import SYSTEM_PROMPT
+    from app.prompts.agent import AGENT_SYSTEM_PROMPT
     from app.services.chat.context_assembly_pipeline import (
         AssembledContext,
         prompt_renderer,
@@ -169,7 +169,7 @@ def test_agent_system_block_keeps_manifest_before_grounding_for_prompt_cache():
     )
     system_block = prompt_renderer.render_answer_prompt(
         ctx,
-        system_prompt=f"{SYSTEM_PROMPT}\n\nAvailable tools:\n{manifest}",
+        system_prompt=f"{AGENT_SYSTEM_PROMPT}\n\nAvailable tools:\n{manifest}",
         skip_fields={"current_input"},
     )
 

@@ -101,8 +101,8 @@ class TestTaskUpdateTool:
             )
         )
         monkeypatch.setattr(
-            "app.agent_runtime.tools.tasks.build_async_openai_client_for_role",
-            lambda role, user_id=None: (client, SimpleNamespace(model="verifier")),
+            "app.agent_runtime.tools.tasks.build_async_openai_client_for_internal_role",
+            lambda role: (client, SimpleNamespace(model="verifier")),
         )
         result = await registry.dispatch("task_verify", {"task_id": 1}, CTX)
         assert result["verdict"] == "PASS"

@@ -315,10 +315,12 @@ from app.api import (
     interview,
     memory,
     model_runtime,
+    operations,
     rag,
     resumes,
 )
 
+app.include_router(operations.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(capabilities.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")

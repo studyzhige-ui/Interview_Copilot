@@ -6,7 +6,7 @@
       1. docker compose up -d           (no-op if already running)
       2. alembic upgrade head           (no-op if already at head)
       3. uvicorn (backend, --reload)    -> background job
-      4. celery worker                  -> background job
+      4. celery worker + beat           -> background jobs
       5. vite dev server (frontend)     -> background job
 
     All three job streams are merged into this one console with
@@ -151,15 +151,35 @@ if (-not $SkipBackend) {
     } -ArgumentList $backendDir, $ApiPort
     $jobs += $j; $colors[$j.Name] = 'Green'
 
-    Log 'Celery' 'worker -> --pool=solo' Yellow
+    Log 'Celery' 'worker -> default,pipeline,transcription; --pool=solo' Yellow
     $j = Start-Job -Name 'celery' -ScriptBlock {
         param($dir)
         Set-Location $dir
         $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'
         [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
-        & python -m celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=solo 2>&1
+        & python -m celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=solo --queues=default,pipeline,transcription 2>&1
     } -ArgumentList $backendDir
     $jobs += $j; $colors[$j.Name] = 'Yellow'
+
+    Log 'Turns' 'conversation worker -> turns; --pool=threads' DarkCyan
+    $j = Start-Job -Name 'turns' -ScriptBlock {
+        param($dir)
+        Set-Location $dir
+        $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+        & python -m celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=threads --concurrency=2 --queues=turns 2>&1
+    } -ArgumentList $backendDir
+    $jobs += $j; $colors[$j.Name] = 'DarkCyan'
+
+    Log 'Beat' 'scheduler' Magenta
+    $j = Start-Job -Name 'beat' -ScriptBlock {
+        param($dir)
+        Set-Location $dir
+        $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+        & python -m celery -A app.worker.celery_app.celery_app beat --loglevel=info 2>&1
+    } -ArgumentList $backendDir
+    $jobs += $j; $colors[$j.Name] = 'Magenta'
 }
 
 if (-not $SkipFrontend) {

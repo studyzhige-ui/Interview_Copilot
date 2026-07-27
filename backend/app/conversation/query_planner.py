@@ -42,7 +42,8 @@ import re
 from pydantic import BaseModel
 
 from app.core.config import settings
-from app.core.llm_client_factory import get_llm_for_role
+from app.core.llm_client_factory import get_internal_llm
+from app.prompts.chat import build_query_planner_system_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +132,6 @@ async def plan_query(
     recent_turns: list[dict],
     learning_strategy_description: str = "",
     global_memory_on: bool = True,
-    user_id: str | None = None,
 ) -> QueryPlan:
     """One LLM call per turn: rewrite query for RAG + decide whether to load the
     full learning_strategy body.
@@ -144,45 +144,15 @@ async def plan_query(
     if global_memory_on:
         memory_files_slot = (
             "[Available Memory Files]\n"
-            f"Learning-strategy doc one-liner: {learning_strategy_description or '(empty)'}\n"
-            "\n"
-            "Memory load rules:\n"
-            "- load_strategy: true only if the question is about answering methodology / "
-            "review approach / training the user might have strategy notes for. When in doubt, "
-            "leave it false — the user_profile and ability states are always available."
+            "Learning-strategy description: "
+            f"{learning_strategy_description or '(empty)'}"
         )
-        memory_output_keys = '  "load_strategy": true | false,\n'
     else:
         memory_files_slot = ""  # privacy mode: omit the whole slot
-        memory_output_keys = '  "load_strategy": false,\n'
 
-    system_prompt = (
-        "You are the query planner for an interview copilot. Decide what "
-        "context this turn needs.\n"
-        "\n"
-        "Return ONLY a JSON object matching this schema:\n"
-        "{\n"
-        '  "needs_knowledge_retrieval": true | false,\n'
-        '  "dense_query": "<natural-language query for semantic vector retrieval>",\n'
-        '  "sparse_query": "<short keyword query for BM25>",\n'
-        '  "sub_queries": [{"dense_query": "...", "sparse_query": "..."}],\n'
-        f"{memory_output_keys}"
-        "}\n"
-        "\n"
-        "Rules:\n"
-        "- needs_knowledge_retrieval=true when the question is about interview\n"
-        "  questions / technical concepts / framework facts / official docs.\n"
-        "- needs_knowledge_retrieval=false for casual chat, profile updates,\n"
-        "  questions answerable from memory alone, or meta-questions about\n"
-        "  the copilot itself.\n"
-        "- When generating dense_query / sparse_query, resolve any pronouns or\n"
-        "  follow-up references using [Recent Turns]. Leave both empty when\n"
-        "  needs_knowledge_retrieval=false.\n"
-        "- sub_queries: ONLY when the question has multiple distinct intents\n"
-        "  (e.g. 'explain A and B, then compare C'). Emit one entry per\n"
-        "  independent intent; keep dense_query/sparse_query as the overall\n"
-        "  question. For a normal single question, return an empty list — do\n"
-        "  NOT split a single complex question or a follow-up."
+    system_prompt = build_query_planner_system_prompt(
+        global_memory_on=global_memory_on,
+        max_sub_queries=settings.MAX_SUB_QUERIES,
     )
 
     parts: list[str] = [system_prompt]
@@ -195,7 +165,7 @@ async def plan_query(
     prompt = "\n\n".join(parts)
 
     try:
-        response = await get_llm_for_role("utility", user_id=user_id).acomplete(
+        response = await get_internal_llm("router").acomplete(
             prompt,
             response_format={"type": "json_object"},
         )

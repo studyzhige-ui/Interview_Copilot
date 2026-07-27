@@ -10,7 +10,9 @@ Three long-term stores + the pipelines that maintain them:
     realtime_extraction       — per-turn extraction core (run_realtime_extraction)
     dreaming_worker           — per-record cross-session synthesis core
     extraction_jobs           — outbox glue: enqueue + handlers for the two jobs
-    post_turn_maintenance     — enqueues the realtime job after each QA turn
+
+  Realtime jobs are enqueued atomically by ``chat_history_service`` when it
+  persists the assistant reply.
 
   Read entry-points:
     v3_context_loader         — universal + on-demand body loader
@@ -27,20 +29,12 @@ from app.services.memory import (  # noqa: F401
     v3_context_loader,
 )
 
-from app.services.memory.post_turn_maintenance import (  # noqa: F401
-    PostTurnMaintenanceService,
-    post_turn_maintenance_service,
-)
-
 __all__ = [
     # Stores
     "memory_document_service",
     "memory_ability_state_service",
     # Pipelines
+    "extraction_jobs",
     "realtime_extraction",
     "v3_context_loader",
-    # Compaction (conversation → summary; historically lives in this package)
-    # Post-turn maintenance
-    "PostTurnMaintenanceService",
-    "post_turn_maintenance_service",
 ]

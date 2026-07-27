@@ -27,30 +27,16 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.core.llm_client_factory import get_llm_for_role
+from app.prompts.interview import (
+    INTERVIEWER_STYLES,
+    MOCK_INTERVIEW_NEXT_TURN_PROMPT,
+    MOCK_INTERVIEW_PREFIX,
+)
 
 logger = logging.getLogger(__name__)
 
 
 # ── Interviewer personas ─────────────────────────────────────────────────
-
-INTERVIEWER_STYLES: dict[str, str] = {
-    "friendly": (
-        "你是一位温和友善的面试官，给候选人充分的思考时间和适度的引导。"
-        "肯定为主，不咄咄逼人；当候选人卡壳时给出温和的提示。"
-    ),
-    "professional": (
-        "你是一位专业、就事论事的面试官。节奏标准，问题清晰，不带情绪色彩。"
-        "回答到位就推进，模糊就追问一层。"
-    ),
-    "rigorous": (
-        "你是一位严谨挑剔的面试官，会追究边界 case 和具体细节。"
-        "追问比较尖锐，但保持职业；不允许笼统含糊的回答蒙混过去。"
-    ),
-    "pressure": (
-        "你是一位高强度的压力面试官，连珠追问、质疑回答的细节和动机，模拟真实大厂压力面。"
-        "保持专业边界，不羞辱不嘲讽；目的是看候选人在压力下的思路稳定性。"
-    ),
-}
 
 
 def _style_brief(style: str | None) -> str:
@@ -120,16 +106,10 @@ def build_prefix(resume_context: str, jd_context: str, style: str) -> str:
     """
     resume = (resume_context or "").strip() or "（候选人未提供简历）"
     jd = (jd_context or "").strip() or "（未提供 JD）"
-    return (
-        "你是资深技术面试官。核心原则：认真听 → 基于材料判断 → "
-        "接住对方刚说的话 → 决定追问 / 推进。每次只问一个清晰问题；"
-        "不要书面化堆砌；不要一口气问多个。\n"
-        "\n═════════ 候选人简历（全文） ═════════\n"
-        f"{resume}\n"
-        "\n═════════ 目标岗位 JD（全文） ═════════\n"
-        f"{jd}\n"
-        "\n═════════ 你的人设 ═════════\n"
-        f"{_style_brief(style)}\n"
+    return MOCK_INTERVIEW_PREFIX.format(
+        resume=resume,
+        jd=jd,
+        style=_style_brief(style),
     )
 
 
@@ -240,41 +220,6 @@ def stages_from_plan_json(plan_json: str | None) -> list[dict[str, str]]:
     return GENERAL_PLAN_TEMPLATE
 
 
-_NEXT_TURN_PROMPT = """{prefix}
-## 本场面试阶段（按顺序）
-{stage_list}
-
-## 当前阶段
-{current_stage}
-
-## 最近对话
-{recent_dialog}
-
-## 全场已问过的问题（避免重复！每条截断到 {asked_trunc} 字）
-{asked_questions}
-（当前阶段已提问 {questions_in_current_stage} 个问题）
-
-## 候选人刚才的回答
-{user_answer}
-
-## 你的任务
-作为面试官，自然地接住候选人刚才的回答，并给出下一句话。规则：
-- 一段连贯口语，先简短承接，再问下一个问题；只问一个问题。
-- **绝不重复**「全场已问过的问题」里出现过的问题或同义变体；当前阶段问了 3 个以上就考虑推进。
-- 在当前阶段聊够了就推进到下一个阶段（stage_key 用下一个阶段的 key）；否则保持当前阶段。
-- 进入「反问」阶段（candidate_questions）时，邀请候选人提问，并认真回答其问题。
-- 反问阶段也聊完、整场覆盖充分时，把 ready_to_finish 设为 true，并说一句收尾的话。
-- 候选人放弃某题（说"不知道/跳过"）时温和带过，不要纠缠。
-
-严格输出 JSON：
-{{
-  "message": "你作为面试官说出口的下一句话",
-  "stage_key": "{stage_keys_hint}",
-  "ready_to_finish": false
-}}
-"""
-
-
 async def generate_next_turn(
     *,
     prefix: str,
@@ -308,7 +253,7 @@ async def generate_next_turn(
         )
         or "（暂无）"
     )
-    prompt = _NEXT_TURN_PROMPT.format(
+    prompt = MOCK_INTERVIEW_NEXT_TURN_PROMPT.format(
         prefix=prefix,
         stage_list=stage_list,
         current_stage=current_stage_key
@@ -322,7 +267,7 @@ async def generate_next_turn(
     )
 
     try:
-        llm = get_llm_for_role("mock_interview", user_id=user_id)
+        llm = get_llm_for_role("primary", user_id=user_id)
         response = await llm.acomplete(prompt, response_format={"type": "json_object"})
         data = _clean_json(str(response.text))
     except Exception as exc:  # noqa: BLE001 — any failure: keep the interview moving
@@ -336,20 +281,42 @@ async def generate_next_turn(
             is_ready_to_finish=False,
         )
 
-    message = str(data.get("message") or "").strip()
+    message = str(data.get("message") or "").strip()[:800]
     if not message:
         message = "好的，我们继续。能再多说一些吗？"
 
+    current_stage = (
+        current_stage_key
+        if current_stage_key in stage_keys
+        else (stage_keys[0] if stage_keys else "self_intro")
+    )
+    current_index = (
+        stage_keys.index(current_stage) if current_stage in stage_keys else 0
+    )
+    allowed_stages = {current_stage}
+    if current_index + 1 < len(stage_keys):
+        allowed_stages.add(stage_keys[current_index + 1])
+
+    # The model proposes a transition; the domain layer owns the state
+    # machine. Reject backward moves and stage jumps even when the JSON is
+    # otherwise valid.
     next_stage = str(data.get("stage_key") or "").strip()
-    if next_stage not in stage_keys:
-        next_stage = current_stage_key or (
-            stage_keys[0] if stage_keys else "self_intro"
-        )
+    if next_stage not in allowed_stages:
+        next_stage = current_stage
+
+    # Only the final stage may end the interview. Use an actual JSON boolean:
+    # bool("false") is True in Python and previously allowed malformed model
+    # output to end a run early.
+    ready_to_finish = (
+        data.get("ready_to_finish") is True
+        and bool(stage_keys)
+        and next_stage == stage_keys[-1]
+    )
 
     return NextTurn(
         interviewer_message=message,
         next_stage_key=next_stage,
-        is_ready_to_finish=bool(data.get("ready_to_finish", False)),
+        is_ready_to_finish=ready_to_finish,
     )
 
 

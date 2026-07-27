@@ -26,8 +26,8 @@ def refresh_primary_llm() -> None:
     )
 
 
-def init_rag_settings():
-    """Initialize global LlamaIndex Settings: embedding + primary LLM.
+def init_rag_settings(*, include_primary_llm: bool = True):
+    """Initialize global embedding settings and, for API processes, the LLM.
 
     Embedding provider is selected via ``EMBEDDING_PROVIDER`` + ``EMBEDDING_MODEL``
     + ``EMBEDDING_DIM`` env vars. Default ``local`` preserves the original
@@ -60,6 +60,9 @@ def init_rag_settings():
         milvus_hybrid.RESUME,
         milvus_hybrid.ABILITY,
     )
+
+    if not include_primary_llm:
+        return
 
     # Primary LLM: resolve eagerly (warm + validated) when the model catalog is
     # populated. When the catalog is COLD — a fresh environment before

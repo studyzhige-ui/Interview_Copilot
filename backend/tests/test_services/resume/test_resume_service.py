@@ -21,6 +21,7 @@ def resume_db_session():
     import app.models.file_asset  # noqa: F401 — resumes.file_asset_id FK target
     import app.models.resume  # noqa: F401 — register resumes on Base
     import app.models.resume_section  # noqa: F401 — register on Base
+    import app.models.outbox_job  # noqa: F401 — durable vector rebuild
     import app.models.user  # noqa: F401
     from app.db.database import Base
     from app.models.resume import Resume
@@ -38,6 +39,7 @@ def resume_db_session():
             Base.metadata.tables["file_assets"],
             Base.metadata.tables["resumes"],
             Base.metadata.tables["resume_sections"],
+            Base.metadata.tables["outbox_jobs"],
         ],
     )
     Session = sessionmaker(bind=engine, expire_on_commit=False)
@@ -76,18 +78,7 @@ class _NoCloseSession:
 
 def _patch(monkeypatch, module, session, llm):
     monkeypatch.setattr(module, "SessionLocal", lambda: _NoCloseSession(session))
-    monkeypatch.setattr(module, "get_llm_for_role", lambda role, user_id=None: llm)
-    # Vectorization + the delete-then-insert index sync hit the real embed model
-    # and Milvus — out of scope for these persistence tests, and they block when
-    # those services are offline. Stub both.
-    monkeypatch.setattr(
-        module.ResumeService, "_vectorize_sections", staticmethod(lambda sections: None)
-    )
-    from app.services.resume import resume_vector_service as rvs
-
-    monkeypatch.setattr(
-        rvs.resume_vector_service, "delete_by_resume", lambda resume_id: None
-    )
+    monkeypatch.setattr(module, "get_internal_llm", lambda role: llm)
 
 
 def test_resume_parse_and_store(monkeypatch, resume_db_session):

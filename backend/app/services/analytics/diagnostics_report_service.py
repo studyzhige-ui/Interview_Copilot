@@ -13,7 +13,8 @@ import json
 import logging
 from typing import Any
 
-from app.core.llm_client_factory import get_llm_for_role
+from app.core.llm_client_factory import get_internal_llm
+from app.prompts.analytics import DIAGNOSTICS_REPORT_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -68,19 +69,10 @@ async def generate_comprehensive_report(
         records = ability_records[:limit]
         structured_payload = json.dumps(records, ensure_ascii=False)
 
-        sys_prompt = f"""
-你是一位资深技术面试官，请根据候选人各主题的能力状态输出结构化诊断。
-必须输出 JSON 对象，严格遵循字段：
-{{
-  "overall_evaluation": "string",
-  "strengths": [{{"topic":"string","evidence":"string"}}],
-  "weaknesses": [{{"topic":"string","flaw":"string","plan":"string"}}],
-  "skill_radar": {{"算法与数据结构": 0-10, "底层架构剖析": 0-10, "工程落地并发": 0-10, "源码深度追踪": 0-10}}
-}}
-输入记录：
-{structured_payload}
-"""
-        response = await get_llm_for_role("utility", user_id=user_id).acomplete(
+        sys_prompt = DIAGNOSTICS_REPORT_PROMPT.format(
+            structured_payload=structured_payload
+        )
+        response = await get_internal_llm("worker").acomplete(
             sys_prompt,
             response_format={"type": "json_object"},
         )

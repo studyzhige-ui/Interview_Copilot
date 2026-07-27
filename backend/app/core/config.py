@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     #   Switching to a different-dim model after data is indexed requires
     #   dropping the Milvus collection and re-ingesting.
 
+    # Platform-owned internal LLM. End users cannot select this model or
+    # supply its credential; both latency-sensitive routing and background
+    # model work use the deployment's provider key.
+    INTERNAL_LLM_PROVIDER: str = "deepseek"
+    INTERNAL_LLM_MODEL: str = "deepseek-v4-flash"
+
     # Embedding (RAG vector store)
     EMBEDDING_PROVIDER: str = (
         "local"  # local | openai | siliconflow | jina | dashscope | zhipu

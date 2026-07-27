@@ -204,13 +204,24 @@ export function ProfilePage() {
               <span className="text-[11px] text-stone-400">加入于 {created || '—'}</span>
             </div>
           </div>
-          <button
-            onClick={refresh}
-            className="p-2 rounded-md text-stone-500 hover:bg-stone-100"
-            title="刷新"
-          >
-            <RefreshCw size={14} />
-          </button>
+          <div className="flex items-center gap-2">
+            {dirty && <span className="text-xs text-warning-700">有未保存的修改</span>}
+            <Btn
+              icon={<Save size={14} />}
+              onClick={onSave}
+              disabled={!dirty || saving}
+              loading={saving}
+            >
+              保存修改
+            </Btn>
+            <button
+              onClick={refresh}
+              className="p-2 rounded-md text-stone-500 hover:bg-stone-100"
+              title="刷新"
+            >
+              <RefreshCw size={14} />
+            </button>
+          </div>
         </div>
 
         <hr className="my-6 border-stone-100" />
@@ -290,19 +301,9 @@ export function ProfilePage() {
           </div>
         </div>
 
-        <div className="mt-6 flex items-center gap-2">
-          <Btn
-            icon={<Save size={14} />}
-            onClick={onSave}
-            disabled={!dirty || saving}
-            loading={saving}
-          >
-            保存修改
-          </Btn>
-          {dirty && <span className="text-xs text-warning-700">有未保存的修改</span>}
+        <div className="mt-6 flex justify-end">
           <Btn
             kind="outline"
-            className="ml-auto"
             icon={<LogOut size={14} />}
             onClick={async () => {
               await logout();

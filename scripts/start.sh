@@ -5,7 +5,7 @@
 #   1. docker compose up -d           (no-op if already running)
 #   2. alembic upgrade head           (no-op if already at head)
 #   3. uvicorn (backend, --reload)    -> background
-#   4. celery worker                  -> background
+#   4. celery worker + beat           -> background
 #   5. vite dev server (frontend)     -> background
 #
 # Logs from all three streams are merged into this terminal with
@@ -122,9 +122,19 @@ if [ "$SKIP_BACKEND" = "0" ]; then
         2>&1 | sed -u "s/^/[uvicorn] /" | tee -a "$LOG_FILE" &
     PIDS+=($!)
 
-    log Celery "$YELLOW" "worker -> --pool=solo"
-    ( cd "$BACKEND_DIR" && python -m celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=solo ) \
+    log Celery "$YELLOW" "worker -> default,pipeline,transcription; --pool=solo"
+    ( cd "$BACKEND_DIR" && python -m celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=solo --queues=default,pipeline,transcription ) \
         2>&1 | sed -u "s/^/[celery]  /" | tee -a "$LOG_FILE" &
+    PIDS+=($!)
+
+    log Turns "$CYAN" "conversation worker -> turns; --pool=threads"
+    ( cd "$BACKEND_DIR" && python -m celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=threads --concurrency=2 --queues=turns ) \
+        2>&1 | sed -u "s/^/[turns]   /" | tee -a "$LOG_FILE" &
+    PIDS+=($!)
+
+    log Beat "$MAGENTA" "scheduler"
+    ( cd "$BACKEND_DIR" && python -m celery -A app.worker.celery_app.celery_app beat --loglevel=info ) \
+        2>&1 | sed -u "s/^/[beat]    /" | tee -a "$LOG_FILE" &
     PIDS+=($!)
 fi
 

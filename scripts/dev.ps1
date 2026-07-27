@@ -283,15 +283,35 @@ if ($RunBackend) {
     } -ArgumentList $backendDir, $ApiPort, $Workers
     $jobs += $uvJob; $colors[$uvJob.Name] = 'Green'
 
-    Say 'Celery' 'worker (--pool=solo)' Yellow
+    Say 'Celery' 'worker (default,pipeline,transcription; --pool=solo)' Yellow
     $celeryJob = Start-Job -Name 'celery' -ScriptBlock {
         param($dir)
         Set-Location $dir
         $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'
         [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
-        & python -m celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=solo 2>&1
+        & python -m celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=solo --queues=default,pipeline,transcription 2>&1
     } -ArgumentList $backendDir
     $jobs += $celeryJob; $colors[$celeryJob.Name] = 'Yellow'
+
+    Say 'Turns' 'conversation worker (turns; --pool=threads)' DarkCyan
+    $turnsJob = Start-Job -Name 'turns' -ScriptBlock {
+        param($dir)
+        Set-Location $dir
+        $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+        & python -m celery -A app.worker.celery_app.celery_app worker --loglevel=info --pool=threads --concurrency=2 --queues=turns 2>&1
+    } -ArgumentList $backendDir
+    $jobs += $turnsJob; $colors[$turnsJob.Name] = 'DarkCyan'
+
+    Say 'Beat' 'scheduler' Magenta
+    $beatJob = Start-Job -Name 'beat' -ScriptBlock {
+        param($dir)
+        Set-Location $dir
+        $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+        & python -m celery -A app.worker.celery_app.celery_app beat --loglevel=info 2>&1
+    } -ArgumentList $backendDir
+    $jobs += $beatJob; $colors[$beatJob.Name] = 'Magenta'
 }
 
 if ($RunFrontend) {

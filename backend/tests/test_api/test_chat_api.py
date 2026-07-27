@@ -170,6 +170,38 @@ def test_create_turn_is_backgrounded(client: TestClient, db: Session, monkeypatc
     assert scheduled == [turn.id]
 
 
+def test_create_turn_dispatch_failure_is_terminal(
+    client: TestClient,
+    db: Session,
+    monkeypatch,
+):
+    from app.services.chat import turn_executor
+    from app.services.chat.turn_event_buffer import turn_event_buffer
+
+    user_id = _uid(db, "alice")
+    db.add(Conversation(id="s_dispatch", user_id=user_id, title="T", type="general"))
+    db.commit()
+
+    async def ping():
+        return None
+
+    def fail_dispatch(_turn_id: str):
+        raise ConnectionError("broker offline")
+
+    monkeypatch.setattr(turn_event_buffer, "ping", ping)
+    monkeypatch.setattr(turn_executor, "schedule_turn", fail_dispatch)
+    response = client.post(
+        "/api/v1/chat/s_dispatch/turns",
+        json={"message": "继续完成任务", "mode": "agent"},
+    )
+
+    assert response.status_code == 503
+    turn = db.query(ConversationTurn).filter_by(conversation_id="s_dispatch").one()
+    db.refresh(turn)
+    assert turn.status == "failed"
+    assert db.get(Conversation, "s_dispatch").active_turn_id is None
+
+
 def test_create_turn_rejects_parallel_turn(
     client: TestClient, db: Session, monkeypatch
 ):
@@ -615,7 +647,9 @@ def test_mock_finish_transitions_to_processing_review_and_dispatches(
         dispatched["record_id"] = rid
         return _FakeAsyncResult()
 
-    monkeypatch.setattr("app.worker.tasks.process_interview_analysis.delay", fake_delay)
+    monkeypatch.setattr(
+        "app.worker.tasks.process_mock_interview_review.delay", fake_delay
+    )
 
     resp = client.post(f"/api/v1/mock-interviews/{record_id}/finish")
     assert resp.status_code == 200, resp.text

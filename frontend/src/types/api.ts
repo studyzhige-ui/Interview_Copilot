@@ -284,14 +284,17 @@ export interface ModelProfile {
   auto_discovered?: boolean;
 }
 
-export type ModelRole = 'primary' | 'agent' | 'mock_interview';
+export type ModelRole = 'primary';
 
 export interface ModelRuntime {
   selection: Record<ModelRole, string>;
-  // resolved additionally carries the system 'utility' role (read-only,
-  // observability) — which model handles internal planner/memory calls.
   resolved: Record<
-    ModelRole | 'utility',
+    ModelRole,
+    { profile_id: string; provider: string; model: string; display_name: string }
+  >;
+  /** Platform-owned, read-only routing and background models. */
+  internal: Record<
+    'router' | 'worker',
     { profile_id: string; provider: string; model: string; display_name: string }
   >;
 }

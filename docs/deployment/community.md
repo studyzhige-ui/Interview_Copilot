@@ -28,8 +28,11 @@ weights with:
 python scripts/init_models.py
 ```
 
-Every foundation role may instead use a supported remote provider by changing
-the corresponding `*_PROVIDER` and `*_MODEL` values.
+End users choose answer models in the application. The deployment-owned
+`router` and `worker` roles share `INTERNAL_LLM_PROVIDER` /
+`INTERNAL_LLM_MODEL` (default: `deepseek/deepseek-v4-flash`) and use only the
+operator's environment credential. Community operators may change these
+server-side values; ordinary users cannot.
 
 ## Local capabilities
 

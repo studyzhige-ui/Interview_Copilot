@@ -34,8 +34,6 @@ export const MODEL_ROW_HEIGHT_PX = 64;
 export const MODEL_ROW_GAP_PX = 8;
 
 export const ROLE_DESC: Record<ModelRole, { label: string; short: string }> = {
-  primary:        { label: '主对话', short: '主' },
-  agent:          { label: 'Agent · 工具调用', short: 'A' },
-  mock_interview: { label: '模拟面试', short: '模' },
+  primary: { label: '回答模型', short: '答' },
 };
-export const ROLES: ModelRole[] = ['primary', 'agent', 'mock_interview'];
+export const ROLES: ModelRole[] = ['primary'];

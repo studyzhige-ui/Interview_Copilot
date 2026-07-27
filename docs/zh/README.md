@@ -5,8 +5,9 @@ Interview Copilot 是一个 AI 面试训练与复盘平台，包含模拟面试�
 
 项目采用一套共享核心、两个发行版本：
 
-- **Interview Copilot Cloud**：面向普通用户的 Web 产品。用户可以选择 LLM、
-  配置自己的 API Key、Skill、远程 MCP 和音色；语音与 RAG 基础能力由运营方提供。
+- **Interview Copilot Cloud**：面向普通用户的 Web 产品。用户可以选择回答
+  LLM，配置自己的 API Key、Skill、远程 MCP 和音色；内部规划、后台模型、
+  语音与 RAG 基础能力由运营方提供。
 - **Interview Copilot Community**：面向 GitHub 和学习开发者的自部署版本。
   模型、接口、本地运行时和 stdio MCP 均可由部署者配置。
 
@@ -57,7 +58,7 @@ npm run dev
 
 Cloud 用户可配置：
 
-- LLM 厂商、模型与个人 API Key
+- 最终回答所用的 LLM 厂商、模型与个人 API Key
 - 声音
 - 声明式 Skill
 - 远程 Streamable HTTP MCP
@@ -67,6 +68,7 @@ Cloud 运营方负责：
 - Embedding、Reranker
 - 语音识别与说话人分离
 - 数据库、向量库、对象存储和任务队列
-- 平台默认 LLM、配额、监控、备份与数据生命周期
+- `deepseek-v4-flash` 内部规划/后台模型及其平台密钥
+- 配额、监控、备份与数据生命周期
 
 Community 部署者可以修改上述所有能力，但本地进程能力仍需显式开启。

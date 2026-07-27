@@ -78,6 +78,7 @@ class Conversation(Base):
         "ConversationMessage",
         back_populates="session",
         order_by="ConversationMessage.seq",
+        passive_deletes=True,
     )
 
 
@@ -98,7 +99,10 @@ class ConversationMessage(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     conversation_id = Column(
-        String, ForeignKey("conversations.id"), index=True, nullable=False
+        String,
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
     )
     seq = Column(Integer, index=True, nullable=False)
     # user | assistant | tool | system.

@@ -8,12 +8,8 @@ single hydrate + live-check step shared by the L1 retriever and the L2
 
 Live check (the read-path safety net for lagging/failed Milvus deletes):
 
-  * the chunk row still exists, ``deleted_at IS NULL`` and
-    ``index_status != 'deleted'`` — ``failed`` is an index-copy state; the
-    Postgres text is still the fact source, so it does NOT hide a chunk
-    (ingestion plan §4.4.1);
-  * its knowledge document exists, is not soft-deleted and is not in a
-    deleting/delete_failed state.
+  * the chunk row still exists, ``deleted_at IS NULL`` and is fully indexed;
+  * its knowledge document exists, is not soft-deleted and is ``ready``.
 
 A hit whose ``node_id`` doesn't resolve here is dropped. This also covers
 legacy index rows whose chunk rows were removed by migration (e.g. the old
@@ -34,9 +30,6 @@ from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
 
 logger = logging.getLogger(__name__)
-
-# Knowledge-document states that mean "no longer a valid read source".
-KB_DEAD_DOC_STATES = {"deleting", "delete_failed", "deleted"}
 
 
 def _chunk_metadata(raw: str | None) -> dict[str, Any]:
@@ -67,12 +60,9 @@ def hydrate_chunks(db: Session, node_ids: list[str]) -> list[dict[str, Any]]:
         .filter(
             DocumentChunk.node_id.in_(node_ids),
             DocumentChunk.deleted_at.is_(None),
-            # 'pending' chunks aren't filtered here on purpose: Milvus gates
-            # recall, and its insert is atomic, so a pending (not-yet-indexed or
-            # index-queued) chunk has no Milvus row to recall in the first place.
-            DocumentChunk.index_status != "deleted",
+            DocumentChunk.index_status == "indexed",
             KnowledgeDocument.deleted_at.is_(None),
-            ~KnowledgeDocument.status.in_(KB_DEAD_DOC_STATES),
+            KnowledgeDocument.status == "ready",
         )
         .all()
     )
@@ -80,6 +70,9 @@ def hydrate_chunks(db: Session, node_ids: list[str]) -> list[dict[str, Any]]:
     for chunk, doc, asset in rows:
         meta = _chunk_metadata(chunk.metadata_json)
         by_node[chunk.node_id] = {
+            # Internal tenant provenance used by evaluation and diagnostics.
+            # Context/source rendering intentionally omits it from user output.
+            "user_id": doc.user_id,
             "chunk_id": chunk.id,
             "node_id": chunk.node_id,
             "document_id": chunk.document_id,
@@ -99,4 +92,4 @@ def hydrate_chunks(db: Session, node_ids: list[str]) -> list[dict[str, Any]]:
     return [by_node[nid] for nid in node_ids if nid in by_node]
 
 
-__all__ = ["KB_DEAD_DOC_STATES", "hydrate_chunks"]
+__all__ = ["hydrate_chunks"]

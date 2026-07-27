@@ -42,6 +42,7 @@ DEFAULT_USER = "eval_user_a"
 # QPS throttle between LLM calls prevents vendor rate-limit storms.
 _LLM_THROTTLE_SECONDS = 0.6
 _RAGAS_THROTTLE_SECONDS = 0.3
+_CURRENT_SOURCE_KINDS = frozenset({"user_upload", "improved_qa", "manual_text"})
 
 
 # ── Dataset loading ────────────────────────────────────────────────────
@@ -75,6 +76,36 @@ def filter_by_layer(
     return [r for r in rows if r.get("layer") in (layer, "all")]
 
 
+def _dataset_source_kind(row: dict[str, Any]) -> str | None:
+    """Use a source filter only when the dataset names a current storage kind.
+
+    Older datasets use ``source_type=interview_qa`` as a semantic label; that
+    value was never a current ``knowledge_documents.source_kind`` and must not
+    accidentally filter every result.
+    """
+    value = row.get("source_kind") or row.get("source_type")
+    return value if value in _CURRENT_SOURCE_KINDS else None
+
+
+def _resolve_evaluation_users(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Fail fast when the evaluation corpus cannot be tenant-scoped."""
+    from app.core.user_identity import resolve_user_pk
+    from app.db.database import SessionLocal
+
+    usernames = {str(row.get("user_id") or DEFAULT_USER) for row in rows}
+    resolved: dict[str, int] = {}
+    with SessionLocal() as db:
+        for username in usernames:
+            user_pk = resolve_user_pk(db, username)
+            if user_pk is None:
+                raise RuntimeError(
+                    f"Evaluation user {username!r} does not exist. "
+                    "Create the user and index its evaluation corpus first."
+                )
+            resolved[username] = user_pk
+    return resolved
+
+
 # ── L1 retrieval ───────────────────────────────────────────────────────
 
 
@@ -92,6 +123,7 @@ async def run_retrieval(rows: list[dict[str, Any]]) -> dict[str, Any]:
     init_reranker()
     if not rows:
         return {"samples": 0, "error": "No rows."}
+    user_pks = _resolve_evaluation_users(rows)
 
     hits: list[int] = []
     precisions: list[float] = []
@@ -105,14 +137,15 @@ async def run_retrieval(rows: list[dict[str, Any]]) -> dict[str, Any]:
         user_id = row.get("user_id", DEFAULT_USER)
         start = time.perf_counter()
         result = await query_knowledge_base(
-            query_str=row["query"],
+            dense_query=row["query"],
+            sparse_query=row["query"],
             user_id=user_id,
-            source_type=row.get("source_type"),
+            source_kind=_dataset_source_kind(row),
         )
         latency_ms = (time.perf_counter() - start) * 1000
         latencies.append(latency_ms)
 
-        chunks = result.get("chunks", [])
+        chunks = result.chunks
         ref = row.get("reference_answer", row["query"])
         flags = [chunk_relevance(ref, c.get("text", "")) for c in chunks]
 
@@ -126,8 +159,8 @@ async def run_retrieval(rows: list[dict[str, Any]]) -> dict[str, Any]:
         # Multi-tenant leakage check — any chunk tagged with a different
         # user_id than the requester is a hard isolation failure.
         for c in chunks:
-            c_user = c.get("metadata", {}).get("user_id")
-            if c_user and c_user != user_id:
+            c_user = c.get("user_id")
+            if c_user is not None and c_user != user_pks[user_id]:
                 isolation_violations += 1
 
         logger.info(
@@ -197,7 +230,7 @@ async def run_generation(rows: list[dict[str, Any]]) -> dict[str, Any]:
             dense_query=row["query"],
             sparse_query=row["query"],
             user_id=user_id,
-            source_type=row.get("source_type"),
+            source_kind=_dataset_source_kind(row),
         )
         retrieval_ms = (time.perf_counter() - t_start) * 1000
         retrieval_latencies.append(retrieval_ms)
@@ -494,9 +527,9 @@ def prepare_runtime() -> None:
 
       1. ``prepare_hf_runtime`` — set HF_HOME, clear dead proxy env,
          create cache dirs.
-      2. ``init_rag_settings``  — register the LlamaIndex embedding
-         model + primary LLM so ``query_knowledge_base`` and
-         ``plan_query`` can resolve them.
+      2. ``init_rag_settings``  — register the LlamaIndex embedding model.
+         Evaluation generation uses its explicit evaluator model and planning
+         uses the platform router, so the user's answer model is not loaded.
       3. ``init_reranker``      — load BGE (or the remote reranker
          provider) into the singleton.
 
@@ -507,5 +540,5 @@ def prepare_runtime() -> None:
     from app.rag.retriever import init_reranker
 
     prepare_hf_runtime()
-    init_rag_settings()
+    init_rag_settings(include_primary_llm=False)
     init_reranker()

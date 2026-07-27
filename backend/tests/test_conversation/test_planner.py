@@ -42,9 +42,11 @@ class _FakeLLM:
 def _patch_llm(monkeypatch, fake_llm):
     from app.conversation import query_planner as planner
 
-    monkeypatch.setattr(
-        planner, "get_llm_for_role", lambda role, user_id=None: fake_llm
-    )
+    def get_internal(role):
+        assert role == "router"
+        return fake_llm
+
+    monkeypatch.setattr(planner, "get_internal_llm", get_internal)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -494,9 +496,7 @@ def test_plan_query_falls_back_when_llm_raises(monkeypatch):
         async def acomplete(self, *args, **kwargs):
             raise RuntimeError("upstream provider 503")
 
-    monkeypatch.setattr(
-        planner, "get_llm_for_role", lambda role, user_id=None: BoomLLM()
-    )
+    monkeypatch.setattr(planner, "get_internal_llm", lambda role: BoomLLM())
 
     plan = asyncio.run(
         planner.plan_query(

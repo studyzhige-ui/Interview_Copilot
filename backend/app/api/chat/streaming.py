@@ -89,7 +89,11 @@ async def create_chat_turn(
             status_code=404, detail="Session not found or access denied"
         )
     from app.services.chat.turn_event_buffer import turn_event_buffer
-    from app.services.chat.turn_executor import create_turn, schedule_turn
+    from app.services.chat.turn_executor import (
+        create_turn,
+        fail_pending_turn,
+        schedule_turn,
+    )
 
     try:
         await turn_event_buffer.ping()
@@ -110,7 +114,20 @@ async def create_chat_turn(
             status_code=409,
             detail={"message": "A turn is already running", "turn_id": str(exc)},
         ) from exc
-    schedule_turn(turn.id)
+    try:
+        schedule_turn(turn.id)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Could not dispatch conversation turn %s: %s", turn.id, exc)
+        fail_pending_turn(
+            db,
+            turn.id,
+            user_pk,
+            "后台任务队列暂时不可用",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="后台任务队列暂时不可用，请稍后重试",
+        ) from exc
     return {"turn_id": turn.id, "status": turn.status}
 
 
@@ -170,17 +187,13 @@ async def cancel_chat_turn(
         raise HTTPException(status_code=404, detail="Turn not found or access denied")
     if turn.status not in {"pending", "running"}:
         return {"turn_id": turn_id, "status": turn.status, "cancelled": False}
-    from app.core.background_tasks import cancel_background_task
-
     from app.services.chat.turn_executor import cancel_pending_turn
     from app.services.chat.turn_event_buffer import turn_event_buffer
 
     await turn_event_buffer.request_cancel(turn_id)
     cancelled_before_start = cancel_pending_turn(db, turn_id, user_pk)
-    cancelled = cancel_background_task(f"chat-turn:{turn_id}")
     return {
         "turn_id": turn_id,
         "status": "cancelled" if cancelled_before_start else "cancelling",
         "cancelled": True,
-        "local": cancelled,
     }

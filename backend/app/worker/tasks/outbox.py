@@ -1,4 +1,4 @@
-"""Outbox drain task — reliable cross-system side effects (light queue)."""
+"""Outbox drain task — reliable cross-system side effects (pipeline queue)."""
 
 import logging
 
@@ -10,10 +10,10 @@ logger = logging.getLogger(__name__)
 @celery_app.task(
     bind=True,
     name="tasks.drain_outbox_jobs",
-    # Cleanup work is small and bounded (object deletes, index drops). A short
-    # outer limit keeps a hung external call from pinning the worker.
-    time_limit=120,
-    soft_time_limit=110,
+    # Some handlers perform embedding or an internal-model extraction. Keep
+    # the batch bounded, but allow enough time for those durable operations.
+    time_limit=900,
+    soft_time_limit=840,
 )
 def drain_outbox_jobs(self):
     """Process due ``outbox_jobs`` — reliable cross-system side effects.
@@ -33,9 +33,10 @@ def drain_outbox_jobs(self):
     import app.services.knowledge.knowledge_outbox  # noqa: F401
     import app.services.memory.ability_outbox  # noqa: F401
     import app.services.memory.extraction_jobs  # noqa: F401
+    import app.services.resume.resume_outbox  # noqa: F401
 
     with SessionLocal() as db:
-        processed = run_due_outbox_jobs(db)
+        processed = run_due_outbox_jobs(db, limit=10)
     if processed:
         logger.info("drain_outbox_jobs: processed %d job(s)", processed)
     return {"processed": processed}

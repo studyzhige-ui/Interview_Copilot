@@ -162,6 +162,56 @@ def test_generate_next_turn_rejects_unknown_stage_key():
     assert turn.next_stage_key == "role_technical_assessment"
 
 
+def test_generate_next_turn_rejects_backward_move_and_stage_jump():
+    async def run(proposed: str):
+        resp = MagicMock()
+        resp.text = json.dumps(
+            {"message": "继续", "stage_key": proposed, "ready_to_finish": False}
+        )
+        with patch.object(mod, "get_llm_for_role") as factory:
+            factory.return_value.acomplete = AsyncMock(return_value=resp)
+            return await generate_next_turn(
+                prefix="P",
+                stages=_stages(),
+                current_stage_key="resume_project_deep_dive",
+                recent_messages=[],
+                user_answer="answer",
+            )
+
+    assert asyncio.run(run("self_intro")).next_stage_key == "resume_project_deep_dive"
+    assert (
+        asyncio.run(run("candidate_questions")).next_stage_key
+        == "resume_project_deep_dive"
+    )
+    assert (
+        asyncio.run(run("role_technical_assessment")).next_stage_key
+        == "role_technical_assessment"
+    )
+
+
+def test_generate_next_turn_only_finishes_on_final_stage_with_json_boolean():
+    async def run(stage: str, ready):
+        resp = MagicMock()
+        resp.text = json.dumps(
+            {"message": "继续", "stage_key": stage, "ready_to_finish": ready}
+        )
+        with patch.object(mod, "get_llm_for_role") as factory:
+            factory.return_value.acomplete = AsyncMock(return_value=resp)
+            return await generate_next_turn(
+                prefix="P",
+                stages=_stages(),
+                current_stage_key="role_technical_assessment",
+                recent_messages=[],
+                user_answer="answer",
+            )
+
+    assert (
+        asyncio.run(run("role_technical_assessment", True)).is_ready_to_finish is False
+    )
+    assert asyncio.run(run("candidate_questions", "false")).is_ready_to_finish is False
+    assert asyncio.run(run("candidate_questions", True)).is_ready_to_finish is True
+
+
 def test_generate_next_turn_survives_parse_failure():
     """A garbage / failed LLM response must NOT raise — the interview keeps
     moving with a safe generic line and the current stage held."""

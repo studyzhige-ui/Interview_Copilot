@@ -1,12 +1,12 @@
 """LLM + AsyncOpenAI client construction and per-user caching.
 
-Sits on top of the catalog (``app.core.model_catalog``) + per-user
-selection (``app.core.user_model_selection``). All chat / agent
-call sites end up here when they need an actual callable LLM
-object.
+Sits on top of the catalog, per-user answer-model selection, and the
+deployment-owned internal model configuration. All model call sites end up
+here when they need an actual callable LLM object.
 
 What lives here:
-  * API-key resolution priority (user_model_credentials → env-var fallback)
+  * Answer-model API-key resolution (user credential → deployment fallback)
+  * Internal-model API-key resolution (deployment environment only)
   * Per-user api_base / organization / extra_headers override
     (consumes ``user_model_provider_settings``)
   * Two caches, both process-local:
@@ -33,6 +33,7 @@ from llama_index.llms.openai_like import OpenAILike
 from openai import AsyncOpenAI
 
 from app.core import model_catalog, user_model_selection
+from app.core.internal_models import get_internal_model_profile
 from app.core.model_catalog import ModelProfile, get_profile
 
 logger = logging.getLogger(__name__)
@@ -352,16 +353,13 @@ def list_profiles(user_id: str | None = None) -> list[dict[str, Any]]:
 def validate_role_update(
     role: str, profile_id: str, user_id: str | None = None
 ) -> ModelProfile:
+    if role not in model_catalog.USER_SELECTABLE_ROLES:
+        raise ValueError(f"Unknown user-selectable model role: {role}")
     profile = get_profile(profile_id)
     if not profile_ready(profile, user_id=user_id):
         raise ValueError(
             f"Model profile '{profile_id}' is not ready. "
             f"Please configure {profile.api_key_env} first."
-        )
-    if role == "agent" and not profile.supports_function_calling:
-        raise ValueError(
-            f"Model profile '{profile_id}' does not support function calling "
-            "and cannot be used for agent role."
         )
     return profile
 
@@ -407,20 +405,16 @@ def _build_llm_instance(profile: ModelProfile, user_id: str | None = None):
     return llm
 
 
-def get_llm_for_role(role: str, user_id: str | None = None):
-    """Build (or fetch from cache) a llama-index LLM for ``role``.
-
-    The cache key includes ``user_id`` AND a credential fingerprint:
-    ``_build_llm_instance`` bakes the resolved api_key/api_base into the
-    instance, so a key without the user dimension would hand the first
-    caller's private key to every same-role caller, and a key change
-    would keep serving the stale client until restart.
-    """
-    profile = user_model_selection.get_profile_for_role(role, user_id=user_id)
+def _get_cached_llm(
+    *,
+    cache_role: str,
+    profile: ModelProfile,
+    user_id: str | None,
+):
     api_key = resolve_api_key(profile, user_id=user_id)
     api_base = _resolve_api_base(profile, user_id=user_id)
     fp = _key_fingerprint(f"{api_key}|{api_base}")
-    cache_key = (user_id, role, profile.id)
+    cache_key = (user_id, cache_role, profile.id)
     with _llm_cache_lock:
         cached = _llm_cache.get(cache_key)
         if cached is not None and cached[0] == fp:
@@ -430,6 +424,26 @@ def get_llm_for_role(role: str, user_id: str | None = None):
         return instance
 
 
+def get_llm_for_role(role: str, user_id: str | None = None):
+    """Return an answer model selected for one user-facing role."""
+    profile = user_model_selection.get_profile_for_role(role, user_id=user_id)
+    return _get_cached_llm(
+        cache_role=role,
+        profile=profile,
+        user_id=user_id,
+    )
+
+
+def get_internal_llm(role: str):
+    """Return a platform-owned model using deployment credentials only."""
+    profile = get_internal_model_profile(role)
+    return _get_cached_llm(
+        cache_role=f"internal:{role}",
+        profile=profile,
+        user_id=None,
+    )
+
+
 def build_async_openai_client_for_role(
     role: str,
     user_id: str | None = None,
@@ -437,6 +451,14 @@ def build_async_openai_client_for_role(
     """Return a cached ``AsyncOpenAI`` + profile for the current selection."""
     profile = user_model_selection.get_profile_for_role(role, user_id=user_id)
     return get_async_openai_client(profile, user_id=user_id), profile
+
+
+def build_async_openai_client_for_internal_role(
+    role: str,
+) -> tuple[AsyncOpenAI, ModelProfile]:
+    """Return a platform-owned raw client using deployment settings only."""
+    profile = get_internal_model_profile(role)
+    return get_async_openai_client(profile, user_id=None), profile
 
 
 class RuntimeLLMProxy:
@@ -483,7 +505,9 @@ __all__ = [
     "list_profiles",
     "validate_role_update",
     "get_llm_for_role",
+    "get_internal_llm",
     "build_async_openai_client_for_role",
+    "build_async_openai_client_for_internal_role",
     "RuntimeLLMProxy",
     "_serialize_profile",
 ]

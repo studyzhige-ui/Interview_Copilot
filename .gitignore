@@ -30,6 +30,7 @@ dist/
 # Runtime data
 data/
 backend/data/
+backend/celerybeat-schedule.*
 *.db
 *.sqlite3
 *.sqlite3-journal

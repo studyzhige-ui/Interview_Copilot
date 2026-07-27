@@ -18,9 +18,11 @@ import app.core.model_catalog as model_catalog
 import app.core.user_model_selection as user_model_selection
 from app.core.llm_client_factory import (
     _build_llm_instance,
+    get_internal_llm,
     profile_ready,
     validate_role_update,
 )
+from app.core.internal_models import get_internal_model_profile
 from app.core.model_catalog import ROLE_DEFAULTS, ModelProfile, get_profile
 from app.core.user_model_selection import (
     _normalize_selection,
@@ -59,10 +61,8 @@ def _stub_profile_cache(monkeypatch):
     fallback for the fallback-chain tests.
     """
     catalog = {
-        "deepseek/deepseek-chat": _mkprofile("deepseek/deepseek-chat", fc=True),
-        "deepseek/deepseek-reasoner": _mkprofile(
-            "deepseek/deepseek-reasoner", fc=False
-        ),
+        "deepseek/deepseek-v4-flash": _mkprofile("deepseek/deepseek-v4-flash", fc=True),
+        "deepseek/deepseek-v4-pro": _mkprofile("deepseek/deepseek-v4-pro", fc=True),
         "openai/gpt-4o": _mkprofile("openai/gpt-4o", fc=True),
         "openai/gpt-4o-mini": _mkprofile("openai/gpt-4o-mini", fc=True),
         "nvidia/nemotron-1": _mkprofile("nvidia/nemotron-1", fc=False),
@@ -103,11 +103,10 @@ def test_role_defaults_all_resolve_in_test_catalog():
         get_profile(pid)  # raises if missing
 
 
-def test_agent_default_supports_function_calling(_stub_profile_cache):
-    agent_pid = ROLE_DEFAULTS["agent"]
-    assert _stub_profile_cache[agent_pid].supports_function_calling, (
-        "agent role default must support function calling"
-    )
+def test_only_primary_is_user_selectable():
+    from app.core.model_catalog import USER_SELECTABLE_ROLES
+
+    assert USER_SELECTABLE_ROLES == ("primary",)
 
 
 # ── _normalize_selection ─────────────────────────────────────────────────
@@ -130,16 +129,16 @@ def test_normalize_selection_preserves_valid_provider_slash_ids():
     normalized = _normalize_selection(
         {
             "primary": "openai/gpt-4o",
-            # utility is a SYSTEM role — raw input for it must be ignored.
+            # Internal roles must be ignored by per-user selection.
             "utility": "openai/gpt-4o",
             "agent": "openai/gpt-4o",
             "mock_interview": "openai/gpt-4o-mini",
         }
     )
     assert normalized["primary"] == "openai/gpt-4o"
-    assert normalized["utility"] == ROLE_DEFAULTS["utility"]
-    assert normalized["agent"] == "openai/gpt-4o"
-    assert normalized["mock_interview"] == "openai/gpt-4o-mini"
+    assert "utility" not in normalized
+    assert "agent" not in normalized
+    assert "mock_interview" not in normalized
 
 
 def test_normalize_selection_unknown_id_falls_back_to_default():
@@ -147,12 +146,9 @@ def test_normalize_selection_unknown_id_falls_back_to_default():
     assert normalized["primary"] == ROLE_DEFAULTS["primary"]
 
 
-def test_normalize_selection_forces_function_calling_agent():
-    """A non-FC profile for the agent role must be replaced by the role default."""
-    normalized = _normalize_selection(
-        {"agent": "nvidia/nemotron-1"}
-    )  # FC=False in fixture
-    assert normalized["agent"] == ROLE_DEFAULTS["agent"]
+def test_normalize_selection_allows_non_fc_answer_model():
+    normalized = _normalize_selection({"primary": "nvidia/nemotron-1"})
+    assert normalized["primary"] == "nvidia/nemotron-1"
 
 
 # ── get_profile / get_profile_for_role ──────────────────────────────────
@@ -184,20 +180,17 @@ def test_get_profile_for_role_falls_back_when_selection_stale(
     assert prof.id == ROLE_DEFAULTS["primary"]
 
 
-def test_get_profile_for_role_picks_any_fc_model_when_default_missing(monkeypatch):
+def test_get_profile_for_role_picks_catalog_model_when_default_missing(monkeypatch):
     """If ROLE_DEFAULTS itself isn't in the catalog (the vendor's
-    /v1/models temporarily dropped that id), agent role still resolves
-    to SOME function-calling model rather than 500ing the chat path."""
-    # Replant the catalog WITHOUT the default deepseek-chat.
+    /v1/models temporarily dropped that id), the answer role still resolves."""
+    # Replant the catalog without the configured default.
     catalog = {
         "openai/gpt-4o": _mkprofile("openai/gpt-4o", fc=True),
         "nvidia/nemotron-1": _mkprofile("nvidia/nemotron-1", fc=False),
     }
     monkeypatch.setattr(model_catalog, "_get_all_profiles", lambda: catalog)
-    prof = get_profile_for_role("agent")
-    # Some FC profile must be returned (the only FC in catalog is gpt-4o here).
+    prof = get_profile_for_role("primary")
     assert prof.id == "openai/gpt-4o"
-    assert prof.supports_function_calling
 
 
 def test_get_profile_for_role_raises_when_catalog_empty(monkeypatch):
@@ -231,9 +224,8 @@ def test_runtime_selection_is_per_user_isolated():
 # ── validate_role_update ─────────────────────────────────────────────────
 
 
-def test_validate_role_update_rejects_non_function_calling_for_agent(monkeypatch):
-    monkeypatch.setenv("NVIDIA_API_KEY", "sk-test")
-    with pytest.raises(ValueError, match="function calling"):
+def test_validate_role_update_rejects_removed_role(monkeypatch):
+    with pytest.raises(ValueError, match="user-selectable"):
         validate_role_update("agent", "nvidia/nemotron-1")
 
 
@@ -245,16 +237,16 @@ def test_validate_role_update_rejects_profile_without_key(monkeypatch):
 
 def test_validate_role_update_returns_profile_on_success(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
-    prof = validate_role_update("primary", "deepseek/deepseek-chat")
+    prof = validate_role_update("primary", "deepseek/deepseek-v4-pro")
     assert isinstance(prof, ModelProfile)
-    assert prof.id == "deepseek/deepseek-chat"
+    assert prof.id == "deepseek/deepseek-v4-pro"
 
 
 # ── profile_ready ────────────────────────────────────────────────────────
 
 
 def test_profile_ready_true_when_env_key_set(monkeypatch, _stub_profile_cache):
-    prof = _stub_profile_cache["deepseek/deepseek-chat"]
+    prof = _stub_profile_cache["deepseek/deepseek-v4-pro"]
     monkeypatch.setenv(prof.api_key_env, "sk-yes")
     assert profile_ready(prof) is True
 
@@ -280,7 +272,7 @@ def test_build_llm_instance_returns_openai_like(monkeypatch, _stub_profile_cache
 
 
 def test_build_llm_instance_uses_resolved_api_key(monkeypatch, _stub_profile_cache):
-    prof = _stub_profile_cache["deepseek/deepseek-chat"]
+    prof = _stub_profile_cache["deepseek/deepseek-v4-pro"]
     monkeypatch.setenv(prof.api_key_env, "sk-resolved-via-env")
     instance = _build_llm_instance(prof)
     assert getattr(instance, "api_key", None) == "sk-resolved-via-env"
@@ -387,14 +379,13 @@ def _stub_user_keys(monkeypatch, providers: set[str]):
 
 
 def test_openai_only_user_gets_ready_profile_not_default(monkeypatch):
-    """Acceptance: a new user with ONLY an OpenAI key must resolve every role
-    to a profile they can actually call — not the deepseek defaults that
+    """A new user with ONLY an OpenAI key resolves an answer model they can
+    actually call — not the deepseek default that
     would 401 while the Models page shows green."""
     _stub_user_keys(monkeypatch, {"openai"})
 
-    for role in ("primary", "agent", "mock_interview", "utility"):
-        profile = get_profile_for_role(role, user_id="alice")
-        assert profile.provider == "openai", (role, profile.id)
+    profile = get_profile_for_role("primary", user_id="alice")
+    assert profile.provider == "openai"
 
 
 def test_ready_selection_wins_over_default(monkeypatch):
@@ -407,24 +398,33 @@ def test_ready_selection_wins_over_default(monkeypatch):
     assert get_profile_for_role("primary", user_id="alice").id == "openai/gpt-4o-mini"
 
 
-def test_not_ready_selection_degrades_to_user_primary(monkeypatch):
-    """utility follows the user's ready primary when its default isn't ready."""
-    _stub_user_keys(monkeypatch, {"openai"})
+def test_internal_roles_are_not_user_selectable():
+    with pytest.raises(ValueError, match="user-selectable"):
+        get_profile_for_role("utility", user_id="alice")
+
+
+def test_internal_model_is_fixed_to_platform_flash(monkeypatch):
+    monkeypatch.setattr("app.core.config.settings.INTERNAL_LLM_PROVIDER", "deepseek")
     monkeypatch.setattr(
-        user_model_selection,
-        "_load_user_selection",
-        lambda user_id: {"primary": "openai/gpt-4o"},
+        "app.core.config.settings.INTERNAL_LLM_MODEL",
+        "deepseek-v4-flash",
     )
-    assert get_profile_for_role("utility", user_id="alice").id == "openai/gpt-4o"
+    profile = get_internal_model_profile("router")
+    assert profile.id == "deepseek/deepseek-v4-flash"
+    assert get_internal_model_profile("worker").id == profile.id
 
 
-def test_agent_role_never_degrades_to_non_fc(monkeypatch):
-    """Even under ready-fallback, agent must get a function-calling profile."""
-    _stub_user_keys(monkeypatch, {"nvidia"})  # only a non-FC profile is ready
-    profile = get_profile_for_role("agent", user_id="alice")
-    # nvidia/nemotron-1 is non-FC → ready fallback must skip it; the
-    # historical not-ready chain then yields the FC default.
-    assert profile.supports_function_calling
+def test_internal_model_uses_deployment_key_only(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-platform")
+    llm = get_internal_llm("router")
+    assert getattr(llm, "api_key", None) == "sk-platform"
+
+
+def test_non_fc_answer_model_remains_selectable(monkeypatch):
+    _stub_user_keys(monkeypatch, {"nvidia"})
+    profile = get_profile_for_role("primary", user_id="alice")
+    assert profile.id == "nvidia/nemotron-1"
+    assert profile.supports_function_calling is False
 
 
 def test_no_keys_at_all_falls_back_to_historical_chain(monkeypatch):

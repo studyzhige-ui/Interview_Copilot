@@ -62,6 +62,7 @@ class TranscriptService:
         rewritten_query: str | None = None,
         ai_blocks: list[dict] | None = None,
         user_blocks: list[dict] | None = None,
+        enqueue_memory: bool = False,
     ) -> int:
         """Persist one ``User → Agent`` turn.
 
@@ -126,6 +127,23 @@ class TranscriptService:
 
             session_row.turn_count = (session_row.turn_count or 0) + 1
             session_row.updated_at = datetime.utcnow()
+            if enqueue_memory:
+                from app.services.memory.extraction_jobs import (
+                    enqueue_realtime_extraction_in_transaction,
+                )
+
+                enqueue_realtime_extraction_in_transaction(
+                    db,
+                    user_pk=session_row.user_id,
+                    session_id=session_id,
+                    user_id=user_id,
+                    record_id=(
+                        session_row.subject_id
+                        if session_row.subject_type == "interview_record"
+                        else None
+                    ),
+                    upto_seq=next_seq + 1,
+                )
             db.commit()
             return next_seq + 1
         except Exception:
@@ -141,6 +159,8 @@ class TranscriptService:
         ai_msg: str,
         rewritten_query: str | None = None,
         ai_blocks: list[dict] | None = None,
+        enqueue_memory: bool = False,
+        memory_user_id: str | None = None,
     ) -> int:
         """Idempotently append the assistant half of a reserved turn."""
         db: Session = SessionLocal()
@@ -192,6 +212,23 @@ class TranscriptService:
             if conversation is not None:
                 conversation.turn_count = (conversation.turn_count or 0) + 1
                 conversation.updated_at = datetime.utcnow()
+                if enqueue_memory and memory_user_id:
+                    from app.services.memory.extraction_jobs import (
+                        enqueue_realtime_extraction_in_transaction,
+                    )
+
+                    enqueue_realtime_extraction_in_transaction(
+                        db,
+                        user_pk=conversation.user_id,
+                        session_id=conversation.id,
+                        user_id=memory_user_id,
+                        record_id=(
+                            conversation.subject_id
+                            if conversation.subject_type == "interview_record"
+                            else None
+                        ),
+                        upto_seq=assistant_seq,
+                    )
             turn.assistant_message_seq = assistant_seq
             db.commit()
             return assistant_seq

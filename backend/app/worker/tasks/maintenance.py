@@ -3,6 +3,8 @@ last resort for rows nothing else re-examines.
 
 * ``sweep_stale_interview_records`` — interview records stuck in an
   in-flight status (lost broker message, dead worker).
+* ``sweep_stale_pipeline_records`` — re-dispatch knowledge/resume work whose
+  broker message disappeared before producing durable facts.
 * ``sweep_orphan_file_assets`` — presigned uploads whose client vanished
   before confirm/consume.
 """
@@ -98,6 +100,89 @@ def sweep_stale_interview_records(self):
     if swept:
         logger.info("sweep_stale_interview_records: swept %d record(s)", swept)
     return {"swept": swept}
+
+
+_PIPELINE_STALE_AFTER = timedelta(hours=2)
+
+
+@celery_app.task(
+    bind=True,
+    name="tasks.sweep_stale_pipeline_records",
+    time_limit=60,
+    soft_time_limit=50,
+)
+def sweep_stale_pipeline_records(self):
+    """Re-dispatch stale parse/ingest rows that have produced no facts."""
+    from app.models.document_chunk import DocumentChunk
+    from app.models.knowledge import KnowledgeDocument
+    from app.models.resume import Resume
+    from app.models.resume_section import ResumeSection
+    from app.worker.tasks.ingestion import process_document_ingestion
+    from app.worker.tasks.resume import process_resume_parse
+
+    cutoff = datetime.utcnow() - _PIPELINE_STALE_AFTER
+    dispatched = 0
+    with SessionLocal() as db:
+        documents = (
+            db.query(KnowledgeDocument)
+            .filter(
+                KnowledgeDocument.status == "processing",
+                KnowledgeDocument.updated_at < cutoff,
+                KnowledgeDocument.deleted_at.is_(None),
+                ~db.query(DocumentChunk.id)
+                .filter(DocumentChunk.document_id == KnowledgeDocument.id)
+                .exists(),
+            )
+            .limit(100)
+            .all()
+        )
+        resumes = (
+            db.query(Resume)
+            .filter(
+                Resume.parse_status.in_(("pending", "processing")),
+                Resume.updated_at < cutoff,
+                Resume.archived_at.is_(None),
+                ~db.query(ResumeSection.id)
+                .filter(ResumeSection.resume_id == Resume.id)
+                .exists(),
+            )
+            .limit(100)
+            .all()
+        )
+
+        for document in documents:
+            try:
+                task = process_document_ingestion.delay(document.id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "stale knowledge re-dispatch failed for %s: %s",
+                    document.id,
+                    exc,
+                )
+                continue
+            document.task_id = task.id
+            document.updated_at = datetime.utcnow()
+            dispatched += 1
+
+        for resume in resumes:
+            try:
+                process_resume_parse.delay(resume.id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "stale resume re-dispatch failed for %s: %s",
+                    resume.id,
+                    exc,
+                )
+                continue
+            resume.parse_error = None
+            resume.updated_at = datetime.utcnow()
+            dispatched += 1
+        db.commit()
+    return {
+        "dispatched": dispatched,
+        "knowledge": len(documents),
+        "resumes": len(resumes),
+    }
 
 
 # A pending_upload row whose client never PUT/confirmed is an orphan: nothing

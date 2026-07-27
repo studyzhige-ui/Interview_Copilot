@@ -34,25 +34,23 @@ export function useChatModels(mode: Mode) {
   const [localSelection, setLocalSelection] = useState<Partial<Record<ModelRole, string>>>({});
   const selection = {
     primary: localSelection.primary ?? runtime?.resolved?.primary?.profile_id ?? '',
-    agent: localSelection.agent ?? runtime?.resolved?.agent?.profile_id ?? '',
   };
 
-  const activeRole: ModelRole = mode === 'AGENT' ? 'agent' : 'primary';
-  const activeProfileId = selection[activeRole as 'primary' | 'agent'];
+  const activeProfileId = selection.primary;
   const activeProfile = profiles.find((p) => p.id === activeProfileId);
   const activeModelName = activeProfile?.display_name ?? '未配置';
 
   const pickModel = useCallback(async (p: ModelProfile): Promise<boolean> => {
     if (!p.ready) { toast.warn(`需先配置 ${p.api_key_env}`); return false; }
-    if (activeRole === 'agent' && !p.supports_function_calling) {
+    if (mode === 'AGENT' && !p.supports_function_calling) {
       toast.warn('AGENT 角色需要支持函数调用的模型');
       return false;
     }
     const prev = activeProfileId;
-    setLocalSelection((s) => ({ ...s, [activeRole]: p.id }));
+    setLocalSelection((s) => ({ ...s, primary: p.id }));
     try {
-      await updateModelsRuntime({ [activeRole]: p.id } as Partial<Record<ModelRole, string>>);
-      toast.success(`已切换 ${activeRole === 'agent' ? 'Agent' : '主对话'}：${p.display_name}`);
+      await updateModelsRuntime({ primary: p.id });
+      toast.success(`已切换回答模型：${p.display_name}`);
       // The catalog carries ``selection`` too — refresh both so the
       // Models page reflects the pick without waiting out staleTime.
       await Promise.all([
@@ -62,11 +60,11 @@ export function useChatModels(mode: Mode) {
       setLocalSelection({});
       return true;
     } catch {
-      setLocalSelection((s) => ({ ...s, [activeRole]: prev }));
+      setLocalSelection((s) => ({ ...s, primary: prev }));
       toast.error('切换模型失败');
       return false;
     }
-  }, [activeRole, activeProfileId, queryClient]);
+  }, [activeProfileId, mode, queryClient]);
 
-  return { profiles, activeRole, activeProfileId, activeModelName, pickModel };
+  return { profiles, activeProfileId, activeModelName, pickModel };
 }
