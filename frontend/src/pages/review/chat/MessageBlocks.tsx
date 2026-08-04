@@ -59,7 +59,7 @@ export function BlockChain({ blocks, citeRefs, onCiteClick }: {
  * Folded tool call card. Header always shows "🔧 name · summary";
  * click to expand input (JSON args) + full result content.
  */
-export function ToolCard({
+function ToolCard({
   use, result,
 }: { use: ToolUseBlock | null; result: ToolResultBlock | null }) {
   const [open, setOpen] = useState(false);

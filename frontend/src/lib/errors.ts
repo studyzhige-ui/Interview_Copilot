@@ -35,6 +35,10 @@ export function registerErr(e: unknown): string {
   return clientError(e, '注册失败，请稍后重试');
 }
 
+export function resetPasswordErr(e: unknown): string {
+  return clientError(e, '重置密码失败，请稍后重试');
+}
+
 export function sendCodeErr(e: unknown): string {
   // 429 (rate-limited / cooldown) — detail already has the cooldown seconds
   const s = (e as { response?: { status?: number } }).response?.status;

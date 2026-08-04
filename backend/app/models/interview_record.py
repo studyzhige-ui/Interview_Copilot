@@ -37,7 +37,7 @@ class InterviewRecord(Base):
         ),
     )
 
-    id = Column(String, primary_key=True, default=_generate_record_id, index=True)
+    id = Column(String, primary_key=True, default=_generate_record_id)
     # Stable users.id FK (CLEANUP #2). The API + record service resolve the
     # caller's username via resolve_user_pk; the dreaming worker bridges this
     # back to the username for the memory dispatch (memory keys on username).

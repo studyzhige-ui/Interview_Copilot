@@ -40,7 +40,7 @@ export async function pingAllModels(): Promise<ModelPingResult[]> {
   return res.data?.results ?? [];
 }
 
-export interface RefreshCatalogResult {
+interface RefreshCatalogResult {
   status: string;
   providers_refreshed: number;
   profiles_total: number;
@@ -95,13 +95,6 @@ export interface ProviderInfo {
 export async function listProviders(): Promise<ProviderInfo[]> {
   const res = await apiClient.get('/models/providers');
   return res.data?.providers ?? [];
-}
-
-export async function getProviderSettings(provider: string): Promise<ProviderInfo> {
-  const res = await apiClient.get(
-    `/models/providers/${encodeURIComponent(provider)}`,
-  );
-  return res.data?.provider;
 }
 
 export interface ProviderSettingsPatch {

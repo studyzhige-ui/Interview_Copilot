@@ -285,10 +285,6 @@ def delete_by_field(coll: HybridCollection, field_name: str, value: Any) -> None
     delete(coll, _eq(field_name, value))
 
 
-def delete_by_user(coll: HybridCollection, user_pk: int) -> None:
-    delete(coll, _eq("user_id", int(user_pk)))
-
-
 def hybrid_search(
     coll: HybridCollection,
     *,
@@ -357,6 +353,5 @@ __all__ = [
     "insert",
     "delete",
     "delete_by_field",
-    "delete_by_user",
     "hybrid_search",
 ]

@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiClient } from '@/api/client';
 
-export type TtsState =
+type TtsState =
   | { phase: 'idle' }
   | { phase: 'loading' }
   | { phase: 'playing' }

@@ -2,8 +2,9 @@ import { useState } from 'react';
 import { Logo } from '@/components/ui/Logo';
 import { LoginForm } from './LoginForm';
 import { RegisterForm } from './RegisterForm';
+import { ResetPasswordForm } from './ResetPasswordForm';
 
-type Tab = 'login' | 'register';
+type Tab = 'login' | 'register' | 'reset';
 
 export function AuthPage() {
   const [tab, setTab] = useState<Tab>('login');
@@ -19,14 +20,25 @@ export function AuthPage() {
           </div>
         </div>
 
-        <div className="flex gap-1 p-1 bg-stone-100 rounded-md mb-6">
-          <TabBtn active={tab === 'login'} onClick={() => setTab('login')}>登录</TabBtn>
-          <TabBtn active={tab === 'register'} onClick={() => setTab('register')}>注册</TabBtn>
-        </div>
+        {tab === 'reset' ? (
+          <div className="mb-6 pb-3 border-b border-stone-200 text-base font-medium text-stone-800">
+            重置密码
+          </div>
+        ) : (
+          <div className="flex gap-1 p-1 bg-stone-100 rounded-md mb-6">
+            <TabBtn active={tab === 'login'} onClick={() => setTab('login')}>登录</TabBtn>
+            <TabBtn active={tab === 'register'} onClick={() => setTab('register')}>注册</TabBtn>
+          </div>
+        )}
 
-        {tab === 'login'
-          ? <LoginForm onSwitchToRegister={() => setTab('register')} />
-          : <RegisterForm onSwitchToLogin={() => setTab('login')} />}
+        {tab === 'login' && (
+          <LoginForm
+            onSwitchToRegister={() => setTab('register')}
+            onForgotPassword={() => setTab('reset')}
+          />
+        )}
+        {tab === 'register' && <RegisterForm onSwitchToLogin={() => setTab('login')} />}
+        {tab === 'reset' && <ResetPasswordForm onBackToLogin={() => setTab('login')} />}
       </div>
     </div>
   );

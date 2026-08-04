@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 # Interview Copilot — clean shutdown (Linux / macOS).
 #
-# Stops everything start.sh brought up:
-#   - Any leftover uvicorn / celery / vite processes (best-effort)
-#   - All docker compose services
-#
-# Usually you stop start.sh with Ctrl+C and that's enough; this script
-# is the "make sure nothing is left behind" hammer.
+# Stops this repository's Docker Compose services. Host development processes
+# belong to the terminal running start.sh and are stopped there with Ctrl+C;
+# this script never scans or kills unrelated processes.
 #
 # Flags:
 #   --volumes   Also delete docker volumes (postgres data, milvus, minio).
@@ -26,28 +23,9 @@ done
 
 CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 step() { printf "${CYAN}==> %s${NC}\n" "$*"; }
-ok()   { printf "    ${GREEN}%s${NC}\n" "$*"; }
 
 # -----------------------------------------------------------------------------
-# 1. Kill any straggler dev processes.
-#    Match by command line so we only hit OUR processes.
-# -----------------------------------------------------------------------------
-step "Stopping leftover dev processes (uvicorn / celery / vite)"
-killed=0
-for pat in "uvicorn app.main:app" "celery_app.celery_app worker" "node.*vite"; do
-    # pgrep -f matches against full command line.
-    while read -r pid; do
-        [ -z "$pid" ] && continue
-        if kill "$pid" 2>/dev/null; then
-            ok "killed PID $pid: $pat"
-            killed=$((killed + 1))
-        fi
-    done < <(pgrep -f "$pat" 2>/dev/null || true)
-done
-[ "$killed" -eq 0 ] && ok "no leftover processes found"
-
-# -----------------------------------------------------------------------------
-# 2. Bring down docker compose
+# Bring down docker compose
 # -----------------------------------------------------------------------------
 step "docker compose down"
 cd "$PROJECT_ROOT"

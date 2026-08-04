@@ -30,7 +30,7 @@ def _job(payload: dict, job_type: str = "upsert_memory_ability_index"):
 
 
 def test_upsert_handler_calls_index_from_payload():
-    from app.services.memory import ability_outbox
+    from app.worker.outbox_handlers import ability
 
     payload = {
         "state_id": "mas_1",
@@ -42,28 +42,33 @@ def test_upsert_handler_calls_index_from_payload():
         "summary": "s",
     }
     with patch("app.services.memory.ability_index.upsert_ability") as up:
-        ability_outbox._handle_upsert(None, _job(payload))
+        ability._handle_upsert(None, _job(payload))
     up.assert_called_once()
     assert up.call_args.args[0] == "mas_1"
     assert up.call_args.kwargs["user_id"] == 1
     assert up.call_args.kwargs["topic"] == "Redis"
 
 
-def test_upsert_handler_skips_bad_payload():
-    from app.services.memory import ability_outbox
+def test_upsert_handler_rejects_bad_payload():
+    from app.worker.outbox_handlers import ability
 
     # Missing user_id → must not index a node no tenant-filtered search can reach.
     with patch("app.services.memory.ability_index.upsert_ability") as up:
-        ability_outbox._handle_upsert(None, _job({"state_id": "mas_1"}))
+        with pytest.raises(ValueError, match="bad payload"):
+            ability._handle_upsert(None, _job({"state_id": "mas_1"}))
     up.assert_not_called()
 
 
 def test_delete_handler_calls_index():
-    from app.services.memory import ability_outbox
+    from app.worker.outbox_handlers import ability
 
     with patch("app.services.memory.ability_index.delete_ability") as dl:
-        ability_outbox._handle_delete(
-            None, _job({"state_id": "mas_9"}, "delete_memory_ability_index")
+        ability._handle_delete(
+            None,
+            _job(
+                {"state_id": "mas_9", "user_id": 1},
+                "delete_memory_ability_index",
+            ),
         )
     dl.assert_called_once_with("mas_9")
 
@@ -102,7 +107,7 @@ def seeded(monkeypatch):
     import app.services.memory._db_helpers as helpers_mod
     import app.services.memory._memory_audit as audit_mod
     import app.services.memory.memory_ability_state_service as ability_mod
-    import app.services.uploads.outbox_service as outbox_mod
+    import app.services.outbox as outbox_mod
 
     for mod in (helpers_mod, audit_mod, ability_mod, outbox_mod):
         monkeypatch.setattr(mod, "SessionLocal", Session, raising=False)
@@ -122,9 +127,9 @@ def test_enqueue_then_drain_invokes_index(seeded):
     """service.upsert enqueues a job → the outbox drain runs the registered
     handler → ability_index.upsert_ability is invoked. Proves the durable path
     end-to-end (handlers registered at import, Milvus mocked)."""
-    import app.services.memory.ability_outbox  # noqa: F401 — registers handlers
+    import app.worker.outbox_handlers.ability  # noqa: F401 — registers handlers
     from app.services.memory import memory_ability_state_service as svc
-    from app.services.uploads.outbox_service import run_due_outbox_jobs
+    from app.services.outbox import run_due_outbox_jobs
 
     svc.upsert(
         "alice",

@@ -10,6 +10,7 @@ write failure queues ``milvus_upsert_document`` (facts already pending, doc left
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -18,12 +19,18 @@ import pytest
 from app.models.document_chunk import DocumentChunk
 from app.models.knowledge import KnowledgeDocument
 from app.models.outbox_job import OutboxJob
-from app.services.knowledge import knowledge_outbox as ko
+from app.services.knowledge import index_jobs as ko
+from app.worker.outbox_handlers import knowledge as knowledge_handlers
 
 
 def _job(document_id, *, attempts=0, max_attempts=5):
     return SimpleNamespace(
-        id="j", aggregate_id=document_id, attempts=attempts, max_attempts=max_attempts
+        id="j",
+        user_id=1,
+        aggregate_id=document_id,
+        payload_json=json.dumps({"user_id": 1}),
+        attempts=attempts,
+        max_attempts=max_attempts,
     )
 
 
@@ -61,7 +68,15 @@ def test_handle_milvus_delete_deletes_by_document_id(monkeypatch):
         mh, "delete_by_field", lambda coll, field, value: calls.append((field, value))
     )
 
-    ko._handle_milvus_delete(None, SimpleNamespace(id="job1", aggregate_id="kdoc_x"))
+    knowledge_handlers.handle_milvus_delete(
+        None,
+        SimpleNamespace(
+            id="job1",
+            user_id=1,
+            aggregate_id="kdoc_x",
+            payload_json=json.dumps({"user_id": 1}),
+        ),
+    )
     assert calls == [("document_id", "kdoc_x")]
 
 
@@ -71,8 +86,17 @@ def test_handle_milvus_delete_noop_without_document_id(monkeypatch):
 
     monkeypatch.setattr(mh, "delete_by_field", lambda *a, **k: calls.append(a))
 
-    ko._handle_milvus_delete(None, SimpleNamespace(id="job2", aggregate_id=None))
-    assert calls == []  # no document_id → nothing to delete
+    with pytest.raises(ValueError, match="has no document id"):
+        knowledge_handlers.handle_milvus_delete(
+            None,
+            SimpleNamespace(
+                id="job2",
+                user_id=1,
+                aggregate_id=None,
+                payload_json=json.dumps({"user_id": 1}),
+            ),
+        )
+    assert calls == []
 
 
 def test_enqueue_milvus_delete_creates_keyed_job(db_session):
@@ -154,8 +178,8 @@ def test_enqueue_then_drain_runs_registered_handler(db_session, monkeypatch):
     runs the REGISTERED handler → job reaches 'succeeded' and delete_by_field is
     called. The direct-handler tests above can't exercise the claim/run/status
     lifecycle this does."""
-    import app.services.knowledge.knowledge_outbox  # noqa: F401 — registers handler
-    from app.services.uploads.outbox_service import run_due_outbox_jobs
+    import app.worker.outbox_handlers.knowledge  # noqa: F401 — registers handler
+    from app.services.outbox import run_due_outbox_jobs
 
     calls = []
     import app.rag.milvus_hybrid as mh
@@ -236,7 +260,7 @@ def test_upsert_handler_rebuilds_and_marks_ready(db_session, monkeypatch):
 
     monkeypatch.setattr(ing, "reindex_document", lambda db, doc_id: 3)  # rebuild OK
 
-    ko._handle_milvus_upsert(db_session, _job("kdoc_u"))
+    knowledge_handlers.handle_milvus_upsert(db_session, _job("kdoc_u"))
 
     doc = (
         db_session.query(KnowledgeDocument)
@@ -256,7 +280,7 @@ def test_upsert_handler_nonfinal_failure_stays_processing(db_session, monkeypatc
     monkeypatch.setattr(ing, "reindex_document", _boom)
 
     with pytest.raises(RuntimeError):
-        ko._handle_milvus_upsert(
+        knowledge_handlers.handle_milvus_upsert(
             db_session, _job("kdoc_u2", attempts=0)
         )  # 4 retries left
 
@@ -279,7 +303,7 @@ def test_upsert_handler_final_failure_marks_failed(db_session, monkeypatch):
 
     with pytest.raises(RuntimeError):
         # attempts=4, max=5 → this attempt exhausts the job (4 + 1 >= 5).
-        ko._handle_milvus_upsert(db_session, _job("kdoc_u3", attempts=4))
+        knowledge_handlers.handle_milvus_upsert(db_session, _job("kdoc_u3", attempts=4))
 
     doc = (
         db_session.query(KnowledgeDocument)
@@ -297,7 +321,7 @@ def test_upsert_handler_does_not_resurrect_deleting_doc(db_session, monkeypatch)
 
     monkeypatch.setattr(ing, "reindex_document", lambda db, doc_id: 0)  # no live chunks
 
-    ko._handle_milvus_upsert(db_session, _job("kdoc_del"))
+    knowledge_handlers.handle_milvus_upsert(db_session, _job("kdoc_del"))
 
     doc = (
         db_session.query(KnowledgeDocument)
@@ -334,8 +358,8 @@ def test_upsert_drain_persistent_failure_ends_dead_and_doc_failed(
     upsert increments attempts 1→5; the job goes 'dead' and the document goes
     'failed' on the SAME (5th) drain — the off-by-one boundary — with the doc
     kept 'processing' on runs 1–4."""
-    import app.services.knowledge.knowledge_outbox  # noqa: F401 — registers handler
-    from app.services.uploads.outbox_service import run_due_outbox_jobs
+    import app.worker.outbox_handlers.knowledge  # noqa: F401 — registers handler
+    from app.services.outbox import run_due_outbox_jobs
     import app.rag.ingestion as ing
 
     _seed_doc(db_session, "kdoc_e2e")  # status=processing
@@ -363,8 +387,8 @@ def test_upsert_drain_persistent_failure_ends_dead_and_doc_failed(
 def test_upsert_drain_recovers_to_ready(db_session, monkeypatch):
     """Fail once, then succeed: the document graduates 'processing' → 'ready'
     through the real runner (the primary recovery path C2 exists for)."""
-    import app.services.knowledge.knowledge_outbox  # noqa: F401
-    from app.services.uploads.outbox_service import run_due_outbox_jobs
+    import app.worker.outbox_handlers.knowledge  # noqa: F401
+    from app.services.outbox import run_due_outbox_jobs
     import app.rag.ingestion as ing
 
     _seed_doc(db_session, "kdoc_rec")
@@ -393,9 +417,9 @@ def test_upsert_drain_does_not_resurrect_hard_deleted_doc(db_session, monkeypatc
     """Delete-race end-to-end with the REAL reindex_document: a doc deleted while
     its upsert was queued reads 0 live chunks → Milvus is cleared and the doc
     stays 'deleting' (never resurrected to ready)."""
-    import app.services.knowledge.knowledge_outbox  # noqa: F401
+    import app.worker.outbox_handlers.knowledge  # noqa: F401
     from app.rag.document_chunk_service import delete_document_chunks
-    from app.services.uploads.outbox_service import run_due_outbox_jobs
+    from app.services.outbox import run_due_outbox_jobs
 
     _seed_doc(db_session, "kdoc_race")  # processing
     db_session.add(

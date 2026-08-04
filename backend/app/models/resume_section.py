@@ -15,7 +15,7 @@ class ResumeSection(Base):
 
     __tablename__ = "resume_sections"
 
-    id = Column(String, primary_key=True, default=_generate_section_id, index=True)
+    id = Column(String, primary_key=True, default=_generate_section_id)
     # Stable users.id FK (CLEANUP #2). Like document_chunks this is the
     # retrieval-scope key — the same value written to the resume Milvus
     # collection's node metadata; resume_service resolves the username->pk at

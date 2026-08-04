@@ -75,15 +75,12 @@ def read_object_head(storage_uri: str, n: int = 32) -> bytes:
 def public_avatar_url(user: User) -> Optional[str]:
     """Translate the stored ``avatar_url`` to a browser-fetchable URL.
 
-    Three storage shapes are supported AFTER the data:-URL migration ran:
+    Three storage shapes are supported:
       * ``s3://bucket/...``           → presigned GET URL (15-min TTL); the
         browser fetches bytes straight from S3 / MinIO.
       * ``local://avatars/<rel>...``  → ``/api/v1/static/avatars/<rel>`` —
         S3-fallback storage, served by FastAPI's StaticFiles mount.
       * ``http(s)://...``              → user-supplied public URL, verbatim.
-      * ``data:...``                   → returns None. Should never appear
-        after the migration; if it does, log a warning so the operator
-        notices a missed row.
       * ``None`` / ``""``              → no avatar.
     """
     raw = (user.avatar_url or "").strip()
@@ -109,16 +106,6 @@ def public_avatar_url(user: User) -> Optional[str]:
         return f"{_LOCAL_AVATAR_STATIC_PATH}{quote(rel_under_mount, safe='/')}"
     if raw.startswith("http://") or raw.startswith("https://"):
         return raw
-    if raw.startswith("data:"):
-        # Migration didn't reach this row; log loudly so the operator can
-        # re-run scripts.migrate_avatars. We refuse to render it inline so
-        # the bloat doesn't keep leaving the DB on every /auth/me.
-        logger.warning(
-            "Avatar for user=%s is still a data: URL — run "
-            "`python scripts/migrate_avatars.py` to migrate it.",
-            user.username,
-        )
-        return None
     # Anything else (e.g. ``local://resumes/...``, a stray absolute path) is
     # not avatar-shaped — refuse rather than leak server-internal URIs.
     logger.warning(
@@ -145,7 +132,7 @@ def delete_previous_avatar(previous_uri: str) -> None:
     elif is_local_uri(previous_uri):
         # ``delete_local_uri`` is already best-effort.
         delete_local_uri(previous_uri)
-    # data: / http(s):// / unknown — nothing on disk to clean.
+    # http(s):// / unknown — nothing on disk to clean.
 
 
 def swap_avatar(db: Session, user: User, asset) -> None:

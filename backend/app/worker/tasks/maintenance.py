@@ -10,11 +10,14 @@ last resort for rows nothing else re-examines.
 """
 
 import logging
+import shutil
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from sqlalchemy import and_, or_
 
 from app.db.database import SessionLocal
+from app.core.config import settings
 from app.models.interview_record import InterviewRecord
 from app.services.interview.interview_record_service import (
     STATUS_ANALYZING,
@@ -25,7 +28,7 @@ from app.services.interview.interview_record_service import (
     STATUS_REVIEW_FAILED,
     STATUS_TRANSCRIBING,
 )
-from app.worker.celery_app import celery_app
+from app.task_queue.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
@@ -240,3 +243,63 @@ def sweep_orphan_file_assets(self):
     if swept:
         logger.info("sweep_orphan_file_assets: swept %d asset(s)", swept)
     return {"swept": swept}
+
+
+_TEMP_FILE_TTL = timedelta(hours=24)
+_DEV_LOG_TTL = timedelta(days=14)
+
+
+def _remove_files_older_than(root: Path, pattern: str, cutoff: datetime) -> int:
+    if not root.is_dir():
+        return 0
+    removed = 0
+    for path in root.rglob(pattern):
+        try:
+            if path.is_file() and datetime.fromtimestamp(path.stat().st_mtime) < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError:
+            logger.warning("runtime-file cleanup failed for %s", path, exc_info=True)
+    return removed
+
+
+@celery_app.task(
+    name="tasks.sweep_runtime_files",
+    time_limit=120,
+    soft_time_limit=100,
+)
+def sweep_runtime_files():
+    """Bound disposable local files without touching model or user-data caches."""
+    now = datetime.now()
+    data_dir = Path(settings.APP_DATA_DIR)
+    temp_files = _remove_files_older_than(data_dir / "tmp", "*", now - _TEMP_FILE_TTL)
+    dev_logs = _remove_files_older_than(
+        Path(settings.LOG_DIR), "*.log", now - _DEV_LOG_TTL
+    )
+
+    result_root = data_dir / "agent-results"
+    orphan_results = 0
+    if result_root.is_dir():
+        from app.models.chat import Conversation
+
+        directories = [path for path in result_root.iterdir() if path.is_dir()]
+        ids = [path.name for path in directories]
+        active_ids: set[str] = set()
+        with SessionLocal() as db:
+            for start in range(0, len(ids), 500):
+                active_ids.update(
+                    row[0]
+                    for row in db.query(Conversation.id)
+                    .filter(Conversation.id.in_(ids[start : start + 500]))
+                    .all()
+                )
+        for directory in directories:
+            if directory.name not in active_ids:
+                shutil.rmtree(directory, ignore_errors=True)
+                orphan_results += 1
+
+    return {
+        "temp_files": temp_files,
+        "dev_logs": dev_logs,
+        "orphan_result_dirs": orphan_results,
+    }

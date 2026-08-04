@@ -1,15 +1,8 @@
-"""Tests for diagnostics_report_service report generation.
+"""Evidence semantics for the deterministic cross-interview report."""
 
-The diagnostic input now comes from the active ``memory_ability_states`` via
-``_extract_ability_records(db, user_id)`` (topic mastery + summary); we patch
-that extractor (and the LLM) so these tests cover the report-assembly logic,
-not the data source.
-"""
-
-import json
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 _SVC = "app.services.analytics.diagnostics_report_service"
 
@@ -22,7 +15,7 @@ async def test_generate_report_empty_when_no_ability_records():
         )
 
         result = await generate_comprehensive_report(limit=20, user_id="u1")
-        assert result["status"] == "empty"
+    assert result["status"] == "empty"
 
 
 @pytest.mark.asyncio
@@ -36,81 +29,72 @@ async def test_generate_report_empty_when_no_user():
 
 
 @pytest.mark.asyncio
-async def test_generate_report_successful_json_parse():
-    memories = [
+async def test_report_aggregates_observed_axes_without_model_call():
+    records = [
         {
-            "content": "我在 Redis 分布式锁上得了 3 分",
-            "score": 3.0,
+            "topic": "Redis 分布式锁",
+            "skill_type": "system_design",
+            "mastery_level": "weak",
+            "summary": "锁续期与 fencing token 不清楚",
+            "score": 35.0,
+            "evidence_count": 2,
             "time": "2026-01-01T00:00:00",
+        },
+        {
+            "topic": "容量估算",
+            "skill_type": "system_design",
+            "mastery_level": "stable",
+            "summary": "能完成基础估算",
+            "score": 75.0,
+            "evidence_count": 1,
+            "time": "2026-01-02T00:00:00",
+        },
+        {
+            "topic": "项目表达",
+            "skill_type": "communication",
+            "mastery_level": "strong",
+            "summary": "能用结果和数据说明贡献",
+            "score": 90.0,
+            "evidence_count": 3,
+            "time": "2026-01-03T00:00:00",
+        },
+    ]
+    with patch(f"{_SVC}._extract_ability_records", return_value=records):
+        from app.services.analytics.diagnostics_report_service import (
+            generate_comprehensive_report,
+        )
+
+        result = await generate_comprehensive_report(limit=20, user_id="u1")
+
+    axes = {axis["k"]: axis for axis in result["axes"]}
+    assert axes["系统设计"]["v"] == 55.0
+    assert axes["系统设计"]["evidence_count"] == 3
+    assert axes["沟通表达"]["v"] == 90.0
+    assert axes["知识与原理"]["v"] is None
+    assert result["totals"]["evaluated_axes"] == 2
+    assert result["totals"]["ability_topics"] == 3
+
+
+@pytest.mark.asyncio
+async def test_missing_evidence_is_unknown_not_zero():
+    records = [
+        {
+            "topic": "MySQL 索引",
+            "skill_type": "knowledge_topic",
+            "mastery_level": "stable",
+            "summary": "能解释联合索引",
+            "score": 75.0,
+            "evidence_count": 1,
+            "time": "2026-01-01",
         }
     ]
-    report_json = json.dumps(
-        {
-            "overall_evaluation": "技术薄弱",
-            "strengths": [],
-            "weaknesses": [{"topic": "Redis", "flaw": "概念混乱", "plan": "重读源码"}],
-            "skill_radar": {"算法": 5.0},
-        }
-    )
-    mock_response = MagicMock()
-    mock_response.text = report_json
-
-    with (
-        patch(f"{_SVC}._extract_ability_records", return_value=memories),
-        patch(f"{_SVC}.get_internal_llm") as factory_mock,
-    ):
-        llm_mock = factory_mock.return_value
-        llm_mock.acomplete = AsyncMock(return_value=mock_response)
+    with patch(f"{_SVC}._extract_ability_records", return_value=records):
         from app.services.analytics.diagnostics_report_service import (
             generate_comprehensive_report,
         )
 
-        result = await generate_comprehensive_report(limit=20, user_id="u1")
+        result = await generate_comprehensive_report(user_id="u1")
 
-    assert result["status"] == "success"
-    assert result["overall_evaluation"] == "技术薄弱"
-    assert any(w["k"] == "Redis" for w in result["weaknesses"])
-
-
-@pytest.mark.asyncio
-async def test_generate_report_strips_markdown_codeblock():
-    memories = [{"content": "test", "score": 5.0, "time": "2026-01-01"}]
-    raw = '```json\n{"overall_evaluation": "OK", "strengths": [], "weaknesses": [], "skill_radar": {}}\n```'
-    mock_response = MagicMock()
-    mock_response.text = raw
-
-    with (
-        patch(f"{_SVC}._extract_ability_records", return_value=memories),
-        patch(f"{_SVC}.get_internal_llm") as factory_mock,
-    ):
-        llm_mock = factory_mock.return_value
-        llm_mock.acomplete = AsyncMock(return_value=mock_response)
-        from app.services.analytics.diagnostics_report_service import (
-            generate_comprehensive_report,
-        )
-
-        result = await generate_comprehensive_report(limit=20, user_id="u1")
-
-    assert result["status"] == "success"
-
-
-@pytest.mark.asyncio
-async def test_generate_report_fallback_on_invalid_json():
-    memories = [{"content": "test", "score": 5.0, "time": "2026-01-01"}]
-    mock_response = MagicMock()
-    mock_response.text = "这不是合法的 JSON 格式"
-
-    with (
-        patch(f"{_SVC}._extract_ability_records", return_value=memories),
-        patch(f"{_SVC}.get_internal_llm") as factory_mock,
-    ):
-        llm_mock = factory_mock.return_value
-        llm_mock.acomplete = AsyncMock(return_value=mock_response)
-        from app.services.analytics.diagnostics_report_service import (
-            generate_comprehensive_report,
-        )
-
-        result = await generate_comprehensive_report(limit=20, user_id="u1")
-
-    assert result["status"] == "fallback"
-    assert "raw_text" in result
+    unknown = [axis for axis in result["axes"] if axis["k"] != "知识与原理"]
+    assert all(axis["v"] is None and axis["confidence"] == "none" for axis in unknown)
+    assert result["overall"] == 75.0

@@ -6,7 +6,7 @@
 // Do NOT introduce fields the backend does not return.
 
 // status values written by backend (lower-case in v2 schema)
-export type InterviewRecordStatus =
+type InterviewRecordStatus =
   | 'pending'
   | 'transcribing'
   | 'extracting'
@@ -152,12 +152,12 @@ export interface Source {
  * history turn can re-resolve its [K#] cards. Skipped by the body renderer
  * (BlockChain) — the source-card UI consumes it separately.
  */
-export interface SourcesBlock {
+interface SourcesBlock {
   type: 'sources';
   sources: Source[];
 }
 
-export interface TextBlock {
+interface TextBlock {
   type: 'text';
   text: string;
 }
@@ -209,13 +209,6 @@ export interface ChatTranscriptResp {
   total_messages: number;
 }
 
-/** One business stage of the (frozen) interview plan, for the progress UI.
- *  Mirrors ``app.schemas.chat.MockStage``. */
-export interface MockStage {
-  key: string;
-  title: string;
-}
-
 /** ``POST /mock-interviews/start``. The start endpoint owns creation of the
  *  record + conversation + runtime and returns the opening interviewer line. */
 export interface MockStartResp {
@@ -226,7 +219,7 @@ export interface MockStartResp {
   /** The opening interviewer message (greeting + first question), one string. */
   current_question: string;
   question_message_id?: number | null;
-  plan_phases: MockStage[];
+  plan_phases: Array<{ key: string; title: string }>;
 }
 
 /** ``POST /mock-interviews/{record_id}/answer`` — one interviewer line.

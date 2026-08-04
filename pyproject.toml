@@ -14,7 +14,6 @@ dependencies = [
     "uvicorn==0.42.0",
     "gunicorn==23.0.0",
     "python-multipart==0.0.22",
-    "websockets==15.0.1",
     # Persistence and background work
     "sqlalchemy==2.0.48",
     "psycopg2-binary==2.9.11",
@@ -65,7 +64,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-community = [
+local = [
     # Local embeddings, reranking, parsing, OCR, speech, and diarization
     "sentence-transformers==5.1.2",
     "llama-index-embeddings-huggingface==0.7.0",
@@ -74,18 +73,24 @@ community = [
     "rapidocr-onnxruntime==1.2.3",
     "faster-whisper==1.2.1",
     "whisperx==3.8.4",
+]
+cuda = [
+    # Optional NVIDIA runtime; keep platform-specific wheels out of the
+    # portable Community dependency set.
     "torch==2.8.0+cu129",
     "torchvision==0.23.0+cu129",
     "torchaudio==2.8.0+cu129",
 ]
 dev = [
-    # Evaluation, tests, and static analysis
-    "datasets==4.8.4",
-    "ragas==0.4.3",
-    "langchain-openai==1.1.12",
+    # Tests and static analysis
     "pytest==8.4.2",
     "pytest-asyncio==1.1.0",
     "ruff==0.15.12",
+]
+evaluation = [
+    # Optional offline RAG and interview quality evaluation
+    "ragas==0.4.3",
+    "langchain-openai==1.1.12",
 ]
 
 [tool.setuptools]

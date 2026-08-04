@@ -18,6 +18,19 @@ s3_client = boto3.client(
     endpoint_url=settings.AWS_ENDPOINT_URL,
 )
 
+_public_endpoint = settings.S3_PUBLIC_ENDPOINT_URL.strip()
+s3_signing_client = (
+    boto3.client(
+        "s3",
+        aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+        region_name=settings.AWS_REGION,
+        endpoint_url=_public_endpoint,
+    )
+    if _public_endpoint and _public_endpoint != settings.AWS_ENDPOINT_URL
+    else s3_client
+)
+
 
 def sanitize_filename(filename: str) -> str:
     """Return a path-safe display filename while keeping a useful extension."""
@@ -55,7 +68,7 @@ def generate_presigned_upload_url_for_key(
 ) -> dict:
     """Generate a presigned URL for an already-owned object key."""
     try:
-        response = s3_client.generate_presigned_url(
+        response = s3_signing_client.generate_presigned_url(
             "put_object",
             Params={
                 "Bucket": settings.S3_BUCKET_NAME,
@@ -101,7 +114,7 @@ def generate_presigned_get_url(s3_uri: str, expiration: int = 600) -> str:
     that a leaked URL goes stale fast.
     """
     bucket, key = parse_s3_uri(s3_uri)
-    return s3_client.generate_presigned_url(
+    return s3_signing_client.generate_presigned_url(
         "get_object",
         Params={"Bucket": bucket, "Key": key},
         ExpiresIn=expiration,
@@ -202,9 +215,7 @@ def upload_file_to_owned_key(
 
 def _fallback_local_save(file_obj, relative_path: str) -> str:
     """Write the upload to local disk when S3 isn't reachable; return its
-    ``local://`` URI (NOT an absolute path — degraded products used to come
-    in two formats, absolute path here vs ``local://`` from
-    ``save_blob_to_local``, and only the latter is understood by readers).
+    ``local://`` URI rather than an absolute filesystem path.
 
     Hardened against path traversal: even though ``relative_path`` is
     constructed internally by ``build_owned_object_key`` (which sanitises
@@ -283,23 +294,6 @@ def parse_local_uri(uri: str) -> Path:
     except ValueError as exc:
         raise ValueError(f"local URI escapes STORAGE_DIR: {uri!r}") from exc
     return full
-
-
-def save_blob_to_local(data: bytes, rel_path: str) -> str:
-    """Write ``data`` to STORAGE_DIR/<rel_path>; return its ``local://`` URI.
-
-    Used as the S3-fallback target for avatar uploads. Path-traversal
-    guarded by :func:`_safe_relative`.
-    """
-    candidate = _safe_relative(rel_path)
-    base = Path(settings.STORAGE_DIR).resolve()
-    full = (base / candidate).resolve()
-    full.relative_to(base)  # belt-and-braces; raises on escape
-    full.parent.mkdir(parents=True, exist_ok=True)
-    full.write_bytes(data)
-    # Normalise separators so the URI is portable across Win/POSIX.
-    normalised = str(candidate).replace(os.sep, "/")
-    return f"{LOCAL_URI_PREFIX}{normalised}"
 
 
 def delete_local_uri(uri: str) -> None:

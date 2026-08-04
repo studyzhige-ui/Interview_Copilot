@@ -9,7 +9,7 @@
 #                   pass an absolute URL like "https://api.example.com/api/v1".
 
 # ─── Stage 1: build ──────────────────────────────────────────────────────
-FROM node:20-alpine AS build
+FROM node:20.20.2-alpine AS build
 WORKDIR /build
 
 # Install deps first so Docker layer cache stays warm across source changes.
@@ -24,7 +24,7 @@ ENV VITE_API_BASE=${VITE_API_BASE}
 RUN npm run build
 
 # ─── Stage 2: serve ──────────────────────────────────────────────────────
-FROM nginx:1.27-alpine AS runtime
+FROM nginx:1.27.5-alpine AS runtime
 
 # Drop the default config so our SPA-friendly one wins.
 RUN rm -f /etc/nginx/conf.d/default.conf

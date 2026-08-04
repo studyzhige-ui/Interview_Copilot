@@ -3,10 +3,9 @@
 #
 # Two jobs:
 #   1. Make sure /app/data exists and the non-root ``app`` user owns it.
-#      docker-compose users often bind-mount ./data → /app/data; the host
-#      directory may come in owned by root or some unexpected UID. Without
-#      this fix-up the first cache write or log append from a non-root
-#      process would fail with EACCES, breaking startup.
+#      docker-compose users may bind-mount ./data → /app/data. We create the
+#      writable runtime directories, but never recursively chown a model cache:
+#      it can contain tens of gigabytes and is commonly shared by workers.
 #   2. Drop privileges to the ``app`` user via gosu, then exec whatever
 #      CMD the image was launched with (uvicorn, gunicorn, celery, …).
 #
@@ -24,9 +23,10 @@ DATA_DIR="${APP_DATA_DIR:-/app/data}"
 # trust that the bind-mount permissions are correct, so skip the chown.
 if [ "$(id -u)" = "0" ]; then
     mkdir -p "$DATA_DIR"
-    # ``-R`` so freshly-mounted dirs whose subtree we'll touch later
-    # (cache/, logs/, storage/, ...) are also writeable.
-    chown -R app:app "$DATA_DIR" 2>/dev/null || true
+    mkdir -p "$DATA_DIR/cache" "$DATA_DIR/logs" "$DATA_DIR/runtime" \
+        "$DATA_DIR/storage" "$DATA_DIR/agent-results" "$DATA_DIR/tmp"
+    chown app:app "$DATA_DIR" "$DATA_DIR/cache" "$DATA_DIR/logs" "$DATA_DIR/runtime" \
+        "$DATA_DIR/storage" "$DATA_DIR/agent-results" "$DATA_DIR/tmp" 2>/dev/null || true
     exec gosu app "$@"
 fi
 

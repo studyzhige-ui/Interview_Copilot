@@ -346,7 +346,7 @@ def enqueue_asset_blob_delete(db: Session, asset: FileAsset) -> None:
     asset. The row itself is the caller's business — this only handles the
     bytes in object storage.
     """
-    from app.services.uploads.outbox_service import enqueue_job
+    from app.services.outbox import enqueue_job
 
     enqueue_job(
         db,
@@ -354,14 +354,14 @@ def enqueue_asset_blob_delete(db: Session, asset: FileAsset) -> None:
         job_type="delete_object",
         aggregate_type="file_asset",
         aggregate_id=asset.id,
-        payload={"storage_uri": asset.storage_uri},
+        payload={"storage_uri": asset.storage_uri, "user_id": asset.user_id},
         idempotency_key=f"delete_object:{asset.id}",
     )
 
 
 def _fail_asset(db: Session, asset: FileAsset, reason: str) -> None:
     """Flag a failed upload and enqueue object-storage cleanup, atomically."""
-    from app.services.uploads.outbox_service import enqueue_job
+    from app.services.outbox import enqueue_job
 
     asset.upload_status = UPLOAD_STATUS_FAILED
     asset.validation_status = "failed"
@@ -374,7 +374,7 @@ def _fail_asset(db: Session, asset: FileAsset, reason: str) -> None:
         job_type="cleanup_failed_upload",
         aggregate_type="file_asset",
         aggregate_id=asset.id,
-        payload={"storage_uri": asset.storage_uri},
+        payload={"storage_uri": asset.storage_uri, "user_id": asset.user_id},
         idempotency_key=f"cleanup_failed_upload:{asset.id}",
     )
     db.commit()

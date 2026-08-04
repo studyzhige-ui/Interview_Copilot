@@ -29,9 +29,9 @@
 
 Dependency direction inside this package:
   analysis_orchestrator → interview_record_service
-  analysis_intake       → interview_record_service (+ worker.tasks dispatch)
+  analysis_intake       → interview_record_service (+ task_queue dispatch)
   mock_flow             → mock_interview_service + mock_runtime_service
-                          + interview_record_service (+ worker.tasks dispatch)
+                          + interview_record_service (+ task_queue dispatch)
   record_admin          → interview_record_service (status constants only)
   mock_interview_service is independent (no intra-package imports)
 """

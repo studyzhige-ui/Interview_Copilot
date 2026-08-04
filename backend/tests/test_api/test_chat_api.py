@@ -10,6 +10,7 @@ shared ``db_session`` fixture in ``tests/conftest.py`` references the missing
 
 from __future__ import annotations
 
+import json
 from typing import Iterator
 
 import pytest
@@ -22,12 +23,27 @@ from sqlalchemy.pool import StaticPool
 from app.api import chat as chat_api
 from app.api import memory as memory_api
 from app.api.chat import sessions as conversations_mod
+from app.api.interviews import mock as mock_api
 from app.core.security import get_current_user
 from app.db.database import Base, get_db
 import app.models  # noqa: F401  — ensure mappers registered
 from app.models.chat import ConversationMessage, Conversation
 from app.models.conversation_turn import ConversationTurn
 from app.models.user import User
+
+
+def test_terminal_sse_recovery_preserves_failure_and_cancellation():
+    from app.api.chat.streaming import _recovery_events
+
+    failed = [json.loads(event) for event in _recovery_events("failed", "worker died")]
+    cancelled = [json.loads(event) for event in _recovery_events("cancelled", None)]
+    completed = [json.loads(event) for event in _recovery_events("completed", None)]
+
+    assert [event["type"] for event in failed] == ["error", "done"]
+    assert failed[0]["data"]["error"] == "worker died"
+    assert [event["type"] for event in cancelled] == ["error", "done"]
+    assert cancelled[0]["data"]["error"] == "本轮已取消"
+    assert [event["type"] for event in completed] == ["done"]
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
@@ -109,6 +125,7 @@ def client(db: Session) -> Iterator[TestClient]:
 
     app = FastAPI()
     app.include_router(chat_api.router, prefix="/api/v1")
+    app.include_router(mock_api.router, prefix="/api/v1")
     # /memory/* lives under app.api.memory now (moved out of chat/
     # in P8-1 because the routes are cross-session memory CRUD,
     # not chat-session operations). Mount it here so the existing
@@ -473,14 +490,15 @@ def _seed_started_mock(
             subject_id=record_id,
         )
     )
-    db.add(
-        ConversationMessage(
-            conversation_id=conv_id,
-            seq=1,
-            role="assistant",
-            content="请做个自我介绍",
-        )
+    db.flush()
+    opening = ConversationMessage(
+        conversation_id=conv_id,
+        seq=1,
+        role="assistant",
+        content="请做个自我介绍",
     )
+    db.add(opening)
+    db.flush()
     db.add(
         MockInterviewRuntime(
             id="mir_m",
@@ -489,6 +507,7 @@ def _seed_started_mock(
             conversation_id=conv_id,
             status="in_progress",
             current_stage_key="self_intro",
+            current_question_message_id=opening.id,
             plan_json=_json.dumps(
                 {
                     "stages": [
@@ -569,6 +588,33 @@ def test_mock_start_creates_record_conversation_runtime(
     assert rt.current_question_message_id is not None
 
 
+def test_mock_start_rejects_resume_that_has_not_been_parsed(
+    client: TestClient,
+    db: Session,
+):
+    from app.models.resume import Resume
+
+    pk = _uid(db, "alice")
+    db.add(
+        Resume(
+            id="rsm_pending",
+            user_id=pk,
+            title="仍在解析的简历",
+            is_default=True,
+            parse_status="pending",
+        )
+    )
+    db.commit()
+
+    response = client.post(
+        "/api/v1/mock-interviews/start",
+        json={"resume_id": "rsm_pending", "jd_text": "后端工程师岗位说明"},
+    )
+
+    assert response.status_code == 409
+    assert "解析" in response.json()["detail"]
+
+
 def test_mock_answer_appends_messages_and_advances(
     client: TestClient,
     db: Session,
@@ -581,6 +627,11 @@ def test_mock_answer_appends_messages_and_advances(
     from app.services.interview.mock_interview_service import NextTurn
 
     record_id, conv_id = _seed_started_mock(db)
+    runtime = (
+        db.query(MockInterviewRuntime)
+        .filter(MockInterviewRuntime.interview_record_id == record_id)
+        .one()
+    )
 
     async def fake_next_turn(**kwargs):
         return NextTurn(
@@ -596,7 +647,10 @@ def test_mock_answer_appends_messages_and_advances(
 
     resp = client.post(
         f"/api/v1/mock-interviews/{record_id}/answer",
-        json={"answer_text": "我叫小王，三年后端。"},
+        json={
+            "answer_text": "我叫小王，三年后端。",
+            "question_message_id": runtime.current_question_message_id,
+        },
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -648,7 +702,7 @@ def test_mock_finish_transitions_to_processing_review_and_dispatches(
         return _FakeAsyncResult()
 
     monkeypatch.setattr(
-        "app.worker.tasks.process_mock_interview_review.delay", fake_delay
+        "app.services.interview.mock_flow.dispatch_mock_interview_review", fake_delay
     )
 
     resp = client.post(f"/api/v1/mock-interviews/{record_id}/finish")

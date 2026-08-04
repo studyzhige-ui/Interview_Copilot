@@ -3,7 +3,6 @@
 Submodules:
   - sessions       : session CRUD + full transcript
   - streaming      : SSE QA streaming
-  - mock_interview : mock interview control + TTS
 
 Memory CRUD endpoints used to live here as ``chat/memory.py`` but were
 moved out in P8-1 — they manage cross-session memory docs (knowledge /
@@ -18,12 +17,11 @@ that ``app.main`` can keep its existing one-line include:
 
 from fastapi import APIRouter
 
-from app.api.chat import mock_interview, sessions, streaming
+from app.api.chat import sessions, streaming
 
 router = APIRouter()
 router.include_router(sessions.router)
 router.include_router(streaming.router)
-router.include_router(mock_interview.router)
 
 
 __all__ = ["router"]

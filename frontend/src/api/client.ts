@@ -1,13 +1,11 @@
 import axios, { AxiosError, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
 import { tokenStore } from '@/lib/token';
 import { toast } from '@/store/uiStore';
+import { API_BASE, apiUrl } from './apiUrl';
 
 // API base URL — baked in at build time so the same image runs anywhere.
 // Default '/api/v1' works for same-origin (SPA + API behind one nginx).
 // For split deployments, build with VITE_API_BASE=https://api.example.com/api/v1.
-const API_BASE =
-  (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api/v1';
-
 export const apiClient = axios.create({
   baseURL: API_BASE,
   timeout: 30_000,
@@ -30,9 +28,9 @@ let refreshInFlight: Promise<string | null> | null = null;
 /**
  * Refresh the access token using the stored refresh token.
  *
- * Exported so non-axios paths (notably ``streamChatTurn``, which uses
- * raw ``fetch`` and therefore bypasses the response interceptor below)
- * can also recover from a 401. In-flight de-duplication is process-wide:
+ * Shared by the Axios interceptor and ``authedFetch`` so fetch-based
+ * streams recover from a 401 through the same flow. In-flight
+ * de-duplication is process-wide:
  * a second caller that arrives while a refresh is already pending awaits
  * the same promise rather than firing a duplicate refresh request.
  *
@@ -40,14 +38,14 @@ let refreshInFlight: Promise<string | null> | null = null;
  * refresh token / the refresh endpoint rejected it. Callers should
  * fall back to :func:`redirectToAuth` on ``null``.
  */
-export async function refreshAccessToken(): Promise<string | null> {
+async function refreshAccessToken(): Promise<string | null> {
   if (refreshInFlight) return refreshInFlight;
   const refresh = tokenStore.getRefresh();
   if (!refresh) return null;
 
   refreshInFlight = (async () => {
     try {
-      const res = await axios.post('/api/v1/auth/refresh', { refresh_token: refresh });
+      const res = await axios.post(apiUrl('/auth/refresh'), { refresh_token: refresh });
       const access = res.data?.access_token as string | undefined;
       const newRefresh = (res.data?.refresh_token as string | undefined) ?? refresh;
       if (!access) return null;
@@ -63,12 +61,9 @@ export async function refreshAccessToken(): Promise<string | null> {
 }
 
 /**
- * Clear tokens and bounce to /auth. Exported for the same reason as
- * :func:`refreshAccessToken` — non-axios paths need to share the
- * "unrecoverable auth" exit so the user lands on the login page
- * instead of seeing an opaque "连接中断" toast.
+ * Clear tokens and bounce to /auth after either transport fails to refresh.
  */
-export function redirectToAuth() {
+function redirectToAuth() {
   tokenStore.clear();
   if (window.location.pathname !== '/auth') {
     window.location.href = '/auth';
@@ -155,17 +150,4 @@ export function extractErr(e: unknown, fallback = '请求失败'): string {
   if (typeof detail === 'string') return detail;
   if (detail && typeof detail === 'object' && detail.message) return detail.message;
   return ax?.message ?? fallback;
-}
-
-/** Business error code from a structured 4xx detail (`{code, message}`),
- *  or `null` when the response carried a plain-string / no detail. Lets
- *  call-sites branch on stable codes (e.g. route to login on
- *  EMAIL_ALREADY_REGISTERED) instead of matching human text. */
-export function extractErrCode(e: unknown): string | null {
-  const ax = e as AxiosError<{ detail?: ErrDetail }>;
-  const detail = ax?.response?.data?.detail;
-  if (detail && typeof detail === 'object' && typeof detail.code === 'string') {
-    return detail.code;
-  }
-  return null;
 }

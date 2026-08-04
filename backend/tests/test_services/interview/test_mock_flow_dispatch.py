@@ -8,8 +8,6 @@ a finished interview in the resume banner).
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from app.services.interview import mock_flow, mock_runtime_service
@@ -55,8 +53,8 @@ def _broker_down(monkeypatch):
 
     monkeypatch.setattr(
         mock_flow,
-        "process_mock_interview_review",
-        SimpleNamespace(delay=_raise),
+        "dispatch_mock_interview_review",
+        _raise,
     )
 
 
@@ -114,8 +112,8 @@ def test_dispatch_success_stamps_task_id_and_processing_review(db_session, monke
     )
     monkeypatch.setattr(
         mock_flow,
-        "process_mock_interview_review",
-        SimpleNamespace(delay=lambda *a, **k: SimpleNamespace(id="celery-task-1")),
+        "dispatch_mock_interview_review",
+        lambda *a, **k: type("Task", (), {"id": "celery-task-1"})(),
     )
 
     task = mock_flow.dispatch_review(db_session, record.id)

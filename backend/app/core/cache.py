@@ -83,23 +83,4 @@ async def invalidate(*names: str) -> None:
         logger.warning("cache invalidate failed for %s: %s", names, exc)
 
 
-async def invalidate_prefix(prefix: str) -> int:
-    """Drop every cache entry whose name starts with ``prefix``.
-
-    Useful when one mutation invalidates many derived keys (e.g. saving a
-    user's API key invalidates every catalog entry for that user). Uses
-    SCAN so a big keyspace doesn't block Redis. Returns the number of
-    keys deleted.
-    """
-    pattern = f"{_PREFIX}{prefix}*"
-    deleted = 0
-    try:
-        async for key in redis_client.scan_iter(match=pattern, count=200):
-            await redis_client.delete(key)
-            deleted += 1
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("cache invalidate_prefix failed for %s: %s", prefix, exc)
-    return deleted
-
-
-__all__ = ["cached", "invalidate", "invalidate_prefix"]
+__all__ = ["cached", "invalidate"]

@@ -67,7 +67,7 @@ function AuthGuard() {
 
 function GuestGuard() {
   const isAuthed = useAuthStore((s) => s.isAuthed);
-  if (isAuthed) return <Navigate to="/review" replace />;
+  if (isAuthed) return <Navigate to="/mock" replace />;
   return <LazyOutlet />;
 }
 
@@ -79,7 +79,7 @@ export const router = createBrowserRouter([
   {
     element: <AuthGuard />,
     children: [
-      { path: '/', element: <Navigate to="/review" replace /> },
+      { path: '/', element: <Navigate to="/mock" replace /> },
       { path: '/review', element: <ReviewPage /> },
       { path: '/mock', element: <MockPage /> },
       { path: '/general-chat', element: <GeneralChatPage /> },

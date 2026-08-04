@@ -22,6 +22,7 @@ from app.services.interview.interview_record_service import (
     STATUS_PENDING,
     interview_record_service,
 )
+from app.task_queue.dispatch import dispatch_interview_analysis, revoke_task
 
 logger = logging.getLogger(__name__)
 
@@ -64,11 +65,7 @@ def cancel_analysis(db: Session, record: InterviewRecord) -> bool:
     revoked = False
     if record.celery_task_id:
         try:
-            from app.worker.celery_app import celery_app
-
-            celery_app.control.revoke(
-                record.celery_task_id, terminate=True, signal="SIGTERM"
-            )
+            revoke_task(record.celery_task_id, terminate=True, signal="SIGTERM")
             revoked = True
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -183,8 +180,6 @@ def reanalyze_record(db: Session, record: InterviewRecord, *, drop_qa: bool = Fa
     Returns the dispatched Celery task. Dispatch failure rolls the record
     back to ``failed`` (never a zombie ``pending``) and re-raises.
     """
-    from app.worker.tasks import process_interview_analysis
-
     if record.source != "upload":
         raise ReanalyzeNotAllowed(
             "仅上传录音的记录支持重新分析（模拟面试请用重试复盘）"
@@ -197,9 +192,7 @@ def reanalyze_record(db: Session, record: InterviewRecord, *, drop_qa: bool = Fa
     # rerun we're about to dispatch.
     if record.celery_task_id:
         try:
-            from app.worker.celery_app import celery_app
-
-            celery_app.control.revoke(record.celery_task_id)
+            revoke_task(record.celery_task_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("reanalyze: stale-task revoke failed: %s", exc)
 
@@ -221,7 +214,7 @@ def reanalyze_record(db: Session, record: InterviewRecord, *, drop_qa: bool = Fa
     db.commit()
 
     try:
-        task = process_interview_analysis.delay(record.id)
+        task = dispatch_interview_analysis(record.id)
     except Exception as exc:  # noqa: BLE001 — broker down / misconfigured
         logger.error("reanalyze dispatch failed for %s: %s", record.id, exc)
         interview_record_service.set_status(
@@ -330,6 +323,10 @@ def delete_record_cascade(
         # interview_qa auto-cleaned by ON DELETE CASCADE on interview_records.
         db.delete(record)
         db.commit()
+        from app.core.runtime_files import remove_session_results
+
+        for session_id in session_ids:
+            remove_session_results(session_id)
         logger.info(
             "Deleted interview_record=%s with %d session(s)",
             record_id,

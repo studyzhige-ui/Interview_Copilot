@@ -29,35 +29,11 @@ export async function getInterviewRecord(
   return res.data;
 }
 
-export async function getInterviewSummary(id: string): Promise<string | null> {
-  try {
-    const res = await apiClient.get(`/interview-records/${encodeURIComponent(id)}/summary`);
-    return res.data?.summary ?? null;
-  } catch {
-    return null;
-  }
-}
-
 export async function uploadAudio(file: File): Promise<{ upload_id: string; filename: string }> {
   // Unified presigned flow (purpose='interview_audio') — no server-receives-bytes
   // direct upload. Returns the confirmed file_asset id as upload_id.
   const fileAssetId = await uploadFileAsset(file, 'interview_audio');
   return { upload_id: fileAssetId, filename: file.name };
-}
-
-/** A personal resume the user can pick as interview context (the first-class
- *  `resumes` entity — NOT a knowledge document). */
-export interface StoredResume {
-  resume_id: string;
-  title: string;
-  is_default: boolean;
-  parse_status: string;
-  created_at: string;
-}
-
-export async function listStoredResumes(): Promise<StoredResume[]> {
-  const res = await apiClient.get('/uploads/resumes');
-  return res.data?.resumes ?? [];
 }
 
 /** Dispatch a unified analysis on an uploaded audio file. Returns the new
@@ -93,10 +69,6 @@ export async function cancelAnalyze(recordId: string): Promise<void> {
 export async function getAnalyticsReport(): Promise<unknown> {
   const res = await apiClient.get('/analytics/report');
   return res.data;
-}
-
-export async function renameInterviewRecord(id: string, title: string): Promise<void> {
-  await apiClient.patch(`/interview-records/${encodeURIComponent(id)}`, { title });
 }
 
 export async function updateInterviewRecord(

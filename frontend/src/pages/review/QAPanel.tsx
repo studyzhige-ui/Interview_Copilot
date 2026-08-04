@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ChevronRight, FileText, Pencil, BookmarkPlus, BookmarkCheck } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Pill } from '@/components/ui/Pill';
@@ -101,7 +101,7 @@ export function QAPanel({ detail, loading }: Props) {
           : <div className="flex flex-col gap-4">
               {qa.map((q) => (
                 <QAItem
-                  key={q.id}
+                  key={`${q.id}:${q.question}:${q.answer}:${q.saved_document_id ?? ''}`}
                   qa={q}
                   recordId={detail.id}
                 />
@@ -370,22 +370,26 @@ function QAItem({ qa, recordId }: { qa: InterviewQA; recordId: string }) {
   const [answer, setAnswer] = useState(qa.answer);
   const [savedDocId, setSavedDocId] = useState<string | null>(qa.saved_document_id ?? null);
   const [savingKb, setSavingKb] = useState(false);
+  const savedQuestion = useRef(qa.question);
+  const savedAnswer = useRef(qa.answer);
 
   const saveQ = async () => {
     setEditingQ(false);
-    if (question === qa.question) return;
+    if (question === savedQuestion.current) return;
     try {
       await editInterviewQA(recordId, qa.id, { question });
+      savedQuestion.current = question;
       toast.success('问题已保存');
-    } catch { toast.error('保存失败'); setQuestion(qa.question); }
+    } catch { toast.error('保存失败'); setQuestion(savedQuestion.current); }
   };
   const saveA = async () => {
     setEditingA(false);
-    if (answer === qa.answer) return;
+    if (answer === savedAnswer.current) return;
     try {
       await editInterviewQA(recordId, qa.id, { answer });
+      savedAnswer.current = answer;
       toast.success('答案已保存');
-    } catch { toast.error('保存失败'); setAnswer(qa.answer); }
+    } catch { toast.error('保存失败'); setAnswer(savedAnswer.current); }
   };
 
   const toggleKb = async () => {
@@ -439,7 +443,9 @@ function QAItem({ qa, recordId }: { qa: InterviewQA; recordId: string }) {
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           onBlur={saveQ}
-          onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) saveQ(); }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) e.currentTarget.blur();
+          }}
           rows={2}
           className="w-full p-3 text-base font-medium bg-stone-50 border border-primary-200 rounded-lg outline-none resize-y mb-4"
         />
@@ -480,7 +486,9 @@ function QAItem({ qa, recordId }: { qa: InterviewQA; recordId: string }) {
           value={answer}
           onChange={(e) => setAnswer(e.target.value)}
           onBlur={saveA}
-          onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) saveA(); }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) e.currentTarget.blur();
+          }}
           rows={4}
           className="w-full p-3.5 text-[15px] font-mono bg-stone-50 border border-primary-200 rounded-lg outline-none resize-y leading-[1.7]"
         />

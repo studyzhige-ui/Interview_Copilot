@@ -77,6 +77,7 @@ export function ReviewPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [widths, setWidths] = useState(loadWidths);
   const [analyses, setAnalyses] = useState<Record<string, AnalysisEntry>>({});
+  const [mobilePane, setMobilePane] = useState<'records' | 'review' | 'chat'>('review');
 
   const { data: records = [], error: recordsError, isFetchedAfterMount } = useQuery({
     queryKey: RECORDS_KEY,
@@ -148,6 +149,7 @@ export function ReviewPage() {
     const d = makeDraft();
     setDrafts((arr) => [d, ...arr]);
     setActiveId(d.id);
+    setSearch({}, { replace: true });
   };
 
   const onDraftMutate = (id: string, patch: Partial<InterviewRecordListItem>) => {
@@ -504,7 +506,7 @@ export function ReviewPage() {
   })();
 
   return (
-    <div className="h-full flex">
+    <div className="h-full flex flex-col lg:flex-row">
       {/* Headless SSE runners — one per in-flight analysis, kept alive
        *  regardless of which session the user is currently looking at. */}
       {Object.entries(analyses).map(([id, a]) => (
@@ -517,37 +519,71 @@ export function ReviewPage() {
         />
       ))}
 
+      <div className="lg:hidden flex shrink-0 border-b border-stone-200 bg-white p-1.5">
+        {([
+          ['records', '面试记录'],
+          ['review', '复盘内容'],
+          ['chat', '复盘对话'],
+        ] as const).map(([pane, label]) => (
+          <button
+            key={pane}
+            type="button"
+            onClick={() => setMobilePane(pane)}
+            className={`flex-1 rounded-md px-3 py-2 text-sm ${
+              mobilePane === pane
+                ? 'bg-primary-50 font-medium text-primary-700'
+                : 'text-stone-500'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       <SessionList
         records={combined}
         activeId={activeId}
-        onSelect={setActiveId}
+        onSelect={(id) => {
+          setActiveId(id);
+          setMobilePane('review');
+          if (isDraft(id)) setSearch({}, { replace: true });
+          else setSearch({ id }, { replace: true });
+        }}
         onNew={onNew}
         onChanged={onRecordChanged}
         onDraftMutate={onDraftMutate}
         onDraftDelete={onDraftDelete}
         analyzingStates={analyzingStates}
         width={widths.left}
+        className={`${mobilePane === 'records' ? 'flex' : 'hidden'} lg:flex min-h-0 flex-1 lg:flex-none`}
       />
-      <Resizer
-        value={widths.left}
-        onChange={(v) => setWidths((w) => ({ ...w, left: v }))}
-        min={200}
-        max={420}
-        direction="right"
-      />
-      <section className="flex-1 min-w-0 overflow-y-auto bg-cream-50">{middle}</section>
-      <Resizer
-        value={widths.right}
-        onChange={(v) => setWidths((w) => ({ ...w, right: v }))}
-        min={280}
-        max={560}
-        direction="left"
-      />
+      <div className="hidden lg:contents">
+        <Resizer
+          value={widths.left}
+          onChange={(v) => setWidths((w) => ({ ...w, left: v }))}
+          min={200}
+          max={420}
+          direction="right"
+        />
+      </div>
+      <section className={`${mobilePane === 'review' ? 'block' : 'hidden'} lg:block flex-1 min-h-0 min-w-0 overflow-y-auto bg-cream-50`}>
+        {middle}
+      </section>
+      <div className="hidden lg:contents">
+        <Resizer
+          value={widths.right}
+          onChange={(v) => setWidths((w) => ({ ...w, right: v }))}
+          min={280}
+          max={560}
+          direction="left"
+        />
+      </div>
       <ChatPanel
         interviewId={!isDraft(activeId ?? '') ? activeId : null}
         sessionTitle={activeRecord?.title ?? null}
         sessionType="debrief"
         width={widths.right}
+        className={`${mobilePane === 'chat' ? 'flex' : 'hidden'} lg:flex min-h-0 flex-1 lg:flex-none`}
       />
     </div>
   );

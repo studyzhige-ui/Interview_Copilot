@@ -411,7 +411,7 @@ def _dream_for_record_locked(
                 # NB: this is a sync call from a sync worker — wrap the
                 # async LLM in run_async via the worker helper.
                 from app.core.llm_client_factory import get_internal_llm
-                from app.worker.tasks import run_async
+                from app.core.async_runtime import run_async
 
                 response = run_async(
                     get_internal_llm("worker").acomplete(

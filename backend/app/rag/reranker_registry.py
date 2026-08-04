@@ -86,13 +86,13 @@ class ResolvedReranker:
 
 
 def resolve_reranker() -> ResolvedReranker:
-    pid = (settings.RERANKER_PROVIDER or "local").strip().lower()
+    pid = (settings.RERANKER_PROVIDER or "siliconflow").strip().lower()
     if pid not in PROVIDERS:
         logger.warning(
-            "Unknown RERANKER_PROVIDER=%r, falling back to 'local'",
+            "Unknown RERANKER_PROVIDER=%r, falling back to 'siliconflow'",
             pid,
         )
-        pid = "local"
+        pid = "siliconflow"
     model = (settings.RERANKER_MODEL or "BAAI/bge-reranker-v2-m3").strip()
     return ResolvedReranker(provider_id=pid, provider=PROVIDERS[pid], model=model)
 

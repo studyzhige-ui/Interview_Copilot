@@ -6,7 +6,8 @@ Security model:
   token's jti so stealing one ticket only buys until first rotation.
 - /logout revokes both presented tokens (access via Authorization header,
   refresh via request body) so a real logout can't be undone by replay.
-- /send-code and /register do not leak whether an email is registered.
+- Password-reset responses do not leak whether an email is registered;
+  registration deliberately returns an explicit duplicate-account conflict.
 
 Thin router: token/code protocol flow + HTTP status mapping. The
 ``users``-table work lives in ``services.auth.user_account_service``; the
@@ -64,6 +65,7 @@ from app.schemas.auth import (  # noqa: E402, F401
     MeResponse,
     MeUpdate,
     RefreshRequest,
+    ResetPasswordRequest,
     Token,
     UserCreate,
 )
@@ -134,18 +136,74 @@ async def send_verification_code(
     accepted only for the register link. The high-value enumeration targets —
     LOGIN and password reset — keep generic responses elsewhere.
     """
+    account = user_account_service.get_by_email(db, str(payload.email))
     if payload.purpose == "register":
-        if user_account_service.get_by_email(db, payload.email) is not None:
+        if account is not None:
             raise _conflict(
                 ERR_EMAIL_ALREADY_REGISTERED,
                 "该邮箱已注册，请直接登录",
             )
 
+    # Password reset never reveals whether the address owns an account.
+    # Unknown/inactive/unverified addresses still receive the same response and
+    # Redis cooldown, but no email is delivered.
+    code_email = str(account.email) if account and account.email else str(payload.email)
+    deliver = True
+    if payload.purpose == "reset_password":
+        deliver = bool(
+            account and account.email_verified and getattr(account, "is_active", True)
+        )
+
     try:
-        ttl = await request_code(payload.email, purpose=payload.purpose)  # type: ignore[arg-type]
+        ttl = await request_code(
+            code_email,
+            purpose=payload.purpose,
+            deliver=deliver,
+        )
     except CodeError as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     return {"status": "sent", "expires_in": ttl}
+
+
+@router.post("/reset-password", response_model=dict)
+@limiter.limit(RATE_AUTH)
+async def reset_password(
+    request: Request,
+    response: Response,
+    body: ResetPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    """Reset a forgotten password using a one-time email code.
+
+    Every failure returns the same message so callers cannot use this endpoint
+    to discover registered addresses. A successful reset consumes the code and
+    bumps ``token_version``, immediately invalidating every old access and
+    refresh token for the account.
+    """
+    generic_err = _generic_400("重置失败，请检查验证码或重新获取")
+    client_ip = request.client.host if request.client else None
+
+    try:
+        await assert_ip_not_locked(client_ip)
+    except CodeError:
+        raise generic_err
+
+    user = user_account_service.get_by_email(db, str(body.email))
+    code_email = str(user.email) if user and user.email else str(body.email)
+
+    try:
+        await verify_code(code_email, body.code, purpose="reset_password")
+    except CodeError:
+        await record_verify_failure_for_ip(client_ip)
+        raise generic_err
+
+    if user is None or not user.email_verified or not getattr(user, "is_active", True):
+        await record_verify_failure_for_ip(client_ip)
+        raise generic_err
+
+    await reset_ip_failures(client_ip)
+    user_account_service.apply_password_change(db, user, body.new_password)
+    return {"status": "ok", "message": "密码已重置，请使用新密码登录"}
 
 
 @router.post("/register", response_model=dict)

@@ -1,20 +1,25 @@
-"""Knowledge-document ingestion task (light queue)."""
+"""Knowledge-document ingestion on the pipeline queue."""
 
 import logging
 
 from app.core.error_messages import humanize_error
 from app.db.database import SessionLocal
 from app.models.knowledge import KnowledgeDocument
-from app.worker.celery_app import celery_app
-from app.worker.tasks.runtime import run_async
+from app.task_queue.celery_app import celery_app
+from app.core.async_runtime import run_async
 
 logger = logging.getLogger(__name__)
+
+# Keep the business-state decision aligned with Celery's retry policy below.
+# Any exception outside this tuple is terminal for this dispatch: Celery will
+# not schedule another attempt, so the document must not remain "processing".
+_TRANSIENT_INGEST_ERRORS = (ConnectionError, TimeoutError, OSError)
 
 
 @celery_app.task(
     bind=True,
     name="tasks.process_document_ingestion",
-    autoretry_for=(ConnectionError, TimeoutError, OSError),
+    autoretry_for=_TRANSIENT_INGEST_ERRORS,
     retry_backoff=True,
     retry_backoff_max=120,
     retry_jitter=True,
@@ -34,8 +39,8 @@ def process_document_ingestion(self, document_id: str):
         insert), so a retry never accumulates duplicate chunks.
     """
     import os
-    import tempfile
 
+    from app.core.runtime_files import create_runtime_temp_file
     from app.core.storage import download_file_from_s3
     from app.rag.cleaning import EmptyContentError
     from app.rag.embedding_registry import EmbeddingValidationError
@@ -99,8 +104,7 @@ def process_document_ingestion(self, document_id: str):
             "[Task %s] Downloading S3 document for RAG ingestion.", self.request.id
         )
         _, ext = os.path.splitext(document.object_key)
-        tmp_fd, local_file_path = tempfile.mkstemp(suffix=ext)
-        os.close(tmp_fd)
+        local_file_path = create_runtime_temp_file(suffix=ext)
 
         try:
             download_file_from_s3(document.storage_uri, local_file_path)
@@ -178,10 +182,10 @@ def process_document_ingestion(self, document_id: str):
         # retries; tag it as "retrying" instead so the user sees a
         # consistent in-progress signal until we give up for good.
         retries_left = max(0, (self.max_retries or 0) - self.request.retries)
-        is_final_attempt = retries_left == 0
+        will_retry = isinstance(exc, _TRANSIENT_INGEST_ERRORS) and retries_left > 0
         if document is not None:
             try:
-                if is_final_attempt:
+                if not will_retry:
                     document.status = "failed"
                     # Humanize the terminal user-facing message (e.g. a 402
                     # balance error during embedding); raw detail is logged.

@@ -1,12 +1,13 @@
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { User, Lock, Mail, KeyRound, Info } from 'lucide-react';
 import { Btn } from '@/components/ui/Btn';
 import { Field } from '@/components/ui/Field';
-import { login, register, sendVerificationCode } from '@/api/auth';
+import { login, register } from '@/api/auth';
 import { useAuthStore } from '@/store/authStore';
-import { registerErr, loginErr, sendCodeErr } from '@/lib/errors';
+import { registerErr, loginErr } from '@/lib/errors';
 import { toast } from '@/store/uiStore';
+import { useVerificationCode } from './useVerificationCode';
 
 const MIN_PWD = 6;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -25,14 +26,8 @@ export function RegisterForm({ onSwitchToLogin }: Props = {}) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [sending, setSending] = useState(false);
   const [registering, setRegistering] = useState(false);
-  const [cooldown, setCooldown] = useState(0);
-  const tickRef = useRef<number | null>(null);
-
-  useEffect(() => () => {
-    if (tickRef.current !== null) window.clearInterval(tickRef.current);
-  }, []);
+  const { sending, cooldown, send } = useVerificationCode();
 
   const emailValid = EMAIL_RE.test(email);
   const pwdShort = password.length > 0 && password.length < MIN_PWD;
@@ -47,33 +42,9 @@ export function RegisterForm({ onSwitchToLogin }: Props = {}) {
     confirm === password &&
     !registering;
 
-  const startCooldown = (seconds: number) => {
-    setCooldown(seconds);
-    if (tickRef.current !== null) window.clearInterval(tickRef.current);
-    tickRef.current = window.setInterval(() => {
-      setCooldown((c) => {
-        if (c <= 1) {
-          if (tickRef.current !== null) window.clearInterval(tickRef.current);
-          tickRef.current = null;
-          return 0;
-        }
-        return c - 1;
-      });
-    }, 1000);
-  };
-
   const onSendCode = async () => {
     if (!canSend) return;
-    setSending(true);
-    try {
-      await sendVerificationCode(email, 'register');
-      toast.success('验证码已发送，请查收邮箱（开发模式见后端日志）');
-      startCooldown(60);
-    } catch (err) {
-      toast.error(sendCodeErr(err));
-    } finally {
-      setSending(false);
-    }
+    await send(email, 'register', '验证码已发送，请查收邮箱（开发模式见后端日志）');
   };
 
   const onSubmit = async (e: FormEvent) => {

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { AxiosError } from 'axios';
 
-import { loginErr, registerErr, sendCodeErr } from './errors';
+import { loginErr, registerErr, resetPasswordErr, sendCodeErr } from './errors';
 
 /** Tiny helper to build an AxiosError-shaped object for the error
  *  mappers. We only populate the fields the mappers actually read
@@ -68,5 +68,17 @@ describe('sendCodeErr', () => {
   it('falls back when the status is not 429', () => {
     const e = axiosError(500);
     expect(sendCodeErr(e)).toBe('发送验证码失败，请稍后重试');
+  });
+});
+
+describe('resetPasswordErr', () => {
+  it('shows the generic backend reset failure', () => {
+    const e = axiosError(400, '重置失败，请检查验证码或重新获取');
+    expect(resetPasswordErr(e)).toBe('重置失败，请检查验证码或重新获取');
+  });
+
+  it('does not expose server details for 5xx errors', () => {
+    const e = axiosError(500, 'smtp exploded');
+    expect(resetPasswordErr(e)).toBe('重置密码失败，请稍后重试');
   });
 });

@@ -9,7 +9,7 @@ never drifts (e.g. two ``in_progress`` rows for one record).
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -24,6 +24,7 @@ from app.models.mock_interview_runtime import MockInterviewRuntime
 # Its status just mirrors active-vs-not (MOCK-9).
 ACTIVE_STATUS = "in_progress"
 PROCESSING_STATUS = "processing_review"
+ANSWER_CLAIM_TTL_SECONDS = 600
 
 
 def create_runtime(
@@ -94,6 +95,74 @@ def get_runtime_for_record(
         .filter(MockInterviewRuntime.interview_record_id == interview_record_id)
         .first()
     )
+
+
+def claim_question(
+    db: Session,
+    runtime: MockInterviewRuntime,
+    *,
+    question_message_id: int,
+) -> str:
+    """Atomically claim one question before the slow interviewer LLM call.
+
+    Returns ``claimed``, ``stale`` or ``busy``. The caller commits the claim in
+    the same short transaction as the candidate answer. A lease older than ten
+    minutes is reclaimable after an API hard kill.
+    """
+    now = datetime.utcnow()
+    stale_before = now - timedelta(seconds=ANSWER_CLAIM_TTL_SECONDS)
+    updated = (
+        db.query(MockInterviewRuntime)
+        .filter(
+            MockInterviewRuntime.id == runtime.id,
+            MockInterviewRuntime.status == ACTIVE_STATUS,
+            MockInterviewRuntime.current_question_message_id == question_message_id,
+            (
+                MockInterviewRuntime.answer_claimed_at.is_(None)
+                | (MockInterviewRuntime.answer_claimed_at < stale_before)
+            ),
+        )
+        .update(
+            {
+                MockInterviewRuntime.answer_claimed_at: now,
+                MockInterviewRuntime.last_activity_at: now,
+            },
+            synchronize_session=False,
+        )
+    )
+    if updated:
+        runtime.answer_claimed_at = now
+        runtime.last_activity_at = now
+        return "claimed"
+
+    db.expire_all()
+    current = db.get(MockInterviewRuntime, runtime.id)
+    if current is None or current.current_question_message_id != question_message_id:
+        return "stale"
+    return "busy"
+
+
+def release_question_claim(
+    db: Session,
+    runtime_id: str,
+    *,
+    question_message_id: int,
+) -> None:
+    """Release a failed turn without disturbing a newer question."""
+    db.rollback()
+    (
+        db.query(MockInterviewRuntime)
+        .filter(
+            MockInterviewRuntime.id == runtime_id,
+            MockInterviewRuntime.status == ACTIVE_STATUS,
+            MockInterviewRuntime.current_question_message_id == question_message_id,
+        )
+        .update(
+            {MockInterviewRuntime.answer_claimed_at: None},
+            synchronize_session=False,
+        )
+    )
+    db.commit()
 
 
 def advance_runtime(

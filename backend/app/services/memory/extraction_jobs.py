@@ -8,23 +8,15 @@ domain modules (``realtime_extraction.run_realtime_extraction`` and
 atomic dispatch + cursor advance, so a partial write can't escape and a retry
 is idempotent. This module is just the outbox glue: enqueue helpers + handlers.
 
-Imported by the worker's drain task so the handlers register before any job
-runs (mirrors ``ability_outbox``).
+Worker handlers are registered by ``app.worker.tasks.outbox``.
 """
 
 from __future__ import annotations
 
-import json
-import logging
-
 from sqlalchemy.orm import Session
 
-from app.core.user_identity import resolve_user_pk
-from app.db.database import SessionLocal
 from app.models.outbox_job import OutboxJob
-from app.services.uploads.outbox_service import enqueue_job, register_handler
-
-logger = logging.getLogger(__name__)
+from app.services.outbox import enqueue_job
 
 REALTIME_JOB = "extract_memory_realtime"
 DREAMING_JOB = "extract_memory_dreaming"
@@ -35,42 +27,6 @@ _INFLIGHT = ("pending", "running", "failed")
 
 
 # ── Enqueue helpers ──────────────────────────────────────────────────────
-
-
-def enqueue_realtime_extraction(
-    *,
-    session_id: str,
-    user_id: str,
-    record_id: str | None,
-    upto_seq: int,
-) -> None:
-    """Enqueue a realtime extraction job for messages up to ``upto_seq``.
-
-    Idempotent on ``(session_id, upto_seq)`` so a re-fired post-turn hook won't
-    double-enqueue. Multiple jobs with different ``upto_seq`` are self-
-    coordinating: each handler extracts ``(current_cursor, its upto_seq]`` and
-    advances the cursor, so a superseded job becomes a no-op (see the core).
-    """
-    db = SessionLocal()
-    try:
-        user_pk = resolve_user_pk(db, user_id)
-        if user_pk is None:
-            return
-        enqueue_realtime_extraction_in_transaction(
-            db,
-            user_pk=user_pk,
-            session_id=session_id,
-            user_id=user_id,
-            record_id=record_id,
-            upto_seq=upto_seq,
-        )
-        db.commit()
-    except Exception as exc:  # noqa: BLE001 — enqueue is best-effort; the cursor
-        # didn't advance, so the next turn re-enqueues the same range.
-        db.rollback()
-        logger.warning("enqueue_realtime_extraction failed for %s: %s", session_id, exc)
-    finally:
-        db.close()
 
 
 def enqueue_realtime_extraction_in_transaction(
@@ -124,75 +80,9 @@ def enqueue_dreaming(db: Session, *, user_pk: int, record_id: str) -> OutboxJob 
     )
 
 
-# ── Handlers ─────────────────────────────────────────────────────────────
-
-
-def _handle_realtime(db: Session, job: OutboxJob) -> None:
-    from app.services.memory.realtime_extraction import run_realtime_extraction
-
-    p = json.loads(job.payload_json) if job.payload_json else {}
-    session_id = p.get("session_id")
-    user_id = p.get("user_id")
-    upto_seq = p.get("upto_seq")
-    if not session_id or not user_id or upto_seq is None:
-        logger.warning("extract_memory_realtime: bad payload %s", p)
-        return
-    # Raises on failure → outbox records + retries. The core's own session +
-    # cursor re-check make this idempotent.
-    run_realtime_extraction(
-        session_id=session_id,
-        user_id=user_id,
-        record_id=p.get("record_id"),
-        upto_seq=int(upto_seq),
-    )
-
-
-def _handle_dreaming(db: Session, job: OutboxJob) -> None:
-    from app.services.memory.dreaming_worker import dream_for_record
-
-    p = json.loads(job.payload_json) if job.payload_json else {}
-    record_id = p.get("record_id")
-    if not record_id:
-        logger.warning("extract_memory_dreaming: bad payload %s", p)
-        return
-    summary = dream_for_record(record_id)
-    # dream_for_record never raises in normal operation; surface a hard failure
-    # to the outbox so it retries (its last_dreamed_at re-check keeps the retry
-    # idempotent).
-    if summary.get("error"):
-        raise RuntimeError(f"dreaming failed for {record_id}: {summary['error']}")
-
-
-register_handler(REALTIME_JOB, _handle_realtime)
-register_handler(DREAMING_JOB, _handle_dreaming)
-
-
 __all__ = [
     "REALTIME_JOB",
     "DREAMING_JOB",
-    "enqueue_realtime_extraction",
     "enqueue_realtime_extraction_in_transaction",
     "enqueue_dreaming",
 ]
-
-
-def _handle_dream_check_user(db, job) -> None:
-    """Outbox handler for the event-driven dream check (MEM-9).
-
-    The delayed wait lives in the OUTBOX (``run_after``), not in a Celery
-    countdown: a 6h-unacked message would blow through the broker's
-    visibility_timeout (3700s) and get redelivered ~hourly. When this
-    fires, the quiet window has already passed — dispatch the (immediate,
-    fast-ack) dream task and let its own gates decide.
-    """
-    import json as _json
-
-    from app.worker.tasks.memory import dream_for_user_task
-
-    payload = _json.loads(job.payload_json) if job.payload_json else {}
-    username = payload.get("username")
-    if username:
-        dream_for_user_task.delay(username)
-
-
-register_handler("dream_check_user", _handle_dream_check_user)

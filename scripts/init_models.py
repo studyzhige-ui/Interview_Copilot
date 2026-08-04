@@ -4,16 +4,17 @@ Reads model IDs from environment variables (or .env file) and downloads them
 from HuggingFace. Supports selective downloading via --only flag.
 
 Usage:
-    python scripts/init_models.py              # Download all models
+    python scripts/init_models.py              # Interactive model/profile wizard
     python scripts/init_models.py --only embedding  # Download embedding model only
     python scripts/init_models.py --dry-run    # Show what would be downloaded
 
-Models are stored under data/cache/models/ and data/cache/huggingface/.
-The application auto-detects local snapshots at startup — no path changes needed.
+Model weights are stored under data/cache/models/. Library metadata and
+temporary download state stay under data/cache/ as well.
 """
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -22,10 +23,69 @@ from huggingface_hub import snapshot_download
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-MODEL_DIR = ROOT_DIR / "data" / "cache" / "models"
-HF_CACHE_DIR = ROOT_DIR / "data" / "cache" / "huggingface"
-TORCH_CACHE_DIR = ROOT_DIR / "data" / "cache" / "torch"
+SOURCE_ROOT = (
+    ROOT_DIR / "backend" if (ROOT_DIR / "backend" / "app").is_dir() else ROOT_DIR
+)
+sys.path.insert(0, str(SOURCE_ROOT))
+load_dotenv(ROOT_DIR / ".env")
+
+from app.core.config import settings  # noqa: E402
+from app.core.hf_runtime import (  # noqa: E402
+    DOCLING_MODELS_DIR,
+    HF_CACHE_DIR,
+    LOCAL_MODELS_DIR,
+    prepare_hf_runtime,
+)
+
+MODEL_DIR = LOCAL_MODELS_DIR
+ENV_FILE = ROOT_DIR / ".env"
 DEFAULT_HF_ENDPOINT = "https://hf-mirror.com"
+
+LOCAL_MODEL_CHOICES = {
+    "embedding": (
+        ("BAAI/bge-m3", "multilingual, recommended", "1024"),
+        ("BAAI/bge-large-zh-v1.5", "Chinese, higher quality", "1024"),
+        ("BAAI/bge-small-en-v1.5", "English, lightweight", "384"),
+    ),
+    "reranker": (
+        ("BAAI/bge-reranker-v2-m3", "multilingual, recommended", None),
+        ("BAAI/bge-reranker-large", "larger legacy model", None),
+    ),
+    "whisper": (
+        (
+            "deepdml/faster-whisper-large-v3-turbo-ct2",
+            "multilingual turbo, recommended",
+            None,
+        ),
+        ("Systran/faster-whisper-medium", "balanced", None),
+        ("Systran/faster-whisper-small", "lightweight", None),
+    ),
+    "diarization": (
+        (
+            "pyannote-community/speaker-diarization-community-1",
+            "community model, recommended",
+            None,
+        ),
+        (
+            "pyannote/speaker-diarization-3.1",
+            "requires HF token and license acceptance",
+            None,
+        ),
+    ),
+}
+
+RECOMMENDED_LOCAL_CONFIG = {
+    "EMBEDDING_PROVIDER": "local",
+    "EMBEDDING_MODEL": LOCAL_MODEL_CHOICES["embedding"][0][0],
+    "EMBEDDING_DIM": LOCAL_MODEL_CHOICES["embedding"][0][2],
+    "RERANKER_PROVIDER": "local",
+    "RERANKER_MODEL": LOCAL_MODEL_CHOICES["reranker"][0][0],
+    "TRANSCRIPTION_PROVIDER": "local_whisperx",
+    "TRANSCRIPTION_MODEL": LOCAL_MODEL_CHOICES["whisper"][0][0],
+    "DIARIZATION_MODE": "auto",
+    "DIARIZATION_MODEL_ID": LOCAL_MODEL_CHOICES["diarization"][0][0],
+    "PARSER_PROVIDER": "docling",
+}
 
 # Downloads use ``huggingface_hub.snapshot_download`` for every role — no
 # per-role filename lists, no special-case downloaders. snapshot_download
@@ -45,10 +105,21 @@ DEFAULT_HF_ENDPOINT = "https://hf-mirror.com"
 # Environment variable → default model name. These names match
 # backend/app/core/config.py exactly.
 MODEL_DEFAULTS = {
-    "EMBEDDING_MODEL": "BAAI/bge-m3",
-    "RERANKER_MODEL": "BAAI/bge-reranker-v2-m3",
-    "TRANSCRIPTION_MODEL": "Systran/faster-whisper-large-v3",
-    "DIARIZATION_MODEL_ID": "pyannote-community/speaker-diarization-community-1",
+    "EMBEDDING_MODEL": settings.EMBEDDING_MODEL,
+    "RERANKER_MODEL": settings.RERANKER_MODEL,
+    "TRANSCRIPTION_MODEL": settings.TRANSCRIPTION_MODEL,
+    "DIARIZATION_MODEL_ID": settings.DIARIZATION_MODEL_ID,
+}
+
+ROLE_ENV_KEYS = {
+    "embedding": ("EMBEDDING_MODEL", "EMBEDDING_PROVIDER", "local"),
+    "reranker": ("RERANKER_MODEL", "RERANKER_PROVIDER", "local"),
+    "whisper": (
+        "TRANSCRIPTION_MODEL",
+        "TRANSCRIPTION_PROVIDER",
+        "local_whisperx",
+    ),
+    "diarization": ("DIARIZATION_MODEL_ID", "DIARIZATION_MODE", "auto"),
 }
 
 # ── Size lookup: query HuggingFace live; no hardcoded fallback ───────────
@@ -101,25 +172,7 @@ def repo_dir(repo_id: str) -> Path:
 
 
 def prepare_runtime(hf_endpoint: str) -> None:
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    HF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    TORCH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Clear dead local proxies that block HuggingFace downloads
-    for key in (
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "GIT_HTTP_PROXY",
-        "GIT_HTTPS_PROXY",
-    ):
-        value = os.getenv(key, "")
-        if "127.0.0.1:9" in value or "localhost:9" in value:
-            os.environ.pop(key, None)
-
-    os.environ["HF_HOME"] = str(HF_CACHE_DIR)
-    os.environ["HUGGINGFACE_HUB_CACHE"] = str(HF_CACHE_DIR)
-    os.environ["TORCH_HOME"] = str(TORCH_CACHE_DIR)
+    prepare_hf_runtime()
     os.environ["HF_ENDPOINT"] = hf_endpoint
 
 
@@ -172,6 +225,21 @@ def is_already_downloaded(repo_id: str) -> bool:
     return False
 
 
+def is_docling_downloaded() -> bool:
+    return _tree_size(DOCLING_MODELS_DIR) >= _MIN_DOWNLOADED_BYTES
+
+
+def download_docling_models() -> Path:
+    from docling.utils.model_downloader import download_models
+
+    return Path(
+        download_models(
+            output_dir=DOCLING_MODELS_DIR,
+            progress=True,
+        )
+    )
+
+
 def _provider_status(role: str) -> tuple[bool, str, str]:
     """Inspect the relevant *_PROVIDER env var to decide whether the role needs a local download.
 
@@ -203,9 +271,129 @@ def _provider_status(role: str) -> tuple[bool, str, str]:
     return local, pid, reason
 
 
-def main() -> None:
-    load_dotenv(ROOT_DIR / ".env")
+def _choice(prompt: str, maximum: int, default: int = 1) -> int:
+    while True:
+        raw = input(f"{prompt} [{default}]: ").strip()
+        if not raw:
+            return default
+        if raw.isdigit() and 1 <= int(raw) <= maximum:
+            return int(raw)
+        print(f"Please enter a number from 1 to {maximum}.")
 
+
+def _yes_no(prompt: str, *, default: bool = True) -> bool:
+    suffix = "Y/n" if default else "y/N"
+    while True:
+        raw = input(f"{prompt} [{suffix}]: ").strip().lower()
+        if not raw:
+            return default
+        if raw in {"y", "yes"}:
+            return True
+        if raw in {"n", "no"}:
+            return False
+        print("Please enter y or n.")
+
+
+def _custom_repo_id(role: str) -> tuple[str, str | None]:
+    while True:
+        repo_id = input(f"  Custom Hugging Face repo for {role} (owner/name): ").strip()
+        if re.fullmatch(r"[^/\s]+/[^/\s]+", repo_id):
+            break
+        print("  Use the form owner/model-name.")
+
+    dimension = None
+    if role == "embedding":
+        while True:
+            dimension = input("  Embedding output dimension: ").strip()
+            if dimension.isdigit() and int(dimension) > 0:
+                break
+            print("  Dimension must be a positive integer.")
+    return repo_id, dimension
+
+
+def _select_model(role: str) -> tuple[str, str | None]:
+    choices = LOCAL_MODEL_CHOICES[role]
+    print(f"\n  Choose {role} model:")
+    for index, (repo_id, label, _dimension) in enumerate(choices, start=1):
+        print(f"    [{index}] {repo_id} — {label}")
+    print(f"    [{len(choices) + 1}] Enter another compatible Hugging Face repo")
+    selected = _choice("  Selection", len(choices) + 1)
+    if selected == len(choices) + 1:
+        return _custom_repo_id(role)
+    repo_id, _label, dimension = choices[selected - 1]
+    return repo_id, dimension
+
+
+def _write_env(updates: dict[str, str]) -> None:
+    """Persist selected providers/models without rewriting unrelated settings."""
+    text = ENV_FILE.read_text(encoding="utf-8") if ENV_FILE.exists() else ""
+    for key, value in updates.items():
+        line = f"{key}={value}"
+        pattern = re.compile(rf"(?m)^{re.escape(key)}=.*$")
+        if pattern.search(text):
+            text = pattern.sub(lambda _match, replacement=line: replacement, text)
+        else:
+            if text and not text.endswith("\n"):
+                text += "\n"
+            text += f"{line}\n"
+        os.environ[key] = value
+    ENV_FILE.write_text(text, encoding="utf-8", newline="\n")
+
+
+def _interactive_selection() -> set[str] | None:
+    """Choose a Community local-model bundle and persist it to ``.env``.
+
+    ``None`` means use the providers already configured in ``.env``. An empty
+    set means the user cancelled without changing configuration.
+    """
+    print("\nCommunity model profile:")
+    print("  [1] Recommended local bundle (all local capabilities)")
+    print("  [2] Custom / hybrid (choose each local capability)")
+    print("  [3] Use the local providers already configured in .env")
+    print("  [4] Cancel; download nothing")
+    profile = _choice("Selection", 4)
+
+    if profile == 4:
+        return set()
+    if profile == 3:
+        return None
+    if profile == 1:
+        _write_env(RECOMMENDED_LOCAL_CONFIG)
+        print(f"\nSaved recommended local providers to {ENV_FILE}.")
+        return {"embedding", "reranker", "whisper", "diarization", "docling"}
+
+    updates: dict[str, str] = {}
+    selected_roles: set[str] = set()
+    prompts = {
+        "embedding": "Use a local embedding model for RAG?",
+        "reranker": "Use a local reranker for RAG?",
+        "whisper": "Use local WhisperX transcription?",
+        "diarization": "Use local speaker diarization (also available with remote ASR)?",
+    }
+    for role, prompt in prompts.items():
+        if not _yes_no(prompt, default=role in {"embedding", "reranker"}):
+            continue
+        model_id, dimension = _select_model(role)
+        model_key, provider_key, provider_value = ROLE_ENV_KEYS[role]
+        updates[model_key] = model_id
+        if role == "diarization" and "whisper" not in selected_roles:
+            provider_value = "pyannote"
+        updates[provider_key] = provider_value
+        if dimension is not None:
+            updates["EMBEDDING_DIM"] = dimension
+        selected_roles.add(role)
+
+    if _yes_no("Use Docling as the primary local document parser?"):
+        updates["PARSER_PROVIDER"] = "docling"
+        selected_roles.add("docling")
+
+    if updates:
+        _write_env(updates)
+        print(f"\nSaved selected local providers to {ENV_FILE}.")
+    return selected_roles
+
+
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="Download local models for Interview Copilot.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -216,10 +404,10 @@ providers. Remote-provider roles are skipped because their model data stays
 with the provider.
 
 Examples:
-  python scripts/init_models.py                  # Download all locally-configured models
+  python scripts/init_models.py                  # Interactive Community model setup
   python scripts/init_models.py --only embedding # Embedding only
   python scripts/init_models.py --dry-run        # Show plan without downloading
-  python scripts/init_models.py --force-all      # Pre-download every configured local model
+  python scripts/init_models.py --non-interactive # Use current .env without prompts
 """,
     )
     parser.add_argument(
@@ -229,8 +417,8 @@ Examples:
     )
     parser.add_argument(
         "--only",
-        choices=("all", "embedding", "reranker", "whisper", "diarization"),
-        default="all",
+        choices=("all", "embedding", "reranker", "whisper", "diarization", "docling"),
+        default=None,
         help="Download only a specific model type",
     )
     parser.add_argument(
@@ -244,7 +432,35 @@ Examples:
         help="Download every configured model, including roles currently using "
         "remote providers.",
     )
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Use current .env provider/model settings without prompting",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Show the Community model selection wizard even when stdin is piped",
+    )
     args = parser.parse_args()
+
+    if args.interactive and args.non_interactive:
+        parser.error("--interactive and --non-interactive are mutually exclusive")
+
+    should_prompt = args.interactive or (
+        sys.stdin.isatty()
+        and not args.non_interactive
+        and args.only is None
+        and not args.dry_run
+        and not args.force_all
+    )
+
+    selected_roles: set[str] | None = None
+    if should_prompt:
+        selected_roles = _interactive_selection()
+        if selected_roles == set():
+            print("No model download selected.")
+            return 0
 
     models = {
         "embedding": os.getenv(
@@ -278,7 +494,10 @@ Examples:
     tasks = []
     skipped_roles: list[tuple[str, str]] = []
     for role in ("embedding", "reranker", "whisper", "diarization"):
-        if args.only not in ("all", role):
+        if selected_roles is not None:
+            if role not in selected_roles:
+                continue
+        elif (args.only or "all") not in ("all", role):
             continue
         repo_id = models[role]
         # Provider gate: remote roles need no local model download.
@@ -298,6 +517,29 @@ Examples:
         if not already:
             tasks.append((role, repo_id))
 
+    needs_docling = False
+    include_docling = (
+        "docling" in selected_roles
+        if selected_roles is not None
+        else (args.only or "all") in ("all", "docling")
+    )
+    if include_docling:
+        try:
+            import docling  # noqa: F401
+        except ImportError:
+            print(f"  {'docling':>13}: default parsing artifacts")
+            print("                [skip] local dependency is not installed")
+        else:
+            already = is_docling_downloaded()
+            status = (
+                "[ok]   already downloaded"
+                if already
+                else "[get]  will download default parsing artifacts"
+            )
+            print(f"  {'docling':>13}: layout, tables, OCR and enrichment")
+            print(f"                {status}    [local parser/fallback]")
+            needs_docling = not already
+
     print()
     if skipped_roles:
         print(
@@ -306,33 +548,51 @@ Examples:
         )
         print()
 
-    if not tasks:
+    if not tasks and not needs_docling:
         print("All models are already downloaded. Nothing to do.")
-        return
+        return 0
 
     if args.dry_run:
-        print(f"Dry run: {len(tasks)} model(s) would be downloaded.")
-        return
+        print(
+            f"Dry run: {len(tasks) + int(needs_docling)} model bundle(s) "
+            "would be downloaded."
+        )
+        return 0
 
     prepare_runtime(args.hf_endpoint)
 
+    failures = 0
     for role, repo_id in tasks:
         print(f"[{role}] Downloading {repo_id} ...")
         try:
             target = download_snapshot(repo_id)
             print(f"[{role}] [done] Ready: {target}")
         except Exception as exc:
+            failures += 1
             print(f"[{role}] [fail] {exc}", file=sys.stderr)
             print(
                 f"[{role}]   Try running with --hf-endpoint https://huggingface.co",
                 file=sys.stderr,
             )
 
+    if needs_docling:
+        print("[docling] Downloading default parsing artifacts ...")
+        try:
+            target = download_docling_models()
+            print(f"[docling] [done] Ready: {target}")
+        except Exception as exc:
+            failures += 1
+            print(f"[docling] [fail] {exc}", file=sys.stderr)
+
     print()
+    if failures:
+        print(f"{failures} model download(s) failed.", file=sys.stderr)
+        return 1
     print(
         "Done. Start the API server with: cd backend && uvicorn app.main:app --reload --port 8080"
     )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

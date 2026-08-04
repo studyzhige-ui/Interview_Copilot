@@ -123,39 +123,8 @@ class ExecutionStrategy(Protocol):
         ...
 
 
-# ── Concrete strategies (implementations live in their own modules) ──
-# The factory functions below are populated in G3/G4 once the
-# concrete classes land. Keeping the imports lazy avoids a circular
-# import via conversation/engine.py → strategy.py → agent_runtime/…
-
-
-def make_agent_strategy() -> ExecutionStrategy:
-    """Factory for the L2 ReAct strategy. Lazy-imported so the chat
-    path doesn't pay the agent_runtime import cost when running pure-
-    chat traffic."""
-    from app.conversation.agent_strategy import AgentLoopStrategy
-
-    return AgentLoopStrategy()
-
-
-def make_chat_strategy() -> ExecutionStrategy:
-    """Factory for the L1 chat-pipeline strategy."""
-    from app.conversation.chat_strategy import ChatPipelineStrategy
-
-    return ChatPipelineStrategy()
-
-
-# Concrete classes live in agent_strategy.py / chat_strategy.py and
-# are re-exported via app.conversation.__init__ for callers who want
-# the class itself (e.g. tests, type hints). No __getattr__ magic
-# here — the package __init__ does the re-export eagerly anyway, so
-# lazy module-level lookup added zero value.
-
-
 __all__ = [
     "ExecutionStrategy",
     "StrategyContext",
     "StrategyResult",
-    "make_agent_strategy",
-    "make_chat_strategy",
 ]

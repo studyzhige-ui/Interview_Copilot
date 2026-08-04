@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 
 from llama_index.core import Settings
@@ -28,11 +29,22 @@ from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.resume_section import ResumeSection
 from app.rag import milvus_hybrid
-from app.rag.hybrid import RetrievalChunk
 
 logger = logging.getLogger(__name__)
 
 _COLL = milvus_hybrid.RESUME
+
+
+@dataclass
+class ResumeSearchHit:
+    """One resume-section retrieval result."""
+
+    id: str
+    text: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+    vector_score: float | None = None
+    lexical_score: float | None = None
+    final_score: float = 0.0
 
 
 class ResumeVectorService:
@@ -113,7 +125,7 @@ class ResumeVectorService:
         query: str,
         section_types: list[str] | None = None,
         top_k: int = 5,
-    ) -> list[RetrievalChunk]:
+    ) -> list[ResumeSearchHit]:
         """Dense + BM25 hybrid search over the user's resume sections.
 
         ``user_id`` is the username principal; it's resolved to the stable
@@ -135,14 +147,14 @@ class ResumeVectorService:
 
         hits = await asyncio.to_thread(_search)
         allowed = set(section_types) if section_types else None
-        chunks: list[RetrievalChunk] = []
+        chunks: list[ResumeSearchHit] = []
         for h in hits:
             if h.get("user_id") != user_pk:  # defence-in-depth on the server filter
                 continue
             if allowed and h.get("section_type") not in allowed:
                 continue
             chunks.append(
-                RetrievalChunk(
+                ResumeSearchHit(
                     id=str(h["id"]),
                     text=h["text"],
                     metadata={

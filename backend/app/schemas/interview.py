@@ -1,6 +1,6 @@
 """Pydantic schemas for interview / upload / debrief HTTP endpoints.
 
-Mirrors the request / response shapes used by ``app/api/interview.py``
+Mirrors the request / response shapes used by ``app/api/interviews/records.py``
 (audio upload, analysis, InterviewRecord CRUD, QA edits).
 """
 

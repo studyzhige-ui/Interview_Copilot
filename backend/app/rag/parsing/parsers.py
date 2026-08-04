@@ -142,6 +142,11 @@ def _get_docling_converter():
     is a plain options object — the engine imports at convert time, not here)."""
     global _docling_converter
     if _docling_converter is None:
+        # Set all model-cache environment variables before importing Docling;
+        # otherwise its first import can lock in ~/.cache defaults.
+        from app.core.hf_runtime import DOCLING_MODELS_DIR, prepare_hf_runtime
+
+        prepare_hf_runtime()
         from docling.datamodel.base_models import InputFormat
         from docling.datamodel.pipeline_options import (
             PdfPipelineOptions,
@@ -157,16 +162,9 @@ def _get_docling_converter():
             do_ocr=_ocr_enabled(),
             ocr_options=RapidOcrOptions(),  # onnxruntime-based, deployment-light
         )
-        # Load layout/table models from the managed data/cache/docling/models
-        # folder when pre-downloaded there (`docling-tools models download -o
-        # <that path>`) — keeps all local models under one root. When absent,
-        # leave artifacts_path unset so Docling falls back to its own download
-        # (works where HuggingFace is reachable; degrades gracefully otherwise).
-        from app.core.hf_runtime import DOCLING_CACHE_DIR
-
-        models_dir = DOCLING_CACHE_DIR / "models"
-        if models_dir.is_dir() and any(models_dir.iterdir()):
-            pdf_opts.artifacts_path = models_dir
+        # Pre-downloaded Docling artifacts share data/cache/models with the
+        # embedding, reranker and speech models.
+        pdf_opts.artifacts_path = DOCLING_MODELS_DIR
         _docling_converter = DocumentConverter(
             format_options={
                 InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_opts),

@@ -364,9 +364,7 @@ DOC_MAX_CHARS = 6000
 DOC_COMPACT_TARGET_LINES = DOC_MAX_LINES // 2
 
 
-def compact_if_oversized(
-    username: str, doc_type: str, *, user_id_for_llm: str | None = None
-) -> bool:
+def compact_if_oversized(username: str, doc_type: str) -> bool:
     """LLM-rewrite ``doc_type`` when it exceeds the size ceiling.
 
     Returns True iff a rewrite was applied. Sync (dreaming worker context);
@@ -382,7 +380,7 @@ def compact_if_oversized(
 
         from app.core.llm_client_factory import get_internal_llm
         from app.prompts.memory import DOC_COMPACT_PROMPT
-        from app.worker.tasks import run_async
+        from app.core.async_runtime import run_async
 
         labels = {"user_profile": "用户画像", "learning_strategy": "学习策略"}
         prompt = DOC_COMPACT_PROMPT.format(

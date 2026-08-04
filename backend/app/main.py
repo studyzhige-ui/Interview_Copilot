@@ -13,6 +13,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import __version__
 from app.core.background_tasks import cancel_and_wait_all, safe_background_task
 
 # Set a default Hugging Face mirror without overriding the user's .env value.
@@ -38,8 +39,6 @@ from app.db.database import engine
 # app.models.__init__ imports every model module — the single registry
 # (alembic env.py and tests/conftest.py consume the same package).
 import app.models  # noqa: F401
-from app.rag.embeddings import init_rag_settings
-from app.rag.retriever import init_reranker
 from app.core.config import settings
 
 # ─── Structured logging ──────────────────────────────────────────────────
@@ -68,7 +67,11 @@ for _quiet in ("httpx", "httpcore", "urllib3", "openai", "milvus"):
     logging.getLogger(_quiet).setLevel(logging.WARNING)
 
 logger = logging.getLogger("interview.copilot.main")
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if not (PROJECT_ROOT / "alembic.ini").is_file():
+    # Source checkout: backend/app/main.py. The container layout is
+    # /app/app/main.py and resolves on the first candidate above.
+    PROJECT_ROOT = PROJECT_ROOT.parent
 
 
 @asynccontextmanager
@@ -81,7 +84,7 @@ async def lifespan(app: FastAPI):
     # ensures the startup banner appears once when the lifespan starts.
     _setup_llm_tracing()
 
-    logger.info(">>> [1/5] Verifying database schema migration state...")
+    logger.info(">>> Verifying database schema migration state...")
     from alembic.config import Config
     from alembic.script import ScriptDirectory
     from sqlalchemy import inspect, text
@@ -115,21 +118,11 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # Redis failure must not prevent API startup.
         logger.warning("Could not publish orphan-turn terminal events: %s", exc)
 
-    logger.info(">>> [2/5] Initializing LlamaIndex LLM and embedding settings...")
-    init_rag_settings()
-
-    # v3 memory is markdown docs, not Milvus vectors — no startup
-    # backfill needed. (The retired v2 ``memory_items`` path used a
-    # ``MEMORY_BACKFILL_ON_STARTUP`` setting + a ``memory_vector_service``
-    # priming step here; both were removed in the audit cleanup.)
-    logger.info(">>> [3/5] (v3 memory needs no startup backfill — skipping)")
-
-    logger.info(">>> [4/5] Initializing reranker...")
-    init_reranker()
-
-    logger.info(
-        ">>> [5/5] Whisper and diarization models are loaded by Celery workers."
-    )
+    # Heavy models belong to the queue processes that use them. Keeping the API
+    # lightweight makes health/readiness available immediately and avoids a
+    # duplicate embedding + reranker copy in memory. The diagnostic /rag/query
+    # endpoint initializes its own process lazily when explicitly requested.
+    logger.info(">>> Heavy AI runtimes are owned by their worker queues.")
     safe_background_task(monitor_orphaned_turns(), name="orphan-turn-monitor")
     logger.info("====== Interview Copilot startup sequence complete ======")
     yield
@@ -145,34 +138,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description="Agent + RAG Backend for Interview Copilot",
-    version="1.0.0",
+    version=__version__,
     lifespan=lifespan,
 )
-
-# ─── Reverse-proxy headers (must come BEFORE rate-limit / lockout reads) ─
-# When ``TRUSTED_PROXIES`` is set, ProxyHeadersMiddleware reads the
-# X-Forwarded-For header from the trusted proxy and rewrites
-# ``request.client.host`` to the real client IP. Without this, every
-# request behind nginx/ALB looks like it came from the proxy IP —
-# slowapi's per-IP key_func and verification_code_service's IP-lockout
-# both degrade to a single global counter, and one attacker burns the
-# quota for everyone.
-#
-# Default empty = dev direct-connect, no rewrite — same behaviour as
-# before. Must be configured in prod for the rate-limit P0 to actually
-# bite.
-_trusted_proxies = [p.strip() for p in settings.TRUSTED_PROXIES.split(",") if p.strip()]
-if _trusted_proxies:
-    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-
-    # trusted_hosts accepts a list or comma-string; we pass the parsed
-    # list so a typo in TRUSTED_PROXIES surfaces at startup, not later.
-    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_proxies)
-    logger.info(
-        "ProxyHeadersMiddleware enabled (trusted_hosts=%s) — request.client.host "
-        "will be rewritten from X-Forwarded-For",
-        _trusted_proxies,
-    )
 
 # CORS Configuration — read allowed origins from settings (comma-separated).
 _cors_origins = [
@@ -194,7 +162,7 @@ app.add_middleware(
 
 # ─── Local-fallback static files (avatars only) ──────────────────────────
 # When S3 / MinIO is unreachable an avatar upload falls back to writing the
-# bytes under ``STORAGE_DIR/avatars/...`` (see app.core.storage.save_blob_to_local).
+# bytes under ``STORAGE_DIR/avatars/...`` (see app.core.storage fallback).
 # Those files need to be browser-readable; we mount JUST the avatars/
 # sub-tree as a public static route. Other STORAGE_DIR contents (resumes,
 # JDs, knowledge documents) stay off-bus — they're private and only the
@@ -307,12 +275,28 @@ except ImportError:
         "slowapi not installed — rate limiting disabled. Run: pip install slowapi"
     )
 
+# ─── Reverse-proxy headers ───────────────────────────────────────
+# Starlette prepends each newly registered middleware. Register this LAST so
+# it is the outermost layer and rewrites ``request.client.host`` before
+# SlowAPI and the application middleware read it. Otherwise every request
+# behind nginx shares the proxy's rate-limit bucket.
+_trusted_proxies = [p.strip() for p in settings.TRUSTED_PROXIES.split(",") if p.strip()]
+if _trusted_proxies:
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_proxies)
+    logger.info(
+        "ProxyHeadersMiddleware enabled (trusted_hosts=%s) — request.client.host "
+        "will be rewritten from X-Forwarded-For",
+        _trusted_proxies,
+    )
+
 from app.api import (
     auth,
     capabilities,
     chat,
     file_assets,
-    interview,
+    interviews,
     memory,
     model_runtime,
     operations,
@@ -325,7 +309,7 @@ app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(capabilities.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
 app.include_router(file_assets.router, prefix="/api/v1")
-app.include_router(interview.router, prefix="/api/v1")
+app.include_router(interviews.router, prefix="/api/v1")
 app.include_router(memory.router, prefix="/api/v1")
 app.include_router(rag.router, prefix="/api/v1")
 app.include_router(model_runtime.router, prefix="/api/v1")

@@ -9,16 +9,18 @@ The suite has three layers:
 
 | Layer | Scope | External LLM |
 |---|---|---|
-| `retrieval` | recall, precision, MRR, nDCG, latency and tenant isolation | No |
+| `retrieval` | source hit, passage hit/precision/MRR/nDCG, latency and tenant isolation | No |
 | `generation` | grounded answer quality through RAGAS | Yes |
 | `trajectory` | planner retrieval decisions and query construction | Yes |
 
 ## Prepare
 
-Install the developer dependencies:
+Install the evaluation dependencies. Add `dev` when you also want to run the
+pytest quality gates:
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[evaluation]"
+pip install -e ".[dev,evaluation]"
 ```
 
 Create a project-owned JSONL dataset. The repository includes
@@ -26,7 +28,9 @@ Create a project-owned JSONL dataset. The repository includes
 ignored because evaluation content may contain private or licensed source
 material.
 
-Configure an OpenAI-compatible evaluator in `.env`:
+Configure an OpenAI-compatible evaluator in your shell or local `.env`. These
+variables intentionally do not appear in the ordinary Community/Cloud
+templates because evaluation is an explicit developer workflow:
 
 ```dotenv
 EVAL_LLM_API_KEY=...
@@ -82,11 +86,16 @@ Each line is a JSON object:
 }
 ```
 
+Retrieval rows should include `relevant_document_ids`, or a `source_file` that
+maps to the deterministic document id created by `prepare_corpus`. A passage is
+relevant only when its source is correct and its text is semantically relevant;
+low-threshold answer overlap alone is not a gold label.
+
 `layer` accepts `retrieval`, `generation`, `trajectory`, or `all`. Thresholds
 live beside their assertions in `test_*_quality.py`; calibrate them for the
 chosen corpus and evaluator rather than weakening them to hide regressions.
 
-## Current baseline (2026-07-27)
+## Historical baseline (2026-07-27, invalidated)
 
 The isolated `eval_user_a` run used five real PDFs, 902 chunks and 835
 retrieval questions:
@@ -98,7 +107,13 @@ retrieval questions:
 - P95 latency: `512.36 ms`
 - tenant-isolation violations: `0`
 
-All eight fixed mock-interview scenarios passed, with a `4.9/5` mean judge
-score and 100% safety and grounding pass rates. These numbers are regression
-baselines for the current corpus and models, not a replacement for broader
-human evaluation.
+The RAG figures above used the former relevance rule: loose lexical overlap
+against `reference_answer`; Recall@3 was effectively the same binary measure
+as Hit@3. They do not prove correct-source retrieval and must not be used as a
+release claim. Since 2026-08-04 the suite requires correct source plus semantic
+relevance, so a newly prepared isolated corpus must produce the next baseline.
+
+All eight fixed mock-interview scenarios historically passed, with a `4.9/5`
+mean judge score and 100% safety and grounding pass rates. Stage-budget and
+prompt changes also require a rerun. Model judging remains an automated
+regression signal, not a substitute for human interview-experience evaluation.

@@ -12,16 +12,6 @@ from app.core.storage import parse_s3_uri
 logger = logging.getLogger(__name__)
 
 
-def json_list(value: str | None) -> list[str]:
-    if not value:
-        return []
-    try:
-        data = json.loads(value)
-    except json.JSONDecodeError:
-        return []
-    return [str(item) for item in data if item]
-
-
 def dump_json_list(values: list[str]) -> str:
     return json.dumps(values, ensure_ascii=False)
 
@@ -35,7 +25,7 @@ def delete_document_vectors_and_chunks(
 ) -> None:
     """Delete chunk facts and enqueue the external index cleanup atomically."""
     from app.rag.document_chunk_service import delete_document_chunks
-    from app.services.knowledge.knowledge_outbox import enqueue_milvus_delete
+    from app.services.knowledge.index_jobs import enqueue_milvus_delete
 
     delete_document_chunks(db, document.id)
     enqueue_milvus_delete(db, user_pk=document.user_id, document_id=document.id)
@@ -97,7 +87,7 @@ def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> 
     # perspective; Milvus/object-store outages only delay cleanup.
     delete_document_vectors_and_chunks(db, document)
     if has_object:
-        from app.services.uploads.outbox_service import enqueue_job
+        from app.services.outbox import enqueue_job
 
         enqueue_job(
             db,
@@ -105,7 +95,10 @@ def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> 
             job_type="delete_object",
             aggregate_type="knowledge_document",
             aggregate_id=document.id,
-            payload={"storage_uri": document.storage_uri},
+            payload={
+                "storage_uri": document.storage_uri,
+                "user_id": document.user_id,
+            },
             idempotency_key=f"delete_object:kdoc:{document.id}",
         )
     upload = document.upload

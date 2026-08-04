@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from app.prompts.analytics import DIAGNOSTICS_REPORT_PROMPT
 from app.prompts.chat import (
     CONVERSATION_COMPACTION_PROMPT,
     build_query_planner_system_prompt,
@@ -34,7 +33,6 @@ def test_all_prompt_templates_render() -> None:
         CONVERSATION_COMPACTION_PROMPT.format(
             old_summary="old", new_conversation="new"
         ),
-        DIAGNOSTICS_REPORT_PROMPT.format(structured_payload="[]"),
         DEBRIEF_SUMMARY_PROMPT.format(
             title="title",
             tag="tag",
@@ -51,6 +49,9 @@ def test_all_prompt_templates_render() -> None:
             asked_trunc=40,
             asked_questions="questions",
             questions_in_current_stage=2,
+            min_questions=2,
+            max_questions=4,
+            transition_rule="可推进",
             user_answer="answer",
             stage_keys_hint="technical | candidate_questions",
         ),
@@ -101,10 +102,10 @@ def test_all_prompt_templates_render() -> None:
     ]
 
     assert all(rendered)
-    assert '"sections"' in rendered[8]
-    assert '"qa_pairs"' in rendered[9]
+    assert '"sections"' in rendered[7]
+    assert '"qa_pairs"' in rendered[8]
+    assert '"patches"' in rendered[4]
     assert '"patches"' in rendered[5]
-    assert '"patches"' in rendered[6]
 
 
 def test_query_planner_memory_privacy_contract() -> None:

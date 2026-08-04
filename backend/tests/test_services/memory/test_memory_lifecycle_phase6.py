@@ -179,7 +179,15 @@ def test_dreaming_blocked_by_user_tombstone():
         summary="s",
         change_type="patch_realtime",
     )
-    assert abil.archive("alice", topic="幻觉", skill_type="knowledge_topic") is True
+    assert (
+        abil.archive_by_key(
+            "alice",
+            topic="幻觉",
+            skill_type="knowledge_topic",
+            change_type="patch_dreaming",
+        )
+        is True
+    )
     blocked = abil.upsert(
         "alice",
         topic="幻觉",
@@ -315,7 +323,7 @@ def test_compact_rewrites_oversized_doc(monkeypatch):
         lambda role: _LLM(),
     )
     monkeypatch.setattr(
-        "app.worker.tasks.run_async",
+        "app.core.async_runtime.run_async",
         lambda coro: __import__("asyncio").run(coro),
     )
 
@@ -336,7 +344,7 @@ def test_compact_rejects_suspiciously_small_rewrite(monkeypatch):
         lambda role: _LLM(),
     )
     monkeypatch.setattr(
-        "app.worker.tasks.run_async",
+        "app.core.async_runtime.run_async",
         lambda coro: __import__("asyncio").run(coro),
     )
     assert docs.compact_if_oversized("alice", "user_profile") is False
@@ -412,7 +420,15 @@ def test_tombstone_drop_emits_reason(monkeypatch):
         summary="s",
         change_type="patch_realtime",
     )
-    assert abil.archive("alice", topic="鬼影", skill_type="knowledge_topic") is True
+    assert (
+        abil.archive_by_key(
+            "alice",
+            topic="鬼影",
+            skill_type="knowledge_topic",
+            change_type="patch_dreaming",
+        )
+        is True
+    )
     events.clear()
     blocked = abil.upsert(
         "alice",

@@ -25,12 +25,14 @@ from app.api.auth import (
     EmailRequest,
     LogoutRequest,
     RefreshRequest,
+    ResetPasswordRequest,
     UserCreate,
     change_password,
     login_access_token,
     logout,
     refresh_access_token,
     register_user,
+    reset_password,
     send_verification_code,
 )
 from app.core.rate_limit import limiter as _rate_limiter
@@ -146,6 +148,45 @@ async def test_send_code_fresh_email_calls_request_code(db_session_local):
 
     assert result == {"status": "sent", "expires_in": 600}
     mock_req.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_send_reset_code_for_existing_account_delivers(db_session_local):
+    _register_sync(db_session_local, "alice", "pw12345")
+    with patch(
+        "app.api.auth.request_code", new_callable=AsyncMock, return_value=600
+    ) as mock_req:
+        result = await send_verification_code(
+            request=_fake_request(),
+            response=MagicMock(),
+            payload=EmailRequest(email="ALICE@example.com", purpose="reset_password"),
+            db=db_session_local,
+        )
+
+    assert result == {"status": "sent", "expires_in": 600}
+    mock_req.assert_awaited_once_with(
+        "alice@example.com", purpose="reset_password", deliver=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_reset_code_for_unknown_account_is_indistinguishable(
+    db_session_local,
+):
+    with patch(
+        "app.api.auth.request_code", new_callable=AsyncMock, return_value=600
+    ) as mock_req:
+        result = await send_verification_code(
+            request=_fake_request(),
+            response=MagicMock(),
+            payload=EmailRequest(email="ghost@example.com", purpose="reset_password"),
+            db=db_session_local,
+        )
+
+    assert result == {"status": "sent", "expires_in": 600}
+    mock_req.assert_awaited_once_with(
+        "ghost@example.com", purpose="reset_password", deliver=False
+    )
 
 
 # ── register ──────────────────────────────────────────────────────────────
@@ -504,6 +545,104 @@ async def test_get_current_user_rejects_token_without_token_version(db_session_l
 
 
 # ── change-password ────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reset_password_consumes_code_and_kills_old_tokens(db_session_local):
+    user = _register_sync(db_session_local, "alice", "oldpw1")
+    old_access = create_access_token(data=token_claims_for(user))
+
+    with (
+        patch("app.api.auth.assert_ip_not_locked", new_callable=AsyncMock),
+        patch("app.api.auth.verify_code", new_callable=AsyncMock) as mock_verify,
+        patch("app.api.auth.reset_ip_failures", new_callable=AsyncMock) as mock_reset,
+    ):
+        result = await reset_password(
+            request=_fake_request(),
+            response=MagicMock(),
+            body=ResetPasswordRequest(
+                email="ALICE@example.com",
+                code="123456",
+                new_password="newpw123",
+            ),
+            db=db_session_local,
+        )
+
+    assert result == {"status": "ok", "message": "密码已重置，请使用新密码登录"}
+    mock_verify.assert_awaited_once_with(
+        "alice@example.com", "123456", purpose="reset_password"
+    )
+    mock_reset.assert_awaited_once_with("1.2.3.4")
+    assert user.token_version == 1
+    assert user.password_changed_at is not None
+    assert verify_password("newpw123", user.hashed_password)
+
+    with patch(
+        "app.core.security.is_revoked", new_callable=AsyncMock, return_value=False
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await get_current_user(token=old_access, db=db_session_local)
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_reset_password_bad_code_is_generic_and_does_not_change_password(
+    db_session_local,
+):
+    from app.services.auth.verification_code_service import CodeError
+
+    user = _register_sync(db_session_local, "alice", "oldpw1")
+    with (
+        patch("app.api.auth.assert_ip_not_locked", new_callable=AsyncMock),
+        patch(
+            "app.api.auth.verify_code",
+            new_callable=AsyncMock,
+            side_effect=CodeError("验证码错误"),
+        ),
+        patch(
+            "app.api.auth.record_verify_failure_for_ip", new_callable=AsyncMock
+        ) as mock_failure,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await reset_password(
+                request=_fake_request(),
+                response=MagicMock(),
+                body=ResetPasswordRequest(
+                    email="alice@example.com",
+                    code="000000",
+                    new_password="newpw123",
+                ),
+                db=db_session_local,
+            )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "重置失败，请检查验证码或重新获取"
+    mock_failure.assert_awaited_once_with("1.2.3.4")
+    assert user.token_version == 0
+    assert verify_password("oldpw1", user.hashed_password)
+
+
+@pytest.mark.asyncio
+async def test_reset_password_unknown_account_stays_generic(db_session_local):
+    with (
+        patch("app.api.auth.assert_ip_not_locked", new_callable=AsyncMock),
+        patch("app.api.auth.verify_code", new_callable=AsyncMock),
+        patch("app.api.auth.record_verify_failure_for_ip", new_callable=AsyncMock),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await reset_password(
+                request=_fake_request(),
+                response=MagicMock(),
+                body=ResetPasswordRequest(
+                    email="ghost@example.com",
+                    code="123456",
+                    new_password="newpw123",
+                ),
+                db=db_session_local,
+            )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "重置失败，请检查验证码或重新获取"
 
 
 @pytest.mark.asyncio

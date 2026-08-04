@@ -130,15 +130,15 @@ class ResolvedEmbedding:
 
 def resolve_embedding() -> ResolvedEmbedding:
     """Read the three env vars + look the provider up."""
-    pid = (settings.EMBEDDING_PROVIDER or "local").strip().lower()
+    pid = (settings.EMBEDDING_PROVIDER or "siliconflow").strip().lower()
     if pid not in PROVIDERS:
         logger.warning(
-            "Unknown EMBEDDING_PROVIDER=%r, falling back to 'local'. "
+            "Unknown EMBEDDING_PROVIDER=%r, falling back to 'siliconflow'. "
             "Known providers: %s",
             pid,
             ", ".join(PROVIDERS),
         )
-        pid = "local"
+        pid = "siliconflow"
     model = (settings.EMBEDDING_MODEL or "BAAI/bge-m3").strip()
     dim = int(settings.EMBEDDING_DIM or 1024)
     return ResolvedEmbedding(
@@ -172,7 +172,11 @@ def build_embedding() -> Any:
     p = cfg.provider
 
     if p.kind == "local_huggingface":
-        from app.core.hf_runtime import prepare_hf_runtime, resolve_local_snapshot
+        from app.core.hf_runtime import (
+            format_missing_model_error,
+            prepare_hf_runtime,
+            resolve_local_snapshot,
+        )
         from llama_index.embeddings.huggingface import HuggingFaceEmbedding
         import torch
 
@@ -182,7 +186,15 @@ def build_embedding() -> Any:
             if settings.EMBEDDING_DEVICE != "auto"
             else ("cuda" if torch.cuda.is_available() else "cpu")
         )
-        model_name = resolve_local_snapshot(cfg.model) or cfg.model
+        model_name = resolve_local_snapshot(cfg.model)
+        if model_name is None:
+            raise RuntimeError(
+                format_missing_model_error(
+                    model_id=cfg.model,
+                    role="Embedding",
+                    fix_hint="python scripts/init_models.py --only embedding",
+                )
+            )
         logger.info(
             "Embedding: local HF model=%s device=%s dim=%d",
             cfg.model,

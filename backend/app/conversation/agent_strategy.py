@@ -9,8 +9,8 @@ only handles the per-turn execution.
 
 The strategy:
   * builds the initial messages array from the prepared context
-  * drives the LLM↔tool ReAct loop until a final answer / budget stop
-  * tracks token usage + budget on its own (engine reads back via
+  * drives the LLM↔tool ReAct loop until a final answer or lifecycle stop
+  * tracks token and tool usage as telemetry (engine reads back via
     :class:`StrategyResult`)
   * emits ``HarnessEvent`` for SSE
   * builds the Anthropic-style ``content_blocks_json`` chain
@@ -38,7 +38,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.agent_runtime.context_compactor import QueryLoopCompactor
 from app.agent_runtime.react_agent import (
-    AgentBudget,
+    AgentRunState,
     _args_summary,
     _result_summary,
     _tool_call_payload,
@@ -238,7 +238,7 @@ class AgentLoopStrategy:
         result: StrategyResult,
     ) -> AsyncGenerator[HarnessEvent, None]:
         # ── Per-turn state ────────────────────────────────────────
-        budget = AgentBudget(started_at=time.perf_counter())
+        budget = AgentRunState(started_at=time.perf_counter())
         client, profile = build_async_openai_client_for_role(
             "primary",
             user_id=ctx.user_id,
@@ -274,14 +274,7 @@ class AgentLoopStrategy:
         )
         await persist_turn_budget(
             ctx.turn_id,
-            {
-                **budget.to_dict(),
-                "limits": {
-                    "max_steps": settings.AGENT_MAX_STEPS,
-                    "tool_timeout_seconds": settings.AGENT_TOOL_TIMEOUT_SECONDS,
-                    "max_tool_argument_chars": settings.AGENT_MAX_TOOL_ARG_CHARS,
-                },
-            },
+            budget.to_dict(),
         )
         recovery_text = await self._load_recovery_context(ctx.session_id)
 
@@ -386,17 +379,15 @@ class AgentLoopStrategy:
             result.extras["degraded"] = True
 
         # Ensure a trailing text block exists (so the persisted message
-        # always carries a final answer, even when the loop ended on
-        # budget stop).
+        # always carries a final answer, including a context-window stop).
         if not final_answer:
             final_answer = (
-                f"Agent 执行因预算策略停止: {budget.stop_reason}. "
-                "请缩小目标范围后重试。"
-                if budget.stop_reason
+                "上下文窗口已耗尽，本轮已保留现有执行结果。"
+                if budget.stop_reason == "context_window_exhausted"
                 else "Agent 无法生成最终回答。"
             )
             blocks.append({"type": "text", "text": final_answer})
-            # live == replay (AGT-5): a synthetic tail (budget stop / crash
+            # live == replay (AGT-5): a synthetic tail (context stop / crash
             # fallback) used to exist only in the persisted blocks — the
             # live viewer saw the stream just... end.
             yield HarnessEvent.text(
@@ -424,15 +415,12 @@ class AgentLoopStrategy:
             {
                 **budget.to_dict(),
                 "stop_reason": budget.stop_reason,
-                "limits": {
-                    "max_steps": settings.AGENT_MAX_STEPS,
-                    "tool_timeout_seconds": settings.AGENT_TOOL_TIMEOUT_SECONDS,
-                    "max_tool_argument_chars": settings.AGENT_MAX_TOOL_ARG_CHARS,
-                },
             },
         )
 
-        # Final budget event for the FE's BudgetInfo handler. LangSmith
+        # Final usage event. The legacy wire name remains ``budget`` for
+        # compatibility; it contains observations only, never execution caps.
+        # LangSmith
         # captures the same fields via the OpenAI wrap, but the FE
         # surfaces budget in-band on the SSE stream so the chat panel
         # can render token/step badges without a trace-service call.
@@ -450,7 +438,7 @@ class AgentLoopStrategy:
         ctx: StrategyContext,
         messages: list[dict[str, Any]],
         blocks: list[dict[str, Any]],
-        budget: AgentBudget,
+        budget: AgentRunState,
         client: Any,
         profile: Any,
         compactor: QueryLoopCompactor,
@@ -462,12 +450,6 @@ class AgentLoopStrategy:
         stop_hook_count = 0
 
         while True:
-            # Budget check
-            stop = budget.check()
-            if stop:
-                budget.stop_reason = stop
-                break
-
             budget.consume_step()
 
             # Proactive compaction: self-measure the prompt, run the cheap
@@ -659,7 +641,7 @@ class AgentLoopStrategy:
         messages: list[dict[str, Any]],
         tool_schemas: list[dict[str, Any]],
         compactor: QueryLoopCompactor,
-        budget: AgentBudget,
+        budget: AgentRunState,
     ) -> tuple[Any, float]:
         async def _make_call() -> Any:
             return await client.chat.completions.create(
@@ -690,7 +672,7 @@ class AgentLoopStrategy:
     async def _consume_stream(
         self,
         stream: Any,
-        budget: AgentBudget,
+        budget: AgentRunState,
         tool_calls_acc: list[_ToolCallAccumulator],
         reasoning_acc: list[str],
     ) -> AsyncGenerator[HarnessEvent | str, None]:
@@ -780,7 +762,7 @@ class AgentLoopStrategy:
         tool_calls_acc: list[_ToolCallAccumulator],
         assistant_content: str,
         reasoning_content: str,
-        budget: AgentBudget,
+        budget: AgentRunState,
         tool_catalog: TurnToolCatalog | None = None,
     ) -> AsyncGenerator[HarnessEvent, None]:
         # ``reasoning_content`` (thinking-mode trace) MUST round-trip

@@ -72,9 +72,8 @@ def init_reranker():
     """Initialize the reranker. Safe to call multiple times (idempotent).
 
     Provider + model are picked from ``RERANKER_PROVIDER`` + ``RERANKER_MODEL``
-    env vars. Default keeps the previous behaviour (local BGE-Reranker
-    v2 M3 from HF cache); switching ``RERANKER_PROVIDER=siliconflow`` etc
-    skips the local download entirely.
+    env vars. The lightweight default uses SiliconFlow; the optional local
+    installation can run BGE-Reranker v2 M3 from the HuggingFace cache.
     """
     global _reranker
     if _reranker is not None:

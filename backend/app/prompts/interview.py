@@ -44,6 +44,8 @@ MOCK_INTERVIEW_NEXT_TURN_PROMPT = """{prefix}
 <state>
 current_stage: {current_stage}
 questions_in_current_stage: {questions_in_current_stage}
+stage_question_budget: {min_questions}-{max_questions}
+transition_rule: {transition_rule}
 </state>
 
 <recent_dialog>
@@ -63,6 +65,7 @@ questions_in_current_stage: {questions_in_current_stage}
 - 先用一句短语自然承接回答，再追问当前回答中最值得验证的一点，或在当前阶段已充分覆盖时推进到下一阶段。
 - 不得重复 asked_questions 中的问题或同义改写；候选人明确不知道或跳过时直接推进。
 - stage_key 必须取自 stages。只能保持当前阶段或移到紧邻的下一阶段，不得倒退或跳级。
+- 严格服从 transition_rule；业务层会校验阶段预算，不要在达到上限后继续追问当前阶段。
 - candidate_questions 阶段应回答候选人的合理问题，但只能使用 JD 或对话中明确给出的公司/团队信息；信息不足时坦诚说明以实际团队沟通为准，不得编造技术栈、流程、福利或后续安排。
 - 确认候选人没有更多问题且整场已覆盖时，只需感谢参与并结束；不得提及反馈、评估结果、HR、通知或后续安排，并令 ready_to_finish=true。
 - 其他阶段 ready_to_finish 必须为 false。

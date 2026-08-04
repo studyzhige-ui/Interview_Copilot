@@ -51,13 +51,12 @@ async def send_email(to_email: str, subject: str, body: str) -> bool:
     Returns True on success (including the dev-log fallback path), False if
     SMTP was configured but the send failed.
 
-    Logging policy — every send leaves a breadcrumb in the application log
-    regardless of outcome, so support can reconstruct "did the user actually
-    get a code?" from logs alone:
+    Logging policy — every send leaves a delivery breadcrumb, but production
+    SMTP logs never contain the verification code:
 
       * SMTP not configured  → WARNING with full body (dev fallback)
-      * SMTP configured + OK → INFO with full body (traceability)
-      * SMTP configured + fail → ERROR with full body + exception
+      * SMTP configured + OK → INFO with recipient + subject
+      * SMTP configured + fail → ERROR with recipient + subject + exception
     """
     if not settings.SMTP_HOST:
         logger.warning(
@@ -70,25 +69,17 @@ async def send_email(to_email: str, subject: str, body: str) -> bool:
         return True
     try:
         await asyncio.to_thread(_send_sync, to_email, subject, body)
-        # ALWAYS log the body too, even on success. Verification codes and
-        # password-reset tokens are short-lived; logging them in the dev/prod
-        # log lets operators answer "did Alice actually get her code?" without
-        # asking her to forward the email. If you ever ship to a regulated
-        # environment, gate this on settings.DEBUG.
         logger.info(
-            "[email] sent OK.\n  To:      %s\n  Subject: %s\n  Body:    %s",
+            "[email] sent OK. To=%s Subject=%s",
             to_email,
             subject,
-            body,
         )
         return True
     except Exception as exc:  # noqa: BLE001
         logger.error(
-            "[email] SMTP send FAILED — body printed below.\n"
-            "  To:      %s\n  Subject: %s\n  Body:    %s\n  Error:   %s",
+            "[email] SMTP send FAILED. To=%s Subject=%s Error=%s",
             to_email,
             subject,
-            body,
             exc,
         )
         return False

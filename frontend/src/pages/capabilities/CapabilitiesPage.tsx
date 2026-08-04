@@ -11,7 +11,7 @@ export function CapabilitiesPage() {
   const edition = useEditionPolicy();
   return (
     <div className="h-full overflow-auto bg-stone-50">
-      <main className="mx-auto max-w-6xl px-6 py-7">
+      <main className="mx-auto max-w-6xl px-4 py-6 md:px-6 md:py-7">
         <div className="mb-6">
           <h1 className="text-2xl font-semibold text-stone-900">Agent 能力</h1>
           <p className="mt-1.5 text-sm text-stone-500">管理只属于你的 Skill 与 MCP 工具；启用后会自动进入 Agent 对话。</p>
@@ -36,6 +36,7 @@ function TabButton({ active, onClick, icon, children }: {
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className={`flex items-center gap-1.5 rounded-md px-4 py-2 text-sm transition ${active ? 'bg-primary-50 font-medium text-primary-700' : 'text-stone-500 hover:text-stone-800'}`}
     >

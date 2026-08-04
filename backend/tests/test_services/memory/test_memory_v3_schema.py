@@ -314,7 +314,15 @@ def test_ability_archive_then_reupsert_makes_new_active_row(seeded):
         summary="s1",
         change_type="patch_realtime",
     )
-    assert svc.archive("alice", topic="TCP", skill_type="knowledge_topic") is True
+    assert (
+        svc.archive_by_key(
+            "alice",
+            topic="TCP",
+            skill_type="knowledge_topic",
+            change_type="patch_dreaming",
+        )
+        is True
+    )
     assert svc.load_active("alice") == []
 
     # Automatic channel blocked by the tombstone.
@@ -454,7 +462,12 @@ def test_ability_archive_enqueues_delete_index_job(seeded):
         summary="s",
         change_type="patch_realtime",
     )
-    svc.archive("alice", topic="TCP", skill_type="knowledge_topic")
+    svc.archive_by_key(
+        "alice",
+        topic="TCP",
+        skill_type="knowledge_topic",
+        change_type="patch_dreaming",
+    )
     s = seeded()
     try:
         n = (

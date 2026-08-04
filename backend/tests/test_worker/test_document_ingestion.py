@@ -247,3 +247,39 @@ def test_worker_marks_failed_on_embedding_validation_without_retry(
         assert "维度" in (doc.error_message or "")
     finally:
         db.close()
+
+
+def test_worker_does_not_leave_document_processing_for_non_retryable_crash(
+    worker_db, monkeypatch
+):
+    """An unclassified application error is not in Celery's autoretry tuple,
+    so its persisted state must be terminal instead of claiming a retry that
+    will never be scheduled."""
+    from app.worker.tasks import process_document_ingestion
+
+    import app.core.storage as storage_mod
+
+    monkeypatch.setattr(
+        storage_mod,
+        "download_file_from_s3",
+        lambda uri, path: open(path, "w", encoding="utf-8").close(),
+    )
+
+    async def _crash(*args, **kwargs):
+        raise ValueError("unexpected parser contract violation")
+
+    import app.rag.ingestion as ingestion_mod
+
+    monkeypatch.setattr(ingestion_mod, "ingest_document", _crash)
+
+    doc_id = _seed_doc(worker_db, filename="notes.txt")
+    with pytest.raises(ValueError, match="parser contract"):
+        process_document_ingestion.apply(args=[doc_id]).get()
+
+    db = worker_db()
+    try:
+        doc = db.get(KnowledgeDocument, doc_id)
+        assert doc.status == "failed"
+        assert "导入失败" in (doc.error_message or "")
+    finally:
+        db.close()

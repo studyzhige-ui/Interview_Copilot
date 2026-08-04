@@ -7,6 +7,7 @@ from sqlalchemy import engine_from_config, pool
 # ``prepend_sys_path = %(here)s/backend`` — no manual sys.path edits here.
 from app.core.config import settings
 from app.db.database import Base
+
 # app.models.__init__ imports every model module, so autogenerate sees the
 # complete metadata (a partial list here would diff missing tables as drops).
 import app.models  # noqa: F401

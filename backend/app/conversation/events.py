@@ -6,7 +6,7 @@ consumes one wire format. Re-exports the existing
 identical without duplicating the class definition.
 
 L1 (chat) emits a subset:        status / text_delta / text / error / done
-L2 (agent) adds:                 + tool_start / tool_done / budget
+L2 (agent) adds:                 + tool_start / tool_done / usage telemetry
 
 The frontend's chat renderer treats unknown event types as no-ops, so
 keeping L1 to the subset is forward-compatible with the L2 fields.

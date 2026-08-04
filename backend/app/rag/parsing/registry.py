@@ -18,6 +18,7 @@ import tempfile
 import time
 
 from app.core.config import settings
+from app.core.runtime_files import runtime_temp_dir
 
 from .base import (
     IMAGE_EXTS,
@@ -73,6 +74,9 @@ def _docling_available() -> bool:
     global _docling_available_cache
     if _docling_available_cache is None:
         try:
+            from app.core.hf_runtime import prepare_hf_runtime
+
+            prepare_hf_runtime()
             import docling.document_converter  # noqa: F401
 
             _docling_available_cache = True
@@ -99,8 +103,8 @@ def _candidates(ext: str) -> list:
     being unavailable simply drops out — the list is never empty (SimpleReader
     is the floor)."""
     first_class = _first_class_parsers()
-    primary_id = (settings.PARSER_PROVIDER or "docling").strip().lower()
-    if primary_id not in ("docling", "llamaparse"):
+    primary_id = (settings.PARSER_PROVIDER or "lightweight").strip().lower()
+    if primary_id not in ("docling", "llamaparse", "lightweight"):
         logger.warning(
             "unknown PARSER_PROVIDER=%r; using insertion order for first-class parsers",
             primary_id,
@@ -111,10 +115,13 @@ def _candidates(ext: str) -> list:
         ordered.append(first_class.pop(primary_id))
     ordered.extend(first_class.values())  # the remaining first-class as fallback
 
-    out = [p for p in ordered if p.supports(ext)]
     lightweight = _lightweight_for(ext)
+    out = [p for p in ordered if p.supports(ext)]
     if lightweight is not None:
-        out.append(lightweight)
+        if primary_id == "lightweight":
+            out.insert(0, lightweight)
+        else:
+            out.append(lightweight)
     # Binary formats (images + legacy Office) get NO SimpleReader text catch-all
     # (§4.1.3 matrix: no lightweight fallback): SimpleDirectoryReader reads an
     # unmapped binary (.tiff/.bmp/.doc/.xls) as raw bytes → garbage that passes
@@ -214,7 +221,7 @@ def _parse_legacy_office(file_path: str, ext: str) -> ParseResult:
     target_ext = LEGACY_OFFICE_TARGET[ext]
     soffice = shutil.which("soffice") or shutil.which("libreoffice")
     if soffice:
-        with tempfile.TemporaryDirectory() as outdir:
+        with tempfile.TemporaryDirectory(dir=runtime_temp_dir()) as outdir:
             try:
                 converted = _soffice_convert(soffice, file_path, target_ext, outdir)
             except Exception as exc:  # noqa: BLE001 — fall through to the friendly error

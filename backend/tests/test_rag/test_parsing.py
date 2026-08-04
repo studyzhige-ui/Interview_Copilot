@@ -235,12 +235,15 @@ def test_docling_parser_supports_structured_formats():
 
 
 def test_parser_provider_normalized(monkeypatch):
-    """PARSER_PROVIDER tolerates case / whitespace / empty (-> default docling)."""
+    """PARSER_PROVIDER tolerates case and whitespace."""
     monkeypatch.setattr(reg, "_has_llama_cloud", lambda: True)
     monkeypatch.setattr(reg, "_docling_available", lambda: True)
-    for value in ("  DOCLING  ", "Docling", ""):
+    for value in ("  DOCLING  ", "Docling"):
         monkeypatch.setattr(settings, "PARSER_PROVIDER", value)
         assert _ids(".pdf")[0] == "docling", value
+
+    monkeypatch.setattr(settings, "PARSER_PROVIDER", "")
+    assert _ids(".pdf")[0] == "pymupdf"
 
 
 def test_unknown_parser_provider_warns_and_uses_insertion_order(monkeypatch, caplog):

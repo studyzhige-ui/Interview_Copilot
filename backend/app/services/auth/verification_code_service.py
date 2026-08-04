@@ -20,6 +20,7 @@ import logging
 import secrets
 from typing import Literal
 
+from app.core.background_tasks import safe_background_task
 from app.core.config import settings
 from app.db.redis import redis_client
 from app.services.auth.email_service import send_email
@@ -82,13 +83,38 @@ class CodeError(Exception):
     """Raised for user-visible verification flow errors."""
 
 
+async def _deliver_code_email(
+    email: str,
+    subject: str,
+    body: str,
+    *,
+    deliver: bool,
+    code_key: str,
+    cooldown_key: str,
+) -> None:
+    """Deliver outside request latency and reopen retry on SMTP failure."""
+    if not deliver:
+        return
+    if await send_email(email, subject, body):
+        return
+    await redis_client.delete(code_key, cooldown_key)
+    logger.warning("Verification email delivery failed; cooldown cleared for retry")
+
+
 # ── Public API ────────────────────────────────────────────────────────
 
 
-async def request_code(email: str, purpose: Purpose = "register") -> int:
+async def request_code(
+    email: str,
+    purpose: Purpose = "register",
+    *,
+    deliver: bool = True,
+) -> int:
     """Generate a code, send it, and return remaining TTL seconds.
 
     Raises ``CodeError`` if a recent code was just sent (resend cooldown).
+    ``deliver=False`` preserves the same Redis code/cooldown behavior without
+    sending mail, which keeps unknown-account reset requests indistinguishable.
     """
     r = redis_client
     cooldown_key = _cooldown_key(email, purpose)
@@ -114,7 +140,21 @@ async def request_code(email: str, purpose: Purpose = "register") -> int:
         f"此验证码 {minutes} 分钟内有效，请勿泄露。\n"
         "如果这不是您本人的操作，请忽略本邮件。"
     )
-    await send_email(email, subject_map[purpose], body)
+    # Always schedule the same background path, including unknown-account
+    # password resets. The HTTP response therefore does not expose SMTP latency
+    # or account existence. Failed delivery clears the code/cooldown so a real
+    # user can retry instead of waiting for an email that will never arrive.
+    safe_background_task(
+        _deliver_code_email(
+            email,
+            subject_map[purpose],
+            body,
+            deliver=deliver,
+            code_key=code_key,
+            cooldown_key=cooldown_key,
+        ),
+        name=f"verification-email:{purpose}",
+    )
     return settings.EMAIL_CODE_TTL_SECONDS
 
 

@@ -311,3 +311,48 @@ def test_fresh_and_live_assets_not_swept(orphan_db):
     assert result == {"swept": 0}
     assert fresh.upload_status == "pending_upload"
     assert live.upload_status == "consumed"
+
+
+def test_runtime_sweeper_removes_only_disposable_or_orphaned_files(
+    db_session, tmp_path, monkeypatch
+):
+    import os
+
+    from app.core.config import settings
+    from app.models.chat import Conversation
+    from app.models.user import User
+    from app.worker.tasks import maintenance
+
+    user = User(username="runtime-owner", hashed_password="x")
+    db_session.add(user)
+    db_session.flush()
+    db_session.add(Conversation(id="live-session", user_id=user.id))
+    db_session.commit()
+
+    temp_file = tmp_path / "tmp" / "stale.bin"
+    old_log = tmp_path / "logs" / "old.log"
+    live_result = tmp_path / "agent-results" / "live-session" / "call.txt"
+    orphan_result = tmp_path / "agent-results" / "gone-session" / "call.txt"
+    for path in (temp_file, old_log, live_result, orphan_result):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+    old_timestamp = (datetime.now() - timedelta(days=30)).timestamp()
+    os.utime(temp_file, (old_timestamp, old_timestamp))
+    os.utime(old_log, (old_timestamp, old_timestamp))
+
+    class _SessionContext:
+        def __enter__(self):
+            return db_session
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(settings, "APP_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(settings, "LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setattr(maintenance, "SessionLocal", _SessionContext)
+
+    result = maintenance.sweep_runtime_files.run()
+
+    assert result == {"temp_files": 1, "dev_logs": 1, "orphan_result_dirs": 1}
+    assert live_result.is_file()
+    assert not orphan_result.parent.exists()

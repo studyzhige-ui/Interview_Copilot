@@ -31,7 +31,7 @@ from app.services.uploads.file_asset_service import (
     get_owned_file_asset,
     mark_file_asset_consumed,
 )
-from app.worker.tasks import process_interview_analysis
+from app.task_queue.dispatch import dispatch_interview_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +56,10 @@ class ResumeContext:
 def extract_text_snapshot(db: Session, file_asset_id: str, user_id: str) -> str:
     """Download a resume/JD file asset and return its plain text (truncated)."""
     import os
-    import tempfile
 
+    from app.core.runtime_files import create_runtime_temp_file
     from app.core.storage import download_file_from_s3
-    from app.services.voice.file_parser import extract_resume_text
+    from app.services.interview.document_text import extract_document_text
 
     upload = get_owned_file_asset(db, file_asset_id=file_asset_id, user_id=user_id)
     if upload is None or not upload.storage_uri:
@@ -68,11 +68,10 @@ def extract_text_snapshot(db: Session, file_asset_id: str, user_id: str) -> str:
         return ""
 
     _, ext = os.path.splitext(upload.object_key or "")
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=ext or ".pdf")
-    os.close(tmp_fd)
+    tmp_path = create_runtime_temp_file(suffix=ext or ".pdf")
     try:
         download_file_from_s3(upload.storage_uri, tmp_path)
-        return (extract_resume_text(tmp_path) or "")[:12000]
+        return (extract_document_text(tmp_path) or "")[:12000]
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -220,7 +219,7 @@ def create_record_and_dispatch(
     db.commit()
 
     try:
-        task = process_interview_analysis.delay(
+        task = dispatch_interview_analysis(
             record.id,
             language=normalize_language(language),
         )

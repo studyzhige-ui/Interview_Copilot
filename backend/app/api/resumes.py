@@ -19,6 +19,7 @@ from app.models.resume import Resume
 from app.models.user import User
 from app.schemas.resumes import ResumeCreateRequest, ResumeResponse
 from app.services.resume import resume_entity_service
+from app.task_queue.dispatch import dispatch_resume_parse
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,7 @@ def _dispatch_resume_parse(db: Session, resume: Resume) -> None:
     if not (resume.file_asset_id or (resume.raw_text_snapshot or "").strip()):
         return
     try:
-        from app.worker.tasks import process_resume_parse
-
-        process_resume_parse.delay(resume.id)
+        dispatch_resume_parse(resume.id)
     except Exception as exc:  # noqa: BLE001
         logger.warning("resume parse dispatch failed for %s: %s", resume.id, exc)
         resume.parse_status = "failed"

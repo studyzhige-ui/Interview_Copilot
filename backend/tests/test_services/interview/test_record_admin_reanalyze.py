@@ -49,16 +49,8 @@ def test_reanalyze_resets_and_dispatches(db_session, monkeypatch):
     )
     monkeypatch.setattr(
         record_admin,
-        "process_interview_analysis",
-        SimpleNamespace(delay=lambda rid: SimpleNamespace(id="task-9")),
-        raising=False,
-    )
-    import app.worker.tasks as wt
-
-    monkeypatch.setattr(
-        wt,
-        "process_interview_analysis",
-        SimpleNamespace(delay=lambda rid: SimpleNamespace(id="task-9")),
+        "dispatch_interview_analysis",
+        lambda rid: SimpleNamespace(id="task-9"),
     )
 
     task = record_admin.reanalyze_record(db_session, rec)
@@ -84,18 +76,15 @@ def test_reanalyze_rejects_mock_and_inflight(db_session):
 
 
 def test_reanalyze_dispatch_failure_rolls_back_to_failed(db_session, monkeypatch):
-    from types import SimpleNamespace
-
     rec = _mk_record(db_session, "ir_re4", status="completed")
-    import app.worker.tasks as wt
 
     def _raise(rid):
         raise ConnectionError("broker down")
 
     monkeypatch.setattr(
-        wt,
-        "process_interview_analysis",
-        SimpleNamespace(delay=_raise),
+        record_admin,
+        "dispatch_interview_analysis",
+        _raise,
     )
     with pytest.raises(ConnectionError):
         record_admin.reanalyze_record(db_session, rec)

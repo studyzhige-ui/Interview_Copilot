@@ -1,4 +1,4 @@
-"""API tests for ``app.api.interview`` — upload, analyze, records.
+"""API tests for ``app.api.interviews.records`` — upload, analyze, records.
 
 The handlers are async and mostly call into Celery / S3 / RAG ingestion;
 we patch those at the boundary and verify orchestration + DB side effects.
@@ -20,7 +20,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api import interview as interview_mod
+from app.api.interviews import records as interview_mod
 from app.core.security import get_current_user
 from app.db.database import Base, get_db
 import app.models  # noqa: F401  — ensure mappers registered
@@ -91,7 +91,7 @@ def client(db: Session) -> Iterator[TestClient]:
 
     app = FastAPI()
     # Plug a slowapi limiter shim because @limiter.limit lives on a few
-    # routes; rate_limit lib is already imported by app.api.interview's
+    # routes; rate_limit lib is already imported by the interview records
     # dependency tree but no actual limit decorators are applied here.
     app.include_router(interview_mod.router, prefix="/api/v1")
     app.dependency_overrides[get_current_user] = fake_user
@@ -133,14 +133,14 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
     fake_task.id = "celery-abc"
     with (
         patch(
-            "app.services.interview.analysis_intake.process_interview_analysis"
+            "app.services.interview.analysis_intake.dispatch_interview_analysis"
         ) as mock_proc,
         patch(
             "app.services.interview.analysis_intake.extract_text_snapshot",
             return_value="resume txt",
         ),
     ):
-        mock_proc.delay.return_value = fake_task
+        mock_proc.return_value = fake_task
         resp = client.post(
             "/api/v1/analyze",
             json={
@@ -156,7 +156,7 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
     assert body["record_id"].startswith("ir_")
     # Default language is "zh"; the task receives it as a kwarg so a
     # re-run can override it without breaking idempotency.
-    mock_proc.delay.assert_called_once_with(body["record_id"], language="zh")
+    mock_proc.assert_called_once_with(body["record_id"], language="zh")
 
     record = (
         db.query(InterviewRecord)
@@ -239,13 +239,13 @@ def test_cancel_analysis_revokes_celery_task(client, db: Session):
     db.add(record)
     db.commit()
 
-    with patch("app.worker.celery_app.celery_app") as mock_celery:
+    with patch("app.services.interview.record_admin.revoke_task") as revoke_task:
         resp = client.post("/api/v1/analyze/ir_1/cancel")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "cancelled"
     assert body["revoked"] is True
-    mock_celery.control.revoke.assert_called_once()
+    revoke_task.assert_called_once()
     db.expire_all()
     assert db.get(InterviewRecord, "ir_1").status == "failed"
 
@@ -276,7 +276,7 @@ def test_cancel_analysis_404_for_other_user(client, db: Session):
 def test_analytics_report_delegates_to_service(client):
     fake = {"status": "success", "report": {"score": 4.2}}
     with patch(
-        "app.api.interview.generate_comprehensive_report",
+        "app.api.interviews.records.generate_comprehensive_report",
         new_callable=AsyncMock,
         return_value=fake,
     ) as mock_gen:

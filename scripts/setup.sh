@@ -6,17 +6,16 @@
 #
 # What this script does:
 #   1. Choose an edition and create .env if missing
-#   2. Verify prerequisites and an isolated Python environment
-#   3. Install the edition-appropriate development dependencies
+#   2. Choose the Community model profile (remote / local CPU / local CUDA)
+#   3. Verify prerequisites and install the matching dependencies
 #   4. Generate SECRET_KEY if blank
-#   5. docker compose up -d  +  wait for postgres
+#   5. docker compose up -d --wait for healthy infrastructure
 #   6. alembic upgrade head
-#   7. cd frontend && npm install
+#   7. cd frontend && npm ci
+#   8. Configure/download the selected local model profile
 #
 # What this script does NOT do:
 #   - Create or activate your Python environment. Do that yourself first.
-#   - Download Whisper / Pyannote model weights. Run
-#     `python scripts/init_models.py` separately for Community local models.
 
 set -euo pipefail
 
@@ -48,13 +47,48 @@ else
     cp "$PROJECT_ROOT/$TEMPLATE" "$ENV_FILE"
     ok "Copied $TEMPLATE -> .env"
 fi
+REQUESTED_MODEL_PROFILE="${COMMUNITY_MODEL_PROFILE:-}"
+COMMUNITY_MODEL_PROFILE="managed"
+if [ "$EDITION" = "community" ]; then
+    COMMUNITY_MODEL_PROFILE="$REQUESTED_MODEL_PROFILE"
+    if [ -z "$COMMUNITY_MODEL_PROFILE" ]; then
+        if [ "${INSTALL_CUDA:-0}" = "1" ]; then
+            COMMUNITY_MODEL_PROFILE="local-cuda"
+        elif [ "${INSTALL_LOCAL_MODELS:-0}" = "1" ]; then
+            COMMUNITY_MODEL_PROFILE="local-cpu"
+        else
+            printf "    Choose a Community model profile:\n"
+            printf "      [1] Lightweight remote — API providers, no large local models\n"
+            printf "      [2] Local / hybrid CPU — choose local capabilities and models\n"
+            printf "      [3] Local / hybrid CUDA — NVIDIA acceleration\n"
+            read -rp "    Enter 1, 2, or 3: " profile_choice
+            case "$profile_choice" in
+                2) COMMUNITY_MODEL_PROFILE="local-cpu" ;;
+                3) COMMUNITY_MODEL_PROFILE="local-cuda" ;;
+                *) COMMUNITY_MODEL_PROFILE="remote" ;;
+            esac
+        fi
+    fi
+    case "$COMMUNITY_MODEL_PROFILE" in
+        remote|local-cpu|local-cuda) ;;
+        *) fail "COMMUNITY_MODEL_PROFILE must be remote, local-cpu, or local-cuda." ;;
+    esac
+    ok "Community model profile: $COMMUNITY_MODEL_PROFILE"
+fi
+
 if [ "$EDITION" = "cloud" ]; then
     DEPENDENCY_ARGS=(-e ".[dev]")
 else
-    DEPENDENCY_ARGS=(
-        --extra-index-url "https://download.pytorch.org/whl/cu129"
-        -e ".[community,dev]"
-    )
+    if [ "$COMMUNITY_MODEL_PROFILE" = "local-cuda" ]; then
+        DEPENDENCY_ARGS=(
+            --extra-index-url "https://download.pytorch.org/whl/cu129"
+            -e ".[local,cuda,dev]"
+        )
+    elif [ "$COMMUNITY_MODEL_PROFILE" = "local-cpu" ]; then
+        DEPENDENCY_ARGS=(-e ".[local,dev]")
+    else
+        DEPENDENCY_ARGS=(-e ".[dev]")
+    fi
 fi
 
 # -----------------------------------------------------------------------------
@@ -73,12 +107,12 @@ case "$PY_VER" in
 esac
 ok "python $PY_VER  ($(python -c 'import sys; print(sys.executable)'))"
 
-# Verify the user is in an isolated env. Installing 3 GB of ML deps into
+# Verify the user is in an isolated env. Installing ML dependencies into
 # system Python is almost always a mistake.
 if [ -z "${VIRTUAL_ENV:-}" ] && \
    { [ -z "${CONDA_PREFIX:-}" ] || [ "${CONDA_PREFIX:-}" = "${CONDA_PREFIX_1:-}" ]; }; then
     warn "You appear to be using the system / conda-base Python."
-    warn "Installing ~3 GB of dependencies here will pollute it."
+    warn "Installing project dependencies here will pollute it."
     warn "Recommended:"
     warn "    python -m venv .venv && source .venv/bin/activate"
     warn "  or"
@@ -111,19 +145,15 @@ fi
 # 5. Infrastructure
 # -----------------------------------------------------------------------------
 step "Starting Docker infrastructure (postgres, redis, minio, milvus)"
-( cd "$PROJECT_ROOT" && docker compose up -d ) || fail "docker compose up failed."
-
-step "Waiting for postgres to accept connections"
-for _ in $(seq 1 30); do
-    if docker exec interview_copilot_db pg_isready -U postgres >/dev/null 2>&1; then
-        ok "postgres ready"
-        break
-    fi
-    sleep 1
-done
+( cd "$PROJECT_ROOT" && docker compose up -d --wait --wait-timeout 180 \
+    db redis minio milvus-etcd milvus-minio milvus-standalone ) \
+    || fail "Infrastructure did not become healthy."
+( cd "$PROJECT_ROOT" && docker compose run --rm --no-deps minio-create-bucket ) \
+    || fail "MinIO bucket initialization failed."
+ok "infrastructure healthy"
 
 # -----------------------------------------------------------------------------
-# 5. Database migrations
+# 6. Database migrations
 # -----------------------------------------------------------------------------
 step "Running database migrations"
 ( cd "$PROJECT_ROOT" && python -c "from alembic.config import CommandLine; CommandLine().main(['upgrade','head'])" ) \
@@ -131,11 +161,21 @@ step "Running database migrations"
 ok "schema is up to date"
 
 # -----------------------------------------------------------------------------
-# 6. Frontend
+# 7. Frontend
 # -----------------------------------------------------------------------------
 step "Installing frontend dependencies"
-( cd "$FRONTEND_DIR" && npm install ) || fail "npm install failed."
+( cd "$FRONTEND_DIR" && npm ci --no-audit --no-fund ) || fail "npm ci failed."
 ok "frontend deps installed"
+
+# -----------------------------------------------------------------------------
+# 8. Optional local model profile
+# -----------------------------------------------------------------------------
+if [ "$EDITION" = "community" ] && [ "$COMMUNITY_MODEL_PROFILE" != "remote" ]; then
+    step "Configuring and downloading Community local models"
+    ( cd "$PROJECT_ROOT" && python scripts/init_models.py ) \
+        || fail "Local model initialization failed."
+    ok "local model profile configured"
+fi
 
 # -----------------------------------------------------------------------------
 # Done
@@ -148,8 +188,7 @@ echo
 echo "  Next steps:"
 echo "    1. Open .env and fill in any provider API keys you want to use"
 echo "       or configure the operator-provided default LLM."
-echo "    2. (Community local models only) python scripts/init_models.py"
-echo "       — downloads Whisper / Pyannote weights for local inference."
+echo "    2. To change local models later: python scripts/init_models.py"
 echo "    3. ./scripts/start.sh"
 echo "       — every-day startup (uvicorn + celery + vite, single shell)."
 echo "       (Run with ./ prefix; sourcing or invoking via a child shell"

@@ -38,7 +38,7 @@ class Conversation(Base):
         Index("ix_conversations_user_updated", "user_id", "updated_at"),
     )
 
-    id = Column(String, primary_key=True, default=generate_uuid, index=True)
+    id = Column(String, primary_key=True, default=generate_uuid)
     # Stable users.id FK (CLEANUP #2). Resolved from the runtime username via
     # resolve_user_pk at every API/service boundary. A debrief session's owner
     # pk equals its bound interview_record's owner pk, so build_interview_reference
@@ -97,7 +97,7 @@ class ConversationMessage(Base):
         ),
     )
 
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     conversation_id = Column(
         String,
         ForeignKey("conversations.id", ondelete="CASCADE"),

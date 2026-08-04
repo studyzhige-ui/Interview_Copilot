@@ -25,7 +25,8 @@ forges the request.
 ## Required operator services
 
 - PostgreSQL
-- Redis and isolated Celery workers for turns, pipelines, voice, and control jobs
+- Redis and isolated Celery workers for turns, indexing pipelines, voice,
+  background intelligence, and short control jobs
 - Milvus
 - S3-compatible object storage
 - Managed or operator-hosted embedding and reranking

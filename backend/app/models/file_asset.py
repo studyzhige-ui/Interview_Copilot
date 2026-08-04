@@ -39,7 +39,7 @@ class FileAsset(Base):
         Index("ix_file_assets_user_purpose", "user_id", "purpose"),
     )
 
-    id = Column(String, primary_key=True, default=generate_file_asset_id, index=True)
+    id = Column(String, primary_key=True, default=generate_file_asset_id)
     user_id = Column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),

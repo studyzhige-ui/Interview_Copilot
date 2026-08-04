@@ -25,17 +25,14 @@ so the metric pipeline never breaks the path it observes.
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from threading import Lock
 from typing import Any
 
+from app.core.runtime_files import append_jsonl
+
 logger = logging.getLogger(__name__)
-
-
-_FILE_LOCK = Lock()
 
 
 def _resolve_metrics_path() -> Path | None:
@@ -71,10 +68,7 @@ def incr(event: str, *, value: int = 1, **labels: Any) -> None:
     if path is None:
         return
     try:
-        line = json.dumps(payload, ensure_ascii=False) + "\n"
-        with _FILE_LOCK:
-            with open(path, "a", encoding="utf-8") as fh:
-                fh.write(line)
+        append_jsonl(path, payload)
     except Exception as exc:  # noqa: BLE001
         logger.debug("memory metrics emit failed (%s): %s", event, exc)
 

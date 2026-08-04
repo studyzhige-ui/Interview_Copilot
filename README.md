@@ -14,8 +14,8 @@ The repository ships one shared product core in two editions:
   local stdio MCP.
 
 [中文说明](docs/zh/README.md) · [Edition architecture](docs/architecture/editions.md)
-· [2026-07 consolidation report](docs/reports/consolidation-2026-07-26.md)
-· [Core systems audit](docs/reports/core-systems-audit-2026-07-27.md)
+· [Codebase architecture](docs/architecture/codebase.md) ·
+[Product and systems audit](docs/reports/full-product-and-systems-audit-2026-08-04.md)
 
 ## Core features
 
@@ -30,7 +30,13 @@ The repository ships one shared product core in two editions:
 
 ## Quick start
 
-Requirements: Python 3.11+, Node.js 20+, and Docker.
+Choose one run mode and do not mix them in the same checkout.
+
+### Host development
+
+Requirements: Python 3.11–3.13, Node.js 20+, Docker, and an active Python
+virtual environment. The setup script installs dependencies, starts the local
+infrastructure, applies migrations, and installs the frontend packages.
 
 ```powershell
 pwsh ./scripts/setup.ps1
@@ -40,20 +46,34 @@ pwsh ./scripts/setup.ps1
 bash ./scripts/setup.sh
 ```
 
-The setup script asks which edition to configure:
+The setup script asks which edition to configure. Community then asks for a
+model profile: lightweight remote, local/hybrid CPU, or local/hybrid CUDA. A
+local profile opens a per-capability model wizard and stores the selection in
+`.env`. Then use the matching daily launcher:
 
-1. Community — full self-hosted controls and local-model defaults
-2. Cloud — hosted product policy and managed API defaults
-
-Then start the backend and frontend:
+```powershell
+.\scripts\start.ps1
+```
 
 ```bash
-uvicorn app.main:app --app-dir backend --reload --port 8080
-cd frontend
-npm run dev
+bash ./scripts/start.sh
 ```
 
 Open `http://localhost:5173`.
+
+### Full container stack
+
+Copy the Community template, set a generated `SECRET_KEY` and any provider
+keys, then start the complete stack. Database migrations are built into this
+path.
+
+```bash
+cp .env.community.example .env
+docker compose --profile full up -d --wait
+```
+
+Open `http://localhost`. Runtime data and model caches are stored under
+`data/`; PostgreSQL, Redis, MinIO, and Milvus use Docker volumes.
 
 See [Community deployment](docs/deployment/community.md) or
 [Cloud deployment](docs/deployment/cloud.md) for the complete contract.
@@ -80,8 +100,17 @@ Python dependencies have one source of truth in `pyproject.toml`:
 # Cloud development
 python -m pip install -e ".[dev]"
 
-# Community development
-python -m pip install --extra-index-url https://download.pytorch.org/whl/cu129 -e ".[community,dev]"
+# Community development (lightweight remote-provider mode)
+python -m pip install -e ".[dev]"
+
+# Optional local embedding, parsing, reranking and speech stack
+python -m pip install -e ".[local,dev]"
+
+# Optional NVIDIA CUDA runtime
+python -m pip install --extra-index-url https://download.pytorch.org/whl/cu129 -e ".[local,cuda,dev]"
+
+# Optional quality evaluation
+python -m pip install -e ".[evaluation]"
 ```
 
 ```bash
@@ -104,17 +133,19 @@ alembic upgrade head
 ## Repository layout
 
 ```text
-backend/app/       FastAPI application and agent runtime
+backend/app/       FastAPI application, domain services, and agent runtime
 backend/tests/     Backend test suite
 frontend/src/      React application
 alembic/           Database migrations
-evaluation/        Optional RAG evaluation runners, tests, and dataset template
-docs/deployment/   Edition-specific deployment guidance
-docs/              Current architecture and operator documentation
-scripts/           Setup, maintenance, and model initialization
+evaluation/        Optional quality runners, gates, and dataset templates
+docs/              Architecture, deployment, and user documentation
+scripts/           Setup, launch, maintenance, and model utilities
 pyproject.toml     Python dependencies, package metadata, and tool configuration
-docker-compose.yml Community infrastructure and optional full local stack
+docker-compose.yml Community infrastructure and full local stack
 ```
+
+See [Codebase architecture](docs/architecture/codebase.md) for module ownership
+and dependency direction.
 
 ## Security boundary
 

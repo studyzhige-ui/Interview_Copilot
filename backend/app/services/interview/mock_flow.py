@@ -23,13 +23,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-import tempfile
 from dataclasses import dataclass
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.user_identity import resolve_user_pk
+from app.core.runtime_files import create_runtime_temp_file
 from app.models.chat import Conversation, ConversationMessage, generate_uuid
 from app.models.interview_record import InterviewRecord
 from app.services.interview import mock_runtime_service
@@ -39,7 +39,7 @@ from app.services.interview.interview_record_service import (
     STATUS_PROCESSING_REVIEW,
     interview_record_service,
 )
-from app.worker.tasks import process_mock_interview_review
+from app.task_queue.dispatch import dispatch_mock_interview_review
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +48,16 @@ logger = logging.getLogger(__name__)
 # many turns, ready_to_finish is FORCED true regardless of what the LLM
 # says. Lives here — next to the enforcement in submit_answer — not in the
 # LLM service, which never reads it.
-MOCK_MAX_ANSWERED_TURNS = 30
+MOCK_MAX_ANSWERED_TURNS = 14
 
 
 class StaleQuestionError(ValueError):
     """The answer references a question that is no longer current — a
     concurrent submit already advanced the interview (MOCK-3)."""
+
+
+class QuestionBusyError(ValueError):
+    """Another request is already generating the reply for this question."""
 
 
 # ── Message helpers ──────────────────────────────────────────────────────
@@ -111,7 +115,7 @@ def extract_file_asset_text(db: Session, asset_id: str, username: str) -> str:
             READABLE_UPLOAD_STATUSES,
             get_file_asset,
         )
-        from app.services.voice.file_parser import extract_resume_text
+        from app.services.interview.document_text import extract_document_text
 
         asset = get_file_asset(db, asset_id)
         if asset is None or asset.user_id != resolve_user_pk(db, username):
@@ -125,15 +129,15 @@ def extract_file_asset_text(db: Session, asset_id: str, username: str) -> str:
         local_path = storage_uri
         is_temp = False
         if storage_uri and storage_uri.startswith("s3://"):
-            from app.core.storage import download_file_from_s3
-
             _, ext = os.path.splitext(storage_uri)
-            tmp_fd, local_path = tempfile.mkstemp(suffix=ext)
-            os.close(tmp_fd)
-            download_file_from_s3(storage_uri, local_path)
+            local_path = create_runtime_temp_file(suffix=ext)
             is_temp = True
         try:
-            return (extract_resume_text(local_path) or "").strip()
+            if is_temp:
+                from app.core.storage import download_file_from_s3
+
+                download_file_from_s3(storage_uri, local_path)
+            return (extract_document_text(local_path) or "").strip()
         finally:
             if is_temp and local_path and os.path.exists(local_path):
                 os.unlink(local_path)
@@ -142,6 +146,14 @@ def extract_file_asset_text(db: Session, asset_id: str, username: str) -> str:
             "mock file-asset text extraction failed for %s: %s", asset_id, exc
         )
         return ""
+
+
+class ResumeNotFoundError(ValueError):
+    pass
+
+
+class ResumeNotReadyError(RuntimeError):
+    pass
 
 
 def resolve_resume_context(
@@ -163,17 +175,29 @@ def resolve_resume_context(
                 resume_id=resume_id,
                 user_id=username,
             )
-            if resume is not None:
-                sections = resume_service.get_sections_by_resume(resume.id)
-                if sections:
-                    return resume_service.format_for_context(
-                        sections
-                    ), "personal_resume"
-                if (resume.raw_text_snapshot or "").strip():
-                    return resume.raw_text_snapshot.strip(), "personal_resume"
+            if resume is None:
+                raise ResumeNotFoundError("简历不存在或无权访问")
+            if not (resume.raw_text_snapshot or "").strip() and resume.parse_status in {
+                "pending",
+                "processing",
+            }:
+                raise ResumeNotReadyError("简历仍在解析，请解析完成后再开始面试")
+            if (
+                resume.parse_status == "failed"
+                and not (resume.raw_text_snapshot or "").strip()
+            ):
+                raise ResumeNotReadyError("简历解析失败，请替换后重试")
+            sections = resume_service.get_sections_by_resume(resume.id)
+            if sections:
+                return resume_service.format_for_context(sections), "personal_resume"
+            if (resume.raw_text_snapshot or "").strip():
+                return resume.raw_text_snapshot.strip(), "personal_resume"
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, (ResumeNotFoundError, ResumeNotReadyError)):
+                raise
             logger.warning("mock resume context load failed: %s", exc)
-        return "", None
+            raise ResumeNotReadyError("简历读取失败，请稍后重试") from exc
+        raise ResumeNotReadyError("简历仍在解析，请解析完成后再开始面试")
     if resume_file_asset_id:
         text = extract_file_asset_text(db, resume_file_asset_id, username)
         return text, ("context_upload" if text else None)
@@ -329,7 +353,7 @@ async def submit_answer(
     answer_text: str,
     answer_audio_file_asset_id: str | None,
     user_id: str | None = None,
-    question_message_id: int | None = None,
+    question_message_id: int,
 ):
     """One turn in TWO short transactions (MOCK-4):
 
@@ -343,19 +367,14 @@ async def submit_answer(
     ``question_message_id`` (MOCK-3): optimistic concurrency token — the FE
     echoes back the id of the question it is answering; a mismatch means a
     concurrent submit already advanced the interview → StaleQuestionError
-    (409 at the API). Legacy clients that don't send it keep the old
-    last-write-wins behaviour.
+    (409 at the API).
 
     Returns the ``NextTurn`` with ``question_message_id`` set to the new
     interviewer message's id.
     """
     conversation_id = runtime.conversation_id
 
-    if (
-        question_message_id is not None
-        and runtime.current_question_message_id is not None
-        and question_message_id != runtime.current_question_message_id
-    ):
+    if question_message_id != runtime.current_question_message_id:
         raise StaleQuestionError(
             f"answer targets message {question_message_id}, current is "
             f"{runtime.current_question_message_id}"
@@ -373,6 +392,16 @@ async def submit_answer(
     # prompt — read recent first, then persist the answer.
     recent = recent_messages(db, conversation_id, limit=8)
     asked = list_asked_questions(db, conversation_id)
+
+    claim = mock_runtime_service.claim_question(
+        db,
+        runtime,
+        question_message_id=question_message_id,
+    )
+    if claim == "stale":
+        raise StaleQuestionError("the current question changed before it was claimed")
+    if claim == "busy":
+        raise QuestionBusyError("the current question is already being answered")
 
     # ── Phase A: persist the answer, commit ─────────────────────────
     last = _last_message(db, conversation_id)
@@ -424,49 +453,66 @@ async def submit_answer(
     db.commit()
 
     # ── LLM turn (no transaction open) ──────────────────────────────
-    turn = await mock_interview_service.generate_next_turn(
-        prefix=prefix,
-        stages=stages,
-        current_stage_key=current_stage,
-        recent_messages=recent,
-        user_answer=answer_text,
-        user_id=user_id,
-        asked_questions=[q["text"] for q in asked],
-        questions_in_current_stage=sum(
-            1 for q in asked if q["stage_key"] == current_stage
-        ),
-    )
+    try:
+        turn = await mock_interview_service.generate_next_turn(
+            prefix=prefix,
+            stages=stages,
+            current_stage_key=current_stage,
+            recent_messages=recent,
+            user_answer=answer_text,
+            user_id=user_id,
+            asked_questions=[q["text"] for q in asked],
+            questions_in_current_stage=sum(
+                1 for q in asked if q["stage_key"] == current_stage
+            ),
+        )
+    except BaseException:
+        mock_runtime_service.release_question_claim(
+            db,
+            runtime.id,
+            question_message_id=question_message_id,
+        )
+        raise
 
     # Rules layer (MOCK-5): the hard cap overrides the LLM's soft signal.
     if count_answered_turns(db, conversation_id) >= MOCK_MAX_ANSWERED_TURNS:
         turn.is_ready_to_finish = True
 
     # ── Phase B: persist the reply + advance runtime, commit ────────
-    assistant_msg = append_message(
-        db,
-        conversation_id,
-        "assistant",
-        turn.interviewer_message,
-        content_blocks_json=json.dumps(
-            [{"type": "stage", "stage_key": turn.next_stage_key}],
-            ensure_ascii=False,
-        ),
-    )
+    try:
+        assistant_msg = append_message(
+            db,
+            conversation_id,
+            "assistant",
+            turn.interviewer_message,
+            content_blocks_json=json.dumps(
+                [{"type": "stage", "stage_key": turn.next_stage_key}],
+                ensure_ascii=False,
+            ),
+        )
 
-    stage_index = next(
-        (i for i, s in enumerate(stages) if s["key"] == turn.next_stage_key),
-        runtime.stage_index,
-    )
-    mock_runtime_service.advance_runtime(
-        db,
-        runtime,
-        current_stage_key=turn.next_stage_key,
-        stage_index=stage_index,
-        current_question_text=turn.interviewer_message,
-        current_question_message_id=assistant_msg.id,
-        commit=False,
-    )
-    db.commit()
+        stage_index = next(
+            (i for i, s in enumerate(stages) if s["key"] == turn.next_stage_key),
+            runtime.stage_index,
+        )
+        mock_runtime_service.advance_runtime(
+            db,
+            runtime,
+            current_stage_key=turn.next_stage_key,
+            stage_index=stage_index,
+            current_question_text=turn.interviewer_message,
+            current_question_message_id=assistant_msg.id,
+            commit=False,
+        )
+        runtime.answer_claimed_at = None
+        db.commit()
+    except BaseException:
+        mock_runtime_service.release_question_claim(
+            db,
+            runtime.id,
+            question_message_id=question_message_id,
+        )
+        raise
     turn.question_message_id = assistant_msg.id
     return turn
 
@@ -543,7 +589,7 @@ def dispatch_review(
       resume banner.
     """
     try:
-        task = process_mock_interview_review.delay(record_id)
+        task = dispatch_mock_interview_review(record_id)
     except Exception as exc:  # noqa: BLE001 — broker down / misconfigured
         logger.error("review dispatch failed for record %s: %s", record_id, exc)
         interview_record_service.set_status(record_id, rollback_status, db=db)

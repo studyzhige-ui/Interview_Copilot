@@ -25,6 +25,10 @@ parse XFF unconditionally, an attacker could just set
 
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 
@@ -109,3 +113,32 @@ def test_xff_chain_picks_rightmost_hop():
         )
     # Rightmost entry — uvicorn's chosen semantics.
     assert resp.json()["client_host"] == "10.0.0.5"
+
+
+def test_proxy_headers_run_before_per_ip_rate_limit():
+    """Two forwarded clients must receive independent SlowAPI buckets.
+
+    Middleware registration order is load-bearing: Starlette prepends newly
+    registered middleware, so ProxyHeadersMiddleware must be added after
+    SlowAPIMiddleware to become the outermost layer.
+    """
+    limiter = Limiter(key_func=get_remote_address)
+    app = FastAPI()
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["testclient"])
+
+    @app.get("/limited")
+    @limiter.limit("1/minute")
+    def limited(request: Request) -> dict[str, str]:
+        return {"client_host": request.client.host}
+
+    with TestClient(app) as client:
+        first_a = client.get("/limited", headers={"X-Forwarded-For": "203.0.113.1"})
+        second_a = client.get("/limited", headers={"X-Forwarded-For": "203.0.113.1"})
+        first_b = client.get("/limited", headers={"X-Forwarded-For": "203.0.113.2"})
+
+    assert first_a.status_code == 200
+    assert second_a.status_code == 429
+    assert first_b.status_code == 200

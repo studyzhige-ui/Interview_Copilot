@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
 
 from app.db.redis import redis_client
 
@@ -81,9 +80,4 @@ async def is_revoked(jti: str | None) -> bool:
         return True
 
 
-def utcnow_ts() -> int:
-    """Standard helper for token issuers — current UTC as integer seconds."""
-    return int(datetime.now(timezone.utc).timestamp())
-
-
-__all__ = ["revoke", "is_revoked", "utcnow_ts"]
+__all__ = ["revoke", "is_revoked"]

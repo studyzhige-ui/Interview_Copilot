@@ -3,7 +3,7 @@
 # ──────────────────────────────────────────────────────────────────────────
 
 # Stage 1: Build dependencies into a virtual environment
-FROM python:3.13-slim AS builder
+FROM python:3.13.14-slim AS builder
 
 WORKDIR /build
 
@@ -15,18 +15,25 @@ RUN apt-get update && \
 ARG APP_EXTRAS
 ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu129
 COPY pyproject.toml README.md ./
-COPY backend/app ./backend/app
+# Dependency installation only needs one discoverable package. Keeping the
+# application source out of this layer means normal code edits reuse the
+# expensive dependency cache; the complete source is copied in the runtime
+# stage below.
+COPY backend/app/__init__.py ./backend/app/__init__.py
 RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir --upgrade pip && \
     if [ -n "$APP_EXTRAS" ]; then \
-        /opt/venv/bin/pip install --no-cache-dir \
-            --extra-index-url "$PYTORCH_INDEX_URL" ".[${APP_EXTRAS}]"; \
+        case ",${APP_EXTRAS}," in \
+            *,cuda,*) /opt/venv/bin/pip install --no-cache-dir \
+                --extra-index-url "$PYTORCH_INDEX_URL" ".[${APP_EXTRAS}]" ;; \
+            *) /opt/venv/bin/pip install --no-cache-dir ".[${APP_EXTRAS}]" ;; \
+        esac; \
     else \
         /opt/venv/bin/pip install --no-cache-dir .; \
     fi
 
 # Stage 2: Lean runtime image
-FROM python:3.13-slim AS runtime
+FROM python:3.13.14-slim AS runtime
 
 # libpq is needed at runtime for psycopg2; curl is the healthcheck client;
 # gosu (~1MB) lets entrypoint drop privileges *after* fixing /app/data
@@ -47,6 +54,8 @@ COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    TMPDIR=/app/data/tmp \
+    HF_HOME=/app/data/cache/huggingface \
     # Tell pydantic-settings / app code that runtime state lives at
     # /app/data — entrypoint chowns this dir to the app user before
     # exec'ing the server.
@@ -57,13 +66,17 @@ WORKDIR /app
 # Copy source. --chown gives the app user ownership inside the image so
 # read-only operations (importing modules, reading alembic migrations)
 # don't need any further filesystem mucking.
-COPY --chown=app:app backend/ ./
+COPY --chown=app:app backend/app/ /app/app/
 COPY --chown=app:app alembic.ini /app/alembic.ini
 COPY --chown=app:app alembic/ /app/alembic/
-# Operator scripts that must be runnable inside the container (reingest /
-# consistency scan). They live at scripts/ in the repo; their sys.path shim
-# handles both the repo layout (backend/app) and this image layout (/app/app).
-COPY --chown=app:app scripts/consistency_scan.py scripts/reingest_hybrid.py /app/scripts/
+# Operator scripts that must be runnable inside the container. They live at
+# scripts/ in the repo; their sys.path shim handles both the repo layout
+# (backend/app) and this image layout (/app/app).
+COPY --chown=app:app \
+    scripts/consistency_scan.py \
+    scripts/init_models.py \
+    scripts/reingest_hybrid.py \
+    /app/scripts/
 
 # Entrypoint creates /app/data if missing, chowns it (handles the case
 # where docker-compose bind-mounts a host dir owned by root or some other

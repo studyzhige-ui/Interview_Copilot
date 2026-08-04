@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 export type ToastKind = 'success' | 'info' | 'warning' | 'danger';
-export interface ToastItem {
+interface ToastItem {
   id: number;
   kind: ToastKind;
   message: string;

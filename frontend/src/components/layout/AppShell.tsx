@@ -4,11 +4,13 @@ import { SideNav } from './SideNav';
 import { TopBar } from './TopBar';
 
 const PAGE_TITLES: Record<string, string> = {
-  '/review':    '复盘',
+  '/review':    '面试复盘',
   '/mock':      '模拟面试',
-  '/analytics': '能力分析',
-  '/library':   '资料库',
-  '/models':    '模型',
+  '/general-chat': '自由对话',
+  '/analytics': '能力成长',
+  '/library':   '资料与记忆',
+  '/models':    '回答模型',
+  '/capabilities': 'Skills 与 MCP',
   '/me':        '个人中心',
 };
 

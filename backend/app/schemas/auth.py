@@ -7,7 +7,7 @@ codegen all reference the same source of truth.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -36,7 +36,15 @@ class LogoutRequest(BaseModel):
 
 class EmailRequest(BaseModel):
     email: EmailStr
-    purpose: str = "register"  # "register" | "reset_password" | "change_email"
+    purpose: Literal["register", "reset_password", "change_email"] = "register"
+
+
+class ResetPasswordRequest(BaseModel):
+    """Reset an account password with a one-time email code."""
+
+    email: EmailStr
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+    new_password: str = Field(..., min_length=6, max_length=128)
 
 
 class ChangePasswordRequest(BaseModel):
@@ -71,11 +79,9 @@ class MeUpdate(BaseModel):
     def _reject_internal_avatar_schemes(cls, v):
         """Only http(s):// URLs are user-settable via PATCH.
 
-        ``data:`` (legacy inline base64), ``s3://`` (backend-managed blob),
-        and ``local://`` (backend fallback) are all internal storage forms.
-        Letting a client submit them would either re-introduce the data:
-        bloat we're migrating away from, or write an unverifiable / forged
-        URI straight onto the user row.
+        ``data:``, ``s3://`` (backend-managed blob), and ``local://``
+        (backend fallback) are internal storage forms. Letting a client submit
+        them would write an unverifiable or forged URI onto the user row.
         """
         if v is None:
             return v
@@ -124,6 +130,7 @@ __all__ = [
     "RefreshRequest",
     "LogoutRequest",
     "EmailRequest",
+    "ResetPasswordRequest",
     "ChangePasswordRequest",
     "MeUpdate",
     "MeResponse",

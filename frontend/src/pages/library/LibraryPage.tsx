@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useIsMounted } from '@/hooks/useIsMounted';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Upload, Search, Pencil, Trash2, FileText, RefreshCw,
   ChevronLeft, ChevronRight, ArrowDown, ArrowUp, Folder, Brain,
@@ -20,14 +20,16 @@ import {
   updateKnowledgeDocument,
   uploadKnowledgeFile,
 } from '@/api/knowledge';
-import type { KnowledgeCategory, KnowledgeDoc } from '@/types/api';
+import type { KnowledgeDoc } from '@/types/api';
 import { MemoryTab } from './memory/MemoryTab';
+import { ResumeSection } from './ResumeSection';
 
-type TopTab = 'files' | 'memory';
+type TopTab = 'knowledge' | 'resumes' | 'memory';
 
-// Fixed set of user-selectable categories. Picking 简历/面试题库/官方文档 as
-// the canonical labels per spec; backend still accepts any string.
-const CATEGORIES = ['简历', '面试题库', '官方文档'] as const;
+// Personal resumes are a separate profile entity, not RAG material. Keeping
+// knowledge categories distinct prevents an uploaded resume from appearing to
+// affect mock-interview context when it actually does not.
+const CATEGORIES = ['面试题库', '技术资料', '项目资料'] as const;
 type Category = typeof CATEGORIES[number];
 
 const PAGE_SIZE = 10;
@@ -70,24 +72,25 @@ function humanSize(n: number | null): string {
 }
 
 export function LibraryPage() {
-  // Top-level tab: 文件 (uploaded knowledge docs) vs 记忆 (v3 memory browser).
-  // The memory tab is its own component so this file stays focused on the
-  // file-CRUD flow; both share the page header + tab bar below.
-  const [tab, setTab] = useState<TopTab>('files');
+  const [tab, setTab] = useState<TopTab>('knowledge');
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <div className="flex items-center gap-3 mb-4">
-        <h2 className="text-xl font-semibold text-stone-800">个人资料库</h2>
+    <div className="p-4 md:p-6 max-w-6xl mx-auto">
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <h2 className="text-xl font-semibold text-stone-800">资料与记忆</h2>
         <div className="ml-3 inline-flex items-center gap-1 p-0.5 bg-stone-100 rounded-lg">
-          <TopTabBtn active={tab === 'files'}  icon={<Folder size={13} />} onClick={() => setTab('files')}>
-            文件
+          <TopTabBtn active={tab === 'knowledge'} icon={<Folder size={13} />} onClick={() => setTab('knowledge')}>
+            知识库
+          </TopTabBtn>
+          <TopTabBtn active={tab === 'resumes'} icon={<FileText size={13} />} onClick={() => setTab('resumes')}>
+            简历
           </TopTabBtn>
           <TopTabBtn active={tab === 'memory'} icon={<Brain size={13} />}  onClick={() => setTab('memory')}>
             记忆
           </TopTabBtn>
         </div>
       </div>
-      {tab === 'files'  && <FilesSection />}
+      {tab === 'knowledge' && <FilesSection />}
+      {tab === 'resumes' && <ResumeSection />}
       {tab === 'memory' && <MemoryTab />}
     </div>
   );
@@ -103,6 +106,7 @@ function TopTabBtn({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className={[
         'inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-sm',
@@ -118,115 +122,48 @@ function TopTabBtn({
 }
 
 function FilesSection() {
-  const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
-  const [cats, setCats] = useState<KnowledgeCategory[]>([]);
   const [filter, setFilter] = useState<string>('');
   const [query, setQuery] = useState('');
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<{ id: string; title: string } | null>(null);
   const [deleting, setDeleting] = useState<KnowledgeDoc | null>(null);
   const [uploading, setUploading] = useState(false);
   // Pending file waiting for category choice
   const [pendingFile, setPendingFile] = useState<File | null>(null);
-  const [pickCategory, setPickCategory] = useState<Category>('简历');
+  const [pickCategory, setPickCategory] = useState<Category>('技术资料');
   const fileRef = useRef<HTMLInputElement | null>(null);
-  const isMounted = useIsMounted();
-
-  // ``refresh`` is the manual / user-triggered reload (after upload,
-  // after edit, after delete). The filter-driven effect below uses its
-  // own abort lifecycle; this manual path uses ``useIsMounted`` so a
-  // refresh fired right before the user navigates away doesn't
-  // setState on an unmounted component.
+  const queryClient = useQueryClient();
+  const knowledgeQuery = useQuery({
+    queryKey: ['knowledge', 'documents', filter],
+    queryFn: ({ signal }) => Promise.all([
+      listKnowledgeDocuments(filter ? { category: filter } : {}, { signal }),
+      listKnowledgeCategories({ signal }),
+    ]),
+    refetchInterval: (query) => query.state.data?.[0].some(
+      (doc) => doc.status === 'processing' || doc.status === 'pending',
+    ) ? 2500 : false,
+  });
+  const [docs, cats] = knowledgeQuery.data ?? [[], []];
+  const loading = knowledgeQuery.isPending;
   const refresh = async () => {
-    setLoading(true);
-    try {
-      const [d, c] = await Promise.all([
-        listKnowledgeDocuments(filter ? { category: filter } : {}),
-        listKnowledgeCategories(),
-      ]);
-      if (!isMounted.current) return;
-      setDocs(d);
-      setCats(c);
-    } catch {
-      if (isMounted.current) toast.error('资料库加载失败');
-    } finally {
-      if (isMounted.current) setLoading(false);
-    }
+    await queryClient.invalidateQueries({ queryKey: ['knowledge'] });
   };
 
   useEffect(() => {
-    // Abort on filter change — without this, switching filters
-    // rapidly could land an older filter's response into ``docs``.
-    const controller = new AbortController();
-    let alive = true;
-    Promise.all([
-      listKnowledgeDocuments(
-        filter ? { category: filter } : {},
-        { signal: controller.signal },
-      ),
-      listKnowledgeCategories({ signal: controller.signal }),
-    ])
-      .then(([d, c]) => {
-        if (!alive) return;
-        setDocs(d);
-        setCats(c);
-      })
-      .catch((e) => {
-        if ((e as { code?: string })?.code === 'ERR_CANCELED') return;
-        if (alive) toast.error('资料库加载失败');
-      })
-      .finally(() => { if (alive) setLoading(false); });
-    return () => {
-      alive = false;
-      controller.abort();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- listKnowledgeCategories ignores filter
-  }, [filter]);
-
-  // Auto-poll while any doc is still processing/pending. This is why the
-  // user previously had to navigate away and back to see status updates —
-  // we never re-fetched after the initial Celery dispatch.
-  const hasInFlight = docs.some(
-    (d) => d.status === 'processing' || d.status === 'pending',
-  );
-  useEffect(() => {
-    if (!hasInFlight) return;
-    // Per-tick AbortController so a still-running poll request from
-    // the previous filter / interval can't land on the new state.
-    // Tracked at outer scope so the cleanup can cancel an in-flight
-    // tick when ``filter`` / ``hasInFlight`` flips.
-    let inFlightAbort: AbortController | null = null;
-    let alive = true;
-    const t = setInterval(() => {
-      // Abort the prior tick if it's still pending.
-      inFlightAbort?.abort();
-      inFlightAbort = new AbortController();
-      listKnowledgeDocuments(
-        filter ? { category: filter } : {},
-        { signal: inFlightAbort.signal },
-      )
-        .then((d) => { if (alive) setDocs(d); })
-        .catch(() => {});
-    }, 2500);
-    return () => {
-      alive = false;
-      clearInterval(t);
-      inFlightAbort?.abort();
-    };
-  }, [hasInFlight, filter]);
+    if (knowledgeQuery.error) toast.error('资料库加载失败');
+  }, [knowledgeQuery.error]);
 
   const onPickFile = (f: File) => {
     setPendingFile(f);
     // Default category guess from filename
     const lc = f.name.toLowerCase();
-    if (lc.includes('resume') || lc.includes('简历') || lc.includes('cv')) {
-      setPickCategory('简历');
-    } else if (lc.includes('题') || lc.includes('面经') || lc.endsWith('.md')) {
+    if (lc.includes('题') || lc.includes('面经')) {
       setPickCategory('面试题库');
+    } else if (lc.includes('项目') || lc.includes('project')) {
+      setPickCategory('项目资料');
     } else {
-      setPickCategory('官方文档');
+      setPickCategory('技术资料');
     }
   };
 
@@ -255,11 +192,10 @@ function FilesSection() {
     if (!title) { setEditing(null); return; }
     try {
       await updateKnowledgeDocument(editing.id, { title });
-      if (!isMounted.current) return;
       setEditing(null);
       await refresh();
     } catch {
-      if (isMounted.current) toast.error('保存失败');
+      toast.error('保存失败');
     }
   };
 
@@ -267,12 +203,11 @@ function FilesSection() {
     if (!deleting) return;
     try {
       await deleteKnowledgeDocument(deleting.id);
-      if (!isMounted.current) return;
       setDeleting(null);
       toast.success('已删除');
       await refresh();
     } catch {
-      if (isMounted.current) toast.error('删除失败');
+      toast.error('删除失败');
     }
   };
 
@@ -329,7 +264,7 @@ function FilesSection() {
         </div>
       </div>
 
-      <div className="bg-white border border-stone-200 rounded-xl shadow-xs">
+      <div className="bg-white border border-stone-200 rounded-xl shadow-xs overflow-x-auto">
         <div className="px-4 py-3 border-b border-stone-200 flex items-center gap-3 flex-wrap">
           <div className="relative flex-1 max-w-sm">
             <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400" />
@@ -341,11 +276,11 @@ function FilesSection() {
             />
           </div>
           <div className="flex items-center gap-1 overflow-x-auto">
-            <CatChip active={filter === ''} onClick={() => { setPage(1); setLoading(true); setFilter(''); }}>全部</CatChip>
+            <CatChip active={filter === ''} onClick={() => { setPage(1); setFilter(''); }}>全部</CatChip>
             {CATEGORIES.map((c) => {
               const count = cats.find((x) => x.category === c)?.count ?? 0;
               return (
-                <CatChip key={c} active={filter === c} onClick={() => { setPage(1); setLoading(true); setFilter(c); }}>
+                <CatChip key={c} active={filter === c} onClick={() => { setPage(1); setFilter(c); }}>
                   {c} <span className="opacity-60">· {count}</span>
                 </CatChip>
               );
@@ -357,7 +292,7 @@ function FilesSection() {
                 <CatChip
                   key={c.category}
                   active={filter === c.category}
-                  onClick={() => { setPage(1); setLoading(true); setFilter(c.category); }}
+                  onClick={() => { setPage(1); setFilter(c.category); }}
                 >
                   {c.category} <span className="opacity-60">· {c.count}</span>
                 </CatChip>
@@ -373,11 +308,11 @@ function FilesSection() {
           <EmptyState
             icon={<FileText size={28} />}
             title="资料库还是空的"
-            description="点右上「上传文件」添加简历 / 面试题库 / 官方文档"
+            description="点右上「上传文件」添加题库、技术文档或项目资料；个人简历请使用上方「简历」页签。"
           />
         ) : (
           <>
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[860px] text-sm">
               <thead className="text-xs text-stone-500 uppercase tracking-wider">
                 <tr className="border-b border-stone-200">
                   <th className="text-left font-medium px-4 py-3">文件名</th>
@@ -532,9 +467,9 @@ function FilesSection() {
                 {c}
               </span>
               <span className="ml-auto text-xs text-stone-400">
-                {c === '简历' && '用于个性化提问'}
                 {c === '面试题库' && '常考题、面经'}
-                {c === '官方文档' && '技术文档、规范'}
+                {c === '技术资料' && '技术文档、规范'}
+                {c === '项目资料' && '项目说明、设计材料'}
               </span>
             </label>
           ))}

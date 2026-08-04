@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 
@@ -13,6 +14,7 @@ from app.db.database import get_db
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
 from app.rag.retriever import query_knowledge_base
+from app.rag.runtime import ensure_rag_runtime
 from app.schemas.rag import (
     KnowledgeDocumentCreateRequest,
     KnowledgeDocumentUpdateRequest,
@@ -36,7 +38,7 @@ from app.services.uploads.file_asset_service import (
     get_owned_file_asset,
     mark_file_asset_consumed,
 )
-from app.worker.tasks import process_document_ingestion
+from app.task_queue.dispatch import dispatch_document_ingestion
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,11 @@ async def api_query_knowledge_base(
     here — context assembly owns those on the chat path.
     """
     try:
+        await asyncio.to_thread(
+            ensure_rag_runtime,
+            embedding=True,
+            reranker=True,
+        )
         source_kind_val = body.source_kind.value if body.source_kind else None
 
         result = await query_knowledge_base(
@@ -104,7 +111,7 @@ def _document_payload(document: KnowledgeDocument) -> dict:
 
 @router.post("/knowledge/upload/url")
 @limiter.limit(RATE_UPLOAD)
-async def create_knowledge_upload_url(
+def create_knowledge_upload_url(
     request: Request,
     response: Response,
     body: KnowledgeUploadRequest,
@@ -137,7 +144,7 @@ async def create_knowledge_upload_url(
 
 @router.post("/knowledge/documents")
 @limiter.limit(RATE_UPLOAD)
-async def create_knowledge_document(
+def create_knowledge_document(
     request: Request,
     response: Response,
     body: KnowledgeDocumentCreateRequest,
@@ -192,7 +199,7 @@ async def create_knowledge_document(
         db.refresh(document)
 
         try:
-            task = process_document_ingestion.delay(document_id)
+            task = dispatch_document_ingestion(document_id)
         except Exception as exc:  # noqa: BLE001
             # The document is already durable and visible. Park it in a
             # terminal state so a broker outage cannot leave a zombie.
@@ -226,7 +233,7 @@ async def create_knowledge_document(
 
 
 @router.get("/knowledge/documents")
-async def list_knowledge_documents(
+def list_knowledge_documents(
     category: Optional[str] = None,
     status: Optional[str] = None,
     source_kind: Optional[SourceKindEnum] = None,
@@ -257,7 +264,7 @@ async def list_knowledge_documents(
 
 
 @router.get("/knowledge/documents/{document_id}")
-async def get_knowledge_document(
+def get_knowledge_document(
     document_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -277,7 +284,7 @@ async def get_knowledge_document(
 
 
 @router.patch("/knowledge/documents/{document_id}")
-async def update_knowledge_document(
+def update_knowledge_document(
     document_id: str,
     request: KnowledgeDocumentUpdateRequest,
     db: Session = Depends(get_db),
@@ -304,7 +311,7 @@ async def update_knowledge_document(
 
 
 @router.delete("/knowledge/documents/{document_id}")
-async def delete_knowledge_document(
+def delete_knowledge_document(
     document_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -331,7 +338,7 @@ async def delete_knowledge_document(
 
 
 @router.get("/knowledge/categories")
-async def list_knowledge_categories(
+def list_knowledge_categories(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

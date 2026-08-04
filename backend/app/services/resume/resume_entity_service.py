@@ -225,7 +225,7 @@ def delete_resume(db: Session, *, user_id: str, resume_id: str) -> bool:
     resume.is_default = False
     resume.archived_at = datetime.utcnow()
     db.add(resume)
-    from app.services.resume.resume_outbox import enqueue_resume_reindex
+    from app.services.resume.reindex_jobs import enqueue_resume_reindex
 
     enqueue_resume_reindex(db, user_pk=resume.user_id, resume_id=resume.id)
     db.flush()

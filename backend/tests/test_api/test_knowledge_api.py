@@ -190,14 +190,14 @@ def test_create_document_rejects_unsupported_format(client, db: Session):
         )
     )
     db.commit()
-    with patch("app.api.rag.process_document_ingestion") as mock_proc:
+    with patch("app.api.rag.dispatch_document_ingestion") as dispatch:
         resp = client.post(
             "/api/v1/knowledge/documents",
             json={"upload_id": "upl_x", "source_kind": "user_upload"},
         )
     assert resp.status_code == 400
     # No worker dispatch and no document row for a rejected format.
-    mock_proc.delay.assert_not_called()
+    dispatch.assert_not_called()
     assert db.query(KnowledgeDocument).count() == 0
 
 
@@ -220,14 +220,14 @@ def test_create_document_accepts_legacy_office(client, db: Session):
     db.commit()
     fake_task = MagicMock()
     fake_task.id = "task-legacy"
-    with patch("app.api.rag.process_document_ingestion") as mock_proc:
-        mock_proc.delay.return_value = fake_task
+    with patch("app.api.rag.dispatch_document_ingestion") as dispatch:
+        dispatch.return_value = fake_task
         resp = client.post(
             "/api/v1/knowledge/documents",
             json={"upload_id": "upl_legacy", "source_kind": "user_upload"},
         )
     assert resp.status_code == 200, resp.text
-    mock_proc.delay.assert_called_once()
+    dispatch.assert_called_once()
 
 
 def test_create_document_dispatches_celery_with_document_id(client, db: Session):
@@ -249,14 +249,14 @@ def test_create_document_dispatches_celery_with_document_id(client, db: Session)
     fake_task.id = "task-1"
     with (
         patch.object(db, "commit", wraps=db.commit) as commit_spy,
-        patch("app.api.rag.process_document_ingestion") as mock_proc,
+        patch("app.api.rag.dispatch_document_ingestion") as dispatch_mock,
     ):
 
         def dispatch(document_id):
             assert commit_spy.call_count >= 1
             return fake_task
 
-        mock_proc.delay.side_effect = dispatch
+        dispatch_mock.side_effect = dispatch
         resp = client.post(
             "/api/v1/knowledge/documents",
             json={
@@ -269,7 +269,7 @@ def test_create_document_dispatches_celery_with_document_id(client, db: Session)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     document_id = body["document"]["id"]
-    mock_proc.delay.assert_called_once_with(document_id)
+    dispatch_mock.assert_called_once_with(document_id)
     assert body["document"]["category"] == "Backend"
     assert body["document"]["title"] == "Redis Notes"
     assert body["document"]["task_id"] == "task-1"
@@ -290,8 +290,8 @@ def test_create_document_marks_failed_when_dispatch_explodes(client, db: Session
     )
     db.commit()
 
-    with patch("app.api.rag.process_document_ingestion") as mock_proc:
-        mock_proc.delay.side_effect = RuntimeError("redis broker offline")
+    with patch("app.api.rag.dispatch_document_ingestion") as dispatch:
+        dispatch.side_effect = RuntimeError("redis broker offline")
         resp = client.post(
             "/api/v1/knowledge/documents",
             json={"upload_id": "upl_a", "source_kind": "user_upload"},

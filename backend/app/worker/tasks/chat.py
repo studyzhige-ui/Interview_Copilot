@@ -1,7 +1,7 @@
 """Durable conversation-turn execution."""
 
-from app.worker.celery_app import celery_app
-from app.worker.tasks.runtime import run_async
+from app.task_queue.celery_app import celery_app
+from app.core.async_runtime import run_async
 
 
 @celery_app.task(

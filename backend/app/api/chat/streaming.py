@@ -20,13 +20,13 @@ Wire format (Stage-G — unified across chat + agent paths):
       status / text_delta / text / error / done   — emitted by both
       sources                                     — L1 RAG only, once
                                                     before generation
-      tool_start / tool_done / budget             — agent-mode only
+      tool_start / tool_done / budget             — agent usage (legacy name)
 
     L1 (chat) uses ``mode="chat"``; the engine instantiates
     :class:`ChatPipelineStrategy` and fires status / text_delta / text /
     error / done, plus a single ``sources`` event on RAG turns (the L1
     [K#] citation sources). L2 (agent) uses ``mode="agent"`` and gets the
-    tool / budget events on top.
+    tool / usage events on top.
 """
 
 from __future__ import annotations
@@ -51,15 +51,28 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 
 
-def _turn_status(turn_id: str) -> str | None:
+def _turn_terminal_state(turn_id: str) -> tuple[str | None, str | None]:
     from app.db.database import SessionLocal
 
     session = SessionLocal()
     try:
         row = session.get(ConversationTurn, turn_id)
-        return row.status if row else None
+        return (row.status, row.error) if row else (None, None)
     finally:
         session.close()
+
+
+def _recovery_events(status: str, error: str | None) -> list[str]:
+    """Rebuild terminal events when the Redis stream is unavailable or expired."""
+    from app.conversation.events import HarnessEvent
+
+    events: list[str] = []
+    if status == "failed":
+        events.append(HarnessEvent.error(error or "本轮执行失败").to_json())
+    elif status == "cancelled":
+        events.append(HarnessEvent.error(error or "本轮已取消").to_json())
+    events.append(HarnessEvent.done(step=0, elapsed_ms=0).to_json())
+    return events
 
 
 def _resolve_mode(row: Conversation, requested: str | None, db: Session) -> str:
@@ -153,11 +166,10 @@ async def stream_chat_turn_events(
         while True:
             events = await turn_event_buffer.read(turn_id, cursor)
             if not events:
-                status = await asyncio.to_thread(_turn_status, turn_id)
+                status, error = await asyncio.to_thread(_turn_terminal_state, turn_id)
                 if status in {"completed", "failed", "cancelled"}:
-                    from app.conversation.events import HarnessEvent
-
-                    yield f"data: {HarnessEvent.done(step=0, elapsed_ms=0).to_json()}\n\n"
+                    for event_json in _recovery_events(status, error):
+                        yield f"data: {event_json}\n\n"
                     return
                 yield ": keepalive\n\n"
                 continue

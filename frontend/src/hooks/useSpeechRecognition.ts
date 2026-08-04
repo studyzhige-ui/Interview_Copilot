@@ -62,18 +62,29 @@ export const SPEECH_RECOGNITION_AVAILABLE = getRecognitionCtor() !== null;
 export function useSpeechRecognition(lang = 'zh-CN') {
   const [state, setState] = useState<State>({ phase: 'idle', finalText: '', interim: '' });
   const recRef = useRef<RecognitionLike | null>(null);
+  const transcriptRef = useRef({ finalText: '', interim: '' });
+  const stopResolveRef = useRef<((text: string) => void) | null>(null);
 
-  const stop = useCallback(() => {
+  const stop = useCallback((): Promise<string> => {
     const rec = recRef.current;
-    if (!rec) return;
-    try {
-      rec.stop();
-    } catch {
-      /* may already be stopped */
+    if (!rec) {
+      return Promise.resolve(
+        (transcriptRef.current.finalText + transcriptRef.current.interim).trim(),
+      );
     }
+    return new Promise((resolve) => {
+      stopResolveRef.current = resolve;
+      try {
+        rec.stop();
+      } catch {
+        stopResolveRef.current = null;
+        resolve((transcriptRef.current.finalText + transcriptRef.current.interim).trim());
+      }
+    });
   }, []);
 
   const reset = useCallback(() => {
+    transcriptRef.current = { finalText: '', interim: '' };
     setState({ phase: 'idle', finalText: '', interim: '' });
   }, []);
 
@@ -101,6 +112,10 @@ export function useSpeechRecognition(lang = 'zh-CN') {
         if (r.isFinal) finalChunk += t;
         else interimChunk += t;
       }
+      transcriptRef.current = {
+        finalText: transcriptRef.current.finalText + finalChunk,
+        interim: interimChunk,
+      };
       setState((s) => ({
         phase: 'listening',
         finalText: s.finalText + finalChunk,
@@ -114,13 +129,23 @@ export function useSpeechRecognition(lang = 'zh-CN') {
         interim: '',
         message: e.error || e.message || 'recognition error',
       }));
+      stopResolveRef.current?.(
+        (transcriptRef.current.finalText + transcriptRef.current.interim).trim(),
+      );
+      stopResolveRef.current = null;
     };
     rec.onend = () => {
+      const text = (transcriptRef.current.finalText + transcriptRef.current.interim).trim();
+      transcriptRef.current.interim = '';
+      recRef.current = null;
       setState((s) => (s.phase === 'listening'
         ? { ...s, phase: 'idle', interim: '' }
         : s));
+      stopResolveRef.current?.(text);
+      stopResolveRef.current = null;
     };
     recRef.current = rec;
+    transcriptRef.current = { finalText: '', interim: '' };
     setState({ phase: 'listening', finalText: '', interim: '' });
     try {
       rec.start();
@@ -137,6 +162,8 @@ export function useSpeechRecognition(lang = 'zh-CN') {
       } catch {
         /* ignore */
       }
+      stopResolveRef.current?.('');
+      stopResolveRef.current = null;
     };
   }, []);
 

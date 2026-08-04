@@ -9,6 +9,24 @@ from io import BytesIO
 from unittest.mock import patch
 
 
+def test_presigned_urls_use_browser_facing_signing_client():
+    with (
+        patch("app.core.storage.s3_signing_client") as signer,
+        patch("app.core.storage.s3_client") as internal,
+        patch("app.core.storage.settings") as settings,
+    ):
+        settings.S3_BUCKET_NAME = "bucket"
+        signer.generate_presigned_url.return_value = "http://localhost:9000/signed"
+
+        from app.core.storage import generate_presigned_upload_url_for_key
+
+        result = generate_presigned_upload_url_for_key("uploads/1/file.pdf")
+
+    assert result["upload_url"] == "http://localhost:9000/signed"
+    signer.generate_presigned_url.assert_called_once()
+    internal.generate_presigned_url.assert_not_called()
+
+
 def test_fallback_local_save_returns_local_uri(tmp_path):
     """_fallback_local_save 应写入本地并返回 local:// URI（供读取方解析）。"""
     with patch("app.core.storage.settings") as mock_settings:

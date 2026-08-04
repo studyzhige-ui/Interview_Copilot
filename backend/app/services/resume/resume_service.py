@@ -177,7 +177,7 @@ class ResumeService:
                 persisted.append(section)
 
             from app.models.resume import Resume
-            from app.services.resume.resume_outbox import enqueue_resume_reindex
+            from app.services.resume.reindex_jobs import enqueue_resume_reindex
 
             resume = db.query(Resume).filter(Resume.id == resume_id).first()
             if resume is not None:

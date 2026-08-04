@@ -8,7 +8,7 @@ from app.db.database import Base
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     username = Column(String, unique=True, index=True, nullable=False)
     email = Column(String, unique=True, index=True, nullable=True)
     hashed_password = Column(String, nullable=False)
@@ -27,8 +27,7 @@ class User(Base):
     # carried by ``token_version``, not this timestamp.
     password_changed_at = Column(DateTime, nullable=True)
     nickname = Column(String(64), nullable=True)
-    # Widened to Text so we can inline ~1MB image as `data:` URL (≈1.4MB
-    # base64). Plain http(s) URLs still fit fine.
+    # Stores an object-storage URI, local fallback URI, or public HTTP URL.
     avatar_url = Column(Text, nullable=True)
     bio = Column(Text, nullable=True)
     # Per-user default for the GLOBAL (cross-session) memory toggle.

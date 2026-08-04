@@ -8,21 +8,7 @@ import { toast } from '@/store/uiStore';
 import { getMe, updateMe, uploadAvatar, type MeResponse } from '@/api/auth';
 import { useAuthStore } from '@/store/authStore';
 import { useIsMounted } from '@/hooks/useIsMounted';
-
-const MACARON_BG = [
-  'bg-macaron-peach',
-  'bg-macaron-mint',
-  'bg-macaron-butter',
-  'bg-macaron-lavender',
-  'bg-macaron-sky',
-];
-
-function pickColor(name: string): string {
-  if (!name) return MACARON_BG[0];
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return MACARON_BG[h % MACARON_BG.length];
-}
+import { Avatar } from '@/components/ui/Avatar';
 
 export function ProfilePage() {
   const logout = useAuthStore((s) => s.logout);
@@ -31,8 +17,8 @@ export function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [nickname, setNickname] = useState('');
-  // Render-only URL (whatever the backend handed back: data: / s3-presigned /
-  // user-supplied http URL). NEVER round-tripped through the URL editor field.
+  // Render-only URL (S3-presigned, local fallback, or user-supplied HTTP URL).
+  // Never round-trip it through the public URL editor field.
   const [avatarUrl, setAvatarUrl] = useState('');
   // Editable URL field. Initialised to '' on load — once the user types a
   // public http(s) URL here we send THAT in the PATCH; otherwise we leave
@@ -142,8 +128,6 @@ export function ProfilePage() {
 
   if (!me) return null;
 
-  const initial = (me.nickname || me.username || '?').slice(0, 1).toUpperCase();
-  const color = pickColor(me.username);
   const created = me.created_at?.slice(0, 19).replace('T', ' ');
 
   return (
@@ -162,20 +146,14 @@ export function ProfilePage() {
                 e.target.value = '';
               }}
             />
-            {avatarUrl ? (
-              <img
-                src={avatarUrl}
-                alt="头像"
-                className="w-20 h-20 rounded-full object-cover border border-stone-200"
-                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-              />
-            ) : (
-              <div
-                className={`w-20 h-20 rounded-full ${color} text-white text-3xl font-semibold flex items-center justify-center`}
-              >
-                {initial}
-              </div>
-            )}
+            <Avatar
+              src={avatarUrl}
+              name={me.nickname || me.username || '?'}
+              colorSeed={me.username}
+              alt="头像"
+              className="w-20 h-20"
+              fallbackClassName="text-3xl"
+            />
             <button
               type="button"
               onClick={() => avatarInputRef.current?.click()}

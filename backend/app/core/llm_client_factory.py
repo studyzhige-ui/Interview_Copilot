@@ -23,18 +23,25 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from threading import Lock
 from typing import Any
 
+from llama_index.core.llms import LLM
 from llama_index.llms.openai_like import OpenAILike
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
 
-from app.core import model_catalog, user_model_selection
+from app.core import user_model_selection
+from app.core.config import settings
 from app.core.internal_models import get_internal_model_profile
-from app.core.model_catalog import ModelProfile, get_profile
+from app.core.model_catalog import ModelProfile
+from app.core.model_readiness import (
+    profile_ready,
+    ready_profile_ids,
+    resolve_api_key,
+    validate_role_update,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,33 +52,6 @@ logger = logging.getLogger(__name__)
 _llm_cache_lock = Lock()
 # key: (user_id, role, profile_id) → (credential fingerprint, LLM instance)
 _llm_cache: dict[tuple[str | None, str, str], tuple[str, Any]] = {}
-
-
-# ── API-key resolution ──────────────────────────────────────────────────
-
-
-def resolve_api_key(profile: ModelProfile, user_id: str | None = None) -> str:
-    """Resolve the API key to use when calling this profile.
-
-    Priority:
-      1) ``user_model_credentials`` row for (user_id, provider) — encrypted DB
-      2) ``os.environ[profile.api_key_env]`` — legacy / single-tenant path
-
-    Returns ``""`` when nothing resolves; downstream auth then fails
-    visibly instead of papering over a config bug.
-    """
-    if user_id:
-        try:
-            from app.services.auth.user_api_key_service import (
-                get_user_api_key_plaintext,
-            )
-
-            user_key = get_user_api_key_plaintext(user_id, profile.provider)
-            if user_key:
-                return user_key
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("user_api_key lookup failed: %s", exc)
-    return os.getenv(profile.api_key_env, "")
 
 
 # ── Per-user provider overrides ────────────────────────────────────────
@@ -232,7 +212,10 @@ def get_async_openai_client(
         kwargs: dict[str, Any] = {
             "api_key": api_key,
             "base_url": api_base,
-            "timeout": 30.0,
+            "timeout": float(settings.LLM_REQUEST_TIMEOUT_SECONDS),
+            # Retry policy belongs to the caller. SDK retries here would
+            # invisibly multiply Agent/planner retry loops.
+            "max_retries": 0,
         }
         if organization:
             kwargs["organization"] = organization
@@ -246,13 +229,6 @@ def get_async_openai_client(
             _, evicted = _async_openai_cache.popitem(last=False)
             _close_client_quietly(evicted[1])
         return client
-
-
-def _clear_llm_instance_cache() -> None:
-    """Drop ALL cached LLM instances. Called from selection persistence
-    so the user's next chat reflects their fresh role mapping."""
-    with _llm_cache_lock:
-        _llm_cache.clear()
 
 
 def clear_llm_cache_for_provider(provider: str) -> None:
@@ -286,43 +262,6 @@ def clear_llm_cache_for_provider(provider: str) -> None:
                 _close_client_quietly(entry[1])
 
 
-def ready_profile_ids(
-    profiles: dict[str, ModelProfile],
-    user_id: str | None = None,
-) -> set[str]:
-    """Profile ids whose provider key actually RESOLVES for the caller.
-
-    Same truth as ``profile_ready`` (plaintext resolves via
-    ``resolve_api_key``: user_model_credentials first, env fallback) — the
-    role-resolution fallback in ``user_model_selection`` consumes this so
-    "ready" can never mean two different things. Resolution is memoized
-    per provider (profiles of one provider share the key).
-    """
-    provider_ok: dict[str, bool] = {}
-    out: set[str] = set()
-    for pid, profile in profiles.items():
-        if not profile.model.strip():
-            continue
-        ok = provider_ok.get(profile.provider)
-        if ok is None:
-            ok = bool(resolve_api_key(profile, user_id=user_id))
-            provider_ok[profile.provider] = ok
-        if ok:
-            out.add(pid)
-    return out
-
-
-def profile_ready(profile: ModelProfile, user_id: str | None = None) -> bool:
-    """A profile is "ready" when SOME key resolves for it.
-
-    With ``user_id`` we check ``user_model_credentials`` first, then env.
-    Without ``user_id`` we fall back to env-only (legacy / ping path).
-    """
-    return bool(resolve_api_key(profile, user_id=user_id)) and bool(
-        profile.model.strip()
-    )
-
-
 # ── Catalog serialization ───────────────────────────────────────────────
 
 
@@ -334,34 +273,6 @@ def _serialize_profile(
         "ready": profile_ready(profile, user_id=user_id),
         "selected_for": [role for role, pid in selection.items() if pid == profile.id],
     }
-
-
-def list_profiles(user_id: str | None = None) -> list[dict[str, Any]]:
-    """Snapshot of the runtime catalog for ``user_id``.
-
-    Reads the pipeline cache (warmed lazily from Redis). Every entry
-    comes from a vendor's own /v1/models endpoint via the adapter
-    pipeline in ``app.services.model_sources``. Empty list means
-    nothing has populated the catalog yet — operators should run
-    ``scripts/refresh_models.py`` or wait for the daily Celery beat.
-    """
-    profiles = model_catalog._get_all_profiles()
-    selection = user_model_selection.get_runtime_selection(user_id)
-    return [_serialize_profile(p, selection, user_id) for p in profiles.values()]
-
-
-def validate_role_update(
-    role: str, profile_id: str, user_id: str | None = None
-) -> ModelProfile:
-    if role not in model_catalog.USER_SELECTABLE_ROLES:
-        raise ValueError(f"Unknown user-selectable model role: {role}")
-    profile = get_profile(profile_id)
-    if not profile_ready(profile, user_id=user_id):
-        raise ValueError(
-            f"Model profile '{profile_id}' is not ready. "
-            f"Please configure {profile.api_key_env} first."
-        )
-    return profile
 
 
 # ── LLM construction ────────────────────────────────────────────────────
@@ -383,7 +294,21 @@ def _build_llm_instance(profile: ModelProfile, user_id: str | None = None):
     order works in our favour — but kept as a defence in depth.
     """
     api_key = resolve_api_key(profile, user_id=user_id)
-    api_base = _resolve_api_base(profile, user_id=user_id)
+    overrides = _load_user_provider_overrides(profile, user_id)
+    api_base = overrides.api_base or profile.api_base
+    client_kwargs: dict[str, Any] = {
+        "api_key": api_key,
+        "base_url": api_base,
+        "timeout": float(settings.LLM_REQUEST_TIMEOUT_SECONDS),
+        "max_retries": 0,
+    }
+    if overrides.organization_id:
+        client_kwargs["organization"] = overrides.organization_id
+    if overrides.extra_headers:
+        client_kwargs["default_headers"] = dict(overrides.extra_headers)
+
+    sync_client = OpenAI(**client_kwargs)
+    async_client = AsyncOpenAI(**client_kwargs)
     llm = OpenAILike(
         model=profile.model,
         api_key=api_key,
@@ -392,6 +317,9 @@ def _build_llm_instance(profile: ModelProfile, user_id: str | None = None):
         is_function_calling_model=profile.supports_function_calling,
         context_window=profile.context_window,
         temperature=0.2,
+        default_headers=dict(overrides.extra_headers) or None,
+        openai_client=sync_client,
+        async_openai_client=async_client,
     )
 
     try:
@@ -412,8 +340,12 @@ def _get_cached_llm(
     user_id: str | None,
 ):
     api_key = resolve_api_key(profile, user_id=user_id)
-    api_base = _resolve_api_base(profile, user_id=user_id)
-    fp = _key_fingerprint(f"{api_key}|{api_base}")
+    overrides = _load_user_provider_overrides(profile, user_id)
+    api_base = overrides.api_base or profile.api_base
+    fp = _key_fingerprint(
+        f"{api_key}|{api_base}|org={overrides.organization_id or ''}|"
+        f"hdr={json.dumps(overrides.extra_headers, sort_keys=True)}"
+    )
     cache_key = (user_id, cache_role, profile.id)
     with _llm_cache_lock:
         cached = _llm_cache.get(cache_key)
@@ -461,7 +393,7 @@ def build_async_openai_client_for_internal_role(
     return get_async_openai_client(profile, user_id=None), profile
 
 
-class RuntimeLLMProxy:
+class RuntimeLLMProxy(LLM):
     """Process-global LLM proxy wired into LlamaIndex ``Settings.llm``.
 
     Always resolves with ``user_id=None`` (ROLE_DEFAULTS) — there's no
@@ -471,29 +403,50 @@ class RuntimeLLMProxy:
     conversation engine instead.
     """
 
-    def __init__(self, role: str):
-        self.role = role
+    role: str
 
     def _delegate(self):
         return get_llm_for_role(self.role)
 
-    def __getattr__(self, name):
-        # Forward PUBLIC attribute access (chat, complete, stream_chat, ...)
-        # to the underlying delegate. The delegate is re-resolved per
-        # call so a runtime selection change (PUT /models/runtime) is
-        # observed without recreating this proxy.
-        #
-        # Reject ANY name starting with ``_`` (dunder + ``_private``).
-        # ``mock.patch.__enter__`` probes ``_is_coroutine_marker`` /
-        # ``__func__`` / similar on its target to decide between AsyncMock
-        # and MagicMock; if we forwarded those, we'd trigger
-        # ``get_llm_for_role`` — which raises a hard ValueError when the
-        # catalog is cold (test environments without Redis). Refusing
-        # introspection lookups with AttributeError lets ``patch`` fall
-        # back to its plain-MagicMock branch cleanly.
-        if name.startswith("_"):
-            raise AttributeError(name)
-        return getattr(self._delegate(), name)
+    @property
+    def metadata(self):
+        return self._delegate().metadata
+
+    def chat(self, messages, **kwargs):
+        return self._delegate().chat(messages, **kwargs)
+
+    async def achat(self, messages, **kwargs):
+        return await self._delegate().achat(messages, **kwargs)
+
+    def stream_chat(self, messages, **kwargs):
+        return self._delegate().stream_chat(messages, **kwargs)
+
+    async def astream_chat(self, messages, **kwargs):
+        return await self._delegate().astream_chat(messages, **kwargs)
+
+    def complete(self, prompt, formatted=False, **kwargs):
+        return self._delegate().complete(prompt, formatted=formatted, **kwargs)
+
+    async def acomplete(self, prompt, formatted=False, **kwargs):
+        return await self._delegate().acomplete(
+            prompt,
+            formatted=formatted,
+            **kwargs,
+        )
+
+    def stream_complete(self, prompt, formatted=False, **kwargs):
+        return self._delegate().stream_complete(
+            prompt,
+            formatted=formatted,
+            **kwargs,
+        )
+
+    async def astream_complete(self, prompt, formatted=False, **kwargs):
+        return await self._delegate().astream_complete(
+            prompt,
+            formatted=formatted,
+            **kwargs,
+        )
 
 
 __all__ = [
@@ -502,7 +455,6 @@ __all__ = [
     "clear_llm_cache_for_provider",
     "profile_ready",
     "ready_profile_ids",
-    "list_profiles",
     "validate_role_update",
     "get_llm_for_role",
     "get_internal_llm",

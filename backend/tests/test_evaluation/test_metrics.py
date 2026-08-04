@@ -7,12 +7,27 @@ from evaluation.metrics import (
     precision_at_k,
     recall_at_k,
     reciprocal_rank,
+    tokenize,
 )
 
 
 def test_overlap_score_handles_english_and_chinese() -> None:
     assert overlap_score("MCP isolation", "MCP needs per-user isolation") == 1.0
     assert overlap_score("混合检索", "这里解释混合检索的原理") == 1.0
+
+
+def test_chinese_tokenizer_uses_bigrams_not_one_whole_sentence() -> None:
+    assert tokenize("混合检索") == ["混合", "合检", "检索"]
+
+
+def test_dataset_source_file_maps_to_prepared_document_id() -> None:
+    import hashlib
+
+    from evaluation.runners import _expected_document_ids
+
+    name = "owned-source.pdf"
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:24]
+    assert _expected_document_ids({"source_file": name}) == {f"kdoc_eval_{digest}"}
 
 
 def test_binary_ranking_metrics_respect_k() -> None:

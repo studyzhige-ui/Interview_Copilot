@@ -10,6 +10,7 @@ LLM construction, api-base override).
 from __future__ import annotations
 
 import pytest
+from llama_index.core.llms import LLM
 from llama_index.llms.openai_like import OpenAILike
 
 # Patch the owning module so runtime callers observe the same test state.
@@ -17,6 +18,7 @@ import app.core.llm_client_factory as llm_client_factory
 import app.core.model_catalog as model_catalog
 import app.core.user_model_selection as user_model_selection
 from app.core.llm_client_factory import (
+    RuntimeLLMProxy,
     _build_llm_instance,
     get_internal_llm,
     profile_ready,
@@ -200,6 +202,11 @@ def test_get_profile_for_role_raises_when_catalog_empty(monkeypatch):
         get_profile_for_role("primary")
 
 
+def test_runtime_proxy_is_a_valid_llamaindex_llm():
+    """Cold-catalog startup can assign the lazy proxy to Settings.llm."""
+    assert isinstance(RuntimeLLMProxy(role="primary"), LLM)
+
+
 # ── Per-user selection storage ───────────────────────────────────────────
 
 
@@ -276,6 +283,28 @@ def test_build_llm_instance_uses_resolved_api_key(monkeypatch, _stub_profile_cac
     monkeypatch.setenv(prof.api_key_env, "sk-resolved-via-env")
     instance = _build_llm_instance(prof)
     assert getattr(instance, "api_key", None) == "sk-resolved-via-env"
+
+
+def test_build_llm_instance_applies_user_connection_overrides(
+    monkeypatch, _stub_profile_cache
+):
+    prof = _stub_profile_cache["openai/gpt-4o"]
+    monkeypatch.setattr(llm_client_factory, "resolve_api_key", lambda *_a, **_k: "sk")
+    monkeypatch.setattr(
+        llm_client_factory,
+        "_load_user_provider_overrides",
+        lambda *_a, **_k: llm_client_factory._UserProviderOverrides(
+            api_base="https://gateway.example/v1",
+            organization_id="org-test",
+            extra_headers={"X-Tenant": "tenant-a"},
+        ),
+    )
+
+    instance = _build_llm_instance(prof, user_id="alice")
+    client = instance._get_client()
+    assert str(client.base_url) == "https://gateway.example/v1/"
+    assert client.organization == "org-test"
+    assert client.default_headers["X-Tenant"] == "tenant-a"
 
 
 # ── api_base override (P6-L plumbing for P6-M) ───────────────────────────

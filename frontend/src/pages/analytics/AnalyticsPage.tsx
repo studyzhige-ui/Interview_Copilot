@@ -4,14 +4,15 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Spinner } from '@/components/ui/Spinner';
 import { Btn } from '@/components/ui/Btn';
 import { toast } from '@/store/uiStore';
-import { getAnalyticsReport, listInterviewRecords } from '@/api/interview';
+import { getAnalyticsReport } from '@/api/interview';
 import { useIsMounted } from '@/hooks/useIsMounted';
-
-const MIN_SESSIONS = 3;
 
 interface RadarAxis {
   k: string;
-  v: number;
+  v: number | null;
+  topicCount: number;
+  evidenceCount: number;
+  confidence: 'none' | 'low' | 'medium' | 'high';
 }
 
 interface NormalizedReport {
@@ -24,27 +25,29 @@ interface NormalizedReport {
 function normalize(raw: unknown): NormalizedReport | { empty: true; message: string } {
   if (!raw || typeof raw !== 'object') return { empty: true, message: '无数据' };
   const obj = raw as Record<string, unknown>;
-  if (obj.status === 'empty') {
+  if (obj.status === 'empty' || obj.status === 'error' || obj.status === 'fallback') {
     return { empty: true, message: typeof obj.message === 'string' ? obj.message : '暂无数据' };
   }
 
-  // Prefer the current report schema.
-  let axes: RadarAxis[] = Array.isArray(obj.axes)
+  const axes: RadarAxis[] = Array.isArray(obj.axes)
     ? (obj.axes as { k?: unknown; v?: unknown }[])
-        .map((a) => ({ k: String(a.k ?? ''), v: Number(a.v ?? 0) }))
+        .map((a) => ({
+          k: String(a.k ?? ''),
+          v: typeof a.v === 'number' && Number.isFinite(a.v) ? a.v : null,
+          topicCount: Number((a as Record<string, unknown>).topic_count ?? 0),
+          evidenceCount: Number((a as Record<string, unknown>).evidence_count ?? 0),
+          confidence: String((a as Record<string, unknown>).confidence ?? 'none') as RadarAxis['confidence'],
+        }))
         .filter((a) => a.k)
     : [];
 
-  // Fallback: skill_radar object → axes
-  if (axes.length === 0 && obj.skill_radar && typeof obj.skill_radar === 'object') {
-    axes = Object.entries(obj.skill_radar as Record<string, unknown>)
-      .map(([k, v]) => ({ k, v: Number(v) || 0 }));
-  }
-
   const overall = typeof obj.overall === 'number'
     ? (obj.overall as number)
-    : axes.length > 0
-    ? Math.round(axes.reduce((s, a) => s + a.v, 0) / axes.length)
+    : axes.some((axis) => axis.v !== null)
+    ? Math.round(
+        axes.reduce((sum, axis) => sum + (axis.v ?? 0), 0)
+        / axes.filter((axis) => axis.v !== null).length,
+      )
     : 0;
 
   const strengths = Array.isArray(obj.strengths)
@@ -66,7 +69,6 @@ function normalize(raw: unknown): NormalizedReport | { empty: true; message: str
 }
 
 export function AnalyticsPage() {
-  const [sessionCount, setSessionCount] = useState<number | null>(null);
   const [report, setReport] = useState<ReturnType<typeof normalize> | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -74,18 +76,14 @@ export function AnalyticsPage() {
   const refresh = async () => {
     setLoading(true);
     try {
-      const records = await listInterviewRecords(0, 50);
+      const raw = await getAnalyticsReport();
       if (!isMounted.current) return;
-      setSessionCount(records.length);
-      if (records.length >= MIN_SESSIONS) {
-        const raw = await getAnalyticsReport();
-        if (!isMounted.current) return;
-        setReport(normalize(raw));
-      } else {
-        setReport(null);
-      }
+      setReport(normalize(raw));
     } catch {
-      if (isMounted.current) toast.error('能力分析加载失败');
+      if (isMounted.current) {
+        setReport({ empty: true, message: '服务暂时不可用，请稍后重试' });
+        toast.error('能力分析加载失败');
+      }
     } finally {
       if (isMounted.current) setLoading(false);
     }
@@ -103,24 +101,12 @@ export function AnalyticsPage() {
     );
   }
 
-  if ((sessionCount ?? 0) < MIN_SESSIONS) {
-    return (
-      <div className="p-6">
-        <EmptyState
-          icon={<BarChart3 size={32} />}
-          title={`完成 ${MIN_SESSIONS} 次面试后解锁能力分析`}
-          description={`当前 ${sessionCount ?? 0} 次。完成更多场次后，这里会出现六维雷达 + 薄弱点诊断。`}
-        />
-      </div>
-    );
-  }
-
   if (report && 'empty' in report && report.empty) {
     return (
       <div className="p-6">
         <EmptyState
           icon={<BarChart3 size={32} />}
-          title="后端尚未生成能力报告"
+          title="暂无足够的能力数据"
           description={report.message}
           action={
             <Btn icon={<RefreshCw size={14} />} onClick={refresh}>重新尝试</Btn>
@@ -133,26 +119,25 @@ export function AnalyticsPage() {
   const r = report as NormalizedReport;
 
   return (
-    <div className="p-6 max-w-5xl mx-auto">
+    <div className="p-4 md:p-6 max-w-5xl mx-auto">
       <div className="flex items-center gap-3 mb-5">
         <h2 className="text-xl font-semibold text-stone-800">能力分析</h2>
         <button
           onClick={refresh}
           className="p-1.5 rounded text-stone-500 hover:bg-stone-100"
           title="刷新"
+          aria-label="刷新能力分析"
         >
           <RefreshCw size={14} />
         </button>
       </div>
 
-      <div className="bg-white rounded-xl border border-stone-200 p-5 shadow-xs flex items-center gap-8">
+      <div className="bg-white rounded-xl border border-stone-200 p-5 shadow-xs flex flex-col md:flex-row items-center gap-8">
         <OverallCircle score={r.overall} />
-        {r.axes.length > 0 ? (
-          <Radar axes={r.axes} />
+        {r.axes.length > 0 && r.axes.every((axis) => axis.v !== null) ? (
+          <Radar axes={r.axes as (RadarAxis & { v: number })[]} />
         ) : (
-          <div className="text-sm text-stone-500">
-            后端未返回结构化能力维度（axes / skill_radar）—— 等待 P2 后端字段对齐。
-          </div>
+          <AxisCoverage axes={r.axes} />
         )}
       </div>
 
@@ -224,7 +209,39 @@ function OverallCircle({ score }: { score: number }) {
   );
 }
 
-function Radar({ axes }: { axes: RadarAxis[] }) {
+function AxisCoverage({ axes }: { axes: RadarAxis[] }) {
+  const confidenceLabel: Record<RadarAxis['confidence'], string> = {
+    none: '待评估',
+    low: '证据较少',
+    medium: '证据一般',
+    high: '证据充分',
+  };
+  return (
+    <div className="w-full grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {axes.map((axis) => (
+        <div key={axis.k} className="rounded-lg border border-stone-200 px-3 py-2.5">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm font-medium text-stone-700">{axis.k}</span>
+            <span className={axis.v === null ? 'text-xs text-stone-400' : 'text-sm font-semibold text-stone-800'}>
+              {axis.v === null ? '待评估' : Math.round(axis.v)}
+            </span>
+          </div>
+          <div className="mt-2 h-1.5 rounded-full bg-stone-100 overflow-hidden">
+            {axis.v !== null && (
+              <div className="h-full bg-primary-500" style={{ width: `${Math.max(0, Math.min(100, axis.v))}%` }} />
+            )}
+          </div>
+          <div className="mt-1.5 text-[11px] text-stone-500">
+            {confidenceLabel[axis.confidence]}
+            {axis.topicCount > 0 && ` · ${axis.topicCount} 个主题 · ${axis.evidenceCount} 条证据`}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Radar({ axes }: { axes: (RadarAxis & { v: number })[] }) {
   const n = axes.length;
   const radius = 90;
   const cx = 120;

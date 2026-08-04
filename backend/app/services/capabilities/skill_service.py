@@ -69,19 +69,6 @@ def list_skills(
     ]
 
 
-def get_enabled_by_name(db: Session, user_pk: int, name: str) -> dict | None:
-    row = (
-        db.query(UserSkill)
-        .filter(
-            UserSkill.user_id == user_pk,
-            UserSkill.name == name,
-            UserSkill.enabled.is_(True),
-        )
-        .one_or_none()
-    )
-    return _payload(row) if row else None
-
-
 def get_skill(db: Session, user_pk: int, skill_id: int) -> UserSkill | None:
     return (
         db.query(UserSkill)

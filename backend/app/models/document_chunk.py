@@ -48,7 +48,7 @@ class DocumentChunk(Base):
         Index("ix_document_chunks_doc_order", "document_id", "chunk_index"),
     )
 
-    id = Column(String, primary_key=True, default=generate_chunk_id, index=True)
+    id = Column(String, primary_key=True, default=generate_chunk_id)
     # NULL for personal_memory chunks (no knowledge_documents row).
     document_id = Column(
         String,

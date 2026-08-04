@@ -19,7 +19,7 @@ class KnowledgeDocument(Base):
     # was named ``knowledge_docs``). See alembic 0001_baseline:318.
     __table_args__ = (Index("ix_knowledge_docs_user_category", "user_id", "category"),)
 
-    id = Column(String, primary_key=True, default=generate_document_id, index=True)
+    id = Column(String, primary_key=True, default=generate_document_id)
     # Stable users.id FK (CLEANUP #2). The library API resolves the caller's
     # username via resolve_user_pk; the same pk is the Milvus / document_chunks
     # retrieval-scope key.

@@ -5,8 +5,6 @@ API returns an error."""
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from app.models.file_asset import FileAsset
@@ -74,8 +72,8 @@ def test_dispatch_failure_parks_record_failed_and_reraises(db_session, monkeypat
 
     monkeypatch.setattr(
         analysis_intake,
-        "process_interview_analysis",
-        SimpleNamespace(delay=_raise),
+        "dispatch_interview_analysis",
+        _raise,
     )
 
     with pytest.raises(ConnectionError):
@@ -112,8 +110,8 @@ def test_dispatch_success_leaves_record_pending_with_task_id(db_session, monkeyp
     monkeypatch.setattr(irs_module, "SessionLocal", lambda: _NoClose(db_session))
     monkeypatch.setattr(
         analysis_intake,
-        "process_interview_analysis",
-        SimpleNamespace(delay=lambda *a, **k: SimpleNamespace(id="celery-task-9")),
+        "dispatch_interview_analysis",
+        lambda *a, **k: type("Task", (), {"id": "celery-task-9"})(),
     )
 
     record, task = analysis_intake.create_record_and_dispatch(

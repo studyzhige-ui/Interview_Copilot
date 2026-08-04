@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from datetime import datetime
 
 import pytest
 
@@ -111,7 +112,7 @@ def test_stale_question_token_rejected(db_session, monkeypatch):
                 question_message_id=runtime.current_question_message_id + 999,
             )
         )
-    # No token / matching token both pass.
+    # A matching token advances the interview.
     turn = asyncio.run(
         mock_flow.submit_answer(
             db_session,
@@ -119,10 +120,31 @@ def test_stale_question_token_rejected(db_session, monkeypatch):
             runtime=runtime,
             answer_text="回答",
             answer_audio_file_asset_id=None,
-            question_message_id=None,
+            question_message_id=runtime.current_question_message_id,
         )
     )
     assert turn.question_message_id == runtime.current_question_message_id
+
+
+def test_question_claim_rejects_overlapping_generation(db_session, monkeypatch):
+    record, runtime, conv = _make_run(db_session)
+    _stub_turn(monkeypatch)
+    runtime.answer_claimed_at = datetime.utcnow()
+    db_session.commit()
+
+    with pytest.raises(mock_flow.QuestionBusyError):
+        asyncio.run(
+            mock_flow.submit_answer(
+                db_session,
+                record=record,
+                runtime=runtime,
+                answer_text="重复提交",
+                answer_audio_file_asset_id=None,
+                question_message_id=runtime.current_question_message_id,
+            )
+        )
+
+    assert mock_flow.count_answered_turns(db_session, conv.id) == 0
 
 
 def test_dangling_answer_retry_not_double_recorded(db_session, monkeypatch):
@@ -142,10 +164,13 @@ def test_dangling_answer_retry_not_double_recorded(db_session, monkeypatch):
                 runtime=runtime,
                 answer_text="我的回答",
                 answer_audio_file_asset_id=None,
+                question_message_id=runtime.current_question_message_id,
             )
         )
     # Phase A committed the answer even though phase B failed.
     assert mock_flow.count_answered_turns(db_session, conv.id) == 1
+    db_session.refresh(runtime)
+    assert runtime.answer_claimed_at is None
 
     _stub_turn(monkeypatch)
     asyncio.run(
@@ -155,6 +180,7 @@ def test_dangling_answer_retry_not_double_recorded(db_session, monkeypatch):
             runtime=runtime,
             answer_text="我的回答",
             answer_audio_file_asset_id=None,
+            question_message_id=runtime.current_question_message_id,
         )
     )
     assert mock_flow.count_answered_turns(db_session, conv.id) == 1  # deduped
@@ -171,6 +197,7 @@ def test_hard_cap_forces_ready_to_finish(db_session, monkeypatch):
             runtime=runtime,
             answer_text="第一答",
             answer_audio_file_asset_id=None,
+            question_message_id=runtime.current_question_message_id,
         )
     )
     assert turn.is_ready_to_finish is True  # rules layer overrode the LLM
@@ -187,6 +214,7 @@ def test_asked_questions_fed_to_prompt(db_session, monkeypatch):
             runtime=runtime,
             answer_text="回答",
             answer_audio_file_asset_id=None,
+            question_message_id=runtime.current_question_message_id,
         )
     )
     assert captured["asked_questions"] == ["你好，请自我介绍。"]

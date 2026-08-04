@@ -21,8 +21,17 @@ def normalize(text: str) -> str:
 
 
 def tokenize(text: str) -> list[str]:
-    """Extract meaningful tokens (English words and Chinese bigrams+)."""
-    return re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]{2,}", normalize(text))
+    """Extract English terms plus overlapping Chinese bigrams."""
+    value = normalize(text)
+    tokens = re.findall(r"[a-z0-9]+", value)
+    for sequence in re.findall(r"[\u4e00-\u9fff]+", value):
+        if len(sequence) == 1:
+            tokens.append(sequence)
+        else:
+            tokens.extend(
+                sequence[index : index + 2] for index in range(len(sequence) - 1)
+            )
+    return tokens
 
 
 # ---------------------------------------------------------------------------

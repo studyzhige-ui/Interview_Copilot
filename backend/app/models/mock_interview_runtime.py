@@ -43,10 +43,15 @@ class MockInterviewRuntime(Base):
     __tablename__ = "mock_interview_runtime"
     __table_args__ = (
         # Resume the user's most recent in-progress mock after a refresh.
-        Index("ix_mock_runtime_user_status", "user_id", "status"),
+        Index(
+            "ix_mock_runtime_user_status_activity",
+            "user_id",
+            "status",
+            "last_activity_at",
+        ),
     )
 
-    id = Column(String, primary_key=True, default=generate_runtime_id, index=True)
+    id = Column(String, primary_key=True, default=generate_runtime_id)
     user_id = Column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -73,6 +78,10 @@ class MockInterviewRuntime(Base):
     # The conversation message id of the question awaiting an answer — used to
     # reliably merge the QA pair when the interview ends.
     current_question_message_id = Column(Integer, nullable=True)
+    # Non-null while one request owns the current question and is generating
+    # the next interviewer turn. A timestamp (rather than a boolean) lets a
+    # later retry reclaim a lease left behind by a killed API process.
+    answer_claimed_at = Column(DateTime, nullable=True)
     # Frozen stage plan for THIS run (a template change can't affect a started
     # interview). Phase-1 template: self_intro / resume_project_deep_dive /
     # role_technical_assessment / candidate_questions.

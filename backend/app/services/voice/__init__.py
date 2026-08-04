@@ -1,9 +1,8 @@
 """Voice / audio pipeline services — L4 (async interview audio analysis).
 
 Submodules:
-  - audio_transcription_service: WhisperX + Pyannote diarization
-  - interview_analysis_service:  Three-stage MapReduce analysis pipeline
-  - file_parser:                 Resume/media file parsing utilities
+  - audio_transcription_service: provider-neutral long-form entry point
+  - whisperx_engine: local WhisperX + Pyannote model runtime
   - tts_service:                 edge-tts wrapper
 
 Submodules are imported lazily (no eager re-exports) so that optional

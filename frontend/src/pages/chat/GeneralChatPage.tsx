@@ -264,10 +264,10 @@ export function GeneralChatPage() {
       {/* Right pane: reuse ChatPanel for the active session. ``width``
           is wide-open because there's no resizer on this page — keep
           it simple, the side nav already takes its share. */}
-      {activeId ? (
+      {selectedId ? (
         <div className="flex-1 min-w-0 flex">
           <ChatPanel
-            sessionId={activeId}
+            sessionId={selectedId}
             sessionTitle={activeSession?.title ?? '通用对话'}
             flexible
           />

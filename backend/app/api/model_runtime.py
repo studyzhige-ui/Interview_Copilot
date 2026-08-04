@@ -5,6 +5,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.background_tasks import safe_background_task
 from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.user import User
@@ -38,11 +39,6 @@ from app.services.model_sources.pipeline import load_catalog, refresh_catalog
 
 logger = logging.getLogger(__name__)
 
-# Fire-and-forget background tasks (MDL-4 catalog refresh). asyncio holds
-# only a weak reference to tasks — without this registry a task suspended
-# on the vendor HTTP call can be garbage-collected and silently never run.
-_bg_tasks: set = set()
-
 
 def _schedule_provider_catalog_refresh(provider: str, username: str) -> None:
     """Kick a live /v1/models fetch for one provider with the (fresh) key,
@@ -57,9 +53,10 @@ def _schedule_provider_catalog_refresh(provider: str, username: str) -> None:
                 "post-upsert catalog refresh failed for %s: %s", provider, exc
             )
 
-    task = asyncio.create_task(_run())
-    _bg_tasks.add(task)
-    task.add_done_callback(_bg_tasks.discard)
+    safe_background_task(
+        _run(),
+        name=f"model-catalog-refresh:{provider}:{username}",
+    )
 
 
 router = APIRouter(tags=["models"])
@@ -149,7 +146,7 @@ async def refresh_model_catalog(
 
 
 @router.get("/models/runtime")
-async def api_model_runtime(
+def api_model_runtime(
     current_user: User = Depends(get_current_user),
 ):
     uid = current_user.username
@@ -381,7 +378,7 @@ async def ping_models(
 
 
 @router.get("/models/providers")
-async def api_list_providers(
+def api_list_providers(
     current_user: User = Depends(get_current_user),
 ):
     """List every known provider with the user's effective settings.
@@ -403,7 +400,7 @@ async def api_list_providers(
 
 
 @router.get("/models/providers/{provider}")
-async def api_get_provider_settings(
+def api_get_provider_settings(
     provider: str,
     current_user: User = Depends(get_current_user),
 ):

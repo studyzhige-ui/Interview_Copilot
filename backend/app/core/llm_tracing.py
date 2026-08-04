@@ -54,17 +54,15 @@ def _ensure_dotenv_loaded() -> None:
     imported transitively via the app's other modules. So in the FastAPI
     process, ``os.getenv("LANGSMITH_TRACING")`` returns ``None`` at our
     call time even though the value lives in ``.env``. The Celery worker
-    doesn't have this problem because ``app.worker.celery_app`` imports
+    doesn't have this problem because ``app.task_queue.celery_app`` imports
     ``app.core.config`` at module top before the ``worker_process_init``
     signal fires. To make both paths behave the same we just
     ``load_dotenv()`` ourselves here — it's idempotent.
 
-    Important: we resolve the .env path from ``__file__`` (project_root/
-    backend/app/core/llm_tracing.py → project_root/.env) rather than
-    relying on CWD-relative search. uvicorn under ``dev.ps1`` runs with
-    CWD=backend/; dotenv's default upward walk DOES find the file there,
-    but other deployment shapes (containers, ``python -m app.main``)
-    might not. Anchoring at __file__ removes that fragility.
+    Important: we resolve the .env path from ``__file__`` rather than the
+    process working directory, and support both the source checkout and
+    container layouts. Containers normally receive these values directly
+    through Compose, so a missing file there is expected.
     """
     try:
         from dotenv import load_dotenv
@@ -72,7 +70,9 @@ def _ensure_dotenv_loaded() -> None:
         return
     from pathlib import Path
 
-    project_root = Path(__file__).resolve().parents[3]
+    project_root = Path(__file__).resolve().parents[2]
+    if not (project_root / ".env").is_file():
+        project_root = project_root.parent
     env_file = project_root / ".env"
     if env_file.exists():
         load_dotenv(env_file, override=False)

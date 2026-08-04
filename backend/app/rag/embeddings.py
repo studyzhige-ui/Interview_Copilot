@@ -30,10 +30,9 @@ def init_rag_settings(*, include_primary_llm: bool = True):
     """Initialize global embedding settings and, for API processes, the LLM.
 
     Embedding provider is selected via ``EMBEDDING_PROVIDER`` + ``EMBEDDING_MODEL``
-    + ``EMBEDDING_DIM`` env vars. Default ``local`` preserves the original
-    full-mode behaviour (downloads from HuggingFace, runs on local GPU/CPU);
-    set ``EMBEDDING_PROVIDER`` to ``siliconflow`` / ``openai`` / etc for lite
-    mode where no local model download / GPU is required.
+    + ``EMBEDDING_DIM`` env vars. The lightweight default is ``siliconflow``;
+    operators who install the optional ``local`` dependencies may switch to a
+    HuggingFace model running on local GPU/CPU.
     """
     # Embedding is REQUIRED for RAG (query + document vectors); a failure here
     # is fatal — surface it rather than silently degrading retrieval.

@@ -29,12 +29,8 @@ from app.conversation.agent_strategy import AgentLoopStrategy
 from app.conversation.chat_strategy import ChatPipelineStrategy
 from app.conversation.engine import ConversationEngine
 from app.conversation.events import HarnessEvent, HarnessEventType
-from app.conversation.strategy import (
-    ExecutionStrategy,
-    StrategyResult,
-    make_agent_strategy,
-    make_chat_strategy,
-)
+from app.conversation.factory import make_agent_strategy, make_chat_strategy
+from app.conversation.strategy import ExecutionStrategy, StrategyResult
 
 __all__ = [
     "AgentLoopStrategy",

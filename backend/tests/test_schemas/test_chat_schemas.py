@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.chat import MockAnswerResp, MockStage, MockStartResp
+from app.schemas.chat import MockAnswerRequest, MockAnswerResp, MockStage, MockStartResp
 
 
 # ── MockAnswerResp ───────────────────────────────────────────────────────
@@ -23,6 +23,13 @@ _VALID_ANSWER_RESP = {
     "current_stage_key": "resume_project_deep_dive",
     "is_ready_to_finish": False,
 }
+
+
+def test_mock_answer_request_requires_concurrency_token():
+    with pytest.raises(ValidationError):
+        MockAnswerRequest(answer_text="回答")
+    request = MockAnswerRequest(answer_text="回答", question_message_id=42)
+    assert request.question_message_id == 42
 
 
 def test_mock_answer_resp_accepts_full_valid_payload():

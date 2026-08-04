@@ -5,7 +5,7 @@ import logging
 from app.core.error_messages import humanize_error
 from app.db.database import SessionLocal
 from app.services.interview.interview_record_service import STATUS_PROCESSING_REVIEW
-from app.worker.celery_app import celery_app
+from app.task_queue.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ Skill 与 MCP 的配置属于用户，但运行时状态不能注册到进程级
 | 用户级 | Skill/MCP 配置、加密密钥、启停状态 | `user_skills`、`user_mcp_servers` |
 | 用户 + Server 级 | MCP Client、工具定义缓存、连接状态 | `MCPManager[(user_id, server_id)]`；配置 revision 变化时关闭并重建 |
 | 会话级 | 已发现 Skill、权限覆盖、最近工具选择历史 | `conversation_capability_states` |
-| Turn 级 | 冻结的内置/MCP/Skill 清单、权限快照、延迟 Schema、预算 | `conversation_turns` 的三个 JSON 字段 |
+| Turn 级 | 冻结的内置/MCP/Skill 清单、权限快照、延迟 Schema、用量观测 | `conversation_turns` 的三个 JSON 字段 |
 | Tool Call 级 | 参数、超时、取消、状态、结果与耗时 | `agent_tool_calls` |
 
 ## 关键约束
@@ -23,4 +23,4 @@ Skill 与 MCP 的配置属于用户，但运行时状态不能注册到进程级
 
 ## 数据库升级
 
-运行 `alembic upgrade head`。`0047_capability_runtime_layers` 创建会话状态、工具调用审计及 turn 快照；`0048` 删除重复的旧审计表；`0049` 增加 turn owner 与 heartbeat 租约字段；`0050` 清理已废弃的多回答模型角色。
+运行 `alembic upgrade head`。当前发行基线会一次性创建会话能力状态、工具调用审计、不可变 turn 快照，以及 turn owner/heartbeat 租约字段。

@@ -10,7 +10,7 @@ import {
   SPEECH_RECOGNITION_AVAILABLE,
   useSpeechRecognition,
 } from '@/hooks/useSpeechRecognition';
-import { abandonMockInterview, getInProgressMock, submitMockAnswer, finishMockInterview, TRANSCRIBE_AVAILABLE, transcribeAudio } from '@/api/mock';
+import { abandonMockInterview, getInProgressMock, submitMockAnswer, finishMockInterview, transcribeAudio } from '@/api/mock';
 import { extractErr } from '@/api/client';
 import { uploadFileAsset } from '@/api/fileAssets';
 import { useBlocker, useNavigate } from 'react-router-dom';
@@ -150,6 +150,11 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
 
   const pushUserAnswer = async (answer: string, audioAssetId?: string) => {
     if (!answer.trim() || finished) return;
+    const questionMessageId = questionMessageIdRef.current;
+    if (questionMessageId == null) {
+      toast.error('当前问题状态已失效，请返回后重新进入面试');
+      return;
+    }
     setSending(true);
     // Optimistic insert — the user sees their message immediately
     // rather than waiting for the backend's interviewer-response
@@ -160,7 +165,7 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
       const resp = await submitMockAnswer(recordId, {
         answer_text: answer,
         answer_audio_file_asset_id: audioAssetId,
-        question_message_id: questionMessageIdRef.current,
+        question_message_id: questionMessageId,
       });
       questionMessageIdRef.current = resp.question_message_id ?? null;
       setTurns((t) => [...t, { who: 'interviewer', text: resp.interviewer_message }]);
@@ -208,13 +213,11 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
   const [transcribing, setTranscribing] = useState(false);
 
   // Browser recognition: partials show in the textarea; stop commits the final text.
-  const onMicToggleNative = () => {
+  const onMicToggleNative = async () => {
     if (speech.state.phase === 'listening') {
-      speech.stop();
-      // Submit whatever we've captured. Final fragments are already in the
-      // textarea via the effect above; flush after a tick so the last partial
-      // becomes final before submit.
-      const finalText = (speech.state.finalText + speech.state.interim).trim();
+      // Wait for onend: browsers can emit the final recognition result only
+      // after stop(), so reading React state synchronously loses the last words.
+      const finalText = await speech.stop();
       speech.reset();
       if (finalText) {
         setTyping('');
@@ -233,10 +236,6 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
       const blob = await rec.stop();
       if (!blob) {
         toast.warn('未捕获到音频');
-        return;
-      }
-      if (!TRANSCRIBE_AVAILABLE) {
-        toast.warn('录音转写功能即将上线，请在下方文本框输入你的回答');
         return;
       }
       setTranscribing(true);
@@ -285,8 +284,7 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
     : transcribing
     ? 'transcribing'
     : 'idle';
-  const micDisabled =
-    !useNativeStt && (!TRANSCRIBE_AVAILABLE || finished || transcribing);
+  const micDisabled = finished || (!useNativeStt && transcribing);
   const micLabel =
     micPhase === 'recording'
       ? useNativeStt
@@ -514,12 +512,10 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
         <div className="max-w-[760px] mx-auto flex flex-col items-center gap-3">
           <button
             onClick={() => void onMicToggle()}
-            disabled={micDisabled || finished}
+            disabled={micDisabled}
             title={
               useNativeStt
                 ? micPhase === 'recording' ? '点击结束听写' : '点击开始听写（浏览器原生）'
-                : !TRANSCRIBE_AVAILABLE
-                ? '录音转写功能即将上线'
                 : micPhase === 'recording' ? '点击结束录音' : '点击开始录音'
             }
             className={[

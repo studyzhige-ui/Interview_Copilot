@@ -3,8 +3,8 @@
 import logging
 
 from app.core.llm_client_factory import get_internal_llm
+from app.core.tokens import token_count
 from app.prompts.chat import CONVERSATION_COMPACTION_PROMPT
-from app.services.chat.context_assembly_pipeline import count_tokens
 from app.services.memory._json_payload import _extract_json_payload
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ async def summarize_conversation(
     except Exception as exc:  # noqa: BLE001
         logger.error("Conversation summarization failed: %s", exc)
         return ""
-    if count_tokens(new_summary) > SUMMARY_MAX_TOKENS:
+    if token_count(new_summary) > SUMMARY_MAX_TOKENS:
         new_summary = new_summary[:1200]
     return new_summary
 

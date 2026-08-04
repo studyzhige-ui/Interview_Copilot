@@ -23,7 +23,7 @@ export async function submitMockAnswer(
     answer_text: string;
     answer_audio_file_asset_id?: string;
     /** Concurrency token (MOCK-3): id of the question being answered. */
-    question_message_id?: number | null;
+    question_message_id: number;
   },
 ): Promise<MockAnswerResp> {
   const res = await apiClient.post(
@@ -45,9 +45,6 @@ export async function retryMockReview(recordId: string): Promise<MockFinishResp>
   return res.data;
 }
 
-// transcribe endpoint shipped — backend POST /mock-interviews/transcribe
-export const TRANSCRIBE_AVAILABLE = true;
-
 export async function transcribeAudio(blob: Blob): Promise<string> {
   const fd = new FormData();
   fd.append('file', blob, 'answer.webm');
@@ -55,7 +52,7 @@ export async function transcribeAudio(blob: Blob): Promise<string> {
   return res.data?.text ?? '';
 }
 
-export interface InProgressMock {
+interface InProgressMock {
   has_in_progress: boolean;
   record_id?: string;
   conversation_id?: string;
@@ -78,7 +75,7 @@ export async function getInProgressMock(): Promise<InProgressMock> {
 }
 
 /** ``MockAbandonResp`` from the backend (``DELETE /mock-interviews/{id}``). */
-export interface AbandonMockResp {
+interface AbandonMockResp {
   status: 'deleted';
   record_id: string;
 }

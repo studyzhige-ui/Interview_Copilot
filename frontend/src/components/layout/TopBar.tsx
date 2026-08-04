@@ -2,24 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { LogOut, ChevronDown, UserRound } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
-
-const MACARON_BG = [
-  'bg-macaron-peach',
-  'bg-macaron-mint',
-  'bg-macaron-butter',
-  'bg-macaron-lavender',
-  'bg-macaron-sky',
-];
-
-function pickColor(name: string): string {
-  if (!name) return MACARON_BG[0];
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return MACARON_BG[h % MACARON_BG.length];
-}
+import { Avatar } from '@/components/ui/Avatar';
 
 export function TopBar({ pageTitle }: { pageTitle?: string }) {
-  const username = useAuthStore((s) => s.username);
+  const subjectId = useAuthStore((s) => s.subjectId);
   const me = useAuthStore((s) => s.me);
   const fetchMe = useAuthStore((s) => s.fetchMe);
   const logout = useAuthStore((s) => s.logout);
@@ -41,8 +27,6 @@ export function TopBar({ pageTitle }: { pageTitle?: string }) {
 
   const displayName = me?.nickname || me?.username || '?';
   const avatarUrl = me?.avatar_url;
-  const initial = displayName.slice(0, 1).toUpperCase();
-  const colorCls = pickColor(me?.username ?? username ?? '');
 
   return (
     <header className="h-16 bg-white border-b border-stone-200 flex items-center px-6 shrink-0">
@@ -52,20 +36,13 @@ export function TopBar({ pageTitle }: { pageTitle?: string }) {
           onClick={() => setOpen((v) => !v)}
           className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md hover:bg-stone-50"
         >
-          {avatarUrl ? (
-            <img
-              src={avatarUrl}
-              alt=""
-              className="w-8 h-8 rounded-full object-cover border border-stone-200"
-              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-            />
-          ) : (
-            <span
-              className={`w-8 h-8 rounded-full ${colorCls} text-white text-sm font-semibold flex items-center justify-center`}
-            >
-              {initial}
-            </span>
-          )}
+          <Avatar
+            src={avatarUrl}
+            name={displayName}
+            colorSeed={me?.username ?? subjectId ?? ''}
+            className="w-8 h-8"
+            fallbackClassName="text-sm"
+          />
           <span className="text-sm text-stone-700">{displayName}</span>
           <ChevronDown size={16} className="text-stone-400" />
         </button>

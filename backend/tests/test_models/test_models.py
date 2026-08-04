@@ -44,7 +44,7 @@ def test_all_expected_tables_registered(test_engine):
         "conversations",
         "conversation_messages",
         "resumes",
-        # MEMORY-V3 stores (old knowledge/strategy/habit/audit_log dropped in 0023)
+        # Current memory document, ability-state, and audit stores.
         "memory_documents",
         "memory_ability_states",
         "memory_audit_logs",
@@ -471,7 +471,7 @@ def test_memory_audit_entry_round_trip_and_unique_idem_key(db_session):
 
 # test_agent_run_and_steps_relationship was removed in the audit
 # cleanup — the agent_runs / agent_steps tables were dropped (see
-# alembic 0008_drop_agent_trace) because LangSmith's wrap_openai
+# the release schema) because LangSmith's wrap_openai
 # instrumentation already captures every LLM call with full trace.
 
 

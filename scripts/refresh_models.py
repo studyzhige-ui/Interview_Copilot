@@ -75,10 +75,7 @@ async def _main() -> int:
     grouped = await refresh_catalog()
 
     if args.write_seed:
-        import json as _json
-        from pathlib import Path as _Path
-
-        seed_path = _Path("backend/app/services/model_sources/seed_catalog.json")
+        seed_path = ROOT / "backend/app/services/model_sources/seed_catalog.json"
         snapshot = {
             provider: [
                 {
@@ -97,7 +94,7 @@ async def _main() -> int:
         }
         seed_path.parent.mkdir(parents=True, exist_ok=True)
         with seed_path.open("w", encoding="utf-8") as f:
-            _json.dump(snapshot, f, ensure_ascii=False, indent=2)
+            json.dump(snapshot, f, ensure_ascii=False, indent=2)
         total = sum(len(v) for v in snapshot.values())
         print(
             f"Wrote seed catalog: {total} models across "

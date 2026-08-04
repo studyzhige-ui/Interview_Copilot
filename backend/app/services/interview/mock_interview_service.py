@@ -55,26 +55,42 @@ def _style_brief(style: str | None) -> str:
 _ASKED_QUESTION_TRUNC = 40
 
 # ``phase`` maps each stage onto the analysis-report vocabulary
-# (interview_analysis_service._PHASE_NAME_MAP) — defined HERE, next to the
+# (analysis.service._PHASE_NAME_MAP) — defined HERE, next to the
 # stage keys, so adding a stage can't silently degrade its review
 # attribution to "general".
-GENERAL_PLAN_TEMPLATE: list[dict[str, str]] = [
-    {"key": "self_intro", "title": "自我介绍", "phase": "self_intro"},
+GENERAL_PLAN_TEMPLATE: list[dict[str, Any]] = [
+    {
+        "key": "self_intro",
+        "title": "自我介绍",
+        "phase": "self_intro",
+        "min_questions": 1,
+        "max_questions": 1,
+    },
     {
         "key": "resume_project_deep_dive",
         "title": "简历项目深挖",
         "phase": "resume_deep_dive",
+        "min_questions": 2,
+        "max_questions": 4,
     },
     {
         "key": "role_technical_assessment",
         "title": "岗位相关技术考察",
         "phase": "technical",
+        "min_questions": 3,
+        "max_questions": 6,
     },
-    {"key": "candidate_questions", "title": "反问", "phase": "reverse_qa"},
+    {
+        "key": "candidate_questions",
+        "title": "反问",
+        "phase": "reverse_qa",
+        "min_questions": 1,
+        "max_questions": 2,
+    },
 ]
 
 
-PLAN_TEMPLATES: dict[str, list[dict[str, str]]] = {
+PLAN_TEMPLATES: dict[str, list[dict[str, Any]]] = {
     "general": GENERAL_PLAN_TEMPLATE,
 }
 
@@ -87,7 +103,7 @@ STAGE_TO_PHASE: dict[str, str] = {
 }
 
 
-def _template_stages(plan_template_key: str | None) -> list[dict[str, str]]:
+def _template_stages(plan_template_key: str | None) -> list[dict[str, Any]]:
     return PLAN_TEMPLATES.get(
         (plan_template_key or "general").strip(), GENERAL_PLAN_TEMPLATE
     )
@@ -125,7 +141,7 @@ class MockPlan:
     """Result of ``generate_plan`` — what mock-start freezes + shows."""
 
     template_key: str
-    stages: list[dict[str, str]]
+    stages: list[dict[str, Any]]
     plan_json: str
     opening_message: str
     first_stage_key: str
@@ -194,7 +210,7 @@ def generate_plan(
     )
 
 
-def stages_from_plan_json(plan_json: str | None) -> list[dict[str, str]]:
+def stages_from_plan_json(plan_json: str | None) -> list[dict[str, Any]]:
     """Parse the frozen stage list back out of ``runtime.plan_json``."""
     if not plan_json:
         return GENERAL_PLAN_TEMPLATE
@@ -211,6 +227,8 @@ def stages_from_plan_json(plan_json: str | None) -> list[dict[str, str]]:
                 "key": str(s.get("key")),
                 "title": str(s.get("title") or s.get("key")),
                 **({"phase": str(s["phase"])} if s.get("phase") else {}),
+                "min_questions": max(1, int(s.get("min_questions") or 1)),
+                "max_questions": max(1, int(s.get("max_questions") or 3)),
             }
             for s in stages
             if isinstance(s, dict) and s.get("key")
@@ -223,7 +241,7 @@ def stages_from_plan_json(plan_json: str | None) -> list[dict[str, str]]:
 async def generate_next_turn(
     *,
     prefix: str,
-    stages: list[dict[str, str]],
+    stages: list[dict[str, Any]],
     current_stage_key: str,
     recent_messages: list[dict[str, str]],
     user_answer: str,
@@ -238,7 +256,8 @@ async def generate_next_turn(
     """
     stage_keys = [s["key"] for s in stages]
     stage_list = "\n".join(
-        f"  {i + 1}. {s['key']} — {s.get('title', s['key'])}"
+        f"  {i + 1}. {s['key']} — {s.get('title', s['key'])} "
+        f"(建议 {s.get('min_questions', 1)}-{s.get('max_questions', 3)} 题)"
         for i, s in enumerate(stages)
     )
     recent_dialog = _recent_dialog_block(recent_messages)
@@ -253,15 +272,37 @@ async def generate_next_turn(
         )
         or "（暂无）"
     )
+    current_stage = (
+        current_stage_key
+        if current_stage_key in stage_keys
+        else (stage_keys[0] if stage_keys else "self_intro")
+    )
+    current_index = (
+        stage_keys.index(current_stage) if current_stage in stage_keys else 0
+    )
+    stage_config = stages[current_index] if stages else {}
+    min_questions = max(1, int(stage_config.get("min_questions") or 1))
+    max_questions = max(min_questions, int(stage_config.get("max_questions") or 3))
+    must_stay = questions_in_current_stage < min_questions
+    must_advance = questions_in_current_stage >= max_questions
+
     prompt = MOCK_INTERVIEW_NEXT_TURN_PROMPT.format(
         prefix=prefix,
         stage_list=stage_list,
-        current_stage=current_stage_key
-        or (stage_keys[0] if stage_keys else "self_intro"),
+        current_stage=current_stage,
         recent_dialog=recent_dialog,
         asked_questions=asked_block,
         asked_trunc=_ASKED_QUESTION_TRUNC,
         questions_in_current_stage=questions_in_current_stage,
+        min_questions=min_questions,
+        max_questions=max_questions,
+        transition_rule=(
+            "必须推进到下一阶段（若已在最后阶段则自然结束）"
+            if must_advance
+            else "必须留在当前阶段继续验证"
+            if must_stay
+            else "可根据覆盖质量留在当前阶段或推进"
+        ),
         user_answer=(user_answer or "").strip() or "（候选人沉默）",
         stage_keys_hint=" | ".join(stage_keys),
     )
@@ -274,25 +315,25 @@ async def generate_next_turn(
         logger.warning(
             "generate_next_turn failed (non-fatal, advancing safely): %s", exc
         )
+        if must_advance and current_index + 1 < len(stage_keys):
+            next_stage = stage_keys[current_index + 1]
+            message = _stage_opening(next_stage)
+        elif must_advance and current_index == len(stage_keys) - 1:
+            next_stage = current_stage
+            message = "感谢你的参与，本次模拟面试到这里结束。"
+        else:
+            next_stage = current_stage
+            message = "好的，我们继续。能再展开讲讲你刚才提到的点吗？"
         return NextTurn(
-            interviewer_message="好的，我们继续。能再展开讲讲你刚才提到的点吗？",
-            next_stage_key=current_stage_key
-            or (stage_keys[0] if stage_keys else "self_intro"),
-            is_ready_to_finish=False,
+            interviewer_message=message,
+            next_stage_key=next_stage,
+            is_ready_to_finish=must_advance and current_index == len(stage_keys) - 1,
         )
 
     message = str(data.get("message") or "").strip()[:800]
     if not message:
         message = "好的，我们继续。能再多说一些吗？"
 
-    current_stage = (
-        current_stage_key
-        if current_stage_key in stage_keys
-        else (stage_keys[0] if stage_keys else "self_intro")
-    )
-    current_index = (
-        stage_keys.index(current_stage) if current_stage in stage_keys else 0
-    )
     allowed_stages = {current_stage}
     if current_index + 1 < len(stage_keys):
         allowed_stages.add(stage_keys[current_index + 1])
@@ -303,21 +344,33 @@ async def generate_next_turn(
     next_stage = str(data.get("stage_key") or "").strip()
     if next_stage not in allowed_stages:
         next_stage = current_stage
+    if must_stay:
+        next_stage = current_stage
+    elif must_advance and current_index + 1 < len(stage_keys):
+        next_stage = stage_keys[current_index + 1]
 
     # Only the final stage may end the interview. Use an actual JSON boolean:
     # bool("false") is True in Python and previously allowed malformed model
     # output to end a run early.
-    ready_to_finish = (
-        data.get("ready_to_finish") is True
-        and bool(stage_keys)
-        and next_stage == stage_keys[-1]
-    )
+    final_stage = bool(stage_keys) and next_stage == stage_keys[-1]
+    ready_to_finish = data.get("ready_to_finish") is True and final_stage
+    if must_advance and current_index == len(stage_keys) - 1:
+        ready_to_finish = True
+        message = "感谢你的参与，本次模拟面试到这里结束。"
 
     return NextTurn(
         interviewer_message=message,
         next_stage_key=next_stage,
         is_ready_to_finish=ready_to_finish,
     )
+
+
+def _stage_opening(stage_key: str) -> str:
+    return {
+        "resume_project_deep_dive": "接下来聊聊你的项目。请选一个最有代表性的项目，说明你的职责和最终结果。",
+        "role_technical_assessment": "下面进入岗位相关技术考察。请先说明你会如何分析一个真实的技术问题。",
+        "candidate_questions": "主要问题就到这里。你对岗位或团队有什么想了解的吗？",
+    }.get(stage_key, "好的，我们进入下一部分。请继续。")
 
 
 def _recent_dialog_block(recent_messages: list[dict[str, str]], n: int = 8) -> str:

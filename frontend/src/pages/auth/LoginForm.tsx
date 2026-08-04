@@ -13,9 +13,10 @@ const MIN_PWD = 6;
 interface Props {
   /** Hop over to the register tab. */
   onSwitchToRegister?: () => void;
+  onForgotPassword?: () => void;
 }
 
-export function LoginForm({ onSwitchToRegister }: Props = {}) {
+export function LoginForm({ onSwitchToRegister, onForgotPassword }: Props = {}) {
   const setSession = useAuthStore((s) => s.setSession);
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
@@ -63,9 +64,8 @@ export function LoginForm({ onSwitchToRegister }: Props = {}) {
         <span>—</span>
         <button
           type="button"
-          disabled
-          className="cursor-not-allowed text-stone-400"
-          title="即将上线"
+          onClick={onForgotPassword}
+          className="text-primary-600 hover:text-primary-800 underline underline-offset-2"
         >
           忘记密码？
         </button>

@@ -160,6 +160,7 @@ class MCPManager:
             runtime.status = "closed"
             if request is not None and not request.future.done():
                 request.future.cancel()
+            self._cancel_queued(runtime)
             raise
         except BaseException as exc:
             runtime.status = "failed"
@@ -168,6 +169,14 @@ class MCPManager:
                 request = runtime.queue.get_nowait()
                 if not request.future.done():
                     request.future.set_exception(exc)
+
+    @staticmethod
+    def _cancel_queued(runtime: _ServerRuntime) -> None:
+        """Release callers waiting behind a runtime that is being closed."""
+        while not runtime.queue.empty():
+            queued = runtime.queue.get_nowait()
+            if not queued.future.done():
+                queued.future.cancel()
 
     async def _get_runtime(self, config: MCPServerConfig) -> _ServerRuntime:
         self._ensure_reaper()

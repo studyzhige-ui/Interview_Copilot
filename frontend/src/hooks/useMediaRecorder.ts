@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 type RecState = 'idle' | 'requesting' | 'recording' | 'stopping' | 'error';
 
-export interface UseMediaRecorder {
+interface UseMediaRecorder {
   state: RecState;
   start: () => Promise<void>;
   stop: () => Promise<Blob | null>;

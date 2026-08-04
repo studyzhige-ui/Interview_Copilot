@@ -316,9 +316,9 @@ async def execute_turn(turn_id: str) -> None:
 
 def schedule_turn(turn_id: str) -> None:
     """Dispatch a durable turn to the isolated conversation-worker queue."""
-    from app.worker.tasks import process_conversation_turn
+    from app.task_queue.dispatch import dispatch_conversation_turn
 
-    process_conversation_turn.delay(turn_id)
+    dispatch_conversation_turn(turn_id)
 
 
 async def fail_orphaned_turns() -> int:

@@ -21,13 +21,13 @@ from threading import Lock
 
 from app.core import model_catalog
 from app.core.model_catalog import ROLE_DEFAULTS, USER_SELECTABLE_ROLES, ModelProfile
+from app.core.model_readiness import ready_profile_ids
 
 logger = logging.getLogger(__name__)
 
 
-# Single lock for selection-state writes. The LLM caches in
-# ``llm_client_factory`` carry their own lock; ``persist_runtime_selection``
-# triggers the cache clear via a lazy import to avoid a circular dep.
+# Single lock for selection-state writes. LLM instances are keyed by the
+# resolved profile id, so changing a role selection needs no global cache flush.
 _selection_lock = Lock()
 
 
@@ -134,12 +134,6 @@ def persist_runtime_selection(
     normalized = _normalize_selection(selection)
     with _selection_lock:
         _save_user_selection(user_id, normalized)
-    # Clear the (role, profile_id) → LLM-instance cache so the user's
-    # next chat constructs a fresh LLM honouring the new selection.
-    # Lazy import to avoid circular dep with llm_client_factory.
-    from app.core.llm_client_factory import _clear_llm_instance_cache
-
-    _clear_llm_instance_cache()
     return normalized
 
 
@@ -171,11 +165,6 @@ def get_profile_for_role(role: str, user_id: str | None = None) -> ModelProfile:
     """
     if role not in USER_SELECTABLE_ROLES:
         raise ValueError(f"Unknown user-selectable model role: {role}")
-
-    # Lazy import — llm_client_factory imports this module at its top, so
-    # the reverse edge must stay function-local (same pattern as the cache
-    # clear in persist_runtime_selection).
-    from app.core.llm_client_factory import ready_profile_ids
 
     profiles = model_catalog._get_all_profiles()
     selection = get_runtime_selection(user_id)

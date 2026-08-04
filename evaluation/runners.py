@@ -17,6 +17,7 @@ Layer mapping:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -30,7 +31,6 @@ from evaluation.metrics import (
     ndcg_at_k,
     overlap_score,
     precision_at_k,
-    recall_at_k,
     reciprocal_rank,
 )
 
@@ -87,6 +87,18 @@ def _dataset_source_kind(row: dict[str, Any]) -> str | None:
     return value if value in _CURRENT_SOURCE_KINDS else None
 
 
+def _expected_document_ids(row: dict[str, Any]) -> set[str]:
+    """Resolve explicit gold ids or the deterministic prepared-corpus id."""
+    explicit = row.get("relevant_document_ids")
+    if isinstance(explicit, list):
+        return {str(value) for value in explicit if value}
+    source_file = str(row.get("source_file") or "").strip()
+    if not source_file:
+        return set()
+    digest = hashlib.sha256(source_file.encode("utf-8")).hexdigest()[:24]
+    return {f"kdoc_eval_{digest}"}
+
+
 def _resolve_evaluation_users(rows: list[dict[str, Any]]) -> dict[str, int]:
     """Fail fast when the evaluation corpus cannot be tenant-scoped."""
     from app.core.user_identity import resolve_user_pk
@@ -125,9 +137,10 @@ async def run_retrieval(rows: list[dict[str, Any]]) -> dict[str, Any]:
         return {"samples": 0, "error": "No rows."}
     user_pks = _resolve_evaluation_users(rows)
 
-    hits: list[int] = []
-    precisions: list[float] = []
-    recalls: list[float] = []
+    passage_hits: list[int] = []
+    source_hits: list[int] = []
+    semantic_hits: list[int] = []
+    passage_precisions: list[float] = []
     mrrs: list[float] = []
     ndcgs: list[float] = []
     latencies: list[float] = []
@@ -147,13 +160,26 @@ async def run_retrieval(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
         chunks = result.chunks
         ref = row.get("reference_answer", row["query"])
-        flags = [chunk_relevance(ref, c.get("text", "")) for c in chunks]
+        expected_ids = _expected_document_ids(row)
+        source_flags = [
+            not expected_ids or str(chunk.get("document_id") or "") in expected_ids
+            for chunk in chunks
+        ]
+        semantic_flags = [chunk_relevance(ref, c.get("text", "")) for c in chunks]
+        flags = [
+            source_match and semantic_match
+            for source_match, semantic_match in zip(source_flags, semantic_flags)
+        ]
 
-        hits.append(hit_at_k(flags, k=3))
-        precisions.append(precision_at_k(flags, k=3))
-        recalls.append(recall_at_k(flags, k=3))
+        passage_hits.append(hit_at_k(flags, k=3))
+        source_hits.append(hit_at_k(source_flags, k=3))
+        semantic_hits.append(hit_at_k(semantic_flags, k=3))
+        passage_precisions.append(precision_at_k(flags, k=3))
         mrrs.append(reciprocal_rank(flags[:5]))
-        scores = [overlap_score(ref, c.get("text", "")) for c in chunks[:5]]
+        scores = [
+            overlap_score(ref, chunk.get("text", "")) if source_flags[index] else 0.0
+            for index, chunk in enumerate(chunks[:5])
+        ]
         ndcgs.append(ndcg_at_k(scores, k=5))
 
         # Multi-tenant leakage check — any chunk tagged with a different
@@ -167,19 +193,20 @@ async def run_retrieval(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "[L1 %d/%d] hit=%d p@3=%.2f latency=%.0fms",
             idx,
             len(rows),
-            hits[-1],
-            precisions[-1],
+            passage_hits[-1],
+            passage_precisions[-1],
             latency_ms,
         )
 
     n = len(rows)
     return {
         "samples": n,
-        "hit_at_3": round(sum(hits) / n, 4),
-        "precision_at_3": round(sum(precisions) / n, 4),
-        "recall_at_3": round(sum(recalls) / n, 4),
-        "mrr_at_5": round(sum(mrrs) / n, 4),
-        "ndcg_at_5": round(sum(ndcgs) / n, 4),
+        "passage_hit_at_3": round(sum(passage_hits) / n, 4),
+        "source_hit_at_3": round(sum(source_hits) / n, 4),
+        "semantic_hit_at_3": round(sum(semantic_hits) / n, 4),
+        "passage_precision_at_3": round(sum(passage_precisions) / n, 4),
+        "passage_mrr_at_5": round(sum(mrrs) / n, 4),
+        "passage_ndcg_at_5": round(sum(ndcgs) / n, 4),
         "latency_ms": aggregate_scores(latencies),
         "isolation_violations": isolation_violations,
     }

@@ -2,9 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
     branches: [main]
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -13,10 +16,14 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
 
     services:
       postgres:
-        image: postgres:15-alpine
+        image: postgres:15.18-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -30,7 +37,7 @@ jobs:
           --health-retries 5
 
       redis:
-        image: redis:alpine
+        image: redis:8.8.1-alpine
         ports:
           - 6379:6379
         options: >-
@@ -49,18 +56,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.13
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
 
       - name: Cache pip packages
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
+          key: ${{ runner.os }}-py${{ matrix.python-version }}-pip-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-py${{ matrix.python-version }}-pip-
 
       - name: Install dependencies
         run: |
@@ -70,11 +77,46 @@ jobs:
       - name: Compile check
         run: python -m compileall -q backend/app evaluation scripts
 
+      - name: Apply and verify database migrations
+        run: |
+          alembic upgrade head
+          alembic check
+
       - name: Run unit tests
         run: |
           python -m pytest backend/tests \
             -v \
             --tb=short
+
+  evaluation-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install optional evaluation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[evaluation]"
+
+      - name: Import evaluation boundary
+        run: python -c "import evaluation.llm_factory; import ragas; import langchain_openai"
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate complete Community Compose model
+        run: |
+          cp .env.community.example .env
+          docker compose --profile full config --quiet
 
   lint:
     runs-on: ubuntu-latest

@@ -43,7 +43,7 @@ import type {
  */
 
 /** Mirrors HarnessEventType in backend/app/agent_runtime/harness_events.py. */
-export type HarnessEventType =
+type HarnessEventType =
   | 'status'
   | 'sources'
   | 'text_delta'
@@ -54,14 +54,14 @@ export type HarnessEventType =
   | 'error'
   | 'done';
 
-export interface HarnessEvent {
+interface HarnessEvent {
   type: HarnessEventType;
   data: Record<string, unknown>;
   step: number;
   elapsed_ms: number;
 }
 
-export interface ToolStartInfo {
+interface ToolStartInfo {
   tool: string;
   /** LLM-assigned tool call id (e.g. ``call_AbC123``). Mirrors the
    *  matching ``tool_done.tool_call_id`` so the renderer can pair
@@ -77,7 +77,7 @@ export interface ToolStartInfo {
   elapsed_ms: number;
 }
 
-export interface ToolDoneInfo {
+interface ToolDoneInfo {
   tool: string;
   /** Mirrors ``tool_start.tool_call_id`` — use for id-based pairing
    *  of live tool_use/tool_result blocks. */
@@ -96,16 +96,17 @@ export interface ToolDoneInfo {
 }
 
 /**
- * Agent-mode budget snapshot — emitted exactly once per turn by
- * AgentLoopStrategy when the run completes (success or budget-stop).
- * Mirrors ``AgentBudget.to_dict()`` in
+ * Agent-mode usage snapshot — emitted exactly once per turn by
+ * AgentLoopStrategy when the run completes. The legacy event name is
+ * ``budget`` for wire compatibility, but none of these observations is a
+ * task-termination limit. Mirrors ``AgentRunState.to_dict()`` in
  * backend/app/agent_runtime/react_agent.py.
  *
  * All fields are always present on the wire — the backend never omits
  * one, so callers may treat them as required (the wire→type cast in
  * ``streamChatTurn`` trusts this).
  */
-export interface BudgetInfo {
+interface BudgetInfo {
   /** ReAct steps consumed this turn. */
   steps: number;
   /** Total tool calls dispatched this turn. */
@@ -116,7 +117,7 @@ export interface BudgetInfo {
   completion_tokens: number;
   /** Wall-clock SECONDS spent in this turn. NB: the outer
    *  ``HarnessEvent.elapsed_ms`` is milliseconds; this nested
-   *  ``elapsed_s`` is seconds (per AgentBudget.to_dict). */
+   *  ``elapsed_s`` is seconds (per AgentRunState.to_dict). */
   elapsed_s: number;
 }
 
@@ -146,7 +147,7 @@ export interface StreamChatHandlers {
  *  read_url, search_knowledge, read_resume, read_interview_history,
  *  read_file, write_file, recall_memory, save_memory). Without it the
  *  AGENT pill is decorative and the LLM never sees a single tool. */
-export type ChatMode = 'chat' | 'agent';
+type ChatMode = 'chat' | 'agent';
 
 export interface StreamChatOptions {
   signal?: AbortSignal;

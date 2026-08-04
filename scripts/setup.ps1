@@ -7,24 +7,28 @@
 
     What this script does:
       1. Choose an edition and create .env if missing
-      2. Verify prerequisites and an isolated Python environment
-      3. Install the edition-appropriate development dependencies
+      2. Choose the Community model profile (remote / local CPU / local CUDA)
+      3. Verify prerequisites and install the matching dependencies
       4. Generate SECRET_KEY if blank
-      5. docker compose up -d  +  wait for postgres / redis
+      5. docker compose up -d --wait for healthy infrastructure
       6. alembic upgrade head
-      7. cd frontend && npm install
+      7. cd frontend && npm ci
+      8. Configure/download the selected local model profile
 
     What this script does NOT do:
       - Create or activate your Python environment. Do that yourself first.
-      - Download Whisper / Pyannote model weights. Run
-        `python scripts/init_models.py` separately for Community local models.
 
 .EXAMPLE
     # Activate your env first, then:
     pwsh scripts/setup.ps1
 #>
 [CmdletBinding()]
-param()
+param(
+    [switch]$LocalModels,
+    [switch]$Cuda,
+    [ValidateSet('remote', 'local-cpu', 'local-cuda')]
+    [string]$ModelProfile
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -64,14 +68,49 @@ if (Test-Path $envFile) {
     Copy-Item (Join-Path $projectRoot $template) $envFile
     Ok "Copied $template -> .env"
 }
+$communityModelProfile = 'managed'
+if ($edition -eq 'community') {
+    if ($LocalModels -and $Cuda) {
+        Fail 'Use either -LocalModels or -Cuda, not both.'
+    }
+    if ($ModelProfile -and ($LocalModels -or $Cuda)) {
+        Fail 'Use -ModelProfile or the legacy -LocalModels/-Cuda switches, not both.'
+    }
+    if ($ModelProfile) {
+        $communityModelProfile = $ModelProfile
+    } elseif ($Cuda) {
+        $communityModelProfile = 'local-cuda'
+    } elseif ($LocalModels) {
+        $communityModelProfile = 'local-cpu'
+    } else {
+        Write-Host '    Choose a Community model profile:' -ForegroundColor Cyan
+        Write-Host '      [1] Lightweight remote — API providers, no large local models'
+        Write-Host '      [2] Local / hybrid CPU — choose local capabilities and models'
+        Write-Host '      [3] Local / hybrid CUDA — NVIDIA acceleration'
+        $profileChoice = Read-Host '    Enter 1, 2, or 3'
+        $communityModelProfile = switch ($profileChoice) {
+            '2' { 'local-cpu' }
+            '3' { 'local-cuda' }
+            default { 'remote' }
+        }
+    }
+    Ok "Community model profile: $communityModelProfile"
+}
+
 $dependencyArgs = if ($edition -eq 'cloud') {
     @('install', '-e', '.[dev]')
 } else {
-    @(
-        'install',
-        '--extra-index-url', 'https://download.pytorch.org/whl/cu129',
-        '-e', '.[community,dev]'
-    )
+    if ($communityModelProfile -eq 'local-cuda') {
+        @(
+            'install',
+            '--extra-index-url', 'https://download.pytorch.org/whl/cu129',
+            '-e', '.[local,cuda,dev]'
+        )
+    } elseif ($communityModelProfile -eq 'local-cpu') {
+        @('install', '-e', '.[local,dev]')
+    } else {
+        @('install', '-e', '.[dev]')
+    }
 }
 
 # -----------------------------------------------------------------------------
@@ -92,14 +131,14 @@ if ($pyVer -notin $supportedVersions) {
 }
 Ok "python $pyVer  ($((& python -c 'import sys; print(sys.executable)' 2>&1).Trim()))"
 
-# Verify the user is in an isolated env. Installing 3 GB of ML deps into
+# Verify the user is in an isolated env. Installing ML dependencies into
 # system / base Python is almost always a mistake — refuse unless the user
 # acknowledges with -Force (not exposed; intentional friction).
 $inVenv  = [bool]$env:VIRTUAL_ENV
 $inConda = [bool]$env:CONDA_PREFIX -and ($env:CONDA_PREFIX -ne $env:CONDA_PREFIX_1)
 if (-not ($inVenv -or $inConda)) {
     Warn 'You appear to be using the system / conda-base Python.'
-    Warn 'Installing ~3 GB of dependencies here will pollute it.'
+    Warn 'Installing project dependencies here will pollute it.'
     Warn 'Recommended:'
     Warn '    python -m venv .venv && .\.venv\Scripts\Activate.ps1'
     Warn '  or'
@@ -138,19 +177,16 @@ if ($envContent -match '(?m)^SECRET_KEY=\s*$') {
 Step 'Starting Docker infrastructure (postgres, redis, minio, milvus)'
 Push-Location $projectRoot
 try {
-    docker compose up -d | Out-Host
-    if ($LASTEXITCODE -ne 0) { Fail 'docker compose up failed.' }
+    docker compose up -d --wait --wait-timeout 180 `
+        db redis minio milvus-etcd milvus-minio milvus-standalone | Out-Host
+    if ($LASTEXITCODE -ne 0) { Fail 'Infrastructure did not become healthy.' }
+    docker compose run --rm --no-deps minio-create-bucket | Out-Host
+    if ($LASTEXITCODE -ne 0) { Fail 'MinIO bucket initialization failed.' }
 } finally { Pop-Location }
-
-Step 'Waiting for postgres to accept connections'
-for ($i = 0; $i -lt 30; $i++) {
-    docker exec interview_copilot_db pg_isready -U postgres 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) { Ok 'postgres ready'; break }
-    Start-Sleep -Seconds 1
-}
+Ok 'infrastructure healthy'
 
 # -----------------------------------------------------------------------------
-# 5. Database migrations
+# 6. Database migrations
 # -----------------------------------------------------------------------------
 Step 'Running database migrations'
 Push-Location $projectRoot
@@ -161,15 +197,28 @@ try {
 Ok 'schema is up to date'
 
 # -----------------------------------------------------------------------------
-# 6. Frontend
+# 7. Frontend
 # -----------------------------------------------------------------------------
 Step 'Installing frontend dependencies'
 Push-Location $frontendDir
 try {
-    npm install
-    if ($LASTEXITCODE -ne 0) { Fail 'npm install failed.' }
+    npm ci --no-audit --no-fund
+    if ($LASTEXITCODE -ne 0) { Fail 'npm ci failed.' }
 } finally { Pop-Location }
 Ok 'frontend deps installed'
+
+# -----------------------------------------------------------------------------
+# 8. Optional local model profile
+# -----------------------------------------------------------------------------
+if ($edition -eq 'community' -and $communityModelProfile -ne 'remote') {
+    Step 'Configuring and downloading Community local models'
+    Push-Location $projectRoot
+    try {
+        & python scripts/init_models.py
+        if ($LASTEXITCODE -ne 0) { Fail 'Local model initialization failed.' }
+    } finally { Pop-Location }
+    Ok 'local model profile configured'
+}
 
 # -----------------------------------------------------------------------------
 # Done
@@ -182,8 +231,7 @@ Write-Host ''
 Write-Host '  Next steps:'
 Write-Host '    1. Open .env and fill in any provider API keys you want to use'
 Write-Host '       or configure the operator-provided default LLM.'
-Write-Host '    2. (Community local models only) python scripts/init_models.py'
-Write-Host '       — downloads Whisper / Pyannote weights for local inference.'
+Write-Host '    2. To change local models later: python scripts/init_models.py'
 Write-Host '    3. .\scripts\start.ps1'
 Write-Host '       — every-day startup (uvicorn + celery + vite, single window).'
 Write-Host '       (Note: use the .\ prefix, NOT `pwsh scripts/start.ps1` — the'

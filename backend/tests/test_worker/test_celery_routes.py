@@ -20,23 +20,23 @@ import sys
 
 
 def test_heavy_task_routes_to_transcription_queue():
-    from app.worker.celery_app import celery_app
+    from app.task_queue.celery_app import celery_app
 
     routes = celery_app.conf.task_routes
     assert routes["tasks.process_interview_analysis"]["queue"] == "transcription"
 
 
-def test_mock_review_routes_to_control_queue():
-    from app.worker.celery_app import celery_app
+def test_mock_review_routes_to_background_queue():
+    from app.task_queue.celery_app import celery_app
 
     assert (
         celery_app.conf.task_routes["tasks.process_mock_interview_review"]["queue"]
-        == "default"
+        == "background"
     )
 
 
 def test_conversation_turn_routes_to_isolated_queue():
-    from app.worker.celery_app import celery_app
+    from app.task_queue.celery_app import celery_app
 
     assert (
         celery_app.conf.task_routes["tasks.process_conversation_turn"]["queue"]
@@ -45,13 +45,13 @@ def test_conversation_turn_routes_to_isolated_queue():
 
 
 def test_pipeline_tasks_route_to_pipeline_queue():
-    from app.worker.celery_app import celery_app
+    from app.task_queue.celery_app import celery_app
 
     routes = celery_app.conf.task_routes
     pipeline = [
         "tasks.process_document_ingestion",
         "tasks.process_resume_parse",
-        "tasks.drain_outbox_jobs",
+        "tasks.drain_index_outbox_jobs",
     ]
     for name in pipeline:
         assert routes[name]["queue"] == "pipeline", (
@@ -60,7 +60,7 @@ def test_pipeline_tasks_route_to_pipeline_queue():
 
 
 def test_control_tasks_route_to_default_queue():
-    from app.worker.celery_app import celery_app
+    from app.task_queue.celery_app import celery_app
 
     routes = celery_app.conf.task_routes
     control = [
@@ -70,9 +70,22 @@ def test_control_tasks_route_to_default_queue():
         "tasks.sweep_stale_interview_records",
         "tasks.sweep_stale_pipeline_records",
         "tasks.sweep_orphan_file_assets",
+        "tasks.sweep_runtime_files",
+        "tasks.drain_cleanup_outbox_jobs",
     ]
     for name in control:
         assert routes[name]["queue"] == "default"
+
+
+def test_background_intelligence_tasks_have_their_own_queue():
+    from app.task_queue.celery_app import celery_app
+
+    routes = celery_app.conf.task_routes
+    for name in (
+        "tasks.process_mock_interview_review",
+        "tasks.drain_intelligence_outbox_jobs",
+    ):
+        assert routes[name]["queue"] == "background"
 
 
 def test_every_registered_task_has_a_route():
@@ -80,7 +93,7 @@ def test_every_registered_task_has_a_route():
     silently catches it — fine, but the test exists so the omission
     is visible at PR time and the author can confirm 'yes, default
     is right for this' rather than leaving it accidental."""
-    from app.worker.celery_app import celery_app
+    from app.task_queue.celery_app import celery_app
 
     routes = celery_app.conf.task_routes
     registered = {name for name in celery_app.tasks if name.startswith("tasks.")}
@@ -95,7 +108,7 @@ def test_every_registered_task_has_a_route():
 
 
 def test_worker_subscribes_to_via_env(monkeypatch):
-    from app.worker import celery_app as mod
+    from app.task_queue import celery_app as mod
 
     monkeypatch.setenv("CELERY_QUEUES", "transcription")
     monkeypatch.setattr(sys, "argv", ["celery", "worker"])
@@ -104,7 +117,7 @@ def test_worker_subscribes_to_via_env(monkeypatch):
 
 
 def test_worker_subscribes_to_via_argv_long(monkeypatch):
-    from app.worker import celery_app as mod
+    from app.task_queue import celery_app as mod
 
     monkeypatch.delenv("CELERY_QUEUES", raising=False)
     monkeypatch.setattr(
@@ -117,7 +130,7 @@ def test_worker_subscribes_to_via_argv_long(monkeypatch):
 
 
 def test_worker_subscribes_to_via_argv_equals(monkeypatch):
-    from app.worker import celery_app as mod
+    from app.task_queue import celery_app as mod
 
     monkeypatch.delenv("CELERY_QUEUES", raising=False)
     monkeypatch.setattr(
@@ -131,7 +144,7 @@ def test_worker_subscribes_to_via_argv_equals(monkeypatch):
 
 
 def test_worker_subscribes_to_via_argv_short_q(monkeypatch):
-    from app.worker import celery_app as mod
+    from app.task_queue import celery_app as mod
 
     monkeypatch.delenv("CELERY_QUEUES", raising=False)
     monkeypatch.setattr(
@@ -148,7 +161,7 @@ def test_worker_subscribes_to_returns_false_when_no_queue_signal(monkeypatch):
     fail-safe: if an operator forgets to pass --queues, we'd rather
     skip the expensive model load than try to load it on a process
     that has no business doing transcription."""
-    from app.worker import celery_app as mod
+    from app.task_queue import celery_app as mod
 
     monkeypatch.delenv("CELERY_QUEUES", raising=False)
     monkeypatch.setattr(sys, "argv", ["celery", "worker"])
@@ -157,7 +170,7 @@ def test_worker_subscribes_to_returns_false_when_no_queue_signal(monkeypatch):
 
 
 def test_task_prerun_loads_only_the_runtime_required_by_task(monkeypatch):
-    from app.worker import celery_app as mod
+    from app.task_queue import celery_app as mod
 
     calls: list[dict[str, bool]] = []
     monkeypatch.setattr(

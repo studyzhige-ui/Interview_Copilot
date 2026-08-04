@@ -47,7 +47,7 @@ def _enqueue_index_upsert(db: Session, *, user_pk: int, row) -> None:
     """Queue a durable Milvus re-index for this ability state, in the caller's
     transaction. ``payload.user_id`` is the stable users.id pk — the same value
     the ability collection's node metadata and search filter key on (CLEANUP #2)."""
-    from app.services.uploads.outbox_service import enqueue_job
+    from app.services.outbox import enqueue_job
 
     enqueue_job(
         db,
@@ -68,7 +68,7 @@ def _enqueue_index_upsert(db: Session, *, user_pk: int, row) -> None:
 
 
 def _enqueue_index_delete(db: Session, *, user_pk: int, state_id: str) -> None:
-    from app.services.uploads.outbox_service import enqueue_job
+    from app.services.outbox import enqueue_job
 
     enqueue_job(
         db,
@@ -76,7 +76,7 @@ def _enqueue_index_delete(db: Session, *, user_pk: int, state_id: str) -> None:
         job_type="delete_memory_ability_index",
         aggregate_type="memory_ability_state",
         aggregate_id=state_id,
-        payload={"state_id": state_id},
+        payload={"state_id": state_id, "user_id": user_pk},
     )
 
 
@@ -431,42 +431,6 @@ def _upsert_inner(
     return row
 
 
-def archive(
-    username: str,
-    *,
-    topic: str,
-    skill_type: str,
-    db: Session | None = None,
-) -> bool:
-    """Retire the active state for ``(user, topic, skill_type)``. Returns True
-    if a row was archived."""
-    own_db = db is None
-    if own_db:
-        db = SessionLocal()
-    try:
-        user_pk = resolve_user_pk(db, username)
-        if user_pk is None:
-            return False
-        row = (
-            db.query(MemoryAbilityState)
-            .filter(
-                MemoryAbilityState.user_id == user_pk,
-                MemoryAbilityState.topic == topic,
-                MemoryAbilityState.skill_type == skill_type,
-                MemoryAbilityState.archived_at.is_(None),
-            )
-            .first()
-        )
-        return _archive_row(db, user_pk, row, own_db)
-    except Exception:
-        if own_db:
-            db.rollback()
-        raise
-    finally:
-        if own_db and db is not None:
-            db.close()
-
-
 def archive_by_key(
     username: str,
     *,
@@ -581,7 +545,6 @@ __all__ = [
     "load_active",
     "list_by_mastery",
     "upsert",
-    "archive",
     "archive_by_id",
     "archive_by_key",
     "UnknownUser",

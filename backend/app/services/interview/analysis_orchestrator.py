@@ -25,13 +25,13 @@ from datetime import datetime
 import json
 import logging
 import os
-import tempfile
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
 from app.core.error_messages import humanize_error
+from app.core.runtime_files import create_runtime_temp_file
 from app.models.chat import Conversation, ConversationMessage
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
@@ -162,7 +162,7 @@ class InterviewAnalysisOrchestrator:
             #   upload: noisy ASR transcript → 3-stage MapReduce pipeline
             #   mock  : pre-structured Q&A   → batched scoring with sliding window
             if source == "upload":
-                from app.services.voice.interview_analysis_service import (
+                from app.services.interview.analysis.service import (
                     analyze_interview,
                 )
 
@@ -179,7 +179,7 @@ class InterviewAnalysisOrchestrator:
                     qa_pairs=qa_pairs,
                 )
             else:
-                from app.services.voice.interview_analysis_service import (
+                from app.services.interview.analysis.service import (
                     analyze_mock_qa_batched,
                 )
 
@@ -220,7 +220,7 @@ class InterviewAnalysisOrchestrator:
                     from datetime import timedelta as _td
 
                     from app.services.memory.dreaming_worker import RECORD_QUIET_HOURS
-                    from app.services.uploads.outbox_service import enqueue_job
+                    from app.services.outbox import enqueue_job
 
                     with SessionLocal() as odb:
                         rec_row = (
@@ -300,15 +300,15 @@ class InterviewAnalysisOrchestrator:
         local_path = storage_uri
         is_temp = False
         if storage_uri and storage_uri.startswith("s3://"):
-            from app.core.storage import download_file_from_s3
-
             _, ext = os.path.splitext(storage_uri)
-            tmp_fd, local_path = tempfile.mkstemp(suffix=ext)
-            os.close(tmp_fd)
-            download_file_from_s3(storage_uri, local_path)
+            local_path = create_runtime_temp_file(suffix=ext)
             is_temp = True
 
         try:
+            if is_temp:
+                from app.core.storage import download_file_from_s3
+
+                download_file_from_s3(storage_uri, local_path)
             transcript = await transcribe_media(local_path, language=language)
             interview_record_service.set_transcript(
                 record_id,
@@ -330,7 +330,7 @@ class InterviewAnalysisOrchestrator:
         user_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """LLM extracts structured Q&A pairs from the diarized transcript."""
-        from app.services.voice.interview_analysis_service import (
+        from app.services.interview.analysis.service import (
             extract_qa_pairs_with_llm,
         )
 

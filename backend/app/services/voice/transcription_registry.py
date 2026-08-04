@@ -3,7 +3,7 @@
 Same shape as embedding/reranker: small PROVIDERS dict + free-form
 ``TRANSCRIPTION_MODEL`` env. Hybrid local-Pyannote diarization is a
 separate axis controlled by ``DIARIZATION_MODE`` (see
-``audio_transcription_service.py``).
+``whisperx_engine.py``).
 
 User config (.env):
 
@@ -82,14 +82,14 @@ class ResolvedTranscription:
 
 
 def resolve_transcription() -> ResolvedTranscription:
-    pid = (settings.TRANSCRIPTION_PROVIDER or "local_whisperx").strip().lower()
+    pid = (settings.TRANSCRIPTION_PROVIDER or "siliconflow").strip().lower()
     if pid not in PROVIDERS:
         logger.warning(
-            "Unknown TRANSCRIPTION_PROVIDER=%r, falling back to 'local_whisperx'",
+            "Unknown TRANSCRIPTION_PROVIDER=%r, falling back to 'siliconflow'",
             pid,
         )
-        pid = "local_whisperx"
-    model = (settings.TRANSCRIPTION_MODEL or "Systran/faster-whisper-large-v3").strip()
+        pid = "siliconflow"
+    model = (settings.TRANSCRIPTION_MODEL or "FunAudioLLM/SenseVoiceSmall").strip()
     return ResolvedTranscription(provider_id=pid, provider=PROVIDERS[pid], model=model)
 
 
@@ -134,7 +134,7 @@ async def transcribe(file_path: str, language: Optional[str] = "zh") -> str:
     p = cfg.provider
 
     if p.kind == "local_whisperx":
-        from app.services.voice.audio_transcription_service import _run_whisperx_sync
+        from app.services.voice.whisperx_engine import _run_whisperx_sync
 
         # Forward the language hint to WhisperX. Forcing the language is
         # the single largest accuracy improvement on clean monolingual
@@ -268,7 +268,7 @@ async def _transcribe_openai_compat(
         )
         return f"**[Speaker 1]**: {flat}" if flat else ""
 
-    from app.services.voice.audio_transcription_service import (
+    from app.services.voice.whisperx_engine import (
         align_remote_words_with_local_diarization,
     )
 

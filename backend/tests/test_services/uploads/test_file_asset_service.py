@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from app.models.outbox_job import OutboxJob
 from app.models.user import User
-from app.services.uploads import file_asset_service, outbox_service
+from app.services import outbox as outbox_service
+from app.services.uploads import file_asset_service
 
 
 def _make_user(db, username="alice") -> User:
@@ -219,6 +221,27 @@ def test_enqueue_job_is_idempotent(db_session):
     assert db_session.query(OutboxJob).count() == 1
 
 
+def test_enqueue_job_coalesces_before_caller_commit(db_session):
+    user = _make_user(db_session)
+    db_session.flush()
+
+    first = outbox_service.enqueue_job(
+        db_session,
+        user_pk=user.id,
+        job_type="delete_object",
+        idempotency_key="same-transaction",
+    )
+    second = outbox_service.enqueue_job(
+        db_session,
+        user_pk=user.id,
+        job_type="delete_object",
+        idempotency_key="same-transaction",
+    )
+
+    assert first.id == second.id
+    assert db_session.query(OutboxJob).count() == 1
+
+
 def test_run_due_outbox_jobs_runs_handler(db_session, monkeypatch):
     user = _make_user(db_session)
     db_session.commit()
@@ -246,6 +269,40 @@ def test_run_due_outbox_jobs_runs_handler(db_session, monkeypatch):
     assert job.status == "succeeded"
 
 
+def test_run_due_outbox_jobs_claims_only_requested_resource_class(
+    db_session, monkeypatch
+):
+    user = _make_user(db_session)
+    db_session.commit()
+    for job_type in ("delete_object", "extract_memory_realtime"):
+        outbox_service.enqueue_job(
+            db_session,
+            user_pk=user.id,
+            job_type=job_type,
+            payload={},
+        )
+    db_session.commit()
+    seen: list[str] = []
+    monkeypatch.setitem(
+        outbox_service._HANDLERS,
+        "delete_object",
+        lambda db, job: seen.append(job.job_type),
+    )
+
+    processed = outbox_service.run_due_outbox_jobs(
+        db_session,
+        job_types={"delete_object", "cleanup_failed_upload"},
+    )
+
+    assert processed == 1
+    assert seen == ["delete_object"]
+    statuses = {job.job_type: job.status for job in db_session.query(OutboxJob).all()}
+    assert statuses == {
+        "delete_object": "succeeded",
+        "extract_memory_realtime": "pending",
+    }
+
+
 def test_run_due_outbox_jobs_retries_on_failure(db_session, monkeypatch):
     user = _make_user(db_session)
     db_session.commit()
@@ -268,6 +325,38 @@ def test_run_due_outbox_jobs_retries_on_failure(db_session, monkeypatch):
     assert job.status == "failed"  # retryable, not dead yet
     assert job.attempts == 1
     assert "storage down" in job.last_error
+
+
+def test_delete_object_handler_enforces_owner_prefix(monkeypatch):
+    from app.core import storage
+
+    deleted = []
+    monkeypatch.setattr(storage, "delete_s3_object", deleted.append)
+    owned_job = SimpleNamespace(
+        job_type="delete_object",
+        user_id=7,
+        payload_json=json.dumps(
+            {
+                "storage_uri": "s3://bucket/uploads/7/asset/file.pdf",
+                "user_id": 7,
+            }
+        ),
+    )
+    outbox_service._handle_delete_object(None, owned_job)
+    assert deleted == ["s3://bucket/uploads/7/asset/file.pdf"]
+
+    cross_tenant_job = SimpleNamespace(
+        job_type="delete_object",
+        user_id=7,
+        payload_json=json.dumps(
+            {
+                "storage_uri": "s3://bucket/uploads/8/asset/file.pdf",
+                "user_id": 7,
+            }
+        ),
+    )
+    with pytest.raises(PermissionError, match="outside its owner prefix"):
+        outbox_service._handle_delete_object(None, cross_tenant_job)
 
 
 # ── Phase 2: registry caps + confirm-on-consume + magic gate ────────────

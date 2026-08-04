@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.security import get_password_hash, verify_and_maybe_rehash
@@ -19,7 +20,8 @@ def get_by_username(db: Session, username: str) -> User | None:
 
 
 def get_by_email(db: Session, email: str) -> User | None:
-    return db.query(User).filter(User.email == email).first()
+    normalized = email.strip().lower()
+    return db.query(User).filter(func.lower(User.email) == normalized).first()
 
 
 def get_by_id(db: Session, user_id: int) -> User | None:
@@ -60,7 +62,7 @@ def create_user(db: Session, *, username: str, email: str, password: str) -> Use
     """Create a verified user row (caller has already verified the email code)."""
     user = User(
         username=username,
-        email=email,
+        email=email.strip().lower(),
         hashed_password=get_password_hash(password),
         email_verified=True,
     )

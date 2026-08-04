@@ -3,8 +3,12 @@ import { Upload, FileText, Briefcase, CheckCircle2, Mic, FileUp, ClipboardPaste,
 import { Btn } from '@/components/ui/Btn';
 import { Spinner } from '@/components/ui/Spinner';
 import { toast } from '@/store/uiStore';
-import { listStoredResumes, type StoredResume } from '@/api/interview';
-import { createResumeFromFile } from '@/api/resumes';
+import {
+  createResumeFromFile,
+  listResumes,
+  waitForResumeUsable,
+  type PersonalResume,
+} from '@/api/resumes';
 import { parseJdForMock } from '@/api/mock';
 
 export type InterviewerStyle = 'friendly' | 'professional' | 'rigorous' | 'pressure';
@@ -68,7 +72,7 @@ export function MockSetup({ onReady, starting }: Props) {
     jd: { ...empty },
   });
   const [resumeMode, setResumeMode] = useState<'upload' | 'existing'>('existing');
-  const [storedResumes, setStoredResumes] = useState<StoredResume[]>([]);
+  const [storedResumes, setStoredResumes] = useState<PersonalResume[]>([]);
   const [loadingResumes, setLoadingResumes] = useState(true);
   const [jdMode, setJdMode] = useState<'upload' | 'paste'>('upload');
   const [jdText, setJdText] = useState('');
@@ -80,12 +84,19 @@ export function MockSetup({ onReady, starting }: Props) {
 
   useEffect(() => {
     let alive = true;
-    listStoredResumes()
+    listResumes()
       .then((rs) => {
         if (!alive) return;
         setStoredResumes(rs);
-        // Default to "existing" if user has previous resumes; otherwise "upload".
-        setResumeMode(rs.length > 0 ? 'existing' : 'upload');
+        const usable = rs.filter((resume) => resume.has_text || resume.parse_status === 'ready');
+        const selected = usable.find((resume) => resume.is_default) ?? usable[0];
+        setResumeMode(selected ? 'existing' : 'upload');
+        if (selected) {
+          setCards((current) => ({
+            ...current,
+            resume: { filename: selected.title, uploadId: selected.id, uploading: false },
+          }));
+        }
       })
       .catch(() => { /* non-fatal — just hide the picker */ })
       .finally(() => { if (alive) setLoadingResumes(false); });
@@ -100,10 +111,14 @@ export function MockSetup({ onReady, starting }: Props) {
     }
   }, [ttsVoice]);
 
-  const pickExistingResume = (r: StoredResume) => {
+  const pickExistingResume = (r: PersonalResume) => {
+    if (!r.has_text && r.parse_status !== 'ready') {
+      toast.error(r.parse_status === 'failed' ? '这份简历解析失败，请替换后重试' : '这份简历仍在解析');
+      return;
+    }
     setCards((c) => ({
       ...c,
-      resume: { filename: r.title, uploadId: r.resume_id, uploading: false },
+      resume: { filename: r.title, uploadId: r.id, uploading: false },
     }));
   };
 
@@ -116,14 +131,20 @@ export function MockSetup({ onReady, starting }: Props) {
       // Saves a NEW personal resume entity (parsed into sections server-side);
       // its id is what the mock uses as resume context.
       const r = await createResumeFromFile(f);
-      update('resume', { uploadId: r.id, uploading: false });
-      toast.success('简历已保存');
+      setStoredResumes((current) => [r, ...current.filter((item) => item.id !== r.id)]);
+      const usable = await waitForResumeUsable(r.id);
+      setStoredResumes((current) => [usable, ...current.filter((item) => item.id !== usable.id)]);
+      update('resume', { filename: usable.title, uploadId: usable.id, uploading: false });
+      toast.success('简历已解析，可以开始面试');
     } catch (e) {
       update('resume', empty);
       const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 409) {
         // Two-active-resume limit hit — guide the user to pick an existing one.
-        toast.error('已有两份简历，请从"选已有"中选择，或在个人信息中管理');
+        toast.error('已有两份简历，请从“选已有”中选择，或到“资料与记忆 > 简历”管理');
+        setResumeMode('existing');
+      } else if ((e as Error)?.message?.includes('解析')) {
+        toast.error('简历处理未完成，请到“资料与记忆 > 简历”查看或替换');
         setResumeMode('existing');
       } else {
         toast.error('简历上传失败');
@@ -155,10 +176,10 @@ export function MockSetup({ onReady, starting }: Props) {
   // JD always reduces to plain text — either the user pasted it directly,
   // or parseJdForMock returned text from their uploaded file.
   const jdReady = jdText.trim().length >= 20;
-  const ready = !!cards.resume.uploadId && jdReady;
+  const ready = !!cards.resume.uploadId && !cards.resume.uploading && jdReady;
 
   return (
-    <div className="h-full flex items-center justify-center px-6 py-8 overflow-y-auto">
+    <div className="h-full flex items-center justify-center px-4 md:px-6 py-8 overflow-y-auto">
       <div className="max-w-[720px] w-full mx-auto flex flex-col items-center">
         {/* Header: clean, single hierarchy — title + subtitle, both centered. */}
         <header className="mb-9 text-center">
@@ -170,7 +191,7 @@ export function MockSetup({ onReady, starting }: Props) {
           </p>
         </header>
 
-        <div className="grid grid-cols-2 gap-6 w-full">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full">
           <ResumeCard
             mode={resumeMode}
             setMode={setResumeMode}
@@ -253,11 +274,11 @@ function ResumeCard({
   mode: 'upload' | 'existing';
   setMode: (m: 'upload' | 'existing') => void;
   state: CardState;
-  storedResumes: StoredResume[];
+  storedResumes: PersonalResume[];
   loadingResumes: boolean;
   inputRef: React.RefObject<HTMLInputElement>;
   onPickFile: (f: File) => void;
-  onPickExisting: (r: StoredResume) => void;
+  onPickExisting: (r: PersonalResume) => void;
 }) {
   const done = !!state.uploadId;
   const hasStored = storedResumes.length > 0;
@@ -339,15 +360,23 @@ function ResumeCard({
             <select
               value={state.uploadId ?? ''}
               onChange={(e) => {
-                const r = storedResumes.find((x) => x.resume_id === e.target.value);
+                const r = storedResumes.find((x) => x.id === e.target.value);
                 if (r) onPickExisting(r);
               }}
               className="w-full px-3 py-2.5 bg-white border border-stone-300 rounded-lg text-[14px] text-stone-800 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
             >
               <option value="">— 选一份简历 —</option>
               {storedResumes.map((r) => (
-                <option key={r.resume_id} value={r.resume_id}>
-                  {r.title}{r.is_default ? '（默认）' : ''} · {(r.created_at || '').slice(0, 10)}
+                <option
+                  key={r.id}
+                  value={r.id}
+                  disabled={!r.has_text && r.parse_status !== 'ready'}
+                >
+                  {r.title}{r.is_default ? '（默认）' : ''}
+                  {!r.has_text && r.parse_status !== 'ready'
+                    ? r.parse_status === 'failed' ? '（解析失败）' : '（解析中）'
+                    : ''}
+                  {' · '}{(r.created_at || '').slice(0, 10)}
                 </option>
               ))}
             </select>

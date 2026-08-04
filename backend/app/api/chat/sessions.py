@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
+from app.core.runtime_files import remove_session_results
 from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
 from app.models.chat import ConversationMessage, Conversation, generate_uuid
@@ -193,6 +194,7 @@ def delete_chat_session(
         ).delete(synchronize_session=False)
         db.delete(row)
         db.commit()
+        remove_session_results(session_id)
         return {"status": "success", "id": session_id}
     except Exception as exc:  # noqa: BLE001
         db.rollback()

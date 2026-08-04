@@ -246,7 +246,7 @@ def _index_nodes(
         # Deliberate upward seam (rag → services.knowledge): the outbox is the
         # cross-system reliability layer, and enqueueing the retry job is the
         # only thing this pipeline needs from it — only on this failure path.
-        from app.services.knowledge.knowledge_outbox import enqueue_milvus_upsert
+        from app.services.knowledge.index_jobs import enqueue_milvus_upsert
 
         with SessionLocal() as db:
             enqueue_milvus_upsert(db, user_pk=user_id, document_id=document_id)

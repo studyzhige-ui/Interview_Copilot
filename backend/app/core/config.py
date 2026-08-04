@@ -85,20 +85,18 @@ class Settings(BaseSettings):
 
     # Embedding (RAG vector store)
     EMBEDDING_PROVIDER: str = (
-        "local"  # local | openai | siliconflow | jina | dashscope | zhipu
+        "siliconflow"  # local | openai | siliconflow | jina | dashscope | zhipu
     )
     EMBEDDING_MODEL: str = "BAAI/bge-m3"
     EMBEDDING_DIM: int = 1024
 
     # Reranker (RAG cross-encoder)
-    RERANKER_PROVIDER: str = "local"  # local | siliconflow | jina | cohere | dashscope
+    RERANKER_PROVIDER: str = "siliconflow"
     RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"
 
     # ASR (audio transcription)
-    TRANSCRIPTION_PROVIDER: str = (
-        "local_whisperx"  # local_whisperx | openai | siliconflow | dashscope
-    )
-    TRANSCRIPTION_MODEL: str = "Systran/faster-whisper-large-v3"
+    TRANSCRIPTION_PROVIDER: str = "siliconflow"
+    TRANSCRIPTION_MODEL: str = "FunAudioLLM/SenseVoiceSmall"
 
     # Speaker diarization (separates "who said what"). Three modes:
     #   "auto"     — bundled when TRANSCRIPTION_PROVIDER=local_whisperx;
@@ -109,19 +107,22 @@ class Settings(BaseSettings):
     #                AND a remote ASR provider that supports word-level
     #                timestamps (e.g. openai/whisper-1).
     #   "none"     — never diarize; transcripts come back single-speaker.
-    DIARIZATION_MODE: str = "auto"
+    DIARIZATION_MODE: str = "none"
     # Interview diarization speaker bounds. 1:1 interviews are the norm
     # (2/2); bump MAX for panel interviews. Hardcoding 2 forced every
     # 3-speaker recording to merge two voices into one.
     DIARIZATION_MIN_SPEAKERS: int = 2
     DIARIZATION_MAX_SPEAKERS: int = 2
     DIARIZATION_MODEL_ID: str = "pyannote-community/speaker-diarization-community-1"
-    AGENT_MAX_STEPS: int = 80  # hard safety-valve — the ONLY hard stop (no time budget)
+    # Usage is observed per turn but does not determine task completion.
+    # Cancellation, context limits, request/tool timeouts, and the worker
+    # lifecycle provide the operational safety boundary.
     AGENT_TOOL_TIMEOUT_SECONDS: int = 30
     AGENT_TEMPERATURE: float = 0.2
     AGENT_MAX_RESPONSE_TOKENS: int = 4096
     AGENT_TOOL_SCHEMA_STRICT: bool = True
     AGENT_MAX_TOOL_ARG_CHARS: int = 4000
+    LLM_REQUEST_TIMEOUT_SECONDS: int = 60
     TURN_HEARTBEAT_SECONDS: int = 10
     TURN_STALE_SECONDS: int = 60
     # Stage A — tool-result offload thresholds.
@@ -156,12 +157,9 @@ class Settings(BaseSettings):
     # S0 conservative ingest cleaning (plan §4.2) — switchable per
     # INGEST-CLEANING. Off = parsed text is chunked verbatim.
     RAG_CLEANING_ENABLED: bool = True
-    # Primary first-class document parser (Phase E). "docling" (local, no key)
-    # or "llamaparse" (cloud, needs LLAMA_CLOUD_API_KEY); whichever isn't primary
-    # is the document-level fallback when available. Unsupported formats fall to
-    # the per-format lightweight parsers. Default local-first so a fresh deploy
-    # works without a cloud key.
-    PARSER_PROVIDER: str = "docling"
+    # Primary document parser: bundled lightweight parsers, optional local
+    # Docling, or LlamaParse with a deployment key.
+    PARSER_PROVIDER: str = "lightweight"
     # On-demand OCR for the Docling parser (plan §4.1.3/§4.1.4): scanned PDFs
     # (pages with no text layer) and image documents. Effective only when an OCR
     # engine (rapidocr-onnxruntime) is importable — if it isn't, Docling is built
@@ -232,6 +230,10 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: str = "minioadmin"
     AWS_REGION: str = "us-east-1"
     AWS_ENDPOINT_URL: str = "http://localhost:9000"
+    # Browser-facing endpoint used only to sign presigned URLs. Containers use
+    # AWS_ENDPOINT_URL=http://minio:9000 for server I/O while browsers need a
+    # host/public address such as http://localhost:9000.
+    S3_PUBLIC_ENDPOINT_URL: str = ""
     S3_BUCKET_NAME: str = "interview-copilot-bucket"
 
     # Database connection pool — PER-WORKER limits.

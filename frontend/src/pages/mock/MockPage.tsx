@@ -20,7 +20,6 @@ type Stage =
   | {
       kind: 'live';
       recordId: string;
-      conversationId: string;
       currentQuestion: string;
       voiceMode: VoiceMode;
       ttsVoice: TtsVoice;
@@ -32,7 +31,6 @@ type Stage =
 
 interface InProgressBanner {
   recordId: string;
-  conversationId: string;
   currentQuestion: string;
   title: string;
   answeredCount: number;
@@ -54,7 +52,6 @@ export function MockPage() {
         if (!alive || !r.has_in_progress || !r.record_id) return;
         setInProgress({
           recordId: r.record_id,
-          conversationId: r.conversation_id ?? '',
           currentQuestion: r.current_question ?? '',
           title: r.title ?? '模拟面试',
           answeredCount: r.answered_count ?? 0,
@@ -75,7 +72,6 @@ export function MockPage() {
     setStage({
       kind: 'live',
       recordId: inProgress.recordId,
-      conversationId: inProgress.conversationId,
       currentQuestion: inProgress.currentQuestion,
       voiceMode: 'hybrid',
       ttsVoice: loadPreferredVoice(),
@@ -113,7 +109,6 @@ export function MockPage() {
       setStage({
         kind: 'live',
         recordId: started.interview_record_id,
-        conversationId: started.conversation_id,
         currentQuestion: started.current_question,
         voiceMode: payload.voice_mode,
         ttsVoice: payload.tts_voice,

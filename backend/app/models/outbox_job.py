@@ -40,8 +40,13 @@ def generate_outbox_job_id() -> str:
 class OutboxJob(Base):
     __tablename__ = "outbox_jobs"
     __table_args__ = (
-        # Worker claim scan: pending/failed jobs whose next_run_at is due.
-        Index("ix_outbox_jobs_status_next_run", "status", "next_run_at"),
+        # Resource-isolated worker claim scan.
+        Index(
+            "ix_outbox_jobs_type_status_next_run",
+            "job_type",
+            "status",
+            "next_run_at",
+        ),
         # Idempotency: a (job_type, idempotency_key) pair enqueues once.
         UniqueConstraint(
             "job_type",
@@ -50,7 +55,7 @@ class OutboxJob(Base):
         ),
     )
 
-    id = Column(String, primary_key=True, default=generate_outbox_job_id, index=True)
+    id = Column(String, primary_key=True, default=generate_outbox_job_id)
     user_id = Column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),

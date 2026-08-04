@@ -79,11 +79,3 @@ async def cancel_and_wait_all(timeout: float = 5.0) -> None:
 def pending_count() -> int:
     """Return the number of currently tracked background tasks."""
     return len(_background_tasks)
-
-
-def cancel_background_task(name: str) -> bool:
-    for task in _background_tasks:
-        if task.get_name() == name and not task.done():
-            task.cancel()
-            return True
-    return False

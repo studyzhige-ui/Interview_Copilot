@@ -5,7 +5,7 @@ The agent loop itself lives in
 covers the lower-layer building blocks the strategy depends on.
 
 Covers:
-  - AgentBudget: Hermes-style steps+timeout limits, correct refund semantics
+  - AgentRunState: usage telemetry, repeat detection, and refund semantics
   - QueryLoopCompactor: unconditional microcompact + threshold LLM autocompact
   - tool_result_storage: 3-layer persistence
   - HarnessEvent: SSE event serialization
@@ -15,15 +15,13 @@ Covers:
 import time
 
 
-# ── AgentBudget ──────────────────────────────────────────────────────────
+# ── AgentRunState ────────────────────────────────────────────────────────
 
 
-def test_agent_budget_dataclass():
-    """AgentBudget check() and refund() work correctly."""
-    from app.agent_runtime.react_agent import AgentBudget
+def test_agent_run_state_tracks_usage():
+    from app.agent_runtime.react_agent import AgentRunState
 
-    budget = AgentBudget(started_at=time.perf_counter())
-    assert budget.check() is None
+    budget = AgentRunState(started_at=time.perf_counter())
 
     budget.consume_step()
     assert budget.steps == 1
@@ -44,28 +42,6 @@ def test_agent_budget_dataclass():
     assert info["tool_calls"] == 1
 
 
-def test_agent_budget_max_steps():
-    """Budget check() triggers when max steps exceeded."""
-    from app.agent_runtime.react_agent import AgentBudget
-    from app.core.config import settings
-
-    budget = AgentBudget(started_at=time.perf_counter())
-    for _ in range(settings.AGENT_MAX_STEPS):
-        budget.consume_step()
-    assert budget.check() == "max_steps_exceeded"
-
-
-def test_agent_budget_no_token_limit():
-    """Token usage does NOT trigger budget stop (Hermes pattern)."""
-    from app.agent_runtime.react_agent import AgentBudget
-
-    budget = AgentBudget(started_at=time.perf_counter())
-    budget.prompt_tokens = 999_999
-    budget.completion_tokens = 999_999
-    # Token usage is tracked but never triggers a stop
-    assert budget.check() is None
-
-
 def test_agent_budget_refund_semantics():
     """Refund should only be used for compression-retry, not tool failure.
 
@@ -73,9 +49,9 @@ def test_agent_budget_refund_semantics():
     - compression-retry → refund (system action, not reasoning)
     - tool failure → NO refund (LLM made a reasoning decision)
     """
-    from app.agent_runtime.react_agent import AgentBudget
+    from app.agent_runtime.react_agent import AgentRunState
 
-    budget = AgentBudget(started_at=time.perf_counter())
+    budget = AgentRunState(started_at=time.perf_counter())
     budget.consume_step()
     budget.consume_step()
     assert budget.steps == 2
@@ -92,9 +68,9 @@ def test_agent_budget_refund_semantics():
 
 def test_budget_tracks_repeated_call_signatures():
     """consume_tool_call counts identical (tool, args) signatures for the soft nudge."""
-    from app.agent_runtime.react_agent import AgentBudget
+    from app.agent_runtime.react_agent import AgentRunState
 
-    budget = AgentBudget(started_at=time.perf_counter())
+    budget = AgentRunState(started_at=time.perf_counter())
     sig = 'web_search\x00{"q": "redis"}'
     assert budget.consume_tool_call("web_search", sig) == 1
     assert budget.consume_tool_call("web_search", sig) == 2
@@ -120,9 +96,9 @@ def test_repeat_call_nudge_is_firmer_at_six():
 
 
 def test_budget_requests_replan_after_repeated_failed_outcome():
-    from app.agent_runtime.react_agent import AgentBudget
+    from app.agent_runtime.react_agent import AgentRunState
 
-    budget = AgentBudget(started_at=time.perf_counter())
+    budget = AgentRunState(started_at=time.perf_counter())
     assert (
         budget.observe_tool_result("fetch", "fetch\x00{}", "same error", is_error=True)
         is None
@@ -138,9 +114,9 @@ def test_budget_requests_replan_after_repeated_failed_outcome():
 
 
 def test_budget_resets_failure_streak_on_progress():
-    from app.agent_runtime.react_agent import AgentBudget
+    from app.agent_runtime.react_agent import AgentRunState
 
-    budget = AgentBudget(started_at=time.perf_counter())
+    budget = AgentRunState(started_at=time.perf_counter())
     budget.observe_tool_result("fetch", "fetch\x00{}", "error", is_error=True)
     budget.observe_tool_result("fetch", "fetch\x00{}", "success", is_error=False)
     assert budget.failed_outcome_streak == 0

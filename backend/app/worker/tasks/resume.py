@@ -1,11 +1,11 @@
-"""Resume parse + section-indexing task (light queue)."""
+"""Resume parsing and section indexing on the pipeline queue."""
 
 import logging
 
 from app.core.error_messages import humanize_error
 from app.db.database import SessionLocal
-from app.worker.celery_app import celery_app
-from app.worker.tasks.runtime import run_async
+from app.task_queue.celery_app import celery_app
+from app.core.async_runtime import run_async
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +32,8 @@ def process_resume_parse(self, resume_id: str):
     delete-then-inserts by ``resume_id``.
     """
     import os
-    import tempfile
 
+    from app.core.runtime_files import create_runtime_temp_file
     from app.models.resume import Resume
     from app.services.resume.resume_service import resume_service
     from app.services.uploads.file_asset_service import get_file_asset
@@ -76,14 +76,13 @@ def process_resume_parse(self, resume_id: str):
             db.close()
         if storage_uri and storage_uri.startswith("s3://"):
             from app.core.storage import download_file_from_s3
-            from app.services.voice.file_parser import extract_resume_text
+            from app.services.interview.document_text import extract_document_text
 
             _, ext = os.path.splitext(object_key or "")
-            tmp_fd, tmp_path = tempfile.mkstemp(suffix=ext or ".pdf")
-            os.close(tmp_fd)
+            tmp_path = create_runtime_temp_file(suffix=ext or ".pdf")
             try:
                 download_file_from_s3(storage_uri, tmp_path)
-                text = (extract_resume_text(tmp_path) or "").strip()
+                text = (extract_document_text(tmp_path) or "").strip()
             finally:
                 if os.path.exists(tmp_path):
                     os.unlink(tmp_path)

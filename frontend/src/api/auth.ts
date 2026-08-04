@@ -52,19 +52,14 @@ export async function login(username: string, password: string): Promise<TokenPa
   return res.data;
 }
 
-/**
- * Change the current user's password. On success the backend bumps the
- * user's `token_version`, so EVERY existing access + refresh token
- * (including the one this request used) is immediately invalidated — the
- * caller must clear local tokens and send the user back to /auth to log in
- * with the new password. No new token pair is returned by design.
- */
-export async function changePassword(
-  oldPassword: string,
+export async function resetPassword(
+  email: string,
+  code: string,
   newPassword: string,
 ): Promise<{ status: string; message: string }> {
-  const res = await apiClient.post('/auth/change-password', {
-    old_password: oldPassword,
+  const res = await apiClient.post('/auth/reset-password', {
+    email,
+    code,
     new_password: newPassword,
   });
   return res.data;

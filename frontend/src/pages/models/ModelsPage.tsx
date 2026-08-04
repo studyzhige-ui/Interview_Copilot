@@ -59,8 +59,8 @@ export function ModelsPage() {
   }
 
   return (
-    <div className="p-8 max-w-7xl mx-auto">
-      <div className="flex items-center gap-3 mb-4">
+    <div className="p-4 md:p-8 max-w-7xl mx-auto">
+      <div className="flex flex-wrap items-start gap-3 mb-4">
         <div>
           <h2 className="text-2xl font-semibold text-stone-800">
             {edition.data?.edition === 'cloud' ? 'LLM 模型' : '模型配置'}
@@ -71,7 +71,7 @@ export function ModelsPage() {
               : '配置模型提供商，并为不同对话角色选择模型。'}
           </p>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="w-full lg:w-auto lg:ml-auto flex flex-wrap items-center gap-2">
           <button
             onClick={() => setShowMoreOpen(true)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm border border-stone-200 text-stone-700 hover:bg-stone-50"
@@ -109,7 +109,7 @@ export function ModelsPage() {
       </div>
 
       {/* Compact role assignment bar */}
-      <div className="bg-white rounded-xl border border-stone-200 shadow-xs px-4 py-2.5 mb-6 flex items-stretch divide-x divide-stone-200">
+      <div className="bg-white rounded-xl border border-stone-200 shadow-xs px-4 py-2.5 mb-6 flex flex-wrap items-stretch gap-y-2 divide-x divide-stone-200">
         {ROLES.map((r) => {
           const cur = profiles.find((p) => p.id === selection[r]);
           return (

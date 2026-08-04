@@ -51,7 +51,7 @@ class Resume(Base):
         Index("ix_resumes_user_active", "user_id", "archived_at"),
     )
 
-    id = Column(String, primary_key=True, default=generate_resume_id, index=True)
+    id = Column(String, primary_key=True, default=generate_resume_id)
     user_id = Column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),

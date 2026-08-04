@@ -1,9 +1,7 @@
-"""End-to-end test for the 14 alembic migrations.
+"""End-to-end test for the Alembic release baseline.
 
-SQLite cannot execute several of the migrations (0002 adds a column with an
-inline FK constraint; SQLite has no ALTER for constraints — alembic batch
-mode is not used there). We therefore run the migration chain against a
-real Postgres instance.
+Migration behavior is tested against PostgreSQL because that is the supported
+database and several indexes use PostgreSQL-specific predicates.
 
 In CI / dev we expect a Postgres at
 ``postgresql://postgres:postgres@localhost:5432`` (the Docker compose
@@ -144,7 +142,7 @@ def test_migration_chain_has_no_gaps_and_one_head():
 
 
 def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
-    """Run every migration from 0001 → head against a virgin Postgres."""
+    """Install the release schema in a virgin PostgreSQL database."""
     from alembic import command
     from sqlalchemy import create_engine, inspect
 
@@ -158,9 +156,6 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     tables = set(insp.get_table_names())
 
     # Core tables that must exist after head.
-    # After the v3 cleanup migration (0003) ``memory_items`` is GONE — the
-    # four v3 doc tables (knowledge_docs / strategy_docs / habit_docs /
-    # memory_audit_log) are the replacement.
     expected_tables = {
         "alembic_version",
         "users",
@@ -186,11 +181,7 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     missing = expected_tables - tables
     assert not missing, f"Missing tables after upgrade head: {missing}"
 
-    # Legacy tables from the pre-squash chain (originally dropped by the
-    # old 0008 migration) must NOT exist. We retain this assertion even
-    # after squashing so an accidental "restore from old dump" still
-    # trips the test. ``memory_items`` is in this list since 0003
-    # drops it; ``agent_runs``/``agent_steps`` since 0008 drops them.
+    # Retired schemas must not leak back into the release baseline.
     legacy = {
         "interviews",
         "transcripts",
@@ -199,7 +190,6 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "memory_items",
         "agent_runs",
         "agent_steps",
-        # mock_interview_sessions dropped in 0040 (CLEANUP) — runtime + interview_qa replace it.
         "mock_interview_sessions",
     }
     leftover = legacy & tables
@@ -222,7 +212,7 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
 
 
 def test_hot_query_composite_indexes_exist(fresh_pg_db, monkeypatch):
-    """0014 adds composite indexes — confirm they land on the right tables."""
+    """The release baseline contains the composite indexes used by hot queries."""
     from alembic import command
     from sqlalchemy import create_engine, inspect
 
@@ -234,15 +224,9 @@ def test_hot_query_composite_indexes_exist(fresh_pg_db, monkeypatch):
     engine = create_engine(fresh_pg_db)
     insp = inspect(engine)
 
-    # ``memory_items.ix_memory_items_user_type_key`` was dropped together
-    # with the table in 0003; only the still-relevant composite indexes
-    # are asserted here.
     expectations = {
         "conversations": "ix_conversations_user_type_arch",
         "knowledge_documents": "ix_knowledge_docs_user_category",
-        # ``user_uploads`` (+ its ix_user_uploads_user_purpose) was dropped in
-        # 0025; the replacement file_assets table carries the equivalent
-        # (user_id, purpose) hot-list composite index (created in 0018).
         "file_assets": "ix_file_assets_user_purpose",
         "interview_qa": "ix_interview_qa_record_order",
     }
@@ -255,9 +239,8 @@ def test_hot_query_composite_indexes_exist(fresh_pg_db, monkeypatch):
     engine.dispose()
 
 
-def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
-    """Alembic 0009 added ON DELETE CASCADE to the two FKs that the
-    ``DELETE /interview-records/{id}`` endpoint silently depended on.
+def test_interview_record_children_cascade(fresh_pg_db, monkeypatch):
+    """The release baseline cascades interview child rows.
 
     Verify behaviourally (not just via inspector): insert one parent
     interview_records row + one interview_qa child + one
@@ -265,8 +248,6 @@ def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
     that both children disappear without any IntegrityError. Without
     the cascade, the parent delete would either raise or leave
     orphan children — both are regressions worth pinning.
-    (mock_interview_sessions was dropped in 0040; the runtime row is the
-    surviving mock child of interview_records.)
     """
     from alembic import command
     from sqlalchemy import create_engine, text
@@ -282,19 +263,27 @@ def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
         # its id (1) from both child inserts.
         conn.execute(
             text(
-                "INSERT INTO users (id, username, hashed_password) VALUES (1, 'alice', 'x')"
+                "INSERT INTO users "
+                "(id, username, hashed_password, email_verified, "
+                "global_memory_enabled, created_at, updated_at) "
+                "VALUES (1, 'alice', 'x', FALSE, FALSE, NOW(), NOW())"
             )
         )
         conn.execute(
             text(
-                "INSERT INTO interview_records (id, user_id, source, status) "
-                "VALUES ('ir_cascade', 1, 'upload', 'completed')"
+                "INSERT INTO interview_records "
+                "(id, user_id, source, status, analysis_schema_version, "
+                "analyzed_qa_count, created_at, updated_at) "
+                "VALUES ('ir_cascade', 1, 'upload', 'completed', 1, 0, NOW(), NOW())"
             )
         )
         conn.execute(
             text(
-                "INSERT INTO interview_qa (id, record_id, order_idx, question, answer) "
-                "VALUES ('qa_x', 'ir_cascade', 0, 'q?', 'a.')"
+                "INSERT INTO interview_qa "
+                "(id, record_id, order_idx, phase, question, answer, "
+                "is_follow_up, follow_up_depth, answer_input_mode, created_at) "
+                "VALUES ('qa_x', 'ir_cascade', 0, 'general', 'q?', 'a.', "
+                "FALSE, 0, 'text', NOW())"
             )
         )
         conn.execute(
@@ -308,8 +297,7 @@ def test_interview_record_child_cascades_after_0009(fresh_pg_db, monkeypatch):
             )
         )
 
-    # The actual cascade probe. Pre-0009 this would have raised
-    # IntegrityError because the FKs had no ondelete clause.
+    # The parent delete must not raise or leave orphan rows.
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM interview_records WHERE id = 'ir_cascade'"))
 

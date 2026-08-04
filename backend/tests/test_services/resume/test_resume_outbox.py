@@ -2,8 +2,9 @@ from app.models.outbox_job import OutboxJob
 from app.models.resume import Resume
 from app.models.resume_section import ResumeSection
 from app.models.user import User
-from app.services.resume import resume_outbox
-from app.services.uploads.outbox_service import run_due_outbox_jobs
+from app.services.resume import reindex_jobs
+from app.worker.outbox_handlers import resume as resume_handler  # noqa: F401
+from app.services.outbox import run_due_outbox_jobs
 
 
 def _seed(db):
@@ -27,7 +28,7 @@ def _seed(db):
         order_idx=0,
     )
     db.add_all([resume, section])
-    resume_outbox.enqueue_resume_reindex(
+    reindex_jobs.enqueue_resume_reindex(
         db,
         user_pk=user.id,
         resume_id=resume.id,

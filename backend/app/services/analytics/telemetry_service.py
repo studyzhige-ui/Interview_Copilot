@@ -1,10 +1,10 @@
 import asyncio
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
 
 from app.core.config import settings
+from app.core.runtime_files import append_jsonl
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +17,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 def _write_log_sync(log_data: dict):
     """Write one telemetry event without blocking the main coroutine."""
     try:
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(log_data, ensure_ascii=False) + "\n")
+        append_jsonl(LOG_FILE, log_data)
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to write telemetry event: %s", exc)
 
@@ -38,10 +37,9 @@ async def log_interaction_metrics(
 ):
     """Persist interaction metrics without affecting the API response path.
 
-    ``stop_reason`` is populated by the L2 agent strategy (budget stop
-    reason) and is None for L1 chat turns — kept so log post-mortems
-    can correlate a tail-latency outlier with its budget exhaust
-    reason. LangSmith covers the rest of the per-step trace surface.
+    ``stop_reason`` records lifecycle outcomes such as context-window
+    exhaustion and is normally None for L1 chat turns. LangSmith covers the
+    rest of the per-step trace surface.
 
     The RAG degradation fields mirror the turn's RetrievalState so online
     sampling can aggregate planner_failure_rate / reranker fallback_rate /

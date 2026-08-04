@@ -69,7 +69,7 @@ def run_realtime_extraction(
     """
     # Imported in-function to avoid an import cycle (app.worker.tasks imports
     # this module's package) — same pattern as dreaming_worker.
-    from app.worker.tasks import run_async
+    from app.core.async_runtime import run_async
     from app.services.chat.chat_history_service import transcript_service
 
     # Jobs raise on lock contention (MEM-6) — the outbox retries with

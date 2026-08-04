@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Plus, MoreHorizontal, Pencil, Trash2, Search, Check, Tag, Loader2 } from 'lucide-react';
 import { Pill } from '@/components/ui/Pill';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -19,6 +19,7 @@ interface Props {
   /** Per-record live progress so the pill can show the current sub-stage. */
   analyzingStates?: Map<string, AnalysisProgress>;
   width?: number;
+  className?: string;
 }
 
 /** Map backend stage strings to a short, user-readable Chinese label.
@@ -90,6 +91,7 @@ export function SessionList({
   onDraftDelete,
   analyzingStates,
   width = 280,
+  className = '',
 }: Props) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [tagMenu, setTagMenu] = useState<string | null>(null);
@@ -185,8 +187,8 @@ export function SessionList({
 
   return (
     <aside
-      style={{ width }}
-      className="shrink-0 bg-white border-r border-stone-200 flex flex-col"
+      style={{ '--record-list-width': `${width}px` } as CSSProperties}
+      className={`w-full lg:w-[var(--record-list-width)] shrink-0 bg-white border-r border-stone-200 flex-col ${className}`}
     >
       <div className="p-4 border-b border-stone-200">
         <div className="flex items-center justify-between mb-2.5">

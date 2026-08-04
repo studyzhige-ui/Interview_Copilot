@@ -334,3 +334,36 @@ def test_mcp_runtime_isolated_by_user_and_revision(monkeypatch):
 
     asyncio.run(run())
     assert opened == 3
+
+
+def test_mcp_runtime_close_releases_running_and_queued_callers(monkeypatch):
+    instance = MCPManager()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    session = SimpleNamespace()
+
+    async def slow_list_tools():
+        entered.set()
+        await release.wait()
+
+    session.list_tools = slow_list_tools
+
+    @asynccontextmanager
+    async def fake_session(_config):
+        yield session
+
+    monkeypatch.setattr(instance, "_session", fake_session)
+
+    async def run():
+        first = asyncio.create_task(instance._request(CONFIG, "list_tools"))
+        await entered.wait()
+        second = asyncio.create_task(instance._request(CONFIG, "list_tools"))
+        await asyncio.sleep(0)
+
+        await instance.invalidate(CONFIG.user_id, CONFIG.id)
+        outcomes = await asyncio.gather(first, second, return_exceptions=True)
+        await instance.close_all()
+        return outcomes
+
+    outcomes = asyncio.run(run())
+    assert all(isinstance(item, asyncio.CancelledError) for item in outcomes)

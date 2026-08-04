@@ -107,8 +107,8 @@ class MockAnswerRequest(BaseModel):
     answer_audio_file_asset_id: str | None = None
     # Optimistic concurrency token (MOCK-3): the id of the interviewer
     # message this answer responds to. Mismatch → 409 (a concurrent submit
-    # already advanced the interview). Optional for legacy clients.
-    question_message_id: int | None = None
+    # already advanced the interview).
+    question_message_id: int
 
 
 class MockAnswerResp(BaseModel):

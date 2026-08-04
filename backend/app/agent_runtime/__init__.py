@@ -15,7 +15,7 @@ hosts the lower-layer building blocks the strategy depends on:
   * :mod:`harness_events`      — the streaming HarnessEvent type
                                   (re-exported by ``conversation/events``)
   * :mod:`retry_utils`         — retry-on-context-too-long helper
-  * :mod:`react_agent`         — :class:`AgentBudget` dataclass +
+  * :mod:`react_agent`         — :class:`AgentRunState` telemetry +
                                   SSE event formatting helpers
 
 External callers should reach for ``app.conversation``. Agent execution

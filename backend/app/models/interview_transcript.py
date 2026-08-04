@@ -22,7 +22,7 @@ def _generate_transcript_id() -> str:
 class InterviewTranscript(Base):
     __tablename__ = "interview_transcripts"
 
-    id = Column(String, primary_key=True, default=_generate_transcript_id, index=True)
+    id = Column(String, primary_key=True, default=_generate_transcript_id)
     record_id = Column(
         String,
         ForeignKey("interview_records.id", ondelete="CASCADE"),

@@ -2,7 +2,7 @@
 
 import logging
 
-from app.worker.celery_app import celery_app
+from app.task_queue.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 

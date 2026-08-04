@@ -8,7 +8,6 @@ import {
   Library,
   Cpu,
   Puzzle,
-  UserRound,
   Pin,
   PinOff,
   ChevronLeft,
@@ -23,15 +22,32 @@ interface NavItem {
   icon: typeof Mic;
 }
 
-const ITEMS: NavItem[] = [
-  { to: '/review',       label: '复盘',     icon: ClipboardList },
-  { to: '/mock',         label: '模拟面试', icon: Mic },
-  { to: '/general-chat', label: '通用对话', icon: MessageSquare },
-  { to: '/analytics',    label: '能力分析', icon: BarChart3 },
-  { to: '/library',      label: '资料库',   icon: Library },
-  { to: '/models',       label: '模型',     icon: Cpu },
-  { to: '/capabilities', label: 'Agent 能力', icon: Puzzle },
-  { to: '/me',           label: '个人中心', icon: UserRound },
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
+const GROUPS: NavGroup[] = [
+  {
+    label: '面试工作台',
+    items: [
+      { to: '/mock', label: '模拟面试', icon: Mic },
+      { to: '/review', label: '面试复盘', icon: ClipboardList },
+      { to: '/general-chat', label: '自由对话', icon: MessageSquare },
+      { to: '/analytics', label: '能力成长', icon: BarChart3 },
+    ],
+  },
+  {
+    label: '资料',
+    items: [{ to: '/library', label: '资料与记忆', icon: Library }],
+  },
+  {
+    label: '配置',
+    items: [
+      { to: '/models', label: '回答模型', icon: Cpu },
+      { to: '/capabilities', label: 'Skills 与 MCP', icon: Puzzle },
+    ],
+  },
 ];
 
 const PIN_KEY = 'sidenav.pinned';
@@ -51,7 +67,7 @@ export function SideNav() {
   }, [pinned]);
 
   const expanded = pinned || hovering;
-  const widthClass = expanded ? 'w-[240px]' : 'w-[64px]';
+  const widthClass = expanded ? 'w-[64px] md:w-[240px]' : 'w-[64px]';
 
   return (
     <aside
@@ -66,7 +82,7 @@ export function SideNav() {
       <div className="h-16 px-3 flex items-center gap-2.5 border-b border-stone-200">
         <Logo size={34} />
         {expanded && (
-          <div className="min-w-0">
+          <div className="hidden md:block min-w-0">
             <div className="text-base font-semibold text-stone-800 truncate">Interview Copilot</div>
             <div className="text-[10px] uppercase tracking-wide text-stone-400">
               {edition.data?.edition ?? 'community'}
@@ -74,28 +90,38 @@ export function SideNav() {
           </div>
         )}
       </div>
-      <nav className="flex-1 p-2.5 flex flex-col gap-1">
-        {ITEMS.map(({ to, label, icon: Icon }) => (
-          <NavLink
-            key={to}
-            to={to}
-            title={expanded ? undefined : label}
-            className={({ isActive }) =>
-              [
-                'flex items-center gap-3 rounded-md text-[15px] transition-colors',
-                expanded ? 'px-3 py-2.5' : 'p-2.5 justify-center',
-                isActive
-                  ? 'bg-primary-50 text-primary-700 font-medium'
-                  : 'text-stone-600 hover:bg-stone-50 hover:text-stone-800',
-              ].join(' ')
-            }
-          >
-            <Icon size={20} className="shrink-0" />
-            {expanded && <span className="truncate">{label}</span>}
-          </NavLink>
+      <nav className="flex-1 p-2.5 flex flex-col gap-3 overflow-y-auto">
+        {GROUPS.map((group) => (
+          <div key={group.label} className="flex flex-col gap-1">
+            {expanded && (
+              <div className="hidden md:block px-3 pt-1 text-[10px] font-medium uppercase tracking-wider text-stone-400">
+                {group.label}
+              </div>
+            )}
+            {group.items.map(({ to, label, icon: Icon }) => (
+              <NavLink
+                key={to}
+                to={to}
+                title={expanded ? undefined : label}
+                aria-label={label}
+                className={({ isActive }) =>
+                  [
+                    'flex items-center gap-3 rounded-md text-[15px] transition-colors',
+                    expanded ? 'p-2.5 md:px-3 md:py-2.5 justify-center md:justify-start' : 'p-2.5 justify-center',
+                    isActive
+                      ? 'bg-primary-50 text-primary-700 font-medium'
+                      : 'text-stone-600 hover:bg-stone-50 hover:text-stone-800',
+                  ].join(' ')
+                }
+              >
+                <Icon size={20} className="shrink-0" />
+                {expanded && <span className="hidden md:block truncate">{label}</span>}
+              </NavLink>
+            ))}
+          </div>
         ))}
       </nav>
-      <div className="border-t border-stone-200 p-2.5 flex items-center">
+      <div className="hidden md:flex border-t border-stone-200 p-2.5 items-center">
         <button
           onClick={() => setPinned((p) => !p)}
           title={pinned ? '取消固定（收起）' : '固定（保持展开）'}
@@ -104,13 +130,13 @@ export function SideNav() {
           {pinned
             ? <>
                 <PinOff size={16} className="shrink-0" />
-                {expanded && <span>收起</span>}
-                {expanded && <ChevronLeft size={14} className="ml-auto" />}
+                {expanded && <span className="hidden md:inline">收起</span>}
+                {expanded && <ChevronLeft size={14} className="hidden md:block ml-auto" />}
               </>
             : <>
                 <Pin size={16} className="shrink-0" />
-                {expanded && <span>固定</span>}
-                {expanded && <ChevronRight size={14} className="ml-auto" />}
+                {expanded && <span className="hidden md:inline">固定</span>}
+                {expanded && <ChevronRight size={14} className="hidden md:block ml-auto" />}
               </>}
         </button>
       </div>

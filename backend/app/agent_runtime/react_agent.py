@@ -1,4 +1,4 @@
-"""Agent harness primitives — ``AgentBudget`` + streaming helpers.
+"""Agent harness primitives — run-state telemetry + streaming helpers.
 
 The actual agent loop lives in
 :class:`app.conversation.agent_strategy.AgentLoopStrategy`, and the
@@ -9,7 +9,7 @@ loop primitives.
 
 What this module retains:
 
-  - ``AgentBudget``        — iteration budget dataclass
+  - ``AgentRunState``      — per-turn usage and progress telemetry
   - ``_tool_call_payload`` — OpenAI tool_calls dict shape
   - ``_args_summary``      — short label for the SSE tool_start event
   - ``_result_summary``    — short label for the SSE tool_done event
@@ -23,20 +23,16 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.core.config import settings
-
-
-# ── AgentBudget ──────────────────────────────────────────────────────────
+# ── Agent run state ──────────────────────────────────────────────────────
 
 
 @dataclass
-class AgentBudget:
-    """Lightweight iteration budget.
+class AgentRunState:
+    """Observed usage and loop progress for one turn.
 
-    The step count (``AGENT_MAX_STEPS``) is the hard safety-valve. Token usage
-    and wall-clock time are *tracked* for observability but never trigger an
-    early stop — context-window pressure is handled adaptively by
-    ``compress()`` rather than by arbitrary token or time caps.
+    Steps, tool calls, tokens, and elapsed time are telemetry. They never stop
+    a valid task. Completion comes from the model, an explicit cancellation,
+    context-window exhaustion, or the surrounding worker/process lifecycle.
     """
 
     started_at: float
@@ -61,11 +57,6 @@ class AgentBudget:
     def elapsed_seconds(self) -> float:
         return time.perf_counter() - self.started_at
 
-    def check(self) -> str | None:
-        if self.steps >= settings.AGENT_MAX_STEPS:
-            return "max_steps_exceeded"
-        return None
-
     def consume_step(self) -> None:
         self.steps += 1
 
@@ -84,8 +75,7 @@ class AgentBudget:
         return self.tool_signatures[signature]
 
     def refund_step(self) -> None:
-        """Refund a step consumed by a compression-retry (a system action,
-        not a reasoning step, so it must not count against the step budget)."""
+        """Exclude a compression retry from observed reasoning-step usage."""
         if self.steps > 0:
             self.steps -= 1
 
@@ -204,7 +194,7 @@ def _result_summary(observation: dict[str, Any]) -> str:
 
 
 __all__ = [
-    "AgentBudget",
+    "AgentRunState",
     "_args_summary",
     "_result_summary",
     "_tool_call_payload",

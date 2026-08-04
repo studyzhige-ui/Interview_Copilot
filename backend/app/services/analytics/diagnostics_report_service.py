@@ -1,180 +1,167 @@
-"""User-level diagnostic report service.
+"""Deterministic, evidence-backed cross-interview ability report."""
 
-Aggregates a user's historical interview mistakes and review records,
-then asks the agent's fast LLM to produce a structured diagnosis
-(strengths, weaknesses, skill radar).
+from __future__ import annotations
 
-Renamed from ``analytics_service`` to clearly distinguish from the
-per-interview transcript scoring in
-``app.services.voice.interview_analysis_service``.
-"""
-
+import asyncio
 import json
-import logging
+from collections import defaultdict
 from typing import Any
 
-from app.core.llm_client_factory import get_internal_llm
-from app.prompts.analytics import DIAGNOSTICS_REPORT_PROMPT
 
-logger = logging.getLogger(__name__)
+_MASTERY_SCORE = {"weak": 35.0, "improving": 55.0, "stable": 75.0, "strong": 90.0}
+_AXIS_BY_SKILL_TYPE = {
+    "knowledge_topic": "知识与原理",
+    "system_design": "系统设计",
+    "project_deep_dive": "项目深挖",
+    "communication": "沟通表达",
+    "behavioral": "行为面试",
+}
+FIXED_AXES = tuple(_AXIS_BY_SKILL_TYPE.values())
 
 
-# Mastery → a rough 0-10 competence score for the diagnostic input.
-_MASTERY_SCORE = {"weak": 3.0, "improving": 5.0, "stable": 7.5, "strong": 9.0}
+def _evidence_count(raw: str | None) -> int:
+    try:
+        refs = json.loads(raw or "[]")
+    except (json.JSONDecodeError, TypeError):
+        refs = []
+    return max(1, len(refs)) if isinstance(refs, list) else 1
 
 
 def _extract_ability_records(db: Any, user_id: str) -> list[dict[str, Any]]:
-    """Read a user's active ability states (memory_ability_states) as the
-    diagnostic input — topic mastery + summary, newest evidence first."""
+    """Read active ability states in a report-friendly, traceable shape."""
     from app.services.memory import memory_ability_state_service
 
     records: list[dict[str, Any]] = []
-    for s in memory_ability_state_service.load_active(user_id, db=db):
+    for state in memory_ability_state_service.load_active(user_id, db=db):
         records.append(
             {
-                "content": f"[{s.topic}] ({s.skill_type}) {s.summary or ''}".strip(),
-                "score": _MASTERY_SCORE.get(s.mastery_level or "", 5.0),
-                "time": s.last_evidence_at.isoformat() if s.last_evidence_at else "",
+                "topic": state.topic,
+                "skill_type": state.skill_type,
+                "mastery_level": state.mastery_level,
+                "summary": state.summary or "",
+                "score": _MASTERY_SCORE.get(state.mastery_level),
+                "evidence_count": _evidence_count(state.evidence_refs_json),
+                "time": state.last_evidence_at.isoformat()
+                if state.last_evidence_at
+                else "",
             }
         )
     return records
 
 
-def _clean_json_text(raw: str) -> str:
-    cleaned = raw.strip()
-    if cleaned.startswith("```json"):
-        cleaned = cleaned[7:]
-    elif cleaned.startswith("```"):
-        cleaned = cleaned[3:]
-    if cleaned.endswith("```"):
-        cleaned = cleaned[:-3]
-    return cleaned.strip()
+def _confidence(topic_count: int) -> str:
+    if topic_count >= 4:
+        return "high"
+    if topic_count >= 2:
+        return "medium"
+    return "low"
 
 
-async def generate_comprehensive_report(
-    limit: int = 20, user_id: str | None = None
-) -> dict:
-    if not user_id:
-        return {"status": "empty", "message": "missing user id"}
+def _build_report(records: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        axis = _AXIS_BY_SKILL_TYPE.get(str(record.get("skill_type") or ""))
+        score = record.get("score")
+        if axis and isinstance(score, (int, float)):
+            grouped[axis].append(record)
 
-    try:
-        from app.db.database import SessionLocal
-
-        with SessionLocal() as db:
-            ability_records = _extract_ability_records(db, user_id=user_id)
-        if not ability_records:
-            return {"status": "empty", "message": "暂无能力状态数据"}
-
-        ability_records.sort(key=lambda x: x["time"], reverse=True)
-        records = ability_records[:limit]
-        structured_payload = json.dumps(records, ensure_ascii=False)
-
-        sys_prompt = DIAGNOSTICS_REPORT_PROMPT.format(
-            structured_payload=structured_payload
-        )
-        response = await get_internal_llm("worker").acomplete(
-            sys_prompt,
-            response_format={"type": "json_object"},
-        )
-        raw_text = _clean_json_text(str(response.text))
-        try:
-            parsed = json.loads(raw_text)
-        except json.JSONDecodeError:
-            return {
-                "status": "fallback",
-                "message": "模型输出非标准 JSON，已返回原文。",
-                "raw_text": raw_text,
-            }
-
-        # Normalize to the canonical analytics contract.
-        return _normalize_report(parsed, source_count=len(records))
-    except Exception as exc:  # noqa: BLE001
-        logger.error("生成全维诊断报告期间发生了毁灭性灾难: %s", exc)
-        return {"status": "error", "message": f"诊断中断: {exc}"}
-
-
-# Six fixed dimensions for the radar chart. We always emit all six so the
-# frontend never has to handle a "missing axis" branch — if the LLM didn't
-# score one, it defaults to 0.
-FIXED_AXES: list[str] = [
-    "算法与数据结构",
-    "系统设计",
-    "工程落地与并发",
-    "源码与底层",
-    "沟通与表达",
-    "抗压与节奏",
-]
-
-
-def _normalize_report(parsed: dict, source_count: int = 0) -> dict:
-    """Convert the LLM raw report into the canonical analytics contract."""
-    skill_radar = parsed.get("skill_radar")
-    if not isinstance(skill_radar, dict):
-        skill_radar = {}
-
-    # Build axes array — always include the six fixed dims, falling back to 0.
-    # Also keep any extra dims the LLM produced so callers can see the raw.
-    axes: list[dict] = []
+    axes: list[dict[str, Any]] = []
     for name in FIXED_AXES:
-        raw_v = skill_radar.get(name, 0)
-        try:
-            v_010 = float(raw_v)
-        except (TypeError, ValueError):
-            v_010 = 0.0
-        # Rescale 0-10 → 0-100 if it looks like a 0-10 score, otherwise pass through.
-        v = v_010 * 10 if v_010 <= 10 else v_010
-        axes.append({"k": name, "v": round(max(0.0, min(100.0, v)), 1)})
-
-    overall = round(sum(a["v"] for a in axes) / len(axes), 1) if axes else 0
-    strongest = max(axes, key=lambda a: a["v"])["k"] if axes else ""
-
-    weaknesses_raw = (
-        parsed.get("weaknesses") if isinstance(parsed.get("weaknesses"), list) else []
-    )
-    weaknesses: list[dict] = []
-    for w in weaknesses_raw:
-        if not isinstance(w, dict):
-            continue
-        weaknesses.append(
+        items = grouped.get(name, [])
+        axes.append(
             {
-                "k": str(w.get("topic", "") or w.get("k", "")),
-                "v": float(w.get("v", 0) or 0),
-                "why": str(w.get("flaw", "") or w.get("why", "")),
-                "plan": str(w.get("plan", "")),
-                "docs": w.get("docs", []) if isinstance(w.get("docs"), list) else [],
-                "practice": w.get("practice", [])
-                if isinstance(w.get("practice"), list)
-                else [],
+                "k": name,
+                "v": round(sum(float(item["score"]) for item in items) / len(items), 1)
+                if items
+                else None,
+                "topic_count": len(items),
+                "evidence_count": sum(
+                    int(item.get("evidence_count") or 0) for item in items
+                ),
+                "confidence": _confidence(len(items)) if items else "none",
             }
         )
 
-    strengths_raw = (
-        parsed.get("strengths") if isinstance(parsed.get("strengths"), list) else []
+    measured = [axis for axis in axes if axis["v"] is not None]
+    overall = (
+        round(sum(float(axis["v"]) for axis in measured) / len(measured), 1)
+        if measured
+        else None
     )
-    strengths: list[dict] = []
-    for s in strengths_raw:
-        if not isinstance(s, dict):
-            continue
-        strengths.append(
-            {
-                "topic": str(s.get("topic", "")),
-                "evidence": str(s.get("evidence", "")),
-            }
-        )
+    strongest = max(measured, key=lambda axis: axis["v"])["k"] if measured else None
+
+    ranked = sorted(
+        (record for record in records if isinstance(record.get("score"), (int, float))),
+        key=lambda record: (float(record["score"]), str(record.get("time") or "")),
+        reverse=True,
+    )
+    strengths = [
+        {
+            "topic": str(record.get("topic") or ""),
+            "evidence": str(record.get("summary") or ""),
+            "mastery_level": record.get("mastery_level"),
+            "evidence_count": int(record.get("evidence_count") or 0),
+        }
+        for record in ranked
+        if float(record["score"]) >= _MASTERY_SCORE["stable"]
+    ][:3]
+    weaknesses = [
+        {
+            "k": str(record.get("topic") or ""),
+            "v": float(record["score"]),
+            "why": str(record.get("summary") or ""),
+            "plan": (
+                f"围绕「{record.get('topic') or '该主题'}」补齐定义、边界和实战例子，"
+                "并在下一次模拟面试中复测。"
+            ),
+            "evidence_count": int(record.get("evidence_count") or 0),
+        }
+        for record in reversed(ranked)
+        if float(record["score"]) <= _MASTERY_SCORE["improving"]
+    ][:3]
 
     return {
         "status": "success",
         "overall": overall,
         "axes": axes,
         "totals": {
-            "sessions": source_count,
+            "ability_topics": len(records),
+            "evaluated_axes": len(measured),
+            "evidence_refs": sum(
+                int(record.get("evidence_count") or 0) for record in records
+            ),
             "strongest_axis": strongest,
         },
         "strengths": strengths,
         "weaknesses": weaknesses,
-        "overall_evaluation": str(parsed.get("overall_evaluation", "")),
-        "_raw": parsed,
+        "overall_evaluation": (
+            f"当前已覆盖 {len(measured)}/{len(FIXED_AXES)} 个能力维度；"
+            "分数只汇总已有证据，未覆盖维度保持待评估。"
+        ),
+        "generated_from": "memory_ability_states",
     }
+
+
+def _load_records(user_id: str) -> list[dict[str, Any]]:
+    from app.db.database import SessionLocal
+
+    with SessionLocal() as db:
+        return _extract_ability_records(db, user_id=user_id)
+
+
+async def generate_comprehensive_report(
+    limit: int = 20, user_id: str | None = None
+) -> dict[str, Any]:
+    if not user_id:
+        return {"status": "empty", "message": "missing user id"}
+
+    # The report endpoint is async, while SQLAlchemy is intentionally sync in
+    # this service. Keep the event loop free for other requests.
+    records = await asyncio.to_thread(_load_records, user_id)
+    if not records:
+        return {"status": "empty", "message": "暂无能力状态数据"}
+    records.sort(key=lambda record: str(record.get("time") or ""), reverse=True)
+    return _build_report(records[:limit])
 
 
 __all__ = ["generate_comprehensive_report"]

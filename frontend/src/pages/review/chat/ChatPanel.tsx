@@ -29,7 +29,7 @@
  *   MessageList / Bubble / MessageBlocks / SessionDropdown / ChatToolbar
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Sparkles, ChevronDown } from 'lucide-react';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { getChatTranscript } from '@/api/chat';
@@ -63,6 +63,7 @@ interface Props {
    *  ``flexible`` to stretch into the parent's remaining space. */
   width?: number;
   flexible?: boolean;
+  className?: string;
 }
 
 export function ChatPanel({
@@ -72,6 +73,7 @@ export function ChatPanel({
   sessionType = 'debrief',
   width = 400,
   flexible = false,
+  className = '',
 }: Props) {
   // External-mode (caller-controlled): ChatPanel becomes a thin shell;
   // session list state stays empty.
@@ -179,6 +181,7 @@ export function ChatPanel({
   const inflightSources = activeRuntime?.inflightSources ?? [];
   const statusHint = activeRuntime?.status ?? '';
   const streaming = !!activeRuntime?.streaming;
+  const disconnectedTurnId = !streaming ? activeRuntime?.turnId ?? null : null;
   const hidePartialBar = !!activeRuntime?.hidePartialBar;
   const activeSession = sessionList.sessions.find((s) => s.session_id === activeSessionId);
   const activeSessionTitle = activeSession?.title ?? '选择会话';
@@ -186,10 +189,11 @@ export function ChatPanel({
   // ────────────────────────────────────────────────────────────────────
   return (
     <aside
-      style={flexible ? undefined : { width }}
+      style={flexible ? undefined : { '--chat-panel-width': `${width}px` } as CSSProperties}
       className={[
         'bg-white border-l border-stone-200 flex flex-col',
-        flexible ? 'flex-1 min-w-0' : 'shrink-0',
+        flexible ? 'flex-1 min-w-0' : 'w-full lg:w-[var(--chat-panel-width)] shrink-0',
+        className,
       ].join(' ')}
     >
       {/* Row 1: subtitle + model picker */}
@@ -198,7 +202,17 @@ export function ChatPanel({
           <div className="text-sm font-semibold text-stone-800 truncate">{subtitle}</div>
           <div className="text-[11px] text-stone-400 mt-0.5 truncate font-mono">{activeModelName}</div>
         </div>
-        <div ref={modelRef} className="relative shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
+          {disconnectedTurnId && (
+            <button
+              onClick={() => resumeTurn(disconnectedTurnId)}
+              className="px-2.5 py-1 rounded-lg border border-warning-200 bg-warning-50 text-warning-700 text-xs hover:bg-warning-100"
+              title="服务器任务仍在运行，重新订阅其输出"
+            >
+              重新连接
+            </button>
+          )}
+          <div ref={modelRef} className="relative">
           <button
             onClick={() => setModelOpen((v) => !v)}
             title="当前回答模型"
@@ -239,6 +253,7 @@ export function ChatPanel({
                 })}
             </div>
           )}
+          </div>
         </div>
       </div>
 
