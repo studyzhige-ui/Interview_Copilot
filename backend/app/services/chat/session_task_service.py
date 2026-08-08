@@ -6,12 +6,12 @@ tool handlers call them via ``asyncio.to_thread``.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.db.types import utc_now
 from app.models.chat import Conversation
 from app.models.session_task import SessionTask
 
@@ -210,7 +210,7 @@ def update_task(
         row.status = status
         if status == "verifying":
             row.verification_status = "pending"
-    row.updated_at = datetime.utcnow()
+    row.updated_at = utc_now()
     db.commit()
     db.refresh(row)
     return _row_to_dict(row)
@@ -244,7 +244,7 @@ def record_verification(
         raise ValueError(f"invalid verification verdict: {verdict}")
     row.status, row.verification_status = mapping[verdict]
     row.verification_notes = notes
-    row.updated_at = datetime.utcnow()
+    row.updated_at = utc_now()
     db.commit()
     db.refresh(row)
     return _row_to_dict(row)

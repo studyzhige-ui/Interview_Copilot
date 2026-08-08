@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from app.services.memory._doc_patch_protocol import _normalize_line, apply_patches
 
-
 # ── _normalize_line: the anti-injection normaliser ───────────────────────
 
 

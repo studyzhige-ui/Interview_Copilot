@@ -15,7 +15,6 @@ from app.models.knowledge import KnowledgeDocument
 
 import scripts.consistency_scan as cs
 
-
 # ── pure diff (no I/O) ───────────────────────────────────────────────────────
 
 

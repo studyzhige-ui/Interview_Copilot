@@ -8,14 +8,16 @@ interview_record_service for record persistence).
 
 import asyncio
 import json
+import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.rate_limit import RATE_EXPENSIVE, limiter
+from app.api.file_assets import require_uploaded
 from app.core.error_messages import humanize_error
+from app.core.rate_limit import RATE_EXPENSIVE, limiter
 from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
@@ -29,6 +31,7 @@ from app.schemas.interview import (
     SaveQARequest,
 )
 from app.services.analytics.diagnostics_report_service import (
+    ABILITY_SCORE_SCALE_VERSION,
     generate_comprehensive_report,
 )
 from app.services.interview import analysis_intake, record_admin
@@ -44,13 +47,10 @@ from app.services.interview.interview_record_service import (
     STATUS_TRANSCRIBING,
     interview_record_service,
 )
-from app.api.file_assets import require_uploaded
 from app.services.uploads.file_asset_service import (
     UPLOAD_STATUS_CONSUMED,
     get_owned_file_asset,
 )
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -180,11 +180,21 @@ def cancel_analysis(
 
 @router.get("/analytics/report")
 async def get_analytics_report(
-    limit: int = Query(20, description="Max personal memory items to scan."),
+    limit: int = Query(20, ge=1, le=100, description="Max ability topics to scan."),
+    scale_version: str = Query(
+        ABILITY_SCORE_SCALE_VERSION,
+        description="Versioned continuous evidence-scoring rubric.",
+    ),
     current_user: User = Depends(get_current_user),
 ):
     try:
-        return await generate_comprehensive_report(limit, user_id=current_user.username)
+        return await generate_comprehensive_report(
+            limit,
+            user_id=current_user.username,
+            scale_version=scale_version,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=humanize_error(exc)) from exc
 

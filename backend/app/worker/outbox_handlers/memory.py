@@ -1,7 +1,5 @@
 """Worker handlers for durable memory extraction jobs."""
 
-import json
-
 from sqlalchemy.orm import Session
 
 from app.models.outbox_job import OutboxJob
@@ -12,7 +10,7 @@ from app.services.outbox import register_handler
 def handle_realtime(db: Session, job: OutboxJob) -> None:
     from app.services.memory.realtime_extraction import run_realtime_extraction
 
-    payload = json.loads(job.payload_json) if job.payload_json else {}
+    payload = job.payload_json or {}
     session_id = payload.get("session_id")
     user_id = payload.get("user_id")
     upto_seq = payload.get("upto_seq")
@@ -46,7 +44,7 @@ def handle_realtime(db: Session, job: OutboxJob) -> None:
 def handle_dreaming(db: Session, job: OutboxJob) -> None:
     from app.services.memory.dreaming_worker import dream_for_record
 
-    payload = json.loads(job.payload_json) if job.payload_json else {}
+    payload = job.payload_json or {}
     record_id = payload.get("record_id")
     if not record_id:
         raise ValueError(f"{DREAMING_JOB}: bad payload {payload}")
@@ -72,7 +70,7 @@ def handle_dream_check_user(db: Session, job: OutboxJob) -> None:
     """Dispatch an immediate Celery dream task after the durable quiet window."""
     from app.worker.tasks.memory import dream_for_user_task
 
-    payload = json.loads(job.payload_json) if job.payload_json else {}
+    payload = job.payload_json or {}
     username = payload.get("username")
     if not username:
         raise ValueError(f"dream_check_user: bad payload {payload}")

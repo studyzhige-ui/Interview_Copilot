@@ -72,16 +72,16 @@ def dream_for_user_task(self, user_id: str):
     message arriving during processing isn't dropped from the next nightly's
     gate-3 count (review found this as M1).
     """
-    from datetime import datetime
     from app.core.user_identity import resolve_user_pk
     from app.db.database import SessionLocal
+    from app.db.types import utc_now
     from app.services.memory import extraction_jobs
     from app.services.memory.dreaming_worker import (
         bump_user_last_dreamed_at,
         select_records_for_user,
     )
 
-    scan_started_at = datetime.utcnow()
+    scan_started_at = utc_now()
     records = select_records_for_user(user_id, limit=50)
     enqueued = 0
     db = SessionLocal()

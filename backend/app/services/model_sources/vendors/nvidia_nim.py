@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from .base import VendorAdapterSpec
 
-
 # Substring-based blocklist for non-chat NIM entries. Designed from
 # inspecting the live response — see P7-A verification output (123
 # entries, ~60% are non-chat).

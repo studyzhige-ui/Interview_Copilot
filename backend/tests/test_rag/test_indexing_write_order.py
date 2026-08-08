@@ -10,17 +10,16 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import app.models  # noqa: F401 — register mappers
+import app.rag.embedding_registry as er
 import pytest
+from app.db.database import Base
+from app.models.document_chunk import DocumentChunk
+from app.rag import ingestion
 from llama_index.core.schema import TextNode
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-
-import app.models  # noqa: F401 — register mappers
-import app.rag.embedding_registry as er
-from app.db.database import Base
-from app.models.document_chunk import DocumentChunk
-from app.rag import ingestion
 
 
 class _FakeEmbed:
@@ -179,6 +178,36 @@ def test_reingest_replacement_is_idempotent(index_db, monkeypatch):
         db.close()
     # Each ingest deleted this document's prior Milvus rows before inserting.
     assert deletes == [("document_id", "dup"), ("document_id", "dup")]
+
+
+def test_index_text_is_structured_while_postgres_keeps_raw_fact(index_db, monkeypatch):
+    _use_embed(monkeypatch)
+    import app.rag.milvus_hybrid as mh
+
+    captured: dict = {}
+    monkeypatch.setattr(ingestion, "_document_title", lambda _document_id: "Celery")
+    monkeypatch.setattr(mh, "delete_by_field", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        mh, "insert", lambda _collection, rows: captured.__setitem__("rows", rows)
+    )
+    node = TextNode(
+        text="A task message is acknowledged after execution.",
+        id_="n-structured",
+        metadata={"heading_path": ["Tasks", "Acknowledgements"]},
+    )
+
+    ingestion._index_nodes(
+        [node], user_id=1, source_kind="user_upload", document_id="structured"
+    )
+
+    assert captured["rows"][0]["text"] == (
+        "Document: Celery\n"
+        "Section: Tasks > Acknowledgements\n"
+        "A task message is acknowledged after execution."
+    )
+    with index_db() as db:
+        fact = db.query(DocumentChunk).filter_by(node_id="n-structured").one()
+        assert fact.text == "A task message is acknowledged after execution."
 
 
 def test_reindex_document_rebuilds_from_live_facts(index_db, monkeypatch):

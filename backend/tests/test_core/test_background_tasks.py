@@ -6,7 +6,6 @@ import asyncio
 import logging
 
 import pytest
-
 from app.core.background_tasks import (
     _background_tasks,
     cancel_and_wait_all,

@@ -22,7 +22,6 @@ from pathlib import Path
 
 import pytest
 
-
 PG_ADMIN_URL = os.environ.get(
     "TEST_PG_ADMIN_URL",
     "postgresql://postgres:postgres@localhost:5432/postgres",
@@ -97,6 +96,7 @@ def _make_alembic_config(db_url: str):
     time to whatever DATABASE_URL was set when the process started.
     """
     from argparse import Namespace
+
     from alembic.config import Config
 
     cfg = Config(str(ALEMBIC_INI), cmd_opts=Namespace(x=[f"url={db_url}"]))
@@ -143,8 +143,10 @@ def test_migration_chain_has_no_gaps_and_one_head():
 
 def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     """Install the release schema in a virgin PostgreSQL database."""
+    from sqlalchemy import Float, create_engine, inspect
+    from sqlalchemy.dialects.postgresql import JSONB
+
     from alembic import command
-    from sqlalchemy import create_engine, inspect
 
     monkeypatch.setenv("DATABASE_URL", fresh_pg_db)
 
@@ -181,6 +183,24 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     missing = expected_tables - tables
     assert not missing, f"Missing tables after upgrade head: {missing}"
 
+    # Operational structured values are JSONB, while all lifecycle timestamps
+    # expose timezone-aware semantics at the database boundary.
+    outbox_columns = {c["name"]: c for c in insp.get_columns("outbox_jobs")}
+    turn_columns = {c["name"]: c for c in insp.get_columns("conversation_turns")}
+    user_columns = {c["name"]: c for c in insp.get_columns("users")}
+    runtime_columns = {c["name"]: c for c in insp.get_columns("mock_interview_runtime")}
+    qa_columns = {c["name"]: c for c in insp.get_columns("interview_qa")}
+    ability_columns = {c["name"]: c for c in insp.get_columns("memory_ability_states")}
+    chunk_columns = {c["name"]: c for c in insp.get_columns("document_chunks")}
+    assert isinstance(outbox_columns["payload_json"]["type"], JSONB)
+    assert isinstance(turn_columns["budget_json"]["type"], JSONB)
+    assert user_columns["created_at"]["type"].timezone is True
+    assert runtime_columns["answer_claimed_at"]["type"].timezone is True
+    assert isinstance(qa_columns["score"]["type"], Float)
+    assert isinstance(ability_columns["ability_score"]["type"], Float)
+    assert chunk_columns["document_id"]["nullable"] is False
+    assert "lexical_index_id" not in chunk_columns
+
     # Retired schemas must not leak back into the release baseline.
     legacy = {
         "interviews",
@@ -213,8 +233,9 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
 
 def test_hot_query_composite_indexes_exist(fresh_pg_db, monkeypatch):
     """The release baseline contains the composite indexes used by hot queries."""
-    from alembic import command
     from sqlalchemy import create_engine, inspect
+
+    from alembic import command
 
     monkeypatch.setenv("DATABASE_URL", fresh_pg_db)
 
@@ -239,6 +260,60 @@ def test_hot_query_composite_indexes_exist(fresh_pg_db, monkeypatch):
     engine.dispose()
 
 
+def test_0004_preserves_legacy_json_and_utc_instants(fresh_pg_db, monkeypatch):
+    """Upgrade real 0003-shaped values instead of validating only an empty DB."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import create_engine, text
+
+    from alembic import command
+
+    monkeypatch.setenv("DATABASE_URL", fresh_pg_db)
+    cfg = _make_alembic_config(fresh_pg_db)
+    command.upgrade(cfg, "0003")
+
+    engine = create_engine(fresh_pg_db)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO users "
+                "(id, username, hashed_password, email_verified, "
+                "global_memory_enabled, created_at, updated_at) VALUES "
+                "(1, 'legacy', 'x', FALSE, FALSE, "
+                "'2026-08-05 10:30:00', '2026-08-05 10:30:00')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO outbox_jobs "
+                "(id, user_id, job_type, payload_json, status, attempts, "
+                "max_attempts, next_run_at, created_at, updated_at) VALUES "
+                "('job_legacy', 1, 'test', '{\"items\":[1,2]}', 'pending', "
+                "0, 3, '2026-08-05 10:30:00', "
+                "'2026-08-05 10:30:00', '2026-08-05 10:30:00')"
+            )
+        )
+    engine.dispose()
+
+    command.upgrade(cfg, "head")
+
+    engine = create_engine(fresh_pg_db)
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                text(
+                    "SELECT payload_json, created_at FROM outbox_jobs "
+                    "WHERE id = 'job_legacy'"
+                )
+            )
+            .mappings()
+            .one()
+        )
+    assert row["payload_json"] == {"items": [1, 2]}
+    assert row["created_at"].astimezone(UTC) == datetime(2026, 8, 5, 10, 30, tzinfo=UTC)
+    engine.dispose()
+
+
 def test_interview_record_children_cascade(fresh_pg_db, monkeypatch):
     """The release baseline cascades interview child rows.
 
@@ -249,8 +324,9 @@ def test_interview_record_children_cascade(fresh_pg_db, monkeypatch):
     the cascade, the parent delete would either raise or leave
     orphan children — both are regressions worth pinning.
     """
-    from alembic import command
     from sqlalchemy import create_engine, text
+
+    from alembic import command
 
     monkeypatch.setenv("DATABASE_URL", fresh_pg_db)
     cfg = _make_alembic_config(fresh_pg_db)

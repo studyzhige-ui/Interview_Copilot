@@ -10,13 +10,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-from llama_index.core.schema import TextNode
-
 import app.rag.embedding_registry as er
+import pytest
 from app.rag import ingestion
 from app.rag.cleaning import EmptyContentError
 from app.rag.embedding_registry import EmbeddingValidationError
+from llama_index.core.schema import TextNode
 
 
 class _FakeEmbed:
@@ -142,8 +141,14 @@ async def test_ingest_text_all_blank_raises_empty(monkeypatch):
     (EmptyContentError) before any index/fact write."""
     monkeypatch.setattr(
         ingestion,
-        "get_optimal_nodes",
-        lambda doc: [TextNode(text="   "), TextNode(text="")],
+        "chunk_document",
+        lambda *_args, **_kwargs: [TextNode(text="   "), TextNode(text="")],
     )
+    monkeypatch.setattr(ingestion, "_document_title", lambda _id: None)
     with pytest.raises(EmptyContentError):
-        await ingestion.ingest_text("some real source text", "manual_text", user_id=1)
+        await ingestion.ingest_text(
+            "some real source text",
+            "manual_text",
+            user_id=1,
+            document_id="doc-blank",
+        )

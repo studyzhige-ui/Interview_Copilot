@@ -12,8 +12,6 @@ job runs.
 
 from __future__ import annotations
 
-import json
-
 from sqlalchemy.orm import Session
 
 from app.models.outbox_job import OutboxJob
@@ -22,7 +20,7 @@ from app.services.outbox import register_handler
 
 
 def _handle_upsert(db: Session, job: OutboxJob) -> None:
-    p = json.loads(job.payload_json) if job.payload_json else {}
+    p = job.payload_json or {}
     state_id = p.get("state_id")
     user_id = p.get("user_id")
     if not state_id or not user_id:
@@ -43,7 +41,7 @@ def _handle_upsert(db: Session, job: OutboxJob) -> None:
 
 
 def _handle_delete(db: Session, job: OutboxJob) -> None:
-    p = json.loads(job.payload_json) if job.payload_json else {}
+    p = job.payload_json or {}
     state_id = p.get("state_id")
     user_id = p.get("user_id")
     if not state_id or not user_id:

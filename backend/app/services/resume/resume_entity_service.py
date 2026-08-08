@@ -13,11 +13,10 @@ by a partial unique index on the table.
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from sqlalchemy.orm import Session
 
 from app.core.user_identity import resolve_user_pk
+from app.db.types import utc_now
 from app.models.resume import Resume
 from app.models.user import User
 
@@ -163,7 +162,7 @@ def replace_resume(
         raise ValueError("要替换的简历不存在")
     inherit_default = bool(old.is_default)
     old.is_default = False
-    old.archived_at = datetime.utcnow()
+    old.archived_at = utc_now()
     db.add(old)
     db.flush()
     resume = _create_resume_locked(
@@ -223,7 +222,7 @@ def delete_resume(db: Session, *, user_id: str, resume_id: str) -> bool:
         return False
     was_default = resume.is_default
     resume.is_default = False
-    resume.archived_at = datetime.utcnow()
+    resume.archived_at = utc_now()
     db.add(resume)
     from app.services.resume.reindex_jobs import enqueue_resume_reindex
 

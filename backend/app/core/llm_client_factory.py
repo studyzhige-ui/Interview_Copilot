@@ -13,9 +13,6 @@ What lives here:
       - LlamaIndex ``OpenAILike`` keyed by (role, profile_id)
       - Raw ``AsyncOpenAI`` keyed by (user_id, profile_id) with an
         LRU bound + auto-invalidate on key/base/header changes
-  * ``RuntimeLLMProxy`` — wired into LlamaIndex ``Settings.llm`` so
-    runtime selection changes are picked up without recreating
-    the proxy
 """
 
 from __future__ import annotations
@@ -28,7 +25,6 @@ from dataclasses import asdict, dataclass
 from threading import Lock
 from typing import Any
 
-from llama_index.core.llms import LLM
 from llama_index.llms.openai_like import OpenAILike
 from openai import AsyncOpenAI, OpenAI
 
@@ -44,6 +40,7 @@ from app.core.model_readiness import (
 )
 
 logger = logging.getLogger(__name__)
+LLM_TEMPERATURE = 0.2
 
 
 # Single lock guarding the two caches below. Lookups are quick enough
@@ -278,7 +275,12 @@ def _serialize_profile(
 # ── LLM construction ────────────────────────────────────────────────────
 
 
-def _build_llm_instance(profile: ModelProfile, user_id: str | None = None):
+def _build_llm_instance(
+    profile: ModelProfile,
+    user_id: str | None = None,
+    *,
+    request_overrides: dict[str, Any] | None = None,
+):
     """Construct a LlamaIndex ``OpenAILike`` for ``profile``.
 
     Every supported provider is reached through the OpenAI-compatible
@@ -316,7 +318,8 @@ def _build_llm_instance(profile: ModelProfile, user_id: str | None = None):
         is_chat_model=True,
         is_function_calling_model=profile.supports_function_calling,
         context_window=profile.context_window,
-        temperature=0.2,
+        temperature=LLM_TEMPERATURE,
+        additional_kwargs=dict(request_overrides or {}),
         default_headers=dict(overrides.extra_headers) or None,
         openai_client=sync_client,
         async_openai_client=async_client,
@@ -338,20 +341,26 @@ def _get_cached_llm(
     cache_role: str,
     profile: ModelProfile,
     user_id: str | None,
+    request_overrides: dict[str, Any] | None = None,
 ):
     api_key = resolve_api_key(profile, user_id=user_id)
     overrides = _load_user_provider_overrides(profile, user_id)
     api_base = overrides.api_base or profile.api_base
     fp = _key_fingerprint(
         f"{api_key}|{api_base}|org={overrides.organization_id or ''}|"
-        f"hdr={json.dumps(overrides.extra_headers, sort_keys=True)}"
+        f"hdr={json.dumps(overrides.extra_headers, sort_keys=True)}|"
+        f"req={json.dumps(request_overrides or {}, sort_keys=True)}"
     )
     cache_key = (user_id, cache_role, profile.id)
     with _llm_cache_lock:
         cached = _llm_cache.get(cache_key)
         if cached is not None and cached[0] == fp:
             return cached[1]
-        instance = _build_llm_instance(profile, user_id=user_id)
+        instance = _build_llm_instance(
+            profile,
+            user_id=user_id,
+            request_overrides=request_overrides,
+        )
         _llm_cache[cache_key] = (fp, instance)
         return instance
 
@@ -369,10 +378,16 @@ def get_llm_for_role(role: str, user_id: str | None = None):
 def get_internal_llm(role: str):
     """Return a platform-owned model using deployment credentials only."""
     profile = get_internal_model_profile(role)
+    request_overrides = (
+        {"extra_body": {"thinking": {"type": "disabled"}}}
+        if profile.provider == "deepseek"
+        else None
+    )
     return _get_cached_llm(
         cache_role=f"internal:{role}",
         profile=profile,
         user_id=None,
+        request_overrides=request_overrides,
     )
 
 
@@ -393,62 +408,6 @@ def build_async_openai_client_for_internal_role(
     return get_async_openai_client(profile, user_id=None), profile
 
 
-class RuntimeLLMProxy(LLM):
-    """Process-global LLM proxy wired into LlamaIndex ``Settings.llm``.
-
-    Always resolves with ``user_id=None`` (ROLE_DEFAULTS) — there's no
-    per-request user context at the import-time singleton level.
-    Per-user model selection goes through
-    ``build_async_openai_client_for_role(role, user_id=...)`` from the
-    conversation engine instead.
-    """
-
-    role: str
-
-    def _delegate(self):
-        return get_llm_for_role(self.role)
-
-    @property
-    def metadata(self):
-        return self._delegate().metadata
-
-    def chat(self, messages, **kwargs):
-        return self._delegate().chat(messages, **kwargs)
-
-    async def achat(self, messages, **kwargs):
-        return await self._delegate().achat(messages, **kwargs)
-
-    def stream_chat(self, messages, **kwargs):
-        return self._delegate().stream_chat(messages, **kwargs)
-
-    async def astream_chat(self, messages, **kwargs):
-        return await self._delegate().astream_chat(messages, **kwargs)
-
-    def complete(self, prompt, formatted=False, **kwargs):
-        return self._delegate().complete(prompt, formatted=formatted, **kwargs)
-
-    async def acomplete(self, prompt, formatted=False, **kwargs):
-        return await self._delegate().acomplete(
-            prompt,
-            formatted=formatted,
-            **kwargs,
-        )
-
-    def stream_complete(self, prompt, formatted=False, **kwargs):
-        return self._delegate().stream_complete(
-            prompt,
-            formatted=formatted,
-            **kwargs,
-        )
-
-    async def astream_complete(self, prompt, formatted=False, **kwargs):
-        return await self._delegate().astream_complete(
-            prompt,
-            formatted=formatted,
-            **kwargs,
-        )
-
-
 __all__ = [
     "resolve_api_key",
     "get_async_openai_client",
@@ -460,6 +419,5 @@ __all__ = [
     "get_internal_llm",
     "build_async_openai_client_for_role",
     "build_async_openai_client_for_internal_role",
-    "RuntimeLLMProxy",
     "_serialize_profile",
 ]

@@ -11,15 +11,10 @@ We build our own in-memory SQLite engine instead of using the shared
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi import HTTPException
-from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from starlette.requests import Request
-
+import app.models  # noqa: F401  — register all mappers before create_all
+import pytest
 from app.api.auth import (
     ChangePasswordRequest,
     EmailRequest,
@@ -45,8 +40,12 @@ from app.core.security import (
     verify_password,
 )
 from app.db.database import Base
-import app.models  # noqa: F401  — register all mappers before create_all
 from app.models.user import User
+from fastapi import HTTPException
+from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from starlette.requests import Request
 
 
 @pytest.fixture(autouse=True)

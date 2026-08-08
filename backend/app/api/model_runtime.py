@@ -6,30 +6,29 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.background_tasks import safe_background_task
-from app.core.security import get_current_user
-from app.db.database import get_db
-from app.models.user import User
+from app.core.internal_models import (
+    INTERNAL_MODEL_ROLES,
+    get_internal_model_profile,
+)
 from app.core.llm_client_factory import (
     _serialize_profile,
     get_async_openai_client,
     profile_ready,
     validate_role_update,
 )
-from app.core.internal_models import (
-    INTERNAL_MODEL_ROLES,
-    get_internal_model_profile,
-)
 from app.core.model_catalog import (
     USER_SELECTABLE_ROLES,
     _get_all_profiles,
     get_profile,
 )
+from app.core.security import get_current_user
 from app.core.user_model_selection import (
     get_profile_for_role,
     get_runtime_selection,
     update_runtime_selection,
 )
-from app.rag.embeddings import refresh_primary_llm
+from app.db.database import get_db
+from app.models.user import User
 from app.schemas.model_runtime import (
     APIKeyUpsertRequest,
     ProviderSettingsUpdateRequest,
@@ -520,7 +519,6 @@ async def api_update_model_runtime(
         for role, profile_id in updates.items():
             validate_role_update(role, profile_id, user_id=current_user.username)
         selection = update_runtime_selection(updates, user_id=current_user.username)
-        refresh_primary_llm()
         # The selection affects every profile's `selected_for` in the cached
         # catalog payload, so drop it for this user.
         await invalidate(f"models:catalog:{current_user.username}")

@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -133,6 +134,27 @@ def prefix_hash(prefix: str) -> str:
     return hashlib.sha256(prefix.encode("utf-8")).hexdigest()[:16]
 
 
+def detect_response_language(text: str) -> str:
+    """Choose the candidate's dominant conversational language.
+
+    The first meaningful script resolves genuinely mixed answers; a leading
+    technical name such as ``Python`` does not override a mostly Chinese
+    sentence unless the answer contains a real English phrase.
+    """
+    value = (text or "").strip()
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", value))
+    english_words = len(re.findall(r"[A-Za-z]{2,}", value))
+    first = re.search(r"[A-Za-z\u4e00-\u9fff]", value)
+    first_char = first.group(0) if first else ""
+    if "\u4e00" <= first_char <= "\u9fff" and cjk_count >= 2:
+        return "zh"
+    if first_char.isascii() and first_char.isalpha() and english_words >= 3:
+        return "en"
+    if cjk_count >= 4:
+        return "zh"
+    return "en" if english_words >= 3 else "zh"
+
+
 # ── Output dataclasses ───────────────────────────────────────────────────
 
 
@@ -154,6 +176,7 @@ class NextTurn:
     interviewer_message: str
     next_stage_key: str
     is_ready_to_finish: bool
+    used_fallback: bool = False
     # Set by mock_flow.submit_answer after persisting the message — the FE
     # echoes it back with the next answer as the concurrency token (MOCK-3).
     question_message_id: int | None = None
@@ -304,6 +327,11 @@ async def generate_next_turn(
             else "可根据覆盖质量留在当前阶段或推进"
         ),
         user_answer=(user_answer or "").strip() or "（候选人沉默）",
+        response_language=(
+            "简体中文（英文技术术语原样保留）"
+            if detect_response_language(user_answer) == "zh"
+            else "English (preserve Chinese technical terms as written)"
+        ),
         stage_keys_hint=" | ".join(stage_keys),
     )
 
@@ -328,6 +356,7 @@ async def generate_next_turn(
             interviewer_message=message,
             next_stage_key=next_stage,
             is_ready_to_finish=must_advance and current_index == len(stage_keys) - 1,
+            used_fallback=True,
         )
 
     message = str(data.get("message") or "").strip()[:800]
@@ -444,6 +473,7 @@ __all__ = [
     "MockPlan",
     "NextTurn",
     "build_prefix",
+    "detect_response_language",
     "prefix_hash",
     "generate_plan",
     "generate_next_turn",

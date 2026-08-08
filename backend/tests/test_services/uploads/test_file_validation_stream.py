@@ -16,12 +16,11 @@ import asyncio
 import io
 
 import pytest
-from fastapi import HTTPException, UploadFile
-
 from app.services.uploads.file_validation import (
     _SIZE_LIMITS_BYTES,
     validate_upload_stream,
 )
+from fastapi import HTTPException, UploadFile
 
 
 def _make_upload(body: bytes, filename: str = "x.pdf") -> UploadFile:

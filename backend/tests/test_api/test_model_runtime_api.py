@@ -9,11 +9,10 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from app.api import model_runtime as model_runtime_mod
 from app.core.security import get_current_user
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -142,7 +141,7 @@ def test_update_runtime_rejects_empty_payload(client):
 
 
 def test_update_runtime_validates_and_persists(client, monkeypatch):
-    calls = {"validate": 0, "refresh": 0}
+    calls = {"validate": 0}
 
     def fake_validate(role, profile_id, user_id=None):
         calls["validate"] += 1
@@ -155,16 +154,11 @@ def test_update_runtime_validates_and_persists(client, monkeypatch):
             "primary": updates.get("primary", "p1"),
         }
 
-    def fake_refresh():
-        calls["refresh"] += 1
-
     async def fake_invalidate(*_names):
         return None
 
     monkeypatch.setattr(model_runtime_mod, "validate_role_update", fake_validate)
     monkeypatch.setattr(model_runtime_mod, "update_runtime_selection", fake_update)
-    monkeypatch.setattr(model_runtime_mod, "refresh_primary_llm", fake_refresh)
-
     with patch("app.core.cache.invalidate", side_effect=fake_invalidate):
         resp = client.put("/api/v1/models/runtime", json={"primary": "p_new"})
     assert resp.status_code == 200, resp.text
@@ -172,7 +166,6 @@ def test_update_runtime_validates_and_persists(client, monkeypatch):
     assert body["status"] == "success"
     assert body["selection"]["primary"] == "p_new"
     assert calls["validate"] == 1
-    assert calls["refresh"] == 1
 
 
 def test_update_runtime_translates_value_error_to_400(client, monkeypatch):

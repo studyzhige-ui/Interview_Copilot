@@ -103,7 +103,7 @@ def _ability_states_to_dicts(states) -> list[dict]:
     exactly the long-standing weaknesses. Also annotates evidence age
     (MEM-1) so the LLM can discount three-month-old judgements.
     """
-    from datetime import datetime
+    from app.db.types import utc_now
 
     def _stale_days(s) -> int | None:
         from app.services.memory._extraction_common import STALE_ANNOTATION_DAYS
@@ -111,7 +111,7 @@ def _ability_states_to_dicts(states) -> list[dict]:
         ts = getattr(s, "last_evidence_at", None)
         if ts is None:
             return None
-        days = (datetime.utcnow() - ts).days
+        days = (utc_now() - ts).days
         return days if days >= STALE_ANNOTATION_DAYS else None
 
     growth = [s for s in states if s.mastery_level in ("weak", "improving")]

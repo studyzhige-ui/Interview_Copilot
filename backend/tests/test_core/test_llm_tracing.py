@@ -86,11 +86,11 @@ def test_setup_warns_when_tracing_true_but_no_api_key(
 
 
 def test_setup_patches_openai_when_enabled(monkeypatch, fresh_tracing):
-    import openai
-
     # Stub langsmith.wrappers.wrap_openai so the test doesn't need the real lib.
     import sys
     import types
+
+    import openai
 
     stub_module = types.ModuleType("langsmith.wrappers")
     sentinel_marker = object()
@@ -126,9 +126,10 @@ def test_setup_patches_openai_when_enabled(monkeypatch, fresh_tracing):
 
 
 def test_setup_is_idempotent(monkeypatch, fresh_tracing):
-    import openai
     import sys
     import types
+
+    import openai
 
     stub_module = types.ModuleType("langsmith.wrappers")
     stub_module.wrap_openai = lambda c: c
@@ -154,9 +155,10 @@ def test_setup_is_idempotent(monkeypatch, fresh_tracing):
 
 
 def test_setup_handles_missing_langsmith_gracefully(monkeypatch, fresh_tracing, caplog):
-    import openai
-    import sys
     import builtins
+    import sys
+
+    import openai
 
     monkeypatch.setenv("LANGSMITH_TRACING", "true")
     monkeypatch.setenv("LANGSMITH_API_KEY", "lsv2_fake_key")

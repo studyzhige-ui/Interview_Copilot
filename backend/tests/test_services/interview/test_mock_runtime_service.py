@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from app.services.interview import mock_runtime_service as svc
 
 

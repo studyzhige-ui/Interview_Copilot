@@ -9,14 +9,13 @@ from __future__ import annotations
 
 import logging
 
-from fastapi.testclient import TestClient
-
 from app.core.request_id import (
     RequestIdFormatter,
     get_request_id,
     new_request_id,
     set_request_id,
 )
+from fastapi.testclient import TestClient
 
 
 def test_new_request_id_is_short_and_hex():
@@ -112,6 +111,7 @@ def test_unhandled_exception_handler_attaches_request_id_header():
     client↔server correlation contract silently.
     """
     import inspect
+
     from app.main import unhandled_exception_logger
 
     src = inspect.getsource(unhandled_exception_logger)

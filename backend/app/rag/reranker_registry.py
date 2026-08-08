@@ -118,12 +118,9 @@ def list_providers() -> list[dict[str, Any]]:
 class RerankerUnavailableError(RuntimeError):
     """Remote reranker transport failure / unusable response.
 
-    Raised instead of silently passing candidates through: the retriever
-    catches this and takes its EXPLICIT fallback path — unranked RRF top-N,
-    ``score_source=retriever_fallback``, and no reranker-score threshold.
-    The old silent pass-through kept RRF-scale scores (~1/60) that then hit
-    ``RAG_MIN_SCORE``, which filtered every fallback result (retrieval plan
-    §2.5).
+    Raised instead of silently passing candidates through. The retriever
+    fails closed because RRF and cross-encoder scores use incompatible scales;
+    uncalibrated RRF candidates must not bypass the answer evidence gate.
     """
 
 
@@ -133,8 +130,8 @@ class RemoteAPIRerank(BaseNodePostprocessor):
     Posts the candidate node texts to the provider and returns the top-N as
     ``NodeWithScore`` in provider order. Raises
     :class:`RerankerUnavailableError` on transport error or an unusable
-    response body so the caller can take its explicit fallback path instead
-    of mixing RRF-scale scores into the reranker-score contract.
+    response body so the caller can return an explicit unavailable state
+    instead of mixing RRF-scale scores into the reranker-score contract.
     """
 
     api_base: str = Field()
@@ -214,14 +211,17 @@ def build_reranker(top_n: int) -> Any:
     p = cfg.provider
 
     if p.kind == "local_hf_crossencoder":
-        from app.core.hf_runtime import (
-            prepare_hf_runtime,
-            resolve_local_snapshot,
-            format_missing_model_error,
-        )
         from llama_index.postprocessor.sbert_rerank import SentenceTransformerRerank
 
+        from app.core.hf_runtime import (
+            format_missing_model_error,
+            prepare_hf_runtime,
+            resolve_local_snapshot,
+        )
+
         prepare_hf_runtime()
+        from app.rag.policy import current_rag_policy, resolve_rag_device
+
         local_path = resolve_local_snapshot(cfg.model)
         if local_path is None:
             raise RuntimeError(
@@ -233,7 +233,14 @@ def build_reranker(top_n: int) -> Any:
                 )
             )
         logger.info("Reranker: local model=%s top_n=%d", cfg.model, top_n)
-        return SentenceTransformerRerank(model=local_path, top_n=top_n)
+        return SentenceTransformerRerank(
+            model=local_path,
+            device=resolve_rag_device(),
+            top_n=top_n,
+            cross_encoder_kwargs={
+                "max_length": current_rag_policy().tokens.rerank_input
+            },
+        )
 
     if p.kind == "remote_openai_style":
         api_key = os.getenv(p.api_key_env, "").strip()

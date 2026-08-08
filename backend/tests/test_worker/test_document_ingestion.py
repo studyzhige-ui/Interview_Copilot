@@ -11,15 +11,14 @@ from __future__ import annotations
 
 from typing import Iterator
 
+import app.models  # noqa: F401 — register mappers
 import pytest
+from app.db.database import Base
+from app.models.file_asset import FileAsset
+from app.models.knowledge import KnowledgeDocument
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
-
-from app.db.database import Base
-import app.models  # noqa: F401 — register mappers
-from app.models.file_asset import FileAsset
-from app.models.knowledge import KnowledgeDocument
 
 
 @pytest.fixture
@@ -74,11 +73,10 @@ def _seed_doc(maker: sessionmaker, *, filename: str, status: str = "processing")
 
 
 def test_worker_rejects_unsupported_format_without_retry(worker_db, monkeypatch):
-    from app.worker.tasks import process_document_ingestion
-
     # If the parser is ever reached, fail loudly — the format gate must
     # short-circuit before download/ingest.
     import app.rag.ingestion as ingestion_mod
+    from app.worker.tasks import process_document_ingestion
 
     monkeypatch.setattr(
         ingestion_mod,
@@ -106,9 +104,8 @@ def test_worker_rejects_unsupported_format(worker_db, monkeypatch):
     """The worker's defensive format re-check rejects an unsupported extension
     before running ingest. (Images + legacy Office are all allowed now, so the
     rejection path is exercised with a genuinely out-of-scope format.)"""
-    from app.worker.tasks import process_document_ingestion
-
     import app.rag.ingestion as ingestion_mod
+    from app.worker.tasks import process_document_ingestion
 
     monkeypatch.setattr(
         ingestion_mod,
@@ -135,11 +132,10 @@ def test_worker_marks_failed_on_empty_after_cleaning_without_retry(
 ):
     """EmptyContentError from ingest (S0 cleaning left no usable text) is a
     permanent failure: friendly message, no retry."""
-    from app.rag.cleaning import EmptyContentError
-    from app.worker.tasks import process_document_ingestion
-
     # Get past the download (no real S3) so ingest is reached.
     import app.core.storage as storage_mod
+    from app.rag.cleaning import EmptyContentError
+    from app.worker.tasks import process_document_ingestion
 
     monkeypatch.setattr(
         storage_mod,
@@ -173,9 +169,8 @@ def test_worker_keeps_processing_when_index_queued(worker_db, monkeypatch):
     """C2: when ingest reports indexed=False (the Milvus write was queued for
     outbox retry because Milvus was down), the worker saves the facts but keeps
     the document 'processing' — NOT 'ready' — until the index lands."""
-    from app.worker.tasks import process_document_ingestion
-
     import app.core.storage as storage_mod
+    from app.worker.tasks import process_document_ingestion
 
     monkeypatch.setattr(
         storage_mod,
@@ -216,10 +211,9 @@ def test_worker_marks_failed_on_embedding_validation_without_retry(
 ):
     """A dimension/count mismatch (EmbeddingValidationError) is a permanent
     config error: friendly message surfaced via str(exc), no retry (B6 §4.5.3)."""
+    import app.core.storage as storage_mod
     from app.rag.embedding_registry import EmbeddingValidationError
     from app.worker.tasks import process_document_ingestion
-
-    import app.core.storage as storage_mod
 
     monkeypatch.setattr(
         storage_mod,
@@ -255,9 +249,8 @@ def test_worker_does_not_leave_document_processing_for_non_retryable_crash(
     """An unclassified application error is not in Celery's autoretry tuple,
     so its persisted state must be terminal instead of claiming a retry that
     will never be scheduled."""
-    from app.worker.tasks import process_document_ingestion
-
     import app.core.storage as storage_mod
+    from app.worker.tasks import process_document_ingestion
 
     monkeypatch.setattr(
         storage_mod,

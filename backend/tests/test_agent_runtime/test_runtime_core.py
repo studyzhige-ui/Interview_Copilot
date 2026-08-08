@@ -14,7 +14,6 @@ Covers:
 
 import time
 
-
 # ── AgentRunState ────────────────────────────────────────────────────────
 
 
@@ -218,7 +217,7 @@ async def _stub_autocompact(self, messages, *, keep_last=2):
 
 def test_microcompact_clears_old_keeps_recent():
     """Microcompact keeps the last 5 compactable results, clears the rest."""
-    from app.agent_runtime.context_compactor import QueryLoopCompactor, _CLEARED_CONTENT
+    from app.agent_runtime.context_compactor import _CLEARED_CONTENT, QueryLoopCompactor
 
     pipeline = QueryLoopCompactor(profile=_profile())
     messages = [{"role": "system", "content": "sys"}]
@@ -374,7 +373,7 @@ def test_microcompact_noop_when_under_keep_limit():
 
 def test_microcompact_copy_on_write():
     """Microcompact does not modify the original messages list."""
-    from app.agent_runtime.context_compactor import QueryLoopCompactor, _CLEARED_CONTENT
+    from app.agent_runtime.context_compactor import _CLEARED_CONTENT, QueryLoopCompactor
 
     pipeline = QueryLoopCompactor(profile=_profile())
     messages = [{"role": "system", "content": "sys"}]
@@ -407,7 +406,7 @@ def test_microcompact_copy_on_write():
 
 def test_microcompact_skips_already_cleared():
     """Already-cleared results don't count toward the keep limit."""
-    from app.agent_runtime.context_compactor import QueryLoopCompactor, _CLEARED_CONTENT
+    from app.agent_runtime.context_compactor import _CLEARED_CONTENT, QueryLoopCompactor
 
     pipeline = QueryLoopCompactor(profile=_profile())
     messages = [{"role": "system", "content": "sys"}]
@@ -449,7 +448,7 @@ def test_compress_runs_microcompact_unconditionally(monkeypatch):
     """compress() runs microcompact even when total is under threshold."""
     import asyncio
 
-    from app.agent_runtime.context_compactor import QueryLoopCompactor, _CLEARED_CONTENT
+    from app.agent_runtime.context_compactor import _CLEARED_CONTENT, QueryLoopCompactor
 
     monkeypatch.setattr(QueryLoopCompactor, "autocompact", _stub_autocompact)
 
@@ -530,6 +529,7 @@ def test_autocompact_summarizes_body_keeps_head_and_tail(monkeypatch):
             return _StubResponse()
 
     import sys
+
     import app.services.chat.conversation_summarizer  # noqa: F401
 
     monkeypatch.setattr(

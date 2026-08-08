@@ -4,7 +4,7 @@ Uses the same local-SQLite idiom as tests/test_services/interview — the
 sweeper opens its own SessionLocal, so we monkeypatch the module's.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -81,7 +81,7 @@ def _record(db, *, source: str, status: str, age: timedelta):
         user_id=pk,
         source=source,
         status=status,
-        updated_at=datetime.utcnow() - age,
+        updated_at=datetime.now(UTC) - age,
     )
     db.add(rec)
     db.commit()
@@ -161,8 +161,8 @@ def test_stale_factless_pipeline_rows_are_redispatched(db_session, monkeypatch):
     from app.models.knowledge import KnowledgeDocument
     from app.models.resume import Resume
     from app.models.user import User
-    from app.worker.tasks import maintenance
-    from app.worker.tasks import ingestion, resume as resume_tasks
+    from app.worker.tasks import ingestion, maintenance
+    from app.worker.tasks import resume as resume_tasks
 
     user = User(username="pipeline-sweeper", hashed_password="x")
     db_session.add(user)
@@ -183,7 +183,7 @@ def test_stale_factless_pipeline_rows_are_redispatched(db_session, monkeypatch):
         title="Notes",
         source_kind="user_upload",
         status="processing",
-        updated_at=datetime.utcnow() - timedelta(hours=3),
+        updated_at=datetime.now(UTC) - timedelta(hours=3),
     )
     resume = Resume(
         id="rsm_pipeline_stale",
@@ -191,7 +191,7 @@ def test_stale_factless_pipeline_rows_are_redispatched(db_session, monkeypatch):
         title="CV",
         parse_status="pending",
         is_default=True,
-        updated_at=datetime.utcnow() - timedelta(hours=3),
+        updated_at=datetime.now(UTC) - timedelta(hours=3),
     )
     db_session.add_all([asset, document, resume])
     db_session.commit()
@@ -248,7 +248,7 @@ def _asset(db, *, status: str, age: timedelta):
         object_key=f"k/{status}/{int(age.total_seconds())}.pdf",
         storage_uri=f"s3://b/k/{status}/{int(age.total_seconds())}.pdf",
         upload_status=status,
-        updated_at=datetime.utcnow() - age,
+        updated_at=datetime.now(UTC) - age,
     )
     db.add(asset)
     db.commit()
@@ -336,7 +336,7 @@ def test_runtime_sweeper_removes_only_disposable_or_orphaned_files(
     for path in (temp_file, old_log, live_result, orphan_result):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("x", encoding="utf-8")
-    old_timestamp = (datetime.now() - timedelta(days=30)).timestamp()
+    old_timestamp = (datetime.now(UTC) - timedelta(days=30)).timestamp()
     os.utime(temp_file, (old_timestamp, old_timestamp))
     os.utime(old_log, (old_timestamp, old_timestamp))
 

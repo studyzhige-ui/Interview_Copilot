@@ -79,6 +79,35 @@ side effects. Cross-system changes use the typed outbox and are claimed by
 cleanup. PostgreSQL owns lifecycle state, object storage owns file bytes, and
 Milvus is a rebuildable retrieval index.
 
+## Storage value contracts
+
+Database values follow two explicit rules, enforced by models, migrations and
+architecture tests:
+
+- Every lifecycle timestamp is timezone-aware UTC. `UTCDateTime` accepts an
+  old naive value only at the compatibility boundary, interprets it as UTC,
+  and always returns an aware UTC value. Migration `0004` converts PostgreSQL
+  columns from `timestamp without time zone` to `timestamp with time zone`
+  without shifting historical instants.
+- Values the application reads and writes as dictionaries/lists use
+  `JSONValue`: JSONB on PostgreSQL and JSON on SQLite. Opaque snapshots that
+  are replaced or forwarded as a whole remain `Text`, including transcript
+  segments, analysis/model snapshots, resume snapshots and provider wire
+  configuration. They should move to JSONB only when a concrete containment,
+  validation or indexing use case exists.
+
+This is deliberately not a blanket “make every field JSONB” rule. Native
+structured state such as turn budgets, MCP arguments, Outbox payloads and
+ability evidence gets typed storage; large versioned artifacts retain their
+document boundary.
+
+Derived product scores have the same compatibility rule. Ability reports name
+their continuous evidence scale (`evidence-v2`), publish its 0–100 bands,
+aggregation and missing-data meaning, and accept an explicit scale version when
+recomputing a report. Legacy label-only rows remain unscored instead of being
+converted through invented anchor values. A future calibration adds a new
+registry entry; it must not mutate an existing version.
+
 The API uses synchronous SQLAlchemy. Synchronous routes are intentionally
 declared with normal `def` so FastAPI runs blocking database and storage work in
 its thread pool. `async def` is reserved for actual async I/O such as SSE or
@@ -110,8 +139,9 @@ enforced import rule. New code should follow these directions:
    Pages should not construct service URLs or duplicate edition policy.
 
 `backend/tests/test_architecture/` enforces these high-level directions and an
-acyclic internal import graph. Cross-domain calls should use an existing shared
-contract or a clearly owned service, not a second implementation.
+acyclic internal import graph. It also prevents models from reintroducing naive
+datetime columns. Cross-domain calls should use an existing shared contract or
+a clearly owned service, not a second implementation.
 
 ## Placement rules
 

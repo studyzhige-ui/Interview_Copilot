@@ -26,13 +26,13 @@ Public API:
 """
 
 from .base import ModelEntry, ProviderDefaults
-from .providers import PROVIDERS, get_provider_defaults, known_provider_ids
 from .pipeline import (
     load_catalog,
     load_catalog_for,
     refresh_catalog,
     refresh_catalog_for,
 )
+from .providers import PROVIDERS, get_provider_defaults, known_provider_ids
 
 __all__ = [
     "PROVIDERS",

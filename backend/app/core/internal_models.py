@@ -7,7 +7,6 @@ from app.core.config import settings
 from app.core.model_catalog import ModelProfile
 from app.services.model_sources.providers import get_provider_defaults
 
-
 INTERNAL_MODEL_ROLES: tuple[str, ...] = ("router", "worker")
 
 

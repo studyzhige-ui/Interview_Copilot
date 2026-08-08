@@ -7,7 +7,6 @@ to best-effort (log + proceed) rather than blocking a working index.
 from __future__ import annotations
 
 import pytest
-
 from app.core.config import settings
 from app.rag import milvus_hybrid
 from app.rag.embedding_registry import EmbeddingValidationError

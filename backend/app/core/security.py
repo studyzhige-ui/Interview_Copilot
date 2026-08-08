@@ -20,9 +20,9 @@ from pwdlib.hashers.bcrypt import BcryptHasher
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.token_blacklist import is_revoked
 from app.db.database import get_db
 from app.models.user import User
-from app.core.token_blacklist import is_revoked
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 

@@ -36,8 +36,9 @@ def _load_tokenizer() -> Any:
     if cfg.provider.kind != "local_huggingface":
         return None
     try:
-        from app.core.hf_runtime import resolve_local_snapshot
         from transformers import AutoTokenizer
+
+        from app.core.hf_runtime import resolve_local_snapshot
 
         path = resolve_local_snapshot(cfg.model)
         if not path:

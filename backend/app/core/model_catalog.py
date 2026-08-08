@@ -5,8 +5,8 @@ own ``/v1/models`` endpoint via per-vendor adapters in
 ``app.services.model_sources.vendors``. The pipeline writes
 per-provider entries to Redis (24h TTL) plus a no-TTL last-known-good
 snapshot. THIS module mirrors that cache into a small process-local
-map for the sync code paths (LlamaIndex Settings.llm, validators,
-etc.) so a chat request doesn't pay a Redis round-trip every call.
+map for synchronous validators and model resolution so a chat request does not
+pay a Redis round-trip on every call.
 
 What lives here:
   * ``ModelProfile``      — runtime row shape used by every chat /
@@ -39,6 +39,7 @@ from app.services.model_sources.pipeline import (  # internal helpers reused bel
     _deserialize_entries,
     _redis_key,
     _redis_key_lkg,
+    load_seed_catalog_sync,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,8 +69,7 @@ class ModelProfile:
 
 
 # ── Role defaults ───────────────────────────────────────────────────────
-# Used when (a) we have no user_id (startup, global LlamaIndex Settings.llm),
-# OR (b) a user hasn't set a role in ``user_model_selections``. Values
+# Used when a user has not selected a role in ``user_model_selections``. Values
 # are profile ids in ``"{provider}/{model}"`` form — must match what the
 # vendor's /v1/models endpoint actually returns. If the catalog is cold
 # / a default id isn't yet present, ``get_profile_for_role`` falls back
@@ -125,9 +125,8 @@ def _build_profile(entry: ModelEntry, defaults: ProviderDefaults) -> ModelProfil
 def _load_entries_from_sync_redis() -> dict[str, list[ModelEntry]]:
     """Sync read of the pipeline's cached entries.
 
-    We can't ``await`` from the sync ``get_profile`` path (called from
-    LlamaIndex Settings.llm initialisation, validators, etc.) so we use
-    the parallel sync Redis client. The async pipeline still owns the
+    We can't ``await`` from the sync ``get_profile`` path, so we use the
+    parallel sync Redis client. The async pipeline still owns the
     cache writes — this is a read-only sync mirror.
     """
     out: dict[str, list[ModelEntry]] = {}
@@ -144,23 +143,21 @@ def _load_entries_from_sync_redis() -> dict[str, list[ModelEntry]]:
             return out
         # All per-provider keys missing — try the LKG sentinel.
         raw_lkg = sync_redis_client.get(_redis_key_lkg())
-        if raw_lkg is None:
-            return out
-        try:
-            snapshot = json.loads(raw_lkg)
-        except (json.JSONDecodeError, TypeError):
-            return out
-        if not isinstance(snapshot, dict):
-            return out
-        for provider_id, serialized in snapshot.items():
-            if not isinstance(serialized, str):
-                continue
-            entries = _deserialize_entries(serialized)
-            if entries:
-                out[provider_id] = entries
+        if raw_lkg is not None:
+            try:
+                snapshot = json.loads(raw_lkg)
+            except (json.JSONDecodeError, TypeError):
+                snapshot = None
+            if isinstance(snapshot, dict):
+                for provider_id, serialized in snapshot.items():
+                    if not isinstance(serialized, str):
+                        continue
+                    entries = _deserialize_entries(serialized)
+                    if entries:
+                        out[provider_id] = entries
     except Exception as exc:  # noqa: BLE001 — Redis outage shouldn't crash chat
         logger.warning("model_catalog: sync catalog read failed: %s", exc)
-    return out
+    return out or load_seed_catalog_sync()
 
 
 def _rebuild_cache_locked(grouped: dict[str, list[ModelEntry]]) -> None:

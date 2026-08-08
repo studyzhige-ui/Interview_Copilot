@@ -137,7 +137,7 @@ backend/app/       FastAPI application, domain services, and agent runtime
 backend/tests/     Backend test suite
 frontend/src/      React application
 alembic/           Database migrations
-evaluation/        Optional quality runners, gates, and dataset templates
+evaluation/        Reproducible RAG/interview datasets, runners, and quality gates
 docs/              Architecture, deployment, and user documentation
 scripts/           Setup, launch, maintenance, and model utilities
 pyproject.toml     Python dependencies, package metadata, and tool configuration

@@ -9,19 +9,19 @@ at *set*-time (magic-byte check on the object head) or *read*-time
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.services.uploads.file_asset_service import UPLOAD_STATUS_DELETED
 from app.core.storage import (
     delete_local_uri,
     delete_s3_object,
     generate_presigned_get_url,
     is_local_uri,
 )
+from app.db.types import utc_now
 from app.models.user import User
+from app.services.uploads.file_asset_service import UPLOAD_STATUS_DELETED
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +166,7 @@ def swap_avatar(db: Session, user: User, asset) -> None:
         )
         if prev is not None:
             prev.upload_status = UPLOAD_STATUS_DELETED
-            prev.deleted_at = datetime.utcnow()
+            prev.deleted_at = utc_now()
             db.add(prev)
             db.commit()
         delete_previous_avatar(previous_uri)

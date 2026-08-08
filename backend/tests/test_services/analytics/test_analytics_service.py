@@ -73,6 +73,9 @@ async def test_report_aggregates_observed_axes_without_model_call():
     assert axes["知识与原理"]["v"] is None
     assert result["totals"]["evaluated_axes"] == 2
     assert result["totals"]["ability_topics"] == 3
+    assert result["score_scale"]["version"] == "evidence-v2"
+    assert result["score_scale"]["range"] == [0, 100]
+    assert result["score_scale"]["missing"] == "unknown_not_zero"
 
 
 @pytest.mark.asyncio
@@ -98,3 +101,52 @@ async def test_missing_evidence_is_unknown_not_zero():
     unknown = [axis for axis in result["axes"] if axis["k"] != "知识与原理"]
     assert all(axis["v"] is None and axis["confidence"] == "none" for axis in unknown)
     assert result["overall"] == 75.0
+
+
+@pytest.mark.asyncio
+async def test_unknown_score_scale_is_rejected_instead_of_silently_reinterpreted():
+    records = [
+        {
+            "topic": "Redis",
+            "skill_type": "knowledge_topic",
+            "mastery_level": "stable",
+            "summary": "有证据",
+            "evidence_count": 1,
+            "time": "2026-01-01",
+        }
+    ]
+    with patch(f"{_SVC}._extract_ability_records", return_value=records):
+        from app.services.analytics.diagnostics_report_service import (
+            generate_comprehensive_report,
+        )
+
+        with pytest.raises(ValueError, match="unknown ability score scale"):
+            await generate_comprehensive_report(
+                user_id="u1", scale_version="evidence-v3"
+            )
+
+
+@pytest.mark.asyncio
+async def test_legacy_label_without_numeric_evidence_is_not_given_a_fake_score():
+    records = [
+        {
+            "topic": "旧状态",
+            "skill_type": "knowledge_topic",
+            "mastery_level": "strong",
+            "summary": "只有历史定性标签",
+            "score": None,
+            "score_version": None,
+            "evidence_count": 0,
+            "time": "2026-01-01",
+        }
+    ]
+    with patch(f"{_SVC}._extract_ability_records", return_value=records):
+        from app.services.analytics.diagnostics_report_service import (
+            generate_comprehensive_report,
+        )
+
+        result = await generate_comprehensive_report(user_id="u1")
+
+    assert result["overall"] is None
+    assert result["totals"]["scored_topics"] == 0
+    assert all(axis["v"] is None for axis in result["axes"])

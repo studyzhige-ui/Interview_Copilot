@@ -20,8 +20,6 @@ import logging
 from typing import Any, Callable
 
 import tiktoken
-
-
 from llama_index.core.llms import LLM
 
 from app.core.llm_client_factory import get_internal_llm, get_llm_for_role

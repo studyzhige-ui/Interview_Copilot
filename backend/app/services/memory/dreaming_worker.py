@@ -62,18 +62,22 @@ from sqlalchemy.orm import Session
 
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
-from app.models.chat import ConversationMessage, Conversation
+from app.db.types import utc_now
+from app.models.chat import Conversation, ConversationMessage
 from app.models.interview_record import InterviewRecord
 from app.models.user import User
-from app.services.memory import memory_ability_state_service, memory_document_service
+from app.prompts.memory import DREAMING_PROMPT
+from app.services.memory import (
+    _metrics,
+    memory_ability_state_service,
+    memory_document_service,
+)
 from app.services.memory._dispatch import dispatch_memory_patches
-from app.services.memory import _metrics
 from app.services.memory._extraction_common import (
     format_ability_index,
     parse_json_patches_ex,
 )
 from app.services.memory._user_memory_lock import LockNotAcquired, user_memory_lock_sync
-from app.prompts.memory import DREAMING_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +133,7 @@ def select_dreamable_users(*, limit: int = 200) -> list[str]:
     Returns user_ids ordered by least-recently-dreamed first so a long
     backlog drains evenly across nights.
     """
-    now = datetime.utcnow()
+    now = utc_now()
     time_threshold = now - timedelta(hours=USER_MIN_HOURS_SINCE_LAST_DREAM)
 
     db: Session = SessionLocal()
@@ -220,7 +224,7 @@ def select_records_for_user(
         "exclude currently-chatted record" requirement at 03:30, which
         in practice is always true unless the user is awake at night).
     """
-    now = datetime.utcnow()
+    now = utc_now()
     quiet_threshold = now - timedelta(hours=RECORD_QUIET_HOURS)
 
     db: Session = SessionLocal()
@@ -277,7 +281,7 @@ def bump_user_last_dreamed_at(
         user = db.query(User).filter(User.username == user_id).first()
         if user is None:
             return
-        user.last_dreamed_at = at if at is not None else datetime.utcnow()
+        user.last_dreamed_at = at if at is not None else utc_now()
         db.commit()
     finally:
         db.close()
@@ -389,7 +393,7 @@ def _dream_for_record_locked(
             if not messages:
                 # Nothing to dream — still bump cursor so we don't keep
                 # rescanning a quiet record.
-                record.last_dreamed_at = datetime.utcnow()
+                record.last_dreamed_at = utc_now()
                 db.commit()
                 summary["skipped_reason"] = "no debrief messages"
                 return summary
@@ -410,8 +414,8 @@ def _dream_for_record_locked(
             try:
                 # NB: this is a sync call from a sync worker — wrap the
                 # async LLM in run_async via the worker helper.
-                from app.core.llm_client_factory import get_internal_llm
                 from app.core.async_runtime import run_async
+                from app.core.llm_client_factory import get_internal_llm
 
                 response = run_async(
                     get_internal_llm("worker").acomplete(
@@ -456,7 +460,7 @@ def _dream_for_record_locked(
 
             # Bump cursor. Always — even when patches=0, so we don't
             # repeatedly process a quiet record.
-            record.last_dreamed_at = datetime.utcnow()
+            record.last_dreamed_at = utc_now()
             db.commit()
         except Exception as exc:  # noqa: BLE001
             db.rollback()

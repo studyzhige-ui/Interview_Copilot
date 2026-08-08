@@ -28,11 +28,11 @@ from sqlalchemy.pool import StaticPool
 
 @pytest.fixture
 def engine_and_session():
-    from app.db.database import Base
     import app.models.memory_ability_state  # noqa: F401
     import app.models.memory_audit_logs  # noqa: F401
     import app.models.memory_document  # noqa: F401
     import app.models.user  # noqa: F401
+    from app.db.database import Base
 
     engine = create_engine(
         "sqlite://",
@@ -269,6 +269,7 @@ def test_attach_active_bodies_yields_event_loop_via_to_thread(monkeypatch):
     """
     import asyncio
     import time
+
     from app.services.memory.v3_context_loader import (
         V3MemoryContext,
         attach_active_bodies,

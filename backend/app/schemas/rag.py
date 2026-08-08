@@ -14,11 +14,7 @@ from pydantic import BaseModel, Field
 
 
 class SourceKindEnum(str, Enum):
-    """KnowledgeDocument system source kind (RFC §5.1). ``personal_memory`` is
-    NOT a knowledge-document kind — its write path was removed in MEMORY-V3
-    (long-term user state lives in ``memory_ability_states`` now) and any
-    preserved ``document_chunks`` were dropped in migration 0039. It is excluded
-    from knowledge read paths and is intentionally not a member here.
+    """Knowledge-document source kinds exposed by the API.
 
     - ``user_upload``: a user-uploaded file (题库/官方文档/面经/笔记…).
     - ``improved_qa``: a QA improved-answer the user saved from an interview.

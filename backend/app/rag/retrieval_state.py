@@ -22,6 +22,7 @@ EMPTY_NO_CANDIDATES = "no_candidates"
 EMPTY_ALL_BELOW_THRESHOLD = "all_below_threshold"
 EMPTY_ALL_FILTERED_LIVE_CHECK = "all_filtered_live_check"
 EMPTY_MILVUS_UNAVAILABLE = "milvus_unavailable"
+EMPTY_RERANKER_UNAVAILABLE = "reranker_unavailable"
 EMPTY_PRINCIPAL_UNRESOLVED = "principal_unresolved"
 
 EMPTY_REASONS = frozenset(
@@ -31,13 +32,13 @@ EMPTY_REASONS = frozenset(
         EMPTY_ALL_BELOW_THRESHOLD,
         EMPTY_ALL_FILTERED_LIVE_CHECK,
         EMPTY_MILVUS_UNAVAILABLE,
+        EMPTY_RERANKER_UNAVAILABLE,
         EMPTY_PRINCIPAL_UNRESOLVED,
     }
 )
 
-# ── score_source 固定枚举（sources/trace 中只允许这两个值）─────────────────
+# ── score_source 固定枚举 ─────────────────────────────────────────────────
 SCORE_SOURCE_RERANKER = "reranker"
-SCORE_SOURCE_RETRIEVER_FALLBACK = "retriever_fallback"
 
 
 @dataclass
@@ -50,8 +51,7 @@ class RetrievalState:
     # Set by the engine/facade from the QueryPlan — the retriever itself
     # doesn't know whether the planner LLM failed.
     planner_failed: bool = False
-    # Remote reranker transport failure → unranked RRF top-N with
-    # score_source=retriever_fallback. Never mixed with reranker scores.
+    # True when an unavailable reranker forced a fail-closed empty result.
     fallback_used: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -76,6 +76,9 @@ class RetrievalResult:
 
     chunks: list[dict[str, Any]] = field(default_factory=list)
     state: RetrievalState = field(default_factory=RetrievalState)
+    # Populated only when an offline evaluator explicitly requests stage
+    # diagnostics; live requests keep this empty.
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
     @property
     def retrieval_hit(self) -> bool:
@@ -88,10 +91,10 @@ __all__ = [
     "EMPTY_ALL_BELOW_THRESHOLD",
     "EMPTY_ALL_FILTERED_LIVE_CHECK",
     "EMPTY_MILVUS_UNAVAILABLE",
+    "EMPTY_RERANKER_UNAVAILABLE",
     "EMPTY_PRINCIPAL_UNRESOLVED",
     "EMPTY_REASONS",
     "SCORE_SOURCE_RERANKER",
-    "SCORE_SOURCE_RETRIEVER_FALLBACK",
     "RetrievalState",
     "RetrievalResult",
 ]

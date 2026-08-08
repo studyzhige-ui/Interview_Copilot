@@ -23,7 +23,6 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-
 # ── Stub heavy ML modules so importing app.* never blows up at test time ──
 _MAYBE_MISSING = [
     "whisperx",
@@ -60,12 +59,11 @@ def test_engine():
         poolclass=StaticPool,
     )
 
-    from app.db.database import Base
-
     # app.models.__init__ imports every model module, so this single import
     # registers all tables on Base.metadata. New models only need to be added
     # to app/models/__init__.py (alembic/env.py relies on the same package).
     import app.models  # noqa: F401
+    from app.db.database import Base
 
     Base.metadata.create_all(bind=engine)
     yield engine

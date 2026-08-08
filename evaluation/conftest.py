@@ -1,95 +1,80 @@
-"""Pytest fixtures for the evaluation suite.
-
-The actual evaluation runs are session-scoped — running L1/L2/L3
-through the production pipeline is expensive (Milvus + reranker + LLM
-calls), so each test file pulls from a precomputed metric dict instead
-of re-traversing the dataset per assertion. Yields a 10-20× speed-up
-on the full suite.
-"""
+"""Read-only quality gates for reports produced by the official CLI."""
 
 from __future__ import annotations
 
-import asyncio
-import sys
+import json
+import hashlib
+import os
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-# Make ``backend/app/...`` importable for the production code paths the
-# runners call into.
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-BACKEND_ROOT = PROJECT_ROOT / "backend"
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
 
-from evaluation.runners import (  # noqa: E402
-    filter_by_layer,
-    load_dataset,
-    prepare_runtime,
-    run_generation,
-    run_retrieval,
-    run_trajectory,
-)
+@pytest.fixture(scope="session")
+def evaluation_report() -> dict[str, Any]:
+    configured = os.getenv("RAG_EVAL_REPORT", "").strip()
+    if not configured:
+        pytest.skip(
+            "Set RAG_EVAL_REPORT to an eval_runner report directory or report.json."
+        )
+    path = Path(configured).resolve()
+    if path.is_dir():
+        path = path / "report.json"
+    if not path.is_file():
+        pytest.fail(f"RAG evaluation report does not exist: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    run = payload.get("run") or {}
+    expected_dataset_sha = hashlib.sha256(
+        (Path(__file__).with_name("rag_dataset.jsonl")).read_bytes()
+    ).hexdigest()
+    expected_manifest_sha = hashlib.sha256(
+        (Path(__file__).with_name("corpus_manifest.json")).read_bytes()
+    ).hexdigest()
+    if run.get("dataset_sha256") != expected_dataset_sha:
+        pytest.fail("Selected report belongs to a different RAG dataset")
+    if run.get("corpus_manifest_sha256") != expected_manifest_sha:
+        pytest.fail("Selected report belongs to a different corpus manifest")
+    from evaluation.rag_release import evaluation_code_sha256
 
-EVAL_USER_A = "eval_user_a"
-EVAL_USER_B = "eval_user_b"
+    if run.get("evaluation_code_sha256") != evaluation_code_sha256():
+        pytest.fail("Selected report belongs to a different evaluation code contract")
+    if payload.get("generation") is not None:
+        from evaluation.ragas_runner import _generation_contract_sha256
+
+        if run.get("generation_contract_sha256") != _generation_contract_sha256():
+            pytest.fail("Selected report belongs to a different generation contract")
+        if not run.get("ragas_evaluation_contract"):
+            pytest.fail("Formal report does not identify its RAGAS contract")
+        if not run.get("release_run_fingerprint"):
+            pytest.fail("Formal report is not bound to a CUDA release campaign")
+    if payload.get("retrieval") is not None or payload.get("generation") is not None:
+        from evaluation.index_provenance import validate_evaluation_index
+
+        current_index = validate_evaluation_index()
+        reported_index = run.get("index_provenance") or {}
+        if reported_index.get("fingerprint") != current_index.get("fingerprint"):
+            pytest.fail("Selected report belongs to a different evaluation index")
+    return payload
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _bootstrap_runtime() -> None:
-    """Set HF env, init embeddings + LLM Settings, warm the reranker."""
-    prepare_runtime()
+def _layer(report: dict[str, Any], name: str) -> dict[str, Any]:
+    payload = report.get(name)
+    if not isinstance(payload, dict):
+        pytest.skip(f"The selected report has no {name} layer.")
+    return payload
 
 
 @pytest.fixture(scope="session")
-def golden_dataset() -> list[dict[str, Any]]:
-    rows = load_dataset()
-    if not rows:
-        pytest.skip("Golden dataset is empty.")
-    return rows
+def retrieval_metrics(evaluation_report: dict[str, Any]) -> dict[str, Any]:
+    return _layer(evaluation_report, "retrieval")
 
 
 @pytest.fixture(scope="session")
-def retrieval_dataset(golden_dataset: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows = filter_by_layer(golden_dataset, "retrieval")
-    if not rows:
-        pytest.skip("No retrieval-layer rows.")
-    return rows
+def generation_metrics(evaluation_report: dict[str, Any]) -> dict[str, Any]:
+    return _layer(evaluation_report, "generation")
 
 
 @pytest.fixture(scope="session")
-def generation_dataset(golden_dataset: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows = filter_by_layer(golden_dataset, "generation")
-    if not rows:
-        pytest.skip("No generation-layer rows.")
-    return rows
-
-
-@pytest.fixture(scope="session")
-def trajectory_dataset(golden_dataset: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows = filter_by_layer(golden_dataset, "trajectory")
-    if not rows:
-        pytest.skip("No trajectory-layer rows.")
-    return rows
-
-
-# ── One-shot runner fixtures ───────────────────────────────────────────
-# Each layer's runner is expensive (one Milvus call per row, plus LLM
-# calls for L2/L3). Cache the result for the whole session so every
-# assertion file in that layer reads the same metric dict.
-
-
-@pytest.fixture(scope="session")
-def retrieval_metrics(retrieval_dataset: list[dict[str, Any]]) -> dict[str, Any]:
-    return asyncio.run(run_retrieval(retrieval_dataset))
-
-
-@pytest.fixture(scope="session")
-def generation_metrics(generation_dataset: list[dict[str, Any]]) -> dict[str, Any]:
-    return asyncio.run(run_generation(generation_dataset))
-
-
-@pytest.fixture(scope="session")
-def trajectory_metrics(trajectory_dataset: list[dict[str, Any]]) -> dict[str, Any]:
-    return asyncio.run(run_trajectory(trajectory_dataset))
+def trajectory_metrics(evaluation_report: dict[str, Any]) -> dict[str, Any]:
+    return _layer(evaluation_report, "trajectory")

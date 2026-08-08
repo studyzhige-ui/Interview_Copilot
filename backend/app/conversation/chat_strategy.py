@@ -14,6 +14,7 @@ and stream one LLM call."
 from __future__ import annotations
 
 import logging
+import re
 from typing import AsyncGenerator
 
 from app.conversation.events import HarnessEvent
@@ -21,6 +22,7 @@ from app.conversation.strategy import StrategyContext, StrategyResult
 from app.core.llm_client_factory import get_llm_for_role
 from app.core.tokens import token_count as _count_tokens
 from app.prompts.chat import DIRECT_SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
+from app.rag.evidence import check_evidence
 from app.services.chat.citation import validate_citations
 from app.services.chat.context_assembly_pipeline import (
     AssembledContext,
@@ -29,6 +31,12 @@ from app.services.chat.context_assembly_pipeline import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _insufficient_evidence_message(query: str) -> str:
+    if re.search(r"[\u4e00-\u9fff]", query):
+        return "现有资料不足，无法可靠回答这个问题。"
+    return "The available sources do not contain enough evidence to answer reliably."
 
 
 class ChatPipelineStrategy:
@@ -52,6 +60,29 @@ class ChatPipelineStrategy:
         # for the session-meta read + debrief reference fetch, and
         # rebuilding would duplicate both round-trips.
         assembled: AssembledContext = ctx.assembled
+
+        evidence = (
+            check_evidence(
+                ctx.search_intents,
+                (
+                    f"{chunk.get('document_title') or ''}\n{chunk.get('text') or ''}"
+                    for chunk in ctx.knowledge_chunks
+                ),
+            )
+            if ctx.needs_knowledge_retrieval and ctx.retrieval_hit
+            else None
+        )
+        if ctx.needs_knowledge_retrieval and (
+            not ctx.retrieval_hit or (evidence is not None and not evidence.supported)
+        ):
+            answer = _insufficient_evidence_message(ctx.user_message)
+            yield HarnessEvent.status("现有资料不足", step=0, elapsed_ms=0)
+            yield HarnessEvent.text_delta(answer, step=0, elapsed_ms=0)
+            result.final_answer = answer
+            result.assistant_blocks = [{"type": "text", "text": answer}]
+            result.steps_used = 0
+            result.completion_tokens = _count_tokens(answer)
+            return
 
         prompt = self.renderer.render_answer_prompt(
             assembled,

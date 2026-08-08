@@ -2,10 +2,10 @@
 
 import logging
 
+from app.core.async_runtime import run_async
 from app.core.error_messages import humanize_error
 from app.db.database import SessionLocal
 from app.task_queue.celery_app import celery_app
-from app.core.async_runtime import run_async
 
 logger = logging.getLogger(__name__)
 

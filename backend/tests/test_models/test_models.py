@@ -20,7 +20,6 @@ import pytest
 from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
-
 # ─────────────────────────────────────────────────────────────────────
 # Schema-shape assertions
 # ─────────────────────────────────────────────────────────────────────
@@ -332,9 +331,8 @@ def test_memory_document_defaults_and_unique_per_doc_type(db_session):
     """v3 memory: ``memory_documents`` has one row per (user_id, doc_type)
     with denormalised ``one_liner``; the unique constraint blocks a second
     row of the same doc_type for the same user."""
-    from sqlalchemy.exc import IntegrityError
-
     from app.models.memory_document import MemoryDocument
+    from sqlalchemy.exc import IntegrityError
 
     uid = _make_user(db_session)
 
@@ -364,11 +362,10 @@ def test_memory_ability_state_defaults_and_active_uniqueness(db_session):
     enforces ONE ACTIVE row per (user, topic, skill_type) via the partial
     unique index (archived rows are excluded, so re-adding after archive is
     allowed)."""
-    from datetime import datetime
-
-    from sqlalchemy.exc import IntegrityError
+    from datetime import UTC, datetime
 
     from app.models.memory_ability_state import MemoryAbilityState
+    from sqlalchemy.exc import IntegrityError
 
     uid = _make_user(db_session)
 
@@ -399,7 +396,7 @@ def test_memory_ability_state_defaults_and_active_uniqueness(db_session):
     live = MemoryAbilityState(user_id=uid2, topic="TCP", skill_type="knowledge_topic")
     db_session.add(live)
     db_session.flush()
-    live.archived_at = datetime.utcnow()
+    live.archived_at = datetime.now(UTC)
     db_session.flush()
     db_session.add(
         MemoryAbilityState(
@@ -433,9 +430,8 @@ def test_memory_audit_entry_round_trip_and_unique_idem_key(db_session):
     """``memory_audit_logs`` is append-only; the ``idempotency_key`` index is
     unique so a retried job can't double-write an audit row (NULL keys stay
     distinct)."""
-    from sqlalchemy.exc import IntegrityError
-
     from app.models.memory_audit_logs import MemoryAuditEntry
+    from sqlalchemy.exc import IntegrityError
 
     uid = _make_user(db_session)
 

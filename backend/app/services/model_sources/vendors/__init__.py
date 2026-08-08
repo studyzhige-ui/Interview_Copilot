@@ -10,20 +10,19 @@ Adding a new vendor = drop a new file in this package + import it
 into ``ALL_SPECS`` below. No edit to the pipeline.
 """
 
+from .anthropic import SPEC as ANTHROPIC_SPEC
 from .base import VendorAdapterSpec, fetch_one_vendor
+from .deepseek import SPEC as DEEPSEEK_SPEC
+from .gemini import SPEC as GEMINI_SPEC
+from .moonshot import SPEC as MOONSHOT_SPEC
+from .nvidia_nim import SPEC as NVIDIA_SPEC
 
 # Default-enabled (the 9 vendors we ship support for, all with
 # /v1/models confirmed working as of P7-A live verification).
 from .openai import SPEC as OPENAI_SPEC
-from .anthropic import SPEC as ANTHROPIC_SPEC
-from .gemini import SPEC as GEMINI_SPEC
-from .deepseek import SPEC as DEEPSEEK_SPEC
-from .nvidia_nim import SPEC as NVIDIA_SPEC
-from .xiaomi import SPEC as XIAOMI_SPEC
-from .moonshot import SPEC as MOONSHOT_SPEC
-from .zai import SPEC as ZAI_SPEC
 from .qwen import SPEC as QWEN_SPEC
-
+from .xiaomi import SPEC as XIAOMI_SPEC
+from .zai import SPEC as ZAI_SPEC
 
 ALL_SPECS: list[VendorAdapterSpec] = [
     OPENAI_SPEC,

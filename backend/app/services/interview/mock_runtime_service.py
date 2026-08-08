@@ -9,12 +9,13 @@ never drifts (e.g. two ``in_progress`` rows for one record).
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.core.user_identity import resolve_user_pk
+from app.db.types import utc_now
 from app.models.mock_interview_runtime import MockInterviewRuntime
 
 # The single live status; every other status is terminal.
@@ -109,7 +110,7 @@ def claim_question(
     the same short transaction as the candidate answer. A lease older than ten
     minutes is reclaimable after an API hard kill.
     """
-    now = datetime.utcnow()
+    now = utc_now()
     stale_before = now - timedelta(seconds=ANSWER_CLAIM_TTL_SECONDS)
     updated = (
         db.query(MockInterviewRuntime)
@@ -189,7 +190,7 @@ def advance_runtime(
         runtime.current_question_text = current_question_text
     if current_question_message_id is not None:
         runtime.current_question_message_id = current_question_message_id
-    runtime.last_activity_at = datetime.utcnow()
+    runtime.last_activity_at = utc_now()
     db.add(runtime)
     if commit:
         db.commit()
@@ -212,8 +213,8 @@ def set_status(
     """
     runtime.status = status
     if status != ACTIVE_STATUS and runtime.ended_at is None:
-        runtime.ended_at = datetime.utcnow()
-    runtime.updated_at = datetime.utcnow()
+        runtime.ended_at = utc_now()
+    runtime.updated_at = utc_now()
     db.add(runtime)
     if commit:
         db.commit()

@@ -1,37 +1,4 @@
-"""Unified query planner — one LLM call per chat turn.
-
-Used by :class:`app.conversation.engine.ConversationEngine` during the
-``_prepare`` phase. One fast-LLM call decides:
-
-  * session state + recent turns                → pronoun resolution
-  * learning_strategy one-liner                 → whether to load its full body
-  * global_memory_on flag                       → privacy gate
-  * current user message                        → the question to plan around
-
-Prompt assembly follows "large models attend more to the end of the context":
-system prompt → available memory files → session state → recent turns → current
-user message (last).
-
-Output (:class:`QueryPlan`):
-
-  needs_knowledge_retrieval (bool)
-      Whether to consult the RAG corpus this turn.
-
-  dense_query / sparse_query (str)
-      Rewritten queries for vector retrieval / BM25. Defaults to the original
-      user message when the LLM omits them and RAG is on.
-
-  load_strategy (bool)
-      Whether to pull the full learning_strategy doc body. Its one-liner is
-      always loaded by the universal pass; this asks for the detail. (The
-      user_profile body and the active ability states are always loaded by the
-      universal pass — they're cheap — so the planner makes no decision about
-      them.)
-
-  planner_failed (bool)
-      Runtime flag set ONLY by the failure fallback (planner crashed →
-      original-question retrieval). Never part of the LLM's JSON schema.
-"""
+"""One-call conversation planner with a single RAG intent contract."""
 
 from __future__ import annotations
 
@@ -39,41 +6,20 @@ import json
 import logging
 import re
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.core.config import settings
 from app.core.llm_client_factory import get_internal_llm
 from app.prompts.chat import build_query_planner_system_prompt
+from app.rag.contracts import SearchIntent
+from app.rag.policy import current_rag_policy
 
 logger = logging.getLogger(__name__)
 
 
-class SubQuery(BaseModel):
-    """One leg of a multi-intent question (retrieval plan §2.1). A flat list —
-    no nesting. dense for vector retrieval, sparse for BM25."""
-
-    dense_query: str = ""
-    sparse_query: str = ""
-
-
 class QueryPlan(BaseModel):
-    """Output of the unified planner."""
-
-    # ── RAG routing ───────────────────────────────────────────────
     needs_knowledge_retrieval: bool = False
-    dense_query: str = ""
-    sparse_query: str = ""
-    # Only for clearly multi-intent questions ("explain A and B, compare C").
-    # Empty for normal single questions. Capped at MAX_SUB_QUERIES.
-    sub_queries: list[SubQuery] = []
-
-    # ── Memory body selection ─────────────────────────────────────
+    intents: list[SearchIntent] = Field(default_factory=list)
     load_strategy: bool = False
-
-    # ── Runtime flags (NEVER part of the LLM's output schema) ─────
-    # Set by the failure fallback only — an LLM-emitted value would be
-    # noise (retrieval plan §2.1). The engine forwards it into the
-    # turn's RetrievalState.
     planner_failed: bool = False
 
 
@@ -89,39 +35,38 @@ def _extract_json_payload(raw_text: str) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def _keyword_query(text: str) -> str:
-    """ASCII + CJK terms, deduped, up to 12 — feeds BM25 fallback."""
+def _keyword_terms(text: str) -> list[str]:
     terms = re.findall(r"[a-zA-Z0-9_+#.-]+|[一-鿿]{2,}", text)
-    return " ".join(dict.fromkeys(terms[:12]))
+    return list(dict.fromkeys(terms[:12]))
 
 
 def _format_recent_turns(recent_turns: list[dict]) -> str:
-    """Render ``[{role, content, ...}]`` as ``User: ...\\nAgent: ...``."""
     if not recent_turns:
         return "(no prior turns)"
     return "\n".join(
-        f"{m.get('role', '?')}: {m.get('content', '')}" for m in recent_turns
+        f"{message.get('role', '?')}: {message.get('content', '')}"
+        for message in recent_turns
     )
 
 
-def fallback_query_plan(user_message: str) -> QueryPlan:
-    """Fallback when the planner LLM fails: retrieve with the ORIGINAL
-    question instead of giving up (retrieval plan §2.1) — the candidates
-    still pass the reranker + threshold, so a useless retrieval costs
-    latency, while skipping it loses answers. Memory body loads stay off
-    (can't be decided without the planner).
+def _compact(value: str) -> str:
+    return re.sub(r"[^a-z0-9一-鿿]", "", value.casefold())
 
-    ``planner_failed=True`` is stamped so the engine can mark the turn's
-    retrieval state and fallback_rate stays observable — a persistently
-    failing planner makes EVERY message (incl. casual chat) pay an
-    embedding + Milvus + rerank round-trip, which must show up in trace,
-    never silently.
-    """
+
+def _validated_required_terms(intent: SearchIntent, source_text: str) -> list[str]:
+    source = _compact(source_text)
+    return [term for term in intent.required_terms if _compact(term) in source]
+
+
+def fallback_query_plan(user_message: str) -> QueryPlan:
     return QueryPlan(
         needs_knowledge_retrieval=True,
-        dense_query=user_message,
-        sparse_query=_keyword_query(user_message),
-        load_strategy=False,
+        intents=[
+            SearchIntent(
+                query=user_message,
+                keywords=_keyword_terms(user_message),
+            )
+        ],
         planner_failed=True,
     )
 
@@ -133,82 +78,58 @@ async def plan_query(
     learning_strategy_description: str = "",
     global_memory_on: bool = True,
 ) -> QueryPlan:
-    """One LLM call per turn: rewrite query for RAG + decide whether to load the
-    full learning_strategy body.
-
-    ``learning_strategy_description`` comes from
-    ``v3_context_loader.load_universal``. When ``global_memory_on=False``
-    (privacy mode) the memory section is omitted and any memory load is forced
-    off.
-    """
-    if global_memory_on:
-        memory_files_slot = (
-            "[Available Memory Files]\n"
-            "Learning-strategy description: "
-            f"{learning_strategy_description or '(empty)'}"
-        )
-    else:
-        memory_files_slot = ""  # privacy mode: omit the whole slot
-
+    memory_slot = (
+        "[Available Memory Files]\nLearning-strategy description: "
+        f"{learning_strategy_description or '(empty)'}"
+        if global_memory_on
+        else ""
+    )
+    policy = current_rag_policy().retrieval
     system_prompt = build_query_planner_system_prompt(
         global_memory_on=global_memory_on,
-        max_sub_queries=settings.MAX_SUB_QUERIES,
+        max_intents=policy.max_intents,
     )
-
-    parts: list[str] = [system_prompt]
-    if memory_files_slot:
-        parts.append(memory_files_slot)
-    parts.append(f"[Recent Turns]\n{_format_recent_turns(recent_turns)}")
-    # The actual user message appears EXACTLY ONCE, last.
+    parts = [system_prompt]
+    if memory_slot:
+        parts.append(memory_slot)
+    recent_text = _format_recent_turns(recent_turns)
+    parts.append(f"[Recent Turns]\n{recent_text}")
     parts.append(f"[Current Query]\n{user_message}")
-
-    prompt = "\n\n".join(parts)
 
     try:
         response = await get_internal_llm("router").acomplete(
-            prompt,
+            "\n\n".join(parts),
             response_format={"type": "json_object"},
         )
-        payload = _extract_json_payload(str(response.text))
-        plan = QueryPlan(**payload)
-        # planner_failed is a runtime flag owned by the failure fallback — a
-        # successful parse must never let the model set it.
+        plan = QueryPlan(**_extract_json_payload(str(response.text)))
         plan.planner_failed = False
-
         if plan.needs_knowledge_retrieval:
-            if not plan.dense_query.strip():
-                plan.dense_query = user_message
-            if not plan.sparse_query.strip():
-                plan.sparse_query = _keyword_query(user_message)
-            # Drop empty sub-queries and enforce the defensive hard cap
-            # (the engine/retriever cap too, but keep the plan itself clean).
-            valid_subs = [
-                sq
-                for sq in plan.sub_queries
-                if sq.dense_query.strip() or sq.sparse_query.strip()
-            ]
-            plan.sub_queries = valid_subs[: settings.MAX_SUB_QUERIES]
+            source_text = f"{recent_text}\n{user_message}"
+            intents: list[SearchIntent] = []
+            for intent in plan.intents:
+                if not intent.query:
+                    continue
+                if intent.alternate_query == intent.query:
+                    intent.alternate_query = ""
+                if not intent.keywords:
+                    intent.keywords = _keyword_terms(intent.query)
+                intent.required_terms = _validated_required_terms(intent, source_text)
+                intents.append(intent)
+            plan.intents = intents[: policy.max_intents]
+            if not plan.intents:
+                plan.intents = fallback_query_plan(user_message).intents
         else:
-            plan.dense_query = ""
-            plan.sparse_query = ""
-            plan.sub_queries = []
-
-        # Recall-off contract guard.
+            plan.intents = []
         if not global_memory_on:
             plan.load_strategy = False
         return plan
     except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Query planner failed, falling back to original-question "
-            "retrieval (planner_failed=True): %s",
-            exc,
-        )
+        logger.warning("Query planner failed; using original query: %s", exc)
         return fallback_query_plan(user_message)
 
 
 __all__ = [
     "QueryPlan",
-    "SubQuery",
     "fallback_query_plan",
     "plan_query",
 ]

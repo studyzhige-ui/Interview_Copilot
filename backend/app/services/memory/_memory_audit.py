@@ -55,7 +55,7 @@ def record(
     memory_ability_state_id: str | None = None,
     source_conversation_id: str | None = None,
     source_interview_record_id: str | None = None,
-    source_message_range_json: str | None = None,
+    source_message_range_json: dict[str, int] | None = None,
     idempotency_key: str | None = None,
     before_body: str = "",
     after_body: str = "",

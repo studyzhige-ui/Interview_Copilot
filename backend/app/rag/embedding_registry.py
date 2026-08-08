@@ -172,20 +172,18 @@ def build_embedding() -> Any:
     p = cfg.provider
 
     if p.kind == "local_huggingface":
+        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+
         from app.core.hf_runtime import (
             format_missing_model_error,
             prepare_hf_runtime,
             resolve_local_snapshot,
         )
-        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-        import torch
 
         hf_cache_dir = prepare_hf_runtime()
-        device = (
-            settings.EMBEDDING_DEVICE
-            if settings.EMBEDDING_DEVICE != "auto"
-            else ("cuda" if torch.cuda.is_available() else "cpu")
-        )
+        from app.rag.policy import resolve_rag_device
+
+        device = resolve_rag_device()
         model_name = resolve_local_snapshot(cfg.model)
         if model_name is None:
             raise RuntimeError(

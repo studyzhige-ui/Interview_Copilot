@@ -1,8 +1,9 @@
-from datetime import datetime
-
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String
+from sqlalchemy import Column, ForeignKey, Integer, String
 
 from app.db.database import Base
+from app.db.types import JSONValue as JSON
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 class ConversationCapabilityState(Base):
@@ -19,6 +20,4 @@ class ConversationCapabilityState(Base):
     discovered_skills_json = Column(JSON, nullable=False, default=list)
     permissions_json = Column(JSON, nullable=False, default=dict)
     tool_history_json = Column(JSON, nullable=False, default=list)
-    updated_at = Column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
-    )
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)

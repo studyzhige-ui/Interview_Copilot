@@ -1,3 +1,0 @@
-{"id":"example-retrieval-001","layer":"retrieval","query":"为什么 MCP 工具需要按用户隔离？","reference_answer":"按用户隔离可防止一个用户的服务器、凭据和工具定义泄漏到其他用户的运行时。","user_id":"eval_user_a","source_type":"interview_qa","tags":["agent","security"],"source_file":"community-example"}
-{"id":"example-generation-001","layer":"generation","query":"长任务为什么需要持久化 Turn 状态？","reference_answer":"持久化 Turn 状态让任务脱离网络连接继续执行，并支持恢复、审计和幂等重试。","user_id":"eval_user_a","source_type":"interview_qa","tags":["agent","recovery"],"source_file":"community-example"}
-{"id":"example-trajectory-001","layer":"trajectory","query":"结合我的知识库解释混合检索。","reference_answer":"混合检索同时利用语义向量和关键词信号，再融合与重排候选结果。","user_id":"eval_user_a","source_type":"interview_qa","tags":["rag","planner"],"source_file":"community-example"}

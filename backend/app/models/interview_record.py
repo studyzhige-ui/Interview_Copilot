@@ -1,9 +1,10 @@
 import uuid
-from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Column, ForeignKey, Index, Integer, String, Text
 
 from app.db.database import Base
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 def _generate_record_id() -> str:
@@ -106,10 +107,8 @@ class InterviewRecord(Base):
     celery_task_id = Column(String, nullable=True)
     error_message = Column(Text, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
-    )
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
     completed_at = Column(DateTime, nullable=True)
 
     # Dreaming cursor: when the dreaming worker last distilled this

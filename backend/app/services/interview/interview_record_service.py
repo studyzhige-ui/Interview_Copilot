@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Iterable
 
 from sqlalchemy import and_, or_
@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
+from app.db.types import utc_now
 from app.models.interview_qa import InterviewQA, _generate_qa_id
 from app.models.interview_record import InterviewRecord, _generate_record_id
 from app.models.interview_transcript import InterviewTranscript, _generate_transcript_id
@@ -149,7 +150,7 @@ class InterviewRecordService:
         Terminal mock states (review_ready / review_failed) always show."""
         db: Session = SessionLocal()
         try:
-            stale_review_cutoff = datetime.utcnow() - _PROCESSING_REVIEW_GRACE
+            stale_review_cutoff = utc_now() - _PROCESSING_REVIEW_GRACE
             return (
                 db.query(InterviewRecord)
                 .filter(
@@ -215,8 +216,8 @@ class InterviewRecordService:
             if celery_task_id is not None:
                 row.celery_task_id = celery_task_id
             if status in (STATUS_COMPLETED, STATUS_REVIEW_READY):
-                row.completed_at = datetime.utcnow()
-            row.updated_at = datetime.utcnow()
+                row.completed_at = utc_now()
+            row.updated_at = utc_now()
             if own_db:
                 db.commit()
             else:
@@ -270,10 +271,10 @@ class InterviewRecordService:
             if language is not None:
                 tr.language = language
             tr.status = "ready"
-            tr.updated_at = datetime.utcnow()
+            tr.updated_at = utc_now()
             db.flush()  # persist the transcript row before pointing the record at it
             row.transcript_id = tr.id
-            row.updated_at = datetime.utcnow()
+            row.updated_at = utc_now()
             if own_db:
                 db.commit()
             else:
@@ -351,7 +352,7 @@ class InterviewRecordService:
                 if isinstance(analysis, str)
                 else json.dumps(analysis, ensure_ascii=False)
             )
-            row.updated_at = datetime.utcnow()
+            row.updated_at = utc_now()
             if own_db:
                 db.commit()
             else:
@@ -429,7 +430,7 @@ class InterviewRecordService:
         self,
         qa_id: str,
         *,
-        score: int | None,
+        score: float | None,
         critique: str | None,
         improved_answer: str | None,
         key_points: list[str] | None = None,
@@ -450,7 +451,7 @@ class InterviewRecordService:
                 row.improved_answer = improved_answer
             if key_points is not None:
                 row.key_points_json = json.dumps(key_points, ensure_ascii=False)
-            row.analyzed_at = datetime.utcnow()
+            row.analyzed_at = utc_now()
             if own_db:
                 db.commit()
             else:
@@ -477,7 +478,7 @@ class InterviewRecordService:
             if row is None:
                 return
             row.analyzed_qa_count = (row.analyzed_qa_count or 0) + by
-            row.updated_at = datetime.utcnow()
+            row.updated_at = utc_now()
             if own_db:
                 db.commit()
             else:
@@ -507,7 +508,7 @@ class InterviewRecordService:
             if row is None:
                 return
             row.analyzed_qa_count = 0
-            row.updated_at = datetime.utcnow()
+            row.updated_at = utc_now()
             if own_db:
                 db.commit()
             else:

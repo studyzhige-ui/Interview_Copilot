@@ -19,7 +19,6 @@ The runtime threads a ``username``; this service resolves it to the stable
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any, Iterable
 
 from sqlalchemy.exc import IntegrityError
@@ -27,11 +26,14 @@ from sqlalchemy.orm import Session
 
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
+from app.db.types import utc_now
 from app.models.memory_document import DOC_TYPES, MemoryDocument
 from app.services.memory import _memory_audit
 from app.services.memory._db_helpers import session_scope
 from app.services.memory._doc_patch_protocol import (
     PatchResult,
+)
+from app.services.memory._doc_patch_protocol import (
     apply_patches as patch_body,
 )
 
@@ -214,7 +216,7 @@ def _apply_inner(
             doc_type=doc_type,
             body=new_body,
             one_liner=_derive_one_liner(new_body),
-            last_discussed_at=datetime.utcnow(),
+            last_discussed_at=utc_now(),
         )
         db.add(row)
         db.flush()  # surface the unique-constraint race as IntegrityError now
@@ -227,8 +229,8 @@ def _apply_inner(
             return result
         row.body = new_body
         row.one_liner = _derive_one_liner(new_body)
-        row.last_discussed_at = datetime.utcnow()
-        row.updated_at = datetime.utcnow()
+        row.last_discussed_at = utc_now()
+        row.updated_at = utc_now()
         db.add(row)
 
     _memory_audit.record(
@@ -325,7 +327,7 @@ def upsert_user_edit(
             db.add(row)
         row.body = body
         row.one_liner = _derive_one_liner(body)
-        row.updated_at = datetime.utcnow()
+        row.updated_at = utc_now()
         db.flush()
         _memory_audit.record(
             user_pk=user_pk,
@@ -378,9 +380,9 @@ def compact_if_oversized(username: str, doc_type: str) -> bool:
         if len(lines) <= DOC_MAX_LINES and len(current or "") <= DOC_MAX_CHARS:
             return False
 
+        from app.core.async_runtime import run_async
         from app.core.llm_client_factory import get_internal_llm
         from app.prompts.memory import DOC_COMPACT_PROMPT
-        from app.core.async_runtime import run_async
 
         labels = {"user_profile": "用户画像", "learning_strategy": "学习策略"}
         prompt = DOC_COMPACT_PROMPT.format(
@@ -420,7 +422,7 @@ def compact_if_oversized(username: str, doc_type: str) -> bool:
             before_body = row.body or ""
             row.body = new_body
             row.one_liner = _derive_one_liner(new_body)
-            row.updated_at = datetime.utcnow()
+            row.updated_at = utc_now()
             db.add(row)
             _memory_audit.record(
                 user_pk=user_pk,

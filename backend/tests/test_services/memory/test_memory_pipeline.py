@@ -13,13 +13,12 @@ circuiting a superseded/retried job. These tests pin:
 
 from unittest.mock import AsyncMock, MagicMock
 
+import app.models  # noqa: F401  — register mappers
 import pytest
+from app.db.database import Base
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-
-from app.db.database import Base
-import app.models  # noqa: F401  — register mappers
 
 
 def _fake_llm(acomplete):

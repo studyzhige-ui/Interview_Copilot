@@ -9,11 +9,8 @@ holds the stable provider key (``openai`` / ``deepseek`` / ...) — there is no
 provider catalog table; the runtime catalog lives in code / Redis.
 """
 
-from datetime import datetime
-
 from sqlalchemy import (
     Column,
-    DateTime,
     ForeignKey,
     Integer,
     String,
@@ -22,6 +19,8 @@ from sqlalchemy import (
 )
 
 from app.db.database import Base
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 class UserModelCredential(Base):
@@ -51,10 +50,10 @@ class UserModelCredential(Base):
     status = Column(String(16), nullable=False, default="active")
     last_validated_at = Column(DateTime, nullable=True)
     last_validation_error = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )

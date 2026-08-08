@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from .base import VendorAdapterSpec
 
-
 SPEC = VendorAdapterSpec(
     provider="anthropic",
     models_path="/models",

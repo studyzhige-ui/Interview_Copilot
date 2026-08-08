@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 
 from app.models.user_skill import UserSkill
 
-
 _FRONTMATTER = re.compile(r"\A---\s*\r?\n(.*?)\r?\n---\s*(?:\r?\n|\Z)", re.DOTALL)
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 

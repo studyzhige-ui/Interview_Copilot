@@ -10,11 +10,8 @@ system model catalog is NOT in the DB — ``profile_id`` is validated against
 the live catalog (code / Redis) at read/write time.
 """
 
-from datetime import datetime
-
 from sqlalchemy import (
     Column,
-    DateTime,
     ForeignKey,
     Integer,
     String,
@@ -22,6 +19,8 @@ from sqlalchemy import (
 )
 
 from app.db.database import Base
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 class UserModelSelection(Base):
@@ -43,10 +42,10 @@ class UserModelSelection(Base):
     # is derivable from this; we store the single canonical id the resolver
     # uses rather than a denormalised copy that could drift.
     profile_id = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )

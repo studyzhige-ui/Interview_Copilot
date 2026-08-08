@@ -1,10 +1,11 @@
 import uuid
-from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Column, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from app.db.database import Base
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 def generate_document_id() -> str:
@@ -60,9 +61,7 @@ class KnowledgeDocument(Base):
     # Soft delete — read paths exclude deleted_at IS NOT NULL immediately, even
     # before the async Milvus index delete completes.
     deleted_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
-    )
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
 
     upload = relationship("FileAsset")

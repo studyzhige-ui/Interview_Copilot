@@ -36,6 +36,8 @@ from typing import Any, AsyncGenerator
 
 from sqlalchemy.exc import SQLAlchemyError
 
+# Trigger tool self-registration on first import.
+import app.agent_runtime.tools  # noqa: F401
 from app.agent_runtime.context_compactor import QueryLoopCompactor
 from app.agent_runtime.react_agent import (
     AgentRunState,
@@ -44,8 +46,8 @@ from app.agent_runtime.react_agent import (
     _tool_call_payload,
 )
 from app.agent_runtime.retry_utils import call_with_retry
-from app.agent_runtime.tool_call_streaming import _ToolCallAccumulator
 from app.agent_runtime.tool_call_executor import execute_tool_call, persist_turn_budget
+from app.agent_runtime.tool_call_streaming import _ToolCallAccumulator
 from app.agent_runtime.tool_registry import (
     AgentToolContext,
     parse_tool_arguments,
@@ -63,9 +65,6 @@ from app.core.config import settings
 from app.core.error_messages import humanize_error
 from app.core.llm_client_factory import build_async_openai_client_for_role
 from app.prompts.agent import AGENT_SYSTEM_PROMPT
-
-# Trigger tool self-registration on first import.
-import app.agent_runtime.tools  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

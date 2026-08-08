@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.services.knowledge.document_formats import (
     ALLOWED_KNOWLEDGE_EXTENSIONS,
     UnsupportedDocumentFormat,

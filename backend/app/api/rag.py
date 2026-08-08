@@ -6,13 +6,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.rate_limit import RATE_EXPENSIVE, RATE_UPLOAD, limiter
+from app.api.file_assets import require_uploaded, upload_too_large_http
+from app.core.edition import current_edition_policy
 from app.core.error_messages import humanize_error
+from app.core.rate_limit import RATE_EXPENSIVE, RATE_UPLOAD, limiter
 from app.core.security import get_current_user
-from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
+from app.rag.contracts import SearchIntent
 from app.rag.retriever import query_knowledge_base
 from app.rag.runtime import ensure_rag_runtime
 from app.schemas.rag import (
@@ -30,7 +32,6 @@ from app.services.knowledge.knowledge_service import (
     default_title,
     hard_delete_knowledge_document,
 )
-from app.api.file_assets import require_uploaded, upload_too_large_http
 from app.services.uploads.file_asset_service import (
     UPLOAD_STATUS_CONSUMED,
     UploadTooLarge,
@@ -57,8 +58,11 @@ async def api_query_knowledge_base(
 
     Diagnostic endpoint: returns the hydrated chunks + structured
     retrieval_state. ``[K#]`` numbering / final sources are NOT produced
-    here — context assembly owns those on the chat path.
+    here — context assembly owns those on the chat path. The endpoint is a
+    Community/developer surface and is deliberately absent in Cloud.
     """
+    if not current_edition_policy().expose_rag_diagnostics:
+        raise HTTPException(status_code=404, detail="Not found")
     try:
         await asyncio.to_thread(
             ensure_rag_runtime,
@@ -68,8 +72,7 @@ async def api_query_knowledge_base(
         source_kind_val = body.source_kind.value if body.source_kind else None
 
         result = await query_knowledge_base(
-            dense_query=body.query,
-            sparse_query=body.query,
+            intents=[SearchIntent.from_query(body.query)],
             source_kind=source_kind_val,
             user_id=current_user.username,
         )
@@ -179,7 +182,7 @@ def create_knowledge_document(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         document = KnowledgeDocument(
-            user_id=resolve_user_pk(db, current_user.username),
+            user_id=current_user.id,
             file_asset_id=upload.id,
             title=body.title or default_title(upload),
             category=body.category.strip() or "默认",
@@ -246,7 +249,7 @@ def list_knowledge_documents(
         db.query(KnowledgeDocument)
         .options(selectinload(KnowledgeDocument.upload))
         .filter(
-            KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username),
+            KnowledgeDocument.user_id == current_user.id,
             KnowledgeDocument.deleted_at.is_(None),
         )
     )
@@ -273,7 +276,7 @@ def get_knowledge_document(
         db.query(KnowledgeDocument)
         .filter(
             KnowledgeDocument.id == document_id,
-            KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username),
+            KnowledgeDocument.user_id == current_user.id,
             KnowledgeDocument.deleted_at.is_(None),
         )
         .first()
@@ -294,7 +297,7 @@ def update_knowledge_document(
         db.query(KnowledgeDocument)
         .filter(
             KnowledgeDocument.id == document_id,
-            KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username),
+            KnowledgeDocument.user_id == current_user.id,
         )
         .first()
     )
@@ -320,7 +323,7 @@ def delete_knowledge_document(
         db.query(KnowledgeDocument)
         .filter(
             KnowledgeDocument.id == document_id,
-            KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username),
+            KnowledgeDocument.user_id == current_user.id,
         )
         .first()
     )
@@ -345,7 +348,7 @@ def list_knowledge_categories(
     rows = (
         db.query(KnowledgeDocument.category, func.count(KnowledgeDocument.id))
         .filter(
-            KnowledgeDocument.user_id == resolve_user_pk(db, current_user.username),
+            KnowledgeDocument.user_id == current_user.id,
             KnowledgeDocument.deleted_at.is_(None),
         )
         .group_by(KnowledgeDocument.category)

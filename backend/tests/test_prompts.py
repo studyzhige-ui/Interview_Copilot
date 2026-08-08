@@ -52,6 +52,7 @@ def test_all_prompt_templates_render() -> None:
             min_questions=2,
             max_questions=4,
             transition_rule="可推进",
+            response_language="简体中文",
             user_answer="answer",
             stage_keys_hint="technical | candidate_questions",
         ),
@@ -111,15 +112,17 @@ def test_all_prompt_templates_render() -> None:
 def test_query_planner_memory_privacy_contract() -> None:
     enabled = build_query_planner_system_prompt(
         global_memory_on=True,
-        max_sub_queries=3,
+        max_intents=3,
     )
     disabled = build_query_planner_system_prompt(
         global_memory_on=False,
-        max_sub_queries=3,
+        max_intents=3,
     )
 
     assert "at most 3" in enabled
     assert "load_strategy=true" in enabled
+    assert '"alternate_query"' in enabled
+    assert '"required_terms"' in enabled
     assert "load_strategy must be false" in disabled
 
 

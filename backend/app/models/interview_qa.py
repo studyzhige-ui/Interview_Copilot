@@ -6,13 +6,10 @@ edit, and re-analyze a single Q&A without rewriting the whole record.
 """
 
 import uuid
-from datetime import datetime
 
 from sqlalchemy import (
-    JSON,
     Boolean,
     Column,
-    DateTime,
     Float,
     ForeignKey,
     Index,
@@ -22,6 +19,9 @@ from sqlalchemy import (
 )
 
 from app.db.database import Base
+from app.db.types import JSONValue as JSON
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 def _generate_qa_id() -> str:
@@ -80,7 +80,9 @@ class InterviewQA(Base):
     answer_quality_json = Column(JSON, nullable=True)
 
     # Analysis result (filled by orchestrator)
-    score = Column(Integer, nullable=True)
+    # The grading rubric permits one decimal place; keep that precision so
+    # downstream ability analytics do not quantise evidence to whole points.
+    score = Column(Float, nullable=True)
     critique = Column(Text, nullable=True)
     improved_answer = Column(Text, nullable=True)
     key_points_json = Column(Text, nullable=True)
@@ -92,4 +94,4 @@ class InterviewQA(Base):
     # this column is the back-reference so the review UI can show "已保存".
     saved_document_id = Column(String, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)

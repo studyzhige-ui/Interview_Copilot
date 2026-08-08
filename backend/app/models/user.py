@@ -1,8 +1,8 @@
-from datetime import datetime
-
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, Column, Integer, String, Text
 
 from app.db.database import Base
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 class User(Base):
@@ -59,7 +59,5 @@ class User(Base):
     # Per-user model-role selection moved out to the ``user_model_selections``
     # table (one row per role, keyed by the stable users.id) — see
     # app.models.user_model_selections / app.core.user_model_selection.
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
-    )
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)

@@ -6,7 +6,7 @@ import os
 import socket
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -15,12 +15,12 @@ from app.conversation.events import HarnessEvent
 from app.core.config import settings
 from app.core.error_messages import humanize_error
 from app.db.database import SessionLocal
+from app.db.types import utc_now
 from app.models.chat import Conversation, ConversationMessage
 from app.models.conversation_turn import ConversationTurn
 from app.models.user import User
-from app.services.chat.turn_event_buffer import turn_event_buffer
 from app.services.chat.chat_history_service import transcript_service
-
+from app.services.chat.turn_event_buffer import turn_event_buffer
 
 logger = logging.getLogger(__name__)
 _WORKER_ID = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
@@ -107,7 +107,7 @@ def cancel_pending_turn(db: Session, turn_id: str, user_id: int) -> bool:
         return False
     row.status = "cancelled"
     row.error = "Turn cancelled"
-    row.completed_at = datetime.utcnow()
+    row.completed_at = utc_now()
     conversation = db.get(Conversation, row.conversation_id)
     if conversation and conversation.active_turn_id == turn_id:
         conversation.active_turn_id = None
@@ -135,7 +135,7 @@ def fail_pending_turn(
         return False
     row.status = "failed"
     row.error = error
-    row.completed_at = datetime.utcnow()
+    row.completed_at = utc_now()
     conversation = db.get(Conversation, row.conversation_id)
     if conversation and conversation.active_turn_id == turn_id:
         conversation.active_turn_id = None
@@ -160,7 +160,7 @@ def _claim(turn_id: str) -> TurnExecution | None:
         username = db.query(User.username).filter(User.id == row.user_id).scalar()
         if username is None:
             return None
-        now = datetime.utcnow()
+        now = utc_now()
         row.status = "running"
         row.started_at = now
         row.heartbeat_at = now
@@ -197,7 +197,7 @@ def _finish(turn_id: str, status: str, error: str | None = None) -> bool:
             return False
         row.status = status
         row.error = error
-        row.completed_at = datetime.utcnow()
+        row.completed_at = utc_now()
         conversation = db.get(Conversation, row.conversation_id)
         if conversation and conversation.active_turn_id == turn_id:
             conversation.active_turn_id = None
@@ -215,7 +215,7 @@ def _heartbeat(turn_id: str) -> None:
     try:
         row = db.get(ConversationTurn, turn_id)
         if row is not None and row.status == "running" and row.owner_id == _WORKER_ID:
-            row.heartbeat_at = datetime.utcnow()
+            row.heartbeat_at = utc_now()
             db.commit()
     finally:
         db.close()
@@ -325,7 +325,7 @@ async def fail_orphaned_turns() -> int:
     """Close turns whose worker heartbeat has expired."""
     db = SessionLocal()
     try:
-        cutoff = datetime.utcnow() - timedelta(seconds=settings.TURN_STALE_SECONDS)
+        cutoff = utc_now() - timedelta(seconds=settings.TURN_STALE_SECONDS)
         rows = (
             db.query(ConversationTurn)
             .filter(
@@ -350,7 +350,7 @@ async def fail_orphaned_turns() -> int:
         for row in rows:
             row.status = "failed"
             row.error = "服务重启，本轮执行已中断"
-            row.completed_at = datetime.utcnow()
+            row.completed_at = utc_now()
             conversation = db.get(Conversation, row.conversation_id)
             if conversation and conversation.active_turn_id == row.id:
                 conversation.active_turn_id = None

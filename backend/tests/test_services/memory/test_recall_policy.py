@@ -17,9 +17,9 @@ from sqlalchemy.pool import StaticPool
 @pytest.fixture
 def engine_and_session():
     """In-memory SQLite engine with users + conversations tables."""
-    from app.db.database import Base
     import app.models.chat  # noqa: F401
     import app.models.user  # noqa: F401
+    from app.db.database import Base
 
     engine = create_engine(
         "sqlite://",

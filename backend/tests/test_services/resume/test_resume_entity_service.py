@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.models.user import User
 from app.services.resume import resume_entity_service
 

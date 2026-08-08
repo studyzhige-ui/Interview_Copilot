@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
-import pytest
+from datetime import UTC, datetime, timedelta
 
-from app.models.chat import Conversation
-from app.models.chat import ConversationMessage
+import pytest
+from app.models.chat import Conversation, ConversationMessage
 from app.models.conversation_turn import ConversationTurn
 from app.models.outbox_job import OutboxJob
 from app.models.user import User
-from app.services.chat import turn_executor
-from app.services.chat import chat_history_service
+from app.services.chat import chat_history_service, turn_executor
 
 
 class _NonClosingSession:
@@ -43,8 +41,8 @@ async def test_fail_orphaned_turns_closes_active_rows(db_session, monkeypatch):
         mode="agent",
         message="work",
         status="running",
-        started_at=datetime.utcnow() - timedelta(minutes=5),
-        heartbeat_at=datetime.utcnow() - timedelta(minutes=5),
+        started_at=datetime.now(UTC) - timedelta(minutes=5),
+        heartbeat_at=datetime.now(UTC) - timedelta(minutes=5),
     )
     db_session.add_all([conversation, turn])
     db_session.commit()
@@ -91,8 +89,8 @@ async def test_fail_orphaned_turns_keeps_live_heartbeat(db_session, monkeypatch)
         mode="agent",
         message="work",
         status="running",
-        started_at=datetime.utcnow(),
-        heartbeat_at=datetime.utcnow(),
+        started_at=datetime.now(UTC),
+        heartbeat_at=datetime.now(UTC),
     )
     db_session.add_all([conversation, turn])
     db_session.commit()

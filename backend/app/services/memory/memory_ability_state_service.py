@@ -12,8 +12,8 @@ for retried jobs, and audit on every mutation.
 
 from __future__ import annotations
 
-import json
 import logging
+import json
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
+from app.db.types import utc_now
 from app.models.memory_ability_state import (
     MASTERY_LEVELS,
     SKILL_TYPES,
@@ -31,6 +32,15 @@ from app.services.memory import _memory_audit, _metrics
 from app.services.memory._db_helpers import session_scope
 
 logger = logging.getLogger(__name__)
+
+ABILITY_SCORE_VERSION = "evidence-v2"
+_SCORE_BANDS = (
+    (40.0, "weak"),
+    (60.0, "improving"),
+    (80.0, "stable"),
+    (101.0, "strong"),
+)
+_MAX_EVIDENCE_REFS = 20
 
 
 class UnknownUser(Exception):
@@ -89,6 +99,39 @@ def _validate(skill_type: str, mastery_level: str) -> None:
         raise ValueError(
             f"unknown mastery_level {mastery_level!r}; expected one of {MASTERY_LEVELS}"
         )
+
+
+def mastery_from_score(score: float) -> str:
+    """Translate a continuous score to the qualitative label used for recall."""
+    value = float(score)
+    if not 0.0 <= value <= 100.0:
+        raise ValueError("ability_score must be between 0 and 100")
+    return next(level for upper, level in _SCORE_BANDS if value < upper)
+
+
+def _normalise_score(score: float | None) -> float | None:
+    if score is None:
+        return None
+    if isinstance(score, bool):
+        raise ValueError("ability_score must be a number between 0 and 100")
+    value = float(score)
+    if not 0.0 <= value <= 100.0:
+        raise ValueError("ability_score must be between 0 and 100")
+    return round(value, 1)
+
+
+def _merge_evidence(existing: Any, incoming: list[dict[str, Any]] | None) -> Any:
+    """Append new provenance without replacing prior independent evidence."""
+    if not incoming:
+        return existing
+    merged = [item for item in (existing or []) if isinstance(item, dict)]
+    seen = {json.dumps(item, sort_keys=True, ensure_ascii=False) for item in merged}
+    for item in incoming:
+        key = json.dumps(item, sort_keys=True, ensure_ascii=False)
+        if key not in seen:
+            merged.append(item)
+            seen.add(key)
+    return merged[-_MAX_EVIDENCE_REFS:] or None
 
 
 # ── reads ───────────────────────────────────────────────────────────────
@@ -202,6 +245,7 @@ def upsert(
     topic: str,
     skill_type: str,
     mastery_level: str,
+    ability_score: float | None = None,
     summary: str | None = None,
     evidence_refs: list[dict[str, Any]] | None = None,
     last_evidence_at: datetime | None = None,
@@ -231,6 +275,7 @@ def upsert(
             topic=topic,
             skill_type=skill_type,
             mastery_level=mastery_level,
+            ability_score=ability_score,
             summary=summary,
             evidence_refs=evidence_refs,
             last_evidence_at=last_evidence_at,
@@ -257,6 +302,7 @@ def upsert(
                 topic=topic,
                 skill_type=skill_type,
                 mastery_level=mastery_level,
+                ability_score=ability_score,
                 summary=summary,
                 evidence_refs=evidence_refs,
                 last_evidence_at=last_evidence_at,
@@ -296,7 +342,7 @@ def _blocked_by_tombstone(
             MemoryAbilityState.topic == topic,
             MemoryAbilityState.skill_type == skill_type,
             MemoryAbilityState.archived_at.isnot(None),
-            MemoryAbilityState.archived_at > datetime.utcnow() - _TOMBSTONE_WINDOW,
+            MemoryAbilityState.archived_at > utc_now() - _TOMBSTONE_WINDOW,
         )
         .first()
         is not None
@@ -310,6 +356,7 @@ def _upsert_inner(
     topic: str,
     skill_type: str,
     mastery_level: str,
+    ability_score: float | None,
     summary: str | None,
     evidence_refs: list[dict[str, Any]] | None,
     last_evidence_at: datetime | None,
@@ -333,6 +380,11 @@ def _upsert_inner(
         .first()
     )
     was_new = row is None
+    ability_score = _normalise_score(ability_score)
+    if ability_score is not None:
+        if change_type == "patch_realtime":
+            ability_score = min(ability_score, 79.9)
+        mastery_level = mastery_from_score(ability_score)
 
     # ── Tombstone (MEM-2): an archive is a veto ─────────────────────
     # A user-archived state used to be silently recreated by the next
@@ -362,11 +414,15 @@ def _upsert_inner(
             return None
 
     # ── Mastery discipline (MEM-4) ──────────────────────────────────
-    effective_level, clamp_reason = _disciplined_mastery(
-        requested=mastery_level,
-        current=None if was_new else row.mastery_level,
-        change_type=change_type,
-        has_evidence=bool(evidence_refs),
+    effective_level, clamp_reason = (
+        (mastery_level, None)
+        if ability_score is not None
+        else _disciplined_mastery(
+            requested=mastery_level,
+            current=None if was_new else row.mastery_level,
+            change_type=change_type,
+            has_evidence=bool(evidence_refs),
+        )
     )
     if clamp_reason:
         _metrics.incr(
@@ -380,9 +436,14 @@ def _upsert_inner(
 
     # Audit bodies carry the mastery value, not just the summary — the
     # "before" level used to be unrecoverable from the trail (MEM-10).
-    before = "" if was_new else f"[{row.mastery_level}] {row.summary or ''}"
-    evidence_json = (
-        json.dumps(evidence_refs, ensure_ascii=False) if evidence_refs else None
+    before = (
+        ""
+        if was_new
+        else f"[{row.mastery_level}/{row.ability_score}] {row.summary or ''}"
+    )
+    evidence_json = _merge_evidence(
+        None if was_new else row.evidence_refs_json,
+        evidence_refs,
     )
     search_text = build_search_text(topic, summary)
 
@@ -392,15 +453,20 @@ def _upsert_inner(
             topic=topic,
             skill_type=skill_type,
             mastery_level=mastery_level,
+            ability_score=ability_score,
+            score_version=ABILITY_SCORE_VERSION if ability_score is not None else None,
             summary=summary,
             evidence_refs_json=evidence_json,
             search_text=search_text,
-            last_evidence_at=last_evidence_at or datetime.utcnow(),
+            last_evidence_at=last_evidence_at or utc_now(),
         )
         db.add(row)
         db.flush()  # surface the active-uniqueness race now
     else:
         row.mastery_level = mastery_level
+        if ability_score is not None:
+            row.ability_score = ability_score
+            row.score_version = ABILITY_SCORE_VERSION
         row.summary = summary
         if evidence_json is not None:
             row.evidence_refs_json = evidence_json
@@ -409,8 +475,8 @@ def _upsert_inner(
         # default-bump so the field actually "drives staleness" as the
         # model docstring promises (callers never pass it explicitly,
         # which used to freeze it at row-creation time forever).
-        row.last_evidence_at = last_evidence_at or datetime.utcnow()
-        row.updated_at = datetime.utcnow()
+        row.last_evidence_at = last_evidence_at or utc_now()
+        row.updated_at = utc_now()
         db.add(row)
 
     _memory_audit.record(
@@ -422,7 +488,7 @@ def _upsert_inner(
         source_interview_record_id=source_interview_record_id,
         idempotency_key=idempotency_key,
         before_body=before,
-        after_body=f"[{mastery_level}] {summary or ''}",
+        after_body=f"[{mastery_level}/{row.ability_score}] {summary or ''}",
         summary=f"{'created' if was_new else 'updated'} ability "
         f"{topic}/{skill_type} → {mastery_level}",
         db=db,
@@ -520,8 +586,8 @@ def _archive_row(
     if row is None:
         return False
     before = f"[{row.mastery_level}] {row.summary or ''}"
-    row.archived_at = datetime.utcnow()
-    row.updated_at = datetime.utcnow()
+    row.archived_at = utc_now()
+    row.updated_at = utc_now()
     db.add(row)
     _memory_audit.record(
         user_pk=user_pk,

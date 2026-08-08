@@ -2,9 +2,9 @@ from app.models.outbox_job import OutboxJob
 from app.models.resume import Resume
 from app.models.resume_section import ResumeSection
 from app.models.user import User
+from app.services.outbox import run_due_outbox_jobs
 from app.services.resume import reindex_jobs
 from app.worker.outbox_handlers import resume as resume_handler  # noqa: F401
-from app.services.outbox import run_due_outbox_jobs
 
 
 def _seed(db):

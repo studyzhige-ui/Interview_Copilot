@@ -17,7 +17,8 @@ interface RadarAxis {
 
 interface NormalizedReport {
   axes: RadarAxis[];
-  overall: number;
+  overall: number | null;
+  scoreScale: { version: string; meaning: string };
   strengths: { topic: string; evidence: string }[];
   weaknesses: { topic: string; flaw: string; plan?: string }[];
 }
@@ -41,14 +42,14 @@ function normalize(raw: unknown): NormalizedReport | { empty: true; message: str
         .filter((a) => a.k)
     : [];
 
-  const overall = typeof obj.overall === 'number'
+  const overall: number | null = typeof obj.overall === 'number'
     ? (obj.overall as number)
     : axes.some((axis) => axis.v !== null)
     ? Math.round(
         axes.reduce((sum, axis) => sum + (axis.v ?? 0), 0)
         / axes.filter((axis) => axis.v !== null).length,
       )
-    : 0;
+    : null;
 
   const strengths = Array.isArray(obj.strengths)
     ? (obj.strengths as Record<string, unknown>[]).map((s) => ({
@@ -65,7 +66,20 @@ function normalize(raw: unknown): NormalizedReport | { empty: true; message: str
       }))
     : [];
 
-  return { axes, overall, strengths, weaknesses };
+  const scale = obj.score_scale && typeof obj.score_scale === 'object'
+    ? obj.score_scale as Record<string, unknown>
+    : {};
+
+  return {
+    axes,
+    overall,
+    scoreScale: {
+      version: String(scale.version ?? 'unknown'),
+      meaning: String(scale.meaning ?? '产品成长标尺，不代表招聘结论'),
+    },
+    strengths,
+    weaknesses,
+  };
 }
 
 export function AnalyticsPage() {
@@ -140,6 +154,9 @@ export function AnalyticsPage() {
           <AxisCoverage axes={r.axes} />
         )}
       </div>
+      <p className="mt-2 text-[11px] text-stone-400 text-right">
+        评分标尺 {r.scoreScale.version} · {r.scoreScale.meaning}
+      </p>
 
       {r.strengths.length > 0 && (
         <div className="mt-5">
@@ -181,7 +198,15 @@ export function AnalyticsPage() {
   );
 }
 
-function OverallCircle({ score }: { score: number }) {
+function OverallCircle({ score }: { score: number | null }) {
+  if (score === null) {
+    return (
+      <div className="w-[140px] h-[140px] shrink-0 rounded-full border-[10px] border-stone-100 flex flex-col items-center justify-center">
+        <div className="text-sm font-medium text-stone-500">待评估</div>
+        <div className="text-[11px] text-stone-400 mt-1">暂无数值证据</div>
+      </div>
+    );
+  }
   const clamped = Math.max(0, Math.min(100, Math.round(score)));
   const r = 56;
   const c = 2 * Math.PI * r;

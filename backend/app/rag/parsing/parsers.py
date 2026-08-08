@@ -9,28 +9,23 @@ and LlamaIndex's default ``SimpleDirectoryReader`` for everything else. Docling
 
 from __future__ import annotations
 
+import csv
 import os
 from threading import Lock
 
 from app.core.config import settings
+from app.rag.documents import ParsedDocument, ParsedPage
 
 from .base import (
     IMAGE_EXTS,
     LEGACY_OFFICE_EXTS,
-    ParseResult,
-    PageSpan,
     TIER_FIRST_CLASS,
     TIER_LIGHTWEIGHT,
 )
 
 
-def _join_documents(docs: list) -> tuple[str, list[PageSpan]]:
-    """Join LlamaIndex ``Document``s into one Markdown string + a best-effort
-    page map. A single-Document format yields identical text; a multi-page PDF
-    is joined (page boundaries preserved in ``page_map``, not as hard splits)."""
-    parts: list[str] = []
-    page_map: list[PageSpan] = []
-    cursor = 0
+def _pages_from_documents(docs: list) -> list[ParsedPage]:
+    pages: list[ParsedPage] = []
     for i, d in enumerate(docs):
         text = getattr(d, "text", None) or ""
         if not text:
@@ -39,26 +34,28 @@ def _join_documents(docs: list) -> tuple[str, list[PageSpan]]:
         try:
             page = int(meta.get("page_label"))
         except (TypeError, ValueError):
-            page = i + 1
-        page_map.append(
-            PageSpan(page=page, char_start=cursor, char_end=cursor + len(text))
-        )
-        parts.append(text)
-        cursor += len(text) + 2  # the "\n\n" the join inserts
-    return "\n\n".join(parts), page_map
+            page = i + 1 if len(docs) > 1 else None
+        pages.append(ParsedPage(text=text, number=page))
+    return pages
 
 
 def _read_text(file_path: str) -> str:
     """Read a text file with encoding detection (charset-normalizer), falling
     back to UTF-8 with replacement — the ingest text is always normalized to a
     str (plan §4.1.3: TXT/HTML/CSV encoding detection)."""
-    from charset_normalizer import from_path
+    from charset_normalizer import from_bytes
 
-    best = from_path(file_path).best()
+    with open(file_path, "rb") as fh:
+        raw = fh.read()
+    for encoding in ("utf-8-sig", "gb18030"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            pass
+    best = from_bytes(raw).best()
     if best is not None:
         return str(best)
-    with open(file_path, encoding="utf-8", errors="replace") as fh:
-        return fh.read()
+    return raw.decode("utf-8", errors="replace")
 
 
 class LlamaParseParser:
@@ -75,7 +72,7 @@ class LlamaParseParser:
     def supports(self, ext: str) -> bool:
         return ext in self._EXTS
 
-    def parse(self, file_path: str) -> ParseResult:
+    def parse(self, file_path: str) -> ParsedDocument:
         import nest_asyncio
         from llama_index.core import SimpleDirectoryReader
         from llama_parse import LlamaParse
@@ -92,16 +89,15 @@ class LlamaParseParser:
             input_files=[file_path],
             file_extractor={ext: parser},
         ).load_data()
-        markdown, page_map = _join_documents(docs)
-        return ParseResult(
-            markdown=markdown,
+        return ParsedDocument(
+            pages=_pages_from_documents(docs),
             parser_id=self.id,
-            is_markdown=True,
-            page_map=page_map,
+            content_kind="markdown",
         )
 
 
 _docling_converter = None
+_docling_converter_key: tuple[str, bool] | None = None
 # Docling reuses one pipeline per converter and its convert() is not thread-safe.
 # The pipeline worker is solo today, but the lock keeps this module correct when
 # called from tests, an API process, or a future threaded deployment.
@@ -140,14 +136,16 @@ def _get_docling_converter():
     otherwise the converter is built with ``do_ocr=False`` so text PDFs still
     parse without the OCR engine present. Construction is lazy (RapidOcrOptions
     is a plain options object — the engine imports at convert time, not here)."""
-    global _docling_converter
-    if _docling_converter is None:
+    global _docling_converter, _docling_converter_key
+    key = (settings.RAG_DEVICE, _ocr_enabled())
+    if _docling_converter is None or _docling_converter_key != key:
         # Set all model-cache environment variables before importing Docling;
         # otherwise its first import can lock in ~/.cache defaults.
         from app.core.hf_runtime import DOCLING_MODELS_DIR, prepare_hf_runtime
 
         prepare_hf_runtime()
         from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.accelerator_options import AcceleratorOptions
         from docling.datamodel.pipeline_options import (
             PdfPipelineOptions,
             RapidOcrOptions,
@@ -161,6 +159,7 @@ def _get_docling_converter():
         pdf_opts = PdfPipelineOptions(
             do_ocr=_ocr_enabled(),
             ocr_options=RapidOcrOptions(),  # onnxruntime-based, deployment-light
+            accelerator_options=AcceleratorOptions(device=settings.RAG_DEVICE),
         )
         # Pre-downloaded Docling artifacts share data/cache/models with the
         # embedding, reranker and speech models.
@@ -171,6 +170,7 @@ def _get_docling_converter():
                 InputFormat.IMAGE: ImageFormatOption(pipeline_options=pdf_opts),
             }
         )
+        _docling_converter_key = key
     return _docling_converter
 
 
@@ -197,12 +197,39 @@ class DoclingParser:
     def supports(self, ext: str) -> bool:
         return ext in self._EXTS
 
-    def parse(self, file_path: str) -> ParseResult:
+    def parse(self, file_path: str) -> ParsedDocument:
         ext = os.path.splitext(file_path)[1].lower()
         with _docling_lock:  # serialize: Docling convert() isn't thread-safe
             converter = _get_docling_converter()
             result = converter.convert(file_path)
-            markdown = result.document.export_to_markdown()
+            from docling.datamodel.base_models import ConversionStatus
+
+            if result.status is not ConversionStatus.SUCCESS:
+                messages = "; ".join(
+                    str(getattr(error, "error_message", None) or error)
+                    for error in result.errors[:3]
+                )
+                raise RuntimeError(
+                    f"Docling conversion was {result.status.value}"
+                    + (f": {messages}" if messages else "")
+                )
+            document = result.document
+            page_numbers = sorted(int(number) for number in document.pages)
+            if page_numbers:
+                from docling_core.types.doc import ContentLayer
+
+                pages = [
+                    ParsedPage(
+                        text=document.export_to_markdown(
+                            page_no=page_number,
+                            included_content_layers={ContentLayer.BODY},
+                        ),
+                        number=page_number,
+                    )
+                    for page_number in page_numbers
+                ]
+            else:
+                pages = [ParsedPage(text=document.export_to_markdown())]
         # ocr_used is best-effort: an image document IS OCR (its only text
         # source), so it's True when OCR is active; for text formats we don't
         # claim OCR even though Docling may OCR scanned PDF pages — there's no
@@ -211,12 +238,11 @@ class DoclingParser:
         # page_map is empty: Docling's exported Markdown exposes no per-page char
         # spans, so page_count reads 0 here (unlike PyMuPDF, which maps per page).
         # Accurate Docling page provenance is deferred to the page_start/end round.
-        return ParseResult(
-            markdown=markdown,
+        return ParsedDocument(
+            pages=pages,
             parser_id=self.id,
-            is_markdown=True,
+            content_kind="markdown",
             ocr_used=ocr_used,
-            page_map=[],
         )
 
 
@@ -229,7 +255,7 @@ class PyMuPDFParser:
     def supports(self, ext: str) -> bool:
         return ext == ".pdf"
 
-    def parse(self, file_path: str) -> ParseResult:
+    def parse(self, file_path: str) -> ParsedDocument:
         from llama_index.core import SimpleDirectoryReader
         from llama_index.readers.file import PyMuPDFReader
 
@@ -237,45 +263,14 @@ class PyMuPDFParser:
             input_files=[file_path],
             file_extractor={".pdf": PyMuPDFReader()},
         ).load_data()
-        markdown, page_map = _join_documents(docs)
-        return ParseResult(
-            markdown=markdown,
+        return ParsedDocument(
+            pages=_pages_from_documents(docs),
             parser_id=self.id,
-            is_markdown=False,
-            page_map=page_map,
+            content_kind="text",
         )
 
 
-class SimpleReaderParser:
-    """LlamaIndex's default reader — the catch-all for the remaining formats
-    (txt / md / html / json / csv / docx-without-key / ...). Also the final
-    fallback for any extension."""
-
-    id = "simple_reader"
-    tier = TIER_LIGHTWEIGHT
-    _MARKDOWN_EXTS = {".md", ".markdown"}
-
-    def supports(self, ext: str) -> bool:
-        return True
-
-    def parse(self, file_path: str) -> ParseResult:
-        from llama_index.core import SimpleDirectoryReader
-
-        docs = SimpleDirectoryReader(input_files=[file_path]).load_data()
-        markdown, page_map = _join_documents(docs)
-        ext = os.path.splitext(file_path)[1].lower()
-        return ParseResult(
-            markdown=markdown,
-            parser_id=self.id,
-            is_markdown=ext in self._MARKDOWN_EXTS,
-            page_map=page_map,
-        )
-
-
-# ── Per-format lightweight parsers (Phase E3) ────────────────────────────────
-# Controlled, known-behaviour extractors used when no first-class parser is
-# available/supports the format (plan §4.1.3) — they replace LlamaIndex's default
-# readers for these formats so parse quality + failure behaviour is explicit.
+# ── Per-format lightweight parsers ───────────────────────────────────────────
 
 
 class DocxParser:
@@ -288,12 +283,14 @@ class DocxParser:
     def supports(self, ext: str) -> bool:
         return ext == ".docx"
 
-    def parse(self, file_path: str) -> ParseResult:
+    def parse(self, file_path: str) -> ParsedDocument:
         import docx
 
         document = docx.Document(file_path)
         text = "\n\n".join(p.text for p in document.paragraphs if p.text.strip())
-        return ParseResult(markdown=text, parser_id=self.id, is_markdown=False)
+        return ParsedDocument(
+            pages=[ParsedPage(text=text)], parser_id=self.id, content_kind="text"
+        )
 
 
 class PptxParser:
@@ -305,21 +302,19 @@ class PptxParser:
     def supports(self, ext: str) -> bool:
         return ext == ".pptx"
 
-    def parse(self, file_path: str) -> ParseResult:
+    def parse(self, file_path: str) -> ParsedDocument:
         from pptx import Presentation
 
-        slides: list[str] = []
-        for slide in Presentation(file_path).slides:
+        slides: list[ParsedPage] = []
+        for index, slide in enumerate(Presentation(file_path).slides, start=1):
             parts = [
                 shape.text
                 for shape in slide.shapes
                 if shape.has_text_frame and shape.text.strip()
             ]
             if parts:
-                slides.append("\n".join(parts))
-        return ParseResult(
-            markdown="\n\n".join(slides), parser_id=self.id, is_markdown=False
-        )
+                slides.append(ParsedPage(text="\n".join(parts), number=index))
+        return ParsedDocument(pages=slides, parser_id=self.id, content_kind="text")
 
 
 class XlsxParser:
@@ -334,7 +329,7 @@ class XlsxParser:
     def supports(self, ext: str) -> bool:
         return ext == ".xlsx"
 
-    def parse(self, file_path: str) -> ParseResult:
+    def parse(self, file_path: str) -> ParsedDocument:
         from openpyxl import load_workbook
 
         workbook = load_workbook(file_path, read_only=True, data_only=True)
@@ -352,21 +347,23 @@ class XlsxParser:
                         if value is not None and i < len(header)
                     ]
                     if cells:
-                        lines.append(" | ".join(cells))
+                        lines.append(f"sheet: {sheet.title} | " + " | ".join(cells))
         finally:
             workbook.close()
         # No sheet marker: every row already self-describes (header: value), so
         # rows from different sheets stay correct without a "[Sheet]" line that
         # the table splitter would mis-promote to a repeated header.
-        return ParseResult(
-            markdown="\n".join(lines), parser_id=self.id, is_markdown=False
+        return ParsedDocument(
+            pages=[ParsedPage(text="\n".join(lines))],
+            parser_id=self.id,
+            content_kind="table",
         )
 
 
 class HtmlParser:
     """Lightweight HTML → Markdown (BeautifulSoup drops script/style/nav noise,
     then markdownify keeps heading/list/table structure). Emits Markdown
-    (``is_markdown=True``) so the chunk stage uses MarkdownNodeParser — feeding
+    Markdown output lets the chunk stage use MarkdownNodeParser — feeding
     HTMLNodeParser tag-stripped text yields zero nodes (silent content loss)."""
 
     id = "beautifulsoup"
@@ -375,7 +372,7 @@ class HtmlParser:
     def supports(self, ext: str) -> bool:
         return ext in (".html", ".htm")
 
-    def parse(self, file_path: str) -> ParseResult:
+    def parse(self, file_path: str) -> ParsedDocument:
         from bs4 import BeautifulSoup
         from markdownify import markdownify
 
@@ -385,21 +382,65 @@ class HtmlParser:
         for tag in soup(["script", "style", "nav"]):
             tag.decompose()
         markdown = markdownify(str(soup)).strip()
-        return ParseResult(markdown=markdown, parser_id=self.id, is_markdown=True)
+        return ParsedDocument(
+            pages=[ParsedPage(text=markdown)],
+            parser_id=self.id,
+            content_kind="markdown",
+        )
 
 
 class TextParser:
-    """Lightweight TXT / CSV / TSV → encoding-detected text (charset-normalizer).
-    CSV/TSV stays raw so the chunk stage's table splitter keeps the header row."""
+    """Normalize text, delimited tables, JSON, Markdown, and source code."""
 
     id = "text"
     tier = TIER_LIGHTWEIGHT
-    _EXTS = {".txt", ".csv", ".tsv"}
+    _EXTS = {
+        ".txt",
+        ".csv",
+        ".tsv",
+        ".md",
+        ".markdown",
+        ".json",
+        ".py",
+        ".java",
+        ".cpp",
+        ".c",
+    }
 
     def supports(self, ext: str) -> bool:
         return ext in self._EXTS
 
-    def parse(self, file_path: str) -> ParseResult:
-        return ParseResult(
-            markdown=_read_text(file_path), parser_id=self.id, is_markdown=False
+    def parse(self, file_path: str) -> ParsedDocument:
+        ext = os.path.splitext(file_path)[1].lower()
+        text = _read_text(file_path)
+        if ext in {".csv", ".tsv"}:
+            rows = list(
+                csv.reader(
+                    text.splitlines(),
+                    delimiter="," if ext == ".csv" else "\t",
+                )
+            )
+            header = rows[0] if rows else []
+            records = [
+                " | ".join(
+                    f"{header[index]}: {value}"
+                    for index, value in enumerate(row)
+                    if index < len(header) and value
+                )
+                for row in rows[1:]
+            ]
+            text = "\n".join(record for record in records if record)
+            content_kind = "table"
+        elif ext in {".md", ".markdown"}:
+            content_kind = "markdown"
+        elif ext == ".json":
+            content_kind = "json"
+        elif ext in {".py", ".java", ".cpp", ".c"}:
+            content_kind = "code"
+        else:
+            content_kind = "text"
+        return ParsedDocument(
+            pages=[ParsedPage(text=text)],
+            parser_id=self.id,
+            content_kind=content_kind,
         )

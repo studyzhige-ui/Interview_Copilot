@@ -11,10 +11,8 @@ pair must be edited together.
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from app.schemas.chat import MockAnswerRequest, MockAnswerResp, MockStage, MockStartResp
-
+from pydantic import ValidationError
 
 # ── MockAnswerResp ───────────────────────────────────────────────────────
 

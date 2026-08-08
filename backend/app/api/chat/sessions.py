@@ -10,11 +10,11 @@ from typing import List, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
 from app.core.runtime_files import remove_session_results
+from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
-from app.models.chat import ConversationMessage, Conversation, generate_uuid
+from app.models.chat import Conversation, ConversationMessage, generate_uuid
 from app.models.user import User
 from app.schemas.chat import (
     MemoryRecallToggleBody,

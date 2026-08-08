@@ -6,12 +6,11 @@ verification, status mapping); the direct ``users``-table work lives here.
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.security import get_password_hash, verify_and_maybe_rehash
+from app.db.types import utc_now
 from app.models.user import User
 
 
@@ -82,7 +81,7 @@ def apply_password_change(db: Session, user: User, new_password: str) -> None:
     user.token_version = (user.token_version or 0) + 1
     # Naive UTC to match the model's created_at/updated_at convention and the
     # TIMESTAMP (without-tz) column. ``updated_at`` auto-stamps via onupdate.
-    user.password_changed_at = datetime.utcnow()
+    user.password_changed_at = utc_now()
     db.add(user)
     db.commit()
 

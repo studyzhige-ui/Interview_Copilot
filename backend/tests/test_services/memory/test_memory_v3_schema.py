@@ -8,8 +8,6 @@ dedicated in-memory engine and rebind every service's ``SessionLocal`` to it.
 
 from __future__ import annotations
 
-import json
-
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -18,12 +16,12 @@ from sqlalchemy.pool import StaticPool
 
 @pytest.fixture
 def engine_and_session():
-    from app.db.database import Base
     import app.models.memory_ability_state  # noqa: F401
     import app.models.memory_audit_logs  # noqa: F401
     import app.models.memory_document  # noqa: F401
     import app.models.outbox_job  # noqa: F401 — ability upsert enqueues an index job
     import app.models.user  # noqa: F401
+    from app.db.database import Base
 
     engine = create_engine(
         "sqlite://",
@@ -172,9 +170,9 @@ def test_document_unknown_user_raises(seeded):
 def test_document_shared_db_rollback_is_atomic(seeded):
     """With a caller-owned ``db``, a rollback discards BOTH the doc write and
     its audit row — the atomicity the dreaming worker relies on."""
-    from app.services.memory import memory_document_service as svc
     from app.models.memory_audit_logs import MemoryAuditEntry
     from app.models.memory_document import MemoryDocument
+    from app.services.memory import memory_document_service as svc
 
     db = seeded()
     try:
@@ -200,9 +198,8 @@ def test_document_shared_db_rollback_is_atomic(seeded):
 def test_document_apply_retries_once_on_integrity_error(seeded, monkeypatch):
     """The own-session path retries exactly once on IntegrityError (the
     first-write race backstop) then commits via the update branch."""
-    from sqlalchemy.exc import IntegrityError
-
     from app.services.memory import memory_document_service as svc
+    from sqlalchemy.exc import IntegrityError
 
     calls = {"n": 0}
     real_inner = svc._apply_inner
@@ -269,8 +266,45 @@ def test_ability_evidence_refs_serialised(seeded):
         evidence_refs=[{"type": "interview_qa", "id": "qa_1"}],
         change_type="patch_realtime",
     )
-    assert json.loads(row.evidence_refs_json) == [
-        {"type": "interview_qa", "id": "qa_1"}
+    assert row.evidence_refs_json == [{"type": "interview_qa", "id": "qa_1"}]
+
+
+def test_ability_score_is_continuous_versioned_and_drives_mastery(seeded):
+    from app.services.memory import memory_ability_state_service as svc
+
+    row = svc.upsert(
+        "alice",
+        topic="事务隔离",
+        skill_type="knowledge_topic",
+        mastery_level="weak",
+        ability_score=73.6,
+        summary="能解释快照差异",
+        evidence_refs=[{"type": "interview_record", "id": "ir_1"}],
+        change_type="patch_dreaming",
+    )
+
+    assert row.ability_score == 73.6
+    assert row.score_version == "evidence-v2"
+    assert row.mastery_level == "stable"
+
+
+def test_ability_evidence_is_deduplicated_and_accumulated(seeded):
+    from app.services.memory import memory_ability_state_service as svc
+
+    for evidence_id in ("ir_1", "ir_1", "ir_2"):
+        row = svc.upsert(
+            "alice",
+            topic="系统设计",
+            skill_type="system_design",
+            mastery_level="improving",
+            ability_score=55.5,
+            evidence_refs=[{"type": "interview_record", "id": evidence_id}],
+            change_type="patch_dreaming",
+        )
+
+    assert row.evidence_refs_json == [
+        {"type": "interview_record", "id": "ir_1"},
+        {"type": "interview_record", "id": "ir_2"},
     ]
 
 
@@ -303,8 +337,8 @@ def test_ability_archive_then_reupsert_makes_new_active_row(seeded):
     """MEM-2: after a user archive, AUTOMATIC channels are tombstoned for 30
     days (the deleted memory must not resurrect); the user's own channel
     can still re-create immediately."""
-    from app.services.memory import memory_ability_state_service as svc
     from app.models.memory_ability_state import MemoryAbilityState
+    from app.services.memory import memory_ability_state_service as svc
 
     svc.upsert(
         "alice",
@@ -420,8 +454,6 @@ def test_ability_upsert_enqueues_milvus_index_job(seeded):
     """Each ability upsert queues a durable Milvus re-index in the same tx; the
     payload carries the owner pk (the ability collection's scope key) + the row
     snapshot."""
-    import json
-
     from app.models.outbox_job import OutboxJob
     from app.models.user import User
     from app.services.memory import memory_ability_state_service as svc
@@ -443,7 +475,7 @@ def test_ability_upsert_enqueues_milvus_index_job(seeded):
             .all()
         )
         assert len(jobs) == 1
-        payload = json.loads(jobs[0].payload_json)
+        payload = jobs[0].payload_json
         assert payload["user_id"] == alice_pk and payload["topic"] == "Redis"
         assert payload["state_id"]
     finally:

@@ -222,8 +222,8 @@ async def _save_memory_handler(
 
 
 def _save_ability_state(args: SaveMemoryArgs, ctx: AgentToolContext) -> dict[str, Any]:
-    from app.services.memory import memory_ability_state_service
     from app.models.memory_ability_state import MASTERY_LEVELS, SKILL_TYPES
+    from app.services.memory import memory_ability_state_service
 
     topic = args.topic.strip()
     skill_type = args.skill_type.strip()

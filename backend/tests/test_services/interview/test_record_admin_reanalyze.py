@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from app.models.interview_record import InterviewRecord
 from app.services.interview import record_admin
 
@@ -97,13 +96,12 @@ def test_reanalyze_dispatch_failure_rolls_back_to_failed(db_session, monkeypatch
 
 
 def test_load_existing_qa_shells_roundtrip(db_session, monkeypatch):
-    from app.models.interview_qa import InterviewQA
-
     # The package __init__ re-exports the singleton under the module's own
     # name, so ``import ... as orch`` binds the INSTANCE — go via sys.modules.
     import sys
 
     import app.services.interview.analysis_orchestrator  # noqa: F401
+    from app.models.interview_qa import InterviewQA
 
     orch = sys.modules["app.services.interview.analysis_orchestrator"]
 

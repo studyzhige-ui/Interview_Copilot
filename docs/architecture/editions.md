@@ -45,6 +45,7 @@ complexity into the user interface.
 | Local stdio MCP | Disabled | Operator opt-in |
 | Embedding, reranker, ASR, diarization | Operator managed | Deployment configurable |
 | Advanced model settings UI | Hidden | Visible |
+| Direct `/rag/query` diagnostics | Hidden (404) | Enabled for developer use |
 
 `APP_EDITION` is the only product-edition switch:
 

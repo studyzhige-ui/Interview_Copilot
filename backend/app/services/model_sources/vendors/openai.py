@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from .base import VendorAdapterSpec
 
-
 # OpenAI's /v1/models returns ALL models the org has access to:
 # chat + embedding + image + audio + tts + realtime + search-api + ...
 # This filter keeps only chat-family ids. The hint list comes from

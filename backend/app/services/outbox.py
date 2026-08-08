@@ -12,16 +12,16 @@ own job types (ingest / transcribe / memory) against the same table + runner.
 
 from __future__ import annotations
 
-import json
 import logging
 import socket
-from datetime import datetime, timedelta
 from collections.abc import Collection
+from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
+from app.db.types import utc_now
 from app.models.outbox_job import OutboxJob, generate_outbox_job_id
 
 logger = logging.getLogger(__name__)
@@ -64,11 +64,11 @@ def enqueue_job(
         "job_type": job_type,
         "aggregate_type": aggregate_type,
         "aggregate_id": aggregate_id,
-        "payload_json": json.dumps(payload, ensure_ascii=False) if payload else None,
+        "payload_json": payload or None,
         "status": "pending",
         "attempts": 0,
         "max_attempts": max_attempts,
-        "next_run_at": run_after or datetime.utcnow(),
+        "next_run_at": run_after or utc_now(),
         "idempotency_key": idempotency_key,
     }
     if idempotency_key is not None and db.get_bind().dialect.name in {
@@ -131,7 +131,7 @@ def run_due_outbox_jobs(
         return 0
 
     worker_id = f"{socket.gethostname()}:{id(db)}"
-    now = datetime.utcnow()
+    now = utc_now()
     # Stale-lock recovery: a worker that is SIGKILLed after the claim commit
     # leaves the job at status='running' with locked_at set — the finally
     # block never runs, and without this clause the job would be invisible
@@ -190,7 +190,7 @@ def run_due_outbox_jobs(
                 )
                 continue
         job.status = "running"
-        job.locked_at = datetime.utcnow()
+        job.locked_at = utc_now()
         job.locked_by = worker_id
         db.add(job)
         runnable.append(job)
@@ -222,7 +222,7 @@ def run_due_outbox_jobs(
                     _BACKOFF_BASE_SECONDS * (4 ** (job.attempts - 1)),
                     _BACKOFF_CAP_SECONDS,
                 )
-                job.next_run_at = datetime.utcnow() + timedelta(seconds=delay)
+                job.next_run_at = utc_now() + timedelta(seconds=delay)
                 logger.warning(
                     "outbox job %s failed (attempt %d), retrying in %ds: %s",
                     job.id,
@@ -233,7 +233,7 @@ def run_due_outbox_jobs(
         finally:
             job.locked_at = None
             job.locked_by = None
-            job.updated_at = datetime.utcnow()
+            job.updated_at = utc_now()
             db.add(job)
             db.commit()
         processed += 1
@@ -269,7 +269,7 @@ def _handle_delete_object(db: Session, job: OutboxJob) -> None:
         parse_s3_uri,
     )
 
-    payload = json.loads(job.payload_json) if job.payload_json else {}
+    payload = job.payload_json or {}
     storage_uri = payload.get("storage_uri")
     if not storage_uri or payload.get("user_id") != job.user_id:
         raise ValueError(f"{job.job_type}: bad payload {payload}")

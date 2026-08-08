@@ -4,9 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from app.agent_runtime.tool_registry import AgentToolContext, registry
-
 
 CTX = AgentToolContext(user_id="u-test", session_id="sess-task-tool-001")
 

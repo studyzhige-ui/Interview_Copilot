@@ -19,10 +19,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.llm_client_factory import get_internal_llm
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.resume_section import ResumeSection, _generate_section_id
-from app.core.llm_client_factory import get_internal_llm
 from app.prompts.resume import RESUME_PARSE_PROMPT
 
 logger = logging.getLogger(__name__)

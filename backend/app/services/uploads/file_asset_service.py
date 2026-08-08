@@ -29,14 +29,10 @@ by id alone (``get_file_asset``); ownership-sensitive reads use
 from __future__ import annotations
 
 import logging
-
 import os
-from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from app.core.user_identity import resolve_user_pk
-from app.models.file_asset import FileAsset, generate_file_asset_id
 from app.core.storage import (
     build_owned_object_key,
     generate_presigned_upload_url_for_key,
@@ -44,6 +40,9 @@ from app.core.storage import (
     read_object_head,
     storage_uri_for_key,
 )
+from app.core.user_identity import resolve_user_pk
+from app.db.types import utc_now
+from app.models.file_asset import FileAsset, generate_file_asset_id
 from app.services.uploads.purpose_registry import get_purpose_spec
 
 logger = logging.getLogger(__name__)
@@ -269,7 +268,7 @@ def _verify_pending_asset(db: Session, asset: FileAsset) -> FileAsset:
             # object also lands here via InvalidRange and stays pending; the
             # orphan sweeper reaps it after 24h.)
             asset.validation_error = "存储暂时不可读，请稍后重试"
-            asset.updated_at = datetime.utcnow()
+            asset.updated_at = utc_now()
             db.add(asset)
             db.commit()
             db.refresh(asset)
@@ -291,7 +290,7 @@ def _verify_pending_asset(db: Session, asset: FileAsset) -> FileAsset:
     asset.upload_status = UPLOAD_STATUS_UPLOADED
     asset.validation_status = "passed"
     asset.validation_error = None
-    asset.updated_at = datetime.utcnow()
+    asset.updated_at = utc_now()
     db.add(asset)
     db.commit()
     db.refresh(asset)
@@ -301,7 +300,7 @@ def _verify_pending_asset(db: Session, asset: FileAsset) -> FileAsset:
 def mark_file_asset_consumed(db: Session, asset: FileAsset) -> None:
     """Mark an asset consumed by a business object. Caller commits."""
     asset.upload_status = UPLOAD_STATUS_CONSUMED
-    asset.updated_at = datetime.utcnow()
+    asset.updated_at = utc_now()
     db.add(asset)
 
 
@@ -366,7 +365,7 @@ def _fail_asset(db: Session, asset: FileAsset, reason: str) -> None:
     asset.upload_status = UPLOAD_STATUS_FAILED
     asset.validation_status = "failed"
     asset.validation_error = reason
-    asset.updated_at = datetime.utcnow()
+    asset.updated_at = utc_now()
     db.add(asset)
     enqueue_job(
         db,

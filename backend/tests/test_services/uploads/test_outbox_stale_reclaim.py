@@ -9,7 +9,7 @@ while never stealing a fresh running lock.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from app.models.outbox_job import OutboxJob
 from app.services import outbox as outbox_service
@@ -29,7 +29,7 @@ def _enqueue(db, job_type: str, key: str) -> OutboxJob:
 def _orphan(db, job: OutboxJob, *, age: timedelta, attempts: int = 0) -> None:
     """Simulate a hard-killed worker: running + locked, no finally cleanup."""
     job.status = "running"
-    job.locked_at = datetime.utcnow() - age
+    job.locked_at = datetime.now(UTC) - age
     job.locked_by = "dead-host:1"
     job.attempts = attempts
     db.add(job)

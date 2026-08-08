@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.core.ssrf import UrlNotSafe, validate_safe_url
 
-
 # ── Limits / validators for the per-user provider settings (P6-M) ──
 _API_BASE_MAX_LEN = 500
 _ORG_ID_MAX_LEN = 100

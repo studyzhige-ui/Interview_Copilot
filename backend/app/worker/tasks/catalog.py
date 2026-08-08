@@ -19,8 +19,8 @@ jobs don't share the LLM/network at the same moment.
 
 import logging
 
-from app.task_queue.celery_app import celery_app
 from app.core.async_runtime import run_async
+from app.task_queue.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 

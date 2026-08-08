@@ -8,7 +8,6 @@ not Milvus itself.
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -21,9 +20,7 @@ from sqlalchemy.pool import StaticPool
 def _job(payload: dict, job_type: str = "upsert_memory_ability_index"):
     from app.models.outbox_job import OutboxJob
 
-    return OutboxJob(
-        id="job_x", user_id=1, job_type=job_type, payload_json=json.dumps(payload)
-    )
+    return OutboxJob(id="job_x", user_id=1, job_type=job_type, payload_json=payload)
 
 
 # ── handlers (no DB needed — they read the payload) ──────────────────────
@@ -90,11 +87,11 @@ def test_search_abilities_degrades_to_empty_on_error():
 
 @pytest.fixture
 def seeded(monkeypatch):
-    from app.db.database import Base
     import app.models.memory_ability_state  # noqa: F401
     import app.models.memory_audit_logs  # noqa: F401
     import app.models.outbox_job  # noqa: F401
     import app.models.user  # noqa: F401
+    from app.db.database import Base
 
     engine = create_engine(
         "sqlite://",

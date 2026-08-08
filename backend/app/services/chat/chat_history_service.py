@@ -24,14 +24,14 @@ Content blocks (Stage G refactor — Anthropic Claude Code style):
 
 import json
 import logging
-from datetime import datetime
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
-from app.models.chat import ConversationMessage, Conversation, generate_uuid
+from app.db.types import utc_now
+from app.models.chat import Conversation, ConversationMessage, generate_uuid
 from app.models.conversation_turn import ConversationTurn
 
 logger = logging.getLogger(__name__)
@@ -126,7 +126,7 @@ class TranscriptService:
             )
 
             session_row.turn_count = (session_row.turn_count or 0) + 1
-            session_row.updated_at = datetime.utcnow()
+            session_row.updated_at = utc_now()
             if enqueue_memory:
                 from app.services.memory.extraction_jobs import (
                     enqueue_realtime_extraction_in_transaction,
@@ -211,7 +211,7 @@ class TranscriptService:
             conversation = db.get(Conversation, turn.conversation_id)
             if conversation is not None:
                 conversation.turn_count = (conversation.turn_count or 0) + 1
-                conversation.updated_at = datetime.utcnow()
+                conversation.updated_at = utc_now()
                 if enqueue_memory and memory_user_id:
                     from app.services.memory.extraction_jobs import (
                         enqueue_realtime_extraction_in_transaction,
@@ -368,7 +368,7 @@ class TranscriptService:
             for key, value in kwargs.items():
                 if hasattr(row, key):
                     setattr(row, key, value)
-            row.updated_at = datetime.utcnow()
+            row.updated_at = utc_now()
             db.commit()
         except Exception as exc:  # noqa: BLE001
             db.rollback()

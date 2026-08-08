@@ -199,8 +199,8 @@ async def cancel_chat_turn(
         raise HTTPException(status_code=404, detail="Turn not found or access denied")
     if turn.status not in {"pending", "running"}:
         return {"turn_id": turn_id, "status": turn.status, "cancelled": False}
-    from app.services.chat.turn_executor import cancel_pending_turn
     from app.services.chat.turn_event_buffer import turn_event_buffer
+    from app.services.chat.turn_executor import cancel_pending_turn
 
     await turn_event_buffer.request_cancel(turn_id)
     cancelled_before_start = cancel_pending_turn(db, turn_id, user_pk)

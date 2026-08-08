@@ -1,9 +1,6 @@
-from datetime import datetime
-
 from sqlalchemy import (
     Boolean,
     Column,
-    DateTime,
     ForeignKey,
     Integer,
     String,
@@ -12,6 +9,8 @@ from sqlalchemy import (
 )
 
 from app.db.database import Base
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 class UserSkill(Base):
@@ -28,7 +27,5 @@ class UserSkill(Base):
     description = Column(String(500), nullable=False)
     content = Column(Text, nullable=False)
     enabled = Column(Boolean, nullable=False, default=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
-    )
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)

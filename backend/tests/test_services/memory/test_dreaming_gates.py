@@ -10,7 +10,7 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -20,10 +20,10 @@ from sqlalchemy.pool import StaticPool
 
 @pytest.fixture
 def engine_and_session():
-    from app.db.database import Base
     import app.models.chat  # noqa: F401
     import app.models.interview_record  # noqa: F401
     import app.models.user  # noqa: F401
+    from app.db.database import Base
 
     engine = create_engine(
         "sqlite://",
@@ -80,7 +80,7 @@ def _seed_chat(
     username → pk here (the ``users`` row is seeded by ``_seed_user`` first)
     and store the integer pk on the session.
     """
-    from app.models.chat import ConversationMessage, Conversation
+    from app.models.chat import Conversation, ConversationMessage
     from app.models.user import User
 
     db = Session()
@@ -117,7 +117,7 @@ def test_gate1_filters_out_users_dreamed_recently(engine_and_session, monkeypatc
     engine, Session = engine_and_session
     _rebind(monkeypatch, Session)
 
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     _seed_user(Session, "fresh_alice", last_dreamed_at=now - timedelta(hours=2))
     _seed_user(Session, "stale_bob", last_dreamed_at=now - timedelta(hours=30))
     _seed_user(Session, "new_carol", last_dreamed_at=None)
@@ -151,7 +151,7 @@ def test_gate3_passes_via_message_count(engine_and_session, monkeypatch):
     engine, Session = engine_and_session
     _rebind(monkeypatch, Session)
 
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     _seed_user(Session, "alice", last_dreamed_at=None)
     _seed_chat(
         Session,
@@ -178,7 +178,7 @@ def test_gate3_session_count_alone_does_not_trigger(engine_and_session, monkeypa
     engine, Session = engine_and_session
     _rebind(monkeypatch, Session)
 
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     _seed_user(Session, "alice", last_dreamed_at=None)
     # Many sessions, 1 message each → lots of sessions but total messages
     # ( = n_sessions ) stays well below NEW_MESSAGES_THRESHOLD. Pre-refactor
@@ -207,7 +207,7 @@ def test_gate3_fails_when_below_message_threshold(engine_and_session, monkeypatc
     engine, Session = engine_and_session
     _rebind(monkeypatch, Session)
 
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     _seed_user(Session, "alice", last_dreamed_at=None)
     _seed_chat(
         Session,
@@ -227,7 +227,7 @@ def test_gate3_fails_when_below_message_threshold(engine_and_session, monkeypatc
 def test_record_quiet_threshold_excludes_active_record(engine_and_session, monkeypatch):
     """A record whose latest debrief message is < RECORD_QUIET_HOURS
     old must NOT be selected — they're 'currently being chatted'."""
-    from app.models.chat import ConversationMessage, Conversation
+    from app.models.chat import Conversation, ConversationMessage
     from app.models.interview_record import InterviewRecord
     from app.models.user import User
     from app.services.memory.dreaming_worker import (
@@ -243,7 +243,7 @@ def test_record_quiet_threshold_excludes_active_record(engine_and_session, monke
     # ``users`` row must exist and the records must carry its pk.
     _seed_user(Session, "alice", last_dreamed_at=None)
 
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     db = Session()
     try:
         alice_pk = db.query(User.id).filter(User.username == "alice").scalar()
@@ -326,7 +326,7 @@ def test_bump_user_last_dreamed_at_moves_cursor(engine_and_session, monkeypatch)
     _rebind(monkeypatch, Session)
 
     _seed_user(Session, "alice", last_dreamed_at=None)
-    before = datetime.utcnow()
+    before = datetime.now(UTC)
     bump_user_last_dreamed_at("alice")
 
     db = Session()

@@ -1,5 +1,4 @@
 import pytest
-
 from app.core.edition import AppEdition, policy_for
 
 
@@ -8,6 +7,7 @@ def test_cloud_exposes_only_hosted_product_controls():
 
     assert policy.supported_mcp_transports == ("streamable_http",)
     assert not policy.allow_provider_connection_overrides
+    assert not policy.expose_rag_diagnostics
     assert set(policy.managed_ai_roles) == {
         "embedding",
         "reranker",
@@ -22,6 +22,7 @@ def test_community_exposes_advanced_controls():
     assert "stdio" in policy.supported_mcp_transports
     assert policy.allow_provider_connection_overrides
     assert policy.show_advanced_model_settings
+    assert policy.expose_rag_diagnostics
 
 
 def test_cloud_rejects_non_official_provider_endpoint():

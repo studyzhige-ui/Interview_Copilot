@@ -5,14 +5,17 @@ truncation (MEM-8), doc compaction (MEM-5)."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-
 from app.services.memory import (
     _dispatch,
+)
+from app.services.memory import (
     memory_ability_state_service as abil,
+)
+from app.services.memory import (
     memory_document_service as docs,
 )
 from app.services.memory._extraction_common import parse_json_patches_ex
@@ -31,6 +34,7 @@ def _seed_user(db_session, monkeypatch):
     import app.services.memory._memory_audit as audit_mod
     import app.services.memory.memory_ability_state_service as abil_mod
     import app.services.memory.memory_document_service as docs_mod
+
     from tests.conftest import patch_session_locals
 
     patch_session_locals(
@@ -282,7 +286,7 @@ def test_context_cap_keeps_all_growth_states(monkeypatch):
             skill_type="knowledge_topic",
             mastery_level=level,
             summary="s",
-            last_evidence_at=datetime.utcnow() - timedelta(days=days_old),
+            last_evidence_at=datetime.now(UTC) - timedelta(days=days_old),
         )
 
     # 3 old weak + 4 fresh strong; flat updated_at-desc cut at 5 would keep

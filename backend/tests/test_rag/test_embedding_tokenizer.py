@@ -7,7 +7,6 @@ environment-independent (no dependency on whether BGE-M3 is cached locally).
 from __future__ import annotations
 
 import pytest
-
 from app.rag import embedding_tokenizer as et
 
 

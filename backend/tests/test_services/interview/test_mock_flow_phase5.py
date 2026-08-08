@@ -7,10 +7,9 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
-
 from app.models.chat import Conversation
 from app.services.interview import (
     mock_flow,
@@ -129,7 +128,7 @@ def test_stale_question_token_rejected(db_session, monkeypatch):
 def test_question_claim_rejects_overlapping_generation(db_session, monkeypatch):
     record, runtime, conv = _make_run(db_session)
     _stub_turn(monkeypatch)
-    runtime.answer_claimed_at = datetime.utcnow()
+    runtime.answer_claimed_at = datetime.now(UTC)
     db_session.commit()
 
     with pytest.raises(mock_flow.QuestionBusyError):

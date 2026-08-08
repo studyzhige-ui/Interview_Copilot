@@ -1,0 +1,156 @@
+{
+  "version": "official-multiformat-software-docs-v4",
+  "output_directory": "data/evaluation/corpus",
+  "documents": [
+    {
+      "file": "python-3.12-asyncio-task.html",
+      "url": "https://docs.python.org/3.12/library/asyncio-task.html",
+      "license": "Python Software Foundation License Version 2",
+      "sha256": "dbcd706e390261780c790100c0bc9ce3b9b3fa086163740816b319af0dd2b3d1"
+    },
+    {
+      "file": "postgresql-17-transaction-isolation.html",
+      "url": "https://www.postgresql.org/docs/17/transaction-iso.html",
+      "license": "PostgreSQL License",
+      "sha256": "749c22942e41ebf6d74833f0c0f4fe87b63d6dfa6767c49b1ae04bfccbe02d13"
+    },
+    {
+      "file": "rfc9110-http-semantics.pdf",
+      "url": "https://www.rfc-editor.org/rfc/rfc9110.pdf",
+      "license": "IETF Trust Legal Provisions",
+      "sha256": "60b30efa1048900833d1758440247fe8ac85a3134f2327388dcb24e07d814c89"
+    },
+    {
+      "file": "rfc9457-problem-details.pdf",
+      "url": "https://www.rfc-editor.org/rfc/rfc9457.pdf",
+      "license": "IETF Trust Legal Provisions",
+      "sha256": "9e556f5dcbf7dd780928cfe03ec7f2080a635e1bcb41ddbeecbe8141c67d09ed"
+    },
+    {
+      "file": "kubernetes-1.32-deployment.md",
+      "url": "https://raw.githubusercontent.com/kubernetes/website/release-1.32/content/en/docs/concepts/workloads/controllers/deployment.md",
+      "license": "CC BY 4.0",
+      "sha256": "e616926c0fc61a406ab08f9c380a32176d4f5141d5694ee09a6afd06e59f3121"
+    },
+    {
+      "file": "redis-client-side-caching.md",
+      "url": "https://raw.githubusercontent.com/redis/docs/main/content/develop/clients/client-side-caching.md",
+      "license": "Redis documentation; local evaluation copy only",
+      "sha256": "0dc65bf8c7f80ca09aeb6d2c5480f3ed8506302977c227fe3f9a3c325b4bb065"
+    },
+    {
+      "file": "docker-storage.md",
+      "url": "https://docs.docker.com/engine/storage.md",
+      "license": "Apache License 2.0",
+      "sha256": "91d439395d38ff19cebf8978ae9a8e7b17e97b649f386ecae839bd78141763bd"
+    },
+    {
+      "file": "python-3.12-typing.html",
+      "url": "https://docs.python.org/3.12/library/typing.html",
+      "license": "Python Software Foundation License Version 2",
+      "sha256": "b8cb00eba2309f5f4dfaa2f9d79333e72b1310396486af7e052a0e69aa104eb6"
+    },
+    {
+      "file": "python-3.12-dataclasses.html",
+      "url": "https://docs.python.org/3.12/library/dataclasses.html",
+      "license": "Python Software Foundation License Version 2",
+      "sha256": "a0f4fb90c359da948056060f1c379f320a82803572048ca0ad09ba360cc94e34"
+    },
+    {
+      "file": "postgresql-17-index-types.html",
+      "url": "https://www.postgresql.org/docs/17/indexes-types.html",
+      "license": "PostgreSQL License",
+      "sha256": "5c1e49f2adb31efe658c04643cb96defdec4eb2c8b27421a057bc41af0dd7008"
+    },
+    {
+      "file": "postgresql-17-using-explain.html",
+      "url": "https://www.postgresql.org/docs/17/using-explain.html",
+      "license": "PostgreSQL License",
+      "sha256": "4285a88f9254b8e1f2107a7cb26fe554fd35c8b191c83079b1432b3ac8dc5aa4"
+    },
+    {
+      "file": "rfc6749-oauth2.txt",
+      "url": "https://www.rfc-editor.org/rfc/rfc6749.txt",
+      "license": "IETF Trust Legal Provisions",
+      "sha256": "f204fc8661d6c92d2ec6e0b54808f961a9ad26e792f57f312d9528335519bd71"
+    },
+    {
+      "file": "kubernetes-1.32-probes.md",
+      "url": "https://raw.githubusercontent.com/kubernetes/website/release-1.32/content/en/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes.md",
+      "license": "CC BY 4.0",
+      "sha256": "15480f0f372aee176477e74c8729596a11babd3fc580522dfb50b511a29affc5"
+    },
+    {
+      "file": "kubernetes-1.32-configmap.md",
+      "url": "https://raw.githubusercontent.com/kubernetes/website/release-1.32/content/en/docs/concepts/configuration/configmap.md",
+      "license": "CC BY 4.0",
+      "sha256": "8e04b9e5c6fea6ac1507fabf2f23040f4d93dd027c0ec8c6a53ce554e2af34b7"
+    },
+    {
+      "file": "docker-network.md",
+      "url": "https://docs.docker.com/engine/network.md",
+      "license": "Apache License 2.0",
+      "sha256": "04f43b15abb747e42f6acddc93c0b65baedff758adcef4ca29188d5294a6a95c"
+    },
+    {
+      "file": "docker-build-cache.md",
+      "url": "https://docs.docker.com/build/cache.md",
+      "license": "Apache License 2.0",
+      "sha256": "6c6a849a716fa59e0ba22c05f1f6959d781fa66f200621084b7a415a7cc3dcb1"
+    },
+    {
+      "file": "typescript-generics.md",
+      "url": "https://raw.githubusercontent.com/microsoft/TypeScript-Website/v2/packages/documentation/copy/en/handbook-v2/Type%20Manipulation/Generics.md",
+      "license": "Apache License 2.0",
+      "sha256": "03ba6d7620fe02cfd7610507e895bc6ef5e20357d3a3ff4f9d7ad195d5381412"
+    },
+    {
+      "file": "typescript-narrowing.md",
+      "url": "https://raw.githubusercontent.com/microsoft/TypeScript-Website/v2/packages/documentation/copy/en/handbook-v2/Narrowing.md",
+      "license": "Apache License 2.0",
+      "sha256": "4836a29bbb3097085d0b21d0631ac464fcfb2a8719a17f4602e892d2be4f337e"
+    },
+    {
+      "file": "react-preserving-state.md",
+      "url": "https://raw.githubusercontent.com/reactjs/react.dev/main/src/content/learn/preserving-and-resetting-state.md",
+      "license": "CC BY 4.0",
+      "sha256": "086a8e55edfc73bdf432aa69d24861eadda6581d838636a12d109ca1316d9548"
+    },
+    {
+      "file": "react-effects.md",
+      "url": "https://raw.githubusercontent.com/reactjs/react.dev/main/src/content/learn/synchronizing-with-effects.md",
+      "license": "CC BY 4.0",
+      "sha256": "75cd806a4f3bcf9ef045533b54fb2b91847c8c361dfd9432a49c94c20c153c7e"
+    },
+    {
+      "file": "fastapi-async.md",
+      "url": "https://raw.githubusercontent.com/fastapi/fastapi/master/docs/en/docs/async.md",
+      "license": "MIT License",
+      "sha256": "1d4397242a6b63f64dd5106e36999dff6deacdc79bb0bb157aae6cc36f8a2c44"
+    },
+    {
+      "file": "sqlalchemy-2-session-transactions.html",
+      "url": "https://docs.sqlalchemy.org/en/20/orm/session_transaction.html",
+      "license": "MIT License",
+      "sha256": "2cf588a1943b121e416690bde68f301a7066b0f3acea049f60e926ef8c31f819"
+    },
+    {
+      "file": "git-rebase.html",
+      "url": "https://git-scm.com/docs/git-rebase",
+      "license": "GNU General Public License v2.0",
+      "sha256": "6fdf4dbd5503f0681a29befc1737f271aa099f6a44e5b6d1fa3ed672a8b1474a"
+    },
+    {
+      "file": "celery-tasks.html",
+      "url": "https://docs.celeryq.dev/en/stable/userguide/tasks.html",
+      "license": "BSD 3-Clause License",
+      "sha256": "ab191fa175e75f0a382f91dd31689712b0b21b6ffd4df679c0cec56c6539aa5d"
+    },
+    {
+      "file": "node-event-loop.html",
+      "url": "https://nodejs.org/en/learn/asynchronous-work/event-loop-timers-and-nexttick",
+      "license": "MIT License",
+      "sha256": "7ef7a31a1886fbde98570ee2d778999786f1cb386ad2c3280376908c328538f1"
+    }
+  ]
+}

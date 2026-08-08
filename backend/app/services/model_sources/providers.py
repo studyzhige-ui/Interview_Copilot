@@ -28,7 +28,6 @@ import os
 
 from .base import ProviderDefaults
 
-
 # Default-enabled providers — the 9 vendors that ship with a working
 # adapter and a card on the new-user Models page:
 #

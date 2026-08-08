@@ -7,22 +7,22 @@ S3 or Redis.
 from __future__ import annotations
 
 from typing import Iterator
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import app.models  # noqa: F401  — register mappers
 import pytest
+from app.api import rag as rag_mod
+from app.core.security import get_current_user
+from app.db.database import Base, get_db
+from app.models.file_asset import FileAsset
+from app.models.knowledge import KnowledgeDocument
+from app.models.user import User
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
-
-from app.api import rag as rag_mod
-from app.core.security import get_current_user
-from app.db.database import Base, get_db
-import app.models  # noqa: F401  — register mappers
-from app.models.file_asset import FileAsset
-from app.models.knowledge import KnowledgeDocument
-from app.models.user import User
 
 
 def _uid(db: Session, username: str) -> int:
@@ -68,11 +68,8 @@ def db() -> Iterator[Session]:
 
 @pytest.fixture
 def client(db: Session) -> Iterator[TestClient]:
-    class FakeUser:
-        username = "alice"
-
-    def fake_user() -> FakeUser:
-        return FakeUser()
+    def fake_user() -> SimpleNamespace:
+        return SimpleNamespace(id=_uid(db, "alice"), username="alice")
 
     def fake_db() -> Iterator[Session]:
         yield db
@@ -90,11 +87,9 @@ def client(db: Session) -> Iterator[TestClient]:
 def test_rag_query_delegates_to_retriever(client):
     from app.rag.retrieval_state import RetrievalResult, RetrievalState
 
-    async def fake_query(*, dense_query, sparse_query, user_id=None, source_kind=None):
+    async def fake_query(*, intents, user_id=None, source_kind=None):
         assert user_id == "alice"
-        # The diagnostic endpoint passes the single query as BOTH inputs.
-        assert dense_query == "what is redis"
-        assert sparse_query == "what is redis"
+        assert [intent.query for intent in intents] == ["what is redis"]
         assert source_kind == "user_upload"
         return RetrievalResult(
             chunks=[
@@ -103,7 +98,14 @@ def test_rag_query_delegates_to_retriever(client):
             state=RetrievalState(retrieval_hit=True),
         )
 
-    with patch("app.api.rag.query_knowledge_base", side_effect=fake_query):
+    from app.core.edition import policy_for
+
+    with (
+        patch(
+            "app.api.rag.current_edition_policy", return_value=policy_for("community")
+        ),
+        patch("app.api.rag.query_knowledge_base", side_effect=fake_query),
+    ):
         resp = client.post(
             "/api/v1/rag/query",
             json={"query": "what is redis", "source_kind": "user_upload"},
@@ -114,6 +116,21 @@ def test_rag_query_delegates_to_retriever(client):
     assert body["data"]["chunks"][0]["chunk_id"] == "dch_1"
     assert body["data"]["retrieval_state"]["retrieval_hit"] is True
     assert body["data"]["retrieval_state"]["empty_reason"] is None
+
+
+def test_rag_query_is_not_exposed_in_cloud(client):
+    from app.core.edition import policy_for
+
+    with (
+        patch("app.api.rag.current_edition_policy", return_value=policy_for("cloud")),
+        patch("app.api.rag.ensure_rag_runtime") as ensure_runtime,
+        patch("app.api.rag.query_knowledge_base") as query,
+    ):
+        response = client.post("/api/v1/rag/query", json={"query": "redis"})
+
+    assert response.status_code == 404
+    ensure_runtime.assert_not_called()
+    query.assert_not_called()
 
 
 def test_rag_query_500_on_retriever_error(client):

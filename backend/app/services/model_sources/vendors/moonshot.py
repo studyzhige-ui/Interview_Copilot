@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from .base import VendorAdapterSpec
 
-
 SPEC = VendorAdapterSpec(
     provider="moonshot",
     models_path="/models",

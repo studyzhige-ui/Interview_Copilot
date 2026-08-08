@@ -438,11 +438,17 @@ async def load_catalog_for(provider: str) -> list[ModelEntry]:
     return await _load_one_provider(provider)
 
 
+def load_seed_catalog_sync() -> dict[str, list[ModelEntry]]:
+    """Return a copy of the packaged cold-start catalog for sync runtimes."""
+    return {provider: list(entries) for provider, entries in _SEED_CATALOG.items()}
+
+
 __all__ = [
     "refresh_catalog",
     "refresh_catalog_for",
     "load_catalog",
     "load_catalog_for",
+    "load_seed_catalog_sync",
 ]
 
 

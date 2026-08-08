@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from .base import VendorAdapterSpec
 
-
 SPEC = VendorAdapterSpec(
     provider="deepseek",
     models_path="/models",

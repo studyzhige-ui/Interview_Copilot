@@ -7,7 +7,7 @@ docstore). ``read_document_text`` concatenates a document's LIVE chunks in order
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from app.models.document_chunk import DocumentChunk
@@ -74,7 +74,7 @@ def test_read_document_text_excludes_soft_deleted(db_session):
                 source_kind="user_upload",
                 chunk_index=1,
                 text="soft deleted",
-                deleted_at=datetime.utcnow(),
+                deleted_at=datetime.now(UTC),
             ),
             DocumentChunk(
                 document_id="kdoc_d",
@@ -141,42 +141,6 @@ def test_mark_chunks_indexed_by_document_id(db_session):
     assert all(r.index_status == "indexed" for r in rows)
 
 
-def test_mark_chunks_indexed_by_node_ids_only_touches_pending(db_session):
-    """The document-less path marks by node_id; a 'deleted' row is never
-    resurrected (only 'pending' rows flip)."""
-    from app.rag.document_chunk_service import mark_chunks_indexed
-
-    db_session.add_all(
-        [
-            DocumentChunk(
-                document_id=None,
-                node_id="p1",
-                user_id=1,
-                source_kind="manual_text",
-                chunk_index=0,
-                text="pending one",
-                index_status="pending",
-            ),
-            DocumentChunk(
-                document_id=None,
-                node_id="d1",
-                user_id=1,
-                source_kind="manual_text",
-                chunk_index=1,
-                text="already deleted",
-                index_status="deleted",
-            ),
-        ]
-    )
-    db_session.commit()
-
-    updated = mark_chunks_indexed(db_session, node_ids=["p1", "d1"])
-    assert updated == 1  # only the pending one
-    by_node = {r.node_id: r for r in db_session.query(DocumentChunk).all()}
-    assert by_node["p1"].index_status == "indexed"
-    assert by_node["d1"].index_status == "deleted"  # untouched
-
-
 def test_write_chunks_persists_provenance_from_node_metadata(db_session):
     """page_start/page_end/token_count are lifted off each node's metadata
     (Phase B); a node without them leaves the columns NULL."""
@@ -223,6 +187,7 @@ def test_write_chunks_builds_metadata_json_from_node_diagnostics(db_session):
     """metadata_json is per-chunk, built from the node's diagnostic keys;
     category is NEVER written there (it lives on knowledge_documents)."""
     import json
+
     from app.rag.document_chunk_service import write_chunks
 
     nodes = [

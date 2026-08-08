@@ -6,7 +6,6 @@ API returns an error."""
 from __future__ import annotations
 
 import pytest
-
 from app.models.file_asset import FileAsset
 from app.services.interview import analysis_intake
 from app.services.interview.interview_record_service import (

@@ -24,18 +24,21 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from app.core.llm_client_factory import get_internal_llm
 from app.db.database import SessionLocal
 from app.models.chat import Conversation
-from app.core.llm_client_factory import get_internal_llm
-from app.services.memory import memory_ability_state_service, memory_document_service
+from app.prompts.memory import REALTIME_EXTRACTION_PROMPT
+from app.services.memory import (
+    _metrics,
+    memory_ability_state_service,
+    memory_document_service,
+)
 from app.services.memory._dispatch import dispatch_memory_patches
-from app.services.memory import _metrics
 from app.services.memory._extraction_common import (
     format_ability_index,
     parse_json_patches_ex,
 )
 from app.services.memory._user_memory_lock import user_memory_lock_sync
-from app.prompts.memory import REALTIME_EXTRACTION_PROMPT
 
 logger = logging.getLogger(__name__)
 

@@ -23,12 +23,9 @@ stable provider key validated at the API layer against ``providers.PROVIDERS``
 (not a DB FK — adding/removing a provider must not need a migration).
 """
 
-from datetime import datetime
-
 from sqlalchemy import (
     Boolean,
     Column,
-    DateTime,
     ForeignKey,
     Integer,
     String,
@@ -37,6 +34,8 @@ from sqlalchemy import (
 )
 
 from app.db.database import Base
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 class UserModelProviderSettings(Base):
@@ -75,10 +74,10 @@ class UserModelProviderSettings(Base):
     # value len <= 500, and NEVER Authorization / Cookie / Host.
     extra_headers_json = Column(Text, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )

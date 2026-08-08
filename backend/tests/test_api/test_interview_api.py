@@ -13,20 +13,19 @@ from __future__ import annotations
 from typing import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import app.models  # noqa: F401  — ensure mappers registered
 import pytest
+from app.api.interviews import records as interview_mod
+from app.core.security import get_current_user
+from app.db.database import Base, get_db
+from app.models.file_asset import FileAsset
+from app.models.interview_record import InterviewRecord
+from app.models.user import User
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
-
-from app.api.interviews import records as interview_mod
-from app.core.security import get_current_user
-from app.db.database import Base, get_db
-import app.models  # noqa: F401  — ensure mappers registered
-from app.models.file_asset import FileAsset
-from app.models.interview_record import InterviewRecord
-from app.models.user import User
 
 
 def _uid(db: Session, username: str) -> int:
@@ -283,7 +282,11 @@ def test_analytics_report_delegates_to_service(client):
         resp = client.get("/api/v1/analytics/report", params={"limit": 10})
     assert resp.status_code == 200
     assert resp.json() == fake
-    mock_gen.assert_awaited_once_with(10, user_id="alice")
+    mock_gen.assert_awaited_once_with(
+        10,
+        user_id="alice",
+        scale_version="evidence-v2",
+    )
 
 
 # ── /interview-records (list / detail / patch / delete) ───────────────────
@@ -375,7 +378,7 @@ def test_delete_interview_record_cascades_conversations(client, db: Session):
     in practice it produced confusing orphan sessions, and the user expressed
     they wanted a clean wipe when removing an interview.
     """
-    from app.models.chat import ConversationMessage, Conversation
+    from app.models.chat import Conversation, ConversationMessage
 
     alice_pk = _uid(db, "alice")
     db.add(

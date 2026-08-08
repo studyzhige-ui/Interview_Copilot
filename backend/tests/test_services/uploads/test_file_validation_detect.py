@@ -9,7 +9,6 @@ csv/json/code/images/legacy Office) while still rejecting binary junk.
 from __future__ import annotations
 
 import pytest
-
 from app.services.uploads.file_validation import detect_head_format
 
 _PDF = b"%PDF-1.7 xxxxxxxxxxxxxxxxxxxxxxxx"

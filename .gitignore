@@ -7,10 +7,8 @@
 # User-local prompt scratchpad (not project content)
 docs/prompts/
 
-# Evaluation code and docs are part of Community. The private golden dataset
-# and its source documents are not distributable; use the tracked example as
-# the schema/template for a project-owned dataset.
-evaluation/golden_dataset.jsonl
+# Evaluation code, manifests and curated questions are tracked. Downloaded
+# source documents remain runtime data under data/evaluation/.
 rag_eval_corpus/
 .venv/
 env/

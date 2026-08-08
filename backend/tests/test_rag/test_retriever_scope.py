@@ -7,8 +7,7 @@ helpers that gate scope, dedup and scoring:
   * ``_hit_in_scope`` — tenant (+ optional source_kind) defence-in-depth.
   * ``milvus_hybrid._scope_expr`` — the Milvus server-side tenant filter expr.
   * ``_dedup_hits`` / ``_normalized_text_hash`` — deterministic dedup.
-  * ``_score_passes`` — reranker-branch score gate (the retriever-fallback
-    branch deliberately skips it — RRF scores are ~1/60-scale).
+  * ``_score_passes`` — calibrated cross-encoder score gate.
   * ``RetrievalState`` / ``RetrievalResult`` — the structured-state contract
     that replaced the ``[SYSTEM_EMPTY_WARNING]`` sentinel protocol.
 """
@@ -16,7 +15,6 @@ helpers that gate scope, dedup and scoring:
 from __future__ import annotations
 
 import pytest
-
 
 # ─────────────────────────────────────────────────────────────────────
 # Scope helpers
@@ -82,6 +80,35 @@ def test_eq_rejects_injection():
 
     with pytest.raises(ValueError):
         milvus_hybrid._eq("source_kind", 'x" or user_id == 1 or "')
+
+
+def test_hybrid_search_uses_strong_read_after_write_consistency(monkeypatch):
+    from app.rag import milvus_hybrid
+
+    class Client:
+        kwargs = None
+
+        def has_collection(self, _name):
+            return True
+
+        def hybrid_search(self, *_args, **kwargs):
+            self.kwargs = kwargs
+            return [[]]
+
+    client = Client()
+    monkeypatch.setattr(milvus_hybrid, "_get_client", lambda: client)
+
+    assert (
+        milvus_hybrid.hybrid_search(
+            milvus_hybrid.KNOWLEDGE,
+            query_text="redis",
+            query_dense=[0.1] * 4,
+            user_pk=7,
+            top_k=3,
+        )
+        == []
+    )
+    assert client.kwargs["consistency_level"] == "Strong"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -168,7 +195,7 @@ def test_retrieval_state_defaults_and_dict_shape():
 
 
 def test_empty_reason_enum_is_frozen():
-    """The six fixed values shared by online trace and offline eval —
+    """The fixed values shared by online trace and offline eval —
     additions belong in retrieval_state.py + the evaluation plan, nowhere else."""
     from app.rag import retrieval_state as rs
 
@@ -178,6 +205,7 @@ def test_empty_reason_enum_is_frozen():
         "all_below_threshold",
         "all_filtered_live_check",
         "milvus_unavailable",
+        "reranker_unavailable",
         "principal_unresolved",
     }
 
@@ -186,7 +214,6 @@ def test_score_source_enum_values():
     from app.rag import retrieval_state as rs
 
     assert rs.SCORE_SOURCE_RERANKER == "reranker"
-    assert rs.SCORE_SOURCE_RETRIEVER_FALLBACK == "retriever_fallback"
 
 
 def test_retrieval_result_hit_property():

@@ -1,18 +1,17 @@
-from datetime import datetime
-
 from sqlalchemy import (
     Boolean,
     Column,
-    DateTime,
     ForeignKey,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
 )
 
 from app.db.database import Base
+from app.db.types import JSONValue as JSON
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 class UserMCPServer(Base):
@@ -36,7 +35,5 @@ class UserMCPServer(Base):
     last_error = Column(Text, nullable=True)
     tool_count = Column(Integer, nullable=False, default=0)
     checked_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
-    )
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)

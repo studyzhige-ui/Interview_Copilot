@@ -1,13 +1,13 @@
 import json
 import logging
-from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from app.core.storage import parse_s3_uri
+from app.db.types import utc_now
 from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
-from app.core.storage import parse_s3_uri
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ def mark_document_indexed_ready(db: Session, document_id: str) -> None:
         return
     doc.status = "ready"
     doc.error_message = None
-    doc.updated_at = datetime.utcnow()
+    doc.updated_at = utc_now()
     db.add(doc)
     db.commit()
 
@@ -58,7 +58,7 @@ def mark_document_index_failed(db: Session, document_id: str, message: str) -> N
         return
     doc.status = "failed"
     doc.error_message = message[:500]
-    doc.updated_at = datetime.utcnow()
+    doc.updated_at = utc_now()
     db.add(doc)
     db.commit()
 

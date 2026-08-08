@@ -1,11 +1,8 @@
-"""Parser selection + orchestration (plan §4.1.1/§4.1.3).
+"""Parser selection and canonical-document orchestration.
 
 The ingest pipeline calls :func:`parse_document`; this module owns which parsers
 to try and in what order, tries them until one yields usable text, and records
-which parser actually ran (the ``parser_profile`` observability). E1 reproduces
-the previous key-based selection (LlamaParse when a LlamaCloud key is set, else
-PyMuPDF/default reader) — Docling (E2) and the per-format lightweight matrix
-(E3) extend ``_candidates`` without touching callers.
+which parser actually ran in ``parser_profile``.
 """
 
 from __future__ import annotations
@@ -19,13 +16,13 @@ import time
 
 from app.core.config import settings
 from app.core.runtime_files import runtime_temp_dir
+from app.rag.cleaning import EmptyContentError, canonicalize_document
+from app.rag.documents import CanonicalDocument
 
 from .base import (
-    IMAGE_EXTS,
     LEGACY_OFFICE_EXTS,
     LEGACY_OFFICE_TARGET,
     DocumentParser,
-    ParseResult,
 )
 from .parsers import (
     DoclingParser,
@@ -34,7 +31,6 @@ from .parsers import (
     LlamaParseParser,
     PptxParser,
     PyMuPDFParser,
-    SimpleReaderParser,
     TextParser,
     XlsxParser,
 )
@@ -43,8 +39,7 @@ logger = logging.getLogger(__name__)
 
 _docling_available_cache: bool | None = None
 
-# Per-format lightweight parser (plan §4.1.3) — the controlled fallback after the
-# first-class tier. Formats not listed fall to SimpleReader (json / md / unknown).
+# Controlled local fallback after the configured first-class parser.
 _LIGHTWEIGHT: dict[str, type] = {
     ".pdf": PyMuPDFParser,
     ".docx": DocxParser,
@@ -55,6 +50,13 @@ _LIGHTWEIGHT: dict[str, type] = {
     ".txt": TextParser,
     ".csv": TextParser,
     ".tsv": TextParser,
+    ".md": TextParser,
+    ".markdown": TextParser,
+    ".json": TextParser,
+    ".py": TextParser,
+    ".java": TextParser,
+    ".cpp": TextParser,
+    ".c": TextParser,
 }
 
 
@@ -85,50 +87,29 @@ def _docling_available() -> bool:
     return _docling_available_cache
 
 
-def _first_class_parsers() -> dict:
-    """Available first-class parsers by id, gated on key (LlamaParse) /
-    installability (Docling) — peers, deployment config picks the primary."""
-    out: dict = {}
-    if _has_llama_cloud():
-        out["llamaparse"] = LlamaParseParser()
-    if _docling_available():
-        out["docling"] = DoclingParser()
-    return out
-
-
 def _candidates(ext: str) -> list:
-    """Ordered parser candidates for an extension: the PARSER_PROVIDER-selected
-    first-class parser first, then the OTHER first-class as document-level
-    fallback, then per-format lightweight, then the default reader. Any tier
-    being unavailable simply drops out — the list is never empty (SimpleReader
-    is the floor)."""
-    first_class = _first_class_parsers()
-    primary_id = (settings.PARSER_PROVIDER or "lightweight").strip().lower()
+    """Return the configured primary followed by one format-specific fallback."""
+    primary_id = (settings.PARSER_PROVIDER or "docling").strip().lower()
     if primary_id not in ("docling", "llamaparse", "lightweight"):
         logger.warning(
-            "unknown PARSER_PROVIDER=%r; using insertion order for first-class parsers",
+            "unknown PARSER_PROVIDER=%r; using docling",
             primary_id,
         )
+        primary_id = "docling"
 
     ordered: list = []
-    if primary_id in first_class:
-        ordered.append(first_class.pop(primary_id))
-    ordered.extend(first_class.values())  # the remaining first-class as fallback
+    if primary_id == "llamaparse":
+        if _has_llama_cloud():
+            ordered.append(LlamaParseParser())
+        if _docling_available():
+            ordered.append(DoclingParser())
+    elif primary_id == "docling" and _docling_available():
+        ordered.append(DoclingParser())
 
     lightweight = _lightweight_for(ext)
     out = [p for p in ordered if p.supports(ext)]
     if lightweight is not None:
-        if primary_id == "lightweight":
-            out.insert(0, lightweight)
-        else:
-            out.append(lightweight)
-    # Binary formats (images + legacy Office) get NO SimpleReader text catch-all
-    # (§4.1.3 matrix: no lightweight fallback): SimpleDirectoryReader reads an
-    # unmapped binary (.tiff/.bmp/.doc/.xls) as raw bytes → garbage that passes
-    # the emptiness gate and gets indexed. For them the list is first-class-only;
-    # with none available it's empty → the caller raises the friendly error.
-    if ext not in IMAGE_EXTS and ext not in LEGACY_OFFICE_EXTS:
-        out.append(SimpleReaderParser())  # default reader + final fallback
+        out.append(lightweight)
     return out
 
 
@@ -137,39 +118,35 @@ def _run_candidates(
     candidates: list,
     *,
     legacy_conversion_used: bool = False,
-) -> ParseResult | None:
-    """Try candidates in order; return the first non-empty ParseResult with its
+) -> CanonicalDocument | None:
+    """Try candidates in order; return the first canonical document with its
     ``parser_profile`` stamped, or None if every candidate fails / yields empty.
     Never raises — the caller decides the friendly final error message."""
     warnings: list[str] = []
     t0 = time.perf_counter()
     for idx, parser in enumerate(candidates):
         try:
-            result = parser.parse(file_path)
+            parsed = parser.parse(file_path)
+            parser_profile = {
+                "tier": parser.tier,
+                "fallback_used": idx > 0,
+                "duration_ms": int((time.perf_counter() - t0) * 1000),
+            }
+            if legacy_conversion_used:
+                parser_profile["legacy_conversion_used"] = True
+            canonical = canonicalize_document(
+                parsed,
+                parser_profile=parser_profile,
+            )
         except Exception as exc:  # noqa: BLE001 — record + try the next candidate
             logger.warning("parser %s failed on %s: %s", parser.id, file_path, exc)
             warnings.append(f"{parser.id}: {exc}")
             continue
-        if not result.markdown.strip():
-            warnings.append(f"{parser.id}: empty output")
-            continue
-        # Merge this parser's own warnings (its channel) with the cross-attempt
-        # failure/empty warnings; warnings live inside the owning profile, never
-        # as a separate top-level key.
-        merged = warnings + list(result.warnings)
-        result.parser_profile = {
-            "tier": parser.tier,
-            "fallback_used": idx > 0,
-            "page_count": len(result.page_map),
-            "char_count": len(result.markdown),
-            "duration_ms": int((time.perf_counter() - t0) * 1000),
-        }
-        if legacy_conversion_used:  # §4.1.4 rule 8 observability
-            result.parser_profile["legacy_conversion_used"] = True
+        merged = [*warnings, *canonical.cleaning_profile.get("warnings", [])]
         if merged:
-            result.parser_profile["warnings"] = merged
+            canonical.parser_profile["warnings"] = list(dict.fromkeys(merged))
         logger.info("parsed %s via %s (fallback=%s)", file_path, parser.id, idx > 0)
-        return result
+        return canonical
     return None
 
 
@@ -202,15 +179,13 @@ def _soffice_convert(
     return converted
 
 
-def _parse_legacy_office(file_path: str, ext: str) -> ParseResult:
+def _parse_legacy_office(file_path: str, ext: str) -> CanonicalDocument:
     """Legacy .doc/.ppt/.xls (plan §4.1.3): LlamaParse parses them directly when
     available; otherwise convert to modern OOXML via LibreOffice/headless soffice
     and run the normal candidates on the converted file (so .xls→.xlsx still uses
     openpyxl, .doc→.docx uses Docling/python-docx, etc.). soffice absent AND no
     LlamaParse → a friendly error: install LibreOffice, switch to OOXML, or
     configure LlamaParse (§4.1.4 rule 5)."""
-    from app.rag.cleaning import EmptyContentError
-
     # 1. First-class direct: _candidates(ext) is [LlamaParse] when a key is set
     #    (Docling doesn't claim legacy office); binaries get no text catch-all.
     result = _run_candidates(file_path, _candidates(ext))
@@ -245,15 +220,8 @@ def _parse_legacy_office(file_path: str, ext: str) -> ParseResult:
     )
 
 
-def parse_document(file_path: str) -> ParseResult:
-    """Parse a file into one :class:`ParseResult`, trying candidates in order
-    until one yields non-empty text. Stamps ``parser_profile`` (tier /
-    fallback_used / page_count / char_count / duration_ms / warnings; plus
-    legacy_conversion_used on the LibreOffice path). Raises
-    :class:`EmptyContentError` (permanent, friendly) if every candidate fails or
-    yields nothing — the worker surfaces it without a pointless retry."""
-    from app.rag.cleaning import EmptyContentError
-
+def parse_document(file_path: str) -> CanonicalDocument:
+    """Parse and normalize a supported file into the sole ingestion contract."""
     ext = os.path.splitext(file_path)[1].lower()
     if ext in LEGACY_OFFICE_EXTS:
         return _parse_legacy_office(file_path, ext)

@@ -460,6 +460,7 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
 def test_context_exhaustion_synthesizes_final_answer():
     """Context exhaustion is explicit without presenting usage as a limit."""
     import inspect
+
     from app.conversation.agent_strategy import AgentLoopStrategy
 
     src = inspect.getsource(AgentLoopStrategy.execute)
@@ -481,6 +482,7 @@ def test_strategy_context_carries_global_memory_on(monkeypatch):
     re-adds the call would fail this assertion.
     """
     import inspect
+
     from app.conversation.agent_strategy import AgentLoopStrategy
 
     src = inspect.getsource(AgentLoopStrategy.execute)
@@ -599,8 +601,8 @@ def test_strategy_crash_yields_humanized_error_event(monkeypatch):
     message live, and that it routes through the shared ``humanize_error``.
     """
     from app.conversation.agent_strategy import AgentLoopStrategy
-    from app.core.error_messages import MSG_BALANCE
     from app.conversation.strategy import StrategyContext, StrategyResult
+    from app.core.error_messages import MSG_BALANCE
 
     class _StubProfile:
         model = "stub"

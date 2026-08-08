@@ -20,11 +20,9 @@ Write-heavy, read-rarely (the history UI). ``user_id`` is the stable
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 from sqlalchemy import (
     Column,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -33,6 +31,8 @@ from sqlalchemy import (
 )
 
 from app.db.database import Base
+from app.db.types import JSONValue, utc_now
+from app.db.types import UTCDateTime as DateTime
 
 # Valid change provenances.
 # compaction_rewrite: the dreaming-time full-doc size compaction (MEM-5) —
@@ -92,7 +92,7 @@ class MemoryAuditEntry(Base):
     source_conversation_id = Column(String, nullable=True)
     source_interview_record_id = Column(String, nullable=True)
     # JSON {"start": seq, "end": seq} of the source message range, when known.
-    source_message_range_json = Column(Text, nullable=True)
+    source_message_range_json = Column(JSONValue, nullable=True)
 
     # Dedup key for a memory write job (NULL for user edits / un-keyed writes).
     idempotency_key = Column(String, nullable=True)
@@ -103,4 +103,4 @@ class MemoryAuditEntry(Base):
     after_body = Column(Text, nullable=True)
     summary = Column(String, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)

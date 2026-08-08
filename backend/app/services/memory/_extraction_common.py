@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
 from typing import Any
+
+from app.db.types import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ def format_ability_index(
         mastery = MASTERY_LABELS.get(s.mastery_level or "", s.mastery_level or "?")
         line = f"- [{s.topic}] {mastery} ({s.skill_type}) — {s.summary or ''}"
         if include_age and getattr(s, "last_evidence_at", None):
-            days = (datetime.utcnow() - s.last_evidence_at).days
+            days = (utc_now() - s.last_evidence_at).days
             if days >= _STALE_ANNOTATION_DAYS:
                 line += f"（距上次证据 {days} 天）"
         lines.append(line)

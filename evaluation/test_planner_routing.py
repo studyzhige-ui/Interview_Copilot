@@ -1,25 +1,11 @@
 """Layer 3 — planner routing quality.
 
 Asserts ``app.conversation.query_planner.plan_query`` makes the right
-RAG / memory-load decisions on the bundled golden dataset.
+RAG / memory-load decisions on the bundled evaluation dataset.
 
-Post-planner-merge, the ``QueryPlan`` shape is:
-
-  needs_knowledge_retrieval : bool
-  dense_query               : str  # only meaningful when needs_kr=True
-  sparse_query              : str  # only meaningful when needs_kr=True
-  knowledge_topics          : list[str]
-  load_strategy             : bool
-  load_habit                : bool
-
-The pre-P8 ``answer_mode`` / ``knowledge_sources`` / ``standalone_query``
-fields are gone, so we don't try to assert on them. The golden dataset
-also doesn't carry per-row ``expected_plan`` rows (and never did under
-the new shape), so the meaningful signal is aggregate behaviour.
-
-Every dataset row is tagged ``["knowledge", "qa"]`` — these are
-unambiguously interview-knowledge questions, so a healthy planner
-should turn RAG on for ≥ 80% of them.
+Knowledge rows, including corpus-unanswerable questions, should retrieve;
+planner-only greeting, transformation and arithmetic rows should not.
+Multi-hop rows additionally verify sub-query decomposition.
 """
 
 from __future__ import annotations
@@ -28,44 +14,52 @@ from typing import Any
 
 import pytest
 
-
-MIN_KNOWLEDGE_TRIGGER_RATE = 0.80
-MIN_DENSE_QUERY_POPULATED_RATE = 0.95
+MIN_ROUTING_ACCURACY = 0.90
+MIN_RETRIEVAL_RECALL = 0.95
+MIN_NO_RETRIEVAL_SPECIFICITY = 0.75
+MIN_INTENT_POPULATED_RATE = 0.95
+MIN_MULTI_INTENT_PLANNING_RATE = 0.66
+MIN_INTENT_COUNT_ACCURACY = 0.90
+MAX_SINGLE_INTENT_OVERDECOMPOSITION_RATE = 0.10
 MAX_PLAN_CALL_FAILURE_RATE = 0.02
 
 
-def test_knowledge_retrieval_trigger_rate(
+def test_routing_accuracy(
     trajectory_metrics: dict[str, Any],
 ) -> None:
-    """QA-tagged queries should turn RAG on."""
-    rate = trajectory_metrics.get("knowledge_retrieval_trigger_rate")
+    """Answerable and deliberately unanswerable queries should both route."""
+    rate = trajectory_metrics.get("routing_accuracy")
     if rate is None:
         pytest.skip("No succeeded plan_query calls.")
-    print(
-        f"\n  Knowledge trigger rate = {rate:.4f} "
-        f"({trajectory_metrics['knowledge_triggered']}/{trajectory_metrics['succeeded']})"
-    )
-    assert rate >= MIN_KNOWLEDGE_TRIGGER_RATE, (
-        f"Knowledge trigger rate = {rate:.4f}, expected ≥ {MIN_KNOWLEDGE_TRIGGER_RATE}"
+    print(f"\n  Routing accuracy = {rate:.4f}")
+    assert rate >= MIN_ROUTING_ACCURACY, (
+        f"Routing accuracy = {rate:.4f}, expected ≥ {MIN_ROUTING_ACCURACY}"
     )
 
 
-def test_dense_query_populated_rate(
+def test_retrieval_recall(trajectory_metrics: dict[str, Any]) -> None:
+    rate = trajectory_metrics.get("retrieval_recall")
+    if rate is None:
+        pytest.skip("No answerable planner rows.")
+    assert rate >= MIN_RETRIEVAL_RECALL
+
+
+def test_no_retrieval_specificity(trajectory_metrics: dict[str, Any]) -> None:
+    rate = trajectory_metrics.get("no_retrieval_specificity")
+    if rate is None:
+        pytest.skip("No negative planner rows.")
+    assert rate >= MIN_NO_RETRIEVAL_SPECIFICITY
+
+
+def test_intent_populated_rate(
     trajectory_metrics: dict[str, Any],
 ) -> None:
-    """When RAG is on, dense_query should be non-empty.
-
-    An empty dense_query short-circuits retrieval upstream — even a
-    correct ``needs_knowledge_retrieval=True`` decision is useless if
-    no query string makes it through to Milvus.
-    """
-    rate = trajectory_metrics.get("dense_query_populated_rate")
+    rate = trajectory_metrics.get("intent_populated_rate")
     if rate is None:
         pytest.skip("No succeeded plan_query calls.")
-    print(f"\n  Dense-query populated rate = {rate:.4f}")
-    assert rate >= MIN_DENSE_QUERY_POPULATED_RATE, (
-        f"Dense-query populated rate = {rate:.4f}, "
-        f"expected ≥ {MIN_DENSE_QUERY_POPULATED_RATE}"
+    print(f"\n  Intent populated rate = {rate:.4f}")
+    assert rate >= MIN_INTENT_POPULATED_RATE, (
+        f"Intent populated rate = {rate:.4f}, expected ≥ {MIN_INTENT_POPULATED_RATE}"
     )
 
 
@@ -76,10 +70,34 @@ def test_plan_call_failure_rate(trajectory_metrics: dict[str, Any]) -> None:
     without forcing a quality-gate red. Beyond that, the planner
     prompt or the LLM client is degraded — block.
     """
-    samples = trajectory_metrics["samples"]
-    failures = trajectory_metrics["plan_call_failures"]
+    reliability = trajectory_metrics["planner_reliability"]
+    samples = reliability["rows"]
+    failures = reliability["first_attempt_failures"]
     rate = failures / samples if samples else 0.0
     print(f"\n  plan_query failure rate = {rate:.4f} ({failures}/{samples})")
     assert rate <= MAX_PLAN_CALL_FAILURE_RATE, (
         f"plan_query failure rate = {rate:.4f}, expected ≤ {MAX_PLAN_CALL_FAILURE_RATE}"
     )
+
+
+def test_multi_intent_planning_rate(trajectory_metrics: dict[str, Any]) -> None:
+    rate = trajectory_metrics.get("multi_intent_planning_rate")
+    if rate is None:
+        pytest.skip("No multi-intent planner rows.")
+    assert rate >= MIN_MULTI_INTENT_PLANNING_RATE
+
+
+def test_intent_count_accuracy(trajectory_metrics: dict[str, Any]) -> None:
+    rate = trajectory_metrics.get("intent_count_accuracy")
+    if rate is None:
+        pytest.skip("No succeeded planner rows.")
+    assert rate >= MIN_INTENT_COUNT_ACCURACY
+
+
+def test_single_intent_overdecomposition_rate(
+    trajectory_metrics: dict[str, Any],
+) -> None:
+    rate = trajectory_metrics.get("single_intent_overdecomposition_rate")
+    if rate is None:
+        pytest.skip("No single-intent retrieval rows.")
+    assert rate <= MAX_SINGLE_INTENT_OVERDECOMPOSITION_RATE

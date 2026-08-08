@@ -1,32 +1,24 @@
-"""Chunk stage (Phase E4) — content-type Splitter strategies + a registry.
-
-``ingestion.get_optimal_nodes`` selects a Splitter by content type, the strategy
-produces the primary nodes, then the shared oversize gate + annotation run back
-in ingestion. This replaces the previous if/elif branch.
-
-There is deliberately NO HTML strategy: the parse stage emits Markdown for HTML
-(``HtmlParser``/Docling), so HTML flows through the markdown strategy; a stray
-plain-text HTML (lightweight fallback failure) falls to the sentence strategy.
-Feeding tag-stripped text to HTMLNodeParser yields zero nodes — silent loss.
-"""
+"""Structure-aware chunking behind one token-safe final gate."""
 
 from __future__ import annotations
 
-import os
 import re
 from typing import Protocol, runtime_checkable
 
 from llama_index.core import Document
 from llama_index.core.node_parser import (
     CodeSplitter as _LlamaCodeSplitter,
+)
+from llama_index.core.node_parser import (
     JSONNodeParser,
     MarkdownNodeParser,
     SentenceSplitter,
 )
 
-# BGE-M3 推荐 chunk 在 512 tokens 内以获得最佳 embedding 语义密度。
-CHUNK_SIZE = 512
-CHUNK_OVERLAP = 64
+from app.rag.documents import CanonicalDocument, PageSpan
+from app.rag.embedding_tokenizer import count_tokens
+from app.rag.policy import current_rag_policy
+from app.rag.retrieval_text import build_retrieval_text
 
 
 # ── Splitter contract ────────────────────────────────────────────────────────
@@ -42,9 +34,7 @@ class Splitter(Protocol):
     id: str
     chunk_type: str
 
-    def matches(
-        self, file_name: str, source_kind: str, is_markdown_parsed: bool
-    ) -> bool: ...
+    def matches(self, content_kind: str) -> bool: ...
 
     def split(self, document: Document) -> tuple[list, bool]: ...
 
@@ -52,36 +42,28 @@ class Splitter(Protocol):
 # ── Moved chunking helpers (verbatim from ingestion) ─────────────────────────
 
 
-def _table_aware_nodes(document: Document, char_budget: int) -> list:
-    """Split CSV/XLSX-extracted text into row-group chunks, repeating the
-    header in each chunk so a single retrieved chunk stays self-describing."""
+def _table_aware_nodes(document: Document, token_budget: int) -> list:
+    """Group normalized, self-describing table records without splitting rows."""
     from llama_index.core.schema import TextNode
 
     lines = [ln for ln in (document.text or "").splitlines() if ln.strip()]
     if not lines:
         return []
-    header = lines[0]
-    body = lines[1:] or [header]
     nodes: list = []
     buf: list[str] = []
-    size = len(header)
-    for row in body:
-        if buf and size + len(row) > char_budget:
+    for row in lines:
+        candidate = "\n".join([*buf, row])
+        if buf and count_tokens(candidate) > token_budget:
             nodes.append(
                 TextNode(
-                    text=header + "\n" + "\n".join(buf),
+                    text="\n".join(buf),
                     metadata=dict(document.metadata),
                 )
             )
-            buf, size = [], len(header)
+            buf = []
         buf.append(row)
-        size += len(row) + 1
     if buf:
-        nodes.append(
-            TextNode(
-                text=header + "\n" + "\n".join(buf), metadata=dict(document.metadata)
-            )
-        )
+        nodes.append(TextNode(text="\n".join(buf), metadata=dict(document.metadata)))
     return nodes
 
 
@@ -153,31 +135,21 @@ class TableSplitter:
     id = "table"
     chunk_type = "table"
 
-    def matches(
-        self, file_name: str, source_kind: str, is_markdown_parsed: bool
-    ) -> bool:
-        return file_name.endswith((".csv", ".tsv", ".xlsx", ".xls"))
+    def matches(self, content_kind: str) -> bool:
+        return content_kind == "table"
 
     def split(self, document: Document) -> tuple[list, bool]:
-        # CHUNK_SIZE*2 is a CHARACTER budget here (rows are short); the doubling
-        # is a rough token→char allowance, not a token count. The oversize gate
-        # back in ingestion re-splits by real tokens, so this only sets row-group
-        # granularity. Don't "fix" this to a token count.
-        return _table_aware_nodes(document, CHUNK_SIZE * 2), False
+        return _table_aware_nodes(
+            document, current_rag_policy().tokens.chunk_target
+        ), False
 
 
 class MarkdownSplitter:
     id = "markdown"
     chunk_type = "text"
 
-    def matches(
-        self, file_name: str, source_kind: str, is_markdown_parsed: bool
-    ) -> bool:
-        return (
-            is_markdown_parsed
-            or file_name.endswith((".md", ".markdown"))
-            or source_kind == "improved_qa"  # saved QA content_text is Markdown
-        )
+    def matches(self, content_kind: str) -> bool:
+        return content_kind == "markdown"
 
     def split(self, document: Document) -> tuple[list, bool]:
         return MarkdownNodeParser().get_nodes_from_documents([document]), False
@@ -187,10 +159,8 @@ class JsonSplitter:
     id = "json"
     chunk_type = "text"
 
-    def matches(
-        self, file_name: str, source_kind: str, is_markdown_parsed: bool
-    ) -> bool:
-        return file_name.endswith(".json")
+    def matches(self, content_kind: str) -> bool:
+        return content_kind == "json"
 
     def split(self, document: Document) -> tuple[list, bool]:
         return JSONNodeParser().get_nodes_from_documents([document]), False
@@ -204,13 +174,13 @@ class CodeSplitter:
     id = "code"
     chunk_type = "code"
 
-    def matches(
-        self, file_name: str, source_kind: str, is_markdown_parsed: bool
-    ) -> bool:
-        return os.path.splitext(file_name)[1] in _CODE_LANGS
+    def matches(self, content_kind: str) -> bool:
+        return content_kind == "code"
 
     def split(self, document: Document) -> tuple[list, bool]:
-        ext = os.path.splitext(document.metadata.get("file_name", "").lower())[1]
+        from pathlib import Path
+
+        ext = Path(document.metadata.get("file_name", "").lower()).suffix
         nodes = _code_splitter(_CODE_LANGS[ext]).get_nodes_from_documents([document])
         return nodes, False
 
@@ -222,16 +192,18 @@ class SentenceSplitterStrategy:
     id = "sentence"
     chunk_type = "text"
 
-    def matches(
-        self, file_name: str, source_kind: str, is_markdown_parsed: bool
-    ) -> bool:
+    def matches(self, content_kind: str) -> bool:
         return True  # catch-all floor
 
     def split(self, document: Document) -> tuple[list, bool]:
         qa_nodes = _qa_aware_nodes(document)
         if qa_nodes is not None:
             return qa_nodes, True
-        splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+        budget = current_rag_policy().tokens
+        splitter = SentenceSplitter(
+            chunk_size=budget.chunk_target,
+            chunk_overlap=budget.chunk_overlap,
+        )
         return splitter.get_nodes_from_documents([document]), False
 
 
@@ -246,11 +218,183 @@ SPLITTERS: list[Splitter] = [
 ]
 
 
-def select_splitter(
-    file_name: str, source_kind: str, is_markdown_parsed: bool
-) -> Splitter:
+def select_splitter(content_kind: str) -> Splitter:
     """Pick the chunking strategy for a document (first match; sentence floor)."""
     for splitter in SPLITTERS:
-        if splitter.matches(file_name, source_kind, is_markdown_parsed):
+        if splitter.matches(content_kind):
             return splitter
     return SPLITTERS[-1]
+
+
+_MD_HEADER_RE = re.compile(r"^#{1,6}\s+(.+)")
+
+
+def _heading_annotations(node, splitter_id: str) -> tuple[list[str], str | None]:
+    if splitter_id != "markdown":
+        return [], None
+    metadata = getattr(node, "metadata", None) or {}
+    heading_path = [
+        value for value in str(metadata.get("header_path") or "").split("/") if value
+    ]
+    first_line = node.get_content().lstrip().split("\n", 1)[0]
+    match = _MD_HEADER_RE.match(first_line)
+    return heading_path, match.group(1).strip() if match else None
+
+
+def _node_start(node, source: str, cursor: int) -> int:
+    canonical_start = (getattr(node, "metadata", None) or {}).get("_canonical_start")
+    if isinstance(canonical_start, int) and canonical_start >= 0:
+        return canonical_start
+    start = getattr(node, "start_char_idx", None)
+    if isinstance(start, int) and start >= 0:
+        return start
+    text = node.get_content().strip()
+    found = source.find(text, cursor)
+    if found < 0:
+        found = source.find(text)
+    return max(found, cursor)
+
+
+def _page_range(
+    spans: list[PageSpan],
+    start: int,
+    end: int,
+) -> tuple[int | None, int | None]:
+    pages = [
+        span.page for span in spans if start < span.char_end and end > span.char_start
+    ]
+    return (min(pages), max(pages)) if pages else (None, None)
+
+
+def _largest_fitting_end(text: str, start: int, limit: int) -> int:
+    low, high = start + 1, len(text)
+    best = low
+    while low <= high:
+        middle = (low + high) // 2
+        if count_tokens(text[start:middle]) <= limit:
+            best = middle
+            low = middle + 1
+        else:
+            high = middle - 1
+    if best < len(text):
+        floor = start + max(1, (best - start) * 3 // 4)
+        matches = list(re.finditer(r"\n\n|\n|[。！？.!?]\s+|\s+", text[floor:best]))
+        if matches:
+            best = floor + matches[-1].end()
+    return best
+
+
+def _overlap_start(text: str, start: int, end: int, overlap: int) -> int:
+    if overlap <= 0:
+        return end
+    low, high = start, end
+    best = end
+    while low <= high:
+        middle = (low + high) // 2
+        if count_tokens(text[middle:end]) <= overlap:
+            best = middle
+            high = middle - 1
+        else:
+            low = middle + 1
+    return best if best > start else end
+
+
+def _split_to_budget(node, *, limit: int, overlap: int) -> list:
+    text = node.get_content()
+    if count_tokens(text) <= limit:
+        return [node]
+    from llama_index.core.schema import TextNode
+
+    nodes: list[TextNode] = []
+    start = 0
+    while start < len(text):
+        end = _largest_fitting_end(text, start, limit)
+        piece = text[start:end].strip()
+        if piece:
+            nodes.append(TextNode(text=piece, metadata=dict(node.metadata)))
+        if end >= len(text):
+            break
+        next_start = _overlap_start(text, start, end, min(overlap, limit // 4))
+        start = next_start if next_start > start else end
+    return nodes
+
+
+def chunk_document(
+    canonical: CanonicalDocument,
+    *,
+    metadata: dict,
+    document_title: str | None = None,
+) -> list:
+    """Split every supported format through one token-budgeted final gate."""
+    document = Document(text=canonical.text, metadata=metadata)
+    splitter = select_splitter(canonical.content_kind)
+    primary_nodes, qa_regex_hit = splitter.split(document)
+    policy = current_rag_policy().tokens
+
+    nodes: list = []
+    primary_cursor = 0
+    for primary in primary_nodes:
+        primary_start = _node_start(primary, canonical.text, primary_cursor)
+        primary_cursor = max(primary_cursor, primary_start + len(primary.get_content()))
+        heading_path, section_title = _heading_annotations(primary, splitter.id)
+        prefix = build_retrieval_text(
+            "",
+            document_title=document_title,
+            section_title=section_title,
+            heading_path=heading_path,
+        )
+        content_limit = max(32, policy.passage_limit - count_tokens(prefix))
+        split_nodes = _split_to_budget(
+            primary,
+            limit=min(policy.chunk_target, content_limit),
+            overlap=policy.chunk_overlap,
+        )
+        local_cursor = 0
+        primary_text = primary.get_content()
+        for node in split_nodes:
+            local_start = _node_start(node, primary_text, local_cursor)
+            local_cursor = max(local_cursor, local_start + len(node.get_content()))
+            node.metadata["_canonical_start"] = primary_start + local_start
+            node.metadata["heading_path"] = heading_path or None
+            node.metadata["section_title"] = section_title
+            nodes.append(node)
+
+    cursor = 0
+    profile = {
+        "chunk_target": policy.chunk_target,
+        "chunk_overlap": policy.chunk_overlap,
+        "passage_limit": policy.passage_limit,
+        "tokenizer": "embedding",
+        "qa_regex_hit": qa_regex_hit,
+    }
+    for node in nodes:
+        text = node.get_content()
+        start = _node_start(node, canonical.text, cursor)
+        end = start + len(text)
+        cursor = max(cursor, end)
+        page_start, page_end = _page_range(canonical.page_spans, start, end)
+        node.metadata.update(metadata)
+        node.metadata["token_count"] = count_tokens(text)
+        node.metadata["splitter_id"] = splitter.id
+        node.metadata["chunk_type"] = splitter.chunk_type
+        node.metadata["splitter_profile"] = profile
+        node.metadata["cleaning_profile"] = canonical.cleaning_profile
+        node.metadata["parser_id"] = canonical.parser_id
+        node.metadata["parser_profile"] = canonical.parser_profile
+        node.metadata["ocr_used"] = canonical.ocr_used
+        if page_start is not None:
+            node.metadata["page_start"] = page_start
+            node.metadata["page_end"] = page_end
+
+        retrieval_text = build_retrieval_text(
+            text,
+            document_title=document_title,
+            section_title=node.metadata.get("section_title"),
+            heading_path=node.metadata.get("heading_path"),
+        )
+        if count_tokens(retrieval_text) > policy.passage_limit:
+            raise ValueError("chunk exceeds the configured reranker passage budget")
+    return nodes
+
+
+__all__ = ["chunk_document", "select_splitter"]

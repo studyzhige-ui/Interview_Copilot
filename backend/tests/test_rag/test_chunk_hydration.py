@@ -9,16 +9,15 @@ to ready documents), file-asset attribution and ``metadata_json`` parsing.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy.orm import Session
-
 from app.models.document_chunk import DocumentChunk
 from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
 from app.rag.chunk_hydration import hydrate_chunks
+from sqlalchemy.orm import Session
 
 
 @pytest.fixture
@@ -145,14 +144,14 @@ def test_hydrate_drops_dead_chunks_and_documents(db: Session):
     uid = _seed_user(db)
     live_doc = _seed_doc(db, uid, suffix="1")
     _seed_chunk(db, live_doc, uid, "n-live")
-    _seed_chunk(db, live_doc, uid, "n-chunk-deleted", deleted_at=datetime.utcnow())
+    _seed_chunk(db, live_doc, uid, "n-chunk-deleted", deleted_at=datetime.now(UTC))
     _seed_chunk(db, live_doc, uid, "n-index-deleted", index_status="deleted")
     deleting_doc = _seed_doc(
         db,
         uid,
         suffix="2",
         status="deleting",
-        deleted_at=datetime.utcnow(),
+        deleted_at=datetime.now(UTC),
     )
     _seed_chunk(db, deleting_doc, uid, "n-dead-doc")
 

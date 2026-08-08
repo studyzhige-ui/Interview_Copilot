@@ -17,7 +17,7 @@ def test_read_resume_reads_personal_entity(monkeypatch):
     from contextlib import contextmanager
 
     from app.agent_runtime.tool_registry import AgentToolContext
-    from app.agent_runtime.tools.resume import _read_resume_handler, ReadResumeArgs
+    from app.agent_runtime.tools.resume import ReadResumeArgs, _read_resume_handler
 
     # ``read_resume`` opens ``with SessionLocal() as db`` and passes db straight
     # to the (stubbed) entity service — a dummy context manager is enough.

@@ -14,11 +14,9 @@ no server-receives-bytes "direct upload" business path.
 """
 
 import uuid
-from datetime import datetime
 
 from sqlalchemy import (
     Column,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -26,6 +24,8 @@ from sqlalchemy import (
 )
 
 from app.db.database import Base
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 def generate_file_asset_id() -> str:
@@ -73,11 +73,11 @@ class FileAsset(Base):
     # the presigned bytes never traverse this process.
     validation_status = Column(String, default="pending", nullable=False)
     validation_error = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )
     deleted_at = Column(DateTime, nullable=True)

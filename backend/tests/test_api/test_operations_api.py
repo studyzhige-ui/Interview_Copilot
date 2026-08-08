@@ -1,7 +1,6 @@
+from app.api import operations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-from app.api import operations
 
 
 def _client() -> TestClient:

@@ -1,7 +1,5 @@
 """Worker handlers for knowledge-index synchronization."""
 
-import json
-
 from sqlalchemy.orm import Session
 
 from app.models.outbox_job import OutboxJob
@@ -47,7 +45,7 @@ def handle_milvus_delete(db: Session, job: OutboxJob) -> None:
     document_id = job.aggregate_id
     if not document_id:
         raise ValueError(f"{JOB_MILVUS_DELETE}: job {job.id} has no document id")
-    payload = json.loads(job.payload_json) if job.payload_json else {}
+    payload = job.payload_json or {}
     if payload.get("user_id") != job.user_id:
         raise PermissionError("knowledge-index job owner does not match payload owner")
     milvus_hybrid.delete_by_field(milvus_hybrid.KNOWLEDGE, "document_id", document_id)

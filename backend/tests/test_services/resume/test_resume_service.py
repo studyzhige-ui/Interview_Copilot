@@ -19,9 +19,9 @@ from sqlalchemy.pool import StaticPool
 @pytest.fixture
 def resume_db_session():
     import app.models.file_asset  # noqa: F401 — resumes.file_asset_id FK target
+    import app.models.outbox_job  # noqa: F401 — durable vector rebuild
     import app.models.resume  # noqa: F401 — register resumes on Base
     import app.models.resume_section  # noqa: F401 — register on Base
-    import app.models.outbox_job  # noqa: F401 — durable vector rebuild
     import app.models.user  # noqa: F401
     from app.db.database import Base
     from app.models.resume import Resume

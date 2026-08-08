@@ -11,13 +11,14 @@ last resort for rows nothing else re-examines.
 
 import logging
 import shutil
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import and_, or_
 
-from app.db.database import SessionLocal
 from app.core.config import settings
+from app.db.database import SessionLocal
+from app.db.types import utc_now
 from app.models.interview_record import InterviewRecord
 from app.services.interview.interview_record_service import (
     STATUS_ANALYZING,
@@ -67,7 +68,7 @@ def sweep_stale_interview_records(self):
     odds) it is still running — the orchestrator writes completed/
     review_ready unconditionally at the end of a successful run.
     """
-    now = datetime.utcnow()
+    now = utc_now()
     swept = 0
     with SessionLocal() as db:
         rows = (
@@ -123,7 +124,7 @@ def sweep_stale_pipeline_records(self):
     from app.worker.tasks.ingestion import process_document_ingestion
     from app.worker.tasks.resume import process_resume_parse
 
-    cutoff = datetime.utcnow() - _PIPELINE_STALE_AFTER
+    cutoff = utc_now() - _PIPELINE_STALE_AFTER
     dispatched = 0
     with SessionLocal() as db:
         documents = (
@@ -164,7 +165,7 @@ def sweep_stale_pipeline_records(self):
                 )
                 continue
             document.task_id = task.id
-            document.updated_at = datetime.utcnow()
+            document.updated_at = utc_now()
             dispatched += 1
 
         for resume in resumes:
@@ -178,7 +179,7 @@ def sweep_stale_pipeline_records(self):
                 )
                 continue
             resume.parse_error = None
-            resume.updated_at = datetime.utcnow()
+            resume.updated_at = utc_now()
             dispatched += 1
         db.commit()
     return {
@@ -217,7 +218,7 @@ def sweep_orphan_file_assets(self):
         enqueue_asset_blob_delete,
     )
 
-    cutoff = datetime.utcnow() - _ORPHAN_ASSET_STALE_AFTER
+    cutoff = utc_now() - _ORPHAN_ASSET_STALE_AFTER
     swept = 0
     with SessionLocal() as db:
         rows = (
@@ -235,8 +236,8 @@ def sweep_orphan_file_assets(self):
             if asset.upload_status == UPLOAD_STATUS_PENDING:
                 enqueue_asset_blob_delete(db, asset)
             asset.upload_status = UPLOAD_STATUS_DELETED
-            asset.deleted_at = datetime.utcnow()
-            asset.updated_at = datetime.utcnow()
+            asset.deleted_at = utc_now()
+            asset.updated_at = utc_now()
             db.add(asset)
             swept += 1
         db.commit()
@@ -255,7 +256,8 @@ def _remove_files_older_than(root: Path, pattern: str, cutoff: datetime) -> int:
     removed = 0
     for path in root.rglob(pattern):
         try:
-            if path.is_file() and datetime.fromtimestamp(path.stat().st_mtime) < cutoff:
+            modified_at = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+            if path.is_file() and modified_at < cutoff:
                 path.unlink()
                 removed += 1
         except OSError:
@@ -270,7 +272,7 @@ def _remove_files_older_than(root: Path, pattern: str, cutoff: datetime) -> int:
 )
 def sweep_runtime_files():
     """Bound disposable local files without touching model or user-data caches."""
-    now = datetime.now()
+    now = utc_now()
     data_dir = Path(settings.APP_DATA_DIR)
     temp_files = _remove_files_older_than(data_dir / "tmp", "*", now - _TEMP_FILE_TTL)
     dev_logs = _remove_files_older_than(

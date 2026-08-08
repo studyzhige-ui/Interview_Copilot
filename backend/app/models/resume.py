@@ -14,12 +14,10 @@ history.
 """
 
 import uuid
-from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
     Column,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -29,6 +27,8 @@ from sqlalchemy import (
 )
 
 from app.db.database import Base
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 def generate_resume_id() -> str:
@@ -69,11 +69,11 @@ class Resume(Base):
         String, nullable=False, default="pending"
     )  # pending/ready/failed
     parse_error = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )
     # Soft delete. Only ``archived_at IS NULL`` rows count toward the

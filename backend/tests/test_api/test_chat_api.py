@@ -13,23 +13,22 @@ from __future__ import annotations
 import json
 from typing import Iterator
 
+import app.models  # noqa: F401  — ensure mappers registered
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
-
 from app.api import chat as chat_api
 from app.api import memory as memory_api
 from app.api.chat import sessions as conversations_mod
 from app.api.interviews import mock as mock_api
 from app.core.security import get_current_user
 from app.db.database import Base, get_db
-import app.models  # noqa: F401  — ensure mappers registered
-from app.models.chat import ConversationMessage, Conversation
+from app.models.chat import Conversation, ConversationMessage
 from app.models.conversation_turn import ConversationTurn
 from app.models.user import User
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 
 def test_terminal_sse_recovery_preserves_failure_and_cancellation():

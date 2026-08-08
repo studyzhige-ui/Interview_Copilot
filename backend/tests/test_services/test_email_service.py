@@ -4,7 +4,6 @@ import logging
 from unittest.mock import patch
 
 import pytest
-
 from app.core.config import settings
 from app.services.auth.email_service import send_email
 

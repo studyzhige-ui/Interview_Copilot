@@ -269,7 +269,7 @@ def delete_record_cascade(
     Returns ``{"deleted_sessions": N, "deleted_knowledge_docs": N}``.
     Raises on failure after rolling back.
     """
-    from app.models.chat import ConversationMessage, Conversation
+    from app.models.chat import Conversation, ConversationMessage
     from app.models.mock_interview_runtime import MockInterviewRuntime
 
     record_id = record.id

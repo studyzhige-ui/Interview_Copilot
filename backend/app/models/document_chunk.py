@@ -7,12 +7,9 @@ replaced the LlamaIndex ``PostgresDocumentStore`` as the project's chunk store:
 full-text reconstruction (``app.rag.document_chunk_service.read_document_text``) reads
 this table; BM25 retrieval is now served by Milvus, not from here.
 
-A row is one chunk:
-  * knowledge-document chunk -> ``document_id`` set (FK to knowledge_documents);
-  * personal_memory chunk    -> ``document_id`` NULL (no knowledge_documents
-    row), identified by ``source_kind='personal_memory'`` + ``user_id``.
+A row is one chunk owned by one ``knowledge_documents`` row.
 
-``user_id`` / ``source_kind`` are denormalised so the keyword + diagnostics
+``user_id`` / ``source_kind`` are denormalised so diagnostics
 scoped reads don't need a join. ``user_id`` here is the stable ``users.id`` FK —
 the same value used as the Milvus retrieval-scope key. CLEANUP #2 moved the whole
 RAG scope key from username to ``users.id``; ingestion writes the pk to both the
@@ -20,11 +17,9 @@ Milvus node metadata and this column, and retrieval filters both by the pk.
 """
 
 import uuid
-from datetime import datetime
 
 from sqlalchemy import (
     Column,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -33,6 +28,8 @@ from sqlalchemy import (
 )
 
 from app.db.database import Base
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 def generate_chunk_id() -> str:
@@ -49,12 +46,11 @@ class DocumentChunk(Base):
     )
 
     id = Column(String, primary_key=True, default=generate_chunk_id)
-    # NULL for personal_memory chunks (no knowledge_documents row).
     document_id = Column(
         String,
         ForeignKey("knowledge_documents.id", ondelete="CASCADE"),
         index=True,
-        nullable=True,
+        nullable=False,
     )
     # Milvus node id this chunk is indexed under — used to delete the matching
     # vector when the chunk is removed.
@@ -81,16 +77,14 @@ class DocumentChunk(Base):
     metadata_json = Column(Text, nullable=True)
     # Index lifecycle: pending -> indexed (Milvus written) / failed / deleted.
     index_status = Column(String, nullable=False, default="pending")
-    # Optional BM25/full-text external index reference (reserved).
-    lexical_index_id = Column(String, nullable=True)
     # Soft delete — read paths exclude deleted_at IS NOT NULL / index_status=
     # 'deleted' immediately, so a not-yet-completed Milvus delete can't leak a
     # removed chunk back into RAG context.
     deleted_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )

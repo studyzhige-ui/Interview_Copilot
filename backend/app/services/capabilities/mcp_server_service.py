@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
 
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.edition import current_edition_policy
 from app.core.secrets import decrypt_secret, encrypt_secret
+from app.db.types import utc_now
 from app.models.user_mcp_server import UserMCPServer
 
 
@@ -226,7 +226,7 @@ def record_check(
     row.last_status = status
     row.last_error = error
     row.tool_count = tool_count
-    row.checked_at = datetime.utcnow()
+    row.checked_at = utc_now()
     db.commit()
     db.refresh(row)
     return _payload(row)

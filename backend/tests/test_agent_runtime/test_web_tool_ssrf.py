@@ -19,7 +19,6 @@ from unittest.mock import patch
 
 import pytest
 
-
 # ── _validate_safe_url ──────────────────────────────────────────────────
 
 
@@ -130,7 +129,7 @@ def test_handler_returns_error_for_unsafe_scheme():
     """Handler must not raise; it must return the standard tool-error
     payload so the agent observes the refusal and adapts."""
     from app.agent_runtime.tool_registry import AgentToolContext
-    from app.agent_runtime.tools.web import _read_url_handler, ReadUrlArgs
+    from app.agent_runtime.tools.web import ReadUrlArgs, _read_url_handler
 
     ctx = AgentToolContext(user_id="alice", session_id="s1")
     args = ReadUrlArgs(url="file:///etc/passwd")
@@ -146,7 +145,7 @@ def test_handler_returns_error_for_cloud_metadata_ip():
     """The single most important regression: agent prompt-injected
     into calling read_url on 169.254.169.254 must be refused."""
     from app.agent_runtime.tool_registry import AgentToolContext
-    from app.agent_runtime.tools.web import _read_url_handler, ReadUrlArgs
+    from app.agent_runtime.tools.web import ReadUrlArgs, _read_url_handler
 
     ctx = AgentToolContext(user_id="alice", session_id="s1")
     args = ReadUrlArgs(url="http://169.254.169.254/latest/meta-data/iam/")
@@ -162,9 +161,8 @@ def test_handler_refuses_redirect_to_private_host():
     at a private one. ``follow_redirects=False`` + manual per-hop
     re-validation must catch this."""
     import httpx
-
     from app.agent_runtime.tool_registry import AgentToolContext
-    from app.agent_runtime.tools.web import _read_url_handler, ReadUrlArgs
+    from app.agent_runtime.tools.web import ReadUrlArgs, _read_url_handler
 
     # Public for the initial validate, private for the redirect target.
     # NB: do NOT use 203.0.113.x — that's RFC 5737 TEST-NET-3, which

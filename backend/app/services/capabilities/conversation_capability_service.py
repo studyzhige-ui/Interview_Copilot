@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from sqlalchemy.orm import Session
 
+from app.db.types import utc_now
 from app.models.chat import Conversation
 from app.models.conversation_capability_state import ConversationCapabilityState
 from app.models.user_mcp_server import UserMCPServer
 from app.models.user_skill import UserSkill
-
 
 _HISTORY_LIMIT = 50
 _DISCOVERY_TOOLS = {"skill_search", "skill_load", "tool_search"}
@@ -111,7 +109,7 @@ def set_permission(
     else:
         permissions[capability] = decision
     row.permissions_json = permissions
-    row.updated_at = datetime.utcnow()
+    row.updated_at = utc_now()
     db.commit()
     db.refresh(row)
     return payload(row)
@@ -129,7 +127,7 @@ def record_discovered_skills(
             discovered.append(name)
             seen.add(name)
     row.discovered_skills_json = discovered
-    row.updated_at = datetime.utcnow()
+    row.updated_at = utc_now()
     db.commit()
 
 
@@ -147,8 +145,8 @@ def append_tool_history(
             "tool_name": tool_name,
             "status": status,
             "turn_id": turn_id,
-            "at": datetime.utcnow().isoformat(),
+            "at": utc_now().isoformat(),
         }
     )
     row.tool_history_json = history[-_HISTORY_LIMIT:]
-    row.updated_at = datetime.utcnow()
+    row.updated_at = utc_now()

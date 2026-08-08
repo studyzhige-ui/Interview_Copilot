@@ -13,8 +13,8 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 from app.agent_runtime.tool_registry import AgentToolContext, ToolEntry, registry
-from app.db.database import SessionLocal
 from app.core.llm_client_factory import build_async_openai_client_for_internal_role
+from app.db.database import SessionLocal
 from app.prompts.agent import TASK_VERIFIER_SYSTEM_PROMPT
 from app.prompts.tasks import (
     TASK_CHECKPOINT_PROMPT,
@@ -25,7 +25,6 @@ from app.prompts.tasks import (
     TASK_VERIFY_PROMPT,
 )
 from app.services.chat import agent_recovery_service, session_task_service
-
 
 # ── Pydantic arg models ─────────────────────────────────────────────────
 

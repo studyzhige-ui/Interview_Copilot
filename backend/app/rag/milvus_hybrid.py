@@ -65,7 +65,7 @@ class HybridCollection:
 # ── The three retrieval collections — identical tenant model (user_id INT64) ──
 KNOWLEDGE = HybridCollection(
     name=settings.MILVUS_COLLECTION,
-    scalars=(_Scalar("source_kind"), _Scalar("document_id", nullable=True)),
+    scalars=(_Scalar("source_kind"), _Scalar("document_id")),
 )
 RESUME = HybridCollection(
     name=settings.RESUME_MILVUS_COLLECTION,
@@ -326,6 +326,9 @@ def hybrid_search(
         ranker=RRFRanker(),
         limit=top_k,
         output_fields=coll.output_fields,
+        # A document is marked ready only after its rows are inserted. Strong
+        # reads preserve that contract across separate API/worker clients.
+        consistency_level="Strong",
     )
     hits = results[0] if results else []
     out: list[dict[str, Any]] = []

@@ -26,11 +26,11 @@ so the metric pipeline never breaks the path it observes.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from app.core.runtime_files import append_jsonl
+from app.db.types import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ def incr(event: str, *, value: int = 1, **labels: Any) -> None:
     yields parseable JSON lines.
     """
     payload = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": utc_now().isoformat(),
         "event": event,
         "value": value,
         **labels,

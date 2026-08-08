@@ -10,12 +10,10 @@ write failure queues ``milvus_upsert_document`` (facts already pending, doc left
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-
 from app.models.document_chunk import DocumentChunk
 from app.models.knowledge import KnowledgeDocument
 from app.models.outbox_job import OutboxJob
@@ -28,7 +26,7 @@ def _job(document_id, *, attempts=0, max_attempts=5):
         id="j",
         user_id=1,
         aggregate_id=document_id,
-        payload_json=json.dumps({"user_id": 1}),
+        payload_json={"user_id": 1},
         attempts=attempts,
         max_attempts=max_attempts,
     )
@@ -54,7 +52,7 @@ def _doc_row(db, document_id):
 def _make_due(db, document_id):
     """Clear an upsert job's backoff so the next drain re-claims it."""
     job = _upsert_job_row(db, document_id)
-    job.next_run_at = datetime.utcnow() - timedelta(seconds=1)
+    job.next_run_at = datetime.now(UTC) - timedelta(seconds=1)
     job.locked_at = None
     db.add(job)
     db.commit()
@@ -74,7 +72,7 @@ def test_handle_milvus_delete_deletes_by_document_id(monkeypatch):
             id="job1",
             user_id=1,
             aggregate_id="kdoc_x",
-            payload_json=json.dumps({"user_id": 1}),
+            payload_json={"user_id": 1},
         ),
     )
     assert calls == [("document_id", "kdoc_x")]
@@ -93,7 +91,7 @@ def test_handle_milvus_delete_noop_without_document_id(monkeypatch):
                 id="job2",
                 user_id=1,
                 aggregate_id=None,
-                payload_json=json.dumps({"user_id": 1}),
+                payload_json={"user_id": 1},
             ),
         )
     assert calls == []
@@ -358,9 +356,9 @@ def test_upsert_drain_persistent_failure_ends_dead_and_doc_failed(
     upsert increments attempts 1→5; the job goes 'dead' and the document goes
     'failed' on the SAME (5th) drain — the off-by-one boundary — with the doc
     kept 'processing' on runs 1–4."""
+    import app.rag.ingestion as ing
     import app.worker.outbox_handlers.knowledge  # noqa: F401 — registers handler
     from app.services.outbox import run_due_outbox_jobs
-    import app.rag.ingestion as ing
 
     _seed_doc(db_session, "kdoc_e2e")  # status=processing
 
@@ -387,9 +385,9 @@ def test_upsert_drain_persistent_failure_ends_dead_and_doc_failed(
 def test_upsert_drain_recovers_to_ready(db_session, monkeypatch):
     """Fail once, then succeed: the document graduates 'processing' → 'ready'
     through the real runner (the primary recovery path C2 exists for)."""
+    import app.rag.ingestion as ing
     import app.worker.outbox_handlers.knowledge  # noqa: F401
     from app.services.outbox import run_due_outbox_jobs
-    import app.rag.ingestion as ing
 
     _seed_doc(db_session, "kdoc_rec")
     calls = {"n": 0}

@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import pytest
-
 from app.models.outbox_job import OutboxJob
 from app.models.user import User
 from app.services import outbox as outbox_service
@@ -258,9 +256,7 @@ def test_run_due_outbox_jobs_runs_handler(db_session, monkeypatch):
     monkeypatch.setitem(
         outbox_service._HANDLERS,
         "delete_object",
-        lambda db, job: seen.update(
-            {"uri": json.loads(job.payload_json)["storage_uri"]}
-        ),
+        lambda db, job: seen.update({"uri": job.payload_json["storage_uri"]}),
     )
     processed = outbox_service.run_due_outbox_jobs(db_session)
     assert processed == 1
@@ -335,7 +331,7 @@ def test_delete_object_handler_enforces_owner_prefix(monkeypatch):
     owned_job = SimpleNamespace(
         job_type="delete_object",
         user_id=7,
-        payload_json=json.dumps(
+        payload_json=(
             {
                 "storage_uri": "s3://bucket/uploads/7/asset/file.pdf",
                 "user_id": 7,
@@ -348,7 +344,7 @@ def test_delete_object_handler_enforces_owner_prefix(monkeypatch):
     cross_tenant_job = SimpleNamespace(
         job_type="delete_object",
         user_id=7,
-        payload_json=json.dumps(
+        payload_json=(
             {
                 "storage_uri": "s3://bucket/uploads/8/asset/file.pdf",
                 "user_id": 7,
@@ -519,7 +515,7 @@ def test_enqueue_asset_blob_delete_is_idempotent(db_session):
         .all()
     )
     assert len(jobs) == 1
-    assert json.loads(jobs[0].payload_json)["storage_uri"] == asset.storage_uri
+    assert jobs[0].payload_json["storage_uri"] == asset.storage_uri
 
 
 def test_presign_ttl_follows_purpose(db_session, _stub_presign):

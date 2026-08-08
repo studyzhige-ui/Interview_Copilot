@@ -21,7 +21,6 @@ states. Long LLM calls happen outside any open transaction.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 import json
 import logging
 import os
@@ -29,15 +28,15 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.db.database import SessionLocal
 from app.core.error_messages import humanize_error
 from app.core.runtime_files import create_runtime_temp_file
+from app.db.database import SessionLocal
+from app.db.types import utc_now
 from app.models.chat import Conversation, ConversationMessage
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
 from app.models.interview_transcript import InterviewTranscript
 from app.prompts.interview import DEBRIEF_SUMMARY_PROMPT
-from app.services.uploads.file_asset_service import get_file_asset
 from app.services.interview.interview_record_service import (
     STATUS_ANALYZING,
     STATUS_COMPLETED,
@@ -49,6 +48,7 @@ from app.services.interview.interview_record_service import (
     STATUS_TRANSCRIBING,
     interview_record_service,
 )
+from app.services.uploads.file_asset_service import get_file_asset
 
 logger = logging.getLogger(__name__)
 
@@ -237,8 +237,7 @@ class InterviewAnalysisOrchestrator:
                                 aggregate_id=record_id,
                                 payload={"username": owner_username},
                                 idempotency_key=f"dream_check:{record_id}",
-                                run_after=datetime.utcnow()
-                                + _td(hours=RECORD_QUIET_HOURS),
+                                run_after=utc_now() + _td(hours=RECORD_QUIET_HOURS),
                             )
                             odb.commit()
                 except Exception as exc:  # noqa: BLE001
@@ -564,7 +563,7 @@ class InterviewAnalysisOrchestrator:
                     if row is None:
                         continue
 
-                row.score = _safe_int(pq.get("score"))
+                row.score = _safe_score(pq.get("score"))
                 row.critique = pq.get("critique") or pq.get("feedback")
                 row.improved_answer = pq.get("improved_answer")
                 kp = pq.get("key_points")
@@ -576,9 +575,7 @@ class InterviewAnalysisOrchestrator:
                     row.answer = pq["answer"]
                 if pq.get("phase"):
                     row.phase = pq["phase"]
-                from datetime import datetime as _dt
-
-                row.analyzed_at = _dt.utcnow()
+                row.analyzed_at = utc_now()
 
             top_level = {
                 "schema_version": 2,
@@ -749,7 +746,6 @@ class InterviewAnalysisOrchestrator:
 
 import threading  # noqa: E402
 
-
 _loop_local = threading.local()
 
 
@@ -762,11 +758,11 @@ def _get_loop() -> asyncio.AbstractEventLoop:
     return loop
 
 
-def _safe_int(value: Any) -> int | None:
+def _safe_score(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return int(value)
+        return round(max(0.0, min(10.0, float(value))), 1)
     return None
 
 

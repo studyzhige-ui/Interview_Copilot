@@ -1,9 +1,10 @@
 import uuid
-from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, ForeignKey, Integer, String, Text
 
 from app.db.database import Base
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 def _generate_section_id() -> str:
@@ -41,4 +42,4 @@ class ResumeSection(Base):
     metadata_json = Column(Text, nullable=True)
     order_idx = Column(Integer, nullable=False, default=0)  # display / concat order
     embedding_status = Column(String, default="pending", nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)

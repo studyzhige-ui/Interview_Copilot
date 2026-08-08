@@ -1,18 +1,17 @@
-from datetime import datetime
-
 from sqlalchemy import (
     Column,
-    DateTime,
     Float,
     ForeignKey,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
 )
 
 from app.db.database import Base
+from app.db.types import JSONValue as JSON
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 class AgentCheckpoint(Base):
@@ -24,9 +23,7 @@ class AgentCheckpoint(Base):
     summary = Column(Text, nullable=False)
     current_task_id = Column(Integer, nullable=True)
     next_action = Column(Text, nullable=False)
-    updated_at = Column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
-    )
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
 class AgentToolCall(Base):
@@ -58,6 +55,6 @@ class AgentToolCall(Base):
     status = Column(String(16), nullable=False, default="running")
     result_json = Column(JSON, nullable=True)
     error = Column(Text, nullable=True)
-    started_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=False, default=utc_now)
     completed_at = Column(DateTime, nullable=True)
     duration_ms = Column(Float, nullable=True)

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from sqlalchemy.orm import Session
 
+from app.db.types import utc_now
 from app.models.agent_execution import AgentCheckpoint, AgentToolCall
 from app.services.chat import session_task_service
 
@@ -35,7 +34,7 @@ def save_checkpoint(
     row.summary = summary
     row.current_task_id = current_task_id
     row.next_action = next_action
-    row.updated_at = datetime.utcnow()
+    row.updated_at = utc_now()
     db.commit()
     db.refresh(row)
     return checkpoint_payload(row)

@@ -12,11 +12,10 @@ def test_session_scope_does_not_close_passed_session():
     ``test_load_universal_opens_exactly_one_db_session`` only sees
     the 1-vs-4 count; this test pins the close-vs-stay-open behavior.
     """
+    from app.services.memory._db_helpers import session_scope
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool
-
-    from app.services.memory._db_helpers import session_scope
 
     engine = create_engine(
         "sqlite://",

@@ -1,8 +1,8 @@
 import os
 import warnings
 from pathlib import Path
-from app.core.config import settings
 
+from app.core.config import settings
 
 HF_CACHE_DIR = Path(settings.CACHE_DIR) / "huggingface"
 LOCAL_MODELS_DIR = Path(settings.CACHE_DIR) / "models"

@@ -20,11 +20,10 @@ from) knowledge retrieval.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 from sqlalchemy import (
     Column,
-    DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -34,6 +33,8 @@ from sqlalchemy import (
 )
 
 from app.db.database import Base
+from app.db.types import JSONValue, utc_now
+from app.db.types import UTCDateTime as DateTime
 
 # Kind of ability the topic represents.
 SKILL_TYPES = (
@@ -84,22 +85,27 @@ class MemoryAbilityState(Base):
     # weak / improving / stable / strong (see MASTERY_LEVELS). Always set by
     # the extraction; the default is only a placeholder for a partial write.
     mastery_level = Column(String, nullable=False, default="improving")
+    # Evidence-derived continuous score. NULL means the state predates the
+    # continuous rubric or has no assessable performance evidence; it must not
+    # be silently replaced with a mastery-level midpoint.
+    ability_score = Column(Float, nullable=True)
+    score_version = Column(String(32), nullable=True)
     # Short prose describing the user's current state and main gaps. NOT a full
     # knowledge answer.
     summary = Column(Text, nullable=True)
     # JSON list of evidence pointers, e.g.
     # ``[{"type": "interview_qa", "id": "qa_x"}]``. Cleaned/anonymised when the
     # referenced business record is deleted (the state itself survives).
-    evidence_refs_json = Column(Text, nullable=True)
+    evidence_refs_json = Column(JSONValue, nullable=True)
     # topic + summary, newline-joined; indexed by the Milvus ability collection.
     search_text = Column(Text, nullable=True)
     # Most recent evidence timestamp — drives staleness.
     last_evidence_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )
     # Set when the state is retired (superseded or no longer relevant); NULL =

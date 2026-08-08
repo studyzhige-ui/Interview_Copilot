@@ -5,7 +5,6 @@ from app.models.user import User
 from app.services.chat import agent_recovery_service
 from app.services.chat.session_task_service import create_task
 
-
 SESSION_ID = "recovery-session"
 
 

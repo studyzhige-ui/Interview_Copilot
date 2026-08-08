@@ -242,11 +242,11 @@ def test_get_analysis_summary_returns_empty_for_unknown(record_db_session, monke
 
 
 def _mock_record_with_status(db, service, status, *, age_minutes=0):
-    from datetime import datetime, timedelta
+    from datetime import UTC, datetime, timedelta
 
     record = service.create_for_mock(user_id="alice", title="模拟面试", db=db)
     record.status = status
-    record.updated_at = datetime.utcnow() - timedelta(minutes=age_minutes)
+    record.updated_at = datetime.now(UTC) - timedelta(minutes=age_minutes)
     db.add(record)
     db.commit()
     return record

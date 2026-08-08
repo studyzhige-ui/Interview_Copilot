@@ -19,6 +19,7 @@ export interface EditionPolicy {
   mcp_transports: MCPTransport[];
   allow_provider_connection_overrides: boolean;
   show_advanced_model_settings: boolean;
+  expose_rag_diagnostics: boolean;
 }
 
 export interface UserMCPServer {

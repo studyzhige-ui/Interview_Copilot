@@ -18,12 +18,12 @@ from app.services.interview.mock_interview_service import (
     GENERAL_PLAN_TEMPLATE,
     NextTurn,
     build_prefix,
+    detect_response_language,
     generate_next_turn,
     generate_plan,
     prefix_hash,
     stages_from_plan_json,
 )
-
 
 # ── build_prefix / prefix_hash ───────────────────────────────────────────
 
@@ -48,6 +48,14 @@ def test_prefix_hash_is_short_and_stable():
     assert isinstance(h, str)
     assert len(h) == 16
     assert prefix_hash("anything") == h
+
+
+def test_response_language_follows_the_answer_not_technical_terms():
+    assert detect_response_language("Python 是我最常用的后端语言。") == "zh"
+    assert (
+        detect_response_language("联合索引包含 user_id、status 和 created_at。") == "zh"
+    )
+    assert detect_response_language("We also added 熔断、限流 and SLO alerts.") == "en"
 
 
 # ── generate_plan ────────────────────────────────────────────────────────
@@ -265,3 +273,4 @@ def test_generate_next_turn_survives_parse_failure():
     assert turn.interviewer_message  # non-empty fallback
     assert turn.next_stage_key == "self_intro"
     assert turn.is_ready_to_finish is False
+    assert turn.used_fallback is True

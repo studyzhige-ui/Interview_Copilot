@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from .base import VendorAdapterSpec
 
-
 _QWEN_PREFIXES = ("qwen", "qwq")
 _NON_CHAT_HINTS = (
     "embedding",

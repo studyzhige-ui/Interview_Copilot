@@ -1,5 +1,8 @@
+import pytest
+
 from evaluation.metrics import (
     aggregate_scores,
+    average_precision_at_k,
     hit_at_k,
     ndcg_at_k,
     overlap_score,
@@ -35,6 +38,7 @@ def test_binary_ranking_metrics_respect_k() -> None:
     assert hit_at_k(flags, 1) == 0
     assert hit_at_k(flags, 2) == 1
     assert precision_at_k(flags, 2) == 0.5
+    assert precision_at_k([True], 3) == pytest.approx(1 / 3)
     assert recall_at_k(flags, total_relevant=2, k=2) == 0.5
     assert reciprocal_rank(flags) == 0.5
 
@@ -43,6 +47,11 @@ def test_ndcg_rewards_better_ordering() -> None:
     assert ndcg_at_k([3.0, 2.0, 0.0]) == 1.0
     assert ndcg_at_k([0.0, 2.0, 3.0]) < 1.0
     assert ndcg_at_k([]) == 0.0
+
+
+def test_ranking_metrics_penalize_missing_gold_items() -> None:
+    assert average_precision_at_k([True, False, False], k=3, total_relevant=2) == 0.5
+    assert ndcg_at_k([1.0, 0.0, 0.0], k=3, total_relevant=2) < 1.0
 
 
 def test_percentile_interpolates_and_aggregate_handles_empty() -> None:

@@ -36,9 +36,9 @@ REALTIME_EXTRACTION_PROMPT = """从最新一段对话中提取值得长期保留
 返回 JSON 对象 {{"patches":[]}}。每个 patch 只能是以下一种：
 
 1. 能力状态新增或更新：
-{{"target":"ability_state","topic":"具体主题","skill_type":"knowledge_topic | system_design | behavioral | communication | project_deep_dive","mastery_level":"weak | improving | stable | strong","summary":"基于本轮证据描述的当前状态"}}
+{{"target":"ability_state","topic":"具体主题","skill_type":"knowledge_topic | system_design | behavioral | communication | project_deep_dive","score":0.0,"mastery_level":"weak | improving | stable | strong","summary":"基于本轮证据描述的当前状态"}}
 
-掌握度含义：weak=存在明确缺口；improving=已形成部分正确理解但不稳定；stable=能独立、完整地解释或应用；strong=能处理边界、权衡并迁移应用。
+score 是本轮实际表现的 0-100 连续分，可保留一位小数：0-39=存在明显错误或关键缺口；40-59=部分正确但不稳定；60-79=能独立完成基础解释或应用；80-89=能处理主要边界和权衡；90-100=在多项具体证据中稳定迁移应用。单轮证据不得高于 79.9。mastery_level 必须与分数区间一致（weak / improving / stable / strong）。
 
 2. 用户画像或学习策略文档：
 {{"target":"user_profile | learning_strategy","op":"add | update | delete","section":"可选的小节名","match_line":"update/delete 时逐字复制现有行","new_line":"add/update 时的一行 Markdown 列表项"}}
@@ -88,9 +88,9 @@ DREAMING_PROMPT = """综合一份面试记录期间的全部复盘对话，更�
 返回 JSON 对象 {{"patches":[]}}。可输出：
 
 1. 能力状态新增或更新：
-{{"target":"ability_state","topic":"具体主题","skill_type":"knowledge_topic | system_design | behavioral | communication | project_deep_dive","mastery_level":"weak | improving | stable | strong","summary":"综合本记录后的当前状态"}}
+{{"target":"ability_state","topic":"具体主题","skill_type":"knowledge_topic | system_design | behavioral | communication | project_deep_dive","score":0.0,"mastery_level":"weak | improving | stable | strong","summary":"综合本记录后的当前状态"}}
 
-掌握度含义：weak=存在明确缺口；improving=部分正确但不稳定；stable=可独立完整解释或应用；strong=可处理边界、权衡和迁移。
+score 是本记录内用户实际表现的 0-100 连续分，可保留一位小数：0-39=明显错误或关键缺口；40-59=部分正确但不稳定；60-79=可独立完成基础解释或应用；80-89=可处理主要边界和权衡；90-100=多项具体证据显示稳定迁移应用。mastery_level 必须与分数区间一致（weak / improving / stable / strong）；证据不足时不要输出该能力 patch。
 
 2. 归档明确过时的能力状态：
 {{"target":"ability_state","op":"archive","topic":"必须逐字匹配现有主题","skill_type":"必须匹配现有类型"}}

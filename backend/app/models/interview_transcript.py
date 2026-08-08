@@ -8,11 +8,12 @@ record removes its transcripts.
 """
 
 import uuid
-from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, Float, ForeignKey, Integer, String, Text
 
 from app.db.database import Base
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 def _generate_transcript_id() -> str:
@@ -49,7 +50,5 @@ class InterviewTranscript(Base):
         String, nullable=False, default="pending"
     )  # pending|processing|ready|failed
     error_message = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
-    )
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)

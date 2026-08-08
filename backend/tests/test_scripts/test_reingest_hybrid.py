@@ -8,16 +8,15 @@ rebuild-from-facts behaviour is covered in test_indexing_write_order).
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
+import app.models  # noqa: F401 — register mappers
 import pytest
+from app.db.database import Base
+from app.models.knowledge import KnowledgeDocument
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-
-import app.models  # noqa: F401 — register mappers
-from app.db.database import Base
-from app.models.knowledge import KnowledgeDocument
 
 
 @pytest.fixture
@@ -76,7 +75,7 @@ def test_reingest_full_skips_soft_deleted(reingest_db, monkeypatch):
                 title="t",
                 source_kind="user_upload",
                 status="ready",
-                deleted_at=datetime.utcnow(),
+                deleted_at=datetime.now(UTC),
             ),
         ],
     )

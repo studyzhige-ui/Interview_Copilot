@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from app.services.model_sources import pipeline as pipeline_mod
 from app.services.model_sources.base import ModelEntry
 from app.services.model_sources.vendors.base import VendorFetchFailed

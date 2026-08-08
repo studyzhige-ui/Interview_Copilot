@@ -9,7 +9,6 @@ from __future__ import annotations
 import math
 import re
 
-
 # ---------------------------------------------------------------------------
 # Text normalisation helpers
 # ---------------------------------------------------------------------------
@@ -60,6 +59,31 @@ def chunk_relevance(
     return overlap_score(reference_text, retrieved_text) >= threshold
 
 
+def term_coverage(terms: list[str], text: str) -> float:
+    """Fraction of curator-provided, language-independent terms in ``text``."""
+    if not terms:
+        return 0.0
+    value = normalize(text)
+    compact_value = re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", value)
+    matched = 0
+    for term in terms:
+        normalized_term = normalize(term)
+        compact_term = re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", normalized_term)
+        matched += normalized_term in value or (
+            bool(compact_term) and compact_term in compact_value
+        )
+    return matched / len(terms)
+
+
+def chunk_matches_terms(
+    terms: list[str],
+    text: str,
+    *,
+    threshold: float = 0.75,
+) -> bool:
+    return term_coverage(terms, text) >= threshold
+
+
 # ---------------------------------------------------------------------------
 # Ranking metrics
 # ---------------------------------------------------------------------------
@@ -80,9 +104,10 @@ def precision_at_k(
 ) -> float:
     """Precision@K — fraction of top-k that are relevant."""
     flags = relevant_flags[:k] if k else relevant_flags
-    if not flags:
+    denominator = k if k is not None else len(flags)
+    if denominator <= 0:
         return 0.0
-    return sum(flags) / len(flags)
+    return sum(flags) / denominator
 
 
 def recall_at_k(
@@ -105,6 +130,26 @@ def reciprocal_rank(relevant_flags: list[bool]) -> float:
     return 0.0
 
 
+def average_precision_at_k(
+    relevant_flags: list[bool],
+    k: int,
+    *,
+    total_relevant: int,
+) -> float:
+    """Standard AP@K, including relevant items missed from the retrieved list."""
+    flags = relevant_flags[:k]
+    denominator = min(total_relevant, k)
+    if denominator <= 0:
+        return 0.0
+    precision_sum = 0.0
+    seen = 0
+    for rank, flag in enumerate(flags, start=1):
+        if flag:
+            seen += 1
+            precision_sum += seen / rank
+    return precision_sum / denominator
+
+
 def dcg(scores: list[float]) -> float:
     """Discounted Cumulative Gain."""
     value = 0.0
@@ -119,12 +164,19 @@ def dcg(scores: list[float]) -> float:
 def ndcg_at_k(
     scores: list[float],
     k: int | None = None,
+    *,
+    total_relevant: int | None = None,
 ) -> float:
     """Normalised DCG@K."""
     truncated = scores[:k] if k else scores
     if not truncated:
         return 0.0
-    ideal = sorted(truncated, reverse=True)
+    if total_relevant is None:
+        ideal = sorted(truncated, reverse=True)
+    else:
+        limit = k or len(truncated)
+        ideal = [1.0] * min(total_relevant, limit)
+        ideal.extend([0.0] * (limit - len(ideal)))
     ideal_dcg = dcg(ideal)
     if ideal_dcg == 0.0:
         return 0.0
@@ -168,3 +220,58 @@ def aggregate_scores(values: list[float]) -> dict[str, float]:
         "p50": round(percentile(values, 0.5), 4),
         "p95": round(percentile(values, 0.95), 4),
     }
+
+
+# ---------------------------------------------------------------------------
+# Grounded-answer helpers
+# ---------------------------------------------------------------------------
+
+
+_CITATION_RE = re.compile(r"\[K(\d+)]", re.IGNORECASE)
+_INSUFFICIENT_MARKERS = (
+    "资料不足",
+    "信息不足",
+    "无法确定",
+    "无法根据",
+    "未包含",
+    "cannot be answered",
+    "cannot determine",
+    "not contain",
+    "insufficient information",
+    "not provided",
+)
+
+
+def citation_validity(answer: str, context_count: int) -> float | None:
+    """Share of emitted ``[K#]`` references that identify a supplied chunk."""
+    citations = [int(value) for value in _CITATION_RE.findall(answer)]
+    if not citations:
+        return None
+    return sum(1 <= value <= context_count for value in citations) / len(citations)
+
+
+def citation_coverage(answer: str) -> float | None:
+    """Share of substantive answer sentences carrying at least one citation."""
+    sentences = [
+        value.strip()
+        for value in re.split(r"(?<=[。！？!?])\s*|(?<=\.)\s+|\n+", answer)
+        if len(re.sub(r"\s+", "", value)) >= 8
+        and not has_insufficient_disclaimer(value)
+    ]
+    if not sentences:
+        return None
+    return sum(bool(_CITATION_RE.search(value)) for value in sentences) / len(sentences)
+
+
+def has_insufficient_disclaimer(answer: str) -> bool:
+    """Whether the response explicitly acknowledges missing evidence."""
+    value = normalize(answer)
+    return any(marker in value for marker in _INSUFFICIENT_MARKERS)
+
+
+def is_insufficient_answer(answer: str) -> bool:
+    """Whether missing evidence is the response's leading answer, not a hedge."""
+    first_sentence = re.split(
+        r"(?<=[。！？!?])\s*|(?<=\.)\s+|\n+", normalize(answer), maxsplit=1
+    )[0]
+    return any(marker in first_sentence for marker in _INSUFFICIENT_MARKERS)

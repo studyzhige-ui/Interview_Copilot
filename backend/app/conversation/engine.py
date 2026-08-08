@@ -30,15 +30,16 @@ import traceback
 from typing import AsyncGenerator
 
 from app.conversation.events import HarnessEvent
+from app.conversation.query_planner import QueryPlan, plan_query
 from app.conversation.strategy import (
     ExecutionStrategy,
     StrategyContext,
     StrategyResult,
 )
 from app.core.error_messages import humanize_error
-from app.conversation.query_planner import QueryPlan, plan_query
 from app.rag.knowledge_retriever import knowledge_retriever
 from app.rag.retrieval_state import EMPTY_PLANNER_NO_RETRIEVAL
+from app.services.analytics.telemetry_service import log_interaction_metrics
 from app.services.chat.chat_history_service import transcript_service
 from app.services.chat.context_assembly_pipeline import context_pipeline
 from app.services.memory.v3_context_loader import (
@@ -46,7 +47,6 @@ from app.services.memory.v3_context_loader import (
     attach_active_bodies,
     load_universal,
 )
-from app.services.analytics.telemetry_service import log_interaction_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -281,10 +281,8 @@ class ConversationEngine:
         knowledge_task = (
             asyncio.create_task(
                 knowledge_retriever.retrieve(
-                    dense_query=query_plan.dense_query or self.user_message,
-                    sparse_query=query_plan.sparse_query,
+                    intents=query_plan.intents,
                     user_id=self.user_id,
-                    sub_queries=[sq.model_dump() for sq in query_plan.sub_queries],
                     planner_failed=query_plan.planner_failed,
                 )
             )
@@ -377,6 +375,7 @@ class ConversationEngine:
             v3_memory_block=v3_memory_block,
             rewritten_query=None,
             needs_knowledge_retrieval=query_plan.needs_knowledge_retrieval,
+            search_intents=query_plan.intents,
             # Final [K#] sources from context assembly (engine forwards them
             # to the SSE sources event + message persistence below).
             sources=assembled.sources,

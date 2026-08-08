@@ -1,7 +1,6 @@
 from unittest.mock import AsyncMock
 
 import pytest
-
 from app.services.auth import verification_code_service as service
 
 

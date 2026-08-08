@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Protocol, runtime_checkable
 
 from app.conversation.events import HarnessEvent
-
+from app.rag.contracts import SearchIntent
 
 # ── Context passed into a strategy ────────────────────────────────────
 
@@ -45,6 +45,7 @@ class StrategyContext:
     v3_memory_block: str = ""  # Convenience: already-rendered v3 memory bundle
     rewritten_query: str | None = None
     needs_knowledge_retrieval: bool = False
+    search_intents: list[SearchIntent] = field(default_factory=list)
 
     # ── Retrieval provenance + state (L1 RAG) ─────────────────────
     # ``sources`` is the final citation array built by context assembly,

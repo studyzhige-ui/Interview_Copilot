@@ -1,462 +1,144 @@
-"""Tests for get_optimal_nodes provenance wiring (ingestion §4.3).
-
-token_count is stamped from the embedding tokenizer and the oversize gate
-uses it. Counting is monkeypatched to a deterministic function so the test
-doesn't depend on a locally-cached embedding model.
-"""
+"""Unified structure-aware chunking tests."""
 
 from __future__ import annotations
 
-from llama_index.core import Document
+from types import SimpleNamespace
 
-from app.rag import ingestion
-from app.rag.chunking import select_splitter
+import pytest
 
-
-# ── E4: select_splitter strategy selection ──────────────────────────────────
-
-
-def test_select_splitter_by_content_type():
-    """The registry maps each content type to its strategy (first match wins,
-    sentence is the catch-all floor)."""
-    assert select_splitter("d.csv", "", False).id == "table"
-    assert select_splitter("d.tsv", "", False).id == "table"
-    assert select_splitter("d.xlsx", "", False).id == "table"
-    assert select_splitter("d.xls", "", False).id == "table"
-    assert select_splitter("n.md", "", False).id == "markdown"
-    assert select_splitter("n.markdown", "", False).id == "markdown"
-    assert select_splitter("x", "improved_qa", False).id == "markdown"  # saved QA is md
-    assert select_splitter("x", "", True).id == "markdown"  # parser emitted markdown
-    assert select_splitter("d.json", "", False).id == "json"
-    assert select_splitter("m.py", "", False).id == "code"
-    assert select_splitter("m.java", "", False).id == "code"
-    assert select_splitter("m.cpp", "", False).id == "code"
-    assert select_splitter("m.c", "", False).id == "code"
-    assert select_splitter("notes.txt", "", False).id == "sentence"
-    assert select_splitter("unknown.xyz", "", False).id == "sentence"
-    assert select_splitter("", "", False).id == "sentence"  # floor, never empty
+import app.rag.chunking as chunking
+from app.rag.documents import CanonicalDocument, PageSpan
+from app.rag.retrieval_text import build_retrieval_text
 
 
-def test_select_splitter_html_has_no_html_strategy():
-    """E4 seam fix (plan §4.1.3 / chunking module docstring): there is NO HTML
-    chunking strategy. HTML reaches chunking as Markdown from the parse stage
-    (HtmlParser/Docling) → markdown strategy; a stray plain-text HTML (lightweight
-    failure) falls to the sentence floor — never HTMLNodeParser, which would
-    yield zero nodes from tag-stripped text and silently lose the document."""
-    assert select_splitter("page.html", "", True).id == "markdown"  # parsed → md
-    assert select_splitter("page.htm", "", True).id == "markdown"
-    assert select_splitter("page.html", "", False).id == "sentence"  # plain-text floor
-    assert select_splitter("page.htm", "", False).id == "sentence"
-
-
-def test_token_count_stamped_on_every_node(monkeypatch):
-    # Deterministic "tokenizer": 1 token per whitespace word.
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    doc = Document(
-        text="alpha beta gamma delta",
-        metadata={"source_kind": "user_upload", "user_id": 1},
+def _document(
+    text: str,
+    kind: str = "text",
+    *,
+    spans: list[PageSpan] | None = None,
+) -> CanonicalDocument:
+    return CanonicalDocument(
+        text=text,
+        content_kind=kind,
+        page_spans=spans or [],
+        parser_id="fixture",
+        parser_profile={"tier": "test"},
+        cleaning_profile={"char_out": len(text)},
     )
-    nodes = ingestion.get_optimal_nodes(doc)
-
-    assert nodes
-    for node in nodes:
-        assert node.metadata["token_count"] == len(node.get_content().split())
 
 
-def test_diagnostic_annotations_stamped(monkeypatch):
-    """Plain text → sentence splitter → splitter_id/chunk_type stamped, and a
-    document-level cleaning_profile propagates to every chunk node."""
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
+@pytest.fixture
+def small_policy(monkeypatch):
+    tokens = SimpleNamespace(chunk_target=64, chunk_overlap=8, passage_limit=96)
+    monkeypatch.setattr(
+        chunking,
+        "current_rag_policy",
+        lambda: SimpleNamespace(tokens=tokens),
+    )
+    return tokens
 
-    doc = Document(
-        text="some plain prose about caching",
+
+def _chunks(document, *, title="Fixture"):
+    return chunking.chunk_document(
+        document,
         metadata={
+            "file_name": "fixture.txt",
             "source_kind": "user_upload",
             "user_id": 1,
-            "cleaning_profile": {"char_out": 30},
         },
+        document_title=title,
     )
-    nodes = ingestion.get_optimal_nodes(doc)
 
+
+@pytest.mark.parametrize(
+    ("kind", "splitter_id"),
+    [
+        ("table", "table"),
+        ("markdown", "markdown"),
+        ("json", "json"),
+        ("code", "code"),
+        ("text", "sentence"),
+        ("unknown", "sentence"),
+    ],
+)
+def test_splitter_selection_uses_parser_semantics(kind, splitter_id):
+    assert chunking.select_splitter(kind).id == splitter_id
+
+
+def test_every_chunk_gets_one_provenance_contract(small_policy):
+    nodes = _chunks(_document("Redis prevents repeated database reads."))
     assert nodes
-    for node in nodes:
-        assert node.metadata["splitter_id"] == "sentence"
-        assert node.metadata["chunk_type"] == "text"
-        assert node.metadata["cleaning_profile"] == {"char_out": 30}
+    metadata = nodes[0].metadata
+    assert metadata["splitter_id"] == "sentence"
+    assert metadata["parser_id"] == "fixture"
+    assert metadata["cleaning_profile"] == {"char_out": 39}
+    assert metadata["token_count"] == chunking.count_tokens(nodes[0].text)
+    assert metadata["splitter_profile"]["chunk_target"] == 64
 
 
-def test_markdown_splitter_id_and_chunk_type(monkeypatch):
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    doc = Document(
-        text="# Title\nbody text",
-        metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "notes.md"},
-    )
-    nodes = ingestion.get_optimal_nodes(doc)
-    assert nodes
-    assert all(n.metadata["splitter_id"] == "markdown" for n in nodes)
-    assert all(n.metadata["chunk_type"] == "text" for n in nodes)
+def test_markdown_keeps_heading_context(small_policy):
+    markdown = "# Cache\n## Redis\n### Avalanche\nRandomize expiry times."
+    nodes = _chunks(_document(markdown, "markdown"))
+    target = next(node for node in nodes if "Avalanche" in node.text)
+    assert target.metadata["heading_path"] == ["Cache", "Redis"]
+    assert target.metadata["section_title"] == "Avalanche"
 
 
-def test_table_branch_splitter_id_and_chunk_type(monkeypatch):
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    doc = Document(
-        text="name,score\nalice,90\nbob,80",
-        metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "data.csv"},
-    )
-    nodes = ingestion.get_optimal_nodes(doc)
-    assert nodes
-    assert all(n.metadata["splitter_id"] == "table" for n in nodes)
-    assert all(n.metadata["chunk_type"] == "table" for n in nodes)
+def test_normalized_table_records_are_not_duplicated(small_policy):
+    text = "name: Alice | score: 90\nname: Bob | score: 80"
+    nodes = _chunks(_document(text, "table"))
+    combined = "\n".join(node.text for node in nodes)
+    assert combined.count("name: Alice") == 1
+    assert combined.count("name: Bob") == 1
+    assert all(node.metadata["chunk_type"] == "table" for node in nodes)
 
 
-def test_code_branch_splitter_id_and_chunk_type(monkeypatch):
-    """Code files use CodeSplitter with an explicitly-built tree-sitter Parser
-    (the get_parser isinstance workaround)."""
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    doc = Document(
-        text="def f():\n    return 1\n\nclass A:\n    pass\n",
-        metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "m.py"},
-    )
-    nodes = ingestion.get_optimal_nodes(doc)
-    assert nodes
-    assert all(n.metadata["splitter_id"] == "code" for n in nodes)
-    assert all(n.metadata["chunk_type"] == "code" for n in nodes)
-
-
-def test_c_file_uses_cpp_grammar(monkeypatch):
-    """.c reuses the cpp grammar (existing behaviour) and still splits."""
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    doc = Document(
-        text="#include <stdio.h>\nint main(void) {\n    return 0;\n}\n",
-        metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "m.c"},
-    )
-    nodes = ingestion.get_optimal_nodes(doc)
-    assert nodes
-    assert all(n.metadata["splitter_id"] == "code" for n in nodes)
-
-
-# ── B4c: heading provenance + splitter_profile ──────────────────────────
-
-
-def test_markdown_heading_path_and_section_title(monkeypatch):
-    # Depends on the MarkdownNodeParser.header_path contract (ancestor chain,
-    # "/"-joined) — pinned to llama-index-core==0.14.19.
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    md = "# Cache\n## Redis\n### Avalanche\n热点 key 失效后大量请求打到数据库。\n"
-    doc = Document(
-        text=md,
-        metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "q.md"},
-    )
-    nodes = ingestion.get_optimal_nodes(doc)
-    target = [n for n in nodes if "Avalanche" in n.get_content()]
-    assert target, "expected a node for the ### Avalanche section"
-    n = target[0]
-    # header_path "/Cache/Redis/" → ancestor chain; own heading → section_title.
-    assert n.metadata.get("heading_path") == ["Cache", "Redis"]
-    assert n.metadata.get("section_title") == "Avalanche"
-
-
-def test_plain_text_has_no_heading_annotations(monkeypatch):
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    doc = Document(
-        text="just prose with no markdown headers at all",
-        metadata={"source_kind": "user_upload", "user_id": 1},
-    )
-    nodes = ingestion.get_optimal_nodes(doc)
-    assert nodes
-    for n in nodes:
-        assert "heading_path" not in n.metadata
-        assert "section_title" not in n.metadata
-
-
-def test_parser_provenance_carried_to_chunks(monkeypatch):
-    """Parse-stage fields (parser_id / parser_profile / ocr_used) on the document
-    metadata are carried onto every chunk (E1, so they land in metadata_json)."""
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    doc = Document(
-        text="some parsed prose",
+def test_code_uses_language_parser(small_policy):
+    document = _document("def answer():\n    return 42\n", "code")
+    nodes = chunking.chunk_document(
+        document,
         metadata={
+            "file_name": "answer.py",
             "source_kind": "user_upload",
             "user_id": 1,
-            "parser_id": "pymupdf",
-            "parser_profile": {"tier": "lightweight"},
-            "ocr_used": False,
         },
     )
-    nodes = ingestion.get_optimal_nodes(doc)
     assert nodes
-    for n in nodes:
-        assert n.metadata["parser_id"] == "pymupdf"
-        assert n.metadata["parser_profile"] == {"tier": "lightweight"}
-        assert n.metadata["ocr_used"] is False
+    assert all(node.metadata["splitter_id"] == "code" for node in nodes)
 
 
-def test_plain_text_chunks_have_no_parser_fields(monkeypatch):
-    """ingest_text-style docs (no file parse) carry no parser_* fields."""
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    doc = Document(
-        text="raw text", metadata={"source_kind": "manual_text", "user_id": 1}
-    )
-    for n in ingestion.get_optimal_nodes(doc):
-        assert "parser_id" not in n.metadata
-        assert "parser_profile" not in n.metadata
-
-
-def test_splitter_profile_stamped(monkeypatch):
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    doc = Document(
-        text="plain prose",
-        metadata={"source_kind": "user_upload", "user_id": 1},
-    )
-    nodes = ingestion.get_optimal_nodes(doc)
-    assert nodes
-    for n in nodes:
-        sp = n.metadata["splitter_profile"]
-        assert sp["chunk_size"] == 512
-        assert sp["chunk_overlap"] == 64
-        assert sp["tokenizer"] == "embedding"
-
-
-def test_splitter_profile_stamped_on_table_and_code_paths(monkeypatch):
-    """splitter_profile records the secondary SentenceSplitter regime and is
-    stamped UNIFORMLY on every branch (table/code included) — even though those
-    branches' primary splitter uses different params. splitter_id carries the
-    true primary identity; this pins that documented behaviour."""
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-    expected = {
-        "chunk_size": 512,
-        "chunk_overlap": 64,
-        "tokenizer": "embedding",
-        "qa_regex_hit": False,
-    }
-
-    csv = Document(
-        text="name,score\nalice,90\nbob,80",
-        metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "d.csv"},
-    )
-    csv_nodes = ingestion.get_optimal_nodes(csv)
-    assert csv_nodes
-    for n in csv_nodes:
-        assert n.metadata["splitter_id"] == "table"
-        assert n.metadata["splitter_profile"] == expected
-
-    code = Document(
-        text="def f():\n    return 1\n",
-        metadata={"source_kind": "user_upload", "user_id": 1, "file_name": "m.py"},
-    )
-    code_nodes = ingestion.get_optimal_nodes(code)
-    assert code_nodes
-    for n in code_nodes:
-        assert n.metadata["splitter_id"] == "code"
-        assert n.metadata["splitter_profile"] == expected
-
-
-def test_non_markdown_hash_first_line_is_not_a_section_title(monkeypatch):
-    """A non-markdown chunk whose first line starts with '# ' (e.g. a Python or
-    shell comment) must NOT be mistaken for a heading. Heading provenance is
-    gated to the markdown splitter, so 'never guesses' holds for code/text."""
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    # No file_name → sentence splitter; first line is a hash-comment the bare
-    # regex would otherwise capture as section_title.
-    doc = Document(
-        text="# TODO refactor this\nsome following prose line",
-        metadata={"source_kind": "user_upload", "user_id": 1},
-    )
-    nodes = ingestion.get_optimal_nodes(doc)
-    assert nodes
-    for n in nodes:
-        assert n.metadata["splitter_id"] == "sentence"
-        assert "section_title" not in n.metadata
-        assert "heading_path" not in n.metadata
-
-
-def test_token_count_stamped_per_node_on_multi_node_doc(monkeypatch):
-    """A long doc splits into several nodes; each carries its OWN token_count
-    (not the parent's), per the post-split stamping loop."""
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    big = " ".join(f"word{i}" for i in range(1200))
-    doc = Document(text=big, metadata={"source_kind": "user_upload", "user_id": 1})
-    nodes = ingestion.get_optimal_nodes(doc)
-
-    assert len(nodes) >= 2
+def test_final_gate_obeys_embedding_and_reranker_budgets(small_policy):
+    text = " ".join(f"token{i}" for i in range(400))
+    nodes = _chunks(_document(text), title="Long technical document")
+    assert len(nodes) > 1
     for node in nodes:
-        assert node.metadata["token_count"] == len(node.get_content().split())
+        assert chunking.count_tokens(node.text) <= small_policy.chunk_target
+        retrieval_text = build_retrieval_text(
+            node.text,
+            document_title="Long technical document",
+            section_title=node.metadata.get("section_title"),
+            heading_path=node.metadata.get("heading_path"),
+        )
+        assert chunking.count_tokens(retrieval_text) <= small_policy.passage_limit
 
 
-def test_oversize_gate_uses_embedding_tokenizer(monkeypatch):
-    """A node the tokenizer reports as oversize (> CHUNK_SIZE*2 = 1024) is
-    secondary-split; the char length is irrelevant to the decision."""
-    calls = {"split": 0}
-
-    # Report every node as hugely oversize so the secondary splitter runs.
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: 5000)
-
-    real_get = ingestion.SentenceSplitter.get_nodes_from_documents
-
-    def _counting(self, docs, **kw):
-        calls["split"] += 1
-        return real_get(self, docs, **kw)
-
-    monkeypatch.setattr(
-        ingestion.SentenceSplitter, "get_nodes_from_documents", _counting
+def test_page_provenance_follows_canonical_offsets(small_policy):
+    text = "first page answer\n\nsecond page answer"
+    boundary = len("first page answer")
+    document = _document(
+        text,
+        spans=[
+            PageSpan(1, 0, boundary),
+            PageSpan(2, boundary + 2, len(text)),
+        ],
     )
-
-    doc = Document(
-        text="short text", metadata={"source_kind": "user_upload", "user_id": 1}
-    )
-    nodes = ingestion.get_optimal_nodes(doc)
-
-    # Secondary split was invoked despite the text being short (char-len would
-    # never have tripped the old len(text) > 1024 gate).
-    assert calls["split"] >= 1
-    assert nodes
+    nodes = _chunks(document)
+    assert nodes[0].metadata["page_start"] == 1
+    assert nodes[0].metadata["page_end"] == 2
 
 
-# ── B4d: most-conservative QA-prefix grouping (plan §4.3 rule 2) ─────────────
-
-
-def test_qa_prefix_pairs_kept_in_same_chunk(monkeypatch):
-    """A plain-text question bank with paired 问题：/答案： prefixes splits at
-    question boundaries, so each question stays in one chunk with its answer."""
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    text = (
-        "问题：什么是缓存击穿？\n答案：热点 key 失效后大量请求打到数据库。\n"
-        "问题：什么是缓存雪崩？\n答案：大量 key 在同一时刻集中失效。\n"
-    )
-    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
-    nodes = ingestion.get_optimal_nodes(doc)
-
-    assert len(nodes) == 2
-    first = nodes[0].get_content()
-    assert "缓存击穿" in first and "打到数据库" in first  # Q and its A together
-    second = nodes[1].get_content()
-    assert "缓存雪崩" in second and "集中失效" in second
-    for n in nodes:
-        assert n.metadata["splitter_id"] == "sentence"
-        assert n.metadata["splitter_profile"]["qa_regex_hit"] is True
-
-
-def test_qa_english_prefixes_grouped(monkeypatch):
-    """The English Q:/A: form (half-width colon) triggers the same grouping."""
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    text = "Q: What is a B-tree?\nA: A balanced search tree.\nQ: What is a heap?\nA: A tree-based priority queue.\n"
-    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
-    nodes = ingestion.get_optimal_nodes(doc)
-
-    assert len(nodes) == 2
-    assert "B-tree" in nodes[0].get_content() and "balanced" in nodes[0].get_content()
-    assert all(n.metadata["splitter_profile"]["qa_regex_hit"] is True for n in nodes)
-
-
-def test_single_qa_pair_does_not_trigger_grouping(monkeypatch):
-    """A lone Q/A marker (one question) is NOT treated as a bank — falls back to
-    the sentence splitter so an incidental "问题：" line can't reshape a doc."""
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    text = "问题：只有一个问题。\n答案：所以不触发分组。"
-    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
-    nodes = ingestion.get_optimal_nodes(doc)
-
-    assert nodes
-    assert all(n.metadata["splitter_profile"]["qa_regex_hit"] is False for n in nodes)
-
-
-def test_question_list_without_answers_does_not_trigger(monkeypatch):
-    """Numbered/bare questions with no answer markers stay rule-3 'hint only' —
-    no forced QA split (requires ≥1 answer marker)."""
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    text = "问题：第一题？\n问题：第二题？\n问题：第三题？\n"
-    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
-    nodes = ingestion.get_optimal_nodes(doc)
-
-    assert nodes
-    assert all(n.metadata["splitter_profile"]["qa_regex_hit"] is False for n in nodes)
-
-
-def test_mid_sentence_qa_marker_does_not_trigger(monkeypatch):
-    """A 问题：/答案： that appears mid-line (not at a line start) must not match
-    the line-anchored regex, so ordinary prose is never reshaped."""
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    text = "前言里讨论了一个问题：到底是什么。后面又给出答案：其实就是这样。再次提到问题：依旧如此。"
-    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
-    nodes = ingestion.get_optimal_nodes(doc)
-
-    assert nodes
-    assert all(n.metadata["splitter_profile"]["qa_regex_hit"] is False for n in nodes)
-
-
-def test_qa_preamble_kept_as_own_chunk(monkeypatch):
-    """Text before the first question marker is preserved as its own leading
-    chunk — QA grouping drops nothing."""
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    text = (
-        "本文档是一份面试题库整理。\n"
-        "问题：什么是索引？\n答案：加速查询的数据结构。\n"
-        "问题：什么是事务？\n答案：一组原子操作。\n"
-    )
-    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
-    nodes = ingestion.get_optimal_nodes(doc)
-
-    assert len(nodes) == 3  # preamble + two Q/A groups
-    assert "面试题库整理" in nodes[0].get_content()
-    assert "索引" in nodes[1].get_content() and "事务" in nodes[2].get_content()
-    assert all(n.metadata["splitter_profile"]["qa_regex_hit"] is True for n in nodes)
-
-
-def test_qa_mixed_answer_markers_grouped(monkeypatch):
-    """答案：/答：/A: all count as answer markers toward the pairing trigger."""
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: len(t.split()))
-
-    text = "问题：甲是什么？\n答：是甲。\n问题：乙是什么？\n答案：是乙。\n"
-    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
-    nodes = ingestion.get_optimal_nodes(doc)
-
-    assert len(nodes) == 2
-    assert all(n.metadata["splitter_profile"]["qa_regex_hit"] is True for n in nodes)
-
-
-def test_oversize_qa_group_routes_through_secondary_gate(monkeypatch):
-    """An oversize Q/A group does not bypass the downstream oversize gate — it is
-    still secondary-split, and the resulting sub-nodes keep qa_regex_hit=True."""
-    # Report every node as oversize so each QA group hits the secondary splitter.
-    monkeypatch.setattr(ingestion, "count_embedding_tokens", lambda t: 5000)
-    calls = {"split": 0}
-    real_get = ingestion.SentenceSplitter.get_nodes_from_documents
-
-    def _counting(self, docs, **kw):
-        calls["split"] += 1
-        return real_get(self, docs, **kw)
-
-    monkeypatch.setattr(
-        ingestion.SentenceSplitter, "get_nodes_from_documents", _counting
-    )
-
-    text = (
-        "问题：什么是缓存击穿？\n答案：热点 key 失效后大量请求打到数据库。\n"
-        "问题：什么是缓存雪崩？\n答案：大量 key 在同一时刻集中失效。\n"
-    )
-    doc = Document(text=text, metadata={"source_kind": "user_upload", "user_id": 1})
-    nodes = ingestion.get_optimal_nodes(doc)
-
-    # _qa_aware_nodes builds TextNodes directly, so every SentenceSplitter call
-    # here comes from the oversize gate re-splitting the QA groups.
-    assert calls["split"] >= 1
-    assert nodes
-    assert all(n.metadata["splitter_profile"]["qa_regex_hit"] is True for n in nodes)
+def test_qa_bank_keeps_question_answer_pairs(small_policy):
+    text = "Q: What is Redis?\nA: A data store.\nQ: What is TTL?\nA: Expiry."
+    nodes = _chunks(_document(text))
+    assert nodes[0].metadata["splitter_profile"]["qa_regex_hit"] is True
+    assert all("Q:" in node.text for node in nodes)

@@ -1,10 +1,8 @@
 import uuid
-from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
     Column,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -15,6 +13,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from app.db.database import Base
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 def generate_uuid() -> str:
@@ -71,8 +71,8 @@ class Conversation(Base):
     memory_extraction_cursor = Column(Integer, default=0)
     turn_count = Column(Integer, default=0)
     archived_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
     messages = relationship(
         "ConversationMessage",
@@ -124,6 +124,6 @@ class ConversationMessage(Base):
     # its tool_use without re-parsing content_blocks_json.
     tool_call_id = Column(String, nullable=True)
     tool_name = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     session = relationship("Conversation", back_populates="messages")

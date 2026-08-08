@@ -31,15 +31,15 @@ from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
-    verify_and_maybe_rehash,
     get_current_user,
     oauth2_scheme,
     token_claims_for,
+    verify_and_maybe_rehash,
 )
+from app.core.token_blacklist import is_revoked, revoke
 from app.db.database import get_db
 from app.models.user import User
 from app.services.auth import avatar_service, user_account_service
-from app.core.token_blacklist import is_revoked, revoke
 from app.services.auth.verification_code_service import (
     CodeError,
     assert_ip_not_locked,
@@ -69,7 +69,6 @@ from app.schemas.auth import (  # noqa: E402, F401
     Token,
     UserCreate,
 )
-
 
 # ── Token helpers ──────────────────────────────────────────────────────
 

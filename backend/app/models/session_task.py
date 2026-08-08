@@ -5,21 +5,20 @@ work the agent plans to complete. Tasks persist across turns within a
 session so the agent (and user) can see progress over multi-turn workflows.
 """
 
-from datetime import datetime
-
 from sqlalchemy import (
     Column,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
 )
 
 from app.db.database import Base
+from app.db.types import JSONValue as JSON
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 class SessionTask(Base):
@@ -48,5 +47,5 @@ class SessionTask(Base):
     verification_status = Column(String(16), nullable=False, default="unverified")
     verification_notes = Column(Text, nullable=True)
     attempt_count = Column(Integer, nullable=False, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)

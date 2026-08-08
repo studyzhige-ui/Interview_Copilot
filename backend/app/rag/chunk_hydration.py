@@ -3,18 +3,15 @@
 Milvus rows carry only the index copy (user_id / source_kind / document_id /
 text); everything the answer page shows — document title, file name, page
 span, chunk index — comes from the Postgres fact tables. This module is the
-single hydrate + live-check step shared by the L1 retriever and the L2
-``search_knowledge`` tool (and the planned offline evaluation runners).
+single hydrate + live-check step shared by retrieval, the
+``search_knowledge`` tool, and offline evaluation.
 
 Live check (the read-path safety net for lagging/failed Milvus deletes):
 
   * the chunk row still exists, ``deleted_at IS NULL`` and is fully indexed;
   * its knowledge document exists, is not soft-deleted and is ``ready``.
 
-A hit whose ``node_id`` doesn't resolve here is dropped. This also covers
-legacy index rows whose chunk rows were removed by migration (e.g. the old
-personal_memory corpus, dropped in 0039) — replacing the explicit
-source_kind exclusion the retriever used to carry.
+A hit whose ``node_id`` does not resolve here is dropped.
 """
 
 from __future__ import annotations

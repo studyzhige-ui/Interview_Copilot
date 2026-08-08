@@ -4,9 +4,8 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 load_dotenv()
 
@@ -64,7 +63,9 @@ class Settings(BaseSettings):
     # Local upload backups and object-storage staging
     STORAGE_DIR: str = ""
 
-    EMBEDDING_DEVICE: str = "auto"
+    # One device choice for the local RAG stack (Docling, embedding, reranker).
+    # Every component supports CPU; ``auto`` uses CUDA when available.
+    RAG_DEVICE: str = "auto"
     # ── Model selection: provider + free-form model name ───────────────────
     # Two axes per role:
     #   *_PROVIDER  — picks an entry from the small PROVIDERS dict in the
@@ -93,6 +94,12 @@ class Settings(BaseSettings):
     # Reranker (RAG cross-encoder)
     RERANKER_PROVIDER: str = "siliconflow"
     RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"
+    # Shared ingestion/retrieval policy. Defaults remain benchmark inputs until
+    # the CPU/GPU ablation selects the release profile.
+    RAG_CHUNK_TOKENS: int = 384
+    RAG_CHUNK_OVERLAP: int = 64
+    RAG_RERANK_INPUT_TOKENS: int = 512
+    RAG_QUERY_TOKEN_RESERVE: int = 96
 
     # ASR (audio transcription)
     TRANSCRIPTION_PROVIDER: str = "siliconflow"
@@ -139,27 +146,24 @@ class Settings(BaseSettings):
     MCP_ALLOW_STDIO: bool = False
     MCP_ALLOW_PRIVATE_NETWORKS: bool = False
     MCP_RUNTIME_IDLE_SECONDS: int = 600
-    # Pre-rerank hybrid candidate count (Milvus RRF output). 12 gives the
-    # cross-encoder a real choice space (retrieval plan §2.3).
-    FUSION_TOP_K: int = 12
-    # Per-sub-query candidate budget for a multi-intent turn — smaller than
-    # FUSION_TOP_K so the merged pool stays bounded before the unified rerank.
-    SUB_QUERY_FUSION_TOP_K: int = 6
-    # Defensive hard cap on planner-emitted sub-queries (not a product limit;
-    # bounds the embedding/Milvus/rerank fan-out if the LLM over-splits).
-    MAX_SUB_QUERIES: int = 4
-    RERANK_TOP_N: int = 5
-    # Reranker-score relevance threshold — reranker branch ONLY. The
-    # retriever-fallback branch (remote reranker transport failure) returns
-    # RRF-ordered top-N without it: RRF scores are ~1/60-scale and would
-    # never clear a cross-encoder threshold (see rag/retriever._score_passes).
-    RAG_MIN_SCORE: float = 0.5
-    # S0 conservative ingest cleaning (plan §4.2) — switchable per
-    # INGEST-CLEANING. Off = parsed text is chunked verbatim.
-    RAG_CLEANING_ENABLED: bool = True
-    # Primary document parser: bundled lightweight parsers, optional local
-    # Docling, or LlamaParse with a deployment key.
-    PARSER_PROVIDER: str = "lightweight"
+    RAG_CANDIDATE_COUNT: int = 20
+    RAG_FINAL_COUNT: int = 3
+    RAG_MAX_INTENTS: int = 4
+    # Reranker-score relevance threshold — reranker branch ONLY. Calibrated
+    # for the default BAAI/bge-reranker-v2-m3 sigmoid score on the versioned
+    # official-doc benchmark; other reranker models must be calibrated on
+    # their own score distribution rather than inheriting this number. A
+    # reranker transport failure fails closed because RRF scores use an
+    # incompatible scale and cannot safely inherit this threshold.
+    RAG_MIN_SCORE: float = 0.87
+    # Single-intent evidence must also stay close to the best result. This
+    # removes topically related tail chunks without suppressing independent
+    # legs of an explicitly decomposed multi-intent query.
+    RAG_SCORE_MARGIN: float | None = 0.01
+    # Community defaults to local structured parsing. LlamaParse remains an
+    # explicit optional primary; format-specific lightweight parsers are the
+    # final fallback.
+    PARSER_PROVIDER: str = "docling"
     # On-demand OCR for the Docling parser (plan §4.1.3/§4.1.4): scanned PDFs
     # (pages with no text layer) and image documents. Effective only when an OCR
     # engine (rapidocr-onnxruntime) is importable — if it isn't, Docling is built
@@ -279,6 +283,22 @@ class Settings(BaseSettings):
         }
         subdir = field_to_subdir.get(info.field_name, info.field_name.lower())
         return str(Path(app_data) / subdir)
+
+    @model_validator(mode="after")
+    def _validate_rag_policy(self) -> "Settings":
+        if self.RAG_DEVICE not in {"auto", "cpu", "cuda"}:
+            raise ValueError("RAG_DEVICE must be auto, cpu, or cuda")
+        if self.RAG_CHUNK_TOKENS <= self.RAG_CHUNK_OVERLAP:
+            raise ValueError("RAG_CHUNK_TOKENS must exceed RAG_CHUNK_OVERLAP")
+        if self.RAG_QUERY_TOKEN_RESERVE >= self.RAG_RERANK_INPUT_TOKENS:
+            raise ValueError(
+                "RAG_QUERY_TOKEN_RESERVE must be below RAG_RERANK_INPUT_TOKENS"
+            )
+        if self.RAG_CHUNK_TOKENS > (
+            self.RAG_RERANK_INPUT_TOKENS - self.RAG_QUERY_TOKEN_RESERVE
+        ):
+            raise ValueError("RAG_CHUNK_TOKENS exceeds the reranker passage budget")
+        return self
 
 
 _INSECURE_SECRET_KEYS = {

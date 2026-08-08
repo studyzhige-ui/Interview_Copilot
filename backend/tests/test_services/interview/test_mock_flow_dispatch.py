@@ -9,7 +9,6 @@ a finished interview in the resume banner).
 from __future__ import annotations
 
 import pytest
-
 from app.services.interview import mock_flow, mock_runtime_service
 from app.services.interview.interview_record_service import (
     STATUS_MOCK_IN_PROGRESS,

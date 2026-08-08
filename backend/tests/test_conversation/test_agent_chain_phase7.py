@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from app.services.chat.context_assembly_pipeline import TokenBudget, _turn_tokens
 
-
 # ── AGT-6: TokenBudget takes the model's real window ─────────────────────
 
 
@@ -48,9 +47,8 @@ def test_turn_tokens_counts_agent_blocks():
 
 
 def test_registry_passes_user_id_to_capable_check_fns():
-    from pydantic import BaseModel
-
     from app.agent_runtime.tool_registry import ToolEntry, ToolRegistry
+    from pydantic import BaseModel
 
     class _Args(BaseModel):
         q: str = ""

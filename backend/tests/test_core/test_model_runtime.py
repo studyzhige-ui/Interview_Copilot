@@ -9,27 +9,24 @@ LLM construction, api-base override).
 
 from __future__ import annotations
 
-import pytest
-from llama_index.core.llms import LLM
-from llama_index.llms.openai_like import OpenAILike
-
 # Patch the owning module so runtime callers observe the same test state.
 import app.core.llm_client_factory as llm_client_factory
 import app.core.model_catalog as model_catalog
 import app.core.user_model_selection as user_model_selection
+import pytest
+from app.core.internal_models import get_internal_model_profile
 from app.core.llm_client_factory import (
-    RuntimeLLMProxy,
     _build_llm_instance,
     get_internal_llm,
     profile_ready,
     validate_role_update,
 )
-from app.core.internal_models import get_internal_model_profile
 from app.core.model_catalog import ROLE_DEFAULTS, ModelProfile, get_profile
 from app.core.user_model_selection import (
     _normalize_selection,
     get_profile_for_role,
 )
+from llama_index.llms.openai_like import OpenAILike
 
 
 def _mkprofile(
@@ -200,11 +197,6 @@ def test_get_profile_for_role_raises_when_catalog_empty(monkeypatch):
     monkeypatch.setattr(model_catalog, "_get_all_profiles", lambda: {})
     with pytest.raises(ValueError, match="catalog is empty"):
         get_profile_for_role("primary")
-
-
-def test_runtime_proxy_is_a_valid_llamaindex_llm():
-    """Cold-catalog startup can assign the lazy proxy to Settings.llm."""
-    assert isinstance(RuntimeLLMProxy(role="primary"), LLM)
 
 
 # ── Per-user selection storage ───────────────────────────────────────────
@@ -447,6 +439,7 @@ def test_internal_model_uses_deployment_key_only(monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-platform")
     llm = get_internal_llm("router")
     assert getattr(llm, "api_key", None) == "sk-platform"
+    assert llm.additional_kwargs == {"extra_body": {"thinking": {"type": "disabled"}}}
 
 
 def test_non_fc_answer_model_remains_selectable(monkeypatch):
@@ -462,6 +455,17 @@ def test_no_keys_at_all_falls_back_to_historical_chain(monkeypatch):
     _stub_user_keys(monkeypatch, set())
     profile = get_profile_for_role("primary", user_id="alice")
     assert profile.id == ROLE_DEFAULTS["primary"]
+
+
+def test_sync_runtime_uses_packaged_catalog_when_redis_is_cold(monkeypatch):
+    from app.core import model_catalog
+
+    monkeypatch.setattr(model_catalog.sync_redis_client, "get", lambda key: None)
+    grouped = model_catalog._load_entries_from_sync_redis()
+
+    assert any(
+        entry.model == "deepseek-v4-pro" for entry in grouped.get("deepseek", [])
+    )
 
 
 def test_degradation_logs_a_warning(monkeypatch, caplog):

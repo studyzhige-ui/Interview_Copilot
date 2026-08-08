@@ -1,0 +1,81 @@
+{
+  "schema_version": 3,
+  "dataset_sha256": "01db8a9cee586c38421d4115a1b136af143697fedb259375db635f798ecd67de",
+  "split": "test",
+  "selection": "Deterministic held-out stratification over independently evidence-audited rows; includes four explicit multi-intent, multi-document cases.",
+  "quotas": {
+    "samples": 50,
+    "language": {
+      "zh": 25,
+      "en": 25
+    },
+    "difficulty": {
+      "basic": 16,
+      "intermediate": 17,
+      "advanced": 17
+    },
+    "source_format": {
+      "html": 18,
+      "md": 18,
+      "pdf": 10,
+      "multi": 4
+    },
+    "intent_count": {
+      "1": 46,
+      "2": 4
+    },
+    "source_documents": 17
+  },
+  "sample_ids": [
+    "generated-celery-tasks-01",
+    "generated-celery-tasks-07",
+    "generated-docker-storage-02",
+    "generated-docker-storage-05",
+    "generated-fastapi-async-08",
+    "generated-fastapi-async-11",
+    "generated-fastapi-async-14",
+    "generated-git-rebase-02",
+    "generated-git-rebase-08",
+    "generated-git-rebase-10",
+    "generated-git-rebase-11",
+    "generated-kubernetes-1.32-configmap-02",
+    "generated-kubernetes-1.32-configmap-06",
+    "generated-kubernetes-1.32-configmap-08",
+    "generated-kubernetes-1.32-configmap-11",
+    "generated-kubernetes-1.32-deployment-02",
+    "generated-kubernetes-1.32-deployment-03",
+    "generated-kubernetes-1.32-deployment-09",
+    "generated-kubernetes-1.32-deployment-14",
+    "generated-kubernetes-1.32-probes-02",
+    "generated-postgresql-17-index-types-04",
+    "generated-postgresql-17-index-types-07",
+    "generated-postgresql-17-using-explain-02",
+    "generated-postgresql-17-using-explain-05",
+    "generated-postgresql-17-using-explain-06",
+    "generated-postgresql-17-using-explain-07",
+    "generated-postgresql-17-using-explain-10",
+    "generated-postgresql-17-using-explain-15",
+    "generated-postgresql-17-using-explain-16",
+    "generated-python-3.12-asyncio-task-07",
+    "generated-python-3.12-dataclasses-02",
+    "generated-react-effects-10",
+    "generated-redis-client-side-caching-05",
+    "generated-rfc9110-http-semantics-01",
+    "generated-rfc9110-http-semantics-03",
+    "generated-rfc9110-http-semantics-04",
+    "generated-rfc9110-http-semantics-06",
+    "generated-rfc9110-http-semantics-07",
+    "generated-rfc9110-http-semantics-09",
+    "generated-rfc9110-http-semantics-10",
+    "generated-rfc9110-http-semantics-11",
+    "generated-rfc9110-http-semantics-13",
+    "generated-rfc9110-http-semantics-14",
+    "generated-sqlalchemy-2-session-transactions-11",
+    "generated-typescript-generics-01",
+    "generated-typescript-generics-16",
+    "multi-doc-02-en",
+    "multi-doc-02-zh",
+    "multi-doc-05-en",
+    "multi-doc-05-zh"
+  ]
+}

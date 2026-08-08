@@ -1,10 +1,10 @@
 import asyncio
 import logging
-from datetime import datetime
 from pathlib import Path
 
 from app.core.config import settings
 from app.core.runtime_files import append_jsonl
+from app.db.types import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ async def log_interaction_metrics(
     field names kept identical to the offline trace schema).
     """
     try:
-        timestamp = datetime.now().isoformat()
+        timestamp = utc_now().isoformat()
         log_payload = {
             "timestamp": timestamp,
             "session_id": session_id,

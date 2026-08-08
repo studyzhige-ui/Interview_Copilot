@@ -133,6 +133,11 @@ def dispatch_memory_patches(
                 continue
 
             mastery_level = str(item.get("mastery_level") or "").strip()
+            ability_score = _coerce_score(item.get("score"))
+            if ability_score is not None:
+                mastery_level = memory_ability_state_service.mastery_from_score(
+                    ability_score
+                )
             summary = item.get("summary")
             if (
                 not topic
@@ -148,13 +153,23 @@ def dispatch_memory_patches(
                 )
                 continue
             try:
+                evidence_refs = _coerce_evidence(item.get("evidence")) or []
+                if source_interview_record_id:
+                    evidence_refs.append(
+                        {"type": "interview_record", "id": source_interview_record_id}
+                    )
+                elif source_conversation_id:
+                    evidence_refs.append(
+                        {"type": "conversation", "id": source_conversation_id}
+                    )
                 row = memory_ability_state_service.upsert(
                     user_id,
                     topic=topic,
                     skill_type=skill_type,
                     mastery_level=mastery_level,
+                    ability_score=ability_score,
                     summary=str(summary) if summary is not None else None,
-                    evidence_refs=_coerce_evidence(item.get("evidence")),
+                    evidence_refs=evidence_refs or None,
                     change_type=change_type,
                     source_conversation_id=source_conversation_id,
                     source_interview_record_id=source_interview_record_id,
@@ -256,6 +271,16 @@ def _coerce_evidence(raw: Any) -> list[dict[str, Any]] | None:
     if isinstance(raw, str) and raw.strip():
         return [{"type": "note", "id": raw.strip()}]
     return None
+
+
+def _coerce_score(raw: Any) -> float | None:
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return round(value, 1) if 0.0 <= value <= 100.0 else None
 
 
 __all__ = ["DispatchResult", "dispatch_memory_patches"]

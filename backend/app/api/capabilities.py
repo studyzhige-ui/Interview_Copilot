@@ -18,7 +18,6 @@ from app.services.capabilities import (
     skill_service,
 )
 
-
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
 
 

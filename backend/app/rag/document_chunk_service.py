@@ -28,8 +28,7 @@ def _node_text(node: Any) -> str:
 
 
 # Diagnostic / provenance fields lifted off node.metadata into the chunk's
-# metadata_json (plan §4.4.2/§4.4.3/§4.5.4). NOT including category — that lives
-# on knowledge_documents and is hydrated from there (INGEST-CLEANUP). Warnings
+# metadata_json. Category lives on knowledge_documents and is hydrated there. Warnings
 # are not a top-level key — they live inside their owning profile dict
 # (cleaning_profile.warnings / parser_profile.warnings / splitter_profile).
 # parser_id / parser_profile / ocr_used are produced by the parse stage (E1).
@@ -63,27 +62,26 @@ def write_chunks(
     nodes: list[Any],
     user_id: int,
     source_kind: str,
-    document_id: str | None = None,
+    document_id: str,
     index_status: str = "pending",
     commit: bool = True,
 ) -> dict[str, Any]:
     """Persist LlamaIndex ``nodes`` as ``document_chunks`` rows.
 
-    Idempotent per document: when ``document_id`` is set, any existing chunks
-    for it are replaced (re-ingest produces a fresh chunk set). Per-chunk
+    Idempotent per document: existing chunks are replaced, so re-ingest produces
+    one fresh chunk set. Per-chunk
     provenance (page/token columns + diagnostic metadata_json) is lifted off
     each node's metadata, stamped by the parser / cleaning / chunking stages.
     Returns the chunk + node-id summary the worker stores on the document.
 
-    Facts are written ``pending`` by default (plan §4.6.3 two-phase write): the
+    Facts are written ``pending`` by default in a two-phase write: the
     caller writes facts first, then Milvus rows, then flips the rows to
     ``indexed`` via :func:`mark_chunks_indexed`. A Milvus failure then leaves
     recoverable pending facts rather than a Milvus/Postgres inconsistency.
     """
-    if document_id is not None:
-        db.query(DocumentChunk).filter(
-            DocumentChunk.document_id == document_id,
-        ).delete(synchronize_session=False)
+    db.query(DocumentChunk).filter(
+        DocumentChunk.document_id == document_id,
+    ).delete(synchronize_session=False)
 
     node_ids: list[str] = []
     for idx, node in enumerate(nodes):
@@ -118,23 +116,14 @@ def write_chunks(
 def mark_chunks_indexed(
     db: Session,
     *,
-    document_id: str | None = None,
-    node_ids: list[str] | None = None,
+    document_id: str,
     commit: bool = True,
 ) -> int:
-    """Flip a document's freshly-written chunks from ``pending`` to ``indexed``
-    after the Milvus rows land (plan §4.6.3 phase 3). Targets by ``document_id``
-    (the live path) or by ``node_ids`` (the document-less path). Only ``pending``
-    rows are touched, so it never resurrects a ``deleted`` chunk. Returns the
-    number of rows updated.
-    """
-    q = db.query(DocumentChunk).filter(DocumentChunk.index_status == "pending")
-    if document_id is not None:
-        q = q.filter(DocumentChunk.document_id == document_id)
-    elif node_ids:
-        q = q.filter(DocumentChunk.node_id.in_(node_ids))
-    else:
-        return 0
+    """Mark one document's pending chunks indexed after Milvus succeeds."""
+    q = db.query(DocumentChunk).filter(
+        DocumentChunk.index_status == "pending",
+        DocumentChunk.document_id == document_id,
+    )
     updated = q.update(
         {DocumentChunk.index_status: "indexed"}, synchronize_session=False
     )

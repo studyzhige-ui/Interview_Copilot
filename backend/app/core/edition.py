@@ -18,6 +18,7 @@ class EditionPolicy:
     supported_mcp_transports: tuple[str, ...]
     allow_provider_connection_overrides: bool
     show_advanced_model_settings: bool
+    expose_rag_diagnostics: bool
 
     def validate_provider_patch(self, patch: dict[str, Any]) -> None:
         if self.allow_provider_connection_overrides:
@@ -42,6 +43,7 @@ class EditionPolicy:
             "mcp_transports": transports,
             "allow_provider_connection_overrides": self.allow_provider_connection_overrides,
             "show_advanced_model_settings": self.show_advanced_model_settings,
+            "expose_rag_diagnostics": self.expose_rag_diagnostics,
         }
 
 
@@ -53,6 +55,7 @@ _POLICIES = {
         supported_mcp_transports=("streamable_http",),
         allow_provider_connection_overrides=False,
         show_advanced_model_settings=False,
+        expose_rag_diagnostics=False,
     ),
     AppEdition.COMMUNITY: EditionPolicy(
         edition=AppEdition.COMMUNITY,
@@ -61,6 +64,7 @@ _POLICIES = {
         supported_mcp_transports=("streamable_http", "stdio"),
         allow_provider_connection_overrides=True,
         show_advanced_model_settings=True,
+        expose_rag_diagnostics=True,
     ),
 }
 

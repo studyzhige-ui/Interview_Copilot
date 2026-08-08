@@ -24,9 +24,7 @@ os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 # AsyncOpenAI`` at module-load time. That binding is FROZEN once the module
 # is imported — subsequent monkey-patches on ``openai.AsyncOpenAI`` don't
 # affect llama_index's local reference. So we must patch the openai module
-# BEFORE the first import of llama_index transitively happens (which used
-# to be triggered by ``from app.rag.embeddings import init_rag_settings``
-# below). Without this ordering, chat-path traces silently vanish from
+# before any transitive llama_index import. Without this ordering, chat-path traces silently vanish from
 # LangSmith while Celery-side transcript traces still appear (because the
 # Celery worker process patches before importing llama_index — see
 # ``app/worker/celery_app.py::init_worker_models``).
@@ -34,12 +32,11 @@ from app.core.llm_tracing import setup_llm_tracing as _setup_llm_tracing
 
 _setup_llm_tracing()
 
-from app.db.database import engine
-
 # app.models.__init__ imports every model module — the single registry
 # (alembic env.py and tests/conftest.py consume the same package).
 import app.models  # noqa: F401
 from app.core.config import settings
+from app.db.database import engine
 
 # ─── Structured logging ──────────────────────────────────────────────────
 # The ``%(request_id)s`` field is populated by
@@ -49,7 +46,11 @@ from app.core.config import settings
 _LOG_FORMAT = "%(asctime)s [req=%(request_id)s] [%(name)s] %(levelname)s %(message)s"
 _LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
-from app.core.request_id import RequestIdFormatter, new_request_id, set_request_id  # noqa: E402
+from app.core.request_id import (  # noqa: E402
+    RequestIdFormatter,
+    new_request_id,
+    set_request_id,
+)
 
 # ``logging.basicConfig`` writes a default Formatter; replace the
 # handler's formatter with our request-id-aware variant so every log

@@ -7,8 +7,6 @@ from unittest.mock import patch
 
 import bcrypt as _bcrypt
 import pytest
-from jose import JWTError, jwt as jose_jwt
-
 from app.core.config import settings
 from app.core.security import (
     create_access_token,
@@ -18,6 +16,8 @@ from app.core.security import (
     verify_and_maybe_rehash,
     verify_password,
 )
+from jose import JWTError
+from jose import jwt as jose_jwt
 
 
 # ── bcrypt password hashing ──────────────────────────────────────────────
@@ -170,9 +170,8 @@ def test_decode_token_rejects_wrong_signature():
 # ── get_current_user / blacklist integration ─────────────────────────────
 async def test_get_current_user_rejects_refresh_token():
     """A refresh token must not satisfy the access-token dependency."""
-    from fastapi import HTTPException
-
     from app.core.security import get_current_user
+    from fastapi import HTTPException
 
     refresh = create_refresh_token(data={"sub": "user-x"})
     with patch("app.core.security.is_revoked", return_value=False):
@@ -183,9 +182,8 @@ async def test_get_current_user_rejects_refresh_token():
 
 async def test_get_current_user_rejects_revoked_jti():
     """A token whose jti is in the blacklist must be rejected."""
-    from fastapi import HTTPException
-
     from app.core.security import get_current_user
+    from fastapi import HTTPException
 
     token = create_access_token(data={"sub": "user-y"})
 
@@ -200,9 +198,8 @@ async def test_get_current_user_rejects_revoked_jti():
 
 async def test_get_current_user_rejects_token_without_jti():
     """Pre-jti-rollout tokens must be rejected even with a valid signature."""
-    from fastapi import HTTPException
-
     from app.core.security import get_current_user
+    from fastapi import HTTPException
 
     # Hand-craft a valid-signature access token that lacks jti.
     payload = {"sub": "legacy", "type": "access"}

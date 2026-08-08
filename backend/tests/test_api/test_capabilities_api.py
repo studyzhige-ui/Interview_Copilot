@@ -1,15 +1,13 @@
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from app.api import capabilities
 from app.core.security import get_current_user
 from app.db.database import get_db
-from app.models.user import User
 from app.models.chat import Conversation
-
+from app.models.user import User
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 SKILL = """---
 name: api-skill
@@ -65,6 +63,7 @@ def test_edition_policy_api(client, monkeypatch):
     assert response.status_code == 200
     assert response.json()["edition"] == "cloud"
     assert response.json()["mcp_transports"] == ["streamable_http"]
+    assert response.json()["expose_rag_diagnostics"] is False
 
 
 def test_cloud_rejects_stdio_mcp(client, monkeypatch):

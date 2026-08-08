@@ -1,20 +1,17 @@
 """Tests for ``RemoteAPIRerank``'s raise contract.
 
-The old behaviour silently passed candidates through on transport failure,
-which let RRF-scale scores hit the reranker-score threshold and filtered
-every fallback result. The new contract: any unusable outcome raises
-``RerankerUnavailableError`` so the retriever takes its EXPLICIT fallback
-path (retrieval plan §2.5).
+An unusable response raises ``RerankerUnavailableError``. The retriever can
+then fail closed instead of either mixing RRF and cross-encoder scales or
+letting uncalibrated candidates reach the answer context.
 """
 
 from __future__ import annotations
 
 import pytest
-from llama_index.core import QueryBundle
-from llama_index.core.schema import NodeWithScore, TextNode
-
 from app.rag import reranker_registry
 from app.rag.reranker_registry import RemoteAPIRerank, RerankerUnavailableError
+from llama_index.core import QueryBundle
+from llama_index.core.schema import NodeWithScore, TextNode
 
 
 def _nodes(*texts: str) -> list[NodeWithScore]:

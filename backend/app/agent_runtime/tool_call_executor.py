@@ -4,15 +4,14 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime
 from typing import Any, Awaitable, Callable
 
 from app.core.config import settings
 from app.db.database import SessionLocal
+from app.db.types import utc_now
 from app.models.agent_execution import AgentToolCall
 from app.models.conversation_turn import ConversationTurn
 from app.services.capabilities import conversation_capability_service
-
 
 Dispatch = Callable[[], Awaitable[dict[str, Any]]]
 _AUDIT_RESULT_CHARS = 16_000
@@ -204,7 +203,7 @@ def _finish(
         row.result_json = _audit_result(result)
         row.error = error[:4_000] if error else None
         row.duration_ms = round(duration_ms, 2)
-        row.completed_at = datetime.utcnow()
+        row.completed_at = utc_now()
         capability_state = conversation_capability_service.get_or_create(
             db,
             session_id,

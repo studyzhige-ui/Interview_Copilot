@@ -25,11 +25,9 @@ service resolves it via ``app.core.user_identity.resolve_user_pk``).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 from sqlalchemy import (
     Column,
-    DateTime,
     ForeignKey,
     Integer,
     String,
@@ -38,6 +36,8 @@ from sqlalchemy import (
 )
 
 from app.db.database import Base
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 # The only two document types Memory keeps as global state. ``knowledge`` and
 # ``habit`` from the old design are gone — knowledge/ability now lives in
@@ -73,10 +73,10 @@ class MemoryDocument(Base):
     # When this document's subject was last discussed (lags — only bumped on
     # extraction, not every turn).
     last_discussed_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utc_now,
+        onupdate=utc_now,
         nullable=False,
     )

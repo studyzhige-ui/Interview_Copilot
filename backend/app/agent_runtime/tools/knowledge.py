@@ -12,6 +12,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.agent_runtime.tool_registry import AgentToolContext, ToolEntry, registry
+from app.rag.contracts import SearchIntent
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +34,7 @@ async def _search_knowledge_handler(
         from app.rag.knowledge_retriever import knowledge_retriever
 
         result = await knowledge_retriever.retrieve(
-            dense_query=args.query,
-            sparse_query=args.query,
+            intents=[SearchIntent.from_query(args.query)],
             user_id=ctx.user_id,
         )
     except Exception as exc:
@@ -43,7 +43,7 @@ async def _search_knowledge_handler(
 
     chunks = []
     if result and result.chunks:
-        for chunk in result.chunks[:5]:
+        for chunk in result.chunks:
             chunks.append(
                 {
                     "text": chunk.get("text", "")[:1500],

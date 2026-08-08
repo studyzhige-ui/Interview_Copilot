@@ -17,12 +17,11 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
 from app.api import model_runtime as model_runtime_mod
 from app.core.security import get_current_user
 from app.services.model_sources.providers import PROVIDERS
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture

@@ -3,10 +3,10 @@
 import asyncio
 
 from app.services.chat.context_assembly_pipeline import (
+    SLOT_ORDER,
     AssembledContext,
     ContextAssemblyPipeline,
     PromptRenderer,
-    SLOT_ORDER,
     TokenBudget,
 )
 

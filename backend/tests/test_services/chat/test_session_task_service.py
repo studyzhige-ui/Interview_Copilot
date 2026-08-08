@@ -1,7 +1,6 @@
 """Tests for the session-scoped task CRUD layer."""
 
 import pytest
-
 from app.services.chat.session_task_service import (
     create_task,
     get_task,

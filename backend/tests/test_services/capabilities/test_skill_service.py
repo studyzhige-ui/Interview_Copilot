@@ -1,8 +1,6 @@
 import pytest
-
 from app.models.user import User
 from app.services.capabilities import skill_service
-
 
 SKILL = """---
 name: interview-plan

@@ -5,7 +5,6 @@ leaving 500MB orphans in MinIO forever."""
 from __future__ import annotations
 
 import pytest
-
 from app.models.file_asset import FileAsset
 from app.models.interview_record import InterviewRecord
 from app.models.outbox_job import OutboxJob

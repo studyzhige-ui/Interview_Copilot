@@ -1,10 +1,14 @@
-"""Parse stage (Phase E) — a replaceable parser abstraction.
+"""Multi-format parsing into the canonical ingestion contract."""
 
-The ingest pipeline consumes a single ``ParseResult`` from :func:`parse_document`
-and never binds to a parser library directly (plan §4.1.1).
-"""
+from app.rag.documents import CanonicalDocument, ParsedDocument, ParsedPage
 
-from .base import DocumentParser, PageSpan, ParseResult
+from .base import DocumentParser
 from .registry import parse_document
 
-__all__ = ["DocumentParser", "PageSpan", "ParseResult", "parse_document"]
+__all__ = [
+    "CanonicalDocument",
+    "DocumentParser",
+    "ParsedDocument",
+    "ParsedPage",
+    "parse_document",
+]

@@ -39,8 +39,8 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.core.secrets import decrypt_secret, encrypt_secret, encrypted_with_primary
-from app.db.database import SessionLocal
 from app.core.user_identity import resolve_user_pk
+from app.db.database import SessionLocal
 from app.models.user_model_credentials import UserModelCredential
 
 logger = logging.getLogger(__name__)

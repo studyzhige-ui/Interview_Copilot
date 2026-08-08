@@ -1,9 +1,11 @@
 import uuid
-from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Column, ForeignKey, Integer, String, Text
 
 from app.db.database import Base
+from app.db.types import JSONValue as JSON
+from app.db.types import UTCDateTime as DateTime
+from app.db.types import utc_now
 
 
 class ConversationTurn(Base):
@@ -30,6 +32,6 @@ class ConversationTurn(Base):
     capability_snapshot_json = Column(JSON, nullable=False, default=dict)
     loaded_schemas_json = Column(JSON, nullable=False, default=list)
     budget_json = Column(JSON, nullable=False, default=dict)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)

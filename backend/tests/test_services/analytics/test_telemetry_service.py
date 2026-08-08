@@ -1,8 +1,9 @@
 """测试 telemetry_service 的 JSONL 写入与异常容错。"""
 
 import json
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 
 @pytest.mark.asyncio

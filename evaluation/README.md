@@ -1,119 +1,141 @@
 # RAG evaluation
 
-The optional evaluation suite exercises the production planner, hybrid
-retriever and answer pipeline. It is intentionally outside the default backend
-test run because it needs external services, an indexed evaluation corpus and,
-for generation/planner scoring, a paid LLM.
+This directory validates the production path: parsing, cleaning, chunking,
+embedding, Milvus dense/BM25 retrieval, RRF, CrossEncoder reranking, evidence
+gating, streaming generation, and citations. Gold annotations are never added
+to retrieval requests.
 
-The suite has three layers:
+## Scope
 
-| Layer | Scope | External LLM |
-|---|---|---|
-| `retrieval` | source hit, passage hit/precision/MRR/nDCG, latency and tenant isolation | No |
-| `generation` | grounded answer quality through RAGAS | Yes |
-| `trajectory` | planner retrieval decisions and query construction | Yes |
+- The pinned semantic corpus contains official HTML, Markdown, PDF, and TXT
+  documents with verified SHA-256 hashes.
+- PDF is one required format, not the only format. Community uses Docling for
+  supported structured documents and falls back to PyMuPDF for the whole PDF
+  when Docling cannot complete it. LlamaParse is opt-in.
+- Format-fidelity tests separately cover DOCX, PPTX, XLSX, CSV/TSV, JSON, code,
+  image OCR, and legacy Office conversion.
+- Community remains CPU-compatible, but maintainer quality and performance
+  release campaigns use CUDA only.
 
-## Prepare
+## Dataset and qrels
 
-Install the evaluation dependencies. Add `dev` when you also want to run the
-pytest quality gates:
+`corpus_manifest.json` pins sources, licenses, and hashes. Positive rows in
+`rag_dataset.jsonl` use atomic `evidence_groups`. Every phrase in one group must
+occur in one chunk; separate groups may span chunks or documents. The scorer
+maps the verbatim evidence onto the rebuilt index after ingestion. Retrieval
+sees only the user question and production planner output, so these qrels are
+labels, not leaked search hints.
 
-```bash
-pip install -e ".[evaluation]"
-pip install -e ".[dev,evaluation]"
-```
-
-Create a project-owned JSONL dataset. The repository includes
-`golden_dataset.example.jsonl`; the real `golden_dataset.jsonl` is intentionally
-ignored because evaluation content may contain private or licensed source
-material.
-
-Configure an OpenAI-compatible evaluator in your shell or local `.env`. These
-variables intentionally do not appear in the ordinary Community/Cloud
-templates because evaluation is an explicit developer workflow:
-
-```dotenv
-EVAL_LLM_API_KEY=...
-EVAL_LLM_API_BASE=https://api.deepseek.com
-EVAL_LLM_MODEL=deepseek-v4-pro
-```
-
-Postgres, Milvus and Redis must be running. If the private dataset's
-`source_file` values point to local corpus files, prepare the isolated
-evaluation tenant through the production parser/chunker/indexer:
-
-```bash
-python -m evaluation.prepare_corpus --reset
-```
-
-## Run
-
-```bash
-# Retrieval only (no evaluator tokens)
-python -m evaluation.eval_runner --layer retrieval --limit 20
-
-# All layers with a report
-python -m evaluation.eval_runner --all --report
-
-# Use an explicit dataset
-python -m evaluation.eval_runner --layer retrieval \
-  --dataset evaluation/golden_dataset.example.jsonl
-
-# Quality-gate tests (slow and external-state dependent)
-pytest evaluation/ -v -s
-
-# Automated mock-interview quality gate
-python -m evaluation.mock_interview_eval
-```
-
-Use `--sample N --seed N` for a reproducible sample. Reports are written under
-`data/evaluation/reports/`, which is runtime data and is not committed.
-
-## Dataset
-
-Each line is a JSON object:
+Each atomic group is an AND requirement; `alternatives` are equivalent OR
+representations of that same fact:
 
 ```json
 {
-  "id": "retrieval-001",
-  "layer": "retrieval",
-  "query": "Why isolate MCP tools by user?",
-  "reference_answer": "Per-user isolation prevents capability leakage.",
-  "user_id": "eval_user_a",
-  "source_type": "interview_qa",
-  "tags": ["agent", "security"],
-  "source_file": "project-owned-fixture"
+  "source_files": ["one.html", "two.pdf"],
+  "evidence_groups": [
+    {
+      "source_file": "one.html",
+      "alternatives": [
+        {"all_of": ["verbatim phrase A", "verbatim phrase B"]},
+        {"all_of": ["equivalent verbatim passage"]}
+      ]
+    },
+    {
+      "source_file": "two.pdf",
+      "alternatives": [{"all_of": ["verbatim phrase C"]}]
+    }
+  ]
 }
 ```
 
-Retrieval rows should include `relevant_document_ids`, or a `source_file` that
-maps to the deterministic document id created by `prepare_corpus`. A passage is
-relevant only when its source is correct and its text is semantically relevant;
-low-threshold answer overlap alone is not a gold label.
+Calibration/test splitting is group-aware and source-disjoint: translated
+pairs, one source, and one multi-intent scenario cannot cross the boundary. An
+independent agent builds the dataset; code only validates schema, balance,
+source evidence, and leakage.
 
-`layer` accepts `retrieval`, `generation`, `trajectory`, or `all`. Thresholds
-live beside their assertions in `test_*_quality.py`; calibrate them for the
-chosen corpus and evaluator rather than weakening them to hide regressions.
+```powershell
+python -m evaluation.download_corpus
+python -m evaluation.validate_rag_dataset
+```
 
-## Historical baseline (2026-07-27, invalidated)
+Runtime corpus files live under `data/evaluation/corpus/`. Evaluation rebuilds
+only isolated users and runs a second-user tenant canary.
 
-The isolated `eval_user_a` run used five real PDFs, 902 chunks and 835
-retrieval questions:
+## Fixed release profile
 
-- Hit@3 / Recall@3: `0.9461`
-- Precision@3: `0.7549`
-- MRR@5: `0.9293`
-- nDCG@5: `0.9399`
-- P95 latency: `512.36 ms`
-- tenant-isolation violations: `0`
+Structural parameters are frozen instead of repeatedly reselected:
 
-The RAG figures above used the former relevance rule: loose lexical overlap
-against `reference_answer`; Recall@3 was effectively the same binary measure
-as Hit@3. They do not prove correct-source retrieval and must not be used as a
-release claim. Since 2026-08-04 the suite requires correct source plus semantic
-relevance, so a newly prepared isolated corpus must produce the next baseline.
+```dotenv
+RAG_CHUNK_TOKENS=384
+RAG_CHUNK_OVERLAP=64
+RAG_CANDIDATE_COUNT=20
+RAG_FINAL_COUNT=3
+```
 
-All eight fixed mock-interview scenarios historically passed, with a `4.9/5`
-mean judge score and 100% safety and grounding pass rates. Stage-budget and
-prompt changes also require a rerun. Model judging remains an automated
-regression signal, not a substitute for human interview-experience evaluation.
+Every parser output passes the same token-safe final splitter. The reranker has
+a 512-token total input budget with space reserved for query and special
+tokens. `RAG_MIN_SCORE` and the single-intent score margin remain calibrated on
+the calibration split because CrossEncoder scores are model-specific, not
+probabilities.
+
+The CUDA release command verifies corpus hashes, freezes planner output,
+rebuilds the fixed index once, warms it, calibrates the evidence gate, checks
+tenant isolation, and opens the held-out split once:
+
+```powershell
+python -m evaluation.rag_release
+```
+
+It writes `data/evaluation/release/cuda.json`. Only a completed,
+release-ready CUDA report can be supplied to generation evaluation.
+Changing `--output` cannot reopen the same held-out campaign; the claim is
+stored in a separate identity-keyed ledger before the held-out run starts.
+
+## RAGAS: one live check, then one formal 50
+
+The generator uses the platform model or a complete maintainer-only
+`EVAL_GENERATOR_*` override. The judge must use a different model.
+
+```dotenv
+EVAL_GENERATOR_API_KEY=
+EVAL_GENERATOR_API_BASE=
+EVAL_GENERATOR_MODEL=
+EVAL_JUDGE_API_KEY=
+EVAL_JUDGE_API_BASE=
+EVAL_JUDGE_MODEL=
+EVAL_JUDGE_CONCURRENCY=4
+```
+
+```powershell
+python -m evaluation.eval_runner --layer generation --ragas-profile check `
+  --profile data/evaluation/release/cuda.json --report
+
+python -m evaluation.eval_runner --layer generation --ragas-profile formal `
+  --profile data/evaluation/release/cuda.json --report
+```
+
+Formal 50 means 50 pinned questions. Five RAGAS metrics are evaluated per
+question, so provider request count is normally greater than 50. The formal run
+requires a fresh successful live check and must reuse its first answer and five
+metric checkpoints. Unknown post-request crash states stop by default instead
+of automatically repeating a possibly paid call.
+
+## Metric guide
+
+- Candidate evidence-group recall measures first-stage coverage before
+  reranking.
+- Hit@3 reports whether at least one correct passage reaches the Top-3.
+- MRR@3 rewards the first correct passage appearing early.
+- nDCG@3 evaluates multi-evidence coverage and ordering.
+- Evidence-group recall@3 measures the fraction of atomic evidence units in the
+  Top-3; document recall measures expected source coverage.
+- Context evidence precision measures useful, non-duplicate evidence among
+  chunks sent to the generator.
+- Hard-negative FPR measures context admitted when the corpus has no answer.
+- RAGAS reports Faithfulness, Context Precision, Context Recall, Answer
+  Relevancy, and Factual Correctness.
+- TTFT is time to the first non-empty token. TPOT is average time per later
+  output token; throughput is output tokens per second.
+
+Measured values belong in the current release report and the latest
+`docs/reports/rag-evaluation-*.md`, not duplicated here as a stale baseline.

@@ -28,12 +28,11 @@ from dataclasses import dataclass
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.user_identity import resolve_user_pk
 from app.core.runtime_files import create_runtime_temp_file
+from app.core.user_identity import resolve_user_pk
 from app.models.chat import Conversation, ConversationMessage, generate_uuid
 from app.models.interview_record import InterviewRecord
-from app.services.interview import mock_runtime_service
-from app.services.interview import mock_interview_service
+from app.services.interview import mock_interview_service, mock_runtime_service
 from app.services.interview.interview_record_service import (
     STATUS_MOCK_IN_PROGRESS,
     STATUS_PROCESSING_REVIEW,
@@ -111,11 +110,11 @@ def recent_messages(
 def extract_file_asset_text(db: Session, asset_id: str, username: str) -> str:
     """Best-effort: download an owned file asset and extract its plain text."""
     try:
+        from app.services.interview.document_text import extract_document_text
         from app.services.uploads.file_asset_service import (
             READABLE_UPLOAD_STATUSES,
             get_file_asset,
         )
-        from app.services.interview.document_text import extract_document_text
 
         asset = get_file_asset(db, asset_id)
         if asset is None or asset.user_id != resolve_user_pk(db, username):

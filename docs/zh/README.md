@@ -54,6 +54,8 @@ docker compose --profile full up -d --wait
 - [Community 部署](../deployment/community.md)
 - [Cloud 部署](../deployment/cloud.md)
 - [Agent 能力运行时](agent-capability-runtime.md)
+- [RAG 评测使用说明](../../evaluation/README.zh.md)
+- [RAG 全链路重构与评测报告](../reports/rag-evaluation-2026-08-08.md)
 - [全产品与核心系统审查](../reports/full-product-and-systems-audit-2026-08-04.md)
 
 ## 用户与部署者边界

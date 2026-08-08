@@ -1,8 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from types import MappingProxyType
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from unittest.mock import AsyncMock
 
 from app.agent_runtime.mcp.manager import MCPManager, MCPToolDescriptor
@@ -12,13 +11,13 @@ from app.agent_runtime.tool_registry import (
     ToolRegistry,
     registry,
 )
-from pydantic import BaseModel
 from app.agent_runtime.turn_tool_catalog import TurnToolCatalog
 from app.models.user import User
 from app.models.user_skill import UserSkill
 from app.services.capabilities.mcp_server_service import MCPServerConfig
-from tests.conftest import patch_session_locals
+from pydantic import BaseModel
 
+from tests.conftest import patch_session_locals
 
 CONFIG = MCPServerConfig(
     id=7,

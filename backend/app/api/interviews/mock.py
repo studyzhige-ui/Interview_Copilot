@@ -28,13 +28,13 @@ from fastapi import (
     Response,
     UploadFile,
 )
-
-from app.core.runtime_files import create_runtime_temp_file, remove_session_results
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.api.file_assets import require_uploaded
 from app.core.error_messages import humanize_error
 from app.core.rate_limit import RATE_DEFAULT, RATE_EXPENSIVE, RATE_UPLOAD, limiter
+from app.core.runtime_files import create_runtime_temp_file, remove_session_results
 from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.interview_record import InterviewRecord
@@ -53,16 +53,15 @@ from app.schemas.chat import (
     MockTranscribeResp,
     TTSRequest,
 )
-from app.api.file_assets import require_uploaded
 from app.services.interview import mock_flow, mock_runtime_service
-from app.services.uploads.file_asset_service import (
-    get_owned_file_asset,
-    mark_file_asset_consumed,
-)
 from app.services.interview.interview_record_service import (
     STATUS_MOCK_IN_PROGRESS,
     STATUS_PROCESSING_REVIEW,
     STATUS_REVIEW_FAILED,
+)
+from app.services.uploads.file_asset_service import (
+    get_owned_file_asset,
+    mark_file_asset_consumed,
 )
 
 logger = logging.getLogger(__name__)
@@ -450,8 +449,8 @@ async def parse_jd_for_mock(
     _current_user: User = Depends(get_current_user),
 ):
     """Parse a JD file inline and return its plain text. Does NOT persist."""
-    from app.services.uploads.file_validation import read_validated_upload
     from app.services.interview.document_text import extract_document_text
+    from app.services.uploads.file_validation import read_validated_upload
 
     if file.size is not None and file.size > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="JD 文件过大（限制 10MB）")

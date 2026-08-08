@@ -176,7 +176,7 @@ def _read_upload_content(upload) -> str:
 
     if storage_uri.startswith("s3://"):
         try:
-            from app.core.storage import s3_client, parse_s3_uri
+            from app.core.storage import parse_s3_uri, s3_client
 
             bucket, key = parse_s3_uri(storage_uri)
             response = s3_client.get_object(Bucket=bucket, Key=key)

@@ -28,12 +28,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from app.core.tokens import token_count
 from app.agent_runtime.context_window import (
     get_blocking_limit,
     get_cheap_prepass_threshold,
 )
 from app.agent_runtime.tool_result_storage import is_persisted_content
+from app.core.tokens import token_count
 from app.prompts.chat import AUTOCOMPACT_SUMMARY_WRAPPER
 
 if TYPE_CHECKING:
