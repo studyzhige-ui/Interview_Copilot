@@ -7,72 +7,74 @@ name = "interview-copilot"
 version = "0.1.0"
 description = "AI interview copilot — mock interviews, review analysis, RAG knowledge base, and long-term memory"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     # Web
-    "fastapi==0.135.2",
-    "uvicorn==0.42.0",
-    "gunicorn==23.0.0",
-    "python-multipart==0.0.22",
+    "fastapi==0.141.1",
+    "uvicorn==0.52.1",
+    "gunicorn==26.0.0",
+    "python-multipart==0.0.32",
     # Persistence and background work
-    "sqlalchemy==2.0.48",
-    "psycopg2-binary==2.9.11",
-    "alembic==1.17.2",
-    "redis==5.2.1",
+    "sqlalchemy==2.0.51",
+    "psycopg2-binary==2.9.12",
+    "alembic==1.19.1",
+    "redis==8.1.0",
     "celery==5.6.3",
-    "boto3==1.38.0",
-    "pymilvus==2.6.11",
+    "boto3==1.43.67",
+    # Match the deployed Milvus 2.6 server line; PyMilvus 3.x targets Milvus 3.
+    "pymilvus==2.6.17",
     # Configuration and security
     "python-dotenv==1.2.2",
-    "pydantic[email]==2.12.5",
-    "pydantic-settings==2.14.2",
-    "python-jose[cryptography]==3.5.0",
-    "cryptography==44.0.1",
+    "pydantic[email]==2.13.4",
+    "pydantic-settings==2.15.0",
+    "PyJWT==2.13.0",
+    "cryptography==50.0.0",
     "pwdlib[argon2,bcrypt]==0.3.0",
     "nest_asyncio==1.6.0",
-    "slowapi==0.1.9",
+    "slowapi==0.1.10",
     # LLM and remote RAG providers
-    "openai==2.30.0",
-    "tiktoken==0.12.0",
-    "langsmith==0.7.22",
-    "transformers==4.48.0",
-    "huggingface-hub==0.28.1",
-    "llama-index-core==0.14.19",
-    "llama-index-llms-openai==0.6.26",
-    "llama-index-llms-openai-like==0.5.3",
+    "openai==2.53.0",
+    "tiktoken==0.13.0",
+    "langsmith==0.10.17",
+    "llama-index-core==0.14.23",
+    "llama-index-llms-openai==0.7.10",
+    "llama-index-llms-openai-like==0.7.2",
     "llama-index-embeddings-openai==0.6.0",
     "llama-index-embeddings-openai-like==0.3.1",
     # Documents
     "llama-index-readers-file==0.6.0",
-    "pypdf==6.9.2",
-    "pymupdf==1.27.2.2",
+    "pypdf==6.15.0",
+    "pymupdf==1.28.2",
     "llama-parse==0.6.94",
     "python-docx==1.2.0",
     "python-pptx==1.0.2",
     "openpyxl==3.1.5",
-    "beautifulsoup4==4.12.3",
-    "charset-normalizer==3.3.2",
-    "tree-sitter==0.25.2",
-    "tree-sitter-language-pack==1.8.1",
+    "beautifulsoup4==4.15.0",
+    "charset-normalizer==3.4.9",
+    "tree-sitter==0.26.0",
+    "tree-sitter-language-pack==1.14.3",
     # Agent capabilities
     "httpx==0.28.1",
-    "markdownify==1.1.0",
-    "mcp==1.27.1",
-    "PyYAML==6.0.2",
-    "jsonschema==4.23.0",
+    "markdownify==1.2.3",
+    "mcp==2.0.0",
+    "PyYAML==6.0.3",
+    "jsonschema==4.26.0",
     "edge-tts==7.2.8",
 ]
 
 [project.optional-dependencies]
 local = [
     # Local embeddings, reranking, parsing, OCR, speech, and diarization
-    "sentence-transformers==5.1.2",
+    # WhisperX 3.8 requires huggingface-hub<1, so Transformers 5.x is not a
+    # resolvable upgrade until WhisperX moves to the Hub 1.x line.
+    "transformers==4.57.6",
+    "huggingface-hub==0.36.2",
+    "sentence-transformers==5.7.0",
     "llama-index-embeddings-huggingface==0.7.0",
     "llama-index-postprocessor-sbert-rerank==0.5.0",
-    "docling==2.100.0",
-    "rapidocr-onnxruntime==1.2.3",
+    "docling[rapidocr]==2.118.1",
     "faster-whisper==1.2.1",
-    "whisperx==3.8.4",
+    "whisperx==3.8.6",
 ]
 cuda = [
     # Optional NVIDIA runtime; keep platform-specific wheels out of the
@@ -83,15 +85,22 @@ cuda = [
 ]
 dev = [
     # Tests and static analysis
-    "pytest==8.4.2",
-    "pytest-asyncio==1.1.0",
+    "filelock==3.32.2",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    # Ruff 0.16 changes the default enabled rule set and would require an
+    # unrelated repository-wide lint migration. 0.15.12 is the newest usable
+    # release under the current lint contract.
     "ruff==0.15.12",
 ]
 evaluation = [
     # Optional offline RAG and interview quality evaluation
-    "filelock==3.17.0",
+    "filelock==3.32.2",
     "ragas==0.4.3",
-    "langchain-openai==1.1.12",
+    # Ragas 0.4.3 imports the pre-1.0 LangChain community module layout.
+    # Pin the newest coherent 0.3 line instead of the incompatible 1.x/0.4 pair.
+    "langchain-community==0.3.31",
+    "langchain-openai==0.3.35",
 ]
 
 [tool.setuptools]

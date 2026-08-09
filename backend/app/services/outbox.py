@@ -16,11 +16,12 @@ import logging
 import socket
 from collections.abc import Collection
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, event, or_
 from sqlalchemy.orm import Session
 
+from app.db.database import SessionLocal
 from app.db.types import utc_now
 from app.models.outbox_job import OutboxJob, generate_outbox_job_id
 
@@ -32,6 +33,74 @@ _HANDLERS: dict[str, Callable[[Session, OutboxJob], None]] = {}
 # Exponential backoff per attempt, capped. attempts=1 -> 60s, 2 -> 240s, ...
 _BACKOFF_BASE_SECONDS = 60
 _BACKOFF_CAP_SECONDS = 3600
+
+OutboxLane = Literal["index", "intelligence", "cleanup"]
+
+INDEX_JOB_TYPES = frozenset(
+    {
+        "milvus_delete_document",
+        "milvus_upsert_document",
+        "milvus_reindex_resume",
+        "upsert_memory_ability_index",
+        "delete_memory_ability_index",
+    }
+)
+INTELLIGENCE_JOB_TYPES = frozenset(
+    {"extract_memory_realtime", "extract_memory_dreaming", "dream_check_user"}
+)
+CLEANUP_JOB_TYPES = frozenset({"delete_object", "cleanup_failed_upload"})
+
+_JOB_LANES: dict[str, OutboxLane] = {
+    **dict.fromkeys(INDEX_JOB_TYPES, "index"),
+    **dict.fromkeys(INTELLIGENCE_JOB_TYPES, "intelligence"),
+    **dict.fromkeys(CLEANUP_JOB_TYPES, "cleanup"),
+}
+_WAKEUP_LANES_KEY = "outbox_wakeup_lanes"
+
+
+def _request_outbox_wakeup(
+    db: Session,
+    job_type: str,
+    *,
+    run_after: datetime | None = None,
+) -> None:
+    """Coalesce one immediate wake-up per resource lane and transaction."""
+
+    lane = _JOB_LANES.get(job_type)
+    if lane is None or (run_after is not None and run_after > utc_now()):
+        return
+    lanes = db.info.setdefault(_WAKEUP_LANES_KEY, set())
+    lanes.add(lane)
+
+
+def _dispatch_committed_outbox_wakeups(db: Session) -> None:
+    """Wake workers only after the transaction that created jobs committed."""
+
+    lanes = sorted(db.info.pop(_WAKEUP_LANES_KEY, set()))
+    if not lanes:
+        return
+    from app.task_queue.dispatch import dispatch_outbox_drain
+
+    for lane in lanes:
+        try:
+            dispatch_outbox_drain(lane)
+        except Exception as exc:  # broker outage: Beat remains the recovery path
+            logger.warning(
+                "Could not wake %s outbox worker after commit; "
+                "periodic reconciliation will retry: %s",
+                lane,
+                exc,
+            )
+
+
+def _clear_pending_outbox_wakeups(db: Session) -> None:
+    db.info.pop(_WAKEUP_LANES_KEY, None)
+
+
+# Listen only to the application's session factory. Unit-test sessionmakers and
+# third-party SQLAlchemy sessions do not unexpectedly publish Celery messages.
+event.listen(SessionLocal, "after_commit", _dispatch_committed_outbox_wakeups)
+event.listen(SessionLocal, "after_rollback", _clear_pending_outbox_wakeups)
 
 
 def register_handler(
@@ -88,8 +157,9 @@ def enqueue_job(
         )
         inserted_id = db.execute(statement).scalar_one_or_none()
         if inserted_id is not None:
+            _request_outbox_wakeup(db, job_type, run_after=run_after)
             return db.get(OutboxJob, inserted_id)
-        return (
+        existing = (
             db.query(OutboxJob)
             .filter(
                 OutboxJob.job_type == job_type,
@@ -97,6 +167,13 @@ def enqueue_job(
             )
             .one()
         )
+        if existing.status in {"pending", "failed"}:
+            _request_outbox_wakeup(
+                db,
+                job_type,
+                run_after=existing.next_run_at,
+            )
+        return existing
 
     if idempotency_key is not None:
         existing = (
@@ -108,10 +185,17 @@ def enqueue_job(
             .first()
         )
         if existing is not None:
+            if existing.status in {"pending", "failed"}:
+                _request_outbox_wakeup(
+                    db,
+                    job_type,
+                    run_after=existing.next_run_at,
+                )
             return existing
 
     job = OutboxJob(**values)
     db.add(job)
+    _request_outbox_wakeup(db, job_type, run_after=run_after)
     return job
 
 
@@ -240,7 +324,7 @@ def run_due_outbox_jobs(
 
     # Dead-backlog visibility: dead jobs mean permanently-skipped side
     # effects (leaked blobs / stale Milvus rows / lost memory extraction)
-    # and nothing else surfaces them. One WARNING per drain (≤1/min) while
+    # and nothing else surfaces them. One WARNING per drain while
     # any exist is deliberate — quiet enough to live with, loud enough to
     # notice in logs.
     dead_query = db.query(OutboxJob).filter(OutboxJob.status == "dead")

@@ -263,7 +263,7 @@ function UploadCard({
   subtitle: string;
   state: SlotState;
   accept: string;
-  inputRef: React.RefObject<HTMLInputElement>;
+  inputRef: React.RefObject<HTMLInputElement | null>;
   onPick: (f: File) => void;
   required?: boolean;
 }) {

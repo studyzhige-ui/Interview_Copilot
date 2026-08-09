@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.core.llm_client_factory import get_internal_llm
 from app.prompts.chat import build_query_planner_system_prompt
-from app.rag.contracts import SearchIntent
+from app.rag.domain.models import SearchIntent
 from app.rag.policy import current_rag_policy
 
 logger = logging.getLogger(__name__)

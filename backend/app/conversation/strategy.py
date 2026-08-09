@@ -16,8 +16,6 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Protocol, runtime_checkable
 
 from app.conversation.events import HarnessEvent
-from app.rag.contracts import SearchIntent
-
 # ── Context passed into a strategy ────────────────────────────────────
 
 
@@ -41,21 +39,11 @@ class StrategyContext:
     # so memory, debrief reference, and RAG all reach the LLM with
     # the SLOT_ORDER contract intact. Engine sets this in _prepare.
     assembled: Any = None  # AssembledContext (forward ref to avoid import cycle)
-    knowledge_chunks: list[dict] = field(default_factory=list)
-    v3_memory_block: str = ""  # Convenience: already-rendered v3 memory bundle
     rewritten_query: str | None = None
     needs_knowledge_retrieval: bool = False
-    search_intents: list[SearchIntent] = field(default_factory=list)
 
     # ── Retrieval provenance + state (L1 RAG) ─────────────────────
-    # ``sources`` is the final citation array built by context assembly,
-    # aligned 1:1 with the [K#] refs in the prompt. The chat strategy reads
-    # it for the post-generation citation check; the engine forwards it to
-    # the SSE ``sources`` event + message persistence. Empty for non-RAG /
-    # agent turns.
-    sources: list[dict] = field(default_factory=list)
     retrieval_hit: bool = False
-    planner_failed: bool = False
 
     # Global memory toggle resolved ONCE by the engine in ``_prepare``.
     # The agent strategy uses this to gate the recall_memory /

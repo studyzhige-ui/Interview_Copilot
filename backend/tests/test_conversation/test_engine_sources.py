@@ -17,7 +17,9 @@ import asyncio
 
 from app.agent_runtime.harness_events import HarnessEventType
 from app.conversation.engine import ConversationEngine
+from app.conversation.events import HarnessEvent
 from app.conversation.strategy import StrategyContext
+from app.services.chat.context_assembly_pipeline import AssembledContext
 
 
 class _NoopStrategy:
@@ -26,10 +28,10 @@ class _NoopStrategy:
     name = "chat"
 
     async def execute(self, ctx, result):
+        if ctx.assembled.sources:
+            yield HarnessEvent.sources(ctx.assembled.sources, step=0, elapsed_ms=0)
         result.final_answer = "缓存击穿的解法见 [K1]。"
         result.assistant_blocks = [{"type": "text", "text": result.final_answer}]
-        if False:  # pragma: no cover — make this an async generator
-            yield
 
 
 def _engine(monkeypatch, *, sources, capture: dict):
@@ -45,7 +47,7 @@ def _engine(monkeypatch, *, sources, capture: dict):
             user_id="alice",
             session_id="s1",
             user_message="缓存击穿怎么办",
-            sources=sources,
+            assembled=AssembledContext(sources=sources),
             retrieval_hit=bool(sources),
             needs_knowledge_retrieval=bool(sources),
         )

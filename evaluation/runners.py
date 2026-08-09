@@ -742,7 +742,7 @@ async def run_retrieval(
 ) -> dict[str, Any]:
     """Aggregate retrieval quality across ``rows``.
 
-    Calls the production ``query_knowledge_base`` once per row and
+    Calls the production ``RagService`` once per row and
     derives Hit / Precision / Recall / MRR / nDCG against the
     ``reference_answer`` (or the query itself when no reference).
 
@@ -751,12 +751,12 @@ async def run_retrieval(
     variants and intent decomposition match the real user path.
     """
     from app.core.config import settings
-    from app.rag.contracts import SearchIntent
-    from app.rag.retriever import init_reranker, query_knowledge_base
+    from app.rag.domain.models import SearchIntent
+    from app.rag.application.service import rag_service
 
     if query_mode not in {"direct", "planned"}:
         raise ValueError("query_mode must be 'direct' or 'planned'")
-    init_reranker()
+    rag_service.initialize()
     if not rows:
         return {"samples": 0, "error": "No rows."}
     if query_mode == "planned":
@@ -823,7 +823,7 @@ async def run_retrieval(
             intents = [SearchIntent.from_query(row["query"])]
         allow_margin = len(intents) == 1
         start = time.perf_counter()
-        result = await query_knowledge_base(
+        result = await rag_service.retrieve(
             intents=intents,
             user_id=user_id,
             source_kind=_dataset_source_kind(row),
@@ -1241,19 +1241,24 @@ async def _run_generation(
 ) -> dict[str, Any]:
     """End-to-end RAG quality: retrieve, answer, and optionally run RAGAS.
 
-    Pulls per-row context via the same ``knowledge_retriever`` the
-    production engine uses, then has the configured evaluator answer the question
-    grounded in those chunks. The CLI may include extra hard negatives in
-    ``rows`` while limiting RAGAS judging to the fixed answerable subset.
+    Uses the production planner, RagService, GroundingBuilder, and prompt
+    renderer. The evaluator model differs, but the evidence and prompt contract
+    is identical to online chat.
     """
-    from app.rag.knowledge_retriever import knowledge_retriever
-    from app.rag.retrieval_state import (
+    from app.core.config import settings
+    from app.prompts.chat import RAG_SYSTEM_PROMPT
+    from app.rag.application.service import rag_service
+    from app.rag.domain.models import (
         EMPTY_PLANNER_NO_RETRIEVAL,
         RetrievalResult,
         RetrievalState,
     )
-    from app.rag.retriever import init_reranker
-    from app.rag.evidence import check_evidence
+    from app.rag.grounding.builder import grounding_builder
+    from app.services.chat.context_assembly_pipeline import (
+        AssembledContext,
+        TokenBudget,
+        prompt_renderer,
+    )
 
     from evaluation.llm_factory import build_evaluation_llm
     from evaluation.ragas_runner import (
@@ -1298,7 +1303,7 @@ async def _run_generation(
             )
         if judge_limit == 1 and len(rows) != 1:
             raise ValueError("Compatibility check must contain exactly one row")
-    init_reranker()
+    rag_service.initialize()
     if judge_limit == 50:
         require_compatibility_check()
     elif judge_limit == 1:
@@ -1376,7 +1381,7 @@ async def _run_generation(
 
         retrieval_start = time.perf_counter()
         if plan.needs_knowledge_retrieval:
-            kr = await knowledge_retriever.retrieve(
+            kr = await rag_service.retrieve(
                 intents=plan.intents,
                 user_id=user_id,
                 source_kind=_dataset_source_kind(row),
@@ -1397,30 +1402,29 @@ async def _run_generation(
         retrieval_ms = (time.perf_counter() - retrieval_start) * 1000
         retrieval_latencies.append(retrieval_ms)
 
-        contexts = [c.get("text", "") for c in kr.chunks]
-        evidence = check_evidence(
-            plan.intents,
-            (
-                f"{chunk.get('document_title') or ''}\n{chunk.get('text') or ''}"
-                for chunk in kr.chunks
+        grounding = grounding_builder.build(
+            kr,
+            token_budget=settings.RAG_RETRIEVED_CONTEXT_TOKENS,
+        )
+        contexts = [str(chunk.get("text") or "") for chunk in grounding.included_chunks]
+        budget = TokenBudget()
+        assembled = AssembledContext(
+            current_input=row["query"],
+            retrieved_context=grounding.context_text,
+            sources=grounding.sources,
+            grounding=grounding,
+            retrieval_result=kr,
+            model_context_window=budget.MODEL_CONTEXT_WINDOW,
+            prompt_token_limit=(
+                budget.MODEL_CONTEXT_WINDOW
+                - budget.OUTPUT_TOKEN_RESERVE
+                - budget.SAFETY_MARGIN
             ),
+            output_token_reserve=budget.OUTPUT_TOKEN_RESERVE,
         )
-        context_block = "\n\n".join(
-            f"[K{context_index}] {context}"
-            for context_index, context in enumerate(contexts, start=1)
-        )
-
-        prompt = (
-            "你是面试问答助手。请严格基于给定参考资料回答问题；"
-            "每个事实句末尾必须用 [K1] 形式标注所依据的资料编号。"
-            "只回答问题直接要求的内容，限 2 至 5 句。"
-            "使用与问题相同的语言回答。"
-            "问题中的产品、版本、系统和限定条件必须在资料中明确出现；"
-            "相近技术的通用信息不能替代特定对象的证据。"
-            "缺少限定对象证据时直接说明缺口，不展开相近对象的背景知识。"
-            "如果资料不足，明确说资料不足，不要用常识补全或编造。\n\n"
-            f"问题：{row['query']}\n\n"
-            f"参考资料：\n{context_block}"
+        prompt = prompt_renderer.render_answer_prompt(
+            assembled,
+            system_prompt=RAG_SYSTEM_PROMPT,
         )
 
         generation_cache_item = {
@@ -1431,7 +1435,9 @@ async def _run_generation(
             },
         }
         # ── Generation (stream for user-visible latency metrics) ──
-        can_generate = bool(contexts) and evidence.supported
+        grounding = assembled.grounding
+        contexts = [str(chunk.get("text") or "") for chunk in grounding.included_chunks]
+        can_generate = kr.retrieval_hit and grounding.supported
         refusal_answer = (
             "现有资料不足，无法可靠回答这个问题。"
             if row.get("language") == "zh"
@@ -1549,7 +1555,7 @@ async def _run_generation(
             if judge_limit == 50 and idx == 1:
                 require_compatibility_metric_cache(scored_data[-1])
                 reused_check_metric_count = len(METRIC_KEYS)
-        citation_valid = citation_validity(answer, len(contexts))
+        citation_valid = citation_validity(answer, len(grounding.sources))
         citation_covered = citation_coverage(answer)
         details.append(
             {
@@ -1601,8 +1607,8 @@ async def _run_generation(
                 "stream_fallback": stream.fallback,
                 "generation_mode": "llm" if can_generate else "deterministic_refusal",
                 "generation_cache_hit": cache_hit,
-                "evidence_guard_refusal": bool(contexts) and not evidence.supported,
-                "missing_required_terms": list(evidence.missing_terms),
+                "evidence_guard_refusal": bool(contexts) and not grounding.supported,
+                "missing_required_terms": list(grounding.missing_terms),
                 "answer_reference_term_coverage": answer_term_coverage,
                 "citation_validity": round(citation_valid, 4)
                 if citation_valid is not None
@@ -2148,15 +2154,14 @@ def prepare_runtime() -> None:
          create cache dirs.
       2. ``init_rag_settings``  — register the LlamaIndex embedding model.
          Answer generation and planning resolve their LLMs explicitly.
-      3. ``init_reranker``      — load BGE (or the remote reranker
-         provider) into the singleton.
+      3. ``RagService.initialize`` — load the configured reranker once.
 
     Idempotent — safe to call from every test session and the CLI.
     """
     from app.core.hf_runtime import prepare_hf_runtime
     from app.rag.embeddings import init_rag_settings
-    from app.rag.retriever import init_reranker
+    from app.rag.application.service import rag_service
 
     prepare_hf_runtime()
     init_rag_settings()
-    init_reranker()
+    rag_service.initialize()

@@ -75,7 +75,7 @@ def _seed_doc(maker: sessionmaker, *, filename: str, status: str = "processing")
 def test_worker_rejects_unsupported_format_without_retry(worker_db, monkeypatch):
     # If the parser is ever reached, fail loudly — the format gate must
     # short-circuit before download/ingest.
-    import app.rag.ingestion as ingestion_mod
+    import app.rag.ingest.pipeline as ingestion_mod
     from app.worker.tasks import process_document_ingestion
 
     monkeypatch.setattr(
@@ -104,7 +104,7 @@ def test_worker_rejects_unsupported_format(worker_db, monkeypatch):
     """The worker's defensive format re-check rejects an unsupported extension
     before running ingest. (Images + legacy Office are all allowed now, so the
     rejection path is exercised with a genuinely out-of-scope format.)"""
-    import app.rag.ingestion as ingestion_mod
+    import app.rag.ingest.pipeline as ingestion_mod
     from app.worker.tasks import process_document_ingestion
 
     monkeypatch.setattr(
@@ -148,7 +148,7 @@ def test_worker_marks_failed_on_empty_after_cleaning_without_retry(
             "文档清洗后没有可用文本，请确认文件内容非空且为可读文本。"
         )
 
-    import app.rag.ingestion as ingestion_mod
+    import app.rag.ingest.pipeline as ingestion_mod
 
     monkeypatch.setattr(ingestion_mod, "ingest_document", _empty)
 
@@ -188,7 +188,7 @@ def test_worker_keeps_processing_when_index_queued(worker_db, monkeypatch):
             "content_text": "body",
         }
 
-    import app.rag.ingestion as ingestion_mod
+    import app.rag.ingest.pipeline as ingestion_mod
 
     monkeypatch.setattr(ingestion_mod, "ingest_document", _queued)
 
@@ -226,7 +226,7 @@ def test_worker_marks_failed_on_embedding_validation_without_retry(
             "向量维度(3)与配置 EMBEDDING_DIM(1024)不一致；请确认 embedding 模型与配置匹配，或重建索引。"
         )
 
-    import app.rag.ingestion as ingestion_mod
+    import app.rag.ingest.pipeline as ingestion_mod
 
     monkeypatch.setattr(ingestion_mod, "ingest_document", _dim_mismatch)
 
@@ -261,7 +261,7 @@ def test_worker_does_not_leave_document_processing_for_non_retryable_crash(
     async def _crash(*args, **kwargs):
         raise ValueError("unexpected parser contract violation")
 
-    import app.rag.ingestion as ingestion_mod
+    import app.rag.ingest.pipeline as ingestion_mod
 
     monkeypatch.setattr(ingestion_mod, "ingest_document", _crash)
 

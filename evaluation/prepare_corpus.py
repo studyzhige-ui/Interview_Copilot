@@ -21,7 +21,7 @@ from app.models.document_chunk import DocumentChunk  # noqa: E402
 from app.models.knowledge import KnowledgeDocument  # noqa: E402
 from app.models.user import User  # noqa: E402
 from app.rag.embeddings import init_rag_settings  # noqa: E402
-from app.rag.ingestion import ingest_document, ingest_text  # noqa: E402
+from app.rag.ingest.pipeline import ingest_document, ingest_text  # noqa: E402
 from app.rag.milvus_hybrid import KNOWLEDGE, delete_by_field  # noqa: E402
 
 from evaluation.runners import load_dataset  # noqa: E402

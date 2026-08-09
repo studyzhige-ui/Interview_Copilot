@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.runtime_files import runtime_temp_dir
 from app.rag.cleaning import EmptyContentError, canonicalize_document
 from app.rag.documents import CanonicalDocument
+from app.rag.parsing.quality import ACCEPT_SCORE, MINIMUM_SCORE, assess_parse_quality
 
 from .base import (
     LEGACY_OFFICE_EXTS,
@@ -123,6 +124,7 @@ def _run_candidates(
     ``parser_profile`` stamped, or None if every candidate fails / yields empty.
     Never raises — the caller decides the friendly final error message."""
     warnings: list[str] = []
+    best: tuple[float, CanonicalDocument, str, bool] | None = None
     t0 = time.perf_counter()
     for idx, parser in enumerate(candidates):
         try:
@@ -138,6 +140,9 @@ def _run_candidates(
                 parsed,
                 parser_profile=parser_profile,
             )
+            quality = assess_parse_quality(canonical)
+            canonical.parser_profile["quality_score"] = round(quality.score, 4)
+            canonical.parser_profile["quality_warnings"] = list(quality.warnings)
         except Exception as exc:  # noqa: BLE001 — record + try the next candidate
             logger.warning("parser %s failed on %s: %s", parser.id, file_path, exc)
             warnings.append(f"{parser.id}: {exc}")
@@ -145,9 +150,33 @@ def _run_candidates(
         merged = [*warnings, *canonical.cleaning_profile.get("warnings", [])]
         if merged:
             canonical.parser_profile["warnings"] = list(dict.fromkeys(merged))
-        logger.info("parsed %s via %s (fallback=%s)", file_path, parser.id, idx > 0)
-        return canonical
-    return None
+        if best is None or quality.score > best[0]:
+            best = (quality.score, canonical, parser.id, idx > 0)
+        if quality.score >= ACCEPT_SCORE:
+            logger.info(
+                "parsed %s via %s (fallback=%s quality=%.3f)",
+                file_path,
+                parser.id,
+                idx > 0,
+                quality.score,
+            )
+            return canonical
+        warnings.append(f"{parser.id}: low parse quality {quality.score:.3f}")
+
+    if best is None or best[0] < MINIMUM_SCORE:
+        return None
+    _, canonical, parser_id, fallback_used = best
+    canonical.parser_profile["fallback_used"] = fallback_used
+    canonical.parser_profile["warnings"] = list(
+        dict.fromkeys([*canonical.parser_profile.get("warnings", []), *warnings])
+    )
+    logger.warning(
+        "using best low-confidence parse for %s via %s (quality=%.3f)",
+        file_path,
+        parser_id,
+        best[0],
+    )
+    return canonical
 
 
 def _soffice_convert(

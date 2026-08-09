@@ -17,7 +17,7 @@ in main.py via ``app.state.limiter = limiter``.
 
 from __future__ import annotations
 
-from jose import JWTError
+from jwt.exceptions import PyJWTError as JWTError
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from starlette.requests import Request

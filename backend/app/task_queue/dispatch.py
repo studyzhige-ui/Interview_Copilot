@@ -29,6 +29,17 @@ def dispatch_resume_parse(resume_id: str) -> AsyncResult:
     return celery_app.send_task("tasks.process_resume_parse", args=[resume_id])
 
 
+def dispatch_outbox_drain(lane: str) -> AsyncResult:
+    task_name = {
+        "index": "tasks.drain_index_outbox_jobs",
+        "intelligence": "tasks.drain_intelligence_outbox_jobs",
+        "cleanup": "tasks.drain_cleanup_outbox_jobs",
+    }.get(lane)
+    if task_name is None:
+        raise ValueError(f"Unknown outbox lane: {lane!r}")
+    return celery_app.send_task(task_name)
+
+
 def revoke_task(
     task_id: str,
     *,
@@ -46,6 +57,7 @@ __all__ = [
     "dispatch_document_ingestion",
     "dispatch_interview_analysis",
     "dispatch_mock_interview_review",
+    "dispatch_outbox_drain",
     "dispatch_resume_parse",
     "revoke_task",
 ]

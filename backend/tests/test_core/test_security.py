@@ -16,8 +16,8 @@ from app.core.security import (
     verify_and_maybe_rehash,
     verify_password,
 )
-from jose import JWTError
-from jose import jwt as jose_jwt
+import jwt as jwt_library
+from jwt.exceptions import PyJWTError as JWTError
 
 
 # ── bcrypt password hashing ──────────────────────────────────────────────
@@ -160,8 +160,10 @@ def test_decode_token_rejects_expired_token():
 def test_decode_token_rejects_wrong_signature():
     """A token signed with a different secret must not decode under ours."""
     payload = {"sub": "intruder", "type": "access", "jti": "abc"}
-    forged = jose_jwt.encode(
-        payload, "completely-different-secret", algorithm=settings.ALGORITHM
+    forged = jwt_library.encode(
+        payload,
+        "completely-different-secret-with-32-bytes",
+        algorithm=settings.ALGORITHM,
     )
     with pytest.raises(JWTError):
         decode_token(forged)
@@ -203,7 +205,9 @@ async def test_get_current_user_rejects_token_without_jti():
 
     # Hand-craft a valid-signature access token that lacks jti.
     payload = {"sub": "legacy", "type": "access"}
-    token = jose_jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    token = jwt_library.encode(
+        payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM
+    )
     with patch("app.core.security.is_revoked", return_value=False):
         with pytest.raises(HTTPException) as exc_info:
             await get_current_user(token=token, db=object())

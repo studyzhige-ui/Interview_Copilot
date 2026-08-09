@@ -34,6 +34,14 @@ METRIC_KEYS = (
 )
 
 
+def _installed_distribution_version(name: str) -> str:
+    """Return a stable fingerprint value across optional dependency boundaries."""
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "not-installed"
+
+
 @contextmanager
 def generation_workflow_lock():
     """Serialize the complete live check/formal workflow across processes."""
@@ -157,7 +165,7 @@ def _evaluation_contract_fingerprint(
     payload = {
         "version": 2,
         "metrics": METRIC_KEYS,
-        "ragas_version": importlib.metadata.version("ragas"),
+        "ragas_version": _installed_distribution_version("ragas"),
         "metric_contract_sha256": hashlib.sha256(
             (
                 inspect.getsource(_metric_factories)
@@ -230,9 +238,9 @@ def _ragas_slice_summary(
 def _generation_contract_sha256() -> str:
     import app.conversation.query_planner as planner_module
     import app.prompts.chat as chat_prompts_module
-    import app.rag.evidence as evidence_module
-    import app.rag.knowledge_retriever as knowledge_retriever_module
-    import app.rag.retriever as retriever_module
+    import app.rag.application.service as rag_service_module
+    import app.rag.grounding.builder as grounding_module
+    import app.services.chat.context_assembly_pipeline as context_module
     from evaluation.runners import _run_generation, run_generation
 
     source = "".join(
@@ -242,9 +250,9 @@ def _generation_contract_sha256() -> str:
             _run_generation,
             planner_module,
             chat_prompts_module,
-            evidence_module,
-            knowledge_retriever_module,
-            retriever_module,
+            grounding_module,
+            rag_service_module,
+            context_module,
         )
     )
     return hashlib.sha256(source.encode("utf-8")).hexdigest()

@@ -61,7 +61,7 @@ services:
       - copilot_net
 
   redis:
-    image: redis:8.8.1-alpine
+    image: redis:8.10.0-alpine
     container_name: interview_copilot_redis
     command: ["redis-server", "--appendonly", "yes"]
     ports:
@@ -117,7 +117,7 @@ services:
 
   # Milvus vector database
   milvus-etcd:
-    image: quay.io/coreos/etcd:v3.5.18
+    image: quay.io/coreos/etcd:v3.5.25
     container_name: interview_copilot_etcd
     environment:
       - ETCD_AUTO_COMPACTION_MODE=revision
@@ -156,7 +156,7 @@ services:
       - copilot_net
 
   milvus-standalone:
-    image: milvusdb/milvus:v2.6.11
+    image: milvusdb/milvus:v2.6.22
     container_name: interview_copilot_milvus
     command: ["milvus", "run", "standalone"]
     security_opt:
@@ -323,13 +323,16 @@ services:
       milvus-standalone:
         condition: service_healthy
 
-  worker-background:
+  worker-jobs:
     <<: *backend-service
     profiles: [full]
-    container_name: interview_copilot_worker_background
+    container_name: interview_copilot_worker_jobs
     environment:
       <<: *backend-environment
-      CELERY_QUEUES: "background"
+      # Community topology: retain separate logical lanes while sharing one
+      # lightweight process. Heavy local AI runtimes remain isolated in the
+      # turns, transcription and pipeline workers.
+      CELERY_QUEUES: "background,default"
     command:
       - celery
       - -A
@@ -337,31 +340,9 @@ services:
       - worker
       - --loglevel=info
       - --pool=threads
-      - --concurrency=${BACKGROUND_WORKER_CONCURRENCY:-2}
-      - --queues=background
-      - --hostname=background@%h
-    depends_on:
-      <<: *runtime-dependencies
-
-  worker-light:
-    <<: *backend-service
-    profiles: [full]
-    container_name: interview_copilot_worker_light
-    environment:
-      <<: *backend-environment
-      CELERY_QUEUES: "default"
-    command:
-      - celery
-      - -A
-      - app.task_queue.celery_app.celery_app
-      - worker
-      - --loglevel=info
-      # Control, cleanup and scheduled jobs are short I/O operations; long
-      # model-backed review/memory work runs on worker-background.
-      - --pool=threads
-      - --concurrency=4
-      - --queues=default
-      - --hostname=light@%h
+      - --concurrency=${JOB_WORKER_CONCURRENCY:-4}
+      - --queues=background,default
+      - --hostname=jobs@%h
     depends_on:
       <<: *runtime-dependencies
 

@@ -11,7 +11,7 @@ class TestKnowledgeErrorHandling:
             raise RuntimeError("Milvus connection lost")
 
         monkeypatch.setattr(
-            "app.rag.knowledge_retriever.knowledge_retriever.retrieve",
+            "app.agent_runtime.tools.knowledge.rag_service.retrieve",
             lambda **kw: _boom(**kw),
         )
 

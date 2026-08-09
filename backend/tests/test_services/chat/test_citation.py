@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.services.chat.citation import validate_citations
+from app.rag.grounding.citations import validate_citations
 
 
 def _sources(*refs: str) -> list[dict]:

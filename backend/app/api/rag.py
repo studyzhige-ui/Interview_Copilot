@@ -14,8 +14,8 @@ from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
-from app.rag.contracts import SearchIntent
-from app.rag.retriever import query_knowledge_base
+from app.rag.application.service import rag_service
+from app.rag.domain.models import SearchIntent
 from app.rag.runtime import ensure_rag_runtime
 from app.schemas.rag import (
     KnowledgeDocumentCreateRequest,
@@ -71,7 +71,7 @@ async def api_query_knowledge_base(
         )
         source_kind_val = body.source_kind.value if body.source_kind else None
 
-        result = await query_knowledge_base(
+        result = await rag_service.retrieve(
             intents=[SearchIntent.from_query(body.query)],
             source_kind=source_kind_val,
             user_id=current_user.username,
@@ -82,6 +82,7 @@ async def api_query_knowledge_base(
             "data": {
                 "chunks": result.chunks,
                 "retrieval_state": result.state.to_dict(),
+                "diagnostics": result.diagnostics,
             },
         }
     except Exception as exc:  # noqa: BLE001
@@ -104,6 +105,7 @@ def _document_payload(document: KnowledgeDocument) -> dict:
         "status": document.status,
         "task_id": document.task_id,
         "chunk_count": document.chunk_count,
+        "index_fingerprint": document.index_fingerprint,
         "content_type": content_type,
         "size_bytes": size_bytes,
         "error_message": document.error_message,
@@ -303,11 +305,24 @@ def update_knowledge_document(
     )
     if document is None:
         raise HTTPException(status_code=404, detail="Knowledge document not found")
+    title_changed = False
     if request.title is not None:
-        document.title = request.title.strip() or document.title
+        new_title = request.title.strip() or document.title
+        title_changed = new_title != document.title
+        document.title = new_title
     if request.category is not None:
         document.category = request.category.strip() or "默认"
     db.add(document)
+    if title_changed and document.status == "ready":
+        # The title is part of the retrieval passage. Publish its new index view
+        # through the same durable outbox as every other external-index update.
+        from app.services.knowledge.index_jobs import enqueue_milvus_upsert
+
+        enqueue_milvus_upsert(
+            db,
+            user_pk=document.user_id,
+            document_id=document.id,
+        )
     db.commit()
     db.refresh(document)
     return {"status": "success", "document": _document_payload(document)}

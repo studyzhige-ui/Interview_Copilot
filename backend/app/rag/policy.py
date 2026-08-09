@@ -30,6 +30,11 @@ class RetrievalPolicy:
     max_intents: int
     min_score: float
     score_margin: float | None
+    dense_weight: float
+    sparse_weight: float
+    rrf_k: int
+    search_timeout_seconds: float
+    rerank_timeout_seconds: float
 
 
 @dataclass(frozen=True)
@@ -54,6 +59,11 @@ def current_rag_policy() -> RagPolicy:
             max_intents=settings.RAG_MAX_INTENTS,
             min_score=settings.RAG_MIN_SCORE,
             score_margin=settings.RAG_SCORE_MARGIN,
+            dense_weight=settings.RAG_DENSE_WEIGHT,
+            sparse_weight=settings.RAG_SPARSE_WEIGHT,
+            rrf_k=settings.RAG_RRF_K,
+            search_timeout_seconds=settings.RAG_SEARCH_TIMEOUT_SECONDS,
+            rerank_timeout_seconds=settings.RAG_RERANK_TIMEOUT_SECONDS,
         ),
     )
 

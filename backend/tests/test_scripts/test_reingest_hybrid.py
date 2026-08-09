@@ -1,5 +1,5 @@
 """C3 / §4.6.3: subset knowledge reingest (document / user / category) resolved
-from Postgres facts, funnelled through ingestion.reindex_document.
+from Postgres facts, funnelled through index.knowledge.reindex_document.
 
 A soft-deleted document is never re-indexed; category is read from
 knowledge_documents (not Milvus). reindex_document is stubbed here (its own
@@ -51,7 +51,7 @@ def _seed(maker, docs):
 def _patch_reindex(monkeypatch):
     """Record reindex_document calls; return 1 'chunk' per document."""
     calls: list[str] = []
-    import app.rag.ingestion as ing
+    import app.rag.index.knowledge as ing
 
     monkeypatch.setattr(
         ing, "reindex_document", lambda db, doc_id: calls.append(doc_id) or 1

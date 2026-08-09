@@ -79,7 +79,7 @@ async def save_qa_to_knowledge(
     db.refresh(doc)
 
     # Index the QA as one natural unit (Markdown content_text -> chunks + Milvus).
-    from app.rag.ingestion import ingest_text
+    from app.rag.ingest.pipeline import ingest_text
 
     try:
         result = await ingest_text(

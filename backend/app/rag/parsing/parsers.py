@@ -107,7 +107,7 @@ _ocr_available_cache: bool | None = None
 
 
 def _ocr_available() -> bool:
-    """Whether the OCR engine (rapidocr-onnxruntime) is importable (cached).
+    """Whether the current RapidOCR engine is importable (cached).
 
     Docling OCR is gated on this so a deploy WITHOUT the engine still parses
     text PDFs (do_ocr=False) instead of failing on a missing engine — the same
@@ -116,7 +116,7 @@ def _ocr_available() -> bool:
     if _ocr_available_cache is None:
         from importlib.util import find_spec
 
-        _ocr_available_cache = find_spec("rapidocr_onnxruntime") is not None
+        _ocr_available_cache = find_spec("rapidocr") is not None
     return _ocr_available_cache
 
 

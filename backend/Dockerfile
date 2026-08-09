@@ -13,6 +13,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 ARG APP_EXTRAS
+ARG PYTORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu
 ARG PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu129
 COPY pyproject.toml README.md ./
 # Dependency installation only needs one discoverable package. Keeping the
@@ -26,6 +27,12 @@ RUN python -m venv /opt/venv && \
         case ",${APP_EXTRAS}," in \
             *,cuda,*) /opt/venv/bin/pip install --no-cache-dir \
                 --extra-index-url "$PYTORCH_INDEX_URL" ".[${APP_EXTRAS}]" ;; \
+            *,local,*) /opt/venv/bin/pip install --no-cache-dir \
+                --retries 10 --timeout 120 \
+                --index-url "$PYTORCH_CPU_INDEX_URL" \
+                torch==2.8.0+cpu torchvision==0.23.0+cpu \
+                torchaudio==2.8.0+cpu && \
+                /opt/venv/bin/pip install --no-cache-dir ".[${APP_EXTRAS}]" ;; \
             *) /opt/venv/bin/pip install --no-cache-dir ".[${APP_EXTRAS}]" ;; \
         esac; \
     else \

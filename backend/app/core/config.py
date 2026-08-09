@@ -149,6 +149,14 @@ class Settings(BaseSettings):
     RAG_CANDIDATE_COUNT: int = 20
     RAG_FINAL_COUNT: int = 3
     RAG_MAX_INTENTS: int = 4
+    RAG_DENSE_WEIGHT: float = 1.0
+    RAG_SPARSE_WEIGHT: float = 1.0
+    RAG_RRF_K: int = 60
+    RAG_SEARCH_TIMEOUT_SECONDS: float = 8.0
+    RAG_RERANK_TIMEOUT_SECONDS: float = 30.0
+    RAG_OUTPUT_TOKEN_RESERVE: int = 4_096
+    RAG_CONTEXT_SAFETY_MARGIN: int = 1_024
+    RAG_RETRIEVED_CONTEXT_TOKENS: int = 8_000
     # Reranker-score relevance threshold — reranker branch ONLY. Calibrated
     # for the default BAAI/bge-reranker-v2-m3 sigmoid score on the versioned
     # official-doc benchmark; other reranker models must be calibrated on
@@ -166,7 +174,7 @@ class Settings(BaseSettings):
     PARSER_PROVIDER: str = "docling"
     # On-demand OCR for the Docling parser (plan §4.1.3/§4.1.4): scanned PDFs
     # (pages with no text layer) and image documents. Effective only when an OCR
-    # engine (rapidocr-onnxruntime) is importable — if it isn't, Docling is built
+    # engine (rapidocr) is importable — if it isn't, Docling is built
     # with do_ocr=False so text PDFs still parse instead of failing on a missing
     # engine. Set False to disable OCR globally even where the engine is present.
     RAG_OCR_ENABLED: bool = True
@@ -298,6 +306,32 @@ class Settings(BaseSettings):
             self.RAG_RERANK_INPUT_TOKENS - self.RAG_QUERY_TOKEN_RESERVE
         ):
             raise ValueError("RAG_CHUNK_TOKENS exceeds the reranker passage budget")
+        if self.EMBEDDING_DIM <= 0:
+            raise ValueError("EMBEDDING_DIM must be positive")
+        if (
+            min(
+                self.RAG_CANDIDATE_COUNT,
+                self.RAG_FINAL_COUNT,
+                self.RAG_MAX_INTENTS,
+                self.RAG_RRF_K,
+                self.RAG_OUTPUT_TOKEN_RESERVE,
+                self.RAG_RETRIEVED_CONTEXT_TOKENS,
+            )
+            <= 0
+        ):
+            raise ValueError("RAG counts and token budgets must be positive")
+        if self.RAG_CANDIDATE_COUNT < self.RAG_FINAL_COUNT:
+            raise ValueError("RAG_CANDIDATE_COUNT must be >= RAG_FINAL_COUNT")
+        if self.RAG_DENSE_WEIGHT <= 0 or self.RAG_SPARSE_WEIGHT <= 0:
+            raise ValueError("RAG fusion weights must be positive")
+        if self.RAG_SEARCH_TIMEOUT_SECONDS <= 0 or self.RAG_RERANK_TIMEOUT_SECONDS <= 0:
+            raise ValueError("RAG stage timeouts must be positive")
+        if self.RAG_CONTEXT_SAFETY_MARGIN < 0:
+            raise ValueError("RAG_CONTEXT_SAFETY_MARGIN cannot be negative")
+        if not 0 <= self.RAG_MIN_SCORE <= 1:
+            raise ValueError("RAG_MIN_SCORE must be between 0 and 1")
+        if self.RAG_SCORE_MARGIN is not None and not 0 <= self.RAG_SCORE_MARGIN <= 1:
+            raise ValueError("RAG_SCORE_MARGIN must be between 0 and 1")
         return self
 
 

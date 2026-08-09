@@ -1,6 +1,6 @@
 """B7 / §4.6.3: two-phase document-atomic write order.
 
-``_index_nodes`` must write facts as ``pending`` BEFORE the Milvus rows, then
+The canonical persistence stage must write facts as ``pending`` BEFORE Milvus, then
 flip them to ``indexed`` only after Milvus succeeds. If the Milvus write fails,
 the committed pending facts must remain (recoverable by reingest/reindex), never
 a half-written index.
@@ -15,7 +15,8 @@ import app.rag.embedding_registry as er
 import pytest
 from app.db.database import Base
 from app.models.document_chunk import DocumentChunk
-from app.rag import ingestion
+from app.rag.index.knowledge import reindex_document
+from app.rag.ingest.pipeline import _persist_nodes, ingest_text
 from llama_index.core.schema import TextNode
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -64,8 +65,21 @@ def _use_embed(monkeypatch, dim=4):
             "local", er.PROVIDERS["local"], "BAAI/bge-m3", dim
         ),
     )
+    import app.rag.ingest.embedding as embedding_module
+
     monkeypatch.setattr(
-        ingestion, "Settings", SimpleNamespace(embed_model=_FakeEmbed(dim))
+        embedding_module,
+        "Settings",
+        SimpleNamespace(embed_model=_FakeEmbed(dim)),
+    )
+
+
+def _index_nodes(nodes, **kwargs):
+    return _persist_nodes(
+        nodes,
+        assign_stable_ids=False,
+        document_title_loader=lambda _document_id: None,
+        **kwargs,
     )
 
 
@@ -94,7 +108,7 @@ def test_index_nodes_writes_pending_before_milvus_then_indexed(index_db, monkeyp
     monkeypatch.setattr(mh, "insert", fake_insert)
 
     nodes = [TextNode(text="a", id_="n1"), TextNode(text="b", id_="n2")]
-    info = ingestion._index_nodes(
+    info = _index_nodes(
         nodes,
         user_id=1,
         source_kind="user_upload",
@@ -130,9 +144,7 @@ def test_index_nodes_milvus_failure_queues_upsert_keeps_pending(index_db, monkey
     monkeypatch.setattr(mh, "insert", boom)
 
     nodes = [TextNode(text="a", id_="n1")]
-    info = ingestion._index_nodes(
-        nodes, user_id=1, source_kind="user_upload", document_id="d2"
-    )
+    info = _index_nodes(nodes, user_id=1, source_kind="user_upload", document_id="d2")
 
     assert info["indexed"] is False
     db = index_db()
@@ -160,13 +172,9 @@ def test_reingest_replacement_is_idempotent(index_db, monkeypatch):
     monkeypatch.setattr(mh, "insert", lambda coll, rows: None)
 
     first = [TextNode(text="v1 a", id_="a1"), TextNode(text="v1 b", id_="a2")]
-    ingestion._index_nodes(
-        first, user_id=1, source_kind="user_upload", document_id="dup"
-    )
+    _index_nodes(first, user_id=1, source_kind="user_upload", document_id="dup")
     second = [TextNode(text="v2 only", id_="b1")]
-    ingestion._index_nodes(
-        second, user_id=1, source_kind="user_upload", document_id="dup"
-    )
+    _index_nodes(second, user_id=1, source_kind="user_upload", document_id="dup")
 
     db = index_db()
     try:
@@ -185,7 +193,6 @@ def test_index_text_is_structured_while_postgres_keeps_raw_fact(index_db, monkey
     import app.rag.milvus_hybrid as mh
 
     captured: dict = {}
-    monkeypatch.setattr(ingestion, "_document_title", lambda _document_id: "Celery")
     monkeypatch.setattr(mh, "delete_by_field", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         mh, "insert", lambda _collection, rows: captured.__setitem__("rows", rows)
@@ -196,8 +203,13 @@ def test_index_text_is_structured_while_postgres_keeps_raw_fact(index_db, monkey
         metadata={"heading_path": ["Tasks", "Acknowledgements"]},
     )
 
-    ingestion._index_nodes(
-        [node], user_id=1, source_kind="user_upload", document_id="structured"
+    _persist_nodes(
+        [node],
+        user_id=1,
+        source_kind="user_upload",
+        document_id="structured",
+        assign_stable_ids=False,
+        document_title_loader=lambda _document_id: "Celery",
     )
 
     assert captured["rows"][0]["text"] == (
@@ -261,7 +273,7 @@ def test_reindex_document_rebuilds_from_live_facts(index_db, monkeypatch):
 
     db2 = index_db()
     try:
-        n = ingestion.reindex_document(db2, "rd")
+        n = reindex_document(db2, "rd")
     finally:
         db2.close()
 
@@ -298,7 +310,7 @@ def test_reindex_document_no_live_chunks_clears_milvus(index_db, monkeypatch):
 
     db = index_db()
     try:
-        n = ingestion.reindex_document(db, "empty_doc")
+        n = reindex_document(db, "empty_doc")
     finally:
         db.close()
 
@@ -315,7 +327,7 @@ async def test_ingest_text_end_to_end_marks_indexed(index_db, monkeypatch):
     monkeypatch.setattr(mh, "delete_by_field", lambda *a, **k: None)
     monkeypatch.setattr(mh, "insert", lambda coll, rows: None)
 
-    result = await ingestion.ingest_text(
+    result = await ingest_text(
         "## 问题\n什么是缓存击穿？\n## 答案\n热点 key 失效。",
         "improved_qa",
         user_id=1,

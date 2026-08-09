@@ -26,8 +26,9 @@ import importlib.util
 import sys
 
 blocked = {
-    "torch", "torchvision", "torchaudio", "whisperx",
-    "sentence_transformers", "docling", "rapidocr_onnxruntime",
+    "torch", "torchvision", "torchaudio", "whisperx", "transformers",
+    "huggingface_hub",
+    "sentence_transformers", "docling", "rapidocr",
     "llama_index.embeddings.huggingface",
     "llama_index.postprocessor.sbert_rerank",
 }

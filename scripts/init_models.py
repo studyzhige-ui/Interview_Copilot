@@ -19,7 +19,6 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
-from huggingface_hub import snapshot_download
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -177,6 +176,8 @@ def prepare_runtime(hf_endpoint: str) -> None:
 
 
 def download_snapshot(repo_id: str) -> Path:
+    from huggingface_hub import snapshot_download
+
     target_dir = repo_dir(repo_id)
     path = snapshot_download(
         repo_id=repo_id,

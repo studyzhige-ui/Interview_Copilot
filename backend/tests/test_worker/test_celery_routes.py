@@ -87,6 +87,36 @@ def test_background_intelligence_tasks_have_their_own_queue():
         assert routes[name]["queue"] == "background"
 
 
+def test_outbox_beat_entries_are_reconciliation_fallbacks_not_hot_pollers():
+    from app.task_queue.celery_app import celery_app
+
+    schedule = celery_app.conf.beat_schedule
+    names = (
+        "index-outbox-reconcile-every-five-minutes",
+        "intelligence-outbox-reconcile-every-five-minutes",
+        "cleanup-outbox-reconcile-every-five-minutes",
+    )
+    for name in names:
+        entry = schedule[name]
+        assert entry["schedule"].minute == set(range(0, 60, 5))
+        assert entry["options"]["expires"] == 240
+
+
+def test_community_compose_merges_background_and_default_workers():
+    from pathlib import Path
+
+    import yaml
+
+    compose_path = Path(__file__).resolve().parents[3] / "docker-compose.yml"
+    services = yaml.safe_load(compose_path.read_text(encoding="utf-8"))["services"]
+
+    assert "worker-background" not in services
+    assert "worker-light" not in services
+    jobs = services["worker-jobs"]
+    assert jobs["environment"]["CELERY_QUEUES"] == "background,default"
+    assert "--queues=background,default" in jobs["command"]
+
+
 def test_every_registered_task_has_a_route():
     """If a new task is defined without a route, the default queue
     silently catches it — fine, but the test exists so the omission

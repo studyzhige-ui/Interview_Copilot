@@ -123,17 +123,20 @@ celery_app.conf.update(
         },
         # Split durable work by resource class so model-backed memory jobs
         # cannot head-of-line block indexing or object-storage cleanup.
-        "index-outbox-drain-every-minute": {
+        "index-outbox-reconcile-every-five-minutes": {
             "task": "tasks.drain_index_outbox_jobs",
-            "schedule": crontab(minute="*"),
+            "schedule": crontab(minute="*/5"),
+            "options": {"expires": 240},
         },
-        "intelligence-outbox-drain-every-minute": {
+        "intelligence-outbox-reconcile-every-five-minutes": {
             "task": "tasks.drain_intelligence_outbox_jobs",
-            "schedule": crontab(minute="*"),
+            "schedule": crontab(minute="*/5"),
+            "options": {"expires": 240},
         },
-        "cleanup-outbox-drain-every-minute": {
+        "cleanup-outbox-reconcile-every-five-minutes": {
             "task": "tasks.drain_cleanup_outbox_jobs",
-            "schedule": crontab(minute="*"),
+            "schedule": crontab(minute="*/5"),
+            "options": {"expires": 240},
         },
         # Zombie sweeper: records whose broker message was lost outright
         # (e.g. Redis restart without persistence) never move again —
@@ -142,20 +145,24 @@ celery_app.conf.update(
         "stale-record-sweep": {
             "task": "tasks.sweep_stale_interview_records",
             "schedule": crontab(minute="*/10"),
+            "options": {"expires": 540},
         },
         "stale-pipeline-sweep": {
             "task": "tasks.sweep_stale_pipeline_records",
             "schedule": crontab(minute="5-59/10"),
+            "options": {"expires": 540},
         },
         # Daily orphan-upload cleanup (UP-3) — off-peak, after the memory
         # dreaming batch.
         "uploads-sweep-orphans-daily": {
             "task": "tasks.sweep_orphan_file_assets",
             "schedule": crontab(hour=4, minute=20),
+            "options": {"expires": 3600},
         },
         "runtime-files-sweep-daily": {
             "task": "tasks.sweep_runtime_files",
             "schedule": crontab(hour=4, minute=40),
+            "options": {"expires": 3600},
         },
     },
 )

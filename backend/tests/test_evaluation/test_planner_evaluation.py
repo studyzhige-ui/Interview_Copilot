@@ -6,7 +6,7 @@ import hashlib
 import pytest
 
 from app.conversation.query_planner import QueryPlan
-from app.rag.contracts import SearchIntent
+from app.rag.domain.models import SearchIntent
 from evaluation.planner_snapshot import (
     load_or_create_planner_snapshot,
     planner_results_sha256,

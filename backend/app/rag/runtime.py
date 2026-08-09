@@ -24,9 +24,9 @@ def ensure_rag_runtime(*, embedding: bool = False, reranker: bool = False) -> No
             init_rag_settings()
             _embedding_ready = True
         if reranker and not _reranker_ready:
-            from app.rag.retriever import init_reranker
+            from app.rag.application.service import rag_service
 
-            init_reranker()
+            rag_service.initialize()
             _reranker_ready = True
 
 

@@ -47,14 +47,24 @@ def mark_document_indexed_ready(db: Session, document_id: str) -> None:
     db.commit()
 
 
-def mark_document_index_failed(db: Session, document_id: str, message: str) -> None:
-    """The async Milvus index retries were exhausted — terminal failure so an
-    index-queued document never stays ``processing`` forever. Only flips a doc
-    still in ``processing`` (leaves a concurrent delete alone)."""
+def mark_document_index_failed(
+    db: Session,
+    document_id: str,
+    message: str,
+    *,
+    allow_ready: bool = False,
+) -> None:
+    """Mark an exhausted index build failed without reviving deleted rows.
+
+    Normal retries only transition ``processing`` documents. Generation
+    migration jobs may opt into failing a ``ready`` document because its old
+    physical collection is intentionally no longer queried.
+    """
     doc = (
         db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
     )
-    if doc is None or doc.status != "processing":
+    allowed_statuses = {"processing", "ready"} if allow_ready else {"processing"}
+    if doc is None or doc.status not in allowed_statuses:
         return
     doc.status = "failed"
     doc.error_message = message[:500]
