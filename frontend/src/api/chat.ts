@@ -197,7 +197,6 @@ function dispatchHarnessEvent(evt: HarnessEvent, handlers: StreamChatHandlers): 
     case 'error': handlers.onStreamError?.(String(data.error ?? 'stream error')); break;
     case 'done': return true;
     default:
-      // eslint-disable-next-line no-console
       console.debug('[sse] unknown event type', evt.type, data);
   }
   return false;
@@ -253,7 +252,9 @@ async function readTurnEvents(
       }
     }
   } catch (error) {
-    if (timedOut && !signal?.aborted) throw new Error('连接超时：服务端 60s 无数据响应');
+    if (timedOut && !signal?.aborted) {
+      throw new Error('连接超时：服务端 60s 无数据响应', { cause: error });
+    }
     throw error;
   } finally {
     if (idleTimer) clearTimeout(idleTimer);

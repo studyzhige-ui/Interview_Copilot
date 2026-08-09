@@ -104,6 +104,7 @@ def test_rag_query_delegates_to_retriever(client):
         patch(
             "app.api.rag.current_edition_policy", return_value=policy_for("community")
         ),
+        patch("app.api.rag.ensure_rag_runtime"),
         patch("app.api.rag.rag_service.retrieve", side_effect=fake_query),
     ):
         resp = client.post(

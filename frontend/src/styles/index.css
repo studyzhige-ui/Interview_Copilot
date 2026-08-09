@@ -1,8 +1,6 @@
+@import 'tailwindcss';
 @import './tokens.css';
-
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@config '../../tailwind.config.js';
 
 /* Bump the base type scale ~14% so dense reading surfaces (review page,
    chat bubbles, QA cards) feel comfortable on 1440-wide laptop screens.

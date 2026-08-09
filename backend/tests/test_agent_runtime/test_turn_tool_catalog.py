@@ -238,7 +238,7 @@ def test_mcp_manager_maps_remote_tools(monkeypatch):
                         name="add",
                         title=None,
                         description="Add",
-                        inputSchema={"type": "object", "properties": {}},
+                        input_schema={"type": "object", "properties": {}},
                     )
                 ]
             )
@@ -272,7 +272,7 @@ def test_mcp_runtime_reuses_connection_and_tool_cache(monkeypatch):
                         name="add",
                         title=None,
                         description="Add",
-                        inputSchema={"type": "object", "properties": {}},
+                        input_schema={"type": "object", "properties": {}},
                     )
                 ]
             )

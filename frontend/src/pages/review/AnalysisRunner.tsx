@@ -104,7 +104,6 @@ export function AnalysisRunner({ recordId, onProgress, onDone, onError }: Props)
     })();
 
     return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks read via refs above
   }, [recordId]);
 
   return null;

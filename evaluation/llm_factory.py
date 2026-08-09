@@ -11,7 +11,6 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 
 
 @dataclass(frozen=True)
@@ -243,7 +242,12 @@ def build_evaluation_llm(
     *,
     temperature: float = EVALUATION_GENERATOR_TEMPERATURE,
     max_tokens: int = EVALUATION_GENERATOR_MAX_TOKENS,
-) -> ChatOpenAI:
+) -> Any:
+    # The evaluation stack is optional. Keep its LangChain adapter outside the
+    # base application's import boundary so ``.[dev]`` can run the unit suite
+    # without installing ``.[evaluation]``.
+    from langchain_openai import ChatOpenAI
+
     config = load_generator_llm_config()
     extra_body = (
         {"thinking": {"type": config.thinking_mode}} if config.thinking_mode else None

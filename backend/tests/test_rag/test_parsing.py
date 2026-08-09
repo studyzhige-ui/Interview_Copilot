@@ -181,7 +181,8 @@ def test_ocr_requires_configuration_and_runtime(monkeypatch):
 
 
 def test_docling_partial_conversion_fails_into_registry_fallback(monkeypatch):
-    from docling.datamodel.base_models import ConversionStatus
+    docling_models = pytest.importorskip("docling.datamodel.base_models")
+    ConversionStatus = docling_models.ConversionStatus
 
     result = SimpleNamespace(
         status=ConversionStatus.PARTIAL_SUCCESS,

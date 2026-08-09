@@ -34,6 +34,14 @@ METRIC_KEYS = (
 )
 
 
+def _installed_distribution_version(name: str) -> str:
+    """Return a stable fingerprint value across optional dependency boundaries."""
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "not-installed"
+
+
 @contextmanager
 def generation_workflow_lock():
     """Serialize the complete live check/formal workflow across processes."""
@@ -157,7 +165,7 @@ def _evaluation_contract_fingerprint(
     payload = {
         "version": 2,
         "metrics": METRIC_KEYS,
-        "ragas_version": importlib.metadata.version("ragas"),
+        "ragas_version": _installed_distribution_version("ragas"),
         "metric_contract_sha256": hashlib.sha256(
             (
                 inspect.getsource(_metric_factories)

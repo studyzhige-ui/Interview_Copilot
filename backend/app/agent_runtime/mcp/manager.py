@@ -9,8 +9,6 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
-import httpx
-
 from app.core.config import settings
 from app.core.ssrf import validate_safe_url
 from app.services.capabilities.mcp_server_service import MCPServerConfig
@@ -108,8 +106,10 @@ class MCPManager:
 
         async with AsyncExitStack() as stack:
             if config.transport == "streamable_http":
+                import httpx2
+
                 client = await stack.enter_async_context(
-                    httpx.AsyncClient(
+                    httpx2.AsyncClient(
                         headers=config.headers,
                         timeout=settings.AGENT_TOOL_TIMEOUT_SECONDS,
                     )
@@ -236,7 +236,7 @@ class MCPManager:
                 remote_name=tool.name,
                 description=tool.description or tool.title or tool.name,
                 input_schema=dict(
-                    tool.inputSchema or {"type": "object", "properties": {}}
+                    tool.input_schema or {"type": "object", "properties": {}}
                 ),
             )
             for tool in response.tools

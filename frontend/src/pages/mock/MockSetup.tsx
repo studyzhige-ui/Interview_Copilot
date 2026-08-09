@@ -276,7 +276,7 @@ function ResumeCard({
   state: CardState;
   storedResumes: PersonalResume[];
   loadingResumes: boolean;
-  inputRef: React.RefObject<HTMLInputElement>;
+  inputRef: React.RefObject<HTMLInputElement | null>;
   onPickFile: (f: File) => void;
   onPickExisting: (r: PersonalResume) => void;
 }) {
@@ -486,7 +486,7 @@ function JdCard({
   state: CardState;
   text: string;
   setText: (t: string) => void;
-  inputRef: React.RefObject<HTMLInputElement>;
+  inputRef: React.RefObject<HTMLInputElement | null>;
   onPick: (f: File) => void;
 }) {
   const doneUpload = !!state.uploadId;

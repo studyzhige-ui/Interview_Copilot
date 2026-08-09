@@ -41,7 +41,7 @@ for module_name in _MAYBE_MISSING:
 # repo with stray ``test_unit.db`` files whenever something connects.
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("DEEPSEEK_API_KEY", "test-key-not-real")
-os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-prod")
+os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production-32-bytes")
 
 
 # ── In-memory SQLite engine shared across the test session ───────────────

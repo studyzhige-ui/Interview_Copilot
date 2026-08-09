@@ -22,7 +22,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
-from jose import JWTError
+from jwt.exceptions import PyJWTError as JWTError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
