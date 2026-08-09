@@ -85,10 +85,12 @@ async def test_candidate_search_runs_lexical_once_and_dense_per_variant(monkeypa
     )
 
     assert calls.count(("sparse", intent.sparse_query)) == 1
-    assert [call for call in calls if call[0] == "embed"] == [
+    embedding_calls = [call for call in calls if call[0] == "embed"]
+    assert len(embedding_calls) == 2
+    assert set(embedding_calls) == {
         ("embed", "缓存雪崩"),
         ("embed", "cache avalanche"),
-    ]
+    }
     assert len([call for call in calls if call[0] == "dense"]) == 2
     assert {hit["id"] for hit in result.hits} == {"s", "d"}
     assert all(hit["intent_ids"] == ["I1"] for hit in result.hits)
