@@ -217,8 +217,8 @@ def _parser_metadata(document_id: str) -> dict:
 
 
 async def _evaluate_case(case: FormatCase, path: Path, user_pk: int) -> dict:
-    from app.rag.contracts import SearchIntent
-    from app.rag.retriever import query_knowledge_base
+    from app.rag.domain.models import SearchIntent
+    from app.rag.application.service import rag_service
     from evaluation.prepare_corpus import _document_id, _index_file, _reset_user_corpus
 
     _reset_user_corpus(user_pk)
@@ -230,7 +230,7 @@ async def _evaluate_case(case: FormatCase, path: Path, user_pk: int) -> dict:
     checks: list[dict] = []
     for query, expected in QUESTIONS:
         query_started = time.perf_counter()
-        result = await query_knowledge_base(
+        result = await rag_service.retrieve(
             intents=[SearchIntent.from_query(query)],
             user_id=EVAL_USER,
         )

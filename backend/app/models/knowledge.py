@@ -52,6 +52,10 @@ class KnowledgeDocument(Base):
     status = Column(String, index=True, default="processing", nullable=False)
     task_id = Column(String, nullable=True)
     chunk_count = Column(Integer, default=0, nullable=False)
+    # Complete semantic/index generation that currently owns this document.
+    # A same-dimension embedding-model change therefore becomes visible and
+    # reindexable instead of silently mixing coordinate spaces.
+    index_fingerprint = Column(String, nullable=True, index=True)
     # Deletes go by document_id (milvus_hybrid.delete_by_field + the
     # document_chunks rows) — nothing reads node ids back for deletion anymore.
     # ``ref_doc_ids`` records the LlamaIndex ref-doc ids from the last ingest as

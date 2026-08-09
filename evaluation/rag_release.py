@@ -40,6 +40,10 @@ def profile_sha256(profile: dict[str, Any]) -> str:
 
 def _current_runtime_contract() -> dict[str, Any]:
     from app.core.config import settings
+    from app.rag.index.identity import (
+        active_knowledge_collection_name,
+        current_index_identity,
+    )
 
     return {
         "parser_provider": settings.PARSER_PROVIDER,
@@ -52,10 +56,20 @@ def _current_runtime_contract() -> dict[str, Any]:
         "rerank_input_tokens": settings.RAG_RERANK_INPUT_TOKENS,
         "query_token_reserve": settings.RAG_QUERY_TOKEN_RESERVE,
         "max_intents": settings.RAG_MAX_INTENTS,
+        "dense_weight": settings.RAG_DENSE_WEIGHT,
+        "sparse_weight": settings.RAG_SPARSE_WEIGHT,
+        "rrf_k": settings.RAG_RRF_K,
+        "search_timeout_seconds": settings.RAG_SEARCH_TIMEOUT_SECONDS,
+        "rerank_timeout_seconds": settings.RAG_RERANK_TIMEOUT_SECONDS,
+        "retrieved_context_tokens": settings.RAG_RETRIEVED_CONTEXT_TOKENS,
+        "output_token_reserve": settings.RAG_OUTPUT_TOKEN_RESERVE,
+        "context_safety_margin": settings.RAG_CONTEXT_SAFETY_MARGIN,
         "milvus_uri_sha256": hashlib.sha256(
             settings.MILVUS_URI.encode("utf-8")
         ).hexdigest(),
-        "milvus_collection": settings.MILVUS_COLLECTION,
+        "milvus_collection_base": settings.MILVUS_COLLECTION,
+        "milvus_collection": active_knowledge_collection_name(),
+        "index_fingerprint": current_index_identity().fingerprint,
         "milvus_similarity_metric": settings.MILVUS_SIMILARITY_METRIC,
         "milvus_dense_index_type": settings.MILVUS_DENSE_INDEX_TYPE,
         "milvus_hnsw_m": settings.MILVUS_HNSW_M,

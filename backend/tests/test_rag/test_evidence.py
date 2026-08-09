@@ -1,30 +1,36 @@
-from app.rag.contracts import SearchIntent
-from app.rag.evidence import check_evidence
+from app.rag.domain.models import SearchIntent
+from app.rag.grounding.evidence import missing_terms_by_intent
+
+
+def _missing(intent: SearchIntent, text: str) -> list[str]:
+    return missing_terms_by_intent(
+        [intent],
+        [{"text": text, "intent_ids": [intent.intent_id]}],
+    )
 
 
 def test_evidence_accepts_all_explicit_qualifiers():
     intent = SearchIntent(
+        intent_id="I1",
         query="How does Node.js use asyncio.to_thread?",
         required_terms=["Node.js", "asyncio.to_thread"],
     )
-    decision = check_evidence(
-        [intent],
-        ["Node.js interoperability with Python asyncio.to_thread is limited."],
+    missing = _missing(
+        intent,
+        "Node.js interoperability with Python asyncio.to_thread is limited.",
     )
-    assert decision.supported is True
-    assert decision.missing_terms == ()
+    assert missing == []
 
 
 def test_evidence_rejects_only_planner_declared_missing_terms():
     intent = SearchIntent(
+        intent_id="I1",
         query="Redis 7 eviction",
         required_terms=["Redis 7"],
     )
-    decision = check_evidence([intent], ["Generic cache eviction strategies."])
-    assert decision.supported is False
-    assert decision.missing_terms == ("Redis 7",)
+    assert _missing(intent, "Generic cache eviction strategies.") == ["Redis 7"]
 
 
 def test_evidence_has_no_implicit_product_heuristics():
-    intent = SearchIntent(query="Compare Redis and Memcached")
-    assert check_evidence([intent], ["No matching product text."]).supported is True
+    intent = SearchIntent(intent_id="I1", query="Compare Redis and Memcached")
+    assert _missing(intent, "No matching product text.") == []

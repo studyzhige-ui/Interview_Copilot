@@ -22,8 +22,7 @@ from app.conversation.strategy import StrategyContext, StrategyResult
 from app.core.llm_client_factory import get_llm_for_role
 from app.core.tokens import token_count as _count_tokens
 from app.prompts.chat import DIRECT_SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
-from app.rag.evidence import check_evidence
-from app.services.chat.citation import validate_citations
+from app.rag.grounding.citations import CitationStreamGuard, validate_citations
 from app.services.chat.context_assembly_pipeline import (
     AssembledContext,
     PromptRenderer,
@@ -61,20 +60,7 @@ class ChatPipelineStrategy:
         # rebuilding would duplicate both round-trips.
         assembled: AssembledContext = ctx.assembled
 
-        evidence = (
-            check_evidence(
-                ctx.search_intents,
-                (
-                    f"{chunk.get('document_title') or ''}\n{chunk.get('text') or ''}"
-                    for chunk in ctx.knowledge_chunks
-                ),
-            )
-            if ctx.needs_knowledge_retrieval and ctx.retrieval_hit
-            else None
-        )
-        if ctx.needs_knowledge_retrieval and (
-            not ctx.retrieval_hit or (evidence is not None and not evidence.supported)
-        ):
+        if ctx.needs_knowledge_retrieval and not ctx.retrieval_hit:
             answer = _insufficient_evidence_message(ctx.user_message)
             yield HarnessEvent.status("现有资料不足", step=0, elapsed_ms=0)
             yield HarnessEvent.text_delta(answer, step=0, elapsed_ms=0)
@@ -92,6 +78,23 @@ class ChatPipelineStrategy:
                 else DIRECT_SYSTEM_PROMPT
             ),
         )
+        # Rendering performs the final model-window reconciliation. Evidence
+        # eligibility and citation cards must therefore use this exact,
+        # post-budget bundle—not the larger pre-render retrieval result.
+        if ctx.needs_knowledge_retrieval and not assembled.grounding.supported:
+            answer = _insufficient_evidence_message(ctx.user_message)
+            assembled.sources = []
+            yield HarnessEvent.status("现有资料不足", step=0, elapsed_ms=0)
+            yield HarnessEvent.text_delta(answer, step=0, elapsed_ms=0)
+            result.final_answer = answer
+            result.assistant_blocks = [{"type": "text", "text": answer}]
+            result.steps_used = 0
+            result.prompt_tokens = _count_tokens(prompt)
+            result.completion_tokens = _count_tokens(answer)
+            return
+
+        if assembled.sources:
+            yield HarnessEvent.sources(assembled.sources, step=0, elapsed_ms=0)
         yield HarnessEvent.status(
             "正在生成回答...",
             step=0,
@@ -101,29 +104,60 @@ class ChatPipelineStrategy:
         # Final answers always use the model selected by the user. Internal
         # router/worker models are never allowed to answer on the user's behalf.
         llm = get_llm_for_role("primary", user_id=ctx.user_id)
-        response_generator = await llm.astream_complete(prompt)
+        response_generator = await llm.astream_complete(
+            prompt,
+            max_tokens=assembled.output_token_reserve,
+        )
 
         final_answer = ""
+        citation_guard = (
+            CitationStreamGuard(assembled.sources) if assembled.sources else None
+        )
         async for chunk in response_generator:
-            final_answer += chunk.delta
-            yield HarnessEvent.text_delta(chunk.delta, step=0, elapsed_ms=0)
+            deltas = (
+                citation_guard.feed(chunk.delta) if citation_guard else [chunk.delta]
+            )
+            for delta in deltas:
+                final_answer += delta
+                yield HarnessEvent.text_delta(delta, step=0, elapsed_ms=0)
+        if citation_guard:
+            tail = citation_guard.flush()
+            if tail:
+                final_answer += tail
+                yield HarnessEvent.text_delta(tail, step=0, elapsed_ms=0)
 
         # Engine reads result.final_answer for persistence. We DO NOT
         # also emit ``HarnessEvent.text(final_answer)`` — the L1 wire
-        # contract is delta-only, matching the legacy chat-pipeline
-        # behaviour. The agent strategy is the one that uses ``text``
+        # contract is delta-only. The agent strategy is the one that uses ``text``
         # as a terminator marker, but it only fires after a tool-loop
         # cycle, not after deltas (no double-render risk there).
         # Post-generation citation check (RAG turns only) — regex, no LLM
         # second pass. Logs warnings for unknown / missing [K#]; the answer
         # text is never rewritten (generation plan §2.5). Only runs when the
         # turn actually had citable sources, so direct chat never warns.
-        if ctx.sources:
-            validate_citations(
+        if assembled.sources:
+            citation_report = validate_citations(
                 final_answer,
-                ctx.sources,
+                assembled.sources,
                 retrieval_hit=ctx.retrieval_hit,
             )
+            removed_refs = (
+                list(dict.fromkeys(citation_guard.removed_refs))
+                if citation_guard
+                else []
+            )
+            if not citation_report.ok or removed_refs:
+                logger.warning(
+                    "RAG citation validation failed: invalid=%s missing=%s",
+                    [*citation_report.invalid_refs, *removed_refs],
+                    citation_report.missing_citation,
+                )
+            result.extras["citation_report"] = {
+                "valid_refs": citation_report.valid_refs,
+                "invalid_refs": citation_report.invalid_refs,
+                "removed_invalid_refs": removed_refs,
+                "missing_citation": citation_report.missing_citation,
+            }
 
         result.final_answer = final_answer
         result.assistant_blocks = [{"type": "text", "text": final_answer}]

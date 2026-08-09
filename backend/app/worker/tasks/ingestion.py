@@ -44,7 +44,7 @@ def process_document_ingestion(self, document_id: str):
     from app.core.storage import download_file_from_s3
     from app.rag.cleaning import EmptyContentError
     from app.rag.embedding_registry import EmbeddingValidationError
-    from app.rag.ingestion import ingest_document
+    from app.rag.ingest.pipeline import ingest_document
     from app.services.knowledge.document_formats import (
         UnsupportedDocumentFormat,
         validate_knowledge_document_format,

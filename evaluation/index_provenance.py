@@ -59,6 +59,7 @@ def validate_evaluation_index(
     from app.models.document_chunk import DocumentChunk
     from app.models.knowledge import KnowledgeDocument
     from app.models.user import User
+    from app.rag.index.identity import current_index_identity
 
     corpus = validate_manifest_files(source_dir)
     expected_source_hashes = {
@@ -101,6 +102,16 @@ def validate_evaluation_index(
     not_ready = [document.id for document in documents if document.status != "ready"]
     if not_ready:
         errors.append(f"documents are not ready: {not_ready}")
+    active_fingerprint = current_index_identity().fingerprint
+    stale_generations = [
+        str(document.id)
+        for document in documents
+        if document.index_fingerprint != active_fingerprint
+    ]
+    if stale_generations:
+        errors.append(
+            f"documents are not in the active index generation: {stale_generations}"
+        )
     stale_sources = [
         str(document.id)
         for document in documents
@@ -204,6 +215,7 @@ def validate_evaluation_index(
         "chunk_count": len(chunks),
         "splitter_profile": expected_splitter,
         "embedding_profile": expected_embedding,
+        "index_fingerprint": active_fingerprint,
         "parser_chunk_counts": dict(sorted(parser_counts.items())),
         "parser_documents": {
             parser_id: sorted(filenames)

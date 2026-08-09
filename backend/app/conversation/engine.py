@@ -37,8 +37,8 @@ from app.conversation.strategy import (
     StrategyResult,
 )
 from app.core.error_messages import humanize_error
-from app.rag.knowledge_retriever import knowledge_retriever
-from app.rag.retrieval_state import EMPTY_PLANNER_NO_RETRIEVAL
+from app.rag.application.service import rag_service
+from app.rag.domain.models import EMPTY_PLANNER_NO_RETRIEVAL
 from app.services.analytics.telemetry_service import log_interaction_metrics
 from app.services.chat.chat_history_service import transcript_service
 from app.services.chat.context_assembly_pipeline import context_pipeline
@@ -84,6 +84,7 @@ class ConversationEngine:
         self._planner_failed: bool = False
         self._fallback_used: bool = False
         self._empty_reason: str | None = None
+        self._rag_metrics: dict = {}
         # Set in submit_message when a phase crashes. Persistence +
         # post-turn maintenance gate on this so error-humanised text
         # ("系统出了点问题…") doesn't enter conversation_messages or feed
@@ -113,17 +114,6 @@ class ConversationEngine:
             step=0,
             elapsed_ms=self._elapsed_ms(),
         )
-
-        # L1 RAG citation sources — emitted ONCE before generation streams so
-        # the frontend can mount source cards while the answer arrives. Only
-        # fires when retrieval produced citable chunks (empty for direct chat
-        # / agent turns). Old frontends skip the unknown event type.
-        if self._ctx and self._ctx.sources:
-            yield HarnessEvent.sources(
-                self._ctx.sources,
-                step=0,
-                elapsed_ms=self._elapsed_ms(),
-            )
 
         try:
             async for event in self.strategy.execute(self._ctx, self._result):
@@ -280,7 +270,7 @@ class ConversationEngine:
         # per-turn-variable part of the agent's grounding. L1 (chat) keeps it.
         knowledge_task = (
             asyncio.create_task(
-                knowledge_retriever.retrieve(
+                rag_service.retrieve(
                     intents=query_plan.intents,
                     user_id=self.user_id,
                     planner_failed=query_plan.planner_failed,
@@ -308,7 +298,6 @@ class ConversationEngine:
             v3_memory = universal_ctx
 
         knowledge_result = await knowledge_task if knowledge_task else None
-        knowledge_chunks = knowledge_result.chunks if knowledge_result else []
 
         # RetrievalState is the single source of truth for the turn's RAG
         # flags. When retrieval ran, read everything off it (the facade
@@ -328,6 +317,12 @@ class ConversationEngine:
         self._planner_failed = (
             _state.planner_failed if _state is not None else query_plan.planner_failed
         )
+        if knowledge_result is not None:
+            self._rag_metrics = {
+                "intent_count": len(knowledge_result.intents),
+                "retrieved_chunk_count": len(knowledge_result.chunks),
+                "diagnostics": knowledge_result.diagnostics,
+            }
 
         v3_memory_block = v3_memory.render()
 
@@ -360,7 +355,7 @@ class ConversationEngine:
             session_id=self.session_id,
             current_query=self.user_message,
             memory_block=v3_memory_block,
-            knowledge_chunks=knowledge_chunks,
+            retrieval_result=knowledge_result,
             user_id=self.user_id,
             model_context_window=_window,
         )
@@ -371,16 +366,9 @@ class ConversationEngine:
             user_message=self.user_message,
             turn_id=self.turn_id,
             assembled=assembled,
-            knowledge_chunks=knowledge_chunks,
-            v3_memory_block=v3_memory_block,
             rewritten_query=None,
             needs_knowledge_retrieval=query_plan.needs_knowledge_retrieval,
-            search_intents=query_plan.intents,
-            # Final [K#] sources from context assembly (engine forwards them
-            # to the SSE sources event + message persistence below).
-            sources=assembled.sources,
             retrieval_hit=self._retrieval_hit,
-            planner_failed=self._planner_failed,
             # Cached so the agent strategy doesn't re-query the DB for
             # the same boolean — engine already resolved it for the
             # universal-load gate above.
@@ -413,8 +401,11 @@ class ConversationEngine:
         # Persist the RAG sources alongside the answer so a reloaded history
         # turn can re-resolve [K#] source cards. The frontend (and the block
         # renderer) skip the unknown "sources" block when rendering the body.
-        if self._ctx and self._ctx.sources:
-            ai_blocks = [*ai_blocks, {"type": "sources", "sources": self._ctx.sources}]
+        if self._ctx and self._ctx.assembled.sources:
+            ai_blocks = [
+                *ai_blocks,
+                {"type": "sources", "sources": self._ctx.assembled.sources},
+            ]
         enqueue_memory = bool(
             self._ctx.global_memory_on
             and not (self._result.extras or {}).get("degraded")
@@ -507,6 +498,26 @@ class ConversationEngine:
             fallback_used=self._fallback_used,
             empty_reason=self._empty_reason,
             stop_reason=self._result.stop_reason,
+            rag_metrics={
+                **self._rag_metrics,
+                "grounded_source_count": (
+                    len(self._ctx.assembled.sources) if self._ctx else 0
+                ),
+                "covered_intent_count": (
+                    len(self._ctx.assembled.grounding.covered_intent_ids)
+                    if self._ctx
+                    else 0
+                ),
+                "missing_intent_count": (
+                    len(self._ctx.assembled.grounding.missing_intent_ids)
+                    if self._ctx
+                    else 0
+                ),
+                "missing_term_count": (
+                    len(self._ctx.assembled.grounding.missing_terms) if self._ctx else 0
+                ),
+                "citation": (self._result.extras or {}).get("citation_report"),
+            },
         )
 
     # ── Error humanisation ────────────────────────────────────────

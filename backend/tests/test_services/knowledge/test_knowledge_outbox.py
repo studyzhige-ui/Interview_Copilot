@@ -254,7 +254,7 @@ def _seed_doc(db, doc_id, status="processing"):
 
 def test_upsert_handler_rebuilds_and_marks_ready(db_session, monkeypatch):
     _seed_doc(db_session, "kdoc_u")
-    import app.rag.ingestion as ing
+    import app.rag.index.knowledge as ing
 
     monkeypatch.setattr(ing, "reindex_document", lambda db, doc_id: 3)  # rebuild OK
 
@@ -270,7 +270,7 @@ def test_upsert_handler_rebuilds_and_marks_ready(db_session, monkeypatch):
 
 def test_upsert_handler_nonfinal_failure_stays_processing(db_session, monkeypatch):
     _seed_doc(db_session, "kdoc_u2")
-    import app.rag.ingestion as ing
+    import app.rag.index.knowledge as ing
 
     def _boom(db, doc_id):
         raise RuntimeError("milvus down")
@@ -292,7 +292,7 @@ def test_upsert_handler_nonfinal_failure_stays_processing(db_session, monkeypatc
 
 def test_upsert_handler_final_failure_marks_failed(db_session, monkeypatch):
     _seed_doc(db_session, "kdoc_u3")
-    import app.rag.ingestion as ing
+    import app.rag.index.knowledge as ing
 
     def _boom(db, doc_id):
         raise RuntimeError("milvus down")
@@ -315,7 +315,7 @@ def test_upsert_handler_does_not_resurrect_deleting_doc(db_session, monkeypatch)
     """A delete that happened while the upsert was queued must not be undone:
     reindex clears Milvus (0 live chunks) but the 'deleting' status is kept."""
     _seed_doc(db_session, "kdoc_del", status="deleting")
-    import app.rag.ingestion as ing
+    import app.rag.index.knowledge as ing
 
     monkeypatch.setattr(ing, "reindex_document", lambda db, doc_id: 0)  # no live chunks
 
@@ -356,7 +356,7 @@ def test_upsert_drain_persistent_failure_ends_dead_and_doc_failed(
     upsert increments attempts 1→5; the job goes 'dead' and the document goes
     'failed' on the SAME (5th) drain — the off-by-one boundary — with the doc
     kept 'processing' on runs 1–4."""
-    import app.rag.ingestion as ing
+    import app.rag.index.knowledge as ing
     import app.worker.outbox_handlers.knowledge  # noqa: F401 — registers handler
     from app.services.outbox import run_due_outbox_jobs
 
@@ -385,7 +385,7 @@ def test_upsert_drain_persistent_failure_ends_dead_and_doc_failed(
 def test_upsert_drain_recovers_to_ready(db_session, monkeypatch):
     """Fail once, then succeed: the document graduates 'processing' → 'ready'
     through the real runner (the primary recovery path C2 exists for)."""
-    import app.rag.ingestion as ing
+    import app.rag.index.knowledge as ing
     import app.worker.outbox_handlers.knowledge  # noqa: F401
     from app.services.outbox import run_due_outbox_jobs
 

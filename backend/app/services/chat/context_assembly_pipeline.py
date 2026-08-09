@@ -51,13 +51,14 @@ from typing import Callable
 
 from app.core.tokens import token_count as count_tokens
 from app.core.tokens import truncate_to_tokens
+from app.core.config import settings
+from app.rag.domain.models import GroundingBundle, RetrievalResult
+from app.rag.grounding.builder import grounding_builder
 from app.services.chat.chat_history_service import transcript_service
 
 logger = logging.getLogger(__name__)
 
-# ``count_tokens`` is the canonical tokenizer, defined once in
-# app.core.tokens and re-exported here (imported above)
-# under its historical name so existing callers stay unchanged.
+# ``count_tokens`` is the canonical tokenizer defined in app.core.tokens.
 
 
 # ── Token budget ─────────────────────────────────────────────────────────
@@ -79,8 +80,10 @@ class TokenBudget:
     SYSTEM_PROMPT_BUDGET = 3_000
     DEBRIEF_REFERENCE_BUDGET = 2_000
     MEMORY_BUDGET = 6_000
-    RETRIEVED_CONTEXT_BUDGET = 8_000
+    RETRIEVED_CONTEXT_BUDGET = settings.RAG_RETRIEVED_CONTEXT_TOKENS
     CURRENT_INPUT_BUDGET = 4_000
+    OUTPUT_TOKEN_RESERVE = settings.RAG_OUTPUT_TOKEN_RESERVE
+    SAFETY_MARGIN = settings.RAG_CONTEXT_SAFETY_MARGIN
 
     COMPRESS_PROTECT_FIRST_N = 3
     COMPRESS_PROTECT_LAST_N = 4
@@ -128,10 +131,15 @@ class AssembledContext:
     # budget-trimmed chunks, so a ref can never point at a chunk that
     # didn't make the cut (retrieval plan §2.7). Empty for non-RAG turns.
     sources: list[dict] = field(default_factory=list)
+    grounding: GroundingBundle = field(default_factory=GroundingBundle)
+    retrieval_result: RetrievalResult | None = None
 
     # Computed at the end of _assemble for telemetry / token-budget logging.
     context_text: str = ""
     total_tokens: int = 0
+    model_context_window: int = TokenBudget.MODEL_CONTEXT_WINDOW
+    prompt_token_limit: int = 0
+    output_token_reserve: int = TokenBudget.OUTPUT_TOKEN_RESERVE
 
 
 # ── Single source of slot ordering ────────────────────────────────────────
@@ -193,7 +201,46 @@ class PromptRenderer:
         a user message instead of trailing the system block.
         """
         ctx.system_prompt = system_prompt.strip()
-        return self._render(ctx, skip_fields=set(skip_fields))
+        skipped = set(skip_fields)
+        prompt = self._render(ctx, skip_fields=skipped)
+        limit = int(ctx.prompt_token_limit or 0)
+        if not limit or count_tokens(prompt) <= limit:
+            ctx.total_tokens = count_tokens(prompt)
+            return prompt
+
+        # The real system prompt is known only at render time. Reconcile any
+        # difference from the assembly-time reserve using a deterministic slot
+        # priority; system rules and current input are never truncated.
+        over = count_tokens(prompt) - limit
+        if ctx.retrieval_result is not None and ctx.grounding.token_count:
+            grounding = grounding_builder.build(
+                ctx.retrieval_result,
+                token_budget=max(0, ctx.grounding.token_count - over - 32),
+            )
+            ctx.grounding = grounding
+            ctx.retrieved_context = grounding.context_text
+            ctx.sources = grounding.sources
+            prompt = self._render(ctx, skip_fields=skipped)
+
+        for field_name in ("memory_block", "debrief_reference", "summary"):
+            current = str(getattr(ctx, field_name) or "")
+            while current and count_tokens(prompt) > limit:
+                excess = count_tokens(prompt) - limit
+                current = truncate_to_tokens(
+                    current, max(0, count_tokens(current) - excess - 16)
+                )
+                setattr(ctx, field_name, current)
+                prompt = self._render(ctx, skip_fields=skipped)
+
+        while ctx.recent_turns and count_tokens(prompt) > limit:
+            ctx.recent_turns = (
+                ctx.recent_turns[2:] if len(ctx.recent_turns) >= 2 else []
+            )
+            prompt = self._render(ctx, skip_fields=skipped)
+        if count_tokens(prompt) > limit:
+            raise ValueError("final prompt exceeds the model context budget")
+        ctx.total_tokens = count_tokens(prompt)
+        return prompt
 
     def render_context_text(self, ctx: AssembledContext) -> str:
         """Lightweight rendering for the query-planner / rewriter input.
@@ -260,7 +307,7 @@ class ContextAssemblyPipeline:
         current_query: str,
         memory_block: str = "",
         debrief_reference: str = "",
-        knowledge_chunks: list[dict] | None = None,
+        retrieval_result: RetrievalResult | None = None,
         user_id: str | None = None,
         model_context_window: int | None = None,
     ) -> AssembledContext:
@@ -273,7 +320,7 @@ class ContextAssemblyPipeline:
                                 sessions. Caller may leave this empty
                                 in non-debrief mode and let the
                                 pipeline auto-inject when applicable.
-        ``knowledge_chunks``    RAG output chunks (already reranked).
+        ``retrieval_result``    canonical RAG result with intent provenance.
         ``user_id``             the OWNER's username principal — drives the
                                 compaction summarizer's LLM resolution.
                                 (NOT ``meta["user_id"]``, which is the
@@ -284,7 +331,7 @@ class ContextAssemblyPipeline:
             current_query=current_query,
             memory_block=memory_block,
             debrief_reference=debrief_reference,
-            knowledge_chunks=knowledge_chunks or [],
+            retrieval_result=retrieval_result,
             user_id=user_id,
             model_context_window=model_context_window,
         )
@@ -297,7 +344,7 @@ class ContextAssemblyPipeline:
         current_query: str,
         memory_block: str,
         debrief_reference: str,
-        knowledge_chunks: list[dict],
+        retrieval_result: RetrievalResult | None,
         *,
         skip_debrief_autoinject: bool = False,
         user_id: str | None = None,
@@ -318,35 +365,9 @@ class ContextAssemblyPipeline:
 
         cleaned_turns = self._repair_pairs(self._sanitize(all_turns))
 
-        # ── Threshold-based compaction ───────────────────────────────
-        # Check whether the full context exceeds the threshold. If so,
-        # compress old turns into the summary and re-load.
-        window = model_context_window or self.budget.MODEL_CONTEXT_WINDOW
-        compress_threshold = int(window * self.budget.COMPRESS_THRESHOLD_RATIO)
-        turns_tokens = sum(_turn_tokens(m) for m in cleaned_turns)
-        old_summary = str((meta or {}).get("summary") or "")
-        overhead_tokens = (
-            count_tokens(old_summary)
-            + count_tokens(memory_block)
-            + count_tokens(current_query)
-            + count_tokens(debrief_reference)
-        )
-
-        if (
-            turns_tokens + overhead_tokens > compress_threshold
-            and len(cleaned_turns) > self.budget.COMPRESS_PROTECT_LAST_N
-        ):
-            cleaned_turns, old_summary = await self._maybe_compact(
-                session_id=session_id,
-                user_id=user_id,
-                meta=meta,
-                cleaned_turns=cleaned_turns,
-                old_summary=old_summary,
-                compress_threshold=compress_threshold,
-                overhead_tokens=overhead_tokens,
-            )
-
-        # Auto-inject the interview reference for debrief sessions when the
+        # Auto-inject the interview reference before budgeting. The old order
+        # performed the context-window check first and therefore never counted
+        # this potentially large slot.
         # caller didn't supply one. type + the bound record come from their
         # dedicated columns (type / subject_type / subject_id).
         # ``skip_debrief_autoinject`` lets the lightweight rewrite path bail
@@ -374,23 +395,98 @@ class ContextAssemblyPipeline:
                     record_id,
                 )
 
-        # RAG retrieved-context: only knowledge_chunks now. The legacy
-        # "memories mixed into retrieved_context" path is gone — memory
-        # has its own dedicated slot. This is also the SOLE place that
-        # assigns [K#] refs + builds the final sources array.
-        retrieved_context, sources = self._build_retrieved_context(knowledge_chunks)
+        window = model_context_window or self.budget.MODEL_CONTEXT_WINDOW
+        output_reserve = min(self.budget.OUTPUT_TOKEN_RESERVE, max(128, window // 4))
+        safety_margin = min(self.budget.SAFETY_MARGIN, max(0, window // 10))
+        prompt_limit = max(1, window - output_reserve - safety_margin)
+        system_reserve = min(
+            self.budget.SYSTEM_PROMPT_BUDGET, max(1, prompt_limit // 4)
+        )
+
+        # Per-slot limits are executable policy, not documentation constants.
+        current_query = truncate_to_tokens(
+            current_query, self.budget.CURRENT_INPUT_BUDGET
+        )
+        memory_block = truncate_to_tokens(memory_block, self.budget.MEMORY_BUDGET)
+        debrief_reference = truncate_to_tokens(
+            debrief_reference, self.budget.DEBRIEF_REFERENCE_BUDGET
+        )
+        old_summary = str((meta or {}).get("summary") or "")
+
+        effective_result = retrieval_result or RetrievalResult()
+        desired_grounding = min(
+            self.budget.RETRIEVED_CONTEXT_BUDGET,
+            sum(
+                count_tokens(str(chunk.get("text") or ""))
+                for chunk in effective_result.chunks
+            ),
+        )
+        turns_tokens = sum(_turn_tokens(message) for message in cleaned_turns)
+        overhead_tokens = (
+            system_reserve
+            + count_tokens(old_summary)
+            + count_tokens(memory_block)
+            + count_tokens(current_query)
+            + count_tokens(debrief_reference)
+            + desired_grounding
+        )
+        compress_threshold = min(
+            int(window * self.budget.COMPRESS_THRESHOLD_RATIO),
+            prompt_limit,
+        )
+        if (
+            turns_tokens + overhead_tokens > compress_threshold
+            and len(cleaned_turns) > self.budget.COMPRESS_PROTECT_LAST_N
+        ):
+            cleaned_turns, old_summary = await self._maybe_compact(
+                session_id=session_id,
+                user_id=user_id,
+                meta=meta,
+                cleaned_turns=cleaned_turns,
+                old_summary=old_summary,
+                compress_threshold=compress_threshold,
+                overhead_tokens=overhead_tokens,
+            )
+
+        # If the protected tail itself is too large, remove complete oldest
+        # pairs. Current input is a separate protected slot and is never lost.
+        def fixed_tokens() -> int:
+            return (
+                system_reserve
+                + count_tokens(old_summary)
+                + count_tokens(memory_block)
+                + count_tokens(current_query)
+                + count_tokens(debrief_reference)
+                + sum(_turn_tokens(message) for message in cleaned_turns)
+            )
+
+        while cleaned_turns and fixed_tokens() > prompt_limit:
+            cleaned_turns = cleaned_turns[2:] if len(cleaned_turns) >= 2 else []
+
+        remaining = max(0, prompt_limit - fixed_tokens())
+        grounding = grounding_builder.build(
+            effective_result,
+            token_budget=min(self.budget.RETRIEVED_CONTEXT_BUDGET, remaining),
+        )
 
         ctx = AssembledContext(
             debrief_reference=debrief_reference,
             summary=old_summary,
             memory_block=memory_block,
-            retrieved_context=retrieved_context,
+            retrieved_context=grounding.context_text,
             recent_turns=cleaned_turns,
             current_input=current_query,
-            sources=sources,
+            sources=grounding.sources,
+            grounding=grounding,
+            retrieval_result=effective_result,
+            model_context_window=window,
+            prompt_token_limit=prompt_limit,
+            output_token_reserve=output_reserve,
         )
         ctx.context_text = self.renderer.render_context_text(ctx)
-        ctx.total_tokens = count_tokens(ctx.context_text)
+        ctx.total_tokens = count_tokens(
+            self.renderer._render(ctx, skip_fields={"system_prompt"})
+        )
         return ctx
 
     # ── Assembly-time compaction ──────────────────────────────────────
@@ -453,100 +549,6 @@ class ContextAssemblyPipeline:
         )
 
         return to_keep, new_summary
-
-    # ── [K#] + sources (the sole owner of citation numbering) ──────────
-
-    def _build_retrieved_context(
-        self,
-        chunks: list[dict] | None,
-    ) -> tuple[str, list[dict]]:
-        """Number the budget-trimmed chunks [K1], [K2], … and build the
-        sources array aligned 1:1 with those refs.
-
-        Whole chunks are added in rank order until the token budget is hit;
-        a single chunk that alone exceeds the budget is truncated (and its
-        source flagged ``truncated``). Because only chunks that actually land
-        in [Retrieved Context] get a ref, the model can never be handed a
-        [K#] whose source was trimmed away (retrieval plan §2.7).
-        """
-        if not chunks:
-            return "", []
-        budget = self.budget.RETRIEVED_CONTEXT_BUDGET
-        parts: list[str] = []
-        sources: list[dict] = []
-        used = 0
-        for chunk in chunks:
-            text = str(chunk.get("text") or "")
-            if not text:
-                continue
-            tokens = count_tokens(text)
-            truncated = False
-            if used and used + tokens > budget:
-                break  # whole-chunk budget exhausted — stop appending
-            if tokens > budget:
-                text = truncate_to_tokens(text, budget)
-                tokens = count_tokens(text)
-                truncated = True
-            used += tokens
-            ref = f"K{len(sources) + 1}"
-            parts.append(f"{self._context_header(ref, chunk)}\n{text}")
-            sources.append(self._build_source(ref, chunk, text, truncated))
-        return "\n\n".join(parts), sources
-
-    @staticmethod
-    def _context_header(ref: str, chunk: dict) -> str:
-        """Lightweight source hint shown in-context — full provenance lives
-        in the sources array. e.g. ``[K1] title="Redis 面试题" page=3 chunk=12
-        score=0.873``."""
-        segments = [f"[{ref}]"]
-        title = chunk.get("document_title")
-        if title:
-            segments.append(f'title="{title}"')
-        page_start = chunk.get("page_start")
-        page_end = chunk.get("page_end")
-        if page_start is not None:
-            if page_end is not None and page_end != page_start:
-                segments.append(f"page={page_start}-{page_end}")
-            else:
-                segments.append(f"page={page_start}")
-        section = chunk.get("section_title")
-        if section:
-            segments.append(f'section="{section}"')
-        chunk_index = chunk.get("chunk_index")
-        if chunk_index is not None:
-            segments.append(f"chunk={chunk_index}")
-        score = chunk.get("score")
-        if score is not None:
-            segments.append(f"score={float(score):.3f}")
-        return " ".join(segments)
-
-    @staticmethod
-    def _build_source(
-        ref: str, chunk: dict, rendered_text: str, truncated: bool
-    ) -> dict:
-        """One sources-array entry — the retrieval plan §2.7 source schema.
-        ``text_preview`` is for the source-card UI, not the answer prompt."""
-        source = {
-            "ref": ref,
-            "chunk_id": chunk.get("chunk_id"),
-            "node_id": chunk.get("node_id"),
-            "document_id": chunk.get("document_id"),
-            "document_title": chunk.get("document_title"),
-            "file_name": chunk.get("file_name"),
-            "category": chunk.get("category"),
-            "source_kind": chunk.get("source_kind"),
-            "page_start": chunk.get("page_start"),
-            "page_end": chunk.get("page_end"),
-            "section_title": chunk.get("section_title"),
-            "heading_path": chunk.get("heading_path"),
-            "chunk_index": chunk.get("chunk_index"),
-            "score": chunk.get("score"),
-            "score_source": chunk.get("score_source"),
-            "text_preview": rendered_text[:200],
-        }
-        if truncated:
-            source["truncated"] = True
-        return source
 
     @staticmethod
     def _sanitize(messages: list[dict]) -> list[dict]:

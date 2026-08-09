@@ -26,6 +26,7 @@ from threading import Lock
 from typing import Any, Optional
 
 from app.core.config import settings
+from app.rag.index.identity import active_knowledge_collection_name
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,10 @@ class HybridCollection:
 
 # ── The three retrieval collections — identical tenant model (user_id INT64) ──
 KNOWLEDGE = HybridCollection(
-    name=settings.MILVUS_COLLECTION,
+    # The configured name is a logical base.  The physical collection is tied
+    # to the complete embedding/chunk/index identity, preventing same-dimension
+    # model generations from sharing an ANN space.
+    name=active_knowledge_collection_name(),
     scalars=(_Scalar("source_kind"), _Scalar("document_id")),
 )
 RESUME = HybridCollection(
@@ -117,11 +121,16 @@ def _eq(field_name: str, value: Any) -> str:
 
 def _scope_expr(user_pk: int, filters: Optional[dict[str, Any]] = None) -> str:
     """The tenant-scoped Milvus filter expr: ``user_id == <pk>`` plus any extra
-    equality filters (every value safety-checked via ``_eq``)."""
+    equality / membership filters (every value safety-checked via ``_eq``)."""
     expr = _eq("user_id", int(user_pk))
     for fname, fval in (filters or {}).items():
         if fval is not None:
-            expr += " && " + _eq(fname, fval)
+            if isinstance(fval, (list, tuple, set, frozenset)):
+                clauses = [_eq(fname, value) for value in fval]
+                if clauses:
+                    expr += " && (" + " || ".join(clauses) + ")"
+            else:
+                expr += " && " + _eq(fname, fval)
     return expr
 
 
@@ -330,6 +339,12 @@ def hybrid_search(
         # reads preserve that contract across separate API/worker clients.
         consistency_level="Strong",
     )
+    return _rows_from_search_results(coll, results)
+
+
+def _rows_from_search_results(
+    coll: HybridCollection, results: list | None
+) -> list[dict[str, Any]]:
     hits = results[0] if results else []
     out: list[dict[str, Any]] = []
     for h in hits:
@@ -346,6 +361,61 @@ def hybrid_search(
     return out
 
 
+def dense_search(
+    coll: HybridCollection,
+    *,
+    query_dense: list[float],
+    user_pk: int,
+    top_k: int,
+    filters: Optional[dict[str, Any]] = None,
+) -> list[dict[str, Any]]:
+    """One tenant-scoped dense ANN search without a duplicate BM25 request."""
+
+    client = _get_client()
+    if not client.has_collection(coll.name):
+        return []
+    results = client.search(
+        coll.name,
+        data=[query_dense],
+        anns_field=_DENSE_FIELD,
+        filter=_scope_expr(user_pk, filters),
+        limit=top_k,
+        output_fields=coll.output_fields,
+        search_params={
+            "metric_type": settings.MILVUS_SIMILARITY_METRIC,
+            "params": {"ef": settings.MILVUS_HNSW_EF_SEARCH},
+        },
+        consistency_level="Strong",
+    )
+    return _rows_from_search_results(coll, results)
+
+
+def sparse_search(
+    coll: HybridCollection,
+    *,
+    query_text: str,
+    user_pk: int,
+    top_k: int,
+    filters: Optional[dict[str, Any]] = None,
+) -> list[dict[str, Any]]:
+    """One tenant-scoped server-side BM25 search."""
+
+    client = _get_client()
+    if not client.has_collection(coll.name):
+        return []
+    results = client.search(
+        coll.name,
+        data=[query_text],
+        anns_field=_SPARSE_FIELD,
+        filter=_scope_expr(user_pk, filters),
+        limit=top_k,
+        output_fields=coll.output_fields,
+        search_params={"metric_type": "BM25"},
+        consistency_level="Strong",
+    )
+    return _rows_from_search_results(coll, results)
+
+
 __all__ = [
     "HybridCollection",
     "KNOWLEDGE",
@@ -356,5 +426,7 @@ __all__ = [
     "insert",
     "delete",
     "delete_by_field",
+    "dense_search",
     "hybrid_search",
+    "sparse_search",
 ]

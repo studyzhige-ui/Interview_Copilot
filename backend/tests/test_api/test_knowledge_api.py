@@ -85,7 +85,7 @@ def client(db: Session) -> Iterator[TestClient]:
 
 
 def test_rag_query_delegates_to_retriever(client):
-    from app.rag.retrieval_state import RetrievalResult, RetrievalState
+    from app.rag.domain.models import RetrievalResult, RetrievalState
 
     async def fake_query(*, intents, user_id=None, source_kind=None):
         assert user_id == "alice"
@@ -104,7 +104,7 @@ def test_rag_query_delegates_to_retriever(client):
         patch(
             "app.api.rag.current_edition_policy", return_value=policy_for("community")
         ),
-        patch("app.api.rag.query_knowledge_base", side_effect=fake_query),
+        patch("app.api.rag.rag_service.retrieve", side_effect=fake_query),
     ):
         resp = client.post(
             "/api/v1/rag/query",
@@ -124,7 +124,7 @@ def test_rag_query_is_not_exposed_in_cloud(client):
     with (
         patch("app.api.rag.current_edition_policy", return_value=policy_for("cloud")),
         patch("app.api.rag.ensure_rag_runtime") as ensure_runtime,
-        patch("app.api.rag.query_knowledge_base") as query,
+        patch("app.api.rag.rag_service.retrieve") as query,
     ):
         response = client.post("/api/v1/rag/query", json={"query": "redis"})
 
@@ -137,7 +137,7 @@ def test_rag_query_500_on_retriever_error(client):
     async def boom(*_args, **_kwargs):
         raise RuntimeError("milvus down")
 
-    with patch("app.api.rag.query_knowledge_base", side_effect=boom):
+    with patch("app.api.rag.rag_service.retrieve", side_effect=boom):
         resp = client.post("/api/v1/rag/query", json={"query": "x"})
     assert resp.status_code == 500
 

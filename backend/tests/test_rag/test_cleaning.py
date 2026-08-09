@@ -76,7 +76,7 @@ def test_empty_canonical_document_is_rejected():
 
 
 async def test_ingest_text_rejects_empty_input_before_storage():
-    from app.rag.ingestion import ingest_text
+    from app.rag.ingest.pipeline import ingest_text
 
     with pytest.raises(EmptyContentError):
         await ingest_text(

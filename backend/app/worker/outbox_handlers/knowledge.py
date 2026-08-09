@@ -8,7 +8,7 @@ from app.services.outbox import register_handler
 
 
 def handle_milvus_upsert(db: Session, job: OutboxJob) -> None:
-    from app.rag.ingestion import reindex_document
+    from app.rag.index.knowledge import reindex_document
     from app.services.knowledge.knowledge_service import (
         mark_document_index_failed,
         mark_document_indexed_ready,
@@ -26,6 +26,10 @@ def handle_milvus_upsert(db: Session, job: OutboxJob) -> None:
     )
     if owner is not None and owner != job.user_id:
         raise PermissionError("knowledge-index job owner does not match document owner")
+    idempotency_key = getattr(job, "idempotency_key", None)
+    is_generation_job = bool(
+        idempotency_key and idempotency_key.startswith("rag-generation:")
+    )
     try:
         reindex_document(db, document_id)
     except Exception:
@@ -34,6 +38,7 @@ def handle_milvus_upsert(db: Session, job: OutboxJob) -> None:
                 db,
                 document_id,
                 "向量索引多次重试仍失败，请稍后重新导入该文档。",
+                allow_ready=is_generation_job,
             )
         raise
     mark_document_indexed_ready(db, document_id)

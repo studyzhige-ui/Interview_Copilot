@@ -13,14 +13,16 @@ User config (.env):
 from __future__ import annotations
 
 import logging
+import math
 import os
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Any, List, Literal, Optional
 
 import httpx
 from llama_index.core.bridge.pydantic import Field
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
-from llama_index.core.schema import NodeWithScore, QueryBundle
+from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
 
 from app.core.config import settings
 
@@ -112,6 +114,23 @@ def list_providers() -> list[dict[str, Any]]:
     ]
 
 
+def _warm_local_reranker(reranker: BaseNodePostprocessor) -> None:
+    """Run the first CPU/GPU forward pass before serving retrieval traffic."""
+
+    started = perf_counter()
+    reranker.postprocess_nodes(
+        [
+            NodeWithScore(node=TextNode(text="Relevant retrieval evidence.")),
+            NodeWithScore(node=TextNode(text="Unrelated background text.")),
+        ],
+        QueryBundle("retrieval evidence"),
+    )
+    logger.info(
+        "Reranker warm-up complete in %.2fs",
+        perf_counter() - started,
+    )
+
+
 # ── Remote rerank postprocessor ────────────────────────────────────────
 
 
@@ -177,24 +196,48 @@ class RemoteAPIRerank(BaseNodePostprocessor):
         # Cohere v2 / SiliconFlow / Jina shape: {"results": [{"index": i,
         # "relevance_score": s, ...}, ...]} sorted desc. DashScope wraps
         # in {"output": {"results": [...]}}.
-        results = body.get("results") or body.get("output", {}).get("results") or []
+        if not isinstance(body, dict):
+            raise RerankerUnavailableError(
+                f"remote rerank ({self.model}) returned a non-object response"
+            )
+        output = body.get("output")
+        wrapped_results = output.get("results") if isinstance(output, dict) else None
+        results = body.get("results") or wrapped_results or []
+        if not isinstance(results, list):
+            results = []
         if not results:
             raise RerankerUnavailableError(
                 f"remote rerank ({self.model}) returned no results"
             )
 
         out: list[NodeWithScore] = []
+        seen_indices: set[int] = set()
         for r in results[: self.top_n]:
-            idx = r.get("index")
-            score = r.get("relevance_score") or r.get("score")
-            if idx is None or idx >= len(nodes):
+            if not isinstance(r, dict):
                 continue
+            idx = r.get("index")
+            score = r.get("relevance_score")
+            if score is None:
+                score = r.get("score")
+            if (
+                not isinstance(idx, int)
+                or isinstance(idx, bool)
+                or idx < 0
+                or idx >= len(nodes)
+                or idx in seen_indices
+            ):
+                continue
+            if score is None:
+                continue
+            try:
+                score = float(score)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(score):
+                continue
+            seen_indices.add(idx)
             n = nodes[idx]
-            out.append(
-                NodeWithScore(
-                    node=n.node, score=float(score) if score is not None else n.score
-                )
-            )
+            out.append(NodeWithScore(node=n.node, score=score))
         if not out:
             # Every returned index was unusable — same contract as "no
             # results": raise so the caller takes its explicit fallback path
@@ -202,7 +245,11 @@ class RemoteAPIRerank(BaseNodePostprocessor):
             raise RerankerUnavailableError(
                 f"remote rerank ({self.model}) returned unusable indices"
             )
-        return out
+        return sorted(
+            out,
+            key=lambda item: float(item.score or 0.0),
+            reverse=True,
+        )
 
 
 def build_reranker(top_n: int) -> Any:
@@ -233,7 +280,7 @@ def build_reranker(top_n: int) -> Any:
                 )
             )
         logger.info("Reranker: local model=%s top_n=%d", cfg.model, top_n)
-        return SentenceTransformerRerank(
+        reranker = SentenceTransformerRerank(
             model=local_path,
             device=resolve_rag_device(),
             top_n=top_n,
@@ -241,6 +288,8 @@ def build_reranker(top_n: int) -> Any:
                 "max_length": current_rag_policy().tokens.rerank_input
             },
         )
+        _warm_local_reranker(reranker)
+        return reranker
 
     if p.kind == "remote_openai_style":
         api_key = os.getenv(p.api_key_env, "").strip()
@@ -260,6 +309,7 @@ def build_reranker(top_n: int) -> Any:
             api_key=api_key,
             model=cfg.model,
             top_n=top_n,
+            timeout=settings.RAG_RERANK_TIMEOUT_SECONDS,
         )
 
     raise RuntimeError(f"Unknown provider kind: {p.kind!r}")

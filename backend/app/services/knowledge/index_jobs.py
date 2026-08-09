@@ -43,7 +43,13 @@ def enqueue_milvus_delete(db: Session, *, user_pk: int, document_id: str) -> Non
     )
 
 
-def enqueue_milvus_upsert(db: Session, *, user_pk: int, document_id: str) -> None:
+def enqueue_milvus_upsert(
+    db: Session,
+    *,
+    user_pk: int,
+    document_id: str,
+    idempotency_key: str | None = None,
+) -> None:
     """Queue a Milvus index (re)build for a document whose ingest-time write
     failed (caller commits). No idempotency_key — unlike delete this is
     repeatable across re-ingests, and the handler (rebuild-from-facts) is itself
@@ -54,6 +60,7 @@ def enqueue_milvus_upsert(db: Session, *, user_pk: int, document_id: str) -> Non
         job_type=JOB_MILVUS_UPSERT,
         aggregate_type="knowledge_document",
         aggregate_id=document_id,
+        idempotency_key=idempotency_key,
     )
 
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.rag.contracts import SearchIntent
-from app.rag.retriever import query_knowledge_base
+from app.rag.domain.models import SearchIntent
+from app.rag.application.service import rag_service
 
 ISOLATION_USER = "eval_user_b"
 ISOLATION_DOCUMENT_ID = "kdoc_eval_tenant_isolation_probe"
@@ -24,12 +24,12 @@ async def run_tenant_isolation_probe(
     foreign_user: str,
 ) -> dict[str, Any]:
     intent = SearchIntent.from_query(ISOLATION_QUERY)
-    owner = await query_knowledge_base(
+    owner = await rag_service.retrieve(
         intents=[intent],
         user_id=owner_user,
         min_score=0.0,
     )
-    foreign = await query_knowledge_base(
+    foreign = await rag_service.retrieve(
         intents=[intent],
         user_id=foreign_user,
         min_score=0.0,

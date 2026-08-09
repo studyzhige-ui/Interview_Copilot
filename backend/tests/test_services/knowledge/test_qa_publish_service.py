@@ -45,7 +45,7 @@ def test_save_refresh_and_unsave_qa(db_session, monkeypatch):
         assert kwargs["document_id"]  # tied to the doc
         return {"chunk_count": 2, "node_ids": [], "ref_doc_ids": []}
 
-    monkeypatch.setattr("app.rag.ingestion.ingest_text", _fake_ingest)
+    monkeypatch.setattr("app.rag.ingest.pipeline.ingest_text", _fake_ingest)
 
     doc = asyncio.run(
         qa_publish_service.save_qa_to_knowledge(
@@ -163,7 +163,7 @@ def test_save_stays_processing_while_index_retry_is_queued(db_session, monkeypat
     async def queued_ingest(**_kwargs):
         return {"chunk_count": 1, "indexed": False}
 
-    monkeypatch.setattr("app.rag.ingestion.ingest_text", queued_ingest)
+    monkeypatch.setattr("app.rag.ingest.pipeline.ingest_text", queued_ingest)
 
     doc = asyncio.run(
         qa_publish_service.save_qa_to_knowledge(
@@ -205,7 +205,7 @@ def test_save_marks_document_failed_when_indexing_fails(db_session, monkeypatch)
     async def failed_ingest(**_kwargs):
         raise RuntimeError("embedding unavailable")
 
-    monkeypatch.setattr("app.rag.ingestion.ingest_text", failed_ingest)
+    monkeypatch.setattr("app.rag.ingest.pipeline.ingest_text", failed_ingest)
 
     with pytest.raises(RuntimeError, match="embedding unavailable"):
         asyncio.run(

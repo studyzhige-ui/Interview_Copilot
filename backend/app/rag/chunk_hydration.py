@@ -41,7 +41,12 @@ def _chunk_metadata(raw: str | None) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def hydrate_chunks(db: Session, node_ids: list[str]) -> list[dict[str, Any]]:
+def hydrate_chunks(
+    db: Session,
+    node_ids: list[str],
+    *,
+    enforce_index_generation: bool = False,
+) -> list[dict[str, Any]]:
     """Resolve Milvus ``node_id`` hits to live, fully-attributed chunk dicts.
 
     Returns dicts in the SAME order as ``node_ids``; hits that fail the live
@@ -50,7 +55,7 @@ def hydrate_chunks(db: Session, node_ids: list[str]) -> list[dict[str, Any]]:
     """
     if not node_ids:
         return []
-    rows = (
+    query = (
         db.query(DocumentChunk, KnowledgeDocument, FileAsset)
         .join(KnowledgeDocument, DocumentChunk.document_id == KnowledgeDocument.id)
         .outerjoin(FileAsset, KnowledgeDocument.file_asset_id == FileAsset.id)
@@ -61,8 +66,14 @@ def hydrate_chunks(db: Session, node_ids: list[str]) -> list[dict[str, Any]]:
             KnowledgeDocument.deleted_at.is_(None),
             KnowledgeDocument.status == "ready",
         )
-        .all()
     )
+    if enforce_index_generation:
+        from app.rag.index.identity import current_index_identity
+
+        query = query.filter(
+            KnowledgeDocument.index_fingerprint == current_index_identity().fingerprint
+        )
+    rows = query.all()
     by_node: dict[str, dict[str, Any]] = {}
     for chunk, doc, asset in rows:
         meta = _chunk_metadata(chunk.metadata_json)

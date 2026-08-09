@@ -34,6 +34,7 @@ async def log_interaction_metrics(
     planner_failed: bool = False,
     fallback_used: bool = False,
     empty_reason: str | None = None,
+    rag_metrics: dict | None = None,
 ):
     """Persist interaction metrics without affecting the API response path.
 
@@ -62,6 +63,7 @@ async def log_interaction_metrics(
             "fallback_used": fallback_used,
             "empty_reason": empty_reason,
             "stop_reason": stop_reason,
+            "rag": rag_metrics or None,
         }
 
         await asyncio.to_thread(_write_log_sync, log_payload)

@@ -59,8 +59,8 @@ def reingest_knowledge(
     ``user_id``'s documents (optionally a ``category`` within it), or — when no
     filter is given — every live document (disaster recovery).
 
-    All granularities funnel through ``ingestion.reindex_document`` (one rebuild-
-    from-facts path, not a second one): it reads each document's LIVE chunks
+    All granularities funnel through ``index.knowledge.reindex_document`` (one
+    rebuild-from-facts path): it reads each document's LIVE chunks
     (soft-deleted excluded — so a deleted document is never re-indexed),
     re-embeds with dim/count validation, replaces that document's rows, and flips
     its chunks to ``indexed``. Targets are resolved from ``knowledge_documents``
@@ -73,7 +73,7 @@ def reingest_knowledge(
     ops / disaster-recovery tool. Progress is printed per document.
     """
     from app.models.knowledge import KnowledgeDocument
-    from app.rag.ingestion import reindex_document
+    from app.rag.index.knowledge import reindex_document
 
     db = SessionLocal()
     try:

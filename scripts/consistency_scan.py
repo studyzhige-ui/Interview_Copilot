@@ -183,11 +183,11 @@ def _scan_milvus_rows(client) -> dict[str, dict]:
     objects (accessed via ``.get(...)``, so _diff_pg_milvus treats them and the
     plain-dict test fixtures the same). Paginates so a large collection is fully
     covered (not a sampled subset)."""
-    from app.core.config import settings
+    from app.rag import milvus_hybrid
 
     out: dict[str, dict] = {}
     iterator = client.query_iterator(
-        collection_name=settings.MILVUS_COLLECTION,
+        collection_name=milvus_hybrid.KNOWLEDGE.name,
         batch_size=1000,
         filter="user_id >= 0",  # matches every row (user_id is the int pk scope)
         output_fields=["id", "document_id", "user_id", "source_kind"],
@@ -208,7 +208,9 @@ def _collection_dim_finding(client) -> Finding:
     """dimension_mismatch: an existing collection's dense dim vs EMBEDDING_DIM."""
     from app.core.config import settings
 
-    desc = client.describe_collection(settings.MILVUS_COLLECTION)
+    from app.rag import milvus_hybrid
+
+    desc = client.describe_collection(milvus_hybrid.KNOWLEDGE.name)
     dim = None
     for f in desc.get("fields", []) if isinstance(desc, dict) else []:
         if f.get("name") == "dense":
@@ -231,7 +233,7 @@ def _milvus_node_consistency(db: Session) -> list[Finding]:
     """node_id-level Postgres<->Milvus checks: missing_in_milvus / stale_in_milvus
     / metadata_mismatch / dimension_mismatch (plan §4.6.3). Baseline is the live
     *indexed* chunks under live documents — what Milvus should mirror."""
-    from app.core.config import settings
+    from app.rag.index.identity import current_index_identity
 
     pg_rows = _rows(
         db,
@@ -253,18 +255,32 @@ def _milvus_node_consistency(db: Session) -> list[Finding]:
             db, "SELECT id FROM knowledge_documents WHERE deleted_at IS NULL"
         )
     }
+    active_fingerprint = current_index_identity().fingerprint
+    stale_generation_ids = [
+        str(row[0])
+        for row in _rows(
+            db,
+            """
+            SELECT id FROM knowledge_documents
+            WHERE deleted_at IS NULL AND status = 'ready'
+              AND (index_fingerprint IS NULL OR index_fingerprint != :fingerprint)
+            """,
+            fingerprint=active_fingerprint,
+        )
+    ]
 
     names = (
         "missing_in_milvus",
         "stale_in_milvus",
         "metadata_mismatch",
         "dimension_mismatch",
+        "index_generation",
     )
     try:
         from app.rag import milvus_hybrid
 
         client = milvus_hybrid._get_client()
-        if not client.has_collection(settings.MILVUS_COLLECTION):
+        if not client.has_collection(milvus_hybrid.KNOWLEDGE.name):
             return [
                 Finding(n, 0, note="knowledge collection not created yet")
                 for n in names
@@ -297,6 +313,12 @@ def _milvus_node_consistency(db: Session) -> list[Finding]:
             note="Milvus scope scalar != Postgres chunk",
         ),
         dim_finding,
+        Finding(
+            "index_generation",
+            len(stale_generation_ids),
+            stale_generation_ids[:_SAMPLE],
+            note=f"active fingerprint={active_fingerprint}",
+        ),
     ]
 
 

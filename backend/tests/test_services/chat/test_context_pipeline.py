@@ -2,13 +2,22 @@
 
 import asyncio
 
+from app.rag.domain.models import RetrievalResult
+from app.rag.grounding.builder import grounding_builder
 from app.services.chat.context_assembly_pipeline import (
     SLOT_ORDER,
     AssembledContext,
-    ContextAssemblyPipeline,
     PromptRenderer,
     TokenBudget,
 )
+
+
+def _build_grounding(chunks, *, token_budget=TokenBudget.RETRIEVED_CONTEXT_BUDGET):
+    bundle = grounding_builder.build(
+        RetrievalResult(chunks=chunks or []),
+        token_budget=token_budget,
+    )
+    return bundle.context_text, bundle.sources
 
 
 def test_prompt_renderer_keeps_expected_slot_order():
@@ -374,15 +383,14 @@ def _chunk(node_id: str, text: str, **over) -> dict:
     return base
 
 
-def test_build_retrieved_context_numbers_and_aligns_sources():
-    pipeline = ContextAssemblyPipeline()
+def test_grounding_numbers_and_aligns_sources():
     chunks = [
         _chunk("n1", "Redis 缓存击穿……", page_start=3, page_end=3, chunk_index=12),
         _chunk(
             "n2", "缓存穿透……", section_title="缓存异常场景", chunk_index=4, score=0.82
         ),
     ]
-    text, sources = pipeline._build_retrieved_context(chunks)
+    text, sources = _build_grounding(chunks)
 
     # [K#] refs are 1-based and contiguous, in rank order.
     assert text.startswith("[K1]")
@@ -405,49 +413,36 @@ def test_build_retrieved_context_numbers_and_aligns_sources():
     assert s1["text_preview"].startswith("Redis 缓存击穿")
 
 
-def test_build_retrieved_context_page_range_header():
-    pipeline = ContextAssemblyPipeline()
-    text, _ = pipeline._build_retrieved_context(
-        [_chunk("n1", "x", page_start=3, page_end=5)]
-    )
+def test_grounding_page_range_header():
+    text, _ = _build_grounding([_chunk("n1", "x", page_start=3, page_end=5)])
     assert "page=3-5" in text
 
 
-def test_build_retrieved_context_empty():
-    pipeline = ContextAssemblyPipeline()
-    assert pipeline._build_retrieved_context([]) == ("", [])
-    assert pipeline._build_retrieved_context(None) == ("", [])
+def test_grounding_empty():
+    assert _build_grounding([]) == ("", [])
+    assert _build_grounding(None) == ("", [])
 
 
-def test_build_retrieved_context_skips_blank_text_chunks():
-    pipeline = ContextAssemblyPipeline()
-    text, sources = pipeline._build_retrieved_context(
-        [_chunk("n1", ""), _chunk("n2", "real content")]
-    )
+def test_grounding_skips_blank_text_chunks():
+    text, sources = _build_grounding([_chunk("n1", ""), _chunk("n2", "real content")])
     # The blank chunk takes no ref; the next real chunk is K1, not K2.
     assert [s["ref"] for s in sources] == ["K1"]
     assert sources[0]["node_id"] == "n2"
 
 
-def test_build_retrieved_context_truncates_single_oversized_chunk():
-    budget = TokenBudget()
-    budget.RETRIEVED_CONTEXT_BUDGET = 20
-    pipeline = ContextAssemblyPipeline(budget=budget)
+def test_grounding_truncates_single_oversized_chunk():
     big = "缓存 " * 200
-    text, sources = pipeline._build_retrieved_context([_chunk("n1", big)])
+    text, sources = _build_grounding([_chunk("n1", big)], token_budget=20)
 
     assert len(sources) == 1
     assert sources[0].get("truncated") is True
 
 
-def test_build_retrieved_context_stops_at_budget():
-    budget = TokenBudget()
-    budget.RETRIEVED_CONTEXT_BUDGET = 30
-    pipeline = ContextAssemblyPipeline(budget=budget)
+def test_grounding_stops_at_budget():
     chunks = [
         _chunk(f"n{i}", "缓存雪崩的解决方案包括过期时间随机化。" * 2) for i in range(5)
     ]
-    _, sources = pipeline._build_retrieved_context(chunks)
+    _, sources = _build_grounding(chunks, token_budget=30)
 
     # First chunk always lands; later chunks stop once the budget is hit.
     assert 1 <= len(sources) < 5
@@ -478,7 +473,7 @@ def test_assemble_answer_context_populates_sources(monkeypatch):
         pipeline.assemble_answer_context(
             session_id="s",
             current_query="q",
-            knowledge_chunks=[_chunk("n1", "Redis 缓存击穿……")],
+            retrieval_result=RetrievalResult(chunks=[_chunk("n1", "Redis 缓存击穿……")]),
         )
     )
     assert ctx.sources and ctx.sources[0]["ref"] == "K1"

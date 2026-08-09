@@ -6,7 +6,8 @@ from types import SimpleNamespace
 import pytest
 from app.conversation.chat_strategy import ChatPipelineStrategy
 from app.conversation.strategy import StrategyContext, StrategyResult
-from app.rag.contracts import SearchIntent
+from app.rag.domain.models import RetrievalResult, SearchIntent
+from app.rag.grounding.builder import grounding_builder
 from app.services.chat.context_assembly_pipeline import AssembledContext
 
 
@@ -15,9 +16,12 @@ def test_chat_answers_always_use_the_user_primary_model(monkeypatch, uses_rag):
     from app.conversation import chat_strategy
 
     calls: list[tuple[str, str | None]] = []
+    generation_options: list[dict] = []
 
     class FakeLLM:
-        async def astream_complete(self, prompt):
+        async def astream_complete(self, prompt, **kwargs):
+            generation_options.append(kwargs)
+
             async def chunks():
                 yield SimpleNamespace(delta="answer")
 
@@ -45,6 +49,7 @@ def test_chat_answers_always_use_the_user_primary_model(monkeypatch, uses_rag):
     events = asyncio.run(run())
 
     assert calls == [("primary", "alice")]
+    assert generation_options == [{"max_tokens": ctx.assembled.output_token_reserve}]
     assert result.final_answer == "answer"
     assert events
 
@@ -85,19 +90,36 @@ def test_chat_refuses_when_qualified_product_is_absent_from_evidence(monkeypatch
         "get_llm_for_role",
         lambda *_args, **_kwargs: pytest.fail("answer model must not be called"),
     )
-    ctx = StrategyContext(
-        user_id="alice",
-        session_id="session-1",
-        user_message="How does Amazon Aurora implement PostgreSQL Serializable?",
-        assembled=AssembledContext(current_input="question"),
-        knowledge_chunks=[{"text": "PostgreSQL Serializable uses predicate locking."}],
-        needs_knowledge_retrieval=True,
-        search_intents=[
+    retrieval_result = RetrievalResult(
+        chunks=[
+            {
+                "node_id": "n1",
+                "text": "PostgreSQL Serializable uses predicate locking.",
+                "intent_ids": ["I1"],
+            }
+        ],
+        intents=[
             SearchIntent(
+                intent_id="I1",
                 query="How does Amazon Aurora implement PostgreSQL Serializable?",
                 required_terms=["Amazon Aurora", "PostgreSQL Serializable"],
             )
         ],
+    )
+    grounding = grounding_builder.build(retrieval_result, token_budget=8_000)
+    ctx = StrategyContext(
+        user_id="alice",
+        session_id="session-1",
+        user_message="How does Amazon Aurora implement PostgreSQL Serializable?",
+        assembled=AssembledContext(
+            current_input="question",
+            retrieval_result=retrieval_result,
+            grounding=grounding,
+            retrieved_context=grounding.context_text,
+            sources=grounding.sources,
+            prompt_token_limit=8_000,
+        ),
+        needs_knowledge_retrieval=True,
         retrieval_hit=True,
     )
     result = StrategyResult()

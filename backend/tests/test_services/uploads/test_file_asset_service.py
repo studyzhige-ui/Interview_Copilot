@@ -240,6 +240,85 @@ def test_enqueue_job_coalesces_before_caller_commit(db_session):
     assert db_session.query(OutboxJob).count() == 1
 
 
+def test_enqueue_job_coalesces_immediate_wakeup_by_resource_lane(db_session):
+    user = _make_user(db_session)
+    db_session.flush()
+
+    outbox_service.enqueue_job(
+        db_session,
+        user_pk=user.id,
+        job_type="delete_object",
+    )
+    outbox_service.enqueue_job(
+        db_session,
+        user_pk=user.id,
+        job_type="cleanup_failed_upload",
+    )
+    outbox_service.enqueue_job(
+        db_session,
+        user_pk=user.id,
+        job_type="milvus_upsert_document",
+    )
+
+    assert db_session.info["outbox_wakeup_lanes"] == {"cleanup", "index"}
+
+
+def test_committed_outbox_wakeup_dispatches_each_lane_once(db_session, monkeypatch):
+    from app.task_queue import dispatch
+
+    calls: list[str] = []
+    monkeypatch.setattr(dispatch, "dispatch_outbox_drain", calls.append)
+    db_session.info["outbox_wakeup_lanes"] = {
+        "intelligence",
+        "cleanup",
+        "index",
+    }
+
+    outbox_service._dispatch_committed_outbox_wakeups(db_session)
+
+    assert calls == ["cleanup", "index", "intelligence"]
+    assert "outbox_wakeup_lanes" not in db_session.info
+
+
+def test_application_session_factory_dispatches_only_after_commit(monkeypatch):
+    from app.db.database import SessionLocal
+    from app.task_queue import dispatch
+
+    calls: list[str] = []
+    monkeypatch.setattr(dispatch, "dispatch_outbox_drain", calls.append)
+    session = SessionLocal()
+    try:
+        session.info["outbox_wakeup_lanes"] = {"cleanup", "index"}
+        assert calls == []
+        session.commit()
+        assert calls == ["cleanup", "index"]
+
+        session.begin()
+        session.info["outbox_wakeup_lanes"] = {"intelligence"}
+        session.rollback()
+        assert calls == ["cleanup", "index"]
+        assert "outbox_wakeup_lanes" not in session.info
+    finally:
+        session.close()
+
+
+def test_future_outbox_job_waits_for_periodic_reconciliation(db_session):
+    from datetime import timedelta
+
+    from app.db.types import utc_now
+
+    user = _make_user(db_session)
+    db_session.flush()
+    outbox_service.enqueue_job(
+        db_session,
+        user_pk=user.id,
+        job_type="delete_object",
+        run_after=utc_now() + timedelta(minutes=10),
+    )
+
+    assert "outbox_wakeup_lanes" not in db_session.info
+
+
 def test_run_due_outbox_jobs_runs_handler(db_session, monkeypatch):
     user = _make_user(db_session)
     db_session.commit()
