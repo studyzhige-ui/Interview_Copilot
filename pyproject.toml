@@ -88,10 +88,9 @@ dev = [
     "filelock==3.32.2",
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
-    # Ruff 0.16 changes the default enabled rule set and would require an
-    # unrelated repository-wide lint migration. 0.15.12 is the newest usable
-    # release under the current lint contract.
-    "ruff==0.15.12",
+    # Keep the lint contract explicit below so Ruff upgrades do not silently
+    # enable unrelated rule families.
+    "ruff==0.16.2",
 ]
 evaluation = [
     # Optional offline RAG and interview quality evaluation
@@ -125,3 +124,6 @@ filterwarnings = [
     "ignore::DeprecationWarning:sqlalchemy",
     "ignore:datetime.datetime.utcnow:DeprecationWarning",
 ]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
