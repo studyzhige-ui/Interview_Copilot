@@ -13,7 +13,8 @@ The repository ships one shared product core in two editions:
   can replace providers, run local models, use custom endpoints, and enable
   local stdio MCP.
 
-[中文说明](docs/zh/README.md) · [Edition architecture](docs/architecture/editions.md)
+[中文说明](docs/zh/README.md) · [Career Copilot product architecture](docs/architecture/full-cycle-career-copilot.md)
+· [Edition architecture](docs/architecture/editions.md)
 · [Codebase architecture](docs/architecture/codebase.md) ·
 [Product and systems audit](docs/reports/full-product-and-systems-audit-2026-08-04.md)
 
