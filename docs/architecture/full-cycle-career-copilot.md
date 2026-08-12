@@ -158,7 +158,7 @@ CareerState 只是页面和 Context Compiler 按当前任务从正式对象动�
 
 ### 3.2 Active Working Context 与 CurrentTurnAnchor
 
-Shared Conversation Kernel 中的 Active Working Context 只包含当前 Turn 的权威输入、已解析意图、注意中的少量相关上下文、正在执行的工具链和必要中间状态。它对应当前活动加工状态；Checkpoint 只是可替换恢复快照，不是工作记忆本身。
+Shared Conversation Kernel 中的 Active Working Context 只包含当前 Turn 的权威输入、当前 Strategy 正在处理的任务理解、注意中的少量相关上下文、正在执行的工具链和必要中间状态。它对应当前活动加工状态；Checkpoint 只是可替换恢复快照，不是工作记忆本身。
 
 每个 Turn 通过持久化的 conversation identity、turn identity 和 input identity 建立 CurrentTurnAnchor：
 
@@ -453,7 +453,7 @@ Reminder 只是 planned NextAction 的通知安排，不是独立业务目标。
 
 一次真实面试复盘以其 InterviewRecord 作为天然的 Debrief Project 范围，可以包含多条彼此独立的 Conversation。该 InterviewRecord 的录音、转写、当时的简历与 JD、问答、评分、分析及明确加入本次复盘的其他来源对这些 Conversation 共同可读；在某条 Conversation 输入框直接附加的文件仍只属于该 Conversation，不自动提升为 Debrief Project Source。每条复盘 Conversation 都使用 Debrief Application Profile，并允许 ChatStrategy 与共享 AgentStrategy 按 Turn 无缝混合。
 
-Debrief Project 是 InterviewRecord 的既有领域语义，不增加通用 Project 聚合根、通用项目页面或另一套生命周期。用户若要让聊天附件供同一复盘的其他 Conversation 使用，必须明确执行“添加到本次复盘资料”；该操作只扩大到当前 InterviewRecord，不自动保存为用户全局资料。Mock Interview 是独立的实时、逐轮、强流程约束 Flow，不套用普通 Conversation Resolver 或通用 Agent Loop；它可以复用模型、语音、存储、Artifact 和 Evidence 等底层服务。
+Debrief Project 是 InterviewRecord 的既有领域语义，不增加通用 Project 聚合根、通用项目页面或另一套生命周期。用户若要让聊天附件供同一复盘的其他 Conversation 使用，必须明确执行“添加到本次复盘资料”；该操作只扩大到当前 InterviewRecord，不自动保存为用户全局资料。Mock Interview 是独立的实时、逐轮、强流程约束 Flow，不进入普通 Conversation 的 Strategy Router 或通用 Agent Loop；它可以复用模型、语音、存储、Artifact 和 Evidence 等底层服务。
 
 Career Agent 可以根据用户本 Turn 明确提供的简历、JD、面试类型和风格等输入，调用真实 Mock Flow 入口完成校验和配置；入口成功创建或启动真实 session 后，第一方客户端再依据返回的 session identity 进入相应面试界面。输入和设备条件已经满足时可以直接开始；需要麦克风、浏览器权限或其他用户现场操作时，只在该 readiness 边界等待。Agent Turn 在成功交接或明确失败后结束，不把后续实时逐轮面试包进通用 Agent Tool Loop；仅导航到页面或预填表单不能声称面试已经启动。
 
@@ -694,25 +694,32 @@ Conversation Attachment、Debrief Project Source 和用户明确授权的长期�
 
 ### 10.1 唯一运行结构
 
-运行结构只有三层职责：
+运行结构只有三层职责。普通 Conversation 的主路径如下；Mock Interview 仍是独立实时 Flow：
 
-    Application Profiles & Flows
-    ├─ Career Profile ───── AgentStrategy
-    ├─ Debrief Profile ──── ChatStrategy / AgentStrategy
-    └─ Mock Interview Flow
+```mermaid
+flowchart TB
+    Input["最新用户输入"] --> Kernel["Shared Conversation Kernel<br/>CurrentTurnAnchor · History · Context"]
 
-    Shared Conversation Kernel
-    ├─ Turn Intent Resolver / CurrentTurnAnchor
-    ├─ Active Working Context / Context Compiler
-    ├─ Strategy Router / waiting / compaction / recovery
-    ├─ Tool Executor / Policy / Evidence facilities
-    ├─ Fact & Knowledge Retrieval / RAG
-    └─ History Search / Memory Recall
+    Kernel --> Profile{"Application Profile / 本 Turn Strategy"}
 
-    Product Context Sources
-    └─ 使用第 3 节定义的六种权威来源
+    Profile -->|"Career Agent"| Agent["共享 AgentStrategy"]
+    Profile -->|"Debrief Agent"| Agent
+    Profile -->|"Debrief Chat"| Chat["ChatStrategy"]
 
-三层表达职责与依赖，不要求每个名称成为独立组件。
+    Chat --> Retrieval["本 Turn Chat Retrieval Planner"]
+    Retrieval --> Context["公共 Context Compiler / Source Resolver / RAG"]
+    Context -->|"Chat grounded context"| Answer["有界回答，不执行任务 Tool"]
+
+    Agent --> Context
+    Context -->|"Agent initial context"| Loop["主模型理解、排序与 Agent Loop"]
+    Loop -. "增量读取" .-> Context
+    Loop --> Capability["Application Services / Integrations"]
+
+    Answer --> Conversation["同一个 Conversation / Interaction Records"]
+    Loop --> Conversation
+```
+
+图中的 Application Profile 与 Flow、Shared Conversation Kernel、Product Context Sources 仍是三层职责；`Context` 节点使用第 3 节定义的六种权威来源。三层表达职责与依赖，不要求每个名称成为独立组件。
 
 ### 10.2 Profile、Kernel、Strategy 与 Flow
 
@@ -720,15 +727,17 @@ Conversation Attachment、Debrief Project Source 和用户明确授权的长期�
 
 - Career Profile 是通用求职入口，只允许共享 AgentStrategy；
 - Debrief Profile 从 Conversation 自身不可伪造的 Application identity 绑定当前 Interview/InterviewRecord，把它作为唯一 Debrief Project scope；结构化问答、评分和分析仍通过 Domain State 读取，转写、当时材料和明确加入本次复盘的来源仍按 Knowledge & Evidence 读取，并允许 ChatStrategy 或同一 AgentStrategy；
-- Profile 不拥有独立 Agent Loop，不负责解析用户意图，也不自行选择 Capability；意图归 Turn Intent Resolver，能力解析归共享 AgentStrategy 与 Capability Resolver。
+- Profile 不拥有独立 Agent Loop，不负责解析用户意图，也不自行选择 Capability；Agent Turn 的语义理解、多目标排序和 Capability 选择归共享 AgentStrategy 的主模型循环，Debrief Chat 只在 ChatStrategy 内使用受限的本轮检索规划。
 
 **Shared Conversation Kernel** 负责 Turn 生命周期、CurrentTurnAnchor、Active Working Context、Context Compiler、Strategy Router、等待、流式传输、Compaction、Checkpoint、Recovery，以及共享的 Tool Executor、Policy、Evidence、History Search 和 Memory Recall 设施。它不拥有业务 Profile、Agent Loop 或页面语义。
 
-**AgentStrategy** 是 Career 与 Debrief 唯一共享的 Agent 执行实现，负责 Agent Loop、当前意图下的 Capability 选择、Tool 调用编排、安全并行、必要时创建和推进 AgentTask，并向 Shared Kernel 交付真实调用状态与候选结果。只有 Shared Kernel 执行确定性完成检查并裁定、写入统一 TurnOutcome。
+**AgentStrategy** 是 Career 与 Debrief 唯一共享的 Agent 执行实现。主模型直接依据 CurrentTurnAnchor 理解最新输入、排列多目标、决定直接回答、安全调查、澄清、连接、审批或执行；系统不在它前面建设 Intent 模型、Intent 对象或独立 Planner。AgentStrategy 负责 Agent Loop、Capability 选择、Tool 调用编排、安全并行、必要时创建和推进 AgentTask，并向 Shared Kernel 交付真实调用状态与候选结果。只有 Shared Kernel 执行确定性完成检查并裁定、写入统一 TurnOutcome。
 
-**ChatStrategy** 是 Debrief 中基于公共 Context Acquisition/RAG 的有界、无副作用回答策略。它可以做检索、重排、引用和回答，但不获得执行型 Tool、AgentTask 或外部副作用能力。
+**ChatStrategy** 是 Debrief 中基于公共 Context Acquisition/RAG 的有界、无副作用回答策略。它可以做检索、重排、引用和回答，但不获得执行型 Tool、AgentTask 或外部副作用能力。由于 Chat 不进入迭代 Tool Loop，它在回答前保留一次受限的 **Chat Retrieval Planner**：只把当前输入、当前 Debrief 锚点和可用会话投影转换为本 Turn 的检索请求与来源聚焦，然后由公共 Context Compiler/RAG 执行。
 
-**Mock Interview Flow** 是独立实时、逐轮、强流程约束的运行流，不进入普通 Conversation 的 Turn Intent Resolver、Strategy Router 或通用 Agent Loop。它只复用模型、语音、存储、Artifact/Evidence 等底层服务，不共享普通 Conversation Kernel 的活动执行状态。
+Chat Retrieval Planner 是临时运行步骤，不是 Intent Resolver、产品对象、持久计划或未来 Turn 的任务所有者；它不能创建 AgentTask、选择执行型 Tool、修改 Domain State、申请权限或规划后续 Turn。用户明确引用的来源和由 Profile 确定的复盘范围不能被 Planner 静默排除；规划失败时使用最新用户原文、显式引用和当前 Profile 进行保守检索并留下失败诊断，不能把失败解释为“不需要资料”。AgentStrategy 不调用这层独立 Planner，它在主模型循环中按需读取，但与 Chat 共用下文规定的 Source Resolver、公共 RAG、grounding、引用和失败边界。
+
+**Mock Interview Flow** 是独立实时、逐轮、强流程约束的运行流，不进入普通 Conversation 的 Strategy Router 或通用 Agent Loop。它只复用模型、语音、存储、Artifact/Evidence 等底层服务，不共享普通 Conversation Kernel 的活动执行状态。
 
 Career Profile 下的直接回答、普通分析和简单 Tool 处理都是 AgentStrategy 的正常决策，不建立平行 Chat 模式。Career 与 Debrief 不 fork Prompt 主体、Agent Loop、Tool、Policy、Evidence、AgentTask 或完成控制；Debrief 差异只来自薄 Profile。
 
@@ -743,7 +752,7 @@ Chat/Agent 回答“本 Turn 如何执行”，RAG 回答“如何从非结构�
 - 用户原话、历史承诺和 Tool 轨迹通过 History Search 精确回读；
 - 长期协作经验通过 Memory Recall 选择性召回。
 
-Agent 可以在 Loop 中追加检索，但不能绕过公共检索质量、所有权、权限、来源新鲜度和 Evidence 规则。
+Debrief Chat 的 Retrieval Planner 可以在一次规划中形成多条相互独立的检索请求并并行读取，弥补 Chat 无法通过多轮 Tool Call 逐步选择资料的限制。它只规划补充读取，不能取消用户显式来源、Profile 锚定来源或其他确定性装配内容。Agent 不运行独立 Retrieval Planner，可以在主模型 Loop 中追加检索，但不能绕过公共检索质量、所有权、权限、来源新鲜度和 Evidence 规则。
 
 ### 10.4 Context 编排与 Prompt Cache
 
@@ -756,9 +765,10 @@ Context Compiler 不新增产品领域对象、持久化分级表或巨型 Conte
 3. 确定性解析用户本 Turn 主动附加或明确指定的附件、URL、Artifact 和领域对象引用，并基于第 2 步的 owner 校验 identity、所有权、Conversation/Debrief Project scope、授权、版本与可读取状态。任何页面的当前路由或选中项都不参与这一步；输入框附件只能建立当前 Conversation scope。
 4. 解析本 Turn Strategy，装配共享 Runtime 规则、真实性边界、Policy、当前有效的 CopilotPreference 和少量可调用 Tool schema；完整 Provider/MCP/Skill 目录不进入每轮 Prompt。
 5. 从最近有效 Compaction boundary 恢复会话投影：较早内容的非权威摘要、保留的近期原始消息、用户纠正、未完成承诺以及 Tool Call/Result 的配对完整性。需要核验原话或历史结果时仍回到 Interaction Records。
-6. 用户明确提供的来源内容作为数据加入当前输入附近；Source Resolver 根据最新输入、CurrentTurnAnchor、最近实际使用来源和唯一 identity，选择当前任务需要的历史 Conversation Attachment，或当前 Debrief Project scope 内按原 Product Context Source 类型可见的来源，不把 scope 内全部内容每轮注入。结构化事实通过 Application Service 精确读取，长文档通过公共文档读取/RAG，历史通过 History Search，长期协作经验通过 Memory Recall。互不依赖的读取可以并行，来源结果必须保留时间、权限、权威类型和引用。
-7. 模型以最新用户原文为当前任务指令开始回答或执行。ChatStrategy 在最终回答前完成有界公共读取；AgentStrategy 可以在同一质量与权限边界下继续读取并进入 Tool Loop。
-8. 每次 Tool Call、Policy 结果、Tool Result 和运行中新增的真实来源按原 identity 追加到执行链，再进入下一次模型调用，直到形成 completed、waiting、blocked、failed 或 cancelled 之一。
+6. 先装配不依赖检索规划的初始上下文：Profile 锚点、允许直接读取的结构化事实、已经校验的显式来源引用、当前会话投影和必要 Runtime 状态。用户明确提供的来源内容只作为数据加入当前输入附近；显式来源必须按当前任务完成真实读取，或明确进入 waiting/失败，不能被后续规划静默过滤。
+7. Debrief Chat 在上述初始上下文上调用 Chat Retrieval Planner，形成仅供本 Turn 使用的补充检索请求与来源聚焦；随后由 Source Resolver 执行显式来源读取和计划内补充检索，从当前 Conversation 的历史附件及当前 Debrief Project scope 中按原 Product Context Source 类型选择需要的来源，不把 scope 内全部内容每轮注入。AgentStrategy 不经过独立 Planner，直接让共享主模型依据初始上下文理解与排序，再在 Loop 中按需请求 Source Resolver、公共文档读取/RAG、History Search 或 Memory Recall。两条路径的互不依赖读取都可以并行，结果都必须保留时间、权限、权威类型和引用。
+8. ChatStrategy 基于完成的有界公共读取生成回答；AgentStrategy 在相同质量与权限边界下进入 Tool Loop。最新用户原文始终是当前任务指令，Planner、来源结果和初始上下文都不能取得任务方向。
+9. 每次 Tool Call、Policy 结果、Tool Result 和运行中新增的真实来源按原 identity 追加到执行链，再进入下一次模型调用，直到形成 completed、waiting、blocked、failed 或 cancelled 之一。
 
 模型请求的逻辑排列保持稳定：
 
@@ -798,12 +808,12 @@ Context Source 覆盖测试应在同一 Debrief Profile 下逐类验证两种 St
 
 ### 10.6 Debrief 中的无缝切换
 
-1. Strategy 属于 Turn，不属于整条 Conversation。
-2. 切换保持同一 conversation、Interview 锚点、Interaction Records、权限和来源范围。
-3. 不复制 History，不新建 Conversation，不生成桥接摘要。
-4. 已开始的 Turn 不在中途换 Strategy；它先形成 completed、waiting、blocked、failed 或 cancelled 之一。
-5. 用户在 Chat 后选择“使用 Agent 继续”时，创建新的 Agent Turn，并引用原始用户意图与相关 Turn。
-6. Chat 文本可以作为交互背景；产品写入或外部执行前，Agent 必须回到正式来源和 claim-specific Evidence 核验。
+1. Strategy 在创建 Turn 时形成不可变快照；Conversation 只保存下一次提交的当前选择，不把一种 Strategy 固定为整段会话的执行方式。
+2. Chat/Agent 切换控件只影响下一次用户提交。新的输入建立新的 CurrentTurnAnchor，已经开始的 Turn 不在中途换 Strategy，而是先形成 completed、waiting、blocked、failed 或 cancelled 之一。
+3. 切换保持同一 conversation identity、Interview 锚点、Interaction Records、权限和来源范围；不复制 History，不新建 Conversation，也不生成桥接摘要。
+4. Debrief Conversation 可以按 Turn 交叉使用 ChatStrategy 与共享 AgentStrategy。Chat 后可以让 Agent 继续执行，Agent 后也可以回到 Chat 分析；两者都通过 Shared Kernel 读取同一会话轨迹。
+5. 最新用户输入始终决定新 Turn 的方向；模式切换本身不授权沿用旧任务，也不让旧 AgentTask 自动接管。
+6. Chat 文本可以作为交互背景；产品写入或外部执行前，Agent 必须回到正式来源和 claim-specific Evidence 核验。Chat 在消费先前 Agent 结果时也必须从 Interaction Records 中保留的真实来源和 Tool Result 重新 grounding，不能把 Agent 最终措辞升级为权威事实。
 
 ## 11. Turn、AgentTask、Checkpoint 与 Agent Loop
 
@@ -839,9 +849,9 @@ Turn 是一次输入到最终响应、等待、阻塞、取消或失败的统一
 - 当前阶段位置与阻塞原因；
 - 真实 Tool Call、Application Service 结果、Artifact 和 Evidence 引用。
 
-这些是最小运行语义，不提前冻结字段。阶段用于计划可见性、断点定位和结构完整性，不是独立领域对象。Agent 可以根据新发现增加、合并、重排、并行或跳过阶段，但不能扩大用户目标；调整后仍要解释顺序、局部前置条件、阻塞和完成条件。
+这些是最小运行语义，不提前冻结字段。阶段用于计划可见性、断点定位和结构完整性，不是独立领域对象。Agent 可以根据新发现增加、合并、重排或跳过阶段，也可以识别相互独立的阶段并交错推进，但不能扩大用户目标；真正并行只发生在第 15.2 节证明安全的具体 Tool Call 批次。调整后仍要解释顺序、局部前置条件、阻塞和完成条件。
 
-当前不持久化阶段级 AgentTask、父子任务树、Owner/认领、Mailbox、双向 DAG、attempt 集合、attempt_count 或 Session 全局任务池。局部依赖通过阶段顺序、当前前置判断和明确阻塞表达；安全并行由 Tool Executor 完成。未来真正引入多个执行者时，再根据所有权和调度不变量重新设计。
+本项目采用普通单 Agent 执行：一个复杂请求只有一个 AgentTask 聚合和一份可修订的扁平阶段清单，不为阶段创建独立持久任务节点或 Session 全局任务池。局部先后关系通过阶段顺序、当前前置判断和明确阻塞表达；具体调用能否并行由 Tool Executor 根据输入、副作用和资源冲突判断，任务清单本身不承担调度。
 
 AgentTask 通常服务并完成于当前 Turn。等待审批、资料缺失或基础设施中断时，可以留下最小休眠恢复引用，但不会因此变成 PersistentTask。
 
@@ -997,9 +1007,8 @@ Reminder 仍是 planned NextAction 的通知安排。只有持续读取来源、
 
 统一解析路径为：
 
-    CurrentTurnAnchor
-      → Turn Intent Resolver 确定当前意图
-      → AgentStrategy 识别所需 Capability
+    CurrentTurnAnchor 与最新用户原文
+      → AgentStrategy 主模型理解任务并识别所需 Capability
       → 查找真实 Binding
       → 校验实现可用性、账号连接、Provider scope 与用户指定
       → 比较质量、费用、隐私和副作用差异
@@ -1297,9 +1306,10 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 | write_file | Artifact save/revise/export；不向 Agent 默认暴露任意文件系统写入 |
 | recall_memory | 移除旧万能 handler；精确历史迁移到 History Search，严格长期经验由 Kernel 的 Memory Recall 读取 |
 | save_memory | 取消万能写入；事实、方向、能力、Artifact 和 Preference 分别进入权威 Service，长期 Memory 使用独立受限生命周期 |
-| task_create/update | 只服务当前确实创建的复杂 AgentTask，不成为普通 Turn 固定流程 |
+| query_planner | 收敛为仅供 Debrief Chat 当前 Turn 使用的 Chat Retrieval Planner；AgentStrategy 不经过独立 Planner |
+| task_create/update | 只维护当前复杂请求的单个 AgentTask 聚合与扁平阶段，不成为普通 Turn 固定流程，也不管理跨任务依赖 |
 | task_checkpoint | 取消模型主动维护；Checkpoint 归 Shared Kernel |
-| task_verify | 删除旧 Tool，不设置替代 Tool；完成判定归 Shared Kernel 的第 11.3 节确定性检查 |
+| `task_verify`（现有旧 Tool） | 删除旧验证链，不设置替代 Tool；完成判定归 Shared Kernel 的第 11.3 节确定性检查 |
 
 迁移验收不能只检查 Tool 是否改名，还要验证真实 handler、typed data、Policy、claim-specific Evidence、失败语义，以及页面和 Agent 是否共用 Application Service。
 
@@ -1342,7 +1352,7 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 | forked Skill / actor 成本 | src/tools/SkillTool/SkillTool.ts:122、206、223、623 | packages/opencode/src/tool/actor.ts:35、63、354、612、712、771 | 完整额外执行者需要独立上下文、权限、取消和结果协议，不能用额外模型调用冒充 |
 | Standard / Auto | src/types/permissions.ts:16、28；src/utils/permissions/PermissionMode.ts:45、66、80；src/utils/permissions/permissions.ts:518、593、658、688、818、843、878、1169、1183、1230、1238、1252；src/utils/permissions/permissionSetup.ts:505、529、555、627 | — | 全局模式、参数级 Policy 和不可绕过例外，不复制 Bash/路径分类 |
 | Tool Contract | src/Tool.ts:321、362、379、394、402、405、500、743；src/services/mcp/client.ts:1743、1765；src/tools.ts:329、345；src/services/tools/toolExecution.ts:1206、1282、1589 | — | 薄 typed success、input-dependent effect/concurrency、统一错误外层 |
-| AgentTask 与 Recovery | src/utils/todo/types.ts:4；src/utils/tasks.ts:69、76、94、284、534；src/tools/TaskUpdateTool/TaskUpdateTool.ts:326；src/utils/sessionRestore.ts:72；src/services/compact/autoCompact.ts:241；src/utils/messages.ts:3680 | packages/opencode/src/session/todo.ts:9；src/task/schema.ts:7；src/task/registry.ts:272；src/task/gate.ts:53；src/session/prune.ts:237；src/session/llm.ts:155；src/agent/prompt/checkpoint-writer.txt:69 | 普通复杂任务不需要 DAG，最新用户输入优先，Checkpoint 由 Kernel/维护 writer 产生 |
+| AgentTask 与 Recovery | src/utils/todo/types.ts:4；src/utils/tasks.ts:69、76、94、284、534；src/tools/TaskUpdateTool/TaskUpdateTool.ts:326；src/utils/sessionRestore.ts:72；src/services/compact/autoCompact.ts:241；src/utils/messages.ts:3680 | packages/opencode/src/session/todo.ts:9；src/task/schema.ts:7；src/task/registry.ts:272；src/task/gate.ts:53；src/session/prune.ts:237；src/session/llm.ts:155；src/agent/prompt/checkpoint-writer.txt:69 | 单 Agent 的复杂请求只保留一个 AgentTask 与扁平阶段，最新用户输入优先，Checkpoint 由 Kernel/维护 writer 产生 |
 | Context 编排、Prompt Cache 与 Compaction | src/utils/queryContext.ts:44、61；src/utils/api.ts:437、449；src/constants/prompts.ts:560；src/constants/systemPromptSections.ts:16、27、43、61；src/query.ts:365、449、659、1535、1714；src/services/api/claude.ts:358、3213；src/services/compact/compact.ts:325、517、613、1399 | — | 规则、会话投影、明确来源、最新输入和调用结果分层；稳定前缀与动态尾部分离；缓存命中不影响语义；压缩保留近期原文与调用配对完整性，并从权威源重载 |
 | Attachment 与显式来源 | processTextPrompt.ts:66-99；attachments.ts:1894-1963、3020-3198；messages.ts:1476-1526、3525-3588 | — | 显式引用先受控解析、来源数据与用户指令隔离、长内容按需读取、压缩后按引用恢复；不照搬隐式邻接、静默失败、伪 Tool 文本或本地 CLI 的文件身份 |
 | Memory 边界 | src/utils/claudemd.ts；src/services/SessionMemory；src/services/compact；src/memdir/memoryTypes.ts、memoryScan.ts、findRelevantMemories.ts；src/utils/sessionRestore.ts | packages/opencode/src/session/checkpoint、prune.ts、compaction.ts；src/memory；src/tool/history.ts、memory.ts；src/memory/write-gate.ts | instruction、History、Recovery 与 Long-term Memory 分离，writer 作用域受 Runtime 强制 |
@@ -1363,6 +1373,7 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 #### 阶段 0：共享会话执行与正确性基线
 
 - Career/Debrief Profile 共享唯一 AgentStrategy，Mock Interview 保持独立 Flow；
+- 移除 Agent 前置 Intent Resolver/Planner；Debrief Chat 保留只服务当前 Turn 的 Chat Retrieval Planner，并完成同一 Conversation 内按 Turn 切换 Chat/Agent 的无缝上下文与 Evidence 投影；
 - 落地 CurrentTurnAnchor、最新输入所有权、Claude Code 式 Context Assembly、稳定前缀/动态尾部 Prompt Cache、可连续执行的压缩/恢复和 Tool Call/Result 配对完整性；
 - Agent 通过公共 Context/RAG 链读取，不再绕过 RAG 质量与 Evidence；
 - 实现按具体调用预检的安全 Tool 并行、UI 完成序/模型与历史调用序分离、五种统一 TurnOutcome、确定性完成门禁、语义终止和局部故障熔断；
@@ -1453,7 +1464,7 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 16. 七个业务域映射为首批 provider-neutral Capability 时，哪些动作合并，哪些因权限、副作用、回执和失败语义拆分。
 17. Tool Contract 的具体 typed input/data、结果预算/Artifact 化、错误结构和 Provider extension。
 18. Skill Catalog 的最小元数据、listing filter、搜索置信度、缓存、更新检测和版本不兼容体验。
-19. Career/Debrief Application Profile 的精确 Context Contract、Debrief Chat/Agent 策略选择交互、Conversation Attachment、Debrief Project Source 与全局资料的读取优先级及跨 scope 隔离矩阵，以及 Prompt Cache 分段/失效、Compaction 保护与重载矩阵和跨阈值恢复测试。
+19. Career/Debrief Application Profile 的精确 Context Contract、Chat Retrieval Planner 的输入预算、检索请求数量、降级与指标、Chat/Agent 逐 Turn 切换控件的具体 UX，以及 Conversation Attachment、Debrief Project Source 与全局资料的读取优先级及跨 scope 隔离矩阵、Prompt Cache 分段/失效、Compaction 保护与重载矩阵和跨阈值恢复测试；同一 Debrief Conversation、切换只影响下一 Turn 和不使用 Agent 独立 Planner 已经冻结。
 20. 首次 Provider connection/scope grant 与逐调用 Policy ask 的 UI control event、账号选择、scope 升级、拒绝和失败恢复体验。
 21. Agent 场景评测集、gold/Evidence 标注、成本控制、用户修正数据和隐私安全的构建方式。
 22. 在什么真实评测结果下才值得引入隔离只读 worker；当前不实现通用子 Agent。
@@ -1484,7 +1495,7 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 14. Interaction Records 保留精确原话和完整 Tool Call/Result；摘要不替代 History。
 15. Long-term Agent Memory 不复制 Domain State、文档正文、History、Preference 或 Recovery State。
 16. 用户禁用 Memory Recall 时，旧 Memory 不得显式或隐性影响该 Turn。
-17. Chat 与 Agent 在同一 Profile 下可达相同类别的授权来源；不存在 Agent 私有知识路径或 Context Source Registry。
+17. Chat 与 Agent 在同一 Profile 下可达相同类别的授权来源；不存在 Agent 私有知识路径或 Context Source Registry。Debrief Chat/Agent 使用同一 Conversation 并按 Turn 形成 Strategy 快照；Agent 不经过独立 Planner，Chat Retrieval Planner 只规划当前 Chat Turn 的补充检索，不能排除显式来源、取得任务所有权或产生执行能力。
 18. 用户明确指定且有权访问的来源必须成功读取并引用，或明确失败，不能静默遗漏。
 19. Agent 迭代检索与 Chat 有界检索遵守同一 RAG 质量、权限、新鲜度与 Evidence 规则；Prompt Cache 命中/未命中和 Compaction 前后不得改变这些语义，也不得复活旧任务、旧权限或已经禁用的 Memory。
 
@@ -1506,7 +1517,7 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 ### 19.4 Turn、AgentTask 与 Recovery
 
 32. 简单回答、分析和少量直接调用不创建 AgentTask。
-33. 一个复杂请求只有一个 AgentTask 聚合；不建设 DAG、Owner 或 attempt 集合。
+33. 一个复杂请求只有一个 AgentTask 聚合与一份可修订的扁平阶段清单；阶段顺序表达局部前置关系，Tool Executor 独立判断具体调用的安全并行。
 34. AgentTask 终态幂等且不能被旧摘要、Memory 或 Checkpoint 自行复活。
 35. Checkpoint 与 Compaction 都由 Kernel 维护并分别以成功持久化结果为有效版本；存在活动执行恢复状态时，二者都成功后才能切换 active compact boundary，任一失败继续使用最后有效边界。
 36. 无真实 Tool Call 只形成候选完成；Shared Kernel 按本 Turn 的真实性和执行完整性进行确定性检查，只有存在 AgentTask 时才检查其扁平阶段，不扫描 Session，也不伪造用户消息。
