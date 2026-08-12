@@ -25,10 +25,12 @@ def delete_document_vectors_and_chunks(
 ) -> None:
     """Delete chunk facts and enqueue the external index cleanup atomically."""
     from app.rag.document_chunk_service import delete_document_chunks
-    from app.services.knowledge.index_jobs import enqueue_milvus_delete
 
     delete_document_chunks(db, document.id)
-    enqueue_milvus_delete(db, user_pk=document.user_id, document_id=document.id)
+    if document.source_kind != "chat_attachment":
+        from app.services.knowledge.index_jobs import enqueue_milvus_delete
+
+        enqueue_milvus_delete(db, user_pk=document.user_id, document_id=document.id)
 
 
 def mark_document_indexed_ready(db: Session, document_id: str) -> None:
@@ -73,7 +75,9 @@ def mark_document_index_failed(
     db.commit()
 
 
-def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> None:
+def hard_delete_knowledge_document(
+    db: Session, document: KnowledgeDocument, *, commit: bool = True
+) -> None:
     # Fileless docs (improved_qa / manual_text) have no S3 object — only chunks +
     # Milvus index to drop. File docs validate the owned-prefix before any delete.
     has_object = bool(
@@ -115,4 +119,5 @@ def hard_delete_knowledge_document(db: Session, document: KnowledgeDocument) -> 
     db.delete(document)
     if upload is not None:
         db.delete(upload)
-    db.commit()
+    if commit:
+        db.commit()

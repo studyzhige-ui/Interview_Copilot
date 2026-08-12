@@ -153,6 +153,10 @@ export interface StreamChatOptions {
   signal?: AbortSignal;
   /** Defaults to the direct chat strategy. */
   mode?: ChatMode;
+  /** Explicit 1-based QA-card references for this debrief turn. */
+  questionIndexes?: number[];
+  /** Server-owned document ids validated for this exact turn. */
+  attachments?: string[];
   /** Subscribe to an already-running turn instead of creating one. */
   turnId?: string;
   onTurnCreated?: (turnId: string) => void;
@@ -274,7 +278,12 @@ export async function streamChatTurn(
   if (!turnId) {
     const response = await apiClient.post(
       `/chat/${encodeURIComponent(sessionId)}/turns`,
-      { message, mode: opts.mode ?? 'chat' },
+      {
+        message,
+        mode: opts.mode ?? 'chat',
+        question_indexes: opts.questionIndexes ?? [],
+        attachments: (opts.attachments ?? []).map((document_id) => ({ document_id })),
+      },
       { signal: opts.signal },
     );
     turnId = String(response.data.turn_id);

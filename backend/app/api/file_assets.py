@@ -1,4 +1,4 @@
-"""Unified file-asset upload API: presigned PUT + confirm.
+"""General-purpose file-asset upload API: presigned PUT + confirm.
 
 Every persistent business file (resume / knowledge document / interview audio /
 JD / mock voice clip / avatar / agent output) is uploaded the same way:
@@ -7,8 +7,10 @@ JD / mock voice clip / avatar / agent output) is uploaded the same way:
     PUT  <presigned_url> (client)     -> bytes go straight to object storage
     POST /file-assets/{id}/confirm    -> HEAD-verify + size-reconcile the upload
 
-Business endpoints then consume the confirmed ``file_asset_id``. There is no
-server-receives-bytes "direct upload" path for persistent business files.
+Business endpoints then consume the confirmed ``file_asset_id``. Domain
+commands that must inspect an upload before keeping it (such as a recorded
+mock answer) use ``store_validated_file_asset`` instead of sending the same
+bytes through this generic browser flow a second time.
 """
 
 from __future__ import annotations

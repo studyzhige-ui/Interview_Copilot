@@ -117,13 +117,11 @@ def test_create_for_mock(record_db_session, monkeypatch):
     record = service.create_for_mock(
         user_id="bob",
         title="模拟面试",
-        interview_plan='{"phases": []}',
         db=record_db_session,
     )
 
     assert record.source == "mock"
     assert record.status == module.STATUS_PENDING
-    assert record.interview_plan == '{"phases": []}'
 
 
 def test_set_status_set_transcript_set_analysis(record_db_session, monkeypatch):

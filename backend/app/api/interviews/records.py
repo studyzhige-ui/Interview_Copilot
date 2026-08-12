@@ -258,7 +258,6 @@ def get_interview_record(
         "jd_file_asset_id": record.jd_file_asset_id,
         "transcript": transcript["text"],
         "transcript_segments": _safe_json_loads(transcript["segments_json"]),
-        "interview_plan": _safe_json_loads(record.interview_plan),
         "analysis": analysis,
         "qa": _serialize_qa_rows(db, qa_rows),
         "error_message": record.error_message,

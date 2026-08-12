@@ -105,9 +105,9 @@ to the externally reachable MinIO/S3 origin before starting the stack.
 
 ## Model modes
 
-The Community template defaults to SiliconFlow for embedding, reranking and
-speech, plus lightweight local document parsers. Fill `SILICONFLOW_API_KEY`.
-This keeps the standard install usable on ordinary computers.
+The Community template defaults to SiliconFlow for embedding and reranking,
+while speech transcription uses local WhisperX. Fill `SILICONFLOW_API_KEY` for
+the retrieval services. Document parsing remains local and lightweight.
 
 Choosing a local setup profile starts the model wizard automatically. Run it
 again whenever you want to change the selection:

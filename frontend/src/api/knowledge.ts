@@ -2,7 +2,11 @@ import { apiClient } from './client';
 import { putFileToPresignedUrl } from './presignedUpload';
 import type { KnowledgeDoc, KnowledgeCategory } from '@/types/api';
 
-export type KnowledgeSourceKind = 'user_upload' | 'improved_qa' | 'manual_text';
+export type KnowledgeSourceKind =
+  | 'user_upload'
+  | 'improved_qa'
+  | 'manual_text'
+  | 'chat_attachment';
 
 /**
  * ``accept`` hint for knowledge-document file inputs — UX only; the backend
@@ -54,6 +58,7 @@ async function createKnowledgeDocument(payload: {
   title?: string;
   category?: string;
   source_kind?: KnowledgeSourceKind;
+  conversation_id?: string;
 }): Promise<KnowledgeDoc> {
   const res = await apiClient.post('/knowledge/documents', payload);
   return res.data?.document;
@@ -71,10 +76,50 @@ export async function deleteKnowledgeDocument(id: string): Promise<void> {
   await apiClient.delete(`/knowledge/documents/${encodeURIComponent(id)}`);
 }
 
+export async function getKnowledgeDocument(
+  id: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<KnowledgeDoc> {
+  const res = await apiClient.get(`/knowledge/documents/${encodeURIComponent(id)}`, {
+    signal: opts.signal,
+  });
+  return res.data?.document;
+}
+
+export async function waitForKnowledgeDocument(
+  id: string,
+  opts: { signal?: AbortSignal; pollMs?: number } = {},
+): Promise<KnowledgeDoc> {
+  const pollMs = Math.max(250, opts.pollMs ?? 800);
+  while (true) {
+    const document = await getKnowledgeDocument(id, { signal: opts.signal });
+    if (document.status === 'ready') return document;
+    if (document.status === 'failed') {
+      throw new Error(document.error_message || `文件解析失败：${document.title}`);
+    }
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(new DOMException('Aborted', 'AbortError'));
+      };
+      const timer = setTimeout(() => {
+        opts.signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, pollMs);
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+}
+
 // One-shot helper: presigned-url → PUT → create-document.
 export async function uploadKnowledgeFile(
   file: File,
-  opts: { title?: string; category?: string; source_kind?: KnowledgeSourceKind } = {},
+  opts: {
+    title?: string;
+    category?: string;
+    source_kind?: KnowledgeSourceKind;
+    conversation_id?: string;
+  } = {},
 ): Promise<KnowledgeDoc> {
   const presign = await createKnowledgeUploadUrl({
     filename: file.name,
@@ -87,5 +132,6 @@ export async function uploadKnowledgeFile(
     title: opts.title ?? file.name,
     category: opts.category,
     source_kind: opts.source_kind,
+    conversation_id: opts.conversation_id,
   });
 }

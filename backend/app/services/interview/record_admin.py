@@ -202,9 +202,6 @@ def reanalyze_record(db: Session, record: InterviewRecord, *, drop_qa: bool = Fa
         )
     record.analysis_json = None
     record.error_message = None
-    # Cleared so _generate_debrief_summary regenerates from the new report
-    # (it skips records that already have one).
-    record.debrief_summary = None
     record.analyzed_qa_count = 0
     db.add(record)
     db.commit()

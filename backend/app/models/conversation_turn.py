@@ -23,6 +23,8 @@ class ConversationTurn(Base):
     )
     mode = Column(String(16), nullable=False)
     message = Column(Text, nullable=False)
+    question_indexes_json = Column(JSON, nullable=False, default=list)
+    attachments_json = Column(JSON, nullable=False, default=list)
     user_message_seq = Column(Integer, nullable=True)
     assistant_message_seq = Column(Integer, nullable=True)
     status = Column(String(16), nullable=False, default="pending")

@@ -1,6 +1,4 @@
-"""Phase 5 mock-flow behaviors: concurrency token (MOCK-3), two-phase
-transaction dedupe (MOCK-4), rules-layer hard cap (MOCK-5), asked-question
-inventory (MOCK-6), stage meta + audio in review pairing (MOCK-7/8)."""
+"""Mock-flow concurrency, recovery, length warning and review metadata."""
 
 from __future__ import annotations
 
@@ -41,9 +39,6 @@ def _make_run(db):
     record = interview_record_service.create_for_mock(
         user_id="alice",
         title="模拟面试",
-        interview_plan=json.dumps(
-            {"stages": mock_interview_service.GENERAL_PLAN_TEMPLATE}
-        ),
         db=db,
     )
     record.status = STATUS_MOCK_IN_PROGRESS
@@ -69,15 +64,11 @@ def _make_run(db):
         db,
         user_id="alice",
         interview_record_id=record.id,
-        plan=mock_interview_service.GENERAL_PLAN_TEMPLATE,
+        plan=mock_interview_service.BASE_INTERVIEW_STAGES,
         conversation_id=conv.id,
-    )
-    mock_runtime_service.advance_runtime(
-        db,
-        runtime,
+        interviewer_style="professional",
+        target_question_count=20,
         current_stage_key="self_intro",
-        stage_index=0,
-        current_question_text="你好，请自我介绍。",
         current_question_message_id=opening.id,
     )
     db.commit()
@@ -185,10 +176,14 @@ def test_dangling_answer_retry_not_double_recorded(db_session, monkeypatch):
     assert mock_flow.count_answered_turns(db_session, conv.id) == 1  # deduped
 
 
-def test_hard_cap_forces_ready_to_finish(db_session, monkeypatch):
+def test_length_warning_is_fed_to_next_turn_without_forcing_finish(
+    db_session, monkeypatch
+):
     record, runtime, conv = _make_run(db_session)
-    _stub_turn(monkeypatch)
-    monkeypatch.setattr(mock_flow, "MOCK_MAX_ANSWERED_TURNS", 1)
+    captured: dict = {}
+    _stub_turn(monkeypatch, captured=captured)
+    runtime.target_question_count = 1
+    db_session.commit()
     turn = asyncio.run(
         mock_flow.submit_answer(
             db_session,
@@ -199,10 +194,11 @@ def test_hard_cap_forces_ready_to_finish(db_session, monkeypatch):
             question_message_id=runtime.current_question_message_id,
         )
     )
-    assert turn.is_ready_to_finish is True  # rules layer overrode the LLM
+    assert captured["length_warning_active"] is True
+    assert turn.is_ready_to_finish is False
 
 
-def test_asked_questions_fed_to_prompt(db_session, monkeypatch):
+def test_full_conversation_history_is_fed_to_prompt(db_session, monkeypatch):
     record, runtime, conv = _make_run(db_session)
     captured: dict = {}
     _stub_turn(monkeypatch, captured=captured)
@@ -216,8 +212,10 @@ def test_asked_questions_fed_to_prompt(db_session, monkeypatch):
             question_message_id=runtime.current_question_message_id,
         )
     )
-    assert captured["asked_questions"] == ["你好，请自我介绍。"]
-    assert captured["questions_in_current_stage"] == 1
+    assert captured["conversation_messages"] == [
+        {"role": "assistant", "content": "你好，请自我介绍。"}
+    ]
+    assert captured["length_warning_active"] is False
 
 
 def test_review_pairing_reads_stage_and_audio(db_session, monkeypatch):

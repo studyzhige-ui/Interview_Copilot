@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PositiveInt, field_validator
 
 # ── Generic chat session DTOs ────────────────────────────────────────────
 
@@ -35,8 +35,18 @@ class SessionListItem(BaseModel):
     updated_at: str
 
 
+class AttachmentRef(BaseModel):
+    """One server-owned document explicitly attached to this user turn."""
+
+    document_id: str = Field(min_length=1, max_length=128)
+
+
 class ChatTurnRequest(BaseModel):
     message: str = Field(min_length=1, max_length=100_000)
+    attachments: list[AttachmentRef] = Field(default_factory=list, max_length=10)
+    # Explicit references selected from debrief QA cards. This is execution
+    # input for one durable turn, not interview-record data.
+    question_indexes: list[PositiveInt] = Field(default_factory=list)
     # Execution strategy. ``chat`` runs the L1 chat pipeline (planner →
     # answer LLM, no tool use). ``agent`` runs the L2 ReAct loop with the
     # full tool registry. ``None`` = use the conversation's persisted mode
@@ -56,48 +66,40 @@ class MemoryRecallToggleBody(BaseModel):
 
 
 # ── Mock-interview DTOs ──────────────────────────────────────────────────
-# Target architecture (RFC §6.4): the start endpoint owns creation of the
+# The start endpoint owns creation of the
 # interview_record + conversation + mock_interview_runtime; subsequent calls
 # address the run by ``record_id``. No "Runtime Director" — the next
 # interviewer line is generated from plan_json + current stage + message
 # history. Mirrored 1:1 by the TS interfaces in frontend/src/types/api.ts.
 
 
-class MockStage(BaseModel):
-    """One stage of the (frozen) interview plan, for the progress UI."""
-
-    key: str
-    title: str
-
-
 class MockStartRequest(BaseModel):
-    # Personal resume entity (resumes.id) OR a freshly-uploaded resume file
-    # asset (file_assets.id). Both optional; at most one is used.
-    resume_id: str | None = None
-    resume_file_asset_id: str | None = None
-    # JD as pasted/parsed text OR an uploaded JD file asset.
-    jd_text: str | None = None
-    jd_file_asset_id: str | None = None
-    # Frozen plan template for this run (phase-1: only "general").
-    plan_template_key: str = "general"
-    # Interviewer persona for tone. Depth is inferred from JD seniority.
-    interviewer_style: str = "professional"  # friendly|professional|rigorous|pressure
-    # Interaction mode. 'hybrid' = AI TTS + user types or speaks freely.
-    voice_mode: str = "hybrid"  # text|voice|hybrid
+    resume_id: str = Field(min_length=1)
+    jd_text: str = Field(min_length=20, max_length=50_000)
+    interviewer_style: Literal[
+        "friendly", "professional", "rigorous", "pressure"
+    ] = "professional"
+    # Advisory whole-interview length. This activates a prompt reminder but
+    # never caps a stage or forcibly ends the interview.
+    target_question_count: Literal[15, 20, 30] = 20
+
+    @field_validator("resume_id", "jd_text", mode="before")
+    @classmethod
+    def strip_required_context(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class MockLiveMessage(BaseModel):
+    id: int
+    speaker: Literal["interviewer", "candidate"]
+    text: str
 
 
 class MockStartResp(BaseModel):
     """``POST /mock-interviews/start`` — atomic create + opening line."""
 
-    interview_record_id: str
-    conversation_id: str
-    runtime_id: str
-    current_stage_key: str
-    # The opening interviewer message (greeting + first question), one string.
-    current_question: str
-    # Concurrency token for the first answer (MOCK-3).
-    question_message_id: int | None = None
-    plan_phases: list[MockStage]
+    record_id: str
+    message: MockLiveMessage
 
 
 class MockAnswerRequest(BaseModel):
@@ -113,14 +115,9 @@ class MockAnswerRequest(BaseModel):
 class MockAnswerResp(BaseModel):
     """``POST /mock-interviews/{record_id}/answer`` — next interviewer line."""
 
-    interviewer_message: str
-    current_stage_key: str
-    # Advisory ONLY (MOCK-5): the FE shows a "可以结束了" suggestion banner;
-    # it must never lock the composer. Forced true by the rules layer once
-    # MOCK_MAX_ANSWERED_TURNS is reached.
-    is_ready_to_finish: bool
-    # Echo back with the next answer as the concurrency token (MOCK-3).
-    question_message_id: int | None = None
+    message: MockLiveMessage
+    # Advisory only; the candidate still decides when to finish.
+    end_suggested: bool
 
 
 class MockFinishResp(BaseModel):
@@ -148,25 +145,17 @@ class MockInProgressResp(BaseModel):
     """``GET /mock-interviews/in-progress`` — resume banner.
 
     Discriminated by ``has_in_progress``: when False all other fields are
-    None. Sourced from the user's most recent in_progress
-    ``mock_interview_runtime`` row.
+    None. Sourced from the user's single live ``mock_interview_runtime`` row.
     """
 
     has_in_progress: bool
     record_id: str | None = None
-    conversation_id: str | None = None
-    runtime_id: str | None = None
     title: str | None = None
-    current_stage_key: str | None = None
-    # The last interviewer line (what the candidate is answering) — lets the
-    # frontend re-seed the live view on resume without a history round-trip.
-    current_question: str | None = None
-    # Answered-turn count so the resumed view doesn't think answeredCount=0
-    # (which used to grey out the "生成复盘" button until one more answer).
-    answered_count: int = 0
-    # Concurrency token for the next answer after resume (MOCK-3).
-    question_message_id: int | None = None
     last_activity_at: str | None = None
+
+
+class MockLiveStateResp(BaseModel):
+    messages: list[MockLiveMessage]
 
 
 class MockParseJdResp(BaseModel):
@@ -177,12 +166,11 @@ class MockParseJdResp(BaseModel):
     chars: int
 
 
-class MockTranscribeResp(BaseModel):
-    """``POST /mock-interviews/transcribe``."""
+class MockAnswerAudioResp(BaseModel):
+    """``POST /mock-interviews/{record_id}/answer-audio``."""
 
     text: str
-    language: str
-    duration_sec: float
+    audio_file_asset_id: str
 
 
 class TTSRequest(BaseModel):
@@ -195,12 +183,13 @@ __all__ = [
     "SessionCreateRequest",
     "SessionCreateResponse",
     "SessionListItem",
+    "AttachmentRef",
     "ChatTurnRequest",
     "SessionRenameRequest",
     "MemoryRecallToggleBody",
     # Mock-interview DTOs (mirrored 1:1 by frontend/src/types/api.ts)
-    "MockStage",
     "MockStartRequest",
+    "MockLiveMessage",
     "MockStartResp",
     "MockAnswerRequest",
     "MockAnswerResp",
@@ -208,7 +197,8 @@ __all__ = [
     "MockRetryReviewResp",
     "MockAbandonResp",
     "MockInProgressResp",
+    "MockLiveStateResp",
     "MockParseJdResp",
-    "MockTranscribeResp",
+    "MockAnswerAudioResp",
     "TTSRequest",
 ]

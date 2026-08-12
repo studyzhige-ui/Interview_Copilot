@@ -125,6 +125,10 @@ def process_document_ingestion(self, document_id: str):
                 owner_pk,
                 document_id=document.id,
                 upload_id=document.file_asset_id,
+                # Chat attachments remain conversation-scoped Postgres facts.
+                # They are supplied through the shared Evidence path and must
+                # never compete in the user's global Milvus knowledge index.
+                index_document=document.source_kind != "chat_attachment",
             )
         )
 

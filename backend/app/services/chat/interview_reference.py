@@ -1,71 +1,65 @@
-"""Build a "reference manifest" for a chat session bound to an interview.
+"""Load once and render the interview context used by debrief conversations."""
 
-Design rationale
-================
-A debrief chat needs the LLM to *see* what the interview was actually about —
-without manually copying transcripts or analysis into every prompt the user
-writes. Two engineering options were considered:
-
-  A) **Snapshot on chat creation.** When the debrief chat is created, denormalize
-     the interview's analysis + transcript into the ``Conversation`` row.
-     Pros: zero per-turn cost. Cons: stale if the user edits a Q&A afterwards.
-
-  B) **Lazy fetch per turn.** The context-assembly pipeline reads the chat's
-     ``interview_id`` column on each query, joins on InterviewRecord,
-     builds a compact manifest, fills the dedicated ``debrief_reference`` slot.
-     Pros: always fresh; honors QA edits via ``PATCH /interview-records/{id}/qa/{idx}``;
-     no schema migration. Cons: ~1 SQL roundtrip per turn (≈1ms).
-
-We picked (B). It plugs into the slot-based context pipeline without any
-new infrastructure, and the cost is dominated by the LLM call itself.
-
-The output is a structured markdown block (~1–2k tokens) that goes straight
-into the ``[Record Context]`` slot of the prompt — see
-``app/services/chat/context_assembly_pipeline.py:SLOT_ORDER``.
-"""
+from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
+from app.services.interview.analysis_context import (
+    build_question_index,
+    build_report_context,
+)
 
 logger = logging.getLogger(__name__)
 
 
-# Soft cap on transcript / per-question excerpt sizes. Final assembly will
-# still pass through the TokenBudget gate so this is just an early trim.
-#
-# Why 2400? With Chinese text averaging ~1.8 tokens/char, 2400 chars ≈ 4300
-# tokens. The DEBRIEF_REFERENCE_BUDGET is 2000 tokens but the pipeline doesn't
-# yet hard-trim this slot (an upstream improvement) — so we self-cap here.
-# Transcripts under this length are emitted in full.
-_TRANSCRIPT_HARD_CAP_CHARS = 2400
-# Per-question emission: only ``question`` and ``score`` (no improved_answer
-# / no full critique). Rationale (per product spec): improved_answer is
-# nearly as bulky as the transcript itself — and the model can always pull
-# it on demand via RAG / the record-detail endpoint when discussion
-# actually drifts into a specific Q. Front-loading every full answer just
-# burns prompt cache space.
-_PER_QUESTION_TAKE = 12
+@dataclass(frozen=True)
+class InterviewQuestionReference:
+    order_idx: int
+    phase: str
+    question: str
+    answer: str
+    score: float | None
+    critique: str
+    improved_answer: str
+    tags: tuple[str, ...]
+
+    @property
+    def index(self) -> int:
+        return self.order_idx + 1
 
 
-def build_interview_reference(interview_id: str, owner_pk: int) -> str:
-    """Return a compact markdown reference for the given interview record.
+@dataclass(frozen=True)
+class InterviewReference:
+    record_id: str
+    title: str
+    tag: str
+    source: str
+    status: str
+    analysis_json: str | None
+    resume_text: str
+    audio_file_asset_id: str | None
+    resume_id: str | None
+    resume_file_asset_id: str | None
+    jd_file_asset_id: str | None
+    questions: tuple[InterviewQuestionReference, ...]
 
-    ``owner_pk`` is the stable users.id of the session owner. A debrief chat
-    session and its bound interview_record always belong to the same user, so we
-    match ``InterviewRecord.user_id == owner_pk`` directly (pk==pk) — context
-    assembly passes the chat session's owner pk straight through.
+    @property
+    def question_catalog(self) -> list[tuple[int, str]]:
+        return [(question.index, question.question) for question in self.questions]
 
-    Empty string if the record doesn't exist, doesn't belong to the user, or
-    has no usable data. Empty is fine — caller (the pipeline) just skips the
-    [Record Context] slot.
-    """
+
+def load_interview_reference(
+    interview_id: str,
+    owner_pk: int,
+) -> InterviewReference | None:
+    """Load one owner-scoped record and all QA rows in two queries."""
     db: Session = SessionLocal()
     try:
         record = (
@@ -77,160 +71,155 @@ def build_interview_reference(interview_id: str, owner_pk: int) -> str:
             .first()
         )
         if record is None:
-            return ""
+            return None
         qa_rows = (
             db.query(InterviewQA)
             .filter(InterviewQA.record_id == interview_id)
             .order_by(InterviewQA.order_idx)
             .all()
         )
-        return _render(record, qa_rows)
+        return InterviewReference(
+            record_id=record.id,
+            title=record.title or "未命名",
+            tag=record.tag or "",
+            source=record.source or "",
+            status=record.status or "",
+            analysis_json=record.analysis_json,
+            resume_text=(record.resume_text_snapshot or "").strip(),
+            audio_file_asset_id=record.audio_file_asset_id,
+            resume_id=record.resume_id,
+            resume_file_asset_id=record.resume_file_asset_id,
+            jd_file_asset_id=record.jd_file_asset_id,
+            questions=tuple(_question_from_row(row) for row in qa_rows),
+        )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("build_interview_reference failed for %s: %s", interview_id, exc)
-        return ""
+        logger.warning("load_interview_reference failed for %s: %s", interview_id, exc)
+        return None
     finally:
         db.close()
 
 
-def _render(record: InterviewRecord, qa_rows: list[InterviewQA]) -> str:
-    lines: list[str] = []
-    header_bits = [f"# 当前复盘的面试: {record.title or '未命名'}"]
-    meta_bits = [f"record_id: {record.id}"]
-    if record.tag:
-        meta_bits.append(f"标签: {record.tag}")
-    if record.source:
-        meta_bits.append(f"来源: {record.source}")
-    if record.status:
-        meta_bits.append(f"状态: {record.status}")
-    header_bits.append(" · ".join(meta_bits))
-    header_bits.append(
-        "（以下材料由系统在每轮对话开始时自动注入；如需完整原文，"
-        f"前端/工具调用 GET /api/v1/interview-records/{record.id}）"
+def render_interview_reference(
+    reference: InterviewReference,
+    question_indexes: tuple[int, ...] | list[int] = (),
+) -> str:
+    """Render overview plus full details for every explicitly selected index.
+
+    There is deliberately no item-count limit. The shared context pipeline
+    applies its token budget after rendering, with focused details placed first
+    so an oversized resume or report cannot displace the requested evidence.
+    """
+    meta = [f"record_id: {reference.record_id}"]
+    if reference.tag:
+        meta.append(f"标签: {reference.tag}")
+    if reference.source:
+        meta.append(f"来源: {reference.source}")
+    if reference.status:
+        meta.append(f"状态: {reference.status}")
+    sections = [
+        f"# 当前复盘的面试: {reference.title}\n" + " · ".join(meta),
+        _render_question_details(reference.questions, question_indexes),
+        build_report_context(reference.analysis_json),
+        build_question_index(reference.questions),
+    ]
+
+    if reference.resume_text:
+        sections.append(f"## 候选人简历全文\n{reference.resume_text}")
+
+    uploads = _render_uploads(reference)
+    if uploads:
+        sections.append(uploads)
+    return "\n\n".join(section for section in sections if section).strip()
+
+
+def build_interview_reference(
+    interview_id: str,
+    owner_pk: int,
+    question_indexes: tuple[int, ...] | list[int] = (),
+) -> str:
+    """Compatibility wrapper used by automatic debrief context injection."""
+    reference = load_interview_reference(interview_id, owner_pk)
+    return render_interview_reference(reference, question_indexes) if reference else ""
+
+
+def _question_from_row(row: InterviewQA) -> InterviewQuestionReference:
+    return InterviewQuestionReference(
+        order_idx=row.order_idx,
+        phase=row.phase or "",
+        question=row.question or "",
+        answer=row.answer or "",
+        score=row.score,
+        critique=row.critique or "",
+        improved_answer=row.improved_answer or "",
+        tags=tuple(_parse_tags(row.key_points_json)),
     )
-    lines.append("\n".join(header_bits))
 
-    analysis = _parse_analysis(record.analysis_json)
-    overall = analysis.get("overall") if isinstance(analysis, dict) else None
 
-    if isinstance(overall, dict):
-        score = overall.get("score")
-        summary = (overall.get("summary") or overall.get("feedback") or "").strip()
-        strengths = overall.get("strengths") or []
-        weaknesses = overall.get("weaknesses") or []
-        plan = overall.get("improvement_plan") or []
+def _render_question_details(
+    questions: tuple[InterviewQuestionReference, ...],
+    question_indexes: tuple[int, ...] | list[int],
+) -> str:
+    by_index = {question.index: question for question in questions}
+    selected = [
+        by_index[index]
+        for index in dict.fromkeys(question_indexes)
+        if index in by_index
+    ]
+    if not selected:
+        return ""
 
-        ovr_bits = ["## 综合表现"]
-        if isinstance(score, (int, float)):
-            ovr_bits.append(f"- 评分: {score}")
-        if summary:
-            ovr_bits.append(f"- 评语: {summary}")
-        if strengths:
-            ovr_bits.append("- 亮点:")
-            for s in strengths[:5]:
-                ovr_bits.append(f"  - {str(s).strip()}")
-        if weaknesses:
-            ovr_bits.append("- 待提升:")
-            for w in weaknesses[:5]:
-                ovr_bits.append(f"  - {str(w).strip()}")
-        if plan:
-            ovr_bits.append("- 改进计划:")
-            for p in plan[:5]:
-                step = (
-                    str(p.get("area") or p.get("text") or "").strip()
-                    if isinstance(p, dict)
-                    else str(p).strip()
-                )
-                if step:
-                    ovr_bits.append(f"  - {step}")
-        lines.append("\n".join(ovr_bits))
-
-    if qa_rows:
-        # Light-touch QA index: just question + score. Full answers /
-        # critiques / improved-answers stay in the database and get pulled
-        # on demand by the agent's RAG layer when a specific Q is discussed.
-        ranked = sorted(qa_rows, key=lambda r: r.order_idx)[:_PER_QUESTION_TAKE]
-        qa_bits = [
-            f"## 题目清单（共 {len(qa_rows)} 题，列出前 {len(ranked)} 题；详情按需通过 RAG 拉取）"
+    sections = ["## 本轮重点题目（完整内容）"]
+    for question in selected:
+        lines = [
+            f"### Q{question.index}"
+            + (f" · {question.phase}" if question.phase else ""),
+            f"- 问题: {question.question or '（空）'}",
+            f"- 候选人回答: {question.answer or '（未作答）'}",
+            f"- 评分: {_score_text(question.score)}",
         ]
-        for qa in ranked:
-            q = (qa.question or "").strip()
-            score_str = f" · 评分 {qa.score}" if qa.score is not None else ""
-            header = f"- Q{qa.order_idx + 1}{score_str}"
-            if q:
-                header += f": {_truncate(q, 180)}"
-            qa_bits.append(header)
-        lines.append("\n".join(qa_bits))
+        if question.critique:
+            lines.append(f"- 点评: {question.critique}")
+        if question.improved_answer:
+            lines.append(f"- 优化回答: {question.improved_answer}")
+        if question.tags:
+            lines.append(f"- 知识点: {'、'.join(question.tags)}")
+        sections.append("\n".join(lines))
+    return "\n\n".join(sections)
 
-    # Debrief 摘要——分析 pipeline 末尾由 LLM 生成的 200-400 字浓缩版。
-    # 用它替代原始转录全文（转录太大，会把 prompt cache 撑爆；具体内容
-    # 想看时通过 GET /interview-records/{id} 的 transcript 字段拉，或者
-    # 让 agent 走 RAG）。debrief_summary 为 NULL 时（mock 模式 / 旧记录）
-    # 退化到截断转录，保证最低限度的对话上下文。
-    if (record.debrief_summary or "").strip():
-        lines.append(f"## 本次面试浓缩摘要\n{record.debrief_summary.strip()}")
-    else:
-        from app.services.interview.interview_record_service import (
-            interview_record_service,
+
+def _render_uploads(reference: InterviewReference) -> str:
+    lines: list[str] = []
+    if reference.audio_file_asset_id:
+        lines.append(
+            f"- 音视频文件已上传 (file_asset_id={reference.audio_file_asset_id})"
         )
-
-        full = interview_record_service.get_transcript_text(record.id).strip()
-        if full and len(full) <= _TRANSCRIPT_HARD_CAP_CHARS:
-            lines.append(
-                f"## 原始转录（debrief_summary 缺失，回退到全文，{len(full)} 字符）\n{full}"
-            )
-        elif full:
-            head = full[:_TRANSCRIPT_HARD_CAP_CHARS]
-            lines.append(
-                f"## 原始转录（debrief_summary 缺失，节选前 {_TRANSCRIPT_HARD_CAP_CHARS}/{len(full)} 字符）\n{head}"
-            )
-
-    # 简历全文——围绕简历问问题是绝大多数面试的主线，所以这块对回答质量
-    # 收益最高。``resume_text_snapshot`` 由上传 pipeline 时一次性生成
-    # 并 freeze 在 record 行上（即便后续用户删原始文件也不丢）。空字符串
-    # 表示该 record 当时没传简历——跳过即可。
-    resume_snapshot = (record.resume_text_snapshot or "").strip()
-    if resume_snapshot:
-        lines.append(f"## 候选人简历全文\n{resume_snapshot}")
-
-    # Upload pointers — tell the model what was provided. Actual file bodies
-    # are reachable via the file-assets API if a tool needs them; this is just
-    # disclosure.
-    upload_bits = []
-    if record.audio_file_asset_id:
-        upload_bits.append(
-            f"- 音视频文件已上传 (file_asset_id={record.audio_file_asset_id})"
-        )
-    if record.resume_id:
-        upload_bits.append(f"- 使用个人简历 (resume_id={record.resume_id})")
-    if record.resume_file_asset_id:
-        upload_bits.append(
-            f"- 简历已上传 (file_asset_id={record.resume_file_asset_id})"
-        )
-    if record.jd_file_asset_id:
-        upload_bits.append(
-            f"- 岗位 JD 已上传 (file_asset_id={record.jd_file_asset_id})"
-        )
-    if upload_bits:
-        lines.append("## 关联文件\n" + "\n".join(upload_bits))
-
-    return "\n\n".join(lines).strip()
+    if reference.resume_id:
+        lines.append(f"- 使用个人简历 (resume_id={reference.resume_id})")
+    if reference.resume_file_asset_id:
+        lines.append(f"- 简历已上传 (file_asset_id={reference.resume_file_asset_id})")
+    if reference.jd_file_asset_id:
+        lines.append(f"- 岗位 JD 已上传 (file_asset_id={reference.jd_file_asset_id})")
+    return "## 关联文件\n" + "\n".join(lines) if lines else ""
 
 
-def _parse_analysis(raw: str | None) -> dict[str, Any]:
-    if not raw:
-        return {}
+def _parse_tags(value: str | None) -> list[str]:
+    if not value:
+        return []
     try:
-        parsed = json.loads(raw)
-        return parsed if isinstance(parsed, dict) else {}
-    except json.JSONDecodeError:
-        return {}
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []
 
 
-def _truncate(s: str, n: int) -> str:
-    s = s.strip().replace("\r\n", "\n")
-    if len(s) <= n:
-        return s
-    return s[:n].rstrip() + "…"
+def _score_text(value: float | None) -> str:
+    return "未评分" if value is None else f"{value:g}/10"
 
 
-__all__ = ["build_interview_reference"]
+__all__ = [
+    "InterviewQuestionReference",
+    "InterviewReference",
+    "build_interview_reference",
+    "load_interview_reference",
+    "render_interview_reference",
+]

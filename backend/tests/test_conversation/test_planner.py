@@ -103,6 +103,35 @@ async def test_direct_chat_clears_stray_intents(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_planner_resolves_multiple_debrief_questions_and_validates_indexes(
+    monkeypatch,
+):
+    fake = _LLM(
+        {
+            "needs_knowledge_retrieval": False,
+            "intents": [],
+            "referenced_question_indexes": [5, 2, 5, 99],
+        }
+    )
+    _patch(monkeypatch, fake)
+
+    plan = await planner.plan_query(
+        user_message="比较索引和超时那两道题的回答",
+        recent_turns=[],
+        interview_questions=[
+            (2, "为什么使用数据库索引？"),
+            (5, "服务超时时如何处理？"),
+        ],
+    )
+
+    assert plan.referenced_question_indexes == [5, 2]
+    prompt = fake.calls[0][0]
+    assert "[Interview Questions]" in prompt
+    assert "Q2: 为什么使用数据库索引？" in prompt
+    assert "Q5: 服务超时时如何处理？" in prompt
+
+
+@pytest.mark.asyncio
 async def test_empty_retrieval_plan_uses_original_query(monkeypatch):
     fake = _LLM({"needs_knowledge_retrieval": True, "intents": []})
     _patch(monkeypatch, fake)
@@ -167,5 +196,6 @@ async def test_prompt_advertises_only_current_schema(monkeypatch):
     assert '"alternate_query"' in prompt
     assert "Chinese ↔ English" in prompt
     assert '"required_terms"' in prompt
+    assert '"referenced_question_indexes"' in prompt
     assert '"dense_query"' not in prompt
     assert '"sub_queries"' not in prompt

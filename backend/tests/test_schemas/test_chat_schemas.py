@@ -1,26 +1,41 @@
-"""Wire-format contract tests for ``app.schemas.chat`` Pydantic models.
-
-These pin the *shape* of responses the API ships to the frontend so a BE-only
-rename or type drift trips at the test run, not in a user's browser.
-
-The mock-interview DTOs are mirrored 1:1 by the TS interfaces in
-``frontend/src/types/api.ts`` — until an OpenAPI-generated client lands, that
-pair must be edited together.
-"""
+"""Wire-format contracts shared by the mock API and frontend types."""
 
 from __future__ import annotations
 
 import pytest
-from app.schemas.chat import MockAnswerRequest, MockAnswerResp, MockStage, MockStartResp
 from pydantic import ValidationError
 
-# ── MockAnswerResp ───────────────────────────────────────────────────────
+from app.schemas.chat import (
+    MockAnswerRequest,
+    MockAnswerResp,
+    MockLiveStateResp,
+    MockStartRequest,
+    MockStartResp,
+)
 
-_VALID_ANSWER_RESP = {
-    "interviewer_message": "好的。能讲讲你最近做的一个项目吗？",
-    "current_stage_key": "resume_project_deep_dive",
-    "is_ready_to_finish": False,
+
+_MESSAGE = {
+    "id": 42,
+    "speaker": "interviewer",
+    "text": "好的。能讲讲你最近做的一个项目吗？",
 }
+
+
+def test_mock_start_request_defaults_to_twenty_questions():
+    base = {"resume_id": "rsm_1", "jd_text": "这是满足长度要求的后端工程师岗位说明文本"}
+    assert MockStartRequest(**base).target_question_count == 20
+    assert MockStartRequest(**base, target_question_count=30).target_question_count == 30
+    with pytest.raises(ValidationError):
+        MockStartRequest(**base, target_question_count=25)
+
+
+def test_mock_start_request_requires_resume_and_meaningful_jd():
+    with pytest.raises(ValidationError):
+        MockStartRequest(jd_text="这是满足长度要求的后端工程师岗位说明文本")
+    with pytest.raises(ValidationError):
+        MockStartRequest(resume_id="rsm_1", jd_text="太短")
+    with pytest.raises(ValidationError):
+        MockStartRequest(resume_id="   ", jd_text="这是满足长度要求的后端工程师岗位说明文本")
 
 
 def test_mock_answer_request_requires_concurrency_token():
@@ -30,62 +45,27 @@ def test_mock_answer_request_requires_concurrency_token():
     assert request.question_message_id == 42
 
 
-def test_mock_answer_resp_accepts_full_valid_payload():
-    resp = MockAnswerResp(**_VALID_ANSWER_RESP)
-    assert resp.current_stage_key == "resume_project_deep_dive"
-    assert resp.is_ready_to_finish is False
-
-
-def test_mock_answer_resp_matches_endpoint_dict_shape():
-    """The /answer endpoint returns exactly these three fields — round-trip
-    through model_dump to guard against drift with the response_model."""
-    resp = MockAnswerResp(**_VALID_ANSWER_RESP)
-    # question_message_id (MOCK-3 concurrency token) defaults None when the
-    # endpoint dict omits it.
-    assert resp.model_dump() == {**_VALID_ANSWER_RESP, "question_message_id": None}
-
-
-@pytest.mark.parametrize(
-    "missing",
-    [
-        "interviewer_message",
-        "current_stage_key",
-        "is_ready_to_finish",
-    ],
-)
-def test_mock_answer_resp_requires_all_fields(missing):
-    payload = {k: v for k, v in _VALID_ANSWER_RESP.items() if k != missing}
-    with pytest.raises(ValidationError):
-        MockAnswerResp(**payload)
-
-
-# ── MockStartResp / MockStage ────────────────────────────────────────────
-
-
-def test_mock_start_resp_accepts_full_valid_payload():
-    payload = {
-        "interview_record_id": "ir_x",
-        "conversation_id": "c_x",
-        "runtime_id": "mir_x",
-        "current_stage_key": "self_intro",
-        "current_question": "你好，我们开始吧。先请你做一个简单的自我介绍。",
-        "plan_phases": [
-            {"key": "self_intro", "title": "自我介绍"},
-            {"key": "candidate_questions", "title": "反问"},
-        ],
+def test_mock_answer_response_contains_only_live_ui_fields():
+    response = MockAnswerResp(message=_MESSAGE, end_suggested=False)
+    assert response.model_dump() == {
+        "message": _MESSAGE,
+        "end_suggested": False,
     }
-    resp = MockStartResp(**payload)
-    assert resp.runtime_id == "mir_x"
-    assert resp.plan_phases[0].key == "self_intro"
-    assert resp.model_dump() == {**payload, "question_message_id": None}
 
 
-@pytest.mark.parametrize("missing", ["key", "title"])
-def test_mock_stage_requires_both_fields(missing):
-    payload = {
-        k: v
-        for k, v in {"key": "self_intro", "title": "自我介绍"}.items()
-        if k != missing
-    }
-    with pytest.raises(ValidationError):
-        MockStage(**payload)
+def test_mock_start_response_contains_only_record_and_opening_message():
+    response = MockStartResp(record_id="ir_x", message=_MESSAGE)
+    assert response.model_dump() == {"record_id": "ir_x", "message": _MESSAGE}
+
+
+def test_mock_live_state_accepts_complete_conversation():
+    state = MockLiveStateResp(
+        messages=[
+            _MESSAGE,
+            {"id": 43, "speaker": "candidate", "text": "我的回答"},
+        ]
+    )
+    assert [message.speaker for message in state.messages] == [
+        "interviewer",
+        "candidate",
+    ]

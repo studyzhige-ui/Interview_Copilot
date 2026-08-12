@@ -64,9 +64,11 @@ from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.db.types import utc_now
 from app.models.chat import Conversation, ConversationMessage
+from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
 from app.models.user import User
 from app.prompts.memory import DREAMING_PROMPT
+from app.services.interview.analysis_context import build_analysis_context
 from app.services.memory import (
     _metrics,
     memory_ability_state_service,
@@ -401,6 +403,12 @@ def _dream_for_record_locked(
             # Snapshot reads share the worker's db so they're consistent with
             # the writes that follow in the same transaction.
             snapshot = _load_snapshot_for_dream(user_id, db=db)
+            qa_rows = (
+                db.query(InterviewQA)
+                .filter(InterviewQA.record_id == record_id)
+                .order_by(InterviewQA.order_idx)
+                .all()
+            )
             prompt = DREAMING_PROMPT.format(
                 record_id=record_id,
                 user_profile=snapshot["user_profile"] or "（空）",
@@ -408,7 +416,10 @@ def _dream_for_record_locked(
                 ability_index="\n".join(snapshot["ability_index"])
                 or "（暂无能力状态）",
                 record_messages=_format_record_messages(messages),
-                record_debrief_summary=(record.debrief_summary or "（无客观摘要）"),
+                record_analysis_context=(
+                    build_analysis_context(record.analysis_json, qa_rows)
+                    or "（无客观分析）"
+                ),
             )
 
             try:

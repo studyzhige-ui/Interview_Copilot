@@ -10,8 +10,8 @@ from app.prompts.chat import (
     build_query_planner_system_prompt,
 )
 from app.prompts.interview import (
-    DEBRIEF_SUMMARY_PROMPT,
     MOCK_INTERVIEW_NEXT_TURN_PROMPT,
+    MOCK_INTERVIEW_PLAN_PROMPT,
     MOCK_INTERVIEW_PREFIX,
 )
 from app.prompts.memory import (
@@ -21,9 +21,8 @@ from app.prompts.memory import (
 )
 from app.prompts.resume import RESUME_PARSE_PROMPT
 from app.prompts.voice_analysis import (
-    BATCH_ANALYSIS_PROMPT,
-    PER_QUESTION_ANALYSIS_PROMPT,
     QA_EXTRACTION_PROMPT,
+    QUESTION_ANALYSIS_PROMPT,
     SYNTHESIS_PROMPT,
 )
 
@@ -33,26 +32,20 @@ def test_all_prompt_templates_render() -> None:
         CONVERSATION_COMPACTION_PROMPT.format(
             old_summary="old", new_conversation="new"
         ),
-        DEBRIEF_SUMMARY_PROMPT.format(
-            title="title",
-            tag="tag",
-            overall_text="analysis",
-            qa_lines="questions",
-            transcript_excerpt="transcript",
-        ),
         MOCK_INTERVIEW_PREFIX.format(resume="resume", jd="jd", style="style"),
+        MOCK_INTERVIEW_PLAN_PROMPT.format(
+            resume="resume",
+            jd="jd",
+            style="style",
+        ),
         MOCK_INTERVIEW_NEXT_TURN_PROMPT.format(
             prefix="prefix",
             stage_list="stages",
             current_stage="technical",
-            recent_dialog="dialog",
-            asked_trunc=40,
-            asked_questions="questions",
-            questions_in_current_stage=2,
-            min_questions=2,
-            max_questions=4,
-            transition_rule="可推进",
             response_language="简体中文",
+            length_warning_active="false",
+            pacing_instruction="自然推进",
+            conversation_history="dialog",
             user_answer="answer",
             stage_keys_hint="technical | candidate_questions",
         ),
@@ -68,7 +61,7 @@ def test_all_prompt_templates_render() -> None:
             learning_strategy="strategy",
             ability_index="abilities",
             record_messages="messages",
-            record_debrief_summary="summary",
+            record_analysis_context="summary",
         ),
         DOC_COMPACT_PROMPT.format(
             max_lines=10,
@@ -79,34 +72,24 @@ def test_all_prompt_templates_render() -> None:
         ),
         RESUME_PARSE_PROMPT.format(resume_text="resume"),
         QA_EXTRACTION_PROMPT.format(transcript="transcript", resume_hint="resume"),
-        PER_QUESTION_ANALYSIS_PROMPT.format(
-            resume_section="resume",
-            jd_section="jd",
-            context_section="context",
-            index=1,
-            total=1,
-            question="question",
-            answer="answer",
-        ),
-        SYNTHESIS_PROMPT.format(
-            resume_context="resume",
-            jd_context="jd",
-            per_question_summary="analysis",
-        ),
-        BATCH_ANALYSIS_PROMPT.format(
+        QUESTION_ANALYSIS_PROMPT.format(
             resume_context="resume",
             jd_context="jd",
             prev_ctx="previous",
             batch_block="batch",
             next_ctx="next",
         ),
+        SYNTHESIS_PROMPT.format(
+            resume_context="resume",
+            jd_context="jd",
+            per_question_summary="analysis",
+        ),
     ]
 
     assert all(rendered)
-    assert '"sections"' in rendered[7]
-    assert '"qa_pairs"' in rendered[8]
-    assert '"patches"' in rendered[4]
-    assert '"patches"' in rendered[5]
+    assert any('"sections"' in prompt for prompt in rendered)
+    assert any('"qa_pairs"' in prompt for prompt in rendered)
+    assert sum('"patches"' in prompt for prompt in rendered) >= 2
 
 
 def test_query_planner_memory_privacy_contract() -> None:

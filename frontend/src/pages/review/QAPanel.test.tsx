@@ -27,7 +27,6 @@ const detail: InterviewRecordDetail = {
   jd_file_asset_id: null,
   transcript: null,
   transcript_segments: null,
-  interview_plan: null,
   analysis: null,
   error_message: null,
   qa: [
@@ -37,6 +36,18 @@ const detail: InterviewRecordDetail = {
       phase: 'technical',
       question: '原问题',
       answer: '原答案',
+      is_follow_up: false,
+      follow_up_depth: 0,
+      grounding_refs: [],
+      key_points: [],
+      answer_input_mode: 'text',
+    },
+    {
+      id: 'qa-2',
+      order_idx: 1,
+      phase: 'project',
+      question: '第二个问题',
+      answer: '第二个答案',
       is_follow_up: false,
       follow_up_depth: 0,
       grounding_refs: [],
@@ -74,5 +85,70 @@ describe('QAPanel editing', () => {
         question: '原问题',
       });
     });
+  });
+
+  it('distinguishes unassessed dimensions from a real zero score', () => {
+    const unassessed: InterviewRecordDetail = {
+      ...detail,
+      analysis: {
+        overall: {
+          score: null,
+          summary: '没有可用评分证据。',
+          strengths: [],
+          weaknesses: [],
+          key_growth_areas: [],
+        },
+        phase_summary: [{
+          phase: 'technical',
+          phase_name: '技术基础',
+          score: null,
+          question_count: 1,
+          summary: '本阶段没有可用评分证据。',
+        }],
+        skill_radar: { 基础知识: null },
+      },
+    };
+    const { rerender } = render(<QAPanel detail={unassessed} loading={false} />);
+    expect(screen.getAllByText('未评分').length).toBeGreaterThan(0);
+    expect(screen.getByText('未考察')).toBeInTheDocument();
+
+    const zeroScore: InterviewRecordDetail = {
+      ...unassessed,
+      analysis: {
+        ...unassessed.analysis,
+        overall: { ...unassessed.analysis?.overall, score: 0 },
+        phase_summary: [{
+          phase: 'technical',
+          phase_name: '技术基础',
+          score: 0,
+          question_count: 1,
+          summary: '回答存在关键错误。',
+        }],
+        skill_radar: { 基础知识: 0 },
+      },
+    };
+    rerender(<QAPanel detail={zeroScore} loading={false} />);
+    expect(screen.getByText('0')).toBeInTheDocument();
+    expect(screen.getAllByText('0分')).toHaveLength(2);
+    expect(screen.queryByText('未考察')).not.toBeInTheDocument();
+  });
+
+  it('lets multiple QA cards enter the same question-reference list', () => {
+    const onToggleQuestion = vi.fn();
+    render(
+      <QAPanel
+        detail={detail}
+        loading={false}
+        onToggleQuestion={onToggleQuestion}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'QA 对' }));
+
+    const buttons = screen.getAllByRole('button', { name: '追问本题' });
+    fireEvent.click(buttons[0]);
+    fireEvent.click(buttons[1]);
+
+    expect(onToggleQuestion).toHaveBeenNthCalledWith(1, 1);
+    expect(onToggleQuestion).toHaveBeenNthCalledWith(2, 2);
   });
 });

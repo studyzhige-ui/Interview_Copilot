@@ -20,6 +20,7 @@ class QueryPlan(BaseModel):
     needs_knowledge_retrieval: bool = False
     intents: list[SearchIntent] = Field(default_factory=list)
     load_strategy: bool = False
+    referenced_question_indexes: list[int] = Field(default_factory=list)
     planner_failed: bool = False
 
 
@@ -77,6 +78,7 @@ async def plan_query(
     recent_turns: list[dict],
     learning_strategy_description: str = "",
     global_memory_on: bool = True,
+    interview_questions: list[tuple[int, str]] | None = None,
 ) -> QueryPlan:
     memory_slot = (
         "[Available Memory Files]\nLearning-strategy description: "
@@ -92,6 +94,14 @@ async def plan_query(
     parts = [system_prompt]
     if memory_slot:
         parts.append(memory_slot)
+    available_question_indexes = {
+        index for index, _question in (interview_questions or []) if index > 0
+    }
+    if interview_questions:
+        question_lines = "\n".join(
+            f"Q{index}: {question}" for index, question in interview_questions
+        )
+        parts.append(f"[Interview Questions]\n{question_lines}")
     recent_text = _format_recent_turns(recent_turns)
     parts.append(f"[Recent Turns]\n{recent_text}")
     parts.append(f"[Current Query]\n{user_message}")
@@ -122,6 +132,13 @@ async def plan_query(
             plan.intents = []
         if not global_memory_on:
             plan.load_strategy = False
+        plan.referenced_question_indexes = list(
+            dict.fromkeys(
+                index
+                for index in plan.referenced_question_indexes
+                if index in available_question_indexes
+            )
+        )
         return plan
     except Exception as exc:  # noqa: BLE001
         logger.warning("Query planner failed; using original query: %s", exc)

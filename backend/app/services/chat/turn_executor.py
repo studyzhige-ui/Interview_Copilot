@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import socket
@@ -20,6 +21,10 @@ from app.models.chat import Conversation, ConversationMessage
 from app.models.conversation_turn import ConversationTurn
 from app.models.user import User
 from app.services.chat.chat_history_service import transcript_service
+from app.services.chat.attachment_service import (
+    ResolvedAttachment,
+    attachment_message_blocks,
+)
 from app.services.chat.turn_event_buffer import turn_event_buffer
 
 logger = logging.getLogger(__name__)
@@ -33,6 +38,8 @@ class TurnExecution:
     username: str
     mode: str
     message: str
+    question_indexes: tuple[int, ...] = ()
+    attachments: tuple[dict, ...] = ()
 
 
 def create_turn(
@@ -42,6 +49,8 @@ def create_turn(
     user_id: int,
     mode: str,
     message: str,
+    question_indexes: list[int] | None = None,
+    attachments: list[ResolvedAttachment] | None = None,
 ) -> ConversationTurn:
     locked = (
         db.query(Conversation)
@@ -61,11 +70,14 @@ def create_turn(
         active = db.get(ConversationTurn, locked.active_turn_id)
         if active and active.status in {"pending", "running"}:
             raise ValueError(active.id)
+    resolved_attachments = list(attachments or [])
     row = ConversationTurn(
         conversation_id=locked.id,
         user_id=user_id,
         mode=mode,
         message=message,
+        question_indexes_json=list(dict.fromkeys(question_indexes or [])),
+        attachments_json=[item.snapshot() for item in resolved_attachments],
         status="pending",
     )
     max_seq = (
@@ -82,6 +94,10 @@ def create_turn(
             seq=row.user_message_seq,
             role="User",
             content=message,
+            content_blocks_json=json.dumps(
+                attachment_message_blocks(resolved_attachments, message),
+                ensure_ascii=False,
+            ),
         )
     )
     db.add(row)
@@ -171,6 +187,12 @@ def _claim(turn_id: str) -> TurnExecution | None:
             username=username,
             mode=row.mode,
             message=row.message,
+            question_indexes=tuple(row.question_indexes_json or []),
+            attachments=tuple(
+                dict(item)
+                for item in (row.attachments_json or [])
+                if isinstance(item, dict)
+            ),
         )
         db.commit()
         return result
@@ -275,6 +297,8 @@ async def execute_turn(turn_id: str) -> None:
             user_id=turn.username,
             session_id=turn.conversation_id,
             user_message=turn.message,
+            question_indexes=turn.question_indexes,
+            attachments=turn.attachments,
             strategy=strategy,
             turn_id=turn_id,
         )

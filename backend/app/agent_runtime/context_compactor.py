@@ -100,11 +100,22 @@ class QueryLoopCompactor:
     lists and dicts — the original messages list is never modified.
     """
 
-    def __init__(self, profile: ModelProfile, user_id: str | None = None):
+    def __init__(
+        self,
+        profile: ModelProfile,
+        user_id: str | None = None,
+        *,
+        task_anchor: dict | None = None,
+    ):
         self.profile = profile
         # Owner of the conversation — the autocompact summarizer resolves the
         # platform worker model; user answer-model credentials never apply.
         self.user_id = user_id
+        # Exact in-memory user message that started this turn.  Identity is
+        # deliberately used instead of text matching: two turns may contain
+        # identical text, and loop-generated user nudges can appear after the
+        # real task.  The marker never enters the provider payload.
+        self.task_anchor = task_anchor
         self.cheap_prepass_threshold = get_cheap_prepass_threshold(profile)
         self.blocking_limit = get_blocking_limit(profile)
         self.has_attempted_reactive_compact: bool = False
@@ -195,22 +206,44 @@ class QueryLoopCompactor:
     ) -> list[dict]:
         """Summarize the conversation body into ONE reference-only summary msg.
 
-        Preserves the leading system block + the task-defining user query, then
-        replaces the older turns with a single LLM summary, keeping the last
-        ``keep_last`` messages verbatim.
+        Preserves the leading system block + the *current* task-defining user
+        query, then replaces older history/work with a single LLM summary,
+        keeping the last ``keep_last`` post-task messages verbatim.
         """
         head_end = 0
         while head_end < len(messages) and messages[head_end].get("role") == "system":
             head_end += 1
-        if head_end < len(messages) and messages[head_end].get("role") == "user":
-            head_end += 1
+        task_index = next(
+            (
+                index
+                for index, message in enumerate(messages)
+                if message is self.task_anchor
+            ),
+            None,
+        )
+        if task_index is None:
+            # Compatibility fallback for direct compactor callers.  The latest
+            # user message is a safer task anchor than the first historical
+            # user turn, which was the old source of cross-turn task drift.
+            task_index = next(
+                (
+                    index
+                    for index in range(len(messages) - 1, head_end - 1, -1)
+                    if messages[index].get("role") == "user"
+                ),
+                None,
+            )
 
-        body = messages[head_end:]
-        if len(body) <= keep_last:
+        post_task_start = task_index + 1 if task_index is not None else head_end
+        tail_start = max(post_task_start, len(messages) - keep_last)
+        tail = messages[tail_start:]
+        to_summarize = [
+            message
+            for index, message in enumerate(messages)
+            if index >= head_end and index != task_index and index < tail_start
+        ]
+        if not to_summarize:
             return messages
-
-        to_summarize = body[:-keep_last]
-        tail = body[-keep_last:]
         conversation = "\n\n".join(
             f"{m.get('role', '?')}: {_message_text(m)}" for m in to_summarize
         )
@@ -231,7 +264,8 @@ class QueryLoopCompactor:
             len(to_summarize),
             len(tail),
         )
-        return messages[:head_end] + [summary_msg] + tail
+        task = [messages[task_index]] if task_index is not None else []
+        return messages[:head_end] + [summary_msg] + task + tail
 
     def should_compact(self, prompt_tokens: int) -> bool:
         return prompt_tokens >= self.cheap_prepass_threshold

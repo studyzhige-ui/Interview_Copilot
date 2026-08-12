@@ -16,6 +16,7 @@ from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
 from app.models.chat import Conversation, ConversationMessage, generate_uuid
 from app.models.user import User
+from app.conversation.runtime_profile import runtime_profile_for_type
 from app.schemas.chat import (
     MemoryRecallToggleBody,
     SessionCreateRequest,
@@ -88,6 +89,7 @@ def create_chat_session(
             user_id=resolve_user_pk(db, current_user.username),
             title=title,
             type=conv_type,
+            mode=runtime_profile_for_type(conv_type).default_mode,
             subject_type=subject_type,
             subject_id=subject_id,
         )
@@ -140,7 +142,7 @@ def list_conversations(
             session_id=row.id,
             title=row.title or "新的面试对话",
             type=row.type or "general",
-            mode=row.mode or "chat",
+            mode=runtime_profile_for_type(row.type).resolve_mode(row.mode, None),
             state_summary=_session_list_label(row),
             turn_count=row.turn_count or 0,
             updated_at=row.updated_at.isoformat() if row.updated_at else "",
@@ -189,6 +191,21 @@ def delete_chat_session(
                 status_code=409, detail="Cannot delete a session with an active turn"
             )
     try:
+        from app.models.knowledge import KnowledgeDocument
+        from app.services.knowledge.knowledge_service import (
+            hard_delete_knowledge_document,
+        )
+
+        scoped_attachments = (
+            db.query(KnowledgeDocument)
+            .filter(
+                KnowledgeDocument.conversation_id == session_id,
+                KnowledgeDocument.source_kind == "chat_attachment",
+            )
+            .all()
+        )
+        for document in scoped_attachments:
+            hard_delete_knowledge_document(db, document, commit=False)
         db.query(ConversationMessage).filter(
             ConversationMessage.conversation_id == session_id
         ).delete(synchronize_session=False)

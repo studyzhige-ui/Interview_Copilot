@@ -45,13 +45,15 @@ Return exactly one JSON object:
     "keywords": [string],
     "required_terms": [string]
   }}],
-  "load_strategy": boolean
+  "load_strategy": boolean,
+  "referenced_question_indexes": [integer]
 }}
 
 Routing rules:
 - Set needs_knowledge_retrieval=true only when answering requires factual or domain knowledge that should be checked against the indexed corpus, such as technical concepts, interview questions, framework behavior, or documentation.
 - Set it false for greetings, account operations, and literal transformations such as repeat, translate, rewrite, or reformat, even when the text being transformed contains technical keywords.
 - Resolve pronouns and follow-ups from [Recent Turns].
+- [Interview Questions], when present, is the complete 1-based question catalog for the current debrief. Resolve references by meaning and conversation context, not only explicit forms such as "Q2". If the current query confidently refers to one or more specific interview questions, return every matching index in referenced_question_indexes. Return [] when none is referenced or the match is ambiguous. This field is independent of knowledge retrieval.
 - When retrieval is true, return one intent per independent information need. Each query must be self-contained, resolve follow-ups, and stay in the user's language.
 - For a natural-language retrieval query, alternate_query must be a concise, meaning-preserving search variant in the other primary corpus language (Chinese ↔ English). Leave it empty only when the query is effectively language-neutral identifiers. It supplements query and never replaces it.
 - keywords contains the highest-signal terms for lexical search in both useful languages. Keep exact identifiers unchanged.

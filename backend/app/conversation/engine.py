@@ -31,6 +31,7 @@ from typing import AsyncGenerator
 
 from app.conversation.events import HarnessEvent
 from app.conversation.query_planner import QueryPlan, plan_query
+from app.conversation.runtime_profile import runtime_profile_for_session
 from app.conversation.strategy import (
     ExecutionStrategy,
     StrategyContext,
@@ -38,6 +39,10 @@ from app.conversation.strategy import (
 )
 from app.core.error_messages import humanize_error
 from app.rag.application.service import rag_service
+from app.rag.application.attachment_evidence import (
+    load_attachment_evidence,
+    merge_retrieval_results,
+)
 from app.rag.domain.models import EMPTY_PLANNER_NO_RETRIEVAL
 from app.services.analytics.telemetry_service import log_interaction_metrics
 from app.services.chat.chat_history_service import transcript_service
@@ -63,12 +68,20 @@ class ConversationEngine:
         user_message: str,
         strategy: ExecutionStrategy,
         turn_id: str | None = None,
+        question_indexes: tuple[int, ...] = (),
+        attachments: tuple[dict, ...] = (),
     ) -> None:
         self.user_id = user_id
         self.session_id = session_id
         self.user_message = user_message
         self.strategy = strategy
         self.turn_id = turn_id
+        self.question_indexes = tuple(
+            dict.fromkeys(index for index in question_indexes if index > 0)
+        )
+        # Durable server-resolved snapshots from ConversationTurn. Raw client
+        # ids never reach the runtime directly.
+        self.attachments = tuple(dict(item) for item in attachments)
 
         self._started_at = time.time()
         self._ctx: StrategyContext | None = None
@@ -225,14 +238,25 @@ class ConversationEngine:
         else:
             universal_ctx = V3MemoryContext()  # truly empty bundle
 
+        # Product-specific context is prepared by the runtime profile.  The
+        # shared kernel therefore has no direct knowledge of interview-record
+        # loading, while Career and Debrief still reuse the same planner,
+        # context budgeting, strategies, and persistence path.
+        meta = await asyncio.to_thread(
+            transcript_service.get_session_meta,
+            self.session_id,
+        )
+        runtime_profile = runtime_profile_for_session(meta)
+        runtime_context = await runtime_profile.prepare_turn(meta)
+
         # Step 2: planner LLM. Inputs are STRUCTURED — recent_turns comes
         # straight from transcript_service, no pre-rendered string wrapper.
         # The planner builds its own prompt internally with the user message
         # at the end (LLMs attend more to the tail of the context).
         #
-        # L2 (agent) mode skips the planner entirely (LLM call AND its two
-        # feeder DB reads): every planner output except ``load_strategy``
-        # is RAG routing — unused, because the agent retrieves via the
+        # L2 (agent) mode skips the planner and recent-turn feeder read:
+        # every planner output except ``load_strategy`` is RAG routing —
+        # unused, because the agent retrieves via the
         # ``search_knowledge`` tool — and the strategy body is available on
         # demand through ``recall_memory(load_strategy=true)``. Paying a
         # serial fast-LLM round-trip per agent turn for one discarded bool
@@ -241,10 +265,6 @@ class ConversationEngine:
         if agent_mode:
             query_plan = QueryPlan()  # null plan: no retrieval, no body load
         else:
-            meta = await asyncio.to_thread(
-                transcript_service.get_session_meta,
-                self.session_id,
-            )
             if meta is None:
                 recent_turns: list[dict] = []
             else:
@@ -259,7 +279,13 @@ class ConversationEngine:
                 recent_turns=recent_turns,
                 learning_strategy_description=universal_ctx.learning_strategy_description,
                 global_memory_on=global_memory_on,
+                interview_questions=runtime_context.planner_question_catalog,
             )
+
+        debrief_reference = runtime_context.render_record_context(
+            self.question_indexes,
+            query_plan.referenced_question_indexes,
+        )
 
         # Step 3: concurrent RAG + memory body loads.
         #
@@ -280,6 +306,20 @@ class ConversationEngine:
             else None
         )
 
+        # Explicit files use the same RetrievalResult → GroundingBuilder →
+        # [K#] source-card path as library RAG. The loader also picks up files
+        # already owned by this conversation, matching mainstream chat-file
+        # persistence without placing them in the global vector index.
+        attachment_task = asyncio.create_task(
+            asyncio.to_thread(
+                load_attachment_evidence,
+                user_id=self.user_id,
+                session_id=self.session_id,
+                query=self.user_message,
+                explicit_attachments=self.attachments,
+            )
+        )
+
         bodies_task = (
             asyncio.create_task(
                 attach_active_bodies(
@@ -298,12 +338,19 @@ class ConversationEngine:
             v3_memory = universal_ctx
 
         knowledge_result = await knowledge_task if knowledge_task else None
+        attachment_bundle = await attachment_task
+        knowledge_result = merge_retrieval_results(
+            attachment_bundle.result if attachment_bundle.documents else None,
+            knowledge_result,
+        )
 
         # RetrievalState is the single source of truth for the turn's RAG
         # flags. When retrieval ran, read everything off it (the facade
         # already stamped planner_failed onto it); when it didn't (direct
         # chat / agent mode), planner_failed still comes from the plan.
-        self._retrieval_attempted = knowledge_task is not None
+        self._retrieval_attempted = (
+            knowledge_task is not None or bool(attachment_bundle.documents)
+        )
         _state = knowledge_result.state if knowledge_result is not None else None
         self._retrieval_hit = bool(_state and _state.retrieval_hit)
         self._fallback_used = bool(_state and _state.fallback_used)
@@ -355,6 +402,8 @@ class ConversationEngine:
             session_id=self.session_id,
             current_query=self.user_message,
             memory_block=v3_memory_block,
+            debrief_reference=debrief_reference,
+            attachment_manifest=attachment_bundle.manifest,
             retrieval_result=knowledge_result,
             user_id=self.user_id,
             model_context_window=_window,
@@ -365,9 +414,13 @@ class ConversationEngine:
             session_id=self.session_id,
             user_message=self.user_message,
             turn_id=self.turn_id,
+            runtime_profile=runtime_profile.name,
             assembled=assembled,
             rewritten_query=None,
-            needs_knowledge_retrieval=query_plan.needs_knowledge_retrieval,
+            needs_knowledge_retrieval=(
+                query_plan.needs_knowledge_retrieval
+                or bool(attachment_bundle.documents)
+            ),
             retrieval_hit=self._retrieval_hit,
             # Cached so the agent strategy doesn't re-query the DB for
             # the same boolean — engine already resolved it for the

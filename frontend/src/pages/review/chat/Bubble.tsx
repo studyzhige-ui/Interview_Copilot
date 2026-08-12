@@ -1,4 +1,5 @@
 import { memo, useCallback, useMemo, useState } from 'react';
+import { FileText } from 'lucide-react';
 import { MarkdownBody } from '@/components/ui/MarkdownBody';
 import { SourceCards, linkifyCitations } from '@/components/chat/SourceCards';
 import type { ContentBlock, Source } from '@/types/api';
@@ -28,6 +29,7 @@ export const Bubble = memo(function Bubble({ role, content, blocks, sources }: {
   sources?: Source[];
 }) {
   const mine = role === 'user';
+  const attachmentBlocks = blocks?.filter((block) => block.type === 'attachment') ?? [];
   // Clicking a [K#] badge highlights + scrolls to its source card.
   const [highlightRef, setHighlightRef] = useState<string | null>(null);
   const citeRefs = useMemo(
@@ -49,7 +51,23 @@ export const Bubble = memo(function Bubble({ role, content, blocks, sources }: {
         ].join(' ')}
       >
         {mine ? (
-          <span className="whitespace-pre-wrap">{content}</span>
+          <>
+            {attachmentBlocks.length > 0 && (
+              <div className="mb-1.5 flex flex-wrap gap-1">
+                {attachmentBlocks.map((attachment) => (
+                  <span
+                    key={attachment.document_id}
+                    className="inline-flex max-w-full items-center gap-1 rounded-md bg-white/15 px-2 py-1 text-[11px]"
+                    title={attachment.title}
+                  >
+                    <FileText size={11} className="shrink-0" />
+                    <span className="truncate">{attachment.title}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+            <span className="whitespace-pre-wrap">{content}</span>
+          </>
         ) : blocks && blocks.length > 0 ? (
           <BlockChain blocks={blocks} citeRefs={citeRefs} onCiteClick={cite} />
         ) : (

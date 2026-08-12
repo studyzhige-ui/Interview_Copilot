@@ -2,7 +2,7 @@
 
 Drives an InterviewRecord from `pending` to `completed`. Same orchestrator for
 both sources:
-  - source='upload': WhisperX ASR → LLM Q&A extraction → per-question analysis → synthesis
+  - source='upload': WhisperX ASR → LLM Q&A extraction → shared batch analysis → synthesis
   - source='mock'  : skip ASR/extraction (Q&A is already structured), reuse the
                      rest of the pipeline against the buffered Q&A so the user
                      ends up with the same review experience as upload.
@@ -10,7 +10,7 @@ both sources:
 Side-effects:
   - InterviewRecord.status flips through transcribing / extracting / analyzing
     / completed (or failed) — SSE consumers pick this up.
-  - InterviewRecord.analyzed_qa_count increments after each per-question call,
+  - InterviewRecord.analyzed_qa_count increments after each analyzed batch,
     enabling fine-grained progress in the SSE stream.
   - Per-question rows live in InterviewQA, addressed by record_id + order_idx.
 
@@ -35,8 +35,6 @@ from app.db.types import utc_now
 from app.models.chat import Conversation, ConversationMessage
 from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
-from app.models.interview_transcript import InterviewTranscript
-from app.prompts.interview import DEBRIEF_SUMMARY_PROMPT
 from app.services.interview.interview_record_service import (
     STATUS_ANALYZING,
     STATUS_COMPLETED,
@@ -150,63 +148,27 @@ class InterviewAnalysisOrchestrator:
             interview_record_service.reset_analyzed_count(record_id)
             interview_record_service.set_status(record_id, in_flight_status)
 
-            # Real per-question progress: each completed Stage-2 question
-            # bumps ``analyzed_qa_count`` so the SSE stream can interpolate
+            # Real question progress: each completed batch bumps
+            # ``analyzed_qa_count`` by its size so SSE can interpolate
             # an honest percent instead of a wall-clock guess. Sync DB write
             # per question is fine here — the worker runs --pool=solo and a
             # question costs an LLM call, so the write is noise.
             def _bump_progress(n: int) -> None:
                 interview_record_service.increment_analyzed_count(record_id, by=n)
 
-            # Branch on source:
-            #   upload: noisy ASR transcript → 3-stage MapReduce pipeline
-            #   mock  : pre-structured Q&A   → batched scoring with sliding window
-            if source == "upload":
-                from app.services.interview.analysis.service import (
-                    analyze_interview,
-                )
+            # Extraction differs by source; once structured Q&A exists, both
+            # sources use the same scoring and synthesis implementation.
+            from app.services.interview.analysis.service import analyze_qa_batched
 
-                report = await analyze_interview(
-                    transcript,
-                    resume_context=resume_text,
-                    jd_context=jd_text,
-                    on_progress=_bump_progress,
-                    user_id=owner_username,
-                    # ANA-1: reuse Stage 1's result — re-extracting inside
-                    # analyze_interview doubled the LLM cost and its
-                    # independently-sampled pairs could mismatch the
-                    # persisted shells (order_idx backfill misattribution).
-                    qa_pairs=qa_pairs,
-                )
-            else:
-                from app.services.interview.analysis.service import (
-                    analyze_mock_qa_batched,
-                )
+            report = await analyze_qa_batched(
+                qa_pairs,
+                resume_context=resume_text,
+                jd_context=jd_text,
+                on_progress=_bump_progress,
+                user_id=owner_username,
+            )
 
-                report = await analyze_mock_qa_batched(
-                    qa_pairs,
-                    resume_context=resume_text,
-                    jd_context=jd_text,
-                    batch_size=2,
-                    ctx_prev=3,
-                    ctx_next=2,
-                    on_progress=_bump_progress,
-                    user_id=owner_username,
-                )
-
-            self._persist_analysis(record_id, qa_pairs, report)
-            # Best-effort: produce the cache-friendly summary that gets
-            # injected into every debrief chat's record_context slot.
-            # Non-fatal — a missing summary just falls back to the
-            # truncated transcript at render time.
-            try:
-                await self._generate_debrief_summary(record_id, user_id=owner_username)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "debrief_summary generation failed for %s (non-fatal): %s",
-                    record_id,
-                    exc,
-                )
+            self._persist_analysis(record_id, report)
             interview_record_service.set_status(record_id, done_status)
             # Event-driven dreaming (MEM-9): a finished analysis is exactly
             # the "new growth evidence exists" moment. The quiet-window wait
@@ -519,11 +481,9 @@ class InterviewAnalysisOrchestrator:
     def _persist_analysis(
         self,
         record_id: str,
-        qa_pairs: list[dict[str, Any]],
         report: dict[str, Any],
     ) -> None:
-        """Fan out report.per_question into InterviewQA rows; write the
-        top-level (overall + phase_summary + meta) onto InterviewRecord."""
+        """Persist per-question results and the compact top-level report."""
         per_question = report.get("per_question") or []
         db: Session = SessionLocal()
         try:
@@ -566,7 +526,7 @@ class InterviewAnalysisOrchestrator:
                 row.score = _safe_score(pq.get("score"))
                 row.critique = pq.get("critique") or pq.get("feedback")
                 row.improved_answer = pq.get("improved_answer")
-                kp = pq.get("key_points")
+                kp = pq.get("tags")
                 if isinstance(kp, list):
                     row.key_points_json = json.dumps(kp, ensure_ascii=False)
                 if pq.get("question") and not row.question:
@@ -578,10 +538,10 @@ class InterviewAnalysisOrchestrator:
                 row.analyzed_at = utc_now()
 
             top_level = {
-                "schema_version": 2,
+                "schema_version": 3,
                 "overall": report.get("overall", {}),
-                "phase_summary": report.get("phase_summary", {}),
-                "meta": report.get("meta") or report.get("interview_metadata") or {},
+                "phase_summary": report.get("phase_summary", []),
+                "skill_radar": report.get("skill_radar", {}),
             }
             rec = (
                 db.query(InterviewRecord)
@@ -590,151 +550,12 @@ class InterviewAnalysisOrchestrator:
             )
             if rec is not None:
                 rec.analysis_json = json.dumps(top_level, ensure_ascii=False)
+                rec.analysis_schema_version = 3
                 rec.analyzed_qa_count = len(per_question)
+                generated_tag = str(report.get("tag") or "").strip()
+                if not (rec.tag or "").strip() and generated_tag:
+                    rec.tag = generated_tag[:8]
             db.commit()
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
-
-    async def _generate_debrief_summary(
-        self,
-        record_id: str,
-        *,
-        user_id: str | None = None,
-    ) -> None:
-        """LLM-produced 200-400 字 summary of one finished interview.
-
-        The summary is the centrepiece of the ``record_context`` prompt
-        slot — every debrief chat under this record sees it as part of
-        the LLM's standing context. We also opportunistically fill
-        ``record.tag`` when the user didn't pick one at upload time,
-        because the tag drives downstream UI filters.
-
-        Compose-once / cache-many: this runs exactly once per record at
-        the end of analysis. After that the value is invariant for the
-        lifetime of the record, which is why it cache-hits perfectly
-        when injected into chat prompts.
-        """
-        # Pull the snapshot we'll feed to the LLM in one transaction so
-        # we don't see a half-applied state.
-        db: Session = SessionLocal()
-        try:
-            rec = (
-                db.query(InterviewRecord)
-                .filter(InterviewRecord.id == record_id)
-                .first()
-            )
-            if rec is None:
-                return
-            existing_summary = (rec.debrief_summary or "").strip()
-            if existing_summary:
-                # Re-runs (e.g. user re-analyzed) shouldn't blow away a
-                # summary that's already cached on the prompt-side; skip.
-                return
-            title = (rec.title or "").strip()
-            tag = (rec.tag or "").strip()
-            transcript = ""
-            if rec.transcript_id:
-                tr = (
-                    db.query(InterviewTranscript)
-                    .filter(InterviewTranscript.id == rec.transcript_id)
-                    .first()
-                )
-                transcript = (tr.text if tr and tr.text else "").strip()
-            analysis_json = rec.analysis_json or ""
-            qa_rows = (
-                db.query(InterviewQA)
-                .filter(InterviewQA.record_id == record_id)
-                .order_by(InterviewQA.order_idx)
-                .all()
-            )
-            qa_lines = []
-            for qa in qa_rows[:20]:  # cap so the prompt stays bounded
-                q = (qa.question or "").strip()[:200]
-                if not q:
-                    continue
-                score = f" (score={qa.score})" if qa.score is not None else ""
-                qa_lines.append(f"- Q{qa.order_idx + 1}{score}: {q}")
-        finally:
-            db.close()
-
-        # Parse the analysis blob defensively — bad JSON shouldn't kill
-        # the summary step.
-        overall_text = ""
-        try:
-            if analysis_json:
-                blob = json.loads(analysis_json)
-                overall = blob.get("overall") if isinstance(blob, dict) else None
-                if isinstance(overall, dict):
-                    pieces = []
-                    if overall.get("score") is not None:
-                        pieces.append(f"综合评分: {overall['score']}")
-                    if overall.get("summary"):
-                        pieces.append(f"综合评语: {overall['summary']}")
-                    if overall.get("strengths"):
-                        pieces.append(
-                            "亮点: "
-                            + " / ".join(str(s) for s in overall["strengths"][:5])
-                        )
-                    if overall.get("weaknesses"):
-                        pieces.append(
-                            "待提升: "
-                            + " / ".join(str(w) for w in overall["weaknesses"][:5])
-                        )
-                    overall_text = "\n".join(pieces)
-        except (json.JSONDecodeError, TypeError):
-            overall_text = ""
-
-        # Truncate transcript hard — we just want flavour, not the full
-        # text (the chat's RAG layer can pull full transcript on demand).
-        transcript_excerpt = transcript[:3000] if transcript else ""
-
-        prompt = DEBRIEF_SUMMARY_PROMPT.format(
-            title=title or "（未填）",
-            tag=tag or "（未填，请推断）",
-            overall_text=overall_text or "（无）",
-            qa_lines="\n".join(qa_lines) or "（无 QA）",
-            transcript_excerpt=transcript_excerpt or "（无转录）",
-        )
-
-        from app.core.llm_client_factory import get_internal_llm
-        from app.services.memory._json_payload import _extract_json_payload
-
-        response = await get_internal_llm("worker").acomplete(
-            prompt,
-            response_format={"type": "json_object"},
-        )
-        payload = _extract_json_payload(str(response.text))
-        if not isinstance(payload, dict):
-            return
-        summary = str(payload.get("summary") or "").strip()
-        new_tag = str(payload.get("tag") or "").strip()
-        if not summary:
-            return
-
-        db = SessionLocal()
-        try:
-            rec = (
-                db.query(InterviewRecord)
-                .filter(InterviewRecord.id == record_id)
-                .first()
-            )
-            if rec is None:
-                return
-            rec.debrief_summary = summary[:1500]  # generous cap; prompt asked for 400
-            # Only fill tag when the user hadn't set one — never overwrite
-            # a user-chosen tag with an LLM guess.
-            if not (rec.tag or "").strip() and new_tag:
-                rec.tag = new_tag[:32]
-            db.commit()
-            logger.info(
-                "debrief_summary written for %s (%d chars; tag=%r)",
-                record_id,
-                len(summary),
-                rec.tag,
-            )
         except Exception:
             db.rollback()
             raise

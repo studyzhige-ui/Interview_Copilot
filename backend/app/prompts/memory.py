@@ -56,7 +56,7 @@ DREAMING_PROMPT = """综合一份面试记录期间的全部复盘对话，更�
 
 # 判断原则
 - 记忆描述用户当前稳定的身份、能力和方法，不是事件日志。
-- 只把用户自己的陈述、回答和多轮表现作为能力证据；客观复盘摘要可辅助判断，但不能直接复制成用户记忆。
+- 只把用户自己的陈述、回答和多轮表现作为能力证据；客观面试分析可辅助判断，但不能直接复制成用户记忆。
 - 跨多轮一致出现的信号可提高置信度。新证据与旧状态冲突时，以更具体、更新且由用户实际表现支持的证据为准。
 - 不保存临时情绪、一次性承诺、原始 QA、评分、点评、待办或敏感凭据。
 - 合并同义主题和同义文档行，不重复堆叠。
@@ -79,9 +79,9 @@ DREAMING_PROMPT = """综合一份面试记录期间的全部复盘对话，更�
 <messages>
 {record_messages}
 </messages>
-<debrief_summary>
-{record_debrief_summary}
-</debrief_summary>
+<interview_analysis_context>
+{record_analysis_context}
+</interview_analysis_context>
 </record>
 
 # 输出协议

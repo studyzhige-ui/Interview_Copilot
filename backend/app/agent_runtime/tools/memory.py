@@ -262,6 +262,7 @@ registry.register(
         ),
         args_model=RecallMemoryArgs,
         handler=_recall_memory_handler,
+        concurrency_safe=True,
         max_result_chars=20000,
         emoji="🧠",
     )

@@ -82,14 +82,16 @@ class ResolvedTranscription:
 
 
 def resolve_transcription() -> ResolvedTranscription:
-    pid = (settings.TRANSCRIPTION_PROVIDER or "siliconflow").strip().lower()
+    pid = (settings.TRANSCRIPTION_PROVIDER or "local_whisperx").strip().lower()
     if pid not in PROVIDERS:
         logger.warning(
-            "Unknown TRANSCRIPTION_PROVIDER=%r, falling back to 'siliconflow'",
+            "Unknown TRANSCRIPTION_PROVIDER=%r, falling back to 'local_whisperx'",
             pid,
         )
-        pid = "siliconflow"
-    model = (settings.TRANSCRIPTION_MODEL or "FunAudioLLM/SenseVoiceSmall").strip()
+        pid = "local_whisperx"
+    model = (
+        settings.TRANSCRIPTION_MODEL or "deepdml/faster-whisper-large-v3-turbo-ct2"
+    ).strip()
     return ResolvedTranscription(provider_id=pid, provider=PROVIDERS[pid], model=model)
 
 

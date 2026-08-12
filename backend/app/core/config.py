@@ -102,8 +102,8 @@ class Settings(BaseSettings):
     RAG_QUERY_TOKEN_RESERVE: int = 96
 
     # ASR (audio transcription)
-    TRANSCRIPTION_PROVIDER: str = "siliconflow"
-    TRANSCRIPTION_MODEL: str = "FunAudioLLM/SenseVoiceSmall"
+    TRANSCRIPTION_PROVIDER: str = "local_whisperx"
+    TRANSCRIPTION_MODEL: str = "deepdml/faster-whisper-large-v3-turbo-ct2"
 
     # Speaker diarization (separates "who said what"). Three modes:
     #   "auto"     — bundled when TRANSCRIPTION_PROVIDER=local_whisperx;

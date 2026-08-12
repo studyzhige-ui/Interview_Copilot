@@ -4,11 +4,12 @@ import {
   loadPreferredVoice,
   MockSetup,
   type InterviewerStyle,
+  type TargetQuestionCount,
   type TtsVoice,
-  type VoiceMode,
 } from './MockSetup';
 import { MockLive } from './MockLive';
 import { toast } from '@/store/uiStore';
+import type { MockLiveMessage } from '@/types/api';
 import {
   abandonMockInterview,
   getInProgressMock,
@@ -20,21 +21,13 @@ type Stage =
   | {
       kind: 'live';
       recordId: string;
-      currentQuestion: string;
-      voiceMode: VoiceMode;
+      initialMessages?: MockLiveMessage[];
       ttsVoice: TtsVoice;
-      /** Turns answered before this mount (resume path) — 0 for a fresh start. */
-      resumedAnsweredCount: number;
-      /** Concurrency token for the first answer (MOCK-3). */
-      questionMessageId: number | null;
     };
 
 interface InProgressBanner {
   recordId: string;
-  currentQuestion: string;
   title: string;
-  answeredCount: number;
-  questionMessageId: number | null;
   lastActivityAt: string | null;
 }
 
@@ -52,10 +45,7 @@ export function MockPage() {
         if (!alive || !r.has_in_progress || !r.record_id) return;
         setInProgress({
           recordId: r.record_id,
-          currentQuestion: r.current_question ?? '',
           title: r.title ?? '模拟面试',
-          answeredCount: r.answered_count ?? 0,
-          questionMessageId: r.question_message_id ?? null,
           lastActivityAt: r.last_activity_at ?? null,
         });
       })
@@ -72,11 +62,7 @@ export function MockPage() {
     setStage({
       kind: 'live',
       recordId: inProgress.recordId,
-      currentQuestion: inProgress.currentQuestion,
-      voiceMode: 'hybrid',
       ttsVoice: loadPreferredVoice(),
-      resumedAnsweredCount: inProgress.answeredCount,
-      questionMessageId: inProgress.questionMessageId,
     });
     setInProgress(null);
   };
@@ -95,25 +81,22 @@ export function MockPage() {
     resume_id: string;
     jd_text: string;
     interviewer_style: InterviewerStyle;
-    voice_mode: VoiceMode;
     tts_voice: TtsVoice;
+    target_question_count: TargetQuestionCount;
   }) => {
     setStarting(true);
     try {
       const started = await startMockInterview({
-        resume_id: payload.resume_id || undefined,
-        jd_text: payload.jd_text || undefined,
+        resume_id: payload.resume_id,
+        jd_text: payload.jd_text,
         interviewer_style: payload.interviewer_style,
-        voice_mode: payload.voice_mode,
+        target_question_count: payload.target_question_count,
       });
       setStage({
         kind: 'live',
-        recordId: started.interview_record_id,
-        currentQuestion: started.current_question,
-        voiceMode: payload.voice_mode,
+        recordId: started.record_id,
+        initialMessages: [started.message],
         ttsVoice: payload.tts_voice,
-        resumedAnsweredCount: 0,
-        questionMessageId: started.question_message_id ?? null,
       });
     } catch {
       toast.error('启动模拟面试失败');
@@ -154,11 +137,8 @@ export function MockPage() {
   return (
     <MockLive
       recordId={stage.recordId}
-      initialQuestion={stage.currentQuestion}
-      voiceMode={stage.voiceMode}
+      initialMessages={stage.initialMessages}
       ttsVoice={stage.ttsVoice}
-      resumedAnsweredCount={stage.resumedAnsweredCount}
-      initialQuestionMessageId={stage.questionMessageId}
       onFinished={onFinished}
       onAbandoned={onAbandoned}
     />

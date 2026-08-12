@@ -1,5 +1,12 @@
 import { useRef, useState } from 'react';
-import { ChevronRight, FileText, Pencil, BookmarkPlus, BookmarkCheck } from 'lucide-react';
+import {
+  BookmarkCheck,
+  BookmarkPlus,
+  ChevronRight,
+  FileText,
+  MessageCircleQuestion,
+  Pencil,
+} from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Pill } from '@/components/ui/Pill';
 import { editInterviewQA, saveQAToKnowledge, unsaveQAFromKnowledge } from '@/api/interview';
@@ -15,6 +22,8 @@ type Tab = 'report' | 'qa' | 'transcript';
 interface Props {
   detail: InterviewRecordDetail | null;
   loading: boolean;
+  selectedQuestionIndexes?: number[];
+  onToggleQuestion?: (index: number) => void;
 }
 
 function asAnalysis(detail: InterviewRecordDetail | null): InterviewAnalysis | null {
@@ -49,7 +58,12 @@ function formatLocal(iso: string | null | undefined): string {
   });
 }
 
-export function QAPanel({ detail, loading }: Props) {
+export function QAPanel({
+  detail,
+  loading,
+  selectedQuestionIndexes = [],
+  onToggleQuestion,
+}: Props) {
   // Default to the report tab when content first lands; flip to QA only if the
   // user explicitly switches. This matches the design spec.
   const [tab, setTab] = useState<Tab>('report');
@@ -104,6 +118,8 @@ export function QAPanel({ detail, loading }: Props) {
                   key={`${q.id}:${q.question}:${q.answer}:${q.saved_document_id ?? ''}`}
                   qa={q}
                   recordId={detail.id}
+                  selected={selectedQuestionIndexes.includes(q.order_idx + 1)}
+                  onToggleQuestion={onToggleQuestion}
                 />
               ))}
             </div>
@@ -267,19 +283,17 @@ function ReportView({
     );
   }
 
-  // overall.score is on a 0-10 scale in the v2 schema; we render as /100.
-  const score10 = typeof overall?.score === 'number' ? overall.score : 0;
-  const score100 = Math.round(score10 * 10);
+  const score100 = typeof overall?.score === 'number' ? Math.round(overall.score * 10) : null;
   const summary = overall?.summary || '';
   const strengths = overall?.strengths ?? [];
   const weaknesses = overall?.weaknesses ?? [];
-  const planRaw = overall?.improvement_plan ?? [];
-  const plan: string[] = planRaw.map((p) => {
-    if (typeof p === 'string') return p;
-    const area = p.area ?? '';
-    const actions = (p.actions ?? []).join('；');
-    return area && actions ? `${area}：${actions}` : area || actions;
+  const plan = (overall?.key_growth_areas ?? []).map((item) => {
+    const area = item.area?.trim() ?? '';
+    const nextStep = item.next_step?.trim() ?? '';
+    return area && nextStep ? `${area}：${nextStep}` : area || nextStep;
   }).filter(Boolean);
+  const phases = analysis?.phase_summary ?? [];
+  const radar = Object.entries(analysis?.skill_radar ?? {});
 
   // We're a study companion, not a gatekeeper: do NOT render verdict / grade /
   // any pass-fail framing. Score is kept as a self-benchmark only.
@@ -288,10 +302,12 @@ function ReportView({
       <div className="grid grid-cols-[200px_1fr] gap-5 bg-white border border-stone-200 rounded-2xl p-6 shadow-xs">
         <div className="flex flex-col items-center justify-center bg-cream-50 rounded-xl p-5">
           <div className="text-xs text-stone-500 uppercase tracking-wider">本次表现</div>
-          <div className="text-[52px] font-bold text-primary-600 leading-none mt-2">
-            {score100}
+          <div className={`${score100 === null ? 'text-2xl' : 'text-[52px]'} font-bold text-primary-600 leading-none mt-2`}>
+            {score100 === null ? '未评分' : score100}
           </div>
-          <div className="text-xs text-stone-500 mt-1">/ 100 · 进步基准线</div>
+          {score100 !== null && (
+            <div className="text-xs text-stone-500 mt-1">/ 100 · 进步基准线</div>
+          )}
         </div>
         <div className="flex flex-col gap-3 justify-center">
           {summary && (
@@ -304,6 +320,51 @@ function ReportView({
         <BulletList tone="success" title="做得不错的地方" items={strengths} />
         <BulletList tone="warn" title="下次可以更好的方向" items={weaknesses} />
       </div>
+
+      {phases.length > 0 && (
+        <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs">
+          <div className="text-xs uppercase tracking-wider text-stone-500 mb-3">阶段表现</div>
+          <div className="space-y-3">
+            {phases.map((phase) => (
+              <div key={phase.phase} className="rounded-xl bg-stone-50 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-stone-800">{phase.phase_name}</span>
+                  <span className="text-xs text-stone-400">{phase.question_count} 题</span>
+                  <span className="ml-auto text-sm font-mono font-semibold text-primary-600">
+                    {typeof phase.score === 'number' ? `${Math.round(phase.score * 10)}分` : '未评分'}
+                  </span>
+                </div>
+                {phase.summary && (
+                  <div className="text-sm text-stone-600 leading-[1.7] mt-1.5">{phase.summary}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {radar.length > 0 && (
+        <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs">
+          <div className="text-xs uppercase tracking-wider text-stone-500 mb-3">能力维度</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
+            {radar.map(([dimension, value]) => (
+              <div key={dimension}>
+                <div className="flex items-center text-sm mb-1.5">
+                  <span className="text-stone-700">{dimension}</span>
+                  <span className="ml-auto font-mono text-stone-500">
+                    {typeof value === 'number' ? `${Math.round(value * 10)}分` : '未考察'}
+                  </span>
+                </div>
+                <div className="h-1.5 rounded-full bg-stone-100 overflow-hidden">
+                  {typeof value === 'number' && (
+                    <div className="h-full rounded-full bg-primary-400" style={{ width: `${value * 10}%` }} />
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {plan.length > 0 && (
         <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs">
@@ -362,7 +423,17 @@ function scoreColor(score: number | undefined): string {
   return 'text-danger-500';
 }
 
-function QAItem({ qa, recordId }: { qa: InterviewQA; recordId: string }) {
+function QAItem({
+  qa,
+  recordId,
+  selected,
+  onToggleQuestion,
+}: {
+  qa: InterviewQA;
+  recordId: string;
+  selected: boolean;
+  onToggleQuestion?: (index: number) => void;
+}) {
   const [openS, setOpenS] = useState(false);
   const [editingQ, setEditingQ] = useState(false);
   const [editingA, setEditingA] = useState(false);
@@ -505,6 +576,24 @@ function QAItem({ qa, recordId }: { qa: InterviewQA; recordId: string }) {
         <div className="mt-3.5 text-sm text-stone-600 leading-[1.7]">
           <span className="text-warning-700 font-semibold">回顾：</span>
           {qa.critique}
+        </div>
+      )}
+
+      {onToggleQuestion && (
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            onClick={() => onToggleQuestion(qa.order_idx + 1)}
+            className={[
+              'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] transition-colors',
+              selected
+                ? 'bg-primary-100 text-primary-800 hover:bg-primary-200'
+                : 'bg-stone-100 text-stone-600 hover:bg-primary-50 hover:text-primary-700',
+            ].join(' ')}
+          >
+            <MessageCircleQuestion size={14} />
+            {selected ? '已加入追问' : '追问本题'}
+          </button>
         </div>
       )}
 

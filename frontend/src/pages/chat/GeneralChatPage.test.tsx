@@ -12,7 +12,9 @@ vi.mock('@/api/chat', () => ({
 }));
 
 vi.mock('@/pages/review/chat/ChatPanel', () => ({
-  ChatPanel: ({ sessionId }: { sessionId: string }) => <div>会话：{sessionId}</div>,
+  ChatPanel: ({ sessionId, fixedMode }: { sessionId: string; fixedMode?: string }) => (
+    <div>会话：{sessionId} · 模式：{fixedMode}</div>
+  ),
 }));
 
 describe('GeneralChatPage', () => {
@@ -39,6 +41,6 @@ describe('GeneralChatPage', () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByText('会话：session-1')).toBeInTheDocument();
+    expect(await screen.findByText('会话：session-1 · 模式：AGENT')).toBeInTheDocument();
   });
 });

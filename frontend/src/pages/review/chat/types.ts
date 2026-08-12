@@ -13,7 +13,12 @@ export interface UIMessage {
   sources?: Source[];
 }
 
-export interface Attachment { doc_id: string; filename: string; }
+export interface Attachment {
+  document_id: string;
+  filename: string;
+  status: 'processing' | 'ready' | 'failed';
+  error?: string;
+}
 
 export type Mode = 'CHAT' | 'AGENT';
 
@@ -43,7 +48,7 @@ export function toUI(m: ChatMessageItem): UIMessage {
   // /chat/transcript always sets ``blocks`` (legacy rows are synthesised
   // into a single-text-block array server-side). Pass through unchanged
   // so the renderer can branch uniformly.
-  if (r === 'user') return { role: 'user', content: m.content };
+  if (r === 'user') return { role: 'user', content: m.content, blocks: m.blocks };
   if (r === 'assistant' || r === 'agent' || r === 'ai' || r === 'bot') {
     // The persisted RAG sources ride in a ``{type:"sources"}`` block —
     // lift it out so the source-card panel can consume it (BlockChain

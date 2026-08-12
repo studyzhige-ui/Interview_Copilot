@@ -149,6 +149,43 @@ def test_create_chat_session_defaults_to_general(client: TestClient, db: Session
     row = db.query(Conversation).filter(Conversation.id == body["session_id"]).first()
     assert row is not None
     assert row.user_id == alice_pk
+    assert row.mode == "agent"
+
+
+def test_general_turn_cannot_downgrade_career_runtime_to_chat(
+    client: TestClient, db: Session, monkeypatch
+):
+    from app.services.chat import turn_executor
+    from app.services.chat.turn_event_buffer import turn_event_buffer
+
+    user_id = _uid(db, "alice")
+    db.add(
+        Conversation(
+            id="career_mode",
+            user_id=user_id,
+            title="Career",
+            type="general",
+            mode="chat",
+        )
+    )
+    db.commit()
+
+    async def ping():
+        return None
+
+    monkeypatch.setattr(turn_event_buffer, "ping", ping)
+    monkeypatch.setattr(turn_executor, "schedule_turn", lambda _turn_id: None)
+
+    response = client.post(
+        "/api/v1/chat/career_mode/turns",
+        json={"message": "直接回答也由 Agent 决策", "mode": "chat"},
+    )
+
+    assert response.status_code == 202
+    turn = db.get(ConversationTurn, response.json()["turn_id"])
+    assert turn is not None and turn.mode == "agent"
+    db.expire_all()
+    assert db.get(Conversation, "career_mode").mode == "agent"
 
 
 def test_create_turn_is_backgrounded(client: TestClient, db: Session, monkeypatch):
@@ -167,12 +204,17 @@ def test_create_turn_is_backgrounded(client: TestClient, db: Session, monkeypatc
     monkeypatch.setattr(turn_executor, "schedule_turn", scheduled.append)
     response = client.post(
         "/api/v1/chat/s_turn/turns",
-        json={"message": "继续完成任务", "mode": "agent"},
+        json={
+            "message": "继续完成任务",
+            "mode": "agent",
+            "question_indexes": [5, 2, 5],
+        },
     )
 
     assert response.status_code == 202
     turn = db.get(ConversationTurn, response.json()["turn_id"])
     assert turn and turn.status == "pending" and turn.mode == "agent"
+    assert turn.question_indexes_json == [5, 2]
     assert db.get(Conversation, "s_turn").active_turn_id == turn.id
     user_message = (
         db.query(ConversationMessage)
@@ -462,8 +504,6 @@ def _seed_started_mock(
 ):
     """Seed a started mock: record(mock_in_progress) + conversation + opening
     message + runtime(in_progress), as the start endpoint would have."""
-    import json as _json
-
     from app.models.interview_record import InterviewRecord
     from app.models.mock_interview_runtime import MockInterviewRuntime
 
@@ -500,21 +540,17 @@ def _seed_started_mock(
     db.flush()
     db.add(
         MockInterviewRuntime(
-            id="mir_m",
             user_id=pk,
             interview_record_id=record_id,
             conversation_id=conv_id,
-            status="in_progress",
             current_stage_key="self_intro",
             current_question_message_id=opening.id,
-            plan_json=_json.dumps(
-                {
-                    "stages": [
-                        {"key": "self_intro", "title": "自我介绍"},
-                        {"key": "candidate_questions", "title": "反问"},
-                    ]
-                }
-            ),
+            plan_json=[
+                {"key": "self_intro", "title": "自我介绍"},
+                {"key": "candidate_questions", "title": "反问"},
+            ],
+            interviewer_style="professional",
+            target_question_count=20,
         )
     )
     db.commit()
@@ -551,40 +587,61 @@ def test_mock_start_creates_record_conversation_runtime(
         "app.services.resume.resume_service.resume_service.get_sections_by_resume",
         lambda resume_id, user_id=None: [],
     )
+    plan_payload = {
+        "guidance": {
+            "self_intro": "判断与后端岗位的整体匹配。",
+            "resume_project_deep_dive": "围绕推荐系统验证个人贡献。",
+            "role_technical_assessment": "抽样考察岗位相关技术能力。",
+            "candidate_questions": "只根据 JD 回答候选人反问。",
+        }
+    }
+
+    class _PlanningLLM:
+        def complete(self, *args, **kwargs):
+            return type(
+                "PlanningResponse",
+                (),
+                {"text": json.dumps(plan_payload, ensure_ascii=False)},
+            )()
+
+    monkeypatch.setattr(
+        "app.services.interview.mock_interview_service.get_llm_for_role",
+        lambda *args, **kwargs: _PlanningLLM(),
+    )
 
     resp = client.post(
         "/api/v1/mock-interviews/start",
         json={
             "resume_id": "rsm_1",
-            "jd_text": "JD content",
+            "jd_text": "高级后端工程师岗位，要求系统设计、数据库和稳定性经验。",
             "interviewer_style": "professional",
+            "target_question_count": 30,
         },
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert (
-        body["interview_record_id"] and body["conversation_id"] and body["runtime_id"]
-    )
-    assert body["current_stage_key"] == "self_intro"
-    assert "自我介绍" in body["current_question"]
-    assert [p["key"] for p in body["plan_phases"]][0] == "self_intro"
+    assert set(body) == {"record_id", "message"}
+    assert body["record_id"]
+    assert body["message"]["speaker"] == "interviewer"
+    assert "自我介绍" in body["message"]["text"]
 
     # The resume entity's raw_text_snapshot was frozen onto the record.
     record = (
         db.query(InterviewRecord)
-        .filter(InterviewRecord.id == body["interview_record_id"])
+        .filter(InterviewRecord.id == body["record_id"])
         .first()
     )
     assert record is not None and record.status == "mock_in_progress"
     assert "推荐系统" in (record.resume_text_snapshot or "")
-    # Runtime exists and is in_progress, pointed at the opening message.
+    # Runtime exists and points at the opening message.
     rt = (
         db.query(MockInterviewRuntime)
-        .filter(MockInterviewRuntime.id == body["runtime_id"])
+        .filter(MockInterviewRuntime.interview_record_id == body["record_id"])
         .first()
     )
-    assert rt is not None and rt.status == "in_progress"
+    assert rt is not None
     assert rt.current_question_message_id is not None
+    assert rt.target_question_count == 30
 
 
 def test_mock_start_rejects_resume_that_has_not_been_parsed(
@@ -607,11 +664,173 @@ def test_mock_start_rejects_resume_that_has_not_been_parsed(
 
     response = client.post(
         "/api/v1/mock-interviews/start",
-        json={"resume_id": "rsm_pending", "jd_text": "后端工程师岗位说明"},
+        json={
+            "resume_id": "rsm_pending",
+            "jd_text": "这是满足长度要求的后端工程师岗位说明文本。",
+        },
     )
 
     assert response.status_code == 409
     assert "解析" in response.json()["detail"]
+
+
+def test_mock_answer_audio_transcribes_and_stores_one_asset(
+    client: TestClient,
+    db: Session,
+    monkeypatch,
+):
+    from app.models.file_asset import FileAsset
+
+    record_id, _ = _seed_started_mock(
+        db,
+        record_id="ir_audio_draft",
+        conv_id="c_audio_draft",
+    )
+
+    async def fake_transcribe(_path: str, *, language: str = "zh") -> str:
+        assert language == "zh"
+        return "我负责了核心接口的性能优化"
+
+    stored: dict[str, bytes] = {}
+
+    def fake_store(file_obj, object_key: str, content_type: str | None = None) -> str:
+        stored["body"] = file_obj.read()
+        stored["content_type"] = (content_type or "").encode()
+        return f"s3://test/{object_key}"
+
+    monkeypatch.setattr(
+        "app.services.voice.short_clip_transcription.transcribe_short_clip",
+        fake_transcribe,
+    )
+    monkeypatch.setattr(
+        "app.services.uploads.file_asset_service.upload_file_to_owned_key",
+        fake_store,
+    )
+
+    audio = b"\x1a\x45\xdf\xa3" + b"mock-webm-audio" * 3
+    response = client.post(
+        f"/api/v1/mock-interviews/{record_id}/answer-audio",
+        files={"file": ("answer.webm", audio, "audio/webm")},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body) == {"text", "audio_file_asset_id"}
+    assert body["text"] == "我负责了核心接口的性能优化"
+    assert stored["body"] == audio
+
+    asset = db.get(FileAsset, body["audio_file_asset_id"])
+    assert asset is not None
+    assert asset.purpose == "mock_audio_clip"
+    assert asset.upload_status == "uploaded"
+    assert asset.validation_status == "passed"
+    assert asset.size_bytes == len(audio)
+
+
+def test_mock_answer_audio_does_not_store_empty_transcript(
+    client: TestClient,
+    db: Session,
+    monkeypatch,
+):
+    from app.models.file_asset import FileAsset
+
+    record_id, _ = _seed_started_mock(
+        db,
+        record_id="ir_audio_empty",
+        conv_id="c_audio_empty",
+    )
+
+    async def fake_transcribe(_path: str, *, language: str = "zh") -> str:
+        return "  "
+
+    monkeypatch.setattr(
+        "app.services.voice.short_clip_transcription.transcribe_short_clip",
+        fake_transcribe,
+    )
+    audio = b"\x1a\x45\xdf\xa3" + b"mock-webm-audio" * 3
+
+    response = client.post(
+        f"/api/v1/mock-interviews/{record_id}/answer-audio",
+        files={"file": ("answer.webm", audio, "audio/webm")},
+    )
+
+    assert response.status_code == 422
+    assert "重新录制" in response.json()["detail"]
+    assert db.query(FileAsset).count() == 0
+
+
+def test_mock_answer_audio_reports_storage_failure_and_marks_asset_failed(
+    client: TestClient,
+    db: Session,
+    monkeypatch,
+):
+    from app.models.file_asset import FileAsset
+
+    record_id, _ = _seed_started_mock(
+        db,
+        record_id="ir_audio_storage_failure",
+        conv_id="c_audio_storage_failure",
+    )
+
+    async def fake_transcribe(_path: str, *, language: str = "zh") -> str:
+        return "已经成功转写"
+
+    def fail_store(*_args, **_kwargs):
+        raise RuntimeError("storage unavailable")
+
+    monkeypatch.setattr(
+        "app.services.voice.short_clip_transcription.transcribe_short_clip",
+        fake_transcribe,
+    )
+    monkeypatch.setattr(
+        "app.services.uploads.file_asset_service.upload_file_to_owned_key",
+        fail_store,
+    )
+    audio = b"\x1a\x45\xdf\xa3" + b"mock-webm-audio" * 3
+
+    response = client.post(
+        f"/api/v1/mock-interviews/{record_id}/answer-audio",
+        files={"file": ("answer.webm", audio, "audio/webm")},
+    )
+
+    assert response.status_code == 503
+    assert "录音仍保留" in response.json()["detail"]
+    asset = db.query(FileAsset).one()
+    assert asset.upload_status == "failed"
+    assert asset.validation_status == "failed"
+
+
+def test_mock_answer_audio_reports_unavailable_transcription_without_storing(
+    client: TestClient,
+    db: Session,
+    monkeypatch,
+):
+    from app.models.file_asset import FileAsset
+    from app.services.voice.short_clip_transcription import TranscriptionUnavailable
+
+    record_id, _ = _seed_started_mock(
+        db,
+        record_id="ir_audio_asr_unavailable",
+        conv_id="c_audio_asr_unavailable",
+    )
+
+    async def fail_transcribe(_path: str, *, language: str = "zh") -> str:
+        raise TranscriptionUnavailable("model unavailable")
+
+    monkeypatch.setattr(
+        "app.services.voice.short_clip_transcription.transcribe_short_clip",
+        fail_transcribe,
+    )
+    audio = b"\x1a\x45\xdf\xa3" + b"mock-webm-audio" * 3
+
+    response = client.post(
+        f"/api/v1/mock-interviews/{record_id}/answer-audio",
+        files={"file": ("answer.webm", audio, "audio/webm")},
+    )
+
+    assert response.status_code == 503
+    assert "录音仍保留" in response.json()["detail"]
+    assert db.query(FileAsset).count() == 0
 
 
 def test_mock_answer_appends_messages_and_advances(
@@ -653,9 +872,10 @@ def test_mock_answer_appends_messages_and_advances(
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["interviewer_message"].startswith("好的")
-    assert body["current_stage_key"] == "candidate_questions"
-    assert body["is_ready_to_finish"] is False
+    assert set(body) == {"message", "end_suggested"}
+    assert body["message"]["speaker"] == "interviewer"
+    assert body["message"]["text"].startswith("好的")
+    assert body["end_suggested"] is False
 
     # The user answer + the new assistant line are both persisted (opening + 2).
     msgs = (
@@ -671,6 +891,58 @@ def test_mock_answer_appends_messages_and_advances(
         .first()
     )
     assert rt.current_stage_key == "candidate_questions"
+
+
+def test_mock_answer_failure_preserves_candidate_answer_for_recovery(
+    client: TestClient,
+    db: Session,
+    monkeypatch,
+):
+    from app.models.mock_interview_runtime import MockInterviewRuntime
+    from app.services.interview.mock_interview_service import (
+        NextTurnGenerationError,
+    )
+
+    record_id, conv_id = _seed_started_mock(
+        db,
+        record_id="ir_answer_recovery",
+        conv_id="c_answer_recovery",
+    )
+    runtime = (
+        db.query(MockInterviewRuntime)
+        .filter(MockInterviewRuntime.interview_record_id == record_id)
+        .one()
+    )
+
+    async def fail_next_turn(**kwargs):
+        raise NextTurnGenerationError("LLM unavailable")
+
+    monkeypatch.setattr(
+        "app.services.interview.mock_interview_service.generate_next_turn",
+        fail_next_turn,
+    )
+    response = client.post(
+        f"/api/v1/mock-interviews/{record_id}/answer",
+        json={
+            "answer_text": "这段回答必须被保留",
+            "question_message_id": runtime.current_question_message_id,
+        },
+    )
+
+    assert response.status_code == 503
+    assert "回答已保存" in response.json()["detail"]
+    messages = (
+        db.query(ConversationMessage)
+        .filter(ConversationMessage.conversation_id == conv_id)
+        .order_by(ConversationMessage.seq)
+        .all()
+    )
+    assert [(message.role, message.content) for message in messages] == [
+        ("assistant", "请做个自我介绍"),
+        ("user", "这段回答必须被保留"),
+    ]
+    db.refresh(runtime)
+    assert runtime.answer_claimed_at is None
 
 
 def test_mock_finish_transitions_to_processing_review_and_dispatches(
@@ -712,6 +984,9 @@ def test_mock_finish_transitions_to_processing_review_and_dispatches(
 
     db.expire_all()
     assert db.get(InterviewRecord, record_id).status == "processing_review"
+    from app.models.mock_interview_runtime import MockInterviewRuntime
+
+    assert db.get(MockInterviewRuntime, record_id) is None
 
 
 def test_mock_abandon_deletes_everything(client: TestClient, db: Session):
@@ -752,8 +1027,51 @@ def test_in_progress_returns_active_runtime(client: TestClient, db: Session):
     body = resp.json()
     assert body["has_in_progress"] is True
     assert body["record_id"] == record_id
-    assert body["conversation_id"] == conv_id
-    assert body["current_stage_key"] == "self_intro"
+    assert set(body) == {
+        "has_in_progress",
+        "record_id",
+        "title",
+        "last_activity_at",
+    }
+
+
+def test_live_state_returns_complete_user_facing_conversation(
+    client: TestClient,
+    db: Session,
+):
+    record_id, conv_id = _seed_started_mock(db)
+    db.add_all(
+        [
+            ConversationMessage(
+                conversation_id=conv_id,
+                seq=2,
+                role="user",
+                content="我的第一段回答",
+            ),
+            ConversationMessage(
+                conversation_id=conv_id,
+                seq=3,
+                role="assistant",
+                content="请继续讲讲项目难点",
+            ),
+        ]
+    )
+    db.commit()
+
+    response = client.get(f"/api/v1/mock-interviews/{record_id}/live-state")
+
+    assert response.status_code == 200
+    messages = response.json()["messages"]
+    assert [message["speaker"] for message in messages] == [
+        "interviewer",
+        "candidate",
+        "interviewer",
+    ]
+    assert [message["text"] for message in messages] == [
+        "请做个自我介绍",
+        "我的第一段回答",
+        "请继续讲讲项目难点",
+    ]
 
 
 def test_in_progress_false_when_no_active_runtime(client: TestClient, db: Session):
@@ -800,6 +1118,12 @@ def test_finish_on_non_in_progress_record_maps_to_409(client: TestClient, db: Se
 
 def test_start_with_active_run_maps_to_409(client: TestClient, db: Session):
     _seed_started_mock(db, record_id="ir_dup", conv_id="c_dup")
-    resp = client.post("/api/v1/mock-interviews/start", json={})
+    resp = client.post(
+        "/api/v1/mock-interviews/start",
+        json={
+            "resume_id": "any",
+            "jd_text": "这是满足接口校验长度要求的岗位说明文本内容。",
+        },
+    )
     assert resp.status_code == 409
     assert "进行中" in resp.json()["detail"]

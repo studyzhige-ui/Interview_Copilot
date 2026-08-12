@@ -3,20 +3,21 @@
 Architecture:
   Stage 0: WhisperX transcription (handled by audio_transcription_service)
   Stage 1: Full LLM QA extraction (role identification, pairing, tagging)
-  Stage 2: Per-question deep analysis (Map) with sliding context window
-  Stage 3: Global synthesis report (Reduce)
+  Stage 2: Batched question analysis with neighbouring context
+  Stage 3: Deterministic score aggregation + narrative synthesis
 
 Design principles:
   - LLM reads numbered transcript lines and returns QA line-spans; code slices the original text
   - Handles speaker diarization failures, mixed turns, short/long exchanges
   - Long transcripts are chunked with overlap and deduplicated
-  - Each question is analyzed with a 3-question sliding context window
+  - Upload and mock sources share exactly one batched scoring path
   - Resume and JD context are injected into every analysis stage
 """
 
 import asyncio
 import json
 import logging
+import math
 from typing import Any, Callable
 
 import tiktoken
@@ -24,9 +25,8 @@ from llama_index.core.llms import LLM
 
 from app.core.llm_client_factory import get_internal_llm, get_llm_for_role
 from app.prompts.voice_analysis import (
-    BATCH_ANALYSIS_PROMPT,
-    PER_QUESTION_ANALYSIS_PROMPT,
     QA_EXTRACTION_PROMPT,
+    QUESTION_ANALYSIS_PROMPT,
     SYNTHESIS_PROMPT,
 )
 
@@ -375,18 +375,63 @@ def _resolve_span_pairs(
 
 _ANALYSIS_MAX_ATTEMPTS = 2
 _ANALYSIS_RETRY_BASE_S = 2.0
-# Upload path fans out one task per question; without a bound a 30-question
-# interview fires 30 concurrent completions — a rate-limit trigger on most
-# providers. 5 keeps the pipeline fast without tripping vendor limits.
 _ANALYSIS_MAX_CONCURRENCY = 5
+_SKILL_DIMENSIONS = ("系统设计", "编码能力", "基础知识", "沟通表达", "项目经验")
 
 
-async def _acomplete_json_with_retry(llm: LLM, prompt: str) -> dict[str, Any]:
-    """One grading call: JSON mode + bounded retry with backoff.
+def _validated_score(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("score must be a number or null")
+    score = float(value)
+    if not math.isfinite(score) or not 0 <= score <= 10:
+        raise ValueError("score must be between 0 and 10")
+    return round(score, 1)
 
-    Raises the last exception after ``_ANALYSIS_MAX_ATTEMPTS`` — the caller
-    decides what a failed question looks like (score=None, 未评分).
-    """
+
+def _validate_batch_result(
+    payload: dict[str, Any], expected_indexes: list[int]
+) -> dict[int, dict[str, Any]]:
+    items = payload.get("results")
+    if not isinstance(items, list) or len(items) != len(expected_indexes):
+        raise ValueError("results must contain every requested question exactly once")
+
+    parsed: dict[int, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("each result must be an object with an integer index")
+        raw_index = item.get("index")
+        if isinstance(raw_index, bool) or not isinstance(raw_index, int):
+            raise ValueError("invalid result index")
+        index = raw_index
+        if index in parsed:
+            raise ValueError(f"duplicate result index: {index}")
+        if "score" not in item:
+            raise ValueError(f"missing score for index: {index}")
+        critique = item.get("critique")
+        improved = item.get("improved_answer")
+        tags = item.get("tags")
+        if not isinstance(critique, str) or not isinstance(improved, str):
+            raise ValueError(f"invalid text fields for index: {index}")
+        if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+            raise ValueError(f"invalid tags for index: {index}")
+        parsed[index] = {
+            "score": _validated_score(item["score"]),
+            "critique": critique.strip(),
+            "improved_answer": improved.strip(),
+            "tags": [tag.strip() for tag in tags if tag.strip()][:5],
+        }
+
+    if set(parsed) != set(expected_indexes):
+        raise ValueError("result indexes do not match the requested batch")
+    return parsed
+
+
+async def _request_batch_result(
+    llm: LLM, prompt: str, expected_indexes: list[int]
+) -> dict[int, dict[str, Any]]:
+    """Retry the exact batch when either transport or output contract fails."""
     last_exc: Exception | None = None
     for attempt in range(1, _ANALYSIS_MAX_ATTEMPTS + 1):
         try:
@@ -394,118 +439,21 @@ async def _acomplete_json_with_retry(llm: LLM, prompt: str) -> dict[str, Any]:
                 prompt,
                 response_format={"type": "json_object"},
             )
-            return _clean_json_response(response.text)
+            return _validate_batch_result(
+                _clean_json_response(response.text), expected_indexes
+            )
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
+            logger.warning(
+                "Question-analysis batch attempt %d/%d failed: %s",
+                attempt,
+                _ANALYSIS_MAX_ATTEMPTS,
+                exc,
+            )
             if attempt < _ANALYSIS_MAX_ATTEMPTS:
                 await asyncio.sleep(_ANALYSIS_RETRY_BASE_S * attempt)
-    raise last_exc  # type: ignore[misc]
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# Stage 2: Per-Question Deep Analysis (Map) with Sliding Context Window
-# ══════════════════════════════════════════════════════════════════════════
-
-_SLIDING_WINDOW_SIZE = 3  # include up to 3 preceding QA pairs
-
-
-def _build_sliding_context(
-    qa_pairs: list[dict[str, Any]],
-    current_index: int,
-) -> str:
-    """Build sliding window context for the current question.
-
-    Includes:
-    1. Follow-up chain parent (even if outside window)
-    2. Up to SLIDING_WINDOW_SIZE preceding QA pairs
-    """
-    current = qa_pairs[current_index]
-    context_parts: list[str] = []
-
-    # Include follow-up chain parent if outside the sliding window
-    parent_idx = current.get("parent_index")
-    window_start = max(0, current_index - _SLIDING_WINDOW_SIZE)
-
-    if parent_idx is not None and isinstance(parent_idx, int):
-        parent_pos = parent_idx - 1  # convert 1-based index to 0-based
-        if 0 <= parent_pos < len(qa_pairs) and parent_pos < window_start:
-            p = qa_pairs[parent_pos]
-            context_parts.append(
-                f"[追问源头 — 第{p['index']}题]\n"
-                f"问: {p['question'][:300]}\n"
-                f"答: {p['answer'][:300]}"
-            )
-
-    # Sliding window: preceding questions
-    for i in range(window_start, current_index):
-        p = qa_pairs[i]
-        context_parts.append(
-            f"[第{p['index']}题]\n问: {p['question'][:300]}\n答: {p['answer'][:300]}"
-        )
-
-    if not context_parts:
-        return ""
-
-    return "前文上下文：\n" + "\n\n".join(context_parts)
-
-
-async def _analyze_single_question(
-    qa_pair: dict[str, Any],
-    context_text: str,
-    total_questions: int,
-    resume_context: str = "",
-    jd_context: str = "",
-    *,
-    llm: LLM,
-) -> dict[str, Any]:
-    """Analyze a single QA pair and return structured result."""
-    resume_section = ""
-    if resume_context:
-        resume_section = f"候选人简历背景：\n{resume_context[:1000]}"
-
-    jd_section = ""
-    if jd_context:
-        jd_section = f"目标岗位 JD：\n{jd_context[:500]}"
-
-    prompt = PER_QUESTION_ANALYSIS_PROMPT.format(
-        resume_section=resume_section,
-        jd_section=jd_section,
-        context_section=context_text,
-        index=qa_pair["index"],
-        total=total_questions,
-        question=qa_pair["question"],
-        answer=qa_pair["answer"],
-    )
-
-    try:
-        result = await _acomplete_json_with_retry(llm, prompt)
-
-        return {
-            "index": qa_pair["index"],
-            "phase": qa_pair.get("phase", "general"),
-            "question": qa_pair["question"],
-            "answer": qa_pair["answer"],
-            "score": float(result.get("score", 0) or 0),
-            "critique": str(result.get("critique", "")).strip(),
-            "improved_answer": str(result.get("improved_answer", "")).strip(),
-            "tags": result.get("tags", []),
-        }
-    except Exception as exc:
-        # ANA-6: a failed grading is 未评分 (score=None), never a silent 0 —
-        # zeros were averaged into the overall verdict as if the candidate
-        # had bombed the question.
-        logger.error("Per-question analysis failed for Q%d: %s", qa_pair["index"], exc)
-        return {
-            "index": qa_pair["index"],
-            "phase": qa_pair.get("phase", "general"),
-            "question": qa_pair["question"],
-            "answer": qa_pair["answer"],
-            "score": None,
-            "critique": "该题分析失败（模型调用异常），未计入总分。",
-            "improved_answer": "",
-            "tags": [],
-            "analysis_failed": True,
-        }
+    assert last_exc is not None
+    raise last_exc
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -527,45 +475,74 @@ async def _synthesize_report(
     resume_context: str = "",
     jd_context: str = "",
     *,
-    llm: LLM,
+    llm: LLM | None,
 ) -> dict[str, Any]:
-    """Stage 3: Synthesize per-question results into a global report."""
+    """Aggregate numeric scores in code; ask the model only for interpretation."""
+    assessed = [
+        pq for pq in per_question_results if isinstance(pq.get("score"), (int, float))
+    ]
+    scores = [float(pq["score"]) for pq in assessed]
+    overall_score = round(sum(scores) / len(scores), 1) if scores else None
+    failed_count = sum(bool(pq.get("analysis_failed")) for pq in per_question_results)
+    phases = list(
+        dict.fromkeys(str(pq.get("phase") or "general") for pq in per_question_results)
+    )
 
-    # Build per-question summary for the synthesis prompt. Failed (未评分)
-    # questions are excluded — their placeholder critique would poison the
-    # synthesis — and reported via failed_count instead (ANA-6).
-    graded = [pq for pq in per_question_results if not pq.get("analysis_failed")]
-    failed_count = len(per_question_results) - len(graded)
-    if per_question_results and not graded:
-        # Every grading call failed (e.g. broken provider auth) — asking the
-        # synthesis LLM to write a verdict from just resume+JD would invent
-        # one. Return an honest empty report instead.
+    phase_rows: list[dict[str, Any]] = []
+    for phase in phases:
+        phase_items = [
+            pq
+            for pq in per_question_results
+            if str(pq.get("phase") or "general") == phase
+        ]
+        phase_scores = [
+            float(pq["score"])
+            for pq in phase_items
+            if isinstance(pq.get("score"), (int, float))
+        ]
+        phase_rows.append(
+            {
+                "phase": phase,
+                "phase_name": _PHASE_NAME_MAP.get(phase, phase),
+                "score": round(sum(phase_scores) / len(phase_scores), 1)
+                if phase_scores
+                else None,
+                "question_count": len(phase_items),
+                "summary": "本阶段没有可用评分证据。"
+                if not phase_scores
+                else "本阶段表现详见逐题分析。",
+            }
+        )
+
+    empty_radar = {dimension: None for dimension in _SKILL_DIMENSIONS}
+    if not assessed:
+        if not per_question_results:
+            message = "面试中没有可供分析的问答记录。"
+        elif failed_count == len(per_question_results):
+            message = "全部题目的分析调用都失败了，暂时无法形成可靠复盘，请重试。"
+        else:
+            message = "本次问答均不具备可评分的候选人回答，未生成表现分数。"
         return {
-            "interview_metadata": {
-                "total_questions": len(per_question_results),
-                "phases": list(
-                    {pq.get("phase", "general") for pq in per_question_results}
-                ),
-                "failed_count": failed_count,
-            },
             "overall": {
-                "score": 0,
-                "summary": "全部题目的分析调用都失败了（模型服务异常），未能生成综合报告，请重试。",
+                "score": None,
+                "summary": message,
                 "strengths": [],
                 "weaknesses": [],
                 "key_growth_areas": [],
             },
-            "phase_summary": [],
+            "phase_summary": phase_rows,
             "per_question": per_question_results,
-            "skill_radar": {},
+            "skill_radar": empty_radar,
+            "tag": "",
         }
+
     summary_lines: list[str] = []
-    for pq in graded:
+    for pq in assessed:
         summary_lines.append(
             f"第{pq['index']}题 [{_PHASE_NAME_MAP.get(pq.get('phase', ''), pq.get('phase', ''))}] "
             f"评分:{pq['score']}/10\n"
-            f"  问题: {pq['question'][:80]}...\n"
-            f"  不足: {pq['critique'][:100]}...\n"
+            f"  问题: {pq['question'][:160]}\n"
+            f"  分析: {pq['critique'][:240]}\n"
             f"  标签: {', '.join(pq.get('tags', []))}"
         )
 
@@ -581,56 +558,88 @@ async def _synthesize_report(
     )
 
     try:
+        assert llm is not None
         response = await llm.acomplete(
             prompt,
             response_format={"type": "json_object"},
         )
         synthesis = _clean_json_response(response.text)
-        overall_in = synthesis.get("overall") or {}
-
-        meta = synthesis.get("interview_metadata") or {
-            "total_questions": len(per_question_results),
-            "phases": list({pq.get("phase", "general") for pq in per_question_results}),
+        overall_in = synthesis.get("overall")
+        if not isinstance(overall_in, dict):
+            raise ValueError("synthesis response is missing overall")
+        overall_summary = str(overall_in.get("summary") or "").strip()
+        if not overall_summary:
+            raise ValueError("synthesis response is missing overall.summary")
+        narrative_by_phase = {
+            str(item.get("phase")): str(item.get("summary") or "").strip()
+            for item in synthesis.get("phase_summary", [])
+            if isinstance(item, dict) and item.get("phase")
         }
-        meta["failed_count"] = failed_count
+        for row in phase_rows:
+            row["summary"] = narrative_by_phase.get(row["phase"], row["summary"])
+
+        score_by_index = {int(pq["index"]): float(pq["score"]) for pq in assessed}
+        evidence = synthesis.get("skill_evidence") or {}
+        radar: dict[str, float | None] = {}
+        for dimension in _SKILL_DIMENSIONS:
+            raw_indexes = (
+                evidence.get(dimension, []) if isinstance(evidence, dict) else []
+            )
+            dimension_scores: list[float] = []
+            seen: set[int] = set()
+            if isinstance(raw_indexes, list):
+                for raw_index in raw_indexes:
+                    try:
+                        index = int(raw_index)
+                    except (TypeError, ValueError):
+                        continue
+                    if index not in seen and index in score_by_index:
+                        seen.add(index)
+                        dimension_scores.append(score_by_index[index])
+            radar[dimension] = (
+                round(sum(dimension_scores) / len(dimension_scores), 1)
+                if dimension_scores
+                else None
+            )
+
+        growth = overall_in.get("key_growth_areas")
+        growth = growth if isinstance(growth, list) else []
         return {
-            "interview_metadata": meta,
             "overall": {
-                "score": float(overall_in.get("score", 0) or 0),
-                "summary": str(overall_in.get("summary", "") or "").strip(),
-                "strengths": overall_in.get("strengths", []) or [],
-                "weaknesses": overall_in.get("weaknesses", []) or [],
-                "key_growth_areas": overall_in.get("key_growth_areas", []) or [],
+                "score": overall_score,
+                "summary": overall_summary,
+                "strengths": _string_list(overall_in.get("strengths"), limit=5),
+                "weaknesses": _string_list(overall_in.get("weaknesses"), limit=5),
+                "key_growth_areas": [item for item in growth if isinstance(item, dict)][
+                    :4
+                ],
             },
-            "phase_summary": synthesis.get("phase_summary", []),
+            "phase_summary": phase_rows,
             "per_question": per_question_results,
-            "skill_radar": synthesis.get("skill_radar", {}),
+            "skill_radar": radar,
+            "tag": str(synthesis.get("tag") or "").strip()[:8],
         }
     except Exception as exc:
         logger.error("Report synthesis failed: %s", exc)
-        # Fallback: aggregate scores by phase, no key_growth_areas.
-        # None scores (未评分) are excluded, not treated as zeros.
-        scores = [pq["score"] for pq in graded if (pq.get("score") or 0) > 0]
-        avg_score = sum(scores) / len(scores) if scores else 0.0
         return {
-            "interview_metadata": {
-                "total_questions": len(per_question_results),
-                "phases": list(
-                    {pq.get("phase", "general") for pq in per_question_results}
-                ),
-                "failed_count": failed_count,
-            },
             "overall": {
-                "score": round(avg_score, 1),
-                "summary": "综合报告生成失败，仅提供逐题分析结果。",
+                "score": overall_score,
+                "summary": "综合叙述生成失败，逐题分析和代码聚合分数仍可正常查看。",
                 "strengths": [],
                 "weaknesses": [],
                 "key_growth_areas": [],
             },
-            "phase_summary": [],
+            "phase_summary": phase_rows,
             "per_question": per_question_results,
-            "skill_radar": {},
+            "skill_radar": empty_radar,
+            "tag": "",
         }
+
+
+def _string_list(value: Any, *, limit: int) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()][:limit]
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -647,131 +656,25 @@ async def analyze_interview(
     user_id: str | None = None,
     qa_pairs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Analyze an interview transcript using the three-stage MapReduce pipeline.
-
-    Args:
-        transcript: WhisperX diarized transcript (Markdown format)
-        resume_context: Plain text resume content (recommended)
-        jd_context: Plain text job description (optional)
-        on_progress: optional callback invoked with the number of questions
-            just completed (per-question during Stage 2). The orchestrator
-            wires this to ``increment_analyzed_count`` so the SSE progress
-            stream reports REAL per-question progress. Exceptions from the
-            callback are swallowed — progress must never fail an analysis.
-
-    Returns:
-        Complete analysis report dict matching the v2 report schema.
-    """
-    try:
-        # ── Stage 1: LLM-powered QA extraction ──────────────────────
-        # ANA-1: the orchestrator already ran Stage 1 (and persisted the QA
-        # shells from ITS result) — re-extracting here was a second full LLM
-        # pass whose independently-sampled pairs could mismatch the shells
-        # (order_idx backfill then attaches analyses to the wrong questions).
-        if qa_pairs is None:
-            qa_pairs = await extract_qa_pairs_with_llm(
-                transcript,
-                resume_context,
-                user_id=user_id,
-            )
-
-        if not qa_pairs:
-            logger.warning("No QA pairs extracted; returning empty report.")
-            return {
-                "interview_metadata": {"total_questions": 0, "phases": []},
-                "overall": {
-                    "score": 0,
-                    "summary": "无法从转录文本中识别出有效的问答对。",
-                    "strengths": [],
-                    "weaknesses": [],
-                    "key_growth_areas": [],
-                },
-                "phase_summary": [],
-                "per_question": [],
-                "skill_radar": {},
-            }
-
-        logger.info(
-            "Stage 1 complete: extracted %d QA pairs (%d tokens in transcript).",
-            len(qa_pairs),
-            _count_tokens(transcript),
+    """Extract Q&A when needed, then use the shared batch analysis path."""
+    if qa_pairs is None:
+        qa_pairs = await extract_qa_pairs_with_llm(
+            transcript, resume_context, user_id=user_id
         )
-
-        # ── Stage 2: Per-question analysis (Map, concurrent) ─────────
-        # Owner's primary model drives scoring + synthesis (MDL-1);
-        # resolved once, shared by every concurrent question task.
-        analysis_llm = get_llm_for_role("primary", user_id=user_id)
-        # ANA-6: bound the fan-out — 30 questions used to mean 30 concurrent
-        # completions, a guaranteed rate-limit trip on most providers.
-        semaphore = asyncio.Semaphore(_ANALYSIS_MAX_CONCURRENCY)
-
-        async def _run_one(pair: dict[str, Any], idx: int) -> dict[str, Any]:
-            async with semaphore:
-                context_text = _build_sliding_context(qa_pairs, idx)
-                res = await _analyze_single_question(
-                    qa_pair=pair,
-                    context_text=context_text,
-                    total_questions=len(qa_pairs),
-                    resume_context=resume_context,
-                    jd_context=jd_context,
-                    llm=analysis_llm,
-                )
-            _notify_progress(on_progress, 1)
-            return res
-
-        tasks = [
-            asyncio.create_task(_run_one(pair, idx))
-            for idx, pair in enumerate(qa_pairs)
-        ]
-        per_question_results = await asyncio.gather(*tasks)
-        per_question_results = list(per_question_results)
-
-        logger.info(
-            "Stage 2 complete: analyzed %d questions.", len(per_question_results)
-        )
-
-        # ── Stage 3: Global synthesis (Reduce) ───────────────────────
-        report = await _synthesize_report(
-            per_question_results,
-            resume_context=resume_context,
-            jd_context=jd_context,
-            llm=analysis_llm,
-        )
-
-        logger.info(
-            "Stage 3 complete: overall score %.1f.",
-            report.get("overall", {}).get("score", 0),
-        )
-
-        return report
-
-    except Exception as e:
-        logger.error(f"Analysis pipeline failed: {e}")
-        raise
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# Mock-specific batched analyzer
-# ══════════════════════════════════════════════════════════════════════════
-# When the QA pairs come from a mock interview (already structured, no ASR
-# noise), we can do better than the upload pipeline:
-#   - batch_size questions per LLM call (token-efficient)
-#   - explicit prev / next sliding window so each question sees neighbours
-# The output shape matches `_analyze_single_question`, so `_synthesize_report`
-# can consume it unchanged.
+    return await analyze_qa_batched(
+        qa_pairs,
+        resume_context=resume_context,
+        jd_context=jd_context,
+        on_progress=on_progress,
+        user_id=user_id,
+    )
 
 
 def _render_qa_block(qa: dict[str, Any], label: str) -> str:
-    topic = qa.get("topic") or ""
-    prior = qa.get("prior_quality") or qa.get("answer_quality") or {}
-    prior_str = ""
-    if isinstance(prior, dict) and prior.get("level"):
-        prior_str = f", prior_quality={prior['level']}"
-    elif isinstance(prior, str) and prior:
-        prior_str = f", prior_quality={prior}"
+    topic = qa.get("question_summary") or qa.get("topic") or ""
     topic_str = f", topic={topic}" if topic else ""
     return (
-        f"{label} [index={qa['index']}, phase={qa.get('phase', 'general')}{topic_str}{prior_str}]\n"
+        f"{label} [index={qa['index']}, phase={qa.get('phase', 'general')}{topic_str}]\n"
         f"  问: {qa['question'][:600]}\n"
         f"  答: {qa['answer'][:1200]}"
     )
@@ -799,7 +702,7 @@ async def _analyze_batch(
     next_ctx = "\n\n".join(_render_qa_block(q, "[后]") for q in next_window) or "（无）"
     batch_block = "\n\n".join(_render_qa_block(q, "[本批]") for q in batch)
 
-    prompt = BATCH_ANALYSIS_PROMPT.format(
+    prompt = QUESTION_ANALYSIS_PROMPT.format(
         resume_context=resume_for_prefix,
         jd_context=jd_for_prefix,
         prev_ctx=prev_ctx,
@@ -825,63 +728,28 @@ async def _analyze_batch(
         ]
 
     try:
-        parsed = await _acomplete_json_with_retry(llm, prompt)
-        items_in = parsed.get("results") if isinstance(parsed, dict) else None
-        if not isinstance(items_in, list):
-            logger.warning("Batched analyzer returned non-list results; falling back")
-            return _fallback()
-
-        by_index: dict[int, dict[str, Any]] = {}
-        for item in items_in:
-            if not isinstance(item, dict):
-                continue
-            try:
-                idx = int(item.get("index"))
-            except (TypeError, ValueError):
-                continue
-            by_index[idx] = item
-
-        out: list[dict[str, Any]] = []
+        by_index = await _request_batch_result(
+            llm, prompt, [int(q["index"]) for q in batch]
+        )
+        out = []
         for q in batch:
-            item = by_index.get(int(q["index"]))
-            if item is None:
-                # LLM dropped this one — single-shot retry inline.
-                logger.warning(
-                    "Batched analyzer skipped Q%s; falling back to per-question",
-                    q["index"],
-                )
-                out.append(
-                    await _analyze_single_question(
-                        q,
-                        context_text="",
-                        total_questions=len(batch),
-                        resume_context=resume_context,
-                        jd_context=jd_context,
-                        llm=llm,
-                    )
-                )
-                continue
+            item = by_index[int(q["index"])]
             out.append(
                 {
                     "index": q["index"],
                     "phase": q.get("phase", "general"),
                     "question": q["question"],
                     "answer": q["answer"],
-                    "score": float(item.get("score", 0) or 0),
-                    "critique": str(item.get("critique", "")).strip(),
-                    "improved_answer": str(item.get("improved_answer", "")).strip(),
-                    "tags": item.get("tags", [])
-                    if isinstance(item.get("tags"), list)
-                    else [],
+                    **item,
                 }
             )
         return out
     except Exception as exc:  # noqa: BLE001
-        logger.error("Batched analyzer failed; falling back: %s", exc)
+        logger.error("Question-analysis batch failed after retries: %s", exc)
         return _fallback()
 
 
-async def analyze_mock_qa_batched(
+async def analyze_qa_batched(
     qa_pairs: list[dict[str, Any]],
     *,
     resume_context: str = "",
@@ -892,16 +760,7 @@ async def analyze_mock_qa_batched(
     on_progress: Callable[[int], None] | None = None,
     user_id: str | None = None,
 ) -> dict[str, Any]:
-    """Run the full mock-source pipeline: batched per-question scoring with a
-    sliding window, then global synthesis. Returns the same v2 report shape as
-    `analyze_interview`.
-
-    ``on_progress`` (optional): called with the number of questions completed
-    after each batch — see ``analyze_interview`` for the contract."""
-    # Normalize incoming entries to the {index, question, answer, phase} shape
-    # the rest of this module expects (1-based index, ordered by appearance).
-    # We additionally carry forward any optional per-QA metadata (topic + a
-    # prior quality label, when present) so the analyzer prompt can surface it.
+    """Score structured Q&A in batches and synthesize one report for any source."""
     normalized: list[dict[str, Any]] = []
     for i, pair in enumerate(qa_pairs, start=1):
         if not isinstance(pair, dict):
@@ -914,29 +773,17 @@ async def analyze_mock_qa_batched(
                 "answer": str(pair.get("answer") or ""),
                 "is_follow_up": bool(pair.get("is_follow_up", False)),
                 "topic": pair.get("topic"),
-                "prior_quality": pair.get("answer_quality"),
+                "question_summary": pair.get("question_summary"),
             }
         )
 
     if not normalized:
-        return {
-            "interview_metadata": {"total_questions": 0, "phases": []},
-            "overall": {
-                "score": 0,
-                "summary": "面试无问答记录。",
-                "strengths": [],
-                "weaknesses": [],
-                "key_growth_areas": [],
-            },
-            "phase_summary": [],
-            "per_question": [],
-            "skill_radar": {},
-        }
+        return await _synthesize_report([], resume_context, jd_context, llm=None)
 
     # Owner's primary model drives scoring + synthesis (MDL-1).
     analysis_llm = get_llm_for_role("primary", user_id=user_id)
-    # Bounded fan-out (ANA-6) — same rationale as the upload path.
     semaphore = asyncio.Semaphore(_ANALYSIS_MAX_CONCURRENCY)
+    batch_size = max(1, int(batch_size))
 
     # Walk in batch_size strides, schedule batches concurrently.
     async def _run_batch(
@@ -970,7 +817,7 @@ async def analyze_mock_qa_batched(
     ]
 
     logger.info(
-        "Mock batched analysis complete: %d questions across %d batches (size=%d, prev=%d, next=%d)",
+        "Question analysis complete: %d questions across %d batches (size=%d, prev=%d, next=%d)",
         len(per_question_results),
         len(tasks),
         batch_size,
@@ -987,4 +834,4 @@ async def analyze_mock_qa_batched(
     return report
 
 
-__all__ = ["analyze_interview", "analyze_mock_qa_batched", "extract_qa_pairs_with_llm"]
+__all__ = ["analyze_interview", "analyze_qa_batched", "extract_qa_pairs_with_llm"]

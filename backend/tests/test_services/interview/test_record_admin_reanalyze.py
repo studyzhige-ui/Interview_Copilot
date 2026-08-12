@@ -43,7 +43,6 @@ def test_reanalyze_resets_and_dispatches(db_session, monkeypatch):
         status="failed",
         analysis_json='{"overall": {}}',
         error_message="boom",
-        debrief_summary="旧摘要",
         analyzed_qa_count=7,
     )
     monkeypatch.setattr(
@@ -59,7 +58,6 @@ def test_reanalyze_resets_and_dispatches(db_session, monkeypatch):
     assert rec.status == "pending"
     assert rec.analysis_json is None
     assert rec.error_message is None
-    assert rec.debrief_summary is None  # regenerates from the new report
     assert rec.analyzed_qa_count == 0
     assert rec.celery_task_id == "task-9"
 

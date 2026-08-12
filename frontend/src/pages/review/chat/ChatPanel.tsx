@@ -29,11 +29,11 @@
  *   MessageList / Bubble / MessageBlocks / SessionDropdown / ChatToolbar
  */
 
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Sparkles, ChevronDown } from 'lucide-react';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { getChatTranscript } from '@/api/chat';
-import type { Attachment } from './types';
+import type { Attachment, Mode } from './types';
 import { toUI } from './types';
 import { useSessionRuntimes } from './useSessionRuntimes';
 import { useChatStream } from './useChatStream';
@@ -64,6 +64,12 @@ interface Props {
   width?: number;
   flexible?: boolean;
   className?: string;
+  questionIndexes?: number[];
+  onRemoveQuestion?: (index: number) => void;
+  onClearQuestions?: () => void;
+  /** Product runtimes with a single execution mode (currently Career Agent)
+   *  can lock the strategy and remove the mode switch from the UI. */
+  fixedMode?: Mode;
 }
 
 export function ChatPanel({
@@ -74,6 +80,10 @@ export function ChatPanel({
   width = 400,
   flexible = false,
   className = '',
+  questionIndexes = [],
+  onRemoveQuestion = () => {},
+  onClearQuestions = () => {},
+  fixedMode,
 }: Props) {
   // External-mode (caller-controlled): ChatPanel becomes a thin shell;
   // session list state stays empty.
@@ -97,8 +107,27 @@ export function ChatPanel({
   const serverMode = sessionList.sessions.find(
     (s) => s.session_id === activeSessionId,
   )?.mode;
-  const { mode, setMode } = useSessionMode(activeSessionId, serverMode);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const sessionMode = useSessionMode(activeSessionId, serverMode);
+  const mode = fixedMode ?? sessionMode.mode;
+  const [attachmentState, setAttachmentState] = useState<{
+    sessionId: string | null;
+    items: Attachment[];
+  }>({ sessionId: activeSessionId ?? null, items: [] });
+  const attachments = attachmentState.sessionId === activeSessionId
+    ? attachmentState.items
+    : [];
+  const setAttachments = useCallback<React.Dispatch<React.SetStateAction<Attachment[]>>>(
+    (update) => {
+      setAttachmentState((current) => {
+        const currentItems = current.sessionId === activeSessionId ? current.items : [];
+        return {
+          sessionId: activeSessionId ?? null,
+          items: typeof update === 'function' ? update(currentItems) : update,
+        };
+      });
+    },
+    [activeSessionId],
+  );
   const { globalMemoryOn, togglingMemory, toggleGlobalMemory } =
     useGlobalMemoryToggle(activeSessionId);
   const { profiles, activeProfileId, activeModelName, pickModel } =
@@ -156,20 +185,18 @@ export function ChatPanel({
     if (el) el.scrollTo({ top: el.scrollHeight });
   }, [tick, activeSessionId]);
 
-  // ── Send: compose payload from input + attachments ───────────────────
+  // ── Send structured turn input ──────────────────────────────────────
   const send = () => {
     const text = input.trim();
     if (!text || !activeSessionId) return;
     const runtime = getRuntime(activeSessionId);
     if (runtime.streaming || runtime.turnId) return;
-    let payload = text;
-    if (attachments.length > 0) {
-      const tail = attachments.map((a) => `[附件: ${a.filename} (doc=${a.doc_id})]`).join('\n');
-      payload = `${tail}\n\n${text}`;
-    }
+    if (attachments.some((attachment) => attachment.status !== 'ready')) return;
+    const turnAttachments = attachments;
     setInput('');
     setAttachments([]);
-    sendMessage(payload);
+    sendMessage(text, questionIndexes, turnAttachments);
+    onClearQuestions();
   };
 
   // ── Derived render state ────────────────────────────────────────────
@@ -302,7 +329,8 @@ export function ChatPanel({
         activeSessionId={activeSessionId}
         externalMode={externalMode}
         mode={mode}
-        setMode={setMode}
+        setMode={sessionMode.setMode}
+        allowModeSwitch={fixedMode === undefined}
         globalMemoryOn={globalMemoryOn}
         togglingMemory={togglingMemory}
         onToggleGlobalMemory={() => { void toggleGlobalMemory(); }}
@@ -313,6 +341,9 @@ export function ChatPanel({
         onCancel={cancel}
         attachments={attachments}
         setAttachments={setAttachments}
+        questionIndexes={questionIndexes}
+        onRemoveQuestion={onRemoveQuestion}
+        onClearQuestions={onClearQuestions}
       />
 
       {/* Styled delete confirmation — replaces the off-brand native

@@ -1,14 +1,7 @@
-"""Lifecycle helpers for ``mock_interview_runtime`` — the live mock state.
-
-The mock-start flow creates one runtime row per interview (atomically with the
-``interview_records`` + ``conversations``); answers advance it; finish/abandon
-end it. This service is the single home for those transitions so the runtime
-never drifts (e.g. two ``in_progress`` rows for one record).
-"""
+"""Persistence helpers for the ephemeral live mock-interview cursor."""
 
 from __future__ import annotations
 
-import json
 from datetime import timedelta
 from typing import Any
 
@@ -18,13 +11,6 @@ from app.core.user_identity import resolve_user_pk
 from app.db.types import utc_now
 from app.models.mock_interview_runtime import MockInterviewRuntime
 
-# The single live status; every other status is terminal.
-# Runtime is a PRESENCE CURSOR, not a second state machine: record.status is
-# the single source of truth for the run's lifecycle; the runtime row only
-# answers "does this user have a live run to resume, and where was it".
-# Its status just mirrors active-vs-not (MOCK-9).
-ACTIVE_STATUS = "in_progress"
-PROCESSING_STATUS = "processing_review"
 ANSWER_CLAIM_TTL_SECONDS = 600
 
 
@@ -33,12 +19,12 @@ def create_runtime(
     *,
     user_id: str,
     interview_record_id: str,
-    conversation_id: str | None = None,
-    plan: list[dict[str, Any]] | None = None,
-    plan_template_key: str = "general",
-    interviewer_style: str = "professional",
-    voice_mode: str = "hybrid",
-    current_stage_key: str | None = None,
+    conversation_id: str,
+    plan: list[dict[str, Any]],
+    interviewer_style: str,
+    target_question_count: int,
+    current_stage_key: str,
+    current_question_message_id: int,
     commit: bool = True,
 ) -> MockInterviewRuntime:
     """Create the runtime for a newly-started mock interview.
@@ -53,12 +39,11 @@ def create_runtime(
         user_id=user_pk,
         interview_record_id=interview_record_id,
         conversation_id=conversation_id,
-        status=ACTIVE_STATUS,
-        plan_json=json.dumps(plan, ensure_ascii=False) if plan is not None else None,
-        plan_template_key=plan_template_key,
+        plan_json=plan,
         interviewer_style=interviewer_style,
-        voice_mode=voice_mode,
+        target_question_count=target_question_count,
         current_stage_key=current_stage_key,
+        current_question_message_id=current_question_message_id,
     )
     db.add(runtime)
     if commit:
@@ -68,7 +53,7 @@ def create_runtime(
 
 
 def get_active_runtime(db: Session, *, user_id: str) -> MockInterviewRuntime | None:
-    """The user's most recent in-progress mock, for resume-after-refresh.
+    """The user's active mock, for resume-after-refresh.
 
     ``user_id`` is the username; resolved to the stable ``users.id`` for the
     query (returns None for an unknown user)."""
@@ -77,11 +62,7 @@ def get_active_runtime(db: Session, *, user_id: str) -> MockInterviewRuntime | N
         return None
     return (
         db.query(MockInterviewRuntime)
-        .filter(
-            MockInterviewRuntime.user_id == user_pk,
-            MockInterviewRuntime.status == ACTIVE_STATUS,
-        )
-        .order_by(MockInterviewRuntime.last_activity_at.desc())
+        .filter(MockInterviewRuntime.user_id == user_pk)
         .first()
     )
 
@@ -115,8 +96,7 @@ def claim_question(
     updated = (
         db.query(MockInterviewRuntime)
         .filter(
-            MockInterviewRuntime.id == runtime.id,
-            MockInterviewRuntime.status == ACTIVE_STATUS,
+            MockInterviewRuntime.interview_record_id == runtime.interview_record_id,
             MockInterviewRuntime.current_question_message_id == question_message_id,
             (
                 MockInterviewRuntime.answer_claimed_at.is_(None)
@@ -137,7 +117,7 @@ def claim_question(
         return "claimed"
 
     db.expire_all()
-    current = db.get(MockInterviewRuntime, runtime.id)
+    current = db.get(MockInterviewRuntime, runtime.interview_record_id)
     if current is None or current.current_question_message_id != question_message_id:
         return "stale"
     return "busy"
@@ -145,7 +125,7 @@ def claim_question(
 
 def release_question_claim(
     db: Session,
-    runtime_id: str,
+    interview_record_id: str,
     *,
     question_message_id: int,
 ) -> None:
@@ -154,8 +134,7 @@ def release_question_claim(
     (
         db.query(MockInterviewRuntime)
         .filter(
-            MockInterviewRuntime.id == runtime_id,
-            MockInterviewRuntime.status == ACTIVE_STATUS,
+            MockInterviewRuntime.interview_record_id == interview_record_id,
             MockInterviewRuntime.current_question_message_id == question_message_id,
         )
         .update(
@@ -170,51 +149,14 @@ def advance_runtime(
     db: Session,
     runtime: MockInterviewRuntime,
     *,
-    current_stage_key: str | None = None,
-    stage_index: int | None = None,
-    current_question_text: str | None = None,
-    current_question_message_id: int | None = None,
+    current_stage_key: str,
+    current_question_message_id: int,
     commit: bool = True,
 ) -> MockInterviewRuntime:
-    """Update the live position (stage / current question) + last activity.
-
-    Partial update: only non-None args are applied. The mock flow advances
-    forward, so passing ``stage_index=0`` is a no-op by design (the initial
-    position is set at create time).
-    """
-    if current_stage_key is not None:
-        runtime.current_stage_key = current_stage_key
-    if stage_index is not None:
-        runtime.stage_index = stage_index
-    if current_question_text is not None:
-        runtime.current_question_text = current_question_text
-    if current_question_message_id is not None:
-        runtime.current_question_message_id = current_question_message_id
+    """Update the live stage/question cursor and activity timestamp."""
+    runtime.current_stage_key = current_stage_key
+    runtime.current_question_message_id = current_question_message_id
     runtime.last_activity_at = utc_now()
-    db.add(runtime)
-    if commit:
-        db.commit()
-        db.refresh(runtime)
-    return runtime
-
-
-def set_status(
-    db: Session,
-    runtime: MockInterviewRuntime,
-    status: str,
-    *,
-    commit: bool = True,
-) -> MockInterviewRuntime:
-    """Transition status (e.g. processing_review / completed / review_failed).
-
-    ``ended_at`` is stamped once, on the first move off ``in_progress`` — so a
-    later ``processing_review`` → ``completed`` transition keeps the original
-    interview-end time rather than overwriting it with the review-finish time.
-    """
-    runtime.status = status
-    if status != ACTIVE_STATUS and runtime.ended_at is None:
-        runtime.ended_at = utc_now()
-    runtime.updated_at = utc_now()
     db.add(runtime)
     if commit:
         db.commit()
@@ -225,8 +167,7 @@ def set_status(
 def delete_runtime(
     db: Session, runtime: MockInterviewRuntime, *, commit: bool = True
 ) -> None:
-    """Hard-delete on active abandon (the record/conversation are cleaned up
-    by the caller in the same transaction)."""
+    """Delete the live cursor after dispatch or as part of abandon."""
     db.delete(runtime)
     if commit:
         db.commit()

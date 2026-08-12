@@ -25,6 +25,7 @@ from app.db.types import utc_now
 from app.models.interview_qa import InterviewQA, _generate_qa_id
 from app.models.interview_record import InterviewRecord, _generate_record_id
 from app.models.interview_transcript import InterviewTranscript, _generate_transcript_id
+from app.services.interview.analysis_context import build_analysis_context
 
 logger = logging.getLogger(__name__)
 
@@ -96,13 +97,8 @@ class InterviewRecordService:
         user_id: str,
         title: str = "",
         resume_id: str | None = None,
-        resume_file_asset_id: str | None = None,
-        resume_source: str | None = None,
-        resume_title_snapshot: str | None = None,
-        jd_file_asset_id: str | None = None,
         resume_text_snapshot: str = "",
         jd_text_snapshot: str = "",
-        interview_plan: str = "",
         status: str = STATUS_PENDING,
         db: Session | None = None,
     ) -> InterviewRecord:
@@ -111,13 +107,9 @@ class InterviewRecordService:
             source="mock",
             title=title or "模拟面试",
             resume_id=resume_id,
-            resume_file_asset_id=resume_file_asset_id,
-            resume_source=resume_source,
-            resume_title_snapshot=resume_title_snapshot,
-            jd_file_asset_id=jd_file_asset_id,
+            resume_source="personal_resume" if resume_id else None,
             resume_text_snapshot=resume_text_snapshot,
             jd_text_snapshot=jd_text_snapshot,
-            interview_plan=interview_plan,
             status=status,
             db=db,
         )
@@ -520,31 +512,11 @@ class InterviewRecordService:
     # ── Reference helper for debrief context assembly ─────────────────
 
     def get_analysis_summary(self, record_id: str, user_id: str) -> str:
-        """Short reference for slot 2 of context assembly."""
+        """Return the shared bounded report context for API consumers."""
         record = self.get(record_id, user_id)
         if record is None:
             return ""
-
-        overall: dict[str, Any] = {}
-        if record.analysis_json:
-            try:
-                report = json.loads(record.analysis_json)
-                overall = report.get("overall") or {}
-            except json.JSONDecodeError:
-                pass
-
-        qa_rows = self.list_qa(record_id)
-        lines = [
-            f"综合评分: {overall.get('score', 'N/A')}",
-            f"总体评价: {overall.get('summary') or overall.get('feedback') or ''}",
-            "",
-            "题目列表:",
-        ]
-        for i, qa in enumerate(qa_rows, 1):
-            q = (qa.question or "")[:60]
-            score = qa.score if qa.score is not None else "?"
-            lines.append(f"  Q{i}: {q}... (评分:{score})")
-        return "\n".join(lines)
+        return build_analysis_context(record.analysis_json, self.list_qa(record_id))
 
     # ── Internal ──────────────────────────────────────────────────────
 
@@ -562,7 +534,6 @@ class InterviewRecordService:
         jd_file_asset_id: str | None = None,
         resume_text_snapshot: str = "",
         jd_text_snapshot: str = "",
-        interview_plan: str = "",
         status: str = STATUS_PENDING,
         db: Session | None = None,
     ) -> InterviewRecord:
@@ -583,10 +554,9 @@ class InterviewRecordService:
                 jd_file_asset_id=jd_file_asset_id,
                 resume_text_snapshot=resume_text_snapshot or None,
                 jd_text_snapshot=jd_text_snapshot or None,
-                interview_plan=interview_plan or None,
                 status=status,
                 analyzed_qa_count=0,
-                analysis_schema_version=2,
+                analysis_schema_version=3,
             )
             db.add(record)
             if own_db:

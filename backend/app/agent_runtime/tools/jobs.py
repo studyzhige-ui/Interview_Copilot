@@ -174,6 +174,7 @@ registry.register(
         ),
         args_model=SearchJobsArgs,
         handler=_search_jobs_handler,
+        concurrency_safe=True,
         check_fn=_jobs_available,
         max_result_chars=12_000,
         emoji="💼",

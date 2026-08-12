@@ -117,27 +117,38 @@ def test_analyze_interview_skips_extraction_when_pairs_given(monkeypatch):
     monkeypatch.setattr(svc, "extract_qa_pairs_with_llm", _boom)
 
     graded = {
-        "score": 7,
-        "critique": "还行",
-        "improved_answer": "",
-        "tags": [],
+        "results": [
+            {
+                "index": 1,
+                "score": 7,
+                "critique": "还行",
+                "improved_answer": "更好的回答",
+                "tags": ["Python"],
+            }
+        ]
     }
     synthesis = {
         "overall": {
-            "score": 7,
             "summary": "ok",
             "strengths": [],
             "weaknesses": [],
             "key_growth_areas": [],
         },
-        "phase_summary": [],
-        "skill_radar": {},
+        "phase_summary": [{"phase": "technical", "summary": "技术回答基本准确。"}],
+        "skill_evidence": {
+            "系统设计": [],
+            "编码能力": [1],
+            "基础知识": [1],
+            "沟通表达": [1],
+            "项目经验": [],
+        },
+        "tag": "Python",
     }
     calls = {"n": 0}
 
     async def _acomplete(prompt, **kwargs):
         calls["n"] += 1
-        # First call = the single per-question grading; second = synthesis.
+        # First call = the shared batch analyzer; second = synthesis.
         return _resp(graded) if calls["n"] <= 1 else _resp(synthesis)
 
     monkeypatch.setattr(
@@ -163,45 +174,111 @@ def test_analyze_interview_skips_extraction_when_pairs_given(monkeypatch):
     assert report["per_question"][0]["question"] == "Q1"
     assert report["per_question"][0]["score"] == 7.0
     assert report["overall"]["score"] == 7.0
+    assert report["phase_summary"][0]["score"] == 7.0
+    assert report["skill_radar"]["编码能力"] == 7.0
 
 
 # ── ANA-6: failed grading is 未评分, not a silent zero ────────────────────
 
 
-def test_failed_question_scores_none_not_zero(monkeypatch):
+def test_failed_batch_scores_every_question_none(monkeypatch):
     monkeypatch.setattr(svc, "_ANALYSIS_RETRY_BASE_S", 0.0)
     llm = _FakeLLM(AsyncMock(side_effect=RuntimeError("provider 500")))
     out = asyncio.run(
-        svc._analyze_single_question(
-            {"index": 3, "question": "Q", "answer": "A", "phase": "technical"},
-            context_text="",
-            total_questions=5,
+        svc._analyze_batch(
+            [
+                {"index": 1, "question": "Q1", "answer": "A1", "phase": "technical"},
+                {"index": 2, "question": "Q2", "answer": "A2", "phase": "technical"},
+            ],
+            [],
+            [],
+            resume_context="",
+            jd_context="",
             llm=llm,
         )
     )
-    assert out["score"] is None
-    assert out["analysis_failed"] is True
-    # retried before giving up
+    assert [item["score"] for item in out] == [None, None]
+    assert all(item["analysis_failed"] is True for item in out)
     assert llm.acomplete.await_count == svc._ANALYSIS_MAX_ATTEMPTS
 
 
-def test_retry_succeeds_on_second_attempt(monkeypatch):
+def test_batch_retry_succeeds_on_second_attempt(monkeypatch):
     monkeypatch.setattr(svc, "_ANALYSIS_RETRY_BASE_S", 0.0)
-    ok = _resp({"score": 8, "critique": "好", "improved_answer": "", "tags": []})
+    ok = _resp(
+        {
+            "results": [
+                {
+                    "index": 1,
+                    "score": 8,
+                    "critique": "好",
+                    "improved_answer": "示例",
+                    "tags": [],
+                }
+            ]
+        }
+    )
     llm = _FakeLLM(AsyncMock(side_effect=[RuntimeError("blip"), ok]))
     out = asyncio.run(
-        svc._analyze_single_question(
-            {"index": 1, "question": "Q", "answer": "A", "phase": "technical"},
-            context_text="",
-            total_questions=1,
+        svc._analyze_batch(
+            [{"index": 1, "question": "Q", "answer": "A", "phase": "technical"}],
+            [],
+            [],
+            resume_context="",
+            jd_context="",
             llm=llm,
         )
     )
-    assert out["score"] == 8.0
-    assert "analysis_failed" not in out
+    assert out[0]["score"] == 8.0
+    assert "analysis_failed" not in out[0]
 
 
-def test_synthesis_excludes_failed_and_reports_count():
+def test_incomplete_batch_retries_the_same_full_batch(monkeypatch):
+    monkeypatch.setattr(svc, "_ANALYSIS_RETRY_BASE_S", 0.0)
+    item1 = {
+        "index": 1,
+        "score": 6,
+        "critique": "一",
+        "improved_answer": "一",
+        "tags": [],
+    }
+    item2 = {
+        "index": 2,
+        "score": 7,
+        "critique": "二",
+        "improved_answer": "二",
+        "tags": [],
+    }
+    llm = _FakeLLM(
+        AsyncMock(
+            side_effect=[
+                _resp({"results": [item1]}),
+                _resp({"results": [item1, item2]}),
+            ]
+        )
+    )
+    batch = [
+        {"index": 1, "question": "Q1", "answer": "A1", "phase": "technical"},
+        {"index": 2, "question": "Q2", "answer": "A2", "phase": "technical"},
+    ]
+    out = asyncio.run(
+        svc._analyze_batch(
+            batch,
+            [],
+            [],
+            resume_context="",
+            jd_context="",
+            llm=llm,
+        )
+    )
+    assert [item["score"] for item in out] == [6.0, 7.0]
+    assert llm.acomplete.await_count == 2
+    assert (
+        llm.acomplete.await_args_list[0].args[0]
+        == llm.acomplete.await_args_list[1].args[0]
+    )
+
+
+def test_synthesis_excludes_failed_questions_from_aggregation():
     per_question = [
         {
             "index": 1,
@@ -226,9 +303,35 @@ def test_synthesis_excludes_failed_and_reports_count():
     # Synthesis LLM fails → fallback aggregation path (deterministic).
     llm = _FakeLLM(AsyncMock(side_effect=RuntimeError("down")))
     report = asyncio.run(svc._synthesize_report(per_question, llm=llm))
-    assert report["interview_metadata"]["failed_count"] == 1
     # Average over graded only — a silent 0 would have halved it.
     assert report["overall"]["score"] == 8.0
+
+
+def test_synthesis_average_includes_real_zero_scores():
+    per_question = [
+        {
+            "index": 1,
+            "phase": "technical",
+            "question": "Q1",
+            "answer": "A1",
+            "score": 0.0,
+            "critique": "错误",
+            "tags": [],
+        },
+        {
+            "index": 2,
+            "phase": "technical",
+            "question": "Q2",
+            "answer": "A2",
+            "score": 10.0,
+            "critique": "准确",
+            "tags": [],
+        },
+    ]
+    llm = _FakeLLM(AsyncMock(side_effect=RuntimeError("down")))
+    report = asyncio.run(svc._synthesize_report(per_question, llm=llm))
+    assert report["overall"]["score"] == 5.0
+    assert report["phase_summary"][0]["score"] == 5.0
 
 
 def test_resolve_span_pairs_remaps_parent_after_drops():

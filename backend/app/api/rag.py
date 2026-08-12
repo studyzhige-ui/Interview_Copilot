@@ -12,6 +12,7 @@ from app.core.error_messages import humanize_error
 from app.core.rate_limit import RATE_EXPENSIVE, RATE_UPLOAD, limiter
 from app.core.security import get_current_user
 from app.db.database import get_db
+from app.models.chat import Conversation
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
 from app.rag.application.service import rag_service
@@ -102,6 +103,7 @@ def _document_payload(document: KnowledgeDocument) -> dict:
         "title": document.title,
         "category": document.category,
         "source_kind": document.source_kind,
+        "conversation_id": document.conversation_id,
         "status": document.status,
         "task_id": document.task_id,
         "chunk_count": document.chunk_count,
@@ -157,6 +159,30 @@ def create_knowledge_document(
     current_user: User = Depends(get_current_user),
 ):
     try:
+        conversation_id: str | None = None
+        if body.source_kind == SourceKindEnum.chat_attachment:
+            if not body.conversation_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="聊天附件必须绑定会话",
+                )
+            conversation = (
+                db.query(Conversation)
+                .filter(
+                    Conversation.id == body.conversation_id,
+                    Conversation.user_id == current_user.id,
+                )
+                .first()
+            )
+            if conversation is None:
+                raise HTTPException(status_code=404, detail="Conversation not found")
+            conversation_id = conversation.id
+        elif body.conversation_id:
+            raise HTTPException(
+                status_code=400,
+                detail="只有聊天附件可以绑定会话",
+            )
+
         upload = get_owned_file_asset(
             db,
             file_asset_id=body.upload_id,
@@ -185,6 +211,7 @@ def create_knowledge_document(
 
         document = KnowledgeDocument(
             user_id=current_user.id,
+            conversation_id=conversation_id,
             file_asset_id=upload.id,
             title=body.title or default_title(upload),
             category=body.category.strip() or "默认",
@@ -261,6 +288,8 @@ def list_knowledge_documents(
         query = query.filter(KnowledgeDocument.status == status)
     if source_kind:
         query = query.filter(KnowledgeDocument.source_kind == source_kind.value)
+    else:
+        query = query.filter(KnowledgeDocument.source_kind != "chat_attachment")
     documents = query.order_by(KnowledgeDocument.updated_at.desc()).all()
     return {
         "status": "success",
@@ -313,7 +342,11 @@ def update_knowledge_document(
     if request.category is not None:
         document.category = request.category.strip() or "默认"
     db.add(document)
-    if title_changed and document.status == "ready":
+    if (
+        title_changed
+        and document.status == "ready"
+        and document.source_kind != "chat_attachment"
+    ):
         # The title is part of the retrieval passage. Publish its new index view
         # through the same durable outbox as every other external-index update.
         from app.services.knowledge.index_jobs import enqueue_milvus_upsert
@@ -365,6 +398,7 @@ def list_knowledge_categories(
         .filter(
             KnowledgeDocument.user_id == current_user.id,
             KnowledgeDocument.deleted_at.is_(None),
+            KnowledgeDocument.source_kind != "chat_attachment",
         )
         .group_by(KnowledgeDocument.category)
         .order_by(KnowledgeDocument.category.asc())

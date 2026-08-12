@@ -37,6 +37,9 @@ def _in_scope(
         hit.get("user_id") == user_pk
         and (not source_kind or hit.get("source_kind") == source_kind)
         and (not document_ids or str(hit.get("document_id") or "") in document_ids)
+        # Conversation attachments are available only through explicit
+        # document IDs; they must never leak into global knowledge retrieval.
+        and (bool(document_ids) or hit.get("source_kind") != "chat_attachment")
     )
 
 

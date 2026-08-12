@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from app.services.interview.mock_interview_service import NextTurn
+
+from app.services.interview.mock_interview_service import (
+    BASE_INTERVIEW_STAGES,
+    MockPlan,
+    NextTurn,
+)
 
 from evaluation.mock_interview_eval import (
     DEFAULT_TRAJECTORY_DATASET,
@@ -29,28 +34,37 @@ class DeterministicInterviewer:
         stages,
         current_stage_key,
         user_answer,
-        questions_in_current_stage,
         **kwargs,
     ) -> NextTurn:
         self.calls += 1
         keys = [stage["key"] for stage in stages]
         index = keys.index(current_stage_key)
-        maximum = int(stages[index]["max_questions"])
-        if questions_in_current_stage >= maximum:
-            if index == len(keys) - 1:
-                return NextTurn(
-                    interviewer_message="感谢你的参与，本次模拟面试到这里结束。",
-                    next_stage_key=current_stage_key,
-                    is_ready_to_finish=True,
-                )
-            next_stage = keys[index + 1]
-        else:
-            next_stage = current_stage_key
+        if index == len(keys) - 1:
+            finishing = "没有" in user_answer
+            return NextTurn(
+                interviewer_message=(
+                    "感谢你的参与，准备好后可以结束本次面试并生成复盘。"
+                    if finishing
+                    else "这个问题需要以实际团队信息为准。你还有其他想了解的吗？"
+                ),
+                next_stage_key=current_stage_key,
+                is_ready_to_finish=finishing,
+            )
+        next_stage = keys[index + 1]
         return NextTurn(
             interviewer_message=f"关于“{user_answer[:18]}”，请说明一个新的验证依据？",
             next_stage_key=next_stage,
             is_ready_to_finish=False,
         )
+
+
+def _static_plan(**kwargs) -> MockPlan:
+    stages = [dict(stage) for stage in BASE_INTERVIEW_STAGES]
+    return MockPlan(
+        stages=stages,
+        opening_message="你好，请结合目标岗位做一个简单的自我介绍。",
+        first_stage_key=stages[0]["key"],
+    )
 
 
 def test_trajectory_dataset_covers_release_scenarios() -> None:
@@ -62,6 +76,10 @@ def test_trajectory_dataset_covers_release_scenarios() -> None:
         "off-topic-recovery",
         "bilingual-dialogue",
         "client-disconnect-resume",
+        "python-breadth-not-manual",
+        "length-warning-pacing",
+        "early-finish-request",
+        "conversation-prompt-injection",
     }
 
 
@@ -77,14 +95,15 @@ async def test_complete_trajectory_visits_every_stage_and_finishes() -> None:
     result = await _evaluate_trajectory(
         case,
         "eval-user",
+        plan_generator=_static_plan,
         turn_generator=generator,
         judge_turn=_perfect_judge,
     )
 
     assert result["passed"] is True
     assert result["visited_stages"] == case["required_stages"]
-    assert result["turns"] == 13
-    assert generator.calls == 13
+    assert result["turns"] == 5
+    assert generator.calls == 5
 
 
 @pytest.mark.asyncio
@@ -99,6 +118,7 @@ async def test_disconnect_recovery_does_not_generate_the_same_turn_twice() -> No
     result = await _evaluate_trajectory(
         case,
         "eval-user",
+        plan_generator=_static_plan,
         turn_generator=generator,
         judge_turn=_perfect_judge,
     )

@@ -32,6 +32,7 @@ class StrategyContext:
     session_id: str
     user_message: str
     turn_id: str | None = None
+    runtime_profile: str = "career"
 
     # Prepared context — the FULL ``AssembledContext`` built by the
     # engine. Strategies should render via

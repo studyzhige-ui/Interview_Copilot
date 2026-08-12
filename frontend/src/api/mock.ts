@@ -1,17 +1,17 @@
 import { apiClient } from './client';
-import type { MockAnswerResp, MockFinishResp, MockStartResp } from '@/types/api';
+import type {
+  MockAnswerResp,
+  MockAnswerAudioResp,
+  MockFinishResp,
+  MockLiveMessage,
+  MockStartResp,
+} from '@/types/api';
 
 export async function startMockInterview(payload: {
-  /** Personal resume entity (resumes.id) to use as context. */
-  resume_id?: string;
-  /** Freshly-uploaded resume file asset (file_assets.id). */
-  resume_file_asset_id?: string;
-  /** JD text — pasted or parsed inline. JD is never a knowledge document. */
-  jd_text?: string;
-  jd_file_asset_id?: string;
-  plan_template_key?: string;
-  interviewer_style?: 'friendly' | 'professional' | 'rigorous' | 'pressure';
-  voice_mode?: 'text' | 'voice' | 'hybrid';
+  resume_id: string;
+  jd_text: string;
+  interviewer_style: 'friendly' | 'professional' | 'rigorous' | 'pressure';
+  target_question_count: 15 | 20 | 30;
 }): Promise<MockStartResp> {
   const res = await apiClient.post('/mock-interviews/start', payload);
   return res.data;
@@ -45,32 +45,38 @@ export async function retryMockReview(recordId: string): Promise<MockFinishResp>
   return res.data;
 }
 
-export async function transcribeAudio(blob: Blob): Promise<string> {
+export async function prepareMockAnswerAudio(
+  recordId: string,
+  blob: Blob,
+): Promise<MockAnswerAudioResp> {
   const fd = new FormData();
-  fd.append('file', blob, 'answer.webm');
-  const res = await apiClient.post('/mock-interviews/transcribe', fd);
-  return res.data?.text ?? '';
+  const extension = blob.type.includes('ogg') ? 'ogg' : 'webm';
+  fd.append('file', blob, `answer.${extension}`);
+  const res = await apiClient.post(
+    `/mock-interviews/${encodeURIComponent(recordId)}/answer-audio`,
+    fd,
+  );
+  return res.data;
 }
 
 interface InProgressMock {
   has_in_progress: boolean;
   record_id?: string;
-  conversation_id?: string;
-  runtime_id?: string;
   title?: string;
-  current_stage_key?: string | null;
-  /** The last interviewer line — what the candidate is answering. */
-  current_question?: string | null;
-  /** Answered-turn count — seeds the resumed view's answeredCount so the
-   *  finish button isn't wrongly disabled after a refresh. */
-  answered_count?: number;
-  /** Concurrency token for the next answer after resume (MOCK-3). */
-  question_message_id?: number | null;
   last_activity_at?: string | null;
 }
 
 export async function getInProgressMock(): Promise<InProgressMock> {
   const res = await apiClient.get('/mock-interviews/in-progress');
+  return res.data;
+}
+
+export async function getMockLiveState(
+  recordId: string,
+): Promise<{ messages: MockLiveMessage[] }> {
+  const res = await apiClient.get(
+    `/mock-interviews/${encodeURIComponent(recordId)}/live-state`,
+  );
   return res.data;
 }
 

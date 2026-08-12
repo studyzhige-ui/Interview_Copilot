@@ -1,6 +1,6 @@
 """File I/O tools: read_file and write_file.
 
-read_file  — Read user-uploaded files (resume, JD, notes) by upload_id or purpose.
+read_file  — Read validated documents, uploads, or persisted tool outputs.
 write_file — Export structured output (study plans, reports) as downloadable files.
 """
 
@@ -26,6 +26,13 @@ _MAX_READ_LIMIT = 50_000
 
 
 class ReadFileArgs(BaseModel):
+    document_id: str = Field(
+        default="",
+        description=(
+            "Validated document ID from the [Attachments] manifest or another "
+            "real tool result. Use this for files attached to the conversation."
+        ),
+    )
     upload_id: str = Field(
         default="",
         description="Specific upload ID to read. Leave empty to read the latest file of a given purpose.",
@@ -76,7 +83,9 @@ def _read_file_sync(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]
         content = target.read_text(encoding="utf-8", errors="replace")
         return _paginate(content, args, {"path": str(target)})
 
-    # Branch 2: read a user-uploaded file by id / purpose.
+    # Branch 2: read a server-validated knowledge/attachment document. The
+    # conversation check is enforced again here even though the manifest was
+    # owner-scoped, so a model-generated id cannot cross session boundaries.
     from app.db.database import SessionLocal
     from app.services.uploads.file_asset_service import (
         READABLE_UPLOAD_STATUSES,
@@ -86,6 +95,63 @@ def _read_file_sync(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]
 
     db = SessionLocal()
     try:
+        if args.document_id:
+            from app.core.user_identity import resolve_user_pk
+            from app.models.knowledge import KnowledgeDocument
+            from app.rag.document_chunk_service import read_indexable_chunks
+
+            user_pk = resolve_user_pk(db, ctx.user_id)
+            document = (
+                db.query(KnowledgeDocument)
+                .filter(
+                    KnowledgeDocument.id == args.document_id,
+                    KnowledgeDocument.user_id == user_pk,
+                    KnowledgeDocument.deleted_at.is_(None),
+                )
+                .first()
+            )
+            if (
+                document is None
+                or (
+                    document.source_kind == "chat_attachment"
+                    and document.conversation_id != ctx.session_id
+                )
+            ):
+                return {
+                    "error": "Document not found or not accessible",
+                    "document_id": args.document_id,
+                }
+            if document.status != "ready":
+                return {
+                    "error": f"Document is not readable (status: {document.status})",
+                    "document_id": document.id,
+                }
+            rows = read_indexable_chunks(db, document.id)
+            content = "\n\n".join(row.text for row in rows if row.text)
+            if not content:
+                content = document.content_text or ""
+            return _paginate(
+                content,
+                args,
+                {
+                    "document_id": document.id,
+                    "filename": (
+                        document.upload.original_filename
+                        if document.upload is not None
+                        else ""
+                    ),
+                    "title": document.title,
+                    "source_kind": document.source_kind,
+                    "chunk_count": len(rows),
+                    "source": {
+                        "type": "knowledge_document",
+                        "document_id": document.id,
+                        "conversation_id": document.conversation_id,
+                    },
+                },
+            )
+
+        # Branch 3: read a user-uploaded file by id / purpose.
         if args.upload_id:
             upload = get_owned_file_asset(
                 db,
@@ -281,9 +347,14 @@ def _write_file_sync(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, An
 registry.register(
     ToolEntry(
         name="read_file",
-        description="Read content of a user-uploaded file (resume, JD, notes). Specify upload_id for a specific file, or purpose ('resume', 'jd') to read the latest file of that type.",
+        description=(
+            "Read a conversation attachment or user-uploaded file with paging. "
+            "For an attached file, pass its validated document_id from the "
+            "[Attachments] manifest; otherwise use upload_id or purpose."
+        ),
         args_model=ReadFileArgs,
         handler=_read_file_handler,
+        concurrency_safe=True,
         max_result_chars=200_000,
         emoji="📂",
     )

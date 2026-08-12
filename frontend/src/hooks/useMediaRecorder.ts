@@ -19,6 +19,21 @@ function pickMime(): string {
   return '';
 }
 
+function microphoneErrorMessage(error: unknown): string {
+  if (error instanceof DOMException) {
+    if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
+      return '没有麦克风权限，请在浏览器设置中允许访问后重试。';
+    }
+    if (error.name === 'NotFoundError') {
+      return '没有检测到可用麦克风，请连接设备后重试。';
+    }
+    if (error.name === 'NotReadableError') {
+      return '麦克风正被其他程序占用，请关闭占用程序后重试。';
+    }
+  }
+  return '麦克风启动失败，请检查设备或改用文字回答。';
+}
+
 export function useMediaRecorder(): UseMediaRecorder {
   const [state, setState] = useState<RecState>('idle');
   const [durationMs, setDurationMs] = useState(0);
@@ -65,7 +80,7 @@ export function useMediaRecorder(): UseMediaRecorder {
       setState('recording');
     } catch (err) {
       cleanup();
-      setError(err instanceof Error ? err.message : '麦克风访问失败');
+      setError(microphoneErrorMessage(err));
       setState('error');
     }
   }, [state, cleanup]);

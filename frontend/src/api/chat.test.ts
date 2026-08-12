@@ -31,11 +31,11 @@ describe('streamChatTurn', () => {
 
     await streamChatTurn('session-1', 'hello', {
       onTextDelta: (delta) => deltas.push(delta),
-    });
+    }, { questionIndexes: [5, 2] });
 
     expect(post).toHaveBeenCalledWith(
       '/chat/session-1/turns',
-      { message: 'hello', mode: 'chat' },
+      { message: 'hello', mode: 'chat', question_indexes: [5, 2], attachments: [] },
       { signal: undefined },
     );
     expect(authedFetch.mock.calls[1][0]).toContain('after=1-0');

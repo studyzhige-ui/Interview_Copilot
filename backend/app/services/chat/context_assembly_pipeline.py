@@ -19,8 +19,9 @@ Slots, in order from most → least cache-stable:
                            cursor (incremental-append, no fixed window).
   5. [Memory]              v3 memory bundle (per-turn-variable grounding);
                            user_profile is ALWAYS the first sub-section.
-  6. [Retrieved Context]   RAG knowledge chunks (per-turn-variable grounding).
-  7. [Current Query]       the user's standalone (rewritten) question.
+  6. [Attachments]         validated file manifest (ids + lifecycle scope).
+  7. [Retrieved Context]   public Evidence chunks (RAG and attachments).
+  8. [Current Query]       the user's standalone (rewritten) question.
 
 Per-turn-variable grounding (memory + RAG) sits near the tail so a grounding
 change can't invalidate the cached stable prefix (summary + recent turns).
@@ -80,6 +81,7 @@ class TokenBudget:
     SYSTEM_PROMPT_BUDGET = 3_000
     DEBRIEF_REFERENCE_BUDGET = 2_000
     MEMORY_BUDGET = 6_000
+    ATTACHMENT_MANIFEST_BUDGET = 1_500
     RETRIEVED_CONTEXT_BUDGET = settings.RAG_RETRIEVED_CONTEXT_TOKENS
     CURRENT_INPUT_BUDGET = 4_000
     OUTPUT_TOKEN_RESERVE = settings.RAG_OUTPUT_TOKEN_RESERVE
@@ -119,6 +121,10 @@ class AssembledContext:
 
     # [Retrieved Context] — RAG knowledge chunks only.
     retrieved_context: str = ""
+
+    # [Attachments] — small trusted manifest of server-resolved file ids.
+    # File bodies remain untrusted evidence inside [Retrieved Context].
+    attachment_manifest: str = ""
 
     # [Recent Turns] — list of {seq, role, content} message dicts.
     recent_turns: list[dict] = field(default_factory=list)
@@ -166,6 +172,7 @@ SLOT_ORDER: list[tuple[str, str | None, _SlotRenderer]] = [
     ("summary", "[Context Summary]", None),
     ("recent_turns", "[Recent Turns]", _render_recent_turns),
     ("memory_block", "[Memory]", None),
+    ("attachment_manifest", "[Attachments]", None),
     ("retrieved_context", "[Retrieved Context]", None),
     ("current_input", "[Current Query]", None),
 ]
@@ -174,7 +181,12 @@ SLOT_ORDER: list[tuple[str, str | None, _SlotRenderer]] = [
 # Slots the lightweight rewrite-context renderer skips (system rules
 # isn't useful to a query rewriter; the rewriter just needs the recent
 # turns + the current message).
-_REWRITE_SKIP_FIELDS = {"system_prompt", "memory_block", "retrieved_context"}
+_REWRITE_SKIP_FIELDS = {
+    "system_prompt",
+    "memory_block",
+    "attachment_manifest",
+    "retrieved_context",
+}
 
 
 # ── Prompt rendering ─────────────────────────────────────────────────────
@@ -222,7 +234,12 @@ class PromptRenderer:
             ctx.sources = grounding.sources
             prompt = self._render(ctx, skip_fields=skipped)
 
-        for field_name in ("memory_block", "debrief_reference", "summary"):
+        for field_name in (
+            "memory_block",
+            "attachment_manifest",
+            "debrief_reference",
+            "summary",
+        ):
             current = str(getattr(ctx, field_name) or "")
             while current and count_tokens(prompt) > limit:
                 excess = count_tokens(prompt) - limit
@@ -307,6 +324,7 @@ class ContextAssemblyPipeline:
         current_query: str,
         memory_block: str = "",
         debrief_reference: str = "",
+        attachment_manifest: str = "",
         retrieval_result: RetrievalResult | None = None,
         user_id: str | None = None,
         model_context_window: int | None = None,
@@ -331,6 +349,7 @@ class ContextAssemblyPipeline:
             current_query=current_query,
             memory_block=memory_block,
             debrief_reference=debrief_reference,
+            attachment_manifest=attachment_manifest,
             retrieval_result=retrieval_result,
             user_id=user_id,
             model_context_window=model_context_window,
@@ -344,6 +363,7 @@ class ContextAssemblyPipeline:
         current_query: str,
         memory_block: str,
         debrief_reference: str,
+        attachment_manifest: str,
         retrieval_result: RetrievalResult | None,
         *,
         skip_debrief_autoinject: bool = False,
@@ -408,6 +428,10 @@ class ContextAssemblyPipeline:
             current_query, self.budget.CURRENT_INPUT_BUDGET
         )
         memory_block = truncate_to_tokens(memory_block, self.budget.MEMORY_BUDGET)
+        attachment_manifest = truncate_to_tokens(
+            attachment_manifest,
+            self.budget.ATTACHMENT_MANIFEST_BUDGET,
+        )
         debrief_reference = truncate_to_tokens(
             debrief_reference, self.budget.DEBRIEF_REFERENCE_BUDGET
         )
@@ -428,6 +452,7 @@ class ContextAssemblyPipeline:
             + count_tokens(memory_block)
             + count_tokens(current_query)
             + count_tokens(debrief_reference)
+            + count_tokens(attachment_manifest)
             + desired_grounding
         )
         compress_threshold = min(
@@ -457,6 +482,7 @@ class ContextAssemblyPipeline:
                 + count_tokens(memory_block)
                 + count_tokens(current_query)
                 + count_tokens(debrief_reference)
+                + count_tokens(attachment_manifest)
                 + sum(_turn_tokens(message) for message in cleaned_turns)
             )
 
@@ -473,6 +499,7 @@ class ContextAssemblyPipeline:
             debrief_reference=debrief_reference,
             summary=old_summary,
             memory_block=memory_block,
+            attachment_manifest=attachment_manifest,
             retrieved_context=grounding.context_text,
             recent_turns=cleaned_turns,
             current_input=current_query,

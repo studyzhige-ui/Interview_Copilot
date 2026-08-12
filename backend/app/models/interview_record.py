@@ -21,7 +21,7 @@ class InterviewRecord(Base):
         ASR; the QA is composed from the session buffer.
 
     Per-question rows live in InterviewQA. analysis_json holds only the
-    top-level summary (overall + phase_summary).
+    top-level report (overall, phase summary, radar and metadata).
     """
 
     __tablename__ = "interview_records"
@@ -86,18 +86,10 @@ class InterviewRecord(Base):
     # Current transcript reference — full text/segments live in the dedicated
     # interview_transcripts table (soft ref; the hard FK is on that table).
     transcript_id = Column(String, index=True, nullable=True)
-    interview_plan = Column(Text, nullable=True)  # generate_plan() output (mock only)
 
     # Top-level analysis result (per-question rows in interview_qa)
     analysis_json = Column(Text, nullable=True)
-    analysis_schema_version = Column(Integer, nullable=False, default=2)
-
-    # 200-400 字浓缩摘要，由分析 pipeline 末尾的 LLM 生成。注入到
-    # debrief 类 chat session 的 record_context 槽，作为该 record 下
-    # 每条 session 的恒定前导上下文。在 record 生命周期内不变 → 命中
-    # prompt cache。NULL = 该 record 还没跑完分析（mock 模式或者上传
-    # 后被取消的 record）。
-    debrief_summary = Column(Text, nullable=True)
+    analysis_schema_version = Column(Integer, nullable=False, default=3)
 
     # Status & progress. Upload: pending→transcribing→analyzing→completed/failed.
     # Mock (wired in CONVERSATION-MOCK): mock_in_progress→processing_review→

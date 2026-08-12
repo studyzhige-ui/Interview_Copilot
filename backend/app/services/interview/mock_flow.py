@@ -1,9 +1,9 @@
-"""Mock-interview run orchestration (target architecture, RFC §6.4).
+"""Mock-interview run orchestration.
 
 The start flow OWNS creation of the whole run — it atomically creates the
 ``interview_records`` (status=mock_in_progress), the ``conversations``
 (type=mock_interview, bound via subject_type/subject_id) and the
-``mock_interview_runtime`` (status=in_progress) in one transaction.
+ephemeral ``mock_interview_runtime`` cursor in one transaction.
 Subsequent operations address the run by ``record_id``.
 
 The process transcript lives in ``conversation_messages``; the structured QA +
@@ -22,13 +22,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.runtime_files import create_runtime_temp_file
 from app.core.user_identity import resolve_user_pk
 from app.models.chat import Conversation, ConversationMessage, generate_uuid
 from app.models.interview_record import InterviewRecord
@@ -41,13 +39,6 @@ from app.services.interview.interview_record_service import (
 from app.task_queue.dispatch import dispatch_mock_interview_review
 
 logger = logging.getLogger(__name__)
-
-
-# Rules-layer hard bound (MOCK-5): once the candidate has answered this
-# many turns, ready_to_finish is FORCED true regardless of what the LLM
-# says. Lives here — next to the enforcement in submit_answer — not in the
-# LLM service, which never reads it.
-MOCK_MAX_ANSWERED_TURNS = 14
 
 
 class StaleQuestionError(ValueError):
@@ -90,61 +81,35 @@ def append_message(
     return msg
 
 
-def recent_messages(
-    db: Session, conversation_id: str, limit: int = 8
-) -> list[dict[str, str]]:
+def conversation_messages(db: Session, conversation_id: str) -> list[dict[str, str]]:
     rows = (
         db.query(ConversationMessage)
         .filter(ConversationMessage.conversation_id == conversation_id)
-        .order_by(ConversationMessage.seq.desc())
-        .limit(limit)
+        .order_by(ConversationMessage.seq.asc())
         .all()
     )
-    rows.reverse()
     return [{"role": r.role, "content": r.content or ""} for r in rows]
 
 
-# ── Resume / JD context resolution ───────────────────────────────────────
-
-
-def extract_file_asset_text(db: Session, asset_id: str, username: str) -> str:
-    """Best-effort: download an owned file asset and extract its plain text."""
-    try:
-        from app.services.interview.document_text import extract_document_text
-        from app.services.uploads.file_asset_service import (
-            READABLE_UPLOAD_STATUSES,
-            get_file_asset,
+def live_messages(db: Session, conversation_id: str) -> list[dict[str, object]]:
+    """Return the user-facing mock transcript from the canonical message log."""
+    rows = (
+        db.query(ConversationMessage)
+        .filter(
+            ConversationMessage.conversation_id == conversation_id,
+            ConversationMessage.role.in_(["assistant", "user"]),
         )
-
-        asset = get_file_asset(db, asset_id)
-        if asset is None or asset.user_id != resolve_user_pk(db, username):
-            return ""
-        if asset.upload_status not in READABLE_UPLOAD_STATUSES:
-            # Never parse unverified bytes; the start endpoint gates its own
-            # uploads with require_uploaded, so this is the backstop for any
-            # other caller.
-            return ""
-        storage_uri = asset.storage_uri
-        local_path = storage_uri
-        is_temp = False
-        if storage_uri and storage_uri.startswith("s3://"):
-            _, ext = os.path.splitext(storage_uri)
-            local_path = create_runtime_temp_file(suffix=ext)
-            is_temp = True
-        try:
-            if is_temp:
-                from app.core.storage import download_file_from_s3
-
-                download_file_from_s3(storage_uri, local_path)
-            return (extract_document_text(local_path) or "").strip()
-        finally:
-            if is_temp and local_path and os.path.exists(local_path):
-                os.unlink(local_path)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "mock file-asset text extraction failed for %s: %s", asset_id, exc
-        )
-        return ""
+        .order_by(ConversationMessage.seq.asc())
+        .all()
+    )
+    return [
+        {
+            "id": row.id,
+            "speaker": "interviewer" if row.role == "assistant" else "candidate",
+            "text": row.content or "",
+        }
+        for row in rows
+    ]
 
 
 class ResumeNotFoundError(ValueError):
@@ -159,62 +124,36 @@ def resolve_resume_context(
     db: Session,
     *,
     username: str,
-    resume_id: str | None,
-    resume_file_asset_id: str | None,
-) -> tuple[str, str | None]:
-    """Return (resume_text, resume_source) from a personal resume entity or an
-    uploaded resume file asset. Empty string when neither is provided."""
-    if resume_id:
-        try:
-            from app.services.resume import resume_entity_service
-            from app.services.resume.resume_service import resume_service
-
-            resume = resume_entity_service.get_owned_resume(
-                db,
-                resume_id=resume_id,
-                user_id=username,
-            )
-            if resume is None:
-                raise ResumeNotFoundError("简历不存在或无权访问")
-            if not (resume.raw_text_snapshot or "").strip() and resume.parse_status in {
-                "pending",
-                "processing",
-            }:
-                raise ResumeNotReadyError("简历仍在解析，请解析完成后再开始面试")
-            if (
-                resume.parse_status == "failed"
-                and not (resume.raw_text_snapshot or "").strip()
-            ):
-                raise ResumeNotReadyError("简历解析失败，请替换后重试")
-            sections = resume_service.get_sections_by_resume(resume.id)
-            if sections:
-                return resume_service.format_for_context(sections), "personal_resume"
-            if (resume.raw_text_snapshot or "").strip():
-                return resume.raw_text_snapshot.strip(), "personal_resume"
-        except Exception as exc:  # noqa: BLE001
-            if isinstance(exc, (ResumeNotFoundError, ResumeNotReadyError)):
-                raise
-            logger.warning("mock resume context load failed: %s", exc)
-            raise ResumeNotReadyError("简历读取失败，请稍后重试") from exc
-        raise ResumeNotReadyError("简历仍在解析，请解析完成后再开始面试")
-    if resume_file_asset_id:
-        text = extract_file_asset_text(db, resume_file_asset_id, username)
-        return text, ("context_upload" if text else None)
-    return "", None
-
-
-def resolve_jd_context(
-    db: Session,
-    *,
-    username: str,
-    jd_text: str | None,
-    jd_file_asset_id: str | None,
+    resume_id: str,
 ) -> str:
-    if (jd_text or "").strip():
-        return jd_text.strip()
-    if jd_file_asset_id:
-        return extract_file_asset_text(db, jd_file_asset_id, username)
-    return ""
+    """Load one parsed personal resume for interview planning."""
+    try:
+        from app.services.resume import resume_entity_service
+        from app.services.resume.resume_service import resume_service
+
+        resume = resume_entity_service.get_owned_resume(
+            db,
+            resume_id=resume_id,
+            user_id=username,
+        )
+        if resume is None:
+            raise ResumeNotFoundError("简历不存在或无权访问")
+        snapshot = (resume.raw_text_snapshot or "").strip()
+        if not snapshot and resume.parse_status in {"pending", "processing"}:
+            raise ResumeNotReadyError("简历仍在解析，请解析完成后再开始面试")
+        if resume.parse_status == "failed" and not snapshot:
+            raise ResumeNotReadyError("简历解析失败，请替换后重试")
+        sections = resume_service.get_sections_by_resume(resume.id)
+        if sections:
+            return resume_service.format_for_context(sections)
+        if snapshot:
+            return snapshot
+    except Exception as exc:  # noqa: BLE001
+        if isinstance(exc, (ResumeNotFoundError, ResumeNotReadyError)):
+            raise
+        logger.warning("mock resume context load failed: %s", exc)
+        raise ResumeNotReadyError("简历读取失败，请稍后重试") from exc
+    raise ResumeNotReadyError("简历仍在解析，请解析完成后再开始面试")
 
 
 # ── Ownership ────────────────────────────────────────────────────────────
@@ -245,41 +184,35 @@ class StartedMock:
     plan: object
 
 
+@dataclass(frozen=True)
+class SubmittedTurn:
+    question_message_id: int
+    interviewer_message: str
+    is_ready_to_finish: bool
+
+
 def start_mock(
     db: Session,
     *,
     username: str,
-    resume_id: str | None,
-    resume_file_asset_id: str | None,
-    jd_text: str | None,
-    jd_file_asset_id: str | None,
-    interviewer_style: str | None,
-    plan_template_key: str | None,
-    voice_mode: bool | None,
+    resume_id: str,
+    jd_text: str,
+    interviewer_style: str,
+    target_question_count: int,
 ) -> StartedMock:
     """Atomically create record + conversation + opening message + runtime.
 
     Flushes everything into ONE uncommitted transaction — the caller commits
     (so it can offload the commit to a thread) and rolls back on failure.
     """
-    resume_context, resume_source = resolve_resume_context(
-        db,
-        username=username,
-        resume_id=resume_id,
-        resume_file_asset_id=resume_file_asset_id,
-    )
-    jd_context = resolve_jd_context(
-        db,
-        username=username,
-        jd_text=jd_text,
-        jd_file_asset_id=jd_file_asset_id,
-    )
+    resume_context = resolve_resume_context(db, username=username, resume_id=resume_id)
+    jd_context = jd_text.strip()
 
     plan = mock_interview_service.generate_plan(
         resume_context=resume_context,
         jd_context=jd_context,
         interviewer_style=interviewer_style,
-        plan_template_key=plan_template_key,
+        user_id=username,
     )
 
     # 1) record (mock_in_progress) — freezes the resume/JD snapshots + plan.
@@ -287,12 +220,8 @@ def start_mock(
         user_id=username,
         title="模拟面试",
         resume_id=resume_id,
-        resume_file_asset_id=resume_file_asset_id,
-        resume_source=resume_source,
-        jd_file_asset_id=jd_file_asset_id,
         resume_text_snapshot=resume_context,
         jd_text_snapshot=jd_context,
-        interview_plan=plan.plan_json,
         status=STATUS_MOCK_IN_PROGRESS,
         db=db,
     )
@@ -330,14 +259,12 @@ def start_mock(
         interview_record_id=record.id,
         conversation_id=conversation.id,
         plan=plan.stages,
-        plan_template_key=plan.template_key,
         interviewer_style=interviewer_style,
-        voice_mode=voice_mode,
+        target_question_count=target_question_count,
         current_stage_key=plan.first_stage_key,
+        current_question_message_id=opening.id,
         commit=False,
     )
-    runtime.current_question_text = plan.opening_message
-    runtime.current_question_message_id = opening.id
 
     return StartedMock(
         record=record, conversation=conversation, runtime=runtime, plan=plan
@@ -368,8 +295,7 @@ async def submit_answer(
     concurrent submit already advanced the interview → StaleQuestionError
     (409 at the API).
 
-    Returns the ``NextTurn`` with ``question_message_id`` set to the new
-    interviewer message's id.
+    Returns only the persisted interviewer fields needed by the live API.
     """
     conversation_id = runtime.conversation_id
 
@@ -379,18 +305,17 @@ async def submit_answer(
             f"{runtime.current_question_message_id}"
         )
 
-    stages = mock_interview_service.stages_from_plan_json(runtime.plan_json)
-    current_stage = runtime.current_stage_key or stages[0]["key"]
+    stages = runtime.plan_json
+    current_stage = runtime.current_stage_key
     prefix = mock_interview_service.build_prefix(
         record.resume_text_snapshot or "",
         record.jd_text_snapshot or "",
         runtime.interviewer_style,
     )
-    # Prior dialog (everything BEFORE this answer) for context. The new answer
-    # is passed separately as ``user_answer`` so it isn't double-counted in the
-    # prompt — read recent first, then persist the answer.
-    recent = recent_messages(db, conversation_id, limit=8)
-    asked = list_asked_questions(db, conversation_id)
+    # Full dialog BEFORE this answer. The new answer is passed separately so it
+    # is not duplicated in the prompt. The advisory target guides pacing, so a
+    # second summarization/analysis pipeline is unnecessary here.
+    history = conversation_messages(db, conversation_id)
 
     claim = mock_runtime_service.claim_question(
         db,
@@ -410,10 +335,10 @@ async def submit_answer(
         and (last.content or "").strip() == (answer_text or "").strip()
     )
     if dangling_retry:
-        # A retried answer must not appear twice in the prompt: it's already
-        # the last message in ``recent`` AND passed as ``user_answer``.
-        if recent and recent[-1].get("role") == "user":
-            recent = recent[:-1]
+        # A retried answer must not appear twice in the prompt: it is already
+        # the last history message AND passed separately as ``user_answer``.
+        if history and history[-1].get("role") == "user":
+            history = history[:-1]
         # A re-recorded clip on retry: attach its block to the EXISTING
         # dangling message — otherwise the (already consumed) asset would be
         # referenced by nothing and leak past every cleanup path.
@@ -451,31 +376,26 @@ async def submit_answer(
         )
     db.commit()
 
+    answered_turns = count_answered_turns(db, conversation_id)
+
     # ── LLM turn (no transaction open) ──────────────────────────────
     try:
         turn = await mock_interview_service.generate_next_turn(
             prefix=prefix,
             stages=stages,
             current_stage_key=current_stage,
-            recent_messages=recent,
+            conversation_messages=history,
             user_answer=answer_text,
             user_id=user_id,
-            asked_questions=[q["text"] for q in asked],
-            questions_in_current_stage=sum(
-                1 for q in asked if q["stage_key"] == current_stage
-            ),
+            length_warning_active=answered_turns >= runtime.target_question_count,
         )
     except BaseException:
         mock_runtime_service.release_question_claim(
             db,
-            runtime.id,
+            runtime.interview_record_id,
             question_message_id=question_message_id,
         )
         raise
-
-    # Rules layer (MOCK-5): the hard cap overrides the LLM's soft signal.
-    if count_answered_turns(db, conversation_id) >= MOCK_MAX_ANSWERED_TURNS:
-        turn.is_ready_to_finish = True
 
     # ── Phase B: persist the reply + advance runtime, commit ────────
     try:
@@ -490,16 +410,10 @@ async def submit_answer(
             ),
         )
 
-        stage_index = next(
-            (i for i, s in enumerate(stages) if s["key"] == turn.next_stage_key),
-            runtime.stage_index,
-        )
         mock_runtime_service.advance_runtime(
             db,
             runtime,
             current_stage_key=turn.next_stage_key,
-            stage_index=stage_index,
-            current_question_text=turn.interviewer_message,
             current_question_message_id=assistant_msg.id,
             commit=False,
         )
@@ -508,43 +422,15 @@ async def submit_answer(
     except BaseException:
         mock_runtime_service.release_question_claim(
             db,
-            runtime.id,
+            runtime.interview_record_id,
             question_message_id=question_message_id,
         )
         raise
-    turn.question_message_id = assistant_msg.id
-    return turn
-
-
-def list_asked_questions(db: Session, conversation_id: str) -> list[dict[str, str]]:
-    """All interviewer lines so far, oldest first, with their stage meta.
-
-    Feeds the anti-repetition inventory (MOCK-6) and the per-stage question
-    count. Returns ``[{"text": ..., "stage_key": ...}]``; stage_key is ""
-    for legacy messages without the meta block.
-    """
-    rows = (
-        db.query(ConversationMessage.content, ConversationMessage.content_blocks_json)
-        .filter(
-            ConversationMessage.conversation_id == conversation_id,
-            ConversationMessage.role == "assistant",
-        )
-        .order_by(ConversationMessage.seq)
-        .all()
+    return SubmittedTurn(
+        question_message_id=assistant_msg.id,
+        interviewer_message=turn.interviewer_message,
+        is_ready_to_finish=turn.is_ready_to_finish,
     )
-    out: list[dict[str, str]] = []
-    for content, blocks_json in rows:
-        stage_key = ""
-        if blocks_json:
-            try:
-                for b in json.loads(blocks_json) or []:
-                    if isinstance(b, dict) and b.get("type") == "stage":
-                        stage_key = str(b.get("stage_key") or "")
-                        break
-            except (json.JSONDecodeError, TypeError):
-                pass
-        out.append({"text": (content or "").strip(), "stage_key": stage_key})
-    return out
 
 
 def _last_message(db: Session, conversation_id: str):
@@ -572,38 +458,24 @@ def dispatch_review(
     record_id: str,
     *,
     rollback_status: str = STATUS_MOCK_IN_PROGRESS,
+    delete_live_runtime: bool = False,
 ) -> object:
-    """Dispatch the review task and stamp the celery task id. Commits.
+    """Dispatch review, persist the task id and optionally remove live state.
 
     If the broker is unreachable, roll the record back to
     ``rollback_status`` before re-raising — without the rollback the
     record parks in ``processing_review`` with no task, invisible in
     every list for the grace period and stuck after it.
 
-    * finish path: roll back to ``mock_in_progress`` (+ reactivate the
-      runtime) — the conversation is intact, the user just hits
-      "结束面试" again.
-    * retry path: roll back to ``review_failed`` — the interview is over;
-      reviving the runtime would resurface a finished interview in the
-      resume banner.
+    The finish path keeps the runtime until the broker accepts the task. A
+    dispatch failure restores ``mock_in_progress`` and the unchanged runtime
+    remains resumable. Review retries happen after that runtime is gone.
     """
     try:
         task = dispatch_mock_interview_review(record_id)
     except Exception as exc:  # noqa: BLE001 — broker down / misconfigured
         logger.error("review dispatch failed for record %s: %s", record_id, exc)
         interview_record_service.set_status(record_id, rollback_status, db=db)
-        if rollback_status == STATUS_MOCK_IN_PROGRESS:
-            runtime = mock_runtime_service.get_runtime_for_record(
-                db,
-                interview_record_id=record_id,
-            )
-            if runtime is not None:
-                mock_runtime_service.set_status(
-                    db,
-                    runtime,
-                    mock_runtime_service.ACTIVE_STATUS,
-                    commit=False,
-                )
         db.commit()
         raise
     interview_record_service.set_status(
@@ -612,6 +484,12 @@ def dispatch_review(
         celery_task_id=task.id,
         db=db,
     )
+    if delete_live_runtime:
+        runtime = mock_runtime_service.get_runtime_for_record(
+            db, interview_record_id=record_id
+        )
+        if runtime is not None:
+            db.delete(runtime)
     db.commit()
     return task
 

@@ -178,7 +178,9 @@ def test_agent_system_block_keeps_manifest_before_grounding_for_prompt_cache():
     assert system_block.index("Available tools:") < system_block.index("[Memory]")
     # Stable prefix (summary, recent turns) precedes the per-turn grounding.
     assert system_block.index("[Context Summary]") < system_block.index("[Memory]")
-    assert system_block.index("[Recent Turns]") < system_block.index(
+    # The system instructions mention the label itself; compare against the
+    # rendered slot at the end of the block, not that explanatory occurrence.
+    assert system_block.index("[Recent Turns]") < system_block.rindex(
         "[Retrieved Context]"
     )
     # The query is rendered as the user message, not wedged in the system block.
@@ -455,6 +457,87 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
         "empty reasoning_content should NOT add the key — non-thinking "
         "model APIs would see a confusing always-empty field"
     )
+
+
+def test_concurrency_safe_tools_execute_in_parallel_and_replay_in_order(monkeypatch):
+    """Independent reads overlap, but their messages/events remain deterministic."""
+    from app.agent_runtime.react_agent import AgentRunState
+    from app.conversation.agent_strategy import AgentLoopStrategy, _ToolCallAccumulator
+    from app.conversation.strategy import StrategyContext
+
+    started: set[str] = set()
+    both_started = asyncio.Event()
+    active = 0
+    max_active = 0
+
+    class _Catalog:
+        user_pk = 1
+
+        def __contains__(self, name):
+            return name in {"read_a", "read_b"}
+
+        def is_concurrency_safe(self, name):
+            return name in {"read_a", "read_b"}
+
+        async def dispatch(self, name, _args, _ctx):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            started.add(name)
+            if len(started) == 2:
+                both_started.set()
+            await asyncio.wait_for(both_started.wait(), timeout=0.5)
+            active -= 1
+            return {"tool": name}
+
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.maybe_persist_result",
+        lambda content, **_kwargs: content,
+    )
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.enforce_turn_budget",
+        lambda *_args, **_kwargs: None,
+    )
+    strategy = AgentLoopStrategy()
+    messages: list[dict] = []
+    blocks: list[dict] = []
+    events = []
+
+    async def drain():
+        async for event in strategy._execute_tools(
+            ctx=StrategyContext(
+                user_id="alice",
+                session_id="s1",
+                user_message="compare",
+            ),
+            messages=messages,
+            blocks=blocks,
+            tool_calls_acc=[
+                _ToolCallAccumulator(id="c1", name="read_a", arguments="{}"),
+                _ToolCallAccumulator(id="c2", name="read_b", arguments="{}"),
+            ],
+            assistant_content="",
+            reasoning_content="",
+            budget=AgentRunState(started_at=0.0),
+            tool_catalog=_Catalog(),
+        ):
+            events.append(event)
+
+    asyncio.run(drain())
+
+    assert max_active == 2
+    assert [
+        message["tool_call_id"] for message in messages if message["role"] == "tool"
+    ] == [
+        "c1",
+        "c2",
+    ]
+    done_ids = [
+        event.data["tool_call_id"]
+        for event in events
+        if event.type.value == "tool_done"
+    ]
+    assert done_ids == ["c1", "c2"]
 
 
 def test_context_exhaustion_synthesizes_final_answer():

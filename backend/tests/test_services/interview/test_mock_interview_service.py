@@ -1,35 +1,23 @@
-"""Tests for app.services.interview.mock_interview_service (target architecture).
-
-The Runtime Director (run_director / validate_director / apply_state_update /
-the 6 hard constraints / retry loop) was deleted in CONVERSATION-MOCK. The new
-surface is:
-  - build_prefix / prefix_hash   (deterministic cacheable prefix)
-  - generate_plan                (freeze stages + opening line, no LLM)
-  - stages_from_plan_json        (parse the frozen stage list back out)
-  - generate_next_turn           (one LLM call per answer + stage-budget rules)
-"""
+"""Unit tests for personalized mock planning and single-call turn generation."""
 
 import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from app.services.interview import mock_interview_service as mod
 from app.services.interview.mock_interview_service import (
-    GENERAL_PLAN_TEMPLATE,
-    NextTurn,
+    BASE_INTERVIEW_STAGES,
+    NextTurnGenerationError,
     build_prefix,
     detect_response_language,
     generate_next_turn,
     generate_plan,
     prefix_hash,
-    stages_from_plan_json,
 )
-
-# ── build_prefix / prefix_hash ───────────────────────────────────────────
 
 
 def test_build_prefix_is_deterministic():
-    """Same inputs → byte-identical prefix (DeepSeek prompt-cache stability)."""
     a = build_prefix("resume A", "jd A", "professional")
     b = build_prefix("resume A", "jd A", "professional")
     assert a == b
@@ -44,151 +32,129 @@ def test_build_prefix_falls_back_when_inputs_empty():
 
 
 def test_prefix_hash_is_short_and_stable():
-    h = prefix_hash("anything")
-    assert isinstance(h, str)
-    assert len(h) == 16
-    assert prefix_hash("anything") == h
+    value = prefix_hash("anything")
+    assert len(value) == 16
+    assert prefix_hash("anything") == value
 
 
 def test_response_language_follows_the_answer_not_technical_terms():
     assert detect_response_language("Python 是我最常用的后端语言。") == "zh"
-    assert (
-        detect_response_language("联合索引包含 user_id、status 和 created_at。") == "zh"
-    )
-    assert detect_response_language("We also added 熔断、限流 and SLO alerts.") == "en"
+    assert detect_response_language("联合索引包含 user_id 和 status。") == "zh"
+    assert detect_response_language("We also added 熔断 and SLO alerts.") == "en"
 
 
-# ── generate_plan ────────────────────────────────────────────────────────
+def _plan_payload() -> dict:
+    return {
+        "guidance": {
+            "self_intro": "围绕 Python 后端岗位判断整体匹配。",
+            "resume_project_deep_dive": "深挖候选人的缓存平台项目和个人贡献。",
+            "role_technical_assessment": "抽样考察 Redis、MySQL 和稳定性取舍，不做知识枚举。",
+            "candidate_questions": "只根据 JD 回答团队问题，未知信息明确说明。",
+        }
+    }
 
 
-def test_generate_plan_freezes_general_template():
-    plan = generate_plan(
-        resume_context="r",
-        jd_context="j",
-        interviewer_style="professional",
-        plan_template_key="general",
-    )
-    assert plan.template_key == "general"
-    assert [s["key"] for s in plan.stages] == [s["key"] for s in GENERAL_PLAN_TEMPLATE]
-    assert plan.first_stage_key == "self_intro"
-    # Opening is deterministic + invites a self-introduction.
+def test_generate_plan_uses_resume_and_jd_to_personalize_guidance():
+    response = MagicMock(text=json.dumps(_plan_payload(), ensure_ascii=False))
+    with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.complete.return_value = response
+        plan = generate_plan(
+            resume_context="负责 Redis 缓存平台",
+            jd_context="Python 后端，要求 MySQL 与稳定性",
+            interviewer_style="professional",
+            user_id="alice",
+        )
+
+    prompt = factory.return_value.complete.call_args.args[0]
+    assert "Redis 缓存平台" in prompt
+    assert "Python 后端" in prompt
+    assert [stage["key"] for stage in plan.stages] == [
+        stage["key"] for stage in BASE_INTERVIEW_STAGES
+    ]
+    assert "缓存平台" in plan.stages[1]["guidance"]
     assert "自我介绍" in plan.opening_message
-    # plan_json round-trips through stages_from_plan_json.
-    assert stages_from_plan_json(plan.plan_json) == plan.stages
 
 
 def test_generate_plan_opening_varies_by_style_formality():
-    casual = generate_plan(interviewer_style="friendly").opening_message
-    formal = generate_plan(interviewer_style="pressure").opening_message
+    response = MagicMock(text=json.dumps(_plan_payload(), ensure_ascii=False))
+    with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.complete.return_value = response
+        casual = generate_plan(interviewer_style="friendly").opening_message
+        formal = generate_plan(interviewer_style="pressure").opening_message
     assert casual.startswith("你好")
     assert formal.startswith("您好")
 
 
-def test_unknown_template_falls_back_to_general():
-    plan = generate_plan(plan_template_key="does_not_exist")
-    assert [s["key"] for s in plan.stages] == [s["key"] for s in GENERAL_PLAN_TEMPLATE]
-
-
-# ── stages_from_plan_json ────────────────────────────────────────────────
-
-
-def test_stages_from_plan_json_parses_and_falls_back():
-    good = json.dumps(
-        {"stages": [{"key": "a", "title": "甲"}, {"key": "b", "title": "乙"}]}
-    )
-    assert stages_from_plan_json(good) == [
-        {"key": "a", "title": "甲", "min_questions": 1, "max_questions": 3},
-        {"key": "b", "title": "乙", "min_questions": 1, "max_questions": 3},
-    ]
-    # Garbage / empty → the canonical general template.
-    assert stages_from_plan_json("not json") == GENERAL_PLAN_TEMPLATE
-    assert stages_from_plan_json(None) == GENERAL_PLAN_TEMPLATE
-    assert stages_from_plan_json(json.dumps({"stages": []})) == GENERAL_PLAN_TEMPLATE
-
-
-# ── generate_next_turn ───────────────────────────────────────────────────
+def test_generate_plan_rejects_incomplete_guidance():
+    response = MagicMock(text=json.dumps({"guidance": {"self_intro": "x"}}))
+    with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.complete.return_value = response
+        with pytest.raises(ValueError, match="missing stage"):
+            generate_plan()
 
 
 def _stages():
-    return [
-        {"key": k, "title": k}
-        for k in (
-            "self_intro",
-            "resume_project_deep_dive",
-            "role_technical_assessment",
-            "candidate_questions",
+    return [dict(stage) for stage in BASE_INTERVIEW_STAGES]
+
+
+def test_generate_next_turn_uses_full_history_and_length_warning():
+    response = MagicMock(
+        text=json.dumps(
+            {
+                "message": "好的。能讲讲你最近的项目吗？",
+                "next_stage_key": "resume_project_deep_dive",
+                "ready_to_finish": False,
+            }
         )
-    ]
-
-
-def test_generate_next_turn_parses_llm_output():
-    resp = MagicMock()
-    resp.text = json.dumps(
-        {
-            "message": "好的。能讲讲你最近的项目吗？",
-            "stage_key": "resume_project_deep_dive",
-            "ready_to_finish": False,
-        }
     )
-    with patch.object(mod, "get_llm_for_role") as _factory:
-        mock_llm = _factory.return_value
-        mock_llm.acomplete = AsyncMock(return_value=resp)
+    history = [
+        {"role": "assistant", "content": "最早的问题"},
+        {"role": "user", "content": "最早的回答"},
+        *[{"role": "assistant", "content": f"后续问题 {index}"} for index in range(10)],
+    ]
+    with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.acomplete = AsyncMock(return_value=response)
         turn = asyncio.run(
             generate_next_turn(
                 prefix="P",
                 stages=_stages(),
                 current_stage_key="self_intro",
-                recent_messages=[{"role": "assistant", "content": "请自我介绍"}],
+                conversation_messages=history,
                 user_answer="我是候选人",
-                questions_in_current_stage=1,
+                length_warning_active=True,
             )
         )
-    assert isinstance(turn, NextTurn)
-    assert turn.interviewer_message.startswith("好的")
+
+    prompt = factory.return_value.acomplete.await_args.args[0]
+    assert "最早的问题" in prompt
+    assert "后续问题 9" in prompt
+    assert "length_warning_active: true" in prompt
     assert turn.next_stage_key == "resume_project_deep_dive"
     assert turn.is_ready_to_finish is False
-    assert mock_llm.acomplete.await_count == 1
 
 
-def test_generate_next_turn_rejects_unknown_stage_key():
-    """An LLM-hallucinated stage outside the plan keeps the current stage."""
-    resp = MagicMock()
-    resp.text = json.dumps(
-        {"message": "继续", "stage_key": "made_up", "ready_to_finish": False}
-    )
-    with patch.object(mod, "get_llm_for_role") as _factory:
-        mock_llm = _factory.return_value
-        mock_llm.acomplete = AsyncMock(return_value=resp)
-        turn = asyncio.run(
-            generate_next_turn(
-                prefix="P",
-                stages=_stages(),
-                current_stage_key="role_technical_assessment",
-                recent_messages=[],
-                user_answer="answer",
-                questions_in_current_stage=1,
+def test_generate_next_turn_rejects_unknown_backward_and_jump_stages():
+    async def run(proposed: str):
+        response = MagicMock(
+            text=json.dumps(
+                {
+                    "message": "继续",
+                    "next_stage_key": proposed,
+                    "ready_to_finish": False,
+                }
             )
         )
-    assert turn.next_stage_key == "role_technical_assessment"
-
-
-def test_generate_next_turn_rejects_backward_move_and_stage_jump():
-    async def run(proposed: str):
-        resp = MagicMock()
-        resp.text = json.dumps(
-            {"message": "继续", "stage_key": proposed, "ready_to_finish": False}
-        )
         with patch.object(mod, "get_llm_for_role") as factory:
-            factory.return_value.acomplete = AsyncMock(return_value=resp)
+            factory.return_value.acomplete = AsyncMock(return_value=response)
             return await generate_next_turn(
                 prefix="P",
                 stages=_stages(),
                 current_stage_key="resume_project_deep_dive",
-                recent_messages=[],
+                conversation_messages=[],
                 user_answer="answer",
-                questions_in_current_stage=1,
             )
 
+    assert asyncio.run(run("made_up")).next_stage_key == "resume_project_deep_dive"
     assert asyncio.run(run("self_intro")).next_stage_key == "resume_project_deep_dive"
     assert (
         asyncio.run(run("candidate_questions")).next_stage_key
@@ -200,77 +166,96 @@ def test_generate_next_turn_rejects_backward_move_and_stage_jump():
     )
 
 
-def test_generate_next_turn_only_finishes_on_final_stage_with_json_boolean():
-    async def run(stage: str, ready):
-        resp = MagicMock()
-        resp.text = json.dumps(
-            {"message": "继续", "stage_key": stage, "ready_to_finish": ready}
+def test_generate_next_turn_only_finishes_after_candidate_questions_started():
+    async def run(current_stage: str, proposed_stage: str, ready):
+        response = MagicMock(
+            text=json.dumps(
+                {
+                    "message": "谢谢参与。",
+                    "next_stage_key": proposed_stage,
+                    "ready_to_finish": ready,
+                }
+            )
         )
         with patch.object(mod, "get_llm_for_role") as factory:
-            factory.return_value.acomplete = AsyncMock(return_value=resp)
+            factory.return_value.acomplete = AsyncMock(return_value=response)
             return await generate_next_turn(
                 prefix="P",
                 stages=_stages(),
-                current_stage_key="role_technical_assessment",
-                recent_messages=[],
-                user_answer="answer",
-                questions_in_current_stage=1,
-            )
-
-    assert (
-        asyncio.run(run("role_technical_assessment", True)).is_ready_to_finish is False
-    )
-    assert asyncio.run(run("candidate_questions", "false")).is_ready_to_finish is False
-    assert asyncio.run(run("candidate_questions", True)).is_ready_to_finish is True
-
-
-def test_stage_question_budget_forces_progress_and_final_close():
-    async def run(current_stage: str, count: int):
-        resp = MagicMock()
-        resp.text = json.dumps(
-            {
-                "message": "模型仍想留在当前阶段？",
-                "stage_key": current_stage,
-                "ready_to_finish": False,
-            }
-        )
-        with patch.object(mod, "get_llm_for_role") as factory:
-            factory.return_value.acomplete = AsyncMock(return_value=resp)
-            return await generate_next_turn(
-                prefix="P",
-                stages=GENERAL_PLAN_TEMPLATE,
                 current_stage_key=current_stage,
-                recent_messages=[],
+                conversation_messages=[],
                 user_answer="answer",
-                questions_in_current_stage=count,
             )
 
-    resume = asyncio.run(run("resume_project_deep_dive", 4))
-    assert resume.next_stage_key == "role_technical_assessment"
-    final = asyncio.run(run("candidate_questions", 2))
-    assert final.is_ready_to_finish is True
-    assert "结束" in final.interviewer_message
+    entering = asyncio.run(
+        run("role_technical_assessment", "candidate_questions", True)
+    )
+    assert entering.is_ready_to_finish is False
+    assert (
+        asyncio.run(
+            run("candidate_questions", "candidate_questions", "false")
+        ).is_ready_to_finish
+        is False
+    )
+    assert (
+        asyncio.run(
+            run("candidate_questions", "candidate_questions", True)
+        ).is_ready_to_finish
+        is True
+    )
 
 
-def test_generate_next_turn_survives_parse_failure():
-    """A garbage / failed LLM response must NOT raise — the interview keeps
-    moving with a safe generic line and the current stage held."""
-    resp = MagicMock()
-    resp.text = "not json at all"
-    with patch.object(mod, "get_llm_for_role") as _factory:
-        mock_llm = _factory.return_value
-        mock_llm.acomplete = AsyncMock(return_value=resp)
+def test_generate_next_turn_retries_then_surfaces_generation_failure():
+    response = MagicMock(text="not json at all")
+    with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.acomplete = AsyncMock(return_value=response)
+        with pytest.raises(NextTurnGenerationError):
+            asyncio.run(
+                generate_next_turn(
+                    prefix="P",
+                    stages=_stages(),
+                    current_stage_key="self_intro",
+                    conversation_messages=[],
+                    user_answer="answer",
+                )
+            )
+    assert factory.return_value.acomplete.await_count == 2
+
+
+def test_generate_next_turn_retries_a_question_list_as_one_focus():
+    responses = [
+        MagicMock(
+            text=json.dumps(
+                {
+                    "message": "为什么这样设计？如何恢复？怎样保证一致性？",
+                    "next_stage_key": "self_intro",
+                    "ready_to_finish": False,
+                }
+            )
+        ),
+        MagicMock(
+            text=json.dumps(
+                {
+                    "message": "这项设计最关键的取舍是什么？",
+                    "next_stage_key": "self_intro",
+                    "ready_to_finish": False,
+                }
+            )
+        ),
+    ]
+    with patch.object(mod, "get_llm_for_role") as factory:
+        factory.return_value.acomplete = AsyncMock(side_effect=responses)
         turn = asyncio.run(
             generate_next_turn(
                 prefix="P",
                 stages=_stages(),
                 current_stage_key="self_intro",
-                recent_messages=[],
+                conversation_messages=[],
                 user_answer="answer",
             )
         )
-    assert isinstance(turn, NextTurn)
-    assert turn.interviewer_message  # non-empty fallback
-    assert turn.next_stage_key == "self_intro"
-    assert turn.is_ready_to_finish is False
-    assert turn.used_fallback is True
+
+    assert turn.interviewer_message == "这项设计最关键的取舍是什么？"
+    assert factory.return_value.acomplete.await_count == 2
+    retry_prompt = factory.return_value.acomplete.await_args_list[1].args[0]
+    assert "retry_correction" in retry_prompt

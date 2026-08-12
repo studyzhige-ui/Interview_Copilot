@@ -324,6 +324,7 @@ registry.register(
         ),
         args_model=WebSearchArgs,
         handler=_web_search_handler,
+        concurrency_safe=True,
         check_fn=_tavily_available,
         max_result_chars=12_000,
         emoji="🔍",
@@ -342,6 +343,7 @@ registry.register(
         ),
         args_model=ReadUrlArgs,
         handler=_read_url_handler,
+        concurrency_safe=True,
         max_result_chars=16_000,
         emoji="📄",
     )

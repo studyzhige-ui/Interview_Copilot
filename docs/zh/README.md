@@ -50,6 +50,8 @@ docker compose --profile full up -d --wait
 
 - [完整启动指南](getting-started.md)
 - [代码库结构与依赖方向](../architecture/codebase.md)
+- [模拟面试架构](../architecture/mock-interview.md)
+- [全流程求职 Copilot 产品边界与技术架构](../architecture/full-cycle-career-copilot.md)
 - [双版本架构](../architecture/editions.md)
 - [Community 部署](../deployment/community.md)
 - [Cloud 部署](../deployment/cloud.md)

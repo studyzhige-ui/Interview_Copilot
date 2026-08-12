@@ -64,7 +64,7 @@ from app.conversation.strategy import StrategyContext, StrategyResult
 from app.core.config import settings
 from app.core.error_messages import humanize_error
 from app.core.llm_client_factory import build_async_openai_client_for_role
-from app.prompts.agent import AGENT_SYSTEM_PROMPT
+from app.prompts.agent import agent_system_prompt_for_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +138,8 @@ def _build_graceful_fallback(
 
 
 # Repeated identical tool calls (same tool + same args) are steered with a soft
-# nudge at these counts — never a hard stop (the step valve is the only hard
-# limit). Replaces the old per-tool hard cap.
+# nudge at these counts, never a hard stop. Replaces the old per-tool hard cap;
+# termination remains semantic except for context exhaustion or cancellation.
 _REPEAT_NUDGE_SOFT = 3
 _REPEAT_NUDGE_FIRM = 6
 
@@ -236,6 +236,12 @@ class AgentLoopStrategy:
         ctx: StrategyContext,
         result: StrategyResult,
     ) -> AsyncGenerator[HarnessEvent, None]:
+        # Attachment evidence is assembled before the loop through the same
+        # GroundingBuilder used by L1 RAG. Surface its provenance immediately;
+        # the engine also persists the identical source list on completion.
+        if ctx.assembled is not None and ctx.assembled.sources:
+            yield HarnessEvent.sources(ctx.assembled.sources, step=0, elapsed_ms=0)
+
         # ── Per-turn state ────────────────────────────────────────
         budget = AgentRunState(started_at=time.perf_counter())
         client, profile = build_async_openai_client_for_role(
@@ -246,8 +252,6 @@ class AgentLoopStrategy:
             raise ValueError(
                 "当前回答模型不支持工具调用，请在模型页面选择支持 Function Calling 的模型。"
             )
-        compactor = QueryLoopCompactor(profile=profile, user_id=ctx.user_id)
-
         # Per-turn tool gating. When the global-memory toggle is OFF
         # for this session, drop ``recall_memory`` and ``save_memory``
         # from the LLM's tool manifest entirely (Claude Code's
@@ -298,7 +302,8 @@ class AgentLoopStrategy:
         # append assistant/tool turns after it.
         from app.services.chat.context_assembly_pipeline import prompt_renderer
 
-        agent_system_prompt = f"{AGENT_SYSTEM_PROMPT}\n\n{tool_catalog.format_prompt()}"
+        runtime_prompt = agent_system_prompt_for_runtime(ctx.runtime_profile)
+        agent_system_prompt = f"{runtime_prompt}\n\n{tool_catalog.format_prompt()}"
         if recovery_text:
             agent_system_prompt += (
                 "\n\n# Durable long-task recovery state\n"
@@ -318,11 +323,20 @@ class AgentLoopStrategy:
             history_messages = _reconstruct_history_messages(ctx.assembled.recent_turns)
         else:
             system_block = agent_system_prompt
+        current_task_message: dict[str, Any] = {
+            "role": "user",
+            "content": ctx.user_message,
+        }
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_block},
             *history_messages,
-            {"role": "user", "content": ctx.user_message},
+            current_task_message,
         ]
+        compactor = QueryLoopCompactor(
+            profile=profile,
+            user_id=ctx.user_id,
+        )
+        compactor.task_anchor = current_task_message
 
         # Accumulated Anthropic-style content blocks for the final
         # assistant turn. Built up as the loop encounters text / tool
@@ -789,39 +803,14 @@ class AgentLoopStrategy:
         nudge_repeat = 0
         nudge_tool = ""
         replan_message = ""
+        dispatcher = tool_catalog or registry
 
-        for tc in tool_calls_acc:
+        async def run_tool(
+            tc: _ToolCallAccumulator,
+            parsed_args: dict[str, Any],
+            tool_started: float,
+        ) -> tuple[dict[str, Any], str, float]:
             tool_name = tc.name
-            tool_error = False
-            tool_started = time.perf_counter()
-
-            # Capture the tool_use BLOCK before invoking — so the UI
-            # can show a "running" folded card even mid-flight (in the
-            # future when streaming tool persistence lands).
-            try:
-                parsed_args = parse_tool_arguments(tc.arguments)
-            except Exception:
-                parsed_args = {}
-            tool_use_block = {
-                "type": "tool_use",
-                "id": tc.id,
-                "name": tool_name,
-                "input": parsed_args,
-            }
-
-            yield HarnessEvent.tool_start(
-                tool_name,
-                _args_summary(tc.arguments),
-                step=budget.steps,
-                elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
-                tool_call_id=tc.id,
-                # live == replay (AGT-5): the persisted block carries the
-                # full input dict; the live event must too.
-                input=parsed_args,
-            )
-
-            observation: dict[str, Any]
-            dispatcher = tool_catalog or registry
             tool_ctx = AgentToolContext(
                 user_id=ctx.user_id,
                 session_id=ctx.session_id,
@@ -842,24 +831,7 @@ class AgentLoopStrategy:
                 timeout_seconds=settings.AGENT_TOOL_TIMEOUT_SECONDS,
                 dispatch=dispatch,
             )
-            tool_error = "error" in observation
-
-            signature = f"{tool_name}\x00{tc.arguments}"
-            repeat_count = budget.consume_tool_call(tool_name, signature)
-            await persist_turn_budget(ctx.turn_id, budget.to_dict())
-            if repeat_count in (_REPEAT_NUDGE_SOFT, _REPEAT_NUDGE_FIRM):
-                nudge_repeat, nudge_tool = repeat_count, tool_name
             latency_ms = round((time.perf_counter() - tool_started) * 1000, 2)
-
-            logger.info(
-                "tool_metric | tool=%s latency_ms=%.1f is_error=%s result_chars=%d step=%d",
-                tool_name,
-                latency_ms,
-                tool_error,
-                len(safe_json_dumps(observation)),
-                budget.steps,
-            )
-
             # Persist large tool results to disk; the LLM context only
             # keeps a small preview pointer. maybe_persist_result does
             # sync file_path.write_text() for oversized content — offload
@@ -872,67 +844,144 @@ class AgentLoopStrategy:
                 tool_call_id=tc.id,
                 session_id=ctx.session_id,
             )
-            incident = budget.observe_tool_result(
-                tool_name,
-                signature,
-                result_text,
-                is_error=tool_error,
-            )
-            if incident:
-                replan_message = incident
-            tool_msg = {
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": result_text,
-            }
-            messages.append(tool_msg)
-            turn_tool_messages.append(tool_msg)
+            return observation, result_text, latency_ms
 
-            # Persistent chain (frontend folded-card replay).
-            # ``content`` carries the full LLM-visible result text,
-            # which is either the raw JSON observation or a
-            # ``<persisted-output ...>`` pointer string. The frontend
-            # uses ``content`` to render the expanded view and
-            # ``summary`` as the always-visible folded label.
-            blocks.append(tool_use_block)
-            blocks.append(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": tc.id,
-                    "is_error": tool_error,
-                    "latency_ms": latency_ms,
-                    "summary": _result_summary(observation),
+        def concurrency_safe(name: str) -> bool:
+            checker = getattr(dispatcher, "is_concurrency_safe", None)
+            return bool(checker and checker(name))
+
+        call_index = 0
+        while call_index < len(tool_calls_acc):
+            # Partition into consecutive safe batches. A mutating/unknown call
+            # forms a one-item batch and therefore runs exclusively between
+            # all earlier and later work, preserving observable ordering.
+            batch_end = call_index + 1
+            if concurrency_safe(tool_calls_acc[call_index].name):
+                while batch_end < len(tool_calls_acc) and concurrency_safe(
+                    tool_calls_acc[batch_end].name
+                ):
+                    batch_end += 1
+            batch_calls = tool_calls_acc[call_index:batch_end]
+            prepared: list[
+                tuple[_ToolCallAccumulator, dict[str, Any], dict[str, Any], float]
+            ] = []
+
+            for tc in batch_calls:
+                try:
+                    parsed_args = parse_tool_arguments(tc.arguments)
+                except Exception:
+                    parsed_args = {}
+                tool_use_block = {
+                    "type": "tool_use",
+                    "id": tc.id,
+                    "name": tc.name,
+                    "input": parsed_args,
+                }
+                tool_started = time.perf_counter()
+                prepared.append((tc, parsed_args, tool_use_block, tool_started))
+                yield HarnessEvent.tool_start(
+                    tc.name,
+                    _args_summary(tc.arguments),
+                    step=budget.steps,
+                    elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
+                    tool_call_id=tc.id,
+                    input=parsed_args,
+                )
+
+            completed = await asyncio.gather(
+                *(
+                    run_tool(tc, parsed_args, tool_started)
+                    for tc, parsed_args, _tool_use_block, tool_started in prepared
+                )
+            )
+
+            # Deterministic replay: even when execution overlaps, observations,
+            # content blocks, and SSE completion events follow model call order.
+            for (tc, _parsed_args, tool_use_block, _started), (
+                observation,
+                result_text,
+                latency_ms,
+            ) in zip(prepared, completed):
+                tool_name = tc.name
+                tool_error = "error" in observation
+                signature = f"{tool_name}\x00{tc.arguments}"
+                repeat_count = budget.consume_tool_call(tool_name, signature)
+                await persist_turn_budget(ctx.turn_id, budget.to_dict())
+                if repeat_count in (_REPEAT_NUDGE_SOFT, _REPEAT_NUDGE_FIRM):
+                    nudge_repeat, nudge_tool = repeat_count, tool_name
+
+                logger.info(
+                    "tool_metric | tool=%s latency_ms=%.1f is_error=%s result_chars=%d step=%d",
+                    tool_name,
+                    latency_ms,
+                    tool_error,
+                    len(safe_json_dumps(observation)),
+                    budget.steps,
+                )
+
+                incident = budget.observe_tool_result(
+                    tool_name,
+                    signature,
+                    result_text,
+                    is_error=tool_error,
+                )
+                if incident:
+                    replan_message = incident
+                tool_msg = {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
                     "content": result_text,
                 }
-            )
+                messages.append(tool_msg)
+                turn_tool_messages.append(tool_msg)
 
-            yield HarnessEvent.tool_done(
-                tool_name,
-                _result_summary(observation),
-                step=budget.steps,
-                elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
-                tool_latency_ms=latency_ms,
-                is_error=tool_error,
-                # Ship the full result text on the wire so the live
-                # tool card can render the expanded view without a
-                # refresh. ``result_text`` is already capped at the
-                # per-tool ``max_result_chars`` ceiling so this won't
-                # blow up an SSE frame.
-                result_content=result_text,
-                # Mirror tool_start's id so the frontend can pair the
-                # tool_use / tool_result blocks by id rather than the
-                # ambient FIFO order — robust to parallel tools and
-                # makes the live-stream shape match the persisted
-                # blocks loaded by ``/chat/transcript``.
-                tool_call_id=tc.id,
-            )
+                # Persistent chain (frontend folded-card replay).
+                # ``content`` carries the full LLM-visible result text,
+                # which is either the raw JSON observation or a
+                # ``<persisted-output ...>`` pointer string. The frontend
+                # uses ``content`` to render the expanded view and
+                # ``summary`` as the always-visible folded label.
+                blocks.append(tool_use_block)
+                blocks.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "is_error": tool_error,
+                        "latency_ms": latency_ms,
+                        "summary": _result_summary(observation),
+                        "content": result_text,
+                    }
+                )
+
+                yield HarnessEvent.tool_done(
+                    tool_name,
+                    _result_summary(observation),
+                    step=budget.steps,
+                    elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
+                    tool_latency_ms=latency_ms,
+                    is_error=tool_error,
+                    # Ship the full result text on the wire so the live
+                    # tool card can render the expanded view without a
+                    # refresh. ``result_text`` is already capped at the
+                    # per-tool ``max_result_chars`` ceiling so this won't
+                    # blow up an SSE frame.
+                    result_content=result_text,
+                    # Mirror tool_start's id so the frontend can pair the
+                    # tool_use / tool_result blocks by id rather than the
+                    # ambient FIFO order — robust to parallel tools and
+                    # makes the live-stream shape match the persisted
+                    # blocks loaded by ``/chat/transcript``.
+                    tool_call_id=tc.id,
+                )
+
+            call_index = batch_end
 
         if turn_tool_messages:
             enforce_turn_budget(turn_tool_messages, ctx.session_id)
 
         # Repeated identical tool calls: steer the model with a soft nudge
-        # appended AFTER the tool results (never a hard stop — the step valve
-        # is the only hard limit). Placed after the results so the
+        # appended AFTER the tool results (never a hard stop). Placed after the
+        # results so the
         # assistant(tool_calls)→tool→tool pairing stays intact.
         if nudge_repeat:
             messages.append(

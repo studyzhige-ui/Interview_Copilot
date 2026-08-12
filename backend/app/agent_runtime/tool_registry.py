@@ -53,6 +53,9 @@ class ToolEntry:
     check_fn: Callable[..., bool] | None = None
     emoji: str = "🔧"
     prompt: str = ""
+    # True only when multiple calls can run concurrently without observable
+    # ordering dependencies. Unknown and mutating tools stay serial by default.
+    concurrency_safe: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,6 +105,10 @@ class ToolRegistryView:
         if entry is None:
             return {"error": "unknown_tool", "tool_name": name}
         return await _dispatch_entry(entry, raw_args, ctx)
+
+    def is_concurrency_safe(self, name: str) -> bool:
+        entry = self.entries.get(name)
+        return bool(entry and entry.concurrency_safe)
 
     def __contains__(self, name: str) -> bool:
         return name in self.entries
@@ -313,6 +320,10 @@ class ToolRegistry:
             return {"error": "unknown_tool", "tool_name": name}
 
         return await _dispatch_entry(entry, raw_args, ctx)
+
+    def is_concurrency_safe(self, name: str) -> bool:
+        entry = self.get(name)
+        return bool(entry and entry.concurrency_safe)
 
     def snapshot(
         self,

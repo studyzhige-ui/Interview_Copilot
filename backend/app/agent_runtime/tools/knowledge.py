@@ -89,5 +89,6 @@ registry.register(
             "page/section when available. If evidence_supported is false, state the "
             "missing evidence instead of completing the answer from memory."
         ),
+        concurrency_safe=True,
     )
 )

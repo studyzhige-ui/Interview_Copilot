@@ -30,13 +30,22 @@ class KnowledgeDocument(Base):
         index=True,
         nullable=False,
     )
+    # Chat-scoped uploads belong to one conversation and are excluded from
+    # global knowledge retrieval. NULL means durable library knowledge.
+    conversation_id = Column(
+        String,
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
+    )
     # Source file, if any. NULL for improved_qa / manual_text (no uploaded file).
     file_asset_id = Column(
         String, ForeignKey("file_assets.id"), index=True, nullable=True
     )
     title = Column(String, nullable=False)
     category = Column(String, index=True, default="默认", nullable=False)
-    # System source kind: user_upload | improved_qa | manual_text.
+    # System source kind: user_upload | improved_qa | manual_text |
+    # chat_attachment.
     source_kind = Column(String, index=True, nullable=False)
     # Provenance for non-file docs (improved_qa): which business object produced
     # this doc — e.g. source_ref_type='interview_qa', source_ref_id=interview_qa.id.

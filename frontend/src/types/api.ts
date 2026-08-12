@@ -54,17 +54,24 @@ export interface InterviewQA {
 export interface InterviewAnalysis {
   schema_version?: number;
   overall?: {
-    score?: number;
-    grade?: string;
+    score?: number | null;
     summary?: string;
-    feedback?: string;          // legacy alias retained by backend renderer
-    verdict?: string;
     strengths?: string[];
     weaknesses?: string[];
-    improvement_plan?: Array<string | { area?: string; actions?: string[]; resources?: string[] }>;
+    key_growth_areas?: Array<{
+      area?: string;
+      current_level?: 'weak' | 'partial' | 'good' | 'strong';
+      next_step?: string;
+    }>;
   };
-  phase_summary?: Record<string, { score?: number; feedback?: string }>;
-  meta?: { model?: string; analyzed_at?: string; qa_count?: number; duration_sec?: number };
+  phase_summary?: Array<{
+    phase: string;
+    phase_name: string;
+    score: number | null;
+    question_count: number;
+    summary: string;
+  }>;
+  skill_radar?: Record<string, number | null>;
 }
 
 export interface InterviewRecordDetail extends InterviewRecordListItem {
@@ -77,7 +84,6 @@ export interface InterviewRecordDetail extends InterviewRecordListItem {
   jd_file_asset_id: string | null;
   transcript: string | null;
   transcript_segments: unknown;
-  interview_plan: unknown;
   analysis: InterviewAnalysis | null;
   qa: InterviewQA[];
   error_message: string | null;
@@ -118,6 +124,7 @@ export interface ChatSessionCreateResp {
  */
 export type ContentBlock =
   | TextBlock
+  | AttachmentBlock
   | ToolUseBlock
   | ToolResultBlock
   | SourcesBlock;
@@ -160,6 +167,13 @@ interface SourcesBlock {
 interface TextBlock {
   type: 'text';
   text: string;
+}
+
+export interface AttachmentBlock {
+  type: 'attachment';
+  document_id: string;
+  title: string;
+  source_kind: string;
 }
 
 export interface ToolUseBlock {
@@ -212,24 +226,26 @@ export interface ChatTranscriptResp {
 /** ``POST /mock-interviews/start``. The start endpoint owns creation of the
  *  record + conversation + runtime and returns the opening interviewer line. */
 export interface MockStartResp {
-  interview_record_id: string;
-  conversation_id: string;
-  runtime_id: string;
-  current_stage_key: string;
-  /** The opening interviewer message (greeting + first question), one string. */
-  current_question: string;
-  question_message_id?: number | null;
-  plan_phases: Array<{ key: string; title: string }>;
+  record_id: string;
+  message: MockLiveMessage;
 }
 
-/** ``POST /mock-interviews/{record_id}/answer`` — one interviewer line.
- *  No Runtime Director: the server generates the next turn from the plan +
- *  current stage + message history in a single LLM call. */
+export interface MockLiveMessage {
+  id: number;
+  speaker: 'interviewer' | 'candidate';
+  text: string;
+}
+
+/** ``POST /mock-interviews/{record_id}/answer`` — one interviewer line. */
 export interface MockAnswerResp {
-  interviewer_message: string;
-  current_stage_key: string;
-  is_ready_to_finish: boolean;
-  question_message_id?: number | null;
+  message: MockLiveMessage;
+  end_suggested: boolean;
+}
+
+/** One uploaded recording, prepared for editing before answer submission. */
+export interface MockAnswerAudioResp {
+  text: string;
+  audio_file_asset_id: string;
 }
 
 /** ``POST /mock-interviews/{record_id}/finish`` and ``/retry-review`` — the
@@ -245,6 +261,7 @@ export interface KnowledgeDoc {
   title: string;
   category: string;
   source_kind: string;
+  conversation_id: string | null;
   status: string;
   task_id: string | null;
   chunk_count: number | null;

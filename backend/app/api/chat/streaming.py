@@ -38,6 +38,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.rate_limit import RATE_EXPENSIVE, limiter
+from app.conversation.runtime_profile import runtime_profile_for_type
 from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
@@ -76,11 +77,9 @@ def _recovery_events(status: str, error: str | None) -> list[str]:
 
 
 def _resolve_mode(row: Conversation, requested: str | None, db: Session) -> str:
-    mode = requested or row.mode or "chat"
-    if row.type == "mock_interview":
-        return "chat"
-    if requested and requested != row.mode:
-        row.mode = requested
+    mode = runtime_profile_for_type(row.type).resolve_mode(row.mode, requested)
+    if mode != row.mode:
+        row.mode = mode
         db.commit()
     return mode
 
@@ -102,11 +101,38 @@ async def create_chat_turn(
             status_code=404, detail="Session not found or access denied"
         )
     from app.services.chat.turn_event_buffer import turn_event_buffer
+    from app.services.chat.attachment_service import (
+        AttachmentNotFoundError,
+        AttachmentNotReadyError,
+        resolve_turn_attachments,
+    )
     from app.services.chat.turn_executor import (
         create_turn,
         fail_pending_turn,
         schedule_turn,
     )
+
+    try:
+        attachments = resolve_turn_attachments(
+            db,
+            user_pk=user_pk,
+            session_id=session_id,
+            document_ids=[item.document_id for item in body.attachments],
+        )
+    except AttachmentNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Attachment not found or access denied",
+        ) from exc
+    except AttachmentNotReadyError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Attachment is not ready",
+                "document_id": exc.document_id,
+                "status": exc.status,
+            },
+        ) from exc
 
     try:
         await turn_event_buffer.ping()
@@ -121,6 +147,8 @@ async def create_chat_turn(
             user_id=user_pk,
             mode=_resolve_mode(row, body.mode, db),
             message=body.message,
+            question_indexes=[int(index) for index in body.question_indexes],
+            attachments=attachments,
         )
     except ValueError as exc:
         raise HTTPException(

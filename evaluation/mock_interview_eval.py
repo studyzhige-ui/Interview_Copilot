@@ -22,6 +22,7 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.core.llm_client_factory import get_internal_llm  # noqa: E402
 from app.prompts.interview import MOCK_INTERVIEW_JUDGE_PROMPT  # noqa: E402
 from app.services.interview.mock_interview_service import (  # noqa: E402
+    MockPlan,
     NextTurn,
     build_prefix,
     detect_response_language,
@@ -42,6 +43,7 @@ JUDGE_DIMENSIONS = (
     "language_fit",
 )
 TurnGenerator = Callable[..., Awaitable[NextTurn]]
+PlanGenerator = Callable[..., MockPlan]
 TurnJudge = Callable[[dict[str, Any], str, str, bool], Awaitable[dict[str, Any]]]
 
 
@@ -89,6 +91,13 @@ def _structure_checks(
         if SequenceMatcher(None, question, message).ratio() >= 0.82
     ]
     expected_finish = case.get("expect_finish")
+    already_ended_phrases = (
+        "本次模拟面试到这里结束",
+        "本次面试到这里结束",
+        "面试已经结束",
+        "interview is now over",
+        "interview has ended",
+    )
     return {
         "non_empty": 5 <= len(message.strip()) <= 800,
         "bounded_questions": message.count("?") + message.count("？") <= 2,
@@ -96,6 +105,8 @@ def _structure_checks(
         "finish_signal": (
             True if expected_finish is None else finish is bool(expected_finish)
         ),
+        "finish_is_advisory": not finish
+        or not any(phrase in message.lower() for phrase in already_ended_phrases),
         "no_forbidden_text": not any(item in message for item in forbidden),
         "no_duplicate_question": not duplicates,
         "language_fit": _language_matches(
@@ -120,21 +131,42 @@ async def _judge(
             "recent_messages",
             "user_answer",
             "asked_questions",
-            "questions_in_current_stage",
-            "transition_rule",
+            "length_warning_active",
             "expected_language",
         )
     }
+    recent_messages = case.get("recent_messages") or []
+    payload["previous_interviewer_question"] = next(
+        (
+            str(item.get("content") or "")
+            for item in reversed(recent_messages)
+            if str(item.get("role") or "").lower().startswith(
+                ("assistant", "agent")
+            )
+        ),
+        "",
+    )
     payload["generated_stage"] = generated_stage
     payload["ready_to_finish"] = ready_to_finish
     prompt = MOCK_INTERVIEW_JUDGE_PROMPT.format(
         case_json=json.dumps(payload, ensure_ascii=False),
         message=message,
     )
-    response = await get_internal_llm("worker").acomplete(
-        prompt,
-        response_format={"type": "json_object"},
-    )
+    last_error: Exception | None = None
+    response = None
+    for attempt in range(2):
+        try:
+            response = await get_internal_llm("worker").acomplete(
+                prompt,
+                response_format={"type": "json_object"},
+            )
+            break
+        except Exception as exc:  # noqa: BLE001 - one transient eval retry
+            last_error = exc
+            if attempt == 0:
+                print("  judge request failed; retrying once", flush=True)
+    if response is None:
+        raise RuntimeError("mock interview judge failed twice") from last_error
     result = _parse_json(str(response.text))
     for key in JUDGE_DIMENSIONS:
         result[key] = max(1, min(5, int(result[key])))
@@ -149,37 +181,31 @@ async def _evaluate_turn(
     case: dict[str, Any],
     username: str,
     *,
+    plan_generator: PlanGenerator = generate_plan,
     turn_generator: TurnGenerator = generate_next_turn,
     judge_turn: TurnJudge = _judge,
 ) -> dict[str, Any]:
-    plan = generate_plan(interviewer_style=case["style"])
+    plan = plan_generator(
+        resume_context=case["resume"],
+        jd_context=case["jd"],
+        interviewer_style=case["style"],
+        user_id=username,
+    )
     started = time.perf_counter()
     turn = await turn_generator(
         prefix=build_prefix(case["resume"], case["jd"], case["style"]),
         stages=plan.stages,
         current_stage_key=case["current_stage"],
-        recent_messages=case["recent_messages"],
+        conversation_messages=case["recent_messages"],
         user_answer=case["user_answer"],
         user_id=username,
-        asked_questions=case["asked_questions"],
-        questions_in_current_stage=case["questions_in_current_stage"],
+        length_warning_active=bool(case.get("length_warning_active", False)),
     )
     evaluated_case = {
         **case,
         "expected_language": case.get("expected_language")
         or _expected_language(case["user_answer"]),
     }
-    stage_config = next(
-        stage for stage in plan.stages if stage["key"] == case["current_stage"]
-    )
-    count = int(case["questions_in_current_stage"])
-    evaluated_case["transition_rule"] = (
-        "must_advance"
-        if count >= int(stage_config["max_questions"])
-        else "must_stay"
-        if count < int(stage_config["min_questions"])
-        else "may_advance"
-    )
     judge = await judge_turn(
         evaluated_case,
         turn.interviewer_message,
@@ -192,7 +218,6 @@ async def _evaluate_turn(
         turn.next_stage_key,
         turn.is_ready_to_finish,
     )
-    checks["model_generation_succeeded"] = not turn.used_fallback
     mean_score = _judge_mean(judge)
     passed = (
         all(checks.values())
@@ -248,10 +273,16 @@ async def _evaluate_trajectory(
     case: dict[str, Any],
     username: str,
     *,
+    plan_generator: PlanGenerator = generate_plan,
     turn_generator: TurnGenerator = generate_next_turn,
     judge_turn: TurnJudge = _judge,
 ) -> dict[str, Any]:
-    plan = generate_plan(interviewer_style=case["style"])
+    plan = plan_generator(
+        resume_context=case["resume"],
+        jd_context=case["jd"],
+        interviewer_style=case["style"],
+        user_id=username,
+    )
     stage_keys = [stage["key"] for stage in plan.stages]
     current_stage = str(case.get("current_stage") or plan.first_stage_key)
     recent_messages = list(case.get("recent_messages") or [])
@@ -271,17 +302,18 @@ async def _evaluate_trajectory(
         prior_stage = current_stage
         prior_index = stage_keys.index(prior_stage)
         asked_text = [item["text"] for item in questions]
-        questions_in_stage = sum(item["stage_key"] == prior_stage for item in questions)
         started = time.perf_counter()
         turn = await turn_generator(
             prefix=build_prefix(case["resume"], case["jd"], case["style"]),
             stages=plan.stages,
             current_stage_key=prior_stage,
-            recent_messages=recent_messages[-8:],
+            conversation_messages=recent_messages,
             user_answer=answer,
             user_id=username,
-            asked_questions=asked_text,
-            questions_in_current_stage=questions_in_stage,
+            length_warning_active=bool(
+                case.get("length_warning_active", False)
+                or turn_index + 1 >= int(case.get("warning_turns") or 20)
+            ),
         )
         allowed_stages = [prior_stage]
         if prior_index + 1 < len(stage_keys):
@@ -290,7 +322,7 @@ async def _evaluate_trajectory(
         evaluated_case = {
             **case,
             "current_stage": prior_stage,
-            "recent_messages": recent_messages[-8:],
+            "recent_messages": recent_messages,
             "user_answer": answer,
             "asked_questions": asked_text,
             "allowed_stages": allowed_stages,
@@ -298,13 +330,9 @@ async def _evaluate_trajectory(
             "forbidden": [*case.get("forbidden", []), *step.get("forbidden", [])],
             "expected_language": step.get("expected_language")
             or _expected_language(answer),
-            "questions_in_current_stage": questions_in_stage,
-            "transition_rule": (
-                "must_advance"
-                if questions_in_stage >= int(plan.stages[prior_index]["max_questions"])
-                else "must_stay"
-                if questions_in_stage < int(plan.stages[prior_index]["min_questions"])
-                else "may_advance"
+            "length_warning_active": bool(
+                case.get("length_warning_active", False)
+                or turn_index + 1 >= int(case.get("warning_turns") or 20)
             ),
         }
         judge = await judge_turn(
@@ -319,7 +347,6 @@ async def _evaluate_trajectory(
             turn.next_stage_key,
             turn.is_ready_to_finish,
         )
-        checks["model_generation_succeeded"] = not turn.used_fallback
         checks["finish_only_on_final_stage"] = (
             not turn.is_ready_to_finish or turn.next_stage_key == stage_keys[-1]
         )

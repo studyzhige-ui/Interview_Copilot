@@ -65,12 +65,30 @@ def _persist_nodes(
     embed_model: Any | None = None,
     document_title_loader=_document_title,
     assign_stable_ids: bool = True,
+    index_document: bool = True,
 ) -> dict[str, Any]:
     from app.rag.document_chunk_service import write_chunks
 
     if assign_stable_ids:
         _stamp_stable_ids(nodes, document_id)
     _validate_node_ids(nodes)
+    if not index_document:
+        # Conversation attachments are private facts, not global knowledge.
+        # Persist their parsed chunks for exact reads / per-turn Evidence, but
+        # never embed or publish them into the user's Milvus collection. A
+        # read-time post-filter would be too late: private rows could already
+        # have displaced library candidates from Milvus' top-k result.
+        with database_module.SessionLocal() as db:
+            chunk_info = write_chunks(
+                db,
+                nodes=nodes,
+                user_id=user_id,
+                source_kind=source_kind,
+                document_id=document_id,
+                index_status="private",
+            )
+        return {**chunk_info, "indexed": True, "vector_indexed": False}
+
     passages = build_retrieval_passages(
         nodes,
         document_title=document_title_loader(document_id),
@@ -148,6 +166,7 @@ async def ingest_document(
     _chunker=chunk_document,
     _document_title_loader=_document_title,
     _embed_model: Any | None = None,
+    index_document: bool = True,
 ) -> dict[str, Any]:
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"未找到待摄取的档案: {file_path}")
@@ -179,10 +198,12 @@ async def ingest_document(
         document_id=document_id,
         embed_model=_embed_model,
         document_title_loader=_document_title_loader,
+        index_document=index_document,
     )
     return {
         "success": True,
         "indexed": chunk_info["indexed"],
+        "vector_indexed": chunk_info.get("vector_indexed", True),
         "chunk_count": chunk_info["chunk_count"],
         "node_ids": chunk_info["node_ids"],
         "ref_doc_ids": list({node.ref_doc_id for node in nodes if node.ref_doc_id}),

@@ -19,11 +19,14 @@ class SourceKindEnum(str, Enum):
     - ``user_upload``: a user-uploaded file (题库/官方文档/面经/笔记…).
     - ``improved_qa``: a QA improved-answer the user saved from an interview.
     - ``manual_text``: a directly pasted/hand-written doc (reserved).
+    - ``chat_attachment``: a conversation-scoped upload, excluded from the
+      user's durable library and global retrieval unless explicitly referenced.
     """
 
     user_upload = "user_upload"
     improved_qa = "improved_qa"
     manual_text = "manual_text"
+    chat_attachment = "chat_attachment"
 
 
 class KnowledgeUploadRequest(BaseModel):
@@ -41,6 +44,7 @@ class KnowledgeDocumentCreateRequest(BaseModel):
     source_kind: SourceKindEnum = SourceKindEnum.user_upload
     title: Optional[str] = None
     category: str = "默认"
+    conversation_id: str | None = Field(default=None, max_length=128)
 
 
 class KnowledgeDocumentUpdateRequest(BaseModel):

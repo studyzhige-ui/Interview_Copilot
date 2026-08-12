@@ -18,7 +18,7 @@
                               Post-interview scoring is NOT here — see
                               analysis_orchestrator.
   mock_runtime_service      — Lifecycle of the mock_interview_runtime row
-                              (create / advance / set_status / delete)
+                              (create / claim / advance / delete)
   mock_flow                 — Mock-run orchestration: atomic start
                               (record+conversation+opening+runtime), answer
                               turn, review dispatch, abandon cascade

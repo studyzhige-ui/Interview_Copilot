@@ -136,6 +136,7 @@ registry.register(
         ),
         args_model=ReadResumeArgs,
         handler=_read_resume_handler,
+        concurrency_safe=True,
         # Bumped from 10K to 20K to accommodate the full-text fallback —
         # the handler caps full_text at 18K internally, leaving headroom
         # for the surrounding JSON envelope.

@@ -189,17 +189,38 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     turn_columns = {c["name"]: c for c in insp.get_columns("conversation_turns")}
     user_columns = {c["name"]: c for c in insp.get_columns("users")}
     runtime_columns = {c["name"]: c for c in insp.get_columns("mock_interview_runtime")}
+    record_columns = {c["name"]: c for c in insp.get_columns("interview_records")}
     qa_columns = {c["name"]: c for c in insp.get_columns("interview_qa")}
     ability_columns = {c["name"]: c for c in insp.get_columns("memory_ability_states")}
     chunk_columns = {c["name"]: c for c in insp.get_columns("document_chunks")}
     assert isinstance(outbox_columns["payload_json"]["type"], JSONB)
     assert isinstance(turn_columns["budget_json"]["type"], JSONB)
+    assert isinstance(turn_columns["question_indexes_json"]["type"], JSONB)
     assert user_columns["created_at"]["type"].timezone is True
     assert runtime_columns["answer_claimed_at"]["type"].timezone is True
+    assert isinstance(runtime_columns["plan_json"]["type"], JSONB)
+    assert runtime_columns["plan_json"]["nullable"] is False
+    assert runtime_columns["current_stage_key"]["nullable"] is False
+    assert runtime_columns["current_question_message_id"]["nullable"] is False
+    assert runtime_columns["target_question_count"]["nullable"] is False
+    assert set(runtime_columns) == {
+        "interview_record_id",
+        "user_id",
+        "conversation_id",
+        "plan_json",
+        "interviewer_style",
+        "target_question_count",
+        "current_stage_key",
+        "current_question_message_id",
+        "answer_claimed_at",
+        "last_activity_at",
+    }
     assert isinstance(qa_columns["score"]["type"], Float)
     assert isinstance(ability_columns["ability_score"]["type"], Float)
     assert chunk_columns["document_id"]["nullable"] is False
     assert "lexical_index_id" not in chunk_columns
+    assert "interview_plan" not in record_columns
+    assert "debrief_summary" not in record_columns
 
     # Retired schemas must not leak back into the release baseline.
     legacy = {
@@ -364,14 +385,22 @@ def test_interview_record_children_cascade(fresh_pg_db, monkeypatch):
         )
         conn.execute(
             text(
-                "INSERT INTO mock_interview_runtime "
-                "(id, user_id, interview_record_id, status, stage_index, "
-                "plan_template_key, interviewer_style, voice_mode, "
-                "started_at, last_activity_at, updated_at) "
-                "VALUES ('mir_x', 1, 'ir_cascade', 'completed', 0, "
-                "'general', 'professional', 'hybrid', NOW(), NOW(), NOW())"
+                "INSERT INTO conversations "
+                "(id, user_id, type, mode) "
+                "VALUES ('conv_cascade', 1, 'mock_interview', 'chat')"
             )
         )
+        conn.execute(
+                text(
+                    "INSERT INTO mock_interview_runtime "
+                    "(user_id, interview_record_id, conversation_id, "
+                    "current_stage_key, current_question_message_id, plan_json, "
+                    "interviewer_style, target_question_count, last_activity_at) "
+                    "VALUES (1, 'ir_cascade', 'conv_cascade', "
+                    "'self_intro', 1, '[{\"key\": \"self_intro\"}]', "
+                    "'professional', 20, NOW())"
+                )
+            )
 
     # The parent delete must not raise or leave orphan rows.
     with engine.begin() as conn:

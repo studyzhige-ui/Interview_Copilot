@@ -12,7 +12,7 @@ import {
 import { parseJdForMock } from '@/api/mock';
 
 export type InterviewerStyle = 'friendly' | 'professional' | 'rigorous' | 'pressure';
-export type VoiceMode = 'text' | 'voice' | 'hybrid';
+export type TargetQuestionCount = 15 | 20 | 30;
 export type TtsVoice =
   | 'zh-CN-YunxiNeural'
   | 'zh-CN-XiaoxiaoNeural'
@@ -24,8 +24,8 @@ interface Props {
     resume_id: string;
     jd_text: string;
     interviewer_style: InterviewerStyle;
-    voice_mode: VoiceMode;
     tts_voice: TtsVoice;
+    target_question_count: TargetQuestionCount;
   }) => void;
   starting: boolean;
 }
@@ -45,6 +45,16 @@ const VOICE_OPTIONS: Array<{ id: TtsVoice; label: string }> = [
   { id: 'zh-CN-XiaoyiNeural', label: '晓伊 · 温和女声' },
 ];
 
+const LENGTH_OPTIONS: Array<{
+  id: TargetQuestionCount;
+  label: string;
+  desc: string;
+}> = [
+  { id: 15, label: '快速面试', desc: '约 15 题' },
+  { id: 20, label: '标准面试', desc: '约 20 题 · 默认' },
+  { id: 30, label: '深入面试', desc: '约 30 题' },
+];
+
 export function loadPreferredVoice(): TtsVoice {
   try {
     const stored = localStorage.getItem(VOICE_PREF_KEY);
@@ -56,21 +66,23 @@ export function loadPreferredVoice(): TtsVoice {
   return 'zh-CN-YunxiNeural';
 }
 
-type CardKey = 'resume' | 'jd';
-
-interface CardState {
+interface ResumeState {
   filename: string;
-  uploadId?: string;
-  uploading?: boolean;
+  id: string | null;
+  loading: boolean;
 }
 
-const empty: CardState = { filename: '' };
+interface JdState {
+  filename: string;
+  parsing: boolean;
+}
+
+const EMPTY_RESUME: ResumeState = { filename: '', id: null, loading: false };
+const EMPTY_JD: JdState = { filename: '', parsing: false };
 
 export function MockSetup({ onReady, starting }: Props) {
-  const [cards, setCards] = useState<Record<CardKey, CardState>>({
-    resume: { ...empty },
-    jd: { ...empty },
-  });
+  const [resume, setResume] = useState<ResumeState>(EMPTY_RESUME);
+  const [jdDocument, setJdDocument] = useState<JdState>(EMPTY_JD);
   const [resumeMode, setResumeMode] = useState<'upload' | 'existing'>('existing');
   const [storedResumes, setStoredResumes] = useState<PersonalResume[]>([]);
   const [loadingResumes, setLoadingResumes] = useState(true);
@@ -78,7 +90,8 @@ export function MockSetup({ onReady, starting }: Props) {
   const [jdText, setJdText] = useState('');
   const [style, setStyle] = useState<InterviewerStyle>('professional');
   const [ttsVoice, setTtsVoice] = useState<TtsVoice>(loadPreferredVoice);
-  const voiceMode: VoiceMode = 'hybrid';
+  const [targetQuestionCount, setTargetQuestionCount] =
+    useState<TargetQuestionCount>(20);
   const resumeRef = useRef<HTMLInputElement | null>(null);
   const jdRef = useRef<HTMLInputElement | null>(null);
 
@@ -92,10 +105,7 @@ export function MockSetup({ onReady, starting }: Props) {
         const selected = usable.find((resume) => resume.is_default) ?? usable[0];
         setResumeMode(selected ? 'existing' : 'upload');
         if (selected) {
-          setCards((current) => ({
-            ...current,
-            resume: { filename: selected.title, uploadId: selected.id, uploading: false },
-          }));
+          setResume({ filename: selected.title, id: selected.id, loading: false });
         }
       })
       .catch(() => { /* non-fatal — just hide the picker */ })
@@ -116,17 +126,11 @@ export function MockSetup({ onReady, starting }: Props) {
       toast.error(r.parse_status === 'failed' ? '这份简历解析失败，请替换后重试' : '这份简历仍在解析');
       return;
     }
-    setCards((c) => ({
-      ...c,
-      resume: { filename: r.title, uploadId: r.id, uploading: false },
-    }));
+    setResume({ filename: r.title, id: r.id, loading: false });
   };
 
-  const update = (k: CardKey, patch: Partial<CardState>) =>
-    setCards((c) => ({ ...c, [k]: { ...c[k], ...patch } }));
-
   const onResume = async (f: File) => {
-    update('resume', { filename: f.name, uploading: true });
+    setResume({ filename: f.name, id: null, loading: true });
     try {
       // Saves a NEW personal resume entity (parsed into sections server-side);
       // its id is what the mock uses as resume context.
@@ -134,10 +138,10 @@ export function MockSetup({ onReady, starting }: Props) {
       setStoredResumes((current) => [r, ...current.filter((item) => item.id !== r.id)]);
       const usable = await waitForResumeUsable(r.id);
       setStoredResumes((current) => [usable, ...current.filter((item) => item.id !== usable.id)]);
-      update('resume', { filename: usable.title, uploadId: usable.id, uploading: false });
+      setResume({ filename: usable.title, id: usable.id, loading: false });
       toast.success('简历已解析，可以开始面试');
     } catch (e) {
-      update('resume', empty);
+      setResume(EMPTY_RESUME);
       const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 409) {
         // Two-active-resume limit hit — guide the user to pick an existing one.
@@ -155,20 +159,20 @@ export function MockSetup({ onReady, starting }: Props) {
   const onJd = async (f: File) => {
     // Mock-interview JD is single-use and must NOT join the personal library.
     // We send it to a stateless parse endpoint that returns text only.
-    update('jd', { filename: f.name, uploading: true });
+    setJdDocument({ filename: f.name, parsing: true });
     try {
       const { text } = await parseJdForMock(f);
       if (!text.trim()) {
-        update('jd', empty);
+        setJdDocument(EMPTY_JD);
         toast.error('JD 解析为空，请换一份或粘贴文本');
         return;
       }
       setJdText(text);
       setJdMode('paste'); // surface the parsed text so the user can review/edit
-      update('jd', { filename: f.name, uploadId: undefined, uploading: false });
+      setJdDocument({ filename: f.name, parsing: false });
       toast.success(`JD 已解析（${text.length} 字符）· 仅用于本次模拟`);
     } catch {
-      update('jd', empty);
+      setJdDocument(EMPTY_JD);
       toast.error('JD 解析失败');
     }
   };
@@ -176,7 +180,7 @@ export function MockSetup({ onReady, starting }: Props) {
   // JD always reduces to plain text — either the user pasted it directly,
   // or parseJdForMock returned text from their uploaded file.
   const jdReady = jdText.trim().length >= 20;
-  const ready = !!cards.resume.uploadId && !cards.resume.uploading && jdReady;
+  const ready = resume.id !== null && !resume.loading && jdReady;
 
   return (
     <div className="h-full flex items-center justify-center px-4 md:px-6 py-8 overflow-y-auto">
@@ -195,7 +199,7 @@ export function MockSetup({ onReady, starting }: Props) {
           <ResumeCard
             mode={resumeMode}
             setMode={setResumeMode}
-            state={cards.resume}
+            state={resume}
             storedResumes={storedResumes}
             loadingResumes={loadingResumes}
             inputRef={resumeRef}
@@ -205,7 +209,7 @@ export function MockSetup({ onReady, starting }: Props) {
           <JdCard
             mode={jdMode}
             setMode={setJdMode}
-            state={cards.jd}
+            state={jdDocument}
             text={jdText}
             setText={setJdText}
             inputRef={jdRef}
@@ -220,6 +224,16 @@ export function MockSetup({ onReady, starting }: Props) {
             value={style}
             onChange={setStyle}
           />
+          <PrefGroup
+            label="预计题量"
+            options={LENGTH_OPTIONS}
+            value={targetQuestionCount}
+            onChange={setTargetQuestionCount}
+            columns={3}
+          />
+          <p className="px-1 text-[12px] leading-relaxed text-stone-500">
+            预计题量只用于控制面试节奏，实际题数可能因回答和追问有所变化。
+          </p>
           <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-[0_2px_10px_rgba(15,23,42,0.04)]">
             <label htmlFor="tts-voice" className="text-[16px] font-semibold text-stone-800">
               面试官音色
@@ -245,11 +259,11 @@ export function MockSetup({ onReady, starting }: Props) {
             loading={starting}
             onClick={() =>
               onReady({
-                resume_id: cards.resume.uploadId!,
+                resume_id: resume.id!,
                 jd_text: jdText.trim(),
                 interviewer_style: style,
-                voice_mode: voiceMode,
                 tts_voice: ttsVoice,
+                target_question_count: targetQuestionCount,
               })
             }
           >
@@ -273,14 +287,14 @@ function ResumeCard({
 }: {
   mode: 'upload' | 'existing';
   setMode: (m: 'upload' | 'existing') => void;
-  state: CardState;
+  state: ResumeState;
   storedResumes: PersonalResume[];
   loadingResumes: boolean;
   inputRef: React.RefObject<HTMLInputElement | null>;
   onPickFile: (f: File) => void;
   onPickExisting: (r: PersonalResume) => void;
 }) {
-  const done = !!state.uploadId;
+  const done = state.id !== null;
   const hasStored = storedResumes.length > 0;
   return (
     <div
@@ -309,7 +323,7 @@ function ResumeCard({
             done ? 'bg-success-50 text-success-700' : 'bg-primary-50 text-primary-600',
           ].join(' ')}
         >
-          {state.uploading ? <Spinner size={18} /> : done ? <CheckCircle2 size={20} /> : <FileText size={20} />}
+          {state.loading ? <Spinner size={18} /> : done ? <CheckCircle2 size={20} /> : <FileText size={20} />}
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-[16px] font-semibold text-stone-800 flex items-center gap-1.5 leading-tight">
@@ -358,7 +372,7 @@ function ResumeCard({
         {mode === 'existing' && hasStored ? (
           <div className="flex flex-col gap-2">
             <select
-              value={state.uploadId ?? ''}
+              value={state.id ?? ''}
               onChange={(e) => {
                 const r = storedResumes.find((x) => x.id === e.target.value);
                 if (r) onPickExisting(r);
@@ -424,21 +438,23 @@ function ResumeCard({
   );
 }
 
-function PrefGroup<T extends string>({
+function PrefGroup<T extends string | number>({
   label,
   options,
   value,
   onChange,
+  columns = 2,
 }: {
   label: string;
   options: Array<{ id: T; label: string; desc: string }>;
   value: T;
   onChange: (v: T) => void;
+  columns?: 2 | 3;
 }) {
   return (
     <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-[0_2px_10px_rgba(15,23,42,0.04)]">
       <div className="text-[16px] font-semibold text-stone-800 mb-3.5">{label}</div>
-      <div className="grid grid-cols-2 gap-2.5">
+      <div className={`grid gap-2.5 ${columns === 3 ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2'}`}>
         {options.map((opt) => {
           const active = opt.id === value;
           return (
@@ -483,14 +499,14 @@ function JdCard({
 }: {
   mode: 'upload' | 'paste';
   setMode: (m: 'upload' | 'paste') => void;
-  state: CardState;
+  state: JdState;
   text: string;
   setText: (t: string) => void;
   inputRef: React.RefObject<HTMLInputElement | null>;
   onPick: (f: File) => void;
 }) {
-  const doneUpload = !!state.uploadId;
   const doneText = text.trim().length >= 20;
+  const doneUpload = state.filename !== '' && doneText;
   const done = mode === 'upload' ? doneUpload : doneText;
   return (
     <div
@@ -518,7 +534,7 @@ function JdCard({
             done ? 'bg-success-50 text-success-700' : 'bg-primary-50 text-primary-600',
           ].join(' ')}
         >
-          {state.uploading ? <Spinner size={18} /> : done ? <CheckCircle2 size={20} /> : <Briefcase size={20} />}
+          {state.parsing ? <Spinner size={18} /> : done ? <CheckCircle2 size={20} /> : <Briefcase size={20} />}
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-[16px] font-semibold text-stone-800 flex items-center gap-1.5 leading-tight">

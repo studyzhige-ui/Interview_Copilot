@@ -78,6 +78,10 @@ export function ReviewPage() {
   const [widths, setWidths] = useState(loadWidths);
   const [analyses, setAnalyses] = useState<Record<string, AnalysisEntry>>({});
   const [mobilePane, setMobilePane] = useState<'records' | 'review' | 'chat'>('review');
+  const [questionSelection, setQuestionSelection] = useState<{
+    recordId: string | null;
+    indexes: number[];
+  }>({ recordId: null, indexes: [] });
 
   const { data: records = [], error: recordsError, isFetchedAfterMount } = useQuery({
     queryKey: RECORDS_KEY,
@@ -115,6 +119,36 @@ export function ReviewPage() {
     return records[0]?.id ?? drafts[0]?.id ?? null;
   }, [drafts, isFetchedAfterMount, records, search]);
   const activeId = selectedActiveId ?? defaultActiveId;
+  const selectedQuestionIndexes = questionSelection.recordId === activeId
+    ? questionSelection.indexes
+    : [];
+
+  const toggleQuestion = useCallback((index: number) => {
+    if (!activeId || isDraft(activeId)) return;
+    setQuestionSelection((previous) => {
+      const indexes = previous.recordId === activeId ? previous.indexes : [];
+      const selected = indexes.includes(index);
+      return {
+        recordId: activeId,
+        indexes: selected
+          ? indexes.filter((item) => item !== index)
+          : [...indexes, index],
+      };
+    });
+    setMobilePane('chat');
+  }, [activeId]);
+
+  const removeQuestion = useCallback((index: number) => {
+    setQuestionSelection((previous) => previous.recordId === activeId
+      ? { ...previous, indexes: previous.indexes.filter((item) => item !== index) }
+      : previous);
+  }, [activeId]);
+
+  const clearQuestions = useCallback(() => {
+    setQuestionSelection((previous) => previous.recordId === activeId
+      ? { ...previous, indexes: [] }
+      : previous);
+  }, [activeId]);
 
   useEffect(() => {
     if (!activeId || isDraft(activeId)) {
@@ -465,7 +499,13 @@ export function ReviewPage() {
               </button>
             </div>
             <div className="flex-1 min-h-0">
-              <QAPanel key={detail?.id ?? 'empty'} detail={detail} loading={detailLoading} />
+              <QAPanel
+                key={detail?.id ?? 'empty'}
+                detail={detail}
+                loading={detailLoading}
+                selectedQuestionIndexes={selectedQuestionIndexes}
+                onToggleQuestion={toggleQuestion}
+              />
             </div>
           </div>
         );
@@ -502,7 +542,15 @@ export function ReviewPage() {
         />
       );
     }
-    return <QAPanel key={detail?.id ?? 'empty'} detail={detail} loading={detailLoading} />;
+    return (
+      <QAPanel
+        key={detail?.id ?? 'empty'}
+        detail={detail}
+        loading={detailLoading}
+        selectedQuestionIndexes={selectedQuestionIndexes}
+        onToggleQuestion={toggleQuestion}
+      />
+    );
   })();
 
   return (
@@ -583,6 +631,9 @@ export function ReviewPage() {
         sessionTitle={activeRecord?.title ?? null}
         sessionType="debrief"
         width={widths.right}
+        questionIndexes={selectedQuestionIndexes}
+        onRemoveQuestion={removeQuestion}
+        onClearQuestions={clearQuestions}
         className={`${mobilePane === 'chat' ? 'flex' : 'hidden'} lg:flex min-h-0 flex-1 lg:flex-none`}
       />
     </div>

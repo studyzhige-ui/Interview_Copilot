@@ -3,7 +3,7 @@ import { toast } from '@/store/uiStore';
 import { extractErr } from '@/api/client';
 import { cancelChatTurn, streamChatTurn } from '@/api/chat';
 import type { ToolResultBlock, ToolUseBlock } from '@/types/api';
-import type { Mode, SessionRuntime } from './types';
+import type { Attachment, Mode, SessionRuntime } from './types';
 
 /**
  * The SSE send/cancel pair. Operates on the session-runtime cache: the
@@ -22,12 +22,31 @@ export function useChatStream({
   bump: () => void;
   mode: Mode;
 }) {
-  const startStream = useCallback((payload: string | null, existingTurnId?: string) => {
+  const startStream = useCallback((
+    payload: string | null,
+    existingTurnId?: string,
+    questionIndexes: number[] = [],
+    attachments: Attachment[] = [],
+  ) => {
     if (!activeSessionId) return;
     const r = getRuntime(activeSessionId);
     if (r.streaming || (r.turnId && !existingTurnId)) return;
 
-    if (payload !== null) r.messages.push({ role: 'user', content: payload });
+    if (payload !== null) {
+      r.messages.push({
+        role: 'user',
+        content: payload,
+        blocks: [
+          ...attachments.map((attachment) => ({
+            type: 'attachment' as const,
+            document_id: attachment.document_id,
+            title: attachment.filename,
+            source_kind: 'chat_attachment',
+          })),
+          { type: 'text' as const, text: payload },
+        ],
+      });
+    }
     r.partial = '';
     r.inflightBlocks = [];
     r.inflightSources = [];
@@ -177,10 +196,12 @@ export function useChatStream({
       },
     }, {
       signal: ac.signal,
-      // The mode pill (CHAT vs AGENT) selects the server-side strategy;
-      // the server persists it onto conversations.mode (AGT-4), so a
-      // fresh device resumes the same mode without localStorage.
+      // Debrief's mode pill selects the strategy; Career ChatPanel passes a
+      // fixed AGENT mode. The backend applies the same runtime policy, so an
+      // old client cannot silently downgrade a general session to L1 chat.
       mode: mode === 'AGENT' ? 'agent' : 'chat',
+      questionIndexes,
+      attachments: attachments.map((attachment) => attachment.document_id),
       turnId: existingTurnId,
       onTurnCreated: (turnId) => {
         getRuntime(sid).turnId = turnId;
@@ -199,7 +220,13 @@ export function useChatStream({
   }, [activeSessionId, getRuntime, bump, mode]);
 
   const sendMessage = useCallback(
-    (payload: string) => startStream(payload),
+    (
+      payload: string,
+      questionIndexes: number[] = [],
+      attachments: Attachment[] = [],
+    ) => {
+      startStream(payload, undefined, questionIndexes, attachments);
+    },
     [startStream],
   );
 

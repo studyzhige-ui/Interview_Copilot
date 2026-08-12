@@ -9,6 +9,9 @@ Lifecycle:
     confirm_file_asset()  -> verify: object exists, size reconciles AND is
                              within the purpose cap, first bytes match the
                              purpose's content kind -> uploaded / passed
+    store_validated_file_asset()
+                          -> persist bytes already inspected by a trusted
+                             server-side domain command -> uploaded / passed
                              (or failed + enqueue object cleanup)
     <business consumes>    -> ensure_uploaded() (confirm-on-consume — runs the
                              same verification if the client skipped /confirm)
@@ -39,11 +42,12 @@ from app.core.storage import (
     head_object,
     read_object_head,
     storage_uri_for_key,
+    upload_file_to_owned_key,
 )
 from app.core.user_identity import resolve_user_pk
 from app.db.types import utc_now
 from app.models.file_asset import FileAsset, generate_file_asset_id
-from app.services.uploads.purpose_registry import get_purpose_spec
+from app.services.uploads.purpose_registry import PurposeSpec, get_purpose_spec
 
 logger = logging.getLogger(__name__)
 
@@ -88,14 +92,95 @@ def create_file_asset(
 ) -> tuple[FileAsset, dict]:
     """Reserve a file-asset row and return it plus a presigned PUT URL.
 
-    Enforces the PURPOSE_REGISTRY whitelist and declared-size cap here — the
-    single choke point every entry (file-assets API, rag.py knowledge URL,
-    agent write_file) goes through. Raises ``UnknownUploadPurpose`` /
-    ``UploadTooLarge`` accordingly.
+    Enforces the PURPOSE_REGISTRY whitelist and declared-size cap through the
+    same asset builder used by trusted server-side storage. Raises
+    ``UnknownUploadPurpose`` / ``UploadTooLarge`` accordingly.
 
     ``user_id`` is the caller's username; it's resolved to the stable
     ``users.id`` for the FK. Raises ``ValueError`` for an unknown user.
     """
+    asset, spec = _new_file_asset(
+        db,
+        user_id=user_id,
+        filename=filename,
+        purpose=purpose,
+        content_type=content_type,
+        size_bytes=size_bytes,
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+    url_info = generate_presigned_upload_url_for_key(
+        asset.object_key,
+        content_type=asset.content_type or "application/octet-stream",
+        expiration=spec.presign_ttl_seconds,
+    )
+    return asset, url_info
+
+
+def store_validated_file_asset(
+    db: Session,
+    *,
+    user_id: str,
+    filename: str,
+    purpose: str,
+    file_obj,
+    content_type: str | None = None,
+    size_bytes: int | None = None,
+) -> FileAsset:
+    """Persist bytes already validated by a trusted server-side boundary.
+
+    Browser uploads normally use the presigned flow above. Some domain
+    commands must inspect the same bytes before keeping them (for example a
+    mock-answer recording that is transcribed and saved together). Those
+    commands use this path so the client sends the file only once and the
+    resulting asset still follows the canonical ``file_assets`` lifecycle.
+    """
+    asset, _spec = _new_file_asset(
+        db,
+        user_id=user_id,
+        filename=filename,
+        purpose=purpose,
+        content_type=content_type,
+        size_bytes=size_bytes,
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+
+    try:
+        file_obj.seek(0)
+        asset.storage_uri = upload_file_to_owned_key(
+            file_obj,
+            asset.object_key,
+            content_type=asset.content_type,
+        )
+        asset.upload_status = UPLOAD_STATUS_UPLOADED
+        asset.validation_status = "passed"
+        asset.validation_error = None
+        asset.updated_at = utc_now()
+        db.add(asset)
+        db.commit()
+        db.refresh(asset)
+        return asset
+    except Exception:
+        db.rollback()
+        asset = db.get(FileAsset, asset.id)
+        if asset is not None:
+            _fail_asset(db, asset, "server-side storage failed")
+        raise
+
+
+def _new_file_asset(
+    db: Session,
+    *,
+    user_id: str,
+    filename: str,
+    purpose: str,
+    content_type: str | None,
+    size_bytes: int | None,
+) -> tuple[FileAsset, PurposeSpec]:
+    """Build a pending asset row; the caller chooses how bytes are uploaded."""
     spec = get_purpose_spec(purpose)
     if spec is None:
         raise UnknownUploadPurpose(f"Unknown upload purpose: {purpose}")
@@ -107,30 +192,22 @@ def create_file_asset(
         raise ValueError(f"Unknown user: {user_id}")
 
     asset_id = generate_file_asset_id()
-    # Object key namespaced by the stable id (opaque, stable across renames).
     object_key = build_owned_object_key(str(user_pk), asset_id, filename)
-    storage_uri = storage_uri_for_key(object_key)
-    asset = FileAsset(
-        id=asset_id,
-        user_id=user_pk,
-        purpose=purpose,
-        original_filename=filename,
-        object_key=object_key,
-        storage_uri=storage_uri,
-        content_type=content_type or "application/octet-stream",
-        size_bytes=size_bytes,
-        upload_status=UPLOAD_STATUS_PENDING,
-        validation_status="pending",
+    return (
+        FileAsset(
+            id=asset_id,
+            user_id=user_pk,
+            purpose=purpose,
+            original_filename=filename,
+            object_key=object_key,
+            storage_uri=storage_uri_for_key(object_key),
+            content_type=content_type or "application/octet-stream",
+            size_bytes=size_bytes,
+            upload_status=UPLOAD_STATUS_PENDING,
+            validation_status="pending",
+        ),
+        spec,
     )
-    db.add(asset)
-    db.commit()
-    db.refresh(asset)
-    url_info = generate_presigned_upload_url_for_key(
-        object_key,
-        content_type=asset.content_type or "application/octet-stream",
-        expiration=spec.presign_ttl_seconds,
-    )
-    return asset, url_info
 
 
 def get_owned_file_asset(

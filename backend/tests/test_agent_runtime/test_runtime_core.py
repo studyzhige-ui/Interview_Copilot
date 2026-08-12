@@ -562,13 +562,62 @@ def test_autocompact_summarizes_body_keeps_head_and_tail(monkeypatch):
 
     assert result[0]["content"] == "SYS"
     assert result[1]["content"] == "MANIFEST"
-    assert result[2]["content"] == "the task"
+    summary_index = next(
+        index
+        for index, message in enumerate(result)
+        if "SUMMARY_BODY" in message["content"]
+    )
+    task_index = next(
+        index
+        for index, message in enumerate(result)
+        if message["content"] == "the task"
+    )
+    assert summary_index < task_index
     assert any(
         "SUMMARY_BODY" in m["content"] and "END OF CONTEXT SUMMARY" in m["content"]
         for m in result
     )
     assert result[-2:] == messages[-2:]
     assert len(result) < len(messages)
+
+
+def test_autocompact_preserves_current_task_in_multi_turn_history(monkeypatch):
+    """Historical user turns and loop nudges must not replace the real task."""
+    import asyncio
+
+    from app.agent_runtime.context_compactor import QueryLoopCompactor
+
+    async def fake_summary(*_args, **_kwargs):
+        return "旧会话与早期执行摘要"
+
+    monkeypatch.setattr(
+        "app.services.chat.conversation_summarizer.summarize_conversation",
+        fake_summary,
+    )
+    current_task = {"role": "user", "content": "请比较我当前的两个 offer"}
+    messages = [
+        {"role": "system", "content": "SYS"},
+        {"role": "user", "content": "上周帮我改简历"},
+        {"role": "assistant", "content": "旧任务回答"},
+        current_task,
+        {"role": "assistant", "content": "正在读取 offer"},
+        {"role": "tool", "tool_call_id": "c1", "content": "结果"},
+        {"role": "user", "content": "检测到重复调用，请调整计划"},
+    ]
+    pipeline = QueryLoopCompactor(profile=_profile(), task_anchor=current_task)
+
+    result = asyncio.run(pipeline.autocompact(messages, keep_last=2))
+
+    assert current_task in result
+    assert result.count(current_task) == 1
+    assert not any(message.get("content") == "上周帮我改简历" for message in result)
+    summary_index = next(
+        index
+        for index, message in enumerate(result)
+        if "旧会话与早期执行摘要" in message["content"]
+    )
+    assert summary_index < result.index(current_task)
+    assert result[-2:] == messages[-2:]
 
 
 def test_autocompact_noop_when_nothing_to_summarize():

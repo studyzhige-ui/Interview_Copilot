@@ -233,8 +233,8 @@ def test_interview_record_status_update(db_session):
         .first()
     )
     assert loaded.status == "transcribing"
-    # default schema_version=2 should apply.
-    assert loaded.analysis_schema_version == 2
+    # New analyses use the nullable-score, code-aggregated v3 report shape.
+    assert loaded.analysis_schema_version == 3
 
 
 def test_file_asset_object_key_unique(db_session):
@@ -501,7 +501,8 @@ def test_user_model_credential_uniqueness(db_session):
     db_session.rollback()
 
 
-def test_mock_runtime_defaults(db_session):
+def test_mock_runtime_round_trip(db_session):
+    from app.models.chat import Conversation, ConversationMessage
     from app.models.interview_record import InterviewRecord
     from app.models.mock_interview_runtime import MockInterviewRuntime
 
@@ -510,15 +511,44 @@ def test_mock_runtime_defaults(db_session):
     db_session.add(rec)
     db_session.flush()
 
-    runtime = MockInterviewRuntime(user_id=uid, interview_record_id=rec.id)
+    conversation = Conversation(
+        id="conv_runtime_defaults",
+        user_id=uid,
+        title="模拟面试",
+        type="mock_interview",
+        mode="chat",
+        subject_type="interview_record",
+        subject_id=rec.id,
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    opening = ConversationMessage(
+        conversation_id=conversation.id,
+        seq=1,
+        role="assistant",
+        content="请做个自我介绍。",
+    )
+    db_session.add(opening)
+    db_session.flush()
+
+    runtime = MockInterviewRuntime(
+        user_id=uid,
+        interview_record_id=rec.id,
+        conversation_id=conversation.id,
+        current_stage_key="self_intro",
+        current_question_message_id=opening.id,
+        plan_json=[{"key": "self_intro", "title": "自我介绍"}],
+        interviewer_style="professional",
+        target_question_count=20,
+    )
     db_session.add(runtime)
     db_session.flush()
 
     loaded = db_session.query(MockInterviewRuntime).first()
-    assert loaded.status == "in_progress"
-    assert loaded.stage_index == 0
+    assert loaded.interview_record_id == rec.id
+    assert loaded.plan_json[0]["key"] == "self_intro"
     assert loaded.interviewer_style == "professional"
-    assert loaded.voice_mode == "hybrid"
+    assert loaded.target_question_count == 20
 
 
 def test_resume_section_round_trip(db_session):

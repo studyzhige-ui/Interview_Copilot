@@ -7,45 +7,41 @@ import { toast } from '@/store/uiStore';
 import { useMediaRecorder } from '@/hooks/useMediaRecorder';
 import { useTts } from '@/hooks/useTts';
 import {
-  SPEECH_RECOGNITION_AVAILABLE,
-  useSpeechRecognition,
-} from '@/hooks/useSpeechRecognition';
-import { abandonMockInterview, getInProgressMock, submitMockAnswer, finishMockInterview, transcribeAudio } from '@/api/mock';
+  abandonMockInterview,
+  finishMockInterview,
+  getMockLiveState,
+  prepareMockAnswerAudio,
+  submitMockAnswer,
+} from '@/api/mock';
 import { extractErr } from '@/api/client';
-import { uploadFileAsset } from '@/api/fileAssets';
 import { useBlocker, useNavigate } from 'react-router-dom';
-import type { TtsVoice, VoiceMode } from './MockSetup';
+import type { TtsVoice } from './MockSetup';
+import type { MockLiveMessage } from '@/types/api';
+import { useIsMounted } from '@/hooks/useIsMounted';
 
-// Web Speech API is reachable on Chrome/Edge **only when the host can reach
-// Google's speech service** — in mainland China the recognizer silently fails
-// (`network` error) and we end up with 0 finalized text. We default to the
-// MediaRecorder → backend Whisper path which works offline. Users who do have
-// working Web Speech can flip the toggle at the bottom of the mic area.
-const STT_PREF_KEY = 'mock.sttMode'; // 'whisper' | 'native'
-function loadPreferredStt(): 'whisper' | 'native' {
-  try {
-    const v = localStorage.getItem(STT_PREF_KEY);
-    if (v === 'native' && SPEECH_RECOGNITION_AVAILABLE) return 'native';
-  } catch { /* ignore */ }
-  return 'whisper';
+type LiveOperation =
+  | 'idle'
+  | 'submitting'
+  | 'recovering'
+  | 'finishing'
+  | 'abandoning'
+  | 'completed';
+
+interface PendingAnswer {
+  text: string;
+  audioAssetId?: string;
+  questionMessageId: number;
+  optimisticMessageId: number;
 }
 
-interface Turn {
-  who: 'interviewer' | 'me';
-  text: string;
+interface VoiceDraft {
+  audioAssetId: string;
 }
 
 interface Props {
   recordId: string;
-  /** The opening / current interviewer line (greeting + question), one string. */
-  initialQuestion: string;
-  voiceMode: VoiceMode;
+  initialMessages?: MockLiveMessage[];
   ttsVoice: TtsVoice;
-  /** Turns answered before this mount (resume path) — keeps answeredCount
-   *  honest after a refresh so the finish button isn't wrongly disabled. */
-  resumedAnsweredCount?: number;
-  /** Concurrency token for the first answer (MOCK-3). */
-  initialQuestionMessageId?: number | null;
   onFinished: (recordId: string) => void;
   onAbandoned: () => void;
 }
@@ -55,250 +51,263 @@ function fmtDuration(ms: number) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resumedAnsweredCount = 0, initialQuestionMessageId = null, onFinished, onAbandoned }: Props) {
-  const [turns, setTurns] = useState<Turn[]>(
-    initialQuestion ? [{ who: 'interviewer', text: initialQuestion }] : [],
-  );
+function findLatestInterviewer(messages: MockLiveMessage[]) {
+  return [...messages]
+    .reverse()
+    .find((message) => message.speaker === 'interviewer');
+}
+
+export function MockLive({
+  recordId,
+  initialMessages = [],
+  ttsVoice,
+  onFinished,
+  onAbandoned,
+}: Props) {
+  const [messages, setMessages] = useState<MockLiveMessage[]>(initialMessages);
   const [typing, setTyping] = useState('');
-  const [sending, setSending] = useState(false);
-  const [finishing, setFinishing] = useState(false);
-  const [finished, setFinished] = useState(false);
-  // Advisory-only end suggestion (MOCK-5): the LLM's ready_to_finish shows a
-  // banner; it never locks the composer. ``finished`` remains for the real
-  // end (user clicked 结束面试).
+  const [operation, setOperation] = useState<LiveOperation>(
+    initialMessages.length > 0 ? 'idle' : 'recovering',
+  );
+  const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
+  const pendingAnswerRef = useRef<PendingAnswer | null>(null);
+  const isMounted = useIsMounted();
+  // The model may suggest wrapping up, but the candidate keeps control of
+  // when the interview actually ends.
   const [endSuggested, setEndSuggested] = useState(false);
-  // MOCK-3: id of the interviewer message currently being answered — echoed
-  // back with each submit so a concurrent/stale tab gets a 409 instead of
-  // silently forking the interview. A ref (not state): never rendered, only
-  // echoed in the next request.
-  const questionMessageIdRef = useRef<number | null>(initialQuestionMessageId);
   const [ttsMuted, setTtsMuted] = useState(false);
+  const [voiceDraft, setVoiceDraft] = useState<VoiceDraft | null>(null);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [retryRecording, setRetryRecording] = useState<Blob | null>(null);
   const rec = useMediaRecorder();
   const listRef = useRef<HTMLDivElement | null>(null);
 
-  const ttsEnabledByMode = voiceMode === 'voice' || voiceMode === 'hybrid';
-  const ttsActive = ttsEnabledByMode && !ttsMuted;
+  const ttsActive = !ttsMuted;
   const tts = useTts({ enabled: ttsActive, voice: ttsVoice });
-  const speech = useSpeechRecognition('zh-CN');
-  const [sttMode, setSttMode] = useState<'whisper' | 'native'>(loadPreferredStt);
-  useEffect(() => {
-    try { localStorage.setItem(STT_PREF_KEY, sttMode); } catch { /* ignore */ }
-  }, [sttMode]);
-  const useNativeStt = sttMode === 'native' && SPEECH_RECOGNITION_AVAILABLE;
-
-  // Auto-fall back if Web Speech errors out (commonly: `network` when Google's
-  // speech endpoint is unreachable in CN). Switch the user to Whisper for the
-  // rest of the session so they don't keep hitting the same wall.
-  //
-  // Deps destructured from speech.state — depending on the whole
-  // ``speech.state`` object would re-fire this effect on every
-  // interim-chunk update during listening (50+ times/sec for a
-  // chatty speaker), which is wasted work. We only care about
-  // ``phase`` and ``message`` here.
-  // ``useSpeechRecognition`` declares ``State`` as a single shape
-  // (not a discriminated union) with ``finalText``/``interim`` always
-  // present and ``message`` Optional. Destructure directly — earlier
-  // versions used ``'finalText' in speech.state`` guards which were
-  // dead-defensive (the property is always defined).
-  const speechPhase = speech.state.phase;
-  const speechMessage = speech.state.message;
-  const speechFinalText = speech.state.finalText;
-  const speechInterim = speech.state.interim;
-  useEffect(() => {
-    if (useNativeStt && speechPhase === 'error') {
-      const msg = speechMessage ?? '';
-      if (/network|service|not-allowed/i.test(msg)) {
-        toast.warn('浏览器语音识别不可达，已切到 Whisper');
-        // External speech-service state drives this fallback.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setSttMode('whisper');
-      }
-    }
-  }, [useNativeStt, speechPhase, speechMessage]);
-
-  // Live-stream Web Speech partials into the textarea so the user sees what
-  // we're hearing in real time. final fragments accumulate in the textarea
-  // for review/edit before submit.
-  useEffect(() => {
-    if (!useNativeStt) return;
-    if (speechPhase === 'listening') {
-      const combined = (speechFinalText + speechInterim).trimStart();
-      // Mirror the external recognizer's live transcript into the editor.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setTyping(combined);
-    }
-  }, [useNativeStt, speechPhase, speechFinalText, speechInterim]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-  }, [turns]);
+  }, [messages, recoveryNotice]);
 
-  // Speak the opening / current interviewer line once on mount when voice
-  // is on. The backend now returns the interviewer turn as a single natural
-  // utterance (no spoken/question split), so we just speak it verbatim.
-  const spokeInitialRef = useRef(false);
+  // Every server message has a stable id, so fresh starts, resumed sessions
+  // and recovered requests all use the same once-only TTS rule.
+  const spokenMessageIdRef = useRef<number | null>(null);
+  const latestInterviewerMessage = findLatestInterviewer(messages);
   useEffect(() => {
-    if (spokeInitialRef.current) return;
-    if (!ttsActive) return;
-    if (!initialQuestion) return;
-    spokeInitialRef.current = true;
-    void tts.speak(initialQuestion);
-    // tts.speak is stable for the lifetime of the useTts hook + we gate via
-    // spokeInitialRef so the effect is once-only by design.
+    if (!ttsActive || !latestInterviewerMessage) return;
+    if (spokenMessageIdRef.current === latestInterviewerMessage.id) return;
+    spokenMessageIdRef.current = latestInterviewerMessage.id;
+    void tts.speak(latestInterviewerMessage.text);
+    // The message id gate makes this effect once-only per interviewer turn.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ttsActive, initialQuestion]);
+  }, [ttsActive, latestInterviewerMessage?.id]);
+
+  const syncMessages = async () => {
+    const state = await getMockLiveState(recordId);
+    if (isMounted.current) setMessages(state.messages);
+    return state.messages;
+  };
+
+  useEffect(() => {
+    if (initialMessages.length > 0) return;
+    let active = true;
+    getMockLiveState(recordId)
+      .then((state) => {
+        if (active) {
+          setMessages(state.messages);
+          setRecoveryNotice(null);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setRecoveryNotice('暂时无法恢复面试现场，请检查连接后重试。');
+        }
+      })
+      .finally(() => {
+        if (active) setOperation('idle');
+      });
+    return () => { active = false; };
+  }, [initialMessages.length, recordId]);
+
+  const acceptInterviewerMessage = (
+    message: MockLiveMessage,
+    endSuggested: boolean,
+  ) => {
+    setMessages((current) => [...current, message]);
+    pendingAnswerRef.current = null;
+    setVoiceDraft(null);
+    setVoiceError(null);
+    setRetryRecording(null);
+    setRecoveryNotice(null);
+    if (endSuggested) {
+      setEndSuggested(true);
+      toast.info('面试官觉得可以收尾了——你可以继续追问，或点右上「结束面试」生成复盘');
+    }
+  };
+
+  const recoverPendingAnswer = async (pending: PendingAnswer) => {
+    setOperation('recovering');
+    try {
+      let canonical = await syncMessages();
+      const latest = findLatestInterviewer(canonical);
+      if (latest && latest.id !== pending.questionMessageId) {
+        pendingAnswerRef.current = null;
+        setVoiceDraft(null);
+        setRecoveryNotice(null);
+        return;
+      }
+
+      const last = canonical.at(-1);
+      if (last?.speaker !== 'candidate' || last.text.trim() !== pending.text.trim()) {
+        pendingAnswerRef.current = null;
+        setTyping((current) => current.trim() ? current : pending.text);
+        setVoiceDraft(
+          pending.audioAssetId ? { audioAssetId: pending.audioAssetId } : null,
+        );
+        setRecoveryNotice('回答没有成功提交，内容已恢复到输入框。');
+        return;
+      }
+
+      // The server has already persisted this answer (and consumed its audio
+      // asset). Keep the id only in ``pending`` for response recovery; it must
+      // not leak into whatever the user types next.
+      setVoiceDraft(null);
+
+      try {
+        const response = await submitMockAnswer(recordId, {
+          answer_text: pending.text,
+          ...(pending.audioAssetId
+            ? { answer_audio_file_asset_id: pending.audioAssetId }
+            : {}),
+          question_message_id: pending.questionMessageId,
+        });
+        setMessages([...canonical, response.message]);
+        pendingAnswerRef.current = null;
+        setVoiceDraft(null);
+        setRecoveryNotice(null);
+        if (response.end_suggested) setEndSuggested(true);
+        return;
+      } catch {
+        // The original request may still be finishing. Give it one short
+        // reconciliation window before asking the user to do anything.
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        canonical = await syncMessages();
+        const recovered = findLatestInterviewer(canonical);
+        if (recovered && recovered.id !== pending.questionMessageId) {
+          pendingAnswerRef.current = null;
+          setVoiceDraft(null);
+          setRecoveryNotice(null);
+          return;
+        }
+      }
+
+      setRecoveryNotice(
+        '你的回答已经保留，但面试官暂时没有响应。可以重新连接，或稍后继续面试。',
+      );
+    } catch {
+      setRecoveryNotice(
+        '连接暂时中断，回答仍保留在当前页面。恢复连接后可以继续同步。',
+      );
+    } finally {
+      if (isMounted.current) setOperation('idle');
+    }
+  };
 
   const pushUserAnswer = async (answer: string, audioAssetId?: string) => {
-    if (!answer.trim() || finished) return;
-    const questionMessageId = questionMessageIdRef.current;
-    if (questionMessageId == null) {
-      toast.error('当前问题状态已失效，请返回后重新进入面试');
+    const text = answer.trim();
+    if (!text || operation !== 'idle') return;
+    const question = findLatestInterviewer(messages);
+    if (!question) {
+      setRecoveryNotice('当前问题尚未恢复，请先重新连接面试现场。');
       return;
     }
-    setSending(true);
-    // Optimistic insert — the user sees their message immediately
-    // rather than waiting for the backend's interviewer-response
-    // round-trip.
-    const optimisticTurn: Turn = { who: 'me', text: answer };
-    setTurns((t) => [...t, optimisticTurn]);
+
+    const pending: PendingAnswer = {
+      text,
+      ...(audioAssetId ? { audioAssetId } : {}),
+      questionMessageId: question.id,
+      optimisticMessageId: -Date.now(),
+    };
+    pendingAnswerRef.current = pending;
+    setTyping('');
+    setRecoveryNotice(null);
+    setOperation('submitting');
+    setMessages((current) => [
+      ...current,
+      { id: pending.optimisticMessageId, speaker: 'candidate', text },
+    ]);
     try {
-      const resp = await submitMockAnswer(recordId, {
-        answer_text: answer,
-        answer_audio_file_asset_id: audioAssetId,
-        question_message_id: questionMessageId,
+      const response = await submitMockAnswer(recordId, {
+        answer_text: text,
+        ...(audioAssetId ? { answer_audio_file_asset_id: audioAssetId } : {}),
+        question_message_id: question.id,
       });
-      questionMessageIdRef.current = resp.question_message_id ?? null;
-      setTurns((t) => [...t, { who: 'interviewer', text: resp.interviewer_message }]);
-      if (ttsActive) void tts.speak(resp.interviewer_message);
-      if (resp.is_ready_to_finish) {
-        // Advisory (MOCK-5): suggest ending; the candidate keeps control and
-        // can continue answering or reverse-asking.
-        setEndSuggested(true);
-        toast.info('面试官觉得可以收尾了——你可以继续追问，或点右上「结束面试」生成复盘');
-      }
-    } catch (e) {
-      const status = (e as { response?: { status?: number } })?.response?.status;
-      if (status === 409) {
-        // MOCK-3: our token is stale (another tab advanced the interview).
-        // Show the server's actionable message and resync the token +
-        // current question so the NEXT submit can succeed.
-        toast.warn(extractErr(e, '面试已推进到新问题'));
-        try {
-          const r = await getInProgressMock();
-          if (r.has_in_progress && r.record_id === recordId) {
-            questionMessageIdRef.current = r.question_message_id ?? null;
-            if (r.current_question) {
-              setTurns((t) => [...t, { who: 'interviewer', text: r.current_question! }]);
-            }
-          }
-        } catch {
-          /* resync is best-effort */
-        }
-      } else {
-        toast.error(extractErr(e, '提交回答失败'));
-      }
-      // Roll back the optimistic insert so the user can retry. Pre-
-      // fix the failed message just hung in the transcript with no
-      // AI response — visually identical to "AI ghosted me".
-      setTurns((t) => {
-        const idx = t.lastIndexOf(optimisticTurn);
-        if (idx === -1) return t;
-        return [...t.slice(0, idx), ...t.slice(idx + 1)];
-      });
+      acceptInterviewerMessage(response.message, response.end_suggested);
+      setOperation('idle');
+    } catch {
+      await recoverPendingAnswer(pending);
+    }
+  };
+
+  const [inputPhase, setInputPhase] = useState<'idle' | 'preparing'>('idle');
+
+  const prepareRecording = async (blob: Blob) => {
+    setRetryRecording(blob);
+    setVoiceError(null);
+    setInputPhase('preparing');
+    try {
+      const prepared = await prepareMockAnswerAudio(recordId, blob);
+      setTyping(prepared.text);
+      setVoiceDraft({ audioAssetId: prepared.audio_file_asset_id });
+      setRetryRecording(null);
+    } catch (error) {
+      setVoiceError(
+        extractErr(error, '转写失败，录音仍保留在当前页面，请重试或改用文字回答'),
+      );
     } finally {
-      setSending(false);
+      if (isMounted.current) setInputPhase('idle');
     }
   };
 
-  const [transcribing, setTranscribing] = useState(false);
-
-  // Browser recognition: partials show in the textarea; stop commits the final text.
-  const onMicToggleNative = async () => {
-    if (speech.state.phase === 'listening') {
-      // Wait for onend: browsers can emit the final recognition result only
-      // after stop(), so reading React state synchronously loses the last words.
-      const finalText = await speech.stop();
-      speech.reset();
-      if (finalText) {
-        setTyping('');
-        void pushUserAnswer(finalText);
-      }
-    } else {
-      setTyping('');
-      speech.reset();
-      speech.start();
-    }
-  };
-
-  // Backend recognition: MediaRecorder uploads one clip for transcription.
-  const onMicToggleRecorder = async () => {
+  const onMicToggle = async () => {
+    if (operation !== 'idle' || inputPhase === 'preparing') return;
     if (rec.state === 'recording') {
       const blob = await rec.stop();
       if (!blob) {
-        toast.warn('未捕获到音频');
+        setVoiceError('没有录到有效声音，请重新录制或改用文字回答。');
         return;
       }
-      setTranscribing(true);
-      try {
-        const text = await transcribeAudio(blob);
-        if (!text.trim()) {
-          toast.warn('未识别到有效语音，请重试或文字作答');
-          return;
-        }
-        // MOCK-7: keep the original clip — upload it (best-effort) so the
-        // review can play back the real voice. Failure degrades to text-only.
-        let audioAssetId: string | undefined;
-        try {
-          const file = new File([blob], `answer-${Date.now()}.webm`, {
-            type: blob.type || 'audio/webm',
-          });
-          audioAssetId = await uploadFileAsset(file, 'mock_audio_clip');
-        } catch {
-          audioAssetId = undefined;
-          toast.warn('语音原声上传失败，复盘将只保留文字回答');
-        }
-        await pushUserAnswer(text, audioAssetId);
-      } catch {
-        toast.error('转写失败，请重试或文字作答');
-      } finally {
-        setTranscribing(false);
-      }
+      await prepareRecording(blob);
     } else {
-      try {
-        await rec.start();
-      } catch {
-        toast.error('麦克风启动失败');
-      }
+      setVoiceError(null);
+      tts.stop();
+      await rec.start();
     }
   };
 
-  const onMicToggle = useNativeStt ? onMicToggleNative : onMicToggleRecorder;
-
-  // Unified state for the mic button label / styling.
-  const micPhase = useNativeStt
-    ? speech.state.phase === 'listening'
-      ? 'recording'
-      : 'idle'
-    : rec.state === 'recording'
+  const micPhase = rec.state === 'recording'
     ? 'recording'
-    : transcribing
-    ? 'transcribing'
+    : inputPhase === 'preparing' || rec.state === 'stopping'
+    ? 'preparing'
+    : rec.state === 'requesting'
+    ? 'requesting'
     : 'idle';
-  const micDisabled = finished || (!useNativeStt && transcribing);
+  const inputBusy = micPhase !== 'idle';
+  const operationBusy = operation !== 'idle';
+  const canSubmit = !operationBusy && !inputBusy;
+  const micDisabled = operationBusy || micPhase === 'preparing' || micPhase === 'requesting';
+  const modalBusy = operation === 'finishing' || operation === 'abandoning';
   const micLabel =
     micPhase === 'recording'
-      ? useNativeStt
-        ? '听写中…点击结束'
-        : fmtDuration(rec.durationMs)
-      : micPhase === 'transcribing'
-      ? '转写中…'
-      : useNativeStt
-      ? '点击开始听写'
-      : '按住说话';
+      ? fmtDuration(rec.durationMs)
+      : micPhase === 'preparing'
+      ? '正在转写…'
+      : micPhase === 'requesting'
+      ? '正在连接…'
+      : '点击录音';
 
   const [confirmingFinish, setConfirmingFinish] = useState(false);
-  const [abandoning, setAbandoning] = useState(false);
-  const answeredCount = resumedAnsweredCount + turns.filter((t) => t.who === 'me').length;
+  const answeredCount = messages.filter((message) => message.speaker === 'candidate').length;
   const navigate = useNavigate();
 
   // ── Navigation lock while interview is in flight ─────────────────────
@@ -311,12 +320,7 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
   // unmount regardless. So we intercept navigation HERE and ask before
   // letting the unmount fire.
   //
-  // We block when:
-  //   - interview hasn't finished (debrief generated) yet
-  //   - user isn't actively abandoning (they explicitly want to leave)
-  // Both are gated by ``finished`` / ``abandoning`` flags so the
-  // blocker doesn't fight the user's own "结束" / "放弃" buttons.
-  const shouldBlockNav = !finished && !abandoning;
+  const shouldBlockNav = operation !== 'completed' && operation !== 'abandoning';
   const blocker = useBlocker(({ currentLocation, nextLocation }) =>
     shouldBlockNav && currentLocation.pathname !== nextLocation.pathname,
   );
@@ -339,23 +343,26 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
   }, [shouldBlockNav]);
 
   const onGenerateDebrief = async () => {
-    setFinishing(true);
+    if (operation !== 'idle' || inputBusy) return;
+    tts.stop();
+    setOperation('finishing');
     try {
       const r = await finishMockInterview(recordId);
       setConfirmingFinish(false);
-      setFinished(true);  // unblock the nav guard — the run is over for real
+      setOperation('completed');
       onFinished(r.record_id);
     } catch (e) {
       // A stale tab's finish lands 409 with an actionable server message
       // (复盘可能已在生成或已完成) — show it instead of a generic failure.
       toast.error(extractErr(e, '结束面试失败'));
-    } finally {
-      setFinishing(false);
+      if (isMounted.current) setOperation('idle');
     }
   };
 
   const onAbandonInterview = async () => {
-    setAbandoning(true);
+    if (operation !== 'idle') return;
+    tts.stop();
+    setOperation('abandoning');
     try {
       await abandonMockInterview(recordId);
       toast.success('已放弃本次面试，相关记录已删除');
@@ -367,8 +374,24 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
       navigate('/mock', { replace: true });
     } catch {
       toast.error('放弃失败，请重试');
+      if (isMounted.current) setOperation('idle');
+    }
+  };
+
+  const retryRecovery = async () => {
+    const pending = pendingAnswerRef.current;
+    if (pending) {
+      await recoverPendingAnswer(pending);
+      return;
+    }
+    setOperation('recovering');
+    try {
+      await syncMessages();
+      setRecoveryNotice(null);
+    } catch {
+      setRecoveryNotice('仍然无法连接面试现场，请稍后再试。');
     } finally {
-      setAbandoning(false);
+      if (isMounted.current) setOperation('idle');
     }
   };
 
@@ -382,41 +405,54 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
             面试官正在说话…
           </span>
         )}
-        {ttsEnabledByMode && (
-          <button
-            onClick={() => {
-              if (ttsMuted) {
-                setTtsMuted(false);
-              } else {
-                tts.stop();
-                setTtsMuted(true);
-              }
-            }}
-            className="ml-auto inline-flex items-center gap-1 text-[12px] text-stone-600 hover:text-stone-800 px-2 py-1 rounded border border-stone-200"
-            title={ttsMuted ? '开启面试官语音' : '关闭面试官语音'}
-          >
-            {ttsMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
-            {ttsMuted ? '已静音' : '语音'}
-          </button>
+        {tts.state.phase === 'error' && (
+          <span className="text-[11px] text-amber-700">
+            语音播放失败，文字内容不受影响
+          </span>
         )}
+        <button
+          onClick={() => {
+            if (ttsMuted) {
+              setTtsMuted(false);
+            } else {
+              tts.stop();
+              setTtsMuted(true);
+            }
+          }}
+          className="ml-auto inline-flex items-center gap-1 text-[12px] text-stone-600 hover:text-stone-800 px-2 py-1 rounded border border-stone-200"
+          title={ttsMuted ? '开启面试官语音' : '关闭面试官语音'}
+        >
+          {ttsMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+          {ttsMuted ? '已静音' : '语音'}
+        </button>
         <Btn
           kind="danger"
           size="sm"
-          className={ttsEnabledByMode ? '' : 'ml-auto'}
-          onClick={() => setConfirmingFinish(true)}
-          loading={finishing}
+          onClick={() => {
+            tts.stop();
+            setConfirmingFinish(true);
+          }}
+          disabled={!canSubmit}
+          loading={operation === 'finishing'}
         >
           结束面试
         </Btn>
       </div>
 
-      {endSuggested && !finished && (
+      {endSuggested && (
         // Advisory only (MOCK-5): the LLM thinks the interview covered
         // enough. The candidate stays in control — keep answering or finish.
         <div className="mx-4 mt-2 flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
           <span className="text-xs text-amber-900 flex-1">
-            面试官觉得可以收尾了。你仍可以继续回答或反问；准备好后点「结束面试」生成复盘。
+            本次面试的主要考察已经完成。你可以继续交流，也可以结束并生成复盘。
           </span>
+          <button
+            type="button"
+            onClick={() => setConfirmingFinish(true)}
+            className="text-xs font-medium text-amber-900 hover:text-amber-950 shrink-0"
+          >
+            结束并生成复盘
+          </button>
           <button
             type="button"
             onClick={() => setEndSuggested(false)}
@@ -429,7 +465,7 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
 
       <Modal
         open={confirmingFinish}
-        onClose={() => !finishing && !abandoning && setConfirmingFinish(false)}
+        onClose={() => !modalBusy && setConfirmingFinish(false)}
         title="结束本次面试"
         width={460}
       >
@@ -442,7 +478,7 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
           <button
             type="button"
             onClick={() => setConfirmingFinish(false)}
-            disabled={finishing || abandoning}
+            disabled={modalBusy}
             className="text-left px-4 py-3 rounded-xl border border-stone-200 bg-white hover:bg-stone-50 hover:border-primary-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <div className="text-[14px] font-semibold text-stone-800">继续面试</div>
@@ -452,12 +488,12 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
           <button
             type="button"
             onClick={onGenerateDebrief}
-            disabled={finishing || abandoning || answeredCount === 0}
+            disabled={modalBusy || answeredCount === 0}
             className="text-left px-4 py-3 rounded-xl border border-primary-200 bg-primary-50 hover:bg-primary-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <div className="text-[14px] font-semibold text-primary-800 flex items-center gap-2">
               生成复盘
-              {finishing && <Loader2 size={13} className="animate-spin" />}
+              {operation === 'finishing' && <Loader2 size={13} className="animate-spin" />}
             </div>
             <div className="text-[12px] text-primary-700/80 mt-0.5">
               {answeredCount === 0
@@ -469,12 +505,12 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
           <button
             type="button"
             onClick={onAbandonInterview}
-            disabled={finishing || abandoning}
+            disabled={modalBusy}
             className="text-left px-4 py-3 rounded-xl border border-stone-200 bg-white hover:bg-danger-50 hover:border-danger-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <div className="text-[14px] font-semibold text-danger-700 flex items-center gap-2">
               放弃本次面试
-              {abandoning && <Loader2 size={13} className="animate-spin" />}
+              {operation === 'abandoning' && <Loader2 size={13} className="animate-spin" />}
             </div>
             <div className="text-[12px] text-stone-500 mt-0.5">
               不保留记录，回到模拟面试首页重新开始。
@@ -485,24 +521,46 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
 
       <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto px-6 py-8">
         <div className="max-w-[760px] mx-auto flex flex-col gap-4">
-          {turns.map((t, i) => (
-            <div key={i} className={`flex ${t.who === 'me' ? 'justify-end' : 'justify-start'}`}>
+          {messages.map((message) => (
+            <div
+              key={message.id}
+              className={`flex ${message.speaker === 'candidate' ? 'justify-end' : 'justify-start'}`}
+            >
               <div
                 className={[
                   'max-w-[80%] px-4 py-2.5 rounded-xl text-sm leading-relaxed whitespace-pre-wrap shadow-xs',
-                  t.who === 'me'
+                  message.speaker === 'candidate'
                     ? 'bg-primary-500 text-white'
                     : 'bg-white border border-stone-200 text-stone-800',
                 ].join(' ')}
               >
-                {t.text}
+                {message.text}
               </div>
             </div>
           ))}
-          {sending && (
+          {(operation === 'submitting' || operation === 'recovering') && (
             <div className="flex items-center gap-2 text-xs text-stone-500">
               <Loader2 size={12} className="animate-spin" />
-              面试官正在回应...
+              {operation === 'recovering' ? '正在恢复面试现场…' : '面试官正在回应…'}
+            </div>
+          )}
+          {recoveryNotice && operation === 'idle' && (
+            <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+              <span className="flex-1 text-xs leading-5 text-amber-900">{recoveryNotice}</span>
+              <button
+                type="button"
+                onClick={() => void retryRecovery()}
+                className="shrink-0 text-xs font-medium text-amber-800 hover:text-amber-950"
+              >
+                重新连接
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/mock')}
+                className="shrink-0 text-xs text-amber-700 hover:text-amber-950"
+              >
+                稍后继续
+              </button>
             </div>
           )}
         </div>
@@ -513,23 +571,20 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
           <button
             onClick={() => void onMicToggle()}
             disabled={micDisabled}
-            title={
-              useNativeStt
-                ? micPhase === 'recording' ? '点击结束听写' : '点击开始听写（浏览器原生）'
-                : micPhase === 'recording' ? '点击结束录音' : '点击开始录音'
-            }
+            aria-label={micPhase === 'recording' ? '结束录音' : '开始录音'}
+            title={micPhase === 'recording' ? '点击结束录音' : '点击开始录音'}
             className={[
               'w-[88px] h-[88px] rounded-full flex flex-col items-center justify-center transition-all',
               micPhase === 'recording'
                 ? 'bg-danger-500 text-white animate-pulse'
-                : micPhase === 'transcribing'
+                : micPhase === 'preparing' || micPhase === 'requesting'
                 ? 'bg-warning-500 text-white'
                 : micDisabled
                 ? 'bg-stone-100 text-stone-300 cursor-not-allowed'
                 : 'bg-primary-500 text-white hover:bg-primary-600',
             ].join(' ')}
           >
-            {micPhase === 'transcribing' ? (
+            {micPhase === 'preparing' || micPhase === 'requesting' ? (
               <Loader2 size={28} className="animate-spin" />
             ) : micPhase === 'recording' ? (
               <Square size={28} />
@@ -538,35 +593,50 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
             )}
             <div className="text-[10px] mt-1">{micLabel}</div>
           </button>
-          {/* Mode hint + toggle. Default Whisper because Web Speech needs
-            * Google's speech endpoint, which is unreachable in mainland CN. */}
-          <div className="flex items-center gap-2 text-[10px] text-stone-400">
-            {useNativeStt
-              ? '使用浏览器原生语音识别 · 实时字幕显示在下方输入框'
-              : '使用后端 Whisper · 适合国内网络环境'}
-            {SPEECH_RECOGNITION_AVAILABLE && (
+          <div className="text-[10px] text-stone-400">
+            录音结束后生成可编辑文字，确认无误再提交
+          </div>
+          {(voiceError || rec.errorMessage) && (
+            <div className="w-full flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+              <span className="flex-1 text-xs leading-5 text-amber-900">
+                {voiceError || rec.errorMessage}
+              </span>
+              {voiceError && retryRecording && (
+                <button
+                  type="button"
+                  onClick={() => void prepareRecording(retryRecording)}
+                  className="shrink-0 text-xs font-medium text-amber-800 hover:text-amber-950"
+                >
+                  重试转写
+                </button>
+              )}
+            </div>
+          )}
+          {voiceDraft && (
+            <div className="w-full flex items-center gap-3 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2">
+              <span className="flex-1 text-xs leading-5 text-primary-800">
+                已附带本次录音原声；你可以先修改转写文字，再提交回答。
+              </span>
               <button
                 type="button"
-                onClick={() => setSttMode((m) => (m === 'native' ? 'whisper' : 'native'))}
-                className="text-primary-600 hover:text-primary-700 underline-offset-2 hover:underline"
+                onClick={() => setVoiceDraft(null)}
+                className="shrink-0 text-xs text-primary-700 hover:text-primary-900"
               >
-                切换到{useNativeStt ? ' Whisper' : ' 浏览器原生'}
+                改用纯文字
               </button>
-            )}
-          </div>
+            </div>
+          )}
           <div className="w-full flex items-end gap-2">
             <textarea
               value={typing}
               onChange={(e) => setTyping(e.target.value)}
               rows={2}
-              disabled={sending || finished}
+              disabled={!canSubmit}
               placeholder="输入你的回答，Ctrl+Enter 提交"
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                   e.preventDefault();
-                  const t = typing;
-                  setTyping('');
-                  pushUserAnswer(t);
+                  void pushUserAnswer(typing, voiceDraft?.audioAssetId);
                 }
               }}
               className="flex-1 resize-none border border-stone-200 rounded-md px-3 py-2 text-sm outline-none focus:border-primary-300 bg-stone-50 disabled:opacity-50"
@@ -574,13 +644,9 @@ export function MockLive({ recordId, initialQuestion, voiceMode, ttsVoice, resum
             <Btn
               size="md"
               icon={<CornerUpRight size={14} />}
-              onClick={() => {
-                const t = typing;
-                setTyping('');
-                pushUserAnswer(t);
-              }}
-              disabled={!typing.trim() || sending || finished}
-              loading={sending}
+              onClick={() => void pushUserAnswer(typing, voiceDraft?.audioAssetId)}
+              disabled={!typing.trim() || !canSubmit}
+              loading={operation === 'submitting' || operation === 'recovering'}
             >
               提交
             </Btn>

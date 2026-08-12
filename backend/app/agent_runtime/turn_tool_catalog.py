@@ -253,6 +253,18 @@ class TurnToolCatalog:
             name not in self.excluded and name in self.builtins and self._allowed(name)
         )
 
+    def is_concurrency_safe(self, name: str) -> bool:
+        """Return true only for an explicitly safe, allowed built-in tool.
+
+        Skill discovery persists capability state and MCP tools have unknown
+        side effects, so both remain serial until stronger annotations exist.
+        """
+        return (
+            name not in self.excluded
+            and self._allowed(name)
+            and self.builtins.is_concurrency_safe(name)
+        )
+
     async def dispatch(self, name: str, raw_args: dict, ctx: AgentToolContext) -> dict:
         if name in {"skill_search", "skill_load", "tool_search"} and not self._allowed(
             name

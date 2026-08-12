@@ -1,6 +1,6 @@
 /**
- * /general-chat — standalone "ChatGPT-style" page detached from the
- * review workflow.
+ * /general-chat — the Career Agent control plane, detached from the
+ * review workflow while sharing the conversation kernel.
  *
  * Layout mirrors ReviewPage: a left sidebar listing this user's general
  * chat sessions, and the right pane reuses ``ChatPanel`` to drive the
@@ -88,7 +88,7 @@ export function GeneralChatPage() {
     try {
       const created = await createChatSession({
         type: 'general',
-        title: `通用对话 ${sessions.length + 1}`,
+          title: `求职任务 ${sessions.length + 1}`,
       });
       // Optimistic prepend — the new session is the most recent so it
       // belongs at the top.
@@ -98,6 +98,7 @@ export function GeneralChatPage() {
           title: created.title,
           type: created.type,
           state_summary: '',
+          mode: 'agent',
           turn_count: 0,
           updated_at: new Date().toISOString(),
         },
@@ -167,7 +168,7 @@ export function GeneralChatPage() {
       {/* Left sidebar: session list */}
       <aside className="w-[280px] shrink-0 bg-white border-r border-stone-200 flex flex-col">
         <div className="h-14 px-4 flex items-center justify-between border-b border-stone-100">
-          <div className="text-sm font-semibold text-stone-800">通用对话</div>
+          <div className="text-sm font-semibold text-stone-800">求职 Copilot</div>
           <button
             onClick={onNew}
             disabled={creating}
@@ -268,7 +269,8 @@ export function GeneralChatPage() {
         <div className="flex-1 min-w-0 flex">
           <ChatPanel
             sessionId={selectedId}
-            sessionTitle={activeSession?.title ?? '通用对话'}
+            sessionTitle={activeSession?.title ?? '求职 Copilot'}
+            fixedMode="AGENT"
             flexible
           />
         </div>
@@ -280,7 +282,7 @@ export function GeneralChatPage() {
             </div>
             <div className="text-base text-stone-600 font-medium mb-1">点左侧「新建」开始</div>
             <div className="text-xs leading-relaxed max-w-xs">
-              通用对话不绑定具体面试，适合写代码、刷算法、查概念这类自由聊天。
+              用自然语言管理岗位、材料、面试准备和求职进度。
             </div>
           </div>
         </div>
