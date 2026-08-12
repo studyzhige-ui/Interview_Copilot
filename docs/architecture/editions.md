@@ -42,7 +42,7 @@ complexity into the user interface.
 | Custom provider endpoint and headers | Disabled | Enabled |
 | User Skills | Enabled | Enabled |
 | Remote Streamable HTTP MCP | Enabled | Enabled |
-| Local stdio MCP | Disabled | Operator opt-in |
+| Server-side stdio MCP | Disabled | Trusted operator opt-in |
 | Embedding, reranker, ASR, diarization | Operator managed | Deployment configurable |
 | Advanced model settings UI | Hidden | Visible |
 | Direct `/rag/query` diagnostics | Hidden (404) | Enabled for developer use |
@@ -59,21 +59,25 @@ remote APIs, and a Cloud operator can run managed models on its own servers.
 Users never select the internal router/worker model or provide its credential.
 Both internal roles currently use `deepseek/deepseek-v4-flash`.
 
-## Capability resolution
+The Community stdio exception means a trusted deployment operator may start a
+process on that Community server. It is not a client-side local Agent, does not
+expose an end user's computer, browser, files, or shell, and is not part of the
+Cloud product target.
 
-The effective tools for a turn are the intersection of:
+## Tool boundary
 
-1. tools implemented by the application;
-2. edition policy;
-3. deployment availability;
-4. user enablement;
-5. conversation permissions;
-6. the immutable turn snapshot.
+Edition policy is a deterministic deployment boundary. It can hard-deny a
+transport or setting, but it does not choose a business action, group tools, or
+create a capability-resolution layer.
 
-User Skills and MCP tools never mutate the process-global registry. MCP runtime
-state is keyed by `(user_id, server_id)`, conversation permissions are stored
-per user and conversation, and every turn receives its own immutable tool
-catalog.
+The runtime follows the single Tool plane defined by
+[`full-cycle-career-copilot.md`](./full-cycle-career-copilot.md): only concrete
+ToolDefinitions with real handlers enter discovery, the model calls a concrete
+Tool directly, and the Executor checks current connection, scope, and Policy at
+the actual call. Turn-local catalogs and caches are implementation details;
+they do not form another Tool plane or freeze facts that must be rechecked at
+execution time. User Skills and MCP tools must not mutate the process-global
+registry.
 
 ## Source boundaries
 

@@ -125,7 +125,7 @@ Cloud 的 Embedding、Reranker、ASR 和说话人分离由运营方提供，不�
 2. 退出后在登录页通过“忘记密码”验证邮箱并重置密码。
 3. 选择最终回答模型，并按需保存个人 LLM API Key；内部模型由部署方提供。
 4. 上传简历和 JD，完成一次模拟面试并查看复盘。
-5. 添加可选 Skill 和 MCP，并检查会话权限。
+5. 添加可选 Skill 和远程 MCP，并检查具体 Tool 调用的当前 Policy 与授权提示。
 
 更完整的持久化、升级、模型和 MCP 说明见
 [Community 部署文档](../deployment/community.md)。修改源码前请阅读

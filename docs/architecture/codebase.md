@@ -12,7 +12,7 @@ guide for maintenance work, not a proposal for extra framework layers.
 | `backend/app/schemas/` | Pydantic request and response contracts |
 | `backend/app/services/` | Business use cases grouped by auth, chat, interview, knowledge, memory, resume, upload, voice, capabilities, and model source |
 | `backend/app/conversation/` | Chat/Agent conversation engine, strategy selection, planning, and event contracts |
-| `backend/app/agent_runtime/` | ReAct execution, immutable turn tools, MCP clients, tool calls, cancellation, and result storage |
+| `backend/app/agent_runtime/` | Current ReAct execution, turn-local Tool catalog, MCP clients, Tool Calls, cancellation, and result storage; target Tool/Policy semantics are defined by `full-cycle-career-copilot.md` |
 | `backend/app/rag/` | Parsing, cleaning, chunking, embedding/reranking providers, Milvus indexing, retrieval, and hydration |
 | `backend/app/prompts/` | Production prompt text and prompt builders grouped by business purpose |
 | `backend/app/models/` | SQLAlchemy persistence models only |

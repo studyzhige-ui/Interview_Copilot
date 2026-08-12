@@ -26,7 +26,7 @@ The repository ships one shared product core in two editions:
 - Per-user credentials and one answer-model preference shared by chat, Agent,
   and mock interview
 - Long-running agent turns with reconnectable event streams and cancellation
-- User-scoped Skills, MCP servers, session permissions, and immutable turn tools
+- User-scoped Skills and MCP servers with concrete Tool discovery, execution records, and current policy controls
 - PostgreSQL, Redis/Celery, Milvus, and S3-compatible object storage
 
 ## Quick start
