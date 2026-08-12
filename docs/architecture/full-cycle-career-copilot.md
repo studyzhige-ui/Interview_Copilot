@@ -47,6 +47,14 @@
 
 Stage Spec 经用户讨论确认后才进入编码。实现发现必须改变产品语义时，应先停止扩大修改，记录偏差，更新本文与受影响 Spec 并重新讨论。每阶段完成后必须汇报实际改动、验证结果和与 Spec 的偏差，确认后再进入下一阶段。
 
+### 0.4 多视图图示规则
+
+同一套架构可以从产品心智、责任与依赖、单 Turn 控制流、Context 装配、Capability 执行、Policy 决策、代码所有权和数据契约等不同视角表达。每张图都必须说明：本图的视角、箭头表示和不表示什么，以及为了聚焦而省略了什么；省略不等于对应边界失效。
+
+只有在对象、scope、生命周期时点和关系语义都相同的前提下，对唯一所有者、事实源、identity/基数、状态转换、权限裁决、执行顺序、依赖方向或完成 Evidence 给出互斥定义，才构成真正冲突。不同排版、控制流与依赖关系使用不同箭头、同一组件被折叠或展开、局部省略，以及一张图把 AgentStrategy 展开为 Loop 而另一张图合并为单个节点，都不构成冲突。
+
+同视角、同范围的新图明确替代旧图时才删除旧图；不同视角下仍正确的图必须并存。共享不变量变化时同步修订所有受影响视图，局部细化只修改所属视图。图前统一使用简短说明：`视角：……；箭头表示……，不表示……；为聚焦本问题，本图省略……，其余边界仍以相关主题章节与第 19 节为准。`
+
 ## 1. 产品定位、真实性边界与七个业务域
 
 ### 1.1 产品定义
@@ -131,9 +139,12 @@ Agent 可以接收所有直接服务于用户本人求职的任务。“可以�
 - 涉及正式业务读取或变更时，页面、Agent、同步器和后台触发必须调用相同 Application Service，并遵守相同业务不变量、权限与 Evidence 规则，不能形成第二套状态机；纯客户端导航和未保存预填不伪装成业务操作。
 - Agent 结果不要求对应页面。只需汇报进度或完成情况的任务可以完全在 Conversation 中结束。
 - 用户当前所在页面、路由、页面选中项、DOM、视觉内容和页面缓存都不自动进入 Agent 上下文。用户在本 Turn 主动附加或明确指定的附件、URL 和产品对象引用属于当前输入；已经显式附加到同一 Conversation 的文件及当前 Debrief Project Source 可以在后续 Turn 按最新任务需要重新读取，但不会每轮自动注入，也不能取得任务方向。
-- Agent 可以通过有真实第一方客户端 handler 的语义化 UI/Application Capability 导航到产品视图、带入本 Turn 已确认的数据、预填交互或启动明确的 Flow。Agent 发出产品语义目标，不接触具体路由、DOM、selector、任意 click/type 或万能表单 patch；没有真实 handler 或客户端不可达时必须明确失败。
+- 页面提供的“交给 Copilot”“用此对象继续”等明确入口，可以把带稳定 identity 的 typed object reference 作为用户可感知的本 Turn 输入；服务端仍需按 identity 重新读取权威内容并校验所有权与权限，不能信任客户端复制的业务事实。这是用户主动提供的对象引用，不是页面环境自动进入上下文。未保存草稿只有在用户明确提交时才能进入 Turn，并始终标识为草稿而非正式事实。
+- Agent 可以通过有真实 typed handler 的 **Client Action Bridge** 导航到产品视图、带入本 Turn 已确认的数据、预填交互或进入明确的 Flow。Agent 发出产品语义目标，不接触具体路由、DOM、selector、任意 click/type 或万能表单 patch；没有真实 handler 或客户端不可达时必须明确失败。
 - 页面导航和临时预填不改变 Domain State，也不证明用户已经查看、接受或保存。正式业务变化仍通过同一 Application Service，外部动作仍经过 Policy 并取得 receipt/read-back，Flow 启动仍以对应 Runtime/Application Service 返回的真实 identity 与状态为准。
 - 用户明确要求跳转或启动交互时，Agent 可以直接执行相应语义能力；如果 Agent 只是建议查看某个页面，则返回可选页面动作，不应擅自抢占用户界面。页面跳转不是完成任务的必经步骤，后台 PersistentTask 和没有交互客户端的 Turn 也不能改变用户当前页面。
+- Client Action 只交付给发起当前 Turn 的交互客户端实例，不广播给其他标签页。页面存在未保存内容、设备权限或其他本地安全条件时，由客户端原生 guard 让同一 Turn 进入可恢复 waiting，不把未提交表单内容发送给模型；原客户端不可恢复时必须由用户明确接管，不能自动投递到任意新标签页。
+- 当前阶段只使用产品设计好的页面、Capability-owned typed handler，以及少量可信的确认卡、结果卡和等待卡；不建设模型生成组件树、通用 UI schema、任意 HTML/JavaScript、客户端代码执行或其他生成式 UI 协议。
 
 导航改造不能只改菜单名称而保留数据孤岛。在相应领域读模型和交互 Spec 可用前，现有路由可以保持可访问；随后按四个工作空间的聚合心智迁移。
 
@@ -455,7 +466,9 @@ Reminder 只是 planned NextAction 的通知安排，不是独立业务目标。
 
 Debrief Project 是 InterviewRecord 的既有领域语义，不增加通用 Project 聚合根、通用项目页面或另一套生命周期。用户若要让聊天附件供同一复盘的其他 Conversation 使用，必须明确执行“添加到本次复盘资料”；该操作只扩大到当前 InterviewRecord，不自动保存为用户全局资料。Mock Interview 是独立的实时、逐轮、强流程约束 Flow，不进入普通 Conversation 的 Strategy Router 或通用 Agent Loop；它可以复用模型、语音、存储、Artifact 和 Evidence 等底层服务。
 
-Career Agent 可以根据用户本 Turn 明确提供的简历、JD、面试类型和风格等输入，调用真实 Mock Flow 入口完成校验和配置；入口成功创建或启动真实 session 后，第一方客户端再依据返回的 session identity 进入相应面试界面。输入和设备条件已经满足时可以直接开始；需要麦克风、浏览器权限或其他用户现场操作时，只在该 readiness 边界等待。Agent Turn 在成功交接或明确失败后结束，不把后续实时逐轮面试包进通用 Agent Tool Loop；仅导航到页面或预填表单不能声称面试已经启动。
+Career Agent 可以根据用户本 Turn 明确提供的简历、JD、面试类型和风格等输入调用真实 Mock Capability。Flow Handoff 的顺序固定为：解析并校验明确来源；Application Service 校验配置但不虚报已经开始；Client Action Bridge 把 typed 配置带入对应体验并检查麦克风、浏览器权限和其他本地 readiness；需要用户现场操作时在原 Turn、原 Tool Call 上 waiting；就绪后由真实 Mock Runtime 入口 create/start 并返回 session identity 与运行状态；客户端再依据该 identity 进入实时界面。预填 acknowledgement、设备 readiness、Runtime start 结果和进入实时界面的 acknowledgement 分别记录，只有 Runtime 返回的真实 identity/status 能证明面试已经启动。
+
+Agent Turn 在真实 Runtime 成功交接或明确失败后结束，不把后续实时逐轮面试包进通用 Agent Tool Loop。进入实时流程后由 Mock Interview Flow 持有整场交互；仅导航、预填或设备就绪都不能声称面试已经启动。
 
 真实面试或明确禁止外部协助的测评中，产品不隐蔽代答或冒充用户。面试准备、合法辅助、录音转写、事后复盘、问答修订和能力成长仍在产品范围内。
 
@@ -692,9 +705,31 @@ Conversation Attachment、Debrief Project Source 和用户明确授权的长期�
 
 ## 10. Application Profile、Shared Kernel 与 Chat/Agent/RAG
 
-### 10.1 唯一运行结构
+### 10.1 三层责任与普通 Conversation 单 Turn 控制流
 
-运行结构只有三层职责。普通 Conversation 的主路径如下；Mock Interview 仍是独立实时 Flow：
+运行时只有三层稳定责任，并不意味着全文只能有一张架构图：
+
+    Application Runtimes
+    ├─ Career Profile ───── 共享 AgentStrategy
+    ├─ Debrief Profile ──── ChatStrategy / 共享 AgentStrategy
+    └─ Mock Interview Flow ─ 独立实时流程
+
+    Shared Conversation Kernel
+    ├─ Turn / CurrentTurnAnchor / Active Working Context / Context Compiler
+    ├─ Strategy Router / waiting / Compaction / Checkpoint / Recovery
+    ├─ Tool Executor / Policy / Evidence 共享设施
+    └─ Fact & Knowledge Retrieval / RAG / History Search / Memory Recall
+
+    Authoritative Product Sources
+    └─ 第 3 节定义的六种权威来源
+
+视角：责任与依赖视图；纵向层次表示上层消费下层提供的稳定责任，不表示 Prompt 物理顺序、单次调用顺序或每个名称都必须成为独立组件；为聚焦责任所有权，本视图省略 Capability 内部执行路径和持久化物理组件，其余边界仍以相关主题章节与第 19 节为准。
+
+这里的 Authoritative 表示六类来源分别对自身记录类型拥有唯一所有权，不表示 History、Long-term Agent Memory 或 Recovery State 中的内容能够证明当前领域事实；事实权威性和 Evidence 强度仍按来源类型、时间与具体 claim 判断。
+
+普通 Conversation 的单 Turn 主路径如下；Mock Interview 仍是独立实时 Flow：
+
+视角：普通 Conversation 单 Turn 控制流；实线表示本 Turn 的控制或数据流，虚线表示 Agent Loop 的增量读取，不表示代码包依赖或领域对象所有权；为聚焦 Chat/Agent/RAG 编排，本图省略产品操控 Binding 的内部执行、Mock 实时 Flow 内部步骤和持久化物理组件，其余边界仍以相关主题章节与第 19 节为准。
 
 ```mermaid
 flowchart TB
@@ -713,13 +748,13 @@ flowchart TB
     Agent --> Context
     Context -->|"Agent initial context"| Loop["主模型理解、排序与 Agent Loop"]
     Loop -. "增量读取" .-> Context
-    Loop --> Capability["Application Services / Integrations"]
+    Loop --> Capability["Capability Runtime / Bindings"]
 
     Answer --> Conversation["同一个 Conversation / Interaction Records"]
     Loop --> Conversation
 ```
 
-图中的 Application Profile 与 Flow、Shared Conversation Kernel、Product Context Sources 仍是三层职责；`Context` 节点使用第 3 节定义的六种权威来源。三层表达职责与依赖，不要求每个名称成为独立组件。
+图中的 Application Profile 与 Flow、Shared Conversation Kernel、Authoritative Product Sources 仍是三层职责；`Context` 节点使用第 3 节定义的六种来源边界并按 claim 判断权威性，`Capability Runtime / Bindings` 的产品内外执行路径在第 13.7～13.8 节展开。三层表达职责与依赖，不要求每个名称成为独立组件。
 
 ### 10.2 Profile、Kernel、Strategy 与 Flow
 
@@ -729,7 +764,7 @@ flowchart TB
 - Debrief Profile 从 Conversation 自身不可伪造的 Application identity 绑定当前 Interview/InterviewRecord，把它作为唯一 Debrief Project scope；结构化问答、评分和分析仍通过 Domain State 读取，转写、当时材料和明确加入本次复盘的来源仍按 Knowledge & Evidence 读取，并允许 ChatStrategy 或同一 AgentStrategy；
 - Profile 不拥有独立 Agent Loop，不负责解析用户意图，也不自行选择 Capability；Agent Turn 的语义理解、多目标排序和 Capability 选择归共享 AgentStrategy 的主模型循环，Debrief Chat 只在 ChatStrategy 内使用受限的本轮检索规划。
 
-**Shared Conversation Kernel** 负责 Turn 生命周期、CurrentTurnAnchor、Active Working Context、Context Compiler、Strategy Router、等待、流式传输、Compaction、Checkpoint、Recovery，以及共享的 Tool Executor、Policy、Evidence、History Search 和 Memory Recall 设施。它不拥有业务 Profile、Agent Loop 或页面语义。
+**Shared Conversation Kernel** 负责 Turn 生命周期、CurrentTurnAnchor、Active Working Context、Context Compiler、Strategy Router、等待、流式传输、Compaction、Checkpoint、Recovery，以及对共享 Tool Executor、Policy、Evidence、History Search 和 Memory Recall 设施的统一编排。这里的“负责”表示生命周期和语义入口由 Kernel 统一控制；Tool Executor 与 Policy 的代码实现所有权仍在 `agent_runtime`，Kernel 不复制第二套执行器。它不拥有业务 Profile、Agent Loop 或页面语义。
 
 **AgentStrategy** 是 Career 与 Debrief 唯一共享的 Agent 执行实现。主模型直接依据 CurrentTurnAnchor 理解最新输入、排列多目标、决定直接回答、安全调查、澄清、连接、审批或执行；系统不在它前面建设 Intent 模型、Intent 对象或独立 Planner。AgentStrategy 负责 Agent Loop、Capability 选择、Tool 调用编排、安全并行、必要时创建和推进 AgentTask，并向 Shared Kernel 交付真实调用状态与候选结果。只有 Shared Kernel 执行确定性完成检查并裁定、写入统一 TurnOutcome。
 
@@ -994,14 +1029,14 @@ Reminder 仍是 planned NextAction 的通知安排。只有持续读取来源、
 
 ### 13.1 四种解析职责
 
-- **Capability** 描述产品语义上的“能做什么”，例如搜索岗位、读取邮件、发送邮件、读取 URL、编辑材料或管理日历。
-- **Provider Binding** 描述当前 Capability 由哪个真实实现提供。实现可以是内置 Application Service、第一方 Client Action handler、官方或第三方 Connector、本地 Adapter 或用户 MCP。
+- **Capability** 描述产品语义上的“能做什么”，例如搜索岗位、读取邮件、发送邮件、读取 URL、编辑材料、管理日历或进入一次模拟面试体验。
+- **Provider Binding** 描述当前 Capability 由哪个真实实现提供。实现可以调用内置 Application Service、第一方 Client Action Bridge 中注册的 typed handler、官方或第三方 Connector、本地 Adapter 或用户 MCP；一个领域 Capability 也可以组合多个端点。
 - **Skill** 描述如何理解、规划和编排已经存在的 Capability。Skill 是 instruction，不是 Provider、Tool 或执行器。
 - **Policy / Grant** 分别描述连接提供的 scope，以及带具体账号、对象和参数的本次调用是否允许。
 
 四项是解析职责，不是四个领域聚合根，也不要求四张表、四套 Registry 或四个微服务。Provider Binding 是 Capability 到具体真实实现/Tool Contract 的运行时关系，不是业务对象；连接凭据和 scope 仍由连接与 Grant 边界管理。
 
-内置 Application Service、第一方 Client Action handler、官方或第三方 Connector、本地 Adapter 与 MCP 都转换为统一 Tool Contract，并遵守相同 typed 输入输出与 Policy；客户端 acknowledgement、Application Service 结果、Evidence 和 receipt/read-back 根据实际 claim 分别提供，不能互相冒充。Skill 不属于 Tool Binding。
+只有作为 Agent Binding 暴露的 Application Service 用例、由 Client Action Bridge 支持的 Capability、官方或第三方 Connector、本地 Adapter 与 MCP 能力才适配为统一 Tool Contract，并遵守相同 typed 输入输出与 Policy；页面和确定性同步器仍可直接调用 Application Service，不要求每个 Service 方法都成为 Tool。客户端 acknowledgement、Application Service 结果、Evidence 和 receipt/read-back 根据实际 claim 分别提供，不能互相冒充。Skill 不属于 Tool Binding。
 
 ### 13.2 Capability Resolution 与动态可执行性
 
@@ -1100,12 +1135,12 @@ Policy ask/deny 发生在调用前；缺少连接由 Resolver 处理；AgentTask
 - 邮件读取与发送、日历查询与管理、岗位搜索/读取与投递分别按 Grant、副作用和 receipt/read-back 拆分；
 - Artifact 读取、创建/修订和导出可以按共同生命周期形成少量稳定契约，简历、求职信和报告优先作为 artifact type；
 - Browser、Canva 和 MCP 只实现明确声明的 Capability，不天然获得任意 click/type、文件系统或账号操作。
-- 产品自有前端可以通过第一方 Client Action Binding 实现少量明确的语义化导航、预填和 Flow handoff；它不向 Agent 暴露 DOM、CSS selector、任意路由、任意脚本执行或万能 `execute_ui`。语义和失败边界相同的页面目标复用一个 typed capability，不为每个页面和按钮制造 Tool。
+- 产品自有前端可以通过第一方 Client Action Bridge 实现少量明确的语义化导航、预填和 Flow Handoff；Bridge 中只注册由具体 Capability 拥有的 typed handler，不向 Agent 暴露 DOM、CSS selector、任意路由、任意脚本执行或万能 `execute_ui`。语义和失败边界相同的页面目标复用一个 typed Capability，不为每个页面和按钮制造 Tool。
 
 Tool Catalog 只作三个逻辑责任分组，三者共用 Registry、Tool Contract、Executor、Policy 和 Evidence：
 
 - **Runtime Control**：Skill/Tool discovery 与 Skill load、确有需要的当前 AgentTask 查询/更新、History Search、严格 Memory Recall。Checkpoint、Compaction 和 Recovery 由 Kernel 自动维护，不是默认模型 Tool。
-- **Product**：通过 Application Service 读取或变更 CandidateProfile、TargetDirection、AbilitySignal、JobOpportunity、ProcessEvent、NextAction、Interview、Offer、Artifact 及 PersistentTask，并通过第一方客户端 handler 完成有边界的语义化导航、临时预填和交互 Flow handoff。
+- **Product**：通过 Application Service 读取或变更 CandidateProfile、TargetDirection、AbilitySignal、JobOpportunity、ProcessEvent、NextAction、Interview、Offer、Artifact 及 PersistentTask，并通过 Client Action Bridge 完成有边界的语义化导航、临时预填和交互 Flow Handoff。
 - **Integration**：web search、URL read、email search/read/send、calendar query/manage、opportunity search/read/submit，以及有边界的浏览器、文件、搜索和设计服务。
 
 分组影响发现、展示和统计，不复制 Registry、Executor、Policy 或 Evidence。完整目录可以包含若干语义清楚的 Tool；简洁不等于 Tool name 越少越好，真正需要限制的是重复概念、万能 operation schema 和每个 Turn 同时暴露的 schema 数量。
@@ -1114,13 +1149,69 @@ Tool Catalog 只作三个逻辑责任分组，三者共用 Registry、Tool Contr
 
 Application Service 是领域查询和写入的真实入口，负责所有权、对象 identity、状态不变量、合法转换、幂等、事务、并发冲突、Evidence 关联、修正、撤销和审计。页面、Agent 和同步流程涉及正式业务读取或变更时都调用同一 Service。
 
-Tool 只是 Agent 的薄适配器：解析 typed input，经过 Policy，调用 Service、Connector 或第一方 Client Action handler，返回 typed data，以及与实际 claim 相适配的 acknowledgement、Application Service 结果、Evidence 或 receipt/read-back。事务 helper、投影更新、去重、版本校验、审计写入和仅供内部编排的函数不暴露为 Agent Tool；不是每个 Service 方法都需要成为 Tool。
+Tool 只是 Agent 的薄适配器：解析 typed input，经过 Policy，调用 Service、Integration 或 Client Action Bridge，返回 typed data，以及与实际 claim 相适配的 acknowledgement、Application Service 结果、Evidence 或 receipt/read-back。事务 helper、投影更新、去重、版本校验、审计写入和仅供内部编排的函数不暴露为 Agent Tool；不是每个 Service 方法都需要成为 Tool。
 
-纯导航和未保存的表单预填可以由第一方 Client Action handler 完成，并返回客户端 acknowledgement；一旦动作会创建 Runtime、保存 Domain State 或触发外部副作用，就必须调用对应 Application Service、Flow 入口或 Integration。客户端 acknowledgement 进入 Interaction Records，只证明客户端接收并完成了该界面动作，不代替业务结果、Evidence 或 Provider receipt/read-back。后台 PersistentTask、无交互客户端的 Turn 和第三方 MCP 都不能伪造第一方客户端能力。
+纯导航和未保存的表单预填可以由 Client Action Bridge 中的 typed handler 完成，并返回客户端 acknowledgement；一旦动作会创建 Runtime、保存 Domain State 或触发外部副作用，就必须调用对应 Application Service、Flow 入口或 Integration。客户端 acknowledgement 进入 Interaction Records，只证明客户端接收并完成了该界面动作，不代替业务结果、Evidence 或 Provider receipt/read-back。后台 PersistentTask、无交互客户端的 Turn 和第三方 MCP 都不能伪造第一方客户端能力。
 
 完整 Provider/MCP Catalog 不进入每轮 Prompt。Runtime 根据 CurrentTurnAnchor、Application Profile 的允许策略、已选 Skill 和所需 Capability 形成候选，再只注入少量相关、真实且当前可以暴露的 Tool schema；必要时通过 Tool Search 继续发现。
 
-### 13.8 Skill 的三层加载
+### 13.8 第一方产品操控与 Client Action Bridge
+
+Agent 操控的是产品语义 Capability，不是页面、DOM 或前端实现。页面和 Agent 是 Application Service 的平等调用者；只有任务需要改变用户当前体验时，Capability Runtime 才通过受控的 Client Action Bridge 请求客户端效果。
+
+视角：产品操控执行视图；实线表示调用或结果流，虚线表示领域 Capability 内部的组合方式，不表示领域对象所有权；为聚焦第一方产品操控，本图省略 Context/RAG、Agent Loop 内部步骤和具体持久化组件，其余边界仍以相关主题章节与第 19 节为准。
+
+```mermaid
+flowchart LR
+    User["用户"] --> UI["产品页面"]
+    User --> Agent["共享 AgentStrategy"]
+
+    Agent --> Runtime["Capability Runtime"]
+    Runtime --> Binding["Binding Resolution<br/>Capability 到 concrete 真实实现"]
+    Binding --> Policy["参数级 Policy"]
+
+    UI --> Services["Application Services"]
+    Policy -->|"正式产品读写"| Services
+    Policy -->|"客户端效果与现场交互"| Bridge["Client Action Bridge"]
+    Policy -->|"外部读取与操作"| Integration["Integration Port<br/>Connector / MCP / Provider"]
+
+    Bridge <--> UI
+    Services --> Sources["Authoritative Product Sources"]
+    Integration --> External["外部系统"]
+
+    Binding -. "领域组合" .-> Handoff["Flow Handoff<br/>组合模式，非 Binding、非 Runtime、非状态机"]
+    Handoff -. "组合使用" .-> Services
+    Handoff -. "组合使用" .-> Bridge
+```
+
+Runtime 总体有三个效果目的地：Application Service 负责正式产品读取与写入；Client Action Bridge 负责第一方客户端展示、导航、临时预填和现场交互；Integration Port 负责产品边界外的 Provider、Connector 与 MCP。所谓“两个产品内执行端口”只指前两者，Integration 仍属于既有外部系统边界。三者不是三种需要持久化的 Binding 对象；Provider Binding 只是 Capability 到真实实现的解析关系，可以是代码注册，也可以在确有用户配置和连接生命周期时保存配置，不能为了形式统一强制建立数据库记录。
+
+Application Command 只是 Application Service 的 typed 输入，Client Action 只是当前调用中的一次 typed 客户端效果，Flow Handoff 只是某个领域 Capability 对 Service 与 Bridge 的组合方式。三者都不是新的领域对象、数据库表或通用状态机；Flow Handoff 也不是第三套 Runtime、Binding 类别或万能流程协议。正式 identity、状态与结果始终属于底层真实领域对象和 Runtime，例如 Mock Interview Runtime；等待、恢复和审计复用既有 Turn、Tool Call 与 Interaction Records。
+
+Capability 按稳定的用户意图和产品语义设计，而不是按页面、按钮或表单字段设计。更新岗位状态调用岗位领域命令，保存材料调用 Artifact Service，打开岗位详情使用有边界的语义导航，配置模拟面试使用 typed Mock 配置；客户端 handler 负责把配置映射为当前页面字段。禁止一页一 Tool、逐字段 `set_form_field`、任意 route/DOM/selector/click/type、万能 JSON Patch、组件 props 写入和 `execute_ui`。Skill 只能选择和组合已有 Capability，不能产生缺失 handler、页面权限或执行能力。
+
+Client Action 的最小运行协议是“既有 Conversation/Turn/Tool Call identity + 与该调用关联的可幂等 action identity + Capability-owned typed action + acknowledgement/refusal/failure”。一个 Tool Call 可能依次产生多个客户端动作，因此 action identity 必须能区分和去重，但具体字段、存储形态与传输 envelope 留给 Stage Spec，不能预建万能 ClientAction 领域表。执行顺序为：
+
+    Capability Tool Call
+      → 先持久化 typed Client Action 与恢复位置
+      → 只投递给发起当前 Turn 的客户端实例
+      → 客户端白名单 handler 执行
+      → typed acknowledgement / refusal / failure 写回原 Turn 与原 Tool Call
+      → Runtime 判断继续下一 action、进入或保持 waiting、重新规划或收尾
+      → 满足当前恢复条件时重新读取 authoritative state
+      → 返回与真实 claim 匹配的 typed result
+
+服务端到客户端的 SSE 只承载可重放的交付投影，Interaction Records 与 Tool Call 记录才是恢复来源；客户端通过认证写入端点返回 acknowledgement/refusal/failure。每个结果只是原 Tool Call 的一条 typed 输入：例如“权限提示已展示”可以 acknowledgement，但 Turn 仍保持 waiting；只有满足已持久化恢复条件的结果才能解除 waiting。waiting 释放模型调用、Conversation/Agent Worker、SSE/模型流和 Agent Loop，不靠长连接或协程挂起；重复请求与重复 acknowledgement 必须幂等，拒绝或失败作为原 Tool Call 的真实结果回灌 Agent。客户端 acknowledgement 只能证明页面已打开、临时配置已应用或设备 readiness，正式保存或 Runtime 启动只能由 Application Service 的 authoritative result/identity 证明，外部执行只能由 Integration receipt/read-back 证明。
+
+Client Action 只发送给发起 Turn 的客户端实例。其他标签页可以观察执行状态，但不能并行消费动作；原客户端短暂重连可以重放尚未处理的动作，无法恢复时必须由用户明确“继续/接管”后才能绑定新实例，不能自动转投任意标签页。Bridge 挂在不会随目标页面卸载的产品级壳层，并可以声明当前支持的 typed handler；handler availability 是能力可用性，不是页面内容或隐式上下文。
+
+前后端复用或生成同一份 typed action contract，并以 handler contract test 防止协议漂移；这不要求建设通用 action payload。Bridge 和 handler 只实现能力，不能授予权限，具体调用仍在执行前经过 Policy。Flow 中某一步成功、后一步失败时，由对应领域 Capability 解释已完成状态、可恢复位置和是否需要补偿，不建设万能补偿状态机，也不回滚无法安全撤销的真实结果。
+
+普通交互 Turn 缺少必需客户端时，对应 Client Action 明确不可用；仅为方便查看的页面动作退化为可选入口，不阻塞已经完成的后台工作。PersistentTask Turn 可以调用已授权的 Application Service 与 Integration，但没有活跃客户端时不得导航、预填或操控普通主入口；确需现场交互时只在该 PersistentTask 自己的 Dedicated Conversation 形成等待卡片或通知，用户打开并明确继续后再绑定客户端恢复同一 Turn，不能把动作转移到普通 Career Conversation。
+
+当前阶段只实现固定产品页面、产品编写的 typed handler 与少量可信确认卡、结果卡、等待卡，不建设通用生成式 UI 协议、模型生成组件树或 UI schema，也不执行模型生成的 HTML、JavaScript 或客户端代码。未来只有真实、反复出现且固定页面无法清楚承载的比较或确认场景，才重新讨论受限可信组件目录；Client Action Bridge 本身永远不是生成式 UI 后门。
+
+### 13.9 Skill 的三层加载
 
 Skill 使用共享发现基础设施完成三层渐进暴露：
 
@@ -1193,6 +1284,8 @@ Policy 无法可靠判断、关键事实缺失、账号/对象/收件人有歧�
 - 每次外部动作都保留 receipt/read-back、结果摘要和可用撤销/修正路径；
 - Auto 只减少普通审批，不启用未连接能力，不扩大 Capability、Provider scope、数据范围、对象范围、任务目标或未来任务权限；
 - Policy 不确定时失败关闭，不能猜测用户意愿。
+
+Client Action 仍遵守相同边界：用户已经明确要求，且为完成当前任务必需的可逆导航、打开视图和未保存预填，可以在 Standard 或 Auto 下直接执行；如果页面只是方便查看或 Agent 仅在建议用户查看，则只返回可选动作，不抢占当前界面。页面原生 unsaved guard、设备 readiness 或客户端不可达可以使原调用 waiting。正式保存、隐私外传、破坏性动作、外部副作用和用户保留决定继续按本节 Policy 判断，不能借“只是界面操作”绕过。
 
 接受/拒绝 Offer、签署协议、确认入职，以及真实面试或明确禁止协助测评中的身份行为始终由用户完成。是否投递某岗位、谈判底线和代表用户发送的最终内容不按 Tool name 永久归类；应根据用户是否已经在当前任务或可见 PersistentTask 中作出足够明确的具体决定进行参数级判断。
 
@@ -1274,19 +1367,22 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 
 ### 16.1 目标所有权
 
-    presentation/        页面、API、SSE；把语义化客户端动作映射为导航、预填和 Flow handoff，返回真实 acknowledgement
+    presentation/        页面、API、SSE 与 AppShell 级 Client Action Bridge；投递 typed action、
+                         调用白名单 handler，并通过认证端点返回 acknowledgement/refusal/failure
     conversation/        Shared Kernel、Application Profile、Turn、Strategy 路由、
-                         Active Working Context、Context Compiler、Prompt Assembly/Cache、History/Memory 读取与恢复
+                         Active Working Context、Context Compiler、Prompt Assembly/Cache、History/Memory 读取、
+                         pending client action 的持久恢复与 initiating-client affinity
     agent_runtime/       唯一 AgentStrategy、Agent Loop、AgentTask、Capability Resolver、
                          Tool Catalog/Executor 与 Policy
     career/domain/       求职领域实体、不变量与领域事件
-    career/application/  Profile、方向、岗位、材料、面试、Offer、行动等用例服务
+    career/application/  Profile、方向、岗位、材料、面试、Offer、行动等用例服务，
+                         以及领域 Flow 的校验、真实 Runtime create/start 与结果
     rag/                 公共文档检索、grounding、引用与附件 Evidence
     preferences/         少量显式 CopilotPreference，不保存事实或执行授权
     integrations/        招聘平台、浏览器、邮件、日历、文件系统、设计服务与 MCP
     infrastructure/      数据库、对象存储、队列、向量索引、模型 Provider 与供应商级 Prompt Cache 适配
 
-依赖方向由外向内：涉及正式业务读取或变化时，页面、Agent Tool Adapter、同步器和外部 Integration 都调用 application 层；纯客户端导航和临时预填由 presentation handler 消费语义动作，但不能绕过后续领域命令。领域层不依赖 FastAPI、React、模型 SDK、向量数据库或具体 MCP。
+依赖方向由外向内：涉及正式业务读取或变化时，页面、Agent Tool Adapter、同步器和外部 Integration 都调用 application 层；纯客户端导航和临时预填由 presentation 中的 Client Action Bridge 消费语义动作，但不能绕过后续领域命令。Flow Handoff 只是领域 Capability 内部组合 application 与 Bridge 的方式，不创建独立目录、Service 或状态机。领域层不依赖 FastAPI、React、模型 SDK、向量数据库或具体 MCP。
 
 目录只是目标所有权提示，不要求每项概念对应一个包。当前不因为架构图一次性创建空目录、数据表、微型服务或抽象接口；只有首个真实独立用例出现时才提取边界。
 
@@ -1332,11 +1428,11 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 - backend/app/services/chat/session_task_service.py
 - backend/app/services/capabilities/conversation_capability_service.py
 - frontend/src/pages/review/chat/SessionCapabilities.tsx
-- frontend/src/router.tsx、frontend/src/pages/chat/GeneralChatPage.tsx、frontend/src/api/chat.ts
+- frontend/src/components/layout/AppShell.tsx、frontend/src/router.tsx、frontend/src/pages/chat/GeneralChatPage.tsx、frontend/src/api/chat.ts
 - frontend/src/pages/review/chat/ChatToolbar.tsx、ChatPanel.tsx、useChatStream.ts、types.ts
 - frontend/src/api/knowledge.ts、frontend/src/api/fileAssets.ts
 
-重点验证：现有 SessionTask 是否把阶段误当 Session 全局任务，旧完成门禁是否扫描无关工作，Capability permissions 是否默认放行未知扩展，Agent 是否绕过公共 RAG，上下文压缩是否可能恢复错任务，以及是否存在可复用的客户端 control event、Prompt Assembly 或 Prompt Cache 基础。没有真实 handler 时不得为了满足目标架构虚构 UI Tool 或缓存对象。
+重点验证：现有 SessionTask 是否把阶段误当 Session 全局任务，旧完成门禁是否扫描无关工作，Capability permissions 是否默认放行未知扩展，Agent 是否绕过公共 RAG，上下文压缩是否可能恢复错任务，以及是否存在可复用的耐久 control event、断线重放、同 Turn waiting/resume、Tool Call 幂等、客户端实例绑定、认证 acknowledgement、Prompt Assembly 或 Prompt Cache 基础。Client Action Bridge 应位于 AppShell 级稳定消费点；没有真实 handler 时不得为了满足目标架构虚构 UI Tool、页面自动化或缓存对象。
 
 当前附件实现已经有 FileAsset、AttachmentRef DTO、ConversationTurn 快照、私有 chunks 和公共 Grounding 外形，但不能据此宣称阶段 1 已完成。实施前必须把以下已确认 P0 当作迁移输入而不是目标设计：上传时提前创建 conversation-scoped KnowledgeDocument，Composer 的 X/清空只删除本地芯片却留下以后仍可读取的“幽灵附件”，每轮把当前 Conversation 的全部 ready 文件及 chunks 作为候选装载，显式来源在校验后被删除时可能静默消失，Agent 仍跳过公共知识 RAG，失败文件缺少用户重解析与可靠草稿恢复。`chat_attachment` source_kind 和“不写全局 Milvus”只证明当前做了部分技术隔离，不代表 Conversation Attachment 已经拥有正确领域生命周期。
 
@@ -1379,6 +1475,7 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 - 实现按具体调用预检的安全 Tool 并行、UI 完成序/模型与历史调用序分离、五种统一 TurnOutcome、确定性完成门禁、语义终止和局部故障熔断；
 - callable catalog 只保留真实 Tool，区分缺少 Binding 与缺少 connection/scope；
 - 完成首次连接/授权在同一 Turn 的等待与恢复；
+- 建立可复用的耐久 control event、同 Turn/同 Tool Call waiting/resume、幂等 identity 与 initiating-client 投递基座，供后续连接、审批、附件和 Client Action 共用；本阶段不建设业务 action 全目录或生成式 UI；
 - 移除万能 Memory/Task Tool 对领域和恢复语义的绕过。
 
 #### 阶段 1：附件与公共 Evidence
@@ -1405,7 +1502,8 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 - Artifact 版本、related/submitted 关系和历史冻结；
 - 真实 Interview 与 Debrief 通常关联 JobOpportunity；一个 InterviewRecord 作为天然 Debrief Project 承载多条 Conversation 和 Project-scoped sources，但不扩张成通用 Career Project；Mock 既支持岗位专项练习，也支持不关联岗位的通用训练；
 - Offer 最终条款、按需比较和谈判草稿；
-- 形成第一方语义 UI/Application Capability 的最小交互 Spec，使 Agent 能用真实 handler 导航、预填和启动 Mock 等 Flow，而不读取隐式页面状态或使用视觉/DOM 自动化；
+- 形成首批第一方产品 Capability 与 Client Action Bridge Stage Spec，使 Agent 能用真实 typed handler 导航、预填并完成 Mock Flow Handoff；前后端共享或生成 typed contract 并建立 handler contract test；覆盖请求先持久化、只投递 initiating client、断线重放、显式接管、ack/refusal/failure、同 Turn/同 Tool Call 恢复、幂等和无客户端降级，且分别验证预填、设备 readiness、Runtime start 与进入界面的结果；
+- 本阶段不建设通用生成式 UI、页面级 Tool、逐字段 Tool、任意 route/DOM/视觉自动化或万能 `execute_ui`；
 - 以真实读模型验证四工作空间，再完成必要导航切换，不机械创建四张页面。
 
 #### 阶段 4：真实外部执行与权限
@@ -1436,6 +1534,8 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 - 权限违规率、无谓 ask 率和 Auto 越界率；
 - Tool 重复调用率、无状态进展率、局部熔断诚实度、并行冲突率和恢复幂等性；单个 Tool 失败但仍可替代或部分交付时的 Turn 误失败率，以及成功兄弟结果丢失率；
 - 候选批次因审批 waiting 时的错误启动率，UI 完成顺序与模型/History 原调用顺序的分别正确率；
+- Client Action 的跨标签页/错误客户端投递率、断线重放重复执行率、明确接管正确率、无客户端诚实失败率、unsaved guard 恢复率，以及 acknowledgement 被误报为业务/Flow/外部成功的比例；
+- Mock Flow Handoff 中预填 acknowledgement、设备 readiness、Runtime identity/status 与进入实时界面 acknowledgement 的区分和恢复正确率；
 - AgentTask 遗漏率、错误 completed 率、缺少 receipt/Evidence 却通过率、五种 TurnOutcome 在数据库/SSE/UI 的一致率、部分完成诚实度和恢复成功率；
 - PersistentTask 重复副作用、trigger 合并和用户等待体验；
 - 用户修正成本和结果可理解性。
@@ -1446,7 +1546,7 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 
 以下问题尚未冻结，只能在对应 Stage Spec 中决定，不得在代码中先行变成事实：
 
-1. 四个工作空间最终采用哪些页面、组合视图、详情、抽屉、批量操作和输入交互；Offer 比较等能力采用页面还是一次性报告；首批语义 UI/Application Capability 支持哪些导航、预填和 Flow handoff，以及客户端反馈、失败、确认和无客户端行为。
+1. 四个工作空间最终采用哪些页面、组合视图、详情、抽屉、批量操作和输入交互；Offer 比较等能力采用页面还是一次性报告；首批 Capability-owned typed Client Action catalog、可信卡片和具体交互，以及 initiating client 重连、显式接管和失效后的 UX 与物理传输细节。只投递 initiating client、不广播、同 Turn/同 Tool Call 幂等恢复、无客户端不执行页面动作、Flow Handoff 不是新状态机和当前不建设通用生成式 UI 已经冻结。
 2. 用户明确从简历/资料流程导入首份简历后的 CandidateProfile 候选确认、批量接受、冲突突出和后续事实修正 UX；普通 Conversation Attachment 不触发候选这一前提已经冻结。
 3. CandidateProfile 事实有效时间、TargetDirection、岗位—方向关联、AbilitySignal、Artifact、Interview、Offer 等对象的最小物理字段和迁移顺序。
 4. JobOpportunity identity 线索中哪些由首批真实 Provider 提供并需要物理保存。
@@ -1548,13 +1648,20 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 
 ### 19.7 架构与演进
 
-56. 页面、Agent、同步器与后台触发涉及正式业务读取或变更时通过同一 Application Service，并遵守同一领域和权限规则；Agent 只通过有真实 handler 的 typed 语义 UI/Application Capability 导航、预填或启动 Flow，客户端动作成功不能冒充 Domain State、Flow 或外部动作成功。
+56. 页面、Agent、同步器与后台触发涉及正式业务读取或变更时通过同一 Application Service，并遵守同一领域和权限规则；Agent 只通过有真实 Capability-owned handler 的 Client Action Bridge 导航、预填或进入 Flow，客户端动作成功不能冒充 Domain State、Flow 或外部动作成功。
 57. 主 Agent 只是当前执行编排/交付责任人，不是系统唯一状态写者。
 58. 新字段、状态、表、服务、Registry 和后台任务由独立不变量及当前真实用例证明；可推导和运行时信息不重复持久化。
 59. 读取按相同权威与权限适度聚合，写入按领域命令拆分，外部动作按 Grant、副作用和回执拆分。
 60. 每个阶段先完成 Stage Spec、实现、可执行验证和偏差汇报，再进入下一阶段。
+61. 多张架构图可以表达同一系统的不同正确视角；只有同一对象、scope、生命周期时点和关系语义下出现互斥定义才构成冲突。共享不变量变化时必须同步全部受影响视图，不能用新视图删除仍正确的局部方案。
+62. Agent 只操控稳定的产品语义 Capability；正式产品状态通过 Application Service，第一方客户端效果通过 Client Action Bridge，外部系统通过 Integration Port。Provider Binding 是到真实实现的解析关系，三者都不要求成为新的领域对象。
+63. 用户主动提交的 typed object reference 可以成为 CurrentTurnAnchor 的显式输入；当前页面、选中项、表单和 DOM 仍不得自动进入上下文，客户端复制的业务事实必须按 identity 从权威源重读。
+64. Client Action 先持久化，只投递给发起当前 Turn 的客户端实例，并以可幂等 action identity 关联原 Turn/Tool Call；acknowledgement、拒绝、失败和显式客户端接管都作为同一 Turn/Tool Call 的 typed 输入，不伪造用户消息、不广播、不重复执行。Runtime 根据结果决定继续、进入或保持 waiting、重新规划或收尾，只有满足当前恢复条件的结果才解除 waiting。
+65. Client acknowledgement、设备 readiness、Application Service/Runtime result、进入界面 acknowledgement 和 Integration receipt/read-back 各自只证明对应 claim，不能互相冒充。
+66. Flow Handoff 只是领域 Capability 组合 Application Service 与 Client Action Bridge 的模式，不是第三套 Runtime、Binding、领域对象或状态机；后台 PersistentTask 和无交互客户端的 Turn 不操控普通主入口。
+67. 当前阶段不接受模型生成组件树、通用 UI schema、任意 HTML/JavaScript、客户端代码、route/DOM/selector/click/type、逐字段 Tool 或万能 `execute_ui`；只有产品编写的页面、typed handler 与少量可信卡片可以执行。
 
-## 附录 A：R-00～R-44 当前落点
+## 附录 A：R-00～R-45 当前落点
 
 本附录只映射讨论主题到当前正文，不陈列旧定义，也不具有第二套规范效力。
 
@@ -1605,3 +1712,4 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 | R-42 | 产品内语义控制、显式输入、Context 编排与 Prompt Cache | 2、10、11、13、16、19 |
 | R-43 | Conversation Attachment 与 Debrief Project Source | 3、4、7、9、10、16～19 |
 | R-44 | 完成判定、真实并行与局部故障熔断 | 0、10、11、15～19 |
+| R-45 | 多视图维护与第一方产品操控、Client Action Bridge、Flow Handoff | 0、2、7、13、14、16～19 |
