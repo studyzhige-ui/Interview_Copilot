@@ -130,7 +130,7 @@ Agent 可以接收所有直接服务于用户本人求职的任务。“可以�
 - Agent 负责理解当前意图、组合跨领域能力、执行任务并汇报真实结果。它贯穿所有工作空间，但不替代页面内容和对象视图。
 - 涉及正式业务读取或变更时，页面、Agent、同步器和后台触发必须调用相同 Application Service，并遵守相同业务不变量、权限与 Evidence 规则，不能形成第二套状态机；纯客户端导航和未保存预填不伪装成业务操作。
 - Agent 结果不要求对应页面。只需汇报进度或完成情况的任务可以完全在 Conversation 中结束。
-- 用户当前所在页面、路由、页面选中项、DOM、视觉内容和页面缓存都不自动进入 Agent 上下文。只有用户在本 Turn 主动附加或明确指定的附件、URL 和产品对象引用，才作为当前输入的一部分。
+- 用户当前所在页面、路由、页面选中项、DOM、视觉内容和页面缓存都不自动进入 Agent 上下文。用户在本 Turn 主动附加或明确指定的附件、URL 和产品对象引用属于当前输入；已经显式附加到同一 Conversation 的文件及当前 Debrief Project Source 可以在后续 Turn 按最新任务需要重新读取，但不会每轮自动注入，也不能取得任务方向。
 - Agent 可以通过有真实第一方客户端 handler 的语义化 UI/Application Capability 导航到产品视图、带入本 Turn 已确认的数据、预填交互或启动明确的 Flow。Agent 发出产品语义目标，不接触具体路由、DOM、selector、任意 click/type 或万能表单 patch；没有真实 handler 或客户端不可达时必须明确失败。
 - 页面导航和临时预填不改变 Domain State，也不证明用户已经查看、接受或保存。正式业务变化仍通过同一 Application Service，外部动作仍经过 Policy 并取得 receipt/read-back，Flow 启动仍以对应 Runtime/Application Service 返回的真实 identity 与状态为准。
 - 用户明确要求跳转或启动交互时，Agent 可以直接执行相应语义能力；如果 Agent 只是建议查看某个页面，则返回可选页面动作，不应擅自抢占用户界面。页面跳转不是完成任务的必经步骤，后台 PersistentTask 和没有交互客户端的 Turn 也不能改变用户当前页面。
@@ -152,9 +152,9 @@ Product Context Sources 按所有权、权威性、生命周期和读取规则�
 | **Personalization & Policy State** | 用户确认的 CopilotPreference，以及各自独立管理的授权、通知和同步设置 | 接受未经确认的模型偏好推断，或依赖隐藏记忆扩大执行权限 |
 | **Runtime Recovery State** | Checkpoint、watermark 和必要恢复引用，只用于恢复执行现场 | 充当当前任务、业务事实、长期 Memory 或新 Turn 的续跑指令 |
 
-这是概念所有权，不要求六套数据库、服务或检索管线。上传资料、邮件、网页、日历、Evidence、原始 History、Preference、权限、系统指令和 Skill 都不属于 Long-term Agent Memory。
+这是概念所有权，不要求六套数据库、服务或检索管线。Conversation Attachment 是 FileAsset/Knowledge & Evidence 的 Conversation 可见范围，其附加动作和 AttachmentRef 仍属于 Interaction Records；Debrief Project 是 Application Profile 基于 InterviewRecord 建立的可见范围投影，结构化面试事实仍归 Authoritative Domain State，录音、转写和文件仍归 Knowledge & Evidence，各 Conversation 仍归 Interaction Records。scope 不改变任何来源的所有者、权威类型或事实等级，也不产生第七种 Product Context Source。上传资料、邮件、网页、日历、Evidence、原始 History、Preference、权限、系统指令和 Skill 都不属于 Long-term Agent Memory。
 
-CareerState 只是页面和 Context Compiler 按当前任务从正式对象动态装配的用户级视图，不是一张重复保存所有事实的万能表。当前直接以用户及其正式领域对象为根，不建立固定求职周期或万能 CareerWorkspace。只有未来出现真实、稳定且用户可理解的多计划隔离需求时，才重新讨论容器。
+CareerState 只是页面和 Context Compiler 按当前任务从正式对象动态装配的用户级视图，不是一张重复保存所有事实的万能表。当前直接以用户及其正式领域对象为根，不建立固定求职周期、万能 CareerWorkspace 或通用 Project 管理。第 7 节定义的 Debrief Project 只是 InterviewRecord 已经具有的领域范围，不是通用求职容器；只有未来出现真实、稳定且用户可理解、又不能由 TargetDirection、JobOpportunity、Interview、Conversation 或 PersistentTask 表达的多计划隔离需求时，才重新讨论通用 Project。
 
 ### 3.2 Active Working Context 与 CurrentTurnAnchor
 
@@ -206,7 +206,7 @@ CandidateProfile 保存教育、经历、项目、技能、成果和联系方式
 3. 简历、证书和其他有来源文档提供的候选或冲突依据；
 4. Long-term Agent Memory 与模型推断只可辅助发现，不是事实源。
 
-上传第一份简历时，系统只生成“来源于该简历”的待确认 Profile 候选，不能静默覆盖档案，因为简历可能已经过时、为特定目的裁剪，或与其他版本和来源冲突。交互应允许批量接受无冲突候选，只对真正冲突的内容突出当前值、候选值与来源并逐项确认。未确认内容可以用于分析该份简历本身，不得作为全局事实注入其他任务。
+用户通过简历管理、求职资料入口，或在 Conversation 中明确要求“保存/设为我的简历”而导入第一份简历时，系统只生成“来源于该简历”的待确认 Profile 候选，不能静默覆盖档案，因为简历可能已经过时、为特定目的裁剪，或与其他版本和来源冲突。交互应允许批量接受无冲突候选，只对真正冲突的内容突出当前值、候选值与来源并逐项确认。仅在聊天输入框附加一份简历只建立当前 Conversation 的 AttachmentRef，不保存为简历、不进入全局资料，也不生成 Profile 候选；未确认候选只可用于分析其来源简历，不得作为全局事实注入其他任务。
 
 用户在对话中明确给出全新且无冲突的个人事实时，Agent 可以通过 CandidateProfile Application Service 写入并简短通知。用户明确说“之前写错了，应该是……”时，该纠正本身就是确认。模型仅检测到事实可能变化、但用户没有表达修改意图时，必须展示当前值、候选值和来源并询问；文档冲突与模型推断也只能待确认。
 
@@ -238,6 +238,8 @@ Artifact 及其版本复用一套版本化内容基础设施，可以承载简�
 - **submitted**：该具体版本确实用于本次投递。
 
 submitted 只能由用户明确确认，或由能证明具体文件/版本的真实外部 receipt/read-back 建立。生成、推荐、选择、下载和导出都不能证明实际使用；只证明“投递成功”但没有材料信息的邮件或网页回执，也不能推断版本。
+
+Conversation Attachment、Debrief Project Source 与正式 Artifact 是不同逻辑 scope，可以在显式晋升时复用同一底层 FileAsset/blob，但必须建立新的来源引用、版本与生命周期，不能通过修改原 AttachmentRef 暗中扩大可见范围。任何 scope 晋升都不自动改变 CandidateProfile，也不证明材料已经 submitted。
 
 一个已证明 submitted 的历史版本引用必须冻结；后续编辑创建新版本，CandidateProfile 的后续修正也不能倒改过去实际使用的材料。系统不为了补齐内部关系字段机械打断用户，只有材料事实缺失或冲突会实质影响当前交付时才发起最小确认。
 
@@ -449,7 +451,9 @@ Reminder 只是 planned NextAction 的通知安排，不是独立业务目标。
 
 真实 Interview 通常关联具体 JobOpportunity，并承载面试日程、准备内容、来源明确的事实、录音/转写、问答和复盘结果。Mock Interview 可以围绕具体岗位练习，也可以作为不关联岗位的通用训练。准备材料与复盘报告属于 Artifact；能力结论通过 AbilitySignal 形成，不能反向改写原始转写、问答或岗位事实。
 
-真实面试复盘使用 Debrief Application Profile，并在同一 Conversation 中支持 ChatStrategy 与共享 AgentStrategy 按 Turn 无缝混合。Mock Interview 是独立的实时、逐轮、强流程约束 Flow，不套用普通 Conversation Resolver 或通用 Agent Loop；它可以复用模型、语音、存储、Artifact 和 Evidence 等底层服务。
+一次真实面试复盘以其 InterviewRecord 作为天然的 Debrief Project 范围，可以包含多条彼此独立的 Conversation。该 InterviewRecord 的录音、转写、当时的简历与 JD、问答、评分、分析及明确加入本次复盘的其他来源对这些 Conversation 共同可读；在某条 Conversation 输入框直接附加的文件仍只属于该 Conversation，不自动提升为 Debrief Project Source。每条复盘 Conversation 都使用 Debrief Application Profile，并允许 ChatStrategy 与共享 AgentStrategy 按 Turn 无缝混合。
+
+Debrief Project 是 InterviewRecord 的既有领域语义，不增加通用 Project 聚合根、通用项目页面或另一套生命周期。用户若要让聊天附件供同一复盘的其他 Conversation 使用，必须明确执行“添加到本次复盘资料”；该操作只扩大到当前 InterviewRecord，不自动保存为用户全局资料。Mock Interview 是独立的实时、逐轮、强流程约束 Flow，不套用普通 Conversation Resolver 或通用 Agent Loop；它可以复用模型、语音、存储、Artifact 和 Evidence 等底层服务。
 
 Career Agent 可以根据用户本 Turn 明确提供的简历、JD、面试类型和风格等输入，调用真实 Mock Flow 入口完成校验和配置；入口成功创建或启动真实 session 后，第一方客户端再依据返回的 session identity 进入相应面试界面。输入和设备条件已经满足时可以直接开始；需要麦克风、浏览器权限或其他用户现场操作时，只在该 readiness 边界等待。Agent Turn 在成功交接或明确失败后结束，不把后续实时逐轮面试包进通用 Agent Tool Loop；仅导航到页面或预填表单不能声称面试已经启动。
 
@@ -527,7 +531,7 @@ CopilotPreference 是用户确认后的 Personalization State，不是 Memory �
 | 已投递或招聘流程事实 | JobOpportunity、ProcessEvent 与相应 Evidence |
 | 以后回答的协作方式 | CopilotPreference |
 | 过去讨论的理由 | History Search；确有长期协作价值时形成有来源的 Long-term Agent Memory |
-| 保存一份文件 | 既有 Artifact/Knowledge & Evidence 边界，并进入公共 RAG |
+| 用户明确要求保存一份文件 | 既有 Artifact/Knowledge & Evidence 边界，并按授权 scope 进入公共 RAG；仅附加到 Conversation 不属于保存 |
 | 能力表现 | 有业务 Evidence 的 AbilitySignal 流程，而不是一次聊天自述直接设置等级 |
 
 提醒渠道和同步范围进入各自设置，工具执行许可进入 Policy/Grant，某次分析或建议默认只在当前回答；用户要求保存时形成 Artifact 或经对应领域规则形成正式状态。产品不建立混合展示“画像 Markdown、能力状态和学习策略”的一级 Memory 工作空间。
@@ -613,18 +617,78 @@ Connector 不能把模糊内容直接写入 ProcessEvent；Agent Turn 也不能�
 
 ### 9.4 Attachment
 
-附件链路只冻结以下安全与所有权不变量，具体 UX 留给 Attachment Stage Spec：
+附件不是“把文件正文拼进 Prompt”，而是用户把一个有稳定 identity 的来源显式授予某个 Context scope 使用。文件存储、可读取范围、是否成为长期资料以及能否证明某项事实是四个独立问题；上传成功不能同时代表它们。
 
-1. 上传先产生有所有权的服务端文件/文档 identity，消息只携带结构化 AttachmentRef，不在用户文本中拼接伪标记。
-2. 每次读取前重新校验用户所有权、Conversation scope、解析状态和删除状态。
-3. 会话附件默认只属于当前 Conversation，是 Knowledge & Evidence 中有范围的内容来源；它不自动成为 CandidateProfile 事实、正式 Artifact 或全局资料，也不污染全局向量索引。
-4. 用户明确保存为长期资料时，内容进入既有 Artifact/Knowledge & Evidence 边界并形成来源与版本；不新增“持久知识对象”或第二套资料模型。
-5. Chat 与 Agent 通过相同 Context/Evidence 链读取；需要全文或分页时使用真实文档读取能力。
-6. 文件名、客户端伪文本、“上传成功”或模型声称读取都不能证明正文已解析。
-7. 引用回答必须保留来源；解析失败、替换、删除或权限变化必须显式返回。
-8. 第一份简历仍按第 4.2 节只形成带来源的 Profile 候选；上传、选择、下载或导出附件也不能证明某材料版本实际用于投递。
+#### 9.4.1 两种文件上下文范围
 
-上传、解析、失败重试、替换、删除、多文件、来源卡、进度和全文/片段切换需要先完成主流产品对照，再由 Stage Spec 冻结，本文不预设完整上传状态机。
+当前只实现两种共享范围，不建设通用 Project 管理：
+
+产品心智借鉴 Claude/ChatGPT 对“当前聊天可用的附件”和“供一个明确 Project 内多条聊天共享的来源”的区分；这里对齐的是上下文可见范围，不照搬通用 Project、账号级文件 Library 或其具体存储生命周期。本项目把第二种范围严格映射到已经存在业务边界的 InterviewRecord。这样普通聊天附件获得跨 Turn 可用语义，复盘又能共享其固有材料，同时不会提前增加通用项目管理。
+
+| 范围 | 建立方式 | 可读取者 | 明确不发生 |
+|---|---|---|---|
+| **Conversation Attachment** | 用户在任意普通 Conversation 的输入框直接附加并发送 | 只有该 Conversation 的当前及后续 Turn | 不进入兄弟 Conversation、Debrief Project Source、CandidateProfile、Artifact 或全局资料 |
+| **Debrief Project Source** | InterviewRecord 固有来源，或用户明确“添加到本次复盘资料” | 绑定同一 InterviewRecord 的所有 Debrief Conversation | 不进入其他复盘、Career Conversation 或用户全局资料 |
+
+Conversation Attachment 能力在 Career 与 Debrief 的所有普通 Conversation 中一致可用。一次 InterviewRecord 是唯一采用 Project 心智的领域范围：它让同一记录的结构化问答、评分和分析，以及录音、转写、当时的简历/JD和明确加入的文件，按各自原有 Product Context Source 类型对其 Debrief Conversation 可见。本文用 **Debrief Project Source** 简称这个 scope 内可读取的来源引用，而不是把它们重新分类为一种 Source 或复制进万能 Project 记录。某条复盘 Conversation 临时附加的文件仍只属于该 Conversation；只有用户明确提升到“本次复盘资料”后，其他同一 InterviewRecord Conversation 才能读取。
+
+Artifact/长期知识资料是用户明确保存后的既有产品对象，不是第三种聊天附件。未来若有真实需求，可以让新的通用 Project 复用相同 scope 机制；当前不提供通用 Project 对象、页面、指令或跨对话文件管理，也不让底层字段提前暗示它已经存在。
+
+#### 9.4.2 最小身份与派生投影
+
+附件链路只保留必要身份，不新建 AttachmentSession、AttachmentMemory、ContextFile 或第二套资料模型：
+
+1. 原始上传先产生有所有权、不可由文件名冒充的服务端 FileAsset/source identity；Provider 侧 file id 只是可丢弃的 Binding 缓存，不能成为产品身份。
+2. 用户发送消息时，Interaction Record 冻结结构化 AttachmentRef 与当时使用的来源版本；不在用户文本中拼接伪标记，也不因后续替换而倒改旧 Turn。
+3. OCR、抽取文本、页结构、缩略图、chunks、embeddings 和检索索引只是可删除、可重建的解析投影，不是新的产品事实或长期资料。
+4. 每次实际读取都重新校验用户、scope、来源版本、解析能力、删除状态和当前权限；文件名、上传成功、已有摘要或模型声称读取都不能证明正文可用。
+
+草稿选择文件后可以先创建 FileAsset 并异步解析，但在消息发送前尚未建立 Conversation Attachment。发送前移除或取消必须真实解除草稿引用，并回收没有其他有效引用的临时文件；不能只隐藏客户端芯片而留下以后会被 Conversation 读取的隐形来源。
+
+#### 9.4.3 Turn A 与后续 Turn
+
+附件采用“持续可用、按需装载”，不是“只在上传 Turn 使用一次”，也不是“以后每个 Turn 都重复携带全文”：
+
+1. 上传并发送的 Turn A 一定保存 AttachmentRef；该文件是本 Turn 的显式来源范围，实际使用全文、片段、页面视觉或结构化读取由当前任务决定，不能被通用 top-k 静默遗漏。
+2. 后续 Turn 不复制新的 AttachmentRef，也不无条件重新注入文件名、manifest、全文或 chunks。当前 Conversation 的可用附件集合从仍有效的历史 AttachmentRef 推导，Source Resolver 只在最新输入明确引用、延续上一任务或当前任务确实需要时选择它。
+3. “刚才那份简历”“继续比较第二个文件”等能够依据当前任务锚点、最近使用来源和唯一 identity 确定时直接解析；多个来源仍有实质歧义时进行最小确认，不能只凭语义相似擅自选一个。
+4. 与文件无关的 Turn 完全不装载它。来源可用不等于每轮 RAG、每轮 Prompt 注入或每轮重新付费解析。
+5. Compaction 不复制文件正文，也不删除历史 AttachmentRef。压缩后只有当前 Turn 确实需要该来源时，才按冻结的确切版本、当前 scope 与权限从权威 FileAsset/解析投影重新取得；不能自动重读全部历史附件，也不能用“最新版本”替换原引用。摘要不能代替原文件或使已删除附件复活。
+
+#### 9.4.4 读取、RAG 与 Evidence
+
+Conversation Attachment、Debrief Project Source 和用户明确授权的长期资料都进入 Shared Context/Evidence 基础设施，但必须在检索前应用用户与 scope 过滤，不能先从全局候选中召回再事后删除越界结果。ChatStrategy 与 AgentStrategy 使用同一 Source Resolver、解析能力、公共 RAG、grounding、引用和显式失败规则；Agent 可以在 Loop 中追加读取，却没有私有 `read_file` 宇宙。
+
+读取方式由 Runtime 按文件类型、长度和当前任务自动选择，不向用户暴露“全文/RAG”技术开关：
+
+- 短文档可以直接读取完整规范化内容；
+- 长文档通过公共 RAG 定位相关片段，需要时继续分页或按章节读取；
+- 简历完整审查、Offer 条款提取、多文件比较等要求完整覆盖的任务，必须执行全文或可证明的分段覆盖，不能让跨文件 top-k 遗漏某个明确要求的来源；
+- PDF、扫描件、图表和版式任务按需使用页面视觉/OCR，表格按 Sheet 与行列结构读取，音频先形成可引用转写；只提取到文本时不能声称检查了视觉布局；
+- 用户本 Turn 明确指定且有权访问的文件必须成功读取并引用，或明确进入等待/失败处理，不能用旧摘要、同名文件或模型常识替代。
+
+回答的来源卡只展示实际使用过的来源，不把“已附加但未读取”冒充 Evidence。可定位的主张保留文件 identity/版本、文件名、页码/章节/片段，表格保留 Sheet/范围，外部来源保留 Provider、原始引用、访问时间与版本；无法可靠定位时标记为概括，不能伪造页码。Context Compiler/Source Resolver 的附件预读产生带来源、版本和 scope 的 `SourceResult`，不生成 `tool_call_id`，也不伪装成 Tool Call/Result；只有模型真实发起的 Tool 调用才形成配对的 Tool Call/Result，外部动作成功仍需 receipt/read-back。附件内容始终是不可信数据，不能改变 Runtime instruction、Skill、Policy、工具权限或任务范围。
+
+#### 9.4.5 上传、等待与失败体验
+
+多文件上传按文件独立处理并允许部分成功。界面使用四个最小生命周期状态：上传中、处理中、可用、失败；“可用但只读取文本、OCR 质量低或部分结构不可读”等作为可见 warning，不扩张成另一套业务状态机。每个文件显示自身进度并可取消，单个失败不取消其他文件。
+
+原始字节完成所有权与格式校验后，用户可以发送消息；若本 Turn 的显式附件仍在解析，Turn 进入可恢复 waiting，并释放模型调用、Conversation/Agent 执行 Worker、SSE/模型流与 Agent Loop。独立、有限的 ingestion job 继续解析，并只在实际处理期间使用自己的 Worker；完成后唤醒同一个 Turn。失败时提供重试、移除失败文件后继续、取消本 Turn 三种动作。失败文件不能产生强 Evidence，重试解析不创建新的用户附件 identity；只有原始内容发生变化才形成新版本/来源。
+
+草稿与 Turn 恢复必须覆盖：切换 Conversation 后返回、上传/解析期间刷新、创建 Turn 前提交失败、Turn 已创建但 SSE 中断，以及用户取消上传或 waiting Turn。能够恢复时保留原文本、选择顺序、AttachmentRef 与已完成进度；无法恢复时明确展示状态并允许处理，不能静默丢失或留下以后会被自动读取的孤儿来源。所有恢复与重试保持幂等，不重复创建用户消息、AttachmentRef 或解析投影。
+
+具体支持格式、大小与数量限制、warning 阈值、进度传输协议、孤儿回收时限和预览组件由 Attachment Stage Spec 冻结。这些基础设施限制不改变上述 scope、等待和真实性语义。
+
+#### 9.4.6 移除、删除、替换、晋升与权限
+
+- **发送前移除**：撤销草稿引用，并在没有其他有效引用时回收原始文件与解析投影。
+- **从当前 scope 移除**：阻止未来 Turn 继续读取；历史 Interaction Record 保留不可伪造的 tombstone，既有回答可以保留，但来源卡显示不可访问。Conversation Attachment 与 Debrief Project Source 分别从各自 scope 移除，不能用一个含糊按钮同时影响另一范围。
+- **永久删除文件**：在没有其他保留引用，或用户明确理解级联影响后，删除 Copilot 可控存储中的原始文件及所有解析投影；这是破坏性操作，必须确认。已经发送给回答模型或其他外部 Provider 的内容受相应 Provider 的保留与删除政策约束，产品必须在传送前披露，不能承诺追溯清除其不可控副本。
+- **替换**：新内容形成新的来源版本，旧 Turn 继续引用当时版本；不能原地改写历史 Evidence。
+- **保存为长期资料**：只有用户通过资料/简历流程上传，或在 Conversation 中明确要求保存、设为简历或形成 Artifact 时才扩大 scope，并复用既有 Artifact/Knowledge & Evidence 版本语义。仅附加到聊天不会触发 Profile 候选；第 4.2 节的首次候选只在明确简历导入后发生。
+- **删除 Conversation**：按 Conversation 的数据保留规则删除消息与局部 Interaction Records，不要求在已删除的 scope 内继续保存 AttachmentRef/tombstone；同时清理只由该 Conversation 持有且未被明确晋升的附件。已提升为 Debrief Project Source 或长期 Artifact/Evidence 的独立引用按其新 scope 保留。确认界面必须同时说明消息和未晋升附件将被删除、已晋升来源不会随之删除，以及共享 blob 只在没有其他有效引用并满足保留规则时清理。
+
+用户把文件明确附加到 Conversation，已经授权产品在该 Conversation 内部读取，不为每次片段读取重复审批。由当前用户选择且已披露数据处理边界的回答模型处理本 Conversation，是正常对话处理，不逐 Turn 重复审批；改送 Canva、Drive、邮箱、MCP、不同用途模型/Provider，或执行公开分享、跨 scope 晋升、覆盖和永久删除，属于新的外传或影响范围，仍必须经过当前意图、Policy 和相应确认。外部保存只有取得 receipt/read-back 后才能报告成功。上传、选择、下载、导出或生成文件都不能证明某个材料版本实际用于投递。
 
 ## 10. Application Profile、Shared Kernel 与 Chat/Agent/RAG
 
@@ -655,7 +719,7 @@ Connector 不能把模糊内容直接写入 ProcessEvent；Agent Turn 也不能�
 **Application Profile** 只定义场景锚点、Context Contract 和允许的 Strategy：
 
 - Career Profile 是通用求职入口，只允许共享 AgentStrategy；
-- Debrief Profile 绑定当前 Interview/InterviewRecord，并增加转写、问答、评分和少量复盘规则，允许 ChatStrategy 或同一 AgentStrategy；
+- Debrief Profile 从 Conversation 自身不可伪造的 Application identity 绑定当前 Interview/InterviewRecord，把它作为唯一 Debrief Project scope；结构化问答、评分和分析仍通过 Domain State 读取，转写、当时材料和明确加入本次复盘的来源仍按 Knowledge & Evidence 读取，并允许 ChatStrategy 或同一 AgentStrategy；
 - Profile 不拥有独立 Agent Loop，不负责解析用户意图，也不自行选择 Capability；意图归 Turn Intent Resolver，能力解析归共享 AgentStrategy 与 Capability Resolver。
 
 **Shared Conversation Kernel** 负责 Turn 生命周期、CurrentTurnAnchor、Active Working Context、Context Compiler、Strategy Router、等待、流式传输、Compaction、Checkpoint、Recovery，以及共享的 Tool Executor、Policy、Evidence、History Search 和 Memory Recall 设施。它不拥有业务 Profile、Agent Loop 或页面语义。
@@ -674,8 +738,8 @@ Chat/Agent 回答“本 Turn 如何执行”，RAG 回答“如何从非结构�
 
 所有普通 Conversation Turn 都经过 Shared Context Compiler，但不是每一轮都必须运行 RAG：
 
-- CandidateProfile、TargetDirection、JobOpportunity、ProcessEvent、NextAction、Interview、Offer 和 AbilitySignal 等结构化事实通过 Application Service 精确读取；
-- 简历、附件、长邮件、网页快照、知识资料、录音转写和长报告通过公共 RAG/文档读取；
+- CandidateProfile、TargetDirection、JobOpportunity、ProcessEvent、NextAction、Interview、Offer、复盘问答/评分/分析和 AbilitySignal 等结构化事实通过 Application Service 精确读取；
+- 简历、当前 Conversation Attachment、当前 Debrief Project scope 内的录音/转写/文件、长邮件、网页快照、知识资料和长报告通过带预过滤 scope 的公共 RAG/文档读取；
 - 用户原话、历史承诺和 Tool 轨迹通过 History Search 精确回读；
 - 长期协作经验通过 Memory Recall 选择性召回。
 
@@ -688,19 +752,20 @@ Context Compiler 不新增产品领域对象、持久化分级表或巨型 Conte
 一次普通 Conversation Turn 采用同一编排：
 
 1. 先持久化最新用户原始输入并建立 CurrentTurnAnchor；最新输入决定本 Turn 的方向。
-2. 确定性解析用户本 Turn 主动附加或明确指定的附件、URL、Artifact 和领域对象引用，校验 identity、所有权、Conversation scope、授权、版本与可读取状态。任何页面的当前路由或选中项都不参与这一步。
-3. 解析当前 Application Profile 与 Strategy，装配共享 Runtime 规则、真实性边界、Policy、当前有效的 CopilotPreference 和少量可调用 Tool schema；完整 Provider/MCP/Skill 目录不进入每轮 Prompt。
-4. 从最近有效 Compaction boundary 恢复会话投影：较早内容的非权威摘要、保留的近期原始消息、用户纠正、未完成承诺以及 Tool Call/Result 的配对完整性。需要核验原话或历史结果时仍回到 Interaction Records。
-5. 用户明确提供的来源内容作为数据加入当前输入附近；结构化事实通过 Application Service 精确读取，长文档通过公共文档读取/RAG，历史通过 History Search，长期协作经验通过 Memory Recall。互不依赖的读取可以并行，来源结果必须保留时间、权限、权威类型和引用。
-6. 模型以最新用户原文为当前任务指令开始回答或执行。ChatStrategy 在最终回答前完成有界公共读取；AgentStrategy 可以在同一质量与权限边界下继续读取并进入 Tool Loop。
-7. 每次 Tool Call、Policy 结果、Tool Result 和运行中新增的真实来源按原 identity 追加到执行链，再进入下一次模型调用，直到完成、等待、停止或明确阻塞。
+2. 从 Conversation 自身不可伪造的 Application identity 取得当前 Application Profile；Debrief Conversation 在此确定唯一 InterviewRecord/Debrief Project scope owner。scope owner 不能由模型、附件内容、页面状态或用户伪造的对象 id 推断。
+3. 确定性解析用户本 Turn 主动附加或明确指定的附件、URL、Artifact 和领域对象引用，并基于第 2 步的 owner 校验 identity、所有权、Conversation/Debrief Project scope、授权、版本与可读取状态。任何页面的当前路由或选中项都不参与这一步；输入框附件只能建立当前 Conversation scope。
+4. 解析本 Turn Strategy，装配共享 Runtime 规则、真实性边界、Policy、当前有效的 CopilotPreference 和少量可调用 Tool schema；完整 Provider/MCP/Skill 目录不进入每轮 Prompt。
+5. 从最近有效 Compaction boundary 恢复会话投影：较早内容的非权威摘要、保留的近期原始消息、用户纠正、未完成承诺以及 Tool Call/Result 的配对完整性。需要核验原话或历史结果时仍回到 Interaction Records。
+6. 用户明确提供的来源内容作为数据加入当前输入附近；Source Resolver 根据最新输入、CurrentTurnAnchor、最近实际使用来源和唯一 identity，选择当前任务需要的历史 Conversation Attachment，或当前 Debrief Project scope 内按原 Product Context Source 类型可见的来源，不把 scope 内全部内容每轮注入。结构化事实通过 Application Service 精确读取，长文档通过公共文档读取/RAG，历史通过 History Search，长期协作经验通过 Memory Recall。互不依赖的读取可以并行，来源结果必须保留时间、权限、权威类型和引用。
+7. 模型以最新用户原文为当前任务指令开始回答或执行。ChatStrategy 在最终回答前完成有界公共读取；AgentStrategy 可以在同一质量与权限边界下继续读取并进入 Tool Loop。
+8. 每次 Tool Call、Policy 结果、Tool Result 和运行中新增的真实来源按原 identity 追加到执行链，再进入下一次模型调用，直到完成、等待、停止或明确阻塞。
 
 模型请求的逻辑排列保持稳定：
 
     共享 Runtime 规则、真实性边界与 Policy
       → 当前 Application Profile、Strategy 与相关 CopilotPreference
       → Compaction 后的会话投影和保留的近期原文
-      → 本 Turn 明确提供并已真实读取的资料与对象数据
+      → 本 Turn 明确提供及按当前任务选中并已真实读取的资料与对象数据
       → 最新用户原始输入
       → 执行中逐次追加的 Tool Call / Tool Result
 
@@ -710,20 +775,20 @@ Prompt Cache 只优化重复模型调用的成本和首 Token 延迟，不是 Pr
 
 缓存布局遵守“稳定前缀、动态尾部”：长期稳定的共享 Runtime 规则、真实性边界、通用 Tool 协议和同一 Profile 下的稳定说明靠前；最新输入、附件与来源内容、Memory/History 召回、连接与权限状态、Tool Result 和运行通知保持在动态区域。Tool schema 使用稳定基座和当前请求 overlay；Provider 连接或可发现能力目录的增减作为动态 catalog delta 追加，不重算无关稳定 system 前缀。连接、scope、权限和当前可执行性始终在调用时实时解析，不能从缓存或 schema 推断。
 
-实现可以使用少量命名、可独立重算的 Prompt section；新 Conversation、清空、Compaction 后重载、Runtime/安全规则或模型变化、Profile/Strategy 变化，已加载 Tool 的 name/schema/执行语义变化、Skill/Policy 内容变化或用户身份隔离范围变化，都必须使受影响部分重新计算。普通 Provider 连通性和目录增量只更新动态尾部。具体 Provider cache scope、TTL、cache key 和分段位置由 Stage Spec 与模型供应商能力决定，不进入产品领域模型；私有前缀不得跨用户或越过授权范围复用。
+实现可以使用少量命名、可独立重算的 Prompt section；新 Conversation、清空、Compaction 后重载、Runtime/安全规则或模型变化、Profile/Strategy 变化，已加载 Tool 的 name/schema/执行语义变化、Skill/Policy 内容变化或用户身份隔离范围变化，都必须使受影响部分重新计算。附件/其他来源发生版本替换、scope 移除、永久删除、授权撤销或解析投影失效时，必须重算相应动态 Source section 并使旧正文不可用，但不应使无关稳定 system 前缀整体失效。普通 Provider 连通性和目录增量只更新动态尾部。具体 Provider cache scope、TTL、cache key 和分段位置由 Stage Spec 与模型供应商能力决定，不进入产品领域模型；私有前缀不得跨用户或越过授权范围复用。
 
 ### 10.5 同一可读取上下文宇宙
 
 在同一 Application Profile 与授权范围下，ChatStrategy 和 AgentStrategy 必须可达相同类别的 Context Sources：
 
 - 当前 Profile 锚点和相关结构化 Domain State；
-- Artifact、附件、长文档及其来源版本；
+- Artifact、当前 Conversation 中仍有效的 AttachmentRef，以及当前 Debrief Project scope 内按原有 Product Context Source 类型可见的资料与来源版本；
 - 外部 Observation、Evidence 与真实 Tool/Provider 结果；
 - Interaction Records 与完整 Tool 轨迹；
 - Long-term Agent Memory；
 - CopilotPreference、连接和 Policy 状态。
 
-Debrief 两种 Strategy 都能读取当前 Interview、转写、问答、评分、授权知识库/附件、相关 Career State、History、Memory 和 Preference。Agent 只额外获得迭代决策、执行型 Tool、调用级 Policy 和 AgentTask。
+Debrief 两种 Strategy 都能按各来源原有所有者与权威规则读取当前 InterviewRecord 的 Project-scoped context、当前 Conversation 自己的附件、相关 Career State、History、Memory 和 Preference。兄弟 Conversation 的聊天附件不属于共享 Project scope；Agent 只额外获得迭代决策、执行型 Tool、调用级 Policy 和 AgentTask。
 
 系统不建立 Context Source Registry 领域对象。Agent 从外部 Tool 新取得的信息自动按所有权进入现有边界：完整 Tool Call/Result 进入 Interaction Records，可复用来源快照和 Evidence 进入 Knowledge & Evidence，正式状态通过 Application Service 写入 Domain State。Chat 随后通过相同 Kernel 和权限读取，不存在 Agent 私有资料路径。
 
@@ -803,11 +868,11 @@ Checkpoint 可以引用：
 - pending Tool Call、Policy decision、授权范围与幂等 identity；
 - 已落盘 Artifact、Evidence、receipt/read-back 和既有来源引用。
 
-Checkpoint 不复制来源全文，不把摘要当事实，不决定下一次用户输入应该继续什么任务。Checkpoint 只有成功持久化后才更新自己的有效恢复版本；失败继续使用最后有效 Checkpoint，不单独推进 active compact boundary。
+Checkpoint 不复制来源全文，只保存恢复当前执行确实需要的 AttachmentRef、Debrief Project Source 和其他来源 identity，不把摘要当事实，也不决定下一次用户输入应该继续什么任务。Checkpoint 只有成功持久化后才更新自己的有效恢复版本；失败继续使用最后有效 Checkpoint，不单独推进 active compact boundary。
 
 Compaction 与 Checkpoint 是两个维护过程：Checkpoint 保存执行恢复引用，Compaction 只缩短当前模型可见的 Conversation 投影。完整 Interaction Records 始终是精确原话和调用轨迹的最终来源；压缩摘要不是正式事实、AgentTask 状态或新任务指令。
 
-压缩后的模型上下文按统一顺序恢复：有效 compact boundary、较早内容的非权威摘要、保留的近期原始消息、重新取得的当前来源与 Runtime 状态。压缩必须保护最新真实用户原文、用户纠正、当前范围、未完成承诺、CurrentTurnAnchor、等待中的调用 identity，以及 Tool Call/Result 的配对完整性。旧调用可以整对移出模型投影；凡仍保留的 `tool_use` 和 `tool_result` 都必须按原 call identity 成对存在，不能留下 orphan。大 Tool Result 只有在完整内容已经可靠落入 Artifact、Evidence 或 Interaction Records 后，才可以在同一 `tool_result` 中用带原 call identity 的引用替代正文。
+压缩后的模型上下文按统一顺序恢复：有效 compact boundary、较早内容的非权威摘要、保留的近期原始消息、重新取得的当前来源与 Runtime 状态。压缩必须保护最新真实用户原文、用户纠正、当前范围、未完成承诺、CurrentTurnAnchor、等待中的调用 identity、当前执行需要的来源引用，以及 Tool Call/Result 的配对完整性。历史 AttachmentRef 始终留在完整 Interaction Records 中；它无需复制到每个后续 Turn，也不能只因离开近期消息窗口就失去当前 Conversation scope。旧调用可以整对移出模型投影；凡仍保留的 `tool_use` 和 `tool_result` 都必须按原 call identity 成对存在，不能留下 orphan。大 Tool Result 只有在完整内容已经可靠落入 Artifact、Evidence 或 Interaction Records 后，才可以在同一 `tool_result` 中用带原 call identity 的引用替代正文。
 
 Compaction 结果只有成功持久化后才能成为新的 active compact boundary。存在活动执行恢复状态时，相关 Checkpoint 与 Compaction 结果必须都已成功持久化，才能切换 active boundary 或裁剪旧模型投影；任一失败都继续使用最后有效边界，完整 Interaction Records 不删除。没有活动执行恢复状态时，Compaction 可以独立提交。恢复时从 Application Profile、Authoritative Sources、Policy、当前 callable Tool、未决审批、已落盘 receipt/read-back 和 Capability/Provider 动态 delta 重新装配，不能复制陈旧全文或从摘要推断正式状态。模型可以贡献简短恢复提示，但不能手工维护完整快照、修改 AgentTask 终态或取得新 Turn 的任务所有权。
 
@@ -1209,7 +1274,7 @@ Tool Call 只有同时满足以下条件才可并行：
 | web_search | provider-neutral Web Search Integration；结果保留实际 Provider、URL、观察时间和 Evidence |
 | read_url | URL Read Integration；形成可引用来源快照，无法读取时明确失败 |
 | search_knowledge | Shared Context/RAG 的知识检索，Chat 与 Agent 共同可达 |
-| read_file | Attachment/Artifact 读取；每次校验所有权、Conversation scope、解析和删除状态 |
+| read_file | Attachment/Debrief Project Source/Artifact 读取；每次按真实 scope 类型和 owner identity 校验 Conversation、InterviewRecord 或正式 Artifact/Knowledge 的所有权、版本、解析、权限与删除状态，不能退化成 owner-wide 文件读取 |
 | search_jobs / Lever | provider-neutral Opportunity Search；Lever 只是 Binding，搜索结果默认不创建 JobOpportunity |
 | read_resume | Artifact read 读取简历正文；CandidateProfile read 读取已确认个人事实，不再混成“默认简历” |
 | read_interview_history | Interview query 读取结构化摘要；长报告和逐题内容通过 Artifact/RAG 定向读取 |
@@ -1233,13 +1298,23 @@ Tool Call 只有同时满足以下条件才可并行：
 - backend/app/conversation/query_planner.py、backend/app/agent_runtime/context_compactor.py
 - backend/app/services/chat/turn_executor.py
 - backend/app/services/chat/context_assembly_pipeline.py
+- backend/app/services/chat/attachment_service.py、backend/app/rag/application/attachment_evidence.py
+- backend/app/api/rag.py、backend/app/api/chat/streaming.py、backend/app/api/chat/sessions.py
+- backend/app/models/file_asset.py、backend/app/models/knowledge.py、backend/app/models/conversation_turn.py
+- backend/app/rag/ingest/pipeline.py、backend/app/worker/tasks/ingestion.py
 - backend/app/models/agent_execution.py、session_task.py
 - backend/app/services/chat/session_task_service.py
 - backend/app/services/capabilities/conversation_capability_service.py
 - frontend/src/pages/review/chat/SessionCapabilities.tsx
 - frontend/src/router.tsx、frontend/src/pages/chat/GeneralChatPage.tsx、frontend/src/api/chat.ts
+- frontend/src/pages/review/chat/ChatToolbar.tsx、ChatPanel.tsx、useChatStream.ts、types.ts
+- frontend/src/api/knowledge.ts、frontend/src/api/fileAssets.ts
 
-重点验证：现有 SessionTask 是否把阶段误当 Session 全局任务，旧完成门禁是否扫描无关工作，task_verify 是否只验证模型自由文本，Capability permissions 是否默认放行未知扩展，Agent 是否绕过公共 RAG，附件是否通过伪文本或全局向量索引传递，上下文压缩是否可能恢复错任务，以及是否存在可复用的客户端 control event、Prompt Assembly 或 Prompt Cache 基础。没有真实 handler 时不得为了满足目标架构虚构 UI Tool 或缓存对象。
+重点验证：现有 SessionTask 是否把阶段误当 Session 全局任务，旧完成门禁是否扫描无关工作，task_verify 是否只验证模型自由文本，Capability permissions 是否默认放行未知扩展，Agent 是否绕过公共 RAG，上下文压缩是否可能恢复错任务，以及是否存在可复用的客户端 control event、Prompt Assembly 或 Prompt Cache 基础。没有真实 handler 时不得为了满足目标架构虚构 UI Tool 或缓存对象。
+
+当前附件实现已经有 FileAsset、AttachmentRef DTO、ConversationTurn 快照、私有 chunks 和公共 Grounding 外形，但不能据此宣称阶段 1 已完成。实施前必须把以下已确认 P0 当作迁移输入而不是目标设计：上传时提前创建 conversation-scoped KnowledgeDocument，Composer 的 X/清空只删除本地芯片却留下以后仍可读取的“幽灵附件”，每轮把当前 Conversation 的全部 ready 文件及 chunks 作为候选装载，显式来源在校验后被删除时可能静默消失，Agent 仍跳过公共知识 RAG，失败文件缺少用户重解析与可靠草稿恢复。`chat_attachment` source_kind 和“不写全局 Milvus”只证明当前做了部分技术隔离，不代表 Conversation Attachment 已经拥有正确领域生命周期。
+
+目标迁移保留 FileAsset、统一解析/清洗/chunk、服务端 AttachmentRef 快照、幂等 ingestion、Grounding/引用和事务性 blob 清理等可用基础。现有 KnowledgeDocument/DocumentChunk 可以作为内部解析投影逐步迁移，但不能继续让前端附件 API、Conversation scope 和长期资料共用含糊产品语义；是否需要独立物理表只由真实引用、解析和删除不变量决定，不能为了改名预建大聚合。
 
 ### 16.4 参考实现的可迁移依据
 
@@ -1253,13 +1328,14 @@ Tool Call 只有同时满足以下条件才可并行：
 | Tool Contract | src/Tool.ts:321、362、379、394、402、405、500、743；src/services/mcp/client.ts:1743、1765；src/tools.ts:329、345；src/services/tools/toolExecution.ts:1206、1282、1589 | — | 薄 typed success、input-dependent effect/concurrency、统一错误外层 |
 | AgentTask 与 Recovery | src/utils/todo/types.ts:4；src/utils/tasks.ts:69、76、94、284、534；src/tools/TaskUpdateTool/TaskUpdateTool.ts:326；src/utils/sessionRestore.ts:72；src/services/compact/autoCompact.ts:241；src/utils/messages.ts:3680 | packages/opencode/src/session/todo.ts:9；src/task/schema.ts:7；src/task/registry.ts:272；src/task/gate.ts:53；src/session/prune.ts:237；src/session/llm.ts:155；src/agent/prompt/checkpoint-writer.txt:69 | 普通复杂任务不需要 DAG，最新用户输入优先，Checkpoint 由 Kernel/维护 writer 产生 |
 | Context 编排、Prompt Cache 与 Compaction | src/utils/queryContext.ts:44、61；src/utils/api.ts:437、449；src/constants/prompts.ts:560；src/constants/systemPromptSections.ts:16、27、43、61；src/query.ts:365、449、659、1535、1714；src/services/api/claude.ts:358、3213；src/services/compact/compact.ts:325、517、613、1399 | — | 规则、会话投影、明确来源、最新输入和调用结果分层；稳定前缀与动态尾部分离；缓存命中不影响语义；压缩保留近期原文与调用配对完整性，并从权威源重载 |
+| Attachment 与显式来源 | processTextPrompt.ts:66-99；attachments.ts:1894-1963、3020-3198；messages.ts:1476-1526、3525-3588 | — | 显式引用先受控解析、来源数据与用户指令隔离、长内容按需读取、压缩后按引用恢复；不照搬隐式邻接、静默失败、伪 Tool 文本或本地 CLI 的文件身份 |
 | Memory 边界 | src/utils/claudemd.ts；src/services/SessionMemory；src/services/compact；src/memdir/memoryTypes.ts、memoryScan.ts、findRelevantMemories.ts；src/utils/sessionRestore.ts | packages/opencode/src/session/checkpoint、prune.ts、compaction.ts；src/memory；src/tool/history.ts、memory.ts；src/memory/write-gate.ts | instruction、History、Recovery 与 Long-term Memory 分离，writer 作用域受 Runtime 强制 |
 
 ### 16.5 导航和数据迁移原则
 
 导航迁移在领域读模型可用后进行，避免只改 SideNav 名称而保留孤立页面。旧路由在替代体验未完成前可以保持可访问，但不能继续作为产品模块数量的依据。Agent 只发出稳定的产品语义目标，presentation 层负责映射当前路由、表单和 Flow；具体页面状态不反向成为隐式 Agent 输入。
 
-旧 Memory、Tool、附件和任务数据必须按本文所有权迁移，不整体搬入新字段或用兼容层继续暴露万能语义。迁移过程中已有业务历史、Artifact、Evidence 和 Interaction Records 不因重命名而丢失；无法无损映射的内容进入显式迁移报告或用户确认，不静默猜测。
+旧 Memory、Tool、附件和任务数据必须按本文所有权迁移，不整体搬入新字段或用兼容层继续暴露万能语义。旧附件必须区分 Conversation Attachment、Debrief Project Source 与正式 Artifact/Knowledge；只有存在已持久化用户消息/Turn AttachmentRef 的旧记录才能迁移为 Conversation Attachment。只有 `conversation_id` 或 `source_kind=chat_attachment`、却从未被消息引用的记录属于 orphan/provisional，进入清理或显式迁移报告，绝不能因旧字段重新获得 Conversation scope。无法可靠确定其他 scope 的旧记录同样进入迁移报告或用户确认，不能默认升级为全局资料。迁移过程中已有业务历史、Artifact、Evidence 和 Interaction Records 不因重命名而丢失；可以复用底层 blob，但不能合并逻辑引用、版本或权限。
 
 ## 17. Stage Spec、阶段路线与评测
 
@@ -1279,10 +1355,14 @@ Tool Call 只有同时满足以下条件才可并行：
 
 #### 阶段 1：附件与公共 Evidence
 
-- 结构化 AttachmentRef、所有权、Conversation scope、解析与删除生命周期；
-- 会话附件不污染全局向量索引；
-- Chat 与 Agent 共享 grounding、引用、显式失败和必要全文读取；
-- 完成主流附件产品 UX 对照并形成 Attachment Stage Spec。
+- 先形成 Attachment Stage Spec，再按第 9.4 节实现 FileAsset/source identity、结构化 AttachmentRef、解析投影和真实 scope 校验；现有同名 DTO、`chat_attachment` 或私有 chunks 不视为已经完成；
+- Conversation Attachment 只在发送后属于该 Conversation，后续 Turn 持续可用但按最新任务装载；发送前移除必须真实撤销，其他 Conversation 不能读取；
+- 落地仅用于 InterviewRecord 的 Debrief Project Source，使同一复盘的多条 Conversation 共享复盘固有或明确加入的来源，同时保持各自聊天附件隔离；不实现通用 Project；
+- 会话/复盘索引在候选检索前应用 scope，不污染或竞争用户全局资料索引；Chat 与 Agent 共享 Source Resolver、解析、RAG、grounding、引用和显式失败；
+- 完成四态文件进度、可见 warning、多文件部分成功、解析 waiting/同 Turn 恢复、用户重试、失败项移除后继续、取消与草稿恢复；逐项覆盖切换 Conversation 后返回、上传/解析中刷新、创建 Turn 前失败、Turn 创建后 SSE 中断和用户取消，恢复/重试不得重复消息、AttachmentRef 或解析投影；不允许无限 spinner 或显式来源静默消失；
+- 按任务自动选择完整、分段、RAG、视觉/OCR、表格和音频转写读取，不提供全文/RAG 技术开关；完整审阅和多文件比较必须有可验证覆盖；
+- 区分发送前移除、scope 移除、永久删除、替换、显式晋升和删除 Conversation。Conversation 仍存在时，scope 移除、永久删除或替换保留历史版本/引用或 tombstone；删除整个 Conversation 则按其保留规则删除消息和局部 Interaction Records，不要求在已删除 scope 内保留 tombstone。删除确认必须披露消息、未晋升附件及已晋升来源的不同后果；普通或 Dedicated Conversation 删除后，未晋升附件不可复活，Debrief Project scope、正式 Artifact/Evidence 不级联删除，共享 blob 仅在无其他有效引用且满足保留规则后清理；
+- 验证聊天附件不会自动创建 CandidateProfile 候选、Artifact 或长期资料；只有明确导入/保存才能扩大 scope，外传和永久删除继续经过 Policy。
 
 #### 阶段 2：Career State 最小闭环
 
@@ -1295,7 +1375,7 @@ Tool Call 只有同时满足以下条件才可并行：
 #### 阶段 3：材料、Interview 与 Offer 聚合
 
 - Artifact 版本、related/submitted 关系和历史冻结；
-- 真实 Interview 与 Debrief 通常关联 JobOpportunity；Mock 既支持岗位专项练习，也支持不关联岗位的通用训练；
+- 真实 Interview 与 Debrief 通常关联 JobOpportunity；一个 InterviewRecord 作为天然 Debrief Project 承载多条 Conversation 和 Project-scoped sources，但不扩张成通用 Career Project；Mock 既支持岗位专项练习，也支持不关联岗位的通用训练；
 - Offer 最终条款、按需比较和谈判草稿；
 - 形成第一方语义 UI/Application Capability 的最小交互 Spec，使 Agent 能用真实 handler 导航、预填和启动 Mock 等 Flow，而不读取隐式页面状态或使用视觉/DOM 自动化；
 - 以真实读模型验证四工作空间，再完成必要导航切换，不机械创建四张页面。
@@ -1321,6 +1401,8 @@ Tool Call 只有同时满足以下条件才可并行：
 - 单轮、普通多轮、等待恢复、Prompt Cache 命中/未命中和一次或多次 Compaction 后的任务连续性与语义一致性；
 - 结构化状态变更正确率、重复/错误建线率和可撤销性；
 - Context Source 覆盖率、显式指定来源读取成功率和静默遗漏率；
+- Conversation Attachment 后续 Turn 按需读取成功率、无需重复上传率、未选中附件注入率，以及跨 Conversation、跨 InterviewRecord、Debrief→Career 和全局资料的 scope 泄漏率；
+- 多文件分别覆盖率、解析 warning/失败诚实度、删除后正文复活率和 Compaction 前后 AttachmentRef/版本/scope 一致性；
 - RAG 召回、grounding、引用与来源新鲜度；
 - claim-specific Evidence 完整率及外部动作 receipt/read-back 覆盖；
 - 权限违规率、无谓 ask 率和 Auto 越界率；
@@ -1340,7 +1422,7 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 以下问题尚未冻结，只能在对应 Stage Spec 中决定，不得在代码中先行变成事实：
 
 1. 四个工作空间最终采用哪些页面、组合视图、详情、抽屉、批量操作和输入交互；Offer 比较等能力采用页面还是一次性报告；首批语义 UI/Application Capability 支持哪些导航、预填和 Flow handoff，以及客户端反馈、失败、确认和无客户端行为。
-2. CandidateProfile 首次候选确认、批量接受、冲突突出和后续事实修正的具体 UX。
+2. 用户明确从简历/资料流程导入首份简历后的 CandidateProfile 候选确认、批量接受、冲突突出和后续事实修正 UX；普通 Conversation Attachment 不触发候选这一前提已经冻结。
 3. CandidateProfile 事实有效时间、TargetDirection、岗位—方向关联、AbilitySignal、Artifact、Interview、Offer 等对象的最小物理字段和迁移顺序。
 4. JobOpportunity identity 线索中哪些由首批真实 Provider 提供并需要物理保存。
 5. current_step、结束步骤、阶段时间、等待时长和注意信号是否为查询性能持久化，以及如何避免与 ProcessEvent 形成第二事实源。
@@ -1348,7 +1430,7 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 7. NextAction 的最小关闭原因、来源事件、完成 Evidence 的字段表达和页面聚合；四态与三种时间语义不得扩张。
 8. 批量 NextAction 是关联多个岗位，还是保持独立行动并只在读模型聚合；当前不预建多对多关系。
 9. 材料效果分析在样本不足或 Evidence 不完整时的展示下限、统计方法和混杂因素表达。
-10. Attachment 上传、解析、进度、失败重试、替换、删除、多文件、来源卡和全文/片段切换的主流产品 UX，以及解析生命周期。
+10. Attachment 支持格式与限制、进度传输、warning 阈值、预览/来源卡组件、孤儿回收时限、物理软删/恢复期和解析器选择。Conversation/Debrief Project scope、持续可用按需装载、四态与 waiting、自动读取策略、显式失败、删除后不复活和默认不晋升已经冻结；不得重新引入全文/RAG 技术开关或含糊的单一删除按钮。
 11. 邮箱 Provider 接入顺序、高置信度规则、同步频率、即时通知渠道、正文/附件最小保留与期限。
 12. 云端与本地部署的邮箱 OAuth token、凭据保存、撤销、迁移和故障恢复边界。
 13. 登录态官网同步在本地浏览器、浏览器扩展和正式平台 Connector 之间的首选产品路径。
@@ -1357,13 +1439,13 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 16. 七个业务域映射为首批 provider-neutral Capability 时，哪些动作合并，哪些因权限、副作用、回执和失败语义拆分。
 17. Tool Contract 的具体 typed input/data、结果预算/Artifact 化、错误结构和 Provider extension。
 18. Skill Catalog 的最小元数据、listing filter、搜索置信度、缓存、更新检测和版本不兼容体验。
-19. Career/Debrief Application Profile 的精确 Context Contract、Debrief Chat/Agent 策略选择交互、Context Source 覆盖测试清单，以及 Prompt Cache 分段/失效、Compaction 保护与重载矩阵和跨阈值恢复测试。
+19. Career/Debrief Application Profile 的精确 Context Contract、Debrief Chat/Agent 策略选择交互、Conversation Attachment、Debrief Project Source 与全局资料的读取优先级及跨 scope 隔离矩阵，以及 Prompt Cache 分段/失效、Compaction 保护与重载矩阵和跨阈值恢复测试。
 20. 首次 Provider connection/scope grant 与逐调用 Policy ask 的 UI control event、账号选择、scope 升级、拒绝和失败恢复体验。
 21. 简历、求职信、长报告、Offer 换算等交付物分别需要哪些条件化质量检查。
 22. Agent 场景评测集、gold/Evidence 标注、成本控制、用户修正数据和隐私安全的构建方式。
 23. 在什么真实评测结果下才值得引入隔离只读 worker；当前不实现通用子 Agent。
 
-开放问题不得改变已经冻结的不变量：搜索与分析默认只汇报；最新用户输入拥有普通 Turn 方向；领域对象各有唯一事实所有者；简历编辑按需；submitted 必须有用户确认或相应真实外部证明；模糊 Observation 不进入 ProcessEvent；长期无回复不是终局；外部成功必须 receipt/read-back；Skill 不能提供能力或授权；PersistentTask 只能由用户明确创建。
+开放问题不得改变已经冻结的不变量：搜索与分析默认只汇报；最新用户输入拥有普通 Turn 方向；领域对象各有唯一事实所有者；简历编辑按需；submitted 必须有用户确认或相应真实外部证明；普通聊天附件只属于当前 Conversation，复盘共享只属于当前 InterviewRecord；模糊 Observation 不进入 ProcessEvent；长期无回复不是终局；外部成功必须 receipt/read-back；Skill 不能提供能力或授权；PersistentTask 只能由用户明确创建。
 
 ## 19. 验收不变量
 
@@ -1384,6 +1466,7 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 ### 19.2 Context、Memory 与 RAG
 
 12. 每项信息都能归入六种 Product Context Sources 之一，不产生重复事实源。
+    Debrief Project scope 只能控制可见范围，不能改变来源所有者、权威类型或事实等级。
 13. 最新用户输入唯一拥有普通 Turn 的方向；附件、对象引用、来源内容、摘要、Memory 和 Checkpoint 不能接管，当前页面、路由和选中项永远不是隐式 Turn 输入。
 14. Interaction Records 保留精确原话和完整 Tool Call/Result；摘要不替代 History。
 15. Long-term Agent Memory 不复制 Domain State、文档正文、History、Preference 或 Recovery State。
@@ -1392,45 +1475,60 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 18. 用户明确指定且有权访问的来源必须成功读取并引用，或明确失败，不能静默遗漏。
 19. Agent 迭代检索与 Chat 有界检索遵守同一 RAG 质量、权限、新鲜度与 Evidence 规则；Prompt Cache 命中/未命中和 Compaction 前后不得改变这些语义，也不得复活旧任务、旧权限或已经禁用的 Memory。
 
-### 19.3 Turn、AgentTask 与 Recovery
+### 19.3 Attachment 与 Debrief Project
 
-20. 简单回答、分析和少量直接调用不创建 AgentTask。
-21. 一个复杂请求只有一个 AgentTask 聚合；不建设 DAG、Owner、attempt 集合或通用 verifier。
-22. AgentTask 终态幂等且不能被旧摘要、Memory 或 Checkpoint 自行复活。
-23. Checkpoint 与 Compaction 都由 Kernel 维护并分别以成功持久化结果为有效版本；存在活动执行恢复状态时，二者都成功后才能切换 active compact boundary，任一失败继续使用最后有效边界。
-24. 完成门禁只检查当前 Turn 激活的 AgentTask，不扫描 Session，也不伪造用户消息。
-25. Agent Loop 按完成、等待、明确阻塞、停止或不可恢复故障结束，不以固定步数代替完成判断；Compaction 是同一 Turn 内可恢复的 Kernel 维护边界，不是任务终局。
+20. 任意 Career 或 Debrief 普通 Conversation 都支持 Conversation Attachment；发送后只在该 Conversation 持续可用，后续 Turn 按最新任务选择读取，不重复附加，也不进入兄弟 Conversation 或全局资料。
+21. 一个 InterviewRecord 是唯一的 Debrief Project scope；固有复盘来源和用户明确加入的来源可供其多条 Debrief Conversation 使用，但各 Conversation 的普通附件仍相互隔离。当前不实现通用 Project 对象、页面或生命周期。
+22. 仅附加文件不会创建 CandidateProfile 候选、Artifact、简历版本或长期资料，也不会进入其索引；只有用户明确导入、保存、设为简历或加入本次复盘，才能按目标对象规则扩大 scope。
+23. Turn A 的 Interaction Record 必须冻结服务端解析的 AttachmentRef 和来源版本；显式附件尚在处理时，同一个 Turn 进入可恢复 waiting，不能伪造用户消息。waiting Turn 释放模型调用、Conversation/Agent 执行 Worker、SSE/模型流和 Agent Loop；独立 ingestion job 继续运行并只在实际解析期间占用自己的 Worker。
+24. 发送前移除或清空必须真实撤销草稿引用并回收无引用临时文件；切换 Conversation 后返回、上传/解析中刷新、创建 Turn 前失败、Turn 创建后 SSE 中断和用户取消都必须有明确恢复结果。恢复/重试不能重复消息、AttachmentRef 或解析投影，也不能只隐藏芯片或留下以后仍被读取的“幽灵附件”。
+25. 后续 Turn 不得自动装载该 Conversation 的所有 ready 文件；Source Resolver 只选择当前任务需要的附件或 Project Source，与文件无关的 Turn 不注入 manifest、正文、chunks 或旧摘要。
+26. 每个显式来源必须明确成功、waiting 或失败；删除、权限、解析和格式问题不能被静默过滤。多文件允许部分成功，失败项可重试、移除后继续或取消本 Turn，并显示文件级进度与质量 warning。
+27. Runtime 按任务和文件类型自动选择完整读取、分段覆盖、公共 RAG、页面视觉/OCR、表格结构或音频转写；完整审阅与多文件比较必须证明每个明确来源得到覆盖，不向用户暴露“全文/RAG”技术开关。
+28. 来源卡只列出实际读取的来源，并保留 identity、版本和可获得的页码、章节、片段或表格范围。附件预加载属于 SourceResult，不伪装成 Tool Call；真实 Tool Result 才能使用 tool_call_id 和执行回执语义。
+29. scope 移除、永久删除、替换和删除 Conversation 具有不同语义，删除确认准确披露各自影响。Conversation 仍存在时，其 Interaction Records 保留引用或 tombstone，旧回答继续指向当时版本；删除整个普通或 Dedicated Conversation 时，按保留规则删除消息与局部 Interaction Records，不要求在已删除 scope 内保留 tombstone，未晋升附件不可复活，Debrief Project scope、正式 Artifact/Evidence 不级联删除，共享 blob 只在无其他有效引用且满足保留规则后清理。History、Compaction、Prompt Cache、旧索引或同名文件都不能使已移除内容复活或改写历史 Evidence。
+30. ChatStrategy 与 AgentStrategy 共用 Source Resolver、scope 校验、解析、公共 RAG、grounding、引用与失败规则；Agent 不拥有 owner-wide `read_file` 或其他私有文件宇宙。
+31. 当前 scope 内的普通读取，以及由用户选择且已经披露数据处理边界的回答模型处理当前 Conversation，不逐次重复审批；改送其他用途/Provider、跨 scope 晋升和永久删除继续经过 Policy，并精确说明目标、内容与影响。永久删除只承诺 Copilot 可控存储，已外传副本受对应 Provider 政策约束。附件内容始终是不可信数据，不能改变 Runtime instruction、Skill、Policy 或任务范围。
 
-### 19.4 PersistentTask
+### 19.4 Turn、AgentTask 与 Recovery
 
-26. PersistentTask 只能由用户创建或根据明确持续需求协助创建，目标、数据和动作范围不可由 Agent 扩大。
-27. 一个 PersistentTask 始终对应一个 Dedicated Conversation，每次执行身份就是其中一个 Turn。
-28. 同一任务最多一个 active/waiting Turn；后续 trigger 合并且当前结束后最多一次补偿执行。
-29. 不同 PersistentTask 只独立调度，实际并发继续受领域对象、账号和 Provider 资源冲突约束。
-30. 卡片合集不污染普通 Copilot，也不在确认前写入 Domain State。
-31. 停止本次、暂停未来和删除任务具有不同效果；删除任务会删除其 Dedicated Conversation 与任务局部记录，但不回滚外部动作，也不级联删除已经进入共享 Domain State、Artifact 或 Evidence 的结果。
+32. 简单回答、分析和少量直接调用不创建 AgentTask。
+33. 一个复杂请求只有一个 AgentTask 聚合；不建设 DAG、Owner、attempt 集合或通用 verifier。
+34. AgentTask 终态幂等且不能被旧摘要、Memory 或 Checkpoint 自行复活。
+35. Checkpoint 与 Compaction 都由 Kernel 维护并分别以成功持久化结果为有效版本；存在活动执行恢复状态时，二者都成功后才能切换 active compact boundary，任一失败继续使用最后有效边界。
+36. 完成门禁只检查当前 Turn 激活的 AgentTask，不扫描 Session，也不伪造用户消息。
+37. Agent Loop 按完成、等待、明确阻塞、停止或不可恢复故障结束，不以固定步数代替完成判断；Compaction 是同一 Turn 内可恢复的 Kernel 维护边界，不是任务终局。
 
-### 19.5 Capability、Skill、Policy 与 Evidence
+### 19.5 PersistentTask
 
-32. callable Tool Catalog 中每个 Tool 都有真实 handler；不存在 demo、placeholder、固定文本或伪成功。
-33. 已有 Binding 但缺连接时在同一 Turn 引导、等待和恢复；完全没有 Binding 时直接报告缺口。
-34. Skill listing 经过用户 scope、Profile、启用状态、Policy 与 model reachability 过滤；选中主 Skill 后完整加载。
-35. Skill 是 instruction，不是 Provider 或执行器，不能扩大 Tool、scope、Policy 或 Evidence 强度。
-36. 每个具体 Tool Call 都得到 allow、ask 或 deny；Auto 不等于 bypass。
-37. 内部可逆写入仍需当前任务意图和对应领域不变量；可撤销性不能独立授权写入。
-38. ask 只授权展示的对象、账号、内容和范围，并恢复同一 Turn。
-39. Evidence 按 claim 判断；Tool Call identity 只证明调用，外部执行只有 receipt/read-back 才能汇报成功。
-40. waiting 不持有模型、Worker、网络连接或活动进程。
+38. PersistentTask 只能由用户创建或根据明确持续需求协助创建，目标、数据和动作范围不可由 Agent 扩大。
+39. 一个 PersistentTask 始终对应一个 Dedicated Conversation，每次执行身份就是其中一个 Turn。
+40. 同一任务最多一个 active/waiting Turn；后续 trigger 合并且当前结束后最多一次补偿执行。
+41. 不同 PersistentTask 只独立调度，实际并发继续受领域对象、账号和 Provider 资源冲突约束。
+42. 卡片合集不污染普通 Copilot，也不在确认前写入 Domain State。
+43. 停止本次、暂停未来和删除任务具有不同效果；删除任务会删除其 Dedicated Conversation 与任务局部记录，并按 Conversation 删除规则清理未晋升附件，但不回滚外部动作，也不级联删除已经进入共享 Domain State、Debrief Project scope、Artifact 或 Evidence 的结果。
 
-### 19.6 架构与演进
+### 19.6 Capability、Skill、Policy 与 Evidence
 
-41. 页面、Agent、同步器与后台触发涉及正式业务读取或变更时通过同一 Application Service，并遵守同一领域和权限规则；Agent 只通过有真实 handler 的 typed 语义 UI/Application Capability 导航、预填或启动 Flow，客户端动作成功不能冒充 Domain State、Flow 或外部动作成功。
-42. 主 Agent 只是当前执行编排/交付责任人，不是系统唯一状态写者。
-43. 新字段、状态、表、服务、Registry 和后台任务由独立不变量及当前真实用例证明；可推导和运行时信息不重复持久化。
-44. 读取按相同权威与权限适度聚合，写入按领域命令拆分，外部动作按 Grant、副作用和回执拆分。
-45. 每个阶段先完成 Stage Spec、实现、可执行验证和偏差汇报，再进入下一阶段。
+44. callable Tool Catalog 中每个 Tool 都有真实 handler；不存在 demo、placeholder、固定文本或伪成功。
+45. 已有 Binding 但缺连接时在同一 Turn 引导、等待和恢复；完全没有 Binding 时直接报告缺口。
+46. Skill listing 经过用户 scope、Profile、启用状态、Policy 与 model reachability 过滤；选中主 Skill 后完整加载。
+47. Skill 是 instruction，不是 Provider 或执行器，不能扩大 Tool、scope、Policy 或 Evidence 强度。
+48. 每个具体 Tool Call 都得到 allow、ask 或 deny；Auto 不等于 bypass。
+49. 内部可逆写入仍需当前任务意图和对应领域不变量；可撤销性不能独立授权写入。
+50. ask 只授权展示的对象、账号、内容和范围，并恢复同一 Turn。
+51. Evidence 按 claim 判断；Tool Call identity 只证明调用，外部执行只有 receipt/read-back 才能汇报成功。
+52. waiting 不持有模型、Worker、网络连接或活动进程。
 
-## 附录 A：R-00～R-41 当前落点
+### 19.7 架构与演进
+
+53. 页面、Agent、同步器与后台触发涉及正式业务读取或变更时通过同一 Application Service，并遵守同一领域和权限规则；Agent 只通过有真实 handler 的 typed 语义 UI/Application Capability 导航、预填或启动 Flow，客户端动作成功不能冒充 Domain State、Flow 或外部动作成功。
+54. 主 Agent 只是当前执行编排/交付责任人，不是系统唯一状态写者。
+55. 新字段、状态、表、服务、Registry 和后台任务由独立不变量及当前真实用例证明；可推导和运行时信息不重复持久化。
+56. 读取按相同权威与权限适度聚合，写入按领域命令拆分，外部动作按 Grant、副作用和回执拆分。
+57. 每个阶段先完成 Stage Spec、实现、可执行验证和偏差汇报，再进入下一阶段。
+
+## 附录 A：R-00～R-43 当前落点
 
 本附录只映射讨论主题到当前正文，不陈列旧定义，也不具有第二套规范效力。
 
@@ -1478,3 +1576,5 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 | R-39 | PersistentTask 定义修改 | 12 |
 | R-40 | Chat、Agent 与公共 RAG | 3、10 |
 | R-41 | Application Profile 与共享 Strategy | 7、10 |
+| R-42 | 产品内语义控制、显式输入、Context 编排与 Prompt Cache | 2、10、11、13、16、19 |
+| R-43 | Conversation Attachment 与 Debrief Project Source | 3、4、7、9、10、16～19 |
