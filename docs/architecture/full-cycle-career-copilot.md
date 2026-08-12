@@ -138,14 +138,14 @@ Agent 可以接收所有直接服务于用户本人求职的任务。“可以�
 - Agent 负责理解当前意图、组合跨领域能力、执行任务并汇报真实结果。它贯穿所有工作空间，但不替代页面内容和对象视图。
 - 涉及正式业务读取或变更时，页面、Agent、同步器和后台触发必须调用相同 Application Service，并遵守相同业务不变量、权限与 Evidence 规则，不能形成第二套状态机；纯客户端导航和未保存预填不伪装成业务操作。
 - Agent 结果不要求对应页面。只需汇报进度或完成情况的任务可以完全在 Conversation 中结束。
-- Conversation 中的 Agent 执行呈现只负责让用户理解语义化执行动态、复杂请求的阶段计划、当前待处理交互和真实调用结果；它不能取代岗位、资料、面试、Offer 等领域页面。执行呈现的内容层、固定单列活动控制层和 Tool 渐进披露统一由第 11.6 节定义。
-- 用户当前所在页面、路由、页面选中项、DOM、视觉内容和页面缓存都不自动进入 Agent 上下文。用户在本 Turn 主动附加或明确指定的附件、URL 和产品对象引用属于当前输入；已经显式附加到同一 Conversation 的文件及当前 Debrief Project Source 可以在后续 Turn 按最新任务需要重新读取，但不会每轮自动注入，也不能取得任务方向。
+- Conversation 中的 Agent 执行呈现只负责让用户理解语义化执行动态、复杂请求的阶段计划、当前待处理交互和真实调用结果；它不能取代岗位、资料、面试、Offer 等领域页面。执行呈现的内容层、固定单列活动控制层和 Tool 渐进披露统一由第 11.7 节定义。
+- 用户当前所在页面、路由、页面选中项、DOM、视觉内容和页面缓存都不自动进入 Agent 上下文。用户在本 Turn 主动附加或明确指定的附件、URL 和产品对象引用属于当前输入；已经显式附加到同一 Conversation 的文件及当前 Debrief Project Source 可以在后续 Turn 按当前已接纳任务需要重新读取，但不会每轮自动注入，也不能取得任务方向。
 - 页面提供的“交给 Copilot”“用此对象继续”等明确入口，可以把带稳定 identity 的 typed object reference 作为用户可感知的本 Turn 输入；服务端仍需按 identity 重新读取权威内容并校验所有权与权限，不能信任客户端复制的业务事实。这是用户主动提供的对象引用，不是页面环境自动进入上下文。未保存草稿只有在用户明确提交时才能进入 Turn，并始终标识为草稿而非正式事实。
 - Agent 可以通过有真实 typed handler 的 **Client Action Bridge** 导航到产品视图、带入本 Turn 已确认的数据、预填交互或进入明确的 Flow。Agent 发出产品语义目标，不接触具体路由、DOM、selector、任意 click/type 或万能表单 patch；没有真实 handler 或客户端不可达时必须明确失败。
 - 页面导航和临时预填不改变 Domain State，也不证明用户已经查看、接受或保存。正式业务变化仍通过同一 Application Service，外部动作仍经过 Policy 并取得 receipt/read-back，Flow 启动仍以对应 Runtime/Application Service 返回的真实 identity 与状态为准。
 - 用户明确要求跳转或启动交互时，Agent 可以直接执行相应语义能力；如果 Agent 只是建议查看某个页面，则返回可选页面动作，不应擅自抢占用户界面。页面跳转不是完成任务的必经步骤，后台 PersistentTask 和没有交互客户端的 Turn 也不能改变用户当前页面。
 - Client Action 只交付给发起当前 Turn 的交互客户端实例，不广播给其他标签页。页面存在未保存内容、设备权限或其他本地安全条件时，由客户端原生 guard 让同一 Turn 进入可恢复 waiting，不把未提交表单内容发送给模型；原客户端不可恢复时必须由用户明确接管，不能自动投递到任意新标签页。
-- 当前阶段只使用产品设计好的页面、Capability-owned typed handler，以及第 11.6 节固定的 AgentTask 计划卡、Interaction 聚焦卡、语义执行动态与 typed Tool 详情；不建设模型生成组件树、通用 UI schema、任意 HTML/JavaScript、客户端代码执行或其他生成式 UI 协议。
+- 当前阶段只使用产品设计好的页面、Capability-owned typed handler，以及第 11.7 节固定的 AgentTask 计划卡、Interaction 聚焦卡、语义执行动态与 typed Tool 详情；不建设模型生成组件树、通用 UI schema、任意 HTML/JavaScript、客户端代码执行或其他生成式 UI 协议。
 
 导航改造不能只改菜单名称而保留数据孤岛。在相应领域读模型和交互 Spec 可用前，现有路由可以保持可访问；随后按四个工作空间的聚合心智迁移。
 
@@ -174,11 +174,13 @@ Shared Conversation Kernel 中的 Active Working Context 只包含当前 Turn �
 
 每个 Turn 通过持久化的 conversation identity、turn identity 和 input identity 建立 CurrentTurnAnchor：
 
-- 普通用户 Turn 只有最新用户输入拥有执行方向；附件、用户明确提供的对象引用和其他结构化数据只是受该输入约束的上下文，不能与用户原文争夺任务所有权。
+- 普通用户 Turn 只有已经被服务端接纳并建立 CurrentTurnAnchor 的用户原始输入拥有执行方向；附件、用户明确提供的对象引用和其他结构化数据只是受该输入约束的上下文，不能与用户原文争夺任务所有权。
 - 自动化 Turn 由用户已经确认的 PersistentTask 当前定义与本次 trigger/Observation 共同限定，不伪装成用户手工消息。
 - 摘要、Long-term Memory、Checkpoint 和旧 AgentTask 都不能替换当前锚点。
 
-新的用户 Turn 始终重新解析最新输入。旧 AgentTask 只有在新输入明确继续时才重新激活；明确取消、替换或改变目标时放弃，无关新请求中不注入旧任务。上一轮普通处理不形成跨 Turn 待恢复任务。只有继续与否仍有可能造成真实副作用、错误写入或明显错误交付且无法可靠判断时才询问。
+每条 Conversation 同时最多只有一个尚未终结的 active Turn；active 覆盖已经接纳但尚未开始、running 与 waiting。所有普通提交都经过同一个 Conversation admission 命令：只有既无 active Turn、也无待处理或保留的 PendingSubmission 时，才在 Conversation 锁内直接、幂等地创建 UserMessage、Turn 与 CurrentTurnAnchor；已有 active Turn 或队列仍非空时，输入保存为第 11.2 节的耐久 PendingSubmission。排队输入被 claim 前不是 UserMessage、Turn、Interaction Record、Product Context Source 或新的 CurrentTurnAnchor，也不得进入当前 Prompt、RAG、History、Compaction 或 AgentTask。Conversation 只用当前 active Turn 与现有队列状态作为 admission 门闩，不拥有第二任务方向或通用消息队列。
+
+新的用户 Turn 始终重新解析本次被接纳的原始输入。旧 AgentTask 只有在新输入明确继续时才重新激活；明确取消、替换或改变目标时放弃，无关新请求中不注入旧任务。上一轮普通处理不形成跨 Turn 待恢复任务。只有继续与否仍有可能造成真实副作用、错误写入或明显错误交付且无法可靠判断时才询问。排队顺序本身不表示继续旧任务。
 
 ### 3.3 Interaction Records 与读取过程
 
@@ -655,18 +657,20 @@ Artifact/长期知识资料是用户明确保存后的既有产品对象，不�
 附件链路只保留必要身份，不新建 AttachmentSession、AttachmentMemory、ContextFile 或第二套资料模型：
 
 1. 原始上传先产生有所有权、不可由文件名冒充的服务端 FileAsset/source identity；Provider 侧 file id 只是可丢弃的 Binding 缓存，不能成为产品身份。
-2. 用户发送消息时，Interaction Record 冻结结构化 AttachmentRef 与当时使用的来源版本；不在用户文本中拼接伪标记，也不因后续替换而倒改旧 Turn。
+2. 用户输入经 Conversation admission 接纳并原子创建 UserMessage 与 Turn 时，Interaction Record 才冻结结构化 AttachmentRef 与当时使用的来源版本；已有 active Turn 时进入 PendingSubmission 不等于发送完成，不在用户文本中拼接伪标记，也不因后续替换而倒改旧 Turn。
 3. OCR、抽取文本、页结构、缩略图、chunks、embeddings 和检索索引只是可删除、可重建的解析投影，不是新的产品事实或长期资料。
 4. 每次实际读取都重新校验用户、scope、来源版本、解析能力、删除状态和当前权限；文件名、上传成功、已有摘要或模型声称读取都不能证明正文可用。
 
-草稿选择文件后可以先创建 FileAsset 并异步解析，但在消息发送前尚未建立 Conversation Attachment。发送前移除或取消必须真实解除草稿引用，并回收没有其他有效引用的临时文件；不能只隐藏客户端芯片而留下以后会被 Conversation 读取的隐形来源。
+草稿选择文件后可以先创建 FileAsset 并异步解析，但在输入经 Conversation admission 接纳、创建 Turn 并冻结 AttachmentRef 前尚未建立 Conversation Attachment。已有 active Turn 时，排队项只持有有所有权的草稿引用；编辑或撤回排队项必须真实解除相应引用，并回收没有其他有效引用的临时文件，不能只隐藏客户端芯片而留下以后会被 Conversation 读取的隐形来源。
+
+PendingSubmission 被 claim 时重新校验附件所有权、来源版本、删除状态、格式和原始字节 gate。校验失败时不得创建缺少显式来源的新 Turn，也不得静默过滤附件；该排队项保持可见失败并允许编辑或撤回。若它是显式中断选中的输入，最终校验失败后也不得改为发送其他排队项。原始字节已经通过 gate 即可接纳并创建 Turn，不要求解析投影已经 ready；解析仍未完成时继续遵守第 9.4.5 节的同 Turn waiting，而不是让草稿本身变成 waiting Turn。
 
 #### 9.4.3 Turn A 与后续 Turn
 
 附件采用“持续可用、按需装载”，不是“只在上传 Turn 使用一次”，也不是“以后每个 Turn 都重复携带全文”：
 
 1. 上传并发送的 Turn A 一定保存 AttachmentRef；该文件是本 Turn 的显式来源范围，实际使用全文、片段、页面视觉或结构化读取由当前任务决定，不能被通用 top-k 静默遗漏。
-2. 后续 Turn 不复制新的 AttachmentRef，也不无条件重新注入文件名、manifest、全文或 chunks。当前 Conversation 的可用附件集合从仍有效的历史 AttachmentRef 推导，Source Resolver 只在最新输入明确引用、延续上一任务或当前任务确实需要时选择它。
+2. 后续 Turn 不复制新的 AttachmentRef，也不无条件重新注入文件名、manifest、全文或 chunks。当前 Conversation 的可用附件集合从仍有效的历史 AttachmentRef 推导，Source Resolver 只在当前已接纳 Turn 的输入明确引用、延续上一任务或当前任务确实需要时选择它。
 3. “刚才那份简历”“继续比较第二个文件”等能够依据当前任务锚点、最近使用来源和唯一 identity 确定时直接解析；多个来源仍有实质歧义时进行最小确认，不能只凭语义相似擅自选一个。
 4. 与文件无关的 Turn 完全不装载它。来源可用不等于每轮 RAG、每轮 Prompt 注入或每轮重新付费解析。
 5. Compaction 不复制文件正文，也不删除历史 AttachmentRef。压缩后只有当前 Turn 确实需要该来源时，才按冻结的确切版本、当前 scope 与权限从权威 FileAsset/解析投影重新取得；不能自动重读全部历史附件，也不能用“最新版本”替换原引用。摘要不能代替原文件或使已删除附件复活。
@@ -691,18 +695,18 @@ Conversation Attachment、Debrief Project Source 和用户明确授权的长期�
 
 原始字节完成所有权与格式校验后，用户可以发送消息；若本 Turn 的显式附件仍在解析，Turn 进入可恢复 waiting，并释放模型调用、Conversation/Agent 执行 Worker、SSE/模型流与 Agent Loop。独立、有限的 ingestion job 继续解析，并只在实际处理期间使用自己的 Worker；完成后唤醒同一个 Turn。失败时提供重试、移除失败文件后继续、取消本 Turn 三种动作。失败文件不能产生强 Evidence，重试解析不创建新的用户附件 identity；只有原始内容发生变化才形成新版本/来源。
 
-草稿与 Turn 恢复必须覆盖：切换 Conversation 后返回、上传/解析期间刷新、创建 Turn 前提交失败、Turn 已创建但 SSE 中断，以及用户取消上传或 waiting Turn。能够恢复时保留原文本、选择顺序、AttachmentRef 与已完成进度；无法恢复时明确展示状态并允许处理，不能静默丢失或留下以后会被自动读取的孤儿来源。所有恢复与重试保持幂等，不重复创建用户消息、AttachmentRef 或解析投影。
+草稿、PendingSubmission 与 Turn 恢复必须覆盖：切换 Conversation 后返回、上传/解析期间刷新、多标签同步与 claim 竞争、排队项编辑或撤回、创建 Turn 的原子失败、Turn 已创建但 SSE 中断，以及用户取消上传或 waiting Turn。能够恢复时保留原文本、服务端顺序、草稿附件引用、冻结后的 AttachmentRef 与已完成进度；无法恢复时明确展示状态并允许处理，不能静默丢失或留下以后会被自动读取的孤儿来源。所有 claim、恢复与重试保持幂等，不重复创建用户消息、Turn、AttachmentRef 或解析投影。
 
 具体支持格式、大小与数量限制、warning 阈值、进度传输协议、孤儿回收时限和预览组件由 Attachment Stage Spec 冻结。这些基础设施限制不改变上述 scope、等待和真实性语义。
 
 #### 9.4.6 移除、删除、替换、晋升与权限
 
-- **发送前移除**：撤销草稿引用，并在没有其他有效引用时回收原始文件与解析投影。
+- **claim 前移除**：Composer 草稿或 PendingSubmission 撤销相应引用，并在没有其他有效引用时回收原始文件与解析投影。
 - **从当前 scope 移除**：阻止未来 Turn 继续读取；历史 Interaction Record 保留不可伪造的 tombstone，既有回答可以保留，但来源卡显示不可访问。Conversation Attachment 与 Debrief Project Source 分别从各自 scope 移除，不能用一个含糊按钮同时影响另一范围。
 - **永久删除文件**：在没有其他保留引用，或用户明确理解级联影响后，删除 Copilot 可控存储中的原始文件及所有解析投影；这是破坏性操作，必须确认。已经发送给回答模型或其他外部 Provider 的内容受相应 Provider 的保留与删除政策约束，产品必须在传送前披露，不能承诺追溯清除其不可控副本。
 - **替换**：新内容形成新的来源版本，旧 Turn 继续引用当时版本；不能原地改写历史 Evidence。
 - **保存为长期资料**：只有用户通过资料/简历流程上传，或在 Conversation 中明确要求保存、设为简历或形成 Artifact 时才扩大 scope，并复用既有 Artifact/Knowledge & Evidence 版本语义。仅附加到聊天不会触发 Profile 候选；第 4.2 节的首次候选只在明确简历导入后发生。
-- **删除 Conversation**：按 Conversation 的数据保留规则删除消息与局部 Interaction Records，不要求在已删除的 scope 内继续保存 AttachmentRef/tombstone；同时清理只由该 Conversation 持有且未被明确晋升的附件。已提升为 Debrief Project Source 或长期 Artifact/Evidence 的独立引用按其新 scope 保留。确认界面必须同时说明消息和未晋升附件将被删除、已晋升来源不会随之删除，以及共享 blob 只在没有其他有效引用并满足保留规则时清理。
+- **删除 Conversation**：先禁止新的 admission/claim 与自动化 Turn；存在 active Turn 时按第 11.2 节安全取消并完成必要 reconcile，随后撤回并删除全部 PendingSubmission、释放草稿附件引用。若没有 in-flight、unknown 或待 reconcile 的外部调用，再按数据保留规则物理删除消息与局部 Interaction Records；若仍有这种调用，Conversation 立即对用户不可用并删除非必要内容，但原 Tool Call 只保留受限的最小 reconciliation/receipt correlation tombstone，直到确定终局或相应保留边界后再清理。该 tombstone 不是可恢复 Conversation、History 或新领域对象，不能保存 Prompt、正文或无关上下文，只用于迟到回执关联、冲突副作用保护和必要通知。不要求在已删除 scope 内继续保存普通 AttachmentRef/tombstone，同时清理只由该 Conversation 持有且未被明确晋升的附件。已提升为 Debrief Project Source 或长期 Artifact/Evidence 的独立引用按其新 scope 保留，已经发生的外部动作也不回滚。确认界面必须同时说明待发送输入、消息、未晋升附件、尚未结算外部动作及已晋升来源的不同后果。
 
 用户把文件明确附加到 Conversation，已经授权产品在该 Conversation 内部读取，不为每次片段读取重复审批。由当前用户选择且已披露数据处理边界的回答模型处理本 Conversation，是正常对话处理，不逐 Turn 重复审批；改送 Canva、Drive、邮箱、MCP、不同用途模型/Provider，或执行公开分享、跨 scope 晋升、覆盖和永久删除，属于新的外传或影响范围，仍必须经过当前意图、Policy 和相应确认。外部保存只有取得 receipt/read-back 后才能报告成功。上传、选择、下载、导出或生成文件都不能证明某个材料版本实际用于投递。
 
@@ -736,7 +740,7 @@ Conversation Attachment、Debrief Project Source 和用户明确授权的长期�
 
 ```mermaid
 flowchart TB
-    Input["最新用户输入"] --> Kernel["Shared Conversation Kernel<br/>CurrentTurnAnchor · History · Context"]
+    Input["当前已接纳的用户输入"] --> Kernel["Shared Conversation Kernel<br/>CurrentTurnAnchor · History · Context"]
 
     Kernel --> Profile{"Application Profile / 本 Turn Strategy"}
 
@@ -769,11 +773,11 @@ flowchart TB
 
 **Shared Conversation Kernel** 负责 Turn 生命周期、CurrentTurnAnchor、Active Working Context、Context Compiler、Strategy Router、等待、流式传输、Compaction、Checkpoint、Recovery，以及对共享 Tool Executor、Policy、Evidence、History Search 和 Memory Recall 设施的统一编排。这里的“负责”表示生命周期和语义入口由 Kernel 统一控制；Tool Executor 与 Policy 的代码实现所有权仍在 `agent_runtime`，Kernel 不复制第二套执行器。它不拥有业务 Profile、Agent Loop 或页面语义。
 
-**AgentStrategy** 是 Career 与 Debrief 唯一共享的 Agent 执行实现。主模型直接依据 CurrentTurnAnchor 理解最新输入、排列多目标、决定直接回答、安全调查、澄清、连接、审批或执行；系统不在它前面建设 Intent 模型、Intent 对象或独立 Planner。AgentStrategy 负责 Agent Loop、Capability 选择、Tool 调用编排、安全并行、必要时创建和推进 AgentTask，并向 Shared Kernel 交付真实调用状态与候选结果。只有 Shared Kernel 执行确定性完成检查并裁定、写入统一 TurnOutcome。
+**AgentStrategy** 是 Career 与 Debrief 唯一共享的 Agent 执行实现。主模型直接依据 CurrentTurnAnchor 理解当前已接纳输入、排列多目标、决定直接回答、安全调查、澄清、连接、审批或执行；系统不在它前面建设 Intent 模型、Intent 对象或独立 Planner。AgentStrategy 负责 Agent Loop、Capability 选择、Tool 调用编排、安全并行、必要时创建和推进 AgentTask，并向 Shared Kernel 交付真实调用状态与候选结果。只有 Shared Kernel 执行确定性完成检查并裁定、写入统一 TurnOutcome。
 
 **ChatStrategy** 是 Debrief 中基于公共 Context Acquisition/RAG 的有界、无副作用回答策略。它可以做检索、重排、引用和回答，但不获得执行型 Tool、AgentTask 或外部副作用能力。由于 Chat 不进入迭代 Tool Loop，它在回答前保留一次受限的 **Chat Retrieval Planner**：只把当前输入、当前 Debrief 锚点和可用会话投影转换为本 Turn 的检索请求与来源聚焦，然后由公共 Context Compiler/RAG 执行。
 
-Chat Retrieval Planner 是临时运行步骤，不是 Intent Resolver、产品对象、持久计划或未来 Turn 的任务所有者；它不能创建 AgentTask、选择执行型 Tool、修改 Domain State、申请权限或规划后续 Turn。用户明确引用的来源和由 Profile 确定的复盘范围不能被 Planner 静默排除；规划失败时使用最新用户原文、显式引用和当前 Profile 进行保守检索并留下失败诊断，不能把失败解释为“不需要资料”。AgentStrategy 不调用这层独立 Planner，它在主模型循环中按需读取，但与 Chat 共用下文规定的 Source Resolver、公共 RAG、grounding、引用和失败边界。
+Chat Retrieval Planner 是临时运行步骤，不是 Intent Resolver、产品对象、持久计划或未来 Turn 的任务所有者；它不能创建 AgentTask、选择执行型 Tool、修改 Domain State、申请权限或规划后续 Turn。用户明确引用的来源和由 Profile 确定的复盘范围不能被 Planner 静默排除；规划失败时使用当前已接纳 Turn 的用户原文、显式引用和当前 Profile 进行保守检索并留下失败诊断，不能把失败解释为“不需要资料”。AgentStrategy 不调用这层独立 Planner，它在主模型循环中按需读取，但与 Chat 共用下文规定的 Source Resolver、公共 RAG、grounding、引用和失败边界。
 
 **Mock Interview Flow** 是独立实时、逐轮、强流程约束的运行流，不进入普通 Conversation 的 Strategy Router 或通用 Agent Loop。它只复用模型、语音、存储、Artifact/Evidence 等底层服务，不共享普通 Conversation Kernel 的活动执行状态。
 
@@ -798,14 +802,14 @@ Context Compiler 不新增产品领域对象、持久化分级表或巨型 Conte
 
 一次普通 Conversation Turn 采用同一编排：
 
-1. 先持久化最新用户原始输入并建立 CurrentTurnAnchor；最新输入决定本 Turn 的方向。
+1. 普通输入经过统一 Conversation admission：没有 active Turn 且队列为空时在同一锁内直接接纳；已有 active Turn 或尚有待处理/保留 PendingSubmission 时先追加队列，之后再被 claim。只有 admission 原子成功后，才持久化用户原始输入、创建唯一 UserMessage 与 Turn，并建立 CurrentTurnAnchor；尚未 claim 的排队项完全不进入本 Turn 上下文。该已接纳输入决定本 Turn 的方向。
 2. 从 Conversation 自身不可伪造的 Application identity 取得当前 Application Profile；Debrief Conversation 在此确定唯一 InterviewRecord/Debrief Project scope owner。scope owner 不能由模型、附件内容、页面状态或用户伪造的对象 id 推断。
 3. 确定性解析用户本 Turn 主动附加或明确指定的附件、URL、Artifact 和领域对象引用，并基于第 2 步的 owner 校验 identity、所有权、Conversation/Debrief Project scope、授权、版本与可读取状态。任何页面的当前路由或选中项都不参与这一步；输入框附件只能建立当前 Conversation scope。
-4. 解析本 Turn Strategy，装配共享 Runtime 规则、真实性边界、Policy、当前有效的 CopilotPreference 和少量可调用 Tool schema；完整 Provider/MCP/Skill 目录不进入每轮 Prompt。
+4. 使用 submission/admission payload 携带的可见 mode 选择解析本 Turn Strategy，并在 Turn 创建时形成不可变快照；已有 active Turn 时由 PendingSubmission 保存该 mode，空闲直接接纳时由同一 admission payload 提供。后续切换不反向修改已排队项或活动 Turn。随后装配共享 Runtime 规则、真实性边界、Policy、当前有效的 CopilotPreference 和少量可调用 Tool schema；完整 Provider/MCP/Skill 目录不进入每轮 Prompt。
 5. 从最近有效 Compaction boundary 恢复会话投影：较早内容的非权威摘要、保留的近期原始消息、用户纠正、未完成承诺以及 Tool Call/Result 的配对完整性。需要核验原话或历史结果时仍回到 Interaction Records。
 6. 先装配不依赖检索规划的初始上下文：Profile 锚点、允许直接读取的结构化事实、已经校验的显式来源引用、当前会话投影和必要 Runtime 状态。用户明确提供的来源内容只作为数据加入当前输入附近；显式来源必须按当前任务完成真实读取，或明确进入 waiting/失败，不能被后续规划静默过滤。
 7. Debrief Chat 在上述初始上下文上调用 Chat Retrieval Planner，形成仅供本 Turn 使用的补充检索请求与来源聚焦；随后由 Source Resolver 执行显式来源读取和计划内补充检索，从当前 Conversation 的历史附件及当前 Debrief Project scope 中按原 Product Context Source 类型选择需要的来源，不把 scope 内全部内容每轮注入。AgentStrategy 不经过独立 Planner，直接让共享主模型依据初始上下文理解与排序，再在 Loop 中按需请求 Source Resolver、公共文档读取/RAG、History Search 或 Memory Recall。两条路径的互不依赖读取都可以并行，结果都必须保留时间、权限、权威类型和引用。
-8. ChatStrategy 基于完成的有界公共读取生成回答；AgentStrategy 在相同质量与权限边界下进入 Tool Loop。最新用户原文始终是当前任务指令，Planner、来源结果和初始上下文都不能取得任务方向。
+8. ChatStrategy 基于完成的有界公共读取生成回答；AgentStrategy 在相同质量与权限边界下进入 Tool Loop。当前已接纳 Turn 的用户原文始终是当前任务指令，其他 PendingSubmission、Planner、来源结果和初始上下文都不能取得任务方向。
 9. 每次 Tool Call、Policy 结果、Tool Result 和运行中新增的真实来源按原 identity 追加到执行链，再进入下一次模型调用，直到形成 completed、waiting、blocked、failed 或 cancelled 之一。
 
 模型请求的逻辑排列保持稳定：
@@ -814,14 +818,14 @@ Context Compiler 不新增产品领域对象、持久化分级表或巨型 Conte
       → 当前 Application Profile、Strategy 与相关 CopilotPreference
       → Compaction 后的会话投影和保留的近期原文
       → 本 Turn 明确提供及按当前任务选中并已真实读取的资料与对象数据
-      → 最新用户原始输入
+      → 当前已接纳 Turn 的用户原始输入
       → 执行中逐次追加的 Tool Call / Tool Result
 
-这里的物理消息位置不改变指令优先级：系统和安全边界始终有效，来源内容只是数据，最新用户输入拥有普通 Turn 的任务方向。用户明确指定且有权访问的来源如果无法读取，应在原 Turn 中完成连接、授权或失败处理；不能用相似来源、旧摘要或模型常识静默替代。
+这里的物理消息位置不改变指令优先级：系统和安全边界始终有效，来源内容只是数据，当前已接纳 Turn 的用户原始输入拥有普通 Turn 的任务方向。未 claim 的排队内容不得作为“最新输入”预注入模型。用户明确指定且有权访问的来源如果无法读取，应在原 Turn 中完成连接、授权或失败处理；不能用相似来源、旧摘要或模型常识静默替代。
 
 Prompt Cache 只优化重复模型调用的成本和首 Token 延迟，不是 Product Context Source、Memory、Evidence、权限缓存、事实缓存或 Recovery State。每次调用仍先构造语义完整的 system、user context、messages 与 Tool schema；cache miss、过期或失效只能影响性能，不能改变来源选择、权限判断、执行路径和回答语义。
 
-缓存布局遵守“稳定前缀、动态尾部”：长期稳定的共享 Runtime 规则、真实性边界、通用 Tool 协议和同一 Profile 下的稳定说明靠前；最新输入、附件与来源内容、Memory/History 召回、连接与权限状态、Tool Result 和运行通知保持在动态区域。Tool schema 使用稳定基座和当前请求 overlay；Provider 连接或可发现能力目录的增减作为动态 catalog delta 追加，不重算无关稳定 system 前缀。连接、scope、权限和当前可执行性始终在调用时实时解析，不能从缓存或 schema 推断。
+缓存布局遵守“稳定前缀、动态尾部”：长期稳定的共享 Runtime 规则、真实性边界、通用 Tool 协议和同一 Profile 下的稳定说明靠前；当前已接纳输入、附件与来源内容、Memory/History 召回、连接与权限状态、Tool Result 和运行通知保持在动态区域。Tool schema 使用稳定基座和当前请求 overlay；Provider 连接或可发现能力目录的增减作为动态 catalog delta 追加，不重算无关稳定 system 前缀。连接、scope、权限和当前可执行性始终在调用时实时解析，不能从缓存或 schema 推断。
 
 实现可以使用少量命名、可独立重算的 Prompt section；新 Conversation、清空、Compaction 后重载、Runtime/安全规则或模型变化、Profile/Strategy 变化，已加载 Tool 的 name/schema/执行语义变化、Skill/Policy 内容变化或用户身份隔离范围变化，都必须使受影响部分重新计算。附件/其他来源发生版本替换、scope 移除、永久删除、授权撤销或解析投影失效时，必须重算相应动态 Source section 并使旧正文不可用，但不应使无关稳定 system 前缀整体失效。普通 Provider 连通性和目录增量只更新动态尾部。具体 Provider cache scope、TTL、cache key 和分段位置由 Stage Spec 与模型供应商能力决定，不进入产品领域模型；私有前缀不得跨用户或越过授权范围复用。
 
@@ -847,13 +851,13 @@ Context Source 覆盖测试应在同一 Debrief Profile 下逐类验证两种 St
 ### 10.6 Debrief 中的无缝切换
 
 1. Strategy 在创建 Turn 时形成不可变快照；Conversation 只保存下一次提交的当前选择，不把一种 Strategy 固定为整段会话的执行方式。
-2. Chat/Agent 切换控件只影响下一次用户提交。新的输入建立新的 CurrentTurnAnchor，已经开始的 Turn 不在中途换 Strategy，而是先形成 completed、waiting、blocked、failed 或 cancelled 之一。
+2. Chat/Agent 切换控件只影响尚未进入队列的下一次用户提交；每个 PendingSubmission 保存自己的可见 mode 选择，创建 Turn 时据此形成 Strategy 快照。新的已接纳输入建立新的 CurrentTurnAnchor，已经开始的 Turn 不在中途换 Strategy，而是先形成 completed、waiting、blocked、failed 或 cancelled 之一。
 3. 切换保持同一 conversation identity、Interview 锚点、Interaction Records、权限和来源范围；不复制 History，不新建 Conversation，也不生成桥接摘要。
 4. Debrief Conversation 可以按 Turn 交叉使用 ChatStrategy 与共享 AgentStrategy。Chat 后可以让 Agent 继续执行，Agent 后也可以回到 Chat 分析；两者都通过 Shared Kernel 读取同一会话轨迹。
-5. 最新用户输入始终决定新 Turn 的方向；模式切换本身不授权沿用旧任务，也不让旧 AgentTask 自动接管。
+5. 新 Turn 中被接纳的用户原始输入始终决定其方向；排队位置和模式切换本身都不授权沿用旧任务，也不让旧 AgentTask 自动接管。
 6. Chat 文本可以作为交互背景；产品写入或外部执行前，Agent 必须回到正式来源和 claim-specific Evidence 核验。Chat 在消费先前 Agent 结果时也必须从 Interaction Records 中保留的真实来源和 Tool Result 重新 grounding，不能把 Agent 最终措辞升级为权威事实。
 
-## 11. Turn、AgentTask、Checkpoint 与 Agent Loop
+## 11. Turn、PendingSubmission、AgentTask、Checkpoint 与 Agent Loop
 
 ### 11.1 Turn 与当前任务所有权
 
@@ -862,9 +866,9 @@ Turn 是一次输入到最终响应、等待、阻塞、取消或失败的统一
 - 普通 Conversation 中可见的用户输入；
 - 由已确认 PersistentTask 当前定义和本次 trigger/Observation 编译出的隐藏 automation input。
 
-系统不能为恢复旧任务伪造用户消息。每个 Turn 使用持久化 conversation identity、turn identity 和 input identity 建立 CurrentTurnAnchor。最新用户输入唯一拥有普通 Turn 的执行方向；附件、对象引用、来源内容、摘要、Memory、Checkpoint 和旧 AgentTask 都不能替换它。
+系统不能为恢复旧任务伪造用户消息。每个 Turn 使用持久化 conversation identity、turn identity 和 input identity 建立 CurrentTurnAnchor。当前已接纳 Turn 的用户原始输入唯一拥有该 Turn 的执行方向；附件、对象引用、来源内容、摘要、Memory、Checkpoint、旧 AgentTask 和尚未 claim 的 PendingSubmission 都不能替换它。
 
-新用户输入到达时：
+新的普通输入被直接接纳，或 PendingSubmission 被 claim 为用户 Turn 时：
 
 - 明确继续上一复杂请求，才恢复其休眠 AgentTask；
 - 明确取消、替换或改变目标时，放弃旧 AgentTask；
@@ -873,7 +877,25 @@ Turn 是一次输入到最终响应、等待、阻塞、取消或失败的统一
 
 普通 Turn 中未完成的小处理没有跨 Turn AgentTask。清理或放弃 AgentTask 不删除已经形成的 Interaction Records、Artifact、Evidence、Domain State 或外部 receipt/read-back。
 
-### 11.2 AgentTask 创建门槛与最小骨架
+### 11.2 PendingSubmission 与显式中断
+
+active Turn 执行或 waiting 期间，用户在普通 Composer 按 Enter 只创建当前 Conversation 下的耐久 PendingSubmission，不 mid-turn 注入模型，也不提前创建 UserMessage、Turn、Interaction Record 或 Conversation Attachment。它是 Shared Conversation Kernel 的最小 ingress record，不是产品领域对象、AgentTask、PersistentTask、Product Context Source 或可复用的通用 `MessageQueue`。
+
+所有普通提交使用同一个幂等 submission identity 和 admission 命令，并携带用户原始文本、显式附件草稿引用、typed object reference、提交时可见的 mode 选择和来源客户端。只有没有 active Turn 且不存在待处理/保留 PendingSubmission 时，这些输入才在同一 Conversation 锁内直接创建 UserMessage/Turn/CurrentTurnAnchor；否则冻结为排队项。
+
+Conversation 以服务端顺序维护多条 FIFO 待发送输入。自动 admission 始终只 claim 队首；用户对某一项明确执行“停止当前并发送这条”，是唯一一次性的 FIFO 例外，interrupt request 必须绑定该 submission identity 与当前版本，安全停止后原子抽取该项，其他条目的相对顺序不变，不形成持久优先级或任意重排能力。interrupt 前先完成能够安全进行的输入与附件 preflight；最终 CAS/claim 仍失败时，不得回退发送其他排队项，Conversation 保持没有 active Turn并以该失败记录形成 admission hold。hold 期间新的普通输入只追加队尾，自动队首 claim 与 automation trigger 都不启动；只有用户编辑该失败项后明确重试、撤回它，或明确改选另一项时，才解除或转移 hold 并重新经过同一 CAS。其他项顺序不变。claim 前可以逐项编辑或撤回，claim 后不可修改；接纳失败时保留原项和明确原因，不静默跳过、丢输入或重复创建。这个 hold 是失败 PendingSubmission 的派生门禁，不是新对象或第二状态机。多标签页从同一耐久记录同步，不能由各自本地数组决定顺序或重复消费。
+
+普通完成、waiting resolution、显式中断与下一输入 admission 共用服务端所有的 Conversation lock 与 expected-active CAS 串行化边界，但分支效果不同。waiting resolution 只幂等解决当前 Interaction 并恢复同一 active Turn，零 claim、零替换 CurrentTurnAnchor；只有 normal terminal 或 interrupt 才先耐久保存旧 Turn 已产生的文本、Tool 配对、真实副作用与 TurnOutcome，再在同一受锁 handoff 中释放 active identity，并按规则至多接纳一个输入。命令比较预期 active turn identity、目标 submission identity、submission version 与未 claim 状态；排队项的编辑、撤回和 claim 也按同一 version/CAS 互斥。竞态中只有一个命令成功，失败方重新读取当前状态，不能让旧 finalizer 清除新 Turn、让 Interaction resolution 与 interrupt 同时生效，或让自动队首 claim 抢走显式选中的输入。
+
+PendingSubmission 列表属于 Composer 区，不属于 Activity Control Layer。它按顺序显示文本、附件与对象摘要，支持逐项编辑和撤回，不提供任意拖拽排序、自动合并、持久优先级或 `now/next/later`。用户可以对任一项明确选择“停止当前并发送这条”，并遵守上文唯一的原子抽取例外。PersistentTask trigger/Observation、系统通知、Tool Result 和 Interaction resolution 永远不进入这条用户输入队列。
+
+Turn waiting 时，Interaction 聚焦卡的 typed resolution 是恢复原 Turn 的唯一用户入口；clarification 卡提供自己的文本输入。普通 Composer 输入仍只排队，不能被模型猜成 approval、connection 或 clarification，也不能自动解除 waiting。用户可以先处理 Interaction，或明确选择“停止当前并发送这条”。
+
+显式中断不是第六种 TurnOutcome，也不替换旧 CurrentTurnAnchor。Runtime 先耐久记录 interrupt request，同时关闭当前 Turn 的 Agent Loop、下一次模型调用和新 Tool dispatch gate，并请求取消正在生成的模型流；已经产生的文本与结构化片段按事实耐久保留。尚未启动的批次零调用启动；已经形成有效 Tool Use 但未执行的调用以原 call identity 获得明确的“因用户中断未执行”Tool Result；已经启动的调用只请求取消，并按事实保留 success、failure、partial、receipt 或 unknown。外部副作用结果不确定时按 Tool Contract read-back/reconcile，仍无法确认则明确记录 unknown，不能声称已撤销。
+
+只有已经接受的 Tool Use/Result 配对完整、部分输出和真实副作用均耐久保存，且原 Turn 已写为 cancelled 后，选中的 PendingSubmission 才能创建新 Turn。每次模型/Tool dispatch 必须在当前 fence generation/lease 下原子登记为 in-flight，而不是先检查再启动；interrupt 关闭该 generation 后，只等待或取消已经登记的调用，任何尚未登记的模型/Tool 调用不得发起。已记为 unknown 的调用及其后续 reconcile 始终归原 call identity。迟到的 success/receipt 仍按事实追加到原 Tool Call/Result 与 Evidence 并通知用户，但绝不恢复已 cancelled Turn 或 AgentTask；在不确定性解除前，同对象的后续冲突副作用必须由幂等、Policy 或 Application Service 阻止，或先完成 read-back/reconcile。AgentTask 只冻结当时计划快照，不持有 queue、interrupt 或 cancelling 状态；“正在安全停止”只是 interrupt request 的 UI 投影。关闭/刷新页面、断开 SSE 或切换 Conversation 只表示客户端 detach，绝不等于 cancel。独立的“停止本次执行”不伪造下一条用户输入；其与已有排队项的具体按钮文案和继续方式由 Stage Spec 保持显式，不能静默消费。
+
+### 11.3 AgentTask 创建门槛与最小骨架
 
 直接回答、普通分析、简单生成和一次或少量直接 Tool 调用都在 Turn 内完成，不创建 AgentTask。
 
@@ -892,7 +914,7 @@ Turn 是一次输入到最终响应、等待、阻塞、取消或失败的统一
 
 AgentTask 通常服务并完成于当前 Turn。等待审批、连接、澄清、资料或基础设施恢复时，waiting 由 Turn 持有；只有需要用户输入或决定时才另外形成 durable pending interaction，Checkpoint 保存恢复引用。AgentTask 只冻结同一计划及当前阶段，当前阶段保持进行中，不新增 waiting/blocked 阶段，也不会因此变成 PersistentTask。阶段状态的物理枚举留给 Agent Runtime Stage Spec，不能扩张成第二套 TurnOutcome。
 
-### 11.3 确定性完成保障
+### 11.4 确定性完成保障
 
 所有 Turn 共用的完成保障只是 Shared Kernel 中的一段确定性控制逻辑，不新增产品对象、通用状态机或第二套任务生命周期。它按当前交付实际涉及的范围检查：
 
@@ -904,7 +926,7 @@ AgentTask 通常服务并完成于当前 Turn。等待审批、连接、澄清�
 
 AgentTask 及阶段更新必须幂等；计划 completed 或冻结后的历史快照不能被旧摘要、Memory 或 Recovery 自行复活。结构检查只查看本 Turn 激活的 AgentTask，不扫描整个 Session，也不伪造用户消息强制续跑。Turn 的 waiting、blocked、failed 与 cancelled 始终由 TurnOutcome 持有，不复制成 AgentTask 或阶段状态。
 
-### 11.4 Checkpoint 与 Compaction
+### 11.5 Checkpoint 与 Compaction
 
 Checkpoint 是 Shared Kernel 的维护机制，不是 AgentTask 业务阶段，也不是模型必须调用的 Tool。Kernel 在等待授权、Compaction、关键持久化副作用后、长执行保护或释放资源前自动保存最小恢复状态。
 
@@ -925,13 +947,13 @@ Compaction 结果只有成功持久化后才能成为新的 active compact bound
 
 Compaction 由模型与 Provider 的上下文容量和实际 Token 使用触发，不是固定 Agent 步数预算。它只让 Agent Loop 暂时把控制交给 Kernel；恢复完成后在同一 Turn 继续执行。普通多轮、一次或多次压缩后的多轮，以及等待后恢复，都遵守同一 CurrentTurnAnchor、来源、Tool 配对和完成语义。
 
-### 11.5 Agent Loop 终止
+### 11.6 Agent Loop 终止
 
-Agent Loop 只依据真实控制流和第 11.3 节的确定性检查收敛：
+Agent Loop 只依据真实控制流和第 11.4 节的确定性检查收敛：
 
 1. 模型产生真实、结构化的 Tool Call 时，Runtime 解析具体调用，经过 Capability/Binding、Policy 和安全批次检查后执行，把真实 Tool/Policy Result 回灌，再继续模型循环。Provider 的 finish reason、自由文本中的 Tool-like 片段和模型自述都不能代替实际 Tool Call。
 2. 模型没有产生真实 Tool Call 时只形成**候选完成**，不直接写入 completed。
-3. Shared Kernel 执行适用于本次交付的确定性完成检查；存在 AgentTask 时再检查其当前扁平阶段。检查通过才可 completed；存在待用户动作则 waiting；无法取得目标所需能力或证据则 blocked；不可恢复的执行故障则 failed；用户停止则 cancelled。
+3. Shared Kernel 执行适用于本次交付的确定性完成检查；存在 AgentTask 时再检查其当前扁平阶段。检查通过才可 completed；存在待用户动作则 waiting；无法取得目标所需能力或证据则 blocked；不可恢复的执行故障则 failed；用户停止或显式中断则 cancelled。PendingSubmission 的存在不影响旧 Turn 的完成裁定。
 
 全链路只使用五种最小 TurnOutcome：
 
@@ -947,7 +969,7 @@ Agent Loop 只依据真实控制流和第 11.3 节的确定性检查收敛：
 
 硬边界只绑定可识别的局部故障或资源风险：单次模型/Tool/网络调用超时与取消、可恢复 API/认证错误的有限重试、输出截断的有限续写、空输出或无效结构化输出的有限修复、相同 Tool 与规范化 input/相同输出重复、重新规划后仍没有新状态或 Evidence、Compaction/Checkpoint 恢复失败，以及 emergency watchdog/Worker lease。局部保护按故障签名生效，只有获得真实新进展才解除；耗尽后按实际情况形成 blocked、failed 或 waiting，保留已有结果和 Checkpoint，不能伪装成 completed。具体阈值只在相应 Stage Spec 中按故障类型冻结，不能扩张成 AgentTask 的总步数预算；watchdog 只识别失活和负责恢复/终止资源，不判断业务目标是否完成。
 
-### 11.6 Agent 执行呈现与同一事实投影
+### 11.7 Agent 执行呈现与同一事实投影
 
 Agent 执行呈现遵守“用户默认看语义进度，真实 Tool 轨迹可在当前对话展开，更深审计按需查看”。它只从 Turn、AgentTask、当前待处理交互、Tool Call/Result、Interaction Records、Evidence 与 TurnOutcome 派生，不新增 Presentation 领域对象、执行状态机、第二套 Tool 记录或事实源。
 
@@ -964,13 +986,15 @@ flowchart TB
         Plan ~~~ Interaction
     end
 
-    Composer["用户输入栏"]
+    Composer["Composer<br/>待发送队列 · 用户输入栏"]
     Content --> Control --> Composer
 ```
 
 Activity Control Layer 在所有宽度下保持固定单列：AgentTask 计划卡在上，Interaction 聚焦卡在下并靠近输入栏；不存在的卡不占位。不同屏幕只调整宽度、间距、截断和换行，不建设左右双栏、角落悬浮或另一套响应式语义。容器本身没有展开、waiting 或组合状态，两张卡也不互相读取或派生状态。
 
-AgentTask 计划卡只在本 Turn 已创建、激活或明确承接了 AgentTask 时出现，默认紧凑显示任务目标、已完成阶段数/总数、当前阶段和存在时的下一阶段，展开后显示完整扁平计划。它只消费第 11.2 节的 plan-execute 状态，不显示 waiting、连接、审批、澄清、TurnOutcome、Tool 日志、重试、receipt 或 Evidence 详情。Interaction 出现时，计划卡保持原 identity、当前阶段和用户的展开状态；当前阶段继续处于进行中，不变成“等待用户”，Interaction 消失也不能直接修改计划。
+PendingSubmission 队列在 Activity Control Layer 之外、作为 Composer 的一部分显示。每项按服务端 FIFO 顺序稳定呈现，claim 前可编辑或撤回；“停止当前并发送这条”进入可见的安全停止过程，但不能隐藏旧 Turn 已完成的 Tool、部分结果、外部副作用或 receipt。队列的 UI 只是耐久 ingress record 的投影，不拥有事实、顺序或消费状态。
+
+AgentTask 计划卡只在本 Turn 已创建、激活或明确承接了 AgentTask 时出现，默认紧凑显示任务目标、已完成阶段数/总数、当前阶段和存在时的下一阶段，展开后显示完整扁平计划。它只消费第 11.3 节的 plan-execute 状态，不显示 waiting、连接、审批、澄清、TurnOutcome、Tool 日志、重试、receipt 或 Evidence 详情。Interaction 出现时，计划卡保持原 identity、当前阶段和用户的展开状态；当前阶段继续处于进行中，不变成“等待用户”，Interaction 消失也不能直接修改计划。
 
 Interaction 聚焦卡只在当前 Turn 必须取得用户输入或决定时出现，负责 clarification（包括冲突选择）、首次连接或 scope、逐调用 approval 和 client readiness。一个 Turn 同一时刻只有一个当前 unresolved Interaction；批次授权在同一卡中整体表达，后续需要用户处理的问题只在当前 Interaction 解决并恢复执行后按需生成。卡片说明需要用户参与的原因、对象/账号/动作、影响和可选操作。附件解析、短暂 Provider 重试等不需要用户输入的自动等待只进入 Turn 执行动态，不生成 Interaction 卡。
 
@@ -988,7 +1012,7 @@ Turn 执行动态属于可滚动内容层，按真实 identity 原位更新当�
 
 并行调用按模型原 Tool Call 顺序稳定安放，每个 call identity 在真实进度或完成事件到达时立即原位更新，不因完成先后重新排列或等待最慢调用；模型输入和 Conversation 规范历史仍按第 15.2 节的原调用顺序回放。刷新、断线、页面切换或 waiting 恢复时，从耐久的 Turn、AgentTask、当前未解决交互、Interaction Records 与 Tool Call/Result 重建相同投影；SSE/Redis 只提供实时增量，不能成为唯一恢复来源，UI 也不能通过流关闭、loading 状态或本地 Block 猜测 TurnOutcome。Compaction 只改变模型上下文投影，不删除对话内执行轨迹、决策记录或 Evidence。
 
-Turn completed、blocked、failed 或 cancelled 后 Activity Control Layer 消失；waiting 期间仍保留适用的 Interaction 聚焦卡与 AgentTask 计划卡。存在过 AgentTask 时可以在对应历史 Turn 中保留一条可展开的计划摘要，resolved Interaction 只保留紧凑决策记录，Turn 执行动态和真实结果继续按保留规则可读。PersistentTask 的跨 trigger 卡片合集仍由第 12.5 节定义，不与一个活动 Turn 的 Interaction 聚焦卡合并；二者最多复用可信卡片壳层。
+Turn completed、blocked、failed 或 cancelled 后 Activity Control Layer 消失；waiting 期间仍保留适用的 Interaction 聚焦卡与 AgentTask 计划卡。存在过 AgentTask 时可以在对应历史 Turn 中保留一条可展开的计划摘要，resolved Interaction 只保留紧凑决策记录，Turn 执行动态和真实结果继续按保留规则可读。PersistentTask 的跨 trigger 卡片合集仍由第 12.5 节定义，不与一个活动 Turn 的 Interaction 聚焦卡或 PendingSubmission 队列合并；三者最多复用可信卡片壳层。
 
 ## 12. PersistentTask 与专用 Conversation
 
@@ -1044,7 +1068,9 @@ scheduled/event trigger 把当前任务定义与本次 trigger/Observation 编�
 
 不同 PersistentTask 可以独立调度，但 Dedicated Conversation 不保证账号、对象、邮箱、日历或其他资源不重叠。每个实际 Tool/Application Service 调用仍必须根据领域对象、Provider 资源、幂等和并发冲突决定是否串行；不能仅因任务不同就假定并行安全。
 
-trigger 合并、cursor、Observation 积累、补偿 Turn 和卡片队列属于 Scheduler/Automation Intake。Shared Kernel 只负责 Turn、waiting、Recovery、Tool、Policy 和 Evidence；普通 Conversation 不认识 tick、cursor 或自动化队列。
+trigger 合并、cursor、Observation 积累、补偿 Turn 和卡片队列属于 Scheduler/Automation Intake。Shared Kernel 只负责 Turn、waiting、Recovery、Tool、Policy 和 Evidence；普通 Conversation 不认识 tick、cursor 或自动化队列。用户 PendingSubmission 与自动化 trigger 是两种独立 ingress：前者只接收普通 Composer 的显式用户输入，后者只服务已确认 PersistentTask；不得合并成统一 command/message queue，也不得互相消费。
+
+在 Dedicated Conversation 中，两种 ingress 虽保留各自记录与生命周期，但都必须通过同一个 Conversation admission/CAS，不能拥有两个 Turn 创建者。当前 Turn 终结后如果用户 PendingSubmission 与已合并 trigger 同时可执行，显式用户输入固定优先；trigger 保留，待该用户 Turn 结束后基于最新任务定义、cursor 与 Observation 重新判断是否仍需最多一次补偿 Turn。这个单一仲裁规则不是通用优先队列，也不能绕过“用户停止本次后不立即补偿”。
 
 ### 12.5 卡片式待处理合集
 
@@ -1056,7 +1082,7 @@ trigger 合并、cursor、Observation 积累、补偿 Turn 和卡片队列属于
 - 同一对象或外部事件先去重，不生成重复卡；
 - 已在授权范围内完成的高置信度结果只汇报，不再生成确认卡。
 
-卡片不是 NextAction，也不是全局 Copilot 队列。只有经相应领域规则确认后形成的 ProcessEvent、NextAction、CandidateProfile 更新或其他正式变化才进入共享 Domain State。
+卡片不是 NextAction、PendingSubmission，也不是全局 Copilot 队列。只有经相应领域规则确认后形成的 ProcessEvent、NextAction、CandidateProfile 更新或其他正式变化才进入共享 Domain State。
 
 ### 12.6 用户控制、删除与修改
 
@@ -1064,7 +1090,7 @@ PersistentTask 只保留 active 与 paused 两种生命周期语义；删除是�
 
 - **停止本次执行**：取消当前 Automation Turn，PersistentTask 仍为 active，未来正常触发仍可启动新 Turn。
 - **暂停自动化**：停止未来 scheduled/event trigger，可以恢复；不隐式取消已经开始的 Turn。需要同时停止当前执行时，用户另选“停止本次执行”。
-- **删除任务**：停止当前 Turn、撤销后续调度，并删除 PersistentTask、其 Dedicated Conversation、任务局部 Interaction Records、未处理卡片和局部恢复状态；不能撤销已经发生的外部动作，也不级联删除已经正式进入共享 Domain State、Artifact 或 Evidence 的结果。删除前必须明确展示这些影响并确认。
+- **删除任务**：先禁止后续调度与 Dedicated Conversation 的新 admission/claim，按安全取消语义终结当前 Turn，撤回并删除全部 PendingSubmission、释放其草稿附件引用，再删除 PersistentTask、Dedicated Conversation 的用户内容、任务局部 Interaction Records、未处理卡片和局部恢复状态。仍有 in-flight、unknown 或待 reconcile 外部调用时，按 Conversation 删除规则只暂留最小 reconciliation/receipt correlation tombstone，不能为完成删除而丢弃迟到回执或复活任务；已经发生的外部动作不能撤销，也不级联删除已经正式进入共享 Domain State、Artifact 或 Evidence 的结果。删除前必须明确展示这些影响并确认。
 
 用户在任务 Conversation 中明确提出的定义修改可以直接生效并简短通知。Agent 可以在既有目标与范围内调整执行方法；从用户行为推断出的目标、账号、数据或动作范围变化只能提出建议，等待用户确认，不能静默改写任务。
 
@@ -1087,7 +1113,7 @@ Reminder 仍是 planned NextAction 的通知安排。只有持续读取来源、
 
 统一解析路径为：
 
-    CurrentTurnAnchor 与最新用户原文
+    CurrentTurnAnchor 与当前已接纳 Turn 的用户原文
       → AgentStrategy 主模型理解任务并识别所需 Capability
       → 查找真实 Binding
       → 校验实现可用性、账号连接、Provider scope 与用户指定
@@ -1252,9 +1278,9 @@ Client Action 只发送给发起 Turn 的客户端实例。其他标签页可以
 
 前后端复用或生成同一份 typed action contract，并以 handler contract test 防止协议漂移；这不要求建设通用 action payload。Bridge 和 handler 只实现能力，不能授予权限，具体调用仍在执行前经过 Policy。Flow 中某一步成功、后一步失败时，由对应领域 Capability 解释已完成状态、可恢复位置和是否需要补偿，不建设万能补偿状态机，也不回滚无法安全撤销的真实结果。
 
-普通交互 Turn 缺少必需客户端时，对应 Client Action 明确不可用；仅为方便查看的页面动作退化为可选入口，不阻塞已经完成的后台工作。PersistentTask Turn 可以调用已授权的 Application Service 与 Integration，但没有活跃客户端时不得导航、预填或操控普通主入口；确需现场交互时只在该 PersistentTask 自己的 Dedicated Conversation 卡片合集形成待处理项或通知，用户打开并明确继续后复用第 11.6 节的 Interaction 聚焦卡与同 Turn 恢复，不能把动作转移到普通 Career Conversation。
+普通交互 Turn 缺少必需客户端时，对应 Client Action 明确不可用；仅为方便查看的页面动作退化为可选入口，不阻塞已经完成的后台工作。PersistentTask Turn 可以调用已授权的 Application Service 与 Integration，但没有活跃客户端时不得导航、预填或操控普通主入口；确需现场交互时只在该 PersistentTask 自己的 Dedicated Conversation 卡片合集形成待处理项或通知，用户打开并明确继续后复用第 11.7 节的 Interaction 聚焦卡与同 Turn 恢复，不能把动作转移到普通 Career Conversation。
 
-当前阶段只实现固定产品页面、产品编写的 typed handler，并复用第 11.6 节的可信 Interaction 聚焦卡、执行动态和 typed Tool 结果投影；Client Action 不另建等待卡或结果卡系统。不建设通用生成式 UI 协议、模型生成组件树或 UI schema，也不执行模型生成的 HTML、JavaScript 或客户端代码。未来只有真实、反复出现且固定页面无法清楚承载的比较或确认场景，才重新讨论受限可信组件目录；Client Action Bridge 本身永远不是生成式 UI 后门。
+当前阶段只实现固定产品页面、产品编写的 typed handler，并复用第 11.7 节的可信 Interaction 聚焦卡、执行动态和 typed Tool 结果投影；Client Action 不另建等待卡或结果卡系统。不建设通用生成式 UI 协议、模型生成组件树或 UI schema，也不执行模型生成的 HTML、JavaScript 或客户端代码。未来只有真实、反复出现且固定页面无法清楚承载的比较或确认场景，才重新讨论受限可信组件目录；Client Action Bridge 本身永远不是生成式 UI 后门。
 
 ### 13.9 Skill 的三层加载
 
@@ -1318,7 +1344,7 @@ Policy 无法可靠判断、关键事实缺失、账号/对象/收件人有歧�
 **Standard**
 
 - 只读与推理可以在所有权和 Grant 允许时直接执行；
-- 内部可逆写入只有在最新用户任务确实包含该状态变化，且对象自身的确认、identity、Evidence 和状态不变量允许时才能直接执行，并展示结果摘要；“可撤销”本身不是写入授权；
+- 内部可逆写入只有在当前已接纳的用户任务确实包含该状态变化，且对象自身的确认、identity、Evidence 和状态不变量允许时才能直接执行，并展示结果摘要；“可撤销”本身不是写入授权；
 - 对外发送、提交、预约或修改等普通外部动作，在产生副作用前请求确认；
 - 用户当前原文已经明确授权的同一原子动作不重复形式确认；
 - 对象、账号、收件人、关键内容或范围变化时重新判断。
@@ -1412,14 +1438,19 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 
 ### 16.1 目标所有权
 
-    presentation/        页面、API、SSE、AppShell 级 Client Action Bridge，以及从既有状态派生的
-                         Turn 执行动态、固定单列活动控制层、可信 Interaction/AgentTask/Tool renderer；
-                         投递 typed action、调用白名单 handler，并返回 acknowledgement/refusal/failure
+    presentation/        页面、API、SSE、AppShell 级 Client Action Bridge、Composer PendingSubmission 投影，
+                         以及从既有状态派生的 Turn 执行动态、固定单列活动控制层、
+                         可信 Interaction/AgentTask/Tool renderer；投递 typed action、调用白名单 handler，
+                         并返回 acknowledgement/refusal/failure，但不拥有队列顺序或消费事实
     conversation/        Shared Kernel、Application Profile、Turn、Strategy 路由、
                          Active Working Context、Context Compiler、Prompt Assembly/Cache、History/Memory 读取、
-                         pending interaction/client action 的持久恢复、TurnOutcome 与 initiating-client affinity
+                         Conversation admission、耐久 PendingSubmission、active-Turn CAS、input idempotency、
+                         terminalization/admission handoff、interrupt request、Agent Loop/模型调用 dispatch fence、
+                         pending interaction/client action 的持久恢复、
+                         TurnOutcome 与 initiating-client affinity；不建设领域 MessageQueue
     agent_runtime/       唯一 AgentStrategy、Agent Loop、AgentTask、Capability Resolver、
-                         Tool Catalog/Executor 与 Policy；不持有 UI waiting/approval 状态
+                         Tool Catalog/Executor 与 Policy；中断时服从 Kernel fence、停止新 Tool dispatch、
+                         取消已启动调用、闭合 Tool Result 与 reconcile；不持有 queued input 或 UI waiting/approval 状态
     career/domain/       求职领域实体、不变量与领域事件
     career/application/  Profile、方向、岗位、材料、面试、Offer、行动等用例服务，
                          以及领域 Flow 的校验、真实 Runtime create/start 与结果
@@ -1451,7 +1482,7 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 | query_planner | 收敛为仅供 Debrief Chat 当前 Turn 使用的 Chat Retrieval Planner；AgentStrategy 不经过独立 Planner |
 | task_create/update | 只维护当前复杂请求的单个 AgentTask 聚合与可区分未开始、进行中、完成、明确跳过的扁平阶段计划；不成为普通 Turn 固定流程，不管理跨任务依赖，也不承载 waiting、approval、blocked 或 Tool 日志 |
 | task_checkpoint | 取消模型主动维护；Checkpoint 归 Shared Kernel |
-| `task_verify`（现有旧 Tool） | 删除旧验证链，不设置替代 Tool；完成判定归 Shared Kernel 的第 11.3 节确定性检查 |
+| `task_verify`（现有旧 Tool） | 删除旧验证链，不设置替代 Tool；完成判定归 Shared Kernel 的第 11.4 节确定性检查 |
 
 迁移验收不能只检查 Tool 是否改名，还要验证真实 handler、typed data、Policy、claim-specific Evidence、失败语义，以及页面和 Agent 是否共用 Application Service。
 
@@ -1481,7 +1512,7 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 - frontend/src/pages/review/chat/MessageList.tsx、MessageBlocks.tsx、Bubble.tsx、useSessionRuntimes.ts
 - frontend/src/api/knowledge.ts、frontend/src/api/fileAssets.ts
 
-重点验证：现有 SessionTask 是否把阶段误当 Session 全局任务或混入 Turn waiting/blocked，旧完成门禁是否扫描无关工作，Capability permissions 是否默认放行未知扩展，Agent 是否绕过公共 RAG，上下文压缩是否可能恢复错任务，以及是否存在可复用的耐久 control event、断线重放、同 Turn waiting/resume、Tool Call 幂等、客户端实例绑定、认证 acknowledgement、Prompt Assembly 或 Prompt Cache 基础。还要核查 Tool progress/result 是否通过 call identity 原位归并，前端是否错误依赖相邻 `tool_use/tool_result`，Redis/SSE 过期后能否从耐久记录恢复，`done` 是否与 TurnOutcome 混淆，简单 Turn 是否渲染空 AgentTask/执行卡，以及默认、inline、audit 三层能否从同一耐久调用事实按共同脱敏契约形成各自读取投影。Client Action Bridge 应位于 AppShell 级稳定消费点；没有真实 handler 时不得为了满足目标架构虚构 UI Tool、页面自动化或缓存对象。
+重点验证：现有 SessionTask 是否把阶段误当 Session 全局任务或混入 Turn waiting/blocked，旧完成门禁是否扫描无关工作，Capability permissions 是否默认放行未知扩展，Agent 是否绕过公共 RAG，上下文压缩是否可能恢复错任务，以及是否存在可复用的耐久 control event、断线重放、同 Turn waiting/resume、Tool Call 幂等、客户端实例绑定、认证 acknowledgement、Prompt Assembly 或 Prompt Cache 基础。还要核查现有输入是否只存在本地 queue、是否 mid-turn 注入或在服务端确认前提前创建 UserMessage/Turn，多标签是否通过服务端 admission/CAS 去重；normal terminal、waiting resolution 与显式 interrupt 必须共用 Conversation lock/expected-active CAS 的串行化边界，但只有 terminal/interrupt 使用 terminalization-admission handoff，waiting resolution 必须恢复同一 Turn、零 claim、零替换 Anchor。还要核查 SSE detach 是否误触 cancel，interrupt 是否同时停止模型流、下一次模型调用和新 Tool dispatch，未启动与已启动 Tool 是否分别闭合 Result、保留 receipt/partial/unknown/迟到 receipt 并进行必要 read-back，以及排队附件是否提前获得 Conversation scope。Tool progress/result 必须通过 call identity 原位归并，前端不能依赖相邻 `tool_use/tool_result`；Redis/SSE 过期后应能从耐久记录恢复，`done` 不能与 TurnOutcome 混淆，简单 Turn 不渲染空 AgentTask/执行卡，默认、inline、audit 三层从同一耐久调用事实按共同脱敏契约形成各自读取投影。Client Action Bridge 应位于 AppShell 级稳定消费点；没有真实 handler 时不得为了满足目标架构虚构 UI Tool、页面自动化或缓存对象。
 
 当前附件实现已经有 FileAsset、AttachmentRef DTO、ConversationTurn 快照、私有 chunks 和公共 Grounding 外形，但不能据此宣称阶段 1 已完成。实施前必须把以下已确认 P0 当作迁移输入而不是目标设计：上传时提前创建 conversation-scoped KnowledgeDocument，Composer 的 X/清空只删除本地芯片却留下以后仍可读取的“幽灵附件”，每轮把当前 Conversation 的全部 ready 文件及 chunks 作为候选装载，显式来源在校验后被删除时可能静默消失，Agent 仍跳过公共知识 RAG，失败文件缺少用户重解析与可靠草稿恢复。`chat_attachment` source_kind 和“不写全局 Milvus”只证明当前做了部分技术隔离，不代表 Conversation Attachment 已经拥有正确领域生命周期。
 
@@ -1497,11 +1528,12 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 | forked Skill / actor 成本 | src/tools/SkillTool/SkillTool.ts:122、206、223、623 | packages/opencode/src/tool/actor.ts:35、63、354、612、712、771 | 完整额外执行者需要独立上下文、权限、取消和结果协议，不能用额外模型调用冒充 |
 | Standard / Auto | src/types/permissions.ts:16、28；src/utils/permissions/PermissionMode.ts:45、66、80；src/utils/permissions/permissions.ts:518、593、658、688、818、843、878、1169、1183、1230、1238、1252；src/utils/permissions/permissionSetup.ts:505、529、555、627 | — | 全局模式、参数级 Policy 和不可绕过例外，不复制 Bash/路径分类 |
 | Tool Contract | src/Tool.ts:321、362、379、394、402、405、500、743；src/services/mcp/client.ts:1743、1765；src/tools.ts:329、345；src/services/tools/toolExecution.ts:1206、1282、1589 | — | 薄 typed success、input-dependent effect/concurrency、统一错误外层 |
-| AgentTask 与 Recovery | src/utils/todo/types.ts:4；src/utils/tasks.ts:69、76、94、284、534；src/tools/TaskUpdateTool/TaskUpdateTool.ts:326；src/utils/sessionRestore.ts:72；src/services/compact/autoCompact.ts:241；src/utils/messages.ts:3680 | packages/opencode/src/session/todo.ts:9；src/task/schema.ts:7；src/task/registry.ts:272；src/task/gate.ts:53；src/session/prune.ts:237；src/session/llm.ts:155；src/agent/prompt/checkpoint-writer.txt:69 | 单 Agent 的复杂请求只保留一个 AgentTask 与扁平阶段，最新用户输入优先，Checkpoint 由 Kernel/维护 writer 产生 |
-| Context 编排、Prompt Cache 与 Compaction | src/utils/queryContext.ts:44、61；src/utils/api.ts:437、449；src/constants/prompts.ts:560；src/constants/systemPromptSections.ts:16、27、43、61；src/query.ts:365、449、659、1535、1714；src/services/api/claude.ts:358、3213；src/services/compact/compact.ts:325、517、613、1399 | — | 规则、会话投影、明确来源、最新输入和调用结果分层；稳定前缀与动态尾部分离；缓存命中不影响语义；压缩保留近期原文与调用配对完整性，并从权威源重载 |
+| AgentTask 与 Recovery | src/utils/todo/types.ts:4；src/utils/tasks.ts:69、76、94、284、534；src/tools/TaskUpdateTool/TaskUpdateTool.ts:326；src/utils/sessionRestore.ts:72；src/services/compact/autoCompact.ts:241；src/utils/messages.ts:3680 | packages/opencode/src/session/todo.ts:9；src/task/schema.ts:7；src/task/registry.ts:272；src/task/gate.ts:53；src/session/prune.ts:237；src/session/llm.ts:155；src/agent/prompt/checkpoint-writer.txt:69 | 单 Agent 的复杂请求只保留一个 AgentTask 与扁平阶段，当前已接纳 Turn 的用户输入优先，Checkpoint 由 Kernel/维护 writer 产生 |
+| Context 编排、Prompt Cache 与 Compaction | src/utils/queryContext.ts:44、61；src/utils/api.ts:437、449；src/constants/prompts.ts:560；src/constants/systemPromptSections.ts:16、27、43、61；src/query.ts:365、449、659、1535、1714；src/services/api/claude.ts:358、3213；src/services/compact/compact.ts:325、517、613、1399 | — | 规则、会话投影、明确来源、当前已接纳输入和调用结果分层；稳定前缀与动态尾部分离；缓存命中不影响语义；压缩保留近期原文与调用配对完整性，并从权威源重载 |
 | Attachment 与显式来源 | processTextPrompt.ts:66-99；attachments.ts:1894-1963、3020-3198；messages.ts:1476-1526、3525-3588 | — | 显式引用先受控解析、来源数据与用户指令隔离、长内容按需读取、压缩后按引用恢复；不照搬隐式邻接、静默失败、伪 Tool 文本或本地 CLI 的文件身份 |
 | Memory 边界 | src/utils/claudemd.ts；src/services/SessionMemory；src/services/compact；src/memdir/memoryTypes.ts、memoryScan.ts、findRelevantMemories.ts；src/utils/sessionRestore.ts | packages/opencode/src/session/checkpoint、prune.ts、compaction.ts；src/memory；src/tool/history.ts、memory.ts；src/memory/write-gate.ts | instruction、History、Recovery 与 Long-term Memory 分离，writer 作用域受 Runtime 强制 |
 | 完成判定与局部熔断 | src/query.ts:551、829、1062、1168、1258、1267、1308、1357、1704；src/services/api/withRetry.ts:52、57、696 | packages/opencode/src/session/classify.ts:42、105；src/session/prompt.ts:160、3166、4217；src/session/prompt/text-loop-recovery.ts:3 | 真实 Tool Call 驱动循环、无 Tool 只是候选完成、正常 Turn 无固定步数，具体故障使用局部有限恢复 |
+| Queued input 与 interrupt | src/types/textInputTypes.ts:276；src/utils/messageQueueManager.ts:41、123、422；src/components/PromptInput/PromptInputQueuedCommands.tsx:71；src/utils/handlePromptSubmit.ts:313；src/screens/REPL.tsx:4098；src/query.ts:1011、1535；src/services/tools/StreamingToolExecutor.ts:277 | — | 借鉴可见、可编辑的待发送输入和中断后 Tool Result 配对；不照搬 mid-turn steering、普通提交自动中断、进程内统一 command queue、`now/next/later` 或一次拉回全部输入。每个用户输入只在原子接纳后创建独立新 Turn |
 | Agent 执行呈现与 waiting | src/components/Spinner.tsx:161、280；src/components/TaskListV2.tsx:128、220；src/components/Messages.tsx:475、559、614；src/components/messages/AssistantToolUseMessage.tsx:61、238；src/components/messages/CollapsedReadSearchContent.tsx:142、220、260；src/components/messages/UserToolResultMessage/UserToolResultMessage.tsx:36；src/hooks/toolPermission/handlers/interactiveHandler.ts:44、137、154；src/screens/REPL.tsx:1672、4518、4606 | — | 借鉴复杂请求的 plan-execute 阶段与 waiting 交互分离，以及默认摘要、对话内展开和可读 transcript 共用 call identity；深层审计是本项目基于耐久执行记录补充的产品能力，不能把 Claude Code 的 verbose/transcript 当成审计源；等待恢复同一 Turn/call identity，不复制 terminal UI、DAG/owner/blockedBy、进程内无限 Promise 或 raw thinking |
 
 ### 16.5 导航和数据迁移原则
@@ -1520,25 +1552,27 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 
 - Career/Debrief Profile 共享唯一 AgentStrategy，Mock Interview 保持独立 Flow；
 - 移除 Agent 前置 Intent Resolver/Planner；Debrief Chat 保留只服务当前 Turn 的 Chat Retrieval Planner，并完成同一 Conversation 内按 Turn 切换 Chat/Agent 的无缝上下文与 Evidence 投影；
-- 落地 CurrentTurnAnchor、最新输入所有权、Claude Code 式 Context Assembly、稳定前缀/动态尾部 Prompt Cache、可连续执行的压缩/恢复和 Tool Call/Result 配对完整性；
+- 落地 CurrentTurnAnchor、当前已接纳输入的方向所有权与 PendingSubmission 隔离、Claude Code 式 Context Assembly、稳定前缀/动态尾部 Prompt Cache、可连续执行的压缩/恢复和 Tool Call/Result 配对完整性；
+- 实现每条 Conversation 单 active Turn admission：只有无 active Turn 且队列为空时同一命令直接创建 UserMessage/Turn/CurrentTurnAnchor，否则形成耐久 FIFO PendingSubmission；失败项形成派生 admission hold，后续输入只入队，自动 claim/automation trigger 需等用户修正重试、撤回或明确改选。normal terminal、waiting resolution、显式 interrupt 与下一输入 claim 共用 active-turn/submission-version CAS 的串行化边界，但 waiting resolution 只恢复同一 Turn、零 claim，只有 terminal 分支才执行原子 terminalization/admission handoff；保证 submission 幂等与多标签同步，不建设通用 MessageQueue；
+- 实现显式“停止当前并发送”：interrupt request 绑定所选 submission，作为唯一一次性的 FIFO 抽取例外；preflight 后若最终 claim 失败绝不发送其他项。先关闭 Agent Loop、下一次模型调用和 Tool dispatch generation，取消当前模型流并保留已生成内容；模型/Tool dispatch 必须在 fence 下原子登记 in-flight，未登记调用零启动，已登记调用取消并保留真实 receipt/partial/unknown、迟到回执与必要 reconcile，旧 Turn cancelled 后才创建新 Turn；SSE detach、刷新和切换 Conversation 不得误触 cancel；
 - Agent 通过公共 Context/RAG 链读取，不再绕过 RAG 质量与 Evidence；
 - 实现按具体调用预检的安全 Tool 并行、UI 完成序/模型与历史调用序分离、五种统一 TurnOutcome、确定性完成门禁、语义终止和局部故障熔断；
 - callable catalog 只保留真实 Tool，区分缺少 Binding 与缺少 connection/scope；
 - 完成首次连接/授权在同一 Turn 的等待与恢复；
 - 建立可复用的耐久 control event：由 Turn 在原 Tool Call/Capability 边界进入 waiting，恢复时复用同一 Turn 与 call identity；幂等 identity 与 initiating-client 投递基座供后续连接、审批、附件和 Client Action 共用；本阶段不建设业务 action 全目录或生成式 UI；
-- 建立第 11.6 节的统一执行呈现基座：内容层保留 Turn 执行动态，活动控制层固定单列显示可选 AgentTask 计划卡和 Interaction 聚焦卡；简单 Turn 不产生空卡，waiting 不污染 plan-execute 阶段；
+- 建立第 11.7 节的统一执行呈现基座：内容层保留 Turn 执行动态，活动控制层固定单列显示可选 AgentTask 计划卡和 Interaction 聚焦卡；简单 Turn 不产生空卡，waiting 不污染 plan-execute 阶段；
 - Tool 事件按 call identity 归并并原位更新，修复相邻 Block 配对假设；默认语义动态、对话内展开与深层审计共用同一耐久 Tool Call/Result、成功判断和服务端脱敏契约，并形成不同读取投影，live、刷新、断线和 Redis/SSE 过期后都从耐久来源重建；
 - 移除万能 Memory/Task Tool 对领域和恢复语义的绕过。
 
 #### 阶段 1：附件与公共 Evidence
 
 - 先形成 Attachment Stage Spec，再按第 9.4 节实现 FileAsset/source identity、结构化 AttachmentRef、解析投影和真实 scope 校验；现有同名 DTO、`chat_attachment` 或私有 chunks 不视为已经完成；
-- Conversation Attachment 只在发送后属于该 Conversation，后续 Turn 持续可用但按最新任务装载；发送前移除必须真实撤销，其他 Conversation 不能读取；
+- Conversation Attachment 只在普通输入经统一 admission 接纳、创建 Turn 并冻结 AttachmentRef 后属于该 Conversation；无 active Turn 且队列为空时可同事务直接接纳，否则 PendingSubmission 在 claim 前仍是草稿引用。后续 Turn 持续可用但按当前已接纳任务装载；编辑或撤回排队项必须真实解除引用，claim 时重新校验且不能静默丢附件，其他 Conversation 不能读取；
 - 落地仅用于 InterviewRecord 的 Debrief Project Source，使同一复盘的多条 Conversation 共享复盘固有或明确加入的来源，同时保持各自聊天附件隔离；不实现通用 Project；
 - 会话/复盘索引在候选检索前应用 scope，不污染或竞争用户全局资料索引；Chat 与 Agent 共享 Source Resolver、解析、RAG、grounding、引用和显式失败；
-- 完成四态文件进度、可见 warning、多文件部分成功、解析 waiting/同 Turn 恢复、用户重试、失败项移除后继续、取消与草稿恢复；逐项覆盖切换 Conversation 后返回、上传/解析中刷新、创建 Turn 前失败、Turn 创建后 SSE 中断和用户取消，恢复/重试不得重复消息、AttachmentRef 或解析投影；不允许无限 spinner 或显式来源静默消失；
+- 完成四态文件进度、可见 warning、多文件部分成功、解析 waiting/同 Turn 恢复、用户重试、失败项移除后继续、取消与草稿恢复；逐项覆盖切换 Conversation 后返回、上传/解析中刷新、排队项刷新/多标签/撤回/claim 竞争、创建 Turn 原子失败、Turn 创建后 SSE 中断和用户取消，恢复/重试不得重复消息、Turn、AttachmentRef 或解析投影；不允许无限 spinner 或显式来源静默消失；
 - 按任务自动选择完整、分段、RAG、视觉/OCR、表格和音频转写读取，不提供全文/RAG 技术开关；完整审阅和多文件比较必须有可验证覆盖；
-- 区分发送前移除、scope 移除、永久删除、替换、显式晋升和删除 Conversation。Conversation 仍存在时，scope 移除、永久删除或替换保留历史版本/引用或 tombstone；删除整个 Conversation 则按其保留规则删除消息和局部 Interaction Records，不要求在已删除 scope 内保留 tombstone。删除确认必须披露消息、未晋升附件及已晋升来源的不同后果；普通或 Dedicated Conversation 删除后，未晋升附件不可复活，Debrief Project scope、正式 Artifact/Evidence 不级联删除，共享 blob 仅在无其他有效引用且满足保留规则后清理；
+- 区分 claim 前移除、scope 移除、永久删除、替换、显式晋升和删除 Conversation。Conversation 仍存在时，scope 移除、永久删除或替换保留历史版本/引用或 tombstone；删除整个 Conversation 先禁止 admission/claim、安全终结 active Turn、删除全部 PendingSubmission 并释放草稿引用，再按其保留规则删除消息和局部 Interaction Records。仍有 in-flight/unknown/reconcile 时只暂留最小 receipt correlation tombstone，结算后清理，不能保存用户正文或复活 Conversation。不要求在已删除 scope 内保留普通 tombstone。删除确认必须披露待发送输入、消息、未晋升附件、尚未结算外部动作及已晋升来源的不同后果；未晋升附件不可复活，Debrief Project scope、正式 Artifact/Evidence 不级联删除，共享 blob 仅在无其他有效引用且满足保留规则后清理；
 - 验证聊天附件不会自动创建 CandidateProfile 候选、Artifact 或长期资料；只有明确导入/保存才能扩大 scope，外传和永久删除继续经过 Policy。
 
 #### 阶段 2：Career State 最小闭环
@@ -1564,7 +1598,7 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 - 按真实优先级接入邮箱、浏览器、日历、招聘平台和设计服务；
 - 落地 Standard/Auto、参数级 Policy、用户保留决定和 receipt/read-back；
 - 连接、scope 与逐调用 approval 继续复用同一 Interaction 聚焦卡和同 Turn 恢复协议，Provider receipt 进入同一 Tool 投影，不建设权限专用第二套卡片系统；
-- 实现 PersistentTask、Scheduler/Automation Intake、cursor、trigger 合并和卡片处理；
+- 实现 PersistentTask、Scheduler/Automation Intake、cursor、trigger 合并和卡片处理；Dedicated Conversation 的用户 PendingSubmission 与自动化 trigger 仍分开保存，但共用 Conversation admission/CAS，二者同时可执行时用户输入固定优先、trigger 留待之后重新判断；
 - 所有 MCP 与内置 Connector 遵守相同 Tool、Policy、Evidence 和 Domain State 边界。
 
 #### 阶段 5：场景评测与持续优化
@@ -1578,10 +1612,14 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 至少评估：
 
 - 当前任务识别正确率与旧任务误接管率；
+- 每条 Conversation 出现多个 active Turn 的比例，仅在无 active Turn 且队列为空时直接 admission 的正确率，PendingSubmission 自动 FIFO、显式单项抽取例外、选中项失败时错误 fallback/绕过 hold 率、原子 handoff 与 input idempotency 正确率，重复或丢失 UserMessage/Turn 的比例，以及 queued payload mid-turn 注入率；
+- 多标签重复 claim、顺序或编辑丢失率，waiting 普通 Composer 输入误作 Interaction resolution/自动解除 waiting 的比例，PersistentTask trigger、系统通知或 Tool Result 误入用户 PendingSubmission 的比例，以及 Dedicated Conversation 中用户输入与自动化 trigger 绕过共同 admission/CAS、错误抢占或重复建 Turn 的比例；
+- 显式 interrupt 后 fence 关闭与 in-flight 原子登记竞态、新模型/Tool dispatch 越过率、当前模型流未停止或已生成内容丢失率、未启动 Tool 漏配 Result、已启动 Tool receipt/partial/unknown/迟到回执丢失率、删除后迟到回执无法关联或泄漏率、cancelled Turn 被迟到结果误恢复率、同对象冲突副作用重复率、外部副作用误报撤销率，以及 SSE detach/刷新/切换 Conversation 误取消率；
 - 单轮、普通多轮、等待恢复、Prompt Cache 命中/未命中和一次或多次 Compaction 后的任务连续性与语义一致性；
 - 结构化状态变更正确率、重复/错误建线率和可撤销性；
 - Context Source 覆盖率、显式指定来源读取成功率和静默遗漏率；
 - Conversation Attachment 后续 Turn 按需读取成功率、无需重复上传率、未选中附件注入率，以及跨 Conversation、跨 InterviewRecord、Debrief→Career 和全局资料的 scope 泄漏率；
+- queued attachment 提前获得 Conversation scope、撤回或删除 Conversation 后形成幽灵文件、claim 重验静默丢附件或重复 AttachmentRef 的比例；
 - 多文件分别覆盖率、解析 warning/失败诚实度、删除后正文复活率和 Compaction 前后 AttachmentRef/版本/scope 一致性；
 - RAG 召回、grounding、引用与来源新鲜度；
 - claim-specific Evidence 完整率及外部动作 receipt/read-back 覆盖；
@@ -1604,7 +1642,7 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 
 以下问题尚未冻结，只能在对应 Stage Spec 中决定，不得在代码中先行变成事实：
 
-1. 四个工作空间最终采用哪些页面、组合视图、详情、抽屉、批量操作和输入交互；Offer 比较等能力采用页面还是一次性报告；首批 Capability-owned typed Client Action catalog，以及执行动态、计划卡、Interaction 卡和 Tool 详情的视觉密度、文案、截断、键盘操作、窄屏尺寸、具体 typed renderer 与审计抽屉物理实现。固定单列活动控制层、AgentTask 在上/Interaction 在下、plan-execute 与 waiting 分离、Tool 三级渐进披露和同 call identity 投影已经冻结；只投递 initiating client、不广播、同 Turn 并关联原 call identity 幂等恢复、无客户端不执行页面动作、Flow Handoff 不是新状态机和当前不建设通用生成式 UI 同样已经冻结。
+1. 四个工作空间最终采用哪些页面、组合视图、详情、抽屉、批量操作和输入交互；Offer 比较等能力采用页面还是一次性报告；首批 Capability-owned typed Client Action catalog，以及执行动态、计划卡、Interaction 卡、Tool 详情和 Composer 待发送队列的视觉密度、数量上限/保留期、文案、截断、键盘操作、窄屏尺寸、具体 typed renderer、审计抽屉与“停止当前并发送”确认 UX。队列保留期或清理策略不能静默丢输入，必须给出用户可见结果并遵守耐久、显式失败和附件引用清理语义。固定单列活动控制层、AgentTask 在上/Interaction 在下、plan-execute 与 waiting 分离、Tool 三级渐进披露和同 call identity 投影已经冻结；只投递 initiating client、不广播、同 Turn 并关联原 call identity 幂等恢复、无客户端不执行页面动作、Flow Handoff 不是新状态机和当前不建设通用生成式 UI 同样已经冻结。
 2. 用户明确从简历/资料流程导入首份简历后的 CandidateProfile 候选确认、批量接受、冲突突出和后续事实修正 UX；普通 Conversation Attachment 不触发候选这一前提已经冻结。
 3. CandidateProfile 事实有效时间、TargetDirection、岗位—方向关联、AbilitySignal、Artifact、Interview、Offer 等对象的最小物理字段和迁移顺序。
 4. JobOpportunity identity 线索中哪些由首批真实 Provider 提供并需要物理保存。
@@ -1627,7 +1665,7 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 21. Agent 场景评测集、gold/Evidence 标注、成本控制、用户修正数据和隐私安全的构建方式。
 22. 在什么真实评测结果下才值得引入隔离只读 worker；当前不实现通用子 Agent。
 
-开放问题不得改变已经冻结的不变量：搜索与分析默认只汇报；最新用户输入拥有普通 Turn 方向；领域对象各有唯一事实所有者；简历编辑按需；submitted 必须有用户确认或相应真实外部证明；普通聊天附件只属于当前 Conversation，复盘共享只属于当前 InterviewRecord；模糊 Observation 不进入 ProcessEvent；长期无回复不是终局；外部成功必须 receipt/read-back；Skill 不能提供能力或授权；PersistentTask 只能由用户明确创建；简单 Turn 不创建 AgentTask；AgentTask 只表达 plan-execute 阶段；waiting 由 Turn 持有，只有需要用户输入或决定时才具有 pending interaction；Tool 轨迹支持默认摘要、对话内展开和深层审计且三者共用同一 call identity 与脱敏边界。
+开放问题不得改变已经冻结的不变量：搜索与分析默认只汇报；当前已接纳 Turn 的用户原始输入拥有普通 Turn 方向；领域对象各有唯一事实所有者；简历编辑按需；submitted 必须有用户确认或相应真实外部证明；普通聊天附件只属于当前 Conversation，复盘共享只属于当前 InterviewRecord；模糊 Observation 不进入 ProcessEvent；长期无回复不是终局；外部成功必须 receipt/read-back；Skill 不能提供能力或授权；PersistentTask 只能由用户明确创建；每条 Conversation 只有一个 active Turn，只有无 active Turn 且队列为空时统一 admission 才直接创建 Turn，否则普通输入形成耐久 FIFO PendingSubmission；失败项的派生 hold 期间新输入只入队且不得自动绕过，但在 claim 前排队项不是消息、Turn、Interaction 或上下文；自动 admission 遵守 FIFO，只有绑定明确 submission 的“停止当前并发送”能原子抽取一次且不重排其余项；waiting typed Interaction 与普通 Composer 严格分流；显式中断关闭模型与 Tool dispatch 并在旧 Turn cancelled 后才能创建新 Turn；不建设通用 MessageQueue，自动化 trigger/Observation 不进入用户队列，但在 Dedicated Conversation 与用户输入共用 admission/CAS且用户输入固定优先；简单 Turn 不创建 AgentTask；AgentTask 只表达 plan-execute 阶段；waiting 由 Turn 持有，只有需要用户输入或决定时才具有 pending interaction；Tool 轨迹支持默认摘要、对话内展开和深层审计且三者共用同一 call identity 与脱敏边界。
 
 ## 19. 验收不变量
 
@@ -1649,7 +1687,7 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 
 12. 每项信息都能归入六种 Product Context Sources 之一，不产生重复事实源。
     Debrief Project scope 只能控制可见范围，不能改变来源所有者、权威类型或事实等级。
-13. 最新用户输入唯一拥有普通 Turn 的方向；附件、对象引用、来源内容、摘要、Memory 和 Checkpoint 不能接管，当前页面、路由和选中项永远不是隐式 Turn 输入。
+13. 当前已接纳 Turn 的用户原始输入唯一拥有该 Turn 的方向；尚未 claim 的 PendingSubmission、附件、对象引用、来源内容、摘要、Memory 和 Checkpoint 不能接管，当前页面、路由和选中项永远不是隐式 Turn 输入。
 14. Interaction Records 保留精确原话和完整 Tool Call/Result；摘要不替代 History。
 15. Long-term Agent Memory 不复制 Domain State、文档正文、History、Preference 或 Recovery State。
 16. 用户禁用 Memory Recall 时，旧 Memory 不得显式或隐性影响该 Turn。
@@ -1659,20 +1697,20 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 
 ### 19.3 Attachment 与 Debrief Project
 
-20. 任意 Career 或 Debrief 普通 Conversation 都支持 Conversation Attachment；发送后只在该 Conversation 持续可用，后续 Turn 按最新任务选择读取，不重复附加，也不进入兄弟 Conversation 或全局资料。
+20. 任意 Career 或 Debrief 普通 Conversation 都支持 Conversation Attachment；只有输入被服务端原子接纳、创建 Turn 并冻结 AttachmentRef 后，它才在该 Conversation 持续可用。后续 Turn 按当前已接纳任务选择读取，不重复附加，也不进入兄弟 Conversation 或全局资料。
 21. 一个 InterviewRecord 是唯一的 Debrief Project scope；固有复盘来源和用户明确加入的来源可供其多条 Debrief Conversation 使用，但各 Conversation 的普通附件仍相互隔离。当前不实现通用 Project 对象、页面或生命周期。
 22. 仅附加文件不会创建 CandidateProfile 候选、Artifact、简历版本或长期资料，也不会进入其索引；只有用户明确导入、保存、设为简历或加入本次复盘，才能按目标对象规则扩大 scope。
 23. Turn A 的 Interaction Record 必须冻结服务端解析的 AttachmentRef 和来源版本；显式附件尚在处理时，同一个 Turn 进入可恢复 waiting，不能伪造用户消息。waiting Turn 释放模型调用、Conversation/Agent 执行 Worker、SSE/模型流和 Agent Loop；独立 ingestion job 继续运行并只在实际解析期间占用自己的 Worker。
-24. 发送前移除或清空必须真实撤销草稿引用并回收无引用临时文件；切换 Conversation 后返回、上传/解析中刷新、创建 Turn 前失败、Turn 创建后 SSE 中断和用户取消都必须有明确恢复结果。恢复/重试不能重复消息、AttachmentRef 或解析投影，也不能只隐藏芯片或留下以后仍被读取的“幽灵附件”。
+24. Composer 草稿或 PendingSubmission 在 claim 前移除、清空、编辑或撤回时，必须真实撤销相应草稿引用并回收无引用临时文件；切换 Conversation 后返回、上传/解析中刷新、多标签 claim 竞争、创建 Turn 前失败、Turn 创建后 SSE 中断和用户取消都必须有明确恢复结果。恢复/重试不能重复 UserMessage、Turn、AttachmentRef 或解析投影，也不能只隐藏芯片或留下以后仍被读取的“幽灵附件”。
 25. 后续 Turn 不得自动装载该 Conversation 的所有 ready 文件；Source Resolver 只选择当前任务需要的附件或 Project Source，与文件无关的 Turn 不注入 manifest、正文、chunks 或旧摘要。
 26. 每个显式来源必须明确成功、waiting 或失败；删除、权限、解析和格式问题不能被静默过滤。多文件允许部分成功，失败项可重试、移除后继续或取消本 Turn，并显示文件级进度与质量 warning。
 27. Runtime 按任务和文件类型自动选择完整读取、分段覆盖、公共 RAG、页面视觉/OCR、表格结构或音频转写；完整审阅与多文件比较必须证明每个明确来源得到覆盖，不向用户暴露“全文/RAG”技术开关。
 28. 来源卡只列出实际读取的来源，并保留 identity、版本和可获得的页码、章节、片段或表格范围。附件预加载属于 SourceResult，不伪装成 Tool Call；真实 Tool Result 才能使用 tool_call_id 和执行回执语义。
-29. scope 移除、永久删除、替换和删除 Conversation 具有不同语义，删除确认准确披露各自影响。Conversation 仍存在时，其 Interaction Records 保留引用或 tombstone，旧回答继续指向当时版本；删除整个普通或 Dedicated Conversation 时，按保留规则删除消息与局部 Interaction Records，不要求在已删除 scope 内保留 tombstone，未晋升附件不可复活，Debrief Project scope、正式 Artifact/Evidence 不级联删除，共享 blob 只在无其他有效引用且满足保留规则后清理。History、Compaction、Prompt Cache、旧索引或同名文件都不能使已移除内容复活或改写历史 Evidence。
+29. scope 移除、永久删除、替换和删除 Conversation 具有不同语义，删除确认准确披露各自影响。Conversation 仍存在时，其 Interaction Records 保留引用或 tombstone，旧回答继续指向当时版本；删除整个普通或 Dedicated Conversation 时，先禁止新 admission/claim，安全终结 active Turn，撤回并删除全部 PendingSubmission、释放草稿附件引用，再按保留规则删除消息与局部 Interaction Records。若仍有 in-flight、unknown 或待 reconcile 外部调用，只暂留受限的最小 receipt correlation tombstone，确定终局后清理；它不能保存用户正文、恢复 Conversation 或成为 History。不要求在已删除 scope 内保留普通 tombstone，未晋升附件不可复活，Debrief Project scope、正式 Artifact/Evidence 不级联删除，共享 blob 只在无其他有效引用且满足保留规则后清理。History、Compaction、Prompt Cache、旧索引或同名文件都不能使已移除内容复活或改写历史 Evidence。
 30. ChatStrategy 与 AgentStrategy 共用 Source Resolver、scope 校验、解析、公共 RAG、grounding、引用与失败规则；Agent 不拥有 owner-wide `read_file` 或其他私有文件宇宙。
 31. 当前 scope 内的普通读取，以及由用户选择且已经披露数据处理边界的回答模型处理当前 Conversation，不逐次重复审批；改送其他用途/Provider、跨 scope 晋升和永久删除继续经过 Policy，并精确说明目标、内容与影响。永久删除只承诺 Copilot 可控存储，已外传副本受对应 Provider 政策约束。附件内容始终是不可信数据，不能改变 Runtime instruction、Skill、Policy 或任务范围。
 
-### 19.4 Turn、AgentTask 与 Recovery
+### 19.4 Turn、PendingSubmission、AgentTask 与 Recovery
 
 32. 简单回答、分析和少量直接调用不创建 AgentTask。
 33. 一个复杂请求只有一个 AgentTask 聚合与一份可修订的扁平阶段清单；阶段至少能区分未开始、当前进行、已经完成和明确跳过，物理枚举由 Stage Spec 冻结；顺序表达局部前置关系，Tool Executor 独立判断具体调用的安全并行。
@@ -1683,46 +1721,50 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 38. 正常 Agent Loop 不使用 `max_steps`、`max_tool_calls`、总 Token 或统一墙钟阈值代替语义完成；具体故障与资源风险必须具有有限局部恢复，耗尽后诚实形成 waiting、blocked 或 failed。Compaction 是同一 Turn 内可恢复的 Kernel 维护边界，不是任务终局。
 39. Conversation 内容层在 Conversation/Turn 保留期间按其保留规则保存并可读当前 Turn 的语义执行动态；Activity Control Layer 只是固定单列、无自身状态的派生布局，AgentTask 计划卡在上、Interaction 聚焦卡在下，两者互不派生状态且不能替换执行动态。简单纯回答三者均可不渲染。
 40. Interaction 聚焦卡只消费当前唯一 unresolved clarification（包括冲突选择）、connection、approval 或 client readiness；用户答复持久化后从 active 控制层移除，但 requested/resolved 记录和原调用结果继续留在同一 Turn。waiting 不删除既有轨迹、不创建新用户消息；恢复时继续同一 Turn，并以原 call identity 关联适用的 Tool Call，而不是让 Tool Call 拥有独立 waiting 生命周期。
+41. 每条 Conversation 同时最多一个尚未终结的 active Turn；所有普通提交共用一个幂等 admission 命令。只有无 active Turn 且不存在待处理/保留 PendingSubmission 时，才在同一 Conversation 锁内直接创建 UserMessage、Turn 与 CurrentTurnAnchor；否则输入进入耐久队列。它在原子 claim 前不是 UserMessage、Turn、Interaction Record、Context Source 或 CurrentTurnAnchor，也不得 mid-turn 注入。
+42. PendingSubmission 的自动 admission 严格 FIFO；只有绑定明确 submission identity/version 的“停止当前并发送”是一次性原子抽取例外，其他项相对顺序不变。interrupt 前尽力 preflight，最终 claim 失败时 Conversation 保持无 active Turn并由该失败记录形成派生 admission hold，绝不 fallback 到其他项；hold 期间新输入只追加队尾，自动 claim 与 automation trigger 均不启动，直至用户修正后明确重试、撤回或明确改选。claim 前可以逐项编辑或撤回，claim 后不可改；edit/withdraw/claim 与 active Turn terminalization 通过同一 CAS/handoff 互斥，多标签共享同一耐久顺序。排队附件在 claim 前仍是草稿引用，不能取得 Conversation scope；claim 时重验失败必须显式保留该项，不能静默丢来源或重复 AttachmentRef。
+43. waiting 只能由 Interaction 的 typed resolution 或相应自动条件恢复，普通 Composer 输入不能被猜成审批、连接或澄清答复，也不能自动消费队列。waiting resolution 与终结/admission 共用 Conversation CAS 串行化边界，但只恢复同一 active Turn，不释放 identity、替换 CurrentTurnAnchor 或 claim 输入。PersistentTask trigger/Observation、系统通知、Tool Result 和 Interaction resolution 不进入用户 PendingSubmission，系统不建设统一 MessageQueue。
+44. 只有用户明确“停止当前并发送”才触发 interrupt。Runtime 先耐久记录绑定目标 submission 的请求并关闭 Agent Loop、下一次模型调用和新 Tool dispatch generation，取消当前模型流并保留已生成内容；模型与 Tool dispatch 必须在 fence 下原子登记 in-flight，关闭后未登记调用零启动，已登记调用被取消并保留真实副作用/receipt/partial/unknown 与必要 reconcile。迟到结果仍归原 call identity，不能恢复 cancelled Turn，在不确定性解除前必须阻止同对象冲突副作用。旧 Turn 成为 cancelled 后才通过原子 handoff 创建新 Turn。SSE detach、刷新、关闭页面或切换 Conversation 都不等于 cancel，AgentTask 不持有 queue/interrupt/cancelling 状态。
 ### 19.5 PersistentTask
 
-41. PersistentTask 只能由用户创建或根据明确持续需求协助创建，目标、数据和动作范围不可由 Agent 扩大。
-42. 一个 PersistentTask 始终对应一个 Dedicated Conversation，每次执行身份就是其中一个 Turn。
-43. 同一任务最多一个 active/waiting Turn；后续 trigger 合并且当前结束后最多一次补偿执行。
-44. 不同 PersistentTask 只独立调度，实际并发继续受领域对象、账号和 Provider 资源冲突约束。
-45. 卡片合集不污染普通 Copilot，也不在确认前写入 Domain State。
-46. 停止本次、暂停未来和删除任务具有不同效果；删除任务会删除其 Dedicated Conversation 与任务局部记录，并按 Conversation 删除规则清理未晋升附件，但不回滚外部动作，也不级联删除已经进入共享 Domain State、Debrief Project scope、Artifact 或 Evidence 的结果。
+45. PersistentTask 只能由用户创建或根据明确持续需求协助创建，目标、数据和动作范围不可由 Agent 扩大。
+46. 一个 PersistentTask 始终对应一个 Dedicated Conversation，每次执行身份就是其中一个 Turn。
+47. 同一任务最多一个 active/waiting Turn；后续 trigger 合并且当前结束后最多一次补偿执行。Dedicated Conversation 的用户 PendingSubmission 与自动化 trigger 保持不同 ingress 记录但共用 Conversation admission/CAS；两者同时可执行时用户输入固定优先，trigger 保留并在用户 Turn 结束后重新判断。
+48. 不同 PersistentTask 只独立调度，实际并发继续受领域对象、账号和 Provider 资源冲突约束。
+49. 卡片合集不污染普通 Copilot，也不在确认前写入 Domain State。
+50. 停止本次、暂停未来和删除任务具有不同效果；删除任务先停止调度与新 admission/claim、安全终结 active Turn、删除其全部 PendingSubmission 并释放草稿引用，再删除 Dedicated Conversation 与任务局部记录并按 Conversation 规则清理未晋升附件；未结算外部调用只留下最小 receipt correlation tombstone，不能复活任务。删除不回滚外部动作，也不级联删除已经进入共享 Domain State、Debrief Project scope、Artifact 或 Evidence 的结果。
 
 ### 19.6 Capability、Skill、Policy 与 Evidence
 
-47. callable Tool Catalog 中每个 Tool 都有真实 handler；不存在 demo、placeholder、固定文本或伪成功。
-48. 已有 Binding 但缺连接时在同一 Turn 引导、等待和恢复；完全没有 Binding 时直接报告缺口。
-49. Skill listing 经过用户 scope、Profile、启用状态、Policy 与 model reachability 过滤；选中主 Skill 后完整加载。
-50. Skill 是 instruction，不是 Provider 或执行器，不能扩大 Tool、scope、Policy 或 Evidence 强度。
-51. 每个具体 Tool Call 都得到 allow、ask 或 deny；Auto 不等于 bypass。
-52. 内部可逆写入仍需当前任务意图和对应领域不变量；可撤销性不能独立授权写入。
-53. ask 只授权展示的对象、账号、内容和范围，并恢复同一 Turn。候选并行批次中出现 ask/连接等待时，该尚未启动批次及后续批次零调用启动；恢复后每个调用至多执行一次。
-54. Evidence 按 claim 判断；Tool Call identity 只证明调用，外部执行只有 receipt/read-back 才能汇报成功。
-55. waiting 不持有模型、Worker、网络连接或活动进程。
-56. 单个 Tool 的 deny、超时、异常或部分结果必须以原 call identity 回灌，不能由诊断 error 自动终结 Turn；适用的局部重试、重新规划或降级仍无法安全继续时，才由 Kernel 裁定 waiting、blocked 或 failed。已经成功或仍可安全完成的独立兄弟结果不能丢失。
-57. 并行 Tool 按原调用顺序稳定安放，并在真实完成事件到达时按 call identity 原位更新；Tool Use/Result 配对不得依赖相邻 Block、FIFO 或到达顺序。下一次模型输入与 Conversation 规范历史仍按原 Tool Call 顺序回放。
-58. 默认语义动态、对话内执行详情与深层审计只是同一 Tool Call/Result 的三种展示深度；inline 和 audit 加载不改变 Tool/Turn 状态。所有层都遵守 typed 服务端脱敏、原 scope 与 Policy，审计不能暴露 secret、隐藏 Prompt/Policy、chain-of-thought 或跨租户数据，也不能增强 Evidence 强度。
+51. callable Tool Catalog 中每个 Tool 都有真实 handler；不存在 demo、placeholder、固定文本或伪成功。
+52. 已有 Binding 但缺连接时在同一 Turn 引导、等待和恢复；完全没有 Binding 时直接报告缺口。
+53. Skill listing 经过用户 scope、Profile、启用状态、Policy 与 model reachability 过滤；选中主 Skill 后完整加载。
+54. Skill 是 instruction，不是 Provider 或执行器，不能扩大 Tool、scope、Policy 或 Evidence 强度。
+55. 每个具体 Tool Call 都得到 allow、ask 或 deny；Auto 不等于 bypass。
+56. 内部可逆写入仍需当前任务意图和对应领域不变量；可撤销性不能独立授权写入。
+57. ask 只授权展示的对象、账号、内容和范围，并恢复同一 Turn。候选并行批次中出现 ask/连接等待时，该尚未启动批次及后续批次零调用启动；恢复后每个调用至多执行一次。
+58. Evidence 按 claim 判断；Tool Call identity 只证明调用，外部执行只有 receipt/read-back 才能汇报成功。
+59. waiting 不持有模型、Worker、网络连接或活动进程。
+60. 单个 Tool 的 deny、超时、异常或部分结果必须以原 call identity 回灌，不能由诊断 error 自动终结 Turn；适用的局部重试、重新规划或降级仍无法安全继续时，才由 Kernel 裁定 waiting、blocked 或 failed。已经成功或仍可安全完成的独立兄弟结果不能丢失。
+61. 并行 Tool 按原调用顺序稳定安放，并在真实完成事件到达时按 call identity 原位更新；Tool Use/Result 配对不得依赖相邻 Block、FIFO 或到达顺序。下一次模型输入与 Conversation 规范历史仍按原 Tool Call 顺序回放。
+62. 默认语义动态、对话内执行详情与深层审计只是同一 Tool Call/Result 的三种展示深度；inline 和 audit 加载不改变 Tool/Turn 状态。所有层都遵守 typed 服务端脱敏、原 scope 与 Policy，审计不能暴露 secret、隐藏 Prompt/Policy、chain-of-thought 或跨租户数据，也不能增强 Evidence 强度。
 
 ### 19.7 架构与演进
 
-59. 页面、Agent、同步器与后台触发涉及正式业务读取或变更时通过同一 Application Service，并遵守同一领域和权限规则；Agent 只通过有真实 Capability-owned handler 的 Client Action Bridge 导航、预填或进入 Flow，客户端动作成功不能冒充 Domain State、Flow 或外部动作成功。
-60. 主 Agent 只是当前执行编排/交付责任人，不是系统唯一状态写者。
-61. 新字段、状态、表、服务、Registry 和后台任务由独立不变量及当前真实用例证明；可推导和运行时信息不重复持久化。Activity Control Layer、AgentTask/Interaction 卡、Turn 执行动态及 Tool 三层详情都是 read projection，不是领域对象或新的事实源。
-62. 读取按相同权威与权限适度聚合，写入按领域命令拆分，外部动作按 Grant、副作用和回执拆分。
-63. 每个阶段先完成 Stage Spec、实现、可执行验证和偏差汇报，再进入下一阶段。
-64. 多张架构图可以表达同一系统的不同正确视角；只有同一对象、scope、生命周期时点和关系语义下出现互斥定义才构成冲突。共享不变量变化时必须同步全部受影响视图，不能用新视图删除仍正确的局部方案。
-65. Agent 只操控稳定的产品语义 Capability；正式产品状态通过 Application Service，第一方客户端效果通过 Client Action Bridge，外部系统通过 Integration Port。Provider Binding 是到真实实现的解析关系，三者都不要求成为新的领域对象。
-66. 用户主动提交的 typed object reference 可以成为 CurrentTurnAnchor 的显式输入；当前页面、选中项、表单和 DOM 仍不得自动进入上下文，客户端复制的业务事实必须按 identity 从权威源重读。
-67. Client Action 先持久化，只投递给发起当前 Turn 的客户端实例，并以可幂等 action identity 关联原 Turn/Tool Call；acknowledgement、拒绝、失败和显式客户端接管都作为同一 Turn/Tool Call 的 typed 输入，不伪造用户消息、不广播、不重复执行。Runtime 根据结果决定继续、进入或保持 waiting、重新规划或收尾，只有满足当前恢复条件的结果才解除 waiting。
-68. Client acknowledgement、设备 readiness、Application Service/Runtime result、进入界面 acknowledgement 和 Integration receipt/read-back 各自只证明对应 claim，不能互相冒充。
-69. Flow Handoff 只是领域 Capability 组合 Application Service 与 Client Action Bridge 的模式，不是第三套 Runtime、Binding、领域对象或状态机；后台 PersistentTask 和无交互客户端的 Turn 不操控普通主入口。
-70. 当前阶段不接受模型生成组件树、通用 UI schema、任意 HTML/JavaScript、客户端代码、route/DOM/selector/click/type、逐字段 Tool 或万能 `execute_ui`；只有产品编写的页面、typed handler 与第 11.6 节固定的可信执行呈现可以使用。
+63. 页面、Agent、同步器与后台触发涉及正式业务读取或变更时通过同一 Application Service，并遵守同一领域和权限规则；Agent 只通过有真实 Capability-owned handler 的 Client Action Bridge 导航、预填或进入 Flow，客户端动作成功不能冒充 Domain State、Flow 或外部动作成功。
+64. 主 Agent 只是当前执行编排/交付责任人，不是系统唯一状态写者。
+65. 新字段、状态、表、服务、Registry 和后台任务由独立不变量及当前真实用例证明；可推导和运行时信息不重复持久化。Activity Control Layer、AgentTask/Interaction 卡、PendingSubmission 队列、Turn 执行动态及 Tool 三层详情都是 read projection 或 Runtime ingress，不是产品领域对象或新的事实源。
+66. 读取按相同权威与权限适度聚合，写入按领域命令拆分，外部动作按 Grant、副作用和回执拆分。
+67. 每个阶段先完成 Stage Spec、实现、可执行验证和偏差汇报，再进入下一阶段。
+68. 多张架构图可以表达同一系统的不同正确视角；只有同一对象、scope、生命周期时点和关系语义下出现互斥定义才构成冲突。共享不变量变化时必须同步全部受影响视图，不能用新视图删除仍正确的局部方案。
+69. Agent 只操控稳定的产品语义 Capability；正式产品状态通过 Application Service，第一方客户端效果通过 Client Action Bridge，外部系统通过 Integration Port。Provider Binding 是到真实实现的解析关系，三者都不要求成为新的领域对象。
+70. 用户主动提交的 typed object reference 可以成为 CurrentTurnAnchor 的显式输入；当前页面、选中项、表单和 DOM 仍不得自动进入上下文，客户端复制的业务事实必须按 identity 从权威源重读。
+71. Client Action 先持久化，只投递给发起当前 Turn 的客户端实例，并以可幂等 action identity 关联原 Turn/Tool Call；acknowledgement、拒绝、失败和显式客户端接管都作为同一 Turn/Tool Call 的 typed 输入，不伪造用户消息、不广播、不重复执行。Runtime 根据结果决定继续、进入或保持 waiting、重新规划或收尾，只有满足当前恢复条件的结果才解除 waiting。
+72. Client acknowledgement、设备 readiness、Application Service/Runtime result、进入界面 acknowledgement 和 Integration receipt/read-back 各自只证明对应 claim，不能互相冒充。
+73. Flow Handoff 只是领域 Capability 组合 Application Service 与 Client Action Bridge 的模式，不是第三套 Runtime、Binding、领域对象或状态机；后台 PersistentTask 和无交互客户端的 Turn 不操控普通主入口。
+74. 当前阶段不接受模型生成组件树、通用 UI schema、任意 HTML/JavaScript、客户端代码、route/DOM/selector/click/type、逐字段 Tool 或万能 `execute_ui`；只有产品编写的页面、typed handler 与第 11.7 节固定的可信执行呈现可以使用。
 
-## 附录 A：R-00～R-46 当前落点
+## 附录 A：R-00～R-47 当前落点
 
 本附录只映射讨论主题到当前正文，不陈列旧定义，也不具有第二套规范效力。
 
@@ -1775,3 +1817,4 @@ Tool 数量、调用步数和是否使用 AgentTask 不是质量指标。评测�
 | R-44 | 完成判定、真实并行与局部故障熔断 | 0、10、11、15～19 |
 | R-45 | 多视图维护与第一方产品操控、Client Action Bridge、Flow Handoff | 0、2、7、13、14、16～19 |
 | R-46 | Agent 执行呈现、plan-execute 计划卡、Interaction 聚焦卡与 Tool 三级透明度 | 2、3、11、13、15～19 |
+| R-47 | 单 active Turn、耐久 PendingSubmission、waiting 分流与显式安全中断 | 3、9～12、15～19 |
