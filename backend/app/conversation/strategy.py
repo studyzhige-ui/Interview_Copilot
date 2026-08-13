@@ -34,6 +34,7 @@ class StrategyContext:
     user_id: str
     session_id: str
     user_message: str
+    user_pk: int = 0
     turn_id: str | None = None
     dispatch_generation: int = 1
     runtime_profile: str = "career"

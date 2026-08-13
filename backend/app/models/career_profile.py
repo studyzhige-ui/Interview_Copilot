@@ -102,7 +102,8 @@ class CareerProfileDraftChange(Base):
     __tablename__ = "career_profile_draft_changes"
     __table_args__ = (
         CheckConstraint(
-            "source_kind IN ('resume', 'conversation_message', 'model_inference')",
+            "source_kind IN ('artifact_version', 'resume', "
+            "'conversation_message', 'model_inference')",
             name="ck_career_profile_drafts_source_kind",
         ),
         CheckConstraint(
@@ -140,8 +141,62 @@ class CareerProfileDraftChange(Base):
     resolved_at = Column(DateTime, nullable=True)
 
 
+class CareerProfileCandidateItem(Base):
+    """One independently reviewable item in a durable profile draft."""
+
+    __tablename__ = "career_profile_candidate_items"
+    __table_args__ = (
+        CheckConstraint(
+            "item_kind IN ('fact', 'direction')",
+            name="ck_career_profile_candidate_items_kind",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'accepted', 'rejected')",
+            name="ck_career_profile_candidate_items_status",
+        ),
+        CheckConstraint(
+            "conflict_kind IN ('none', 'duplicate', 'conflict', 'missing_target')",
+            name="ck_career_profile_candidate_items_conflict",
+        ),
+        CheckConstraint(
+            "position >= 0 AND version >= 1",
+            name="ck_career_profile_candidate_items_shape",
+        ),
+        UniqueConstraint(
+            "draft_id",
+            "item_kind",
+            "position",
+            name="uq_career_profile_candidate_items_position",
+        ),
+        Index(
+            "ix_career_profile_candidate_items_draft_status",
+            "draft_id",
+            "status",
+        ),
+    )
+
+    id = Column(String(37), primary_key=True, default=lambda: _id("cpci"))
+    draft_id = Column(
+        String(37),
+        ForeignKey("career_profile_draft_changes.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    item_kind = Column(String(16), nullable=False)
+    position = Column(Integer, nullable=False)
+    payload_json = Column(JSON, nullable=False)
+    conflict_kind = Column(String(24), nullable=False, default="none")
+    current_value_json = Column(JSON, nullable=True)
+    status = Column(String(16), nullable=False, default="pending")
+    resolution_note = Column(Text, nullable=True)
+    version = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    resolved_at = Column(DateTime, nullable=True)
+
+
 __all__ = [
     "CareerProfile",
+    "CareerProfileCandidateItem",
     "CareerProfileDirection",
     "CareerProfileDraftChange",
 ]

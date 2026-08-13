@@ -1,13 +1,10 @@
-"""Personal resume API: the first-class ``resumes`` entity.
+"""Compatibility routes for canonical ``Artifact(kind=resume)`` aggregates.
 
-CRUD over the user's (at most two) personal resumes, enforcing the
-default / max-two / auto-promote rules in the service layer. Resumes are a
-personal-profile asset — they never enter the knowledge base.
+The URL remains stable for existing clients, but every production command now
+writes the Artifact aggregate. The retired ``resumes`` table is never mutated.
 """
 
 from __future__ import annotations
-
-import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
@@ -15,41 +12,37 @@ from sqlalchemy.orm import Session
 from app.core.rate_limit import RATE_DEFAULT, limiter
 from app.core.security import get_current_user
 from app.db.database import get_db
-from app.models.resume import Resume
 from app.models.user import User
 from app.schemas.resumes import ResumeCreateRequest, ResumeResponse
-from app.services.resume import resume_entity_service
-from app.task_queue.dispatch import dispatch_resume_parse
-
-logger = logging.getLogger(__name__)
+from app.services.resume import resume_artifact_service
+from app.services.resume.resume_dispatch_service import dispatch_parse_after_commit
 
 router = APIRouter()
 
 
-def _dispatch_resume_parse(db: Session, resume: Resume) -> None:
-    """Dispatch parsing after the entity commit and guarantee a visible state."""
-    if not (resume.file_asset_id or (resume.raw_text_snapshot or "").strip()):
-        return
-    try:
-        dispatch_resume_parse(resume.id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("resume parse dispatch failed for %s: %s", resume.id, exc)
-        resume.parse_status = "failed"
-        resume.parse_error = "简历解析任务派发失败，请稍后重新上传。"
-        db.add(resume)
-        db.commit()
+def _dispatch_resume_parse(db: Session, record) -> None:
+    """Stable local alias retained for route-level call sites."""
+    dispatch_parse_after_commit(db, record)
 
 
-def _serialize(r: Resume) -> ResumeResponse:
+def _serialize(record) -> ResumeResponse:
+    artifact = record.artifact
+    version = record.current_version
+    state = record.state
     return ResumeResponse(
-        id=r.id,
-        title=r.title,
-        is_default=bool(r.is_default),
-        parse_status=r.parse_status,
-        file_asset_id=r.file_asset_id,
-        has_text=bool(r.raw_text_snapshot),
-        created_at=r.created_at.isoformat() if r.created_at else "",
-        updated_at=r.updated_at.isoformat() if r.updated_at else "",
+        id=artifact.id,
+        artifact_id=artifact.id,
+        current_version_id=version.id,
+        title=version.title,
+        is_default=bool(state.is_default),
+        parse_status=state.parse_status,
+        parse_error=state.parse_error,
+        file_asset_id=version.file_asset_id,
+        has_text=bool(version.content_text),
+        pending_profile_draft_id=record.pending_draft_id,
+        legacy_resume_id=state.legacy_resume_id,
+        created_at=artifact.created_at.isoformat() if artifact.created_at else "",
+        updated_at=artifact.updated_at.isoformat() if artifact.updated_at else "",
     )
 
 
@@ -60,7 +53,9 @@ def list_resumes(
 ):
     return [
         _serialize(r)
-        for r in resume_entity_service.list_resumes(db, user_id=current_user.username)
+        for r in resume_artifact_service.list_resume_artifacts(
+            db, user_pk=current_user.id
+        )
     ]
 
 
@@ -74,18 +69,66 @@ def create_resume(
     db: Session = Depends(get_db),
 ):
     try:
-        resume = resume_entity_service.create_resume(
+        resume = resume_artifact_service.create_resume_artifact(
             db,
-            user_id=current_user.username,
+            user_pk=current_user.id,
+            operation_key=body.operation_key
+            or resume_artifact_service.new_operation_key("resume_import"),
             file_asset_id=body.file_asset_id,
-            title=body.title,
-            raw_text_snapshot=body.raw_text_snapshot,
+            title=body.title or "我的简历",
+            raw_text=body.raw_text_snapshot,
             make_default=body.make_default,
         )
-    except resume_entity_service.ResumeLimitError as exc:
+        db.commit()
+    except resume_artifact_service.ResumeArtifactLimitError as exc:
+        db.rollback()
         raise HTTPException(status_code=409, detail=str(exc))
+    except resume_artifact_service.ResumeArtifactError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc))
     _dispatch_resume_parse(db, resume)
     return _serialize(resume)
+
+
+@router.post("/resumes/{resume_id}/parse", response_model=ResumeResponse)
+@limiter.limit(RATE_DEFAULT)
+def retry_resume_parse(
+    request: Request,
+    response: Response,
+    resume_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Explicitly retry extraction for the exact current ArtifactVersion."""
+
+    try:
+        current = resume_artifact_service.resolve_owned_resume(
+            db,
+            user_pk=current_user.id,
+            resume_id=resume_id,
+        )
+        resume = resume_artifact_service.mark_parse_state(
+            db,
+            user_pk=current_user.id,
+            resume_id=resume_id,
+            status="pending",
+            source_version_id=current.current_version.id,
+        )
+        db.commit()
+    except resume_artifact_service.ResumeArtifactNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except resume_artifact_service.ResumeArtifactError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _dispatch_resume_parse(db, resume)
+    return _serialize(
+        resume_artifact_service.resolve_owned_resume(
+            db,
+            user_pk=current_user.id,
+            resume_id=resume_id,
+        )
+    )
 
 
 @router.post("/resumes/{resume_id}/replace", response_model=ResumeResponse)
@@ -99,16 +142,23 @@ def replace_resume(
     db: Session = Depends(get_db),
 ):
     try:
-        resume = resume_entity_service.replace_resume(
+        resume = resume_artifact_service.add_resume_version(
             db,
-            user_id=current_user.username,
-            replaced_resume_id=resume_id,
+            user_pk=current_user.id,
+            resume_id=resume_id,
+            operation_key=body.operation_key
+            or resume_artifact_service.new_operation_key("resume_version"),
             file_asset_id=body.file_asset_id,
-            title=body.title,
-            raw_text_snapshot=body.raw_text_snapshot,
+            title=body.title or "我的简历",
+            raw_text=body.raw_text_snapshot,
         )
-    except ValueError as exc:
+        db.commit()
+    except resume_artifact_service.ResumeArtifactNotFoundError as exc:
+        db.rollback()
         raise HTTPException(status_code=404, detail=str(exc))
+    except resume_artifact_service.ResumeArtifactError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc))
     _dispatch_resume_parse(db, resume)
     return _serialize(resume)
 
@@ -122,12 +172,13 @@ def set_default(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    resume = resume_entity_service.set_default_resume(
-        db,
-        user_id=current_user.username,
-        resume_id=resume_id,
-    )
-    if resume is None:
+    try:
+        resume = resume_artifact_service.set_default_resume_artifact(
+            db, user_pk=current_user.id, resume_id=resume_id
+        )
+        db.commit()
+    except resume_artifact_service.ResumeArtifactNotFoundError:
+        db.rollback()
         raise HTTPException(status_code=404, detail="简历不存在")
     return _serialize(resume)
 
@@ -141,11 +192,12 @@ def delete_resume(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    ok = resume_entity_service.delete_resume(
-        db,
-        user_id=current_user.username,
-        resume_id=resume_id,
-    )
-    if not ok:
+    try:
+        resume_artifact_service.archive_resume_artifact(
+            db, user_pk=current_user.id, resume_id=resume_id
+        )
+        db.commit()
+    except resume_artifact_service.ResumeArtifactNotFoundError:
+        db.rollback()
         raise HTTPException(status_code=404, detail="简历不存在")
     return {"status": "deleted"}

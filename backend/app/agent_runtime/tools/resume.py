@@ -1,13 +1,10 @@
-"""Resume tool: read_resume.
-
-Wraps ResumeService to read the user's parsed resume sections.
-"""
+"""Read the user's canonical resume Artifact."""
 
 import asyncio
 import logging
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict
 
 from app.agent_runtime.tool_registry import AgentToolContext, ToolDefinition, registry
 from app.agent_runtime.tool_policy import ToolEffect
@@ -16,132 +13,96 @@ logger = logging.getLogger(__name__)
 
 
 class ReadResumeArgs(BaseModel):
-    section_types: list[str] = Field(
-        default=[],
-        description="Filter by section type: 'summary', 'project', 'education', 'skill'. Empty = all sections.",
-    )
+    """The default resume is selected by the canonical resume aggregate."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 async def _read_resume_handler(
     args: ReadResumeArgs, ctx: AgentToolContext
 ) -> dict[str, Any]:
-    """Async wrapper — entire body is sync DB + chunk reads, so
-    offload to a worker thread to keep the agent loop responsive."""
-    return await asyncio.to_thread(_read_resume_sync, args, ctx)
+    """Keep synchronous database access off the Agent event loop."""
+    del args
+    return await asyncio.to_thread(_read_resume_sync, ctx)
 
 
-def _read_resume_sync(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, Any]:
-    """Read the user's default personal resume.
-
-    Resumes are a first-class entity (``resumes``) — never knowledge documents.
-    Read order:
-
-      1. ``resume_sections`` (structured/parsed, keyed by ``resume_id``) — the
-         preferred path; format + return.
-      2. else the entity's ``raw_text_snapshot`` full text.
-      3. else a "not parsed yet / no resume" hint — but NEVER claim "no resume"
-         when one demonstrably exists.
-    """
+def _read_resume_sync(ctx: AgentToolContext) -> dict[str, Any]:
+    """Read the user's default canonical resume and exact current version."""
     try:
-        return _read_resume_inner(args, ctx)
+        return _read_resume_inner(ctx)
     except Exception as exc:
         logger.warning("read_resume failed (%s)", type(exc).__name__)
         return {"error": "Failed to read resume", "section_count": 0}
 
 
-def _read_resume_inner(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, Any]:
+def _read_resume_inner(ctx: AgentToolContext) -> dict[str, Any]:
+    from app.core.user_identity import resolve_user_pk
     from app.db.database import SessionLocal
-    from app.services.resume import resume_entity_service
-    from app.services.resume.resume_service import resume_service
+    from app.services.resume import resume_artifact_service
 
     with SessionLocal() as db:
-        resumes = resume_entity_service.list_resumes(db, user_id=ctx.user_id)
+        user_pk = resolve_user_pk(db, ctx.user_id)
+        resumes = (
+            resume_artifact_service.list_resume_artifacts(db, user_pk=user_pk)
+            if user_pk is not None
+            else []
+        )
         if not resumes:
             return {
+                "error": "resume_artifact_not_found",
                 "section_count": 0,
                 "raw_resume_available": False,
-                "error": (
-                    "No resume found for this user. Suggest uploading one in "
-                    "「个人信息 → 我的简历」。"
+                "message": (
+                    "No canonical resume Artifact was found for this user. "
+                    "Suggest uploading or importing one. Pre-cut-over Resume "
+                    "rows must be materialized by migration 0029 before use."
                 ),
             }
-        primary = next((r for r in resumes if r.is_default), resumes[0])
-        primary_id = primary.id
-        primary_title = primary.title
-        primary_is_default = bool(primary.is_default)
-        primary_parse_status = primary.parse_status
-        primary_raw = (primary.raw_text_snapshot or "").strip()
-
-    sections = resume_service.get_sections_by_resume(primary_id)
-    if sections:
-        formatted = resume_service.format_for_context(
-            sections,
-            section_types=args.section_types if args.section_types else None,
-        )
-        section_summary = []
-        for s in sections:
-            if args.section_types and s.section_type not in args.section_types:
-                continue
-            section_summary.append(
-                {
-                    "type": s.section_type,
-                    "title": s.title,
-                    "content": s.content[:800],
-                }
-            )
+        primary = resumes[0]
+        try:
+            text = resume_artifact_service.read_resume_text(primary)
+        except resume_artifact_service.ResumeArtifactNotReadyError as exc:
+            return {
+                "error": "resume_artifact_not_ready",
+                "resume_id": primary.artifact.id,
+                "artifact_version_id": primary.current_version.id,
+                "title": primary.current_version.title,
+                "is_default": bool(primary.state.is_default),
+                "section_count": 0,
+                "raw_resume_available": False,
+                "source": "artifact_version",
+                "parse_status": primary.state.parse_status,
+                "pending_profile_draft_id": primary.pending_draft_id,
+                "message": str(exc),
+            }
         return {
-            "resume_id": primary_id,
-            "title": primary_title,
-            "is_default": primary_is_default,
-            "section_count": len(section_summary),
-            "sections": section_summary,
-            "formatted_text": formatted[:8000],
-        }
-
-    if primary_raw:
-        return {
-            "resume_id": primary_id,
-            "title": primary_title,
-            "is_default": primary_is_default,
+            "resume_id": primary.artifact.id,
+            "artifact_version_id": primary.current_version.id,
+            "title": primary.current_version.title,
+            "is_default": bool(primary.state.is_default),
             "section_count": 0,
             "raw_resume_available": True,
-            "source": "raw_text_snapshot",
-            "parse_status": primary_parse_status,
-            "full_text": primary_raw[:18000],
+            "source": "artifact_version",
+            "parse_status": primary.state.parse_status,
+            "pending_profile_draft_id": primary.pending_draft_id,
+            "full_text": text[:18000],
         }
-
-    return {
-        "resume_id": primary_id,
-        "title": primary_title,
-        "section_count": 0,
-        "raw_resume_available": True,
-        "source": "empty",
-        "parse_status": primary_parse_status,
-        "hint": (
-            f"Resume '{primary_title}' exists but isn't parsed yet "
-            f"(parse_status={primary_parse_status}). If 'pending', tell the user "
-            f"to wait a few seconds and retry; if 'failed', re-upload."
-        ),
-    }
 
 
 registry.register(
     ToolDefinition(
         name="read_resume",
         description=(
-            "Read the user's default personal resume. Tries the parsed "
-            "``resume_sections`` first; falls back to the resume entity's "
-            "``raw_text_snapshot``. Returns either structured sections or "
-            "``full_text`` plus metadata. Resumes are a personal entity, "
-            "never knowledge documents."
+            "Read the user's default saved resume Artifact and its exact current "
+            "version. Returns full text plus parse/candidate metadata. Legacy "
+            "Resume identities work only when migration 0029 mapped them to the "
+            "canonical Artifact aggregate."
         ),
         args_model=ReadResumeArgs,
         handler=_read_resume_handler,
         effect=ToolEffect.READ,
         concurrency_safe=True,
-        # Bumped from 10K to 20K to accommodate the full-text fallback —
-        # the handler caps full_text at 18K internally, leaving headroom
-        # for the surrounding JSON envelope.
+        # The handler caps full_text at 18K, leaving headroom for the envelope.
         max_result_chars=20000,
         emoji="📄",
     )

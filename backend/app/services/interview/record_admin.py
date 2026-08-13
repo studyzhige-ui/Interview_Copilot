@@ -134,23 +134,34 @@ def _enqueue_record_asset_deletes(db: Session, record: InterviewRecord) -> None:
     if not asset_ids:
         return
     # "Exclusively owns" must be verified, not assumed: the same asset id can
-    # also be referenced by a personal resume entity (Resume.file_asset_id is
-    # a real FK — deleting the row would 500 the whole cascade on Postgres)
-    # or a knowledge document. Skip anything with an outside reference.
+    # also be referenced by a retired Resume audit row (its file_asset_id is a
+    # real FK — deleting the row would fail the cascade on Postgres), a
+    # canonical ArtifactVersion, or a knowledge document. This is reference
+    # protection only; no legacy resume content enters a runtime read path.
     from app.models.knowledge import KnowledgeDocument
     from app.models.resume import Resume
+    from app.models.artifact import ArtifactVersion
 
-    referenced = {
-        row[0]
-        for row in db.query(Resume.file_asset_id)
-        .filter(Resume.file_asset_id.in_(asset_ids))
-        .all()
-    } | {
-        row[0]
-        for row in db.query(KnowledgeDocument.file_asset_id)
-        .filter(KnowledgeDocument.file_asset_id.in_(asset_ids))
-        .all()
-    }
+    referenced = (
+        {
+            row[0]
+            for row in db.query(Resume.file_asset_id)
+            .filter(Resume.file_asset_id.in_(asset_ids))
+            .all()
+        }
+        | {
+            row[0]
+            for row in db.query(ArtifactVersion.file_asset_id)
+            .filter(ArtifactVersion.file_asset_id.in_(asset_ids))
+            .all()
+        }
+        | {
+            row[0]
+            for row in db.query(KnowledgeDocument.file_asset_id)
+            .filter(KnowledgeDocument.file_asset_id.in_(asset_ids))
+            .all()
+        }
+    )
     asset_ids -= referenced
     if not asset_ids:
         return
@@ -211,6 +222,15 @@ def reanalyze_record(db: Session, record: InterviewRecord, *, drop_qa: bool = Fa
         db.query(InterviewQA).filter(InterviewQA.record_id == record.id).delete(
             synchronize_session=False,
         )
+    from app.services.ability_signal_service import (
+        invalidate_ability_signals_for_interview_reanalysis,
+    )
+
+    invalidate_ability_signals_for_interview_reanalysis(
+        db,
+        user_pk=record.user_id,
+        interview_record_id=record.id,
+    )
     record.analysis_json = None
     record.error_message = None
     record.analyzed_qa_count = 0
@@ -344,6 +364,16 @@ def delete_record_cascade(
             interview_record_id=record_id,
             conversation_ids=tuple(session_ids),
         )
+        from app.services.agent_memory_service import (
+            invalidate_sources_for_conversation,
+        )
+
+        for session_id in session_ids:
+            invalidate_sources_for_conversation(
+                db,
+                user_pk=record.user_id,
+                conversation_id=session_id,
+            )
 
         # ── (2) DB deletes in safe order ─────────────────────────────────
         if session_ids:
@@ -362,7 +392,6 @@ def delete_record_cascade(
         # interview_qa auto-cleaned by ON DELETE CASCADE on interview_records.
         db.delete(record)
         db.commit()
-        from app.core.runtime_files import remove_session_results
         from app.task_queue.dispatch import revoke_task
 
         for task_id in dict.fromkeys(attachment_task_ids):
@@ -375,8 +404,6 @@ def delete_record_cascade(
                     exc_info=True,
                 )
 
-        for session_id in session_ids:
-            remove_session_results(session_id)
         logger.info(
             "Deleted interview_record=%s with %d session(s)",
             record_id,

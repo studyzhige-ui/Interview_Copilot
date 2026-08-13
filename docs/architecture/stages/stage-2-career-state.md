@@ -44,12 +44,30 @@ de-duplication. A search result becomes tracked state only after a user product
 command or an owned exact confirmation; browsing alone does not mutate the
 funnel.
 
+The observed JD is an append-only `JobDescriptionSnapshot` child of the owned
+opportunity. It preserves canonical content/checksum, original and normalized
+URL, provider, observation time, version and exact `AgentToolCall` or typed
+product-UI source. A complete detail result can be captured atomically while
+tracking; later `search_jobs` detail or `read_url` results are promoted only by
+the explicit `capture_job_description` command. An application event freezes
+the latest snapshot actually observed at that event time, and a correction
+preserves the original snapshot pair. Current re-fetches never rewrite funnel
+history. This child is not a generic Source Registry or a second opportunity
+owner.
+
 `ProcessEvent` is append-only history for application lifecycle facts. A
 correction appends a relationship to the event it corrects rather than editing
 history. The current opportunity stage/status is a deterministic projection of
 live events. Client-facing APIs may accept user assertions; Tool/provider
 observations and receipts are created only through their trusted handlers, not
 through a caller-selectable source-kind field.
+
+Duplicate detection returns deterministic candidate pairs and reasons; it
+never merges from similarity alone. User-confirmed merge creates a versioned
+relationship that preserves both opportunities, their provider/site identity,
+sources and ProcessEvents. Retraction restores the independent projections
+without rewriting either history. Active merge chains are rejected instead of
+silently redirecting a third identity.
 
 ## 4. NextAction
 
@@ -59,17 +77,42 @@ records origin and lifecycle, and supports versioned update/complete/close.
 Application Services may suggest one from a validated ProcessEvent in the same
 transaction. A suggestion is visible state, not proof an action occurred.
 
+Typed links connect an action to the real Interview, Offer or Artifact when
+applicable. Deterministic derivation and idempotency prevent duplicate actions;
+time conflicts remain multiple visible actions rather than a synthetic global
+priority. A Reminder exists only for a `planned` action, uses the user's IANA
+timezone/quiet hours and produces an in-app notification projection through a
+bounded worker. It is not another task lifecycle. Historical funnel reads use
+the direction, submitted Artifact version and application-channel snapshots
+that were true at the event time and disclose sample IDs, field coverage and
+confounding/missing data instead of backfilling current values.
+
 ## 5. Shared Agent/UI path
 
-Pages and Agent Tools call the same Application Services. The first task-shaped
-Tool slice is intentionally small:
+Pages and Agent Tools call the same Application Services. The current
+task-shaped Tool slice is intentionally command-oriented rather than one CRUD
+Tool per table:
 
 - `read_career_context` reads relevant profile directions, opportunities and
   NextActions;
+- `read_career_domain_state` performs bounded reads for pending Profile
+  candidates, AbilitySignals, Interview/Debrief state, current Offers and
+  PersistentTasks without creating a universal CareerState owner;
+- `prepare_resume_profile_candidates` and
+  `resolve_resume_profile_candidates` operate on canonical resume Artifact
+  versions and explicit candidate identities;
+- `confirm_career_profile_change` handles versioned fact/direction/candidate
+  decisions, while `review_ability_signals` handles only challenge or
+  source-owned recomputation;
 - `track_search_job` accepts an exact owned completed `search_jobs` call result
-  plus owned user confirmation;
+  plus owned user confirmation and preserves a complete JD detail when present;
+- `capture_job_description` promotes one exact owned completed `search_jobs`
+  detail or `read_url` result into the existing opportunity's immutable JD
+  snapshot history;
 - `record_career_event` appends a confirmed event and may derive a suggested
   NextAction;
+- `manage_next_action` handles the closed create/edit/plan/complete/close and
+  Reminder command union against the same owner;
 - `read_artifacts`/`save_artifact` bridge to the Stage 3 owner.
 
 These are not generic CRUD Tools. Internal writes remain Policy-controlled,
@@ -105,6 +148,10 @@ mapping to avoid duplicates without creating a compatibility owner.
 - Analytics and Context read only canonical AbilitySignal;
 - Job search -> explicit track -> event -> NextAction works through both Agent
   and UI against the same rows;
+- duplicate opportunity merge/retraction preserves both identities and event
+  histories and never runs from a heuristic alone;
+- Reminder delivery and funnel analysis remain projections of canonical
+  NextAction/ProcessEvent/submitted-version history;
 - event correction preserves original history and current projection;
 - legacy migration is idempotent, has no residual runtime reader/writer and
   does not route mixed content into Long-term Memory.

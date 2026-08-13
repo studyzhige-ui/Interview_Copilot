@@ -6,12 +6,17 @@ import json
 import logging
 import re
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.core.llm_client_factory import get_internal_llm
 from app.prompts.chat import build_query_planner_system_prompt
 from app.rag.domain.models import SearchIntent
 from app.rag.policy import current_rag_policy
+from app.services.chat.source_requests import (
+    ReadOnlySourceRequest,
+    fallback_source_requests,
+    strip_planner_identities,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +24,24 @@ logger = logging.getLogger(__name__)
 class QueryPlan(BaseModel):
     needs_knowledge_retrieval: bool = False
     intents: list[SearchIntent] = Field(default_factory=list)
+    source_requests: list[ReadOnlySourceRequest] = Field(
+        default_factory=list,
+        max_length=4,
+    )
     referenced_question_indexes: list[int] = Field(default_factory=list)
     planner_failed: bool = False
+
+    @model_validator(mode="after")
+    def one_bounded_request_per_owner(self) -> "QueryPlan":
+        selected: list[ReadOnlySourceRequest] = []
+        seen: set[str] = set()
+        for request in self.source_requests:
+            if request.kind in seen:
+                continue
+            seen.add(request.kind)
+            selected.append(request)
+        self.source_requests = selected
+        return self
 
 
 def _extract_json_payload(raw_text: str) -> dict:
@@ -67,6 +88,7 @@ def fallback_query_plan(user_message: str) -> QueryPlan:
                 keywords=_keyword_terms(user_message),
             )
         ],
+        source_requests=fallback_source_requests(user_message),
         planner_failed=True,
     )
 
@@ -100,6 +122,9 @@ async def plan_query(
             response_format={"type": "json_object"},
         )
         plan = QueryPlan(**_extract_json_payload(str(response.text)))
+        # Stable owner identities are admitted typed input, never LLM output.
+        # The Planner may only request a bounded source category/query.
+        plan.source_requests = strip_planner_identities(plan.source_requests)
         plan.planner_failed = False
         if plan.needs_knowledge_retrieval:
             source_text = f"{recent_text}\n{user_message}"

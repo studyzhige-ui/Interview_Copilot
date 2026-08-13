@@ -63,7 +63,7 @@ def process_document_ingestion(self, document_id: str):
     from app.core.storage import download_file_from_s3
     from app.rag.cleaning import EmptyContentError
     from app.rag.embedding_registry import EmbeddingValidationError
-    from app.rag.ingest.pipeline import ingest_document
+    from app.rag.ingest.pipeline import ingest_document, ingest_transcript
     from app.services.knowledge.document_formats import (
         UnsupportedDocumentFormat,
         validate_knowledge_document_format,
@@ -94,8 +94,14 @@ def process_document_ingestion(self, document_id: str):
         owner_pk = document.user_id
         if not document.upload or document.upload.user_id != owner_pk:
             raise ValueError("Knowledge upload owner does not match document owner")
-        if document.upload.purpose != "knowledge_document":
-            raise ValueError("Knowledge document upload has invalid purpose")
+        upload_purpose = document.upload.purpose
+        if upload_purpose not in {"knowledge_document", "interview_audio"}:
+            raise ValueError("Attachment upload has invalid purpose")
+        if (
+            upload_purpose == "interview_audio"
+            and document.source_kind != "chat_attachment"
+        ):
+            raise ValueError("Audio transcription is only valid for chat attachments")
         if document.status not in {"processing", "failed"}:
             return {
                 "status": "skipped",
@@ -108,10 +114,11 @@ def process_document_ingestion(self, document_id: str):
         # gated this, but a stale dispatch or a direct DB insert must not
         # reach the parser with an unsupported format. Raises
         # UnsupportedDocumentFormat (a permanent error) handled below.
-        validate_knowledge_document_format(
-            document.upload.original_filename,
-            document.upload.content_type,
-        )
+        if upload_purpose == "knowledge_document":
+            validate_knowledge_document_format(
+                document.upload.original_filename,
+                document.upload.content_type,
+            )
 
         if not document.storage_uri.startswith("s3://"):
             raise ValueError("Knowledge ingestion only accepts owned S3 uploads")
@@ -137,20 +144,38 @@ def process_document_ingestion(self, document_id: str):
                 os.unlink(local_file_path)
             raise
 
-        logger.info("[Task %s] Starting RAG ingestion into Milvus.", self.request.id)
-        result = run_async(
-            ingest_document(
-                local_file_path,
-                document.source_kind,
-                owner_pk,
-                document_id=document.id,
-                upload_id=document.file_asset_id,
-                # Chat attachments remain conversation-scoped Postgres facts.
-                # They are supplied through the shared Source Resolver and must
-                # never compete in the user's global Milvus knowledge index.
-                index_document=document.source_kind != "chat_attachment",
+        if upload_purpose == "interview_audio":
+            from app.services.voice.audio_transcription_service import transcribe_media
+
+            logger.info(
+                "[Task %s] Transcribing Conversation audio attachment.",
+                self.request.id,
             )
-        )
+            transcript = run_async(transcribe_media(local_file_path, language=None))
+            result = run_async(
+                ingest_transcript(
+                    transcript,
+                    document.source_kind,
+                    owner_pk,
+                    document_id=document.id,
+                    upload_id=document.file_asset_id,
+                )
+            )
+        else:
+            logger.info("[Task %s] Starting document ingestion.", self.request.id)
+            result = run_async(
+                ingest_document(
+                    local_file_path,
+                    document.source_kind,
+                    owner_pk,
+                    document_id=document.id,
+                    upload_id=document.file_asset_id,
+                    # Chat attachments remain conversation-scoped Postgres facts.
+                    # They are supplied through the shared Source Resolver and must
+                    # never compete in the user's global Milvus knowledge index.
+                    index_document=document.source_kind != "chat_attachment",
+                )
+            )
 
         if result and result.get("success"):
             document.chunk_count = int(result.get("chunk_count") or 0)

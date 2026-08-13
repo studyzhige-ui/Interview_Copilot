@@ -1,17 +1,20 @@
 import { apiClient } from './client';
 import { uploadFileAsset } from './fileAssets';
 
-// The first-class personal ``resumes`` entity (at most two active, one default).
-// Mirrors backend/app/api/resumes.py. Resumes are a personal-profile asset —
-// they never enter the knowledge base.
+// Compatibility URL over canonical Artifact(kind=resume) aggregates.
 
 export interface PersonalResume {
   id: string;
+  artifact_id?: string;
+  current_version_id?: string;
   title: string;
   is_default: boolean;
   parse_status: string;
+  parse_error?: string | null;
   file_asset_id: string | null;
   has_text: boolean;
+  pending_profile_draft_id?: string | null;
+  legacy_resume_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -20,6 +23,7 @@ async function createResume(payload: {
   file_asset_id?: string;
   title?: string;
   make_default?: boolean;
+  operation_key?: string;
 }): Promise<PersonalResume> {
   const res = await apiClient.post('/resumes', payload);
   return res.data;
@@ -61,6 +65,7 @@ export async function createResumeFromFile(
     file_asset_id: fileAssetId,
     title: opts.title ?? file.name,
     make_default: opts.make_default,
+    operation_key: `resume_import:${crypto.randomUUID()}`,
   });
 }
 
@@ -74,12 +79,18 @@ export async function replaceResumeFromFile(
   const res = await apiClient.post(`/resumes/${encodeURIComponent(id)}/replace`, {
     file_asset_id: fileAssetId,
     title: opts.title ?? file.name,
+    operation_key: `resume_version:${crypto.randomUUID()}`,
   });
   return res.data;
 }
 
 export async function setDefaultResume(id: string): Promise<PersonalResume> {
   const res = await apiClient.post(`/resumes/${encodeURIComponent(id)}/set-default`);
+  return res.data;
+}
+
+export async function retryResumeParse(id: string): Promise<PersonalResume> {
+  const res = await apiClient.post(`/resumes/${encodeURIComponent(id)}/parse`);
   return res.data;
 }
 

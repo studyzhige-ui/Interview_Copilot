@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.db.types import utc_now
 from app.models.offer import Offer
+from app.models.job_opportunity import NextAction
 from app.schemas.offer import OfferSourceInput, OfferTermsDiff, OfferTermsInput
 
 JobOwnerChecker: TypeAlias = Callable[[Session, int, str], bool]
@@ -131,6 +132,7 @@ def record_current_offer(
                 offer.updated_at = utc_now()
                 db.add(offer)
                 db.flush()
+            _ensure_offer_deadline_action(db, offer=offer)
             return offer
         raise OfferTermsConfirmationRequired(
             offer_id=offer.id,
@@ -155,6 +157,7 @@ def record_current_offer(
     )
     db.add(row)
     db.flush()
+    _ensure_offer_deadline_action(db, offer=row)
     return row
 
 
@@ -337,7 +340,105 @@ def _confirm_offer_terms_change(
     offer.updated_at = utc_now()
     db.add(offer)
     db.flush()
+    _ensure_offer_deadline_action(db, offer=offer)
     return offer
+
+
+def _ensure_offer_deadline_action(db: Session, *, offer: Offer) -> NextAction | None:
+    """Deterministically derive one suggestion from a confirmed response deadline."""
+
+    previous = (
+        db.query(NextAction)
+        .filter(
+            NextAction.user_id == offer.user_id,
+            NextAction.offer_id == offer.id,
+            NextAction.source_kind == "offer",
+            NextAction.source_identity == f"offer:{offer.id}",
+            NextAction.status.in_(("suggested", "planned")),
+        )
+        .with_for_update()
+        .all()
+    )
+    raw_deadline = dict(offer.terms_json or {}).get("response_deadline")
+    if not raw_deadline:
+        _close_replaced_offer_deadline_actions(
+            db,
+            offer,
+            previous,
+            reason="offer_deadline_removed",
+        )
+        return None
+    deadline = datetime.fromisoformat(str(raw_deadline).replace("Z", "+00:00"))
+    terms = dict(offer.terms_json or {})
+    same_active = next(
+        (
+            action
+            for action in previous
+            if action.time_kind == "deadline" and action.due_at == deadline
+        ),
+        None,
+    )
+    if same_active is not None:
+        return same_active
+    # Include the current confirmed Offer version so remove→re-add of the same
+    # wall-clock deadline creates a new action instead of resurrecting a closed
+    # historical row.  Repeated reads still return `same_active` above.
+    key = f"offer-deadline:{offer.id}:{deadline.isoformat()}:{_current_token(offer)}"
+    existing = (
+        db.query(NextAction)
+        .filter(
+            NextAction.user_id == offer.user_id,
+            NextAction.idempotency_key == key,
+        )
+        .one_or_none()
+    )
+    if existing is not None:
+        return existing
+    _close_replaced_offer_deadline_actions(
+        db,
+        offer,
+        previous,
+        reason="replaced_by_offer_deadline",
+    )
+    action = NextAction(
+        user_id=offer.user_id,
+        job_opportunity_id=offer.job_opportunity_id,
+        offer_id=offer.id,
+        content="在回复截止前确认 Offer 决策或完成必要协商",
+        status="suggested",
+        time_kind="deadline",
+        due_at=deadline,
+        original_time_text=str(terms.get("response_deadline_text") or raw_deadline),
+        source_timezone=str(
+            terms.get("response_deadline_timezone") or deadline.tzinfo or "UTC"
+        ),
+        source_kind="offer",
+        source_identity=f"offer:{offer.id}",
+        source_version=_current_token(offer),
+        idempotency_key=key,
+    )
+    db.add(action)
+    db.flush()
+    return action
+
+
+def _close_replaced_offer_deadline_actions(
+    db: Session,
+    offer: Offer,
+    previous: list[NextAction],
+    *,
+    reason: str,
+) -> None:
+    now = utc_now()
+    for action in previous:
+        action.status = "closed"
+        action.resolved_at = now
+        action.resolution_source_kind = "application_service_result"
+        action.resolution_source_identity = f"offer-current:{offer.id}"
+        action.close_reason = reason
+        action.version += 1
+        action.updated_at = now
+        db.add(action)
 
 
 def get_current_offer(

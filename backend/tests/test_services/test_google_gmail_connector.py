@@ -13,14 +13,15 @@ import httpx
 import pytest
 
 from app.core.config import Settings
-from app.core.secrets import decrypt_secret, encrypt_secret
+from app.core.secrets import decrypt_secret
 from app.db.types import utc_now
-from app.models.gmail_integration import GmailOAuthCredential, GmailOAuthState
+from app.models.gmail_integration import GmailOAuthState
 from app.models.user import User
 from app.services.gmail_integration_service import (
     GMAIL_READONLY_SCOPE,
     GmailProviderAdapterError,
 )
+from app.services.gmail_credential_store import InMemoryGmailCredentialStore
 from app.services.google_gmail_connector import (
     GmailOAuthFlowError,
     GoogleGmailConnector,
@@ -49,7 +50,12 @@ def _state_from_authorization(url: str) -> str:
     return parse_qs(urlsplit(url).query)["state"][0]
 
 
-def _connector(db_session, handler) -> GoogleGmailConnector:
+def _connector(
+    db_session,
+    handler,
+    *,
+    credential_store: InMemoryGmailCredentialStore | None = None,
+) -> GoogleGmailConnector:
     transport = httpx.MockTransport(handler)
     return GoogleGmailConnector(
         client_id=CLIENT_ID,
@@ -58,6 +64,7 @@ def _connector(db_session, handler) -> GoogleGmailConnector:
         product_return_uri=PRODUCT_RETURN_URI,
         state_ttl_seconds=600,
         timeout_seconds=5,
+        credential_store=credential_store or InMemoryGmailCredentialStore(),
         session_factory=lambda: NoCloseSession(db_session),
         http_client_factory=lambda: httpx.AsyncClient(
             transport=transport,
@@ -176,9 +183,16 @@ def test_authorization_uses_google_web_flow_and_stores_only_state_digest(db_sess
     assert authorization.expires_in_seconds == 600
 
 
-def test_oauth_callback_encrypts_tokens_and_adapter_searches_then_revokes(db_session):
+def test_oauth_callback_keeps_tokens_in_broker_and_adapter_searches_then_revokes(
+    db_session,
+):
     user = _user(db_session)
-    connector = _connector(db_session, _success_handler)
+    credential_store = InMemoryGmailCredentialStore()
+    connector = _connector(
+        db_session,
+        _success_handler,
+        credential_store=credential_store,
+    )
     state = _state_from_authorization(
         connector.begin_authorization(user_pk=user.id).authorization_url
     )
@@ -189,15 +203,13 @@ def test_oauth_callback_encrypts_tokens_and_adapter_searches_then_revokes(db_ses
             code="oauth-code-sentinel",
         )
     )
-    grant = db_session.query(GmailOAuthCredential).one()
+    grant = credential_store.snapshot_for_test()[0]
 
     assert completion.user_pk == user.id
     assert completion.credential_handle.startswith("gch_")
-    assert grant.credential_handle == completion.credential_handle
-    assert ACCESS_TOKEN not in grant.access_token_ciphertext
-    assert REFRESH_TOKEN not in grant.refresh_token_ciphertext
-    assert decrypt_secret(grant.access_token_ciphertext) == ACCESS_TOKEN
-    assert decrypt_secret(grant.refresh_token_ciphertext) == REFRESH_TOKEN
+    assert grant.handle == completion.credential_handle
+    assert grant.access_token == ACCESS_TOKEN
+    assert grant.refresh_token == REFRESH_TOKEN
 
     inspection = asyncio.run(
         connector.inspect_grant(completion.credential_handle, user_pk=user.id)
@@ -226,15 +238,182 @@ def test_oauth_callback_encrypts_tokens_and_adapter_searches_then_revokes(db_ses
     assert completion.credential_handle not in encoded
 
     asyncio.run(connector.revoke_grant(completion.credential_handle, user_pk=user.id))
-    assert db_session.query(GmailOAuthCredential).count() == 0
+    assert credential_store.snapshot_for_test() == ()
     with pytest.raises(GmailProviderAdapterError, match="invalid_grant"):
         asyncio.run(
             connector.inspect_grant(completion.credential_handle, user_pk=user.id)
         )
 
 
+def test_gmail_history_initializes_cursor_then_reads_bounded_message_increment(
+    db_session,
+):
+    user = _user(db_session)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/profile"):
+            return httpx.Response(
+                200, json={"emailAddress": "a@example.com", "historyId": "100"}
+            )
+        if request.url.path.endswith("/history"):
+            assert request.url.params["startHistoryId"] == "100"
+            assert request.url.params["historyTypes"] == "messageAdded"
+            return httpx.Response(
+                200,
+                json={
+                    "historyId": "103",
+                    "history": [
+                        {
+                            "id": "101",
+                            "messagesAdded": [
+                                {
+                                    "message": {
+                                        "id": "message-1",
+                                        "threadId": "thread-1",
+                                    }
+                                },
+                                # Same provider message in a later record is deduped.
+                                {
+                                    "message": {
+                                        "id": "message-1",
+                                        "threadId": "thread-1",
+                                    }
+                                },
+                            ],
+                        },
+                        {
+                            "id": "102",
+                            "messagesAdded": [
+                                {"message": {"id": "message-2", "threadId": "thread-2"}}
+                            ],
+                        },
+                    ],
+                },
+            )
+        if request.url.path.endswith("/messages/message-2"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": "message-2",
+                    "threadId": "thread-2",
+                    "internalDate": "1786608000000",
+                    "snippet": "Assessment invitation",
+                    "payload": {
+                        "headers": [{"name": "Subject", "value": "Assessment"}]
+                    },
+                },
+            )
+        return _success_handler(request)
+
+    connector = _connector(db_session, handler)
+    state = _state_from_authorization(
+        connector.begin_authorization(user_pk=user.id).authorization_url
+    )
+    completion = asyncio.run(
+        connector.complete_authorization(state=state, code="oauth-code-sentinel")
+    )
+
+    initialized = asyncio.run(
+        connector.read_incremental_messages(
+            completion.credential_handle, user_pk=user.id, cursor=None, limit=10
+        )
+    )
+    assert initialized.initialized_cursor is True
+    assert initialized.cursor_after == "100"
+    assert initialized.messages == []
+
+    batch = asyncio.run(
+        connector.read_incremental_messages(
+            completion.credential_handle, user_pk=user.id, cursor="100", limit=10
+        )
+    )
+    assert batch.cursor_before == "100"
+    assert batch.cursor_after == "103"
+    assert [message.message_id for message in batch.messages] == [
+        "message-1",
+        "message-2",
+    ]
+    assert [message.history_id for message in batch.messages] == ["101", "102"]
+
+
+def test_expired_gmail_history_cursor_returns_safe_typed_error(db_session):
+    user = _user(db_session)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/history"):
+            return httpx.Response(
+                404,
+                json={"error": {"message": "sensitive provider prose"}},
+            )
+        return _success_handler(request)
+
+    connector = _connector(db_session, handler)
+    state = _state_from_authorization(
+        connector.begin_authorization(user_pk=user.id).authorization_url
+    )
+    completion = asyncio.run(
+        connector.complete_authorization(state=state, code="oauth-code-sentinel")
+    )
+    with pytest.raises(GmailProviderAdapterError) as caught:
+        asyncio.run(
+            connector.read_incremental_messages(
+                completion.credential_handle, user_pk=user.id, cursor="old", limit=10
+            )
+        )
+    assert caught.value.code == "history_cursor_expired"
+    assert "sensitive provider prose" not in str(caught.value)
+
+
+def test_deleted_message_is_captured_as_tombstone_without_blocking_cursor(db_session):
+    user = _user(db_session)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/history"):
+            return httpx.Response(
+                200,
+                json={
+                    "historyId": "102",
+                    "history": [
+                        {
+                            "id": "101",
+                            "messagesAdded": [
+                                {
+                                    "message": {
+                                        "id": "deleted-message",
+                                        "threadId": "thread-1",
+                                    }
+                                }
+                            ],
+                        }
+                    ],
+                },
+            )
+        if request.url.path.endswith("/messages/deleted-message"):
+            return httpx.Response(404, json={"error": {"message": "gone"}})
+        return _success_handler(request)
+
+    connector = _connector(db_session, handler)
+    state = _state_from_authorization(
+        connector.begin_authorization(user_pk=user.id).authorization_url
+    )
+    completion = asyncio.run(
+        connector.complete_authorization(state=state, code="oauth-code-sentinel")
+    )
+    batch = asyncio.run(
+        connector.read_incremental_messages(
+            completion.credential_handle, user_pk=user.id, cursor="100", limit=10
+        )
+    )
+    assert batch.cursor_after == "102"
+    assert len(batch.messages) == 1
+    assert batch.messages[0].message_id == "deleted-message"
+    assert batch.messages[0].thread_id == "thread-1"
+    assert batch.messages[0].content_available is False
+
+
 def test_google_may_omit_scope_when_grant_matches_the_request(db_session):
     user = _user(db_session)
+    credential_store = InMemoryGmailCredentialStore()
 
     def handler(request: httpx.Request) -> httpx.Response:
         response = _success_handler(request)
@@ -244,7 +423,11 @@ def test_google_may_omit_scope_when_grant_matches_the_request(db_session):
             return httpx.Response(200, json=payload)
         return response
 
-    connector = _connector(db_session, handler)
+    connector = _connector(
+        db_session,
+        handler,
+        credential_store=credential_store,
+    )
     state = _state_from_authorization(
         connector.begin_authorization(user_pk=user.id).authorization_url
     )
@@ -255,7 +438,7 @@ def test_google_may_omit_scope_when_grant_matches_the_request(db_session):
         )
     )
 
-    assert set(db_session.query(GmailOAuthCredential).one().scopes_json) == {
+    assert credential_store.snapshot_for_test()[0].scopes == {
         "openid",
         "email",
         GMAIL_READONLY_SCOPE,
@@ -265,7 +448,12 @@ def test_google_may_omit_scope_when_grant_matches_the_request(db_session):
 def test_credential_handle_is_always_rechecked_against_owning_user(db_session):
     alice = _user(db_session, "gmail-owner-alice")
     bob = _user(db_session, "gmail-owner-bob")
-    connector = _connector(db_session, _success_handler)
+    credential_store = InMemoryGmailCredentialStore()
+    connector = _connector(
+        db_session,
+        _success_handler,
+        credential_store=credential_store,
+    )
     state = _state_from_authorization(
         connector.begin_authorization(user_pk=alice.id).authorization_url
     )
@@ -284,7 +472,7 @@ def test_credential_handle_is_always_rechecked_against_owning_user(db_session):
         asyncio.run(
             connector.revoke_grant(completion.credential_handle, user_pk=bob.id)
         )
-    assert db_session.query(GmailOAuthCredential).count() == 1
+    assert len(credential_store.snapshot_for_test()) == 1
 
 
 def test_state_is_user_bound_one_time_and_denial_does_not_call_provider(db_session):
@@ -377,6 +565,7 @@ def test_expiring_access_token_is_refreshed_without_exposing_refresh_token(
 ):
     user = _user(db_session)
     refresh_calls = 0
+    credential_store = InMemoryGmailCredentialStore()
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal refresh_calls
@@ -392,7 +581,11 @@ def test_expiring_access_token_is_refreshed_without_exposing_refresh_token(
             return response
         return _success_handler(request)
 
-    connector = _connector(db_session, handler)
+    connector = _connector(
+        db_session,
+        handler,
+        credential_store=credential_store,
+    )
     state = _state_from_authorization(
         connector.begin_authorization(user_pk=user.id).authorization_url
     )
@@ -404,11 +597,9 @@ def test_expiring_access_token_is_refreshed_without_exposing_refresh_token(
     )
 
     asyncio.run(connector.inspect_grant(completion.credential_handle, user_pk=user.id))
-    grant = db_session.query(GmailOAuthCredential).one()
+    grant = credential_store.snapshot_for_test()[0]
     assert refresh_calls == 1
-    assert decrypt_secret(grant.access_token_ciphertext) == (
-        "ya29.refreshed-access-token"
-    )
+    assert grant.access_token == "ya29.refreshed-access-token"
     assert REFRESH_TOKEN not in repr(connector)
 
 
@@ -417,6 +608,7 @@ def test_reauthorization_preserves_existing_refresh_token_when_google_omits_it(
 ):
     user = _user(db_session)
     exchange_count = 0
+    credential_store = InMemoryGmailCredentialStore()
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal exchange_count
@@ -431,7 +623,11 @@ def test_reauthorization_preserves_existing_refresh_token_when_google_omits_it(
                     return httpx.Response(200, json=payload)
         return response
 
-    connector = _connector(db_session, handler)
+    connector = _connector(
+        db_session,
+        handler,
+        credential_store=credential_store,
+    )
     first_state = _state_from_authorization(
         connector.begin_authorization(user_pk=user.id).authorization_url
     )
@@ -451,9 +647,10 @@ def test_reauthorization_preserves_existing_refresh_token_when_google_omits_it(
         )
     )
 
-    grant = db_session.query(GmailOAuthCredential).one()
-    assert first.credential_handle == second.credential_handle
-    assert decrypt_secret(grant.refresh_token_ciphertext) == REFRESH_TOKEN
+    grant = credential_store.snapshot_for_test()[0]
+    assert first.credential_handle != second.credential_handle
+    assert grant.generation == 2
+    assert grant.refresh_token == REFRESH_TOKEN
 
 
 def test_provider_errors_are_folded_to_bounded_codes_without_response_body(
@@ -488,6 +685,7 @@ def test_provider_errors_are_folded_to_bounded_codes_without_response_body(
 
 def test_already_invalid_google_token_is_idempotent_revoke_readback(db_session):
     user = _user(db_session)
+    credential_store = InMemoryGmailCredentialStore()
 
     def handler(request: httpx.Request) -> httpx.Response:
         response = _success_handler(request)
@@ -495,7 +693,11 @@ def test_already_invalid_google_token_is_idempotent_revoke_readback(db_session):
             return httpx.Response(400, json={"error": "invalid_token"})
         return response
 
-    connector = _connector(db_session, handler)
+    connector = _connector(
+        db_session,
+        handler,
+        credential_store=credential_store,
+    )
     state = _state_from_authorization(
         connector.begin_authorization(user_pk=user.id).authorization_url
     )
@@ -507,23 +709,33 @@ def test_already_invalid_google_token_is_idempotent_revoke_readback(db_session):
     )
 
     asyncio.run(connector.revoke_grant(completion.credential_handle, user_pk=user.id))
-    assert db_session.query(GmailOAuthCredential).count() == 0
+    assert credential_store.snapshot_for_test() == ()
 
 
 def test_revoke_does_not_delete_a_concurrently_reauthorized_grant(db_session):
     user = _user(db_session)
     replacement_refresh_token = "1//concurrent-new-refresh-token"
+    credential_store = InMemoryGmailCredentialStore()
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/revoke":
-            row = db_session.query(GmailOAuthCredential).one()
-            row.refresh_token_ciphertext = encrypt_secret(replacement_refresh_token)
-            db_session.add(row)
-            db_session.commit()
+            current = credential_store.snapshot_for_test()[0]
+            credential_store.put_grant(
+                user_pk=user.id,
+                google_subject=current.google_subject,
+                scopes=current.scopes,
+                access_token="ya29.concurrent-new-access-token",
+                refresh_token=replacement_refresh_token,
+                access_token_expires_at=current.access_token_expires_at,
+            )
             return httpx.Response(200)
         return _success_handler(request)
 
-    connector = _connector(db_session, handler)
+    connector = _connector(
+        db_session,
+        handler,
+        credential_store=credential_store,
+    )
     state = _state_from_authorization(
         connector.begin_authorization(user_pk=user.id).authorization_url
     )
@@ -542,10 +754,9 @@ def test_revoke_does_not_delete_a_concurrently_reauthorized_grant(db_session):
             )
         )
     assert caught.value.code == "credential_changed"
-    remaining = db_session.query(GmailOAuthCredential).one()
-    assert decrypt_secret(remaining.refresh_token_ciphertext) == (
-        replacement_refresh_token
-    )
+    remaining = credential_store.snapshot_for_test()[0]
+    assert remaining.refresh_token == replacement_refresh_token
+    assert remaining.generation == 2
 
 
 def test_oversized_provider_json_is_rejected_before_parsing(db_session):
@@ -655,14 +866,19 @@ def test_nested_google_scope_error_is_folded_to_reconnect_code(db_session):
     assert "provider prose" not in str(caught.value)
 
 
-def test_configuration_gate_requires_complete_valid_https_or_loopback_settings():
+def test_configuration_gate_requires_complete_valid_https_or_loopback_settings(
+    tmp_path,
+):
     base = {
         "_env_file": None,
+        "APP_EDITION": "community",
         "SECRET_KEY": "test-encryption-key",
         "GMAIL_GOOGLE_OAUTH_CLIENT_ID": CLIENT_ID,
         "GMAIL_GOOGLE_OAUTH_CLIENT_SECRET": CLIENT_SECRET,
         "GMAIL_GOOGLE_OAUTH_REDIRECT_URI": REDIRECT_URI,
         "GMAIL_OAUTH_PRODUCT_RETURN_URI": PRODUCT_RETURN_URI,
+        "GMAIL_CREDENTIAL_STORE_FILE": str(tmp_path / "gmail-credentials.enc"),
+        "GMAIL_CREDENTIAL_STORE_KEY": "gmail-store-recovery-key-with-32-characters",
     }
     complete = Settings(**base)
     assert build_configured_google_gmail_connector(complete) is not None
@@ -672,6 +888,16 @@ def test_configuration_gate_requires_complete_valid_https_or_loopback_settings()
             Settings(**{**base, "GMAIL_GOOGLE_OAUTH_CLIENT_SECRET": ""})
         )
         is None
+    )
+
+    cloud = Settings(**{**base, "APP_EDITION": "cloud"})
+    assert build_configured_google_gmail_connector(cloud) is None
+    assert (
+        build_configured_google_gmail_connector(
+            cloud,
+            credential_store=InMemoryGmailCredentialStore(),
+        )
+        is not None
     )
     assert (
         build_configured_google_gmail_connector(
@@ -803,6 +1029,7 @@ def test_default_http_client_disables_environment_proxy_and_redirects(
         product_return_uri=PRODUCT_RETURN_URI,
         state_ttl_seconds=600,
         timeout_seconds=5,
+        credential_store=InMemoryGmailCredentialStore(),
         session_factory=lambda: NoCloseSession(db_session),
     )
     asyncio.run(connector._request("GET", "https://gmail.googleapis.com/test"))

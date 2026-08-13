@@ -25,6 +25,9 @@ const MockPage = lazy(() =>
 const GeneralChatPage = lazy(() =>
   import('@/pages/chat/GeneralChatPage').then((m) => ({ default: m.GeneralChatPage })),
 );
+const HistorySearchPage = lazy(() =>
+  import('@/pages/history/HistorySearchPage').then((m) => ({ default: m.HistorySearchPage })),
+);
 const AnalyticsPage = lazy(() =>
   import('@/pages/analytics/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage })),
 );
@@ -45,6 +48,9 @@ const CareerProfilePage = lazy(() =>
 );
 const CareerProcessPage = lazy(() =>
   import('@/pages/career/CareerProcessPage').then((m) => ({ default: m.CareerProcessPage })),
+);
+const CareerInsightsPage = lazy(() =>
+  import('@/pages/career/CareerInsightsPage').then((m) => ({ default: m.CareerInsightsPage })),
 );
 const ArtifactsPage = lazy(() =>
   import('@/pages/artifacts/ArtifactsPage').then((m) => ({ default: m.ArtifactsPage })),
@@ -107,11 +113,13 @@ export const router = createBrowserRouter([
       { path: '/review', element: <ReviewPage /> },
       { path: '/mock', element: <MockPage /> },
       { path: '/general-chat', element: <GeneralChatPage /> },
+      { path: '/history', element: <HistorySearchPage /> },
       { path: '/persistent-tasks/:taskId/conversation', element: <PersistentTaskConversationPage /> },
       { path: '/persistent-tasks/:taskId?', element: <PersistentTasksPage /> },
       { path: '/analytics', element: <AnalyticsPage /> },
       { path: '/career-profile', element: <CareerProfilePage /> },
       { path: '/career-process', element: <CareerProcessPage /> },
+      { path: '/career-insights', element: <CareerInsightsPage /> },
       { path: '/career-process/:opportunityId/offer', element: <OfferPage /> },
       { path: '/artifacts/:artifactId?', element: <ArtifactsPage /> },
       { path: '/library', element: <LibraryPage /> },

@@ -25,7 +25,10 @@ from app.models.chat import Conversation, ConversationMessage
 from app.models.conversation_turn import ConversationTurn
 from app.models.file_asset import FileAsset
 from app.schemas.artifact import ArtifactProvenanceInput, ArtifactWriteInput
-from app.services.uploads.file_asset_service import READABLE_UPLOAD_STATUSES
+from app.services.uploads.file_asset_service import (
+    READABLE_UPLOAD_STATUSES,
+    file_asset_version_token,
+)
 
 OwnerChecker: TypeAlias = Callable[[Session, int, str, str], bool]
 SubmissionProofChecker: TypeAlias = Callable[[Session, int, str, str, str, str], bool]
@@ -192,17 +195,24 @@ def edit_artifact(
     )
     payload = _version_payload(version)
     if existing is not None:
+        if (
+            payload["file_asset_id"] is not None
+            and payload["file_asset_version"] is None
+        ):
+            payload["file_asset_version"] = existing.file_asset_version
         if _version_matches(existing, origin_kind="edit", payload=payload):
             return existing
         raise ArtifactConflictError(normalized_key)
     if artifact.archived_at is not None:
         raise ArtifactArchivedError(artifact.id)
-    _validate_version_sources(
+    resolved_file_version = _validate_version_sources(
         db,
         user_pk=user_pk,
         version=version,
         source_owner_checker=source_owner_checker,
     )
+    if payload["file_asset_id"] is not None:
+        payload["file_asset_version"] = resolved_file_version
 
     next_no = (
         db.query(func.max(ArtifactVersion.version_no))
@@ -476,6 +486,38 @@ def record_receipt_confirmed_submission(
     )
 
 
+def record_product_ui_confirmed_submission(
+    db: Session,
+    *,
+    user_pk: int,
+    operation_key: str,
+    artifact_id: str,
+    artifact_version_id: str,
+    job_opportunity_id: str,
+    job_owner_checker: OwnerChecker,
+) -> ArtifactSubmissionSnapshot:
+    """Freeze exact-version use from an authenticated explicit UI command.
+
+    The stable operation key is the auditable product-command identity. No
+    ConversationMessage is fabricated merely to satisfy this boundary.
+    """
+
+    return _record_submission(
+        db,
+        user_pk=user_pk,
+        operation_key=operation_key,
+        artifact_id=artifact_id,
+        artifact_version_id=artifact_version_id,
+        job_opportunity_id=job_opportunity_id,
+        basis="product_ui_confirmation",
+        confirmation_message_id=None,
+        receipt_owner_type=None,
+        receipt_owner_id=None,
+        job_owner_checker=job_owner_checker,
+        proof_checker=None,
+    )
+
+
 def _create_artifact(
     db: Session,
     *,
@@ -492,6 +534,11 @@ def _create_artifact(
     existing = _artifact_for_creation_key(db, user_pk, normalized_key)
     if existing is not None:
         initial = _initial_version(db, existing.id)
+        if (
+            payload["file_asset_id"] is not None
+            and payload["file_asset_version"] is None
+        ):
+            payload["file_asset_version"] = initial.file_asset_version
         if existing.kind == normalized_kind and _version_matches(
             initial,
             origin_kind=origin_kind,
@@ -499,12 +546,14 @@ def _create_artifact(
         ):
             return existing
         raise ArtifactConflictError(normalized_key)
-    _validate_version_sources(
+    resolved_file_version = _validate_version_sources(
         db,
         user_pk=user_pk,
         version=version,
         source_owner_checker=source_owner_checker,
     )
+    if payload["file_asset_id"] is not None:
+        payload["file_asset_version"] = resolved_file_version
 
     artifact = Artifact(
         user_id=user_pk,
@@ -600,6 +649,16 @@ def _record_submission(
         message = _require_owned_message(db, user_pk, confirmation_message_id)
         if message.role.lower() != "user":
             raise ArtifactSubmissionProofError(str(confirmation_message_id))
+    elif basis == "product_ui_confirmation":
+        if any(
+            value is not None
+            for value in (
+                confirmation_message_id,
+                receipt_owner_type,
+                receipt_owner_id,
+            )
+        ):
+            raise ArtifactSubmissionProofError("invalid product UI confirmation shape")
     elif basis == "external_receipt":
         if (
             receipt_owner_type is None
@@ -641,7 +700,7 @@ def _validate_version_sources(
     user_pk: int,
     version: ArtifactWriteInput,
     source_owner_checker: OwnerChecker | None,
-) -> None:
+) -> str | None:
     payload = _version_payload(version)
     message = None
     turn = None
@@ -668,6 +727,7 @@ def _validate_version_sources(
         )
 
     file_asset_id = payload["file_asset_id"]
+    file_asset_version = payload["file_asset_version"]
     if file_asset_id is not None:
         asset = (
             db.query(FileAsset)
@@ -684,6 +744,13 @@ def _validate_version_sources(
             or asset.validation_status != "passed"
         ):
             raise ArtifactSourceUnavailableError(file_asset_id)
+        if (
+            file_asset_version is not None
+            and file_asset_version != file_asset_version_token(asset)
+        ):
+            raise ArtifactSourceUnavailableError(str(file_asset_version))
+        return file_asset_version_token(asset)
+    return None
 
 
 def _version_payload(version: ArtifactWriteInput) -> dict[str, object]:
@@ -693,6 +760,11 @@ def _version_payload(version: ArtifactWriteInput) -> dict[str, object]:
         "content_text": version.content_text,
         "content_format": _identity(version.content_format, "content_format", 64),
         "file_asset_id": _optional_identity(version.file_asset_id, "file_asset_id"),
+        "file_asset_version": _optional_identity(
+            version.file_asset_version,
+            "file_asset_version",
+            96,
+        ),
         "source_message_id": provenance.source_message_id,
         "source_turn_id": _optional_identity(
             provenance.source_turn_id,
@@ -894,6 +966,7 @@ __all__ = [
     "list_artifacts",
     "promote_message_to_artifact",
     "record_receipt_confirmed_submission",
+    "record_product_ui_confirmed_submission",
     "record_user_confirmed_submission",
     "relate_artifact_to_job",
     "save_artifact_explicitly",

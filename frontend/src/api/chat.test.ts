@@ -21,8 +21,9 @@ import {
   listDebriefSources,
   listPendingSubmissions,
   promoteAttachmentToDebrief,
+  promoteAttachmentToArtifact,
   removeDebriefSource,
-  removeFailedConversationAttachment,
+  removeConversationAttachmentFromScope,
   retryAttachmentSource,
   retryPendingSubmission,
   streamChatTurn,
@@ -271,11 +272,34 @@ describe('streamChatTurn', () => {
     del.mockResolvedValue({
       data: { source_id: 'ref/1', status: 'removed', resumed_turn: true },
     });
-    await expect(removeFailedConversationAttachment('session 1', 'ref/1')).resolves.toEqual({
+    await expect(removeConversationAttachmentFromScope('session 1', 'ref/1')).resolves.toEqual({
       source_id: 'ref/1', status: 'removed', resumed_turn: true,
     });
     expect(del).toHaveBeenCalledWith(
       '/chat/session%201/attachment-sources/ref%2F1',
+    );
+  });
+
+  it('sends an explicit typed command to promote one exact attachment to Artifact', async () => {
+    const promoted = {
+      source_id: 'ref/1',
+      file_asset_id: 'fa-1',
+      file_asset_version: 'sha256:abc',
+      artifact: { id: 'artifact-1' },
+      resume_parse_dispatched: false,
+    };
+    post.mockResolvedValue({ data: promoted });
+
+    await expect(promoteAttachmentToArtifact('session 1', 'ref/1', {
+      operationKey: 'operation-1', artifactKind: 'portfolio', title: '项目材料',
+    })).resolves.toEqual(promoted);
+    expect(post).toHaveBeenCalledWith(
+      '/chat/session%201/attachment-sources/ref%2F1/artifact',
+      {
+        operation_key: 'operation-1',
+        artifact_kind: 'portfolio',
+        title: '项目材料',
+      },
     );
   });
 

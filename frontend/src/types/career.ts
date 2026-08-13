@@ -101,11 +101,28 @@ export interface DirectionDraftChange {
 export interface CareerProfileDraft {
   id: string;
   career_profile_id: string;
-  source_kind: 'resume' | 'conversation_message' | 'model_inference';
+  source_kind: 'artifact_version' | 'resume' | 'conversation_message' | 'model_inference';
   source_id: string;
   base_profile_version: number;
   proposed_facts: FactDraftChange[];
   proposed_directions: DirectionDraftChange[];
+  status: 'pending' | 'accepted' | 'rejected';
+  resolution_note: string | null;
+  version: number;
+  created_at: string;
+  resolved_at: string | null;
+  /** Present on the canonical 0029 projection; optional keeps cached/legacy
+   * clients readable during a rolling deployment. */
+  candidates?: CareerProfileCandidateItem[];
+}
+
+export interface CareerProfileCandidateItem {
+  id: string;
+  item_kind: 'fact' | 'direction';
+  position: number;
+  payload: FactDraftChange | DirectionDraftChange;
+  conflict_kind: 'none' | 'duplicate' | 'conflict' | 'missing_target';
+  current_value: Record<string, unknown> | null;
   status: 'pending' | 'accepted' | 'rejected';
   resolution_note: string | null;
   version: number;
@@ -182,6 +199,26 @@ export interface JobOpportunity {
   updated_at: string;
 }
 
+export interface JobOpportunityMergeCandidate {
+  duplicate_opportunity_id: string;
+  canonical_opportunity_id: string;
+  reasons: string[];
+}
+
+export interface JobOpportunityMerge {
+  id: string;
+  duplicate_opportunity_id: string;
+  canonical_opportunity_id: string;
+  status: 'active' | 'retracted';
+  version: number;
+  reason: string;
+  confirmation_source_identity: string;
+  created_at: string;
+  updated_at: string;
+  retraction_reason: string | null;
+  retracted_at: string | null;
+}
+
 export type ProcessEventKind =
   | 'tracking_started'
   | 'preparation_started'
@@ -214,6 +251,7 @@ export interface ProcessEvent {
   source_version: string | null;
   description: string;
   step_summary: string | null;
+  analysis_context_json: Record<string, unknown>;
   corrects_event_id: string | null;
   created_at: string;
 }
@@ -225,6 +263,9 @@ export interface NextAction {
   id: string;
   user_id: number;
   job_opportunity_id: string | null;
+  interview_record_id: string | null;
+  offer_id: string | null;
+  artifact_id: string | null;
   content: string;
   status: NextActionStatus;
   time_kind: NextActionTimeKind;
@@ -233,12 +274,18 @@ export interface NextAction {
   due_at: string | null;
   original_time_text: string | null;
   source_timezone: string | null;
-  source_kind: 'user_request' | 'process_event' | 'agent_suggestion' | 'copilot_preference';
+  source_kind: 'user_request' | 'process_event' | 'agent_suggestion' | 'copilot_preference' | 'offer';
   source_identity: string;
   source_version: string | null;
   planned_at: string | null;
   resolved_at: string | null;
   close_reason: string | null;
+  reminder_at: string | null;
+  reminder_next_attempt_at: string | null;
+  reminder_channel: 'in_app' | null;
+  reminder_delivered_at: string | null;
+  reminder_dismissed_at: string | null;
+  version: number;
   created_at: string;
   updated_at: string;
 }
@@ -248,6 +295,7 @@ export interface ArtifactWriteInput {
   content_text?: string | null;
   content_format: string;
   file_asset_id?: string | null;
+  file_asset_version?: string | null;
   provenance?: {
     source_message_id?: number | null;
     source_turn_id?: string | null;
@@ -264,6 +312,7 @@ export interface ArtifactVersion {
   content_text: string | null;
   content_format: string;
   file_asset_id: string | null;
+  file_asset_version: string | null;
   origin_kind: 'explicit_save' | 'message_promotion' | 'flow_delivery' | 'edit';
   source_message_id: number | null;
   source_turn_id: string | null;
@@ -291,7 +340,7 @@ export interface ArtifactSubmission {
   job_opportunity_id: string;
   artifact_id: string;
   artifact_version_id: string;
-  basis: 'user_confirmation' | 'external_receipt';
+  basis: 'user_confirmation' | 'product_ui_confirmation' | 'external_receipt';
   confirmation_message_id: number | null;
   receipt_owner_type: string | null;
   receipt_owner_id: string | null;
@@ -321,6 +370,8 @@ export interface OfferTermsInput {
   probation_text?: string | null;
   start_date?: string | null;
   response_deadline?: string | null;
+  response_deadline_text?: string | null;
+  response_deadline_timezone?: string | null;
   additional_terms?: Record<string, string> | null;
   formality: 'written' | 'verbal_confirmed' | 'verbal_pending_written';
   original_text: string;
@@ -357,4 +408,108 @@ export interface OfferConfirmationRequired {
   offer_id: string;
   current_token: string;
   diff: OfferTermsDiff;
+}
+
+export interface OfferListItem {
+  offer: Offer;
+  current_token: string;
+  company_name: string;
+  job_title: string;
+}
+
+export interface NotificationPreference {
+  enabled: boolean;
+  default_channel: 'in_app';
+  timezone: string;
+  quiet_start: string | null;
+  quiet_end: string | null;
+  version: number;
+}
+
+export interface NextActionAgendaItem {
+  action: NextAction;
+  bucket: 'conflict' | 'today' | 'upcoming' | 'unscheduled_planned' | 'suggested';
+  overdue: boolean;
+  due_soon: boolean;
+  conflict_action_ids: string[];
+  duplicate_action_ids: string[];
+}
+
+export interface NextActionAgenda {
+  generated_at: string;
+  items: NextActionAgendaItem[];
+}
+
+export interface FunnelAnalysis {
+  generated_at: string;
+  sample_job_ids: string[];
+  coverage: {
+    sample_count: number;
+    direction_snapshot_count: number;
+    submitted_material_count: number;
+    channel_count: number;
+    jd_snapshot_count: number;
+    outcome_count: number;
+  };
+  groups: Array<{
+    direction_id: string | null;
+    direction_label: string | null;
+    submitted_artifact_version_id: string | null;
+    channel: string | null;
+    calendar_month: string;
+    sample_job_ids: string[];
+    stages: Array<{
+      stage: 'applied' | 'in_process' | 'offer' | 'terminal';
+      reached: number;
+      conversion_from_sample: number;
+      median_wait_hours: number | null;
+    }>;
+    outcomes: Record<string, number>;
+  }>;
+  missing_source_notes: string[];
+  confounders: string[];
+  interpretation_limit: string;
+}
+
+export interface OfferAnalysisItem {
+  offer_id: string;
+  job_opportunity_id: string;
+  company_name: string;
+  job_title: string;
+  original_currency: string | null;
+  annual_base_original: string | null;
+  annual_base_in_base_currency: string | null;
+  annual_bonus_in_base_currency: string | null;
+  annual_equity_in_base_currency: string | null;
+  estimated_after_tax_cash: string | null;
+  estimated_total_value: string | null;
+  missing_information: string[];
+  risks: string[];
+  assumptions: string[];
+}
+
+export interface OfferAnalysis {
+  generated_at: string;
+  base_currency: string;
+  items: OfferAnalysisItem[];
+  career_profile_constraints: string[];
+  user_constraints: string[];
+  source_observations: Array<{ identity: string; observed_at: string; url: string | null }>;
+  report_markdown: string;
+  artifact_id: string | null;
+}
+export interface JobDescriptionSnapshot {
+  id: string
+  job_opportunity_id: string
+  version: number
+  original_url: string
+  normalized_url: string
+  observed_at: string
+  provider: string
+  canonical_content: string
+  content_checksum: string
+  source_kind: 'tool_result' | 'typed_product_ui'
+  source_identity: string
+  source_version: string
+  created_at: string
 }

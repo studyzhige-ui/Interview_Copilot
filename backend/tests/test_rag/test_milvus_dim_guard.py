@@ -89,7 +89,7 @@ def test_validate_existing_dims_skips_absent_collections(monkeypatch):
     # deploy must not be blocked).
     client = _StartupClient(present=[], dim=settings.EMBEDDING_DIM + 128)
     monkeypatch.setattr(milvus_hybrid, "_get_client", lambda: client)
-    milvus_hybrid.validate_existing_dims(milvus_hybrid.KNOWLEDGE, milvus_hybrid.RESUME)
+    milvus_hybrid.validate_existing_dims(milvus_hybrid.KNOWLEDGE)
 
 
 def test_validate_existing_dims_best_effort_when_unreachable(monkeypatch):

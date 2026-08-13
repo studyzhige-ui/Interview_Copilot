@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 
 def _register_handlers() -> None:
     import app.worker.outbox_handlers.knowledge  # noqa: F401
-    import app.worker.outbox_handlers.resume  # noqa: F401
 
 
 def _drain(job_types: Collection[str], *, limit: int) -> dict[str, int]:

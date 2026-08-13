@@ -14,9 +14,10 @@ from pydantic import BaseModel, Field
 class AnalyzeRequest(BaseModel):
     """``POST /interview/analyze`` request body.
 
-    Resume context is optional and comes from EITHER a personal resume entity
-    (``resume_id``) or an ad-hoc file uploaded just for this interview
-    (``resume_file_asset_id``, a file_assets.id). JD is a snapshot only —
+    Resume context is optional and comes from EITHER a canonical resume
+    Artifact (``resume_id``; migration aliases are accepted) or an ad-hoc file
+    uploaded just for this interview (``resume_file_asset_id``, a
+    file_assets.id). JD is a snapshot only —
     direct ``jd_text`` or a ``jd_file_asset_id`` (file_assets.id, purpose='jd');
     JD never becomes a knowledge document.
     """

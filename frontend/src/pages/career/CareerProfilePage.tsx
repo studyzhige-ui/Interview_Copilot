@@ -26,7 +26,9 @@ import {
   listAbilitySignals,
   listCareerProfileDrafts,
   removePersonalFact,
+  recomputeInterviewAbilitySignals,
   resolveCareerProfileDraft,
+  resolveCareerProfileCandidates,
   saveCareerDirection,
   savePersonalFact,
   setCareerDirectionLifecycle,
@@ -46,6 +48,9 @@ import type {
   DirectionInput,
   DirectionLifecycle,
   PersonalFact,
+  CareerProfileCandidateItem,
+  FactDraftChange,
+  DirectionDraftChange,
 } from '@/types/career';
 import { csv, displayDate, FormItem, SelectInput, TextArea, TextInput } from './CareerFields';
 import { copilotObjectHandoffHref } from '@/lib/copilotObjectReference';
@@ -326,7 +331,50 @@ function DirectionEditor({
   );
 }
 
-function DraftSummary({ draft }: { draft: Awaited<ReturnType<typeof listCareerProfileDrafts>>[number] }) {
+function candidateLabel(item: CareerProfileCandidateItem): string {
+  if (item.item_kind === 'fact') {
+    const change = item.payload as FactDraftChange;
+    return change.operation === 'remove'
+      ? `删除个人事实 ${change.target_fact_id}`
+      : `新增或更新：${change.fact ? factTitle(change.fact) : ''}`;
+  }
+  const change = item.payload as DirectionDraftChange;
+  return change.operation === 'archive'
+    ? `归档求职方向 ${change.target_direction_id}`
+    : `新增或更新方向：${change.direction?.label ?? ''}`;
+}
+
+function DraftSummary({
+  draft, busy, onDecision,
+}: {
+  draft: Awaited<ReturnType<typeof listCareerProfileDrafts>>[number];
+  busy: boolean;
+  onDecision: (item: CareerProfileCandidateItem, decision: 'accept' | 'reject') => void;
+}) {
+  if (draft.candidates?.length) {
+    return <div className="space-y-2 text-sm text-stone-700">
+      {draft.candidates.map((item) => (
+        <div key={item.id} className={`rounded-md border px-3 py-2 ${item.conflict_kind === 'none' ? 'border-stone-100 bg-stone-50' : 'border-warning-200 bg-warning-50/50'}`}>
+          <div className="flex flex-wrap items-start gap-2">
+            <span className="min-w-0 flex-1">{candidateLabel(item)}</span>
+            {item.conflict_kind !== 'none' && <Pill tone="warn">
+              {item.conflict_kind === 'duplicate' ? '与当前内容重复' : item.conflict_kind === 'missing_target' ? '原内容已不存在' : '与当前档案冲突'}
+            </Pill>}
+          </div>
+          {item.current_value && item.conflict_kind !== 'none' && (
+            <details className="mt-2 text-xs text-stone-500">
+              <summary className="cursor-pointer">查看当前档案值</summary>
+              <pre className="mt-1 overflow-auto whitespace-pre-wrap rounded bg-white/70 p-2">{JSON.stringify(item.current_value, null, 2)}</pre>
+            </details>
+          )}
+          {item.status === 'pending' && <div className="mt-2 flex gap-2">
+            <Btn size="sm" disabled={busy} onClick={() => onDecision(item, 'accept')}>接受此项</Btn>
+            <Btn kind="ghost" size="sm" disabled={busy} onClick={() => onDecision(item, 'reject')}>拒绝此项</Btn>
+          </div>}
+        </div>
+      ))}
+    </div>;
+  }
   return (
     <div className="space-y-2 text-sm text-stone-700">
       {draft.proposed_facts.map((item, index) => (
@@ -343,8 +391,9 @@ function DraftSummary({ draft }: { draft: Awaited<ReturnType<typeof listCareerPr
   );
 }
 
-function AbilityCard({ signal, onAction }: { signal: AbilitySignal; onAction: (action: 'dispute' | 'invalidate') => void }) {
+function AbilityCard({ signal, onAction, onRecompute }: { signal: AbilitySignal; onAction: (action: 'dispute' | 'invalidate') => void; onRecompute: () => void }) {
   const tone = signal.status === 'active' ? 'success' : signal.status === 'disputed' ? 'warn' : 'neutral';
+  const canChallenge = signal.status === 'active' || signal.status === 'disputed';
   return (
     <article className="rounded-xl border border-stone-200 bg-white p-4 shadow-xs">
       <div className="flex items-start justify-between gap-3">
@@ -363,8 +412,9 @@ function AbilityCard({ signal, onAction }: { signal: AbilitySignal; onAction: (a
       </div>
       <div className="mt-2 text-[11px] text-stone-500">置信度 {Math.round((signal.confidence ?? 0) * 100)}% · {signal.sources.length} 个真实来源</div>
       {signal.limitations && <p className="mt-2 text-xs text-stone-500">局限：{signal.limitations}</p>}
-      {signal.status === 'active' && <div className="mt-3 flex gap-2">
-        <Btn kind="outline" size="sm" onClick={() => onAction('dispute')}>提出异议</Btn>
+      {canChallenge && <div className="mt-3 flex gap-2">
+        {signal.status === 'active' && <Btn kind="outline" size="sm" onClick={() => onAction('dispute')}>提出异议</Btn>}
+        {signal.scope_kind === 'interview_record' && <Btn kind="ghost" size="sm" onClick={onRecompute}>根据原记录重算</Btn>}
         <Btn kind="ghost" size="sm" onClick={() => onAction('invalidate')}>标记失效</Btn>
       </div>}
     </article>
@@ -433,8 +483,16 @@ export function CareerProfilePage() {
         <div className="space-y-3">
           {pendingDrafts.map((draft) => <div key={draft.id} className="rounded-lg border border-primary-100 bg-white p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><span className="text-xs text-stone-500">来源：{draft.source_kind} · {displayDate(draft.created_at)}</span><span className="text-[11px] text-stone-400">基于档案 v{draft.base_profile_version}</span></div>
-            <DraftSummary draft={draft} />
-            <div className="mt-4 flex gap-2"><Btn size="sm" icon={<Check size={14} />} disabled={busy} onClick={() => run(() => resolveCareerProfileDraft({ draft, profileVersion: profile.version, decision: 'accept' }), '已合并档案更新')}>确认合并</Btn><Btn kind="ghost" size="sm" icon={<X size={14} />} disabled={busy} onClick={() => run(() => resolveCareerProfileDraft({ draft, profileVersion: profile.version, decision: 'reject', note: '用户在档案页拒绝' }), '已拒绝这次更新')}>拒绝</Btn></div>
+            <DraftSummary draft={draft} busy={busy} onDecision={(item, decision) => void run(() => resolveCareerProfileCandidates({ draft, profileVersion: profile.version, decisions: [{ item, decision, note: decision === 'reject' ? '用户在档案页逐项拒绝' : undefined }] }), decision === 'accept' ? '候选已加入档案' : '候选已拒绝')} />
+            <div className="mt-4 flex flex-wrap gap-2">
+              {draft.candidates?.length ? <>
+                {draft.candidates.some((item) => item.status === 'pending' && item.conflict_kind === 'none') && <Btn size="sm" icon={<Check size={14} />} disabled={busy} onClick={() => run(() => resolveCareerProfileCandidates({ draft, profileVersion: profile.version, decisions: (draft.candidates ?? []).filter((item) => item.status === 'pending' && item.conflict_kind === 'none').map((item) => ({ item, decision: 'accept' as const })) }), '已批量接受无冲突候选')}>批量接受无冲突项</Btn>}
+                <Btn kind="ghost" size="sm" icon={<X size={14} />} disabled={busy} onClick={() => run(() => resolveCareerProfileDraft({ draft, profileVersion: profile.version, decision: 'reject', note: '用户在档案页拒绝剩余候选' }), '已拒绝剩余候选')}>拒绝剩余项</Btn>
+              </> : <>
+                <Btn size="sm" icon={<Check size={14} />} disabled={busy} onClick={() => run(() => resolveCareerProfileDraft({ draft, profileVersion: profile.version, decision: 'accept' }), '已合并档案更新')}>确认合并</Btn>
+                <Btn kind="ghost" size="sm" icon={<X size={14} />} disabled={busy} onClick={() => run(() => resolveCareerProfileDraft({ draft, profileVersion: profile.version, decision: 'reject', note: '用户在档案页拒绝' }), '已拒绝这次更新')}>拒绝</Btn>
+              </>}
+            </div>
           </div>)}
         </div>
       </section>}
@@ -464,7 +522,7 @@ export function CareerProfilePage() {
 
       <section>
         <div className="mb-3 flex items-center justify-between"><div><h2 className="font-semibold text-stone-800">能力判断</h2><p className="mt-0.5 text-xs text-stone-500">这些是带真实来源的模型推断，不会混入你确认的个人事实。</p></div>{signalsQuery.isFetching && <Spinner size={14} className="text-stone-400" />}</div>
-        {signalsQuery.data?.length ? <div className="grid gap-4 md:grid-cols-2">{signalsQuery.data.map((signal) => <AbilityCard key={signal.id} signal={signal} onAction={(action) => { setSignalAction({ signal, action }); setSignalReason(''); }} />)}</div> : <div className="rounded-xl border border-stone-200 bg-white"><EmptyState icon={<Award size={30} />} title="还没有能力判断" description="完成面试复盘或其他有依据的任务后，这里会逐步形成能力认知。" /></div>}
+        {signalsQuery.data?.length ? <div className="grid gap-4 md:grid-cols-2">{signalsQuery.data.map((signal) => <AbilityCard key={signal.id} signal={signal} onAction={(action) => { setSignalAction({ signal, action }); setSignalReason(''); }} onRecompute={() => { if (signal.scope_ref_id) void run(() => recomputeInterviewAbilitySignals(signal.scope_ref_id as string), '已根据原面试记录重算能力判断'); }} />)}</div> : <div className="rounded-xl border border-stone-200 bg-white"><EmptyState icon={<Award size={30} />} title="还没有能力判断" description="完成面试复盘或其他有依据的任务后，这里会逐步形成能力认知。" /></div>}
       </section>
 
       {factEditor && <FactEditor key={factEditor.key} open initial={factEditor.fact} busy={busy} onClose={() => setFactEditor(null)} onSave={async (fact) => { if (await run(() => savePersonalFact({ profileVersion: profile.version, fact, factId: factEditor.fact?.id }), '个人事实已保存')) setFactEditor(null); }} />}

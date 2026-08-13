@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.db.types import utc_now
+from app.models.artifact import Artifact, ArtifactVersion
 from app.models.interview_qa import InterviewQA, _generate_qa_id
 from app.models.interview_record import InterviewRecord, _generate_record_id
 from app.models.interview_transcript import InterviewTranscript, _generate_transcript_id
@@ -72,6 +73,8 @@ class InterviewRecordService:
         title: str = "",
         audio_file_asset_id: str | None = None,
         resume_id: str | None = None,
+        resume_artifact_id: str | None = None,
+        resume_artifact_version_id: str | None = None,
         resume_file_asset_id: str | None = None,
         resume_source: str | None = None,
         resume_title_snapshot: str | None = None,
@@ -87,6 +90,8 @@ class InterviewRecordService:
             title=title or "面试录音复盘",
             audio_file_asset_id=audio_file_asset_id,
             resume_id=resume_id,
+            resume_artifact_id=resume_artifact_id,
+            resume_artifact_version_id=resume_artifact_version_id,
             resume_file_asset_id=resume_file_asset_id,
             resume_source=resume_source,
             resume_title_snapshot=resume_title_snapshot,
@@ -104,6 +109,8 @@ class InterviewRecordService:
         user_id: str,
         title: str = "",
         resume_id: str | None = None,
+        resume_artifact_id: str | None = None,
+        resume_artifact_version_id: str | None = None,
         resume_text_snapshot: str = "",
         jd_text_snapshot: str = "",
         job_opportunity_id: str | None = None,
@@ -115,7 +122,11 @@ class InterviewRecordService:
             source="mock",
             title=title or "模拟面试",
             resume_id=resume_id,
-            resume_source="personal_resume" if resume_id else None,
+            resume_artifact_id=resume_artifact_id,
+            resume_artifact_version_id=resume_artifact_version_id,
+            resume_source=(
+                "personal_resume" if (resume_id or resume_artifact_id) else None
+            ),
             resume_text_snapshot=resume_text_snapshot,
             jd_text_snapshot=jd_text_snapshot,
             job_opportunity_id=job_opportunity_id,
@@ -537,6 +548,8 @@ class InterviewRecordService:
         title: str,
         audio_file_asset_id: str | None = None,
         resume_id: str | None = None,
+        resume_artifact_id: str | None = None,
+        resume_artifact_version_id: str | None = None,
         resume_file_asset_id: str | None = None,
         resume_source: str | None = None,
         resume_title_snapshot: str | None = None,
@@ -557,6 +570,25 @@ class InterviewRecordService:
                 user_pk=user_pk,
                 job_opportunity_id=job_opportunity_id,
             )
+            if resume_artifact_version_id and not resume_artifact_id:
+                raise ValueError(
+                    "resume_artifact_version_id requires resume_artifact_id"
+                )
+            if resume_artifact_id:
+                resume_query = db.query(Artifact.id).filter(
+                    Artifact.id == resume_artifact_id,
+                    Artifact.user_id == user_pk,
+                    Artifact.kind == "resume",
+                )
+                if resume_artifact_version_id:
+                    resume_query = resume_query.join(
+                        ArtifactVersion,
+                        ArtifactVersion.artifact_id == Artifact.id,
+                    ).filter(
+                        ArtifactVersion.id == resume_artifact_version_id,
+                    )
+                if resume_query.scalar() is None:
+                    raise ValueError("resume Artifact version is not owned")
             record = InterviewRecord(
                 id=_generate_record_id(),
                 user_id=user_pk,
@@ -565,6 +597,8 @@ class InterviewRecordService:
                 title=title,
                 audio_file_asset_id=audio_file_asset_id,
                 resume_id=resume_id,
+                resume_artifact_id=resume_artifact_id,
+                resume_artifact_version_id=resume_artifact_version_id,
                 resume_file_asset_id=resume_file_asset_id,
                 resume_source=resume_source or ("none" if source == "upload" else None),
                 resume_title_snapshot=resume_title_snapshot,

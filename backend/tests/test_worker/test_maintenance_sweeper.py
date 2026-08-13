@@ -89,6 +89,64 @@ def _record(db, *, source: str, status: str, age: timedelta):
     return rec
 
 
+def test_conversation_deletion_receipt_sweeper_purges_expired_only(
+    db_session,
+    monkeypatch,
+):
+    from app.db.types import utc_now
+    from app.models.conversation_deletion_receipt import ConversationDeletionReceipt
+    from app.models.user import User
+    from app.worker.tasks import maintenance
+
+    owner = User(username="receipt-sweeper-owner", hashed_password="x")
+    db_session.add(owner)
+    db_session.flush()
+    now = utc_now()
+    db_session.add_all(
+        [
+            ConversationDeletionReceipt(
+                id="cdr-sweeper-expired",
+                user_id=owner.id,
+                deleted_conversation_id="deleted-expired",
+                turn_id="turn-expired",
+                call_id="call-expired",
+                tool_name="send_email",
+                effect="external_write",
+                dispatch_generation=1,
+                status="completed",
+                correlation_json={"receipt_id": "expired"},
+                retain_until=now - timedelta(seconds=1),
+            ),
+            ConversationDeletionReceipt(
+                id="cdr-sweeper-unknown",
+                user_id=owner.id,
+                deleted_conversation_id="deleted-unknown",
+                turn_id="turn-unknown",
+                call_id="call-unknown",
+                tool_name="send_email",
+                effect="external_write",
+                dispatch_generation=1,
+                status="unknown",
+                correlation_json={"request_id": "pending"},
+                retain_until=now + timedelta(days=30),
+            ),
+        ]
+    )
+    db_session.commit()
+    monkeypatch.setattr(maintenance, "SessionLocal", lambda: _CtxSession(db_session))
+
+    assert maintenance.sweep_expired_conversation_deletion_receipts.run() == {
+        "purged": 1
+    }
+    assert db_session.get(ConversationDeletionReceipt, "cdr-sweeper-expired") is None
+    assert (
+        db_session.get(ConversationDeletionReceipt, "cdr-sweeper-unknown") is not None
+    )
+    assert maintenance.sweep_expired_conversation_deletion_receipts.run() == {
+        "purged": 0
+    }
+
+
 def test_stale_upload_record_swept_to_failed(sweeper_db):
     from app.worker.tasks import maintenance
 
@@ -158,6 +216,7 @@ def test_terminal_and_mock_in_progress_records_untouched(sweeper_db):
 
 
 def test_stale_factless_pipeline_rows_are_redispatched(db_session, monkeypatch):
+    from app.models.artifact import Artifact, ArtifactResumeState, ArtifactVersion
     from app.models.file_asset import FileAsset
     from app.models.knowledge import KnowledgeDocument
     from app.models.resume import Resume
@@ -186,15 +245,49 @@ def test_stale_factless_pipeline_rows_are_redispatched(db_session, monkeypatch):
         status="processing",
         updated_at=datetime.now(UTC) - timedelta(hours=3),
     )
-    resume = Resume(
+    resume = Artifact(
+        id="art_resume_pipeline_stale",
+        user_id=user.id,
+        kind="resume",
+        creation_key="test:resume-pipeline-stale",
+        updated_at=datetime.now(UTC) - timedelta(hours=3),
+    )
+    resume_version = ArtifactVersion(
+        id="artv_resume_pipeline_stale",
+        artifact_id=resume.id,
+        version_no=1,
+        operation_key="test:resume-pipeline-stale:v1",
+        title="CV",
+        content_text="canonical resume text",
+        content_format="plain_text",
+        origin_kind="explicit_save",
+    )
+    resume_state = ArtifactResumeState(
+        id="ars_resume_pipeline_stale",
+        artifact_id=resume.id,
+        user_id=user.id,
+        parse_status="pending",
+        parse_version_id=resume_version.id,
+        updated_at=datetime.now(UTC) - timedelta(hours=3),
+    )
+    retired_legacy_resume = Resume(
         id="rsm_pipeline_stale",
         user_id=user.id,
-        title="CV",
+        title="Retired legacy CV",
         parse_status="pending",
         is_default=True,
         updated_at=datetime.now(UTC) - timedelta(hours=3),
     )
-    db_session.add_all([asset, document, resume])
+    db_session.add_all(
+        [
+            asset,
+            document,
+            resume,
+            resume_version,
+            resume_state,
+            retired_legacy_resume,
+        ]
+    )
     db_session.commit()
     monkeypatch.setattr(maintenance, "SessionLocal", lambda: _CtxSession(db_session))
 
@@ -219,6 +312,7 @@ def test_stale_factless_pipeline_rows_are_redispatched(db_session, monkeypatch):
     assert result == {"dispatched": 2, "knowledge": 1, "resumes": 1}
     assert knowledge_calls == [document.id]
     assert resume_calls == [resume.id]
+    assert retired_legacy_resume.id not in resume_calls
     assert document.task_id == "task-recovered"
 
 
@@ -386,46 +480,24 @@ def test_fresh_and_live_assets_not_swept(orphan_db):
     assert live.upload_status == "consumed"
 
 
-def test_runtime_sweeper_removes_only_disposable_or_orphaned_files(
-    db_session, tmp_path, monkeypatch
-):
+def test_runtime_sweeper_removes_only_expired_temp_and_logs(tmp_path, monkeypatch):
     import os
 
     from app.core.config import settings
-    from app.models.chat import Conversation
-    from app.models.user import User
     from app.worker.tasks import maintenance
-
-    user = User(username="runtime-owner", hashed_password="x")
-    db_session.add(user)
-    db_session.flush()
-    db_session.add(Conversation(id="live-session", user_id=user.id))
-    db_session.commit()
 
     temp_file = tmp_path / "tmp" / "stale.bin"
     old_log = tmp_path / "logs" / "old.log"
-    live_result = tmp_path / "agent-results" / "live-session" / "call.txt"
-    orphan_result = tmp_path / "agent-results" / "gone-session" / "call.txt"
-    for path in (temp_file, old_log, live_result, orphan_result):
+    for path in (temp_file, old_log):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("x", encoding="utf-8")
     old_timestamp = (datetime.now(UTC) - timedelta(days=30)).timestamp()
     os.utime(temp_file, (old_timestamp, old_timestamp))
     os.utime(old_log, (old_timestamp, old_timestamp))
 
-    class _SessionContext:
-        def __enter__(self):
-            return db_session
-
-        def __exit__(self, *_args):
-            return False
-
     monkeypatch.setattr(settings, "APP_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(settings, "LOG_DIR", str(tmp_path / "logs"))
-    monkeypatch.setattr(maintenance, "SessionLocal", _SessionContext)
 
     result = maintenance.sweep_runtime_files.run()
 
-    assert result == {"temp_files": 1, "dev_logs": 1, "orphan_result_dirs": 1}
-    assert live_result.is_file()
-    assert not orphan_result.parent.exists()
+    assert result == {"temp_files": 1, "dev_logs": 1}

@@ -131,6 +131,67 @@ def test_opportunity_create_list_idempotency_and_owner_scope(career_api):
     assert [row["kind"] for row in timeline.json()] == ["tracking_started"]
 
 
+def test_opportunity_merge_requires_explicit_command_and_can_be_retracted(career_api):
+    client, principal, owner, other = career_api
+    canonical = _create_opportunity(client)
+    duplicate = _create_opportunity(
+        client,
+        source_url="https://other.example.com/roles/99",
+        external_job_id="job-99",
+        idempotency_key="opportunity-create-duplicate",
+        source_identity="request-create-duplicate",
+    )
+
+    candidates = client.get("/api/v1/career-process/opportunity-merge-candidates")
+    assert candidates.status_code == 200
+    assert {
+        candidates.json()[0]["duplicate_opportunity_id"],
+        candidates.json()[0]["canonical_opportunity_id"],
+    } == {canonical["id"], duplicate["id"]}
+
+    merged = client.post(
+        "/api/v1/career-process/opportunity-merges",
+        json={
+            "duplicate_opportunity_id": duplicate["id"],
+            "canonical_opportunity_id": canonical["id"],
+            "operation_key": "ui-merge-1",
+            "reason": "用户核验后确认两条记录属于同一流程",
+        },
+    )
+    assert merged.status_code == 201, merged.text
+    assert merged.json()["status"] == "active"
+    assert (
+        client.get("/api/v1/career-process/opportunity-merges").json()[0]["id"]
+        == merged.json()["id"]
+    )
+
+    principal["user"] = other
+    hidden = client.post(
+        f"/api/v1/career-process/opportunity-merges/{merged.json()['id']}/retract",
+        json={
+            "expected_version": 1,
+            "operation_key": "foreign-undo",
+            "reason": "not owned",
+        },
+    )
+    assert hidden.status_code == 404
+
+    principal["user"] = owner
+    undone = client.post(
+        f"/api/v1/career-process/opportunity-merges/{merged.json()['id']}/retract",
+        json={
+            "expected_version": 1,
+            "operation_key": "ui-undo-1",
+            "reason": "用户确认属于不同招聘批次",
+        },
+    )
+    assert undone.status_code == 200, undone.text
+    assert undone.json()["status"] == "retracted"
+    assert undone.json()["version"] == 2
+    assert client.get("/api/v1/career-process/opportunity-merges").json() == []
+    assert len(client.get("/api/v1/career-process/opportunities").json()) == 2
+
+
 def test_opportunity_direction_create_read_and_cas_update(career_api, db_session):
     client, principal, owner, other = career_api
     backend = _direction(db_session, owner, "Backend")

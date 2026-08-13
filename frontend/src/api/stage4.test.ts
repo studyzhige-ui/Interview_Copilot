@@ -21,6 +21,7 @@ const definition: PersistentTaskDefinitionInput = {
   title: '跟踪岗位', instruction: '每天检查新岗位',
   trigger: { kind: 'scheduled', schedule: '0 9 * * 1-5', timezone: 'Asia/Shanghai' },
   readScope: ['public_jobs'], actionScope: [], allowedToolNames: ['search_jobs'],
+  skillIds: [],
 };
 
 const task = {

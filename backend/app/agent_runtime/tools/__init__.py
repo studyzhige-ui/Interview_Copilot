@@ -2,14 +2,20 @@
 
 from app.agent_runtime.tools import (  # noqa: F401
     agent_task,
+    attachment_vision,
     career,
+    career_domains,
     file_tool,
     gmail,
+    gmail_observation,
+    history,
     interview_history,
     jobs,
     knowledge,
     mock_interview,
+    personalization,
     resume,
+    resume_profile,
     web,
 )
 from app.agent_runtime.tool_registry import registry

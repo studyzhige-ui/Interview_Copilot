@@ -2,7 +2,17 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const api = vi.hoisted(() => ({ getCopilotPreference: vi.fn(), updateCopilotPreference: vi.fn() }));
+const api = vi.hoisted(() => ({
+  getCopilotPreference: vi.fn(),
+  updateCopilotPreference: vi.fn(),
+  getAgentMemorySettings: vi.fn(),
+  updateAgentMemorySettings: vi.fn(),
+  getAgentMemories: vi.fn(),
+  updateAgentMemory: vi.fn(),
+  invalidateAgentMemory: vi.fn(),
+  deleteAgentMemory: vi.fn(),
+  promoteAgentMemoryToPreference: vi.fn(),
+}));
 const authApi = vi.hoisted(() => ({ getMe: vi.fn(), updateMe: vi.fn() }));
 vi.mock('@/api/personalization', () => api);
 vi.mock('@/api/auth', () => authApi);
@@ -23,6 +33,11 @@ describe('CopilotPreferencesPage', () => {
     api.updateCopilotPreference.mockResolvedValue({
       id: 'preference-1', instructions: ['先给结论', '保留多行\n规则'], version: 5, updated_at: null,
     });
+    api.getAgentMemorySettings.mockResolvedValue({
+      recall_enabled: true, contribution_enabled: false, producer_available: true,
+      version: 1, updated_at: null,
+    });
+    api.getAgentMemories.mockResolvedValue([]);
     authApi.getMe.mockResolvedValue({
       username: 'alice', email: 'alice@example.com', nickname: null, avatar_url: null,
       bio: null, default_execution_mode: 'standard', email_verified: true,

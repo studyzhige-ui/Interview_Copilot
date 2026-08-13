@@ -115,7 +115,7 @@ def validate_manifest(
     }
 
 
-def validate_disabled_memory_boundary(
+def validate_canonical_memory_boundary(
     *,
     project_root: Path = PROJECT_ROOT,
 ) -> dict[str, Any]:
@@ -134,21 +134,39 @@ def validate_disabled_memory_boundary(
     engine = (project_root / "backend/app/conversation/engine.py").read_text(
         encoding="utf-8"
     )
-    if 'memory_block=""' not in engine:
+    if "render_recall_block" not in engine or 'memory_block=""' in engine:
         raise CareerScenarioGateError(
-            "Engine must explicitly assemble an empty Memory Recall until the gate passes"
+            "Engine must use only the canonical selective Memory Recall path"
         )
     tools_init = (
         project_root / "backend/app/agent_runtime/tools/__init__.py"
     ).read_text(encoding="utf-8")
     if "tools.memory" in tools_init or "save_memory" in tools_init:
         raise CareerScenarioGateError("legacy Memory Tool remains registered")
+    required_paths = (
+        "backend/app/models/long_term_memory.py",
+        "backend/app/services/agent_memory_service.py",
+        "backend/app/worker/tasks/agent_memory.py",
+        "backend/tests/test_services/test_agent_memory_service.py",
+    )
+    missing = [
+        value for value in required_paths if not (project_root / value).is_file()
+    ]
+    if missing:
+        raise CareerScenarioGateError(
+            "canonical Memory implementation is incomplete: " + ", ".join(missing)
+        )
+    config = (project_root / "backend/app/core/config.py").read_text(encoding="utf-8")
+    if "AGENT_MEMORY_PRODUCER_ENABLED: bool = False" not in config:
+        raise CareerScenarioGateError(
+            "automatic Memory producer must default to a closed release gate"
+        )
     spec = project_root / "docs/architecture/stages/stage-5-evaluation-memory.md"
     if not spec.is_file():
         raise CareerScenarioGateError("Memory Stage Spec is missing")
     return {
-        "automatic_memory_producer": "disabled",
-        "memory_recall": "empty",
+        "automatic_memory_producer": "implemented_release_gated_default_off",
+        "memory_recall": "canonical_selective_low_authority",
         "legacy_runtime_paths": "absent",
         "stage_spec": spec.relative_to(project_root).as_posix(),
     }
@@ -272,7 +290,7 @@ def run_matrix(
     validation = validate_manifest(manifest, project_root=project_root)
     result: dict[str, Any] = {
         "manifest": validation,
-        "memory_gate": validate_disabled_memory_boundary(project_root=project_root),
+        "memory_gate": validate_canonical_memory_boundary(project_root=project_root),
         "commands": [],
     }
     commands: list[dict[str, Any]] = result["commands"]

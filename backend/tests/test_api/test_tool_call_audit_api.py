@@ -108,6 +108,23 @@ def _seed_call(db: Session, *, username: str, suffix: str):
         dispatch_generation=2,
         policy_decision="allow",
         policy_reason="read_only",
+        model_step=3,
+        model_call_index=1,
+        model_call_order=30_001,
+        completion_sequence=2,
+        handler_identity="app.agent_runtime.tools.web._read_url_handler",
+        provider_identity="http",
+        connection_identity=None,
+        timeline_json=[
+            {
+                "event": "finished",
+                "at": "2026-08-13T12:00:00+00:00",
+                "dispatch_generation": 2,
+                "status": "completed",
+                "completion_sequence": 2,
+            }
+        ],
+        receipt_refs_json=[],
         result_json={"authorization": "Bearer secret-output", "count": 3},
         error="token=secret-error",
         duration_ms=12.5,
@@ -137,6 +154,13 @@ def test_tool_call_audit_uses_same_identity_and_redacts_projection(
     assert body["turn_id"] == turn.id
     assert body["dispatch_generation"] == 2
     assert body["policy_decision"] == "allow"
+    assert body["model_step"] == 3
+    assert body["model_call_index"] == 1
+    assert body["model_call_order"] == 30_001
+    assert body["completion_sequence"] == 2
+    assert body["handler_identity"].endswith("._read_url_handler")
+    assert body["timeline"][0]["event"] == "finished"
+    assert body["receipt_refs"] == []
     assert body["arguments"]["api_key"] == "[REDACTED]"
     assert body["result"]["authorization"] == "[REDACTED]"
     assert body["error"] == "token=[REDACTED]"
@@ -161,3 +185,56 @@ def test_tool_call_audit_hides_cross_tenant_identity(
     )
 
     assert response.status_code == 404
+
+
+def test_tool_call_audit_bounds_large_result_but_history_keeps_exact_record(
+    client: TestClient,
+    db: Session,
+):
+    from app.services.interaction_history_service import (
+        get_interaction_history_record,
+    )
+
+    conversation, turn = _seed_call(
+        db,
+        username="alice-tool-audit",
+        suffix="large",
+    )
+    call = db.query(AgentToolCall).filter_by(turn_id=turn.id).one()
+    content = "x" * 50_000
+    call.result_json = {
+        "attachment_ref_id": "attachment-ref-large",
+        "content": content,
+        "offset": 0,
+        "total_chars": len(content),
+        "has_more": False,
+        "coverage": {
+            "segment_start": 0,
+            "segment_end": len(content),
+            "total_chars": len(content),
+            "starts_at_beginning": True,
+            "reaches_end": True,
+            "single_call_full_coverage": True,
+        },
+    }
+    db.commit()
+
+    response = client.get(
+        f"/api/v1/chat/{conversation.id}/turns/{turn.id}/tool-calls/call-audit"
+    )
+
+    assert response.status_code == 200
+    assert len(response.content) < 24_000
+    projected = response.json()["result"]
+    assert projected["truncated"] is True
+    assert projected["attachment_ref_id"] == "attachment-ref-large"
+    assert projected["coverage"]["single_call_full_coverage"] is True
+    assert "content" not in projected
+
+    exact = get_interaction_history_record(
+        db,
+        user_pk=call.user_id,
+        identity=f"agent_tool_call:{turn.id}:call-audit",
+    )
+    assert exact.result is not None
+    assert exact.result["content"] == content

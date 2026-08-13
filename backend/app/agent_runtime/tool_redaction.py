@@ -14,6 +14,38 @@ from typing import Any
 
 REDACTED_TOOL_VALUE = "[REDACTED]"
 _MAX_REDACTION_DEPTH = 32
+TOOL_RESULT_PROJECTION_CHARS = 16_000
+_TOOL_RESULT_IDENTITY_FIELDS = (
+    "attachment_ref_id",
+    "source_ref_id",
+    "path",
+)
+_TOOL_RESULT_PAGING_FIELDS = (
+    "offset",
+    "total",
+    "total_chars",
+    "returned_chars",
+    "next_offset",
+    "has_more",
+)
+_TOOL_RESULT_COVERAGE_FIELDS = frozenset(
+    {
+        "projection_chunk_count",
+        "projection_total_chars",
+        "read_mode",
+        "segment_start",
+        "segment_end",
+        "total",
+        "total_chars",
+        "starts_at_beginning",
+        "reaches_end",
+        "single_call_full_coverage",
+        "selected_chunk_count",
+        "selected_projection_complete",
+        "full_coverage_requested",
+        "requires_segmented_read",
+    }
+)
 
 _SENSITIVE_KEYS = frozenset(
     {
@@ -136,30 +168,43 @@ def redact_tool_text(value: str) -> str:
                 )
                 return f"{leading}{encoded}{trailing}"
 
-    redacted_text = _PRIVATE_KEY_RE.sub(REDACTED_TOOL_VALUE, value)
-    redacted_text = _URL_USERINFO_RE.sub(
-        lambda match: f"{match.group('scheme')}{REDACTED_TOOL_VALUE}@",
-        redacted_text,
+    lowered = value.casefold()
+    redacted_text = (
+        _PRIVATE_KEY_RE.sub(REDACTED_TOOL_VALUE, value)
+        if "private key" in lowered
+        else value
     )
-    redacted_text = _CREDENTIAL_HEADER_RE.sub(
-        lambda match: f"{match.group(1)}{REDACTED_TOOL_VALUE}",
-        redacted_text,
-    )
-    redacted_text = _QUOTED_LABELED_VALUE_RE.sub(
-        lambda match: (
-            f"{match.group('prefix')}{match.group('value')[0]}"
-            f"{REDACTED_TOOL_VALUE}{match.group('value')[-1]}"
-        ),
-        redacted_text,
-    )
-    redacted_text = _UNQUOTED_LABELED_VALUE_RE.sub(
-        lambda match: f"{match.group('prefix')}{REDACTED_TOOL_VALUE}",
-        redacted_text,
-    )
-    redacted_text = _AUTH_SCHEME_RE.sub(
-        lambda match: f"{match.group('scheme')} {REDACTED_TOOL_VALUE}",
-        redacted_text,
-    )
+    # The URL pattern starts with a variable-length scheme; applying it at
+    # every position of a large plain-text ToolResult is quadratic when no URL
+    # exists. Cheap semantic guards retain identical matching behavior while
+    # keeping complete durable results practical.
+    if "://" in redacted_text:
+        redacted_text = _URL_USERINFO_RE.sub(
+            lambda match: f"{match.group('scheme')}{REDACTED_TOOL_VALUE}@",
+            redacted_text,
+        )
+    if ":" in redacted_text:
+        redacted_text = _CREDENTIAL_HEADER_RE.sub(
+            lambda match: f"{match.group(1)}{REDACTED_TOOL_VALUE}",
+            redacted_text,
+        )
+    if ":" in redacted_text or "=" in redacted_text:
+        redacted_text = _QUOTED_LABELED_VALUE_RE.sub(
+            lambda match: (
+                f"{match.group('prefix')}{match.group('value')[0]}"
+                f"{REDACTED_TOOL_VALUE}{match.group('value')[-1]}"
+            ),
+            redacted_text,
+        )
+        redacted_text = _UNQUOTED_LABELED_VALUE_RE.sub(
+            lambda match: f"{match.group('prefix')}{REDACTED_TOOL_VALUE}",
+            redacted_text,
+        )
+    if "bearer " in lowered or "basic " in lowered:
+        redacted_text = _AUTH_SCHEME_RE.sub(
+            lambda match: f"{match.group('scheme')} {REDACTED_TOOL_VALUE}",
+            redacted_text,
+        )
     for credential_re in _OBVIOUS_CREDENTIAL_RES:
         redacted_text = credential_re.sub(REDACTED_TOOL_VALUE, redacted_text)
     return redacted_text
@@ -186,3 +231,50 @@ def redact_tool_value(value: Any, *, _depth: int = 0) -> Any:
     if isinstance(value, str):
         return redact_tool_text(value)
     return value
+
+
+def bounded_tool_result_projection(
+    result: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Create a bounded audit/UI view without truncating canonical storage."""
+
+    if result is None:
+        return None
+    redacted = redact_tool_value(result)
+    if not isinstance(redacted, dict):
+        return {"result": redacted}
+    encoded = json.dumps(redacted, ensure_ascii=False, default=str)
+    if len(encoded) <= TOOL_RESULT_PROJECTION_CHARS:
+        return redacted
+    truncated: dict[str, Any] = {
+        "truncated": True,
+        "original_chars": len(encoded),
+        "preview": encoded[:TOOL_RESULT_PROJECTION_CHARS],
+    }
+    for field in (*_TOOL_RESULT_IDENTITY_FIELDS, *_TOOL_RESULT_PAGING_FIELDS):
+        value = _bounded_result_metadata_value(redacted.get(field))
+        if value is not None:
+            truncated[field] = value
+    coverage = redacted.get("coverage")
+    if isinstance(coverage, dict):
+        safe_coverage = {
+            str(key): safe_value
+            for key, value in coverage.items()
+            if str(key) in _TOOL_RESULT_COVERAGE_FIELDS
+            and (safe_value := _bounded_result_metadata_value(value)) is not None
+        }
+        if safe_coverage:
+            truncated["coverage"] = safe_coverage
+    return truncated
+
+
+def _bounded_result_metadata_value(
+    value: Any,
+) -> str | int | float | bool | None:
+    if isinstance(value, str):
+        return value[:1_000]
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    return None

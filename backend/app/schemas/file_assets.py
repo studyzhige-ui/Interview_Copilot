@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class UploadUrlRequest(BaseModel):
@@ -15,7 +15,6 @@ class UploadUrlRequest(BaseModel):
 class UploadUrlResponse(BaseModel):
     file_asset_id: str
     upload_url: str
-    storage_uri: str
     filename: str
 
 
@@ -26,4 +25,54 @@ class ConfirmResponse(BaseModel):
     validation_error: str | None = None
 
 
-__all__ = ["UploadUrlRequest", "UploadUrlResponse", "ConfirmResponse"]
+class FileAssetReferenceImpact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reference_type: str
+    active_count: int = 0
+    tombstone_count: int = 0
+    effect: str
+
+
+class FileAssetDeletionImpact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_asset_id: str
+    filename: str
+    purpose: str
+    size_bytes: int | None = None
+    reference_impacts: list[FileAssetReferenceImpact] = Field(default_factory=list)
+    known_external_transmission_count: int = 0
+    confirmation_token: str
+    disclosures: list[str] = Field(default_factory=list)
+
+
+class FileAssetPermanentDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation_token: str = Field(min_length=64, max_length=64)
+    confirm_file_asset_id: str = Field(min_length=1, max_length=128)
+    confirm_filename: str = Field(min_length=1, max_length=512)
+
+
+class FileAssetPermanentDeleteResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: str
+    file_asset_id: str
+    removed_draft_scopes: int = 0
+    removed_conversation_scopes: int = 0
+    removed_debrief_scopes: int = 0
+    deleted_projections: int = 0
+    preserved_reference_tombstones: int = 0
+
+
+__all__ = [
+    "ConfirmResponse",
+    "FileAssetDeletionImpact",
+    "FileAssetPermanentDeleteRequest",
+    "FileAssetPermanentDeleteResult",
+    "FileAssetReferenceImpact",
+    "UploadUrlRequest",
+    "UploadUrlResponse",
+]

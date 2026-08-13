@@ -13,6 +13,8 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
     Column,
     ForeignKey,
     Index,
@@ -22,6 +24,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy import event, inspect
+from sqlalchemy import text
 
 from app.db.database import Base
 from app.db.types import UTCDateTime as DateTime
@@ -42,6 +45,10 @@ def generate_artifact_relation_id() -> str:
 
 def generate_artifact_submission_id() -> str:
     return f"asu_{uuid.uuid4().hex}"
+
+
+def generate_resume_state_id() -> str:
+    return f"ars_{uuid.uuid4().hex}"
 
 
 class ImmutableArtifactRecordError(RuntimeError):
@@ -120,6 +127,10 @@ class ArtifactVersion(Base):
         nullable=True,
         index=True,
     )
+    # Frozen identity of the exact raw bytes referenced by this version.  The
+    # FileAsset row is stable, but its checksum/version token is retained here
+    # so an attachment promotion can never drift to replacement bytes.
+    file_asset_version = Column(String(96), nullable=True)
     # explicit_save | message_promotion | flow_delivery | edit
     origin_kind = Column(String(32), nullable=False)
     # Deliberately retained as identities rather than cascading FKs: deleting
@@ -208,7 +219,7 @@ class ArtifactSubmissionSnapshot(Base):
         ForeignKey("artifact_versions.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    # user_confirmation | external_receipt
+    # user_confirmation | product_ui_confirmation | external_receipt
     basis = Column(String(32), nullable=False)
     # A user-confirmed submission points at the original user message. An
     # external submission instead points at the actual receipt/read-back
@@ -217,6 +228,71 @@ class ArtifactSubmissionSnapshot(Base):
     receipt_owner_type = Column(String(64), nullable=True)
     receipt_owner_id = Column(String(128), nullable=True)
     submitted_at = Column(DateTime, nullable=False, default=utc_now)
+
+
+class ArtifactResumeState(Base):
+    """Resume-specific metadata inside the Artifact aggregate.
+
+    Identity, content, source file, provenance and history all remain on
+    ``Artifact``/``ArtifactVersion``.  This row only carries selection and
+    parsing state, so it cannot become a second resume-content owner.  The
+    optional legacy id resolves old API/Interview references during migration.
+    """
+
+    __tablename__ = "artifact_resume_states"
+    __table_args__ = (
+        CheckConstraint(
+            "parse_status IN ('pending', 'processing', 'ready', 'failed')",
+            name="ck_artifact_resume_states_parse_status",
+        ),
+        UniqueConstraint(
+            "user_id",
+            "legacy_resume_id",
+            name="uq_artifact_resume_states_legacy_resume",
+        ),
+        Index(
+            "ix_artifact_resume_states_user_default",
+            "user_id",
+            "is_default",
+        ),
+        Index(
+            "uq_artifact_resume_states_one_default",
+            "user_id",
+            unique=True,
+            postgresql_where=text("is_default"),
+            sqlite_where=text("is_default = 1"),
+        ),
+    )
+
+    id = Column(String(36), primary_key=True, default=generate_resume_state_id)
+    artifact_id = Column(
+        String(128),
+        ForeignKey("artifacts.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    is_default = Column(Boolean, nullable=False, default=False)
+    parse_status = Column(String(16), nullable=False, default="pending")
+    parse_error = Column(Text, nullable=True)
+    # Parse state always describes one exact immutable ArtifactVersion. This
+    # prevents a delayed worker for an older upload from marking the current
+    # resume ready/failed.
+    parse_version_id = Column(
+        String(128),
+        ForeignKey("artifact_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    legacy_resume_id = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
 def _reject_append_only_update(_mapper, _connection, target) -> None:
@@ -233,6 +309,7 @@ event.listen(ArtifactSubmissionSnapshot, "before_update", _reject_append_only_up
 
 __all__ = [
     "Artifact",
+    "ArtifactResumeState",
     "ArtifactJobRelation",
     "ArtifactSubmissionSnapshot",
     "ArtifactVersion",

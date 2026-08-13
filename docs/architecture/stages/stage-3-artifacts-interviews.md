@@ -20,6 +20,13 @@ current version, version history, relationships and submission history with
 the nested frozen version. All are tenant scoped and remain readable after
 archive.
 
+The Agent command `record_artifact_submission` uses the same exact-version
+Application Service and an owned current user assertion. It records what the
+user says was already submitted and returns
+`external_action_performed=false`; it never claims that the Agent uploaded or
+sent the material. Attachment promotion reuses the frozen FileAsset identity
+and byte-version rather than copying parsed text into a new provenance owner.
+
 ## 2. Interview and Debrief
 
 Real and Mock `InterviewRecord` may optionally reference an owned
@@ -35,6 +42,9 @@ Conversation guidance and global CopilotPreference retain their own owners.
 
 Interview analysis may create canonical AbilitySignals through the Stage 2
 service, but cannot rewrite profile facts or hide the underlying QA/transcript.
+The Agent's `start_interview_debrief` accepts only an owned, validated audio
+FileAsset, creates the real InterviewRecord and dispatches the bounded analysis
+job; its immediate result is `processing`, not a fabricated completed report.
 
 ## 3. Offer aggregate
 
@@ -48,6 +58,14 @@ replay returns the same result; stale CAS fails.
 
 The product does not implement accept/decline as a fake local button unless the
 corresponding real external/internal action and result contract exists.
+
+Multi-Offer analysis keeps observed term sources separate from user-supplied
+exchange-rate, tax and equity assumptions and their observation time. It may
+derive a deadline NextAction or explicitly save a versioned analysis Artifact.
+Negotiation assistance produces an Artifact draft labelled `not_sent`; there
+is no hidden email/message dispatch, acceptance, rejection, signature or
+onboarding confirmation. The Agent's `analyze_offers` follows the same
+read/compare/save boundary.
 
 ## 4. Client Action and Mock handoff
 
@@ -80,10 +98,16 @@ duplicate delivery. The active execution column still follows Stage 0.
 - ordinary answer creates zero Artifact; explicit promotion preserves source;
 - edit is append-only and archive keeps every version/history;
 - related and submitted never alias; v1 submission remains v1 after v2;
+- product UI and Agent exact-version submission commands remain idempotent and
+  never claim an external send without a receipt;
 - Artifact/Offer/Interview reads and commands reject cross-tenant identities;
 - Offer mixed source excerpts, conflict diff, CAS and idempotent confirmation
   pass through API and UI;
 - real and Mock Interviews support valid optional opportunity linkage;
+- audio Debrief intake returns a real record/job identity and honest
+  processing/failure state;
+- Offer comparison exposes assumptions/source times, deadline actions and
+  `not_sent` negotiation Artifacts without implementing retained decisions;
 - Mock Client Action proves all four distinct phases, affinity, replay,
   takeover, refusal and failure against the same call;
 - Debrief sources/guidance stay within their InterviewRecord owner.

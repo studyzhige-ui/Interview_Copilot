@@ -9,7 +9,12 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, Field
 
-from app.agent_runtime.tool_registry import AgentToolContext, ToolDefinition, registry
+from app.agent_runtime.tool_registry import (
+    AgentToolContext,
+    ToolDefinition,
+    ToolPreflightResult,
+    registry,
+)
 from app.agent_runtime.tool_policy import ToolEffect
 from app.core.config import settings
 
@@ -41,6 +46,22 @@ class SearchJobsArgs(BaseModel):
     )
 
 
+def _search_jobs_preflight(
+    _args: SearchJobsArgs,
+    _ctx: AgentToolContext,
+) -> ToolPreflightResult:
+    sites = tuple(_lever_sites())
+    return ToolPreflightResult(
+        connection_ready=bool(sites),
+        # LEVER_SITES is deployment configuration, not a user-authorizable
+        # connection.  Do not create an Interaction the user cannot resolve.
+        hard_deny_reason=None if sites else "connector_unavailable",
+        resource_identities=tuple(f"lever-site:{site}" for site in sites),
+        provider_identity="lever",
+        connection_identity="deployment-connector:lever" if sites else None,
+    )
+
+
 async def _search_jobs_handler(
     args: SearchJobsArgs,
     _ctx: AgentToolContext,
@@ -48,9 +69,9 @@ async def _search_jobs_handler(
     target_sites = _lever_sites()
     if not target_sites:
         return {
-            "error": "connection_required",
+            "error": "connector_unavailable",
             "provider": "lever",
-            "required_scope": "job_search",
+            "reason": "deployment_configuration_missing",
             "count": 0,
         }
 
@@ -176,9 +197,9 @@ registry.register(
         args_model=SearchJobsArgs,
         handler=_search_jobs_handler,
         effect=ToolEffect.READ,
-        # Connection readiness is resolved at call time. Keep this call as a
-        # batch barrier so a missing provider creates at most one Interaction
-        # before any later model-proposed calls dispatch.
+        preflight=_search_jobs_preflight,
+        # Deployment readiness is resolved at call time. Keep this call
+        # serial so its provider resource is never raced within a batch.
         concurrency_safe=False,
         max_result_chars=12_000,
         emoji="💼",

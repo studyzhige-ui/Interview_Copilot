@@ -9,9 +9,12 @@ from app.api import career_profile
 from app.core.security import get_current_user
 from app.db.database import Base, get_db
 from app.models.chat import Conversation, ConversationMessage
+from app.models.interview_qa import InterviewQA
+from app.models.interview_record import InterviewRecord
 from app.models.user import User
 from app.schemas.ability_signal import AbilitySignalCreateInput
 from app.services import ability_signal_service
+from app.services.resume import resume_artifact_service
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -151,3 +154,108 @@ def test_ability_signal_api_exposes_inference_and_user_dispute(
     assert disputed.status_code == 200, disputed.text
     assert disputed.json()["status"] == "disputed"
     assert disputed.json()["version"] == 2
+
+
+def test_profile_candidate_api_resolves_existing_items_not_arbitrary_patch(
+    client: TestClient,
+    db: Session,
+):
+    profile = client.get("/api/v1/career-profile").json()
+    user = db.query(User).filter(User.username == "alice").one()
+    resume = resume_artifact_service.create_resume_artifact(
+        db,
+        user_pk=user.id,
+        operation_key="candidate-api-resume",
+        title="Imported",
+        file_asset_id=None,
+        raw_text="Rust",
+        make_default=True,
+    )
+    db.commit()
+    created = client.post(
+        "/api/v1/career-profile/drafts",
+        json={
+            "source_kind": "artifact_version",
+            "source_id": resume.current_version.id,
+            "proposed_facts": [
+                {
+                    "operation": "upsert",
+                    "fact": {"kind": "skill", "name": "Rust"},
+                }
+            ],
+            "proposed_directions": [],
+        },
+    )
+    assert created.status_code == 201, created.text
+    draft = created.json()
+    candidate = draft["candidates"][0]
+    resolved = client.post(
+        f"/api/v1/career-profile/drafts/{draft['id']}/candidates/resolve",
+        json={
+            "expected_draft_version": draft["version"],
+            "expected_profile_version": profile["version"],
+            "decisions": [
+                {
+                    "item_id": candidate["id"],
+                    "expected_version": candidate["version"],
+                    "decision": "accept",
+                }
+            ],
+        },
+    )
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["profile"]["personal_facts"][0]["value"]["name"] == "Rust"
+    assert resolved.json()["draft"]["status"] == "accepted"
+
+
+def test_profile_draft_api_rejects_retired_resume_source(client: TestClient):
+    response = client.post(
+        "/api/v1/career-profile/drafts",
+        json={
+            "source_kind": "resume",
+            "source_id": "rsm_unmigrated",
+            "proposed_facts": [
+                {
+                    "operation": "upsert",
+                    "fact": {"kind": "skill", "name": "Rust"},
+                }
+            ],
+            "proposed_directions": [],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_interview_ability_signal_recompute_endpoint(client: TestClient, db: Session):
+    import json
+
+    user = db.query(User).filter(User.username == "alice").one()
+    record = InterviewRecord(
+        user_id=user.id,
+        source="mock",
+        title="Mock",
+        status="review_ready",
+        analysis_json=json.dumps({"skill_radar": {"communication": 8.2}}),
+    )
+    db.add(record)
+    db.flush()
+    db.add(
+        InterviewQA(
+            record_id=record.id,
+            order_idx=0,
+            question="Tell me about a project",
+            answer="I led a migration",
+            score=8.2,
+            analyzed_at=datetime.now(UTC),
+        )
+    )
+    db.commit()
+
+    response = client.post(
+        f"/api/v1/interviews/{record.id}/ability-signals/recompute",
+        json={},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()[0]["topic"] == "communication"
+    assert response.json()[0]["scope_ref_id"] == record.id

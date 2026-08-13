@@ -17,10 +17,17 @@ from app.db.database import get_db
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
 from app.schemas.attachment_source import (
+    AttachmentArtifactPromotionRequest,
+    AttachmentArtifactPromotionView,
     AttachmentRetryView,
     AttachmentSourceView,
     ConversationAttachmentRemovalView,
     DebriefSourcePromotionView,
+)
+from app.schemas.artifact import ArtifactVersionView, ArtifactView
+from app.services import artifact_service
+from app.services.chat.attachment_artifact_promotion_service import (
+    promote_conversation_attachment_to_artifact,
 )
 from app.services.chat.attachment_source_service import (
     AttachmentSourceCommandError,
@@ -32,9 +39,11 @@ from app.services.chat.attachment_source_service import (
     mark_attachment_retry_dispatch_failed,
     prepare_attachment_projection_retry,
     promote_attachment_to_debrief,
-    remove_failed_conversation_attachment,
+    remove_conversation_attachment_from_scope,
     remove_debrief_project_source,
 )
+from app.services.resume import resume_artifact_service
+from app.services.resume.resume_dispatch_service import dispatch_parse_after_commit
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["attachment-sources"])
@@ -47,6 +56,29 @@ def _view(state) -> AttachmentSourceView:
 def _translate_error(exc: AttachmentSourceCommandError) -> HTTPException:
     status = 404 if isinstance(exc, AttachmentSourceNotFoundError) else 409
     return HTTPException(status_code=status, detail=str(exc))
+
+
+def _artifact_promotion_error(exc: ValueError) -> HTTPException:
+    if isinstance(
+        exc,
+        (
+            artifact_service.ArtifactNotFoundError,
+            artifact_service.ArtifactOwnershipError,
+            artifact_service.ArtifactSourceUnavailableError,
+            resume_artifact_service.ResumeArtifactNotFoundError,
+        ),
+    ):
+        return HTTPException(status_code=404, detail="Artifact or source not found")
+    if isinstance(
+        exc,
+        (
+            artifact_service.ArtifactConflictError,
+            artifact_service.ArtifactArchivedError,
+            resume_artifact_service.ResumeArtifactLimitError,
+        ),
+    ):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=422, detail=str(exc))
 
 
 @router.get(
@@ -144,17 +176,17 @@ def retry_attachment_source(
     "/chat/{session_id}/attachment-sources/{attachment_ref_id}",
     response_model=ConversationAttachmentRemovalView,
 )
-def remove_failed_conversation_source(
+def remove_conversation_source_from_scope(
     session_id: str,
     attachment_ref_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Explicitly drop a failed claimed source and resume the same Turn."""
+    """Revoke this Conversation scope while retaining a History tombstone."""
 
     user_pk = resolve_user_pk(db, current_user.username)
     try:
-        ref, turn_id = remove_failed_conversation_attachment(
+        ref, turn_id = remove_conversation_attachment_from_scope(
             db,
             user_pk=user_pk,
             conversation_id=session_id,
@@ -206,6 +238,62 @@ def promote_conversation_attachment_to_debrief(
     # Promotion is idempotent; clients care about the resulting scope grant,
     # not whether this transport attempt inserted the row.
     return DebriefSourcePromotionView(source=_view(state))
+
+
+@router.post(
+    "/chat/{session_id}/attachment-sources/{attachment_ref_id}/artifact",
+    response_model=AttachmentArtifactPromotionView,
+    status_code=201,
+)
+def promote_conversation_attachment_to_formal_artifact(
+    session_id: str,
+    attachment_ref_id: str,
+    body: AttachmentArtifactPromotionRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Explicitly grant this exact Conversation file a formal Artifact scope."""
+
+    user_pk = resolve_user_pk(db, current_user.username)
+    try:
+        promoted = promote_conversation_attachment_to_artifact(
+            db,
+            user_pk=user_pk,
+            conversation_id=session_id,
+            attachment_ref_id=attachment_ref_id,
+            operation_key=body.operation_key,
+            artifact_kind=body.artifact_kind,
+            title=body.title,
+        )
+        db.commit()
+    except AttachmentSourceCommandError as exc:
+        db.rollback()
+        raise _translate_error(exc) from exc
+    except (
+        artifact_service.ArtifactDomainError,
+        resume_artifact_service.ResumeArtifactError,
+    ) as exc:
+        db.rollback()
+        raise _artifact_promotion_error(exc) from exc
+
+    dispatched = bool(
+        promoted.resume_record is not None
+        and dispatch_parse_after_commit(db, promoted.resume_record)
+    )
+    return AttachmentArtifactPromotionView(
+        source_id=promoted.source_ref_id,
+        file_asset_id=promoted.file_asset_id,
+        file_asset_version=promoted.file_asset_version,
+        artifact=ArtifactView(
+            id=promoted.artifact.id,
+            kind=promoted.artifact.kind,
+            archived_at=promoted.artifact.archived_at,
+            current_version=ArtifactVersionView.model_validate(
+                promoted.current_version
+            ),
+        ),
+        resume_parse_dispatched=dispatched,
+    )
 
 
 @router.get(

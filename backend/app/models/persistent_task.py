@@ -97,6 +97,9 @@ class PersistentTask(Base):
     # Concrete Tool names only.  Runtime admission revalidates them against an
     # injected set of cloud-sustainable real definitions on every run.
     allowed_tool_names_json = Column(JSON, nullable=False, default=list)
+    # Versioned references only. Skill content remains owned by UserSkill and
+    # is revalidated/reloaded for every admitted automation Turn.
+    skill_refs_json = Column(JSON, nullable=False, default=list)
 
     user_request_identity = Column(String(256), nullable=False)
     user_request_version = Column(String(128), nullable=True)

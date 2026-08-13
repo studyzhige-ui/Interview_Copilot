@@ -6,6 +6,12 @@ SSRF URL validation lives in test_web_tool_ssrf.py.
 import asyncio
 from types import SimpleNamespace
 
+# Import the tool module before tests replace ``httpx.AsyncClient``.  The
+# package also registers provider-backed tools whose SDK classes subclass the
+# real httpx client at import time; replacing it first corrupts that unrelated
+# class definition in a fresh pytest process.
+from app.agent_runtime.tools import web as _web_tool  # noqa: F401
+
 
 def _resolved(url: str):
     return SimpleNamespace(
@@ -209,3 +215,27 @@ class TestWebSearchErrorHandling:
         )
         assert "error" in result
         assert "timed out" in result["error"].lower()
+
+    def test_missing_deployment_key_is_not_a_user_connection_prompt(self, monkeypatch):
+        monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+        from app.agent_runtime.tool_registry import AgentToolContext, registry
+        from app.agent_runtime.tools.web import WebSearchArgs, _web_search_handler
+
+        ctx = AgentToolContext(user_id="alice", session_id="s1")
+        plan = asyncio.run(registry.plan_call("web_search", {"query": "test"}, ctx))
+        assert plan.connection_ready is False
+        assert plan.hard_deny_reason == "connector_unavailable"
+
+        result = asyncio.run(
+            _web_search_handler(
+                WebSearchArgs(query="test"),
+                ctx,
+            )
+        )
+
+        assert result == {
+            "error": "connector_unavailable",
+            "provider": "tavily",
+            "reason": "deployment_credential_missing",
+        }

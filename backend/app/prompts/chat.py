@@ -38,6 +38,12 @@ Return exactly one JSON object:
     "keywords": [string],
     "required_terms": [string]
   }}],
+  "source_requests": [
+    {{"kind":"history", "query":string, "scope":"current_conversation"|"all_conversations", "limit":1..5}},
+    {{"kind":"observations", "query":string, "statuses":["unreviewed"|"pending_confirmation"|"applied"|"dismissed"|"retracted"], "limit":1..5}},
+    {{"kind":"artifacts", "query":string, "artifact_kinds":[string], "include_archived":boolean, "limit":1..5}},
+    {{"kind":"career_domains", "query":string, "sections":["career_profile"|"job_opportunities"|"next_actions"|"ability_signals"|"interviews"|"offers"], "include_inactive":boolean, "limit":1..10}}
+  ],
   "referenced_question_indexes": [integer]
 }}
 
@@ -45,6 +51,18 @@ Routing rules:
 - Set needs_knowledge_retrieval=true only when answering requires factual or domain knowledge that should be checked against the indexed corpus, such as technical concepts, interview questions, framework behavior, or documentation.
 - Set it false for greetings, account operations, and literal transformations such as repeat, translate, rewrite, or reformat, even when the text being transformed contains technical keywords.
 - Resolve pronouns and follow-ups from [Recent Turns].
+- source_requests are optional, read-only requests to existing product owners.
+  Add one only when the current query actually needs that source category:
+  exact prior Interaction Records, Gmail Observations, saved Artifacts, or
+  explicitly named career-domain owners. This is not a Source Registry,
+  CareerState aggregate, or universal DTO. Use at most one request per kind
+  and at most four total. These reads never authorize a write or external action.
+- Do not emit a source request for public URLs. Every explicit HTTP(S) URL in
+  [Current Query] is selected deterministically and read through the shared
+  SSRF-safe URL reader, so the planner cannot omit, replace, or invent it.
+- Use current_conversation History only when the user limits the question to
+  this chat; otherwise use all_conversations. Keep every limit at the smallest
+  useful value. Return source_requests=[] when no owner read is needed.
 - [Interview Questions], when present, is the complete 1-based question catalog for the current debrief. Resolve references by meaning and conversation context, not only explicit forms such as "Q2". If the current query confidently refers to one or more specific interview questions, return every matching index in referenced_question_indexes. Return [] when none is referenced or the match is ambiguous. This field is independent of knowledge retrieval.
 - When retrieval is true, return one intent per independent information need. Each query must be self-contained, resolve follow-ups, and stay in the user's language.
 - For a natural-language retrieval query, alternate_query must be a concise, meaning-preserving search variant in the other primary corpus language (Chinese ↔ English). Leave it empty only when the query is effectively language-neutral identifiers. It supplements query and never replaces it.

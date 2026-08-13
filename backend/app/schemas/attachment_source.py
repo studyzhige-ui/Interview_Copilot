@@ -4,7 +4,30 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.schemas.artifact import ArtifactView
+
+
+class AttachmentParseQualityView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    parser_id: str | None = None
+    quality_score: float | None = None
+    ocr_used: bool = False
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AttachmentProjectionCoverageView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_count: int = 0
+    parsed_char_count: int = 0
+    page_count: int | None = None
+    page_start: int | None = None
+    page_end: int | None = None
+    full_text_projection_available: bool = False
+    visual_layout_reviewed: bool = False
 
 
 class AttachmentSourceView(BaseModel):
@@ -30,6 +53,8 @@ class AttachmentSourceView(BaseModel):
     title: str
     error_message: str | None = None
     can_retry: bool = False
+    parse_quality: AttachmentParseQualityView
+    coverage: AttachmentProjectionCoverageView
 
 
 class AttachmentRetryView(BaseModel):
@@ -41,6 +66,22 @@ class DebriefSourcePromotionView(BaseModel):
     source: AttachmentSourceView
 
 
+class AttachmentArtifactPromotionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_key: str = Field(min_length=1, max_length=128)
+    artifact_kind: str = Field(min_length=1, max_length=64)
+    title: str = Field(min_length=1, max_length=240)
+
+
+class AttachmentArtifactPromotionView(BaseModel):
+    source_id: str
+    file_asset_id: str
+    file_asset_version: str
+    artifact: ArtifactView
+    resume_parse_dispatched: bool = False
+
+
 class ConversationAttachmentRemovalView(BaseModel):
     source_id: str
     status: Literal["removed"] = "removed"
@@ -48,7 +89,11 @@ class ConversationAttachmentRemovalView(BaseModel):
 
 
 __all__ = [
+    "AttachmentArtifactPromotionRequest",
+    "AttachmentArtifactPromotionView",
     "AttachmentRetryView",
+    "AttachmentParseQualityView",
+    "AttachmentProjectionCoverageView",
     "AttachmentSourceView",
     "ConversationAttachmentRemovalView",
     "DebriefSourcePromotionView",

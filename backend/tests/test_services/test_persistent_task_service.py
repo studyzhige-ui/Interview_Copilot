@@ -11,6 +11,7 @@ from app.models.conversation_turn import ConversationTurn
 from app.models.pending_submission import PendingSubmission
 from app.models.persistent_task import PersistentTask, PersistentTaskTrigger
 from app.models.user import User
+from app.services.capabilities import skill_service
 from app.schemas.persistent_task import (
     PersistentTaskCreate,
     PersistentTaskDelete,
@@ -20,8 +21,8 @@ from app.schemas.persistent_task import (
 )
 from app.services.chat import turn_executor
 from app.services.persistent_task_service import (
-    PersistentTaskIdempotencyConflictError,
     PersistentTaskDeleteConflictError,
+    PersistentTaskIdempotencyConflictError,
     PersistentTaskNotFoundError,
     PersistentTaskPausedError,
     PersistentTaskToolScopeError,
@@ -39,6 +40,7 @@ from app.services.persistent_task_service import (
     latest_persistent_task_cursor,
     list_persistent_task_triggers,
     list_persistent_tasks,
+    preview_persistent_task_deletion,
     record_user_stopped_automation_run,
     repairable_automation_turn_ids,
     resolve_automation_run_request,
@@ -167,6 +169,45 @@ def test_create_task_owns_one_dedicated_conversation_and_is_idempotent(db_sessio
                 "event_types": ["message.received"],
             },
         )
+
+
+def test_persistent_task_pins_and_revalidates_explicit_skill(db_session):
+    user = _user(db_session, "automation-skill-owner")
+    skill = skill_service.create_skill(
+        db_session,
+        user.id,
+        """---
+name: mailbox-review
+description: Review a mailbox safely
+allowed-tools: [web_search]
+---
+Follow the mailbox review workflow.
+""",
+        True,
+    )
+    task = _create(
+        db_session,
+        user,
+        skill_ids=[skill["id"]],
+        idempotency_key="automation-with-skill",
+    )
+    assert task.skill_refs_json == [
+        {
+            "id": skill["id"],
+            "name": "mailbox-review",
+            "source": "user",
+            "revision": 1,
+            "content_hash": skill["content_hash"],
+        }
+    ]
+
+    row = skill_service.get_skill(db_session, user.id, skill["id"])
+    assert row is not None
+    row.enabled = False
+    db_session.flush()
+    admitted = _intake(db_session, user, task, _trigger("skill-trigger"))
+    assert admitted.status == "pending"
+    assert admitted.reason == "skill_unavailable:mailbox-review"
 
 
 def test_create_retry_survives_later_definition_update(db_session):
@@ -783,6 +824,9 @@ def test_delete_cancels_pending_turn_and_removes_only_dedicated_scope(db_session
     task = _create(db_session, user)
     admission = _intake(db_session, user, task, _trigger("delete-pending"))
     conversation_id = task.conversation_id
+    impact = preview_persistent_task_deletion(
+        db_session, user_pk=user.id, task_id=task.id
+    )
 
     result = delete_persistent_task(
         db_session,
@@ -791,6 +835,8 @@ def test_delete_cancels_pending_turn_and_removes_only_dedicated_scope(db_session
         command=PersistentTaskDelete(
             expected_version=1,
             user_request_identity="settings-delete-task",
+            confirmation_token=impact.confirmation_token,
+            confirm_task_id=task.id,
         ),
     )
     db_session.commit()
@@ -801,13 +847,51 @@ def test_delete_cancels_pending_turn_and_removes_only_dedicated_scope(db_session
     assert db_session.get(ConversationTurn, admission.turn_id) is None
 
 
-def test_delete_rejects_running_turn_to_preserve_reconciliation_identity(db_session):
+def test_delete_safely_fences_and_removes_running_turn(db_session):
     user = _user(db_session)
     task = _create(db_session, user)
     admission = _intake(db_session, user, task, _trigger("delete-running"))
     turn = db_session.get(ConversationTurn, admission.turn_id)
     turn.status = "running"
     turn.owner_id = "worker"
+    impact = preview_persistent_task_deletion(
+        db_session, user_pk=user.id, task_id=task.id
+    )
+
+    result = delete_persistent_task(
+        db_session,
+        user_pk=user.id,
+        task_id=task.id,
+        command=PersistentTaskDelete(
+            expected_version=1,
+            user_request_identity="settings-delete-task",
+            confirmation_token=impact.confirmation_token,
+            confirm_task_id=task.id,
+        ),
+    )
+    db_session.commit()
+
+    assert result.cancelled_turn_id == turn.id
+    assert db_session.get(PersistentTask, task.id) is None
+    assert db_session.get(ConversationTurn, turn.id) is None
+
+
+def test_delete_requires_new_preview_after_pending_trigger_arrives(db_session):
+    user = _user(db_session)
+    task = _create(db_session, user)
+    impact = preview_persistent_task_deletion(
+        db_session,
+        user_pk=user.id,
+        task_id=task.id,
+    )
+    intake_persistent_task_trigger(
+        db_session,
+        user_pk=user.id,
+        task_id=task.id,
+        command=_trigger("arrived-after-preview"),
+        cloud_sustainable_tool_names=CLOUD_TOOLS,
+        attempt_admission=False,
+    )
 
     with pytest.raises(PersistentTaskDeleteConflictError):
         delete_persistent_task(
@@ -817,7 +901,10 @@ def test_delete_rejects_running_turn_to_preserve_reconciliation_identity(db_sess
             command=PersistentTaskDelete(
                 expected_version=1,
                 user_request_identity="settings-delete-task",
+                confirmation_token=impact.confirmation_token,
+                confirm_task_id=task.id,
             ),
         )
+
     assert db_session.get(PersistentTask, task.id) is task
-    assert db_session.get(ConversationTurn, turn.id) is turn
+    assert db_session.query(PersistentTaskTrigger).count() == 1

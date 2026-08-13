@@ -2,15 +2,15 @@
 fact sources. Use after deploying the hybrid migration so no stale dense-only
 metadata/schema survives.
 
-    python scripts/reingest_hybrid.py --drop                # all collections
-    python scripts/reingest_hybrid.py --drop --only resume  # one
+    python scripts/reingest_hybrid.py --drop                # knowledge collection
     python scripts/reingest_hybrid.py --document <id>       # one knowledge doc
     python scripts/reingest_hybrid.py --user <id>           # a user's docs
     python scripts/reingest_hybrid.py --user <id> --category <name>
+    python scripts/reingest_hybrid.py \
+      --drop-retired-resume-index interview_copilot_resume  # one-time cleanup
 
 Fact sources (Postgres is authoritative — this NEVER reads the old Milvus rows):
   * knowledge → document_chunks            (id=node_id, text, source_kind, document_id)
-  * resume    → resume_sections            (id, content, resume_id, section_type, title)
 ``--drop`` recreates the collection from scratch (clean schema). Safe on an empty
 DB: 0 fact rows -> 0 inserts, no error. The embedding model is loaded directly
 (no model-catalog dependency).
@@ -37,13 +37,17 @@ from app.rag.embedding_registry import build_embedding  # noqa: E402
 
 
 def _drop(coll: milvus_hybrid.HybridCollection) -> None:
+    _drop_collection(coll.name)
+
+
+def _drop_collection(collection_name: str) -> None:
     client = milvus_hybrid._get_client()
-    if client.has_collection(coll.name):
-        client.drop_collection(coll.name)
-        milvus_hybrid._ensured.discard(coll.name)
-        print(f"  dropped {coll.name}")
+    if client.has_collection(collection_name):
+        client.drop_collection(collection_name)
+        milvus_hybrid._ensured.discard(collection_name)
+        print(f"  dropped {collection_name}")
     else:
-        print(f"  {coll.name} absent (nothing to drop)")
+        print(f"  {collection_name} absent (nothing to drop)")
 
 
 def reingest_knowledge(
@@ -94,27 +98,8 @@ def reingest_knowledge(
         db.close()
 
 
-def reingest_resume() -> int:
-    from app.models.resume_section import ResumeSection
-    from app.services.resume.resume_vector_service import resume_vector_service
-
-    db = SessionLocal()
-    count = 0
-    try:
-        for sec in db.query(ResumeSection).all():
-            if not (sec.content or "").strip():
-                continue
-            resume_vector_service.upsert_section(sec, db=db)
-            count += 1
-        db.commit()
-        return count
-    finally:
-        db.close()
-
-
 _TARGETS = {
     "knowledge": (milvus_hybrid.KNOWLEDGE, reingest_knowledge),
-    "resume": (milvus_hybrid.RESUME, reingest_resume),
 }
 
 
@@ -134,12 +119,37 @@ def main() -> None:
     p.add_argument(
         "--category", help="with --user, restrict to this knowledge category"
     )
+    p.add_argument(
+        "--drop-retired-resume-index",
+        metavar="COLLECTION",
+        help=(
+            "drop one explicitly named pre-cut-over Resume Milvus collection "
+            "and exit; this never reingests legacy ResumeSection rows"
+        ),
+    )
     args = p.parse_args()
 
     # --category only filters within a --user scope; reject it alone so an
     # operator never silently triggers a full reingest when they meant a subset.
     if args.category and args.user is None:
         p.error("--category requires --user")
+
+    if args.drop_retired_resume_index:
+        if any(
+            (
+                args.drop,
+                args.only,
+                args.document,
+                args.user is not None,
+                args.category,
+            )
+        ):
+            p.error(
+                "--drop-retired-resume-index cannot be combined with reingest options"
+            )
+        _drop_collection(args.drop_retired_resume_index)
+        print("\nDone.")
+        return
 
     # Subset reingest targets only the knowledge collection from Postgres facts;
     # it never drops a collection (that's the full disaster-recovery path).

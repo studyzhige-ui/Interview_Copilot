@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 from app.api.file_assets import require_uploaded
 from app.core.error_messages import humanize_error
 from app.core.rate_limit import RATE_DEFAULT, RATE_EXPENSIVE, RATE_UPLOAD, limiter
-from app.core.runtime_files import create_runtime_temp_file, remove_session_results
+from app.core.runtime_files import create_runtime_temp_file
 from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.interview_record import InterviewRecord
@@ -369,11 +369,8 @@ async def abandon_mock_interview(
     )
 
     try:
-        conversation_id = runtime.conversation_id if runtime else None
         mock_flow.abandon_mock(db, record, runtime)
         await asyncio.to_thread(db.commit)
-        if conversation_id:
-            remove_session_results(conversation_id)
     except Exception as exc:  # noqa: BLE001
         db.rollback()
         logger.exception("abandon mock failed for %s: %s", record_id, exc)

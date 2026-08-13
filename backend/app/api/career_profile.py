@@ -15,10 +15,13 @@ from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
 from app.models.user import User
 from app.schemas.ability_signal import (
+    AbilitySignalRecomputeInput,
     AbilitySignalStatusChangeInput,
     AbilitySignalView,
 )
 from app.schemas.career_profile import (
+    CareerProfileCandidateBatchResolutionInput,
+    CareerProfileCandidateResolutionView,
     CareerProfileDraftInput,
     CareerProfileDraftResolutionInput,
     CareerProfileDraftView,
@@ -215,7 +218,7 @@ def list_profile_drafts(
     db: Session = Depends(get_db),
 ):
     try:
-        return career_profile_service.list_profile_draft_changes(
+        return career_profile_service.list_profile_draft_views(
             db,
             user_pk=_user_pk(db, current_user),
             include_resolved=include_resolved,
@@ -237,7 +240,9 @@ def create_profile_draft(
             db, user_pk=_user_pk(db, current_user), draft=body
         )
         db.commit()
-        return result
+        return career_profile_service.profile_draft_view(
+            db, user_pk=_user_pk(db, current_user), draft_id=result.id
+        )
     except career_profile_service.CareerProfileError as exc:
         db.rollback()
         raise _profile_error(exc) from exc
@@ -289,6 +294,32 @@ def reject_profile_draft(
             resolution_note=body.resolution_note,
         )
         db.commit()
+        return career_profile_service.profile_draft_view(
+            db, user_pk=_user_pk(db, current_user), draft_id=result.id
+        )
+    except career_profile_service.CareerProfileError as exc:
+        db.rollback()
+        raise _profile_error(exc) from exc
+
+
+@router.post(
+    "/career-profile/drafts/{draft_id}/candidates/resolve",
+    response_model=CareerProfileCandidateResolutionView,
+)
+def resolve_profile_candidates(
+    draft_id: str,
+    body: CareerProfileCandidateBatchResolutionInput,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = career_profile_service.resolve_profile_candidate_items(
+            db,
+            user_pk=_user_pk(db, current_user),
+            draft_id=draft_id,
+            resolution=body,
+        )
+        db.commit()
         return result
     except career_profile_service.CareerProfileError as exc:
         db.rollback()
@@ -319,6 +350,31 @@ def read_ability_signal(
             db, user_pk=_user_pk(db, current_user), signal_id=signal_id
         )
     except ability_signal_service.AbilitySignalError as exc:
+        raise _ability_error(exc) from exc
+
+
+@router.post(
+    "/interviews/{interview_record_id}/ability-signals/recompute",
+    response_model=list[AbilitySignalView],
+)
+def recompute_interview_ability_signals(
+    interview_record_id: str,
+    body: AbilitySignalRecomputeInput,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    del body  # reason is user-facing context; source facts drive recomputation.
+    try:
+        result = ability_signal_service.project_interview_ability_signals(
+            db,
+            user_pk=_user_pk(db, current_user),
+            interview_record_id=interview_record_id,
+            force_new_generation=True,
+        )
+        db.commit()
+        return result
+    except ability_signal_service.AbilitySignalError as exc:
+        db.rollback()
         raise _ability_error(exc) from exc
 
 

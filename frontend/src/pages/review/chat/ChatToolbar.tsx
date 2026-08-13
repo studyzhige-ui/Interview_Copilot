@@ -7,7 +7,6 @@ import {
 import { Spinner } from '@/components/ui/Spinner';
 import { toast } from '@/store/uiStore';
 import { extractErr } from '@/api/client';
-import { KNOWLEDGE_ACCEPT } from '@/api/knowledge';
 import { uploadFileAsset } from '@/api/fileAssets';
 import {
   createAttachmentDraft,
@@ -19,6 +18,10 @@ import { useIsMounted } from '@/hooks/useIsMounted';
 import type { PendingSubmissionItem, ProductObjectReference } from '@/types/api';
 import { productObjectReferenceLabel } from '@/lib/copilotObjectReference';
 import type { Attachment, Mode } from './types';
+import {
+  CONVERSATION_ATTACHMENT_ACCEPT,
+  conversationAttachmentPurpose,
+} from './attachmentUpload';
 
 /**
  * Bottom toolbar: mode pill, attachment picker, input textarea, and the
@@ -125,7 +128,10 @@ export function ChatToolbar({
     await Promise.all(selected.map(async (file) => {
       let draftId = '';
       try {
-        const fileAssetId = await uploadFileAsset(file, 'knowledge_document');
+        const fileAssetId = await uploadFileAsset(
+          file,
+          conversationAttachmentPurpose(file),
+        );
         const draft = await createAttachmentDraft(uploadSessionId, fileAssetId);
         draftId = draft.draft_id;
         if (!isMounted.current || activeSessionRef.current !== uploadSessionId) return;
@@ -578,7 +584,7 @@ export function ChatToolbar({
         <input
           ref={fileRef}
           type="file"
-          accept={KNOWLEDGE_ACCEPT}
+          accept={CONVERSATION_ATTACHMENT_ACCEPT}
           multiple
           hidden
           onChange={(e) => {

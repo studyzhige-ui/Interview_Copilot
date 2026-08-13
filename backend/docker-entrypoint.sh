@@ -24,9 +24,9 @@ DATA_DIR="${APP_DATA_DIR:-/app/data}"
 if [ "$(id -u)" = "0" ]; then
     mkdir -p "$DATA_DIR"
     mkdir -p "$DATA_DIR/cache" "$DATA_DIR/logs" "$DATA_DIR/runtime" \
-        "$DATA_DIR/storage" "$DATA_DIR/agent-results" "$DATA_DIR/tmp"
+        "$DATA_DIR/storage" "$DATA_DIR/tmp"
     chown app:app "$DATA_DIR" "$DATA_DIR/cache" "$DATA_DIR/logs" "$DATA_DIR/runtime" \
-        "$DATA_DIR/storage" "$DATA_DIR/agent-results" "$DATA_DIR/tmp" 2>/dev/null || true
+        "$DATA_DIR/storage" "$DATA_DIR/tmp" 2>/dev/null || true
     exec gosu app "$@"
 fi
 

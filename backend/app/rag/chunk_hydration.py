@@ -88,8 +88,8 @@ def hydrate_chunks(
             "file_name": asset.original_filename if asset else None,
             "category": doc.category,
             "source_kind": chunk.source_kind,
-            # Page span: best-effort provenance columns (Phase B migration
-            # 0041). NULL for page-less formats.
+            # Best-effort page provenance from the canonical chunk facts.
+            # Page-less formats intentionally keep both values NULL.
             "page_start": chunk.page_start,
             "page_end": chunk.page_end,
             "chunk_index": chunk.chunk_index,

@@ -1,16 +1,9 @@
-"""Resume: a first-class personal-profile entity (NOT a knowledge document).
+"""Retired Resume rows retained only as migration/rollback/audit data.
 
-A resume is the user's own profile asset. It never enters the knowledge base
-or general RAG. Each user keeps at most TWO active (``archived_at IS NULL``)
-resumes, exactly one of which is the default. Every record has a stable id
-unrelated to the source filename — re-uploading the same name makes a NEW
-resume, never reusing an old id (history/business snapshots must stay stable).
-
-Lifecycle: a personal-info upload confirms a ``file_assets`` row, then this
-table is created/replaced and parsed into ``raw_text_snapshot`` /
-``resume_sections``. Business records that USE a resume snapshot its text at
-the time of use and never re-read this row, so editing a resume can't rewrite
-history.
+``Artifact(kind='resume')`` and ``ArtifactVersion`` are the live identity and
+content owners. Rows in this table predate that cut-over; migration keeps them
+only for old references and rollback/history. Production code must not create,
+replace, parse, archive, or otherwise mutate them.
 """
 
 import uuid
@@ -36,11 +29,11 @@ def generate_resume_id() -> str:
 
 
 class Resume(Base):
+    """Pre-cut-over resume record; never a production write target."""
+
     __tablename__ = "resumes"
     __table_args__ = (
-        # At most ONE default among a user's active resumes. Partial unique
-        # index (Postgres + SQLite both support it). The "at most two active"
-        # rule is enforced transactionally in the service layer.
+        # Historical constraints remain so old rows retain their exact shape.
         Index(
             "uq_resumes_one_default_per_user",
             "user_id",
@@ -58,11 +51,11 @@ class Resume(Base):
         index=True,
         nullable=False,
     )
-    # Source upload, if any. NULL allows future pure-text / hand-created resumes.
+    # Historical source upload identity.
     file_asset_id = Column(String, ForeignKey("file_assets.id"), nullable=True)
     title = Column(String, nullable=False, default="我的简历")
     is_default = Column(Boolean, nullable=False, default=False)
-    # Immutable original-text snapshot (business records snapshot from this).
+    # Pre-cut-over original-text snapshot retained for audit/rollback only.
     raw_text_snapshot = Column(Text, nullable=True)
     structured_json = Column(Text, nullable=True)
     parse_status = Column(
@@ -76,6 +69,5 @@ class Resume(Base):
         onupdate=utc_now,
         nullable=False,
     )
-    # Soft delete. Only ``archived_at IS NULL`` rows count toward the
-    # max-two / default rules and show on the personal-info page.
+    # Historical soft-delete marker.
     archived_at = Column(DateTime, nullable=True)

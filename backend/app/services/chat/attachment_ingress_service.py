@@ -25,7 +25,10 @@ from app.services.knowledge.document_formats import (
     UnsupportedDocumentFormat,
     validate_knowledge_document_format,
 )
-from app.services.uploads.file_asset_service import mark_file_asset_consumed
+from app.services.uploads.file_asset_service import (
+    file_asset_version_token,
+    mark_file_asset_consumed,
+)
 
 
 class AttachmentIngressError(ValueError):
@@ -85,17 +88,23 @@ def create_attachment_draft(
 
     if not _asset_is_claimable(asset) or asset.upload_status != "uploaded":
         raise AttachmentAssetUnavailableError(normalized_file_asset_id)
-    try:
-        validate_knowledge_document_format(asset.original_filename, asset.content_type)
-    except UnsupportedDocumentFormat as exc:
-        raise AttachmentAssetUnavailableError(str(exc)) from exc
+    if asset.purpose == "knowledge_document":
+        try:
+            validate_knowledge_document_format(
+                asset.original_filename,
+                asset.content_type,
+            )
+        except UnsupportedDocumentFormat as exc:
+            raise AttachmentAssetUnavailableError(str(exc)) from exc
+    elif asset.purpose != "interview_audio":
+        raise AttachmentAssetUnavailableError(f"附件用途不支持：{asset.purpose}")
 
     projection = KnowledgeDocument(
         user_id=user_pk,
         conversation_id=None,
         file_asset_id=asset.id,
         title=asset.original_filename,
-        category="会话附件",
+        category=("会话音频转写" if asset.purpose == "interview_audio" else "会话附件"),
         source_kind="chat_attachment",
         storage_uri=asset.storage_uri,
         object_key=asset.object_key,
@@ -323,7 +332,7 @@ def claim_attachment_drafts(
             position=position,
             file_asset_id=asset.id,
             source_document_id=projection.id,
-            file_asset_version=_file_asset_version(asset),
+            file_asset_version=file_asset_version_token(asset),
             display_name=asset.original_filename,
         )
         refs.append(ref)
@@ -446,7 +455,7 @@ def preflight_attachment_drafts(
             raise AttachmentClaimConflictError(draft.id)
         # Computing the version here is the immutable-blob consistency gate;
         # the real claim freezes this exact value after the Turn exists.
-        if not _file_asset_version(asset):  # pragma: no cover - defensive
+        if not file_asset_version_token(asset):  # pragma: no cover - defensive
             raise AttachmentAssetUnavailableError(draft.file_asset_id)
 
 
@@ -563,15 +572,6 @@ def _asset_is_claimable(asset: FileAsset | None) -> bool:
         and asset.validation_status == "passed"
         and asset.deleted_at is None
     )
-
-
-def _file_asset_version(asset: FileAsset) -> str:
-    checksum = (asset.checksum_sha256 or "").strip().lower()
-    # A FileAsset id identifies one immutable uploaded blob.  Prefer the
-    # content hash where available; otherwise the asset identity itself is the
-    # version token.  Replacement creates a new FileAsset instead of rewriting
-    # an existing AttachmentRef.
-    return f"sha256:{checksum}" if checksum else f"file_asset:{asset.id}"
 
 
 def _identity(value: str, field: str) -> str:

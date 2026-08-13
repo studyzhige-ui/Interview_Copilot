@@ -99,12 +99,14 @@ bypass hard denies, sensitive decisions, connection scope, user-retained
 decisions or Provider constraints. Memory, Skill and prompt text never expand
 Policy.
 
-Handlers receive typed original inputs. Durable audit, History blocks, SSE,
-overflow storage, logs and UI receive independently server-redacted copies.
-Tool results remain untrusted model data. Timeout/cancellation of a possible
-external side effect is not success; the durable call retains enough identity
-for receipt/read-back/reconciliation without inventing a public Evidence
-entity.
+Handlers receive typed original inputs. The canonical `AgentToolCall` stores
+the complete typed server-redacted result; History, model input, SSE, logs,
+inline UI and deep audit receive independently bounded/redacted projections of
+that same row. Oversized model input is paged back by exact `tool_call_id`; it
+does not create a worker-local file or second result owner. Tool results remain
+untrusted model data. Timeout/cancellation of a possible external side effect
+is not success; the durable call retains enough identity for
+receipt/read-back/reconciliation without inventing a public Evidence entity.
 
 ## 6. Context, compaction and Provider payload
 
@@ -171,10 +173,18 @@ ConversationCapabilityState, permissive unknown-tool behavior, arbitrary
 store. Legacy Memory rows may remain only as isolated Stage 2 migration input.
 No compatibility facade may keep an old writer or Recall path active.
 
-Deleting a normal Conversation is rejected while it has active work and then
-uses its owner-specific cleanup. A PersistentTask-owned Conversation is deleted
-only through the task lifecycle. Operational rows cascade with their Turn;
-already promoted domain state or Artifact versions follow their own owner.
+Deleting a normal Conversation is a two-step owner command: the server first
+returns a versioned impact preview and confirmation token, then a strong
+confirmation fences new admission/model/Tool dispatch and safely terminalizes
+any active Turn before cleanup. It withdraws PendingSubmissions, releases draft
+attachments and deletes Conversation-local History. Running external/client or
+unknown-effect calls become `unknown` rather than fabricated cancellation; only
+bounded redacted receipt-correlation tombstones survive for reconciliation and
+are purged after their owner-specific deadline. A PersistentTask-owned
+Conversation is deleted only through the task lifecycle, which calls this same
+Conversation command after fencing its scheduler owner. Already promoted
+domain state, Debrief sources and Artifact versions follow their own owner and
+do not cascade.
 
 ## 9. Release gates
 
@@ -192,3 +202,6 @@ already promoted domain state or Artifact versions follow their own owner.
 - Provider payload tests prove no Recovery prompt and no dynamic data in the
   stable cross-user prefix;
 - live, History and audit Tool projections share call identity.
+- deletion preview/strong confirmation, active-Turn fence, queue/draft cleanup,
+  late-receipt reconciliation and bounded tombstone purge rebuild from durable
+  state without retaining Conversation content.

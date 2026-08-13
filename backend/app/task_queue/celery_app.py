@@ -53,6 +53,7 @@ celery_app.conf.update(
     task_default_queue="default",
     task_routes={
         "tasks.process_conversation_turn": {"queue": "turns"},
+        "tasks.consolidate_agent_memory": {"queue": "default"},
         # ── Heavy: needs Whisper + diarization model ──
         "tasks.process_interview_analysis": {"queue": "transcription"},
         # ── Durable content pipeline: parsing / embedding / outbox handlers ──
@@ -70,8 +71,11 @@ celery_app.conf.update(
         "tasks.sweep_stale_pipeline_records": {"queue": "default"},
         "tasks.sweep_orphan_file_assets": {"queue": "default"},
         "tasks.sweep_runtime_files": {"queue": "default"},
+        "tasks.sweep_expired_conversation_deletion_receipts": {"queue": "default"},
         "tasks.repair_pending_automation_turns": {"queue": "default"},
         "tasks.schedule_due_persistent_tasks": {"queue": "default"},
+        "tasks.poll_gmail_observations": {"queue": "default"},
+        "tasks.deliver_due_next_action_reminders": {"queue": "default"},
     },
     # ── Reliability ─────────────────────────────────────────────────────
     # Default acks_late=True so a worker crash during a task re-queues the
@@ -142,6 +146,16 @@ celery_app.conf.update(
             "schedule": crontab(minute="*"),
             "options": {"expires": 50},
         },
+        "gmail-observation-poll": {
+            "task": "tasks.poll_gmail_observations",
+            "schedule": crontab(minute="*"),
+            "options": {"expires": 50},
+        },
+        "next-action-reminder-delivery": {
+            "task": "tasks.deliver_due_next_action_reminders",
+            "schedule": crontab(minute="*"),
+            "options": {"expires": 50},
+        },
         # Daily orphan-upload cleanup (UP-3) — off-peak.
         "uploads-sweep-orphans-daily": {
             "task": "tasks.sweep_orphan_file_assets",
@@ -151,6 +165,11 @@ celery_app.conf.update(
         "runtime-files-sweep-daily": {
             "task": "tasks.sweep_runtime_files",
             "schedule": crontab(hour=4, minute=40),
+            "options": {"expires": 3600},
+        },
+        "conversation-deletion-receipts-sweep-daily": {
+            "task": "tasks.sweep_expired_conversation_deletion_receipts",
+            "schedule": crontab(hour=4, minute=50),
             "options": {"expires": 3600},
         },
     },

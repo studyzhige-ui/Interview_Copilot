@@ -2,6 +2,7 @@ import { apiClient } from './client';
 import type {
   PersistentTask,
   PersistentTaskDeleteResponse,
+  PersistentTaskDeletionImpact,
   PersistentTaskDefinitionInput,
   PersistentTaskEligibleTool,
   PersistentTaskState,
@@ -17,6 +18,7 @@ function definitionPayload(input: PersistentTaskDefinitionInput) {
     read_scope: input.readScope,
     action_scope: input.actionScope,
     allowed_tool_names: input.allowedToolNames,
+    skill_ids: input.skillIds,
   };
 }
 
@@ -102,6 +104,7 @@ export async function triggerPersistentTask(
 
 export async function deletePersistentTask(
   task: PersistentTask,
+  impact: PersistentTaskDeletionImpact,
   operationId: string,
 ): Promise<PersistentTaskDeleteResponse> {
   return (
@@ -110,7 +113,17 @@ export async function deletePersistentTask(
         expected_version: task.version,
         user_request_identity: `product_ui:${operationId}`,
         user_request_version: String(task.version),
+        confirmation_token: impact.confirmation_token,
+        confirm_task_id: impact.task_id,
       },
     })
+  ).data;
+}
+
+export async function getPersistentTaskDeletionImpact(
+  taskId: string,
+): Promise<PersistentTaskDeletionImpact> {
+  return (
+    await apiClient.get(`/persistent-tasks/${encodeURIComponent(taskId)}/deletion-impact`)
   ).data;
 }

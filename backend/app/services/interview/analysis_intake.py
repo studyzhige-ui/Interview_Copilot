@@ -46,7 +46,8 @@ class ResumeUploadNotFound(Exception):
 
 @dataclass
 class ResumeContext:
-    resume_id: Optional[str] = None
+    resume_artifact_id: Optional[str] = None
+    resume_artifact_version_id: Optional[str] = None
     resume_file_asset_id: Optional[str] = None
     resume_source: str = "none"
     resume_title_snapshot: Optional[str] = None
@@ -86,25 +87,34 @@ async def resolve_resume_context(
 ) -> ResumeContext:
     """Resolve the analyze request's resume input onto a text snapshot.
 
-    A personal resume entity (``resume_id``) wins over an ad-hoc file
-    uploaded just for this interview (``resume_file_asset_id``). Both
-    snapshot their text onto the record so history never re-reads them.
+    A canonical resume Artifact (``resume_id`` accepts either its Artifact id
+    or a migration-0029 alias) wins over an ad-hoc file uploaded just for this
+    interview. Both snapshot their text onto the record so history never
+    re-reads them.
     """
     ctx = ResumeContext()
     if resume_id:
-        from app.services.resume import resume_entity_service
+        from app.core.user_identity import resolve_user_pk
+        from app.services.resume import resume_artifact_service
 
-        resume = resume_entity_service.get_owned_resume(
-            db,
-            resume_id=resume_id,
-            user_id=user_id,
-        )
-        if resume is None:
-            raise ResumeNotFound(resume_id)
-        ctx.resume_id = resume.id
+        user_pk = resolve_user_pk(db, user_id)
+        try:
+            resume = resume_artifact_service.resolve_owned_resume(
+                db, user_pk=user_pk, resume_id=resume_id
+            )
+        except resume_artifact_service.ResumeArtifactNotFoundError as exc:
+            raise ResumeNotFound(
+                "Canonical resume Artifact not found; a pre-cut-over Resume id "
+                "must be mapped by migration 0029 before use"
+            ) from exc
+        ctx.resume_artifact_id = resume.artifact.id
+        ctx.resume_artifact_version_id = resume.current_version.id
+        ctx.resume_title_snapshot = resume.current_version.title
+        try:
+            ctx.resume_text = resume_artifact_service.read_resume_text(resume)
+        except resume_artifact_service.ResumeArtifactNotReadyError:
+            ctx.resume_text = ""
         ctx.resume_source = "personal_resume"
-        ctx.resume_title_snapshot = resume.title
-        ctx.resume_text = resume.raw_text_snapshot or ""
     elif resume_file_asset_id:
         resume_upload = get_owned_file_asset(
             db,
@@ -207,7 +217,8 @@ def create_record_and_dispatch(
         user_id=user_id,
         title=f"面试录音 {upload.original_filename or upload.id}",
         audio_file_asset_id=upload.id,
-        resume_id=resume_ctx.resume_id,
+        resume_artifact_id=resume_ctx.resume_artifact_id,
+        resume_artifact_version_id=resume_ctx.resume_artifact_version_id,
         resume_file_asset_id=resume_ctx.resume_file_asset_id,
         resume_source=resume_ctx.resume_source,
         resume_title_snapshot=resume_ctx.resume_title_snapshot,

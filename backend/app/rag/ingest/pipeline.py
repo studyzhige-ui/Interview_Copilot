@@ -221,41 +221,117 @@ async def ingest_text(
     _document_title_loader=_document_title,
     _embed_model: Any | None = None,
 ) -> dict[str, Any]:
+    return await _ingest_textual_source(
+        text,
+        source_kind,
+        user_id,
+        document_id=document_id,
+        parser_id="text_input",
+        content_kind="markdown" if source_kind == "improved_qa" else "text",
+        parser_profile={"tier": "native", "fallback_used": False},
+        chunker=_chunker,
+        document_title_loader=_document_title_loader,
+        embed_model=_embed_model,
+        index_document=True,
+    )
+
+
+async def ingest_transcript(
+    text: str,
+    source_kind: str,
+    user_id: int,
+    *,
+    document_id: str,
+    upload_id: str,
+    _chunker=chunk_document,
+    _document_title_loader=_document_title,
+) -> dict[str, Any]:
+    """Persist an audio transcript as a private, citable text projection.
+
+    The original media remains owned by ``FileAsset``.  This function only
+    writes the same rebuildable ``KnowledgeDocument`` chunks used by other
+    Conversation attachments; it never publishes audio-derived text into the
+    user's global Milvus collection.
+    """
+
+    return await _ingest_textual_source(
+        text,
+        source_kind,
+        user_id,
+        document_id=document_id,
+        upload_id=upload_id,
+        parser_id="audio_transcription",
+        content_kind="transcript",
+        parser_profile={
+            "tier": "transcription",
+            "fallback_used": False,
+            "warnings": ["当前来源由音频转写生成，未检查音画内容或视觉布局。"],
+        },
+        chunker=_chunker,
+        document_title_loader=_document_title_loader,
+        embed_model=None,
+        index_document=False,
+    )
+
+
+async def _ingest_textual_source(
+    text: str,
+    source_kind: str,
+    user_id: int,
+    *,
+    document_id: str,
+    parser_id: str,
+    content_kind: str,
+    parser_profile: dict[str, Any],
+    upload_id: str | None = None,
+    chunker=chunk_document,
+    document_title_loader=_document_title,
+    embed_model: Any | None = None,
+    index_document: bool,
+) -> dict[str, Any]:
     canonical = canonicalize_document(
         ParsedDocument(
             pages=[ParsedPage(text=text)],
-            parser_id="text_input",
-            content_kind="markdown" if source_kind == "improved_qa" else "text",
+            parser_id=parser_id,
+            content_kind=content_kind,
         ),
-        parser_profile={"tier": "native", "fallback_used": False},
+        parser_profile=parser_profile,
     )
     metadata = {
         "source_kind": source_kind,
         "user_id": user_id,
         "document_id": document_id,
     }
+    if upload_id:
+        metadata["upload_id"] = upload_id
     nodes = _prepare_nodes(
         canonical,
         metadata=metadata,
         document_id=document_id,
-        chunker=_chunker,
-        document_title_loader=_document_title_loader,
+        chunker=chunker,
+        document_title_loader=document_title_loader,
     )
+    if upload_id:
+        for node in nodes:
+            node.metadata["upload_id"] = upload_id
     chunk_info = _persist_nodes(
         nodes,
         user_id=user_id,
         source_kind=source_kind,
         document_id=document_id,
-        embed_model=_embed_model,
-        document_title_loader=_document_title_loader,
+        embed_model=embed_model,
+        document_title_loader=document_title_loader,
+        index_document=index_document,
     )
     return {
         "success": True,
         "indexed": chunk_info["indexed"],
+        "vector_indexed": chunk_info.get("vector_indexed", True),
         "chunk_count": chunk_info["chunk_count"],
         "node_ids": chunk_info["node_ids"],
         "ref_doc_ids": list({node.ref_doc_id for node in nodes if node.ref_doc_id}),
+        "content_text": canonical.text[:200000],
     }
 
 
-__all__ = ["ingest_document", "ingest_text"]
+__all__ = ["ingest_document", "ingest_text", "ingest_transcript"]

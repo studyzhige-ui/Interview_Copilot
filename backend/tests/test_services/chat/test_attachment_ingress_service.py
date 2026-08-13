@@ -48,15 +48,19 @@ def _asset(
     upload_status: str = "uploaded",
     validation_status: str = "passed",
     checksum: str | None = None,
+    purpose: str = "knowledge_document",
+    filename: str | None = None,
+    content_type: str | None = None,
 ) -> FileAsset:
+    filename = filename or f"{asset_id}.pdf"
     row = FileAsset(
         id=asset_id,
         user_id=user.id,
-        purpose="knowledge_document",
-        original_filename=f"{asset_id}.pdf",
-        object_key=f"uploads/{user.id}/{asset_id}/file.pdf",
-        storage_uri=f"s3://bucket/uploads/{user.id}/{asset_id}/file.pdf",
-        content_type="application/pdf",
+        purpose=purpose,
+        original_filename=filename,
+        object_key=f"uploads/{user.id}/{asset_id}/{filename}",
+        storage_uri=f"s3://bucket/uploads/{user.id}/{asset_id}/{filename}",
+        content_type=content_type or "application/pdf",
         size_bytes=123,
         checksum_sha256=checksum,
         upload_status=upload_status,
@@ -65,6 +69,53 @@ def _asset(
     db.add(row)
     db.flush()
     return row
+
+
+def test_audio_draft_reuses_attachment_owner_and_transcription_projection(db_session):
+    user = _user(db_session)
+    conversation = _conversation(db_session, user)
+    asset = _asset(
+        db_session,
+        user,
+        "fa-audio",
+        purpose="interview_audio",
+        filename="conversation.m4a",
+        content_type="audio/mp4",
+    )
+
+    draft = create_attachment_draft(
+        db_session,
+        user_pk=user.id,
+        conversation_id=conversation.id,
+        file_asset_id=asset.id,
+    )
+    projection = db_session.get(KnowledgeDocument, draft.source_document_id)
+
+    assert projection is not None
+    assert projection.source_kind == "chat_attachment"
+    assert projection.category == "会话音频转写"
+    assert projection.conversation_id is None
+
+
+def test_draft_rejects_non_attachment_upload_purpose(db_session):
+    user = _user(db_session)
+    conversation = _conversation(db_session, user)
+    asset = _asset(
+        db_session,
+        user,
+        "fa-avatar",
+        purpose="avatar",
+        filename="avatar.png",
+        content_type="image/png",
+    )
+
+    with pytest.raises(AttachmentAssetUnavailableError, match="用途不支持"):
+        create_attachment_draft(
+            db_session,
+            user_pk=user.id,
+            conversation_id=conversation.id,
+            file_asset_id=asset.id,
+        )
 
 
 def _turn(

@@ -13,6 +13,16 @@ class SkillUpdateRequest(BaseModel):
     enabled: bool | None = None
 
 
+class SkillResourceInput(BaseModel):
+    path: str = Field(min_length=1, max_length=255)
+    kind: Literal["reference", "script", "template", "asset"]
+    content: str = Field(min_length=1, max_length=500_000)
+
+
+class SkillResourcesReplaceRequest(BaseModel):
+    resources: list[SkillResourceInput] = Field(default_factory=list, max_length=100)
+
+
 class MCPServerConfigRequest(BaseModel):
     name: str = Field(
         min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$"

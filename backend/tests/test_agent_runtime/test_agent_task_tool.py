@@ -198,11 +198,137 @@ def test_completion_gate_checks_only_current_plan_and_unresolved_tool_calls(
     db_session.flush()
     assert conversation_engine.check_turn_completion(turn.id, user.id) == (
         False,
-        "unresolved_tool_calls",
+        "unresolved_tool_call:call-running",
     )
 
     db_session.query(AgentToolCall).filter_by(call_id="call-running").update(
-        {"status": "completed"}
+        {"status": "completed", "result_json": {"jobs": []}}
     )
     db_session.flush()
     assert conversation_engine.check_turn_completion(turn.id, user.id) == (True, None)
+
+
+def test_rejected_tool_then_safe_alternative_can_complete(monkeypatch, db_session):
+    from app.conversation import engine as conversation_engine
+
+    user, conversation, turn = _seed(db_session)
+    db_session.add_all(
+        [
+            AgentToolCall(
+                call_id="call-rejected-write",
+                turn_id=turn.id,
+                session_id=conversation.id,
+                user_id=user.id,
+                tool_name="send_external",
+                effect="external_write",
+                arguments_json={"recipient": "person@example.test"},
+                timeout_seconds=10,
+                status="denied",
+                policy_decision="deny",
+                policy_reason="user_rejected",
+                result_json={"error": "user_rejected"},
+                error="user_rejected",
+            ),
+            AgentToolCall(
+                call_id="call-safe-read",
+                turn_id=turn.id,
+                session_id=conversation.id,
+                user_id=user.id,
+                tool_name="read_safe_alternative",
+                effect="read",
+                arguments_json={},
+                timeout_seconds=10,
+                status="completed",
+                policy_decision="allow",
+                policy_reason="read_allowed",
+                result_json={"draft": "user can send this manually"},
+            ),
+        ]
+    )
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.db.database.SessionLocal",
+        lambda: _NoCloseSession(db_session),
+    )
+
+    assert conversation_engine.check_turn_completion(turn.id, user.id) == (True, None)
+
+
+def test_completion_gate_requires_contiguous_attachment_read(
+    monkeypatch,
+    db_session,
+):
+    from app.conversation import engine as conversation_engine
+
+    user, conversation, turn = _seed(db_session)
+    db_session.add(
+        AgentToolCall(
+            call_id="call-read-first-half",
+            turn_id=turn.id,
+            session_id=conversation.id,
+            user_id=user.id,
+            tool_name="read_file",
+            effect="read",
+            arguments_json={"attachment_ref_id": "ref-long", "offset": 0},
+            timeout_seconds=10,
+            status="completed",
+            policy_decision="allow",
+            policy_reason="read_allowed",
+            result_json={
+                "coverage": {
+                    "segment_start": 0,
+                    "segment_end": 50,
+                    "total_chars": 100,
+                }
+            },
+        )
+    )
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.db.database.SessionLocal",
+        lambda: _NoCloseSession(db_session),
+    )
+    requirement = (
+        {
+            "kind": "full_text_read",
+            "identity_kind": "attachment_ref",
+            "identity": "ref-long",
+            "title": "long.pdf",
+        },
+    )
+
+    assert conversation_engine.check_turn_completion(
+        turn.id,
+        user.id,
+        requirement,
+    ) == (False, "attachment_full_coverage_incomplete:ref-long")
+
+    db_session.add(
+        AgentToolCall(
+            call_id="call-read-second-half",
+            turn_id=turn.id,
+            session_id=conversation.id,
+            user_id=user.id,
+            tool_name="read_file",
+            effect="read",
+            arguments_json={"attachment_ref_id": "ref-long", "offset": 50},
+            timeout_seconds=10,
+            status="completed",
+            policy_decision="allow",
+            policy_reason="read_allowed",
+            result_json={
+                "coverage": {
+                    "segment_start": 50,
+                    "segment_end": 100,
+                    "total_chars": 100,
+                }
+            },
+        )
+    )
+    db_session.commit()
+
+    assert conversation_engine.check_turn_completion(
+        turn.id,
+        user.id,
+        requirement,
+    ) == (True, None)

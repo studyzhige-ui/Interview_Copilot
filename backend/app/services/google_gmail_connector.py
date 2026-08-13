@@ -13,7 +13,7 @@ import base64
 import hashlib
 import secrets
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -25,13 +25,27 @@ from app.core.config import Settings, settings
 from app.core.secrets import decrypt_secret, encrypt_secret
 from app.db.database import SessionLocal
 from app.db.types import as_utc, utc_now
-from app.models.gmail_integration import GmailOAuthCredential, GmailOAuthState
+from app.models.gmail_integration import GmailOAuthState
 from app.schemas.gmail_integration import GmailMessageSummary
+from app.schemas.gmail_observation import (
+    GmailIncrementalBatch,
+    GmailIncrementalMessage,
+)
 from app.services.gmail_integration_service import (
     GMAIL_READONLY_SCOPE,
     GmailGrantInspection,
     GmailIntegrationError,
     GmailProviderAdapterError,
+)
+from app.services.gmail_credential_store import (
+    EncryptedFileGmailCredentialStore,
+    GmailCredentialConflictError,
+    GmailCredentialGrant,
+    GmailCredentialNotFoundError,
+    GmailCredentialStore,
+    GmailCredentialStoreError,
+    GmailCredentialStoreUnavailableError,
+    GmailRefreshTokenMissingError,
 )
 
 
@@ -40,14 +54,16 @@ _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 _USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 _GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
+_GMAIL_HISTORY_URL = "https://gmail.googleapis.com/gmail/v1/users/me/history"
+_GMAIL_PROFILE_URL = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
 _IDENTITY_SCOPES = frozenset({"openid", "email"})
 _REQUESTED_SCOPES = frozenset({GMAIL_READONLY_SCOPE, *_IDENTITY_SCOPES})
-_HANDLE_PREFIX = "gch_"
 _ACCESS_EXPIRY_SKEW = timedelta(seconds=60)
 _MAX_PROVIDER_JSON_BYTES = 1_000_000
 _OAUTH_OUTCOMES = frozenset({"connected", "failed"})
 _OAUTH_ERROR_CODES = frozenset(
     {
+        "credential_store_unavailable",
         "gmail_readonly_scope_required",
         "google_email_unverified",
         "invalid_grant",
@@ -83,7 +99,7 @@ class GmailOAuthAuthorization:
     # Internal browser binding for the callback cookie. It is the same
     # high-entropy OAuth state already embedded in ``authorization_url`` and
     # is never copied into the JSON response model.
-    state_binding: str
+    state_binding: str = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -91,24 +107,13 @@ class GmailOAuthCompletion:
     """Internal callback result; never serialize this object to a client."""
 
     user_pk: int
-    credential_handle: str
-
-
-@dataclass(frozen=True)
-class _GrantSnapshot:
-    handle: str
-    user_pk: int
-    google_subject: str
-    scopes: frozenset[str]
-    access_token_ciphertext: str
-    refresh_token_ciphertext: str
-    access_token_expires_at: datetime
+    credential_handle: str = field(repr=False)
 
 
 @dataclass(frozen=True)
 class _ClaimedOAuthState:
     user_pk: int
-    code_verifier: str
+    code_verifier: str = field(repr=False)
 
 
 class GoogleGmailConnector:
@@ -123,6 +128,7 @@ class GoogleGmailConnector:
         product_return_uri: str,
         state_ttl_seconds: int,
         timeout_seconds: float,
+        credential_store: GmailCredentialStore,
         session_factory: SessionFactory = SessionLocal,
         http_client_factory: HttpClientFactory | None = None,
     ) -> None:
@@ -131,6 +137,7 @@ class GoogleGmailConnector:
         self._redirect_uri = redirect_uri
         self._product_return_uri = product_return_uri
         self._state_ttl_seconds = state_ttl_seconds
+        self._credential_store = credential_store
         self._session_factory = session_factory
         timeout = httpx.Timeout(
             timeout_seconds,
@@ -296,6 +303,7 @@ class GoogleGmailConnector:
         except GmailProviderAdapterError as exc:
             if exc.code != "invalid_token":
                 raise
+            snapshot = self._load_grant(credential_handle, user_pk=user_pk)
             access_token = await self._refresh_access_token(snapshot)
             identity = await self._identity_for_access_token(access_token)
         if identity.google_subject != snapshot.google_subject:
@@ -310,7 +318,7 @@ class GoogleGmailConnector:
 
     async def revoke_grant(self, credential_handle: str, *, user_pk: int) -> None:
         snapshot = self._load_grant(credential_handle, user_pk=user_pk)
-        refresh_token = decrypt_secret(snapshot.refresh_token_ciphertext)
+        refresh_token = snapshot.refresh_token
         if not refresh_token:
             raise GmailProviderAdapterError("invalid_grant")
         response = await self._request(
@@ -326,24 +334,22 @@ class GoogleGmailConnector:
             if error.code != "invalid_token":
                 raise error
 
-        with self._session_factory() as db:
-            row = (
-                db.query(GmailOAuthCredential)
-                .filter(
-                    GmailOAuthCredential.credential_handle == credential_handle,
-                    GmailOAuthCredential.user_id == user_pk,
-                )
-                .with_for_update()
-                .one_or_none()
+        try:
+            self._credential_store.delete_grant(
+                credential_handle,
+                user_pk=user_pk,
+                expected_generation=snapshot.generation,
             )
-            if row is not None:
-                if row.refresh_token_ciphertext != snapshot.refresh_token_ciphertext:
-                    raise GmailProviderAdapterError(
-                        "credential_changed",
-                        retryable=True,
-                    )
-                db.delete(row)
-            db.commit()
+        except (GmailCredentialNotFoundError, GmailCredentialConflictError):
+            raise GmailProviderAdapterError(
+                "credential_changed",
+                retryable=True,
+            ) from None
+        except GmailCredentialStoreError:
+            raise GmailProviderAdapterError(
+                "credential_store_unavailable",
+                retryable=True,
+            ) from None
 
     async def search_messages(
         self,
@@ -394,6 +400,174 @@ class GoogleGmailConnector:
             self._load_grant(credential_handle, user_pk=user_pk),
         )
         return summaries
+
+    async def read_incremental_messages(
+        self,
+        credential_handle: str,
+        *,
+        user_pk: int,
+        cursor: str | None,
+        limit: int,
+    ) -> GmailIncrementalBatch:
+        """Read a bounded Gmail History increment without persisting a cursor."""
+
+        if not 1 <= limit <= 100:
+            raise GmailProviderAdapterError("invalid_request")
+        snapshot = self._load_grant(credential_handle, user_pk=user_pk)
+        if cursor is None:
+            profile = await self._authorized_get_json(
+                snapshot,
+                _GMAIL_PROFILE_URL,
+                params={},
+            )
+            cursor_after = _bounded_gmail_id(profile.get("historyId"))
+            _ensure_same_grant(
+                snapshot,
+                self._load_grant(credential_handle, user_pk=user_pk),
+            )
+            return GmailIncrementalBatch(
+                cursor_before=None,
+                cursor_after=cursor_after,
+                initialized_cursor=True,
+                messages=[],
+            )
+
+        cursor_before = _bounded_gmail_id(cursor)
+        latest = self._load_grant(credential_handle, user_pk=user_pk)
+        _ensure_same_grant(snapshot, latest)
+        snapshot = latest
+        occurrences, cursor_after = await self._history_occurrences(
+            snapshot,
+            cursor=cursor_before,
+            limit=limit,
+        )
+        latest = self._load_grant(credential_handle, user_pk=user_pk)
+        _ensure_same_grant(snapshot, latest)
+        snapshot = latest
+
+        messages: list[GmailIncrementalMessage] = []
+        for message_id, thread_id, history_id in occurrences:
+            try:
+                detail = await self._authorized_get_json(
+                    snapshot,
+                    f"{_GMAIL_MESSAGES_URL}/{message_id}",
+                    params=[
+                        ("format", "metadata"),
+                        ("metadataHeaders", "From"),
+                        ("metadataHeaders", "Subject"),
+                    ],
+                    default_error_code="gmail_message_unavailable",
+                )
+            except GmailProviderAdapterError as exc:
+                if exc.code != "gmail_message_unavailable":
+                    raise
+                # The History occurrence is still a real provider fact.  Save
+                # an explicit tombstone snapshot and advance atomically rather
+                # than retrying a message that was deleted after delivery.
+                messages.append(
+                    GmailIncrementalMessage(
+                        message_id=message_id,
+                        thread_id=thread_id,
+                        history_id=history_id,
+                        content_available=False,
+                    )
+                )
+                continue
+            summary = _message_summary(detail)
+            if summary.message_id != message_id or summary.thread_id != thread_id:
+                raise GmailProviderAdapterError("provider_response_invalid")
+            messages.append(
+                GmailIncrementalMessage(
+                    message_id=summary.message_id,
+                    thread_id=summary.thread_id,
+                    history_id=history_id,
+                    content_available=True,
+                    received_at=summary.received_at,
+                    from_hint=summary.from_hint,
+                    subject=summary.subject,
+                    snippet=summary.snippet,
+                )
+            )
+        _ensure_same_grant(
+            snapshot,
+            self._load_grant(credential_handle, user_pk=user_pk),
+        )
+        return GmailIncrementalBatch(
+            cursor_before=cursor_before,
+            cursor_after=cursor_after,
+            initialized_cursor=False,
+            messages=messages,
+        )
+
+    async def _history_occurrences(
+        self,
+        snapshot: GmailCredentialGrant,
+        *,
+        cursor: str,
+        limit: int,
+    ) -> tuple[list[tuple[str, str, str]], str]:
+        """Return complete History records up to a bounded message limit.
+
+        We never advance past a partially consumed History record.  Re-reading
+        an already saved record is harmless because Observation persistence is
+        keyed by the provider message identity.
+        """
+
+        page_token: str | None = None
+        cursor_after = cursor
+        occurrences: dict[str, tuple[str, str]] = {}
+        pages = 0
+        provider_head: str | None = None
+        while pages < 4:
+            params: list[tuple[str, Any]] = [
+                ("startHistoryId", cursor),
+                ("historyTypes", "messageAdded"),
+                ("maxResults", 100),
+            ]
+            if page_token is not None:
+                params.append(("pageToken", page_token))
+            payload = await self._authorized_get_json(
+                snapshot,
+                _GMAIL_HISTORY_URL,
+                params=params,
+                default_error_code="gmail_history_unavailable",
+            )
+            pages += 1
+            raw_history = payload.get("history", [])
+            if not isinstance(raw_history, list):
+                raise GmailProviderAdapterError("provider_response_invalid")
+            provider_head = _optional_gmail_id(payload.get("historyId"))
+            stopped_before_record = False
+            for raw_record in raw_history:
+                if not isinstance(raw_record, dict):
+                    raise GmailProviderAdapterError("provider_response_invalid")
+                history_id = _bounded_gmail_id(raw_record.get("id"))
+                record_entries = _message_added_entries(raw_record)
+                new_entries = [
+                    entry for entry in record_entries if entry[0] not in occurrences
+                ]
+                if len(new_entries) > limit:
+                    # Never advance over provider data we did not snapshot.
+                    # The typed failure is preferable to a silent cursor gap.
+                    raise GmailProviderAdapterError("history_batch_too_large")
+                if len(occurrences) + len(new_entries) > limit:
+                    stopped_before_record = True
+                    break
+                for message_id, thread_id in new_entries:
+                    occurrences[message_id] = (thread_id, history_id)
+                cursor_after = history_id
+            if stopped_before_record:
+                break
+            raw_next = payload.get("nextPageToken")
+            if raw_next is None:
+                if provider_head is not None:
+                    cursor_after = provider_head
+                break
+            page_token = _bounded_identity(raw_next, 2_048)
+        return [
+            (message_id, thread_id, history_id)
+            for message_id, (thread_id, history_id) in occurrences.items()
+        ], cursor_after
 
     def _claim_oauth_state(self, raw_state: str) -> _ClaimedOAuthState:
         normalized = _bounded_secret(raw_state, "oauth_state_invalid", 512)
@@ -459,70 +633,53 @@ class GoogleGmailConnector:
         refresh_token: str | None,
         access_token_expires_at: datetime,
     ) -> str:
-        with self._session_factory() as db:
-            row = (
-                db.query(GmailOAuthCredential)
-                .filter(GmailOAuthCredential.user_id == user_pk)
-                .with_for_update()
-                .one_or_none()
+        try:
+            grant = self._credential_store.put_grant(
+                user_pk=user_pk,
+                google_subject=google_subject,
+                scopes=scopes,
+                access_token=access_token,
+                refresh_token=refresh_token,
+                access_token_expires_at=access_token_expires_at,
             )
-            if row is None:
-                if refresh_token is None:
-                    raise GmailOAuthFlowError("refresh_token_missing")
-                row = GmailOAuthCredential(
-                    credential_handle=_new_credential_handle(),
-                    user_id=user_pk,
-                    created_at=utc_now(),
-                )
-            elif refresh_token is None:
-                if row.google_subject != google_subject:
-                    raise GmailOAuthFlowError("refresh_token_missing")
-                refresh_token = decrypt_secret(row.refresh_token_ciphertext)
-                if not refresh_token:
-                    raise GmailOAuthFlowError("refresh_token_missing")
+            return grant.handle
+        except GmailRefreshTokenMissingError:
+            raise GmailOAuthFlowError("refresh_token_missing") from None
+        except GmailCredentialStoreError:
+            raise GmailOAuthFlowError(
+                "credential_store_unavailable",
+                retryable=True,
+            ) from None
 
-            row.google_subject = google_subject
-            row.scopes_json = sorted(scopes)
-            row.access_token_ciphertext = encrypt_secret(access_token)
-            row.refresh_token_ciphertext = encrypt_secret(refresh_token)
-            row.access_token_expires_at = access_token_expires_at
-            row.updated_at = utc_now()
-            db.add(row)
-            db.commit()
-            return str(row.credential_handle)
-
-    def _load_grant(self, credential_handle: str, *, user_pk: int) -> _GrantSnapshot:
-        with self._session_factory() as db:
-            row = (
-                db.query(GmailOAuthCredential)
-                .filter(
-                    GmailOAuthCredential.credential_handle == credential_handle,
-                    GmailOAuthCredential.user_id == user_pk,
-                )
-                .one_or_none()
+    def _load_grant(
+        self,
+        credential_handle: str,
+        *,
+        user_pk: int,
+    ) -> GmailCredentialGrant:
+        try:
+            return self._credential_store.get_grant(
+                credential_handle,
+                user_pk=user_pk,
             )
-            if row is None:
-                raise GmailProviderAdapterError("invalid_grant")
-            return _GrantSnapshot(
-                handle=str(row.credential_handle),
-                user_pk=int(row.user_id),
-                google_subject=str(row.google_subject),
-                scopes=frozenset(str(value) for value in (row.scopes_json or [])),
-                access_token_ciphertext=str(row.access_token_ciphertext),
-                refresh_token_ciphertext=str(row.refresh_token_ciphertext),
-                access_token_expires_at=as_utc(row.access_token_expires_at),
-            )
+        except GmailCredentialNotFoundError:
+            raise GmailProviderAdapterError("invalid_grant") from None
+        except GmailCredentialStoreError:
+            raise GmailProviderAdapterError(
+                "credential_store_unavailable",
+                retryable=True,
+            ) from None
 
-    async def _access_token(self, snapshot: _GrantSnapshot) -> str:
-        token = decrypt_secret(snapshot.access_token_ciphertext)
+    async def _access_token(self, snapshot: GmailCredentialGrant) -> str:
+        token = snapshot.access_token
         if not token:
             raise GmailProviderAdapterError("invalid_grant")
         if snapshot.access_token_expires_at > utc_now() + _ACCESS_EXPIRY_SKEW:
             return token
         return await self._refresh_access_token(snapshot)
 
-    async def _refresh_access_token(self, snapshot: _GrantSnapshot) -> str:
-        refresh_token = decrypt_secret(snapshot.refresh_token_ciphertext)
+    async def _refresh_access_token(self, snapshot: GmailCredentialGrant) -> str:
+        refresh_token = snapshot.refresh_token
         if not refresh_token:
             raise GmailProviderAdapterError("invalid_grant")
         payload = await self._token_request(
@@ -546,37 +703,36 @@ class GoogleGmailConnector:
         except GmailOAuthFlowError:
             raise GmailProviderAdapterError("provider_response_invalid") from None
 
-        with self._session_factory() as db:
-            row = (
-                db.query(GmailOAuthCredential)
-                .filter(
-                    GmailOAuthCredential.credential_handle == snapshot.handle,
-                    GmailOAuthCredential.user_id == snapshot.user_pk,
-                )
-                .with_for_update()
-                .one_or_none()
+        try:
+            self._credential_store.compare_and_swap_refresh(
+                snapshot.handle,
+                user_pk=snapshot.user_pk,
+                expected_generation=snapshot.generation,
+                access_token=access_token,
+                access_token_expires_at=expires_at,
+                scopes=refreshed_scopes or None,
             )
-            if row is None:
-                raise GmailProviderAdapterError("invalid_grant")
-            # A concurrent reconnect replaced this grant while the refresh was
-            # in flight. Never write the old account's access token over it.
-            if row.refresh_token_ciphertext != snapshot.refresh_token_ciphertext:
-                raise GmailProviderAdapterError("credential_changed", retryable=True)
-            row.access_token_ciphertext = encrypt_secret(access_token)
-            row.access_token_expires_at = expires_at
-            if refreshed_scopes:
-                row.scopes_json = sorted(refreshed_scopes)
-            row.updated_at = utc_now()
-            db.add(row)
-            db.commit()
+        except (GmailCredentialNotFoundError, GmailCredentialConflictError):
+            # A reconnect replaced this grant while refresh was in flight.
+            # The stale access token is never written over the new grant.
+            raise GmailProviderAdapterError(
+                "credential_changed",
+                retryable=True,
+            ) from None
+        except GmailCredentialStoreError:
+            raise GmailProviderAdapterError(
+                "credential_store_unavailable",
+                retryable=True,
+            ) from None
         return access_token
 
     async def _authorized_get_json(
         self,
-        snapshot: _GrantSnapshot,
+        snapshot: GmailCredentialGrant,
         url: str,
         *,
         params: Any,
+        default_error_code: str = "gmail_request_failed",
     ) -> dict[str, Any]:
         token = await self._access_token(snapshot)
         response = await self._request(
@@ -586,6 +742,10 @@ class GoogleGmailConnector:
             headers={"Authorization": f"Bearer {token}"},
         )
         if response.status_code == 401:
+            snapshot = self._load_grant(
+                snapshot.handle,
+                user_pk=snapshot.user_pk,
+            )
             token = await self._refresh_access_token(snapshot)
             response = await self._request(
                 "GET",
@@ -594,7 +754,7 @@ class GoogleGmailConnector:
                 headers={"Authorization": f"Bearer {token}"},
             )
         if response.status_code != 200:
-            raise _provider_http_error(response, default_code="gmail_request_failed")
+            raise _provider_http_error(response, default_code=default_error_code)
         return _json_object(response)
 
     async def _token_request(
@@ -634,6 +794,7 @@ class GoogleGmailConnector:
 def build_configured_google_gmail_connector(
     configured_settings: Settings = settings,
     *,
+    credential_store: GmailCredentialStore | None = None,
     session_factory: SessionFactory = SessionLocal,
     http_client_factory: HttpClientFactory | None = None,
 ) -> GoogleGmailConnector | None:
@@ -645,13 +806,13 @@ def build_configured_google_gmail_connector(
     )
     redirect_uri = configured_settings.GMAIL_GOOGLE_OAUTH_REDIRECT_URI.strip()
     product_return_uri = configured_settings.GMAIL_OAUTH_PRODUCT_RETURN_URI.strip()
-    encryption_key = configured_settings.SECRET_KEY.strip()
+    state_encryption_key = configured_settings.SECRET_KEY.strip()
     present = (
         client_id,
         client_secret,
         redirect_uri,
         product_return_uri,
-        encryption_key,
+        state_encryption_key,
     )
     if not all(present):
         return None
@@ -663,6 +824,26 @@ def build_configured_google_gmail_connector(
         environment=configured_settings.ENVIRONMENT,
     ):
         return None
+    resolved_store = credential_store
+    if resolved_store is None:
+        # Hosted Cloud must inject a real external secret broker. A local file
+        # on an ephemeral web instance is neither durable nor an honest cloud
+        # credential boundary, so incomplete deployments remain unavailable.
+        if configured_settings.APP_EDITION == "cloud":
+            return None
+        store_path = configured_settings.GMAIL_CREDENTIAL_STORE_FILE.strip()
+        store_key = (
+            configured_settings.GMAIL_CREDENTIAL_STORE_KEY.get_secret_value().strip()
+        )
+        if not store_path or not store_key:
+            return None
+        try:
+            resolved_store = EncryptedFileGmailCredentialStore(
+                store_path,
+                encryption_secret=store_key,
+            )
+        except (ValueError, GmailCredentialStoreUnavailableError):
+            return None
     return GoogleGmailConnector(
         client_id=client_id,
         client_secret=client_secret,
@@ -670,6 +851,7 @@ def build_configured_google_gmail_connector(
         product_return_uri=product_return_uri,
         state_ttl_seconds=configured_settings.GMAIL_OAUTH_STATE_TTL_SECONDS,
         timeout_seconds=configured_settings.GMAIL_PROVIDER_TIMEOUT_SECONDS,
+        credential_store=resolved_store,
         session_factory=session_factory,
         http_client_factory=http_client_factory,
     )
@@ -715,14 +897,13 @@ def _pkce_challenge(code_verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
-def _new_credential_handle() -> str:
-    return _HANDLE_PREFIX + secrets.token_urlsafe(32)
-
-
-def _ensure_same_grant(original: _GrantSnapshot, latest: _GrantSnapshot) -> None:
+def _ensure_same_grant(
+    original: GmailCredentialGrant,
+    latest: GmailCredentialGrant,
+) -> None:
     if (
-        latest.google_subject != original.google_subject
-        or latest.refresh_token_ciphertext != original.refresh_token_ciphertext
+        latest.handle != original.handle
+        or latest.google_subject != original.google_subject
     ):
         raise GmailProviderAdapterError("credential_changed", retryable=True)
 
@@ -824,6 +1005,12 @@ def _provider_http_error(
         "identity_read_failed",
     }:
         provider_code = "invalid_token"
+    if response.status_code == 404 and default_code == "gmail_history_unavailable":
+        return GmailProviderAdapterError("history_cursor_expired")
+    if response.status_code == 404 and default_code == "gmail_message_unavailable":
+        return GmailProviderAdapterError("gmail_message_unavailable")
+    if default_code == "gmail_message_unavailable":
+        default_code = "gmail_request_failed"
     code_map = {
         "invalid_grant": "invalid_grant",
         "invalid_token": "invalid_token",
@@ -879,6 +1066,27 @@ def _bounded_gmail_id(value: Any) -> str:
     ):
         raise GmailProviderAdapterError("provider_response_invalid")
     return normalized
+
+
+def _optional_gmail_id(value: Any) -> str | None:
+    if value is None:
+        return None
+    return _bounded_gmail_id(value)
+
+
+def _message_added_entries(history_record: dict[str, Any]) -> list[tuple[str, str]]:
+    raw_added = history_record.get("messagesAdded", [])
+    if not isinstance(raw_added, list):
+        raise GmailProviderAdapterError("provider_response_invalid")
+    entries: list[tuple[str, str]] = []
+    for item in raw_added:
+        if not isinstance(item, dict) or not isinstance(item.get("message"), dict):
+            raise GmailProviderAdapterError("provider_response_invalid")
+        message_id = _bounded_gmail_id(item["message"].get("id"))
+        thread_id = _bounded_gmail_id(item["message"].get("threadId"))
+        if all(existing_id != message_id for existing_id, _ in entries):
+            entries.append((message_id, thread_id))
+    return entries
 
 
 __all__ = [

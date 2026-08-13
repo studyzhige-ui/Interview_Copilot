@@ -6,6 +6,7 @@ import {
   FolderInput,
   Loader2,
   RotateCcw,
+  Save,
   Trash2,
   X,
 } from 'lucide-react';
@@ -13,13 +14,24 @@ import {
   listAttachmentSources,
   listDebriefSources,
   promoteAttachmentToDebrief,
+  promoteAttachmentToArtifact,
   removeDebriefSource,
-  removeFailedConversationAttachment,
+  removeConversationAttachmentFromScope,
   retryAttachmentSource,
 } from '@/api/chat';
+import {
+  getFileAssetDeletionImpact,
+  permanentlyDeleteFileAsset,
+} from '@/api/fileAssets';
 import { extractErr } from '@/api/client';
+import { Btn } from '@/components/ui/Btn';
+import { Modal } from '@/components/ui/Modal';
 import { toast } from '@/store/uiStore';
-import type { AttachmentSource, PendingSubmissionItem } from '@/types/api';
+import type {
+  AttachmentSource,
+  FileAssetDeletionImpact,
+  PendingSubmissionItem,
+} from '@/types/api';
 
 interface Props {
   sessionId: string;
@@ -49,6 +61,17 @@ export function AttachmentSources({
   const [pendingSources, setPendingSources] = useState<Record<string, AttachmentSource[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [actingSourceId, setActingSourceId] = useState<string | null>(null);
+  const [permanentDelete, setPermanentDelete] = useState<{
+    source: AttachmentSource;
+    impact: FileAssetDeletionImpact | null;
+    error: string | null;
+  } | null>(null);
+  const [filenameConfirmation, setFilenameConfirmation] = useState('');
+  const [artifactPromotion, setArtifactPromotion] = useState<{
+    source: AttachmentSource;
+    kind: string;
+    title: string;
+  } | null>(null);
   const [resumeNotice, setResumeNotice] = useState<{
     sessionId: string;
     message: string;
@@ -122,6 +145,24 @@ export function AttachmentSources({
     }
   };
 
+  const preparePermanentDelete = (source: AttachmentSource) => {
+    if (!source.file_asset_id) return;
+    setFilenameConfirmation('');
+    setPermanentDelete({ source, impact: null, error: null });
+    void getFileAssetDeletionImpact(source.file_asset_id).then(
+      (impact) => setPermanentDelete((current) => (
+        current?.source.source_id === source.source_id
+          ? { ...current, impact, error: null }
+          : current
+      )),
+      (deleteError) => setPermanentDelete((current) => (
+        current?.source.source_id === source.source_id
+          ? { ...current, error: extractErr(deleteError, '永久删除影响暂时无法读取') }
+          : current
+      )),
+    );
+  };
+
   const promotedKeys = new Set(
     debriefSources.map((source) => `${source.file_asset_id}:${source.file_asset_version}`),
   );
@@ -129,6 +170,7 @@ export function AttachmentSources({
   if (!hasVisibleContent) return null;
 
   return (
+    <>
     <section
       aria-label="附件来源"
       className="border-t border-stone-100 bg-stone-50/70 px-3 py-2"
@@ -181,16 +223,24 @@ export function AttachmentSources({
               onRetry={source.can_retry ? () => run(source.source_id, async () => {
                 await retryAttachmentSource(sessionId, source.source_id);
               }) : undefined}
-              onRemove={source.status === 'failed' ? () => run(source.source_id, async () => {
-                const result = await removeFailedConversationAttachment(sessionId, source.source_id);
+              onRemove={() => run(source.source_id, async () => {
+                const result = await removeConversationAttachmentFromScope(sessionId, source.source_id);
                 setResumeNotice({
                   sessionId,
                   message: result.resumed_turn
-                    ? '失败附件已移除，服务端已恢复当前 Turn。'
-                    : '失败附件已移除，服务端确认当前 Turn 无需恢复。',
+                    ? '附件已从本对话移除，服务端已恢复当前 Turn。'
+                    : '附件已从本对话移除；历史来源卡保留为不可访问 tombstone。',
                 });
-              }) : undefined}
-              removeActionLabel={source.status === 'failed' ? '移除失败项并继续' : undefined}
+              })}
+              removeActionLabel={source.status === 'failed' ? '移除失败项并继续' : '从本对话移除'}
+              onPermanentDelete={source.file_asset_id ? () => preparePermanentDelete(source) : undefined}
+              onSaveArtifact={source.file_asset_id && source.file_asset_version ? () => {
+                setArtifactPromotion({
+                  source,
+                  kind: /(?:简历|resume|cv)/i.test(source.title) ? 'resume' : 'interview_notes',
+                  title: source.title,
+                });
+              } : undefined}
               onPromote={interviewId && !promoted ? () => run(source.source_id, async () => {
                 await promoteAttachmentToDebrief(sessionId, source.source_id);
                 toast.success('已添加到本次复盘资料');
@@ -212,10 +262,148 @@ export function AttachmentSources({
               await removeDebriefSource(interviewId, source.source_id);
               toast.success('已从本次复盘资料移除');
             }) : undefined}
+            onPermanentDelete={source.file_asset_id ? () => preparePermanentDelete(source) : undefined}
           />
         ))}
       </div>
     </section>
+    <Modal
+      open={Boolean(permanentDelete)}
+      onClose={() => { if (!actingSourceId) setPermanentDelete(null); }}
+      title="永久删除原始文件"
+      width={560}
+      footer={<>
+        <Btn kind="ghost" disabled={Boolean(actingSourceId)} onClick={() => setPermanentDelete(null)}>取消</Btn>
+        <Btn
+          kind="danger"
+          loading={Boolean(actingSourceId)}
+          disabled={!permanentDelete?.impact
+            || filenameConfirmation !== permanentDelete.impact.filename
+            || Boolean(permanentDelete.error)}
+          onClick={() => {
+            if (!permanentDelete?.impact) return;
+            const sourceId = permanentDelete.source.source_id;
+            void run(sourceId, async () => {
+              await permanentlyDeleteFileAsset(permanentDelete.impact!, filenameConfirmation);
+              setPermanentDelete(null);
+              setFilenameConfirmation('');
+              toast.success('原始文件与 Copilot 可控解析投影已进入永久删除流程');
+            });
+          }}
+        >永久删除</Btn>
+      </>}
+    >
+      {permanentDelete?.error ? (
+        <div role="alert" className="text-sm text-danger-700">{permanentDelete.error}</div>
+      ) : permanentDelete?.impact ? (
+        <div className="space-y-3 text-sm text-stone-600">
+          <div className="rounded-md border border-danger-200 bg-danger-50 p-3 text-danger-800">
+            {permanentDelete.impact.disclosures.map((item) => <p key={item}>• {item}</p>)}
+          </div>
+          {permanentDelete.impact.reference_impacts.length > 0 && (
+            <div className="space-y-1 text-xs">
+              {permanentDelete.impact.reference_impacts.map((item) => (
+                <div key={item.reference_type}>
+                  {item.reference_type}：有效 {item.active_count}，tombstone {item.tombstone_count}。{item.effect}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="rounded-md border border-warning-200 bg-warning-50 p-2 text-xs text-warning-800">
+            已识别与此文件精确关联的已完成外传：
+            {permanentDelete.impact.known_external_transmission_count} 次。
+            永久删除不会撤回这些外部动作或 Provider 已接收的副本。
+          </div>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-700">
+              输入完整文件名“{permanentDelete.impact.filename}”确认
+            </span>
+            <input
+              value={filenameConfirmation}
+              onChange={(event) => setFilenameConfirmation(event.target.value)}
+              className="w-full rounded-md border border-stone-300 px-3 py-2 outline-none focus:border-danger-400"
+            />
+          </label>
+        </div>
+      ) : <div className="text-sm text-stone-500">正在核对引用、scope 和已知外传影响……</div>}
+    </Modal>
+    <Modal
+      open={Boolean(artifactPromotion)}
+      onClose={() => { if (!actingSourceId) setArtifactPromotion(null); }}
+      title="保存为正式材料"
+      width={520}
+      footer={<>
+        <Btn kind="ghost" disabled={Boolean(actingSourceId)} onClick={() => setArtifactPromotion(null)}>取消</Btn>
+        <Btn
+          loading={Boolean(actingSourceId)}
+          disabled={!artifactPromotion?.title.trim()}
+          onClick={() => {
+            if (!artifactPromotion) return;
+            const pending = artifactPromotion;
+            void run(pending.source.source_id, async () => {
+              const result = await promoteAttachmentToArtifact(
+                sessionId,
+                pending.source.source_id,
+                {
+                  operationKey: crypto.randomUUID(),
+                  artifactKind: pending.kind,
+                  title: pending.title.trim(),
+                },
+              );
+              setArtifactPromotion(null);
+              setResumeNotice({
+                sessionId,
+                message: result.artifact.kind === 'resume'
+                  ? '已保存为简历；系统将解析原始文件并生成待你确认的求职档案候选，不会自动改写个人详情。'
+                  : '已保存为正式材料；本对话附件仍保留在原 scope。',
+              });
+              toast.success('正式材料已保存');
+            });
+          }}
+        >确认保存</Btn>
+      </>}
+    >
+      {artifactPromotion && (
+        <div className="space-y-3 text-sm text-stone-600">
+          <div className="rounded-md border border-primary-200 bg-primary-50 p-3 text-primary-900">
+            此操作会为同一份原始文件新增正式 Artifact scope，并冻结当前文件版本；不会复制解析正文，也不会移除本对话附件。
+          </div>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-700">材料类型</span>
+            <select
+              aria-label="材料类型"
+              value={artifactPromotion.kind}
+              onChange={(event) => setArtifactPromotion((current) => (
+                current ? { ...current, kind: event.target.value } : current
+              ))}
+              className="w-full rounded-md border border-stone-300 px-3 py-2 outline-none focus:border-primary-400"
+            >
+              <option value="resume">简历</option>
+              <option value="cover_letter">求职信</option>
+              <option value="portfolio">作品集说明</option>
+              <option value="interview_notes">面试材料</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-stone-700">材料标题</span>
+            <input
+              aria-label="材料标题"
+              value={artifactPromotion.title}
+              onChange={(event) => setArtifactPromotion((current) => (
+                current ? { ...current, title: event.target.value } : current
+              ))}
+              className="w-full rounded-md border border-stone-300 px-3 py-2 outline-none focus:border-primary-400"
+            />
+          </label>
+          {artifactPromotion.kind === 'resume' && (
+            <p className="rounded-md border border-warning-200 bg-warning-50 p-2 text-xs text-warning-800">
+              保存后会触发简历解析和候选提取。候选必须由你确认后才会进入个人详情/求职档案。
+            </p>
+          )}
+        </div>
+      )}
+    </Modal>
+    </>
   );
 }
 
@@ -226,6 +414,8 @@ function SourceRow({
   onRetry,
   onRemove,
   onPromote,
+  onSaveArtifact,
+  onPermanentDelete,
   removeActionLabel,
   promoted = false,
 }: {
@@ -235,6 +425,8 @@ function SourceRow({
   onRetry?: () => void;
   onRemove?: () => void;
   onPromote?: () => void;
+  onSaveArtifact?: () => void;
+  onPermanentDelete?: () => void;
   removeActionLabel?: string;
   promoted?: boolean;
 }) {
@@ -276,6 +468,17 @@ function SourceRow({
           </button>
         )}
         {promoted && <span className="shrink-0 text-success-700">已加入复盘</span>}
+        {onSaveArtifact && (
+          <button
+            type="button"
+            disabled={acting}
+            onClick={onSaveArtifact}
+            aria-label={`保存为正式材料 ${source.title}`}
+            className="inline-flex shrink-0 items-center gap-0.5 text-primary-700 hover:underline disabled:opacity-50"
+          >
+            <Save size={10} /> 保存为材料
+          </button>
+        )}
         {onRemove && (
           <button
             type="button"
@@ -288,9 +491,31 @@ function SourceRow({
             {removeActionLabel && <span>{removeActionLabel}</span>}
           </button>
         )}
+        {onPermanentDelete && (
+          <button
+            type="button"
+            disabled={acting}
+            onClick={onPermanentDelete}
+            aria-label={`永久删除原始文件 ${source.title}`}
+            className="shrink-0 text-danger-700 underline disabled:opacity-50"
+          >永久删除文件</button>
+        )}
       </div>
       {source.error_message && (
         <div role="alert" className="mt-1 pl-7 text-danger-700">{source.error_message}</div>
+      )}
+      {source.parse_quality.warnings.length > 0 && (
+        <div role="status" className="mt-1 pl-7 text-warning-700">
+          解析提示：{source.parse_quality.warnings.join('、')}
+        </div>
+      )}
+      {source.status === 'ready' && (
+        <div className="mt-1 pl-7 text-stone-500">
+          文本覆盖：{source.coverage.parsed_char_count} 字符 / {source.coverage.chunk_count} 段
+          {source.coverage.page_count != null ? ` / ${source.coverage.page_count} 页` : ''}
+          {source.parse_quality.ocr_used ? ' · 使用 OCR' : ''}
+          {!source.coverage.visual_layout_reviewed ? ' · 未证明已检查视觉版式' : ''}
+        </div>
       )}
     </div>
   );

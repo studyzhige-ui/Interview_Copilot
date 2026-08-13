@@ -11,6 +11,8 @@ from app.core.model_provider_adapter import (
     ProviderRequest,
     build_anthropic_payload,
     build_provider_request,
+    provider_image_block,
+    provider_text_block,
 )
 
 
@@ -195,6 +197,112 @@ def test_anthropic_translation_rejects_request_without_semantic_messages():
         build_anthropic_payload(
             ProviderRequest(system="rules", messages=[{"role": "user", "content": ""}])
         )
+
+
+def test_runtime_control_projection_is_not_serialized_as_user_direction():
+    payload = build_anthropic_payload(
+        ProviderRequest(
+            system="rules",
+            messages=[
+                {"role": "user", "content": "original task"},
+                {
+                    "role": "runtime",
+                    "control_type": "tool_failure_replan",
+                    "content": "revise the approach",
+                },
+            ],
+        )
+    )
+
+    text = "\n".join(
+        str(block.get("text") or "")
+        for message in payload["messages"]
+        for block in message["content"]
+    )
+    assert "original task" in text
+    assert "Runtime control projection" in text
+    assert "not a new user request" in text
+    assert "type=tool_failure_replan" in text
+
+
+def test_provider_neutral_image_blocks_map_to_anthropic_wire():
+    payload = build_anthropic_payload(
+        ProviderRequest(
+            system="inspect",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        provider_text_block("page 1"),
+                        provider_image_block(
+                            media_type="image/jpeg",
+                            data="YWJj",
+                        ),
+                    ],
+                }
+            ],
+        )
+    )
+
+    blocks = payload["messages"][0]["content"]
+    assert blocks[0] == {"type": "text", "text": "page 1"}
+    assert blocks[1] == {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": "image/jpeg",
+            "data": "YWJj",
+        },
+    }
+
+
+def test_provider_neutral_image_blocks_map_to_openai_wire():
+    captured: dict = {}
+
+    async def events():
+        yield SimpleNamespace(choices=[], usage=None)
+
+    class Completions:
+        async def create(self, **kwargs):
+            captured.update(kwargs)
+            return events()
+
+    adapter = ModelProviderAdapter(
+        client=SimpleNamespace(chat=SimpleNamespace(completions=Completions())),
+        profile=_profile("openai"),
+    )
+
+    async def drain():
+        stream = await adapter.start_stream(
+            ProviderRequest(
+                system="inspect",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            provider_text_block("page 1"),
+                            provider_image_block(
+                                media_type="image/png",
+                                data="YWJj",
+                            ),
+                        ],
+                    }
+                ],
+            )
+        )
+        return [event async for event in stream]
+
+    asyncio.run(drain())
+    content = captured["messages"][-1]["content"]
+    assert content[0] == {"type": "text", "text": "page 1"}
+    assert content[1] == {
+        "type": "image_url",
+        "image_url": {
+            "url": "data:image/png;base64,YWJj",
+            "detail": "high",
+        },
+    }
+    assert adapter.vision_wire_supported is True
 
 
 def test_native_anthropic_stream_normalizes_tool_and_cache_usage(monkeypatch):

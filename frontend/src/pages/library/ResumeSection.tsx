@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { FileText, RefreshCw, Star, Trash2, Upload } from 'lucide-react';
 import { Btn } from '@/components/ui/Btn';
@@ -11,6 +12,7 @@ import {
   deleteResume,
   listResumes,
   replaceResumeFromFile,
+  retryResumeParse,
   setDefaultResume,
   type PersonalResume,
 } from '@/api/resumes';
@@ -23,8 +25,8 @@ function statusMeta(status: string, hasText: boolean): {
   tone: 'success' | 'warn' | 'danger' | 'neutral';
 } {
   if (status === 'success' || status === 'completed' || status === 'ready') return { label: '可使用', tone: 'success' };
-  if (hasText) return { label: '可使用 · 索引中', tone: 'warn' };
   if (status === 'failed') return { label: '解析失败', tone: 'danger' };
+  if (hasText) return { label: '可使用 · 档案提取中', tone: 'warn' };
   if (status === 'pending' || status === 'processing') return { label: '解析中', tone: 'warn' };
   return { label: status, tone: 'neutral' };
 }
@@ -78,6 +80,19 @@ export function ResumeSection() {
       await refresh();
     } catch (error) {
       toast.error(extractErr(error, '设置失败'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const retryParse = async (resume: PersonalResume) => {
+    setBusy(true);
+    try {
+      await retryResumeParse(resume.id);
+      toast.success('已提交简历解析');
+      await refresh();
+    } catch (error) {
+      toast.error(extractErr(error, '解析提交失败'));
     } finally {
       setBusy(false);
     }
@@ -166,12 +181,25 @@ export function ResumeSection() {
                       <span className="truncate font-medium text-stone-800">{resume.title}</span>
                       {resume.is_default && <Pill tone="primary"><Star size={10} />默认</Pill>}
                       <Pill tone={status.tone}>{status.label}</Pill>
+                      {resume.pending_profile_draft_id && (
+                        <Link to="/career-profile">
+                          <Pill tone="warn">档案候选待确认</Pill>
+                        </Link>
+                      )}
                     </div>
                     <div className="mt-1 text-xs text-stone-400">
                       更新于 {resume.updated_at.slice(0, 19).replace('T', ' ')}
                     </div>
+                    {resume.parse_status === 'failed' && resume.parse_error && (
+                      <div className="mt-1 text-xs text-danger-600">{resume.parse_error}</div>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
+                    {(resume.parse_status === 'failed' || resume.parse_status === 'pending') && (
+                      <Btn kind="ghost" size="sm" disabled={busy} onClick={() => void retryParse(resume)}>
+                        {resume.parse_status === 'failed' ? '重新解析' : '开始解析'}
+                      </Btn>
+                    )}
                     {!resume.is_default && (
                       <Btn kind="ghost" size="sm" disabled={busy} onClick={() => void makeDefault(resume)}>
                         设为默认

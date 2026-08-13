@@ -9,15 +9,17 @@ from typing import TypeVar
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
-from app.agent_runtime.turn_tool_catalog import cloud_sustainable_read_tool_names
+from app.agent_runtime.turn_tool_catalog import (
+    cloud_sustainable_automation_tool_names,
+)
 from app.agent_runtime.tool_registry import registry
 from app.core.security import get_current_user
-from app.core.runtime_files import remove_session_results
 from app.db.database import get_db
 from app.models.user import User
 from app.schemas.persistent_task import (
     PersistentTaskCreate,
     PersistentTaskDelete,
+    PersistentTaskDeletionImpact,
     PersistentTaskEligibleToolView,
     PersistentTaskStateChange,
     PersistentTaskTriggerAdmissionView,
@@ -100,7 +102,7 @@ def post_persistent_task(
             db,
             user_pk=current_user.id,
             command=body,
-            cloud_sustainable_tool_names=cloud_sustainable_read_tool_names(),
+            cloud_sustainable_tool_names=cloud_sustainable_automation_tool_names(),
         ),
         commit=True,
     )
@@ -115,7 +117,7 @@ def get_persistent_task_eligible_tools(
 ):
     """Project the current real catalog; the frontend never owns this list."""
 
-    eligible_names = cloud_sustainable_read_tool_names()
+    eligible_names = cloud_sustainable_automation_tool_names()
     snapshot = registry.snapshot(user_id=current_user.username)
     return [
         PersistentTaskEligibleToolView(
@@ -175,7 +177,7 @@ def patch_persistent_task(
             user_pk=current_user.id,
             task_id=task_id,
             command=body,
-            cloud_sustainable_tool_names=cloud_sustainable_read_tool_names(),
+            cloud_sustainable_tool_names=cloud_sustainable_automation_tool_names(),
         ),
         commit=True,
     )
@@ -209,8 +211,42 @@ def delete_persistent_task(
                 ingestion_task_id,
                 exc_info=True,
             )
-    remove_session_results(result.conversation_id)
-    return {"status": "success", "id": result.task_id}
+    if result.cancelled_turn_id:
+        try:
+            from app.core.async_runtime import run_async
+            from app.services.chat.turn_event_buffer import turn_event_buffer
+
+            run_async(turn_event_buffer.request_cancel(result.cancelled_turn_id))
+        except Exception:  # noqa: BLE001 - DB dispatch fence is authoritative
+            logger.warning(
+                "Could not signal deleted PersistentTask Turn %s",
+                result.cancelled_turn_id,
+                exc_info=True,
+            )
+    return {
+        "status": "success",
+        "id": result.task_id,
+        "receipt_tombstones": result.receipt_tombstones,
+    }
+
+
+@router.get(
+    "/{task_id}/deletion-impact",
+    response_model=PersistentTaskDeletionImpact,
+)
+def get_persistent_task_deletion_impact(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return _run_domain(
+        db,
+        lambda: persistent_task_service.preview_persistent_task_deletion(
+            db,
+            user_pk=current_user.id,
+            task_id=task_id,
+        ),
+    )
 
 
 def _change_state(
@@ -289,7 +325,7 @@ def trigger_persistent_task(
             user_pk=current_user.id,
             task_id=task_id,
             command=body,
-            cloud_sustainable_tool_names=cloud_sustainable_read_tool_names(),
+            cloud_sustainable_tool_names=cloud_sustainable_automation_tool_names(),
         ),
         commit=True,
     )
@@ -318,4 +354,4 @@ def trigger_persistent_task(
     )
 
 
-__all__ = ["cloud_sustainable_read_tool_names", "router"]
+__all__ = ["cloud_sustainable_automation_tool_names", "router"]

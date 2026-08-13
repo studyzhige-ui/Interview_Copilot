@@ -5,8 +5,11 @@ import {
   createSkill,
   deleteSkill,
   listSkills,
+  listSkillResources,
+  replaceSkillResources,
   updateSkill,
   type UserSkill,
+  type SkillResource,
 } from '@/api/capabilities';
 import { extractErr } from '@/api/client';
 import { Btn } from '@/components/ui/Btn';
@@ -23,6 +26,11 @@ export function SkillsPanel() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [deleting, setDeleting] = useState<UserSkill | null>(null);
   const query = useQuery({ queryKey: ['capabilities', 'skills'], queryFn: listSkills });
+  const resourcesQuery = useQuery({
+    queryKey: ['capabilities', 'skills', editing?.id, 'resources'],
+    queryFn: () => listSkillResources(editing!.id),
+    enabled: editorOpen && editing !== null,
+  });
   useToastOnError(query.error, 'Skill 加载失败');
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['capabilities', 'skills'] });
@@ -41,6 +49,18 @@ export function SkillsPanel() {
     mutationFn: (skill: UserSkill) => updateSkill(skill.id, { enabled: !skill.enabled }),
     onSuccess: refresh,
     onError: (error) => toast.error(extractErr(error, 'Skill 状态更新失败')),
+  });
+  const saveResources = useMutation({
+    mutationFn: (resources: SkillResource[]) => {
+      if (!editing) throw new Error('请先保存主 Skill');
+      return replaceSkillResources(editing.id, resources);
+    },
+    onSuccess: () => {
+      refresh();
+      void resourcesQuery.refetch();
+      toast.success('Skill 附属资源已保存');
+    },
+    onError: (error) => toast.error(extractErr(error, 'Skill 资源保存失败')),
   });
   const remove = useMutation({
     mutationFn: (id: number) => deleteSkill(id),
@@ -92,15 +112,22 @@ export function SkillsPanel() {
         </div>
       )}
 
-      {editorOpen && (
+      {editorOpen && (editing === null || resourcesQuery.isSuccess) && (
         <SkillEditorModal
           key={editing?.id ?? 'new'}
           open
           skill={editing}
           saving={save.isPending}
+          resources={resourcesQuery.data ?? []}
+          resourcesLoading={resourcesQuery.isLoading}
+          resourcesSaving={saveResources.isPending}
           onClose={() => setEditorOpen(false)}
           onSave={(content) => save.mutate(content)}
+          onSaveResources={(resources) => saveResources.mutate(resources)}
         />
+      )}
+      {editorOpen && editing !== null && resourcesQuery.isLoading && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-stone-950/20"><Spinner /></div>
       )}
       <ConfirmDialog
         open={deleting !== null}

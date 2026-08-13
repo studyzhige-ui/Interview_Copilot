@@ -697,7 +697,7 @@ def test_tool_call_id_propagates_from_strategy_to_sse_events(monkeypatch):
         fake_dispatch,
     )
     monkeypatch.setattr(
-        "app.conversation.agent_strategy.maybe_persist_result",
+        "app.conversation.agent_strategy.project_oversized_result",
         lambda content, **k: content,
     )
     monkeypatch.setattr(
@@ -792,10 +792,10 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
         fake_dispatch,
     )
 
-    # maybe_persist_result / enforce_turn_budget are imported into
+    # project_oversized_result / enforce_turn_budget are imported into
     # the strategy module — patch at the use site.
     monkeypatch.setattr(
-        "app.conversation.agent_strategy.maybe_persist_result",
+        "app.conversation.agent_strategy.project_oversized_result",
         lambda content, **k: content,
     )
     monkeypatch.setattr(
@@ -881,8 +881,8 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
     )
 
 
-def test_concurrency_safe_tools_execute_in_parallel_and_replay_in_order(monkeypatch):
-    """Independent reads overlap, but their messages/events remain deterministic."""
+def test_concurrency_safe_tools_complete_live_and_replay_in_model_order(monkeypatch):
+    """Independent reads overlap; SSE is live while replay stays model-ordered."""
     from app.agent_runtime.react_agent import AgentRunState
     from app.conversation.agent_strategy import AgentLoopStrategy, _ToolCallAccumulator
     from app.conversation.strategy import StrategyContext
@@ -914,11 +914,13 @@ def test_concurrency_safe_tools_execute_in_parallel_and_replay_in_order(monkeypa
             if len(started) == 2:
                 both_started.set()
             await asyncio.wait_for(both_started.wait(), timeout=0.5)
+            if name == "read_a":
+                await asyncio.sleep(0.02)
             active -= 1
             return {"tool": name}
 
     monkeypatch.setattr(
-        "app.conversation.agent_strategy.maybe_persist_result",
+        "app.conversation.agent_strategy.project_oversized_result",
         lambda content, **_kwargs: content,
     )
     monkeypatch.setattr(
@@ -964,7 +966,144 @@ def test_concurrency_safe_tools_execute_in_parallel_and_replay_in_order(monkeypa
         for event in events
         if event.type.value == "tool_done"
     ]
-    assert done_ids == ["c1", "c2"]
+    assert done_ids == ["c2", "c1"]
+
+
+def test_batch_preflight_ask_starts_no_handler_in_batch_or_later(monkeypatch):
+    from app.agent_runtime.react_agent import AgentRunState
+    from app.agent_runtime.tool_policy import ToolEffect
+    from app.agent_runtime.tool_registry import ToolDispatchPlan
+    from app.conversation.agent_strategy import AgentLoopStrategy, _ToolCallAccumulator
+    from app.conversation.strategy import StrategyContext
+
+    dispatched: list[str] = []
+
+    class _Catalog:
+        user_pk = 1
+
+        def __contains__(self, _name):
+            return True
+
+        async def plan_call(self, name, arguments, _ctx):
+            return ToolDispatchPlan(
+                tool_name=name,
+                arguments=arguments,
+                effect=ToolEffect.READ,
+                handler_exists=True,
+                concurrency_safe=True,
+                connection_ready=name != "needs_connection",
+            )
+
+        def policy_traits(self, *_args):
+            return False, False
+
+        async def dispatch(self, name, _args, _ctx):
+            dispatched.append(name)
+            return {"tool": name}
+
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.project_oversized_result",
+        lambda content, **_kwargs: content,
+    )
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.enforce_turn_budget",
+        lambda *_args, **_kwargs: None,
+    )
+    ctx = StrategyContext(user_id="alice", session_id="s1", user_message="run")
+    events = []
+
+    async def drain():
+        async for event in AgentLoopStrategy()._execute_tools(
+            ctx=ctx,
+            messages=[],
+            blocks=[],
+            tool_calls_acc=[
+                _ToolCallAccumulator(id="c1", name="ready_sibling", arguments="{}"),
+                _ToolCallAccumulator(id="c2", name="needs_connection", arguments="{}"),
+                _ToolCallAccumulator(id="c3", name="later", arguments="{}"),
+            ],
+            assistant_content="",
+            reasoning_content="",
+            budget=AgentRunState(started_at=0.0),
+            tool_catalog=_Catalog(),
+        ):
+            events.append(event)
+
+    asyncio.run(drain())
+
+    assert dispatched == []
+    assert ctx.extras["interaction_required"]["tool_call_id"] == "c2"
+    assert [
+        event.data["tool_call_id"]
+        for event in events
+        if event.type.value == "tool_start"
+    ] == ["c2"]
+
+
+def test_same_resource_reads_are_split_into_serial_batches(monkeypatch):
+    from app.agent_runtime.react_agent import AgentRunState
+    from app.agent_runtime.tool_policy import ToolEffect
+    from app.agent_runtime.tool_registry import ToolDispatchPlan
+    from app.conversation.agent_strategy import AgentLoopStrategy, _ToolCallAccumulator
+    from app.conversation.strategy import StrategyContext
+
+    active = 0
+    max_active = 0
+
+    class _Catalog:
+        user_pk = 1
+
+        def __contains__(self, _name):
+            return True
+
+        async def plan_call(self, name, arguments, _ctx):
+            return ToolDispatchPlan(
+                tool_name=name,
+                arguments=arguments,
+                effect=ToolEffect.READ,
+                handler_exists=True,
+                concurrency_safe=True,
+                resource_identities=frozenset({"account:one"}),
+            )
+
+        def policy_traits(self, *_args):
+            return False, False
+
+        async def dispatch(self, name, _args, _ctx):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return {"tool": name}
+
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.project_oversized_result",
+        lambda content, **_kwargs: content,
+    )
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.enforce_turn_budget",
+        lambda *_args, **_kwargs: None,
+    )
+
+    async def drain():
+        async for _ in AgentLoopStrategy()._execute_tools(
+            ctx=StrategyContext(user_id="alice", session_id="s1", user_message="read"),
+            messages=[],
+            blocks=[],
+            tool_calls_acc=[
+                _ToolCallAccumulator(id="c1", name="read_a", arguments="{}"),
+                _ToolCallAccumulator(id="c2", name="read_b", arguments="{}"),
+            ],
+            assistant_content="",
+            reasoning_content="",
+            budget=AgentRunState(started_at=0.0),
+            tool_catalog=_Catalog(),
+        ):
+            pass
+
+    asyncio.run(drain())
+    assert max_active == 1
 
 
 def test_context_exhaustion_synthesizes_final_answer():
@@ -1036,7 +1175,7 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
             return messages, False
 
     monkeypatch.setattr(
-        "app.conversation.agent_strategy.QueryLoopCompactor",
+        "app.conversation.agent_strategy.ActiveTurnContextReducer",
         _StubCompactor,
     )
 
@@ -1111,7 +1250,7 @@ def test_strategy_crash_yields_humanized_error_event(monkeypatch):
             return messages, False
 
     monkeypatch.setattr(
-        "app.conversation.agent_strategy.QueryLoopCompactor",
+        "app.conversation.agent_strategy.ActiveTurnContextReducer",
         _StubCompactor,
     )
     _stub_empty_tool_catalog(monkeypatch)
@@ -1171,7 +1310,7 @@ class TestToolMetrics:
             fake_dispatch,
         )
         monkeypatch.setattr(
-            "app.conversation.agent_strategy.maybe_persist_result",
+            "app.conversation.agent_strategy.project_oversized_result",
             lambda content, **k: content,
         )
         monkeypatch.setattr(

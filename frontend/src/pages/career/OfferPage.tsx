@@ -53,6 +53,14 @@ function latestExcerpt(current: OfferCurrent | null): Record<string, unknown> {
   }) ?? excerpts.at(-1) ?? {};
 }
 
+function localDateTimeInput(value: unknown): string {
+  if (!value) return '';
+  const parsed = new Date(String(value));
+  if (Number.isNaN(parsed.getTime())) return '';
+  const local = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
 function offerForm(current: OfferCurrent | null): OfferForm {
   const terms = current?.offer.terms_json ?? {};
   const excerpt = latestExcerpt(current);
@@ -62,7 +70,7 @@ function offerForm(current: OfferCurrent | null): OfferForm {
     currency: String(terms.currency ?? ''), pay_period: String(terms.pay_period ?? ''), tax_basis: String(terms.tax_basis ?? ''),
     bonus_text: String(terms.bonus_text ?? ''), equity_text: String(terms.equity_text ?? ''),
     benefits: Array.isArray(terms.benefits) ? terms.benefits.join('，') : '', probation_text: String(terms.probation_text ?? ''),
-    start_date: String(terms.start_date ?? ''), response_deadline: String(terms.response_deadline ?? '').slice(0, 16),
+    start_date: String(terms.start_date ?? ''), response_deadline: localDateTimeInput(terms.response_deadline),
     formality: String(excerpt.formality ?? 'written'), original_text: String(excerpt.original_text ?? ''),
   };
 }
@@ -83,6 +91,10 @@ function termsFromForm(form: OfferForm): OfferTermsInput {
     benefits: form.benefits.trim() ? csv(form.benefits) : undefined,
     probation_text: optional(form.probation_text), start_date: optional(form.start_date),
     response_deadline: form.response_deadline ? new Date(form.response_deadline).toISOString() : undefined,
+    response_deadline_text: form.response_deadline || undefined,
+    response_deadline_timezone: form.response_deadline
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+      : undefined,
     formality: form.formality as OfferTermsInput['formality'], original_text: form.original_text.trim(),
   };
 }
@@ -139,7 +151,8 @@ const termLabels: Record<string, string> = {
   position_title: '职位', location: '地点', employment_type: '雇佣类型',
   base_salary_amount: '基本薪资', currency: '币种', pay_period: '薪资周期', tax_basis: '税制口径',
   bonus_text: '奖金', equity_text: '股权', benefits: '福利', probation_text: '试用期',
-  start_date: '入职日期', response_deadline: '回复截止', additional_terms: '其他条款',
+  start_date: '入职日期', response_deadline: '回复截止', response_deadline_text: '回复截止原始时间',
+  response_deadline_timezone: '回复截止来源时区', additional_terms: '其他条款',
 };
 
 export function OfferPage() {

@@ -91,6 +91,25 @@ class GroundingBuilder:
             "intent_ids": list(chunk.get("intent_ids", [])),
             "text_preview": rendered_text[:200],
         }
+        # Owner-specific provenance remains optional on ordinary document
+        # chunks. Shared URL/History/Observation/Artifact/Domain reads populate
+        # these fields so the persisted source card freezes the exact identity,
+        # owner version and observation time without introducing a Source table.
+        for key in (
+            "source_identity",
+            "source_version",
+            "source_url",
+            "original_url",
+            "observed_at",
+            "provider",
+            "content_sha256",
+            "artifact_id",
+            "artifact_version_id",
+            "conversation_id",
+            "projection_truncated",
+        ):
+            if chunk.get(key) is not None:
+                source[key] = chunk[key]
         if truncated:
             source["truncated"] = True
         return source

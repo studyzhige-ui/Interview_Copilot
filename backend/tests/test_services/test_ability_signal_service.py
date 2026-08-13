@@ -22,6 +22,8 @@ from app.services.ability_signal_service import (
     create_ability_signal,
     dispute_ability_signal,
     invalidate_ability_signal,
+    invalidate_ability_signals_for_interview_reanalysis,
+    project_interview_ability_signals,
 )
 from app.services.career_profile_service import ensure_career_profile
 
@@ -207,3 +209,73 @@ def test_unknown_source_kind_and_missing_uncertainty_are_rejected():
                 )
             ],
         )
+
+
+def test_interview_analysis_projects_recomputes_and_invalidates_signals(db_session):
+    import json
+
+    user = _user(db_session)
+    record, qa = _interview_sources(db_session, user)
+    record.analysis_json = json.dumps(
+        {
+            "schema_version": 3,
+            "skill_radar": {"technical_depth": 7.5, "communication": 8.0},
+        }
+    )
+    record.analysis_schema_version = 3
+    db_session.add(record)
+    db_session.flush()
+
+    first = project_interview_ability_signals(
+        db_session,
+        user_pk=user.id,
+        interview_record_id=record.id,
+    )
+    replay = project_interview_ability_signals(
+        db_session,
+        user_pk=user.id,
+        interview_record_id=record.id,
+    )
+    assert {signal.id for signal in replay} == {signal.id for signal in first}
+    assert {signal.topic for signal in first} == {
+        "technical_depth",
+        "communication",
+    }
+    assert all(signal.scope_ref_id == record.id for signal in first)
+    assert all(len(signal.sources) == 2 for signal in first)
+
+    record.analysis_json = json.dumps(
+        {"schema_version": 3, "skill_radar": {"technical_depth": 8.5}}
+    )
+    db_session.add(record)
+    db_session.flush()
+    recomputed = project_interview_ability_signals(
+        db_session,
+        user_pk=user.id,
+        interview_record_id=record.id,
+        force_new_generation=True,
+    )
+    assert len(recomputed) == 1
+    assert recomputed[0].score == 8.5
+    assert recomputed[0].supersedes_signal_id is not None
+    live = (
+        db_session.query(AbilitySignal)
+        .filter(AbilitySignal.user_id == user.id, AbilitySignal.status == "active")
+        .all()
+    )
+    assert [row.topic for row in live] == ["technical_depth"]
+
+    assert (
+        invalidate_ability_signals_for_interview_reanalysis(
+            db_session,
+            user_pk=user.id,
+            interview_record_id=record.id,
+        )
+        == 1
+    )
+    assert (
+        db_session.query(AbilitySignal)
+        .filter(AbilitySignal.user_id == user.id, AbilitySignal.status == "active")
+        .count()
+        == 0
+    )

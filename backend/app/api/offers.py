@@ -14,11 +14,13 @@ from app.models.artifact import Artifact, ArtifactVersion
 from app.models.chat import Conversation, ConversationMessage
 from app.models.file_asset import FileAsset
 from app.models.job_opportunity import JobOpportunity
+from app.models.offer import Offer
 from app.models.user import User
 from app.schemas.offer import (
     OfferConfirmationRequiredView,
     OfferConfirmTermsRequest,
     OfferCurrentResponse,
+    OfferListItem,
     OfferRecordRequest,
     OfferView,
 )
@@ -165,6 +167,32 @@ def _raise_offer_http(exc: offer_service.OfferDomainError) -> None:
     ):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/offers/current", response_model=list[OfferListItem])
+def list_current_offers(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(Offer, JobOpportunity)
+        .join(JobOpportunity, JobOpportunity.id == Offer.job_opportunity_id)
+        .filter(
+            Offer.user_id == current_user.id,
+            JobOpportunity.user_id == current_user.id,
+        )
+        .order_by(Offer.updated_at.desc(), Offer.id.asc())
+        .all()
+    )
+    return [
+        OfferListItem(
+            offer=OfferView.model_validate(offer),
+            current_token=offer_service.current_offer_token(offer),
+            company_name=job.company_name,
+            job_title=job.job_title,
+        )
+        for offer, job in rows
+    ]
 
 
 @router.get("/{job_opportunity_id}/offer", response_model=OfferCurrentResponse)

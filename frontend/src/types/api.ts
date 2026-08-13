@@ -5,6 +5,8 @@
 //   backend/app/api/model_runtime.py
 // Do NOT introduce fields the backend does not return.
 
+import type { Artifact } from './career';
+
 // status values written by backend (lower-case in v2 schema)
 type InterviewRecordStatus =
   | 'pending'
@@ -80,6 +82,8 @@ export interface InterviewRecordDetail extends InterviewRecordListItem {
   category: string | null;
   audio_file_asset_id: string | null;
   resume_id: string | null;
+  resume_artifact_id?: string | null;
+  resume_artifact_version_id?: string | null;
   resume_file_asset_id: string | null;
   resume_source: string | null;
   jd_file_asset_id: string | null;
@@ -183,6 +187,54 @@ export interface AttachmentSource {
   title: string;
   error_message: string | null;
   can_retry: boolean;
+  parse_quality: {
+    parser_id: string | null;
+    quality_score: number | null;
+    ocr_used: boolean;
+    warnings: string[];
+  };
+  coverage: {
+    chunk_count: number;
+    parsed_char_count: number;
+    page_count: number | null;
+    page_start: number | null;
+    page_end: number | null;
+    full_text_projection_available: boolean;
+    visual_layout_reviewed: boolean;
+  };
+}
+
+export interface ConversationDeletionImpact {
+  conversation_id: string;
+  conversation_type: string;
+  title: string;
+  active_turn_id: string | null;
+  active_turn_status: string | null;
+  pending_submission_count: number;
+  message_count: number;
+  local_attachment_count: number;
+  unpromoted_file_count: number;
+  preserved_debrief_source_count: number;
+  unresolved_external_call_count: number;
+  completed_external_action_count: number;
+  confirmation_token: string;
+  disclosures: string[];
+}
+
+export interface FileAssetDeletionImpact {
+  file_asset_id: string;
+  filename: string;
+  purpose: string;
+  size_bytes: number | null;
+  reference_impacts: Array<{
+    reference_type: string;
+    active_count: number;
+    tombstone_count: number;
+    effect: string;
+  }>;
+  known_external_transmission_count: number;
+  confirmation_token: string;
+  disclosures: string[];
 }
 
 export interface AttachmentRetryResp {
@@ -198,6 +250,14 @@ export interface ConversationAttachmentRemovalResp {
 
 export interface DebriefSourcePromotionResp {
   source: AttachmentSource;
+}
+
+export interface AttachmentArtifactPromotionResp {
+  source_id: string;
+  file_asset_id: string;
+  file_asset_version: string;
+  artifact: Artifact;
+  resume_parse_dispatched: boolean;
 }
 
 export type AgentInteractionKind =

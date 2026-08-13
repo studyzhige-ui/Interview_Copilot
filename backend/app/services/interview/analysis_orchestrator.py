@@ -511,12 +511,30 @@ class InterviewAnalysisOrchestrator:
                 .first()
             )
             if rec is not None:
-                rec.analysis_json = json.dumps(top_level, ensure_ascii=False)
+                serialized_analysis = json.dumps(
+                    top_level, ensure_ascii=False, sort_keys=True
+                )
+                if rec.analysis_json != serialized_analysis:
+                    rec.ability_signal_generation = (
+                        int(rec.ability_signal_generation) + 1
+                    )
+                rec.analysis_json = serialized_analysis
                 rec.analysis_schema_version = 3
                 rec.analyzed_qa_count = len(per_question)
                 generated_tag = str(report.get("tag") or "").strip()
                 if not (rec.tag or "").strip() and generated_tag:
                     rec.tag = generated_tag[:8]
+                db.add(rec)
+                db.flush()
+                from app.services.ability_signal_service import (
+                    project_interview_ability_signals,
+                )
+
+                project_interview_ability_signals(
+                    db,
+                    user_pk=rec.user_id,
+                    interview_record_id=rec.id,
+                )
             db.commit()
         except Exception:
             db.rollback()

@@ -5,12 +5,17 @@ import type {
   OfferCurrent,
   OfferSourceInput,
   OfferTermsInput,
+  OfferListItem,
 } from '@/types/career';
 
 export class OfferConfirmationError extends Error {
   constructor(public readonly confirmation: OfferConfirmationRequired) {
     super('Offer 条款变化需要用户确认');
   }
+}
+
+export async function listCurrentOffers(): Promise<OfferListItem[]> {
+  return (await apiClient.get('/career-process/opportunities/offers/current')).data;
 }
 
 export async function getCurrentOffer(opportunityId: string): Promise<OfferCurrent | null> {

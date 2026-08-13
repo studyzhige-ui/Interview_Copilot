@@ -129,13 +129,21 @@ class Settings(BaseSettings):
     ANTHROPIC_PROMPT_CACHE_TTL: str = "5m"
     TURN_HEARTBEAT_SECONDS: int = 10
     TURN_STALE_SECONDS: int = 60
-    # Stage A — tool-result offload thresholds.
-    AGENT_PERSIST_THRESHOLD: int = 50_000  # per-result: offload if > 50K chars
+    # Delay before the single automatic Memory producer rechecks that a
+    # completed source Turn's Conversation is idle. Contribution remains
+    # opt-in and the task is a no-op when controls or source state changed.
+    AGENT_MEMORY_IDLE_SECONDS: int = 600
+    # Release gate: turn on only after the versioned Stage 5 owner/privacy/
+    # deletion/relevance evaluation passes. User controls cannot bypass it.
+    AGENT_MEMORY_PRODUCER_ENABLED: bool = False
+    # Model-visible Tool-result projection thresholds. The canonical redacted
+    # result remains on AgentToolCall and is paged by exact call identity.
+    AGENT_RESULT_INLINE_THRESHOLD: int = 50_000
     AGENT_TURN_BUDGET_CHARS: int = (
-        200_000  # per-turn aggregate: spill largest until < 200K
+        200_000  # per-turn aggregate: project largest until < 200K
     )
-    AGENT_PERSIST_PREVIEW_SIZE: int = (
-        2_000  # preview size (chars) in persisted-output block
+    AGENT_RESULT_PREVIEW_SIZE: int = (
+        2_000  # preview size (chars) in canonical Tool-result reference
     )
     # User-managed MCP servers. stdio is disabled by default because it executes
     # a user-supplied command in the API process; private HTTP targets are opt-in
@@ -175,7 +183,6 @@ class Settings(BaseSettings):
     # with do_ocr=False so text PDFs still parse instead of failing on a missing
     # engine. Set False to disable OCR globally even where the engine is present.
     RAG_OCR_ENABLED: bool = True
-    RESUME_MILVUS_COLLECTION: str = "interview_copilot_resume"
     TTS_DEFAULT_VOICE: str = "zh-CN-YunxiNeural"
     LEVER_API_BASE: str = "https://api.lever.co/v0"
     LEVER_SITES: str = "openai"
@@ -237,6 +244,12 @@ class Settings(BaseSettings):
     GMAIL_GOOGLE_OAUTH_CLIENT_SECRET: SecretStr = SecretStr("")
     GMAIL_GOOGLE_OAUTH_REDIRECT_URI: str = ""
     GMAIL_OAUTH_PRODUCT_RETURN_URI: str = ""
+    # Gmail tokens never enter the application database. Community/local
+    # deployments must explicitly configure this independent encrypted file
+    # broker and recovery key. Cloud ignores the file setting and requires an
+    # externally injected GmailCredentialStore implementation.
+    GMAIL_CREDENTIAL_STORE_FILE: str = ""
+    GMAIL_CREDENTIAL_STORE_KEY: SecretStr = SecretStr("")
     GMAIL_OAUTH_STATE_TTL_SECONDS: int = 600
     GMAIL_PROVIDER_TIMEOUT_SECONDS: float = 15.0
 

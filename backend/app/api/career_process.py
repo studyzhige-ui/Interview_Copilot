@@ -23,14 +23,28 @@ from app.schemas.job_opportunity import (
     JobOpportunityView,
     NextActionClose,
     NextActionCreate,
+    NextActionEdit,
     NextActionStatus,
     NextActionTransition,
     NextActionView,
     OpportunityCreate,
     OpportunityDirectionsReplace,
+    OpportunityMergeCandidateView,
+    OpportunityMergeCreate,
+    OpportunityMergeRetract,
+    OpportunityMergeView,
     ProcessEventAppend,
     ProcessEventCorrection,
     ProcessEventView,
+)
+from app.schemas.job_description_snapshot import (
+    JobDescriptionSnapshotFromProductUI,
+    JobDescriptionSnapshotView,
+)
+from app.services.job_description_snapshot_service import (
+    JobDescriptionSnapshotError,
+    create_job_description_snapshot,
+    list_job_description_snapshots,
 )
 from app.services.career_process_service import (
     CareerIdempotencyConflictError,
@@ -39,6 +53,7 @@ from app.services.career_process_service import (
     NextActionTransitionError,
     OpportunityArchivedError,
     OpportunityDirectionConflictError,
+    OpportunityMergeConflictError,
     ProcessEventConflictError,
     append_confirmed_process_event,
     close_next_action,
@@ -46,11 +61,16 @@ from app.services.career_process_service import (
     correct_process_event,
     create_job_opportunity,
     create_next_action,
+    edit_next_action,
     list_job_opportunities,
+    list_opportunity_merges,
     list_next_actions,
     list_process_events,
     plan_next_action,
+    merge_job_opportunities,
+    retract_job_opportunity_merge,
     replace_job_opportunity_directions,
+    suggest_opportunity_merge_candidates,
 )
 
 
@@ -69,6 +89,7 @@ def _domain_http_error(exc: CareerProcessError) -> HTTPException:
             NextActionTransitionError,
             OpportunityArchivedError,
             OpportunityDirectionConflictError,
+            OpportunityMergeConflictError,
             ProcessEventConflictError,
         ),
     ):
@@ -184,6 +205,121 @@ def post_opportunity(
         status.HTTP_201_CREATED if admission.created else status.HTTP_200_OK
     )
     return admission.opportunity
+
+
+@router.get(
+    "/opportunity-merge-candidates",
+    response_model=list[OpportunityMergeCandidateView],
+)
+def get_opportunity_merge_candidates(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return suggest_opportunity_merge_candidates(db, user_pk=current_user.id)
+
+
+@router.get("/opportunity-merges", response_model=list[OpportunityMergeView])
+def get_opportunity_merges(
+    include_retracted: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return list_opportunity_merges(
+        db,
+        user_pk=current_user.id,
+        include_retracted=include_retracted,
+    )
+
+
+@router.get(
+    "/opportunities/{opportunity_id}/jd-snapshots",
+    response_model=list[JobDescriptionSnapshotView],
+)
+def read_job_description_snapshots(
+    opportunity_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[JobDescriptionSnapshotView]:
+    try:
+        rows = list_job_description_snapshots(
+            db,
+            user_pk=current_user.id,
+            opportunity_id=opportunity_id,
+        )
+    except JobDescriptionSnapshotError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return [JobDescriptionSnapshotView.model_validate(row) for row in rows]
+
+
+@router.post(
+    "/opportunities/{opportunity_id}/jd-snapshots",
+    response_model=JobDescriptionSnapshotView,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_product_ui_job_description_snapshot(
+    opportunity_id: str,
+    command: JobDescriptionSnapshotFromProductUI,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> JobDescriptionSnapshotView:
+    """Persist an explicit typed product-UI JD submission."""
+
+    try:
+        row = create_job_description_snapshot(
+            db,
+            user_pk=current_user.id,
+            opportunity_id=opportunity_id,
+            command=command,
+        )
+        db.commit()
+        db.refresh(row)
+    except JobDescriptionSnapshotError as exc:
+        db.rollback()
+        error_name = type(exc).__name__
+        status_code = 404 if error_name.endswith("NotFound") else 422
+        if error_name.endswith("IdempotencyConflict"):
+            status_code = 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return JobDescriptionSnapshotView.model_validate(row)
+
+
+@router.post(
+    "/opportunity-merges",
+    response_model=OpportunityMergeView,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_opportunity_merge(
+    payload: OpportunityMergeCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return _run_domain(
+        db,
+        lambda: merge_job_opportunities(db, user_pk=current_user.id, command=payload),
+        commit=True,
+    )
+
+
+@router.post(
+    "/opportunity-merges/{merge_id}/retract",
+    response_model=OpportunityMergeView,
+)
+def post_opportunity_merge_retraction(
+    merge_id: str,
+    payload: OpportunityMergeRetract,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return _run_domain(
+        db,
+        lambda: retract_job_opportunity_merge(
+            db,
+            user_pk=current_user.id,
+            merge_id=merge_id,
+            command=payload,
+        ),
+        commit=True,
+    )
 
 
 @router.patch(
@@ -309,6 +445,25 @@ def post_next_action(
         lambda: create_next_action(
             db,
             user_pk=current_user.id,
+            command=payload,
+        ),
+        commit=True,
+    )
+
+
+@router.put("/next-actions/{action_id}", response_model=NextActionView)
+def put_next_action(
+    action_id: str,
+    payload: NextActionEdit,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return _run_domain(
+        db,
+        lambda: edit_next_action(
+            db,
+            user_pk=current_user.id,
+            action_id=action_id,
             command=payload,
         ),
         commit=True,

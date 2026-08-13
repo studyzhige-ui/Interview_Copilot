@@ -16,12 +16,29 @@ redirects with a non-secret outcome. Rebind, refresh failure, scope loss,
 revoke and account mismatch update the same provider-specific row. API views
 never return the handle.
 
+The broker is a Gmail-specific port, not a generic product entity. Community
+may use only the explicitly configured encrypted-file implementation: it uses
+an independent recovery key, an absolute path outside the application DB,
+inter-process locking, atomic replacement and owner-only file permissions. A
+test-only in-memory fake is injected explicitly. Cloud must inject managed
+external secret infrastructure; without it the connector and its Tools are
+unavailable. Grant generations fence refresh/revoke writes, and a reconnect
+rotates the handle so an old in-flight refresh cannot overwrite the new grant.
+
 The Gmail adapter resolves a live credential from the broker for each call,
 fences it to the user/provider subject, applies bounded query/result limits and
 maps revoked/expired authorization to `connection_required`. Email bodies and
 snippets are untrusted external data. The concrete read Tool is registered only
 when the real adapter/broker configuration exists; an honest disabled state is
 not counted as a connector.
+
+The first continuous Observation source is exactly Gmail History
+`message_added`; no Outlook/Calendar/generic event bus is implied. Each account
+has a cursor updated by CAS. Provider message identity is deduplicated and each
+Observation version keeps a bounded immutable source snapshot; a message that
+disappears becomes a `content_available=false` tombstone so a bad item cannot
+stall the cursor forever. Raw mail remains untrusted data and is never an
+instruction.
 
 ## 2. Transport and secret safety
 
@@ -61,32 +78,55 @@ cursor. Trigger ingress is durable and separate from user
 
 Manual and scheduled triggers have stable idempotency identities. Schedule is
 strict five-field cron plus IANA timezone with a minimum interval; next
-occurrence is DST-aware. Unsupported event triggers fail validation rather
-than pretending to run. A bounded maintenance scan repairs due cursors and
-unadmitted retained triggers.
+occurrence is DST-aware. The only event definition accepted in this release is
+the provider-specific Gmail `message_added` trigger with
+`gmail:job_observations` read scope and the two concrete Observation Tools;
+every other event definition fails validation rather than pretending to run. A
+bounded maintenance scan repairs due cursors and unadmitted retained triggers.
 
 Admission shares the Conversation lock. Retained user input has priority over
-an automation trigger. At claim time the runner reloads the current task
-definition/version and exact allowed Tool set. Unattended execution excludes
-Skills/MCP discovery and any non-read/unknown Tool. Waiting retains the same
-Turn and is handled in the dedicated Conversation. Terminal settlement
-re-evaluates queued user input and retained triggers through the same admission
-seam.
+an automation trigger. A provider batch first retains all matching trigger
+identities and then makes one admission attempt per task so occurrences merge
+into one Turn. At claim time the runner reloads the current task
+definition/version, exact allowed Tool set and any explicitly selected,
+version-pinned Skill references. Unattended execution disables arbitrary
+Skill/MCP discovery. Its catalog contains cloud-sustainable reads plus only the
+Stage-approved `review_gmail_observation` internal write; that command remains
+bound to the exact task/Turn Observation identities, action scope and Policy.
+Unknown or other mutable Tools stay unavailable. Waiting retains the same Turn
+and is handled in the dedicated Conversation. Terminal settlement re-evaluates
+queued user input and retained triggers through the same admission seam.
+
+Observation analysis never writes ambiguous content directly into career
+state. It creates a task-local confirmation card that can be approved,
+rejected, skipped or corrected by version CAS. Automatic application requires
+the exact task action scope, a unique live opportunity, a non-archived and
+non-late fact, a reversible append operation and the Stage threshold (currently
+at least `0.95`). Creating a new JobOpportunity and a repeated
+`application_submitted` fact always require confirmation because their
+admission fact cannot be safely undone. Every automatic application remains
+visible and has an append-only retraction/correction ProcessEvent.
 
 Pause blocks future triggers but does not falsify a running result. Stop-this-
-run, pause-future and delete-task are distinct. Delete uses version CAS, fences
-pending/waiting automation Turns, cleans the dedicated Conversation and future
-triggers, and preserves domain state/Artifacts already promoted. A genuinely
-running external action cannot be blindly deleted; it first requires terminal
-receipt/reconciliation.
+run, pause-future and delete-task are distinct. Delete uses task version CAS
+plus an aggregate impact preview/strong confirmation, fences future triggers
+and delegates the Dedicated Conversation to the shared safe-deletion command.
+That command closes pending/running/waiting model and dispatch gates, removes
+queued user ingress and drafts, and preserves domain state/Artifacts already
+promoted. A genuinely running external action is never reported as cancelled
+or rolled back: deletion retains only its bounded redacted receipt correlation
+as `unknown` for later reconciliation, then owner-specific maintenance removes
+the tombstone after terminal settlement or expiry.
 
 ## 5. Product surface
 
 Users can list/create/read/edit/pause/resume/delete PersistentTasks, manually
 trigger them, inspect trigger/Turn admission history and open the dedicated
 Conversation to resolve an Interaction. The UI uses only concrete currently
-registered eligible Tools and server versions; it does not create an
-Automation Workspace or local trigger store.
+registered eligible Tools, version-pinned eligible Skills and server versions;
+it does not create an Automation Workspace or local trigger store. Gmail event
+tasks display their source connection and task-local Observation cards rather
+than polluting the ordinary Copilot workspace.
 
 Integration settings expose Gmail connect/status/test/revoke with masked
 identity and granted scopes. The connect button is enabled only when the real
@@ -103,9 +143,17 @@ raw exception text.
 - Standard/Auto defaults, Conversation override, Turn snapshot and exact-call
   approval precedence pass API/UI/runtime tests;
 - scheduler handles DST, minimum interval, idempotent duplicate tick and repair;
+- Gmail cursor CAS, message dedupe/deletion tombstone, bounded batch merge and
+  reconnect/rebaseline failure paths preserve source identity;
+- ambiguous/late/archived/non-unique observations never auto-write; every
+  allowed automatic ProcessEvent is scoped, reversible and visibly retractable;
 - user PendingSubmission wins admission over retained automation;
-- unattended catalog contains only exact current read Tools;
+- unattended catalog contains only exact current cloud-sustainable Tools and
+  explicitly pinned Skill revisions; arbitrary Skill/MCP discovery is absent;
 - trigger history, waiting/resume, pause, stop and delete rebuild across
   process/Redis/browser restart;
+- task deletion requires a fresh aggregate impact token and proves scheduler
+  fence, queue/draft cleanup, Dedicated Conversation teardown and bounded
+  unknown-receipt retention;
 - external/late outcomes keep call/trigger identity and never report fabricated
   success.

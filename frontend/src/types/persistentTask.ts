@@ -2,7 +2,7 @@ export type PersistentTaskState = 'active' | 'paused';
 
 export type PersistentTaskTriggerSpec =
   | { kind: 'scheduled'; schedule: string; timezone: string }
-  | { kind: 'event'; connector: string; event_types: string[] };
+  | { kind: 'event'; connector: 'gmail'; event_types: ['message_added'] };
 
 export interface PersistentTask {
   id: string;
@@ -17,6 +17,13 @@ export interface PersistentTask {
   read_scope_json: string[];
   action_scope_json: string[];
   allowed_tool_names_json: string[];
+  skill_refs_json: Array<{
+    id: number;
+    name: string;
+    source: string;
+    revision: number;
+    content_hash: string;
+  }>;
   user_request_identity: string;
   user_request_version: string | null;
   compensation_blocked_at: string | null;
@@ -32,6 +39,7 @@ export interface PersistentTaskDefinitionInput {
   readScope: string[];
   actionScope: string[];
   allowedToolNames: string[];
+  skillIds: number[];
 }
 
 export interface PersistentTaskEligibleTool {
@@ -70,4 +78,15 @@ export interface PersistentTaskTrigger {
 export interface PersistentTaskDeleteResponse {
   status: 'success';
   id: string;
+  receipt_tombstones: number;
+}
+
+export interface PersistentTaskDeletionImpact {
+  task_id: string;
+  title: string;
+  version: number;
+  pending_trigger_count: number;
+  confirmation_token: string;
+  conversation: import('./api').ConversationDeletionImpact;
+  disclosures: string[];
 }

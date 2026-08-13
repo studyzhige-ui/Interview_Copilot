@@ -10,11 +10,10 @@ from typing import List, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.core.runtime_files import remove_session_results
 from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
-from app.models.chat import Conversation, ConversationMessage, generate_uuid
+from app.models.chat import Conversation, generate_uuid
 from app.models.user import User
 from app.conversation.runtime_profile import runtime_profile_for_type
 from app.schemas.chat import (
@@ -24,6 +23,11 @@ from app.schemas.chat import (
     SessionExecutionModeUpdateRequest,
     SessionListItem,
     SessionRenameRequest,
+)
+from app.schemas.conversation_lifecycle import (
+    ConversationDeleteRequest,
+    ConversationDeleteResult,
+    ConversationDeletionImpact,
 )
 from app.services.chat.chat_history_service import transcript_service
 
@@ -261,51 +265,63 @@ def update_session_title(
     return {"status": "success", "session_id": session_id, "new_title": new_title}
 
 
-@router.delete("/chat/sessions/{session_id}")
-def delete_chat_session(
+@router.get(
+    "/chat/sessions/{session_id}/deletion-impact",
+    response_model=ConversationDeletionImpact,
+)
+def get_chat_session_deletion_impact(
     session_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    row = db.query(Conversation).filter(Conversation.id == session_id).first()
-    if not row or row.user_id != resolve_user_pk(db, current_user.username):
-        raise HTTPException(
-            status_code=404, detail="Session not found or access denied"
-        )
-    if row.type == "persistent_task":
-        # A dedicated automation conversation is owned by its PersistentTask.
-        # Deleting it here would bypass the task's version check, trigger
-        # cleanup, and compensation fence.
-        raise HTTPException(
-            status_code=409,
-            detail="Delete the PersistentTask that owns this conversation",
-        )
-    if row.active_turn_id:
-        from app.models.conversation_turn import ConversationTurn
+    from app.services.chat.conversation_deletion_service import (
+        ConversationDeletionConflictError,
+        ConversationDeletionNotFoundError,
+        preview_conversation_deletion,
+    )
 
-        active = db.get(ConversationTurn, row.active_turn_id)
-        if active is not None and active.status in {"pending", "running", "waiting"}:
-            raise HTTPException(
-                status_code=409, detail="Cannot delete a session with an active turn"
-            )
     try:
-        from app.services.chat.attachment_source_service import (
-            cleanup_conversation_attachment_scope,
-        )
-
-        cleanup = cleanup_conversation_attachment_scope(
+        return preview_conversation_deletion(
             db,
-            user_pk=row.user_id,
+            user_pk=resolve_user_pk(db, current_user.username),
             conversation_id=session_id,
         )
-        db.query(ConversationMessage).filter(
-            ConversationMessage.conversation_id == session_id
-        ).delete(synchronize_session=False)
-        db.delete(row)
+    except ConversationDeletionNotFoundError as exc:
+        raise HTTPException(
+            status_code=404, detail="Session not found or access denied"
+        ) from exc
+    except ConversationDeletionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/chat/sessions/{session_id}",
+    response_model=ConversationDeleteResult,
+)
+def delete_chat_session(
+    session_id: str,
+    payload: ConversationDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from app.services.chat.conversation_deletion_service import (
+        ConversationDeletionConflictError,
+        ConversationDeletionNotFoundError,
+        delete_conversation,
+    )
+
+    try:
+        deletion = delete_conversation(
+            db,
+            user_pk=resolve_user_pk(db, current_user.username),
+            conversation_id=session_id,
+            confirmation_token=payload.confirmation_token,
+            confirm_conversation_id=payload.confirm_conversation_id,
+        )
         db.commit()
         from app.task_queue.dispatch import revoke_task
 
-        for task_id in cleanup.ingestion_task_ids:
+        for task_id in deletion.ingestion_task_ids:
             try:
                 revoke_task(task_id)
             except Exception:  # noqa: BLE001 - cleanup is already durable
@@ -314,8 +330,27 @@ def delete_chat_session(
                     task_id,
                     exc_info=True,
                 )
-        remove_session_results(session_id)
-        return {"status": "success", "id": session_id}
+        if deletion.cancelled_turn_id:
+            try:
+                from app.core.async_runtime import run_async
+                from app.services.chat.turn_event_buffer import turn_event_buffer
+
+                run_async(turn_event_buffer.request_cancel(deletion.cancelled_turn_id))
+            except Exception:  # noqa: BLE001 - durable fence is authoritative
+                logger.warning(
+                    "Could not signal deleted Conversation Turn %s",
+                    deletion.cancelled_turn_id,
+                    exc_info=True,
+                )
+        return deletion.result
+    except ConversationDeletionNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=404, detail="Session not found or access denied"
+        ) from exc
+    except ConversationDeletionConflictError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         db.rollback()
         logger.exception(

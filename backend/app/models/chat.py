@@ -1,6 +1,7 @@
 import uuid
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Column,
     ForeignKey,
@@ -47,6 +48,10 @@ class Conversation(Base):
             "execution_mode_version >= 0",
             name="ck_conversations_execution_mode_version",
         ),
+        CheckConstraint(
+            "memory_control_version >= 0",
+            name="ck_conversations_memory_control_version",
+        ),
     )
 
     id = Column(String, primary_key=True, default=generate_uuid)
@@ -81,6 +86,14 @@ class Conversation(Base):
     execution_mode_version = Column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    # Optional per-Conversation overrides of the two independent account-level
+    # Memory controls.  NULL inherits the account setting and never creates a
+    # Conversation-scoped Memory owner.
+    memory_recall_override = Column(Boolean, nullable=True)
+    memory_contribution_override = Column(Boolean, nullable=True)
+    memory_control_version = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     active_turn_id = Column(String, nullable=True)
     # Explicit guidance for this Conversation only. The original user message
     # remains the exact Interaction Record; this is a small, rebuildable read
@@ -90,8 +103,8 @@ class Conversation(Base):
     guidance_version = Column(Integer, nullable=False, default=0)
     # Polymorphic subject binding (weak FK). subject_type whitelist =
     # {interview_record}; general -> NULL, debrief/mock_interview -> the bound
-    # interview_record. The app layer validates existence + ownership. (The
-    # legacy ``interview_id`` column it replaced was dropped in 0038.)
+    # interview_record. The app layer validates existence + ownership. The
+    # release baseline has no parallel compatibility ``interview_id`` owner.
     subject_type = Column(String, nullable=True)
     subject_id = Column(String, nullable=True)
     compaction_cursor = Column(Integer, default=0)

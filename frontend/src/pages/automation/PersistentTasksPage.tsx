@@ -18,6 +18,7 @@ import {
   createPersistentTask,
   deletePersistentTask,
   getPersistentTask,
+  getPersistentTaskDeletionImpact,
   listPersistentTaskEligibleTools,
   listPersistentTasks,
   listPersistentTaskTriggers,
@@ -25,6 +26,8 @@ import {
   updatePersistentTask,
 } from '@/api/persistentTasks';
 import { extractErr } from '@/api/client';
+import { getGmailIntegration } from '@/api/integrations';
+import { listSkills } from '@/api/capabilities';
 import { Btn } from '@/components/ui/Btn';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -40,10 +43,12 @@ import {
   displayDate,
 } from '@/pages/career/CareerFields';
 import { ChatPanel } from '@/pages/review/chat/ChatPanel';
+import { GmailObservationCards } from './GmailObservationCards';
 import { toast } from '@/store/uiStore';
 import type {
   PersistentTask,
   PersistentTaskDefinitionInput,
+  PersistentTaskDeletionImpact,
   PersistentTaskEligibleTool,
   PersistentTaskTrigger,
   PersistentTaskTriggerAdmission,
@@ -51,6 +56,11 @@ import type {
 } from '@/types/persistentTask';
 
 const TASKS_KEY = ['persistent-tasks'] as const;
+const GMAIL_EVENT_REQUIRED_TOOLS = [
+  'read_career_context',
+  'read_gmail_observations',
+  'review_gmail_observation',
+] as const;
 
 const TOOL_LABELS: Record<string, string> = {
   web_search: '搜索公开网页', read_url: '读取公开网页', search_jobs: '搜索岗位',
@@ -58,6 +68,8 @@ const TOOL_LABELS: Record<string, string> = {
   read_resume: '读取个人简历', read_career_context: '读取求职档案与进展',
   read_artifacts: '读取已保存材料', read_file: '读取已授权附件内容',
   gmail_search_messages: '搜索已连接 Gmail',
+  read_gmail_observations: '读取本次 Gmail Observation',
+  review_gmail_observation: '分析并安全应用或创建待确认卡',
 };
 
 interface EditorForm {
@@ -66,11 +78,12 @@ interface EditorForm {
   triggerKind: 'scheduled' | 'event';
   schedule: string;
   timezone: string;
-  connector: string;
+  connector: '' | 'gmail';
   eventTypes: string;
   readScope: string;
   actionScope: string;
   allowedToolNames: string[];
+  skillIds: number[];
 }
 
 function operationId(): string {
@@ -89,6 +102,7 @@ function blankForm(): EditorForm {
     readScope: '',
     actionScope: '',
     allowedToolNames: [],
+    skillIds: [],
   };
 }
 
@@ -105,13 +119,14 @@ function formFromTask(task: PersistentTask): EditorForm {
     readScope: task.read_scope_json.join(', '),
     actionScope: task.action_scope_json.join(', '),
     allowedToolNames: task.allowed_tool_names_json,
+    skillIds: (task.skill_refs_json ?? []).map((item) => item.id),
   };
 }
 
 function definitionFromForm(form: EditorForm): PersistentTaskDefinitionInput {
   const trigger: PersistentTaskTriggerSpec = form.triggerKind === 'scheduled'
     ? { kind: 'scheduled', schedule: form.schedule.trim(), timezone: form.timezone.trim() }
-    : { kind: 'event', connector: form.connector.trim(), event_types: csv(form.eventTypes) };
+    : { kind: 'event', connector: 'gmail', event_types: ['message_added'] };
   return {
     title: form.title.trim(),
     instruction: form.instruction.trim(),
@@ -119,6 +134,7 @@ function definitionFromForm(form: EditorForm): PersistentTaskDefinitionInput {
     readScope: csv(form.readScope),
     actionScope: csv(form.actionScope),
     allowedToolNames: form.allowedToolNames,
+    skillIds: form.skillIds,
   };
 }
 
@@ -157,7 +173,25 @@ export function PersistentTasksPage() {
   const [manualOpen, setManualOpen] = useState(false);
   const [manualSummary, setManualSummary] = useState('从页面手动检查一次最新变化');
   const [admission, setAdmission] = useState<PersistentTaskTriggerAdmission | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<PersistentTask | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{
+    task: PersistentTask;
+    impact: PersistentTaskDeletionImpact | null;
+    error: string | null;
+  } | null>(null);
+
+  const prepareDelete = (task: PersistentTask) => {
+    setDeleteTarget({ task, impact: null, error: null });
+    void getPersistentTaskDeletionImpact(task.id).then(
+      (impact) => setDeleteTarget((current) => (
+        current?.task.id === task.id ? { ...current, impact, error: null } : current
+      )),
+      (error) => setDeleteTarget((current) => (
+        current?.task.id === task.id
+          ? { ...current, error: extractErr(error, '删除影响暂时无法读取') }
+          : current
+      )),
+    );
+  };
 
   const refresh = async () => {
     await queryClient.invalidateQueries({ queryKey: TASKS_KEY });
@@ -206,7 +240,7 @@ export function PersistentTasksPage() {
       <header className="mb-5 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold text-stone-800">持续任务</h1>
-          <p className="mt-1 text-sm text-stone-500">只有你明确创建的任务才会在云端持续运行；无人值守时只使用已列出的只读 Tool。</p>
+          <p className="mt-1 text-sm text-stone-500">只有你明确创建的任务才会在云端持续运行；每次执行只使用已列出的云端 Tool 和动作范围。</p>
         </div>
         <div className="flex gap-2">
           <Btn kind="ghost" size="sm" icon={<RefreshCw size={14} />} onClick={() => { void refresh(); }}>刷新</Btn>
@@ -267,7 +301,7 @@ export function PersistentTasksPage() {
                 );
               }}
               onManual={() => setManualOpen(true)}
-              onDelete={() => setDeleteTarget(selected)}
+              onDelete={() => prepareDelete(selected)}
             />
           )}
         </main>
@@ -337,18 +371,25 @@ export function PersistentTasksPage() {
       <ConfirmDialog
         open={Boolean(deleteTarget)}
         title="删除这个持续任务？"
-        description="任务定义、未运行的排队输入、触发历史和专属对话会被删除；已保存到产品其他位置的资产不会随之删除。若任务正在运行，服务端会拒绝本次删除，请先停止该次运行。"
+        description={deleteTarget?.error ?? (deleteTarget?.impact
+          ? [
+            ...deleteTarget.impact.disclosures,
+            ...deleteTarget.impact.conversation.disclosures,
+          ].join('\n')
+          : '正在读取调度、触发、待发送输入、专属对话和外部调用影响……')}
         confirmText="删除任务"
         danger
         loading={busy}
+        confirmDisabled={!deleteTarget?.impact || !!deleteTarget?.error}
         onCancel={() => setDeleteTarget(null)}
         onConfirm={() => {
-          if (!deleteTarget) return;
+          if (!deleteTarget?.impact) return;
+          const deletion = deleteTarget;
           void (async () => {
             setBusy(true);
             try {
-              await deletePersistentTask(deleteTarget, operationId());
-              queryClient.removeQueries({ queryKey: ['persistent-task', deleteTarget.id] });
+              await deletePersistentTask(deletion.task, deletion.impact!, operationId());
+              queryClient.removeQueries({ queryKey: ['persistent-task', deletion.task.id] });
               await queryClient.invalidateQueries({ queryKey: TASKS_KEY });
               setDeleteTarget(null);
               setAdmission(null);
@@ -449,6 +490,11 @@ function TaskDetail({
             ? <div className="flex flex-wrap gap-1.5">{task.allowed_tool_names_json.map((tool) => <Pill key={tool}>{tool}</Pill>)}</div>
             : <span>未授权任何 Tool</span>}
         </InfoCard>
+        <InfoCard title="固定工作流 Skill">
+          {task.skill_refs_json?.length
+            ? <div className="flex flex-wrap gap-1.5">{task.skill_refs_json.map((skill) => <Pill key={`${skill.source}:${skill.name}`}>{skill.name} · v{skill.revision}</Pill>)}</div>
+            : <span>未绑定 Skill</span>}
+        </InfoCard>
         <InfoCard title="数据与动作范围">
           <div>读取：{task.read_scope_json.join('、') || '未声明'}</div>
           <div className="mt-1">动作：{task.action_scope_json.join('、') || '无'}</div>
@@ -467,7 +513,7 @@ function TaskDetail({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-medium text-stone-700">删除任务</h3>
-            <p className="mt-1 text-xs text-stone-500">删除会清理任务、触发历史和专属对话；正在运行的任务需要先停止本次运行。</p>
+            <p className="mt-1 text-xs text-stone-500">删除会先停止调度与新执行，安全取消当前 Turn，并分别说明待发送输入、附件、已保存结果和未结算外部调用。</p>
           </div>
           <Btn kind="danger" size="sm" icon={<Trash2 size={14} />} disabled={busy} onClick={onDelete}>删除任务</Btn>
         </div>
@@ -573,7 +619,18 @@ function TaskEditor({
     queryKey: ['persistent-tasks', 'eligible-tools'],
     queryFn: listPersistentTaskEligibleTools,
   });
+  const skillsQuery = useQuery({
+    queryKey: ['capabilities', 'skills'],
+    queryFn: listSkills,
+  });
+  const gmailQuery = useQuery({
+    queryKey: ['integrations', 'gmail'],
+    queryFn: getGmailIntegration,
+  });
   const tools = toolsQuery.data ?? [];
+  const skills = (skillsQuery.data ?? []).filter((skill) => skill.enabled);
+  const enabledSkillIds = new Set(skills.map((skill) => skill.id));
+  const unavailableSkillIds = form.skillIds.filter((id) => !enabledSkillIds.has(id));
   const eligibleNames = new Set(tools.map((tool) => tool.name));
   const unavailableNames = form.allowedToolNames.filter((name) => !eligibleNames.has(name));
   const update = <K extends keyof EditorForm>(key: K, value: EditorForm[K]) => setForm((current) => ({ ...current, [key]: value }));
@@ -583,9 +640,18 @@ function TaskEditor({
     && form.allowedToolNames.length
     && toolsQuery.isSuccess
     && unavailableNames.length === 0
-    && form.triggerKind === 'scheduled'
-    && form.schedule.trim()
-    && form.timezone.trim(),
+    && unavailableSkillIds.length === 0
+    && (
+      (form.triggerKind === 'scheduled' && form.schedule.trim() && form.timezone.trim())
+      || (
+        form.triggerKind === 'event'
+        && form.connector === 'gmail'
+        && form.eventTypes === 'message_added'
+        && GMAIL_EVENT_REQUIRED_TOOLS.every((name) => form.allowedToolNames.includes(name))
+        && gmailQuery.data?.adapter_available
+        && gmailQuery.data.account?.status === 'active'
+      )
+    ),
   );
   return (
     <Modal
@@ -602,23 +668,43 @@ function TaskEditor({
         <div className="sm:col-span-2"><FormItem label="任务名称"><TextInput autoFocus value={form.title} onChange={(event) => update('title', event.target.value)} /></FormItem></div>
         <div className="sm:col-span-2"><FormItem label="持续任务说明" hint="写清要检查什么、何时汇报；Agent 不会自行扩大范围。"><TextArea rows={5} value={form.instruction} onChange={(event) => update('instruction', event.target.value)} /></FormItem></div>
         <FormItem label="触发方式">
-          <SelectInput value={form.triggerKind} onChange={(event) => update('triggerKind', event.target.value as EditorForm['triggerKind'])}>
+          <SelectInput value={form.triggerKind} onChange={(event) => {
+            const triggerKind = event.target.value as EditorForm['triggerKind'];
+            if (triggerKind === 'event') {
+              setForm((current) => ({
+                ...current,
+                triggerKind,
+                connector: 'gmail',
+                eventTypes: 'message_added',
+                readScope: current.readScope || 'gmail:job_observations',
+                allowedToolNames: Array.from(new Set([
+                  ...current.allowedToolNames,
+                  ...(GMAIL_EVENT_REQUIRED_TOOLS.filter((name) => eligibleNames.has(name))),
+                ])),
+              }));
+            } else update('triggerKind', triggerKind);
+          }}>
             <option value="scheduled">定时触发</option>
-            <option value="event" disabled>外部事件触发（尚未接入）</option>
+            <option value="event">Gmail 新邮件事件</option>
           </SelectInput>
         </FormItem>
         {form.triggerKind === 'scheduled' ? <>
           <FormItem label="时区"><TextInput value={form.timezone} onChange={(event) => update('timezone', event.target.value)} /></FormItem>
           <div className="sm:col-span-2"><FormItem label="调度表达式" hint="当前服务接受调度表达式；例如工作日 9 点：0 9 * * 1-5"><TextInput value={form.schedule} onChange={(event) => update('schedule', event.target.value)} /></FormItem></div>
-        </> : <div className="sm:col-span-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-          外部事件入口尚未接入真实 Connector 事件流，因此当前不能创建或修改此类任务。
+        </> : <div className="sm:col-span-2 rounded-lg border border-primary-200 bg-primary-50 p-3 text-xs text-primary-800">
+          <div className="font-medium">真实来源：Gmail History · message_added</div>
+          <p className="mt-1">Connector 按增量 cursor 保存并去重 Observation；语义不明确时只进入本任务待确认卡，不会直接改写岗位事实。</p>
+          {gmailQuery.isLoading ? <div className="mt-2 flex items-center gap-2"><Spinner size={12} />正在检查 Gmail 连接…</div>
+            : gmailQuery.data?.adapter_available && gmailQuery.data.account?.status === 'active'
+              ? <div className="mt-2 text-success-700">已连接 {gmailQuery.data.account.account_hint}</div>
+              : <div role="alert" className="mt-2 text-danger-700">需要先在“设置与连接”中完成真实 Gmail 只读授权。</div>}
         </div>}
         <div className="sm:col-span-2">
-          <FormItem label="允许的云端只读 Tool" hint="无人值守阶段只能使用这里明确列出的只读能力。">
+          <FormItem label="允许的云端 Tool" hint="仅显示当前真实注册且适合无人值守的能力；写入仍受动作范围、Policy 与领域不变量约束。">
             <div className="grid gap-2 rounded-lg border border-stone-200 bg-stone-50 p-3 sm:grid-cols-2">
               {toolsQuery.isLoading && <div className="col-span-2 flex items-center gap-2 text-xs text-stone-500"><Spinner size={13} />正在读取当前可用 Tool…</div>}
               {toolsQuery.isError && <div role="alert" className="col-span-2 text-xs text-danger-700">{extractErr(toolsQuery.error, '当前可用 Tool 读取失败')}</div>}
-              {toolsQuery.isSuccess && tools.length === 0 && <div className="col-span-2 text-xs text-stone-500">当前部署没有可用于无人值守任务的云端只读 Tool。</div>}
+              {toolsQuery.isSuccess && tools.length === 0 && <div className="col-span-2 text-xs text-stone-500">当前部署没有可用于无人值守任务的云端 Tool。</div>}
               {tools.map((tool: PersistentTaskEligibleTool) => (
                 <label key={tool.name} title={tool.description} className="flex items-center gap-2 text-xs text-stone-700">
                   <input
@@ -645,8 +731,51 @@ function TaskEditor({
             </div>
           </FormItem>
         </div>
+        <div className="sm:col-span-2">
+          <FormItem label="绑定 Skill（可选）" hint="仅保存 identity、source、revision 与 hash；每次自动执行都会重新验证，失效时明确阻塞。">
+            <div className="grid gap-2 rounded-lg border border-stone-200 bg-stone-50 p-3 sm:grid-cols-2">
+              {skillsQuery.isLoading && <div className="col-span-2 flex items-center gap-2 text-xs text-stone-500"><Spinner size={13} />正在读取可用 Skill…</div>}
+              {skillsQuery.isError && <div role="alert" className="col-span-2 text-xs text-danger-700">{extractErr(skillsQuery.error, 'Skill 读取失败')}</div>}
+              {skillsQuery.isSuccess && skills.length === 0 && <div className="col-span-2 text-xs text-stone-500">当前没有已启用 Skill。</div>}
+              {skills.map((skill) => (
+                <label key={skill.id} title={skill.description} className="flex items-start gap-2 text-xs text-stone-700">
+                  <input
+                    type="checkbox"
+                    checked={form.skillIds.includes(skill.id)}
+                    onChange={(event) => update('skillIds', event.target.checked
+                      ? [...form.skillIds, skill.id]
+                      : form.skillIds.filter((id) => id !== skill.id))}
+                  />
+                  <span><span className="font-medium">{skill.name}</span><span className="ml-1 text-stone-400">v{skill.revision}</span><span className="block text-[11px] text-stone-500">{skill.description}</span></span>
+                </label>
+              ))}
+              {unavailableSkillIds.map((id) => (
+                <label key={id} className="col-span-2 flex items-center gap-2 text-xs text-danger-700">
+                  <input type="checkbox" checked onChange={() => update('skillIds', form.skillIds.filter((value) => value !== id))} />
+                  <span>已保存的 Skill #{id} 当前不可用；取消选择后才能保存</span>
+                </label>
+              ))}
+            </div>
+          </FormItem>
+        </div>
         <FormItem label="读取范围" hint="可选，逗号分隔的业务范围说明"><TextArea rows={2} value={form.readScope} onChange={(event) => update('readScope', event.target.value)} /></FormItem>
-        <FormItem label="动作范围" hint="当前只读 Tool 通常留空"><TextArea rows={2} value={form.actionScope} onChange={(event) => update('actionScope', event.target.value)} /></FormItem>
+        <FormItem label="动作范围" hint="未明确列出的动作不会被自动执行">
+          <TextArea rows={2} value={form.actionScope} onChange={(event) => update('actionScope', event.target.value)} />
+          {form.triggerKind === 'event' && (
+            <label className="mt-2 flex items-start gap-2 text-xs text-stone-600">
+              <input
+                type="checkbox"
+                checked={csv(form.actionScope).includes('career.process_event.auto_apply')}
+                onChange={(event) => {
+                  const scopes = csv(form.actionScope).filter((scope) => scope !== 'career.process_event.auto_apply');
+                  if (event.target.checked) scopes.push('career.process_event.auto_apply');
+                  update('actionScope', scopes.join(', '));
+                }}
+              />
+              <span>仅在来源明确、唯一匹配且置信度至少 95% 时允许自动追加 ProcessEvent；结果会即时汇报并保留撤销路径。</span>
+            </label>
+          )}
+        </FormItem>
       </div>
     </Modal>
   );
@@ -657,6 +786,11 @@ export function PersistentTaskConversationPage() {
   const taskQuery = useQuery({
     queryKey: ['persistent-task', taskId],
     queryFn: () => getPersistentTask(taskId!),
+    enabled: Boolean(taskId),
+  });
+  const triggersQuery = useQuery({
+    queryKey: ['persistent-task', taskId, 'triggers'],
+    queryFn: () => listPersistentTaskTriggers(taskId!),
     enabled: Boolean(taskId),
   });
   if (taskQuery.isLoading) return <div className="flex items-center gap-2 p-6 text-sm text-stone-500"><Spinner size={15} />正在打开专属对话…</div>;
@@ -670,13 +804,25 @@ export function PersistentTaskConversationPage() {
         </div>
         <Link to={`/persistent-tasks/${encodeURIComponent(taskQuery.data.id)}`}><Btn kind="ghost" size="sm">返回任务详情</Btn></Link>
       </div>
-      <div className="flex min-h-0 flex-1">
-        <ChatPanel
-          sessionId={taskQuery.data.conversation_id}
-          sessionTitle={`自动化 · ${taskQuery.data.title}`}
-          fixedMode="AGENT"
-          flexible
-        />
+      <div className="grid min-h-0 flex-1 gap-3 overflow-hidden p-3 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="min-h-0 overflow-hidden rounded-xl border border-stone-200 bg-white">
+          <ChatPanel
+            sessionId={taskQuery.data.conversation_id}
+            sessionTitle={`自动化 · ${taskQuery.data.title}`}
+            fixedMode="AGENT"
+            flexible
+          />
+        </div>
+        {taskQuery.data.trigger_kind === 'event'
+          && taskQuery.data.trigger_spec_json.kind === 'event'
+          && taskQuery.data.trigger_spec_json.connector === 'gmail' && (
+            <div className="min-h-0 overflow-y-auto">
+              <GmailObservationCards
+                task={taskQuery.data}
+                observationIds={(triggersQuery.data ?? []).filter((trigger) => trigger.kind === 'event').map((trigger) => trigger.source_identity)}
+              />
+            </div>
+          )}
       </div>
     </div>
   );

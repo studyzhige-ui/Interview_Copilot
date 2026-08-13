@@ -1,119 +1,139 @@
-"""read_resume tool handler — happy paths + error handling."""
+"""Canonical ``read_resume`` Tool behavior and cut-over regressions."""
+
+from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
+
+from app.agent_runtime.tool_registry import AgentToolContext
+from app.agent_runtime.tools.resume import ReadResumeArgs, _read_resume_handler
+from app.models.file_asset import FileAsset
+from app.models.resume import Resume
+from app.models.user import User
+from app.services.resume import resume_artifact_service
 
 
-def test_read_resume_reads_personal_entity(monkeypatch):
-    """``read_resume`` reads the user's default personal ``resumes`` entity:
-    structured ``resume_sections`` first, else the entity's
-    ``raw_text_snapshot``. Resumes are a personal entity — never knowledge
-    documents, so there is no knowledge-chunk / docstore fallback.
+def _seed_user(db_session) -> User:
+    user = User(username="alice", hashed_password="x")
+    db_session.add(user)
+    db_session.flush()
+    return user
 
-    Covers three branches:
-      (1) parsed sections present → structured result
-      (2) no sections → raw_text_snapshot fallback (source='raw_text_snapshot')
-      (3) no resumes at all → raw_resume_available=False + error
-    """
-    from contextlib import contextmanager
 
-    from app.agent_runtime.tool_registry import AgentToolContext
-    from app.agent_runtime.tools.resume import ReadResumeArgs, _read_resume_handler
-
-    # ``read_resume`` opens ``with SessionLocal() as db`` and passes db straight
-    # to the (stubbed) entity service — a dummy context manager is enough.
+def _use_test_session(monkeypatch, db_session) -> None:
     @contextmanager
-    def _fake_session():
-        yield object()
+    def _session():
+        yield db_session
 
-    monkeypatch.setattr("app.db.database.SessionLocal", _fake_session)
-
-    class _Resume:
-        def __init__(self, **kw):
-            self.__dict__.update(kw)
-
-    class _Section:
-        def __init__(self, section_type, title, content):
-            self.section_type = section_type
-            self.title = title
-            self.content = content
-
-    ctx = AgentToolContext(user_id="alice", session_id="s1")
-    args = ReadResumeArgs(section_types=[])
-
-    default_resume = _Resume(
-        id="rsm_1",
-        title="我的简历",
-        is_default=True,
-        parse_status="ready",
-        raw_text_snapshot="三年后端开发经验，主导推荐系统",
-    )
-    monkeypatch.setattr(
-        "app.services.resume.resume_entity_service.list_resumes",
-        lambda db, *, user_id: [default_resume],
-    )
-
-    # --- Branch 1: parsed sections present → structured result ---------
-    monkeypatch.setattr(
-        "app.services.resume.resume_service.resume_service.get_sections_by_resume",
-        lambda resume_id, user_id=None: [
-            _Section("summary", "简介", "三年后端开发经验"),
-            _Section("project", "推荐系统", "协同过滤推荐"),
-        ],
-    )
-    monkeypatch.setattr(
-        "app.services.resume.resume_service.resume_service.format_for_context",
-        lambda sections, **k: "[summary] 简介\n三年后端开发经验",
-    )
-    result = asyncio.run(_read_resume_handler(args, ctx))
-    assert result["resume_id"] == "rsm_1"
-    assert result["section_count"] == 2
-    assert result["sections"][0]["type"] == "summary"
-    assert "简介" in result["formatted_text"]
-
-    # --- Branch 2: no sections → raw_text_snapshot fallback ------------
-    monkeypatch.setattr(
-        "app.services.resume.resume_service.resume_service.get_sections_by_resume",
-        lambda resume_id, user_id=None: [],
-    )
-    result = asyncio.run(_read_resume_handler(args, ctx))
-    assert result["source"] == "raw_text_snapshot"
-    assert result["raw_resume_available"] is True
-    assert "推荐系统" in result["full_text"]
-
-    # --- Branch 3: no resumes at all → no-resume error ----------------
-    monkeypatch.setattr(
-        "app.services.resume.resume_entity_service.list_resumes",
-        lambda db, *, user_id: [],
-    )
-    result = asyncio.run(_read_resume_handler(args, ctx))
-    assert result["raw_resume_available"] is False
-    assert "error" in result
+    monkeypatch.setattr("app.db.database.SessionLocal", _session)
 
 
-class TestResumeErrorHandling:
-    """read_resume must catch service errors."""
-
-    def test_service_error_returns_error_dict(self, monkeypatch):
-        from contextlib import contextmanager
-
-        @contextmanager
-        def _fake_session():
-            yield object()
-
-        monkeypatch.setattr("app.db.database.SessionLocal", _fake_session)
-
-        def _boom(db, *, user_id):
-            raise RuntimeError("DB unavailable")
-
-        monkeypatch.setattr(
-            "app.services.resume.resume_entity_service.list_resumes",
-            _boom,
+def _invoke() -> dict:
+    return asyncio.run(
+        _read_resume_handler(
+            ReadResumeArgs(),
+            AgentToolContext(user_id="alice", session_id="s1"),
         )
+    )
 
-        from app.agent_runtime.tool_registry import AgentToolContext
-        from app.agent_runtime.tools.resume import ReadResumeArgs, _read_resume_handler
 
-        ctx = AgentToolContext(user_id="alice", session_id="s1")
-        result = asyncio.run(_read_resume_handler(ReadResumeArgs(), ctx))
-        assert "error" in result
-        assert result["section_count"] == 0
+def test_read_resume_returns_default_canonical_artifact(db_session, monkeypatch):
+    user = _seed_user(db_session)
+    resume = resume_artifact_service.create_resume_artifact(
+        db_session,
+        user_pk=user.id,
+        operation_key="read-resume-canonical",
+        title="我的简历",
+        file_asset_id=None,
+        raw_text="三年后端开发经验，主导推荐系统",
+        make_default=True,
+    )
+    db_session.commit()
+    _use_test_session(monkeypatch, db_session)
+
+    result = _invoke()
+
+    assert result == {
+        "resume_id": resume.artifact.id,
+        "artifact_version_id": resume.current_version.id,
+        "title": "我的简历",
+        "is_default": True,
+        "section_count": 0,
+        "raw_resume_available": True,
+        "source": "artifact_version",
+        "parse_status": "pending",
+        "pending_profile_draft_id": None,
+        "full_text": "三年后端开发经验，主导推荐系统",
+    }
+
+
+def test_read_resume_never_falls_back_to_unmigrated_legacy_row(db_session, monkeypatch):
+    user = _seed_user(db_session)
+    db_session.add(
+        Resume(
+            id="rsm_unmigrated",
+            user_id=user.id,
+            title="旧简历",
+            raw_text_snapshot="不得被生产 Tool 读取",
+            parse_status="ready",
+        )
+    )
+    db_session.commit()
+    _use_test_session(monkeypatch, db_session)
+
+    result = _invoke()
+
+    assert result["error"] == "resume_artifact_not_found"
+    assert result["raw_resume_available"] is False
+    assert "migration 0029" in result["message"]
+    assert "不得被生产 Tool 读取" not in str(result)
+
+
+def test_read_resume_reports_canonical_artifact_not_ready(db_session, monkeypatch):
+    user = _seed_user(db_session)
+    asset = FileAsset(
+        id="fa_pending_resume",
+        user_id=user.id,
+        purpose="resume",
+        original_filename="resume.pdf",
+        object_key="uploads/alice/fa_pending_resume/resume.pdf",
+        storage_uri="s3://test/uploads/alice/fa_pending_resume/resume.pdf",
+        upload_status="uploaded",
+        validation_status="passed",
+    )
+    db_session.add(asset)
+    db_session.flush()
+    resume = resume_artifact_service.create_resume_artifact(
+        db_session,
+        user_pk=user.id,
+        operation_key="read-resume-pending",
+        title="仍在解析的简历",
+        file_asset_id=asset.id,
+        raw_text=None,
+        make_default=True,
+    )
+    db_session.commit()
+    _use_test_session(monkeypatch, db_session)
+
+    result = _invoke()
+
+    assert result["error"] == "resume_artifact_not_ready"
+    assert result["resume_id"] == resume.artifact.id
+    assert result["artifact_version_id"] == resume.current_version.id
+    assert result["parse_status"] == "pending"
+    assert result["raw_resume_available"] is False
+
+
+def test_read_resume_service_error_returns_error_dict(db_session, monkeypatch):
+    _seed_user(db_session)
+    db_session.commit()
+    _use_test_session(monkeypatch, db_session)
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("DB unavailable")
+
+    monkeypatch.setattr(resume_artifact_service, "list_resume_artifacts", _boom)
+
+    result = _invoke()
+
+    assert result == {"error": "Failed to read resume", "section_count": 0}

@@ -682,12 +682,26 @@ def test_rename_session_rejects_other_user(client: TestClient, db: Session):
     assert resp.status_code == 404
 
 
+def _delete_session_after_preview(client: TestClient, session_id: str):
+    impact = client.get(f"/api/v1/chat/sessions/{session_id}/deletion-impact")
+    assert impact.status_code == 200
+    body = impact.json()
+    return client.request(
+        "DELETE",
+        f"/api/v1/chat/sessions/{session_id}",
+        json={
+            "confirmation_token": body["confirmation_token"],
+            "confirm_conversation_id": session_id,
+        },
+    )
+
+
 def test_delete_session_removes_row_and_messages(client: TestClient, db: Session):
     db.add(Conversation(id="s1", user_id=_uid(db, "alice"), title="t", type="general"))
     # conversation_messages has NO user_id (keyed via session_id FK) — leave it as-is.
     db.add(ConversationMessage(conversation_id="s1", seq=1, role="User", content="hi"))
     db.commit()
-    resp = client.delete("/api/v1/chat/sessions/s1")
+    resp = _delete_session_after_preview(client, "s1")
     assert resp.status_code == 200
     db.expire_all()
     assert db.get(Conversation, "s1") is None
@@ -699,7 +713,7 @@ def test_delete_session_removes_row_and_messages(client: TestClient, db: Session
     )
 
 
-def test_delete_session_rejects_active_turn(client: TestClient, db: Session):
+def test_delete_session_safely_cancels_active_turn(client: TestClient, db: Session):
     user_id = _uid(db, "alice")
     conversation = Conversation(
         id="active-session",
@@ -719,12 +733,14 @@ def test_delete_session_rejects_active_turn(client: TestClient, db: Session):
     db.add_all([conversation, turn])
     db.commit()
 
-    response = client.delete("/api/v1/chat/sessions/active-session")
-    assert response.status_code == 409
+    response = _delete_session_after_preview(client, "active-session")
+    assert response.status_code == 200
+    assert response.json()["cancelled_turn_id"] == "active-turn"
+    assert db.get(Conversation, conversation.id) is None
 
 
 @pytest.mark.parametrize("turn_status", ["pending", "running", "waiting"])
-def test_delete_session_rejects_every_nonterminal_active_turn(
+def test_delete_session_safely_terminalizes_every_nonterminal_active_turn(
     client: TestClient,
     db: Session,
     turn_status: str,
@@ -749,10 +765,11 @@ def test_delete_session_rejects_every_nonterminal_active_turn(
     db.add_all([conversation, turn])
     db.commit()
 
-    response = client.delete(f"/api/v1/chat/sessions/{conversation.id}")
+    response = _delete_session_after_preview(client, conversation.id)
 
-    assert response.status_code == 409
-    assert db.get(Conversation, conversation.id) is not None
+    assert response.status_code == 200
+    assert response.json()["cancelled_turn_id"] == turn.id
+    assert db.get(Conversation, conversation.id) is None
 
 
 def test_delete_session_cannot_bypass_persistent_task_lifecycle(
@@ -769,7 +786,14 @@ def test_delete_session_cannot_bypass_persistent_task_lifecycle(
     db.add(conversation)
     db.commit()
 
-    response = client.delete("/api/v1/chat/sessions/automation-conversation")
+    response = client.request(
+        "DELETE",
+        "/api/v1/chat/sessions/automation-conversation",
+        json={
+            "confirmation_token": "0" * 64,
+            "confirm_conversation_id": "automation-conversation",
+        },
+    )
 
     assert response.status_code == 409
     assert "PersistentTask" in response.json()["detail"]
@@ -912,23 +936,25 @@ def test_mock_start_creates_record_conversation_runtime(
     """``POST /mock-interviews/start`` atomically creates the record
     (mock_in_progress), the bound conversation, the runtime (in_progress) and
     the opening interviewer message — resolving resume context from the
-    personal ``resumes`` entity. No pre-created chat session is required."""
+    canonical resume Artifact. No pre-created chat session is required."""
     from app.models.interview_record import InterviewRecord
     from app.models.job_opportunity import JobOpportunity
     from app.models.mock_interview_runtime import MockInterviewRuntime
-    from app.models.resume import Resume
+    from app.services.resume import resume_artifact_service
 
     pk = _uid(db, "alice")
-    db.add(
-        Resume(
-            id="rsm_1",
-            user_id=pk,
-            title="我的简历",
-            is_default=True,
-            raw_text_snapshot="三年后端开发经验，主导过推荐系统项目",
-            parse_status="ready",
-        )
+    resume = resume_artifact_service.create_resume_artifact(
+        db,
+        user_pk=pk,
+        operation_key="mock-start-resume",
+        title="我的简历",
+        file_asset_id=None,
+        raw_text="三年后端开发经验，主导过推荐系统项目",
+        make_default=True,
     )
+    # Migration 0029 aliases remain accepted without reading the retired row.
+    resume.state.legacy_resume_id = "rsm_1"
+    db.add(resume.state)
     db.add(
         JobOpportunity(
             id="jo_mock",
@@ -938,11 +964,6 @@ def test_mock_start_creates_record_conversation_runtime(
         )
     )
     db.commit()
-    # No parsed sections → falls back to the entity's raw_text_snapshot.
-    monkeypatch.setattr(
-        "app.services.resume.resume_service.resume_service.get_sections_by_resume",
-        lambda resume_id, user_id=None: [],
-    )
     plan_payload = {
         "guidance": {
             "self_intro": "判断与后端岗位的整体匹配。",
@@ -982,7 +1003,7 @@ def test_mock_start_creates_record_conversation_runtime(
     assert body["message"]["speaker"] == "interviewer"
     assert "自我介绍" in body["message"]["text"]
 
-    # The resume entity's raw_text_snapshot was frozen onto the record.
+    # The exact ArtifactVersion text was frozen onto the historical record.
     record = (
         db.query(InterviewRecord)
         .filter(InterviewRecord.id == body["record_id"])
@@ -991,6 +1012,9 @@ def test_mock_start_creates_record_conversation_runtime(
     assert record is not None and record.status == "mock_in_progress"
     assert record.job_opportunity_id == "jo_mock"
     assert "推荐系统" in (record.resume_text_snapshot or "")
+    assert record.resume_id is None
+    assert record.resume_artifact_id == resume.artifact.id
+    assert record.resume_artifact_version_id == resume.current_version.id
     # Runtime exists and points at the opening message.
     rt = (
         db.query(MockInterviewRuntime)
@@ -1008,26 +1032,26 @@ def test_mock_start_rejects_other_users_opportunity_before_planning(
     monkeypatch,
 ):
     from app.models.job_opportunity import JobOpportunity
-    from app.models.resume import Resume
+    from app.services.resume import resume_artifact_service
 
     alice_pk = _uid(db, "alice")
     bob_pk = _uid(db, "bob")
-    db.add_all(
-        [
-            Resume(
-                id="rsm_owned",
-                user_id=alice_pk,
-                title="我的简历",
-                raw_text_snapshot="三年后端开发经验",
-                parse_status="ready",
-            ),
-            JobOpportunity(
-                id="jo_bob",
-                user_id=bob_pk,
-                company_name="Other Co",
-                job_title="Backend Engineer",
-            ),
-        ]
+    resume = resume_artifact_service.create_resume_artifact(
+        db,
+        user_pk=alice_pk,
+        operation_key="owned-resume",
+        title="我的简历",
+        file_asset_id=None,
+        raw_text="三年后端开发经验",
+        make_default=True,
+    )
+    db.add(
+        JobOpportunity(
+            id="jo_bob",
+            user_id=bob_pk,
+            company_name="Other Co",
+            job_title="Backend Engineer",
+        )
     )
     db.commit()
     planning_called = False
@@ -1044,7 +1068,7 @@ def test_mock_start_rejects_other_users_opportunity_before_planning(
     response = client.post(
         "/api/v1/mock-interviews/start",
         json={
-            "resume_id": "rsm_owned",
+            "resume_id": resume.artifact.id,
             "jd_text": "这是满足长度要求的后端工程师岗位说明文本。",
             "job_opportunity_id": "jo_bob",
         },
@@ -1058,30 +1082,86 @@ def test_mock_start_rejects_resume_that_has_not_been_parsed(
     client: TestClient,
     db: Session,
 ):
-    from app.models.resume import Resume
+    from app.models.file_asset import FileAsset
+    from app.services.resume import resume_artifact_service
 
     pk = _uid(db, "alice")
-    db.add(
-        Resume(
-            id="rsm_pending",
-            user_id=pk,
-            title="仍在解析的简历",
-            is_default=True,
-            parse_status="pending",
-        )
+    asset = FileAsset(
+        id="fa_pending_resume",
+        user_id=pk,
+        purpose="resume",
+        original_filename="resume.pdf",
+        object_key="uploads/alice/fa_pending_resume/resume.pdf",
+        storage_uri="s3://test/uploads/alice/fa_pending_resume/resume.pdf",
+        upload_status="uploaded",
+        validation_status="passed",
+    )
+    db.add(asset)
+    db.flush()
+    resume = resume_artifact_service.create_resume_artifact(
+        db,
+        user_pk=pk,
+        operation_key="pending-resume",
+        title="仍在解析的简历",
+        file_asset_id=asset.id,
+        raw_text=None,
+        make_default=True,
     )
     db.commit()
 
     response = client.post(
         "/api/v1/mock-interviews/start",
         json={
-            "resume_id": "rsm_pending",
+            "resume_id": resume.artifact.id,
             "jd_text": "这是满足长度要求的后端工程师岗位说明文本。",
         },
     )
 
     assert response.status_code == 409
     assert "解析" in response.json()["detail"]
+
+
+def test_mock_start_rejects_unmigrated_legacy_resume_without_reading_it(
+    client: TestClient,
+    db: Session,
+    monkeypatch,
+):
+    from app.models.resume import Resume
+
+    pk = _uid(db, "alice")
+    db.add(
+        Resume(
+            id="rsm_unmigrated_api",
+            user_id=pk,
+            title="旧简历",
+            raw_text_snapshot="must not reach planning",
+            parse_status="ready",
+        )
+    )
+    db.commit()
+
+    planning_called = False
+
+    def fail_if_planned(*_args, **_kwargs):
+        nonlocal planning_called
+        planning_called = True
+        raise AssertionError("unmigrated Resume must fail before planning")
+
+    monkeypatch.setattr(
+        "app.services.interview.mock_interview_service.generate_plan",
+        fail_if_planned,
+    )
+    response = client.post(
+        "/api/v1/mock-interviews/start",
+        json={
+            "resume_id": "rsm_unmigrated_api",
+            "jd_text": "这是满足长度要求的后端工程师岗位说明文本。",
+        },
+    )
+
+    assert response.status_code == 404
+    assert "0029" in response.json()["detail"]
+    assert planning_called is False
 
 
 def test_mock_answer_audio_transcribes_and_stores_one_asset(

@@ -32,6 +32,10 @@ class InterviewRecord(Base):
             "debrief_guidance_version >= 0",
             name="ck_interview_records_debrief_guidance_version",
         ),
+        CheckConstraint(
+            "ability_signal_generation >= 0",
+            name="ck_interview_records_ability_signal_generation",
+        ),
     )
 
     id = Column(String, primary_key=True, default=_generate_record_id)
@@ -74,6 +78,20 @@ class InterviewRecord(Base):
     resume_id = Column(
         String, ForeignKey("resumes.id", ondelete="SET NULL"), nullable=True
     )
+    # Canonical personal-resume link. New writes use Artifact(kind=resume);
+    # ``resume_id`` above remains only for immutable legacy references.
+    resume_artifact_id = Column(
+        String(128),
+        ForeignKey("artifacts.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    resume_artifact_version_id = Column(
+        String(128),
+        ForeignKey("artifact_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     resume_source = Column(
         String, nullable=True
     )  # personal_resume | context_upload | none
@@ -94,6 +112,7 @@ class InterviewRecord(Base):
     # Top-level analysis result (per-question rows in interview_qa)
     analysis_json = Column(Text, nullable=True)
     analysis_schema_version = Column(Integer, nullable=False, default=3)
+    ability_signal_generation = Column(Integer, nullable=False, default=0)
 
     # User-visible guidance shared only by debrief Conversations bound to this
     # record. It is owned here rather than in a generic Project/Preference

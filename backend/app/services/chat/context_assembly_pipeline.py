@@ -19,10 +19,12 @@ Slots, in order from most → least cache-stable:
   5. [Explicit Guidance]   resolved Global → Debrief → Conversation user rules.
   6. [Memory]              optional low-authority canonical recall.
   7. [Attachments]         validated file manifest (ids + lifecycle scope).
-  8. [Retrieved Context]   scoped RAG and attachment chunks.
-  9. [Referenced Objects]  server-reread typed product data explicitly
+  8. [Source Read Status]  deterministic success/failure projection for
+                           explicitly or planner-selected owner reads.
+  9. [Retrieved Context]   scoped RAG and attachment chunks.
+ 10. [Referenced Objects]  server-reread typed product data explicitly
                            attached to this Turn; never instructions.
- 10. [Current Query]       the user's admitted original input.
+ 11. [Current Query]       the user's admitted original input.
 
 Per-turn-variable grounding (memory + RAG) sits near the tail so a grounding
 change can't invalidate the cached stable prefix (summary + recent turns).
@@ -37,10 +39,9 @@ Compaction is triggered at assembly time when total context tokens exceed
 ``MODEL_CONTEXT_WINDOW * COMPRESS_THRESHOLD_RATIO``. This matches the
 Claude Code model: full history in context, compress only at threshold.
 
-This module is distinct from
-``app.agent_runtime.context_compactor.QueryLoopCompactor``, which
-compresses the running message list inside a single L2 agent
-execution (different problem, different file).
+The active Agent loop may pressure-reduce durable ToolResult payloads to
+identity references, but it never creates a second prose summary.  This module
+remains the sole owner of the canonical Conversation ``summary + cursor``.
 """
 
 from __future__ import annotations
@@ -84,9 +85,9 @@ class TokenBudget:
     PERSONALIZATION_GUIDANCE_BUDGET = 6_000
     MEMORY_BUDGET = 6_000
     ATTACHMENT_MANIFEST_BUDGET = 1_500
+    SOURCE_READ_STATUS_BUDGET = 1_500
     RETRIEVED_CONTEXT_BUDGET = settings.RAG_RETRIEVED_CONTEXT_TOKENS
     PRODUCT_OBJECT_CONTEXT_BUDGET = 6_000
-    CURRENT_INPUT_BUDGET = 4_000
     OUTPUT_TOKEN_RESERVE = settings.RAG_OUTPUT_TOKEN_RESERVE
     SAFETY_MARGIN = settings.RAG_CONTEXT_SAFETY_MARGIN
 
@@ -132,6 +133,11 @@ class AssembledContext:
     # File bodies remain untrusted evidence inside [Retrieved Context].
     attachment_manifest: str = ""
 
+    # [Source Read Status] — bounded deterministic status for shared owner
+    # reads. The successful bodies themselves remain untrusted evidence in
+    # [Retrieved Context]; failures never become citable source chunks.
+    source_read_status: str = ""
+
     # [Referenced Product Objects] — execution-time reread of identities the
     # user explicitly attached to this Turn. It remains low-authority data.
     product_object_context: str = ""
@@ -156,6 +162,18 @@ class AssembledContext:
     model_context_window: int = TokenBudget.MODEL_CONTEXT_WINDOW
     prompt_token_limit: int = 0
     output_token_reserve: int = TokenBudget.OUTPUT_TOKEN_RESERVE
+
+
+class CurrentInputTooLargeError(ValueError):
+    """The admitted user input cannot fit without semantic truncation."""
+
+    def __init__(self, *, input_tokens: int, prompt_limit: int):
+        self.input_tokens = input_tokens
+        self.prompt_limit = prompt_limit
+        super().__init__(
+            "admitted current input exceeds the active model context window "
+            f"({input_tokens} > {prompt_limit} prompt tokens)"
+        )
 
 
 # ── Single source of slot ordering ────────────────────────────────────────
@@ -220,6 +238,7 @@ SLOT_ORDER: list[tuple[str, str | None, _SlotRenderer]] = [
     ("personalization_guidance", "[Explicit Guidance]", None),
     ("memory_block", "[Memory]", None),
     ("attachment_manifest", "[Attachments]", None),
+    ("source_read_status", "[Source Read Status]", None),
     ("retrieved_context", "[Retrieved Context]", None),
     ("product_object_context", "[Referenced Product Objects]", None),
     ("current_input", "[Current Query]", None),
@@ -234,6 +253,7 @@ _REWRITE_SKIP_FIELDS = {
     "personalization_guidance",
     "memory_block",
     "attachment_manifest",
+    "source_read_status",
     "retrieved_context",
 }
 
@@ -286,6 +306,7 @@ class PromptRenderer:
         for field_name in (
             "memory_block",
             "attachment_manifest",
+            "source_read_status",
             "product_object_context",
             "debrief_reference",
             "personalization_guidance",
@@ -341,6 +362,7 @@ class PromptRenderer:
                 "personalization_guidance",
                 "memory_block",
                 "attachment_manifest",
+                "source_read_status",
                 "retrieved_context",
                 "product_object_context",
                 "current_input",
@@ -471,6 +493,7 @@ class ContextAssemblyPipeline:
         memory_block: str = "",
         debrief_reference: str = "",
         attachment_manifest: str = "",
+        source_read_status: str = "",
         product_object_context: str = "",
         retrieval_result: RetrievalResult | None = None,
         user_id: str | None = None,
@@ -484,6 +507,8 @@ class ContextAssemblyPipeline:
                                 sessions. Caller may leave this empty
                                 in non-debrief mode and let the
                                 pipeline auto-inject when applicable.
+        ``source_read_status``  bounded success/failure facts for the current
+                                shared read-only source acquisition.
         ``retrieval_result``    canonical RAG result with intent provenance.
         ``user_id``             the OWNER's username principal — drives the
                                 compaction summarizer's LLM resolution.
@@ -496,6 +521,7 @@ class ContextAssemblyPipeline:
             memory_block=memory_block,
             debrief_reference=debrief_reference,
             attachment_manifest=attachment_manifest,
+            source_read_status=source_read_status,
             product_object_context=product_object_context,
             retrieval_result=retrieval_result,
             user_id=user_id,
@@ -511,6 +537,7 @@ class ContextAssemblyPipeline:
         memory_block: str,
         debrief_reference: str,
         attachment_manifest: str,
+        source_read_status: str,
         product_object_context: str,
         retrieval_result: RetrievalResult | None,
         *,
@@ -583,10 +610,16 @@ class ContextAssemblyPipeline:
             self.budget.SYSTEM_PROMPT_BUDGET, max(1, prompt_limit // 4)
         )
 
-        # Per-slot limits are executable policy, not documentation constants.
-        current_query = truncate_to_tokens(
-            current_query, self.budget.CURRENT_INPUT_BUDGET
-        )
+        # The admitted original input owns this Turn's direction.  It is never
+        # silently truncated to make room for optional history or retrieval.
+        # If the input itself cannot fit, fail explicitly so the user can split
+        # it or attach it as a source without changing its meaning.
+        current_input_tokens = count_tokens(current_query)
+        if current_input_tokens + system_reserve > prompt_limit:
+            raise CurrentInputTooLargeError(
+                input_tokens=current_input_tokens,
+                prompt_limit=max(0, prompt_limit - system_reserve),
+            )
         memory_block = truncate_to_tokens(memory_block, self.budget.MEMORY_BUDGET)
         personalization_guidance = truncate_to_tokens(
             personalization_guidance,
@@ -595,6 +628,10 @@ class ContextAssemblyPipeline:
         attachment_manifest = truncate_to_tokens(
             attachment_manifest,
             self.budget.ATTACHMENT_MANIFEST_BUDGET,
+        )
+        source_read_status = truncate_to_tokens(
+            source_read_status,
+            self.budget.SOURCE_READ_STATUS_BUDGET,
         )
         product_object_context = truncate_to_tokens(
             product_object_context,
@@ -622,6 +659,7 @@ class ContextAssemblyPipeline:
             + count_tokens(current_query)
             + count_tokens(debrief_reference)
             + count_tokens(attachment_manifest)
+            + count_tokens(source_read_status)
             + count_tokens(product_object_context)
             + desired_grounding
         )
@@ -651,6 +689,7 @@ class ContextAssemblyPipeline:
                 + count_tokens(current_query)
                 + count_tokens(debrief_reference)
                 + count_tokens(attachment_manifest)
+                + count_tokens(source_read_status)
                 + count_tokens(product_object_context)
                 + sum(_turn_tokens(message) for message in cleaned_turns)
             )
@@ -670,6 +709,7 @@ class ContextAssemblyPipeline:
             memory_block=memory_block,
             personalization_guidance=personalization_guidance,
             attachment_manifest=attachment_manifest,
+            source_read_status=source_read_status,
             product_object_context=product_object_context,
             retrieved_context=grounding.context_text,
             recent_turns=cleaned_turns,

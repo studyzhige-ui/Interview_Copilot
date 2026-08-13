@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import tempfile
 from pathlib import Path
 from threading import Lock
@@ -44,21 +43,8 @@ def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
             stream.write(line)
 
 
-def remove_session_results(session_id: str) -> None:
-    """Remove oversized tool-result files after their conversation is deleted."""
-    base = (Path(settings.APP_DATA_DIR) / "agent-results").resolve()
-    target = (base / session_id).resolve()
-    try:
-        target.relative_to(base)
-    except ValueError:
-        return
-    if target != base:
-        shutil.rmtree(target, ignore_errors=True)
-
-
 __all__ = [
     "append_jsonl",
     "create_runtime_temp_file",
-    "remove_session_results",
     "runtime_temp_dir",
 ]

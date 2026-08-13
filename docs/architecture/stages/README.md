@@ -13,12 +13,12 @@ server-side redaction.
 
 | Stage | Specification | Status |
 |---|---|---|
-| 0 | `stage-0-runtime.md` | implemented; full-repository release gate pending |
-| 1 | `stage-1-attachments.md` | implemented; full-repository release gate pending |
-| 2 | `stage-2-career-state.md` | implemented; full-repository release gate pending |
-| 3 | `stage-3-artifacts-interviews.md` | implementation in final integration |
-| 4 | `stage-4-connectors-automation.md` | implementation in final integration |
-| 5 | `stage-5-evaluation-memory.md` | active gate; automatic Memory producer disabled |
+| 0 | `stage-0-runtime.md` | implemented; release validation pending |
+| 1 | `stage-1-attachments.md` | implemented; release validation pending |
+| 2 | `stage-2-career-state.md` | implemented; release validation pending |
+| 3 | `stage-3-artifacts-interviews.md` | implemented; release validation pending |
+| 4 | `stage-4-connectors-automation.md` | implemented; live Connector/deployment validation pending |
+| 5 | `stage-5-evaluation-memory.md` | canonical code implemented; automatic Memory producer remains release-gated off |
 
 “Implemented” here means the physical contract exists in the current branch.
 It is not a release claim. A stage becomes release-ready only after its listed

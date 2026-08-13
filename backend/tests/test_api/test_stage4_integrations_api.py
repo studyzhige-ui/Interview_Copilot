@@ -87,6 +87,12 @@ def api_context(db: Session, monkeypatch):
         "schedule_turn",
         dispatched_turns.append,
     )
+    from app.services.chat.turn_event_buffer import turn_event_buffer
+
+    async def request_cancel(_turn_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(turn_event_buffer, "request_cancel", request_cancel)
 
     def fake_db() -> Iterator[Session]:
         yield db
@@ -204,16 +210,28 @@ def test_persistent_task_crud_and_manual_trigger_dispatches_existing_worker(
     assert [row["id"] for row in history.json()] == [admission["trigger_id"]]
     assert history.json()[0]["admitted_turn_id"] == admission["turn_id"]
 
+    impact_response = client.get(f"/api/v1/persistent-tasks/{task_id}/deletion-impact")
+    assert impact_response.status_code == 200, impact_response.text
+    impact = impact_response.json()
+    assert impact["task_id"] == task_id
+    assert impact["pending_trigger_count"] == 0
+
     deleted = client.request(
         "DELETE",
         f"/api/v1/persistent-tasks/{task_id}",
         json={
             "expected_version": 4,
             "user_request_identity": "user-delete:106",
+            "confirmation_token": impact["confirmation_token"],
+            "confirm_task_id": task_id,
         },
     )
     assert deleted.status_code == 200, deleted.text
-    assert deleted.json() == {"status": "success", "id": task_id}
+    assert deleted.json() == {
+        "status": "success",
+        "id": task_id,
+        "receipt_tombstones": 0,
+    }
     assert client.get(f"/api/v1/persistent-tasks/{task_id}").status_code == 404
 
 

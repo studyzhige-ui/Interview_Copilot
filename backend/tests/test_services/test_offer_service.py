@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
 
 from app.models.offer import Offer
+from app.models.job_opportunity import NextAction
 from app.models.user import User
 from app.schemas.offer import OfferSourceInput, OfferTermsInput
 from app.services.offer_service import (
@@ -73,6 +74,35 @@ def _terms(salary: str = "100000", **updates) -> OfferTermsInput:
     }
     values.update(updates)
     return OfferTermsInput(**values)
+
+
+def _replace_terms(
+    db_session,
+    *,
+    user: User,
+    offer: Offer,
+    operation_key: str,
+    terms: OfferTermsInput,
+    source_suffix: str,
+) -> Offer:
+    return confirm_offer_terms_change(
+        db_session,
+        user_pk=user.id,
+        offer_id=offer.id,
+        job_opportunity_id=_job_id(user),
+        operation_key=operation_key,
+        expected_current_token=current_offer_token(offer),
+        resolution="replace",
+        terms=terms,
+        candidate_source=_source(user, suffix=source_suffix),
+        confirmation_source=_source(
+            user,
+            kind="user_assertion",
+            suffix=f"confirm-{source_suffix}",
+        ),
+        job_owner_checker=_job_owner,
+        source_checker=_source_checker,
+    )
 
 
 def test_one_current_offer_per_job_and_creation_retry_is_idempotent(db_session):
@@ -349,6 +379,52 @@ def test_offer_terms_reject_analysis_fields_and_incomplete_salary_shape():
             formality="written",
             original_text="Offer text",
         )
+
+
+def test_offer_deadline_remove_then_readd_creates_new_action_history(db_session):
+    user = _user(db_session, "deadline-history")
+    deadline = NOW + timedelta(days=5)
+    offer = record_current_offer(
+        db_session,
+        user_pk=user.id,
+        job_opportunity_id=_job_id(user),
+        operation_key="deadline-create",
+        terms=_terms(response_deadline=deadline),
+        source=_source(user),
+        job_owner_checker=_job_owner,
+        source_checker=_source_checker,
+    )
+    first = db_session.query(NextAction).filter(NextAction.offer_id == offer.id).one()
+
+    _replace_terms(
+        db_session,
+        user=user,
+        offer=offer,
+        operation_key="deadline-remove",
+        terms=_terms(),
+        source_suffix="remove-deadline",
+    )
+    assert first.status == "closed"
+    assert first.close_reason == "offer_deadline_removed"
+
+    _replace_terms(
+        db_session,
+        user=user,
+        offer=offer,
+        operation_key="deadline-readd",
+        terms=_terms(response_deadline=deadline),
+        source_suffix="readd-deadline",
+    )
+    rows = (
+        db_session.query(NextAction)
+        .filter(NextAction.offer_id == offer.id)
+        .order_by(NextAction.created_at.asc(), NextAction.id.asc())
+        .all()
+    )
+    assert len(rows) == 2
+    assert rows[0].status == "closed"
+    assert rows[1].status == "suggested"
+    assert rows[1].due_at == deadline
 
 
 def test_offer_has_no_accept_decline_or_process_outcome_state(db_session):

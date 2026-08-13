@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from app.models.chat import Conversation
@@ -10,6 +12,7 @@ from app.models.conversation_attachment import (
     ConversationAttachmentRef,
 )
 from app.models.conversation_turn import ConversationTurn
+from app.models.document_chunk import DocumentChunk
 from app.models.file_asset import FileAsset
 from app.models.interview_record import InterviewRecord
 from app.models.interview_source import InterviewSourceRef
@@ -32,7 +35,7 @@ from app.services.chat.attachment_source_service import (
     mark_attachment_retry_dispatch_failed,
     prepare_attachment_projection_retry,
     promote_attachment_to_debrief,
-    remove_failed_conversation_attachment,
+    remove_conversation_attachment_from_scope,
     remove_debrief_project_source,
 )
 
@@ -286,13 +289,13 @@ def test_failed_claim_can_leave_scope_without_rewriting_frozen_identity(db_sessi
     )
     db_session.flush()
 
-    removed, turn_id = remove_failed_conversation_attachment(
+    removed, turn_id = remove_conversation_attachment_from_scope(
         db_session,
         user_pk=user.id,
         conversation_id=conversation.id,
         attachment_ref_id=ref.id,
     )
-    replay, replay_turn_id = remove_failed_conversation_attachment(
+    replay, replay_turn_id = remove_conversation_attachment_from_scope(
         db_session,
         user_pk=user.id,
         conversation_id=conversation.id,
@@ -309,6 +312,83 @@ def test_failed_claim_can_leave_scope_without_rewriting_frozen_identity(db_sessi
         ref.source_document_id,
         ref.position,
     ) == frozen
+    assert (
+        list_claimed_attachment_sources(
+            db_session,
+            user_pk=user.id,
+            conversation_id=conversation.id,
+        )
+        == []
+    )
+
+
+def test_ready_claim_can_leave_scope_and_projects_parser_quality(db_session):
+    user = _user(db_session)
+    conversation = _conversation(db_session, user, "conversation-remove-ready")
+    asset = _asset(db_session, user, "fa-remove-ready")
+    _draft, ref, document = _claim(
+        db_session,
+        user,
+        conversation,
+        asset,
+        suffix="remove-ready",
+    )
+    turn = db_session.get(ConversationTurn, ref.turn_id)
+    turn.status = "completed"
+    document.status = "ready"
+    document.content_text = "parsed source"
+    db_session.add(
+        DocumentChunk(
+            document_id=document.id,
+            user_id=user.id,
+            source_kind="chat_attachment",
+            chunk_index=0,
+            text="parsed source",
+            page_start=1,
+            page_end=2,
+            index_status="indexed",
+            metadata_json=json.dumps(
+                {
+                    "parser_id": "docling_local",
+                    "ocr_used": True,
+                    "parser_profile": {
+                        "page_count": 2,
+                        "char_count": 13,
+                        "quality_score": 0.74,
+                        "quality_warnings": ["line_repetition"],
+                    },
+                }
+            ),
+        )
+    )
+    db_session.flush()
+
+    [state] = list_claimed_attachment_sources(
+        db_session,
+        user_pk=user.id,
+        conversation_id=conversation.id,
+    )
+    assert state.status == "ready"
+    assert state.parse_quality == {
+        "parser_id": "docling_local",
+        "quality_score": 0.74,
+        "ocr_used": True,
+        "warnings": ["line_repetition"],
+    }
+    assert state.coverage["page_count"] == 2
+    assert state.coverage["full_text_projection_available"] is True
+    assert state.coverage["visual_layout_reviewed"] is False
+
+    removed, removed_turn_id = remove_conversation_attachment_from_scope(
+        db_session,
+        user_pk=user.id,
+        conversation_id=conversation.id,
+        attachment_ref_id=ref.id,
+    )
+
+    assert removed.removed_at is not None
+    assert removed_turn_id == turn.id
+    assert db_session.get(ConversationAttachmentRef, ref.id) is ref
     assert (
         list_claimed_attachment_sources(
             db_session,

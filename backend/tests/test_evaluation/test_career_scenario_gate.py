@@ -9,7 +9,7 @@ from evaluation.career_scenario_eval import (
     _pytest_junit_summary,
     _run,
     load_manifest,
-    validate_disabled_memory_boundary,
+    validate_canonical_memory_boundary,
     validate_manifest,
 )
 
@@ -27,12 +27,12 @@ def test_career_scenario_manifest_covers_every_stage_and_real_tests() -> None:
     assert len(result["stage_specs"]) == 6
 
 
-def test_memory_gate_keeps_legacy_writer_absent_and_recall_empty() -> None:
-    result = validate_disabled_memory_boundary(project_root=PROJECT_ROOT)
+def test_memory_gate_requires_one_canonical_path_and_closed_producer_default() -> None:
+    result = validate_canonical_memory_boundary(project_root=PROJECT_ROOT)
 
     assert result == {
-        "automatic_memory_producer": "disabled",
-        "memory_recall": "empty",
+        "automatic_memory_producer": "implemented_release_gated_default_off",
+        "memory_recall": "canonical_selective_low_authority",
         "legacy_runtime_paths": "absent",
         "stage_spec": "docs/architecture/stages/stage-5-evaluation-memory.md",
     }

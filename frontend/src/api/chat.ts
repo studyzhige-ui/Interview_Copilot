@@ -8,8 +8,10 @@ import type {
   PendingSubmissionItem,
   ProductObjectReference,
   AttachmentDraft,
+  AttachmentArtifactPromotionResp,
   AttachmentRetryResp,
   AttachmentSource,
+  ConversationDeletionImpact,
   ConversationAttachmentRemovalResp,
   AgentTask,
   AgentToolCallAudit,
@@ -356,7 +358,7 @@ export async function retryAttachmentSource(
 
 /** Remove one failed claimed Conversation source and let the server decide
  *  whether the attachment-waiting Turn can resume. */
-export async function removeFailedConversationAttachment(
+export async function removeConversationAttachmentFromScope(
   sessionId: string,
   attachmentRefId: string,
 ): Promise<ConversationAttachmentRemovalResp> {
@@ -375,6 +377,23 @@ export async function promoteAttachmentToDebrief(
     `/chat/${encodeURIComponent(sessionId)}/attachment-sources/${encodeURIComponent(attachmentRefId)}/debrief`,
   );
   return (response.data as { source: AttachmentSource }).source;
+}
+
+/** Explicitly grant one exact Conversation attachment a formal Artifact scope. */
+export async function promoteAttachmentToArtifact(
+  sessionId: string,
+  attachmentRefId: string,
+  input: { operationKey: string; artifactKind: string; title: string },
+): Promise<AttachmentArtifactPromotionResp> {
+  const response = await apiClient.post(
+    `/chat/${encodeURIComponent(sessionId)}/attachment-sources/${encodeURIComponent(attachmentRefId)}/artifact`,
+    {
+      operation_key: input.operationKey,
+      artifact_kind: input.artifactKind,
+      title: input.title,
+    },
+  );
+  return response.data as AttachmentArtifactPromotionResp;
 }
 
 export async function listDebriefSources(
@@ -773,6 +792,22 @@ export async function renameChatSession(sessionId: string, title: string): Promi
   await apiClient.patch(`/chat/sessions/${encodeURIComponent(sessionId)}/title`, { title });
 }
 
-export async function deleteChatSession(sessionId: string): Promise<void> {
-  await apiClient.delete(`/chat/sessions/${encodeURIComponent(sessionId)}`);
+export async function getChatSessionDeletionImpact(
+  sessionId: string,
+): Promise<ConversationDeletionImpact> {
+  return (
+    await apiClient.get(`/chat/sessions/${encodeURIComponent(sessionId)}/deletion-impact`)
+  ).data as ConversationDeletionImpact;
+}
+
+export async function deleteChatSession(
+  sessionId: string,
+  impact: ConversationDeletionImpact,
+): Promise<void> {
+  await apiClient.delete(`/chat/sessions/${encodeURIComponent(sessionId)}`, {
+    data: {
+      confirmation_token: impact.confirmation_token,
+      confirm_conversation_id: impact.conversation_id,
+    },
+  });
 }

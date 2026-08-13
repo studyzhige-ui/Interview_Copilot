@@ -9,6 +9,7 @@ from app.schemas.capabilities import (
     CapabilityEnabledRequest,
     MCPServerConfigRequest,
     SkillCreateRequest,
+    SkillResourcesReplaceRequest,
     SkillUpdateRequest,
 )
 from app.services.capabilities import mcp_server_service, skill_service
@@ -83,6 +84,43 @@ def delete_skill(
     if not skill_service.delete_skill(db, current_user.id, skill_id):
         raise HTTPException(status_code=404, detail="Skill not found")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/skills/{skill_id}/resources")
+def list_skill_resources(
+    skill_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    resources = skill_service.list_resources(
+        db,
+        user_pk=current_user.id,
+        skill_id=skill_id,
+    )
+    if resources is None:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    return {"resources": resources}
+
+
+@router.put("/skills/{skill_id}/resources")
+def replace_skill_resources(
+    skill_id: int,
+    payload: SkillResourcesReplaceRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = skill_service.replace_resources(
+            db,
+            user_pk=current_user.id,
+            skill_id=skill_id,
+            resources=[item.model_dump() for item in payload.resources],
+        )
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    return result
 
 
 @router.get("/mcp-servers")

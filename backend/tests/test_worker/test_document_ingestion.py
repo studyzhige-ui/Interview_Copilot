@@ -65,13 +65,14 @@ def _seed_doc(
     filename: str,
     status: str = "processing",
     source_kind: str = "user_upload",
+    purpose: str = "knowledge_document",
 ) -> str:
     db: Session = maker()
     try:
         asset = FileAsset(
             id="fa_w1",
             user_id=1,
-            purpose="knowledge_document",
+            purpose=purpose,
             original_filename=filename,
             object_key="uploads/1/fa_w1/" + filename,
             storage_uri="s3://b/uploads/1/fa_w1/" + filename,
@@ -90,6 +91,69 @@ def _seed_doc(
         db.add_all([asset, doc])
         db.commit()
         return doc.id
+    finally:
+        db.close()
+
+
+def test_chat_audio_is_transcribed_into_private_citable_chunks(worker_db, monkeypatch):
+    import app.core.storage as storage_mod
+    import app.rag.ingest.pipeline as ingestion_mod
+    import app.services.voice.audio_transcription_service as transcription_mod
+    from app.worker.tasks import process_document_ingestion
+
+    monkeypatch.setattr(
+        storage_mod,
+        "download_file_from_s3",
+        lambda uri, path: open(path, "wb").write(b"audio"),
+    )
+
+    async def _transcribe(path, language=None):
+        assert language is None
+        return "**[Speaker 1]**: 这是可引用的转写文本。"
+
+    captured: dict[str, object] = {}
+
+    async def _ingest_transcript(text, source_kind, user_id, **kwargs):
+        captured.update(
+            text=text,
+            source_kind=source_kind,
+            user_id=user_id,
+            **kwargs,
+        )
+        return {
+            "success": True,
+            "indexed": True,
+            "vector_indexed": False,
+            "chunk_count": 1,
+            "ref_doc_ids": [],
+            "content_text": text,
+        }
+
+    monkeypatch.setattr(transcription_mod, "transcribe_media", _transcribe)
+    monkeypatch.setattr(ingestion_mod, "ingest_transcript", _ingest_transcript)
+    monkeypatch.setattr(
+        ingestion_mod,
+        "ingest_document",
+        lambda *args, **kwargs: pytest.fail("audio must not enter document parser"),
+    )
+
+    doc_id = _seed_doc(
+        worker_db,
+        filename="conversation.m4a",
+        source_kind="chat_attachment",
+        purpose="interview_audio",
+    )
+    result = process_document_ingestion.run(doc_id)
+
+    assert result["status"] == "success"
+    assert captured["text"] == "**[Speaker 1]**: 这是可引用的转写文本。"
+    assert captured["source_kind"] == "chat_attachment"
+    assert captured["upload_id"] == "fa_w1"
+    db = worker_db()
+    try:
+        document = db.get(KnowledgeDocument, doc_id)
+        assert document.status == "ready"
+        assert document.content_text == captured["text"]
     finally:
         db.close()
 

@@ -6,15 +6,15 @@
     {
       "id": "stage0-durable-admission-and-interrupt",
       "stage": 0,
-      "claims": ["FIFO admission", "idempotent submission", "explicit interrupt fence", "no pre-claim History"],
-      "backend_tests": ["backend/tests/test_services/chat/test_turn_executor.py"],
+      "claims": ["FIFO admission", "idempotent submission", "explicit interrupt fence", "no pre-claim History", "impact-preview and strong-confirm Conversation deletion", "execution fence with minimal late-receipt tombstone", "owner-specific bounded receipt retention"],
+      "backend_tests": ["backend/tests/test_services/chat/test_turn_executor.py", "backend/tests/test_services/chat/test_conversation_deletion_service.py", "backend/tests/test_api/test_chat_api.py", "backend/tests/test_agent_runtime/test_tool_call_executor.py", "backend/tests/test_worker/test_maintenance_sweeper.py", "backend/tests/test_worker/test_celery_routes.py"],
       "frontend_tests": ["src/api/chat.test.ts", "src/pages/review/chat/ChatToolbar.test.tsx"]
     },
     {
       "id": "stage0-tool-policy-and-recovery",
       "stage": 0,
-      "claims": ["Standard and Auto parameter policy", "same-call waiting resume", "late receipt", "typed redaction"],
-      "backend_tests": ["backend/tests/test_agent_runtime/test_tool_policy.py", "backend/tests/test_agent_runtime/test_tool_call_executor.py", "backend/tests/test_api/test_tool_call_audit_api.py", "backend/tests/test_api/test_chat_api.py"],
+      "claims": ["Standard and Auto parameter policy", "whole-batch preflight before dispatch", "same-call waiting resume", "late receipt", "deleted-Conversation unresolved mutating resources fence overlapping dispatch until reconciliation", "canonical exact redacted ToolResult", "canonical ToolResult has no secondary local filesystem store", "completion-order live events and model-order replay", "typed deep audit"],
+      "backend_tests": ["backend/tests/test_agent_runtime/test_tool_policy.py", "backend/tests/test_agent_runtime/test_tool_call_executor.py", "backend/tests/test_services/chat/test_conversation_deletion_resource_service.py", "backend/tests/test_services/chat/test_model_dispatch_service.py", "backend/tests/test_api/test_tool_call_audit_api.py", "backend/tests/test_api/test_chat_api.py", "backend/tests/test_worker/test_maintenance_sweeper.py"],
       "frontend_tests": ["src/pages/review/chat/InteractionCard.test.tsx", "src/pages/review/chat/MessageBlocks.test.tsx"]
     },
     {
@@ -23,6 +23,13 @@
       "claims": ["single flat AgentTask", "current input anchor", "bounded local recovery", "deterministic provider payload"],
       "backend_tests": ["backend/tests/test_services/chat/test_agent_task_service.py", "backend/tests/test_conversation/test_agent_strategy_stream.py"],
       "frontend_tests": ["src/pages/review/chat/AgentTaskCard.test.tsx"]
+    },
+    {
+      "id": "stage0-shared-source-acquisition",
+      "stage": 0,
+      "claims": ["closed typed Chat source requests route directly to existing owners", "admitted typed object references become deterministic exact reads that Planner cannot remove or invent", "History Observation Artifact and named career-domain reads are bounded and owner-scoped", "explicit URL uses the Agent SSRF-safe reader and becomes versioned citable SourceResult evidence", "a fourth explicit URL produces typed overflow failure instead of silent truncation", "every explicit owner or URL failure blocks Chat before generation", "Chat and Agent share source categories while writes remain Agent Tool-only", "no persistent CareerState aggregate Source Registry or universal context DTO"],
+      "backend_tests": ["backend/tests/test_services/chat/test_shared_source_acquisition.py", "backend/tests/test_conversation/test_planner.py", "backend/tests/test_services/chat/test_context_pipeline.py", "backend/tests/test_conversation/test_chat_strategy.py", "backend/tests/test_rag/test_grounding_protocol.py"],
+      "frontend_tests": []
     },
     {
       "id": "stage0-native-provider-cache-and-execution-mode-cas",
@@ -41,22 +48,37 @@
     {
       "id": "stage1-attachment-claim-and-project-source",
       "stage": 1,
-      "claims": ["draft before claim", "immutable AttachmentRef", "Conversation isolation", "explicit Debrief promotion", "retry and cleanup"],
-      "backend_tests": ["backend/tests/test_services/chat/test_attachment_ingress_service.py", "backend/tests/test_services/chat/test_attachment_source_service.py", "backend/tests/test_rag/test_attachment_sources.py"],
-      "frontend_tests": ["src/pages/review/chat/AttachmentSources.test.tsx"]
+      "claims": ["draft before claim", "immutable AttachmentRef", "Conversation isolation", "explicit Debrief promotion", "exact AttachmentRef-to-Artifact promotion reuses the frozen FileAsset version without copying parsed text", "resume promotion creates confirmable candidates without silently writing CareerProfile", "retry and cleanup", "ready AttachmentRef can revoke only its current scope while History retains a readable tombstone", "scope revoke differs from permanent deletion", "owner-scoped controlled download never exposes storage identity", "permanent FileAsset deletion requires strong confirmation after reference and external-transmission impact preview", "formal references retain tombstones after blob deletion"],
+      "backend_tests": ["backend/tests/test_services/chat/test_attachment_ingress_service.py", "backend/tests/test_services/chat/test_attachment_source_service.py", "backend/tests/test_services/chat/test_attachment_artifact_promotion_service.py", "backend/tests/test_rag/test_attachment_sources.py", "backend/tests/test_api/test_file_assets_api.py", "backend/tests/test_services/uploads/test_file_asset_deletion_service.py", "backend/tests/test_services/test_artifact_service.py", "backend/tests/test_services/resume/test_resume_artifact_service.py", "backend/tests/test_agent_runtime/test_career_tools.py", "backend/tests/test_db/test_alembic_migrations.py"],
+      "frontend_tests": ["src/pages/review/chat/AttachmentSources.test.tsx", "src/api/chat.test.ts", "src/api/fileAssets.test.ts", "src/pages/artifacts/ArtifactsPage.test.tsx"]
+    },
+    {
+      "id": "stage1-attachment-format-and-coverage-truth",
+      "stage": 1,
+      "visual_scope_contract": ["whole-document only when explicit", "exact requested page interval", "bounded disclosed local default"],
+      "claims": ["document and audio ingress share one claim lifecycle", "audio becomes a scoped cited transcript", "typed parser warnings and text-versus-layout coverage are visible to the user", "full-review tasks prove contiguous source coverage", "page-vision uses the exact scoped FileAsset version and real provider receipts", "unsupported vision models and transports fail closed", "Chat never substitutes text/OCR for visual-layout review", "legacy attachments migrate or quarantine without silent scope"],
+      "backend_tests": ["backend/tests/test_worker/test_document_ingestion.py", "backend/tests/test_agent_runtime/test_attachment_vision_tool.py", "backend/tests/test_core/test_model_provider_adapter.py", "backend/tests/test_services/chat/test_attachment_coverage.py", "backend/tests/test_conversation/test_chat_strategy.py", "backend/tests/test_services/test_legacy_attachment_migration.py"],
+      "frontend_tests": ["src/pages/review/chat/attachmentUpload.test.ts", "src/pages/review/chat/AttachmentSources.test.tsx"]
     },
     {
       "id": "stage2-career-owner-and-process",
       "stage": 2,
-      "claims": ["one CareerProfile owner", "AbilitySignal is inferred state", "JobOpportunity supports versioned multi-direction CareerProfile relations", "append-only ProcessEvent", "four-state NextAction"],
-      "backend_tests": ["backend/tests/test_api/test_career_profile_api.py", "backend/tests/test_api/test_career_process_api.py", "backend/tests/test_agent_runtime/test_career_tools.py", "backend/tests/test_services/test_career_process_service.py", "backend/tests/test_services/test_legacy_memory_migration.py"],
+      "claims": ["one CareerProfile owner", "AbilitySignal is inferred state", "JobOpportunity supports versioned multi-direction CareerProfile relations", "append-only ProcessEvent", "four-state NextAction", "JobOpportunity owns append-only JD snapshots captured from exact ToolResult or typed product UI", "application events freeze the observed JD version and corrections preserve it", "Agent can preserve and reread exact JD sources without a generic Source Registry"],
+      "backend_tests": ["backend/tests/test_api/test_career_profile_api.py", "backend/tests/test_api/test_career_process_api.py", "backend/tests/test_api/test_career_process_jd_snapshots_api.py", "backend/tests/test_agent_runtime/test_career_tools.py", "backend/tests/test_agent_runtime/test_career_context_extended.py", "backend/tests/test_agent_runtime/test_career_domain_tools.py", "backend/tests/test_services/test_career_process_service.py", "backend/tests/test_services/test_job_description_snapshot_service.py", "backend/tests/test_services/test_legacy_memory_migration.py", "backend/tests/test_evaluation/test_stage2_job_description_snapshot_contract.py"],
       "frontend_tests": ["src/api/careerDomains.test.ts", "src/pages/career/CareerProfilePage.test.tsx", "src/pages/career/CareerProcessPage.test.tsx"]
+    },
+    {
+      "id": "stage2-resume-profile-ability-and-insights",
+      "stage": 2,
+      "claims": ["Artifact is the only production resume owner", "resume import creates confirmable profile candidates", "Interview and Mock recompute source-linked AbilitySignal", "historical funnel keeps direction material and channel snapshots", "Reminder is a planned NextAction delivery projection"],
+      "backend_tests": ["backend/tests/test_services/resume/test_resume_artifact_service.py", "backend/tests/test_worker/test_resume_worker.py", "backend/tests/test_services/test_ability_signal_service.py", "backend/tests/test_services/test_career_insights_service.py", "backend/tests/test_api/test_career_insights_api.py"],
+      "frontend_tests": ["src/pages/career/CareerProfilePage.test.tsx", "src/pages/career/CareerProcessPage.test.tsx"]
     },
     {
       "id": "stage3-artifact-offer-and-interview",
       "stage": 3,
       "claims": ["append-only Artifact versions", "related versus submitted", "exact submitted freeze", "Offer CAS diff", "owned optional JobOpportunity link"],
-      "backend_tests": ["backend/tests/test_api/test_artifacts_offers_api.py", "backend/tests/test_api/test_interview_api.py"],
+      "backend_tests": ["backend/tests/test_api/test_artifacts_offers_api.py", "backend/tests/test_api/test_interview_api.py", "backend/tests/test_agent_runtime/test_career_domain_tools.py"],
       "frontend_tests": ["src/pages/artifacts/ArtifactsPage.test.tsx", "src/api/careerDomains.test.ts"]
     },
     {
@@ -69,9 +91,9 @@
     {
       "id": "stage4-persistent-task",
       "stage": 4,
-      "claims": ["dedicated Conversation", "user FIFO priority", "scheduled and manual trigger", "waiting and merged compensation", "stop-this-run differs from pause-future", "history and delete", "scheduler dispatch repair", "server-current unattended Tool catalog"],
-      "backend_tests": ["backend/tests/test_services/test_persistent_task_service.py", "backend/tests/test_services/test_persistent_task_schedule.py", "backend/tests/test_api/test_stage4_integrations_api.py", "backend/tests/test_worker/test_maintenance_sweeper.py", "backend/tests/test_worker/test_celery_routes.py"],
-      "frontend_tests": ["src/pages/automation/PersistentTasksPage.test.tsx", "src/api/stage4.test.ts"]
+      "claims": ["dedicated Conversation", "user FIFO priority", "scheduled and manual trigger", "waiting and merged compensation", "stop-this-run differs from pause-future", "impact-preview strong-confirm delete fences active runs and removes dedicated scope", "unresolved late receipts retain only minimal owner-specific tombstones", "scheduler dispatch repair", "server-current unattended Tool catalog"],
+      "backend_tests": ["backend/tests/test_services/test_persistent_task_service.py", "backend/tests/test_services/test_persistent_task_schedule.py", "backend/tests/test_api/test_stage4_integrations_api.py", "backend/tests/test_agent_runtime/test_career_domain_tools.py", "backend/tests/test_worker/test_maintenance_sweeper.py", "backend/tests/test_worker/test_celery_routes.py"],
+      "frontend_tests": ["src/pages/automation/PersistentTasksPage.test.tsx", "src/api/persistentTasks.test.ts", "src/api/stage4.test.ts"]
     },
     {
       "id": "stage4-gmail-connector",
@@ -81,11 +103,25 @@
       "frontend_tests": ["src/pages/settings/ConnectionsPage.test.tsx", "src/api/stage4.test.ts"]
     },
     {
-      "id": "stage5-guidance-and-disabled-memory",
+      "id": "stage4-gmail-observation-automation",
+      "stage": 4,
+      "claims": ["cursor-CAS incremental Observation", "provider-message dedupe and immutable source snapshot", "untrusted email cannot become instruction", "one provider batch merges triggers into one task Turn", "ambiguous facts require a task-local confirmation card", "automatic domain writes are reversible and truthfully reported"],
+      "backend_tests": ["backend/tests/test_services/test_gmail_observation_service.py", "backend/tests/test_api/test_gmail_observations_api.py", "backend/tests/test_agent_runtime/test_gmail_observation_tool.py"],
+      "frontend_tests": ["src/pages/automation/GmailObservationCards.test.tsx"]
+    },
+    {
+      "id": "stage5-guidance-and-canonical-memory",
       "stage": 5,
-      "claims": ["guidance owners remain distinct", "resolved precedence", "legacy writer absent", "Recall empty", "Memory producer release gate closed"],
-      "backend_tests": ["backend/tests/test_services/test_personalization_service.py", "backend/tests/test_evaluation/test_career_scenario_gate.py"],
-      "frontend_tests": ["src/api/personalization.test.ts", "src/pages/settings/CopilotPreferencesPage.test.tsx"]
+      "claims": ["guidance owners remain distinct", "natural-language guidance routes by current real owner", "resolved precedence", "one user-level Memory owner", "independent recall and contribution controls", "selective low-authority Recall", "edit invalidate delete and promotion", "source deletion invalidation", "deleted content cannot auto-revive under a different semantic key", "automatic producer release gate defaults closed", "legacy writer absent"],
+      "backend_tests": ["backend/tests/test_services/test_personalization_service.py", "backend/tests/test_agent_runtime/test_personalization_tool.py", "backend/tests/test_services/test_agent_memory_service.py", "backend/tests/test_api/test_personalization_api.py", "backend/tests/test_evaluation/test_career_scenario_gate.py"],
+      "frontend_tests": ["src/api/personalization.test.ts", "src/pages/settings/CopilotPreferencesPage.test.tsx", "src/pages/settings/AgentMemorySettingsSection.test.tsx", "src/pages/review/chat/ConversationMemoryControlsButton.test.tsx"]
+    },
+    {
+      "id": "cross-stage-exact-history-and-workspaces",
+      "stage": 5,
+      "claims": ["History Search reads exact canonical Interaction Records", "Tool audit excerpts remain redacted", "old records do not claim current truth", "cross-tenant search fails closed", "four workspaces are navigation projections rather than new data owners"],
+      "backend_tests": ["backend/tests/test_services/test_interaction_history_service.py", "backend/tests/test_api/test_history_api.py", "backend/tests/test_agent_runtime/test_tool_registry.py"],
+      "frontend_tests": ["src/api/history.test.ts", "src/pages/history/HistorySearchPage.test.tsx"]
     }
   ]
 }

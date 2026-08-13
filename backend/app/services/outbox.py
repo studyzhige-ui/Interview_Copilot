@@ -39,9 +39,11 @@ INDEX_JOB_TYPES = frozenset(
     {
         "milvus_delete_document",
         "milvus_upsert_document",
-        "milvus_reindex_resume",
     }
 )
+# Pre-cut-over ``milvus_reindex_resume`` rows are intentionally outside every
+# production lane. They remain inert audit records until retention cleanup;
+# no handler may mutate legacy Resume/ResumeSection state after the cut-over.
 CLEANUP_JOB_TYPES = frozenset({"delete_object", "cleanup_failed_upload"})
 
 _JOB_LANES: dict[str, OutboxLane] = {
@@ -364,6 +366,22 @@ def _handle_delete_object(db: Session, job: OutboxJob) -> None:
         delete_local_uri(storage_uri)
     else:
         delete_s3_object(storage_uri)
+    # Permanent FileAsset deletion keeps a minimal reference tombstone because
+    # Artifact/Interview History may still point at the exact old identity.
+    # Only this aggregate shape therefore graduates delete_pending -> deleted;
+    # ordinary cleanup jobs may have physically removed their FileAsset row.
+    if getattr(job, "aggregate_type", None) == "file_asset" and db is not None:
+        from app.models.file_asset import FileAsset
+
+        asset = db.get(FileAsset, job.aggregate_id)
+        if (
+            asset is not None
+            and asset.user_id == job.user_id
+            and asset.upload_status == "delete_pending"
+        ):
+            asset.upload_status = "deleted"
+            asset.updated_at = utc_now()
+            db.add(asset)
 
 
 register_handler("delete_object", _handle_delete_object)

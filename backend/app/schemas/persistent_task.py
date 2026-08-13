@@ -15,6 +15,8 @@ from pydantic import (
     model_validator,
 )
 
+from app.schemas.conversation_lifecycle import ConversationDeletionImpact
+
 
 PersistentTaskState = Literal["active", "paused"]
 AutomationTriggerKind = Literal["scheduled", "event", "manual"]
@@ -41,7 +43,10 @@ class EventTriggerSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["event"] = "event"
-    connector: str = Field(min_length=1, max_length=120)
+    # Only the real first-party Gmail History intake exists today.  Keeping
+    # this provider-specific prevents the UI/API from pretending Outlook,
+    # Calendar, or a generic event bus is implemented.
+    connector: Literal["gmail"] = "gmail"
     event_types: list[str] = Field(min_length=1, max_length=20)
 
     @field_validator("event_types")
@@ -65,6 +70,7 @@ class PersistentTaskCreate(BaseModel):
     read_scope: list[str] = Field(default_factory=list, max_length=50)
     action_scope: list[str] = Field(default_factory=list, max_length=50)
     allowed_tool_names: list[str] = Field(default_factory=list, max_length=64)
+    skill_ids: list[PositiveInt] = Field(default_factory=list, max_length=20)
     user_request_identity: str = Field(min_length=1, max_length=256)
     user_request_version: str | None = Field(default=None, max_length=128)
     idempotency_key: str = Field(min_length=1, max_length=200)
@@ -95,6 +101,7 @@ class PersistentTaskUpdate(BaseModel):
     read_scope: list[str] | None = Field(default=None, max_length=50)
     action_scope: list[str] | None = Field(default=None, max_length=50)
     allowed_tool_names: list[str] | None = Field(default=None, max_length=64)
+    skill_ids: list[PositiveInt] | None = Field(default=None, max_length=20)
     user_request_identity: str = Field(min_length=1, max_length=256)
     user_request_version: str | None = Field(default=None, max_length=128)
 
@@ -128,6 +135,7 @@ class PersistentTaskUpdate(BaseModel):
                 self.read_scope,
                 self.action_scope,
                 self.allowed_tool_names,
+                self.skill_ids,
             )
         ):
             raise ValueError("at least one task definition field must change")
@@ -149,6 +157,20 @@ class PersistentTaskDelete(BaseModel):
     expected_version: PositiveInt
     user_request_identity: str = Field(min_length=1, max_length=256)
     user_request_version: str | None = Field(default=None, max_length=128)
+    confirmation_token: str = Field(min_length=64, max_length=64)
+    confirm_task_id: str = Field(min_length=1, max_length=128)
+
+
+class PersistentTaskDeletionImpact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    title: str
+    version: int
+    pending_trigger_count: int
+    confirmation_token: str
+    conversation: ConversationDeletionImpact
+    disclosures: list[str] = Field(default_factory=list)
 
 
 class PersistentTaskTriggerInput(BaseModel):
@@ -179,6 +201,7 @@ class PersistentTaskView(BaseModel):
     read_scope_json: list[str]
     action_scope_json: list[str]
     allowed_tool_names_json: list[str]
+    skill_refs_json: list[dict]
     user_request_identity: str
     user_request_version: str | None
     compensation_blocked_at: datetime | None
@@ -250,6 +273,7 @@ __all__ = [
     "EventTriggerSpec",
     "PersistentTaskCreate",
     "PersistentTaskDelete",
+    "PersistentTaskDeletionImpact",
     "PersistentTaskEligibleToolView",
     "PersistentTaskState",
     "PersistentTaskStateChange",

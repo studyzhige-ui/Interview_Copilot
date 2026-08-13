@@ -42,6 +42,14 @@ from app.rag.domain.models import EMPTY_PLANNER_NO_RETRIEVAL
 from app.services.analytics.telemetry_service import log_interaction_metrics
 from app.services.chat.chat_history_service import transcript_service
 from app.services.chat.context_assembly_pipeline import context_pipeline
+from app.services.chat.shared_source_acquisition import (
+    SharedSourceBundle,
+    acquire_shared_read_only_sources,
+)
+from app.services.chat.source_requests import (
+    explicit_source_requests_from_object_references,
+    extract_explicit_urls,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +59,7 @@ _TURN_OUTCOMES = {"completed", "waiting", "blocked", "failed", "cancelled"}
 def check_turn_completion(
     turn_id: str | None,
     user_id: int,
+    attachment_requirements: tuple[dict[str, str], ...] = (),
 ) -> tuple[bool, str | None]:
     """Run the Shared Kernel's deterministic completed-candidate gate.
 
@@ -72,21 +81,100 @@ def check_turn_completion(
     db = SessionLocal()
     try:
         task = get_agent_task(db, turn_id=turn_id, user_id=user_id)
-        unresolved = (
-            db.query(AgentToolCall.id)
-            .filter(
-                AgentToolCall.turn_id == turn_id,
-                AgentToolCall.status.in_(("running", "waiting", "unknown")),
-            )
-            .first()
+        calls = (
+            db.query(AgentToolCall)
+            .filter(AgentToolCall.turn_id == turn_id)
+            .order_by(AgentToolCall.id)
+            .all()
         )
-        if unresolved is not None:
-            return False, "unresolved_tool_calls"
+        for call in calls:
+            ok, reason = _tool_call_proves_completion(call)
+            if not ok:
+                return False, reason
+        if attachment_requirements:
+            from app.services.chat.attachment_coverage import (
+                attachment_requirement_block_reason,
+            )
+
+            reason = attachment_requirement_block_reason(
+                attachment_requirements,
+                calls,
+            )
+            if reason:
+                return False, reason
         if not agent_task_structure_complete(task):
             return False, "agent_task_incomplete"
         return True, None
     finally:
         db.close()
+
+
+def _tool_call_proves_completion(call: object) -> tuple[bool, str | None]:
+    """Validate the durable result needed for one concrete Tool claim.
+
+    A model-visible Tool-like string never reaches this function.  It checks
+    only the persisted call identity and redacted typed result.  External
+    writes additionally require a provider receipt or read-back; adding an
+    external-write Tool without that proof therefore fails closed.
+    """
+
+    call_id = str(getattr(call, "call_id", "unknown"))
+    status = str(getattr(call, "status", ""))
+    if status in {"running", "waiting", "unknown", "deferred"}:
+        return False, f"unresolved_tool_call:{call_id}"
+
+    result = getattr(call, "result_json", None)
+    if status in {"denied", "cancelled", "failed", "timeout"}:
+        # A closed failure/Policy result proves only that this concrete action
+        # did not succeed. It must stay available to the Agent for replanning,
+        # but it cannot permanently veto a Turn whose safe alternative path
+        # completed. Success claims below still require their own typed proof.
+        if (isinstance(result, dict) and result.get("error")) or getattr(
+            call, "error", None
+        ):
+            return True, None
+        return False, f"tool_failure_result_missing:{call_id}:{status}"
+    if status != "completed":
+        return False, f"tool_call_not_completed:{call_id}:{status or 'missing'}"
+    if not isinstance(result, dict) or result.get("error"):
+        return False, f"tool_result_missing_or_failed:{call_id}"
+
+    effect = str(getattr(call, "effect", "unknown"))
+    if effect == "external_write":
+        proof = any(
+            result.get(key)
+            for key in (
+                "provider_receipt",
+                "receipt",
+                "read_back",
+                "readback",
+            )
+        )
+        if not proof:
+            return False, f"external_write_proof_missing:{call_id}"
+
+    if effect == "client_action":
+        action_status = str(
+            result.get("client_action_status")
+            or result.get("acknowledgement")
+            or result.get("status")
+            or ""
+        ).casefold()
+        acknowledged = (
+            action_status
+            in {
+                "acknowledged",
+                "completed",
+                "ready",
+                "entered",
+                "started",
+            }
+            or result.get("ui_entered") is True
+        )
+        if not acknowledged:
+            return False, f"client_action_ack_missing:{call_id}"
+
+    return True, None
 
 
 class ConversationEngine:
@@ -97,6 +185,7 @@ class ConversationEngine:
         self,
         *,
         user_id: str,
+        user_pk: int = 0,
         session_id: str,
         user_message: str,
         strategy: ExecutionStrategy,
@@ -108,6 +197,7 @@ class ConversationEngine:
         strategy_extras: dict | None = None,
     ) -> None:
         self.user_id = user_id
+        self.user_pk = user_pk
         self.session_id = session_id
         self.user_message = user_message
         self.strategy = strategy
@@ -287,6 +377,35 @@ class ConversationEngine:
                 interview_questions=runtime_context.planner_question_catalog,
             )
 
+        # Explicit URLs are selected from the admitted current input rather
+        # than delegated to the planner.  Chat may additionally request a
+        # bounded read from one of four existing owners.  Agent keeps its
+        # iterative owner tools, but receives explicit URL SourceResults from
+        # this same SSRF-safe path so the two strategies share the source
+        # universe without manufacturing a Tool Call.
+        explicit_urls = extract_explicit_urls(self.user_message)
+        explicit_owner_requests = explicit_source_requests_from_object_references(
+            self.strategy_extras.get("admitted_object_references")
+        )
+        shared_source_task = (
+            asyncio.create_task(
+                acquire_shared_read_only_sources(
+                    user_id=self.user_id,
+                    user_pk=self.user_pk,
+                    session_id=self.session_id,
+                    turn_id=self.turn_id,
+                    current_query=self.user_message,
+                    requests=(query_plan.source_requests if not agent_mode else ()),
+                    explicit_requests=explicit_owner_requests,
+                    explicit_urls=explicit_urls,
+                )
+            )
+            if explicit_urls
+            or explicit_owner_requests
+            or (not agent_mode and query_plan.source_requests)
+            else None
+        )
+
         debrief_reference = runtime_context.render_record_context(
             self.question_indexes,
             query_plan.referenced_question_indexes,
@@ -327,8 +446,25 @@ class ConversationEngine:
 
         knowledge_result = await knowledge_task if knowledge_task else None
         attachment_bundle = await attachment_task
+        shared_source_bundle = (
+            await shared_source_task if shared_source_task else SharedSourceBundle()
+        )
+        from app.services.chat.attachment_coverage import (
+            attachment_execution_requirements,
+        )
+
+        self.strategy_extras["attachment_execution_requirements"] = (
+            attachment_execution_requirements(attachment_bundle.documents)
+        )
+        self.strategy_extras["explicit_source_failures"] = list(
+            shared_source_bundle.explicit_failures
+        )
         knowledge_result = merge_retrieval_results(
             attachment_bundle.result if attachment_bundle.documents else None,
+            knowledge_result,
+        )
+        knowledge_result = merge_retrieval_results(
+            shared_source_bundle.result if shared_source_bundle.attempted else None,
             knowledge_result,
         )
 
@@ -336,8 +472,10 @@ class ConversationEngine:
         # flags. When retrieval ran, read everything off it (the facade
         # already stamped planner_failed onto it); when it didn't (direct
         # chat / agent mode), planner_failed still comes from the plan.
-        self._retrieval_attempted = knowledge_task is not None or bool(
-            attachment_bundle.documents
+        self._retrieval_attempted = (
+            knowledge_task is not None
+            or bool(attachment_bundle.documents)
+            or shared_source_bundle.attempted
         )
         _state = knowledge_result.state if knowledge_result is not None else None
         self._retrieval_hit = bool(_state and _state.retrieval_hit)
@@ -359,8 +497,8 @@ class ConversationEngine:
                 "diagnostics": knowledge_result.diagnostics,
             }
 
-        # Full answer context. Legacy mixed Memory remains disabled until its
-        # Stage 2 ownership migration; an empty canonical recall is honest.
+        # Full answer context. Canonical Long-term Agent Memory is recalled
+        # selectively as low-authority data; legacy mixed Memory is never read.
         # We build the AssembledContext ONCE here and hand it to the
         # strategy so it can render with its own system rules without
         # re-running the pipeline (and re-fetching the debrief
@@ -383,12 +521,25 @@ class ConversationEngine:
             ).context_window
         except Exception:  # noqa: BLE001 — cold catalog: fall back to default
             _window = None
+        try:
+            from app.services.agent_memory_service import render_recall_block
+
+            memory_block = await asyncio.to_thread(
+                render_recall_block,
+                conversation_id=self.session_id,
+                user_pk=self.user_pk,
+                current_query=self.user_message,
+            )
+        except Exception:  # noqa: BLE001 - optional personalization fails closed
+            logger.exception("Long-term Agent Memory recall failed closed")
+            memory_block = ""
         assembled = await context_pipeline.assemble_answer_context(
             session_id=self.session_id,
             current_query=self.user_message,
-            memory_block="",
+            memory_block=memory_block,
             debrief_reference=debrief_reference,
             attachment_manifest=attachment_bundle.manifest,
+            source_read_status=shared_source_bundle.status_manifest,
             product_object_context=self.product_object_context,
             retrieval_result=knowledge_result,
             user_id=self.user_id,
@@ -397,6 +548,7 @@ class ConversationEngine:
 
         self._ctx = StrategyContext(
             user_id=self.user_id,
+            user_pk=self.user_pk,
             session_id=self.session_id,
             user_message=self.user_message,
             turn_id=self.turn_id,
@@ -407,6 +559,7 @@ class ConversationEngine:
             needs_knowledge_retrieval=(
                 query_plan.needs_knowledge_retrieval
                 or bool(attachment_bundle.documents)
+                or shared_source_bundle.attempted
             ),
             retrieval_hit=self._retrieval_hit,
             extras=self.strategy_extras,

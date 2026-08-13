@@ -110,9 +110,8 @@ python scripts/init_models.py
 受管缓存。
 
 运行时文件统一放在被 Git 忽略的 `data/`：模型和字节码缓存在 `cache/`，日志在
-`logs/`，Celery 状态在 `runtime/`，对象存储降级文件在 `storage/`，大工具结果
-在 `agent-results/`，文档和音频临时文件在 `tmp/`。临时文件超过 24 小时、宿主
-启动日志超过 14 天以及已经删除会话遗留的工具结果会由每日任务清理；
+`logs/`，Celery 状态在 `runtime/`，对象存储降级文件在 `storage/`，文档和音频
+临时文件在 `tmp/`。临时文件超过 24 小时、宿主启动日志超过 14 天会由每日任务清理；
 `metrics.jsonl` 达到 50 MiB 后只保留一个备份。模型缓存下载成本高，不会自动
 删除，应在停止 Worker 后由部署者按模型目录手动清理。
 

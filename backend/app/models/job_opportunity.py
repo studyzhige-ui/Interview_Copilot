@@ -21,11 +21,13 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    text,
 )
 from sqlalchemy.orm import relationship
 
 from app.db.database import Base
 from app.db.types import UTCDateTime as DateTime
+from app.db.types import JSONValue as JSON
 from app.db.types import utc_now
 
 
@@ -78,6 +80,7 @@ NEXT_ACTION_SOURCE_KINDS = (
     "process_event",
     "agent_suggestion",
     "copilot_preference",
+    "offer",
 )
 NEXT_ACTION_TRANSITION_SOURCE_KINDS = (
     "user_assertion",
@@ -229,6 +232,84 @@ class JobOpportunityDirectionLink(Base):
     created_at = Column(DateTime, nullable=False, default=utc_now)
 
 
+class JobOpportunityMerge(Base):
+    """One explicit, reversible duplicate-to-canonical relation.
+
+    Neither opportunity nor either ProcessEvent history is rewritten. The
+    relation only changes how the product projects the duplicate, and a
+    retraction restores both original lines immediately.
+    """
+
+    __tablename__ = "job_opportunity_merges"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'retracted')",
+            name="ck_job_opportunity_merges_status",
+        ),
+        CheckConstraint(
+            "version >= 1",
+            name="ck_job_opportunity_merges_version_positive",
+        ),
+        CheckConstraint(
+            "duplicate_opportunity_id <> canonical_opportunity_id",
+            name="ck_job_opportunity_merges_distinct",
+        ),
+        UniqueConstraint(
+            "user_id",
+            "operation_key",
+            name="uq_job_opportunity_merges_user_operation",
+        ),
+        UniqueConstraint(
+            "user_id",
+            "retraction_operation_key",
+            name="uq_job_opportunity_merges_user_retraction",
+        ),
+        Index(
+            "uq_job_opportunity_merges_active_duplicate",
+            "duplicate_opportunity_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
+        Index(
+            "ix_job_opportunity_merges_user_status",
+            "user_id",
+            "status",
+            "created_at",
+        ),
+    )
+
+    id = Column(String(36), primary_key=True, default=lambda: _id("jom"))
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    duplicate_opportunity_id = Column(
+        String(35),
+        ForeignKey("job_opportunities.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    canonical_opportunity_id = Column(
+        String(35),
+        ForeignKey("job_opportunities.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status = Column(
+        String(16), nullable=False, default="active", server_default="active"
+    )
+    version = Column(Integer, nullable=False, default=1, server_default="1")
+    operation_key = Column(String(200), nullable=False)
+    reason = Column(Text, nullable=False)
+    confirmation_source_identity = Column(String(256), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+    retraction_operation_key = Column(String(200), nullable=True)
+    retraction_reason = Column(Text, nullable=True)
+    retracted_at = Column(DateTime, nullable=True)
+
+
 class ProcessEventImmutableError(RuntimeError):
     """Raised when code attempts to rewrite or delete a historical fact."""
 
@@ -264,6 +345,11 @@ class ProcessEvent(Base):
             "(operation = 'retract' AND kind = 'retraction' "
             "AND corrects_event_id IS NOT NULL)",
             name="ck_process_events_operation_shape",
+        ),
+        CheckConstraint(
+            "(jd_snapshot_id IS NULL AND jd_snapshot_version IS NULL) OR "
+            "(jd_snapshot_id IS NOT NULL AND jd_snapshot_version IS NOT NULL)",
+            name="ck_process_events_jd_snapshot_shape",
         ),
         UniqueConstraint(
             "job_opportunity_id",
@@ -305,9 +391,23 @@ class ProcessEvent(Base):
     source_version = Column(String(128), nullable=True)
     description = Column(Text, nullable=False)
     step_summary = Column(String(300), nullable=True)
+    # Immutable analysis-time facts captured with the event (for example the
+    # confirmed direction identities and application channel at submission).
+    # This is deliberately part of the fact row rather than a mutable funnel
+    # projection, so later profile edits cannot rewrite historical cohorts.
+    analysis_context_json = Column(JSON, nullable=False, default=dict)
 
     # A replacement is another asserted fact that points at the invalid fact.
     # A pure retraction uses operation='retract'. Both preserve the old row.
+    # application_submitted freezes the exact JD version visible at its event
+    # time. Later JobDescriptionSnapshots never rewrite this historical pair.
+    jd_snapshot_id = Column(
+        String(36),
+        ForeignKey("job_description_snapshots.id", ondelete="NO ACTION"),
+        nullable=True,
+    )
+    jd_snapshot_version = Column(Integer, nullable=True)
+
     corrects_event_id = Column(
         String(35),
         ForeignKey(
@@ -348,7 +448,7 @@ class NextAction(Base):
         CheckConstraint(
             "source_kind IN "
             "('user_request', 'process_event', 'agent_suggestion', "
-            "'copilot_preference')",
+            "'copilot_preference', 'offer')",
             name="ck_next_actions_source_kind",
         ),
         CheckConstraint(
@@ -404,6 +504,19 @@ class NextAction(Base):
             "(status <> 'closed' AND close_reason IS NULL)",
             name="ck_next_actions_close_reason",
         ),
+        CheckConstraint("version >= 0", name="ck_next_actions_version"),
+        CheckConstraint(
+            "reminder_channel IS NULL OR reminder_channel = 'in_app'",
+            name="ck_next_actions_reminder_channel",
+        ),
+        CheckConstraint(
+            "(reminder_at IS NULL AND reminder_next_attempt_at IS NULL "
+            "AND reminder_channel IS NULL AND reminder_delivered_at IS NULL "
+            "AND reminder_dismissed_at IS NULL) OR "
+            "(reminder_at IS NOT NULL AND reminder_next_attempt_at IS NOT NULL "
+            "AND reminder_channel IS NOT NULL AND status <> 'suggested')",
+            name="ck_next_actions_reminder_shape",
+        ),
         UniqueConstraint(
             "user_id",
             "idempotency_key",
@@ -420,6 +533,12 @@ class NextAction(Base):
             "job_opportunity_id",
             "status",
         ),
+        Index(
+            "ix_next_actions_reminder_due",
+            "reminder_next_attempt_at",
+            "reminder_delivered_at",
+            "status",
+        ),
     )
 
     id = Column(String(35), primary_key=True, default=lambda: _id("na"))
@@ -433,6 +552,24 @@ class NextAction(Base):
     job_opportunity_id = Column(
         String(35),
         ForeignKey("job_opportunities.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    interview_record_id = Column(
+        String(128),
+        ForeignKey("interview_records.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    offer_id = Column(
+        String(35),
+        ForeignKey("offers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    artifact_id = Column(
+        String(128),
+        ForeignKey("artifacts.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -461,7 +598,18 @@ class NextAction(Base):
     resolution_source_version = Column(String(128), nullable=True)
     close_reason = Column(String(300), nullable=True)
 
+    # Reminder is notification scheduling attached to this planned action,
+    # not another task/object lifecycle.  A minute scheduler materializes an
+    # in-app delivery by stamping ``reminder_delivered_at``; dismissal only
+    # controls presentation and never changes the NextAction lifecycle.
+    reminder_at = Column(DateTime, nullable=True)
+    reminder_next_attempt_at = Column(DateTime, nullable=True)
+    reminder_channel = Column(String(24), nullable=True)
+    reminder_delivered_at = Column(DateTime, nullable=True)
+    reminder_dismissed_at = Column(DateTime, nullable=True)
+
     idempotency_key = Column(String(200), nullable=True)
+    version = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, nullable=False, default=utc_now)
     updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
@@ -478,6 +626,7 @@ __all__ = [
     "PROCESS_SOURCE_KINDS",
     "JobOpportunity",
     "JobOpportunityDirectionLink",
+    "JobOpportunityMerge",
     "NextAction",
     "ProcessEvent",
     "ProcessEventImmutableError",

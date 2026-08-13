@@ -20,6 +20,7 @@ from app.schemas.gmail_integration import (
     GmailMessageSummary,
     GmailSearchMessagesResult,
 )
+from app.schemas.gmail_observation import GmailIncrementalBatch
 
 
 GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
@@ -86,6 +87,16 @@ class GmailProviderAdapter(Protocol):
     ) -> list[GmailMessageSummary]:
         """Run one bounded Gmail read using the referenced grant."""
 
+    async def read_incremental_messages(
+        self,
+        credential_handle: str,
+        *,
+        user_pk: int,
+        cursor: str | None,
+        limit: int,
+    ) -> GmailIncrementalBatch:
+        """Read a bounded Gmail History increment or initialize its cursor."""
+
 
 async def bind_verified_grant(
     db: Session,
@@ -111,6 +122,8 @@ async def bind_verified_grant(
         .one_or_none()
     )
     now = utc_now()
+    previous_subject = row.google_subject if row is not None else None
+    previous_status = row.status if row is not None else None
     if row is None:
         row = GmailIntegrationAccount(user_id=user_pk)
     row.google_subject = subject
@@ -121,6 +134,13 @@ async def bind_verified_grant(
     row.last_checked_at = now
     row.last_error_code = None
     row.revoked_at = None
+    if previous_status == "revoked" or (
+        previous_subject is not None and previous_subject != subject
+    ):
+        row.history_cursor = None
+        row.history_cursor_updated_at = None
+        row.last_observation_sync_at = None
+        row.last_observation_sync_error_code = None
     row.updated_at = now
     db.add(row)
     db.flush()
@@ -205,6 +225,9 @@ async def revoke_account(
     row.status = "revoked"
     row.last_checked_at = now
     row.last_error_code = None
+    row.history_cursor = None
+    row.history_cursor_updated_at = None
+    row.last_observation_sync_error_code = None
     row.revoked_at = now
     row.updated_at = now
     db.add(row)
@@ -284,6 +307,48 @@ async def search_messages(
     )
 
 
+async def fetch_incremental_messages(
+    db: Session,
+    *,
+    user_pk: int,
+    cursor: str | None,
+    limit: int,
+    adapter: GmailProviderAdapter,
+) -> GmailIncrementalBatch:
+    """Fetch one bounded History increment without advancing local state.
+
+    The Gmail Observation Application Service persists snapshots and advances
+    the account cursor in the same transaction.  Keeping that write out of the
+    provider adapter prevents a successful HTTP read from creating a gap when
+    local persistence fails.
+    """
+
+    if not 1 <= limit <= 100:
+        raise GmailIntegrationError("limit")
+    row = _required_account(db, user_pk, lock=False)
+    handle = _active_handle(row)
+    try:
+        batch = await _read_provider_increment(
+            adapter,
+            handle,
+            user_pk=user_pk,
+            cursor=cursor,
+            limit=limit,
+        )
+    except GmailProviderAdapterError as exc:
+        if exc.code in _RECONNECT_ERROR_CODES:
+            now = utc_now()
+            row.status = "invalid"
+            row.last_checked_at = now
+            row.last_error_code = exc.code
+            row.updated_at = now
+            db.add(row)
+            db.flush()
+            raise GmailConnectionRequiredError(exc.code) from exc
+        raise
+    return GmailIncrementalBatch.model_validate(batch.model_dump(mode="python"))
+
+
 async def _inspect_grant(
     adapter: GmailProviderAdapter,
     handle: str,
@@ -325,6 +390,27 @@ async def _search_provider_messages(
             handle,
             user_pk=user_pk,
             query=query,
+            limit=limit,
+        )
+    except GmailProviderAdapterError:
+        raise
+    except Exception:  # noqa: BLE001
+        raise GmailProviderAdapterError("provider_error") from None
+
+
+async def _read_provider_increment(
+    adapter: GmailProviderAdapter,
+    handle: str,
+    *,
+    user_pk: int,
+    cursor: str | None,
+    limit: int,
+) -> GmailIncrementalBatch:
+    try:
+        return await adapter.read_incremental_messages(
+            handle,
+            user_pk=user_pk,
+            cursor=cursor,
             limit=limit,
         )
     except GmailProviderAdapterError:
@@ -415,6 +501,7 @@ __all__ = [
     "GmailProviderAdapter",
     "GmailProviderAdapterError",
     "bind_verified_grant",
+    "fetch_incremental_messages",
     "get_account",
     "mark_reconnect_required",
     "revoke_account",

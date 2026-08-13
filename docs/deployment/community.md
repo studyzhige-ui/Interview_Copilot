@@ -61,6 +61,15 @@ Open `http://localhost:5173`. Stop the foreground launcher with `Ctrl+C`; use
 `scripts/stop.ps1` or `bash scripts/stop.sh` when you also want to stop the
 Docker infrastructure.
 
+### Optional Gmail credential store
+
+Gmail OAuth tokens are never stored in PostgreSQL. To enable Gmail, configure
+all Google OAuth values plus `GMAIL_CREDENTIAL_STORE_FILE` as an absolute path
+outside the database directory and `GMAIL_CREDENTIAL_STORE_KEY` as an
+independently generated recovery secret. Back up the encrypted file and key
+separately. Missing, unreadable, corrupt, or wrongly keyed stores make the
+connector unavailable instead of starting an unrecoverable OAuth flow.
+
 ## Full container mode
 
 Use this mode to run the packaged Community stack without host Python, Celery,
@@ -145,7 +154,6 @@ All application-managed files live under the ignored `data/` tree:
 | `logs/` | Host launcher logs and `metrics.jsonl` | Launcher logs older than 14 days are swept; metrics rotate at 50 MiB with one backup |
 | `runtime/` | Celery Beat schedule and small process state | Reused and overwritten |
 | `storage/` | Local fallback for user uploads when object storage is unavailable | Deleted with the owning business object/outbox job |
-| `agent-results/` | Oversized tool results keyed by conversation | Deleted with the conversation; orphan directories are swept daily |
 | `tmp/` | Document/audio downloads and parser conversions | Deleted after each operation; crash leftovers older than 24 hours are swept daily |
 | `backups/`, `evaluation/`, `release/` | Explicit operator command output | Created only when the corresponding script is run |
 

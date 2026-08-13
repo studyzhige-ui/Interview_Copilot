@@ -16,8 +16,10 @@ bytes through this generic browser flow a second time.
 from __future__ import annotations
 
 import logging
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.rate_limit import RATE_UPLOAD, limiter
@@ -27,6 +29,9 @@ from app.models.file_asset import FileAsset
 from app.models.user import User
 from app.schemas.file_assets import (
     ConfirmResponse,
+    FileAssetDeletionImpact,
+    FileAssetPermanentDeleteRequest,
+    FileAssetPermanentDeleteResult,
     UploadUrlRequest,
     UploadUrlResponse,
 )
@@ -100,7 +105,6 @@ def create_upload_url(
     return UploadUrlResponse(
         file_asset_id=asset.id,
         upload_url=url_info["upload_url"],
-        storage_uri=asset.storage_uri,
         filename=asset.original_filename,
     )
 
@@ -132,3 +136,168 @@ def confirm_upload(
         validation_status=asset.validation_status,
         validation_error=asset.validation_error,
     )
+
+
+def _file_deletion_http(exc: Exception) -> HTTPException:
+    from app.services.uploads.file_asset_deletion_service import (
+        FileAssetDeletionConflictError,
+        FileAssetDeletionNotFoundError,
+    )
+
+    if isinstance(exc, FileAssetDeletionNotFoundError):
+        return HTTPException(status_code=404, detail="文件资产不存在或无权访问")
+    if isinstance(exc, FileAssetDeletionConflictError):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get(
+    "/file-assets/{file_asset_id}/deletion-impact",
+    response_model=FileAssetDeletionImpact,
+)
+def get_file_asset_deletion_impact(
+    file_asset_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from app.services.uploads.file_asset_deletion_service import (
+        FileAssetDeletionError,
+        preview_file_asset_deletion,
+    )
+
+    try:
+        return preview_file_asset_deletion(
+            db,
+            user_pk=current_user.id,
+            file_asset_id=file_asset_id,
+        )
+    except FileAssetDeletionError as exc:
+        raise _file_deletion_http(exc) from exc
+
+
+@router.delete(
+    "/file-assets/{file_asset_id}/permanent",
+    response_model=FileAssetPermanentDeleteResult,
+)
+def permanently_delete_file_asset(
+    file_asset_id: str,
+    body: FileAssetPermanentDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from app.services.uploads.file_asset_deletion_service import (
+        FileAssetDeletionError,
+        permanently_delete_file_asset as delete_asset,
+    )
+
+    try:
+        execution = delete_asset(
+            db,
+            user_pk=current_user.id,
+            file_asset_id=file_asset_id,
+            confirmation_token=body.confirmation_token,
+            confirm_file_asset_id=body.confirm_file_asset_id,
+            confirm_filename=body.confirm_filename,
+        )
+        db.commit()
+    except FileAssetDeletionError as exc:
+        db.rollback()
+        raise _file_deletion_http(exc) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    from app.task_queue.dispatch import revoke_task
+
+    for task_id in execution.ingestion_task_ids:
+        try:
+            revoke_task(task_id)
+        except Exception:  # noqa: BLE001 - durable deletion fence is authoritative
+            logger.warning(
+                "Could not revoke permanently deleted FileAsset ingestion %s",
+                task_id,
+                exc_info=True,
+            )
+    return execution.result
+
+
+@router.get("/file-assets/{file_asset_id}/download")
+def download_file_asset(
+    file_asset_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Owner-scoped download without disclosing storage URI or object key."""
+
+    asset = (
+        db.query(FileAsset)
+        .filter(
+            FileAsset.id == file_asset_id,
+            FileAsset.user_id == current_user.id,
+            FileAsset.deleted_at.is_(None),
+            FileAsset.upload_status.in_(("uploaded", "consumed")),
+            FileAsset.validation_status == "passed",
+        )
+        .one_or_none()
+    )
+    if asset is None:
+        raise HTTPException(status_code=404, detail="文件资产不存在或不可下载")
+
+    if asset.storage_uri.startswith("s3://"):
+        from app.core.config import settings
+        from app.core.storage import parse_s3_uri, s3_client
+
+        try:
+            bucket, key = parse_s3_uri(asset.storage_uri)
+            if bucket != settings.S3_BUCKET_NAME:
+                raise ValueError("FileAsset points outside the controlled bucket")
+            object_response = s3_client.get_object(Bucket=bucket, Key=key)
+        except Exception as exc:  # noqa: BLE001 - no raw storage fallback
+            logger.warning("download read failed for %s", asset.id, exc_info=True)
+            raise HTTPException(status_code=503, detail="文件暂时无法下载") from exc
+
+        body = object_response["Body"]
+
+        def iter_object():
+            try:
+                yield from body.iter_chunks(chunk_size=64 * 1024)
+            finally:
+                body.close()
+
+        headers = {
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": (
+                f"attachment; filename*=UTF-8''{quote(asset.original_filename, safe='')}"
+            ),
+            "X-Content-Type-Options": "nosniff",
+        }
+        response_size = object_response.get("ContentLength", asset.size_bytes)
+        if response_size is not None:
+            headers["Content-Length"] = str(response_size)
+        return StreamingResponse(
+            iter_object(),
+            media_type=asset.content_type or "application/octet-stream",
+            headers=headers,
+        )
+
+    from app.core.storage import is_local_uri, parse_local_uri
+
+    if is_local_uri(asset.storage_uri):
+        try:
+            local_path = parse_local_uri(asset.storage_uri)
+        except ValueError as exc:
+            logger.warning("unsafe local FileAsset URI for %s", asset.id)
+            raise HTTPException(status_code=404, detail="文件资产不可下载") from exc
+        if not local_path.is_file():
+            raise HTTPException(status_code=404, detail="文件资产不可下载")
+        return FileResponse(
+            path=local_path,
+            media_type=asset.content_type or "application/octet-stream",
+            filename=asset.original_filename,
+            headers={
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    raise HTTPException(status_code=409, detail="该存储类型不支持安全下载")

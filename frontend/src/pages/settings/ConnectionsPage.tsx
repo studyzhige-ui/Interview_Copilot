@@ -173,7 +173,16 @@ export function ConnectionsPage() {
               <ConnectionFact label="状态" value={account.status} />
               <ConnectionFact label="最近检查" value={displayDate(account.last_checked_at)} />
               <ConnectionFact label="最近错误" value={account.last_error_code ?? '无'} />
+              <ConnectionFact label="Observation 增量游标" value={account.history_cursor_updated_at ? '已建立' : '尚未建立'} />
+              <ConnectionFact label="最近增量同步" value={displayDate(account.last_observation_sync_at)} />
             </div>
+            {account.last_observation_sync_error_code && (
+              <div role="alert" className="rounded-lg border border-warning-200 bg-warning-50 px-3 py-2 text-xs text-warning-800">
+                增量同步需要处理：{account.last_observation_sync_error_code === 'history_cursor_expired'
+                  ? 'Gmail 游标已过期，请进入对应持续任务确认从当前时点重建。'
+                  : account.last_observation_sync_error_code}
+              </div>
+            )}
             <div>
               <div className="mb-2 text-xs font-medium text-stone-500">已授权 scope</div>
               <div className="flex flex-wrap gap-1.5">

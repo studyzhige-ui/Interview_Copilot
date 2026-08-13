@@ -62,6 +62,7 @@ class TurnExecution:
     automation_user_id: int | None = None
     automation_definition_version: int | None = None
     automation_tool_names: tuple[str, ...] = ()
+    automation_skill_refs: tuple[dict[str, object], ...] = ()
     automation_validation_error: str | None = None
 
 
@@ -787,32 +788,45 @@ def request_turn_interrupt(
     # Close already-registered calls before cancelling the worker.  Read calls
     # are safely cancelled; a side-effecting/unknown call remains explicitly
     # unknown until its provider-specific reconcile path resolves it.
-    now = utc_now()
-    running_calls = (
+    registered_calls = (
         db.query(AgentToolCall)
         .filter(
             AgentToolCall.turn_id == turn.id,
-            AgentToolCall.status == "running",
+            AgentToolCall.status.in_(("running", "waiting", "deferred")),
         )
         .with_for_update()
         .all()
     )
-    for call in running_calls:
-        if call.effect == "read":
-            call.status = "cancelled"
-            call.result_json = {
-                "error": "tool_cancelled",
+    # Local import avoids bootstrapping the Agent tool package while this
+    # service is still defining the Turn ownership primitives it consumes.
+    from app.agent_runtime.tool_call_executor import record_tool_call_interrupt
+
+    for call in registered_calls:
+        if call.status in {"waiting", "deferred"}:
+            status = "cancelled"
+            result = {
+                "error": "tool_not_dispatched",
                 "reason": "user_interrupt",
             }
-            call.error = "tool_cancelled"
+            error = "tool_not_dispatched"
+        elif call.effect == "read":
+            status = "cancelled"
+            result = {"error": "tool_cancelled", "reason": "user_interrupt"}
+            error = "tool_cancelled"
         else:
-            call.status = "unknown"
-            call.result_json = {
+            status = "unknown"
+            result = {
                 "error": "tool_outcome_unknown",
                 "reason": "user_interrupt_requires_reconcile",
             }
-            call.error = "tool_outcome_unknown"
-        call.completed_at = now
+            error = "tool_outcome_unknown"
+        record_tool_call_interrupt(
+            db,
+            row=call,
+            status=status,
+            result=result,
+            error=error,
+        )
     db.commit()
     return turn.status, int(turn.dispatch_generation)
 
@@ -920,7 +934,7 @@ def _admit_persistent_task_after_user_terminal(
     """Admit retained automation only after ordinary user FIFO is empty."""
 
     from app.agent_runtime.turn_tool_catalog import (
-        cloud_sustainable_read_tool_names,
+        cloud_sustainable_automation_tool_names,
     )
     from app.models.persistent_task import PersistentTask
     from app.services.persistent_task_service import (
@@ -940,7 +954,7 @@ def _admit_persistent_task_after_user_terminal(
             db,
             user_pk=task.user_id,
             task_id=task.id,
-            cloud_sustainable_tool_names=cloud_sustainable_read_tool_names(),
+            cloud_sustainable_tool_names=cloud_sustainable_automation_tool_names(),
         )
         db.commit()
     except PersistentTaskError:
@@ -1031,7 +1045,7 @@ def cancel_pending_turn(db: Session, turn_id: str, user_id: int) -> bool:
         and automation_turn.status in {"pending", "waiting"}
     ):
         from app.agent_runtime.turn_tool_catalog import (
-            cloud_sustainable_read_tool_names,
+            cloud_sustainable_automation_tool_names,
         )
         from app.services.persistent_task_service import (
             settle_automation_turn_and_admit_next,
@@ -1044,7 +1058,7 @@ def cancel_pending_turn(db: Session, turn_id: str, user_id: int) -> bool:
             turn_id=turn_id,
             terminal_status="cancelled",
             error="Turn cancelled",
-            cloud_sustainable_tool_names=cloud_sustainable_read_tool_names(),
+            cloud_sustainable_tool_names=cloud_sustainable_automation_tool_names(),
             user_stopped=True,
         )
         db.commit()
@@ -1110,7 +1124,7 @@ def _claim(turn_id: str) -> TurnExecution | None:
         if username is None:
             return None
         from app.agent_runtime.turn_tool_catalog import (
-            cloud_sustainable_read_tool_names,
+            cloud_sustainable_automation_tool_names,
         )
         from app.services.persistent_task_service import (
             resolve_automation_run_request,
@@ -1119,7 +1133,7 @@ def _claim(turn_id: str) -> TurnExecution | None:
         automation = resolve_automation_run_request(
             db,
             turn_id=row.id,
-            cloud_sustainable_tool_names=cloud_sustainable_read_tool_names(),
+            cloud_sustainable_tool_names=cloud_sustainable_automation_tool_names(),
         )
         now = utc_now()
         row.status = "running"
@@ -1157,6 +1171,9 @@ def _claim(turn_id: str) -> TurnExecution | None:
             automation_tool_names=(
                 automation.allowed_tool_names if automation is not None else ()
             ),
+            automation_skill_refs=(
+                automation.skill_refs if automation is not None else ()
+            ),
             automation_validation_error=(
                 automation.validation_error if automation is not None else None
             ),
@@ -1184,6 +1201,21 @@ def _finish(turn_id: str, status: str, error: str | None = None) -> bool:
         )
         if changed:
             _dispatch_handoff(next_turn_id)
+            if status == "completed" and settings.AGENT_MEMORY_PRODUCER_ENABLED:
+                try:
+                    from app.task_queue.dispatch import (
+                        dispatch_agent_memory_consolidation,
+                    )
+
+                    dispatch_agent_memory_consolidation(
+                        turn_id,
+                        countdown=settings.AGENT_MEMORY_IDLE_SECONDS,
+                    )
+                except Exception:  # noqa: BLE001 - source Turn stays authoritative
+                    logger.exception(
+                        "Could not schedule optional Agent Memory consolidation for %s",
+                        turn_id,
+                    )
         return changed
     except Exception:
         db.rollback()
@@ -1204,7 +1236,7 @@ def _finish_automation(
     db = SessionLocal()
     try:
         from app.agent_runtime.turn_tool_catalog import (
-            cloud_sustainable_read_tool_names,
+            cloud_sustainable_automation_tool_names,
         )
         from app.services.persistent_task_service import (
             PersistentTaskTriggerConflictError,
@@ -1219,7 +1251,9 @@ def _finish_automation(
                 turn_id=turn.id,
                 terminal_status=status,
                 error=error,
-                cloud_sustainable_tool_names=cloud_sustainable_read_tool_names(),
+                cloud_sustainable_tool_names=(
+                    cloud_sustainable_automation_tool_names()
+                ),
                 owner_id=_WORKER_ID,
                 dispatch_generation=(
                     None if status == "cancelled" else turn.dispatch_generation
@@ -1406,12 +1440,19 @@ async def execute_turn(turn_id: str) -> None:
             user_pk=turn.user_pk,
             references=turn.object_references,
         )
-        strategy_extras = {"execution_mode": turn.execution_mode}
+        strategy_extras = {
+            "execution_mode": turn.execution_mode,
+            # Preserve the immutable admitted typed identities separately from
+            # the server-rendered label/context projection. The Engine uses
+            # this only for deterministic explicit source reads.
+            "admitted_object_references": list(turn.object_references),
+        }
         if turn.automation_task_id is not None:
             strategy_extras.update(
                 {
                     "unattended_automation": True,
                     "builtin_tool_allowlist": turn.automation_tool_names,
+                    "persistent_task_skill_refs": list(turn.automation_skill_refs),
                     "persistent_task_id": turn.automation_task_id,
                     "persistent_task_definition_version": (
                         turn.automation_definition_version
@@ -1420,6 +1461,7 @@ async def execute_turn(turn_id: str) -> None:
             )
         engine = ConversationEngine(
             user_id=turn.username,
+            user_pk=turn.user_pk,
             session_id=turn.conversation_id,
             user_message=turn.message,
             question_indexes=turn.question_indexes,

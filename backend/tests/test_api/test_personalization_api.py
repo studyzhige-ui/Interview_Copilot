@@ -4,11 +4,13 @@ from collections.abc import Iterator
 
 import app.models  # noqa: F401
 import pytest
+from app.services import agent_memory_service
 from app.api import personalization
 from app.core.security import get_current_user
 from app.db.database import Base, get_db
 from app.models.chat import Conversation, ConversationMessage
 from app.models.interview_record import InterviewRecord
+from app.models.long_term_memory import LongTermAgentMemory
 from app.models.user import User
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -135,4 +137,122 @@ def test_personalization_api_rejects_cross_tenant_owners(
         "/api/v1/personalization/conversations/foreign-guidance/guidance"
     )
 
+    assert response.status_code == 404
+
+
+def test_memory_api_has_independent_controls_cas_and_user_management(
+    client: TestClient,
+    db: Session,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        agent_memory_service.settings, "AGENT_MEMORY_PRODUCER_ENABLED", True
+    )
+    user = db.query(User).filter(User.username == "alice-personalization").one()
+    conversation = Conversation(id="memory-api-conversation", user_id=user.id)
+    memory = LongTermAgentMemory(
+        user_id=user.id,
+        semantic_key="decision.side-by-side",
+        content="过去并排比较方案更容易做决定。",
+        applicability="比较多个方案时",
+        tags_json=["decision"],
+        valence="effective",
+        confidence=0.9,
+        content_hash="b" * 64,
+    )
+    db.add_all([conversation, memory])
+    db.commit()
+
+    default = client.get("/api/v1/personalization/memory-settings")
+    assert default.status_code == 200
+    assert default.json()["recall_enabled"] is True
+    assert default.json()["contribution_enabled"] is False
+
+    settings = client.put(
+        "/api/v1/personalization/memory-settings",
+        json={
+            "expected_version": 0,
+            "recall_enabled": False,
+            "contribution_enabled": True,
+        },
+    )
+    assert settings.status_code == 200, settings.text
+    assert settings.json()["version"] == 1
+
+    controls = client.put(
+        f"/api/v1/personalization/conversations/{conversation.id}/memory-controls",
+        json={
+            "expected_version": 0,
+            "recall_override": True,
+            "contribution_override": None,
+        },
+    )
+    assert controls.status_code == 200, controls.text
+    assert controls.json()["effective_recall_enabled"] is True
+    assert controls.json()["effective_contribution_enabled"] is True
+
+    listed = client.get("/api/v1/personalization/memories")
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()] == [memory.id]
+
+    revised = client.patch(
+        f"/api/v1/personalization/memories/{memory.id}",
+        json={
+            "expected_version": 1,
+            "content": "过去用并排表格更容易比较方案。",
+            "applicability": "权衡多个选项时",
+            "tags": ["comparison"],
+        },
+    )
+    assert revised.status_code == 200, revised.text
+    assert revised.json()["version"] == 2
+
+    promoted = client.post(
+        f"/api/v1/personalization/memories/{memory.id}/promote-to-preference",
+        json={
+            "expected_memory_version": 2,
+            "expected_preference_version": 0,
+            "instruction": "比较多个方案时默认先给并排表格。",
+        },
+    )
+    assert promoted.status_code == 200, promoted.text
+    assert promoted.json()["memory"]["status"] == "invalidated"
+    assert promoted.json()["preference"]["instructions"] == [
+        "比较多个方案时默认先给并排表格。"
+    ]
+
+    stale = client.request(
+        "DELETE",
+        f"/api/v1/personalization/memories/{memory.id}",
+        json={"expected_version": 2, "reason": "stale"},
+    )
+    assert stale.status_code == 409
+
+
+def test_memory_api_never_crosses_account_owner(client: TestClient, db: Session):
+    other = User(username="memory-api-other", hashed_password="x")
+    db.add(other)
+    db.flush()
+    foreign_memory = LongTermAgentMemory(
+        user_id=other.id,
+        semantic_key="foreign.memory",
+        content="foreign",
+        applicability="foreign",
+        tags_json=[],
+        valence="mixed",
+        confidence=0.8,
+        content_hash="c" * 64,
+    )
+    db.add(foreign_memory)
+    db.commit()
+
+    response = client.patch(
+        f"/api/v1/personalization/memories/{foreign_memory.id}",
+        json={
+            "expected_version": 1,
+            "content": "attempt",
+            "applicability": "attempt",
+            "tags": [],
+        },
+    )
     assert response.status_code == 404

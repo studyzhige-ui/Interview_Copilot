@@ -83,4 +83,9 @@ def evaluate_tool_policy(
         ):
             return ToolPolicyDecision("allow", "auto_scope_authorized_reversible")
         return ToolPolicyDecision("ask", "external_write_confirmation_required")
+    # Unknown-effect tools (notably remote MCP) are never admitted by task
+    # scope or Auto mode.  They may run only after the user approves this
+    # exact persisted Tool Call and its concrete typed input.
+    if context.user_confirmed_this_call:
+        return ToolPolicyDecision("allow", "call_confirmed_unknown_effect")
     return ToolPolicyDecision("ask", "unknown_effect")

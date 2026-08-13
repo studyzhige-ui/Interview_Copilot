@@ -10,6 +10,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { FormItem, TextArea } from '@/pages/career/CareerFields';
 import { toast } from '@/store/uiStore';
 import type { CopilotPreference } from '@/types/personalization';
+import { AgentMemorySettingsSection } from './AgentMemorySettingsSection';
 
 const PREFERENCE_KEY = ['personalization', 'copilot-preference'] as const;
 const PROFILE_KEY = ['auth', 'me'] as const;
@@ -81,6 +82,8 @@ export function CopilotPreferencesPage() {
         />
         </section>
       )}
+
+      <AgentMemorySettingsSection />
     </div>
   );
 }

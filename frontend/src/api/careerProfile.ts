@@ -7,6 +7,7 @@ import type {
   DirectionInput,
   DirectionLifecycle,
   PersonalFact,
+  CareerProfileCandidateItem,
 } from '@/types/career';
 
 export async function getCareerProfile(): Promise<CareerProfile> {
@@ -95,6 +96,32 @@ export async function resolveCareerProfileDraft(input: {
   ).data;
 }
 
+export async function resolveCareerProfileCandidates(input: {
+  draft: CareerProfileDraft;
+  profileVersion: number;
+  decisions: Array<{
+    item: CareerProfileCandidateItem;
+    decision: 'accept' | 'reject';
+    note?: string;
+  }>;
+}): Promise<{ profile: CareerProfile; draft: CareerProfileDraft }> {
+  return (
+    await apiClient.post(
+      `/career-profile/drafts/${encodeURIComponent(input.draft.id)}/candidates/resolve`,
+      {
+        expected_draft_version: input.draft.version,
+        expected_profile_version: input.profileVersion,
+        decisions: input.decisions.map(({ item, decision, note }) => ({
+          item_id: item.id,
+          expected_version: item.version,
+          decision,
+          note,
+        })),
+      },
+    )
+  ).data;
+}
+
 export async function listAbilitySignals(includeInactive = false): Promise<AbilitySignal[]> {
   return (await apiClient.get('/ability-signals', { params: { include_inactive: includeInactive } })).data;
 }
@@ -109,5 +136,16 @@ export async function changeAbilitySignalStatus(
       expected_version: signal.version,
       reason,
     })
+  ).data;
+}
+
+export async function recomputeInterviewAbilitySignals(
+  interviewRecordId: string,
+): Promise<AbilitySignal[]> {
+  return (
+    await apiClient.post(
+      `/interviews/${encodeURIComponent(interviewRecordId)}/ability-signals/recompute`,
+      {},
+    )
   ).data;
 }

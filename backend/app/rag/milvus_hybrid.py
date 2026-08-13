@@ -71,14 +71,6 @@ KNOWLEDGE = HybridCollection(
     name=active_knowledge_collection_name(),
     scalars=(_Scalar("source_kind"), _Scalar("document_id")),
 )
-RESUME = HybridCollection(
-    name=settings.RESUME_MILVUS_COLLECTION,
-    scalars=(
-        _Scalar("resume_id"),
-        _Scalar("section_type"),
-        _Scalar("title", max_length=_TEXT_MAX),
-    ),
-)
 _client: Any = None
 _client_lock = Lock()
 _ensured: set[str] = set()
@@ -409,7 +401,6 @@ def sparse_search(
 __all__ = [
     "HybridCollection",
     "KNOWLEDGE",
-    "RESUME",
     "ensure_collection",
     "validate_existing_dims",
     "insert",

@@ -7,7 +7,9 @@ into business capabilities or chooses an implementation on the model's behalf.
 
 import json
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass
+from inspect import isawaitable
 from types import MappingProxyType
 from typing import Any, Awaitable, Callable, Mapping
 
@@ -40,6 +42,43 @@ class AgentToolContext:
 
 
 @dataclass(frozen=True)
+class ToolPreflightResult:
+    """Call-time facts a concrete handler can determine without dispatching.
+
+    This is not a second policy layer.  A ToolDefinition may only report real
+    connection/scope/resource facts; the shared Tool Policy still owns the
+    allow/ask/deny decision.
+    """
+
+    connection_ready: bool = True
+    provider_scope_allows: bool = True
+    hard_deny_reason: str | None = None
+    resource_identities: tuple[str, ...] = ()
+    provider_identity: str | None = None
+    connection_identity: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolDispatchPlan:
+    """Validated, side-effect-free projection of one concrete Tool Call."""
+
+    tool_name: str
+    arguments: dict[str, Any]
+    effect: ToolEffect
+    handler_exists: bool
+    concurrency_safe: bool
+    connection_ready: bool = True
+    provider_scope_allows: bool = True
+    hard_deny_reason: str | None = None
+    resource_identities: frozenset[str] = frozenset()
+    handler_identity: str | None = None
+    provider_identity: str | None = None
+    connection_identity: str | None = None
+    receipt_ref_resolver: Callable[[dict[str, Any]], Collection[str]] | None = None
+    error: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
 class ToolDefinition:
     """A model-callable concrete tool with one real execution handler."""
 
@@ -63,6 +102,26 @@ class ToolDefinition:
     # True only when multiple calls can run concurrently without observable
     # ordering dependencies. Unknown and mutating tools stay serial by default.
     concurrency_safe: bool = False
+    # Optional zero-dispatch check for real connection/scope readiness and
+    # concrete resource identities.  It must not call the provider operation
+    # or mutate product state.  Policy remains centralized in tool_policy.py.
+    preflight: (
+        Callable[
+            [BaseModel, "AgentToolContext"],
+            ToolPreflightResult | Awaitable[ToolPreflightResult],
+        ]
+        | None
+    ) = None
+    # Deterministic resource identities derived from typed arguments.  The
+    # batch planner keeps intersecting identities out of the same parallel
+    # batch; this refines (and never widens) ``concurrency_safe``.
+    resource_resolver: (
+        Callable[[BaseModel, "AgentToolContext"], Collection[str]] | None
+    ) = None
+    # Receipt identities are extracted only when this concrete ToolDefinition
+    # declares their typed result contract. Generic result keys/text are never
+    # interpreted as external proof by the runtime.
+    receipt_ref_resolver: Callable[[dict[str, Any]], Collection[str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +159,19 @@ class ToolRegistryView:
         if entry is None:
             return {"error": "unknown_tool", "tool_name": name}
         return await _dispatch_entry(entry, raw_args, ctx)
+
+    async def plan_call(
+        self,
+        name: str,
+        raw_args: dict[str, Any],
+        ctx: AgentToolContext,
+    ) -> ToolDispatchPlan:
+        """Validate one call and collect concrete facts without dispatching."""
+
+        entry = self.entries.get(name)
+        if entry is None:
+            return _missing_tool_plan(name, raw_args)
+        return await _plan_entry(entry, raw_args, ctx)
 
     def is_concurrency_safe(self, name: str) -> bool:
         entry = self.entries.get(name)
@@ -330,6 +402,18 @@ class ToolRegistry:
 
         return await _dispatch_entry(entry, raw_args, ctx)
 
+    async def plan_call(
+        self,
+        name: str,
+        raw_args: dict[str, Any],
+        ctx: AgentToolContext,
+    ) -> ToolDispatchPlan:
+        self._ensure_default_tools_loaded()
+        entry = self._entries.get(name)
+        if entry is None:
+            return _missing_tool_plan(name, raw_args)
+        return await _plan_entry(entry, raw_args, ctx)
+
     def is_concurrency_safe(self, name: str) -> bool:
         entry = self.get(name)
         return bool(entry and entry.concurrency_safe)
@@ -398,6 +482,124 @@ async def _dispatch_entry(
             "details": exc.errors(),
         }
     return await entry.handler(validated, ctx)
+
+
+def _missing_tool_plan(name: str, raw_args: dict[str, Any]) -> ToolDispatchPlan:
+    return ToolDispatchPlan(
+        tool_name=name,
+        arguments=dict(raw_args),
+        effect=ToolEffect.UNKNOWN,
+        handler_exists=False,
+        concurrency_safe=False,
+        error={"error": "unknown_tool", "tool_name": name},
+    )
+
+
+def _callable_identity(handler: Callable[..., Any]) -> str:
+    module = str(getattr(handler, "__module__", "") or "").strip()
+    qualname = str(
+        getattr(handler, "__qualname__", "")
+        or getattr(handler, "__name__", "")
+        or "handler"
+    ).strip()
+    return f"{module}.{qualname}"[:255] if module else qualname[:255]
+
+
+def _resource_identities(values: Collection[str]) -> frozenset[str]:
+    identities: set[str] = set()
+    for value in values:
+        identity = str(value).strip()
+        if not identity:
+            continue
+        if len(identity) > 512:
+            raise ValueError("tool resource identity is too long")
+        identities.add(identity)
+        if len(identities) > 64:
+            raise ValueError("too many tool resource identities")
+    return frozenset(identities)
+
+
+async def _plan_entry(
+    entry: ToolDefinition,
+    raw_args: dict[str, Any],
+    ctx: AgentToolContext,
+) -> ToolDispatchPlan:
+    """Build the one concrete preflight projection used by the Agent loop."""
+
+    encoded = json.dumps(raw_args, ensure_ascii=False, default=str)
+    if len(encoded) > settings.AGENT_MAX_TOOL_ARG_CHARS:
+        return ToolDispatchPlan(
+            tool_name=entry.name,
+            arguments=dict(raw_args),
+            effect=entry.effect,
+            handler_exists=True,
+            concurrency_safe=False,
+            error={"error": "tool_args_too_large", "tool_name": entry.name},
+        )
+    try:
+        validated = entry.args_model.model_validate(raw_args)
+    except ValidationError as exc:
+        return ToolDispatchPlan(
+            tool_name=entry.name,
+            arguments=dict(raw_args),
+            effect=entry.effect,
+            handler_exists=True,
+            concurrency_safe=False,
+            error={
+                "error": "tool_args_validation_failed",
+                "tool_name": entry.name,
+                "details": exc.errors(),
+            },
+        )
+
+    arguments = validated.model_dump(mode="json")
+    try:
+        resources = (
+            _resource_identities(entry.resource_resolver(validated, ctx))
+            if entry.resource_resolver is not None
+            else frozenset()
+        )
+        facts = ToolPreflightResult()
+        if entry.preflight is not None:
+            candidate = entry.preflight(validated, ctx)
+            facts = await candidate if isawaitable(candidate) else candidate
+            if not isinstance(facts, ToolPreflightResult):
+                raise TypeError("tool preflight returned an invalid result")
+        resources = resources.union(_resource_identities(facts.resource_identities))
+    except Exception as exc:  # noqa: BLE001 - preflight is a trust boundary
+        logger.warning("Tool preflight failed: %s (%s)", entry.name, type(exc).__name__)
+        return ToolDispatchPlan(
+            tool_name=entry.name,
+            arguments=arguments,
+            effect=entry.effect,
+            handler_exists=True,
+            concurrency_safe=False,
+            error={"error": "tool_preflight_failed", "tool_name": entry.name},
+        )
+
+    return ToolDispatchPlan(
+        tool_name=entry.name,
+        arguments=arguments,
+        effect=entry.effect,
+        handler_exists=True,
+        concurrency_safe=bool(entry.concurrency_safe),
+        connection_ready=bool(facts.connection_ready),
+        provider_scope_allows=bool(facts.provider_scope_allows),
+        hard_deny_reason=facts.hard_deny_reason,
+        resource_identities=resources,
+        handler_identity=_callable_identity(entry.handler),
+        provider_identity=(
+            str(facts.provider_identity)[:255]
+            if facts.provider_identity is not None
+            else None
+        ),
+        connection_identity=(
+            str(facts.connection_identity)[:255]
+            if facts.connection_identity is not None
+            else None
+        ),
+        receipt_ref_resolver=entry.receipt_ref_resolver,
+    )
 
 
 # ── Utility functions (carried over from old tools.py) ───────────────────

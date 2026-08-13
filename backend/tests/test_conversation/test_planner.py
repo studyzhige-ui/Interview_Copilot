@@ -101,6 +101,107 @@ async def test_direct_chat_clears_stray_intents(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_planner_emits_closed_bounded_owner_read_requests(monkeypatch):
+    fake = _LLM(
+        {
+            "needs_knowledge_retrieval": False,
+            "intents": [],
+            "source_requests": [
+                {
+                    "kind": "history",
+                    "query": "上次确认的回答方式",
+                    "scope": "all_conversations",
+                    "limit": 2,
+                },
+                {
+                    "kind": "career_domains",
+                    "query": "当前申请进度",
+                    "sections": ["job_opportunities", "next_actions"],
+                    "limit": 5,
+                },
+            ],
+        }
+    )
+    _patch(monkeypatch, fake)
+
+    plan = await planner.plan_query(
+        user_message="结合上次讨论告诉我当前申请进度",
+        recent_turns=[],
+    )
+
+    assert [request.kind for request in plan.source_requests] == [
+        "history",
+        "career_domains",
+    ]
+    assert plan.source_requests[0].limit == 2
+    assert plan.source_requests[1].sections == [
+        "job_opportunities",
+        "next_actions",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_planner_deduplicates_owner_requests_and_never_routes_url(monkeypatch):
+    fake = _LLM(
+        {
+            "needs_knowledge_retrieval": False,
+            "intents": [],
+            "source_requests": [
+                {"kind": "artifacts", "query": "简历", "limit": 1},
+                {"kind": "artifacts", "query": "求职信", "limit": 1},
+            ],
+        }
+    )
+    _patch(monkeypatch, fake)
+
+    plan = await planner.plan_query(
+        user_message="比较简历和求职信 https://example.test/job",
+        recent_turns=[],
+    )
+
+    assert len(plan.source_requests) == 1
+    assert plan.source_requests[0].kind == "artifacts"
+    prompt = fake.calls[0][0]
+    assert "Do not emit a source request for public URLs" in prompt
+    assert '"kind":"url"' not in prompt
+
+
+@pytest.mark.asyncio
+async def test_planner_cannot_create_authoritative_owner_identities(monkeypatch):
+    fake = _LLM(
+        {
+            "needs_knowledge_retrieval": False,
+            "intents": [],
+            "source_requests": [
+                {
+                    "kind": "artifacts",
+                    "query": "resume",
+                    "artifact_ids": ["model-invented-artifact"],
+                },
+                {
+                    "kind": "career_domains",
+                    "query": "job",
+                    "sections": ["job_opportunities"],
+                    "reference_kind": "job_opportunity",
+                    "object_ids": ["model-invented-job"],
+                    "include_process_events": True,
+                },
+            ],
+        }
+    )
+    _patch(monkeypatch, fake)
+
+    plan = await planner.plan_query(
+        user_message="summarize my sources", recent_turns=[]
+    )
+
+    assert plan.source_requests[0].artifact_ids == []
+    assert plan.source_requests[1].reference_kind is None
+    assert plan.source_requests[1].object_ids == []
+    assert plan.source_requests[1].include_process_events is False
+
+
+@pytest.mark.asyncio
 async def test_planner_resolves_multiple_debrief_questions_and_validates_indexes(
     monkeypatch,
 ):

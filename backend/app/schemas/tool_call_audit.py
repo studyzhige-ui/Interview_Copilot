@@ -24,6 +24,16 @@ class AgentToolCallAuditView(BaseModel):
     dispatch_generation: PositiveInt
     policy_decision: str
     policy_reason: str
+    model_step: int | None
+    model_call_index: int | None
+    model_call_order: int | None
+    completion_sequence: int | None
+    handler_identity: str | None
+    provider_identity: str | None
+    connection_identity: str | None
+    timeline: list[dict[str, JsonValue]]
+    receipt_refs: list[str]
+    resource_identities: list[str]
     arguments: dict[str, JsonValue]
     result: JsonValue | None
     error: str | None

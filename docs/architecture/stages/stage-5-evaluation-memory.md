@@ -8,23 +8,26 @@ user-level Long-term Agent Memory producer may be enabled. It does not redefine
 CareerProfile, AbilitySignal, CopilotPreference, Artifact, Interaction Records,
 Conversation compaction or Runtime recovery as Memory.
 
-The initial production decision is deliberately explicit:
+The production boundary is deliberately explicit:
 
 - the legacy realtime extractor, Dreaming worker and `save_memory` Tool remain
   removed;
-- the canonical Memory Recall input is empty;
+- the canonical selective Recall path is implemented and loads only relevant,
+  active, user-owned low-authority items; an empty Recall remains valid;
 - no legacy `user_profile`, `ability_states` or `learning_strategy` row may be
   wrapped and injected as new Memory;
-- no automatic producer is registered until every gate in section 6 passes on
-  a representative, reviewed dataset;
+- the single automatic producer is implemented and registered, but a separate
+  deployment release gate defaults to off until every gate in section 6 passes
+  on a representative, reviewed dataset; account or Conversation contribution
+  controls cannot bypass that release gate;
 - an empty Recall is a valid result and must not change Turn semantics.
 
 This is a gated product decision, not an unfinished compatibility fallback.
 
 ## 2. One future owner and one semantic path
 
-If the gate later passes, the product may have one canonical user-level
-Long-term Agent Memory collection. It has one logical automatic formation and
+The product has one canonical user-level Long-term Agent Memory collection. It
+has one logical automatic formation and
 consolidation path and one logical Recall path; either path may be horizontally
 scaled with idempotency. Direct user correction, invalidation and deletion act
 on the same canonical records and are not a second automatic writer.
@@ -99,23 +102,28 @@ delete existing items.
 Explicit deletion removes the recallable body and every FTS/vector/cache
 projection. A minimal content-free suppression marker may retain source
 identity, deletion boundary and hash solely to prevent automatic resurrection.
-The automatic producer uses a durable per-user/source watermark and never
-periodically rescans already processed old History. Material before a deletion
-boundary cannot recreate the deleted item; only a later explicit user request
-to remember it can remove suppression. Deleting a source Conversation makes
+The automatic producer uses the canonical semantic identity plus exact
+source-Turn idempotency and never periodically rescans old History. Material
+from a previously processed source cannot recreate the deleted item; this
+release has no automatic or generic create path that removes suppression.
+Deleting a source Conversation makes
 that History immediately ineligible; an item supported only by that source is
 invalidated or deleted, while independently supported content is recomputed
 from remaining live sources.
 
-No body snapshot may remain in an audit row after a user forgets it. Account
-export, retention duration, physical schemas and UI are implemented only when
-the producer gate passes; until then no empty Memory page or misleading toggle
-is exposed.
+No body snapshot may remain in an audit row after a user forgets it. The UI
+shows the canonical records and source identities and lets the user revise,
+invalidate, delete or promote an experience into CopilotPreference. It must
+show that automatic contribution is deployment-gated when the representative
+evaluation has not passed; it may never present a toggle as effective when the
+release gate is closed.
 
 ## 6. Automatic producer release gates
 
-All gates are required; a partial pass keeps the producer disabled and Recall
-empty. The evaluation report records denominator, numerator, dataset revision,
+All gates are required; a partial pass keeps the automatic producer disabled.
+Recall remains available only for already canonical, user-owned records and is
+validly empty when none exist; it never reads legacy mixed stores. The
+evaluation report records denominator, numerator, dataset revision,
 model/provider configuration and exact code revision.
 
 | Gate | Required result |
@@ -154,7 +162,7 @@ not only RAG quality. The executable matrix must cover at least:
 - PersistentTask scheduled/manual admission, user-input priority, trigger
   history, waiting, pause, cancellation and deletion;
 - Gmail OAuth connect, refresh, bounded read, revoke and secret non-disclosure;
-- the disabled-Memory gates above.
+- the canonical-Memory gates above.
 
 The matrix references executable backend and frontend tests. A missing test,
 unknown selector, skipped mandatory scenario or non-zero test command is a gate
@@ -164,14 +172,13 @@ connector without committing credentials or provider data.
 
 ## 8. Current release decision
 
-At the creation of this specification, owner-bound product state and explicit
-CopilotPreference provide safe personalization, while no representative
-automatic-memory benefit/error dataset has yet passed section 6. Therefore the
-only conforming implementation is:
+The canonical store, selective Recall, user management and the one automatic
+producer path are implemented. No representative automatic-memory benefit/error
+dataset has yet passed section 6, so the conforming release configuration is:
 
 ```
-automatic_memory_producer = disabled
-memory_recall = empty
+automatic_memory_producer = implemented_but_release_gate_disabled
+memory_recall = selective_canonical_low_authority_items_or_empty
 legacy_memory_runtime_read = forbidden
 ```
 

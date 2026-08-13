@@ -33,6 +33,12 @@ from app.services.chat.context_assembly_pipeline import (
     PromptRenderer,
     context_pipeline,
 )
+from app.services.chat.model_dispatch_service import (
+    durable_model_stream,
+    finish_model_dispatch,
+    request_fingerprint,
+    start_model_dispatch_for_turn,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +47,27 @@ def _insufficient_evidence_message(query: str) -> str:
     if re.search(r"[\u4e00-\u9fff]", query):
         return "现有资料不足，无法可靠回答这个问题。"
     return "The available sources do not contain enough evidence to answer reliably."
+
+
+def _explicit_source_failure_message(query: str, failures: tuple[dict, ...]) -> str:
+    chinese = bool(re.search(r"[\u4e00-\u9fff]", query))
+    lines: list[str] = []
+    for failure in failures[:3]:
+        identity = str(failure.get("identity") or "URL")[:300]
+        detail = str(failure.get("detail") or "read failed")[:300]
+        lines.append(
+            f"- {identity}：{detail}" if chinese else f"- {identity}: {detail}"
+        )
+    if chinese:
+        return (
+            "无法读取你在本轮明确指定的来源，因此没有用搜索摘要或模型常识冒充其内容：\n"
+            + "\n".join(lines)
+        )
+    return (
+        "I could not read the source(s) explicitly specified in this turn, so I "
+        "did not substitute search snippets or model knowledge for their content:\n"
+        + "\n".join(lines)
+    )
 
 
 class ChatPipelineStrategy:
@@ -64,6 +91,67 @@ class ChatPipelineStrategy:
         # for the session-meta read + debrief reference fetch, and
         # rebuilding would duplicate both round-trips.
         assembled: AssembledContext = ctx.assembled
+
+        explicit_failures = tuple(ctx.extras.get("explicit_source_failures") or ())
+        if explicit_failures:
+            answer = _explicit_source_failure_message(
+                ctx.user_message,
+                explicit_failures,
+            )
+            # Successful sibling reads remain represented in the internal
+            # status projection, but a blocked answer must not display uncited
+            # source cards as if the requested comparison had completed.
+            assembled.sources = []
+            yield HarnessEvent.status("明确来源读取失败", step=0, elapsed_ms=0)
+            yield HarnessEvent.text_delta(answer, step=0, elapsed_ms=0)
+            result.final_answer = answer
+            result.assistant_blocks = [{"type": "text", "text": answer}]
+            result.steps_used = 0
+            result.completion_tokens = _count_tokens(answer)
+            result.outcome = "blocked"
+            return
+
+        requirements = tuple(ctx.extras.get("attachment_execution_requirements") or ())
+        if requirements:
+            visual = next(
+                (
+                    item
+                    for item in requirements
+                    if item.get("kind") == "visual_layout_unavailable"
+                ),
+                None,
+            )
+            if visual is not None:
+                answer = (
+                    "Chat 模式不会执行逐页视觉工具循环，因此不能从文本/OCR 投影"
+                    "推断字体、颜色、排版或视觉布局。请切换到 Agent 模式；它会按"
+                    "同一来源 identity 调用真实页面视觉工具，无法执行时也会明确说明。"
+                )
+                yield HarnessEvent.status(
+                    "需要 Agent 逐页视觉读取", step=0, elapsed_ms=0
+                )
+                yield HarnessEvent.text_delta(answer, step=0, elapsed_ms=0)
+                result.final_answer = answer
+                result.assistant_blocks = [{"type": "text", "text": answer}]
+                result.steps_used = 0
+                result.completion_tokens = _count_tokens(answer)
+                result.outcome = "blocked"
+                return
+            # Chat has no iterative read_file loop.  A full review that does not
+            # fit in the injected projection must switch to Agent instead of
+            # silently answering from top-k excerpts.
+            answer = (
+                "本次完整审阅所需内容超过单次安全上下文范围。请切换到 Agent 模式，"
+                "它会按同一来源 identity 分段读完后再给出结论。"
+            )
+            yield HarnessEvent.status("需要分段完整读取", step=0, elapsed_ms=0)
+            yield HarnessEvent.text_delta(answer, step=0, elapsed_ms=0)
+            result.final_answer = answer
+            result.assistant_blocks = [{"type": "text", "text": answer}]
+            result.steps_used = 0
+            result.completion_tokens = _count_tokens(answer)
+            result.outcome = "blocked"
+            return
 
         if ctx.needs_knowledge_retrieval and not ctx.retrieval_hit:
             answer = _insufficient_evidence_message(ctx.user_message)
@@ -131,7 +219,50 @@ class ChatPipelineStrategy:
                 temperature=settings.AGENT_TEMPERATURE,
             )
             adapter = ModelProviderAdapter(client=client, profile=profile)
-            response_generator = await adapter.start_stream(request)
+            model_call_id = (
+                f"model:{ctx.dispatch_generation}:chat:1" if ctx.turn_id else None
+            )
+            if model_call_id and ctx.user_pk > 0:
+                import asyncio
+
+                await asyncio.to_thread(
+                    start_model_dispatch_for_turn,
+                    call_id=model_call_id,
+                    turn_id=ctx.turn_id,
+                    user_id=ctx.user_pk,
+                    dispatch_generation=ctx.dispatch_generation,
+                    provider=str(getattr(profile, "provider", "unknown") or "unknown"),
+                    model=str(getattr(profile, "model", "unknown") or "unknown"),
+                    fingerprint=request_fingerprint(
+                        messages=request.messages,
+                        tools=request.tools,
+                    ),
+                )
+            try:
+                provider_stream = await adapter.start_stream(request)
+            except BaseException as exc:
+                if model_call_id:
+                    import asyncio
+
+                    await asyncio.to_thread(
+                        finish_model_dispatch,
+                        turn_id=ctx.turn_id,
+                        call_id=model_call_id,
+                        dispatch_generation=ctx.dispatch_generation,
+                        status=(
+                            "cancelled"
+                            if isinstance(exc, asyncio.CancelledError)
+                            else "failed"
+                        ),
+                        error_code=type(exc).__name__,
+                    )
+                raise
+            response_generator = durable_model_stream(
+                provider_stream,
+                turn_id=ctx.turn_id,
+                call_id=model_call_id,
+                dispatch_generation=ctx.dispatch_generation,
+            )
             result.provider_id = str(getattr(profile, "provider", "") or "")
             result.prompt_cache_supported = adapter.prompt_cache_supported
             result.prompt_cache_enabled = adapter.prompt_cache_enabled

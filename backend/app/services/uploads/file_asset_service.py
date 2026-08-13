@@ -64,6 +64,13 @@ UPLOAD_STATUS_DELETED = "deleted"
 READABLE_UPLOAD_STATUSES = (UPLOAD_STATUS_UPLOADED, UPLOAD_STATUS_CONSUMED)
 
 
+def file_asset_version_token(asset: FileAsset) -> str:
+    """Return the stable exact-byte identity used by every durable file ref."""
+
+    checksum = (asset.checksum_sha256 or "").strip().lower()
+    return f"sha256:{checksum}" if checksum else f"file_asset:{asset.id}"
+
+
 class UnknownUploadPurpose(ValueError):
     """Purpose not in PURPOSE_REGISTRY."""
 

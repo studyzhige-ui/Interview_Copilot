@@ -63,6 +63,7 @@ class ModelProfile:
     api_base: str
     api_key_env: str
     supports_function_calling: bool = False
+    supports_vision: bool = False
     description: str = ""
     context_window: int = 128_000
     max_output_tokens: int = 4_096
@@ -116,6 +117,7 @@ def _build_profile(entry: ModelEntry, defaults: ProviderDefaults) -> ModelProfil
         api_base=defaults.default_api_base,
         api_key_env=defaults.api_key_env,
         supports_function_calling=entry.supports_function_calling,
+        supports_vision=entry.supports_vision,
         description="",
         context_window=entry.context_window,
         max_output_tokens=entry.max_output_tokens,

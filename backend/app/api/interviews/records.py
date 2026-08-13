@@ -93,8 +93,8 @@ async def analyze_interview_endpoint(
                 resume_id=body.resume_id,
                 resume_file_asset_id=body.resume_file_asset_id,
             )
-        except analysis_intake.ResumeNotFound:
-            raise HTTPException(status_code=404, detail="Resume not found")
+        except analysis_intake.ResumeNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except analysis_intake.ResumeUploadNotFound:
             raise HTTPException(status_code=404, detail="Resume upload not found")
 
@@ -262,7 +262,9 @@ def get_interview_record(
         "status": record.status,
         "analyzed_qa_count": record.analyzed_qa_count,
         "audio_file_asset_id": record.audio_file_asset_id,
-        "resume_id": record.resume_id,
+        "resume_id": record.resume_artifact_id or record.resume_id,
+        "resume_artifact_id": record.resume_artifact_id,
+        "resume_artifact_version_id": record.resume_artifact_version_id,
         "resume_file_asset_id": record.resume_file_asset_id,
         "resume_source": record.resume_source,
         "jd_file_asset_id": record.jd_file_asset_id,

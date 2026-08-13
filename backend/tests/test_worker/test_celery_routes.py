@@ -66,8 +66,10 @@ def test_control_tasks_route_to_default_queue():
         "tasks.sweep_stale_pipeline_records",
         "tasks.sweep_orphan_file_assets",
         "tasks.sweep_runtime_files",
+        "tasks.sweep_expired_conversation_deletion_receipts",
         "tasks.repair_pending_automation_turns",
         "tasks.schedule_due_persistent_tasks",
+        "tasks.consolidate_agent_memory",
         "tasks.drain_cleanup_outbox_jobs",
     ]
     for name in control:
@@ -103,6 +105,16 @@ def test_persistent_task_scheduler_runs_every_minute_with_short_expiry():
     assert entry["task"] == "tasks.schedule_due_persistent_tasks"
     assert entry["schedule"].minute == set(range(60))
     assert entry["options"]["expires"] == 50
+
+
+def test_conversation_deletion_receipt_retention_runs_daily():
+    from app.task_queue.celery_app import celery_app
+
+    entry = celery_app.conf.beat_schedule["conversation-deletion-receipts-sweep-daily"]
+    assert entry["task"] == "tasks.sweep_expired_conversation_deletion_receipts"
+    assert entry["schedule"].hour == {4}
+    assert entry["schedule"].minute == {50}
+    assert entry["options"]["expires"] == 3600
 
 
 def test_community_compose_merges_background_and_default_workers():

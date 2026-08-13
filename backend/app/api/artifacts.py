@@ -29,6 +29,8 @@ from app.schemas.artifact import (
     ArtifactVersionView,
 )
 from app.services import artifact_service
+from app.services.resume import resume_artifact_service
+from app.services.resume.resume_dispatch_service import dispatch_parse_after_commit
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
@@ -146,6 +148,16 @@ def _raise_artifact_http(exc: artifact_service.ArtifactDomainError) -> None:
     raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _raise_resume_http(exc: resume_artifact_service.ResumeArtifactError) -> None:
+    if isinstance(exc, resume_artifact_service.ResumeArtifactNotFoundError):
+        raise HTTPException(
+            status_code=404, detail="Resume Artifact not found"
+        ) from exc
+    if isinstance(exc, resume_artifact_service.ResumeArtifactLimitError):
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("", response_model=ArtifactView, status_code=201)
 def save_artifact(
     body: ArtifactExplicitSaveRequest,
@@ -153,6 +165,23 @@ def save_artifact(
     db: Session = Depends(get_db),
 ):
     try:
+        if body.artifact_kind.strip().casefold() == "resume":
+            record = resume_artifact_service.create_resume_artifact(
+                db,
+                user_pk=current_user.id,
+                operation_key=body.operation_key,
+                title=body.version.title,
+                file_asset_id=body.version.file_asset_id,
+                file_asset_version=body.version.file_asset_version,
+                raw_text=body.version.content_text,
+                make_default=None,
+                content_format=body.version.content_format,
+                provenance=body.version.provenance,
+                source_owner_checker=_direct_source_owner_checker,
+            )
+            db.commit()
+            dispatch_parse_after_commit(db, record)
+            return _artifact_view(db, record.artifact)
         artifact = artifact_service.save_artifact_explicitly(
             db,
             user_pk=current_user.id,
@@ -166,6 +195,9 @@ def save_artifact(
     except artifact_service.ArtifactDomainError as exc:
         db.rollback()
         _raise_artifact_http(exc)
+    except resume_artifact_service.ResumeArtifactError as exc:
+        db.rollback()
+        _raise_resume_http(exc)
 
 
 @router.post("/from-message", response_model=ArtifactView, status_code=201)
@@ -175,6 +207,14 @@ def promote_message(
     db: Session = Depends(get_db),
 ):
     try:
+        existing_artifact_id = (
+            db.query(Artifact.id)
+            .filter(
+                Artifact.user_id == current_user.id,
+                Artifact.creation_key == body.operation_key,
+            )
+            .scalar()
+        )
         artifact = artifact_service.promote_message_to_artifact(
             db,
             user_pk=current_user.id,
@@ -184,11 +224,24 @@ def promote_message(
             source_message_id=body.source_message_id,
             source_turn_id=body.source_turn_id,
         )
+        resume_record = None
+        if artifact.kind == "resume":
+            resume_record = resume_artifact_service.register_resume_artifact(
+                db,
+                user_pk=current_user.id,
+                artifact_id=artifact.id,
+                enforce_active_limit=existing_artifact_id is None,
+            )
         db.commit()
+        if resume_record is not None:
+            dispatch_parse_after_commit(db, resume_record)
         return _artifact_view(db, artifact)
     except artifact_service.ArtifactDomainError as exc:
         db.rollback()
         _raise_artifact_http(exc)
+    except resume_artifact_service.ResumeArtifactError as exc:
+        db.rollback()
+        _raise_resume_http(exc)
 
 
 @router.get("", response_model=list[ArtifactView])
@@ -302,6 +355,24 @@ def edit_artifact(
     db: Session = Depends(get_db),
 ):
     try:
+        artifact = _owned_artifact(db, current_user.id, artifact_id)
+        if artifact.kind == "resume":
+            record = resume_artifact_service.add_resume_version(
+                db,
+                user_pk=current_user.id,
+                resume_id=artifact.id,
+                operation_key=body.operation_key,
+                title=body.version.title,
+                file_asset_id=body.version.file_asset_id,
+                file_asset_version=body.version.file_asset_version,
+                raw_text=body.version.content_text,
+                content_format=body.version.content_format,
+                provenance=body.version.provenance,
+                source_owner_checker=_direct_source_owner_checker,
+            )
+            db.commit()
+            dispatch_parse_after_commit(db, record)
+            return _artifact_view(db, record.artifact)
         artifact_service.edit_artifact(
             db,
             user_pk=current_user.id,
@@ -315,6 +386,9 @@ def edit_artifact(
     except artifact_service.ArtifactDomainError as exc:
         db.rollback()
         _raise_artifact_http(exc)
+    except resume_artifact_service.ResumeArtifactError as exc:
+        db.rollback()
+        _raise_resume_http(exc)
 
 
 @router.post("/{artifact_id}/archive", response_model=ArtifactView)
@@ -324,6 +398,15 @@ def archive_artifact(
     db: Session = Depends(get_db),
 ):
     try:
+        owned = _owned_artifact(db, current_user.id, artifact_id)
+        if owned.kind == "resume":
+            resume_artifact_service.archive_resume_artifact(
+                db,
+                user_pk=current_user.id,
+                resume_id=artifact_id,
+            )
+            db.commit()
+            return _artifact_view(db, owned, include_archived=True)
         artifact = artifact_service.archive_artifact(
             db,
             user_pk=current_user.id,
@@ -334,6 +417,9 @@ def archive_artifact(
     except artifact_service.ArtifactDomainError as exc:
         db.rollback()
         _raise_artifact_http(exc)
+    except resume_artifact_service.ResumeArtifactError as exc:
+        db.rollback()
+        _raise_resume_http(exc)
 
 
 @router.post("/{artifact_id}/related", response_model=ArtifactRelatedView)
@@ -366,16 +452,28 @@ def record_submitted_artifact(
     db: Session = Depends(get_db),
 ):
     try:
-        snapshot = artifact_service.record_user_confirmed_submission(
-            db,
-            user_pk=current_user.id,
-            operation_key=body.operation_key,
-            artifact_id=artifact_id,
-            artifact_version_id=body.artifact_version_id,
-            job_opportunity_id=body.job_opportunity_id,
-            confirmation_message_id=body.confirmation_message_id,
-            job_owner_checker=_job_owner_checker,
-        )
+        if body.ui_confirmation == "product_ui":
+            snapshot = artifact_service.record_product_ui_confirmed_submission(
+                db,
+                user_pk=current_user.id,
+                operation_key=body.operation_key,
+                artifact_id=artifact_id,
+                artifact_version_id=body.artifact_version_id,
+                job_opportunity_id=body.job_opportunity_id,
+                job_owner_checker=_job_owner_checker,
+            )
+        else:
+            assert body.confirmation_message_id is not None
+            snapshot = artifact_service.record_user_confirmed_submission(
+                db,
+                user_pk=current_user.id,
+                operation_key=body.operation_key,
+                artifact_id=artifact_id,
+                artifact_version_id=body.artifact_version_id,
+                job_opportunity_id=body.job_opportunity_id,
+                confirmation_message_id=body.confirmation_message_id,
+                job_owner_checker=_job_owner_checker,
+            )
         db.commit()
         return ArtifactSubmissionView.model_validate(snapshot)
     except artifact_service.ArtifactDomainError as exc:

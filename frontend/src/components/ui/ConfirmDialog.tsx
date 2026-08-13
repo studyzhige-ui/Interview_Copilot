@@ -11,6 +11,7 @@ interface ConfirmDialogProps {
   onConfirm: () => void;
   onCancel: () => void;
   loading?: boolean;
+  confirmDisabled?: boolean;
 }
 
 export function ConfirmDialog({
@@ -23,6 +24,7 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
   loading,
+  confirmDisabled,
 }: ConfirmDialogProps) {
   return (
     <Modal
@@ -37,6 +39,7 @@ export function ConfirmDialog({
             kind={danger ? 'danger' : 'primary'}
             onClick={onConfirm}
             loading={loading}
+            disabled={confirmDisabled}
           >
             {confirmText}
           </Btn>
@@ -44,7 +47,7 @@ export function ConfirmDialog({
       }
     >
       {description && (
-        <div className="text-sm text-stone-600 leading-relaxed">{description}</div>
+        <div className="whitespace-pre-line text-sm leading-relaxed text-stone-600">{description}</div>
       )}
     </Modal>
   );

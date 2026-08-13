@@ -193,10 +193,18 @@ class DirectionDraftChange(BaseModel):
         return self
 
 
+ProfileDraftSourceKind = Literal[
+    "artifact_version", "conversation_message", "model_inference"
+]
+PersistedProfileDraftSourceKind = Literal[
+    "artifact_version", "resume", "conversation_message", "model_inference"
+]
+
+
 class CareerProfileDraftInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    source_kind: Literal["resume", "conversation_message", "model_inference"]
+    source_kind: ProfileDraftSourceKind
     source_id: str = Field(min_length=1, max_length=128)
     proposed_facts: list[FactDraftChange] = Field(default_factory=list, max_length=200)
     proposed_directions: list[DirectionDraftChange] = Field(
@@ -273,12 +281,51 @@ class CareerProfileDraftResolutionInput(BaseModel):
     resolution_note: str | None = Field(default=None, max_length=2_000)
 
 
-class CareerProfileDraftView(BaseModel):
+class CareerProfileCandidateDecisionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: str = Field(min_length=1, max_length=37)
+    expected_version: PositiveInt
+    decision: Literal["accept", "reject"]
+    note: str | None = Field(default=None, max_length=2_000)
+
+
+class CareerProfileCandidateBatchResolutionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_draft_version: PositiveInt
+    expected_profile_version: PositiveInt
+    decisions: list[CareerProfileCandidateDecisionInput] = Field(
+        min_length=1, max_length=250
+    )
+
+
+class CareerProfileCandidateItemView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    item_kind: Literal["fact", "direction"]
+    position: int
+    payload: dict = Field(validation_alias="payload_json")
+    conflict_kind: Literal["none", "duplicate", "conflict", "missing_target"]
+    current_value: dict | None = Field(
+        default=None, validation_alias="current_value_json"
+    )
+    status: Literal["pending", "accepted", "rejected"]
+    resolution_note: str | None
+    version: PositiveInt
+    created_at: datetime
+    resolved_at: datetime | None
+
+
+class CareerProfileDraftView(BaseModel):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: str
     career_profile_id: str
-    source_kind: Literal["resume", "conversation_message", "model_inference"]
+    # Existing pre-cut-over draft rows may still identify their historical
+    # source as ``resume``. Runtime input no longer accepts that value.
+    source_kind: PersistedProfileDraftSourceKind
     source_id: str
     base_profile_version: PositiveInt
     proposed_facts: list[FactDraftChange] = Field(
@@ -292,10 +339,20 @@ class CareerProfileDraftView(BaseModel):
     version: PositiveInt
     created_at: datetime
     resolved_at: datetime | None
+    candidates: list[CareerProfileCandidateItemView] = Field(default_factory=list)
+
+
+class CareerProfileCandidateResolutionView(BaseModel):
+    profile: CareerProfileView
+    draft: CareerProfileDraftView
 
 
 __all__ = [
     "CareerProfileDirectionView",
+    "CareerProfileCandidateBatchResolutionInput",
+    "CareerProfileCandidateDecisionInput",
+    "CareerProfileCandidateItemView",
+    "CareerProfileCandidateResolutionView",
     "CareerProfileDraftInput",
     "CareerProfileDraftResolutionInput",
     "CareerProfileDraftView",

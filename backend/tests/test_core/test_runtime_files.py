@@ -13,12 +13,6 @@ def test_temp_files_and_session_results_stay_under_data(tmp_path, monkeypatch):
     assert temp_path.parent == tmp_path / "tmp"
     assert temp_path.is_file()
 
-    result = tmp_path / "agent-results" / "session-1" / "call.txt"
-    result.parent.mkdir(parents=True)
-    result.write_text("result", encoding="utf-8")
-    runtime_files.remove_session_results("session-1")
-    assert not result.parent.exists()
-
 
 def test_jsonl_rotates_to_one_bounded_backup(tmp_path, monkeypatch):
     path = tmp_path / "metrics.jsonl"

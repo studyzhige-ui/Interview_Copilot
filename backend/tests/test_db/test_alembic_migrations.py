@@ -30,6 +30,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ALEMBIC_INI = PROJECT_ROOT / "alembic.ini"
 ALEMBIC_DIR = PROJECT_ROOT / "alembic"
 VERSIONS_DIR = ALEMBIC_DIR / "versions"
+MODELS_DIR = PROJECT_ROOT / "backend" / "app" / "models"
 
 
 def _pg_available() -> bool:
@@ -47,15 +48,14 @@ def _pg_available() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _pg_available(),
-    reason="Postgres not reachable at TEST_PG_ADMIN_URL — skipping migration test.",
-)
-
-
 @pytest.fixture()
 def fresh_pg_db():
     """Provision an isolated, empty Postgres DB; drop it on teardown."""
+    if not _pg_available():
+        pytest.skip(
+            "Postgres not reachable at TEST_PG_ADMIN_URL — skipping migration test."
+        )
+
     import psycopg2
     from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
@@ -141,6 +141,183 @@ def test_migration_chain_has_no_gaps_and_one_head():
     )
 
 
+def test_release_schema_identifiers_fit_postgres_limit():
+    """Catch DDL names that PostgreSQL refuses before a live upgrade is run."""
+    import ast
+
+    import app.models  # noqa: F401 -- populates the one declarative registry
+    from app.db.database import Base
+
+    max_length = 63
+    metadata_names: list[str] = []
+    for table in Base.metadata.tables.values():
+        metadata_names.append(table.name)
+        metadata_names.extend(column.name for column in table.columns)
+        metadata_names.extend(
+            item.name
+            for item in (*table.constraints, *table.indexes)
+            if item.name is not None
+        )
+
+    too_long = sorted({name for name in metadata_names if len(name) > max_length})
+
+    named_operations = {
+        "create_table",
+        "create_index",
+        "create_check_constraint",
+        "create_unique_constraint",
+        "create_foreign_key",
+        "drop_constraint",
+        "drop_index",
+    }
+    for path in VERSIONS_DIR.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(
+                node.func, ast.Attribute
+            ):
+                continue
+            if node.func.attr not in named_operations or not node.args:
+                continue
+            name_arg = node.args[0]
+            if (
+                isinstance(name_arg, ast.Constant)
+                and isinstance(name_arg.value, str)
+                and len(name_arg.value) > max_length
+            ):
+                too_long.append(f"{path.name}:{node.lineno}:{name_arg.value}")
+
+    assert not too_long, f"PostgreSQL identifiers exceed {max_length} chars: {too_long}"
+
+
+def test_every_model_module_is_registered_once():
+    """The Alembic/ORM registry must not miss or duplicate a model table."""
+    import ast
+
+    import app.models  # noqa: F401 -- populates the one declarative registry
+    from app.db.database import Base
+
+    declarations: dict[str, list[str]] = {}
+    for path in MODELS_DIR.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:
+            if not isinstance(node, ast.ClassDef):
+                continue
+            for statement in node.body:
+                if not isinstance(statement, ast.Assign):
+                    continue
+                if not any(
+                    isinstance(target, ast.Name) and target.id == "__tablename__"
+                    for target in statement.targets
+                ):
+                    continue
+                if isinstance(statement.value, ast.Constant) and isinstance(
+                    statement.value.value, str
+                ):
+                    declarations.setdefault(statement.value.value, []).append(
+                        f"{path.name}:{node.name}"
+                    )
+
+    duplicates = {
+        table: owners for table, owners in declarations.items() if len(owners) > 1
+    }
+    unregistered = sorted(set(declarations) - set(Base.metadata.tables))
+    assert not duplicates, f"Model tables have duplicate owners: {duplicates}"
+    assert not unregistered, (
+        f"Model tables missing from app.models registry: {unregistered}"
+    )
+
+
+def test_release_migration_columns_match_orm_registry():
+    """Statically align 0029+ created/added columns with canonical ORM tables."""
+    import ast
+
+    import app.models  # noqa: F401 -- populates the one declarative registry
+    from app.db.database import Base
+
+    created_tables: dict[str, set[str]] = {}
+    added_columns: list[tuple[str, str, str]] = []
+    release_paths = sorted(VERSIONS_DIR.glob("00*.py"))
+    release_paths = [path for path in release_paths if int(path.name[:4]) >= 29]
+
+    for path in release_paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        upgrade = next(
+            (
+                node
+                for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "upgrade"
+            ),
+            None,
+        )
+        assert upgrade is not None, f"Migration has no upgrade(): {path.name}"
+        for node in ast.walk(upgrade):
+            if not isinstance(node, ast.Call) or not isinstance(
+                node.func, ast.Attribute
+            ):
+                continue
+            if node.func.attr == "create_table" and node.args:
+                table_arg = node.args[0]
+                if not (
+                    isinstance(table_arg, ast.Constant)
+                    and isinstance(table_arg.value, str)
+                ):
+                    continue
+                columns = {
+                    argument.args[0].value
+                    for argument in node.args[1:]
+                    if isinstance(argument, ast.Call)
+                    and isinstance(argument.func, ast.Attribute)
+                    and argument.func.attr == "Column"
+                    and argument.args
+                    and isinstance(argument.args[0], ast.Constant)
+                    and isinstance(argument.args[0].value, str)
+                }
+                assert table_arg.value not in created_tables, (
+                    f"Release migrations create {table_arg.value} more than once"
+                )
+                created_tables[table_arg.value] = columns
+            elif node.func.attr == "add_column" and len(node.args) >= 2:
+                table_arg, column_call = node.args[:2]
+                if not (
+                    isinstance(table_arg, ast.Constant)
+                    and isinstance(table_arg.value, str)
+                    and isinstance(column_call, ast.Call)
+                    and isinstance(column_call.func, ast.Attribute)
+                    and column_call.func.attr == "Column"
+                    and column_call.args
+                    and isinstance(column_call.args[0], ast.Constant)
+                    and isinstance(column_call.args[0].value, str)
+                ):
+                    continue
+                added_columns.append(
+                    (table_arg.value, column_call.args[0].value, path.name)
+                )
+
+    for table_name, column_name, _migration_name in added_columns:
+        if table_name in created_tables:
+            created_tables[table_name].add(column_name)
+
+    for table_name, migrated_columns in created_tables.items():
+        assert table_name in Base.metadata.tables, (
+            f"Migration-created table missing from ORM registry: {table_name}"
+        )
+        orm_columns = set(Base.metadata.tables[table_name].columns.keys())
+        assert migrated_columns == orm_columns, (
+            f"Migration/ORM column mismatch for {table_name}: "
+            f"migration_only={sorted(migrated_columns - orm_columns)}, "
+            f"orm_only={sorted(orm_columns - migrated_columns)}"
+        )
+
+    for table_name, column_name, migration_name in added_columns:
+        assert table_name in Base.metadata.tables, (
+            f"{migration_name} adds a column to unregistered table {table_name}"
+        )
+        assert column_name in Base.metadata.tables[table_name].columns, (
+            f"{migration_name} adds {table_name}.{column_name} but ORM omits it"
+        )
+
+
 def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     """Install the release schema in a virgin PostgreSQL database."""
     from sqlalchemy import Float, create_engine, inspect
@@ -176,13 +353,26 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "conversation_messages",
         "conversation_turns",
         "job_opportunity_direction_links",
+        "job_opportunity_merges",
+        "conversation_deletion_receipts",
+        "artifact_resume_states",
+        "career_profile_candidate_items",
+        "gmail_observations",
+        "gmail_observation_snapshots",
+        "gmail_observation_review_cards",
         "pending_submissions",
         "persistent_tasks",
         "persistent_task_triggers",
+        "notification_preferences",
         "agent_tool_calls",
+        "agent_model_dispatches",
+        "agent_task_skill_bindings",
+        "user_skill_resources",
         "gmail_integration_accounts",
-        "gmail_oauth_credentials",
         "gmail_oauth_states",
+        "agent_memory_settings",
+        "long_term_agent_memories",
+        "long_term_agent_memory_sources",
         "memory_documents",
         "memory_ability_states",
         "memory_audit_logs",
@@ -203,11 +393,10 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     qa_columns = {c["name"]: c for c in insp.get_columns("interview_qa")}
     ability_columns = {c["name"]: c for c in insp.get_columns("memory_ability_states")}
     chunk_columns = {c["name"]: c for c in insp.get_columns("document_chunks")}
-    gmail_credential_columns = {
-        c["name"]: c for c in insp.get_columns("gmail_oauth_credentials")
-    }
     gmail_state_columns = {c["name"]: c for c in insp.get_columns("gmail_oauth_states")}
+    event_columns = {c["name"]: c for c in insp.get_columns("process_events")}
     assert isinstance(outbox_columns["payload_json"]["type"], JSONB)
+    assert isinstance(event_columns["analysis_context_json"]["type"], JSONB)
     assert isinstance(turn_columns["budget_json"]["type"], JSONB)
     assert isinstance(turn_columns["question_indexes_json"]["type"], JSONB)
     assert isinstance(turn_columns["tool_snapshot_json"]["type"], JSONB)
@@ -239,10 +428,7 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     assert isinstance(ability_columns["ability_score"]["type"], Float)
     assert chunk_columns["document_id"]["nullable"] is False
     assert "lexical_index_id" not in chunk_columns
-    assert "access_token" not in gmail_credential_columns
-    assert "refresh_token" not in gmail_credential_columns
-    assert gmail_credential_columns["access_token_ciphertext"]["nullable"] is False
-    assert gmail_credential_columns["refresh_token_ciphertext"]["nullable"] is False
+    assert "gmail_oauth_credentials" not in tables
     assert gmail_state_columns["code_verifier_ciphertext"]["nullable"] is False
     assert "code_verifier" not in gmail_state_columns
     assert "interview_plan" not in record_columns

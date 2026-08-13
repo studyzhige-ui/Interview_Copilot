@@ -54,6 +54,7 @@ NextActionSourceKind = Literal[
     "process_event",
     "agent_suggestion",
     "copilot_preference",
+    "offer",
 ]
 NextActionTransitionSourceKind = Literal[
     "user_assertion",
@@ -128,6 +129,49 @@ class OpportunityDirectionsReplace(BaseModel):
         return self
 
 
+class OpportunityMergeCreate(BaseModel):
+    """Explicitly project one duplicate opportunity through a canonical one."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    duplicate_opportunity_id: str = Field(min_length=1, max_length=35)
+    canonical_opportunity_id: str = Field(min_length=1, max_length=35)
+    operation_key: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=2_000)
+
+
+class OpportunityMergeRetract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+    operation_key: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=2_000)
+
+
+class OpportunityMergeView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    duplicate_opportunity_id: str
+    canonical_opportunity_id: str
+    status: Literal["active", "retracted"]
+    version: int
+    reason: str
+    confirmation_source_identity: str
+    created_at: datetime
+    updated_at: datetime
+    retraction_reason: str | None
+    retracted_at: datetime | None
+
+
+class OpportunityMergeCandidateView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    duplicate_opportunity_id: str
+    canonical_opportunity_id: str
+    reasons: list[str]
+
+
 class ProcessEventAppend(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -139,7 +183,19 @@ class ProcessEventAppend(BaseModel):
     source_version: str | None = Field(default=None, max_length=128)
     description: str = Field(min_length=1, max_length=10_000)
     step_summary: str | None = Field(default=None, max_length=300)
+    application_channel: str | None = Field(default=None, max_length=160)
     idempotency_key: str | None = Field(default=None, max_length=300)
+
+    @model_validator(mode="after")
+    def channel_belongs_to_application(self) -> "ProcessEventAppend":
+        if (
+            self.application_channel is not None
+            and self.kind != "application_submitted"
+        ):
+            raise ValueError(
+                "application_channel is only valid for application_submitted"
+            )
+        return self
 
 
 class ProcessEventCorrection(BaseModel):
@@ -153,7 +209,19 @@ class ProcessEventCorrection(BaseModel):
     source_version: str | None = Field(default=None, max_length=128)
     description: str = Field(min_length=1, max_length=10_000)
     step_summary: str | None = Field(default=None, max_length=300)
+    application_channel: str | None = Field(default=None, max_length=160)
     idempotency_key: str | None = Field(default=None, max_length=300)
+
+    @model_validator(mode="after")
+    def channel_belongs_to_replacement(self) -> "ProcessEventCorrection":
+        if (
+            self.application_channel is not None
+            and self.replacement_kind != "application_submitted"
+        ):
+            raise ValueError(
+                "application_channel is only valid when replacing with application_submitted"
+            )
+        return self
 
 
 class NextActionCreate(BaseModel):
@@ -166,12 +234,17 @@ class NextActionCreate(BaseModel):
     source_identity: str = Field(min_length=1, max_length=256)
     source_version: str | None = Field(default=None, max_length=128)
     job_opportunity_id: str | None = Field(default=None, max_length=35)
+    interview_record_id: str | None = Field(default=None, max_length=128)
+    offer_id: str | None = Field(default=None, max_length=35)
+    artifact_id: str | None = Field(default=None, max_length=128)
 
     starts_at: AwareDatetime | None = None
     ends_at: AwareDatetime | None = None
     due_at: AwareDatetime | None = None
     original_time_text: str | None = Field(default=None, max_length=300)
     source_timezone: str | None = Field(default=None, max_length=80)
+    reminder_at: AwareDatetime | None = None
+    reminder_channel: Literal["in_app"] | None = None
     idempotency_key: str | None = Field(default=None, max_length=200)
 
     @model_validator(mode="after")
@@ -201,6 +274,60 @@ class NextActionCreate(BaseModel):
             raise ValueError(
                 "fixed/deadline actions require original_time_text and source_timezone"
             )
+        if (self.reminder_at is None) != (self.reminder_channel is None):
+            raise ValueError("reminder_at and reminder_channel must be paired")
+        if self.reminder_at is not None:
+            if self.status != "planned":
+                raise ValueError("only planned actions may schedule reminders")
+            anchor = self.starts_at if self.time_kind == "fixed" else self.due_at
+            if anchor is not None and self.reminder_at > anchor:
+                raise ValueError("a reminder cannot be scheduled after its action time")
+        return self
+
+
+class NextActionEdit(BaseModel):
+    """CAS replacement of editable action details; lifecycle stays separate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=0)
+    content: str = Field(min_length=1, max_length=2_000)
+    time_kind: NextActionTimeKind
+    job_opportunity_id: str | None = Field(default=None, max_length=35)
+    interview_record_id: str | None = Field(default=None, max_length=128)
+    offer_id: str | None = Field(default=None, max_length=35)
+    artifact_id: str | None = Field(default=None, max_length=128)
+    starts_at: AwareDatetime | None = None
+    ends_at: AwareDatetime | None = None
+    due_at: AwareDatetime | None = None
+    original_time_text: str | None = Field(default=None, max_length=300)
+    source_timezone: str | None = Field(default=None, max_length=80)
+    reminder_at: AwareDatetime | None = None
+    reminder_channel: Literal["in_app"] | None = None
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> "NextActionEdit":
+        probe = NextActionCreate(
+            content=self.content,
+            status="planned" if self.reminder_at is not None else "suggested",
+            time_kind=self.time_kind,
+            source_kind="user_request"
+            if self.reminder_at is not None
+            else "process_event",
+            source_identity="edit-validation",
+            job_opportunity_id=self.job_opportunity_id,
+            interview_record_id=self.interview_record_id,
+            offer_id=self.offer_id,
+            artifact_id=self.artifact_id,
+            starts_at=self.starts_at,
+            ends_at=self.ends_at,
+            due_at=self.due_at,
+            original_time_text=self.original_time_text,
+            source_timezone=self.source_timezone,
+            reminder_at=self.reminder_at,
+            reminder_channel=self.reminder_channel,
+        )
+        del probe
         return self
 
 
@@ -266,6 +393,9 @@ class ProcessEventView(BaseModel):
     source_version: str | None
     description: str
     step_summary: str | None
+    analysis_context_json: dict[str, object]
+    jd_snapshot_id: str | None
+    jd_snapshot_version: int | None
     corrects_event_id: str | None
     created_at: datetime
 
@@ -276,6 +406,9 @@ class NextActionView(BaseModel):
     id: str
     user_id: int
     job_opportunity_id: str | None
+    interview_record_id: str | None
+    offer_id: str | None
+    artifact_id: str | None
     content: str
     status: NextActionStatus
     time_kind: NextActionTimeKind
@@ -296,6 +429,12 @@ class NextActionView(BaseModel):
     resolution_source_identity: str | None
     resolution_source_version: str | None
     close_reason: str | None
+    reminder_at: datetime | None
+    reminder_next_attempt_at: datetime | None
+    reminder_channel: Literal["in_app"] | None
+    reminder_delivered_at: datetime | None
+    reminder_dismissed_at: datetime | None
+    version: int
     created_at: datetime
     updated_at: datetime
 
@@ -307,6 +446,7 @@ __all__ = [
     "JobPhase",
     "NextActionClose",
     "NextActionCreate",
+    "NextActionEdit",
     "NextActionSourceKind",
     "NextActionStatus",
     "NextActionTimeKind",
@@ -317,6 +457,10 @@ __all__ = [
     "OpportunityDirectionSelection",
     "OpportunityDirectionsReplace",
     "OpportunityEntryReason",
+    "OpportunityMergeCandidateView",
+    "OpportunityMergeCreate",
+    "OpportunityMergeRetract",
+    "OpportunityMergeView",
     "ProcessEventAppend",
     "ProcessEventCorrection",
     "ProcessEventKind",

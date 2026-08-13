@@ -20,6 +20,11 @@ import {
 } from './careerProcess';
 import { savePersonalFact } from './careerProfile';
 import { confirmOfferTerms, OfferConfirmationError, recordOffer } from './offers';
+import {
+  compareOffers,
+  dismissReminder,
+  updateNotificationPreference,
+} from './careerInsights';
 
 describe('career domain API clients', () => {
   beforeEach(() => Object.values(client).forEach((mock) => mock.mockReset()));
@@ -147,5 +152,39 @@ describe('career domain API clients', () => {
         ui_confirmation: { kind: 'product_ui' },
       }),
     );
+  });
+
+  it('CAS-updates notification settings without creating a second reminder object', async () => {
+    client.put.mockResolvedValue({ data: { version: 4 } });
+    await updateNotificationPreference({
+      enabled: true, default_channel: 'in_app', timezone: 'Asia/Shanghai',
+      quiet_start: '22:00', quiet_end: '08:00', version: 3,
+    });
+    expect(client.put).toHaveBeenCalledWith('/career-insights/notification-preference', {
+      expected_version: 3, enabled: true, default_channel: 'in_app', timezone: 'Asia/Shanghai',
+      quiet_start: '22:00', quiet_end: '08:00',
+    });
+  });
+
+  it('dismisses a delivered reminder through its NextAction CAS version', async () => {
+    client.post.mockResolvedValue({ data: { version: 6 } });
+    await dismissReminder({ id: 'action/1', version: 5 });
+    expect(client.post).toHaveBeenCalledWith('/career-insights/reminders/action%2F1/dismiss', {
+      expected_version: 5,
+    });
+  });
+
+  it('keeps Offer comparison assumptions and source observation in the request', async () => {
+    client.post.mockResolvedValue({ data: { items: [] } });
+    await compareOffers({
+      offer_ids: ['offer-1'], base_currency: 'CNY',
+      exchange_rates: [{ currency: 'USD', rate_to_base: '7.2', source: { identity: 'central-bank', observed_at: '2026-08-13T10:00:00Z' } }],
+      tax_assumptions: [], equity_assumptions: [], bonus_assumptions: [], user_constraints: [],
+      save_artifact: true, operation_key: 'save-report',
+    });
+    expect(client.post).toHaveBeenCalledWith('/career-insights/offers/compare', expect.objectContaining({
+      save_artifact: true, operation_key: 'save-report',
+      exchange_rates: [expect.objectContaining({ source: expect.objectContaining({ identity: 'central-bank' }) })],
+    }));
   });
 });

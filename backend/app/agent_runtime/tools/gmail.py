@@ -12,7 +12,11 @@ from collections.abc import Callable
 from typing import Any
 
 from app.agent_runtime.tool_policy import ToolEffect
-from app.agent_runtime.tool_registry import AgentToolContext, ToolDefinition
+from app.agent_runtime.tool_registry import (
+    AgentToolContext,
+    ToolDefinition,
+    ToolPreflightResult,
+)
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.schemas.gmail_integration import GmailSearchMessagesArgs
@@ -23,6 +27,7 @@ from app.services.gmail_integration_service import (
     GmailIntegrationError,
     GmailProviderAdapter,
     GmailProviderAdapterError,
+    get_account,
     search_messages,
 )
 
@@ -55,11 +60,42 @@ def build_gmail_search_messages_tool(
         args_model=GmailSearchMessagesArgs,
         handler=handler,
         effect=ToolEffect.READ,
+        preflight=_gmail_search_messages_preflight,
         # Missing connection/scope must pause the untouched batch on this call.
         concurrency_safe=False,
         max_result_chars=12_000,
         emoji="📨",
     )
+
+
+def _gmail_search_messages_preflight(
+    _args: GmailSearchMessagesArgs,
+    ctx: AgentToolContext,
+) -> ToolPreflightResult:
+    """Check the locally authoritative grant state without calling Gmail."""
+
+    with SessionLocal() as db:
+        user_pk = ctx.user_pk or resolve_user_pk(db, ctx.user_id)
+        if user_pk is None:
+            return ToolPreflightResult(
+                connection_ready=False,
+                hard_deny_reason="user_not_found",
+            )
+        account = get_account(db, user_pk=user_pk)
+        ready = bool(
+            account is not None
+            and account.status == "active"
+            and account.credential_handle_ciphertext
+            and GMAIL_READONLY_SCOPE in set(account.scopes_json or [])
+        )
+        return ToolPreflightResult(
+            connection_ready=ready,
+            resource_identities=(f"gmail-account:{user_pk}",),
+            provider_identity="gmail",
+            connection_identity=(
+                f"gmail-account:{account.id}" if ready and account is not None else None
+            ),
+        )
 
 
 async def _gmail_search_messages_handler(

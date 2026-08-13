@@ -19,13 +19,13 @@ from app.core.security import get_current_user
 from app.db.database import Base, get_db
 from app.models.gmail_integration import (
     GmailIntegrationAccount,
-    GmailOAuthCredential,
     GmailOAuthState,
 )
 from app.models.user import User
 from app.services.gmail_integration_service import GMAIL_READONLY_SCOPE
 from app.services.gmail_integration_service import GmailIntegrationError
 from app.services.google_gmail_connector import GoogleGmailConnector
+from app.services.gmail_credential_store import InMemoryGmailCredentialStore
 from tests.conftest import NoCloseSession
 
 
@@ -75,6 +75,7 @@ def api_context() -> Iterator[tuple[TestClient, Session, FastAPI]]:
     db.add(user)
     db.commit()
     transport = httpx.MockTransport(_provider)
+    credential_store = InMemoryGmailCredentialStore()
     connector = GoogleGmailConnector(
         client_id="api-client.apps.googleusercontent.com",
         client_secret=CLIENT_SECRET,
@@ -84,6 +85,7 @@ def api_context() -> Iterator[tuple[TestClient, Session, FastAPI]]:
         ),
         state_ttl_seconds=600,
         timeout_seconds=5,
+        credential_store=credential_store,
         session_factory=lambda: NoCloseSession(db),
         http_client_factory=lambda: httpx.AsyncClient(
             transport=transport,
@@ -97,6 +99,7 @@ def api_context() -> Iterator[tuple[TestClient, Session, FastAPI]]:
         yield db
 
     app = FastAPI()
+    app.state.gmail_credential_store = credential_store
     app.include_router(gmail_integration.router, prefix="/api/v1")
     app.dependency_overrides[get_db] = fake_db
     app.dependency_overrides[get_current_user] = lambda: user
@@ -114,7 +117,7 @@ def api_context() -> Iterator[tuple[TestClient, Session, FastAPI]]:
 
 
 def test_authorize_callback_returns_only_safe_account_view(api_context):
-    client, db, _app = api_context
+    client, db, app = api_context
     authorization = client.post("/api/v1/integrations/gmail/authorize")
     assert authorization.status_code == 200, authorization.text
     payload = authorization.json()
@@ -176,10 +179,11 @@ def test_authorize_callback_returns_only_safe_account_view(api_context):
     assert all(value not in callback.headers["location"] for value in forbidden)
 
     account = db.query(GmailIntegrationAccount).one()
-    credential = db.query(GmailOAuthCredential).one()
-    assert account.credential_handle_ciphertext != credential.credential_handle
-    assert ACCESS_TOKEN not in credential.access_token_ciphertext
-    assert REFRESH_TOKEN not in credential.refresh_token_ciphertext
+    credential = app.state.gmail_credential_store.snapshot_for_test()[0]
+    assert account.credential_handle_ciphertext != credential.handle
+    assert credential.access_token == ACCESS_TOKEN
+    assert credential.refresh_token == REFRESH_TOKEN
+    assert "gmail_oauth_credentials" not in Base.metadata.tables
     assert db.query(GmailOAuthState).count() == 0
 
     replay = client.get(
@@ -200,7 +204,7 @@ def test_authorize_callback_returns_only_safe_account_view(api_context):
     assert revoked.status_code == 200
     assert revoked.json()["connection_required"] is True
     assert revoked.json()["account"]["status"] == "revoked"
-    assert db.query(GmailOAuthCredential).count() == 0
+    assert app.state.gmail_credential_store.snapshot_for_test() == ()
     assert all(value not in revoked.text for value in forbidden)
 
 
@@ -263,7 +267,7 @@ def test_callback_requires_the_originating_browser_state_cookie(api_context):
             "gmail_oauth_error"
         ] == ["oauth_state_invalid"]
         assert db.query(GmailOAuthState).count() == 1
-        assert db.query(GmailOAuthCredential).count() == 0
+        assert app.state.gmail_credential_store.snapshot_for_test() == ()
 
     accepted = client.get(
         "/api/v1/integrations/gmail/callback",
@@ -280,7 +284,7 @@ def test_failed_rebind_never_leaves_superseded_account_advertised_active(
     api_context,
     monkeypatch,
 ):
-    client, db, _app = api_context
+    client, _db, app = api_context
 
     first = client.post("/api/v1/integrations/gmail/authorize").json()
     first_state = parse_qs(urlsplit(first["authorization_url"]).query)["state"][0]
@@ -314,7 +318,7 @@ def test_failed_rebind_never_leaves_superseded_account_advertised_active(
     status = client.get("/api/v1/integrations/gmail").json()
     assert status["connection_required"] is True
     assert status["account"]["status"] == "invalid"
-    assert db.query(GmailOAuthCredential).count() == 0
+    assert app.state.gmail_credential_store.snapshot_for_test() == ()
 
     # Local revoke remains recoverable when callback cleanup already removed
     # the broker row after Google confirmed revocation.
@@ -327,7 +331,7 @@ def test_unexpected_callback_failure_returns_safely_and_clears_browser_binding(
     api_context,
     monkeypatch,
 ):
-    client, db, _app = api_context
+    client, _db, app = api_context
 
     async def crash_public_binding(*_args, **_kwargs):
         raise RuntimeError("internal details must not reach the browser")
@@ -351,7 +355,7 @@ def test_unexpected_callback_failure_returns_safely_and_clears_browser_binding(
     assert query["gmail_oauth_error"] == ["provider_error"]
     assert 'gmail_oauth_state_binding=""' in callback.headers["set-cookie"]
     assert "internal details" not in callback.headers["location"]
-    assert db.query(GmailOAuthCredential).count() == 0
+    assert app.state.gmail_credential_store.snapshot_for_test() == ()
 
 
 def test_authorize_fails_closed_when_connector_configuration_is_absent(api_context):

@@ -1,14 +1,12 @@
-"""Gmail-specific account and controlled OAuth credential state.
+"""Gmail-specific account facts and short-lived OAuth state.
 
 This is not a provider-neutral Connection registry.  The table stores only
 the minimum user-visible Gmail account facts plus an encrypted opaque handle
 issued by controlled credential infrastructure.  OAuth access/refresh tokens
 never belong in this database row.
 
-The provider-specific broker tables below are deliberately not a generic
-Connection or Secret domain.  They are private implementation storage for the
-one real Google OAuth adapter: raw OAuth state is never persisted, tokens are
-always encrypted, and none of these models has a public schema or API.
+The Gmail credential broker is deliberately outside the application database.
+Only raw-state digests and short-lived encrypted PKCE verifiers remain here.
 """
 
 from __future__ import annotations
@@ -87,34 +85,13 @@ class GmailIntegrationAccount(Base):
     last_checked_at = Column(DateTime, nullable=True)
     # A bounded code owned by the adapter contract, never raw provider text.
     last_error_code = Column(String(64), nullable=True)
+    # Gmail-specific incremental Observation cursor.  This is provider intake
+    # state, not Runtime recovery state and not a generic connector registry.
+    history_cursor = Column(String(256), nullable=True)
+    history_cursor_updated_at = Column(DateTime, nullable=True)
+    last_observation_sync_at = Column(DateTime, nullable=True)
+    last_observation_sync_error_code = Column(String(64), nullable=True)
     revoked_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=utc_now)
-    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
-
-
-class GmailOAuthCredential(Base):
-    """Encrypted Google grant owned exclusively by the Gmail adapter.
-
-    ``credential_handle`` is an opaque lookup identity, never an OAuth token.
-    The public account row stores only an encrypted copy of that handle.
-    """
-
-    __tablename__ = "gmail_oauth_credentials"
-    __table_args__ = (
-        UniqueConstraint("user_id", name="uq_gmail_oauth_credentials_user"),
-    )
-
-    credential_handle = Column(String(256), primary_key=True)
-    user_id = Column(
-        Integer,
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    google_subject = Column(String(255), nullable=False)
-    scopes_json = Column(JSON, nullable=False, default=list)
-    access_token_ciphertext = Column(Text, nullable=False)
-    refresh_token_ciphertext = Column(Text, nullable=False)
-    access_token_expires_at = Column(DateTime, nullable=False)
     created_at = Column(DateTime, nullable=False, default=utc_now)
     updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
@@ -146,7 +123,6 @@ class GmailOAuthState(Base):
 __all__ = [
     "GMAIL_ACCOUNT_STATUSES",
     "GmailIntegrationAccount",
-    "GmailOAuthCredential",
     "GmailOAuthState",
     "generate_gmail_account_id",
     "generate_gmail_oauth_state_id",

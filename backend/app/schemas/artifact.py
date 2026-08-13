@@ -28,12 +28,15 @@ class ArtifactWriteInput(BaseModel):
     content_text: str | None = None
     content_format: str = Field(default="markdown", min_length=1, max_length=64)
     file_asset_id: str | None = Field(default=None, min_length=1, max_length=128)
+    file_asset_version: str | None = Field(default=None, min_length=1, max_length=96)
     provenance: ArtifactProvenanceInput = Field(default_factory=ArtifactProvenanceInput)
 
     @model_validator(mode="after")
     def has_real_content(self):
         if not (self.content_text or "").strip() and self.file_asset_id is None:
             raise ValueError("an Artifact version requires text or a FileAsset")
+        if self.file_asset_version is not None and self.file_asset_id is None:
+            raise ValueError("file_asset_version requires file_asset_id")
         return self
 
 
@@ -47,6 +50,7 @@ class ArtifactVersionView(BaseModel):
     content_text: str | None
     content_format: str
     file_asset_id: str | None
+    file_asset_version: str | None
     origin_kind: Literal["explicit_save", "message_promotion", "flow_delivery", "edit"]
     source_message_id: int | None
     source_turn_id: str | None
@@ -71,7 +75,7 @@ class ArtifactSubmissionView(BaseModel):
     job_opportunity_id: str
     artifact_id: str
     artifact_version_id: str
-    basis: Literal["user_confirmation", "external_receipt"]
+    basis: Literal["user_confirmation", "product_ui_confirmation", "external_receipt"]
     confirmation_message_id: int | None
     receipt_owner_type: str | None
     receipt_owner_id: str | None
@@ -125,7 +129,7 @@ class ArtifactRelatedView(BaseModel):
 
 
 class ArtifactSubmittedRequest(BaseModel):
-    """Exact-version submission explicitly confirmed by one user message.
+    """Exact-version submission explicitly confirmed through one user channel.
 
     External receipt confirmation intentionally has no public DTO until a
     concrete Connector defines a real receipt/read-back contract.
@@ -136,7 +140,16 @@ class ArtifactSubmittedRequest(BaseModel):
     operation_key: str = Field(min_length=1, max_length=128)
     artifact_version_id: str = Field(min_length=1, max_length=128)
     job_opportunity_id: str = Field(min_length=1, max_length=128)
-    confirmation_message_id: PositiveInt
+    confirmation_message_id: PositiveInt | None = None
+    ui_confirmation: Literal["product_ui"] | None = None
+
+    @model_validator(mode="after")
+    def require_exactly_one_confirmation(self) -> "ArtifactSubmittedRequest":
+        if (self.confirmation_message_id is None) == (self.ui_confirmation is None):
+            raise ValueError(
+                "exactly one of confirmation_message_id or ui_confirmation is required"
+            )
+        return self
 
 
 __all__ = [

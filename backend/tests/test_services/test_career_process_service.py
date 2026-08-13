@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from app.models.career_profile import CareerProfile, CareerProfileDirection
 from app.models.job_opportunity import (
     JobOpportunity,
+    JobOpportunityMerge,
     NextAction,
     ProcessEvent,
     ProcessEventImmutableError,
@@ -19,6 +20,8 @@ from app.schemas.job_opportunity import (
     NextActionTransition,
     OpportunityCreate,
     OpportunityDirectionsReplace,
+    OpportunityMergeCreate,
+    OpportunityMergeRetract,
     ProcessEventAppend,
     ProcessEventCorrection,
 )
@@ -28,6 +31,7 @@ from app.services.career_process_service import (
     NextActionTransitionError,
     OpportunityArchivedError,
     OpportunityDirectionConflictError,
+    OpportunityMergeConflictError,
     ProcessEventConflictError,
     append_confirmed_process_event,
     close_next_action,
@@ -36,10 +40,14 @@ from app.services.career_process_service import (
     create_job_opportunity,
     create_next_action,
     list_job_opportunities,
+    list_opportunity_merges,
     list_next_actions,
     list_process_events,
     plan_next_action,
+    merge_job_opportunities,
+    retract_job_opportunity_merge,
     replace_job_opportunity_directions,
+    suggest_opportunity_merge_candidates,
 )
 
 
@@ -143,6 +151,112 @@ def test_create_opportunity_writes_first_confirmed_fact_and_projection(db_sessio
     assert admitted.initial_event.sequence == 1
     assert admitted.initial_event.kind == "tracking_started"
     assert admitted.initial_event.source_identity == "message-1"
+
+
+def test_opportunity_merge_is_explicit_reversible_and_preserves_both_histories(
+    db_session,
+):
+    user = _user(db_session)
+    canonical = _create(db_session, user).opportunity
+    duplicate = _create(
+        db_session,
+        user,
+        source_url="https://other.example.com/jobs/99",
+        external_job_id="job-99",
+        idempotency_key="create-duplicate",
+    ).opportunity
+    before_events = {
+        canonical.id: [
+            row.id
+            for row in list_process_events(
+                db_session, user_pk=user.id, opportunity_id=canonical.id
+            )
+        ],
+        duplicate.id: [
+            row.id
+            for row in list_process_events(
+                db_session, user_pk=user.id, opportunity_id=duplicate.id
+            )
+        ],
+    }
+
+    candidates = suggest_opportunity_merge_candidates(db_session, user_pk=user.id)
+    assert candidates == [
+        {
+            "duplicate_opportunity_id": duplicate.id,
+            "canonical_opportunity_id": canonical.id,
+            "reasons": ["same_company_title_location"],
+        }
+    ]
+
+    merged = merge_job_opportunities(
+        db_session,
+        user_pk=user.id,
+        command=OpportunityMergeCreate(
+            duplicate_opportunity_id=duplicate.id,
+            canonical_opportunity_id=canonical.id,
+            operation_key="merge-explicit-1",
+            reason="用户核对双方来源后确认是同一招聘流程",
+        ),
+    )
+    assert merged.status == "active"
+    assert (
+        merge_job_opportunities(
+            db_session,
+            user_pk=user.id,
+            command=OpportunityMergeCreate(
+                duplicate_opportunity_id=duplicate.id,
+                canonical_opportunity_id=canonical.id,
+                operation_key="merge-explicit-1",
+                reason="用户核对双方来源后确认是同一招聘流程",
+            ),
+        ).id
+        == merged.id
+    )
+    assert list_opportunity_merges(db_session, user_pk=user.id) == [merged]
+
+    with pytest.raises(OpportunityMergeConflictError):
+        merge_job_opportunities(
+            db_session,
+            user_pk=user.id,
+            command=OpportunityMergeCreate(
+                duplicate_opportunity_id=canonical.id,
+                canonical_opportunity_id=duplicate.id,
+                operation_key="merge-cycle",
+                reason="不允许创建合并链",
+            ),
+        )
+
+    retracted = retract_job_opportunity_merge(
+        db_session,
+        user_pk=user.id,
+        merge_id=merged.id,
+        command=OpportunityMergeRetract(
+            expected_version=1,
+            operation_key="undo-merge-1",
+            reason="用户确认它们属于不同招聘批次",
+        ),
+    )
+    assert retracted.status == "retracted"
+    assert retracted.version == 2
+    assert list_opportunity_merges(db_session, user_pk=user.id) == []
+    assert db_session.get(JobOpportunity, canonical.id) is canonical
+    assert db_session.get(JobOpportunity, duplicate.id) is duplicate
+    assert {
+        canonical.id: [
+            row.id
+            for row in list_process_events(
+                db_session, user_pk=user.id, opportunity_id=canonical.id
+            )
+        ],
+        duplicate.id: [
+            row.id
+            for row in list_process_events(
+                db_session, user_pk=user.id, opportunity_id=duplicate.id
+            )
+        ],
+    } == before_events
+    assert db_session.query(JobOpportunityMerge).count() == 1
 
 
 def test_opportunity_direction_links_use_profile_owner_cas_and_not_event_history(
@@ -423,6 +537,54 @@ def test_replacement_can_roll_projection_back_to_correct_fact(db_session):
     assert admitted.opportunity.current_step == "招聘方已收到申请"
 
 
+def test_application_correction_preserves_original_analysis_context(db_session):
+    user = _user(db_session)
+    direction = _direction(db_session, user, "Backend")
+    admitted = _create(
+        db_session,
+        user,
+        reason="user_confirmed_application",
+        directions=[{"direction_id": direction.id, "match_reason": "后端职责匹配"}],
+    )
+    assert admitted.initial_event is not None
+    original_context = dict(admitted.initial_event.analysis_context_json)
+    assert original_context["directions"] == [{"id": direction.id, "label": "Backend"}]
+
+    # The canonical profile may legitimately evolve later.  Correcting the
+    # historical application fact must not back-label that sample with the new
+    # profile wording/version.
+    direction.label = "Platform"
+    profile = db_session.get(CareerProfile, direction.career_profile_id)
+    assert profile is not None
+    profile.version += 1
+    db_session.flush()
+
+    replacement = correct_process_event(
+        db_session,
+        user_pk=user.id,
+        opportunity_id=admitted.opportunity.id,
+        target_event_id=admitted.initial_event.id,
+        command=ProcessEventCorrection(
+            replacement_kind="application_submitted",
+            occurred_at=NOW,
+            source_kind="user_assertion",
+            source_identity="message-corrected-application",
+            description="用户修正了投递事实的来源说明",
+            application_channel="employee_referral",
+        ),
+    )
+
+    assert {
+        key: value
+        for key, value in replacement.analysis_context_json.items()
+        if key != "channel"
+    } == {key: value for key, value in original_context.items() if key != "channel"}
+    assert replacement.analysis_context_json["directions"] == [
+        {"id": direction.id, "label": "Backend"}
+    ]
+    assert replacement.analysis_context_json["channel"] == "employee_referral"
+
+
 def test_process_events_reject_update_delete_and_inactive_recorrection(db_session):
     user = _user(db_session)
     admitted = _create(db_session, user)
@@ -432,6 +594,22 @@ def test_process_events_reject_update_delete_and_inactive_recorrection(db_sessio
         admitted.opportunity.id,
         "assessment_invited",
     )
+
+    with pytest.raises(NextActionTransitionError):
+        create_next_action(
+            db_session,
+            user_pk=user.id,
+            command=NextActionCreate(
+                content="直接计划测评",
+                status="planned",
+                time_kind="deadline",
+                due_at=NOW + timedelta(days=5),
+                original_time_text="8 月 18 日前",
+                source_timezone="Asia/Shanghai",
+                source_kind="process_event",
+                source_identity=assessment.id,
+            ),
+        )
     correct_process_event(
         db_session,
         user_pk=user.id,
@@ -580,6 +758,30 @@ def test_next_action_time_contract_and_source_lifecycle(db_session):
     assert planned.planned_source_identity == "message-accept-action"
     assert done.status == "done"
     assert done.resolution_source_identity == completed_event.id
+
+    interview = _append(
+        db_session,
+        user,
+        admitted.opportunity.id,
+        "interview_scheduled",
+    )
+    fixed = create_next_action(
+        db_session,
+        user_pk=user.id,
+        command=NextActionCreate(
+            content="参加一面",
+            status="planned",
+            time_kind="fixed",
+            starts_at=NOW + timedelta(days=7),
+            ends_at=NOW + timedelta(days=7, hours=1),
+            original_time_text="8 月 20 日 17:00",
+            source_timezone="Asia/Shanghai",
+            source_kind="process_event",
+            source_identity=interview.id,
+        ),
+    )
+    assert fixed.status == "planned"
+    assert fixed.planned_source_kind == "process_event"
     with pytest.raises(NextActionTransitionError):
         close_next_action(
             db_session,

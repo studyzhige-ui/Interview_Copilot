@@ -8,6 +8,7 @@ an admitted Conversation ``AttachmentRef`` and an explicit
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Literal
 
@@ -21,11 +22,13 @@ from app.models.conversation_attachment import (
     ConversationAttachmentRef,
 )
 from app.models.conversation_turn import ConversationTurn
+from app.models.document_chunk import DocumentChunk
 from app.models.file_asset import FileAsset
 from app.models.interview_record import InterviewRecord
 from app.models.interview_source import InterviewSourceRef
 from app.models.knowledge import KnowledgeDocument
 from app.models.pending_submission import PendingSubmission
+from app.services.uploads.file_asset_service import file_asset_version_token
 
 AttachmentProcessingStatus = Literal["processing", "ready", "failed"]
 AttachmentSourceKind = Literal[
@@ -66,6 +69,8 @@ class AttachmentSourceState:
     title: str
     error_message: str | None
     can_retry: bool
+    parse_quality: dict[str, object]
+    coverage: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -150,6 +155,7 @@ def list_pending_submission_sources(
         draft, document, asset = row
         states.append(
             _state_for_draft(
+                db,
                 draft,
                 document,
                 asset,
@@ -192,7 +198,9 @@ def list_claimed_attachment_sources(
         ConversationAttachmentRef.created_at,
         ConversationAttachmentRef.position,
     ).all()
-    return [_state_for_claimed(ref, document, asset) for ref, document, asset in rows]
+    return [
+        _state_for_claimed(db, ref, document, asset) for ref, document, asset in rows
+    ]
 
 
 def list_debrief_project_sources(
@@ -220,7 +228,9 @@ def list_debrief_project_sources(
         .order_by(InterviewSourceRef.created_at, InterviewSourceRef.id)
         .all()
     )
-    return [_state_for_promoted(ref, document, asset) for ref, document, asset in rows]
+    return [
+        _state_for_promoted(db, ref, document, asset) for ref, document, asset in rows
+    ]
 
 
 def prepare_attachment_projection_retry(
@@ -254,7 +264,7 @@ def prepare_attachment_projection_retry(
     if not _asset_is_readable(asset):
         raise AttachmentSourceConflictError("附件原始文件当前不可用。")
 
-    state = _state_from_resolved(source)
+    state = _state_from_resolved(db, source)
     if state.status in {"processing", "ready"}:
         return AttachmentProjectionRetry(state=state, should_dispatch=False)
 
@@ -265,7 +275,7 @@ def prepare_attachment_projection_retry(
     db.add(document)
     db.flush()
     return AttachmentProjectionRetry(
-        state=_state_from_resolved((source[0], document, asset, source[3])),
+        state=_state_from_resolved(db, (source[0], document, asset, source[3])),
         should_dispatch=True,
     )
 
@@ -291,7 +301,7 @@ def get_attachment_source_state(
         source_id=_identity(source_id, "source_id"),
         for_update=False,
     )
-    return _state_from_resolved(source)
+    return _state_from_resolved(db, source)
 
 
 def mark_attachment_retry_dispatch_failed(
@@ -455,19 +465,19 @@ def remove_debrief_project_source(
     return ref
 
 
-def remove_failed_conversation_attachment(
+def remove_conversation_attachment_from_scope(
     db: Session,
     *,
     user_pk: int,
     conversation_id: str,
     attachment_ref_id: str,
 ) -> tuple[ConversationAttachmentRef, str]:
-    """Revoke one failed source and let the same waiting Turn continue.
+    """Revoke one admitted source from future Conversation reads.
 
     The immutable claim identity and frozen asset version stay available to
-    History.  Only the Conversation read grant is revoked.  Ready/processing
-    sources cannot be removed through this recovery command because doing so
-    would silently rewrite an already accepted input.
+    History.  Only the Conversation read grant is revoked.  When the owning
+    Turn is waiting on attachment parsing, the API rechecks whether the same
+    Turn can now resume; no new user message or Turn is created.
     """
 
     normalized_conversation_id = _identity(conversation_id, "conversation_id")
@@ -499,16 +509,6 @@ def remove_failed_conversation_attachment(
         raise AttachmentSourceNotFoundError(ref.turn_id)
     if ref.removed_at is not None:
         return ref, turn.id
-    if turn.status != "waiting" or turn.waiting_reason != "attachment_parsing":
-        raise AttachmentSourceConflictError(
-            "只有因附件解析失败而等待的原 Turn 可以移除该来源并继续。"
-        )
-    document = db.get(KnowledgeDocument, ref.source_document_id)
-    asset = db.get(FileAsset, ref.file_asset_id)
-    if _state_for_claimed(ref, document, asset).status != "failed":
-        raise AttachmentSourceConflictError(
-            "处理中或已就绪的已接纳附件不能通过失败恢复命令移除。"
-        )
     ref.removed_at = utc_now()
     db.add(ref)
     db.flush()
@@ -882,10 +882,11 @@ def _resolve_source_in_conversation(
     raise AttachmentSourceNotFoundError(source_id)
 
 
-def _state_from_resolved(source) -> AttachmentSourceState:
+def _state_from_resolved(db: Session, source) -> AttachmentSourceState:
     owner, document, asset, kind = source
     if kind == "draft":
         return _state_for_draft(
+            db,
             owner,
             document,
             asset,
@@ -893,11 +894,12 @@ def _state_from_resolved(source) -> AttachmentSourceState:
             scope_id=owner.conversation_id,
         )
     if kind == "conversation_attachment":
-        return _state_for_claimed(owner, document, asset)
-    return _state_for_promoted(owner, document, asset)
+        return _state_for_claimed(db, owner, document, asset)
+    return _state_for_promoted(db, owner, document, asset)
 
 
 def _state_for_draft(
+    db: Session,
     draft: ConversationAttachmentDraft,
     document: KnowledgeDocument | None,
     asset: FileAsset | None,
@@ -910,6 +912,7 @@ def _state_for_draft(
         reason = "附件草稿已移除。"
     status = "failed" if reason else _processing_status(document)
     error = reason or (document.error_message if document else None)
+    quality, coverage = _projection_diagnostics(db, document, status=status)
     return AttachmentSourceState(
         source_id=draft.id,
         source_kind="draft",
@@ -917,7 +920,7 @@ def _state_for_draft(
         scope_id=scope_id,
         status=status,
         file_asset_id=draft.file_asset_id,
-        file_asset_version=_asset_version(asset) if asset else None,
+        file_asset_version=file_asset_version_token(asset) if asset else None,
         document_id=draft.source_document_id,
         title=(
             asset.original_filename
@@ -933,10 +936,13 @@ def _state_for_draft(
             and draft.removed_at is None
             and document is not None
         ),
+        parse_quality=quality,
+        coverage=coverage,
     )
 
 
 def _state_for_claimed(
+    db: Session,
     ref: ConversationAttachmentRef,
     document: KnowledgeDocument | None,
     asset: FileAsset | None,
@@ -949,6 +955,7 @@ def _state_for_claimed(
     ):
         reason = "附件来源身份、版本或原始文件已失效。"
     status = "failed" if reason else _processing_status(document)
+    quality, coverage = _projection_diagnostics(db, document, status=status)
     return AttachmentSourceState(
         source_id=ref.id,
         source_kind="conversation_attachment",
@@ -961,10 +968,13 @@ def _state_for_claimed(
         title=ref.display_name,
         error_message=reason or (document.error_message if document else None),
         can_retry=status == "failed" and reason is None,
+        parse_quality=quality,
+        coverage=coverage,
     )
 
 
 def _state_for_promoted(
+    db: Session,
     ref: InterviewSourceRef,
     document: KnowledgeDocument | None,
     asset: FileAsset | None,
@@ -977,6 +987,7 @@ def _state_for_promoted(
     ):
         reason = "复盘来源身份、版本或原始文件已失效。"
     status = "failed" if reason else _processing_status(document)
+    quality, coverage = _projection_diagnostics(db, document, status=status)
     return AttachmentSourceState(
         source_id=ref.id,
         source_kind="debrief_project_source",
@@ -989,6 +1000,8 @@ def _state_for_promoted(
         title=ref.display_name,
         error_message=reason or (document.error_message if document else None),
         can_retry=status == "failed" and reason is None,
+        parse_quality=quality,
+        coverage=coverage,
     )
 
 
@@ -1000,6 +1013,85 @@ def _processing_status(
     if document.status in {"processing", "retrying"}:
         return "processing"
     return "ready" if document.status == "ready" else "failed"
+
+
+def _projection_diagnostics(
+    db: Session,
+    document: KnowledgeDocument | None,
+    *,
+    status: AttachmentProcessingStatus,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Project persisted parser metadata into stable, truthful UI fields."""
+
+    chunks = (
+        db.query(DocumentChunk)
+        .filter(
+            DocumentChunk.document_id == document.id,
+            DocumentChunk.deleted_at.is_(None),
+            DocumentChunk.index_status != "deleted",
+        )
+        .order_by(DocumentChunk.chunk_index)
+        .all()
+        if document is not None
+        else []
+    )
+    metadata: dict[str, object] = {}
+    for chunk in chunks:
+        try:
+            candidate = json.loads(chunk.metadata_json or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(candidate, dict):
+            metadata = candidate
+            break
+    parser_profile = metadata.get("parser_profile")
+    parser_profile = parser_profile if isinstance(parser_profile, dict) else {}
+    cleaning_profile = metadata.get("cleaning_profile")
+    cleaning_profile = cleaning_profile if isinstance(cleaning_profile, dict) else {}
+    warnings: list[str] = []
+    for value in (
+        parser_profile.get("warnings"),
+        parser_profile.get("quality_warnings"),
+        cleaning_profile.get("warnings"),
+    ):
+        if isinstance(value, list):
+            warnings.extend(str(item) for item in value if str(item).strip())
+    page_starts = [int(chunk.page_start) for chunk in chunks if chunk.page_start]
+    page_ends = [int(chunk.page_end) for chunk in chunks if chunk.page_end]
+    parsed_chars = parser_profile.get("char_count")
+    if not isinstance(parsed_chars, int):
+        parsed_chars = len(document.content_text or "") if document else 0
+    page_count = parser_profile.get("page_count")
+    if not isinstance(page_count, int):
+        page_count = None
+    quality_score = parser_profile.get("quality_score")
+    if not isinstance(quality_score, (int, float)):
+        quality_score = None
+    return (
+        {
+            "parser_id": str(metadata.get("parser_id"))
+            if metadata.get("parser_id")
+            else None,
+            "quality_score": float(quality_score)
+            if quality_score is not None
+            else None,
+            "ocr_used": bool(metadata.get("ocr_used")),
+            "warnings": list(dict.fromkeys(warnings)),
+        },
+        {
+            "chunk_count": len(chunks),
+            "parsed_char_count": max(0, int(parsed_chars)),
+            "page_count": page_count,
+            "page_start": min(page_starts) if page_starts else None,
+            "page_end": max(page_ends) if page_ends else None,
+            "full_text_projection_available": bool(
+                status == "ready" and (chunks or (document and document.content_text))
+            ),
+            # Text/OCR extraction alone never proves that visual layout was
+            # inspected.  A future page-vision flow may set a separate receipt.
+            "visual_layout_reviewed": False,
+        },
+    )
 
 
 def _invalid_owner_reason(
@@ -1029,7 +1121,7 @@ def _claimed_owner_is_valid(
         and document.source_kind == "chat_attachment"
         and document.deleted_at is None
         and _asset_is_readable(asset)
-        and ref.file_asset_version == _asset_version(asset)
+        and ref.file_asset_version == file_asset_version_token(asset)
         and ref.removed_at is None
     )
 
@@ -1046,7 +1138,7 @@ def _promoted_owner_is_valid(
         and document.source_kind == "chat_attachment"
         and document.deleted_at is None
         and _asset_is_readable(asset)
-        and ref.file_asset_version == _asset_version(asset)
+        and ref.file_asset_version == file_asset_version_token(asset)
         and ref.removed_at is None
     )
 
@@ -1058,11 +1150,6 @@ def _asset_is_readable(asset: FileAsset | None) -> bool:
         and asset.upload_status in {"uploaded", "consumed"}
         and asset.validation_status == "passed"
     )
-
-
-def _asset_version(asset: FileAsset) -> str:
-    checksum = (asset.checksum_sha256 or "").strip().lower()
-    return f"sha256:{checksum}" if checksum else f"file_asset:{asset.id}"
 
 
 def _projection_has_other_scope(db: Session, document_id: str) -> bool:
@@ -1201,6 +1288,21 @@ def _missing_state(
         title=source_id,
         error_message=reason,
         can_retry=False,
+        parse_quality={
+            "parser_id": None,
+            "quality_score": None,
+            "ocr_used": False,
+            "warnings": [],
+        },
+        coverage={
+            "chunk_count": 0,
+            "parsed_char_count": 0,
+            "page_count": None,
+            "page_start": None,
+            "page_end": None,
+            "full_text_projection_available": False,
+            "visual_layout_reviewed": False,
+        },
     )
 
 
@@ -1229,6 +1331,6 @@ __all__ = [
     "mark_attachment_retry_dispatch_failed",
     "prepare_attachment_projection_retry",
     "promote_attachment_to_debrief",
-    "remove_failed_conversation_attachment",
+    "remove_conversation_attachment_from_scope",
     "remove_debrief_project_source",
 ]

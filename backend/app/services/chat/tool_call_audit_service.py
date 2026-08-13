@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.agent_runtime.tool_redaction import redact_tool_text, redact_tool_value
+from app.agent_runtime.tool_redaction import (
+    bounded_tool_result_projection,
+    redact_tool_text,
+    redact_tool_value,
+)
 from app.models.agent_execution import AgentToolCall
 from app.models.conversation_turn import ConversationTurn
 from app.schemas.tool_call_audit import AgentToolCallAuditView
@@ -52,8 +56,19 @@ def get_tool_call_audit(
     arguments = redact_tool_value(row.arguments_json or {})
     if not isinstance(arguments, dict):
         arguments = {}
-    result = redact_tool_value(row.result_json) if row.result_json is not None else None
+    result = bounded_tool_result_projection(row.result_json)
     error = redact_tool_text(row.error) if row.error else None
+    timeline = redact_tool_value(row.timeline_json or [])
+    if not isinstance(timeline, list):
+        timeline = []
+    receipt_refs = [
+        redact_tool_text(str(value)) for value in (row.receipt_refs_json or []) if value
+    ]
+    resource_identities = [
+        redact_tool_text(str(value))[:255]
+        for value in (row.resource_identities_json or [])[:32]
+        if value
+    ]
     return AgentToolCallAuditView(
         call_id=row.call_id,
         turn_id=row.turn_id,
@@ -63,6 +78,24 @@ def get_tool_call_audit(
         dispatch_generation=row.dispatch_generation,
         policy_decision=row.policy_decision,
         policy_reason=row.policy_reason,
+        model_step=row.model_step,
+        model_call_index=row.model_call_index,
+        model_call_order=row.model_call_order,
+        completion_sequence=row.completion_sequence,
+        handler_identity=(
+            redact_tool_text(row.handler_identity) if row.handler_identity else None
+        ),
+        provider_identity=(
+            redact_tool_text(row.provider_identity) if row.provider_identity else None
+        ),
+        connection_identity=(
+            redact_tool_text(row.connection_identity)
+            if row.connection_identity
+            else None
+        ),
+        timeline=[item for item in timeline if isinstance(item, dict)],
+        receipt_refs=receipt_refs,
+        resource_identities=resource_identities,
         arguments=arguments,
         result=result,
         error=error,

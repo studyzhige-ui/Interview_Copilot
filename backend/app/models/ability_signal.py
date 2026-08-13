@@ -61,6 +61,11 @@ class AbilitySignal(Base):
             "topic",
             "signal_type",
         ),
+        UniqueConstraint(
+            "user_id",
+            "producer_key",
+            name="uq_ability_signals_user_producer_key",
+        ),
     )
 
     id = Column(String(35), primary_key=True, default=lambda: _id("as"))
@@ -89,6 +94,9 @@ class AbilitySignal(Base):
         nullable=True,
         index=True,
     )
+    # Deterministic identity for a real producer projection. Manual/migrated
+    # signals leave it NULL; it is intentionally absent from public writes.
+    producer_key = Column(String(240), nullable=True)
     version = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, nullable=False, default=utc_now)
     updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)

@@ -66,7 +66,7 @@ def test_registry_visibility_does_not_depend_on_connection_probe():
     assert names == {"real_tool"}
 
 
-def test_tavily_tool_reports_connection_required_at_call_time(monkeypatch):
+def test_tavily_tool_reports_deployment_connector_unavailable_at_call_time(monkeypatch):
     import asyncio
 
     import app.agent_runtime.tools.web as web
@@ -81,7 +81,7 @@ def test_tavily_tool_reports_connection_required_at_call_time(monkeypatch):
         )
     )
     assert result == {
-        "error": "connection_required",
+        "error": "connector_unavailable",
         "provider": "tavily",
-        "required_scope": "web_search",
+        "reason": "deployment_credential_missing",
     }

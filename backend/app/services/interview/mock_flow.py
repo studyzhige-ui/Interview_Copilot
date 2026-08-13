@@ -120,6 +120,13 @@ class ResumeNotReadyError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class ResolvedResumeContext:
+    text: str
+    artifact_id: str
+    artifact_version_id: str
+
+
 def resolve_resume_context(
     db: Session,
     *,
@@ -127,33 +134,47 @@ def resolve_resume_context(
     resume_id: str,
 ) -> str:
     """Load one parsed personal resume for interview planning."""
-    try:
-        from app.services.resume import resume_entity_service
-        from app.services.resume.resume_service import resume_service
+    return _resolve_resume_reference(db, username=username, resume_id=resume_id).text
 
-        resume = resume_entity_service.get_owned_resume(
-            db,
-            resume_id=resume_id,
-            user_id=username,
+
+def _resolve_resume_reference(
+    db: Session,
+    *,
+    username: str,
+    resume_id: str,
+) -> ResolvedResumeContext:
+    """Resolve only the canonical resume Artifact and exact current version.
+
+    ``resume_id`` may be a pre-cut-over identity only when migration 0029 has
+    recorded it as ``ArtifactResumeState.legacy_resume_id``. The runtime never
+    reads the retired Resume or ResumeSection tables.
+    """
+    try:
+        from app.services.resume import resume_artifact_service
+
+        user_pk = resolve_user_pk(db, username)
+        try:
+            canonical = resume_artifact_service.resolve_owned_resume(
+                db, user_pk=user_pk, resume_id=resume_id
+            )
+        except resume_artifact_service.ResumeArtifactNotFoundError as exc:
+            raise ResumeNotFoundError(
+                "简历 Artifact 不存在或无权访问；旧简历标识必须先由迁移 0029 映射"
+            ) from exc
+        try:
+            snapshot = resume_artifact_service.read_resume_text(canonical)
+        except resume_artifact_service.ResumeArtifactNotReadyError as exc:
+            raise ResumeNotReadyError(str(exc)) from exc
+        return ResolvedResumeContext(
+            text=snapshot,
+            artifact_id=canonical.artifact.id,
+            artifact_version_id=canonical.current_version.id,
         )
-        if resume is None:
-            raise ResumeNotFoundError("简历不存在或无权访问")
-        snapshot = (resume.raw_text_snapshot or "").strip()
-        if not snapshot and resume.parse_status in {"pending", "processing"}:
-            raise ResumeNotReadyError("简历仍在解析，请解析完成后再开始面试")
-        if resume.parse_status == "failed" and not snapshot:
-            raise ResumeNotReadyError("简历解析失败，请替换后重试")
-        sections = resume_service.get_sections_by_resume(resume.id)
-        if sections:
-            return resume_service.format_for_context(sections)
-        if snapshot:
-            return snapshot
     except Exception as exc:  # noqa: BLE001
         if isinstance(exc, (ResumeNotFoundError, ResumeNotReadyError)):
             raise
         logger.warning("mock resume context load failed: %s", exc)
         raise ResumeNotReadyError("简历读取失败，请稍后重试") from exc
-    raise ResumeNotReadyError("简历仍在解析，请解析完成后再开始面试")
 
 
 # ── Ownership ────────────────────────────────────────────────────────────
@@ -212,7 +233,10 @@ def start_mock(
         user_pk=user_pk,
         job_opportunity_id=job_opportunity_id,
     )
-    resume_context = resolve_resume_context(db, username=username, resume_id=resume_id)
+    resolved_resume = _resolve_resume_reference(
+        db, username=username, resume_id=resume_id
+    )
+    resume_context = resolved_resume.text
     jd_context = jd_text.strip()
 
     plan = mock_interview_service.generate_plan(
@@ -226,7 +250,8 @@ def start_mock(
     record = interview_record_service.create_for_mock(
         user_id=username,
         title="模拟面试",
-        resume_id=resume_id,
+        resume_artifact_id=resolved_resume.artifact_id,
+        resume_artifact_version_id=resolved_resume.artifact_version_id,
         resume_text_snapshot=resume_context,
         jd_text_snapshot=jd_context,
         job_opportunity_id=normalized_job_id,

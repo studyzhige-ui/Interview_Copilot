@@ -21,7 +21,12 @@ from urllib.parse import urljoin
 import httpx
 from pydantic import BaseModel, Field
 
-from app.agent_runtime.tool_registry import AgentToolContext, ToolDefinition, registry
+from app.agent_runtime.tool_registry import (
+    AgentToolContext,
+    ToolDefinition,
+    ToolPreflightResult,
+    registry,
+)
 from app.agent_runtime.tool_policy import ToolEffect
 from app.core.ssrf import UrlNotSafe as _UrlNotSafe
 from app.core.ssrf import resolve_safe_url as _resolve_safe_url
@@ -75,19 +80,16 @@ class WebSearchArgs(BaseModel):
     limit: int = Field(default=5, ge=1, le=10, description="Max results")
 
 
-def _resolve_tavily_key(user_id: str | None) -> str:
-    """Prefer per-user encrypted key, fall back to global env var."""
-    if user_id:
-        try:
-            from app.services.auth.user_api_key_service import (
-                get_user_api_key_plaintext,
-            )
+def _resolve_tavily_key(_user_id: str | None) -> str:
+    """Read the connector's deployment credential at its execution boundary.
 
-            per_user = get_user_api_key_plaintext(user_id, "tavily")
-            if per_user:
-                return per_user
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("tavily per-user key lookup failed (%s)", type(exc).__name__)
+    Tavily is not a response-model provider.  Reusing the user model-key table
+    would merge two different grants and let a model credential silently gain
+    web-search scope.  A future user-connected Tavily flow must own an explicit
+    provider-specific grant; until then only the deployment credential is
+    valid.
+    """
+
     return os.getenv("TAVILY_API_KEY", "")
 
 
@@ -98,9 +100,9 @@ async def _web_search_handler(
     api_key = _resolve_tavily_key(ctx.user_id)
     if not api_key:
         return {
-            "error": "connection_required",
+            "error": "connector_unavailable",
             "provider": "tavily",
-            "required_scope": "web_search",
+            "reason": "deployment_credential_missing",
         }
 
     timeout = httpx.Timeout(15.0)
@@ -143,6 +145,23 @@ async def _web_search_handler(
         "count": len(results),
         "results": results,
     }
+
+
+def _web_search_preflight(
+    _args: WebSearchArgs,
+    ctx: AgentToolContext,
+) -> ToolPreflightResult:
+    ready = bool(_resolve_tavily_key(ctx.user_id))
+    return ToolPreflightResult(
+        connection_ready=ready,
+        # This credential is deployment-owned.  There is no user grant flow
+        # that could resolve a connection Interaction, so missing config is a
+        # terminal typed denial rather than a permanently waiting Turn.
+        hard_deny_reason=None if ready else "connector_unavailable",
+        resource_identities=("connector:tavily",),
+        provider_identity="tavily",
+        connection_identity="deployment-connector:tavily" if ready else None,
+    )
 
 
 # ── read_url ────────────────────────────────────────────────────────────
@@ -342,8 +361,8 @@ registry.register(
         args_model=WebSearchArgs,
         handler=_web_search_handler,
         effect=ToolEffect.READ,
-        # The user's search connection is checked at execution time; serialize
-        # this boundary so a connection wait pauses the untouched batch.
+        preflight=_web_search_preflight,
+        # Deployment connector availability is checked at execution time.
         concurrency_safe=False,
         max_result_chars=12_000,
         emoji="🔍",

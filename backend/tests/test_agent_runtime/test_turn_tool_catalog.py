@@ -14,8 +14,11 @@ from app.agent_runtime.tool_registry import (
 from app.agent_runtime.turn_tool_catalog import TurnToolCatalog
 from app.models.chat import Conversation
 from app.models.conversation_turn import ConversationTurn
+from app.models.agent_task import AgentTask
+from app.models.agent_task_skill import AgentTaskSkillBinding
 from app.models.user import User
 from app.models.user_skill import UserSkill
+from app.services.capabilities import skill_service
 from app.services.capabilities.mcp_server_service import MCPServerConfig
 from pydantic import BaseModel
 
@@ -124,6 +127,12 @@ def test_schemas_and_tool_search_results_are_sorted_by_name():
                 "name": "plan",
                 "description": "Create a plan",
                 "updated_at": "1",
+                "revision": 1,
+                "content_hash": "hash",
+                "source": "user",
+                "applicable_profiles": [],
+                "required_tools": [],
+                "allowed_tools": [],
             },
         ),
         mcp_tools=(SECOND_TOOL, TOOL),
@@ -140,9 +149,14 @@ def test_schemas_and_tool_search_results_are_sorted_by_name():
 
     result, schemas = asyncio.run(run())
     schema_names = [row["function"]["name"] for row in schemas]
-    assert result == {"error": "unknown_tool", "tool_name": "tool_search"}
-    assert TOOL.name not in schema_names
-    assert SECOND_TOOL.name not in schema_names
+    assert result == {
+        "loaded_tools": [
+            {"name": TOOL.name, "description": TOOL.description},
+            {"name": SECOND_TOOL.name, "description": SECOND_TOOL.description},
+        ]
+    }
+    assert TOOL.name in schema_names
+    assert SECOND_TOOL.name in schema_names
     assert schema_names == sorted(schema_names)
 
 
@@ -180,12 +194,18 @@ def test_format_prompt_has_guidance_and_compact_indexes_without_builtin_schemas(
                 "name": "skill-z",
                 "description": "Last skill",
                 "updated_at": "2",
+                "revision": 1,
+                "content_hash": "z",
+                "source": "user",
             },
             {
                 "id": 1,
                 "name": "skill-a",
                 "description": "First skill",
                 "updated_at": "1",
+                "revision": 1,
+                "content_hash": "a",
+                "source": "user",
             },
         ),
         mcp_tools=(SECOND_TOOL, TOOL),
@@ -200,8 +220,9 @@ def test_format_prompt_has_guidance_and_compact_indexes_without_builtin_schemas(
     assert '"parameters"' not in prompt
     assert '"required"' not in prompt
     assert prompt.index('"name":"skill-a"') < prompt.index('"name":"skill-z"')
-    assert TOOL.name not in prompt
-    assert SECOND_TOOL.name not in prompt
+    assert TOOL.name in prompt
+    assert SECOND_TOOL.name in prompt
+    assert "input_schema" not in prompt
 
 
 def test_turn_snapshot_uses_tools_payload_without_permissions(db_session, monkeypatch):
@@ -245,10 +266,13 @@ def test_turn_snapshot_uses_tools_payload_without_permissions(db_session, monkey
     assert "tools" in snapshot
     assert "permissions" not in snapshot
     assert snapshot["tools"]["builtins"] == ["alpha", "zeta"]
-    assert snapshot["tools"]["mcp"] == []
+    assert [item["name"] for item in snapshot["tools"]["mcp"]] == [
+        TOOL.name,
+        SECOND_TOOL.name,
+    ]
 
 
-def test_mcp_is_not_callable_until_safe_execution_is_available(monkeypatch):
+def test_mcp_call_is_typed_and_dispatches_through_real_manager(monkeypatch):
     catalog = TurnToolCatalog(
         builtins=registry.snapshot(user_id="alice"),
         excluded=frozenset(),
@@ -269,18 +293,72 @@ def test_mcp_is_not_callable_until_safe_execution_is_available(monkeypatch):
     async def run():
         ctx = AgentToolContext(user_id="alice", session_id="s1")
         loaded = await catalog.dispatch("tool_search", {"query": "add"}, ctx)
-        assert loaded == {"error": "unknown_tool", "tool_name": "tool_search"}
-        assert TOOL.name not in {
+        assert loaded["loaded_tools"][0]["name"] == TOOL.name
+        assert TOOL.name in {
             item["function"]["name"] for item in catalog.get_openai_schemas()
         }
-        blocked = await catalog.dispatch(TOOL.name, {"a": 1, "b": 2}, ctx)
-        return blocked
+        monkeypatch.setattr(
+            TurnToolCatalog,
+            "_current_mcp_config",
+            AsyncMock(return_value=CONFIG),
+        )
+        plan = await catalog.plan_call(TOOL.name, {"a": 1, "b": 2}, ctx)
+        called = await catalog.dispatch(TOOL.name, {"a": 1, "b": 2}, ctx)
+        return plan, called
 
-    assert asyncio.run(run()) == {
-        "error": "unknown_tool",
-        "tool_name": TOOL.name,
+    plan, called = asyncio.run(run())
+    assert plan.effect.value == "unknown"
+    assert plan.error is None
+    assert called == {"result": 3}
+    call_tool.assert_awaited_once_with(CONFIG, TOOL, {"a": 1, "b": 2})
+
+
+def test_loaded_mcp_schema_restores_callable_identity_for_same_call_resume(
+    db_session,
+    monkeypatch,
+):
+    import app.agent_runtime.turn_tool_catalog as catalog_module
+
+    user = User(username="mcp-resume-owner", hashed_password="x")
+    db_session.add(user)
+    db_session.flush()
+    conversation = Conversation(user_id=user.id, mode="agent")
+    db_session.add(conversation)
+    db_session.flush()
+    turn = ConversationTurn(
+        conversation_id=conversation.id,
+        user_id=user.id,
+        mode="agent",
+        message="resume mcp",
+        loaded_tool_schemas_json=[TurnToolCatalog._mcp_schema(TOOL)],
+    )
+    db_session.add(turn)
+    db_session.commit()
+    patch_session_locals(monkeypatch, db_session, catalog_module)
+    monkeypatch.setattr(
+        catalog_module.mcp_server_service,
+        "enabled_configs",
+        lambda _db, _user_pk: [CONFIG],
+    )
+    monkeypatch.setattr(
+        catalog_module.manager,
+        "discover",
+        AsyncMock(return_value=([TOOL], {})),
+    )
+
+    catalog = asyncio.run(
+        TurnToolCatalog.create(
+            user.username,
+            session_id=conversation.id,
+            turn_id=turn.id,
+        )
+    )
+
+    assert TOOL.name in catalog
+    assert catalog.loaded.mcp[TOOL.name] is TOOL
+    assert TOOL.name in {
+        item["function"]["name"] for item in catalog.get_openai_schemas()
     }
-    call_tool.assert_not_awaited()
 
 
 def test_skill_content_is_progressively_loaded(monkeypatch):
@@ -297,6 +375,9 @@ def test_skill_content_is_progressively_loaded(monkeypatch):
                 "name": "plan",
                 "description": "Create a plan",
                 "updated_at": "1",
+                "revision": 1,
+                "content_hash": "hash",
+                "source": "user",
             },
         ),
         mcp_tools=(),
@@ -310,6 +391,11 @@ def test_skill_content_is_progressively_loaded(monkeypatch):
                 "name": "plan",
                 "description": "Create a plan",
                 "content": "---\nname: plan\ndescription: Create a plan\n---\nDo the work.",
+                "source": "user",
+                "revision": 1,
+                "content_hash": "hash",
+                "resources": [],
+                "allowed_tools": [],
             }
         ),
     )
@@ -325,7 +411,7 @@ def test_skill_content_is_progressively_loaded(monkeypatch):
     assert "Do the work" in loaded["instructions"]
 
 
-def test_known_mcp_is_not_callable_even_before_schema_is_loaded():
+def test_known_mcp_preflight_rejects_untyped_arguments_before_dispatch():
     catalog = TurnToolCatalog(
         builtins=registry.snapshot(user_id="alice"),
         excluded=frozenset(),
@@ -339,16 +425,21 @@ def test_known_mcp_is_not_callable_even_before_schema_is_loaded():
     )
 
     async def run():
-        return await catalog.dispatch(
+        await catalog.dispatch(
+            "tool_search",
+            {"query": "add"},
+            AgentToolContext(user_id="alice", session_id="s1"),
+        )
+        return await catalog.plan_call(
             TOOL.name,
-            {"a": 1, "b": 2},
+            {"a": 1},
             AgentToolContext(user_id="alice", session_id="s1"),
         )
 
-    assert asyncio.run(run()) == {
-        "error": "unknown_tool",
-        "tool_name": TOOL.name,
-    }
+    plan = asyncio.run(run())
+    assert plan.handler_exists is True
+    assert plan.error["error"] == "tool_args_validation_failed"
+    assert plan.error["invalid_paths"] == ["$"]
 
 
 def test_lazy_skill_load_rejects_mid_turn_revision_change(db_session, monkeypatch):
@@ -362,6 +453,8 @@ def test_lazy_skill_load_rejects_mid_turn_revision_change(db_session, monkeypatc
         name="plan",
         description="Create a plan",
         content="---\nname: plan\ndescription: Create a plan\n---\nOld instructions.",
+        revision=1,
+        content_hash="old-hash",
         enabled=True,
     )
     db_session.add(skill)
@@ -381,6 +474,9 @@ def test_lazy_skill_load_rejects_mid_turn_revision_change(db_session, monkeypatc
                 "name": skill.name,
                 "description": skill.description,
                 "updated_at": revision,
+                "revision": skill.revision,
+                "content_hash": skill.content_hash,
+                "source": "user",
             },
         ),
         mcp_tools=(),
@@ -389,6 +485,8 @@ def test_lazy_skill_load_rejects_mid_turn_revision_change(db_session, monkeypatc
     skill.content = (
         "---\nname: plan\ndescription: Create a plan\n---\nNew instructions."
     )
+    skill.revision = 2
+    skill.content_hash = "new-hash"
     skill.updated_at = datetime.fromisoformat(revision) + timedelta(seconds=1)
     db_session.commit()
 
@@ -403,6 +501,102 @@ def test_lazy_skill_load_rejects_mid_turn_revision_change(db_session, monkeypatc
         "error": "skill_revision_changed",
         "name": "plan",
     }
+
+
+def test_skill_activation_binds_task_discloses_resource_and_only_narrows_tools(
+    db_session,
+    monkeypatch,
+):
+    import app.agent_runtime.turn_tool_catalog as catalog_module
+
+    user = User(username="skill-activation-owner", hashed_password="x")
+    db_session.add(user)
+    db_session.flush()
+    conversation = Conversation(user_id=user.id, mode="agent")
+    db_session.add(conversation)
+    db_session.flush()
+    turn = ConversationTurn(
+        conversation_id=conversation.id,
+        user_id=user.id,
+        mode="agent",
+        message="use the workflow",
+    )
+    db_session.add(turn)
+    db_session.flush()
+    task = AgentTask(
+        turn_id=turn.id,
+        objective="Use the selected workflow",
+        completion_conditions_json=["done"],
+        phases_json=[{"id": "phase-1", "status": "in_progress"}],
+        creation_idempotency_key="task-with-skill",
+        creation_fingerprint="f" * 64,
+    )
+    db_session.add(task)
+    db_session.commit()
+    created = skill_service.create_skill(
+        db_session,
+        user.id,
+        """---
+name: bounded-plan
+description: Use one bounded workflow
+required-tools: [web_search]
+allowed-tools: [web_search]
+---
+Follow every instruction in this file.
+""",
+        True,
+    )
+    created = skill_service.replace_resources(
+        db_session,
+        user_pk=user.id,
+        skill_id=created["id"],
+        resources=[
+            {
+                "path": "references/rubric.md",
+                "kind": "reference",
+                "content": "The exact rubric.",
+            }
+        ],
+    )
+    assert created is not None
+    patch_session_locals(monkeypatch, db_session, catalog_module)
+    catalog = TurnToolCatalog(
+        builtins=registry.snapshot(user_id=user.username),
+        excluded=frozenset(),
+        user_id=user.username,
+        user_pk=user.id,
+        session_id=conversation.id,
+        turn_id=turn.id,
+        skills=({key: value for key, value in created.items() if key != "content"},),
+        mcp_tools=(),
+        mcp_configs=MappingProxyType({}),
+    )
+
+    async def run():
+        ctx = AgentToolContext(user_id=user.username, session_id=conversation.id)
+        loaded = await catalog.dispatch(
+            "skill_load",
+            {"name": "bounded-plan"},
+            ctx,
+        )
+        resource = await catalog.dispatch(
+            "skill_resource_load",
+            {"skill_name": "bounded-plan", "path": "references/rubric.md"},
+            ctx,
+        )
+        return loaded, resource, catalog.get_openai_schemas()
+
+    loaded, resource, schemas = asyncio.run(run())
+    assert "Follow every instruction" in loaded["instructions"]
+    assert resource["content"] == "The exact rubric."
+    names = {item["function"]["name"] for item in schemas}
+    assert "web_search" in names
+    assert "skill_resource_load" in names
+    assert "read_url" not in names
+    binding = db_session.query(AgentTaskSkillBinding).one()
+    assert binding.agent_task_id == task.id
+    assert binding.skill_name == "bounded-plan"
+    assert turn.tool_snapshot_json["activated_skills"][0]["revision"] == 2
 
 
 def test_mcp_manager_maps_remote_tools(monkeypatch):

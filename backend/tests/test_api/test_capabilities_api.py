@@ -50,6 +50,21 @@ def test_skill_api_crud(client):
         ).json()["enabled"]
         is False
     )
+    resources = client.put(
+        f"/api/v1/capabilities/skills/{skill_id}/resources",
+        json={
+            "resources": [
+                {
+                    "path": "references/checklist.md",
+                    "kind": "reference",
+                    "content": "Check each step.",
+                }
+            ]
+        },
+    )
+    assert resources.status_code == 200
+    listed = client.get(f"/api/v1/capabilities/skills/{skill_id}/resources").json()
+    assert listed["resources"][0]["path"] == "references/checklist.md"
     assert client.delete(f"/api/v1/capabilities/skills/{skill_id}").status_code == 204
 
 

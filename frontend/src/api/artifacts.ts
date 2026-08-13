@@ -74,3 +74,19 @@ export async function relateArtifactToOpportunity(
     job_opportunity_id: jobOpportunityId,
   })).data;
 }
+
+export async function recordArtifactSubmission(input: {
+  artifactId: string;
+  artifactVersionId: string;
+  jobOpportunityId: string;
+  operationKey: string;
+}): Promise<ArtifactSubmission> {
+  return (
+    await apiClient.post(`/artifacts/${encodeURIComponent(input.artifactId)}/submitted`, {
+      operation_key: input.operationKey,
+      artifact_version_id: input.artifactVersionId,
+      job_opportunity_id: input.jobOpportunityId,
+      ui_confirmation: 'product_ui',
+    })
+  ).data;
+}

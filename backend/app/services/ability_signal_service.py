@@ -8,6 +8,8 @@ queries here, not a reusable owner/Evidence registry.
 
 from __future__ import annotations
 
+import json
+import hashlib
 import uuid
 from datetime import datetime
 
@@ -58,6 +60,7 @@ def create_ability_signal(
     assessment: AbilitySignalCreateInput,
     supersedes_signal_id: str | None = None,
     expected_superseded_version: int | None = None,
+    producer_key: str | None = None,
 ) -> AbilitySignalView:
     """Persist an upstream assessment after validating scope and every source.
 
@@ -67,6 +70,20 @@ def create_ability_signal(
 
     if db.get(User, user_pk) is None:
         raise AbilitySignalOwnershipError(f"Unknown user {user_pk}")
+    normalized_producer_key = producer_key.strip() if producer_key else None
+    if normalized_producer_key and len(normalized_producer_key) > 240:
+        raise AbilitySignalConflictError("AbilitySignal producer key is too long")
+    if normalized_producer_key:
+        existing = (
+            db.query(AbilitySignal)
+            .filter(
+                AbilitySignal.user_id == user_pk,
+                AbilitySignal.producer_key == normalized_producer_key,
+            )
+            .one_or_none()
+        )
+        if existing is not None:
+            return _signal_view(db, existing)
     _validate_scope(
         db,
         user_pk=user_pk,
@@ -153,6 +170,7 @@ def create_ability_signal(
             ),
             status="active",
             supersedes_signal_id=previous.id if previous is not None else None,
+            producer_key=normalized_producer_key,
             version=1,
             status_changed_at=now,
         )
@@ -331,6 +349,243 @@ def invalidate_ability_signals_for_interview_delete(
 
     db.flush()
     return changed
+
+
+def project_interview_ability_signals(
+    db: Session,
+    *,
+    user_pk: int,
+    interview_record_id: str,
+    force_new_generation: bool = False,
+) -> list[AbilitySignalView]:
+    """Project bounded ability judgements from a persisted Interview analysis.
+
+    Each radar dimension becomes one canonical signal with direct
+    InterviewRecord and scored InterviewQA identities. Replays of the same
+    generation are idempotent; an explicit recompute advances the record's
+    generation and supersedes the previous live projection.
+    """
+
+    record = (
+        db.query(InterviewRecord)
+        .filter(
+            InterviewRecord.id == interview_record_id,
+            InterviewRecord.user_id == user_pk,
+        )
+        .with_for_update()
+        .one_or_none()
+    )
+    if record is None:
+        raise AbilitySignalSourceError(
+            f"Owned interview_record {interview_record_id} does not exist"
+        )
+    try:
+        analysis = (
+            json.loads(record.analysis_json)
+            if isinstance(record.analysis_json, str)
+            else (record.analysis_json or {})
+        )
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise AbilitySignalSourceError("Interview analysis is not readable") from exc
+    radar = analysis.get("skill_radar") if isinstance(analysis, dict) else None
+    if not isinstance(radar, dict):
+        raise AbilitySignalSourceError(
+            "Interview analysis has no structured skill_radar"
+        )
+    if force_new_generation:
+        record.ability_signal_generation = int(record.ability_signal_generation) + 1
+        db.add(record)
+        db.flush()
+    generation = int(record.ability_signal_generation)
+    if generation < 1:
+        record.ability_signal_generation = 1
+        generation = 1
+        db.add(record)
+        db.flush()
+
+    qas = (
+        db.query(InterviewQA)
+        .filter(InterviewQA.record_id == record.id, InterviewQA.score.isnot(None))
+        .order_by(InterviewQA.order_idx.asc())
+        .all()
+    )
+    all_qa_count = (
+        db.query(InterviewQA.id).filter(InterviewQA.record_id == record.id).count()
+    )
+    sources = [
+        AbilitySourceRefInput(kind="interview_record", source_id=record.id),
+        *[
+            AbilitySourceRefInput(kind="interview_qa", source_id=qa.id)
+            for qa in qas[:99]
+        ],
+    ]
+    coverage = len(qas) / max(1, all_qa_count)
+    confidence = round(min(0.9, 0.55 + 0.35 * coverage), 2)
+    formed_at = max(
+        (qa.analyzed_at or qa.created_at for qa in qas),
+        default=record.updated_at or record.created_at or utc_now(),
+    )
+    created: list[AbilitySignalView] = []
+    current_keys: set[str] = set()
+    for raw_topic, raw_score in sorted(radar.items(), key=lambda item: str(item[0])):
+        if raw_score is None:
+            continue
+        try:
+            score = float(raw_score)
+        except (TypeError, ValueError):
+            continue
+        if not 0 <= score <= 10:
+            continue
+        topic = str(raw_topic).strip()[:200]
+        if not topic:
+            continue
+        topic_key = hashlib.sha256(topic.encode("utf-8")).hexdigest()[:16]
+        producer_key = f"interview:{record.id}:g{generation}:{topic_key}"
+        current_keys.add(producer_key)
+        previous = _latest_live_interview_signal(
+            db,
+            user_pk=user_pk,
+            interview_record_id=record.id,
+            topic=topic,
+            exclude_producer_key=producer_key,
+        )
+        created.append(
+            create_ability_signal(
+                db,
+                user_pk=user_pk,
+                assessment=AbilitySignalCreateInput(
+                    topic=topic,
+                    signal_type=(
+                        "mock_interview_performance"
+                        if record.source == "mock"
+                        else "interview_performance"
+                    ),
+                    level=_score_level(score),
+                    score=round(score, 1),
+                    summary=(
+                        f"本次{'模拟' if record.source == 'mock' else '真实'}面试中，"
+                        f"{topic}相关回答的聚合评分为 {score:.1f}/10。"
+                    ),
+                    confidence=confidence,
+                    limitations=(
+                        "仅适用于这次面试及其题目覆盖；评分会受题目难度、岗位匹配、"
+                        "表达状态和评分 rubric 影响，不能解释为稳定人格或总体能力定论。"
+                    ),
+                    scope={"kind": "interview_record", "ref_id": record.id},
+                    formed_at=formed_at,
+                    rubric_version=f"interview_analysis_v{record.analysis_schema_version}",
+                    sources=sources,
+                ),
+                supersedes_signal_id=previous.id if previous is not None else None,
+                expected_superseded_version=(
+                    previous.version if previous is not None else None
+                ),
+                producer_key=producer_key,
+            )
+        )
+
+    # A recompute may remove a formerly scored dimension. Such a signal cannot
+    # survive as an unexplained live judgement.
+    live_for_record = _live_interview_signals(
+        db, user_pk=user_pk, interview_record_id=record.id
+    )
+    now = utc_now()
+    for signal in live_for_record:
+        if not (signal.producer_key or "").startswith(f"interview:{record.id}:"):
+            continue
+        if signal.producer_key in current_keys:
+            continue
+        signal.status = "invalidated"
+        signal.status_reason = (
+            f"Interview analysis generation {generation} no longer produced "
+            "this dimension"
+        )
+        signal.status_changed_at = now
+        signal.updated_at = now
+        signal.version = int(signal.version) + 1
+    db.flush()
+    return created
+
+
+def invalidate_ability_signals_for_interview_reanalysis(
+    db: Session,
+    *,
+    user_pk: int,
+    interview_record_id: str,
+) -> int:
+    """Invalidate the prior projection before its source analysis is reset."""
+
+    rows = _live_interview_signals(
+        db, user_pk=user_pk, interview_record_id=interview_record_id
+    )
+    now = utc_now()
+    for row in rows:
+        row.status = "invalidated"
+        row.status_reason = "Interview analysis was reset for recomputation"
+        row.status_changed_at = now
+        row.updated_at = now
+        row.version = int(row.version) + 1
+    db.flush()
+    return len(rows)
+
+
+def _live_interview_signals(
+    db: Session, *, user_pk: int, interview_record_id: str
+) -> list[AbilitySignal]:
+    return (
+        db.query(AbilitySignal)
+        .join(
+            AbilitySignalSourceRef,
+            AbilitySignalSourceRef.ability_signal_id == AbilitySignal.id,
+        )
+        .filter(
+            AbilitySignal.user_id == user_pk,
+            AbilitySignal.status.in_(("active", "disputed")),
+            AbilitySignalSourceRef.source_kind == "interview_record",
+            AbilitySignalSourceRef.source_id == interview_record_id,
+            AbilitySignal.producer_key.like(f"interview:{interview_record_id}:%"),
+        )
+        .distinct()
+        .all()
+    )
+
+
+def _latest_live_interview_signal(
+    db: Session,
+    *,
+    user_pk: int,
+    interview_record_id: str,
+    topic: str,
+    exclude_producer_key: str,
+) -> AbilitySignal | None:
+    return (
+        db.query(AbilitySignal)
+        .join(
+            AbilitySignalSourceRef,
+            AbilitySignalSourceRef.ability_signal_id == AbilitySignal.id,
+        )
+        .filter(
+            AbilitySignal.user_id == user_pk,
+            AbilitySignal.topic == topic,
+            AbilitySignal.status.in_(("active", "disputed")),
+            AbilitySignalSourceRef.source_kind == "interview_record",
+            AbilitySignalSourceRef.source_id == interview_record_id,
+            AbilitySignal.producer_key.like(f"interview:{interview_record_id}:%"),
+            AbilitySignal.producer_key != exclude_producer_key,
+        )
+        .order_by(AbilitySignal.formed_at.desc())
+        .first()
+    )
+
+
+def _score_level(score: float) -> str:
+    if score >= 8.5:
+        return "本次表现突出"
+    if score >= 7:
+        return "本次表现良好"
+    if score >= 5.5:
+        return "本次表现中等"
+    return "本次表现需要改进"
 
 
 def _change_status(
@@ -594,5 +849,7 @@ __all__ = [
     "get_ability_signal",
     "invalidate_ability_signal",
     "invalidate_ability_signals_for_interview_delete",
+    "invalidate_ability_signals_for_interview_reanalysis",
     "list_ability_signals",
+    "project_interview_ability_signals",
 ]

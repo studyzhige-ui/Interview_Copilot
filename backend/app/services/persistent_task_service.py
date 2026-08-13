@@ -10,6 +10,7 @@ lock/``active_turn_id`` field remains the single admission CAS.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
@@ -24,9 +25,11 @@ from app.models.chat import Conversation, ConversationMessage
 from app.models.conversation_turn import ConversationTurn
 from app.models.pending_submission import PendingSubmission
 from app.models.persistent_task import PersistentTask, PersistentTaskTrigger
+from app.models.user_skill import UserSkill
 from app.schemas.persistent_task import (
     PersistentTaskCreate,
     PersistentTaskDelete,
+    PersistentTaskDeletionImpact,
     PersistentTaskStateChange,
     PersistentTaskTriggerInput,
     PersistentTaskUpdate,
@@ -85,6 +88,7 @@ class AutomationRunRequest:
     allowed_tool_names: tuple[str, ...]
     read_scope: tuple[str, ...]
     action_scope: tuple[str, ...]
+    skill_refs: tuple[dict[str, object], ...] = ()
     validation_error: str | None = None
 
 
@@ -109,6 +113,8 @@ class PersistentTaskDeleteResult:
     task_id: str
     conversation_id: str
     ingestion_task_ids: tuple[str, ...]
+    cancelled_turn_id: str | None = None
+    receipt_tombstones: int = 0
 
 
 AutomationRunner = Callable[[AutomationRunRequest], None]
@@ -123,11 +129,13 @@ def create_persistent_task(
 ) -> PersistentTask:
     """Create one definition and its one-to-one Dedicated Conversation."""
 
-    _require_implemented_trigger(command.trigger.kind)
+    _require_implemented_trigger(command.trigger)
     tools = _validate_requested_tools(
         command.allowed_tool_names,
         cloud_sustainable_tool_names,
     )
+    _validate_event_definition(command.trigger, command.read_scope, tools)
+    skill_refs = _resolve_skill_refs(db, user_pk=user_pk, skill_ids=command.skill_ids)
     creation_fingerprint = _creation_fingerprint(command, tools)
     existing = (
         db.query(PersistentTask)
@@ -174,6 +182,7 @@ def create_persistent_task(
         read_scope_json=list(command.read_scope),
         action_scope_json=list(command.action_scope),
         allowed_tool_names_json=list(tools),
+        skill_refs_json=skill_refs,
         user_request_identity=command.user_request_identity.strip(),
         user_request_version=_optional_text(command.user_request_version),
         idempotency_key=command.idempotency_key.strip(),
@@ -196,13 +205,20 @@ def update_persistent_task(
     task = _locked_task(db, user_pk, task_id)
     _require_version(task, int(command.expected_version))
     if command.trigger is not None:
-        _require_implemented_trigger(command.trigger.kind)
+        _require_implemented_trigger(command.trigger)
     if command.allowed_tool_names is not None:
         task.allowed_tool_names_json = list(
             _validate_requested_tools(
                 command.allowed_tool_names,
                 cloud_sustainable_tool_names,
             )
+        )
+    effective_tools = tuple(task.allowed_tool_names_json or [])
+    if command.skill_ids is not None:
+        task.skill_refs_json = _resolve_skill_refs(
+            db,
+            user_pk=user_pk,
+            skill_ids=command.skill_ids,
         )
     if command.title is not None:
         task.title = command.title.strip()
@@ -216,6 +232,17 @@ def update_persistent_task(
         task.read_scope_json = list(command.read_scope)
     if command.action_scope is not None:
         task.action_scope_json = list(command.action_scope)
+    effective_trigger = command.trigger or task.trigger_spec_json
+    effective_read_scope = (
+        command.read_scope
+        if command.read_scope is not None
+        else list(task.read_scope_json or [])
+    )
+    _validate_event_definition(
+        effective_trigger,
+        effective_read_scope,
+        effective_tools,
+    )
     task.user_request_identity = command.user_request_identity.strip()
     task.user_request_version = _optional_text(command.user_request_version)
     task.version += 1
@@ -257,90 +284,67 @@ def delete_persistent_task(
     task_id: str,
     command: PersistentTaskDelete,
 ) -> PersistentTaskDeleteResult:
-    """Delete a definition and its dedicated Conversation under one lock.
+    """Fence scheduling and delete the Dedicated Conversation safely.
 
-    Pending/waiting work has not acquired an active external execution lease,
-    so it is terminalized in place. A running Turn is rejected: deleting its
-    reconciliation identity would be unsafe. Promoted assets are preserved by
-    the existing Conversation attachment cleanup owner.
+    Running work is not rejected.  The shared Conversation lifecycle command
+    closes dispatch/model gates, requests cancellation after commit, preserves
+    minimal unknown external-call correlation, and removes queued user ingress.
     """
 
     task = _locked_task(db, user_pk, task_id)
     _require_version(task, int(command.expected_version))
-    conversation = (
-        db.query(Conversation)
-        .filter(
-            Conversation.id == task.conversation_id,
-            Conversation.user_id == user_pk,
-        )
-        .with_for_update()
-        .populate_existing()
-        .one_or_none()
-    )
-    if conversation is None:
-        raise PersistentTaskNotFoundError(task_id)
-    active = _active_turn_locked(db, conversation)
-    if active is not None and active.status == "running":
+    if command.confirm_task_id.strip() != task.id:
+        raise PersistentTaskDeleteConflictError("task confirmation mismatch")
+    impact = _persistent_task_deletion_impact(db, task)
+    if not hmac.compare_digest(
+        (command.confirmation_token or "").strip(),
+        impact.confirmation_token,
+    ):
         raise PersistentTaskDeleteConflictError(
-            "stop the running automation before deleting it"
+            "PersistentTask changed after deletion preview; review the impact again"
         )
-    if active is not None:
-        if active.status not in {"pending", "waiting"}:
-            raise PersistentTaskDeleteConflictError(
-                f"cannot delete task with active Turn in {active.status}"
-            )
-        now = utc_now()
-        active.status = "cancelled"
-        active.waiting_reason = None
-        active.error = "PersistentTask deleted by user"
-        active.owner_id = None
-        active.heartbeat_at = None
-        active.dispatch_generation = int(active.dispatch_generation or 1) + 1
-        active.completed_at = now
-        conversation.active_turn_id = None
-        from app.services.chat.agent_task_service import (
-            freeze_agent_task_for_terminal_turn,
-        )
-
-        freeze_agent_task_for_terminal_turn(db, turn_id=active.id)
-        db.add(active)
     task.state = "paused"
     task.next_due_at = None
     task.user_request_identity = command.user_request_identity.strip()
     task.user_request_version = _optional_text(command.user_request_version)
     task.version += 1
     task.updated_at = utc_now()
-    db.add_all([task, conversation])
+    db.add(task)
     db.flush()
 
-    from app.services.chat.attachment_source_service import (
-        cleanup_conversation_attachment_scope,
-    )
-
-    cleanup = cleanup_conversation_attachment_scope(
-        db,
-        user_pk=user_pk,
-        conversation_id=conversation.id,
-    )
-    conversation_id = conversation.id
-    # Keep local/test databases correct even when FK cascading is disabled;
-    # production PostgreSQL performs the same dependency cleanup atomically.
+    conversation_id = task.conversation_id
+    # Delete the scheduler owner before its Conversation so PostgreSQL does
+    # not cascade it behind SQLAlchemy's back.  The row lock above serializes
+    # all scheduler/Connector intake; rollback restores both owners if the
+    # shared Conversation command fails.
     db.query(PersistentTaskTrigger).filter(
         PersistentTaskTrigger.persistent_task_id == task.id
     ).delete(synchronize_session="fetch")
-    db.query(ConversationTurn).filter(
-        ConversationTurn.conversation_id == conversation_id
-    ).delete(synchronize_session="fetch")
-    db.query(ConversationMessage).filter(
-        ConversationMessage.conversation_id == conversation_id
-    ).delete(synchronize_session=False)
     db.delete(task)
-    db.delete(conversation)
     db.flush()
+
+    from app.services.chat.conversation_deletion_service import (
+        ConversationDeletionConflictError,
+        delete_conversation,
+    )
+
+    try:
+        deletion = delete_conversation(
+            db,
+            user_pk=user_pk,
+            conversation_id=conversation_id,
+            confirmation_token=impact.conversation.confirmation_token,
+            confirm_conversation_id=conversation_id,
+            allow_persistent_task=True,
+        )
+    except ConversationDeletionConflictError as exc:
+        raise PersistentTaskDeleteConflictError(str(exc)) from exc
     return PersistentTaskDeleteResult(
         task_id=task_id,
         conversation_id=conversation_id,
-        ingestion_task_ids=tuple(cleanup.ingestion_task_ids),
+        ingestion_task_ids=deletion.ingestion_task_ids,
+        cancelled_turn_id=deletion.cancelled_turn_id,
+        receipt_tombstones=deletion.result.receipt_tombstones,
     )
 
 
@@ -374,12 +378,16 @@ def intake_persistent_task_trigger(
     task_id: str,
     command: PersistentTaskTriggerInput,
     cloud_sustainable_tool_names: Collection[str],
+    attempt_admission: bool = True,
 ) -> AutomationAdmission:
-    """Persist one trigger and attempt shared Conversation admission.
+    """Persist one trigger and optionally attempt shared Conversation admission.
 
     Observation/source validation belongs to the concrete scheduler or
     Connector that invokes this trusted intake command.  The summary remains
     trigger input; it does not become Product Domain State by being admitted.
+    A connector may retain a bounded provider batch first and make one explicit
+    admission attempt afterwards so every occurrence in that batch is merged
+    into the same Turn.
     """
 
     task = _locked_task(db, user_pk, task_id)
@@ -410,6 +418,15 @@ def intake_persistent_task_trigger(
                 merged_trigger_ids=(existing.id,),
                 pending_trigger_count=0,
             )
+        if not attempt_admission:
+            return AutomationAdmission(
+                trigger_id=existing.id,
+                status="pending",
+                reason="batched_intake_existing",
+                turn_id=None,
+                merged_trigger_ids=(),
+                pending_trigger_count=_pending_trigger_count(db, task.id),
+            )
         return _attempt_admission_locked(
             db,
             task=task,
@@ -431,6 +448,15 @@ def intake_persistent_task_trigger(
     )
     db.add(trigger)
     db.flush()
+    if not attempt_admission:
+        return AutomationAdmission(
+            trigger_id=trigger.id,
+            status="pending",
+            reason="batched_intake",
+            turn_id=None,
+            merged_trigger_ids=(),
+            pending_trigger_count=_pending_trigger_count(db, task.id),
+        )
     return _attempt_admission_locked(
         db,
         task=task,
@@ -546,6 +572,83 @@ def get_persistent_task(
     """Read one task without acquiring a command lock."""
 
     return _owned_task(db, user_pk, task_id)
+
+
+def preview_persistent_task_deletion(
+    db: Session,
+    *,
+    user_pk: int,
+    task_id: str,
+) -> PersistentTaskDeletionImpact:
+    """Preview scheduler, queue, Conversation, attachment, and receipt effects."""
+
+    task = _owned_task(db, user_pk, task_id)
+    return _persistent_task_deletion_impact(db, task)
+
+
+def _persistent_task_deletion_impact(
+    db: Session,
+    task: PersistentTask,
+) -> PersistentTaskDeletionImpact:
+    """Build one strong preview over definition, triggers, and Conversation."""
+
+    from app.services.chat.conversation_deletion_service import (
+        preview_conversation_deletion,
+    )
+
+    conversation = preview_conversation_deletion(
+        db,
+        user_pk=task.user_id,
+        conversation_id=task.conversation_id,
+        allow_persistent_task=True,
+    )
+    triggers = (
+        db.query(PersistentTaskTrigger)
+        .filter(PersistentTaskTrigger.persistent_task_id == task.id)
+        .order_by(PersistentTaskTrigger.id)
+        .all()
+    )
+    pending_triggers = sum(row.admitted_at is None for row in triggers)
+    fingerprint = {
+        "task": [
+            task.id,
+            int(task.version),
+            task.state,
+            task.updated_at.isoformat() if task.updated_at else None,
+            task.next_due_at.isoformat() if task.next_due_at else None,
+        ],
+        "triggers": [
+            [
+                row.id,
+                row.admitted_turn_id,
+                row.admitted_at.isoformat() if row.admitted_at else None,
+            ]
+            for row in triggers
+        ],
+        "conversation_token": conversation.confirmation_token,
+    }
+    confirmation_token = hashlib.sha256(
+        json.dumps(
+            fingerprint,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return PersistentTaskDeletionImpact(
+        task_id=task.id,
+        title=task.title,
+        version=int(task.version),
+        pending_trigger_count=pending_triggers,
+        confirmation_token=confirmation_token,
+        conversation=conversation,
+        disclosures=[
+            "将停止未来调度、Connector intake 与 Dedicated Conversation 的新 admission/claim。",
+            f"将删除 {pending_triggers} 个尚未 admission 的 trigger；不会自动执行补偿任务。",
+            "已经写入共享 Domain State、Artifact 或本次复盘资料的结果继续保留。",
+            "已发生的外部动作不会回滚；未结算调用按对话删除规则保留最小 receipt correlation。",
+        ],
+    )
 
 
 def list_persistent_task_triggers(
@@ -698,6 +801,7 @@ def resolve_automation_run_request(
     current_tools = set(cloud_sustainable_tool_names)
     missing_tools = tuple(name for name in saved_tools if name not in current_tools)
     tools = tuple(name for name in saved_tools if name in current_tools)
+    skill_error = _validate_saved_skill_refs(db, task)
     return AutomationRunRequest(
         persistent_task_id=task.id,
         conversation_id=task.conversation_id,
@@ -708,12 +812,13 @@ def resolve_automation_run_request(
         input_message=_compile_automation_input(task, triggers),
         trigger_ids=tuple(row.id for row in triggers),
         allowed_tool_names=tools,
+        skill_refs=tuple(dict(item) for item in (task.skill_refs_json or [])),
         read_scope=tuple(task.read_scope_json or []),
         action_scope=tuple(task.action_scope_json or []),
         validation_error=(
             "cloud_tool_unavailable:" + ",".join(missing_tools)
             if missing_tools
-            else None
+            else skill_error
         ),
     )
 
@@ -1044,6 +1149,13 @@ def _attempt_admission_locked(
             pending,
             reason="cloud_tool_unavailable:" + ",".join(missing_tools),
         )
+    skill_error = _validate_saved_skill_refs(db, task)
+    if skill_error:
+        return _pending_admission(
+            trigger_id,
+            pending,
+            reason=skill_error,
+        )
 
     now = utc_now()
     if blocked_at is not None:
@@ -1083,6 +1195,7 @@ def _attempt_admission_locked(
         input_message=_compile_automation_input(task, pending),
         trigger_ids=trigger_ids,
         allowed_tool_names=requested_tools,
+        skill_refs=tuple(dict(item) for item in (task.skill_refs_json or [])),
         read_scope=tuple(task.read_scope_json or []),
         action_scope=tuple(task.action_scope_json or []),
     )
@@ -1157,6 +1270,17 @@ def _compile_automation_input(
         "read_scope": list(task.read_scope_json or []),
         "action_scope": list(task.action_scope_json or []),
         "allowed_tool_names": sorted(task.allowed_tool_names_json or []),
+        "skill_refs": [
+            {
+                "id": item.get("id"),
+                "name": item.get("name"),
+                "source": item.get("source"),
+                "revision": item.get("revision"),
+                "content_hash": item.get("content_hash"),
+            }
+            for item in (task.skill_refs_json or [])
+            if isinstance(item, dict)
+        ],
         "triggers": [
             {
                 "id": occurrence.id,
@@ -1189,10 +1313,110 @@ def _validate_requested_tools(
     return normalized
 
 
-def _require_implemented_trigger(kind: str) -> None:
-    if kind != "scheduled":
-        raise PersistentTaskUnsupportedTriggerError(
-            "event connector triggers are not available"
+def _resolve_skill_refs(
+    db: Session,
+    *,
+    user_pk: int,
+    skill_ids: Collection[int],
+) -> list[dict[str, object]]:
+    ids = tuple(dict.fromkeys(int(value) for value in skill_ids))
+    if not ids:
+        return []
+    rows = (
+        db.query(UserSkill)
+        .filter(
+            UserSkill.user_id == user_pk,
+            UserSkill.id.in_(ids),
+            UserSkill.enabled.is_(True),
+        )
+        .all()
+    )
+    by_id = {int(row.id): row for row in rows}
+    missing = [str(skill_id) for skill_id in ids if skill_id not in by_id]
+    if missing:
+        raise PersistentTaskToolScopeError(
+            "PersistentTask requires enabled owned Skills: " + ", ".join(missing)
+        )
+    return [
+        {
+            "id": row.id,
+            "name": row.name,
+            "source": row.source,
+            "revision": int(row.revision or 1),
+            "content_hash": row.content_hash,
+        }
+        for row in (by_id[skill_id] for skill_id in ids)
+    ]
+
+
+def _validate_saved_skill_refs(db: Session, task: PersistentTask) -> str | None:
+    for ref in task.skill_refs_json or []:
+        if not isinstance(ref, dict):
+            return "skill_reference_invalid"
+        row = (
+            db.query(UserSkill)
+            .filter(
+                UserSkill.id == ref.get("id"),
+                UserSkill.user_id == task.user_id,
+                UserSkill.enabled.is_(True),
+            )
+            .one_or_none()
+        )
+        name = str(ref.get("name") or ref.get("id") or "unknown")
+        if (
+            row is None
+            or row.name != ref.get("name")
+            or row.source != ref.get("source")
+        ):
+            return f"skill_unavailable:{name}"
+        if int(row.revision or 1) != int(
+            ref.get("revision") or 0
+        ) or row.content_hash != ref.get("content_hash"):
+            return f"skill_revision_changed:{name}"
+    return None
+
+
+def _require_implemented_trigger(trigger: object) -> None:
+    kind = getattr(trigger, "kind", None)
+    if kind == "scheduled":
+        return
+    if (
+        kind == "event"
+        and getattr(trigger, "connector", None) == "gmail"
+        and set(getattr(trigger, "event_types", []) or []) == {"message_added"}
+    ):
+        return
+    raise PersistentTaskUnsupportedTriggerError(
+        "only Gmail message_added event triggers are available"
+    )
+
+
+def _validate_event_definition(
+    trigger: object,
+    read_scope: Collection[str],
+    tools: Collection[str],
+) -> None:
+    kind = (
+        trigger.get("kind")
+        if isinstance(trigger, dict)
+        else getattr(trigger, "kind", None)
+    )
+    if kind != "event":
+        return
+    required_tools = {
+        "read_career_context",
+        "read_gmail_observations",
+        "review_gmail_observation",
+    }
+    missing_tools = required_tools.difference(tools)
+    if missing_tools:
+        raise PersistentTaskToolScopeError(
+            "Gmail event tasks require concrete Tools: "
+            + ", ".join(sorted(missing_tools))
+        )
+    if "gmail:job_observations" not in set(read_scope):
+        raise PersistentTaskTriggerConflictError(
+            "Gmail event tasks require read_scope gmail:job_observations"
         )
 
 
@@ -1241,6 +1465,9 @@ def _creation_fingerprint(
         "read_scope": list(command.read_scope),
         "action_scope": list(command.action_scope),
         "allowed_tool_names": list(tools),
+        # Fingerprint the submitted identity, not mutable resolved metadata.
+        # The stored definition pins the resolved revision/hash separately.
+        "skill_ids": list(command.skill_ids),
         "user_request_identity": command.user_request_identity.strip(),
         "user_request_version": _optional_text(command.user_request_version),
     }
@@ -1340,6 +1567,7 @@ __all__ = [
     "latest_persistent_task_cursor",
     "list_persistent_task_triggers",
     "list_persistent_tasks",
+    "preview_persistent_task_deletion",
     "record_user_stopped_automation_run",
     "repairable_automation_turn_ids",
     "repairable_persistent_task_ids",

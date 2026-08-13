@@ -12,22 +12,33 @@ class TestSearchJobsConnectionPreflight:
 
         assert "search_jobs" in registry
 
-    def test_handler_returns_error_when_no_sites(self, monkeypatch):
+    def test_missing_deployment_config_is_hard_denied(self, monkeypatch):
+        monkeypatch.setattr("app.core.config.settings.LEVER_SITES", "")
+        from app.agent_runtime.tool_registry import AgentToolContext
+        from app.agent_runtime.tool_registry import registry
+
+        ctx = AgentToolContext(user_id="alice", session_id="s1")
+        plan = asyncio.run(
+            registry.plan_call("search_jobs", {"keywords": "backend"}, ctx)
+        )
+        assert plan.connection_ready is False
+        assert plan.hard_deny_reason == "connector_unavailable"
+
+    def test_handler_returns_typed_error_when_no_sites(self, monkeypatch):
         monkeypatch.setattr("app.core.config.settings.LEVER_SITES", "")
         from app.agent_runtime.tool_registry import AgentToolContext
         from app.agent_runtime.tools.jobs import SearchJobsArgs, _search_jobs_handler
 
-        ctx = AgentToolContext(user_id="alice", session_id="s1")
         result = asyncio.run(
             _search_jobs_handler(
                 SearchJobsArgs(keywords="backend"),
-                ctx,
+                AgentToolContext(user_id="alice", session_id="s1"),
             )
         )
         assert result == {
-            "error": "connection_required",
+            "error": "connector_unavailable",
             "provider": "lever",
-            "required_scope": "job_search",
+            "reason": "deployment_configuration_missing",
             "count": 0,
         }
 

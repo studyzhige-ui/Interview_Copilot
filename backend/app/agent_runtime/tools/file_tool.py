@@ -1,11 +1,13 @@
-"""File I/O tools: read_file and write_file.
+"""Scoped source reads and Artifact-backed file exports.
 
-read_file  — Read a validated Conversation AttachmentRef or persisted output.
-write_file — Export structured output (study plans, reports) as downloadable files.
+read_file  — Read a validated source or canonical Tool result.
+write_file — Save a versioned Artifact and materialize its downloadable file.
 """
 
 import asyncio
+import hashlib
 import io
+import json
 import logging
 from typing import Any
 
@@ -21,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Paging window for a single read_file call. The default reproduces the
 # historical "first 20K chars" behavior; the cap bounds a single result so it
-# never needs offloading (read_file is in _NEVER_PERSIST_TOOLS).
+# never needs another result-reference projection.
 _DEFAULT_READ_LIMIT = 20_000
 _MAX_READ_LIMIT = 50_000
 
@@ -41,9 +43,14 @@ class ReadFileArgs(BaseModel):
             "manifest. Use only inside that record's debrief conversation."
         ),
     )
-    path: str = Field(
+    tool_call_id: str = Field(
         default="",
-        description="Path to a large persisted tool output (shown inside a <persisted-output> block) to read back. Takes precedence over attachment_ref_id.",
+        max_length=128,
+        description=(
+            "Exact Tool Call ID shown inside a <tool-result-reference> block. "
+            "Reads the canonical redacted result from the current Turn and "
+            "takes precedence over attachment_ref_id."
+        ),
     )
     offset: int = Field(
         default=0,
@@ -69,19 +76,11 @@ async def _read_file_handler(
 
 
 def _read_file_sync(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]:
-    # Branch 1: read back a large persisted tool output (Stage A). Confined to
-    # the current session's storage dir by resolve_persisted_path.
-    if args.path:
-        from app.agent_runtime.tool_result_storage import resolve_persisted_path
-
-        target = resolve_persisted_path(ctx.session_id, args.path)
-        if target is None:
-            return {
-                "error": "Persisted file not found or not accessible",
-                "path": args.path,
-            }
-        content = target.read_text(encoding="utf-8", errors="replace")
-        return _paginate(content, args, {"path": str(target)})
+    # Branch 1: page the canonical redacted result owned by an exact Tool Call.
+    # The same Turn/session/user fence prevents guessing another tenant's call
+    # identity. There is deliberately no worker-local file fallback.
+    if args.tool_call_id:
+        return _read_canonical_tool_result(args, ctx)
 
     # Branch 2: delegate the exact AttachmentRef to the shared Source Resolver.
     # There is deliberately no owner-wide upload/document fallback: Resume,
@@ -109,7 +108,7 @@ def _read_file_sync(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]
         else:
             return {
                 "error": (
-                    "attachment_ref_id, source_ref_id, or persisted path is required"
+                    "attachment_ref_id, source_ref_id, or tool_call_id is required"
                 )
             }
         content = str(loaded.pop("content"))
@@ -132,12 +131,74 @@ def _read_file_sync(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]
         }
 
 
+def _read_canonical_tool_result(
+    args: ReadFileArgs,
+    ctx: AgentToolContext,
+) -> dict[str, Any]:
+    from app.core.user_identity import resolve_user_pk
+    from app.db.database import SessionLocal
+    from app.models.agent_execution import AgentToolCall
+
+    if not ctx.turn_id:
+        return {
+            "error": "tool_result_scope_unavailable",
+            "tool_call_id": args.tool_call_id,
+        }
+
+    db = SessionLocal()
+    try:
+        user_pk = ctx.user_pk or resolve_user_pk(db, ctx.user_id)
+        if user_pk is None:
+            return {
+                "error": "tool_result_scope_unavailable",
+                "tool_call_id": args.tool_call_id,
+            }
+        row = (
+            db.query(AgentToolCall)
+            .filter(
+                AgentToolCall.call_id == args.tool_call_id,
+                AgentToolCall.turn_id == ctx.turn_id,
+                AgentToolCall.session_id == ctx.session_id,
+                AgentToolCall.user_id == user_pk,
+            )
+            .one_or_none()
+        )
+        if (
+            row is None
+            or row.result_json is None
+            or row.status in {"running", "waiting", "deferred"}
+        ):
+            return {
+                "error": "tool_result_unavailable",
+                "tool_call_id": args.tool_call_id,
+            }
+        content = json.dumps(
+            row.result_json,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return _paginate(
+            content,
+            args,
+            {
+                "tool_call_id": row.call_id,
+                "tool_name": row.tool_name,
+                "result_status": row.status,
+                "read_mode": "canonical_tool_result",
+            },
+        )
+    finally:
+        db.close()
+
+
 def _paginate(content: str, args: ReadFileArgs, base: dict[str, Any]) -> dict[str, Any]:
     """Return a windowed slice of *content* plus paging metadata.
 
     Default offset=0 / limit=20000 reproduces the historical "first 20K chars"
     result (now with paging fields); ``next_offset`` / ``has_more`` let the
-    model read the remainder of a large file or persisted output on demand.
+    model read the remainder of a large source or Tool result on demand.
     """
     total = len(content)
     offset = max(args.offset, 0)
@@ -154,6 +215,15 @@ def _paginate(content: str, args: ReadFileArgs, base: dict[str, Any]) -> dict[st
         "has_more": has_more,
         "next_offset": next_offset if has_more else None,
         "truncated": has_more,
+        "coverage": {
+            **(base.get("coverage") if isinstance(base.get("coverage"), dict) else {}),
+            "segment_start": offset,
+            "segment_end": next_offset,
+            "total_chars": total,
+            "starts_at_beginning": offset == 0,
+            "reaches_end": not has_more,
+            "single_call_full_coverage": offset == 0 and not has_more,
+        },
     }
 
 
@@ -181,69 +251,138 @@ async def _write_file_handler(
 
 
 def _write_file_sync(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, Any]:
+    from app.core.user_identity import resolve_user_pk
     from app.db.database import SessionLocal
-    from app.services.uploads.file_asset_service import create_file_asset
+    from app.db.types import utc_now
+    from app.models.artifact import Artifact, ArtifactVersion
+    from app.models.file_asset import FileAsset
+    from app.schemas.artifact import ArtifactProvenanceInput, ArtifactWriteInput
+    from app.services import artifact_service
+    from app.services.uploads.file_asset_service import (
+        enqueue_asset_blob_delete,
+        mark_file_asset_consumed,
+        store_validated_file_asset,
+    )
 
     db = SessionLocal()
+    upload_id: str | None = None
+    artifact_committed = False
     try:
-        upload, url_info = create_file_asset(
+        turn_id = (ctx.turn_id or "").strip()
+        if not turn_id:
+            return {"error": "artifact_source_turn_unavailable"}
+        user_pk = ctx.user_pk or resolve_user_pk(db, ctx.user_id)
+        if user_pk is None:
+            return {"error": "artifact_owner_unavailable"}
+        call_identity = (ctx.tool_call_id or "").strip() or (
+            f"{args.filename}\0{args.content}"
+        )
+        digest = hashlib.sha256(
+            f"{turn_id}\0{call_identity}".encode("utf-8")
+        ).hexdigest()
+        operation_key = f"write-file:{digest}"
+        existing = (
+            db.query(Artifact)
+            .filter(
+                Artifact.user_id == user_pk,
+                Artifact.creation_key == operation_key,
+            )
+            .one_or_none()
+        )
+        if existing is not None:
+            version = (
+                db.query(ArtifactVersion)
+                .filter(ArtifactVersion.artifact_id == existing.id)
+                .order_by(ArtifactVersion.version_no.asc())
+                .first()
+            )
+            if (
+                version is None
+                or version.title != args.filename
+                or version.content_text != args.content
+            ):
+                return {"error": "artifact_export_identity_conflict"}
+            return _write_file_result(existing, version)
+
+        content_format = (
+            "markdown" if args.filename.casefold().endswith(".md") else "plain_text"
+        )
+        upload = store_validated_file_asset(
             db,
             user_id=ctx.user_id,
             filename=args.filename,
             purpose="agent_output",
-            content_type="text/markdown"
-            if args.filename.endswith(".md")
-            else "text/plain",
+            file_obj=io.BytesIO(args.content.encode("utf-8")),
+            content_type=(
+                "text/markdown" if content_format == "markdown" else "text/plain"
+            ),
             size_bytes=len(args.content.encode("utf-8")),
         )
-
-        from app.core.storage import upload_file_to_owned_key
-
-        file_obj = io.BytesIO(args.content.encode("utf-8"))
-        actual_uri = upload_file_to_owned_key(
-            file_obj,
-            upload.object_key,
-            content_type=upload.content_type,
-        )
-        if actual_uri != upload.storage_uri:
-            # S3 was down and the bytes fell back to local disk — record
-            # where they actually live, or every later read_file fails
-            # against a phantom s3:// URI (UP-8).
-            upload.storage_uri = actual_uri
-
-        from app.services.uploads.file_asset_service import mark_file_asset_consumed
-
+        upload_id = upload.id
         mark_file_asset_consumed(db, upload)
+        artifact = artifact_service.save_artifact_explicitly(
+            db,
+            user_pk=user_pk,
+            operation_key=operation_key,
+            artifact_kind="agent_export",
+            version=ArtifactWriteInput(
+                title=args.filename,
+                content_text=args.content,
+                content_format=content_format,
+                file_asset_id=upload.id,
+                provenance=ArtifactProvenanceInput(source_turn_id=turn_id),
+            ),
+        )
         db.commit()
-
-        return {
-            "upload_id": upload.id,
-            "filename": args.filename,
-            "size_bytes": len(args.content.encode("utf-8")),
-            "message": f"File '{args.filename}' saved successfully.",
-        }
+        artifact_committed = True
+        version = (
+            db.query(ArtifactVersion)
+            .filter(ArtifactVersion.artifact_id == artifact.id)
+            .order_by(ArtifactVersion.version_no.desc())
+            .first()
+        )
+        if version is None:  # defensive: the Application Service writes both
+            raise RuntimeError("artifact version missing after save")
+        return _write_file_result(artifact, version)
     except Exception as exc:
         db.rollback()
+        if upload_id is not None and not artifact_committed:
+            orphan = db.get(FileAsset, upload_id)
+            if orphan is not None:
+                orphan.upload_status = "delete_pending"
+                orphan.deleted_at = utc_now()
+                enqueue_asset_blob_delete(db, orphan)
+                db.commit()
         logger.error("write_file failed (%s)", type(exc).__name__)
         return {"error": "Failed to write file"}
     finally:
         db.close()
 
 
+def _write_file_result(artifact, version) -> dict[str, Any]:
+    return {
+        "artifact_id": artifact.id,
+        "artifact_version_id": version.id,
+        "version_no": version.version_no,
+        "file_asset_id": version.file_asset_id,
+        "filename": version.title,
+        "external_action_performed": False,
+        "message": "Artifact version and downloadable file saved.",
+    }
+
+
 # ── Registration ─────────────────────────────────────────────────────────
 
-# read_file: max_result_chars is set high intentionally — read_file output
-# must NEVER be persisted by the tool_result_storage layer.  This prevents
-# the persist→read→persist infinite loop.
-# The tool_result_storage module also lists read_file in _NEVER_PERSIST_TOOLS
-# as a second layer of protection.
+# read_file stays inline so a paged result can never recursively point at
+# another Tool-result reference. The projection layer enforces this again.
 registry.register(
     ToolDefinition(
         name="read_file",
         description=(
-            "Read a conversation attachment or persisted tool output with paging. "
+            "Read a scoped attachment or canonical Tool result with paging. "
             "For an attached file, pass its validated attachment_ref_id from "
-            "the [Attachments] manifest."
+            "the [Attachments] manifest. For an oversized Tool result, pass the "
+            "exact tool_call_id from its <tool-result-reference> block."
         ),
         args_model=ReadFileArgs,
         handler=_read_file_handler,
@@ -257,7 +396,11 @@ registry.register(
 registry.register(
     ToolDefinition(
         name="write_file",
-        description="Export structured output as a downloadable file. Use for study plans, analysis reports, preparation guides, learning notes, etc. Supports Markdown and plain text.",
+        description=(
+            "Explicitly save structured output as one versioned Artifact backed "
+            "by a downloadable file. This proves the Artifact/version exists; "
+            "it does not prove the file was submitted or sent externally."
+        ),
         args_model=WriteFileArgs,
         handler=_write_file_handler,
         effect=ToolEffect.INTERNAL_WRITE,

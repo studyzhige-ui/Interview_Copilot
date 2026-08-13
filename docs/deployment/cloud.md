@@ -47,7 +47,10 @@ production Cloud topology.
   unit: `GMAIL_GOOGLE_OAUTH_CLIENT_ID`,
   `GMAIL_GOOGLE_OAUTH_CLIENT_SECRET`, `GMAIL_GOOGLE_OAUTH_REDIRECT_URI`, and
   `GMAIL_OAUTH_PRODUCT_RETURN_URI`. Both URIs must use HTTPS in production;
-  register the redirect URI exactly in Google Cloud.
+  register the redirect URI exactly in Google Cloud. Cloud must also inject a
+  managed external implementation of the Gmail-specific credential-broker
+  port. The Community encrypted-file store is ignored; without an external
+  broker Gmail remains unavailable.
 - Correct `TRUSTED_PROXIES`
 - Rotated database and object-storage credentials
 - Database backup and restore test

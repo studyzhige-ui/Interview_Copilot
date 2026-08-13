@@ -8,10 +8,12 @@ import {
   Cpu,
   Puzzle,
   BriefcaseBusiness,
+  ListChecks,
   FileText,
   UserRoundSearch,
   Bot,
   TimerReset,
+  Search,
   Settings,
   SlidersHorizontal,
   Pin,
@@ -38,28 +40,32 @@ const GROUPS: NavGroup[] = [
     label: 'Copilot',
     items: [
       { to: '/general-chat', label: '求职 Copilot', icon: Bot },
+      { to: '/history', label: '历史记录', icon: Search },
       { to: '/persistent-tasks', label: '持续任务', icon: TimerReset },
     ],
   },
   {
-    label: '求职管理',
+    label: '求职进程',
     items: [
-      { to: '/career-profile', label: '求职档案', icon: UserRoundSearch },
       { to: '/career-process', label: '求职进程', icon: BriefcaseBusiness },
-      { to: '/artifacts', label: '求职材料', icon: FileText },
+      { to: '/career-insights', label: '行动与决策', icon: ListChecks },
     ],
   },
   {
-    label: '面试工作台',
+    label: '求职资料',
+    items: [
+      { to: '/career-profile', label: '求职档案', icon: UserRoundSearch },
+      { to: '/artifacts', label: '求职材料', icon: FileText },
+      { to: '/library', label: '资料库', icon: Library },
+    ],
+  },
+  {
+    label: '面试中心',
     items: [
       { to: '/mock', label: '模拟面试', icon: Mic },
       { to: '/review', label: '面试复盘', icon: ClipboardList },
       { to: '/analytics', label: '能力成长', icon: BarChart3 },
     ],
-  },
-  {
-    label: '资料',
-    items: [{ to: '/library', label: '资料库', icon: Library }],
   },
   {
     label: '设置与连接',

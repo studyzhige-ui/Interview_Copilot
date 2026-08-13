@@ -104,10 +104,17 @@ class AbilitySignalStatusChangeInput(BaseModel):
     reason: str = Field(min_length=1, max_length=4_000)
 
 
+class AbilitySignalRecomputeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(default=None, max_length=4_000)
+
+
 __all__ = [
     "AbilityScopeInput",
     "AbilityScopeKind",
     "AbilitySignalCreateInput",
+    "AbilitySignalRecomputeInput",
     "AbilitySignalSourceView",
     "AbilitySignalStatus",
     "AbilitySignalStatusChangeInput",

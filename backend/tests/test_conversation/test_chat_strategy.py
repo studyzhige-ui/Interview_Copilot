@@ -167,6 +167,59 @@ def test_chat_refuses_without_calling_model_when_retrieval_misses(monkeypatch):
     assert events[-1].data["delta"] == result.final_answer
 
 
+@pytest.mark.parametrize(
+    ("requirement", "expected_text"),
+    [
+        (
+            {
+                "kind": "full_text_read",
+                "identity_kind": "attachment_ref",
+                "identity": "ref-long",
+                "title": "long.pdf",
+            },
+            "请切换到 Agent 模式",
+        ),
+        (
+            {
+                "kind": "visual_layout_unavailable",
+                "identity_kind": "attachment_ref",
+                "identity": "ref-layout",
+                "title": "layout.pdf",
+            },
+            "请切换到 Agent 模式",
+        ),
+    ],
+)
+def test_chat_does_not_claim_unproven_attachment_coverage(
+    monkeypatch,
+    requirement,
+    expected_text,
+):
+    from app.conversation import chat_strategy
+
+    monkeypatch.setattr(
+        chat_strategy,
+        "get_llm_for_role",
+        lambda *_args, **_kwargs: pytest.fail("model must not be called"),
+    )
+    ctx = StrategyContext(
+        user_id="alice",
+        session_id="session-1",
+        user_message="完整审阅这份文件",
+        assembled=AssembledContext(current_input="完整审阅这份文件"),
+        extras={"attachment_execution_requirements": (requirement,)},
+    )
+    result = StrategyResult()
+
+    async def run():
+        return [event async for event in ChatPipelineStrategy().execute(ctx, result)]
+
+    asyncio.run(run())
+
+    assert result.outcome == "blocked"
+    assert expected_text in result.final_answer
+
+
 def test_chat_refuses_when_qualified_product_is_absent_from_evidence(monkeypatch):
     from app.conversation import chat_strategy
 

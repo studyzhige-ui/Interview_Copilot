@@ -316,15 +316,18 @@ from app.api import (
     auth,
     capabilities,
     career_process,
+    career_insights,
     career_profile,
     chat,
     file_assets,
     gmail_integration,
+    gmail_observations,
     interviews,
     model_runtime,
     offers,
     operations,
     personalization,
+    history,
     persistent_tasks,
     rag,
     resumes,
@@ -337,15 +340,18 @@ app.include_router(artifacts.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(capabilities.router, prefix="/api/v1")
 app.include_router(career_process.router, prefix="/api/v1")
+app.include_router(career_insights.router, prefix="/api/v1")
 app.include_router(career_profile.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
 app.include_router(file_assets.router, prefix="/api/v1")
 app.include_router(gmail_integration.router, prefix="/api/v1")
+app.include_router(gmail_observations.router, prefix="/api/v1")
 app.include_router(interviews.router, prefix="/api/v1")
 app.include_router(rag.router, prefix="/api/v1")
 app.include_router(model_runtime.router, prefix="/api/v1")
 app.include_router(offers.router, prefix="/api/v1")
 app.include_router(personalization.router, prefix="/api/v1")
+app.include_router(history.router, prefix="/api/v1")
 app.include_router(persistent_tasks.router, prefix="/api/v1")
 app.include_router(resumes.router, prefix="/api/v1")
 

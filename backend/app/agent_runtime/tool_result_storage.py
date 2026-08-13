@@ -1,56 +1,41 @@
-"""Stage A — offload oversized tool results instead of truncating them.
+"""Bound model-visible Tool results without creating a second result store.
 
-When a tool result is too large to keep inline, the full output is written to
-local storage and the in-context copy is replaced with a short preview + the
-file path; the model reads the rest on demand via ``read_file`` (itself never
-offloaded, to avoid a persist→read loop). Unlike the lossy Phase-1 summaries,
-this is recoverable — the full bytes stay on disk.
+``AgentToolCall.result_json`` is the canonical, durable, redacted Tool result.
+When that result is too large for the model context, this module replaces only
+the model-visible copy with a preview plus the exact Tool Call identity. The
+model can page the canonical row through ``read_file(tool_call_id=...)`` on any
+worker after a retry or restart.
 
 Three levels of defense against context-window overflow:
 
 1. **Per-tool output cap** (``ToolDefinition.max_result_chars``): enforced here
    in ``resolve_threshold`` — a result larger than the tool's registered cap
-   is persisted (recoverable), not truncated. The effective threshold is
-   ``min(max_result_chars, AGENT_PERSIST_THRESHOLD)``.
+   is projected (recoverable), not destroyed. The effective threshold is
+   ``min(max_result_chars, AGENT_RESULT_INLINE_THRESHOLD)``.
 
-2. **Per-result persistence** (``maybe_persist_result``): if a single result
-   exceeds the effective threshold, write the full content to
-   ``{APP_DATA_DIR}/agent-results/{session_id}/{tool_call_id}.txt`` and replace
-   the in-context content with a preview + path (read back via
-   ``resolve_persisted_path`` + ``read_file``).
+2. **Per-result projection** (``project_oversized_result``): if a single result
+   exceeds the effective threshold, replace the in-context content with a
+   preview + ``tool_call_id``. No local file or duplicate durable owner exists.
 
 3. **Per-turn aggregate budget** (``enforce_turn_budget``): if all tool
    results in one assistant turn together exceed ``AGENT_TURN_BUDGET_CHARS``,
-   spill the largest non-persisted results until under budget — catching many
+   project the largest inline results until under budget — catching many
    medium results that combine to overflow.
 """
 
 import logging
-from pathlib import Path
 
 from app.agent_runtime.tool_redaction import redact_tool_text
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# XML-style tags marking a persisted-output block in the message stream.
-PERSISTED_OUTPUT_TAG = "<persisted-output>"
-PERSISTED_OUTPUT_CLOSING_TAG = "</persisted-output>"
+# XML-style tags marking a durable Tool-result reference in model context.
+TOOL_RESULT_REFERENCE_TAG = "<tool-result-reference>"
+TOOL_RESULT_REFERENCE_CLOSING_TAG = "</tool-result-reference>"
 
-# Tools whose output is never offloaded (would create a persist→read loop).
-_NEVER_PERSIST_TOOLS: frozenset[str] = frozenset({"read_file"})
-
-
-# ── Storage directory helpers ────────────────────────────────────────────
-
-
-def _storage_dir(session_id: str) -> Path:
-    """Return the local directory for persisted tool results."""
-    return Path(settings.APP_DATA_DIR) / "agent-results" / session_id
-
-
-def _ensure_dir(directory: Path) -> None:
-    directory.mkdir(parents=True, exist_ok=True)
+# A paged read must stay inline or it could recursively point at itself.
+_NEVER_PROJECT_TOOLS: frozenset[str] = frozenset({"read_file"})
 
 
 # ── Preview generation ───────────────────────────────────────────────────
@@ -62,7 +47,7 @@ def generate_preview(content: str, max_chars: int | None = None) -> tuple[str, b
     Mirrors Hermes ``generate_preview``: prefers cutting at a newline
     boundary to avoid mid-line splits.
     """
-    max_chars = max_chars or settings.AGENT_PERSIST_PREVIEW_SIZE
+    max_chars = max_chars or settings.AGENT_RESULT_PREVIEW_SIZE
     if len(content) <= max_chars:
         return content, False
     truncated = content[:max_chars]
@@ -72,36 +57,33 @@ def generate_preview(content: str, max_chars: int | None = None) -> tuple[str, b
     return truncated, True
 
 
-def _build_persisted_message(
+def _build_result_reference(
     preview: str,
     has_more: bool,
     original_size: int,
-    file_path: str,
+    tool_call_id: str,
 ) -> str:
-    """Build the ``<persisted-output>`` replacement block.
-
-    Matches the Hermes/Claude Code format so the model knows:
-      - The result was too large and was saved
-      - Where to find the full output
-      - A preview of the first N chars
-    """
+    """Build a bounded pointer to the canonical ``AgentToolCall`` result."""
     size_kb = original_size / 1024
     if size_kb >= 1024:
         size_str = f"{size_kb / 1024:.1f} MB"
     else:
         size_str = f"{size_kb:.1f} KB"
 
-    msg = f"{PERSISTED_OUTPUT_TAG}\n"
+    msg = f"{TOOL_RESULT_REFERENCE_TAG}\n"
     msg += (
         f"This tool result was too large ({original_size:,} characters, {size_str}).\n"
     )
-    msg += f"Full output saved to: {file_path}\n"
-    msg += "Use the read_file tool with the path above to access specific sections.\n\n"
+    msg += f"Canonical tool_call_id: {tool_call_id}\n"
+    msg += (
+        "Use read_file with this tool_call_id and offset/limit to page the "
+        "full durable result.\n\n"
+    )
     msg += f"Preview (first {len(preview)} chars):\n"
     msg += preview
     if has_more:
         msg += "\n..."
-    msg += f"\n{PERSISTED_OUTPUT_CLOSING_TAG}"
+    msg += f"\n{TOOL_RESULT_REFERENCE_CLOSING_TAG}"
     return msg
 
 
@@ -109,17 +91,17 @@ def _build_persisted_message(
 
 
 def resolve_threshold(tool_name: str) -> int | float:
-    """Resolve the effective persistence threshold for a tool.
+    """Resolve the effective model-projection threshold for a tool.
 
-    - Tools in ``_NEVER_PERSIST_TOOLS`` → ``inf`` (never persisted).
-    - Otherwise → ``min(ToolDefinition.max_result_chars, AGENT_PERSIST_THRESHOLD)``.
-      This is what makes the per-tool cap REAL: a tool registered with a
-      2K cap gets its oversized result offloaded at 2K instead of riding
+    - Tools in ``_NEVER_PROJECT_TOOLS`` → ``inf`` (never projected).
+    - Otherwise → ``min(ToolDefinition.max_result_chars, AGENT_RESULT_INLINE_THRESHOLD)``.
+      This is what makes the per-tool cap real: a tool registered with a
+      2K cap gets its oversized result projected at 2K instead of riding
       the global 50K default into the LLM context and the SSE frame.
     """
-    if tool_name in _NEVER_PERSIST_TOOLS:
+    if tool_name in _NEVER_PROJECT_TOOLS:
         return float("inf")
-    threshold: int | float = settings.AGENT_PERSIST_THRESHOLD
+    threshold: int | float = settings.AGENT_RESULT_INLINE_THRESHOLD
     try:
         # Lazy import: registry ← tools ← (this module, via read_file) —
         # importing at module level would risk a cycle through file_tool.
@@ -133,22 +115,14 @@ def resolve_threshold(tool_name: str) -> int | float:
     return threshold
 
 
-def maybe_persist_result(
+def project_oversized_result(
     content: str,
     tool_name: str,
     tool_call_id: str,
-    session_id: str,
     *,
     threshold: int | float | None = None,
 ) -> str:
-    """Persist an oversized tool result to local storage.
-
-    If the content exceeds the threshold, write it to disk and return
-    a ``<persisted-output>`` replacement with a preview and file path.
-    Otherwise, return the content unchanged.
-
-    Falls back to inline truncation if the write fails.
-    """
+    """Return a bounded model projection for an oversized durable result."""
     # Defense in depth: callers should already pass the execution-boundary
     # projection, but overflow storage must never become a raw-secret bypass.
     content = redact_tool_text(content)
@@ -156,61 +130,38 @@ def maybe_persist_result(
         threshold if threshold is not None else resolve_threshold(tool_name)
     )
 
-    # inf threshold → never persist (read_file protection)
+    # inf threshold → never project (read_file recursion protection)
     if effective_threshold == float("inf"):
         return content
 
     if len(content) <= effective_threshold:
         return content
 
-    # Persist to local storage
-    storage = _storage_dir(session_id)
-    file_path = storage / f"{tool_call_id}.txt"
     preview, has_more = generate_preview(content)
-
-    try:
-        _ensure_dir(storage)
-        file_path.write_text(content, encoding="utf-8")
-        logger.info(
-            "Persisted large tool result: %s (%s, %d chars -> %s)",
-            tool_name,
-            tool_call_id,
-            len(content),
-            file_path,
-        )
-        return _build_persisted_message(preview, has_more, len(content), str(file_path))
-    except Exception as exc:
-        logger.warning(
-            "Failed to persist tool result %s: %s",
-            tool_call_id,
-            redact_tool_text(str(exc)),
-        )
-        # Fallback: inline truncation with a notice
-        return (
-            f"{preview}\n\n"
-            f"[Truncated: tool response was {len(content):,} chars. "
-            f"Full output could not be saved to storage.]"
-        )
+    logger.info(
+        "Projected oversized Tool result from canonical call: %s (%s, %d chars)",
+        tool_name,
+        tool_call_id,
+        len(content),
+    )
+    return _build_result_reference(preview, has_more, len(content), tool_call_id)
 
 
 # ── Per-turn aggregate budget ────────────────────────────────────────────
 
 
-def enforce_turn_budget(
-    tool_messages: list[dict],
-    session_id: str,
-) -> list[dict]:
+def enforce_turn_budget(tool_messages: list[dict]) -> list[dict]:
     """Enforce the aggregate character budget across all tool results in a turn.
 
-    If total chars exceed ``AGENT_TURN_BUDGET_CHARS``, persist the
-    largest non-persisted results first until under budget.
+    If total chars exceed ``AGENT_TURN_BUDGET_CHARS``, project the largest
+    inline results first until under budget.
 
-    Already-persisted results (containing ``PERSISTED_OUTPUT_TAG``) are
+    Existing result references are
     skipped.  Mutates the list in-place and returns it.
     """
     budget = settings.AGENT_TURN_BUDGET_CHARS
 
-    # Collect candidates: non-persisted tool messages with their sizes
+    # Collect candidates: inline tool messages with their sizes.
     candidates: list[tuple[int, int]] = []  # (index, size)
     total_size = 0
     for i, msg in enumerate(tool_messages):
@@ -218,7 +169,7 @@ def enforce_turn_budget(
         msg["content"] = content
         size = len(content)
         total_size += size
-        if PERSISTED_OUTPUT_TAG not in content:
+        if TOOL_RESULT_REFERENCE_TAG not in content:
             candidates.append((i, size))
 
     if total_size <= budget:
@@ -233,14 +184,15 @@ def enforce_turn_budget(
 
         msg = tool_messages[idx]
         content = msg["content"]
-        tool_call_id = msg.get("tool_call_id", f"budget_{idx}")
+        tool_call_id = str(msg.get("tool_call_id") or "").strip()
+        if not tool_call_id:
+            raise ValueError("Tool result is missing its canonical tool_call_id")
 
-        replacement = maybe_persist_result(
+        replacement = project_oversized_result(
             content=content,
             tool_name="__budget_enforcement__",
             tool_call_id=tool_call_id,
-            session_id=session_id,
-            threshold=0,  # force persistence
+            threshold=0,  # force projection
         )
         if replacement != content:
             total_size -= size
@@ -251,7 +203,7 @@ def enforce_turn_budget(
             # content in context and make this whole pass a no-op.
             msg["content"] = replacement
             logger.info(
-                "Budget enforcement: persisted tool result %s (%d chars)",
+                "Budget enforcement: projected Tool result %s (%d chars)",
                 tool_call_id,
                 size,
             )
@@ -259,27 +211,6 @@ def enforce_turn_budget(
     return tool_messages
 
 
-def is_persisted_content(content: str) -> bool:
-    """Check if content has already been replaced by a persisted-output block."""
-    return content.startswith(PERSISTED_OUTPUT_TAG)
-
-
-def resolve_persisted_path(session_id: str, path_str: str) -> Path | None:
-    """Resolve *path_str* to a persisted-result file confined to *session_id*.
-
-    Read-back companion to :func:`maybe_persist_result`. Returns the resolved
-    path only when it lives inside this session's ``agent-results`` directory
-    and is an existing file — otherwise ``None``. Both sides are resolved to
-    absolute paths and checked with ``relative_to``, which blocks path
-    traversal, so a tool can only read back files this session actually
-    persisted (never arbitrary disk locations).
-    """
-    if not path_str:
-        return None
-    base = _storage_dir(session_id).resolve()
-    try:
-        target = Path(path_str).resolve()
-        target.relative_to(base)
-    except (ValueError, OSError):
-        return None
-    return target if target.is_file() else None
+def is_result_reference(content: str) -> bool:
+    """Return whether model content points to a canonical Tool result."""
+    return content.startswith(TOOL_RESULT_REFERENCE_TAG)

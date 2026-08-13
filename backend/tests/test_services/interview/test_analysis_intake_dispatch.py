@@ -42,9 +42,8 @@ def _upload(db):
 
 def _resume_ctx():
     return analysis_intake.ResumeContext(
-        resume_id=None,
         resume_file_asset_id=None,
-        resume_source=None,
+        resume_source="none",
         resume_title_snapshot=None,
         resume_text="",
     )

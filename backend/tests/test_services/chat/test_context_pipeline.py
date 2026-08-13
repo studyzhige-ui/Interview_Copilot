@@ -7,6 +7,7 @@ from app.rag.grounding.builder import grounding_builder
 from app.services.chat.context_assembly_pipeline import (
     SLOT_ORDER,
     AssembledContext,
+    CurrentInputTooLargeError,
     PromptRenderer,
     TokenBudget,
 )
@@ -288,6 +289,62 @@ def test_assemble_loads_all_turns_after_cursor(monkeypatch):
     assert len(ctx.recent_turns) >= 48
 
 
+def test_current_admitted_input_is_never_silently_truncated(monkeypatch):
+    from app.services.chat import context_assembly_pipeline as pipeline_mod
+    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
+
+    class FakeTranscript:
+        def get_session_meta(self, _session_id):
+            return {
+                "user_id": None,
+                "type": "general",
+                "subject_type": None,
+                "subject_id": None,
+                "compaction_cursor": 0,
+                "summary": "",
+            }
+
+        def get_turns_after(self, _session_id, after_seq=0):
+            return []
+
+    monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
+    query = "current-anchor-token " * 5_000
+    context = asyncio.run(
+        ContextAssemblyPipeline().assemble_answer_context(
+            session_id="s",
+            current_query=query,
+            model_context_window=32_000,
+        )
+    )
+    assert context.current_input == query
+
+
+def test_oversized_current_input_fails_explicitly(monkeypatch):
+    from app.services.chat import context_assembly_pipeline as pipeline_mod
+    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
+
+    class FakeTranscript:
+        def get_session_meta(self, _session_id):
+            return None
+
+        def get_turns_after(self, _session_id, after_seq=0):
+            return []
+
+    monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
+    try:
+        asyncio.run(
+            ContextAssemblyPipeline().assemble_answer_context(
+                session_id="s",
+                current_query="too-large " * 10_000,
+                model_context_window=4_000,
+            )
+        )
+    except CurrentInputTooLargeError as exc:
+        assert exc.input_tokens > exc.prompt_limit
+    else:  # pragma: no cover - explicit contract assertion
+        raise AssertionError("oversized admitted input must fail, never truncate")
+
+
 # ── Threshold-based compaction ─────────────────────────────────────────
 
 
@@ -555,6 +612,41 @@ def test_assemble_answer_context_populates_sources(monkeypatch):
     )
     assert ctx.sources and ctx.sources[0]["ref"] == "K1"
     assert "[K1]" in ctx.retrieved_context
+
+
+def test_source_read_status_is_dynamic_data_and_rendered_once(monkeypatch):
+    from app.services.chat import context_assembly_pipeline as pipeline_mod
+    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
+
+    class FakeTranscript:
+        def get_session_meta(self, _session_id):
+            return {
+                "user_id": "alice",
+                "type": "general",
+                "subject_type": None,
+                "subject_id": None,
+                "compaction_cursor": 0,
+                "summary": "",
+            }
+
+        def get_turns_after(self, _session_id, after_seq=0):
+            return []
+
+    monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
+    pipeline = ContextAssemblyPipeline()
+    ctx = asyncio.run(
+        pipeline.assemble_answer_context(
+            session_id="s",
+            current_query="分析 URL",
+            source_read_status='[{"kind":"url","status":"success"}]',
+        )
+    )
+
+    dynamic = pipeline.renderer.render_current_user_message(ctx)
+    stable = pipeline.renderer.render_stable_system_prompt(ctx, system_prompt="rules")
+    assert dynamic.count("[Source Read Status]") == 1
+    assert '"kind":"url"' in dynamic
+    assert "[Source Read Status]" not in stable
 
 
 # Note: ``assemble_rewrite_context`` was retired with the planner

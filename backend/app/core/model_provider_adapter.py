@@ -19,6 +19,9 @@ from app.core.config import settings
 from app.core.model_catalog import ModelProfile
 
 
+_IMAGE_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+
+
 @dataclass(frozen=True)
 class ProviderToolCallDelta:
     """One provider-neutral incremental tool call fragment."""
@@ -126,9 +129,10 @@ def build_provider_request(
 
 
 def _openai_payload(profile: ModelProfile, request: ProviderRequest) -> dict[str, Any]:
+    messages = [_provider_message(message) for message in request.messages]
     payload: dict[str, Any] = {
         "model": profile.model,
-        "messages": copy.deepcopy(request.messages),
+        "messages": messages,
         "temperature": request.temperature,
         "max_tokens": request.max_tokens,
         "stream": True,
@@ -143,6 +147,108 @@ def _openai_payload(profile: ModelProfile, request: ProviderRequest) -> dict[str
         payload["tools"] = copy.deepcopy(request.tools)
         payload["tool_choice"] = "auto"
     return payload
+
+
+def _runtime_projection_text(message: dict[str, Any]) -> str:
+    control_type = str(message.get("control_type") or "runtime_control")
+    content = str(message.get("content") or "")
+    return (
+        "[Runtime control projection — not a new user request and not a "
+        f"replacement for the CurrentTurnAnchor; type={control_type}]\n{content}"
+    )
+
+
+def _provider_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Map the canonical runtime role only at the provider boundary."""
+
+    copied = copy.deepcopy(message)
+    if copied.get("role") == "runtime":
+        return {"role": "user", "content": _runtime_projection_text(copied)}
+    if isinstance(copied.get("content"), list):
+        copied["content"] = _openai_content_blocks(copied["content"])
+    return copied
+
+
+def provider_text_block(text: str) -> dict[str, str]:
+    """Build one provider-neutral text content block."""
+
+    if not isinstance(text, str) or not text:
+        raise ValueError("provider text block requires non-empty text")
+    return {"type": "text", "text": text}
+
+
+def provider_image_block(*, media_type: str, data: str) -> dict[str, str]:
+    """Build one provider-neutral inline base64 image content block."""
+
+    normalized_type = str(media_type or "").casefold().strip()
+    if normalized_type not in _IMAGE_MEDIA_TYPES:
+        raise ValueError(f"unsupported provider image media type: {media_type!r}")
+    if not isinstance(data, str) or not data:
+        raise ValueError("provider image block requires base64 data")
+    return {"type": "image", "media_type": normalized_type, "data": data}
+
+
+def _openai_content_blocks(blocks: list[Any]) -> list[dict[str, Any]]:
+    native: list[dict[str, Any]] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            raise ValueError("provider content blocks must be objects")
+        block_type = block.get("type")
+        if block_type == "text":
+            text = str(block.get("text") or "")
+            if text:
+                native.append({"type": "text", "text": text})
+            continue
+        if block_type == "image":
+            image = provider_image_block(
+                media_type=str(block.get("media_type") or ""),
+                data=str(block.get("data") or ""),
+            )
+            native.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": (f"data:{image['media_type']};base64,{image['data']}"),
+                        "detail": "high",
+                    },
+                }
+            )
+            continue
+        raise ValueError(f"unsupported provider content block: {block_type!r}")
+    if not native:
+        raise ValueError("provider content blocks require semantic content")
+    return native
+
+
+def _anthropic_content_blocks(blocks: list[Any]) -> list[dict[str, Any]]:
+    native: list[dict[str, Any]] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            raise ValueError("provider content blocks must be objects")
+        block_type = block.get("type")
+        if block_type == "text":
+            text = str(block.get("text") or "")
+            if text:
+                native.append({"type": "text", "text": text})
+            continue
+        if block_type == "image":
+            image = provider_image_block(
+                media_type=str(block.get("media_type") or ""),
+                data=str(block.get("data") or ""),
+            )
+            native.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": image["media_type"],
+                        "data": image["data"],
+                    },
+                }
+            )
+            continue
+        raise ValueError(f"unsupported provider content block: {block_type!r}")
+    return native
 
 
 def _parse_arguments(raw: Any) -> dict[str, Any]:
@@ -166,15 +272,26 @@ def _anthropic_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if role == "user":
             native_role = "user"
             blocks: list[dict[str, Any]] = []
-            content = str(message.get("content") or "")
-            if content:
-                blocks.append({"type": "text", "text": content})
+            content = message.get("content")
+            if isinstance(content, list):
+                blocks.extend(_anthropic_content_blocks(content))
+            else:
+                text = str(content or "")
+                if text:
+                    blocks.append({"type": "text", "text": text})
+        elif role == "runtime":
+            native_role = "user"
+            blocks = [{"type": "text", "text": _runtime_projection_text(message)}]
         elif role == "assistant":
             native_role = "assistant"
             blocks = []
-            content = str(message.get("content") or "")
-            if content:
-                blocks.append({"type": "text", "text": content})
+            content = message.get("content")
+            if isinstance(content, list):
+                blocks.extend(_anthropic_content_blocks(content))
+            else:
+                text = str(content or "")
+                if text:
+                    blocks.append({"type": "text", "text": text})
             for tool_call in message.get("tool_calls") or []:
                 function = tool_call.get("function") or {}
                 blocks.append(
@@ -423,6 +540,17 @@ class ModelProviderAdapter:
             settings.ANTHROPIC_PROMPT_CACHE_ENABLED
         )
 
+    @property
+    def vision_wire_supported(self) -> bool:
+        """Whether this native transport can serialize neutral image blocks.
+
+        The runtime has exactly two provider wires: native Anthropic Messages
+        and OpenAI-compatible Chat Completions.  Model-level support remains a
+        separate catalog fact and must also be checked by the caller.
+        """
+
+        return bool(str(getattr(self.profile, "provider", "") or "").strip())
+
     async def start_stream(
         self,
         request: ProviderRequest,
@@ -449,4 +577,6 @@ __all__ = [
     "build_anthropic_payload",
     "build_provider_request",
     "normalize_openai_chunk",
+    "provider_image_block",
+    "provider_text_block",
 ]

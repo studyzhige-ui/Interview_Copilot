@@ -61,6 +61,7 @@ import { InteractionCard } from './InteractionCard';
 import { AttachmentSources } from './AttachmentSources';
 import { AgentTaskCard } from './AgentTaskCard';
 import { ConversationGuidanceButton } from './ConversationGuidanceButton';
+import { ConversationMemoryControlsButton } from './ConversationMemoryControlsButton';
 
 interface Props {
   /** Review/debrief mode: bind to this interview record. ChatPanel will
@@ -472,7 +473,8 @@ export function ChatPanel({
         />
       )}
 
-      <div className="flex shrink-0 justify-end border-b border-stone-100 bg-white px-3 py-1.5">
+      <div className="flex shrink-0 justify-end gap-2 border-b border-stone-100 bg-white px-3 py-1.5">
+        <ConversationMemoryControlsButton sessionId={activeSessionId} />
         <ConversationGuidanceButton sessionId={activeSessionId} />
       </div>
 
@@ -576,11 +578,15 @@ export function ChatPanel({
         title="删除对话"
         description={
           sessionList.pendingDelete
-            ? `确定删除「${sessionList.pendingDelete.title}」？该对话下的所有消息将被永久删除，不可恢复。`
+            ? sessionList.pendingDelete.error
+              ?? (sessionList.pendingDelete.impact
+                ? `确定删除「${sessionList.pendingDelete.title}」？\n\n${sessionList.pendingDelete.impact.disclosures.join('\n')}`
+                : '正在读取待发送输入、附件、消息与外部调用影响……')
             : ''
         }
         confirmText="删除"
         loading={sessionList.deletingChat}
+        confirmDisabled={!sessionList.pendingDelete?.impact || !!sessionList.pendingDelete?.error}
         onConfirm={() => { void sessionList.confirmRemoveChat(); }}
         onCancel={() => { if (!sessionList.deletingChat) sessionList.setPendingDelete(null); }}
       />

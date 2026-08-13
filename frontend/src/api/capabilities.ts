@@ -5,9 +5,27 @@ export interface UserSkill {
   name: string;
   description: string;
   content: string;
+  revision: number;
+  content_hash: string;
+  source: string;
+  applicable_profiles: string[];
+  required_tools: string[];
+  allowed_tools: string[];
+  resources: Array<Omit<SkillResource, 'content' | 'created_at'>>;
   enabled: boolean;
   created_at: string | null;
   updated_at: string | null;
+}
+
+export type SkillResourceKind = 'reference' | 'script' | 'template' | 'asset';
+
+export interface SkillResource {
+  path: string;
+  kind: SkillResourceKind;
+  content: string;
+  content_hash?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export type MCPTransport = 'streamable_http' | 'stdio';
@@ -81,6 +99,21 @@ export async function updateSkill(
 
 export async function deleteSkill(id: number): Promise<void> {
   await apiClient.delete(`/capabilities/skills/${id}`);
+}
+
+export async function listSkillResources(id: number): Promise<SkillResource[]> {
+  const response = await apiClient.get(`/capabilities/skills/${id}/resources`);
+  return response.data?.resources ?? [];
+}
+
+export async function replaceSkillResources(
+  id: number,
+  resources: SkillResource[],
+): Promise<UserSkill> {
+  const response = await apiClient.put(`/capabilities/skills/${id}/resources`, {
+    resources: resources.map(({ path, kind, content }) => ({ path, kind, content })),
+  });
+  return response.data;
 }
 
 export async function listMCPServers(): Promise<UserMCPServer[]> {

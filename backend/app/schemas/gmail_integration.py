@@ -23,6 +23,9 @@ class GmailIntegrationAccountView(BaseModel):
     status: GmailAccountStatus
     last_checked_at: datetime | None
     last_error_code: str | None
+    history_cursor_updated_at: datetime | None
+    last_observation_sync_at: datetime | None
+    last_observation_sync_error_code: str | None
     revoked_at: datetime | None
 
 

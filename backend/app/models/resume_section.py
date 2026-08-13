@@ -12,22 +12,19 @@ def _generate_section_id() -> str:
 
 
 class ResumeSection(Base):
-    """A structured paragraph/section extracted from a resume."""
+    """Pre-cut-over parsed section retained for migration/audit only."""
 
     __tablename__ = "resume_sections"
 
     id = Column(String, primary_key=True, default=_generate_section_id)
-    # Stable users.id FK (CLEANUP #2). Like document_chunks this is the
-    # retrieval-scope key — the same value written to the resume Milvus
-    # collection's node metadata; resume_service resolves the username->pk at
-    # its boundary and the vector service filters by the pk.
+    # Stable historical owner identity retained for migration/audit.
     user_id = Column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),
         index=True,
         nullable=False,
     )
-    # Owning resume entity (RFC §5.1: sections hang off resume_id, not upload_id).
+    # Owning pre-cut-over Resume identity.
     resume_id = Column(
         String,
         ForeignKey("resumes.id", ondelete="CASCADE"),

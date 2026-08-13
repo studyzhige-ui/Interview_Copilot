@@ -3,6 +3,7 @@
 import asyncio
 
 import pytest
+from pydantic import BaseModel
 
 
 def test_tool_registry_has_expected_tools():
@@ -12,6 +13,7 @@ def test_tool_registry_has_expected_tools():
         "web_search",
         "read_url",
         "read_file",
+        "inspect_attachment_pages",
         "write_file",
         "search_knowledge",
         "read_resume",
@@ -20,11 +22,27 @@ def test_tool_registry_has_expected_tools():
         "task_create",
         "task_update",
         "read_career_context",
+        "capture_job_description",
         "track_search_job",
         "record_career_event",
         "read_artifacts",
         "save_artifact",
         "start_mock_interview",
+        "prepare_resume_profile_candidates",
+        "resolve_resume_profile_candidates",
+        "read_gmail_observations",
+        "review_gmail_observation",
+        "manage_personalization_guidance",
+        "search_interaction_history",
+        "read_interaction_history",
+        "read_career_domain_state",
+        "confirm_career_profile_change",
+        "review_ability_signals",
+        "manage_next_action",
+        "start_interview_debrief",
+        "analyze_offers",
+        "manage_persistent_task",
+        "record_artifact_submission",
     }
     assert expected == set(registry.tool_names)
 
@@ -85,3 +103,56 @@ def test_every_builtin_has_an_explicit_effect():
         registry.get(name).effect is not ToolEffect.UNKNOWN
         for name in registry.tool_names
     )
+
+
+def test_plan_call_validates_typed_args_and_preflights_without_dispatch():
+    from app.agent_runtime.tool_policy import ToolEffect
+    from app.agent_runtime.tool_registry import (
+        AgentToolContext,
+        ToolDefinition,
+        ToolPreflightResult,
+        ToolRegistry,
+    )
+
+    class Args(BaseModel):
+        value: int
+
+    dispatched = 0
+    preflighted = 0
+
+    async def handler(_args, _ctx):
+        nonlocal dispatched
+        dispatched += 1
+        return {"ok": True}
+
+    def preflight(args, _ctx):
+        nonlocal preflighted
+        preflighted += 1
+        return ToolPreflightResult(
+            connection_ready=False,
+            resource_identities=(f"object:{args.value}",),
+        )
+
+    local = ToolRegistry()
+    local._default_tools_loaded = True
+    local.register(
+        ToolDefinition(
+            "typed",
+            "typed",
+            Args,
+            handler,
+            effect=ToolEffect.READ,
+            concurrency_safe=True,
+            preflight=preflight,
+        )
+    )
+    ctx = AgentToolContext(user_id="alice", session_id="s1")
+    invalid = asyncio.run(local.plan_call("typed", {"value": "no"}, ctx))
+    valid = asyncio.run(local.plan_call("typed", {"value": 7}, ctx))
+
+    assert invalid.error["error"] == "tool_args_validation_failed"
+    assert valid.arguments == {"value": 7}
+    assert valid.connection_ready is False
+    assert valid.resource_identities == frozenset({"object:7"})
+    assert preflighted == 1
+    assert dispatched == 0

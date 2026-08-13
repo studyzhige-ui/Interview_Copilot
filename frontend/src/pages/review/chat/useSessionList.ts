@@ -5,11 +5,12 @@ import { extractErr } from '@/api/client';
 import {
   createChatSession,
   deleteChatSession,
+  getChatSessionDeletionImpact,
   listChatSessions,
   renameChatSession,
 } from '@/api/chat';
 import { useToastOnError } from '@/hooks/useToastOnError';
-import type { ChatSessionListItem } from '@/types/api';
+import type { ChatSessionListItem, ConversationDeletionImpact } from '@/types/api';
 import { clearPersistedSessionState } from './usePersistedSessionState';
 
 function toListItem(created: {
@@ -164,21 +165,37 @@ export function useSessionList({
   // window.confirm (which shows up as a "Code" titled OS dialog — looks
   // like a Chrome extension popup and feels off-brand). ``pendingDelete``
   // carries both id and title so the dialog body can name the session.
-  const [pendingDelete, setPendingDelete] = useState<{ id: string; title: string } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{
+    id: string;
+    title: string;
+    impact: ConversationDeletionImpact | null;
+    error: string | null;
+  } | null>(null);
   const [deletingChat, setDeletingChat] = useState(false);
 
   const removeChat = useCallback((id: string) => {
     if (externalMode) return;
     const s = sessions.find((x) => x.session_id === id);
-    setPendingDelete({ id, title: s?.title ?? '该会话' });
+    const title = s?.title ?? '该会话';
+    setPendingDelete({ id, title, impact: null, error: null });
+    void getChatSessionDeletionImpact(id).then(
+      (impact) => setPendingDelete((current) => (
+        current?.id === id ? { ...current, impact, error: null } : current
+      )),
+      (error) => setPendingDelete((current) => (
+        current?.id === id
+          ? { ...current, error: extractErr(error, '删除影响暂时无法读取') }
+          : current
+      )),
+    );
   }, [externalMode, sessions]);
 
   const confirmRemoveChat = useCallback(async () => {
-    if (!pendingDelete) return;
+    if (!pendingDelete?.impact) return;
     const id = pendingDelete.id;
     setDeletingChat(true);
     try {
-      await deleteChatSession(id);
+      await deleteChatSession(id, pendingDelete.impact);
       onSessionDeleted(id);
       clearPersistedSessionState(id);
       const next = sessions.filter((x) => x.session_id !== id);

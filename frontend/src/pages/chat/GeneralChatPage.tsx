@@ -28,11 +28,14 @@ import { extractErr } from '@/api/client';
 import {
   createChatSession,
   deleteChatSession,
+  getChatSessionDeletionImpact,
   listChatSessions,
   renameChatSession,
 } from '@/api/chat';
+import type { ConversationDeletionImpact } from '@/types/api';
 import { useToastOnError } from '@/hooks/useToastOnError';
 import { ChatPanel } from '@/pages/review/chat/ChatPanel';
+import { CopilotStatusSummary } from './CopilotStatusSummary';
 import { clearPersistedSessionState } from '@/pages/review/chat/usePersistedSessionState';
 import type { ChatSessionListItem } from '@/types/api';
 import {
@@ -133,20 +136,36 @@ export function GeneralChatPage() {
   // PWA dialog — looks like a Chrome extension popup). Same
   // ConfirmDialog used by Library and ChatPanel — keeps
   // the visual language consistent across delete affordances.
-  const [pendingDelete, setPendingDelete] = useState<{ id: string; title: string } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{
+    id: string;
+    title: string;
+    impact: ConversationDeletionImpact | null;
+    error: string | null;
+  } | null>(null);
   const [deletingChat, setDeletingChat] = useState(false);
 
   const onDelete = useCallback((id: string) => {
     const s = sessions.find((x) => x.session_id === id);
-    setPendingDelete({ id, title: s?.title ?? '该会话' });
+    const title = s?.title ?? '该会话';
+    setPendingDelete({ id, title, impact: null, error: null });
+    void getChatSessionDeletionImpact(id).then(
+      (impact) => setPendingDelete((current) => (
+        current?.id === id ? { ...current, impact, error: null } : current
+      )),
+      (error) => setPendingDelete((current) => (
+        current?.id === id
+          ? { ...current, error: extractErr(error, '删除影响暂时无法读取') }
+          : current
+      )),
+    );
   }, [sessions]);
 
   const confirmDelete = useCallback(async () => {
-    if (!pendingDelete) return;
+    if (!pendingDelete?.impact) return;
     const id = pendingDelete.id;
     setDeletingChat(true);
     try {
-      await deleteChatSession(id);
+      await deleteChatSession(id, pendingDelete.impact);
       // Clean up the per-session localStorage drafts/mode so we don't
       // leak keys (same helper ChatPanel uses on its own delete path).
       clearPersistedSessionState(id);
@@ -195,6 +214,7 @@ export function GeneralChatPage() {
             <span>新建</span>
           </button>
         </div>
+        <CopilotStatusSummary />
         <div className="flex-1 overflow-y-auto p-2">
           {loading ? (
             <div className="p-6 flex items-center justify-center text-stone-400">
@@ -318,11 +338,15 @@ export function GeneralChatPage() {
         title="删除对话"
         description={
           pendingDelete
-            ? `确定删除「${pendingDelete.title}」？该对话下的所有消息将被永久删除，不可恢复。`
+            ? pendingDelete.error
+              ?? (pendingDelete.impact
+                ? `确定删除「${pendingDelete.title}」？\n\n${pendingDelete.impact.disclosures.join('\n')}`
+                : '正在读取待发送输入、附件、消息与外部调用影响……')
             : ''
         }
         confirmText="删除"
         loading={deletingChat}
+        confirmDisabled={!pendingDelete?.impact || !!pendingDelete?.error}
         onConfirm={() => { void confirmDelete(); }}
         onCancel={() => { if (!deletingChat) setPendingDelete(null); }}
       />

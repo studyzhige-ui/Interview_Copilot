@@ -18,7 +18,7 @@ from app.api import offers as offers_api
 from app.core.security import get_current_user
 from app.db.database import Base, get_db
 from app.models.agent_execution import AgentToolCall
-from app.models.artifact import ArtifactSubmissionSnapshot
+from app.models.artifact import ArtifactResumeState, ArtifactSubmissionSnapshot
 from app.models.chat import Conversation, ConversationMessage
 from app.models.conversation_turn import ConversationTurn
 from app.models.file_asset import FileAsset
@@ -29,6 +29,14 @@ from app.schemas.artifact import ArtifactWriteInput
 from app.services import artifact_service
 
 NOW = datetime(2026, 8, 13, 8, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def no_resume_broker_dispatch(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.resume.resume_dispatch_service.dispatch_resume_parse",
+        lambda _resume_id: None,
+    )
 
 
 @pytest.fixture
@@ -223,6 +231,8 @@ def test_artifact_related_submitted_and_edit_keep_exact_historical_version(
     artifact = created.json()
     artifact_id = artifact["id"]
     version_one_id = artifact["current_version"]["id"]
+    state = db.query(ArtifactResumeState).filter_by(artifact_id=artifact_id).one()
+    assert state.parse_version_id == version_one_id
 
     related = client.post(
         f"/api/v1/artifacts/{artifact_id}/related",
@@ -283,6 +293,50 @@ def test_artifact_related_submitted_and_edit_keep_exact_historical_version(
         ]
         == version_one_id
     )
+
+
+def test_artifact_submission_accepts_typed_product_ui_confirmation(
+    client: TestClient,
+    db: Session,
+    alice: User,
+):
+    job = _job(db, alice)
+    created = client.post(
+        "/api/v1/artifacts",
+        json={
+            "operation_key": "save-ui-submission",
+            "artifact_kind": "cover_letter",
+            "version": {"title": "Exact letter", "content_text": "frozen body"},
+        },
+    ).json()
+
+    payload = {
+        "operation_key": "ui-submission-command",
+        "artifact_version_id": created["current_version"]["id"],
+        "job_opportunity_id": job.id,
+        "ui_confirmation": "product_ui",
+    }
+    response = client.post(
+        f"/api/v1/artifacts/{created['id']}/submitted",
+        json=payload,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["basis"] == "product_ui_confirmation"
+    assert response.json()["confirmation_message_id"] is None
+
+    replay = client.post(
+        f"/api/v1/artifacts/{created['id']}/submitted",
+        json=payload,
+    )
+    assert replay.status_code == 200
+    assert replay.json()["id"] == response.json()["id"]
+    assert db.query(ArtifactSubmissionSnapshot).count() == 1
+
+    ambiguous = client.post(
+        f"/api/v1/artifacts/{created['id']}/submitted",
+        json={**payload, "confirmation_message_id": 1},
+    )
+    assert ambiguous.status_code == 422
 
 
 def test_artifact_history_reads_do_not_cross_tenants(

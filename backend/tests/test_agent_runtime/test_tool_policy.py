@@ -124,6 +124,17 @@ def test_unknown_effect_fails_closed():
     )
 
 
+def test_unknown_effect_resumes_only_after_exact_call_confirmation():
+    decision = evaluate_tool_policy(
+        ToolEffect.UNKNOWN,
+        ToolPolicyContext(user_confirmed_this_call=True),
+    )
+    assert (decision.outcome, decision.reason) == (
+        "allow",
+        "call_confirmed_unknown_effect",
+    )
+
+
 def test_runtime_control_does_not_require_product_write_approval():
     decision = evaluate_tool_policy(ToolEffect.RUNTIME_CONTROL, ToolPolicyContext())
     assert (decision.outcome, decision.reason) == (

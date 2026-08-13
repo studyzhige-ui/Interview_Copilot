@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from app.models.agent_execution import AgentToolCall
 from app.models.chat import Conversation, ConversationMessage
 from app.models.conversation_turn import ConversationTurn
 from app.models.pending_submission import PendingSubmission
@@ -261,6 +262,8 @@ async def test_execute_automation_reuses_engine_with_frozen_builtin_allowlist(
         "builtin_tool_allowlist": ("read_url", "web_search"),
         "persistent_task_id": "pt_automation",
         "persistent_task_definition_version": 3,
+        "persistent_task_skill_refs": [],
+        "admitted_object_references": [],
     }
     assert settled == [(turn.id, "completed", None)]
 
@@ -410,12 +413,56 @@ def test_terminalization_freezes_agent_task_in_same_transaction(
         "SessionLocal",
         lambda: _NonClosingSession(db_session),
     )
+    monkeypatch.setattr(turn_executor.settings, "AGENT_MEMORY_PRODUCER_ENABLED", True)
 
     assert turn_executor._finish(turn.id, "blocked") is True
     db_session.refresh(turn)
     db_session.refresh(task)
     assert turn.status == "blocked"
     assert task.frozen_at == turn.completed_at
+
+
+def test_only_completed_user_turn_schedules_delayed_memory_consolidation(
+    db_session,
+    monkeypatch,
+):
+    from app.task_queue import dispatch
+
+    monkeypatch.setattr(turn_executor.settings, "AGENT_MEMORY_PRODUCER_ENABLED", True)
+
+    user = User(username="memory-schedule-owner", hashed_password="x")
+    db_session.add(user)
+    db_session.flush()
+    conversation = Conversation(
+        id="memory-schedule-session",
+        user_id=user.id,
+        active_turn_id="memory-schedule-turn",
+    )
+    turn = ConversationTurn(
+        id="memory-schedule-turn",
+        conversation_id=conversation.id,
+        user_id=user.id,
+        mode="agent",
+        message="work",
+        status="running",
+        owner_id=turn_executor._WORKER_ID,
+    )
+    db_session.add_all([conversation, turn])
+    db_session.commit()
+    monkeypatch.setattr(
+        turn_executor,
+        "SessionLocal",
+        lambda: _NonClosingSession(db_session),
+    )
+    scheduled: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        dispatch,
+        "dispatch_agent_memory_consolidation",
+        lambda turn_id, *, countdown: scheduled.append((turn_id, countdown)),
+    )
+
+    assert turn_executor._finish(turn.id, "completed") is True
+    assert scheduled == [(turn.id, turn_executor.settings.AGENT_MEMORY_IDLE_SECONDS)]
 
 
 def test_terminal_turn_atomically_claims_fifo_submission(db_session, monkeypatch):
@@ -718,7 +765,59 @@ def test_interrupt_admits_only_selected_submission(db_session):
     selected = _pending_row(
         row_id="interrupt-selected", conversation=conversation, user=user, position=2
     )
-    db_session.add_all([conversation, active, first, selected])
+    read_call = AgentToolCall(
+        call_id="interrupt-read",
+        turn_id=active.id,
+        session_id=conversation.id,
+        user_id=user.id,
+        tool_name="read_url",
+        effect="read",
+        arguments_json={"url": "https://example.test"},
+        timeout_seconds=10,
+        status="running",
+        dispatch_generation=1,
+        policy_decision="allow",
+        policy_reason="safe_read",
+    )
+    write_call = AgentToolCall(
+        call_id="interrupt-write",
+        turn_id=active.id,
+        session_id=conversation.id,
+        user_id=user.id,
+        tool_name="external_write",
+        effect="external_write",
+        arguments_json={"value": "x"},
+        timeout_seconds=10,
+        status="running",
+        dispatch_generation=1,
+        policy_decision="allow",
+        policy_reason="call_confirmed",
+    )
+    deferred_call = AgentToolCall(
+        call_id="interrupt-deferred",
+        turn_id=active.id,
+        session_id=conversation.id,
+        user_id=user.id,
+        tool_name="later_write",
+        effect="internal_write",
+        arguments_json={"value": "later"},
+        timeout_seconds=10,
+        status="deferred",
+        dispatch_generation=1,
+        policy_decision="defer",
+        policy_reason="batch_waiting:interrupt-write",
+    )
+    db_session.add_all(
+        [
+            conversation,
+            active,
+            first,
+            selected,
+            read_call,
+            write_call,
+            deferred_call,
+        ]
+    )
     db_session.commit()
 
     status, generation = turn_executor.request_turn_interrupt(
@@ -730,6 +829,21 @@ def test_interrupt_admits_only_selected_submission(db_session):
         expected_version=1,
     )
     assert (status, generation) == ("running", 2)
+    db_session.refresh(read_call)
+    db_session.refresh(write_call)
+    db_session.refresh(deferred_call)
+    assert read_call.status == "cancelled"
+    assert write_call.status == "unknown"
+    assert deferred_call.status == "cancelled"
+    assert deferred_call.result_json["error"] == "tool_not_dispatched"
+    assert {
+        read_call.completion_sequence,
+        write_call.completion_sequence,
+        deferred_call.completion_sequence,
+    } == {1, 2, 3}
+    assert read_call.timeline_json[-1]["event"] == "interrupted"
+    assert write_call.timeline_json[-1]["event"] == "interrupted"
+    assert deferred_call.timeline_json[-1]["event"] == "interrupted"
     changed, next_turn_id = turn_executor._terminalize(
         db_session,
         active.id,

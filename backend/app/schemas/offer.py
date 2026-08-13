@@ -62,6 +62,11 @@ class OfferTermsInput(BaseModel):
     probation_text: str | None = Field(default=None, max_length=2_000)
     start_date: date | None = None
     response_deadline: AwareDatetime | None = None
+    # Optional exact local wording/input and its source timezone.  The aware
+    # datetime remains the comparable fact; these fields preserve provenance
+    # for a deadline-derived NextAction.
+    response_deadline_text: str | None = Field(default=None, max_length=300)
+    response_deadline_timezone: str | None = Field(default=None, max_length=80)
     additional_terms: dict[str, str] | None = Field(default=None, max_length=100)
 
     formality: Literal["written", "verbal_confirmed", "verbal_pending_written"]
@@ -91,6 +96,14 @@ class OfferTermsInput(BaseModel):
             not item.strip() for item in self.benefits
         ):
             raise ValueError("benefits cannot contain empty entries")
+        if (self.response_deadline_text is None) != (
+            self.response_deadline_timezone is None
+        ):
+            raise ValueError(
+                "response_deadline_text and response_deadline_timezone must be paired"
+            )
+        if self.response_deadline is None and self.response_deadline_text is not None:
+            raise ValueError("response deadline provenance requires response_deadline")
         if self.additional_terms is not None:
             if any(
                 not key.strip()
@@ -173,6 +186,13 @@ class OfferCurrentResponse(BaseModel):
     current_token: str = Field(min_length=64, max_length=64)
 
 
+class OfferListItem(BaseModel):
+    offer: OfferView
+    current_token: str = Field(min_length=64, max_length=64)
+    company_name: str
+    job_title: str
+
+
 class OfferConfirmationRequiredView(BaseModel):
     status: Literal["confirmation_required"] = "confirmation_required"
     offer_id: str
@@ -184,6 +204,7 @@ __all__ = [
     "OfferConfirmationRequiredView",
     "OfferConfirmTermsRequest",
     "OfferCurrentResponse",
+    "OfferListItem",
     "OfferProductUiConfirmationInput",
     "OfferRecordRequest",
     "OfferSourceInput",

@@ -3,14 +3,15 @@ last resort for rows nothing else re-examines.
 
 * ``sweep_stale_interview_records`` — interview records stuck in an
   in-flight status (lost broker message, dead worker).
-* ``sweep_stale_pipeline_records`` — re-dispatch knowledge/resume work whose
-  broker message disappeared before producing durable facts.
+* ``sweep_stale_pipeline_records`` — re-dispatch knowledge/resume Artifact work
+  whose broker message disappeared before producing durable facts.
 * ``sweep_orphan_file_assets`` — presigned uploads whose client vanished
   before confirm/consume.
+* ``sweep_expired_conversation_deletion_receipts`` — bounded cleanup of the
+  minimal receipt correlations retained after Conversation deletion.
 """
 
 import logging
-import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -111,6 +112,44 @@ _AUTOMATION_DISPATCH_REPAIR_AFTER = timedelta(minutes=1)
 
 
 @celery_app.task(
+    name="tasks.sweep_expired_conversation_deletion_receipts",
+    time_limit=60,
+    soft_time_limit=50,
+)
+def sweep_expired_conversation_deletion_receipts():
+    """Purge only expired Conversation-deletion receipt tombstones."""
+
+    from app.services.chat.conversation_deletion_service import (
+        purge_expired_conversation_deletion_receipts,
+    )
+
+    with SessionLocal() as db:
+        purged = purge_expired_conversation_deletion_receipts(
+            db,
+            due_at=utc_now(),
+            limit=500,
+        )
+        db.commit()
+    return {"purged": purged}
+
+
+@celery_app.task(
+    name="tasks.deliver_due_next_action_reminders",
+    time_limit=60,
+    soft_time_limit=50,
+)
+def deliver_due_next_action_reminders():
+    """Materialize due in-app deliveries while respecting user quiet hours."""
+
+    from app.services.reminder_service import deliver_due_reminders
+
+    with SessionLocal() as db:
+        result = deliver_due_reminders(db, due_at=utc_now(), limit=200)
+        db.commit()
+        return result
+
+
+@celery_app.task(
     name="tasks.schedule_due_persistent_tasks",
     time_limit=60,
     soft_time_limit=50,
@@ -119,7 +158,7 @@ def schedule_due_persistent_tasks():
     """Boundedly persist due cron occurrences, then dispatch admitted Turns."""
 
     from app.agent_runtime.turn_tool_catalog import (
-        cloud_sustainable_read_tool_names,
+        cloud_sustainable_automation_tool_names,
     )
     from app.services.persistent_task_service import (
         due_persistent_task_ids,
@@ -140,7 +179,9 @@ def schedule_due_persistent_tasks():
                     db,
                     task_id=task_id,
                     due_at=due_at,
-                    cloud_sustainable_tool_names=(cloud_sustainable_read_tool_names()),
+                    cloud_sustainable_tool_names=(
+                        cloud_sustainable_automation_tool_names()
+                    ),
                 )
                 db.commit()
             except Exception:  # noqa: BLE001 - one schedule cannot block the batch
@@ -188,7 +229,7 @@ def repair_pending_automation_turns():
         repairable_persistent_task_ids,
     )
     from app.agent_runtime.turn_tool_catalog import (
-        cloud_sustainable_read_tool_names,
+        cloud_sustainable_automation_tool_names,
     )
     from app.models.persistent_task import PersistentTask
     from app.task_queue.dispatch import dispatch_conversation_turn
@@ -223,7 +264,9 @@ def repair_pending_automation_turns():
                     db,
                     user_pk=task.user_id,
                     task_id=task.id,
-                    cloud_sustainable_tool_names=(cloud_sustainable_read_tool_names()),
+                    cloud_sustainable_tool_names=(
+                        cloud_sustainable_automation_tool_names()
+                    ),
                 )
                 db.commit()
             except Exception:  # noqa: BLE001 - one definition cannot block the batch
@@ -261,11 +304,10 @@ def repair_pending_automation_turns():
     soft_time_limit=50,
 )
 def sweep_stale_pipeline_records(self):
-    """Re-dispatch stale parse/ingest rows that have produced no facts."""
+    """Re-dispatch stale canonical parse/ingest rows."""
+    from app.models.artifact import Artifact, ArtifactResumeState
     from app.models.document_chunk import DocumentChunk
     from app.models.knowledge import KnowledgeDocument
-    from app.models.resume import Resume
-    from app.models.resume_section import ResumeSection
     from app.worker.tasks.ingestion import process_document_ingestion
     from app.worker.tasks.resume import process_resume_parse
 
@@ -286,15 +328,15 @@ def sweep_stale_pipeline_records(self):
             .all()
         )
         resumes = (
-            db.query(Resume)
+            db.query(ArtifactResumeState)
+            .join(Artifact, Artifact.id == ArtifactResumeState.artifact_id)
             .filter(
-                Resume.parse_status.in_(("pending", "processing")),
-                Resume.updated_at < cutoff,
-                Resume.archived_at.is_(None),
-                ~db.query(ResumeSection.id)
-                .filter(ResumeSection.resume_id == Resume.id)
-                .exists(),
+                Artifact.kind == "resume",
+                Artifact.archived_at.is_(None),
+                ArtifactResumeState.parse_status.in_(("pending", "processing")),
+                ArtifactResumeState.updated_at < cutoff,
             )
+            .order_by(ArtifactResumeState.updated_at.asc())
             .limit(100)
             .all()
         )
@@ -315,11 +357,11 @@ def sweep_stale_pipeline_records(self):
 
         for resume in resumes:
             try:
-                process_resume_parse.delay(resume.id)
+                process_resume_parse.delay(resume.artifact_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "stale resume re-dispatch failed for %s: %s",
-                    resume.id,
+                    resume.artifact_id,
                     exc,
                 )
                 continue
@@ -424,29 +466,7 @@ def sweep_runtime_files():
         Path(settings.LOG_DIR), "*.log", now - _DEV_LOG_TTL
     )
 
-    result_root = data_dir / "agent-results"
-    orphan_results = 0
-    if result_root.is_dir():
-        from app.models.chat import Conversation
-
-        directories = [path for path in result_root.iterdir() if path.is_dir()]
-        ids = [path.name for path in directories]
-        active_ids: set[str] = set()
-        with SessionLocal() as db:
-            for start in range(0, len(ids), 500):
-                active_ids.update(
-                    row[0]
-                    for row in db.query(Conversation.id)
-                    .filter(Conversation.id.in_(ids[start : start + 500]))
-                    .all()
-                )
-        for directory in directories:
-            if directory.name not in active_ids:
-                shutil.rmtree(directory, ignore_errors=True)
-                orphan_results += 1
-
     return {
         "temp_files": temp_files,
         "dev_logs": dev_logs,
-        "orphan_result_dirs": orphan_results,
     }

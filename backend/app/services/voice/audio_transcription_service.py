@@ -7,7 +7,7 @@ from app.services.voice.transcription_registry import resolve_transcription, tra
 logger = logging.getLogger(__name__)
 
 
-async def transcribe_media(file_path: str, language: str = "zh") -> str:
+async def transcribe_media(file_path: str, language: str | None = "zh") -> str:
     """Transcribe media with the configured provider and speaker labeling."""
     config = resolve_transcription()
     try:

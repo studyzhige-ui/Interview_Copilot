@@ -1,8 +1,9 @@
 """Safe Gmail OAuth lifecycle and account-state API.
 
 The callback accepts only Google's short-lived authorization code and one-time
-state. OAuth tokens and opaque credential handles remain inside the controlled
-provider adapter and are never accepted from, or returned to, product clients.
+state. OAuth tokens remain in the controlled Gmail credential broker; raw
+opaque handles are internal-only and never accepted from, or returned to,
+product clients.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ _OAUTH_STATE_COOKIE = "gmail_oauth_state_binding"
 
 _SAFE_CALLBACK_ERROR_CODES = frozenset(
     {
+        "credential_store_unavailable",
         "gmail_readonly_scope_required",
         "google_email_unverified",
         "invalid_grant",
@@ -105,7 +107,10 @@ def _integration_http_error(
             "google_email_unverified",
         }:
             return HTTPException(status_code=400, detail=exc.code)
-        if exc.code == "oauth_state_store_failed":
+        if exc.code in {
+            "credential_store_unavailable",
+            "oauth_state_store_failed",
+        }:
             return HTTPException(status_code=503, detail=exc.code)
         return HTTPException(status_code=502, detail=exc.code)
     if isinstance(
@@ -179,7 +184,7 @@ async def _cleanup_failed_rebind(
             user_pk=completion.user_pk,
         )
     except Exception:
-        # The encrypted broker row is retained when Google did not confirm
+        # The broker grant is retained when Google did not confirm
         # revocation, allowing the user to retry revoke from the invalid state.
         pass
     try:

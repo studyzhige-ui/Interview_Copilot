@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
@@ -18,8 +18,12 @@ from app.api import career_process, career_profile
 from app.core.security import get_current_user
 from app.db.database import Base, get_db
 from app.models.agent_execution import AgentToolCall
+from app.models.artifact import ArtifactVersion
 from app.models.chat import Conversation, ConversationMessage
+from app.models.conversation_attachment import ConversationAttachmentRef
 from app.models.conversation_turn import ConversationTurn
+from app.models.file_asset import FileAsset
+from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
 
 NOW = datetime(2026, 8, 13, 9, 0, tzinfo=UTC)
@@ -66,7 +70,7 @@ def _seed(db):
         conversation_id=conversation.id,
         user_id=owner.id,
         mode="agent",
-        message="manage career",
+        message="请纳入跟踪，并记录我已约好面试",
         status="running",
     )
     other_turn = ConversationTurn(
@@ -86,12 +90,15 @@ def _seed(db):
             content=content,
         )
         for index, content in enumerate(
-            ["请纳入跟踪", "我已约好面试"],
+            ["请纳入跟踪，并记录我已约好面试", "一条旧的确认"],
             start=1,
         )
     ]
     db.add_all(confirmations)
     db.flush()
+    turn.user_message_seq = confirmations[0].seq
+    other_turn.user_message_seq = 1
+    db.add_all([turn, other_turn])
     db.add(
         AgentToolCall(
             call_id="call-search-1",
@@ -103,6 +110,7 @@ def _seed(db):
             arguments_json={"keywords": "backend"},
             timeout_seconds=20,
             status="completed",
+            completed_at=NOW,
             policy_decision="allow",
             policy_reason="read_allowed",
             result_json={
@@ -115,6 +123,7 @@ def _seed(db):
                         "location": "Shanghai",
                         "team": "Platform",
                         "hosted_url": "https://jobs.example.test/42",
+                        "description_plain": "Build reliable backend platforms.",
                     }
                 ],
             },
@@ -154,6 +163,7 @@ def _call(name, payload, ctx):
 
 def test_career_tool_set_is_small_typed_and_policy_correct():
     expected = {
+        "capture_job_description": ToolEffect.INTERNAL_WRITE,
         "read_career_context": ToolEffect.READ,
         "track_search_job": ToolEffect.INTERNAL_WRITE,
         "record_career_event": ToolEffect.INTERNAL_WRITE,
@@ -176,6 +186,10 @@ def test_career_tool_set_is_small_typed_and_policy_correct():
         ("track_search_job", "不要跟踪这个岗位", False),
         ("track_search_job", "Do not save this job", False),
         ("track_search_job", "分析这个岗位是否合适", False),
+        ("capture_job_description", "请保存这份岗位描述", True),
+        ("capture_job_description", "Update this job description for me", True),
+        ("capture_job_description", "不要保存这份岗位描述", False),
+        ("capture_job_description", "分析这份岗位描述", False),
         ("record_career_event", "请记录这次面试进展", True),
         ("record_career_event", "Record this interview status", True),
         ("record_career_event", "暂不记录这次面试进展", False),
@@ -216,6 +230,7 @@ def test_ui_write_agent_read_and_agent_write_api_read(monkeypatch, career_db):
         "SessionLocal",
         lambda: _NoCloseSession(career_db),
     )
+
     client = _client(career_db, {"user": owner})
     ctx = AgentToolContext(
         user_id=owner.username,
@@ -254,10 +269,53 @@ def test_ui_write_agent_read_and_agent_write_api_read(monkeypatch, career_db):
         },
         ctx,
     )
+    assert "job_opportunity" in tracked, tracked
     opportunity_id = tracked["job_opportunity"]["id"]
+    assert tracked["job_description_capture"] == "captured"
+    assert tracked["job_description_snapshot"]["version"] == 1
+    assert tracked["job_description_snapshot"]["canonical_content"] == (
+        "Build reliable backend platforms."
+    )
     jobs = client.get("/api/v1/career-process/opportunities")
     assert jobs.status_code == 200
     assert jobs.json()[0]["external_job_id"] == "job-42"
+
+    career_db.add(
+        AgentToolCall(
+            call_id="call-read-jd-v2",
+            turn_id=turn.id,
+            session_id=conversation.id,
+            user_id=owner.id,
+            tool_name="read_url",
+            effect="read",
+            arguments_json={"url": "https://jobs.example.test/42"},
+            timeout_seconds=20,
+            status="completed",
+            completed_at=NOW + timedelta(hours=1),
+            policy_decision="allow",
+            policy_reason="read_allowed",
+            result_json={
+                "url": "https://jobs.example.test/42",
+                "content": "Build reliable backend and distributed platforms.",
+                "provider": "example-co",
+            },
+        )
+    )
+    career_db.commit()
+    captured = _call(
+        "capture_job_description",
+        {
+            "opportunity_id": opportunity_id,
+            "source_call_id": "call-read-jd-v2",
+            "original_url": "https://jobs.example.test/42",
+            "observed_at": (NOW + timedelta(hours=1)).isoformat(),
+            "confirmation_message_id": confirmations[0].id,
+            "idempotency_key": "capture-jd-v2",
+        },
+        ctx,
+    )
+    assert captured["job_description_snapshot"]["version"] == 2
+    assert captured["job_description_snapshot"]["source_kind"] == "tool_result"
 
     advanced = _call(
         "record_career_event",
@@ -265,21 +323,29 @@ def test_ui_write_agent_read_and_agent_write_api_read(monkeypatch, career_db):
             "opportunity_id": opportunity_id,
             "kind": "interview_scheduled",
             "occurred_at": NOW.isoformat(),
-            "confirmation_message_id": confirmations[1].id,
+            "confirmation_message_id": confirmations[0].id,
             "description": "用户确认一面已安排",
             "step_summary": "一面已安排",
             "idempotency_key": "event-interview-42",
             "next_action": {
-                "content": "准备一面项目复盘",
-                "time_kind": "flexible",
+                "content": "参加一面",
+                "time_kind": "fixed",
+                "starts_at": (NOW + timedelta(days=2)).isoformat(),
+                "ends_at": (NOW + timedelta(days=2, hours=1)).isoformat(),
+                "original_time_text": "8 月 15 日 17:00",
+                "source_timezone": "Asia/Shanghai",
+                "reminder_at": (NOW + timedelta(days=1, hours=23)).isoformat(),
+                "reminder_channel": "in_app",
                 "idempotency_key": "action-interview-42",
             },
         },
         ctx,
     )
     assert advanced["next_action"]["source_identity"] == advanced["process_event"]["id"]
+    assert advanced["next_action"]["status"] == "planned"
+    assert advanced["next_action"]["planned_source_kind"] == "process_event"
     assert client.get("/api/v1/career-process/next-actions").json()[0]["content"] == (
-        "准备一面项目复盘"
+        "参加一面"
     )
 
     saved = _call(
@@ -303,6 +369,127 @@ def test_ui_write_agent_read_and_agent_write_api_read(monkeypatch, career_db):
         ]["content_text"]
         == "复盘项目架构与关键权衡。"
     )
+
+
+def test_save_artifact_promotes_exact_conversation_attachment_without_text_copy(
+    monkeypatch,
+    career_db,
+):
+    from app.agent_runtime.tools import career as career_tools
+
+    (
+        owner,
+        other,
+        conversation,
+        other_conversation,
+        turn,
+        other_turn,
+        _confirmations,
+    ) = _seed(career_db)
+    checksum = "a" * 64
+    asset = FileAsset(
+        id="fa-agent-promotion",
+        user_id=owner.id,
+        purpose="knowledge_document",
+        original_filename="portfolio.pdf",
+        object_key=f"uploads/{owner.id}/fa-agent-promotion/portfolio.pdf",
+        storage_uri=f"s3://bucket/uploads/{owner.id}/fa-agent-promotion/portfolio.pdf",
+        content_type="application/pdf",
+        size_bytes=100,
+        checksum_sha256=checksum,
+        upload_status="uploaded",
+        validation_status="passed",
+    )
+    document = KnowledgeDocument(
+        id="doc-agent-promotion",
+        user_id=owner.id,
+        conversation_id=conversation.id,
+        file_asset_id=asset.id,
+        title="portfolio.pdf",
+        category="对话附件",
+        source_kind="chat_attachment",
+        storage_uri=asset.storage_uri,
+        object_key=asset.object_key,
+        status="ready",
+        content_text="must not be copied",
+    )
+    ref = ConversationAttachmentRef(
+        id="caref-agent-promotion",
+        draft_id="draft-agent-promotion",
+        user_id=owner.id,
+        conversation_id=conversation.id,
+        turn_id=turn.id,
+        submission_id="submission-agent-promotion",
+        position=0,
+        file_asset_id=asset.id,
+        source_document_id=document.id,
+        file_asset_version=f"sha256:{checksum}",
+        display_name="portfolio.pdf",
+    )
+    career_db.add(asset)
+    career_db.flush()
+    career_db.add(document)
+    career_db.flush()
+    career_db.add(ref)
+    career_db.commit()
+    monkeypatch.setattr(
+        career_tools,
+        "SessionLocal",
+        lambda: _NoCloseSession(career_db),
+    )
+    ctx = AgentToolContext(
+        user_id=owner.username,
+        user_pk=owner.id,
+        session_id=conversation.id,
+        turn_id=turn.id,
+    )
+    payload = {
+        "operation_key": "agent-promote-attachment",
+        "artifact_kind": "portfolio",
+        "title": "项目作品集",
+        "attachment_ref_id": ref.id,
+    }
+
+    first = _call("save_artifact", payload, ctx)
+    replay = _call("save_artifact", payload, ctx)
+
+    assert replay["artifact"]["id"] == first["artifact"]["id"]
+    assert first["attachment_promotion"] == {
+        "source_ref_id": ref.id,
+        "file_asset_id": asset.id,
+        "file_asset_version": ref.file_asset_version,
+        "copied_parsed_text": False,
+        "external_action_performed": False,
+    }
+    version = (
+        career_db.query(ArtifactVersion)
+        .filter(ArtifactVersion.artifact_id == first["artifact"]["id"])
+        .one()
+    )
+    assert version.content_text is None
+    assert version.file_asset_id == asset.id
+    assert version.file_asset_version == ref.file_asset_version
+    assert version.source_owner_type == "conversation_attachment_ref"
+    assert ref.removed_at is None
+
+    other_ctx = AgentToolContext(
+        user_id=other.username,
+        user_pk=other.id,
+        session_id=other_conversation.id,
+        turn_id=other_turn.id,
+    )
+    denied = _call(
+        "save_artifact",
+        {**payload, "operation_key": "cross-tenant-attachment"},
+        other_ctx,
+    )
+    assert denied == {"error": "not_found_or_not_owned"}
+    invalid_copy = _call(
+        "save_artifact",
+        {**payload, "content_text": "do not copy this projection"},
+        ctx,
+    )
+    assert invalid_copy["error"] == "tool_args_validation_failed"
 
 
 def test_career_tools_reject_cross_tenant_sources_and_assets(monkeypatch, career_db):
@@ -333,7 +520,25 @@ def test_career_tools_reject_cross_tenant_sources_and_assets(monkeypatch, career
         },
         owner_ctx,
     )
-    with pytest.raises(ValueError, match="not_found_or_not_owned"):
+    with pytest.raises(
+        ValueError,
+        match="confirmation_message_is_not_current_turn_user_message",
+    ):
+        _call(
+            "track_search_job",
+            {
+                "search_call_id": "call-search-1",
+                "job_id": "job-42",
+                "confirmation_message_id": confirmations[1].id,
+                "occurred_at": NOW.isoformat(),
+                "idempotency_key": "stale-confirmation",
+            },
+            owner_ctx,
+        )
+    with pytest.raises(
+        ValueError,
+        match="confirmation_message_is_not_current_turn_user_message",
+    ):
         _call(
             "track_search_job",
             {

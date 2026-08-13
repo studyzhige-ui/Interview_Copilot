@@ -35,7 +35,4 @@ def init_rag_settings() -> None:
     # without a rebuild). Best-effort on connectivity; raises on a real mismatch.
     from app.rag import milvus_hybrid
 
-    milvus_hybrid.validate_existing_dims(
-        milvus_hybrid.KNOWLEDGE,
-        milvus_hybrid.RESUME,
-    )
+    milvus_hybrid.validate_existing_dims(milvus_hybrid.KNOWLEDGE)

@@ -8,6 +8,7 @@ and they only persist sources that can be checked against owned records.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from datetime import datetime
 from typing import Any, Literal
@@ -19,7 +20,7 @@ from app.agent_runtime.tool_registry import AgentToolContext, ToolDefinition, re
 from app.db.database import SessionLocal
 from app.models.agent_execution import AgentToolCall
 from app.models.artifact import Artifact
-from app.models.chat import Conversation, ConversationMessage
+from app.models.chat import ConversationMessage
 from app.schemas.artifact import (
     ArtifactProvenanceInput,
     ArtifactVersionView,
@@ -34,7 +35,16 @@ from app.schemas.job_opportunity import (
     ProcessEventAppend,
     ProcessEventView,
 )
+from app.schemas.job_description_snapshot import (
+    JobDescriptionSnapshotFromToolResult,
+)
 from app.services import artifact_service
+from app.services.chat.attachment_source_service import (
+    AttachmentSourceCommandError,
+    AttachmentSourceNotFoundError,
+)
+from app.services.resume import resume_artifact_service
+from app.services.resume.resume_dispatch_service import dispatch_parse_after_commit
 from app.services.career_process_service import (
     CareerObjectNotFoundError,
     CareerProcessError,
@@ -42,7 +52,14 @@ from app.services.career_process_service import (
     create_job_opportunity,
     create_next_action,
     list_job_opportunities,
+    list_opportunity_merges,
     list_next_actions,
+    list_process_events,
+)
+from app.services.job_description_snapshot_service import (
+    JobDescriptionSnapshotError,
+    create_job_description_snapshot,
+    current_job_description_snapshot,
 )
 from app.services.career_profile_service import (
     CareerProfileNotFoundError,
@@ -59,6 +76,15 @@ class CareerContextArgs(BaseModel):
     )
     opportunity_limit: int = Field(default=50, ge=1, le=100)
     action_limit: int = Field(default=100, ge=1, le=200)
+    opportunity_id: str | None = Field(default=None, min_length=1, max_length=35)
+    include_events: bool = False
+    event_limit: int = Field(default=30, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def event_scope_is_explicit(self) -> "CareerContextArgs":
+        if self.include_events and self.opportunity_id is None:
+            raise ValueError("include_events requires opportunity_id")
+        return self
 
 
 class TrackSearchJobArgs(BaseModel):
@@ -77,6 +103,19 @@ class TrackSearchJobArgs(BaseModel):
     )
 
 
+class CaptureJobDescriptionArgs(BaseModel):
+    """Promote one exact owned ToolResult into an opportunity JD snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    opportunity_id: str = Field(min_length=1, max_length=35)
+    source_call_id: str = Field(min_length=1, max_length=128)
+    original_url: str = Field(min_length=1, max_length=4_000)
+    observed_at: datetime
+    confirmation_message_id: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
 class DerivedNextActionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -87,7 +126,18 @@ class DerivedNextActionInput(BaseModel):
     due_at: datetime | None = None
     original_time_text: str | None = Field(default=None, max_length=300)
     source_timezone: str | None = Field(default=None, max_length=80)
+    interview_record_id: str | None = Field(default=None, max_length=128)
+    offer_id: str | None = Field(default=None, max_length=35)
+    artifact_id: str | None = Field(default=None, max_length=128)
+    reminder_at: datetime | None = None
+    reminder_channel: Literal["in_app"] | None = None
     idempotency_key: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def reminder_is_paired(self) -> "DerivedNextActionInput":
+        if (self.reminder_at is None) != (self.reminder_channel is None):
+            raise ValueError("reminder_at and reminder_channel must be paired")
+        return self
 
 
 class RecordCareerEventArgs(BaseModel):
@@ -115,6 +165,7 @@ class RecordCareerEventArgs(BaseModel):
     confirmation_message_id: int = Field(gt=0)
     description: str = Field(min_length=1, max_length=10_000)
     step_summary: str | None = Field(default=None, max_length=300)
+    application_channel: str | None = Field(default=None, max_length=160)
     idempotency_key: str = Field(min_length=1, max_length=300)
     next_action: DerivedNextActionInput | None = None
 
@@ -122,6 +173,25 @@ class RecordCareerEventArgs(BaseModel):
     def validate_hiring_step(self) -> "RecordCareerEventArgs":
         if self.kind == "hiring_step" and not (self.step_summary or "").strip():
             raise ValueError("hiring_step requires step_summary")
+        if (
+            self.application_channel is not None
+            and self.kind != "application_submitted"
+        ):
+            raise ValueError(
+                "application_channel is only valid for application_submitted"
+            )
+        if (
+            self.next_action
+            and self.next_action.reminder_at is not None
+            and not (
+                self.kind == "interview_scheduled"
+                and self.next_action.time_kind == "fixed"
+            )
+        ):
+            raise ValueError(
+                "event-derived reminders require a confirmed fixed interview; "
+                "other actions must first be explicitly planned"
+            )
         return self
 
 
@@ -140,8 +210,30 @@ class SaveArtifactArgs(BaseModel):
     operation_key: str = Field(min_length=1, max_length=128)
     artifact_kind: str = Field(min_length=1, max_length=64)
     title: str = Field(min_length=1, max_length=240)
-    content_text: str = Field(min_length=1)
+    content_text: str | None = Field(default=None, min_length=1)
     content_format: str = Field(default="markdown", min_length=1, max_length=64)
+    attachment_ref_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description=(
+            "Exact current Conversation AttachmentRef to promote. Use only when "
+            "the user explicitly asks to save/set that attachment as a formal "
+            "material; do not also send content_text."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def has_exactly_one_content_source(self):
+        if self.attachment_ref_id is not None:
+            if self.content_text is not None:
+                raise ValueError(
+                    "attachment promotion reuses exact bytes and cannot copy content_text"
+                )
+            return self
+        if not (self.content_text or "").strip():
+            raise ValueError("content_text is required without attachment_ref_id")
+        return self
 
 
 _TASK_REFUSAL_MARKERS = (
@@ -332,6 +424,34 @@ def _task_authorizes_record_career_event(
     )
 
 
+def _task_authorizes_capture_job_description(
+    _arguments: dict[str, Any],
+    _ctx: AgentToolContext,
+    current_task: str,
+) -> bool:
+    return _task_explicitly_authorizes(
+        current_task,
+        action_words=(
+            "保存",
+            "更新",
+            "记录",
+            "存档",
+            "save",
+            "update",
+            "record",
+            "capture",
+        ),
+        target_words=(
+            "岗位描述",
+            "职位描述",
+            "岗位详情",
+            "jd",
+            "job description",
+            "posting detail",
+        ),
+    )
+
+
 def _task_authorizes_save_artifact(
     _arguments: dict[str, Any],
     _ctx: AgentToolContext,
@@ -383,20 +503,24 @@ def _scope(ctx: AgentToolContext) -> tuple[int, str | None]:
     return ctx.user_pk, ctx.turn_id
 
 
-def _owned_user_message(db, *, user_pk: int, message_id: int) -> ConversationMessage:
-    row = (
-        db.query(ConversationMessage)
-        .join(Conversation, Conversation.id == ConversationMessage.conversation_id)
-        .filter(
-            ConversationMessage.id == message_id,
-            ConversationMessage.role.ilike("user"),
-            Conversation.user_id == user_pk,
-        )
-        .one_or_none()
+def _owned_user_message(
+    db,
+    *,
+    user_pk: int,
+    message_id: int,
+    ctx: AgentToolContext,
+) -> ConversationMessage:
+    from app.services.chat.current_turn_source import (
+        require_current_turn_user_message,
     )
-    if row is None:
-        raise ValueError("confirmation_message_not_found_or_not_owned")
-    return row
+
+    return require_current_turn_user_message(
+        db,
+        user_pk=user_pk,
+        turn_id=ctx.turn_id,
+        conversation_id=ctx.session_id,
+        message_id=message_id,
+    )
 
 
 def _job_from_search_call(
@@ -465,14 +589,81 @@ def _known_error(exc: Exception) -> dict[str, Any] | None:
             artifact_service.ArtifactNotFoundError,
             artifact_service.ArtifactOwnershipError,
             artifact_service.ArtifactSourceUnavailableError,
+            AttachmentSourceNotFoundError,
+            resume_artifact_service.ResumeArtifactNotFoundError,
         ),
     ):
         return {"error": "not_found_or_not_owned"}
-    if isinstance(exc, (CareerProcessError, artifact_service.ArtifactDomainError)):
+    if isinstance(
+        exc,
+        (
+            CareerProcessError,
+            artifact_service.ArtifactDomainError,
+            AttachmentSourceCommandError,
+            resume_artifact_service.ResumeArtifactError,
+            JobDescriptionSnapshotError,
+        ),
+    ):
         return {"error": "domain_command_rejected", "detail": str(exc)}
     if isinstance(exc, CareerProfileNotFoundError):
         return {"error": "career_profile_not_found"}
     return None
+
+
+def _active_merge_payloads(rows: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": row.id,
+            "duplicate_opportunity_id": row.duplicate_opportunity_id,
+            "canonical_opportunity_id": row.canonical_opportunity_id,
+            "status": row.status,
+            "version": row.version,
+            "reason": row.reason,
+            "confirmation_source_identity": row.confirmation_source_identity,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+        for row in rows
+        if row.status == "active"
+    ]
+
+
+def _canonical_opportunity_id(
+    opportunity_id: str,
+    active_merges: list[dict[str, Any]],
+) -> str:
+    redirects = {
+        str(row["duplicate_opportunity_id"]): str(row["canonical_opportunity_id"])
+        for row in active_merges
+    }
+    current = opportunity_id
+    visited: set[str] = set()
+    while current in redirects:
+        if current in visited:
+            raise ValueError("active_job_opportunity_merge_cycle")
+        visited.add(current)
+        current = redirects[current]
+    return current
+
+
+def _job_description_payload(row: Any | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return {
+        "id": row.id,
+        "job_opportunity_id": row.job_opportunity_id,
+        "version": row.version,
+        "original_url": row.original_url,
+        "normalized_url": row.normalized_url,
+        "observed_at": row.observed_at,
+        "provider": row.provider,
+        "canonical_content": row.canonical_content,
+        "content_checksum": row.content_checksum,
+        "source_kind": row.source_kind,
+        "source_identity": row.source_identity,
+        "source_version": row.source_version,
+        "created_at": row.created_at,
+    }
 
 
 async def read_career_context(
@@ -490,28 +681,69 @@ async def read_career_context(
                 )
             except CareerProfileNotFoundError:
                 profile = None
+            merge_rows = list_opportunity_merges(
+                db,
+                user_pk=user_pk,
+            )
+            active_merges = _active_merge_payloads(merge_rows)
             opportunities = list_job_opportunities(
                 db,
                 user_pk=user_pk,
                 include_archived=args.include_archived_opportunities,
-                limit=args.opportunity_limit,
+                limit=min(500, args.opportunity_limit + len(active_merges)),
             )
+            duplicate_ids = {
+                str(row["duplicate_opportunity_id"]) for row in active_merges
+            }
+            canonical_opportunities = [
+                row for row in opportunities if row.id not in duplicate_ids
+            ][: args.opportunity_limit]
             actions = list_next_actions(
                 db,
                 user_pk=user_pk,
                 statuses=set(args.action_statuses),
                 limit=args.action_limit,
             )
+            selected_opportunity_id = (
+                _canonical_opportunity_id(args.opportunity_id, active_merges)
+                if args.opportunity_id is not None
+                else None
+            )
+            process_events = (
+                list_process_events(
+                    db,
+                    user_pk=user_pk,
+                    opportunity_id=selected_opportunity_id,
+                )[-args.event_limit :]
+                if args.include_events and selected_opportunity_id is not None
+                else []
+            )
+            job_description = (
+                current_job_description_snapshot(
+                    db,
+                    user_pk=user_pk,
+                    opportunity_id=selected_opportunity_id,
+                )
+                if selected_opportunity_id is not None
+                else None
+            )
             return {
                 "career_profile": profile,
+                "job_opportunity_merges": active_merges,
                 "job_opportunities": [
                     JobOpportunityView.model_validate(row).model_dump(mode="json")
-                    for row in opportunities
+                    for row in canonical_opportunities
                 ],
                 "next_actions": [
                     NextActionView.model_validate(row).model_dump(mode="json")
                     for row in actions
                 ],
+                "selected_opportunity_id": selected_opportunity_id,
+                "process_events": [
+                    ProcessEventView.model_validate(row).model_dump(mode="json")
+                    for row in process_events
+                ],
+                "job_description_snapshot": _job_description_payload(job_description),
             }
         finally:
             db.close()
@@ -532,6 +764,7 @@ async def track_search_job(
                 db,
                 user_pk=user_pk,
                 message_id=args.confirmation_message_id,
+                ctx=ctx,
             )
             call, job = _job_from_search_call(
                 db,
@@ -571,8 +804,92 @@ async def track_search_job(
             payload = JobOpportunityView.model_validate(
                 admission.opportunity
             ).model_dump(mode="json")
+            snapshot = None
+            source_url = str(
+                job.get("hosted_url") or job.get("apply_url") or ""
+            ).strip()
+            if source_url and any(
+                isinstance(job.get(key), str) and str(job[key]).strip()
+                for key in (
+                    "canonical_content",
+                    "job_description",
+                    "description_text",
+                    "description_plain",
+                    "description",
+                    "content",
+                    "markdown",
+                    "text",
+                    "jd",
+                )
+            ):
+                snapshot = create_job_description_snapshot(
+                    db,
+                    user_pk=user_pk,
+                    opportunity_id=admission.opportunity.id,
+                    command=JobDescriptionSnapshotFromToolResult(
+                        source_identity=call.call_id,
+                        tool_session_id=ctx.session_id,
+                        original_url=source_url,
+                        observed_at=args.occurred_at,
+                        idempotency_key=(
+                            "track-jd:"
+                            + hashlib.sha256(
+                                args.idempotency_key.encode("utf-8")
+                            ).hexdigest()
+                        ),
+                    ),
+                )
             db.commit()
-            return {"job_opportunity": payload, "created": admission.created}
+            return {
+                "job_opportunity": payload,
+                "created": admission.created,
+                "job_description_snapshot": _job_description_payload(snapshot),
+                "job_description_capture": (
+                    "captured" if snapshot is not None else "detail_required"
+                ),
+            }
+        except Exception as exc:
+            db.rollback()
+            known = _known_error(exc)
+            if known is not None:
+                return known
+            raise
+        finally:
+            db.close()
+
+    return await asyncio.to_thread(write)
+
+
+async def capture_job_description(
+    args: CaptureJobDescriptionArgs,
+    ctx: AgentToolContext,
+) -> dict[str, Any]:
+    user_pk, _turn_id = _scope(ctx)
+
+    def write() -> dict[str, Any]:
+        db = SessionLocal()
+        try:
+            _owned_user_message(
+                db,
+                user_pk=user_pk,
+                message_id=args.confirmation_message_id,
+                ctx=ctx,
+            )
+            snapshot = create_job_description_snapshot(
+                db,
+                user_pk=user_pk,
+                opportunity_id=args.opportunity_id,
+                command=JobDescriptionSnapshotFromToolResult(
+                    source_identity=args.source_call_id,
+                    tool_session_id=ctx.session_id,
+                    original_url=args.original_url,
+                    observed_at=args.observed_at,
+                    idempotency_key=args.idempotency_key,
+                ),
+            )
+            payload = _job_description_payload(snapshot)
+            db.commit()
+            return {"job_description_snapshot": payload, "created": True}
         except Exception as exc:
             db.rollback()
             known = _known_error(exc)
@@ -598,6 +915,7 @@ async def record_career_event(
                 db,
                 user_pk=user_pk,
                 message_id=args.confirmation_message_id,
+                ctx=ctx,
             )
             event = append_confirmed_process_event(
                 db,
@@ -610,18 +928,25 @@ async def record_career_event(
                     source_identity=f"conversation_message:{confirmation.id}",
                     description=args.description,
                     step_summary=args.step_summary,
+                    application_channel=args.application_channel,
                     idempotency_key=args.idempotency_key,
                 ),
             )
             action = None
             if args.next_action is not None:
                 action_input = args.next_action
+                action_status = (
+                    "planned"
+                    if args.kind == "interview_scheduled"
+                    and action_input.time_kind == "fixed"
+                    else "suggested"
+                )
                 action = create_next_action(
                     db,
                     user_pk=user_pk,
                     command=NextActionCreate(
                         content=action_input.content,
-                        status="suggested",
+                        status=action_status,
                         time_kind=action_input.time_kind,
                         starts_at=action_input.starts_at,
                         ends_at=action_input.ends_at,
@@ -631,6 +956,11 @@ async def record_career_event(
                         source_kind="process_event",
                         source_identity=event.id,
                         job_opportunity_id=args.opportunity_id,
+                        interview_record_id=action_input.interview_record_id,
+                        offer_id=action_input.offer_id,
+                        artifact_id=action_input.artifact_id,
+                        reminder_at=action_input.reminder_at,
+                        reminder_channel=action_input.reminder_channel,
                         idempotency_key=action_input.idempotency_key,
                     ),
                 )
@@ -733,18 +1063,50 @@ async def save_artifact(
     def write() -> dict[str, Any]:
         db = SessionLocal()
         try:
-            artifact = artifact_service.save_artifact_explicitly(
-                db,
-                user_pk=user_pk,
-                operation_key=args.operation_key,
-                artifact_kind=args.artifact_kind,
-                version=ArtifactWriteInput(
+            resume_record = None
+            promoted_attachment = None
+            if args.attachment_ref_id is not None:
+                from app.services.chat.attachment_artifact_promotion_service import (
+                    promote_conversation_attachment_to_artifact,
+                )
+
+                promoted_attachment = promote_conversation_attachment_to_artifact(
+                    db,
+                    user_pk=user_pk,
+                    conversation_id=ctx.session_id,
+                    attachment_ref_id=args.attachment_ref_id,
+                    operation_key=args.operation_key,
+                    artifact_kind=args.artifact_kind,
                     title=args.title,
-                    content_text=args.content_text,
+                )
+                artifact = promoted_attachment.artifact
+                resume_record = promoted_attachment.resume_record
+            elif args.artifact_kind.strip().casefold() == "resume":
+                resume_record = resume_artifact_service.create_resume_artifact(
+                    db,
+                    user_pk=user_pk,
+                    operation_key=args.operation_key,
+                    title=args.title,
+                    file_asset_id=None,
+                    raw_text=args.content_text,
+                    make_default=None,
                     content_format=args.content_format,
                     provenance=ArtifactProvenanceInput(source_turn_id=turn_id),
-                ),
-            )
+                )
+                artifact = resume_record.artifact
+            else:
+                artifact = artifact_service.save_artifact_explicitly(
+                    db,
+                    user_pk=user_pk,
+                    operation_key=args.operation_key,
+                    artifact_kind=args.artifact_kind,
+                    version=ArtifactWriteInput(
+                        title=args.title,
+                        content_text=args.content_text,
+                        content_format=args.content_format,
+                        provenance=ArtifactProvenanceInput(source_turn_id=turn_id),
+                    ),
+                )
             payload = _artifact_payload(
                 db,
                 user_pk=user_pk,
@@ -752,7 +1114,18 @@ async def save_artifact(
                 include_archived=False,
             )
             db.commit()
-            return {"artifact": payload}
+            if resume_record is not None:
+                dispatch_parse_after_commit(db, resume_record)
+            result: dict[str, Any] = {"artifact": payload}
+            if promoted_attachment is not None:
+                result["attachment_promotion"] = {
+                    "source_ref_id": promoted_attachment.source_ref_id,
+                    "file_asset_id": promoted_attachment.file_asset_id,
+                    "file_asset_version": promoted_attachment.file_asset_version,
+                    "copied_parsed_text": False,
+                    "external_action_performed": False,
+                }
+            return result
         except Exception as exc:
             db.rollback()
             known = _known_error(exc)
@@ -764,6 +1137,28 @@ async def save_artifact(
 
     return await asyncio.to_thread(write)
 
+
+registry.register(
+    ToolDefinition(
+        name="capture_job_description",
+        description=(
+            "After an explicit user request, preserve one exact completed "
+            "search_jobs detail or read_url result as an immutable JD snapshot "
+            "owned by an existing JobOpportunity."
+        ),
+        args_model=CaptureJobDescriptionArgs,
+        handler=capture_job_description,
+        effect=ToolEffect.INTERNAL_WRITE,
+        task_authorizer=_task_authorizes_capture_job_description,
+        concurrency_safe=False,
+        emoji="🔖",
+        prompt=(
+            "Use only a completed owned search_jobs detail/read_url call id and "
+            "the current Turn user message that explicitly asks to save or update "
+            "the JD. Never copy model-authored JD text into this tool."
+        ),
+    )
+)
 
 registry.register(
     ToolDefinition(
@@ -833,8 +1228,11 @@ registry.register(
     ToolDefinition(
         name="save_artifact",
         description=(
-            "Explicitly save substantial current-Turn content as a durable Artifact; "
-            "ordinary assistant answers are not saved automatically."
+            "Explicitly save substantial current-Turn content, or promote one exact "
+            "current Conversation AttachmentRef, as a durable Artifact. Attachment "
+            "promotion reuses the FileAsset/version without copying parsed text; "
+            "kind=resume starts parsing and only reviewable profile candidates. "
+            "Ordinary answers and attachments are never saved automatically."
         ),
         args_model=SaveArtifactArgs,
         handler=save_artifact,
@@ -847,6 +1245,7 @@ registry.register(
 
 
 __all__ = [
+    "capture_job_description",
     "read_artifacts",
     "read_career_context",
     "record_career_event",

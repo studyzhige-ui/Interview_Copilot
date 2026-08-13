@@ -22,6 +22,7 @@ from app.rag.application.attachment_sources import (
     load_attachment_sources,
     load_attachment_text,
     load_debrief_source_text,
+    visual_page_scope_for_query,
 )
 from app.rag.grounding.builder import GroundingBuilder
 
@@ -255,10 +256,54 @@ def test_read_file_contract_has_no_owner_wide_upload_or_document_selector():
     assert set(ReadFileArgs.model_fields) == {
         "attachment_ref_id",
         "source_ref_id",
-        "path",
+        "tool_call_id",
         "offset",
         "limit",
     }
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        (
+            "请检查第2页的字体",
+            {
+                "full_document": False,
+                "required_page_start": 2,
+                "required_page_end": 2,
+                "scope_source": "explicit_page_interval",
+            },
+        ),
+        (
+            "检查第2-3页排版",
+            {
+                "full_document": False,
+                "required_page_start": 2,
+                "required_page_end": 3,
+                "scope_source": "explicit_page_interval",
+            },
+        ),
+        (
+            "完整检查整份简历所有页面的排版",
+            {
+                "full_document": True,
+                "required_page_start": 1,
+                "scope_source": "explicit_full_document_visual_request",
+            },
+        ),
+    ],
+)
+def test_visual_page_scope_does_not_promote_local_requests(query, expected):
+    assert visual_page_scope_for_query(query) == expected
+
+
+def test_visual_page_scope_without_page_is_explicitly_bounded():
+    scope = visual_page_scope_for_query("这份简历的字体好看吗")
+
+    assert scope["full_document"] is False
+    assert (scope["required_page_start"], scope["required_page_end"]) == (1, 1)
+    assert scope["scope_source"] == "bounded_default_page"
+    assert "only page 1" in scope["scope_warning"]
 
 
 def test_history_selection_is_query_bounded_and_explicit_first(
@@ -312,6 +357,79 @@ def test_history_selection_is_query_bounded_and_explicit_first(
         if chunk.get("attachment_ref_id") == relevant.id
     ]
     assert len(historical_chunks) == 8
+
+
+def test_full_multi_file_review_accounts_for_every_source_and_segment(
+    db_session,
+    monkeypatch,
+):
+    seeded = _seed_attachment(db_session)
+    second, second_document, second_asset = _add_conversation_source(
+        db_session,
+        seeded,
+        suffix="long-comparison",
+        title="long-comparison.txt",
+        content="detailed comparison evidence",
+    )
+    db_session.add_all(
+        [
+            DocumentChunk(
+                id=f"chunk-long-comparison-{index}",
+                document_id=second_document.id,
+                node_id=f"node-long-comparison-{index}",
+                user_id=seeded["user"].id,
+                source_kind="chat_attachment",
+                chunk_index=index,
+                text=f"detailed comparison evidence section {index}",
+                index_status="private",
+            )
+            for index in range(12, 482)
+        ]
+    )
+    db_session.commit()
+    _patch_session(db_session, monkeypatch)
+    second_snapshot = {
+        "attachment_ref_id": second.id,
+        "file_asset_id": second_asset.id,
+        "file_asset_version": second.file_asset_version,
+        "title": second.display_name,
+        "position": second.position,
+        "scope": {
+            "kind": "conversation",
+            "conversation_id": seeded["conversation"].id,
+        },
+    }
+
+    bundle = load_attachment_sources(
+        user_id="attachment-reader",
+        session_id=seeded["conversation"].id,
+        query="请完整审阅并逐份比较全部内容",
+        explicit_attachments=(seeded["snapshot"], second_snapshot),
+    )
+
+    assert bundle.result.diagnostics["full_coverage_requested"] is True
+    assert bundle.result.diagnostics["full_coverage_source_count"] == 2
+    assert bundle.result.diagnostics["full_coverage_complete_in_context"] is False
+    by_id = {item["attachment_ref_id"]: item for item in bundle.documents}
+    assert set(by_id) == {seeded["ref"].id, second.id}
+    assert by_id[seeded["ref"].id]["coverage"]["selected_projection_complete"] is True
+    assert by_id[second.id]["coverage"] == {
+        "projection_chunk_count": 482,
+        "selected_chunk_count": 16,
+        "selected_projection_complete": False,
+        "full_coverage_requested": True,
+        "requires_segmented_read": True,
+    }
+    exact = load_attachment_text(
+        user_id="attachment-reader",
+        session_id=seeded["conversation"].id,
+        attachment_ref_id=second.id,
+    )
+    assert exact["coverage"] == {
+        "projection_chunk_count": 482,
+        "projection_total_chars": len(exact["content"]),
+        "read_mode": "exact_full_projection",
+    }
 
 
 def test_debrief_selects_only_same_record_source_and_supports_typed_full_read(

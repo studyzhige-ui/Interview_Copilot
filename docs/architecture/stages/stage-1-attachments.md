@@ -60,10 +60,12 @@ Context Assembly selects sources at Turn time:
 - chunk and source limits are fixed in code and measured in evaluation.
 
 `read_file` accepts only an exact `attachment_ref_id`, an exact promoted
-`source_ref_id`, or an already persisted allowed path. It validates owner,
-Conversation/InterviewRecord, frozen asset version and current source status.
-Legacy `document_id`, upload-purpose and owner-wide raw-asset selectors are
-forbidden.
+`source_ref_id`, or the `tool_call_id` of a completed Tool result belonging to
+the current owned Turn. It validates owner, Conversation/InterviewRecord,
+frozen asset version and current source status. Large Tool results are read
+back from the canonical redacted `AgentToolCall.result_json`; a worker-local
+path is never the durable or only copy. Legacy `path`, `document_id`,
+upload-purpose and owner-wide raw-asset selectors are forbidden.
 
 ## 5. Debrief promotion and lifecycle
 
@@ -72,24 +74,70 @@ ref into the current owned InterviewRecord. `InterviewSourceRef` is only that
 real relationship; it is not a Project/Memory/Source supertype. Sibling
 Debrief Conversations bound to the same InterviewRecord may then retrieve it.
 Removal revokes the Debrief relationship without rewriting the original
-Conversation History/ref.
+Conversation History/ref. A ready Conversation ref may likewise be explicitly
+revoked from its current Conversation scope; the immutable historical ref is
+retained as a removed/tombstone projection and cannot be selected by later
+Turns.
 
-Conversation deletion removes its local grants and revokes no longer needed
-ingestion tasks after commit. InterviewRecord deletion removes its promoted
-relationships. File bytes are retained or deleted only by the FileAsset
-retention contract; historical messages continue to show frozen identity or a
-tombstone, never silently bind a newer version.
+Promotion into a formal Artifact is a separate explicit command. It rereads an
+owned ready `ConversationAttachmentRef` and freezes the same `file_asset_id`
+and `file_asset_version` on the new `ArtifactVersion`; it does not copy parsed
+text through the model. Promotion to `kind=resume` enters the canonical resume
+Artifact parse/candidate workflow and never silently confirms CareerProfile
+facts or directions.
 
-## 6. UI contract
+Conversation deletion first blocks new admission, fences or safely terminates
+the active Turn, withdraws queued submissions and releases their draft refs,
+then removes its local grants and revokes no longer needed ingestion tasks.
+InterviewRecord deletion removes its promoted relationships. An unresolved
+external call may retain only a bounded receipt-correlation tombstone; a daily
+bounded purge removes it after its owner-specific retention deadline.
+
+Permanent FileAsset deletion is a distinct strongly confirmed command. Its
+preflight lists current Conversation, Debrief and formal Artifact references,
+plus known external transmissions. The command revokes Copilot-controlled
+scope and deletes the controlled blob only after the exact filename is
+confirmed; formal and historical references become tombstones instead of
+silently binding a newer file. It truthfully states that copies already sent to
+an external Provider remain governed by that Provider. Controlled download is
+owner-scoped and streams bytes through the backend without exposing an object
+key, bucket or storage URI.
+
+## 6. Initial format, quality and page-vision contract
+
+The first visual-layout path supports PDF, PNG and JPEG sources after the same
+owner/scope/version checks as text retrieval. The initial bounded limits are:
+
+- source bytes: 25 MiB;
+- PDF pages: 100 per document;
+- consecutive pages inspected by one Tool call: 4;
+- rendered page: 1,600-pixel long edge, 2.5 million pixels and 2 MiB;
+- rendered payload: 7 MiB per Tool call;
+- provider observation text retained in the typed result: 20,000 characters.
+
+`inspect_attachment_pages` is exposed only when the selected primary model and
+Provider transport both support image content. Unsupported model, storage,
+format, rendering or transport returns a typed blocked result; Chat does not
+substitute OCR/text for a visual-layout claim and directs the user to an
+eligible Agent path. Completion of a full visual review requires completed
+receipts covering one exact FileAsset version and a contiguous range of every
+page. These values are the initial Stage 1 resource contract, are versioned by
+tests/telemetry, and may be changed only by a later Stage Spec decision rather
+than silently widened in a handler.
+
+## 7. UI contract
 
 Composer chips represent drafts, retained queued submissions show their frozen
 draft selection, and Conversation/Debrief source lists read server projections.
-States are processing, ready, failed and removed. Failed drafts/refs expose the
-real retry endpoint; a failed claimed ref additionally exposes remove and
-continue. Promotion and Debrief removal are explicit. Client-side filtering or
+States are processing, ready, failed and removed. Source projections expose
+typed parser/OCR/layout warnings and the coverage actually obtained. Failed
+drafts/refs expose the real retry endpoint; a failed claimed ref additionally
+exposes remove and continue. Ready-scope revoke, Debrief promotion/removal,
+Artifact/resume promotion, controlled download and permanent deletion are
+separate explicit controls with distinct impact text. Client-side filtering or
 chip deletion never pretends server scope changed.
 
-## 7. Release gates
+## 8. Release gates
 
 - draft preflight is zero-write and claim-before-History is impossible;
 - claim retry preserves one ref/order/version under concurrent submission;
@@ -98,6 +146,12 @@ chip deletion never pretends server scope changed.
 - remove-and-continue preserves frozen identity and never hides another source;
 - Context selection is owner/scope/relevance bounded with explicit refs first;
 - cross-Conversation and cross-InterviewRecord reads fail closed;
-- `read_file` has no owner-wide bypass;
-- deletion/replacement tests prove historical identity and promotion isolation;
+- `read_file` has no owner-wide or worker-local-path bypass, and oversized
+  Tool-result paging rereads the canonical call row;
+- text and page-vision coverage prove the exact frozen source version, with
+  unsupported vision failing closed;
+- scope revoke, permanent delete, replacement and whole-Conversation delete
+  tests prove historical identity, impact disclosure and promotion isolation;
+- Attachment-to-Artifact/resume promotion preserves exact byte-version
+  provenance and never confirms CareerProfile implicitly;
 - frontend refresh/multi-tab projections match the server.
