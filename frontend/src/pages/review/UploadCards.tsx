@@ -6,6 +6,7 @@ import { toast } from '@/store/uiStore';
 import { startAnalyze, updateInterviewRecord, uploadAudio } from '@/api/interview';
 import { uploadFileAsset } from '@/api/fileAssets';
 import type { AnalysisProgress } from './AnalysisRunner';
+import { JobOpportunitySelect } from '@/pages/career/JobOpportunitySelect';
 
 interface SlotState {
   filename?: string;
@@ -44,6 +45,7 @@ export function UploadCards({ initialTitle, analysis, onStart }: Props) {
   // what 95% of our users record in; users with English interviews flip
   // this once.
   const [language, setLanguage] = useState<'zh' | 'en' | 'auto'>('zh');
+  const [jobOpportunityId, setJobOpportunityId] = useState('');
 
   const audioRef = useRef<HTMLInputElement | null>(null);
   const resumeRef = useRef<HTMLInputElement | null>(null);
@@ -79,6 +81,7 @@ export function UploadCards({ initialTitle, analysis, onStart }: Props) {
         upload_id: slots.audio.uploadId!,
         resume_file_asset_id: slots.resume.uploadId!,
         jd_file_asset_id: slots.jd.uploadId,
+        job_opportunity_id: jobOpportunityId || undefined,
         language,
       });
       onStart({
@@ -187,6 +190,16 @@ export function UploadCards({ initialTitle, analysis, onStart }: Props) {
       <div className="px-4 py-3 rounded-xl bg-primary-50 text-primary-700 text-[13px] flex items-center gap-2.5 mb-4">
         <span className="w-1.5 h-1.5 rounded-full bg-primary-500" />
         需要音视频 + 简历才能开始分析；岗位 JD 可选，提供后分析会更精准。
+      </div>
+
+      <div className="mb-4 rounded-xl border border-stone-200 bg-white p-4">
+        <label className="mb-2 block text-sm font-medium text-stone-700">关联岗位机会（可选）</label>
+        <JobOpportunitySelect
+          value={jobOpportunityId}
+          onChange={setJobOpportunityId}
+          ariaLabel="录音复盘关联岗位"
+          emptyLabel="不关联岗位"
+        />
       </div>
 
       {/* Whisper language picker — sits next to the start button so users

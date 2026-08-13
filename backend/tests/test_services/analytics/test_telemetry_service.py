@@ -25,6 +25,8 @@ async def test_log_interaction_writes_jsonl(tmp_path):
             planner_failed=True,
             fallback_used=True,
             empty_reason="all_below_threshold",
+            cache_read_tokens=40,
+            cache_creation_tokens=10,
         )
 
     assert log_file.exists()
@@ -39,6 +41,8 @@ async def test_log_interaction_writes_jsonl(tmp_path):
     assert data["planner_failed"] is True
     assert data["fallback_used"] is True
     assert data["empty_reason"] == "all_below_threshold"
+    assert data["cache_read_tokens"] == 40
+    assert data["cache_creation_tokens"] == 10
 
 
 @pytest.mark.asyncio

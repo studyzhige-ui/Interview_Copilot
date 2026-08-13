@@ -1,15 +1,28 @@
 """Conversation-summary core shared by chat and agent context compaction."""
 
+import json
 import logging
+import re
 
 from app.core.llm_client_factory import get_internal_llm
-from app.core.tokens import token_count
+from app.core.tokens import token_count, truncate_to_tokens
 from app.prompts.chat import CONVERSATION_COMPACTION_PROMPT
-from app.services.memory._json_payload import _extract_json_payload
 
 logger = logging.getLogger(__name__)
 
 SUMMARY_MAX_TOKENS = 2_500
+
+
+def _extract_json_payload(raw_text: str) -> dict:
+    text = str(raw_text or "").strip()
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"(\{.*\})", text, re.DOTALL)
+        if not match:
+            raise
+        value = json.loads(match.group(1))
+    return value if isinstance(value, dict) else {}
 
 
 async def summarize_conversation(
@@ -35,7 +48,7 @@ async def summarize_conversation(
         logger.error("Conversation summarization failed: %s", exc)
         return ""
     if token_count(new_summary) > SUMMARY_MAX_TOKENS:
-        new_summary = new_summary[:1200]
+        new_summary = truncate_to_tokens(new_summary, SUMMARY_MAX_TOKENS)
     return new_summary
 
 

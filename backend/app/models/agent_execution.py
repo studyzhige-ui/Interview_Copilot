@@ -14,18 +14,6 @@ from app.db.types import UTCDateTime as DateTime
 from app.db.types import utc_now
 
 
-class AgentCheckpoint(Base):
-    __tablename__ = "agent_checkpoints"
-
-    session_id = Column(
-        String, ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True
-    )
-    summary = Column(Text, nullable=False)
-    current_task_id = Column(Integer, nullable=True)
-    next_action = Column(Text, nullable=False)
-    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
-
-
 class AgentToolCall(Base):
     __tablename__ = "agent_tool_calls"
     __table_args__ = (
@@ -50,9 +38,13 @@ class AgentToolCall(Base):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     tool_name = Column(String(128), nullable=False)
+    effect = Column(String(32), nullable=False, default="unknown")
     arguments_json = Column(JSON, nullable=False, default=dict)
     timeout_seconds = Column(Float, nullable=False)
     status = Column(String(16), nullable=False, default="running")
+    dispatch_generation = Column(Integer, nullable=False, default=1)
+    policy_decision = Column(String(16), nullable=False, default="ask")
+    policy_reason = Column(String(128), nullable=False, default="unknown_effect")
     result_json = Column(JSON, nullable=True)
     error = Column(Text, nullable=True)
     started_at = Column(DateTime, nullable=False, default=utc_now)

@@ -16,6 +16,8 @@ import type {
   InterviewQA,
   InterviewRecordDetail,
 } from '@/types/api';
+import { DebriefGuidanceControl } from './DebriefGuidanceControl';
+import { InterviewOpportunityControl } from './InterviewOpportunityControl';
 
 type Tab = 'report' | 'qa' | 'transcript';
 
@@ -93,7 +95,10 @@ export function QAPanel({
     <div className="flex-1 min-w-0 overflow-y-auto p-6">
       <div className="max-w-3xl mx-auto">
         <div className="mb-4">
-          <h2 className="text-xl font-semibold text-stone-800">{detail.title || '未命名'}</h2>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <h2 className="text-xl font-semibold text-stone-800">{detail.title || '未命名'}</h2>
+            <DebriefGuidanceControl interviewId={detail.id} />
+          </div>
           <div className="text-xs text-stone-500 mt-1">
             {formatLocal(detail.created_at)} · {detail.status}
             {detail.tag && (
@@ -102,6 +107,11 @@ export function QAPanel({
               </span>
             )}
           </div>
+          <InterviewOpportunityControl
+            key={`${detail.id}:${detail.job_opportunity_id ?? ''}`}
+            interviewId={detail.id}
+            initialJobOpportunityId={detail.job_opportunity_id}
+          />
         </div>
 
         <ReportTabs tab={tab} onChange={setTab} hasTranscript={!!detail.transcript} />

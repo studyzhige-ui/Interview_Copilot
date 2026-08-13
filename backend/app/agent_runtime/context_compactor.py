@@ -3,9 +3,9 @@
 Used by :class:`app.conversation.agent_strategy.AgentLoopStrategy` to keep
 prompt tokens within the model's context window during multi-turn tool
 execution.  The entry point is :meth:`QueryLoopCompactor.compress`, which runs
-two phases on a copy of the running message list:
+two pressure-gated phases on a copy of the running message list:
 
-  Phase 1  cheap microcompact (runs UNCONDITIONALLY, zero-LLM):
+  Phase 1  cheap microcompact (runs only under context pressure, zero-LLM):
              Delete old compactable tool results, keeping only the most
              recent ``_KEEP_RECENT`` globally.  Persisted (<persisted-output>)
              results are exempt.  Orphaned tool_call ↔ tool_result pairs are
@@ -14,8 +14,10 @@ two phases on a copy of the running message list:
              Summarize the history into one reference-only message when the
              cheap pass can't get under the threshold.
 
-Aligned with Claude Code's microcompact design: an explicit set of
-compactable tool types, position-based keep-last-N, unconditional execution.
+The provider-neutral implementation deliberately does not depend on Claude's
+private cache-editing paths. It preserves semantics when no provider-specific
+context editing exists and only discards replaceable payloads when the active
+request has crossed the configured pressure threshold.
 
 Scope: L2 (a single ReAct execution).  Distinct from
 ``app.services.chat.context_assembly_pipeline`` (L1 multi-turn prompt
@@ -25,6 +27,7 @@ assembly); uses the canonical token counter from
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING
 
@@ -72,32 +75,53 @@ _MAX_COMPACT_FAILURES = 3
 _AUTOCOMPACT_KEEP_LAST = 2
 
 
+def _unwrap_autocompact_summary(content: str) -> str | None:
+    marker = "[Historical Context Summary]"
+    end_marker = "--- END OF CONTEXT SUMMARY ---"
+    if not content.startswith(marker):
+        return None
+    body = content[len(marker) :]
+    if end_marker in body:
+        body = body.split(end_marker, 1)[0]
+    # Remove the fixed reference-data warning between the marker and summary.
+    paragraphs = [part.strip() for part in body.split("\n\n") if part.strip()]
+    return "\n\n".join(paragraphs[1:] if len(paragraphs) > 1 else paragraphs)
+
+
 def _message_text(msg: dict) -> str:
-    """Flatten a message to text for summarization (content + tool-call args)."""
+    """Flatten one message without losing Tool Call/Result correlation."""
     parts = [str(msg.get("content") or "")]
     for tc in msg.get("tool_calls", []):
         if isinstance(tc, dict):
             fn = tc.get("function", {})
-            parts.append(f"[call {fn.get('name', '?')}({fn.get('arguments', '')})]")
+            parts.append(
+                "[tool_call "
+                f"id={tc.get('id', '?')} "
+                f"name={fn.get('name', '?')} "
+                f"input={fn.get('arguments', '')}]"
+            )
+    if msg.get("role") == "tool":
+        parts.insert(0, f"[tool_result id={msg.get('tool_call_id', '?')}]")
     return " ".join(p for p in parts if p)
 
 
-def _estimate_message_tokens(msg: dict) -> int:
-    """Token estimate for one message (content + tool_call arguments)."""
-    parts = [msg.get("content") or ""]
-    for tc in msg.get("tool_calls", []):
-        if isinstance(tc, dict):
-            parts.append(tc.get("function", {}).get("arguments", "") or "")
-    return max(1, token_count("".join(parts)))
+def _request_tokens(messages: list[dict], tool_schemas: list[dict]) -> int:
+    """Estimate the complete provider request, including tools exactly once."""
+    payload = {"tools": tool_schemas, "messages": messages}
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return max(1, token_count(encoded))
 
 
 class QueryLoopCompactor:
-    """Microcompact + LLM autocompact for the L2 agent loop.
+    """Pressure-gated microcompact + autocompact for one Agent loop.
 
-    Cheap microcompact runs unconditionally on every ``compress()`` call (like
-    Claude Code): delete old compactable tool results, keep last N.  LLM
-    autocompact only fires when over the threshold.  All pruning produces NEW
-    lists and dicts — the original messages list is never modified.
+    All pruning produces new lists and dictionaries; the original messages
+    remain the exact in-memory execution history.
     """
 
     def __init__(
@@ -106,6 +130,7 @@ class QueryLoopCompactor:
         user_id: str | None = None,
         *,
         task_anchor: dict | None = None,
+        tool_schemas: list[dict] | None = None,
     ):
         self.profile = profile
         # Owner of the conversation — the autocompact summarizer resolves the
@@ -116,15 +141,18 @@ class QueryLoopCompactor:
         # identical text, and loop-generated user nudges can appear after the
         # real task.  The marker never enters the provider payload.
         self.task_anchor = task_anchor
+        # Concrete schemas live only in the provider ``tools`` parameter.  The
+        # compactor nevertheless has to count them because the provider does.
+        self.tool_schemas = list(tool_schemas or [])
         self.cheap_prepass_threshold = get_cheap_prepass_threshold(profile)
         self.blocking_limit = get_blocking_limit(profile)
         self.has_attempted_reactive_compact: bool = False
         self._consecutive_compact_failures: int = 0
-        # Latest autocompact summary (AGT-7): the strategy exports it via
-        # result.extras so the engine can fold it into the session's
-        # persistent summary — pre-fix it died with the turn and the next
-        # turn re-paid the same summarize call.
-        self.last_summary: str | None = None
+        # Provider usage is authoritative for a completed request.  Until a
+        # fresh usage observation arrives, appended/pruned messages are
+        # measured as a delta from that observed request.
+        self._usage_prompt_tokens: int | None = None
+        self._usage_request_estimate: int | None = None
 
     # ── Proactive blocking-limit guard ───────────────────────────────
 
@@ -136,15 +164,18 @@ class QueryLoopCompactor:
     async def compress(self, messages: list[dict]) -> tuple[list[dict], bool]:
         """Proactive pre-LLM compaction (Phase 1 → Phase 2).
 
-        Phase 1 (cheap microcompact) runs UNCONDITIONALLY — no threshold
-        check.  Phase 2 (LLM autocompact) runs only when over threshold and
-        the circuit breaker is closed.
+        Both phases are skipped while the complete provider request is below
+        the pressure threshold. Once crossed, the cheap pass runs first and
+        the LLM pass is used only if the request remains over budget.
 
         Returns ``(messages, at_blocking_limit)``.
         """
-        # Phase 1 — unconditional cheap microcompact.
-        messages = self._microcompact(messages)
+        total = self._measure_tokens(messages)
+        if not self.should_compact(total):
+            return messages, self.is_at_blocking_limit(total)
 
+        # Phase 1 — pressure-gated cheap microcompact.
+        messages = self._microcompact(messages)
         total = self._measure_tokens(messages)
         if not self.should_compact(total):
             return messages, self.is_at_blocking_limit(total)
@@ -158,7 +189,7 @@ class QueryLoopCompactor:
 
         return messages, self.is_at_blocking_limit(total)
 
-    # ── Phase 1: cheap microcompact (unconditional) ──────────────────
+    # ── Phase 1: cheap microcompact (pressure-gated) ─────────────────
 
     def _microcompact(self, messages: list[dict]) -> list[dict]:
         """Delete old compactable tool results, keep last N globally.
@@ -210,9 +241,28 @@ class QueryLoopCompactor:
         query, then replaces older history/work with a single LLM summary,
         keeping the last ``keep_last`` post-task messages verbatim.
         """
-        head_end = 0
-        while head_end < len(messages) and messages[head_end].get("role") == "system":
-            head_end += 1
+        # Repair any pre-existing orphan before choosing the summary boundary;
+        # neither the summary input nor the retained tail may contain half of a
+        # Tool Call/Result pair.
+        messages = self._sanitize_tool_pairs(messages)
+        original_messages = messages
+        stable_head: list[dict] = []
+        previous_summaries: list[str] = []
+        source_head_end = 0
+        while (
+            source_head_end < len(messages)
+            and messages[source_head_end].get("role") == "system"
+        ):
+            message = messages[source_head_end]
+            previous = _unwrap_autocompact_summary(str(message.get("content") or ""))
+            if previous is None:
+                stable_head.append(message)
+            elif previous:
+                previous_summaries.append(previous)
+            source_head_end += 1
+        if previous_summaries:
+            messages = stable_head + messages[source_head_end:]
+        head_end = len(stable_head)
         task_index = next(
             (
                 index
@@ -235,7 +285,11 @@ class QueryLoopCompactor:
             )
 
         post_task_start = task_index + 1 if task_index is not None else head_end
-        tail_start = max(post_task_start, len(messages) - keep_last)
+        tail_start = self._pair_safe_tail_start(
+            messages,
+            max(post_task_start, len(messages) - keep_last),
+            minimum=post_task_start,
+        )
         tail = messages[tail_start:]
         to_summarize = [
             message
@@ -243,20 +297,26 @@ class QueryLoopCompactor:
             if index >= head_end and index != task_index and index < tail_start
         ]
         if not to_summarize:
-            return messages
+            return original_messages
         conversation = "\n\n".join(
             f"{m.get('role', '?')}: {_message_text(m)}" for m in to_summarize
         )
 
         from app.services.chat.conversation_summarizer import summarize_conversation
 
-        summary = await summarize_conversation("", conversation, user_id=self.user_id)
+        summary = await summarize_conversation(
+            "\n\n".join(previous_summaries),
+            conversation,
+            user_id=self.user_id,
+        )
         if not summary:
-            return messages
-        self.last_summary = summary
+            return original_messages
 
+        # A compaction summary is a lossy Conversation projection, not a new
+        # system rule or a Runtime checkpoint. Keeping it in the chronological
+        # message stream prevents it from gaining instruction authority.
         summary_msg = {
-            "role": "system",
+            "role": "user",
             "content": AUTOCOMPACT_SUMMARY_WRAPPER.format(summary=summary),
         }
         logger.info(
@@ -271,7 +331,51 @@ class QueryLoopCompactor:
         return prompt_tokens >= self.cheap_prepass_threshold
 
     def _measure_tokens(self, messages: list[dict]) -> int:
-        return sum(_estimate_message_tokens(m) for m in messages)
+        fresh_estimate = _request_tokens(messages, self.tool_schemas)
+        if self._usage_prompt_tokens is None or self._usage_request_estimate is None:
+            return fresh_estimate
+        delta = fresh_estimate - self._usage_request_estimate
+        return max(1, self._usage_prompt_tokens + delta)
+
+    def observe_provider_prompt_tokens(
+        self,
+        prompt_tokens: int,
+        messages: list[dict],
+    ) -> None:
+        """Anchor future measurements to provider usage plus request delta."""
+        if prompt_tokens <= 0:
+            return
+        self._usage_prompt_tokens = int(prompt_tokens)
+        self._usage_request_estimate = _request_tokens(messages, self.tool_schemas)
+
+    @staticmethod
+    def _pair_safe_tail_start(
+        messages: list[dict],
+        tail_start: int,
+        *,
+        minimum: int,
+    ) -> int:
+        """Move a tail boundary past complete Tool pairs until none crosses."""
+        call_positions: dict[str, int] = {}
+        result_positions: dict[str, int] = {}
+        for index, message in enumerate(messages):
+            if message.get("role") == "assistant":
+                for tool_call in message.get("tool_calls", []):
+                    if isinstance(tool_call, dict) and tool_call.get("id"):
+                        call_positions[str(tool_call["id"])] = index
+            elif message.get("role") == "tool" and message.get("tool_call_id"):
+                result_positions[str(message["tool_call_id"])] = index
+
+        adjusted = max(minimum, tail_start)
+        while True:
+            crossings = [
+                result_positions[call_id] + 1
+                for call_id, call_index in call_positions.items()
+                if call_index < adjusted <= result_positions.get(call_id, -1)
+            ]
+            if not crossings:
+                return adjusted
+            adjusted = max(adjusted, max(crossings))
 
     # ── Orphan tool-pair sanitization ────────────────────────────────
 

@@ -47,7 +47,6 @@ async def test_planner_builds_bilingual_search_intent(monkeypatch):
                     "required_terms": ["Redis"],
                 }
             ],
-            "load_strategy": False,
         }
     )
     _patch(monkeypatch, fake)
@@ -93,7 +92,6 @@ async def test_direct_chat_clears_stray_intents(monkeypatch):
         {
             "needs_knowledge_retrieval": False,
             "intents": [{"query": "stray"}],
-            "load_strategy": False,
         }
     )
     _patch(monkeypatch, fake)
@@ -153,26 +151,6 @@ async def test_intents_are_capped_by_shared_policy(monkeypatch):
     _patch(monkeypatch, fake)
     plan = await planner.plan_query(user_message="Compare them", recent_turns=[])
     assert len(plan.intents) == maximum
-
-
-@pytest.mark.asyncio
-async def test_memory_off_removes_memory_slot_and_load(monkeypatch):
-    fake = _LLM(
-        {
-            "needs_knowledge_retrieval": False,
-            "intents": [],
-            "load_strategy": True,
-        }
-    )
-    _patch(monkeypatch, fake)
-    plan = await planner.plan_query(
-        user_message="hello",
-        recent_turns=[],
-        learning_strategy_description="private strategy",
-        global_memory_on=False,
-    )
-    assert plan.load_strategy is False
-    assert "private strategy" not in fake.calls[0][0]
 
 
 @pytest.mark.asyncio

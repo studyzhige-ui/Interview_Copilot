@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "interview-copilot"
 version = "0.1.0"
-description = "AI interview copilot — mock interviews, review analysis, RAG knowledge base, and long-term memory"
+description = "Cloud-first career copilot for job search, interviews, artifacts, and agent workflows"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -34,6 +34,7 @@ dependencies = [
     "slowapi==0.1.10",
     # LLM and remote RAG providers
     "openai==2.53.0",
+    "anthropic==0.102.0",
     "tiktoken==0.13.0",
     "langsmith==0.10.17",
     "llama-index-core==0.14.23",

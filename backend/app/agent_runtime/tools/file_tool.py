@@ -1,6 +1,6 @@
 """File I/O tools: read_file and write_file.
 
-read_file  — Read validated documents, uploads, or persisted tool outputs.
+read_file  — Read a validated Conversation AttachmentRef or persisted output.
 write_file — Export structured output (study plans, reports) as downloadable files.
 """
 
@@ -11,7 +11,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.agent_runtime.tool_registry import AgentToolContext, ToolEntry, registry
+from app.agent_runtime.tool_registry import AgentToolContext, ToolDefinition, registry
+from app.agent_runtime.tool_policy import ToolEffect
 
 logger = logging.getLogger(__name__)
 
@@ -26,24 +27,23 @@ _MAX_READ_LIMIT = 50_000
 
 
 class ReadFileArgs(BaseModel):
-    document_id: str = Field(
+    attachment_ref_id: str = Field(
         default="",
         description=(
-            "Validated document ID from the [Attachments] manifest or another "
-            "real tool result. Use this for files attached to the conversation."
+            "Validated AttachmentRef ID from the [Attachments] manifest. "
+            "Use this for files attached to the current conversation."
         ),
     )
-    upload_id: str = Field(
+    source_ref_id: str = Field(
         default="",
-        description="Specific upload ID to read. Leave empty to read the latest file of a given purpose.",
-    )
-    purpose: str = Field(
-        default="",
-        description="File purpose filter: 'jd', 'agent_output', or empty for any. For the candidate's RESUME prefer the read_resume tool (structured sections); use read_file(purpose='resume') only for raw ad-hoc resume uploads.",
+        description=(
+            "Validated InterviewSourceRef ID from a Debrief Project [Attachments] "
+            "manifest. Use only inside that record's debrief conversation."
+        ),
     )
     path: str = Field(
         default="",
-        description="Path to a large persisted tool output (shown inside a <persisted-output> block) to read back. Takes precedence over upload_id/purpose.",
+        description="Path to a large persisted tool output (shown inside a <persisted-output> block) to read back. Takes precedence over attachment_ref_id.",
     )
     offset: int = Field(
         default=0,
@@ -83,121 +83,53 @@ def _read_file_sync(args: ReadFileArgs, ctx: AgentToolContext) -> dict[str, Any]
         content = target.read_text(encoding="utf-8", errors="replace")
         return _paginate(content, args, {"path": str(target)})
 
-    # Branch 2: read a server-validated knowledge/attachment document. The
-    # conversation check is enforced again here even though the manifest was
-    # owner-scoped, so a model-generated id cannot cross session boundaries.
-    from app.db.database import SessionLocal
-    from app.services.uploads.file_asset_service import (
-        READABLE_UPLOAD_STATUSES,
-        get_owned_file_asset,
-        list_user_file_assets,
+    # Branch 2: delegate the exact AttachmentRef to the shared Source Resolver.
+    # There is deliberately no owner-wide upload/document fallback: Resume,
+    # Artifact, and other product assets keep their own typed read tools.
+    from app.rag.application.attachment_sources import (
+        AttachmentParsingPendingError,
+        AttachmentSourceUnavailableError,
+        load_debrief_source_text,
+        load_attachment_text,
     )
 
-    db = SessionLocal()
     try:
-        if args.document_id:
-            from app.core.user_identity import resolve_user_pk
-            from app.models.knowledge import KnowledgeDocument
-            from app.rag.document_chunk_service import read_indexable_chunks
-
-            user_pk = resolve_user_pk(db, ctx.user_id)
-            document = (
-                db.query(KnowledgeDocument)
-                .filter(
-                    KnowledgeDocument.id == args.document_id,
-                    KnowledgeDocument.user_id == user_pk,
-                    KnowledgeDocument.deleted_at.is_(None),
-                )
-                .first()
-            )
-            if (
-                document is None
-                or (
-                    document.source_kind == "chat_attachment"
-                    and document.conversation_id != ctx.session_id
-                )
-            ):
-                return {
-                    "error": "Document not found or not accessible",
-                    "document_id": args.document_id,
-                }
-            if document.status != "ready":
-                return {
-                    "error": f"Document is not readable (status: {document.status})",
-                    "document_id": document.id,
-                }
-            rows = read_indexable_chunks(db, document.id)
-            content = "\n\n".join(row.text for row in rows if row.text)
-            if not content:
-                content = document.content_text or ""
-            return _paginate(
-                content,
-                args,
-                {
-                    "document_id": document.id,
-                    "filename": (
-                        document.upload.original_filename
-                        if document.upload is not None
-                        else ""
-                    ),
-                    "title": document.title,
-                    "source_kind": document.source_kind,
-                    "chunk_count": len(rows),
-                    "source": {
-                        "type": "knowledge_document",
-                        "document_id": document.id,
-                        "conversation_id": document.conversation_id,
-                    },
-                },
-            )
-
-        # Branch 3: read a user-uploaded file by id / purpose.
-        if args.upload_id:
-            upload = get_owned_file_asset(
-                db,
-                file_asset_id=args.upload_id,
+        if args.source_ref_id:
+            loaded = load_debrief_source_text(
                 user_id=ctx.user_id,
+                session_id=ctx.session_id,
+                source_ref_id=args.source_ref_id,
+            )
+        elif args.attachment_ref_id:
+            loaded = load_attachment_text(
+                user_id=ctx.user_id,
+                session_id=ctx.session_id,
+                attachment_ref_id=args.attachment_ref_id,
             )
         else:
-            assets = list_user_file_assets(
-                db,
-                user_id=ctx.user_id,
-                purpose=args.purpose or None,
-            )
-            # Most recent VERIFIED file (desc order) — a dangling
-            # pending_upload row must not shadow the real latest file.
-            upload = next(
-                (a for a in assets if a.upload_status in READABLE_UPLOAD_STATUSES),
-                None,
-            )
-
-        if upload is None:
             return {
-                "error": "No file found",
-                "purpose": args.purpose,
-                "upload_id": args.upload_id,
+                "error": (
+                    "attachment_ref_id, source_ref_id, or persisted path is required"
+                )
             }
-        if upload.upload_status not in READABLE_UPLOAD_STATUSES:
-            # pending_upload = never verified (bytes may not even exist);
-            # failed = rejected by validation; deleted = gone. Serving any
-            # of these would hand the agent unvalidated or phantom content.
-            return {
-                "error": f"File is not readable (status: {upload.upload_status})",
-                "upload_id": upload.id,
-            }
-
-        content = _read_upload_content(upload)
+        content = str(loaded.pop("content"))
         return _paginate(
             content,
             args,
-            {
-                "upload_id": upload.id,
-                "filename": upload.original_filename or "",
-                "purpose": upload.purpose or "",
-            },
+            loaded,
         )
-    finally:
-        db.close()
+    except AttachmentParsingPendingError as exc:
+        return {
+            "error": "attachment_parsing_pending",
+            "attachment_ref_ids": list(exc.attachment_ref_ids),
+        }
+    except AttachmentSourceUnavailableError as exc:
+        return {
+            "error": "attachment_unavailable",
+            "attachment_ref_id": exc.attachment_ref_id,
+            "reason": exc.reason,
+            "status": exc.status,
+        }
 
 
 def _paginate(content: str, args: ReadFileArgs, base: dict[str, Any]) -> dict[str, Any]:
@@ -223,45 +155,6 @@ def _paginate(content: str, args: ReadFileArgs, base: dict[str, Any]) -> dict[st
         "next_offset": next_offset if has_more else None,
         "truncated": has_more,
     }
-
-
-def _read_upload_content(upload) -> str:
-    """Read the text content of an uploaded file from storage."""
-    storage_uri = upload.storage_uri or ""
-
-    if storage_uri.startswith("local://"):
-        try:
-            from app.core.storage import parse_local_uri
-
-            path = parse_local_uri(storage_uri)
-            if path.is_file():
-                return path.read_text(encoding="utf-8", errors="replace")
-        except (ValueError, OSError) as exc:
-            logger.warning("Failed to read local URI %s: %s", storage_uri, exc)
-        return "[File content unavailable]"
-
-    if storage_uri.startswith("s3://"):
-        try:
-            from app.core.storage import parse_s3_uri, s3_client
-
-            bucket, key = parse_s3_uri(storage_uri)
-            response = s3_client.get_object(Bucket=bucket, Key=key)
-            raw = response["Body"].read()
-            return raw.decode("utf-8", errors="replace")
-        except Exception as exc:
-            logger.warning("Failed to read from S3 %s: %s", storage_uri, exc)
-            return f"[Error reading file: {exc}]"
-
-    try:
-        from pathlib import Path
-
-        path = Path(storage_uri)
-        if path.exists():
-            return path.read_text(encoding="utf-8", errors="replace")
-    except Exception as exc:
-        logger.warning("Failed to read local file %s: %s", storage_uri, exc)
-
-    return "[File content unavailable]"
 
 
 # ── write_file ───────────────────────────────────────────────────────────
@@ -331,8 +224,8 @@ def _write_file_sync(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, An
         }
     except Exception as exc:
         db.rollback()
-        logger.error("write_file failed: %s", exc)
-        return {"error": f"Failed to write file: {exc}"}
+        logger.error("write_file failed (%s)", type(exc).__name__)
+        return {"error": "Failed to write file"}
     finally:
         db.close()
 
@@ -345,15 +238,16 @@ def _write_file_sync(args: WriteFileArgs, ctx: AgentToolContext) -> dict[str, An
 # The tool_result_storage module also lists read_file in _NEVER_PERSIST_TOOLS
 # as a second layer of protection.
 registry.register(
-    ToolEntry(
+    ToolDefinition(
         name="read_file",
         description=(
-            "Read a conversation attachment or user-uploaded file with paging. "
-            "For an attached file, pass its validated document_id from the "
-            "[Attachments] manifest; otherwise use upload_id or purpose."
+            "Read a conversation attachment or persisted tool output with paging. "
+            "For an attached file, pass its validated attachment_ref_id from "
+            "the [Attachments] manifest."
         ),
         args_model=ReadFileArgs,
         handler=_read_file_handler,
+        effect=ToolEffect.READ,
         concurrency_safe=True,
         max_result_chars=200_000,
         emoji="📂",
@@ -361,11 +255,12 @@ registry.register(
 )
 
 registry.register(
-    ToolEntry(
+    ToolDefinition(
         name="write_file",
         description="Export structured output as a downloadable file. Use for study plans, analysis reports, preparation guides, learning notes, etc. Supports Markdown and plain text.",
         args_model=WriteFileArgs,
         handler=_write_file_handler,
+        effect=ToolEffect.INTERNAL_WRITE,
         max_result_chars=2000,
         emoji="💾",
     )

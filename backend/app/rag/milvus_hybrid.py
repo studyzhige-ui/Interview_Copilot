@@ -1,5 +1,5 @@
-"""Unified Milvus 2.6 native dense + server-side BM25 hybrid for ALL retrieval
-collections (knowledge, resume, memory-ability).
+"""Unified Milvus 2.6 native dense + server-side BM25 hybrid for retrieval
+collections such as knowledge and resume.
 
 ONE config-driven implementation (raw pymilvus, MilvusClient). Each collection
 declares only its name + its extra scalar fields; everything else is shared:
@@ -63,7 +63,7 @@ class HybridCollection:
         return [_TEXT_FIELD, "user_id", *[s.name for s in self.scalars]]
 
 
-# ── The three retrieval collections — identical tenant model (user_id INT64) ──
+# ── Retrieval collections — identical tenant model (user_id INT64) ─────────
 KNOWLEDGE = HybridCollection(
     # The configured name is a logical base.  The physical collection is tied
     # to the complete embedding/chunk/index identity, preventing same-dimension
@@ -79,16 +79,6 @@ RESUME = HybridCollection(
         _Scalar("title", max_length=_TEXT_MAX),
     ),
 )
-ABILITY = HybridCollection(
-    name=settings.MEMORY_ABILITY_MILVUS_COLLECTION,
-    scalars=(
-        _Scalar("topic", max_length=_TEXT_MAX),
-        _Scalar("skill_type"),
-        _Scalar("mastery_level"),
-        _Scalar("summary", nullable=True, max_length=_TEXT_MAX),
-    ),
-)
-
 _client: Any = None
 _client_lock = Lock()
 _ensured: set[str] = set()
@@ -420,7 +410,6 @@ __all__ = [
     "HybridCollection",
     "KNOWLEDGE",
     "RESUME",
-    "ABILITY",
     "ensure_collection",
     "validate_existing_dims",
     "insert",

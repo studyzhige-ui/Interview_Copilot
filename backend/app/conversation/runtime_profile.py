@@ -1,7 +1,7 @@
 """Product runtime profiles layered on top of the shared conversation kernel.
 
-The kernel owns transport, memory, context budgeting, persistence, and strategy
-execution.  A runtime profile owns product-specific context and mode policy.
+The kernel owns transport, context budgeting, persistence, and strategy
+execution. A runtime profile owns product-specific context and mode policy.
 This keeps the career control plane independent from debrief-only record data
 without duplicating the reliable low-level conversation machinery.
 """

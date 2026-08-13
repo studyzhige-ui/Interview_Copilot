@@ -12,6 +12,7 @@ from app.core.internal_models import (
 )
 from app.core.llm_client_factory import (
     _serialize_profile,
+    get_async_anthropic_client,
     get_async_openai_client,
     profile_ready,
     validate_role_update,
@@ -206,17 +207,24 @@ async def _ping_one(profile_id: str, user_id: str | None = None) -> dict:
             "error": f"未配置 {profile.api_key_env}",
         }
     try:
-        client = get_async_openai_client(profile, user_id=user_id)
-        # 1-token completion — cheapest reachable signal.
-        await asyncio.wait_for(
-            client.chat.completions.create(
+        if profile.provider == "anthropic":
+            client = get_async_anthropic_client(profile, user_id=user_id)
+            call = client.messages.create(
                 model=profile.model,
                 messages=[{"role": "user", "content": "ping"}],
                 max_tokens=1,
                 temperature=0,
-            ),
-            timeout=10.0,
-        )
+            )
+        else:
+            client = get_async_openai_client(profile, user_id=user_id)
+            call = client.chat.completions.create(
+                model=profile.model,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1,
+                temperature=0,
+            )
+        # 1-token completion — cheapest reachable signal.
+        await asyncio.wait_for(call, timeout=10.0)
         return {
             "profile_id": profile_id,
             "ok": True,

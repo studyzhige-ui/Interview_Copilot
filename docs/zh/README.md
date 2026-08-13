@@ -1,7 +1,8 @@
 # Interview Copilot
 
-Interview Copilot 是一个 AI 面试训练与复盘平台，包含模拟面试、录音分析、
-简历/JD 检索、长期学习记忆、用户 Skill 和 MCP 工具。
+Interview Copilot 是一个 Cloud-first 的职业发展 Copilot，包含求职进展管理、
+模拟面试、录音分析、简历/JD 检索、耐久 Artifact、用户 Skill 和 MCP 工具。
+Long-term Agent Memory 仍受评估门禁控制；当前运行时不生成或召回它。
 
 项目采用一套共享核心、两个发行版本：
 

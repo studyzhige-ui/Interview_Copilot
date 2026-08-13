@@ -9,8 +9,8 @@ Coverage:
     the alembic migrations build.
   * Round-trip insert + query through an in-memory SQLite session for the
     core entities (User, Conversation+ConversationMessage, InterviewRecord +
-    InterviewQA, FileAsset, KnowledgeDocument, MemoryDocument /
-    MemoryAbilityState / MemoryAuditEntry (v3 memory),
+    InterviewQA, FileAsset, KnowledgeDocument, migration-only legacy Memory
+    rows,
     MockInterviewRuntime, UserModelCredential, ResumeSection).
 """
 
@@ -43,7 +43,7 @@ def test_all_expected_tables_registered(test_engine):
         "conversations",
         "conversation_messages",
         "resumes",
-        # Current memory document, ability-state, and audit stores.
+        # Legacy tables retained for Stage 2 migration.
         "memory_documents",
         "memory_ability_states",
         "memory_audit_logs",
@@ -317,8 +317,7 @@ def test_knowledge_document_default_values(db_session):
 
 
 def _make_user(db_session, username: str = "mem_user") -> int:
-    """Seed a users row and return its integer PK (v3 memory tables key on
-    ``users.id``)."""
+    """Seed a user row for legacy-table compatibility tests."""
     from app.models.user import User
 
     u = User(username=username, hashed_password="x")
@@ -327,8 +326,8 @@ def _make_user(db_session, username: str = "mem_user") -> int:
     return u.id
 
 
-def test_memory_document_defaults_and_unique_per_doc_type(db_session):
-    """v3 memory: ``memory_documents`` has one row per (user_id, doc_type)
+def test_legacy_memory_document_defaults_and_unique_per_doc_type(db_session):
+    """The migration source has one row per (user_id, doc_type)
     with denormalised ``one_liner``; the unique constraint blocks a second
     row of the same doc_type for the same user."""
     from app.models.memory_document import MemoryDocument
@@ -357,7 +356,7 @@ def test_memory_document_defaults_and_unique_per_doc_type(db_session):
     db_session.rollback()
 
 
-def test_memory_ability_state_defaults_and_active_uniqueness(db_session):
+def test_legacy_ability_state_defaults_and_active_uniqueness(db_session):
     """``memory_ability_states`` defaults ``mastery_level='improving'`` and
     enforces ONE ACTIVE row per (user, topic, skill_type) via the partial
     unique index (archived rows are excluded, so re-adding after archive is
@@ -426,10 +425,9 @@ def test_memory_ability_state_defaults_and_active_uniqueness(db_session):
     )
 
 
-def test_memory_audit_entry_round_trip_and_unique_idem_key(db_session):
-    """``memory_audit_logs`` is append-only; the ``idempotency_key`` index is
-    unique so a retried job can't double-write an audit row (NULL keys stay
-    distinct)."""
+def test_legacy_memory_audit_round_trip_and_unique_idem_key(db_session):
+    """Migration provenance keeps its historical idempotency constraint so a
+    retried legacy job cannot have produced duplicate audit rows."""
     from app.models.memory_audit_logs import MemoryAuditEntry
     from sqlalchemy.exc import IntegrityError
 

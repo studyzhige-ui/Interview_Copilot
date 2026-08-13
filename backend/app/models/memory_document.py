@@ -1,25 +1,8 @@
-"""``memory_documents``: global long-term user state as markdown documents.
+"""Legacy mixed-memory documents retained only for Stage 2 migration.
 
-One row per ``(user, doc_type)``. Holds the two *global* memory documents
-(as opposed to per-topic ability states, which live in
-``memory_ability_states``):
-
-* ``user_profile``     — background, goals, preferences, expression style,
-                         stable behavioural tendencies.
-* ``learning_strategy``— long-term training / review / answering strategy.
-
-This table supersedes the old split of ``users.user_profile_doc`` (column),
-``strategy_docs`` and ``habit_docs`` (tables): ``habit`` is no longer its own
-type — expression/behaviour traits fold into ``user_profile`` and training
-methods fold into ``learning_strategy``.
-
-The ``body`` is a markdown blob patched in place via the exact-line patch
-protocol (see ``app.services.memory._doc_patch_protocol``); ``one_liner`` is a
-denormalised preview surfaced in the always-loaded universal pass so the
-prompt doesn't have to carry the full body every turn.
-
-``user_id`` is the stable ``users.id`` (the runtime threads a username and the
-service resolves it via ``app.core.user_identity.resolve_user_pk``).
+Runtime writers, HTTP mutation APIs, Context assembly and Recall must not use
+this model. Rows need classification into their canonical owner before any
+content may become CareerProfile, CopilotPreference or Long-term Agent Memory.
 """
 
 from __future__ import annotations
@@ -39,9 +22,8 @@ from app.db.database import Base
 from app.db.types import UTCDateTime as DateTime
 from app.db.types import utc_now
 
-# The only two document types Memory keeps as global state. ``knowledge`` and
-# ``habit`` from the old design are gone — knowledge/ability now lives in
-# ``memory_ability_states``; habit folds into the two below.
+# Values present in the legacy table; they are migration classifiers, not
+# canonical owners in the target architecture.
 DOC_TYPES = ("user_profile", "learning_strategy")
 
 
@@ -65,13 +47,11 @@ class MemoryDocument(Base):
     )
     # user_profile / learning_strategy (see DOC_TYPES).
     doc_type = Column(String, nullable=False)
-    # Markdown body, patched in place. Empty string for a freshly-created doc.
+    # Legacy markdown payload.
     body = Column(Text, nullable=False, default="")
-    # Denormalised preview for the always-loaded universal pass; recomputed on
-    # every body write.
+    # Legacy denormalised preview.
     one_liner = Column(String, nullable=False, default="")
-    # When this document's subject was last discussed (lags — only bumped on
-    # extraction, not every turn).
+    # Last discussion timestamp recorded by the retired producer.
     last_discussed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(

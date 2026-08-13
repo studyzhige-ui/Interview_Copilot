@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import field_validator, model_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
@@ -46,13 +46,6 @@ class Settings(BaseSettings):
     MILVUS_HNSW_M: int = 16
     MILVUS_HNSW_EF_CONSTRUCTION: int = 200
     MILVUS_HNSW_EF_SEARCH: int = 64
-    # MEMORY-V3 ability-state hybrid collection — a SEPARATE Milvus collection
-    # from the knowledge RAG one, populated via outbox index jobs and queried
-    # for topic-relevant ability states (parallel to, but distinct from,
-    # knowledge retrieval).
-    MEMORY_ABILITY_MILVUS_COLLECTION: str = "interview_copilot_memory_ability"
-    MEMORY_ABILITY_TOP_K: int = 5
-
     # Hugging Face, model, and framework caches
     CACHE_DIR: str = ""
 
@@ -130,6 +123,10 @@ class Settings(BaseSettings):
     AGENT_TOOL_SCHEMA_STRICT: bool = True
     AGENT_MAX_TOOL_ARG_CHARS: int = 4000
     LLM_REQUEST_TIMEOUT_SECONDS: int = 60
+    # Anthropic native Messages prompt caching. Disabling it changes only
+    # latency/cost; the adapter still sends the complete semantic request.
+    ANTHROPIC_PROMPT_CACHE_ENABLED: bool = True
+    ANTHROPIC_PROMPT_CACHE_TTL: str = "5m"
     TURN_HEARTBEAT_SECONDS: int = 10
     TURN_STALE_SECONDS: int = 60
     # Stage A — tool-result offload thresholds.
@@ -178,10 +175,6 @@ class Settings(BaseSettings):
     # with do_ocr=False so text PDFs still parse instead of failing on a missing
     # engine. Set False to disable OCR globally even where the engine is present.
     RAG_OCR_ENABLED: bool = True
-    # Memory v2 settings (MEMORY_MILVUS_COLLECTION / MEMORY_*_TOP_K /
-    # MEMORY_BACKFILL_ON_STARTUP) were removed in the audit cleanup —
-    # the v3 memory architecture uses markdown docs, not vectors. See
-    # ``app/services/memory/__init__.py`` for the live entry points.
     RESUME_MILVUS_COLLECTION: str = "interview_copilot_resume"
     TTS_DEFAULT_VOICE: str = "zh-CN-YunxiNeural"
     LEVER_API_BASE: str = "https://api.lever.co/v0"
@@ -236,6 +229,16 @@ class Settings(BaseSettings):
     SMTP_USE_TLS: bool = True
     EMAIL_CODE_TTL_SECONDS: int = 600  # 10 minutes
     EMAIL_CODE_RESEND_COOLDOWN: int = 60  # min seconds between resend
+
+    # Gmail's first real cloud Connector.  The adapter is callable only when
+    # all four OAuth/product-return values and SECRET_KEY are configured.
+    # Partial settings fail closed and never register a model-visible Tool.
+    GMAIL_GOOGLE_OAUTH_CLIENT_ID: str = ""
+    GMAIL_GOOGLE_OAUTH_CLIENT_SECRET: SecretStr = SecretStr("")
+    GMAIL_GOOGLE_OAUTH_REDIRECT_URI: str = ""
+    GMAIL_OAUTH_PRODUCT_RETURN_URI: str = ""
+    GMAIL_OAUTH_STATE_TTL_SECONDS: int = 600
+    GMAIL_PROVIDER_TIMEOUT_SECONDS: float = 15.0
 
     # S3-compatible object storage. Defaults are for local MinIO development.
     AWS_ACCESS_KEY_ID: str = "minioadmin"
@@ -332,6 +335,12 @@ class Settings(BaseSettings):
             raise ValueError("RAG_MIN_SCORE must be between 0 and 1")
         if self.RAG_SCORE_MARGIN is not None and not 0 <= self.RAG_SCORE_MARGIN <= 1:
             raise ValueError("RAG_SCORE_MARGIN must be between 0 and 1")
+        if not 60 <= self.GMAIL_OAUTH_STATE_TTL_SECONDS <= 900:
+            raise ValueError("GMAIL_OAUTH_STATE_TTL_SECONDS must be between 60 and 900")
+        if not 1 <= self.GMAIL_PROVIDER_TIMEOUT_SECONDS <= 60:
+            raise ValueError("GMAIL_PROVIDER_TIMEOUT_SECONDS must be between 1 and 60")
+        if self.ANTHROPIC_PROMPT_CACHE_TTL not in {"5m", "1h"}:
+            raise ValueError("ANTHROPIC_PROMPT_CACHE_TTL must be 5m or 1h")
         return self
 
 

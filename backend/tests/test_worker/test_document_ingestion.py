@@ -21,6 +21,22 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 
+@pytest.fixture(autouse=True)
+def _skip_worker_runtime_warmup(monkeypatch):
+    """Keep task business tests isolated from Celery's heavyweight pre-run hook.
+
+    ``Task.apply`` intentionally emits ``task_prerun``.  In a real pipeline
+    worker that signal warms the embedding runtime before ingestion, but these
+    tests replace ``ingest_document`` and only exercise task state/retry
+    semantics.  Loading the real HuggingFace/Milvus runtime here is both
+    unrelated and capable of blocking an otherwise in-memory unit test.  The
+    signal-to-runtime mapping is covered separately by ``test_celery_routes``.
+    """
+    import app.rag.runtime as rag_runtime
+
+    monkeypatch.setattr(rag_runtime, "ensure_rag_runtime", lambda **kwargs: None)
+
+
 @pytest.fixture
 def worker_db(monkeypatch) -> Iterator[sessionmaker]:
     """Isolated in-memory DB whose sessionmaker replaces the worker's
@@ -43,7 +59,13 @@ def worker_db(monkeypatch) -> Iterator[sessionmaker]:
         engine.dispose()
 
 
-def _seed_doc(maker: sessionmaker, *, filename: str, status: str = "processing") -> str:
+def _seed_doc(
+    maker: sessionmaker,
+    *,
+    filename: str,
+    status: str = "processing",
+    source_kind: str = "user_upload",
+) -> str:
     db: Session = maker()
     try:
         asset = FileAsset(
@@ -60,7 +82,7 @@ def _seed_doc(maker: sessionmaker, *, filename: str, status: str = "processing")
             user_id=1,
             file_asset_id="fa_w1",
             title="t",
-            source_kind="user_upload",
+            source_kind=source_kind,
             status=status,
             storage_uri=asset.storage_uri,
             object_key=asset.object_key,
@@ -204,6 +226,49 @@ def test_worker_keeps_processing_when_index_queued(worker_db, monkeypatch):
         assert "重试" in (doc.error_message or "")
     finally:
         db.close()
+
+
+def test_ready_chat_projection_notifies_waiting_turn_service(worker_db, monkeypatch):
+    import app.core.storage as storage_mod
+    import app.services.chat.attachment_waiting_service as waiting_service
+    from app.worker.tasks import process_document_ingestion
+
+    monkeypatch.setattr(
+        storage_mod,
+        "download_file_from_s3",
+        lambda uri, path: open(path, "w", encoding="utf-8").close(),
+    )
+
+    async def _ready(*args, **kwargs):
+        return {
+            "success": True,
+            "indexed": True,
+            "vector_indexed": False,
+            "chunk_count": 1,
+            "ref_doc_ids": [],
+            "content_text": "attachment body",
+        }
+
+    import app.rag.ingest.pipeline as ingestion_mod
+
+    monkeypatch.setattr(ingestion_mod, "ingest_document", _ready)
+    notified: list[str] = []
+    monkeypatch.setattr(
+        waiting_service,
+        "wake_attachment_turns_for_projection",
+        lambda document_id: notified.append(document_id) or ["turn-1"],
+    )
+
+    doc_id = _seed_doc(
+        worker_db,
+        filename="attachment.txt",
+        source_kind="chat_attachment",
+    )
+    result = process_document_ingestion.run(doc_id)
+
+    assert result["status"] == "success"
+    assert result["resumed_turn_ids"] == ["turn-1"]
+    assert notified == [doc_id]
 
 
 def test_worker_marks_failed_on_embedding_validation_without_retry(

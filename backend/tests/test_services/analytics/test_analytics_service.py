@@ -1,10 +1,66 @@
-"""Evidence semantics for the deterministic cross-interview report."""
+"""Canonical AbilitySignal semantics for the cross-interview report."""
+
+from datetime import UTC, datetime
 
 from unittest.mock import patch
 
 import pytest
+from app.models.ability_signal import AbilitySignal, AbilitySignalSourceRef
+from app.models.user import User
 
 _SVC = "app.services.analytics.diagnostics_report_service"
+
+
+def test_extract_records_reads_canonical_ability_signal_only(db_session):
+    from app.models.memory_ability_state import MemoryAbilityState
+    from app.services.analytics.diagnostics_report_service import (
+        _extract_ability_records,
+    )
+
+    user = User(
+        username="canonical-ability-report-user",
+        hashed_password="not-used",
+    )
+    db_session.add(user)
+    db_session.flush()
+    db_session.add(
+        MemoryAbilityState(
+            user_id=user.id,
+            topic="legacy must stay quarantined",
+            skill_type="communication",
+            mastery_level="strong",
+            ability_score=99,
+        )
+    )
+    signal = AbilitySignal(
+        user_id=user.id,
+        topic="系统设计",
+        signal_type="system_design",
+        level="improving",
+        score=58,
+        summary="能完成基本拆分，容量估算仍需练习。",
+        confidence=0.7,
+        scope_kind="general",
+        formed_at=datetime.now(UTC),
+        rubric_version="evidence-v2",
+        status="active",
+    )
+    db_session.add(signal)
+    db_session.flush()
+    db_session.add(
+        AbilitySignalSourceRef(
+            ability_signal_id=signal.id,
+            source_kind="interview_record",
+            source_id="ir_1",
+        )
+    )
+    db_session.commit()
+
+    records = _extract_ability_records(db_session, user.username)
+
+    assert [record["topic"] for record in records] == ["系统设计"]
+    assert records[0]["score"] == 58
+    assert records[0]["evidence_count"] == 1
 
 
 @pytest.mark.asyncio

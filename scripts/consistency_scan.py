@@ -12,9 +12,10 @@ can accumulate, per the RFC acceptance criterion "巡检脚本能输出可修复
                                  metadata_mismatch / dimension_mismatch).
   3. Subject-less conversations — ``conversations`` with a non-chat ``mode`` but
                                  no ``subject_type`` / ``subject_id`` binding.
-  4. Dangling memory evidence  — ``memory_ability_states.evidence_refs_json``
+  4. Legacy migration sources — ``memory_ability_states.evidence_refs_json``
                                  pointing at deleted interview QA / records /
-                                 conversation messages.
+                                 conversation messages; used only to decide
+                                 which rows are safe to migrate in Stage 2.
 
 NOTHING is mutated — the script only reports ids so an operator (or a future
 repair job) can act. Run from the project root:
@@ -345,7 +346,7 @@ def scan_subjectless_conversations(db: Session) -> list[Finding]:
     ]
 
 
-# ── 4. Dangling memory evidence ──────────────────────────────────────────
+# ── 4. Dangling legacy migration sources ─────────────────────────────────
 
 _EVIDENCE_TABLE = {
     "interview_qa": "interview_qa",
@@ -354,7 +355,7 @@ _EVIDENCE_TABLE = {
 }
 
 
-def scan_dangling_evidence(db: Session) -> list[Finding]:
+def scan_legacy_migration_sources(db: Session) -> list[Finding]:
     rows = _rows(
         db,
         """
@@ -393,10 +394,10 @@ def scan_dangling_evidence(db: Session) -> list[Finding]:
                 break
     return [
         Finding(
-            "dangling_memory_evidence",
+            "dangling_legacy_ability_sources",
             len(dangling),
             dangling[:_SAMPLE],
-            note="ability state evidence_refs -> deleted business record",
+            note="legacy ability row references a deleted business record",
         )
     ]
 
@@ -411,7 +412,7 @@ def run_scan() -> list[Finding]:
             scan_orphan_file_assets,
             scan_orphan_chunks,
             scan_subjectless_conversations,
-            scan_dangling_evidence,
+            scan_legacy_migration_sources,
         ):
             try:
                 findings.extend(scan(db))

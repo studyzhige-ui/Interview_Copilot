@@ -9,9 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 def _register_handlers() -> None:
-    import app.worker.outbox_handlers.ability  # noqa: F401
     import app.worker.outbox_handlers.knowledge  # noqa: F401
-    import app.worker.outbox_handlers.memory  # noqa: F401
     import app.worker.outbox_handlers.resume  # noqa: F401
 
 
@@ -46,18 +44,6 @@ def drain_index_outbox_jobs():
 
 
 @celery_app.task(
-    name="tasks.drain_intelligence_outbox_jobs",
-    time_limit=900,
-    soft_time_limit=840,
-)
-def drain_intelligence_outbox_jobs():
-    """Run durable memory extraction on the background-intelligence queue."""
-    from app.services.outbox import INTELLIGENCE_JOB_TYPES
-
-    return _drain(INTELLIGENCE_JOB_TYPES, limit=4)
-
-
-@celery_app.task(
     name="tasks.drain_cleanup_outbox_jobs",
     time_limit=300,
     soft_time_limit=270,
@@ -72,5 +58,4 @@ def drain_cleanup_outbox_jobs():
 __all__ = [
     "drain_cleanup_outbox_jobs",
     "drain_index_outbox_jobs",
-    "drain_intelligence_outbox_jobs",
 ]

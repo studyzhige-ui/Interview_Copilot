@@ -199,12 +199,19 @@ def start_mock(
     jd_text: str,
     interviewer_style: str,
     target_question_count: int,
+    job_opportunity_id: str | None = None,
 ) -> StartedMock:
     """Atomically create record + conversation + opening message + runtime.
 
     Flushes everything into ONE uncommitted transaction — the caller commits
     (so it can offload the commit to a thread) and rolls back on failure.
     """
+    user_pk = resolve_user_pk(db, username)
+    normalized_job_id = interview_record_service.require_owned_job_opportunity(
+        db,
+        user_pk=user_pk,
+        job_opportunity_id=job_opportunity_id,
+    )
     resume_context = resolve_resume_context(db, username=username, resume_id=resume_id)
     jd_context = jd_text.strip()
 
@@ -222,6 +229,7 @@ def start_mock(
         resume_id=resume_id,
         resume_text_snapshot=resume_context,
         jd_text_snapshot=jd_context,
+        job_opportunity_id=normalized_job_id,
         status=STATUS_MOCK_IN_PROGRESS,
         db=db,
     )
@@ -229,7 +237,7 @@ def start_mock(
     # 2) conversation (bound to the record via subject_type/subject_id).
     conversation = Conversation(
         id=generate_uuid(),
-        user_id=resolve_user_pk(db, username),
+        user_id=user_pk,
         title="模拟面试",
         type="mock_interview",
         mode="chat",

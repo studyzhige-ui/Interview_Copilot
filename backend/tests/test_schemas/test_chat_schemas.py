@@ -24,7 +24,9 @@ _MESSAGE = {
 def test_mock_start_request_defaults_to_twenty_questions():
     base = {"resume_id": "rsm_1", "jd_text": "这是满足长度要求的后端工程师岗位说明文本"}
     assert MockStartRequest(**base).target_question_count == 20
-    assert MockStartRequest(**base, target_question_count=30).target_question_count == 30
+    assert (
+        MockStartRequest(**base, target_question_count=30).target_question_count == 30
+    )
     with pytest.raises(ValidationError):
         MockStartRequest(**base, target_question_count=25)
 
@@ -35,7 +37,9 @@ def test_mock_start_request_requires_resume_and_meaningful_jd():
     with pytest.raises(ValidationError):
         MockStartRequest(resume_id="rsm_1", jd_text="太短")
     with pytest.raises(ValidationError):
-        MockStartRequest(resume_id="   ", jd_text="这是满足长度要求的后端工程师岗位说明文本")
+        MockStartRequest(
+            resume_id="   ", jd_text="这是满足长度要求的后端工程师岗位说明文本"
+        )
 
 
 def test_mock_answer_request_requires_concurrency_token():

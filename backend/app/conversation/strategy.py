@@ -13,9 +13,12 @@ metadata the engine wants for hooks / metrics.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Protocol, runtime_checkable
+from typing import Any, AsyncGenerator, Literal, Protocol, runtime_checkable
 
 from app.conversation.events import HarnessEvent
+
+TurnOutcome = Literal["completed", "waiting", "blocked", "failed", "cancelled"]
+
 # ── Context passed into a strategy ────────────────────────────────────
 
 
@@ -32,6 +35,7 @@ class StrategyContext:
     session_id: str
     user_message: str
     turn_id: str | None = None
+    dispatch_generation: int = 1
     runtime_profile: str = "career"
 
     # Prepared context — the FULL ``AssembledContext`` built by the
@@ -45,14 +49,6 @@ class StrategyContext:
 
     # ── Retrieval provenance + state (L1 RAG) ─────────────────────
     retrieval_hit: bool = False
-
-    # Global memory toggle resolved ONCE by the engine in ``_prepare``.
-    # The agent strategy uses this to gate the recall_memory /
-    # save_memory tools out of the manifest. Pre-fix the engine read
-    # this in _prepare AND the strategy re-read the same value in its
-    # execute(), opening 2 DB sessions for a single boolean.
-    # Engine populates; strategy reads only.
-    global_memory_on: bool = False
 
     # Per-strategy extras (e.g. agent gets a tool registry handle)
     extras: dict[str, Any] = field(default_factory=dict)
@@ -78,9 +74,18 @@ class StrategyResult:
     # Optional per-turn metrics (engine forwards these to telemetry).
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    provider_id: str = ""
+    prompt_cache_supported: bool = False
+    prompt_cache_enabled: bool = False
     tool_calls: int = 0
     steps_used: int = 0
     stop_reason: str | None = None
+    # Kernel outcome for this execution pass. ``waiting`` is deliberately
+    # non-terminal: the worker is released while the same durable Turn keeps
+    # ownership of its pending Interaction and original Tool Call identity.
+    outcome: TurnOutcome = "completed"
 
     # Free-form extras (e.g. trace persistence flags for the agent strategy)
     extras: dict[str, Any] = field(default_factory=dict)
@@ -117,4 +122,5 @@ __all__ = [
     "ExecutionStrategy",
     "StrategyContext",
     "StrategyResult",
+    "TurnOutcome",
 ]

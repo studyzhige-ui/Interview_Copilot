@@ -40,6 +40,30 @@ const CapabilitiesPage = lazy(() =>
 const ProfilePage = lazy(() =>
   import('@/pages/me/ProfilePage').then((m) => ({ default: m.ProfilePage })),
 );
+const CareerProfilePage = lazy(() =>
+  import('@/pages/career/CareerProfilePage').then((m) => ({ default: m.CareerProfilePage })),
+);
+const CareerProcessPage = lazy(() =>
+  import('@/pages/career/CareerProcessPage').then((m) => ({ default: m.CareerProcessPage })),
+);
+const ArtifactsPage = lazy(() =>
+  import('@/pages/artifacts/ArtifactsPage').then((m) => ({ default: m.ArtifactsPage })),
+);
+const OfferPage = lazy(() =>
+  import('@/pages/career/OfferPage').then((m) => ({ default: m.OfferPage })),
+);
+const PersistentTasksPage = lazy(() =>
+  import('@/pages/automation/PersistentTasksPage').then((m) => ({ default: m.PersistentTasksPage })),
+);
+const PersistentTaskConversationPage = lazy(() =>
+  import('@/pages/automation/PersistentTasksPage').then((m) => ({ default: m.PersistentTaskConversationPage })),
+);
+const ConnectionsPage = lazy(() =>
+  import('@/pages/settings/ConnectionsPage').then((m) => ({ default: m.ConnectionsPage })),
+);
+const CopilotPreferencesPage = lazy(() =>
+  import('@/pages/settings/CopilotPreferencesPage').then((m) => ({ default: m.CopilotPreferencesPage })),
+);
 
 /** Lightweight fallback while a chunk loads. Kept centred + brand-coloured. */
 function PageFallback() {
@@ -67,7 +91,7 @@ function AuthGuard() {
 
 function GuestGuard() {
   const isAuthed = useAuthStore((s) => s.isAuthed);
-  if (isAuthed) return <Navigate to="/mock" replace />;
+  if (isAuthed) return <Navigate to="/general-chat" replace />;
   return <LazyOutlet />;
 }
 
@@ -79,14 +103,22 @@ export const router = createBrowserRouter([
   {
     element: <AuthGuard />,
     children: [
-      { path: '/', element: <Navigate to="/mock" replace /> },
+      { path: '/', element: <Navigate to="/general-chat" replace /> },
       { path: '/review', element: <ReviewPage /> },
       { path: '/mock', element: <MockPage /> },
       { path: '/general-chat', element: <GeneralChatPage /> },
+      { path: '/persistent-tasks/:taskId/conversation', element: <PersistentTaskConversationPage /> },
+      { path: '/persistent-tasks/:taskId?', element: <PersistentTasksPage /> },
       { path: '/analytics', element: <AnalyticsPage /> },
+      { path: '/career-profile', element: <CareerProfilePage /> },
+      { path: '/career-process', element: <CareerProcessPage /> },
+      { path: '/career-process/:opportunityId/offer', element: <OfferPage /> },
+      { path: '/artifacts/:artifactId?', element: <ArtifactsPage /> },
       { path: '/library', element: <LibraryPage /> },
       { path: '/models', element: <ModelsPage /> },
       { path: '/capabilities', element: <CapabilitiesPage /> },
+      { path: '/settings/connections', element: <ConnectionsPage /> },
+      { path: '/settings/personalization', element: <CopilotPreferencesPage /> },
       { path: '/me', element: <ProfilePage /> },
     ],
   },

@@ -25,6 +25,8 @@ from typing import Any
 
 # ── Agent run state ──────────────────────────────────────────────────────
 
+_LOCAL_TOOL_RECOVERY_LIMIT = 2
+
 
 @dataclass
 class AgentRunState:
@@ -40,6 +42,8 @@ class AgentRunState:
     tool_calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
     stop_reason: str | None = None
     tool_usage: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     tool_signatures: dict[str, int] = field(default_factory=lambda: defaultdict(int))
@@ -48,6 +52,8 @@ class AgentRunState:
     failed_outcome_streak: int = 0
     last_action: tuple[str, str] | None = None
     no_progress_streak: int = 0
+    local_tool_recovery_incidents: int = 0
+    local_tool_recovery_exhausted_reason: str | None = None
 
     @property
     def total_tokens(self) -> int:
@@ -102,17 +108,39 @@ class AgentRunState:
             self.last_failed_outcome = None
 
         action = (tool_name, fingerprint)
-        self.no_progress_streak = (
-            self.no_progress_streak + 1 if self.last_action == action else 1
-        )
+        had_previous_action = self.last_action is not None
+        same_action = self.last_action == action
+        self.no_progress_streak = self.no_progress_streak + 1 if same_action else 1
         self.last_action = action
+        if had_previous_action and not same_action:
+            # A genuinely new outcome proves that the local replan made
+            # progress. Earlier incidents must not become a hidden global
+            # task-call budget.
+            self.local_tool_recovery_incidents = 0
+            self.local_tool_recovery_exhausted_reason = None
         if self.failed_outcome_streak >= 3:
             self.failed_outcome_streak = 0
-            return "The same tool call failed with the same outcome three times. Stop retrying and replan."
+            return self._record_local_tool_incident(
+                "repeated_tool_failure",
+                "The same tool call failed with the same outcome three times. "
+                "Stop retrying and replan.",
+            )
         if self.no_progress_streak >= 4:
             self.no_progress_streak = 0
-            return "Four tool actions produced no new outcome. Pause the current approach and replan from the evidence."
+            return self._record_local_tool_incident(
+                "tool_no_progress",
+                "Four tool actions produced no new outcome. Pause the current "
+                "approach and replan from the evidence.",
+            )
         return None
+
+    def _record_local_tool_incident(self, reason: str, message: str) -> str:
+        """Bound local replanning without imposing a global task budget."""
+
+        self.local_tool_recovery_incidents += 1
+        if self.local_tool_recovery_incidents >= _LOCAL_TOOL_RECOVERY_LIMIT:
+            self.local_tool_recovery_exhausted_reason = reason
+        return message
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -120,6 +148,9 @@ class AgentRunState:
             "tool_calls": self.tool_calls,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_creation_tokens": self.cache_creation_tokens,
+            "local_tool_recovery_incidents": self.local_tool_recovery_incidents,
             "elapsed_s": round(self.elapsed_seconds, 2),
         }
 
@@ -128,6 +159,8 @@ class AgentRunState:
 
 
 def _tool_call_payload(tool_call: Any) -> dict[str, Any]:
+    from app.agent_runtime.tool_redaction import redact_tool_text
+
     return {
         "id": tool_call.id,
         "type": "function",
@@ -135,9 +168,11 @@ def _tool_call_payload(tool_call: Any) -> dict[str, Any]:
             "name": tool_call.name
             if hasattr(tool_call, "name")
             else tool_call.function.name,
-            "arguments": tool_call.arguments
-            if hasattr(tool_call, "arguments")
-            else tool_call.function.arguments,
+            "arguments": redact_tool_text(
+                tool_call.arguments
+                if hasattr(tool_call, "arguments")
+                else tool_call.function.arguments
+            ),
         },
     }
 
@@ -147,7 +182,9 @@ def _args_summary(raw_args: str) -> str:
     try:
         import json
 
-        parsed = json.loads(raw_args) if raw_args else {}
+        from app.agent_runtime.tool_redaction import redact_tool_value
+
+        parsed = redact_tool_value(json.loads(raw_args) if raw_args else {})
         parts = []
         for k, v in list(parsed.items())[:3]:
             val = str(v)[:60]
@@ -158,22 +195,7 @@ def _args_summary(raw_args: str) -> str:
 
 
 def _result_summary(observation: dict[str, Any]) -> str:
-    """Short, HONEST summary of a tool result for event display.
-
-    Order matters — check the "negative" signals first (disabled,
-    error) so they never fall through to a misleading "✅ 完成 (N
-    chars)" line. Pre-fix screenshot: ``recall_memory`` returning
-    ``{"disabled": true, "reason": "用户已关闭…"}`` rendered as
-    "✅ 完成 (273 chars)" — the 273 chars were the JSON of the
-    refusal payload. That looked like success to the user.
-    """
-    # Privacy/gate refusal — tool returned a structured "I won't run"
-    # payload (recall_memory / save_memory under global-memory off).
-    if observation.get("disabled") is True:
-        reason = observation.get("reason") or "已禁用"
-        return f"⊘ {str(reason)[:100]}"
-
-    # Hard error from the handler.
+    """Short, honest summary of a concrete Tool result for display."""
     if "error" in observation:
         return f"❌ {observation['error']}"
 

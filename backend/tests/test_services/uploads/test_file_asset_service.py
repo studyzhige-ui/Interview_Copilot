@@ -269,14 +269,13 @@ def test_committed_outbox_wakeup_dispatches_each_lane_once(db_session, monkeypat
     calls: list[str] = []
     monkeypatch.setattr(dispatch, "dispatch_outbox_drain", calls.append)
     db_session.info["outbox_wakeup_lanes"] = {
-        "intelligence",
         "cleanup",
         "index",
     }
 
     outbox_service._dispatch_committed_outbox_wakeups(db_session)
 
-    assert calls == ["cleanup", "index", "intelligence"]
+    assert calls == ["cleanup", "index"]
     assert "outbox_wakeup_lanes" not in db_session.info
 
 
@@ -294,7 +293,7 @@ def test_application_session_factory_dispatches_only_after_commit(monkeypatch):
         assert calls == ["cleanup", "index"]
 
         session.begin()
-        session.info["outbox_wakeup_lanes"] = {"intelligence"}
+        session.info["outbox_wakeup_lanes"] = {"cleanup"}
         session.rollback()
         assert calls == ["cleanup", "index"]
         assert "outbox_wakeup_lanes" not in session.info
@@ -349,7 +348,7 @@ def test_run_due_outbox_jobs_claims_only_requested_resource_class(
 ):
     user = _make_user(db_session)
     db_session.commit()
-    for job_type in ("delete_object", "extract_memory_realtime"):
+    for job_type in ("delete_object", "milvus_upsert_document"):
         outbox_service.enqueue_job(
             db_session,
             user_pk=user.id,
@@ -374,7 +373,7 @@ def test_run_due_outbox_jobs_claims_only_requested_resource_class(
     statuses = {job.job_type: job.status for job in db_session.query(OutboxJob).all()}
     assert statuses == {
         "delete_object": "succeeded",
-        "extract_memory_realtime": "pending",
+        "milvus_upsert_document": "pending",
     }
 
 

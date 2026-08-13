@@ -4,8 +4,8 @@ Post-Stage-G the actual agent loop lives in
 :class:`app.conversation.agent_strategy.AgentLoopStrategy`. This package
 hosts the lower-layer building blocks the strategy depends on:
 
-  * :mod:`tools/`              — registered ReAct tools (knowledge, memory,
-                                  resume, web, jobs, file_io, …)
+  * :mod:`tools/`              — registered ReAct tools (knowledge, resume,
+                                  web, jobs, file I/O, …)
   * :mod:`tool_registry`       — self-registration + OpenAI schema export
   * :mod:`tool_call_streaming` — incremental tool_call accumulator from
                                   OpenAI streaming responses

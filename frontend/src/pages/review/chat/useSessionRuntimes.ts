@@ -64,7 +64,7 @@ export function useSessionRuntimes() {
         abort: null, turnId: null, messages: [], partial: '', inflightBlocks: [],
         inflightSources: [],
         status: '', streaming: false, hidePartialBar: false,
-        loadedHistory: false,
+        loadedHistory: false, interaction: null,
       };
       map.set(id, r);
     }

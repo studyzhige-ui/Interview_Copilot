@@ -5,6 +5,7 @@
 # very top of the file. See the block comment by _setup_llm_tracing()
 # below for why the ordering is load-bearing. Suppressing E402 file-wide
 # is correct here rather than scattering ~25 inline noqa comments.
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -51,6 +52,9 @@ from app.core.request_id import (  # noqa: E402
     new_request_id,
     set_request_id,
 )
+from app.core.http_log_redaction import (  # noqa: E402
+    install_sensitive_query_access_log_filter,
+)
 
 # ``logging.basicConfig`` writes a default Formatter; replace the
 # handler's formatter with our request-id-aware variant so every log
@@ -66,6 +70,7 @@ logging.basicConfig(
 # Quiet noisy third-party loggers
 for _quiet in ("httpx", "httpcore", "urllib3", "openai", "milvus"):
     logging.getLogger(_quiet).setLevel(logging.WARNING)
+install_sensitive_query_access_log_filter()
 
 logger = logging.getLogger("interview.copilot.main")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -116,6 +121,18 @@ async def lifespan(app: FastAPI):
         orphan_count = await fail_orphaned_turns()
         if orphan_count:
             logger.warning("Closed %d orphaned conversation turn(s).", orphan_count)
+        from app.services.chat.attachment_waiting_service import (
+            recover_terminal_attachment_turns,
+        )
+
+        resumed_attachment_turns = await asyncio.to_thread(
+            recover_terminal_attachment_turns
+        )
+        if resumed_attachment_turns:
+            logger.info(
+                "Recovered %d attachment-waiting conversation turn(s).",
+                len(resumed_attachment_turns),
+            )
     except Exception as exc:  # Redis failure must not prevent API startup.
         logger.warning("Could not publish orphan-turn terminal events: %s", exc)
 
@@ -293,27 +310,43 @@ if _trusted_proxies:
     )
 
 from app.api import (
+    agent_tasks,
+    attachment_sources,
+    artifacts,
     auth,
     capabilities,
+    career_process,
+    career_profile,
     chat,
     file_assets,
+    gmail_integration,
     interviews,
-    memory,
     model_runtime,
+    offers,
     operations,
+    personalization,
+    persistent_tasks,
     rag,
     resumes,
 )
 
 app.include_router(operations.router, prefix="/api/v1")
+app.include_router(agent_tasks.router, prefix="/api/v1")
+app.include_router(attachment_sources.router, prefix="/api/v1")
+app.include_router(artifacts.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(capabilities.router, prefix="/api/v1")
+app.include_router(career_process.router, prefix="/api/v1")
+app.include_router(career_profile.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
 app.include_router(file_assets.router, prefix="/api/v1")
+app.include_router(gmail_integration.router, prefix="/api/v1")
 app.include_router(interviews.router, prefix="/api/v1")
-app.include_router(memory.router, prefix="/api/v1")
 app.include_router(rag.router, prefix="/api/v1")
 app.include_router(model_runtime.router, prefix="/api/v1")
+app.include_router(offers.router, prefix="/api/v1")
+app.include_router(personalization.router, prefix="/api/v1")
+app.include_router(persistent_tasks.router, prefix="/api/v1")
 app.include_router(resumes.router, prefix="/api/v1")
 
 

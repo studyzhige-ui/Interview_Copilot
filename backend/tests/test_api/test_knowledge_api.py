@@ -138,7 +138,13 @@ def test_rag_query_500_on_retriever_error(client):
     async def boom(*_args, **_kwargs):
         raise RuntimeError("milvus down")
 
-    with patch("app.api.rag.rag_service.retrieve", side_effect=boom):
+    # This test owns only the HTTP error mapping.  Runtime/embedding startup is
+    # covered separately and would turn this isolated API test into a real
+    # HuggingFace/Milvus warmup.
+    with (
+        patch("app.api.rag.ensure_rag_runtime"),
+        patch("app.api.rag.rag_service.retrieve", side_effect=boom),
+    ):
         resp = client.post("/api/v1/rag/query", json={"query": "x"})
     assert resp.status_code == 500
 
@@ -456,6 +462,58 @@ def test_get_document_404_for_other_user(client, db: Session):
     db.commit()
     resp = client.get("/api/v1/knowledge/documents/doc_b")
     assert resp.status_code == 404
+
+
+def test_library_api_never_exposes_chat_attachment_projection(client, db: Session):
+    asset = FileAsset(
+        id="fa_chat_projection",
+        user_id=_uid(db, "alice"),
+        purpose="knowledge_document",
+        original_filename="private.txt",
+        object_key="uploads/1/fa_chat_projection/private.txt",
+        storage_uri="s3://b/uploads/1/fa_chat_projection/private.txt",
+        upload_status="consumed",
+        validation_status="passed",
+    )
+    projection = KnowledgeDocument(
+        id="kdoc_chat_projection",
+        user_id=_uid(db, "alice"),
+        file_asset_id=asset.id,
+        title="private.txt",
+        category="会话附件",
+        source_kind="chat_attachment",
+        storage_uri=asset.storage_uri,
+        object_key=asset.object_key,
+        status="ready",
+    )
+    db.add_all([asset, projection])
+    db.commit()
+
+    assert (
+        client.get("/api/v1/knowledge/documents/kdoc_chat_projection").status_code
+        == 404
+    )
+    assert (
+        client.patch(
+            "/api/v1/knowledge/documents/kdoc_chat_projection",
+            json={"title": "mutated"},
+        ).status_code
+        == 404
+    )
+    assert (
+        client.delete("/api/v1/knowledge/documents/kdoc_chat_projection").status_code
+        == 404
+    )
+
+    rejected = client.post(
+        "/api/v1/knowledge/documents",
+        json={
+            "upload_id": asset.id,
+            "source_kind": "chat_attachment",
+            "conversation_id": "conv-guessed",
+        },
+    )
+    assert rejected.status_code == 422
 
 
 def test_patch_document_updates_title_and_category(client, db: Session):

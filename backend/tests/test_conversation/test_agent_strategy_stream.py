@@ -118,7 +118,14 @@ def test_reasoning_content_roundtrips_into_next_assistant_message(monkeypatch):
             )
         )
         # Usage (terminator)
-        yield _FakeChunk(usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5))
+        yield _FakeChunk(
+            usage=SimpleNamespace(
+                prompt_tokens=10,
+                completion_tokens=5,
+                prompt_tokens_details=SimpleNamespace(cached_tokens=4),
+                cache_creation_input_tokens=3,
+            )
+        )
 
     strategy = AgentLoopStrategy()
     budget = AgentRunState(started_at=0.0)
@@ -143,48 +150,462 @@ def test_reasoning_content_roundtrips_into_next_assistant_message(monkeypatch):
     # Tool call was captured.
     assert len(tool_calls_acc) == 1
     assert tool_calls_acc[0].name == "search_jobs"
+    assert budget.prompt_tokens == 10
+    assert budget.completion_tokens == 5
+    assert budget.cache_read_tokens == 4
+    assert budget.cache_creation_tokens == 3
 
 
-def test_agent_system_block_keeps_manifest_before_grounding_for_prompt_cache():
-    """The agent renders its context through the SHARED pipeline (one
-    SLOT_ORDER, no separate assembler). The tool manifest is part of the
-    system prompt and, together with the stable prefix (summary / recent
-    turns), precedes the per-turn grounding (memory / RAG) inside the system
-    block — so a grounding change can't evict the cached prefix. The query is
-    NOT in the system block (it's sent as the user message)."""
-    from app.agent_runtime.tool_registry import registry
-    from app.prompts.agent import AGENT_SYSTEM_PROMPT
-    from app.services.chat.context_assembly_pipeline import (
-        AssembledContext,
-        prompt_renderer,
+def test_agent_provider_payload_partitions_stable_and_dynamic_context(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.conversation.agent_strategy import AgentLoopStrategy
+    from app.conversation.events import HarnessEvent
+    from app.conversation.strategy import StrategyContext, StrategyResult
+    from app.services.chat.context_assembly_pipeline import AssembledContext
+
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "real_tool",
+            "description": "SCHEMA_ONLY_DESCRIPTION",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    async def create_catalog(*_args, **_kwargs):
+        return SimpleNamespace(
+            user_pk=1,
+            format_prompt=lambda: "OPTIONAL_TOOL_GUIDANCE",
+            get_openai_schemas=lambda: [schema],
+        )
+
+    async def persist(*_args, **_kwargs):
+        return None
+
+    profile = SimpleNamespace(
+        model="test-model",
+        supports_function_calling=True,
+        context_window=128_000,
+        max_output_tokens=4_000,
+    )
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.build_async_openai_client_for_role",
+        lambda *_args, **_kwargs: (object(), profile),
+    )
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.TurnToolCatalog.create", create_catalog
+    )
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy._load_agent_task_snapshot",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr("app.conversation.agent_strategy.persist_turn_budget", persist)
+
+    captured: dict = {}
+
+    async def fake_loop(self, **kwargs):
+        captured.update(kwargs)
+        yield HarnessEvent.text("done", step=1, elapsed_ms=0)
+
+    monkeypatch.setattr(AgentLoopStrategy, "_loop", fake_loop)
+
+    assembled = AssembledContext(
+        debrief_reference="STABLE_RECORD",
+        summary="STABLE_SUMMARY",
+        memory_block="DYNAMIC_MEMORY",
+        attachment_manifest="DYNAMIC_ATTACHMENT",
+        retrieved_context="DYNAMIC_RAG",
+        recent_turns=[
+            {"role": "User", "content": "earlier user"},
+            {
+                "role": "Agent",
+                "content": "earlier answer",
+                "blocks": [{"type": "text", "text": "earlier answer"}],
+            },
+        ],
+        current_input="CURRENT_DIRECTION",
+    )
+    ctx = StrategyContext(
+        user_id="alice",
+        session_id="s1",
+        turn_id="turn1",
+        user_message="CURRENT_DIRECTION",
+        assembled=assembled,
+    )
+    result = StrategyResult()
+
+    async def drain():
+        async for _ in AgentLoopStrategy().execute(ctx, result):
+            pass
+
+    asyncio.run(drain())
+
+    messages = captured["messages"]
+    system = messages[0]["content"]
+    assert "STABLE_RECORD" not in system
+    assert "STABLE_SUMMARY" not in system
+    assert "OPTIONAL_TOOL_GUIDANCE" in system
+    assert "SCHEMA_ONLY_DESCRIPTION" not in system
+    assert "DYNAMIC_MEMORY" not in system
+    assert "DYNAMIC_ATTACHMENT" not in system
+    assert "DYNAMIC_RAG" not in system
+    assert messages[1]["role"] == "user"
+    assert "[Context Summary]" in messages[1]["content"]
+    assert "STABLE_SUMMARY" in messages[1]["content"]
+    assert [message["role"] for message in messages[2:4]] == ["user", "assistant"]
+
+    current = messages[-1]["content"]
+    assert "STABLE_RECORD" in current
+    assert "DYNAMIC_MEMORY" in current
+    assert "DYNAMIC_ATTACHMENT" in current
+    assert "DYNAMIC_RAG" in current
+    assert current.endswith("CURRENT_DIRECTION")
+    assert captured["tool_schemas"] == [schema]
+
+
+def test_agent_task_context_precedes_and_does_not_replace_current_user_anchor(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from app.conversation.agent_strategy import AgentLoopStrategy
+    from app.conversation.events import HarnessEvent
+    from app.conversation.strategy import StrategyContext, StrategyResult
+
+    async def create_catalog(*_args, **_kwargs):
+        return SimpleNamespace(
+            user_pk=7,
+            format_prompt=lambda: "",
+            get_openai_schemas=lambda: [],
+        )
+
+    snapshot = {
+        "id": "at_1",
+        "turn_id": "turn1",
+        "version": 2,
+        "objective": "Complete the complex request",
+        "completion_conditions": ["Done"],
+        "phases": [
+            {"id": "one", "title": "One", "status": "in_progress"},
+            {"id": "two", "title": "Two", "status": "pending"},
+        ],
+    }
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.TurnToolCatalog.create", create_catalog
+    )
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy._load_agent_task_snapshot",
+        lambda *_args: snapshot,
+    )
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy.build_async_openai_client_for_role",
+        lambda *_args, **_kwargs: (
+            object(),
+            SimpleNamespace(
+                model="test",
+                supports_function_calling=True,
+                context_window=128_000,
+                max_output_tokens=4_000,
+            ),
+        ),
     )
 
-    manifest = registry.format_manifest()
-    ctx = AssembledContext(
-        summary="prior summary",
-        memory_block="# Memory bundle",
-        retrieved_context="[K1] some chunk",
-        recent_turns=[{"role": "User", "content": "earlier"}],
-        current_input="the user query",
+    async def persist(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("app.conversation.agent_strategy.persist_turn_budget", persist)
+    captured = {}
+
+    async def fake_loop(self, **kwargs):
+        captured.update(kwargs)
+        yield HarnessEvent.text("done", step=1, elapsed_ms=0)
+
+    monkeypatch.setattr(AgentLoopStrategy, "_loop", fake_loop)
+    result = StrategyResult()
+
+    async def drain():
+        async for _ in AgentLoopStrategy().execute(
+            StrategyContext(
+                user_id="alice",
+                session_id="session1",
+                turn_id="turn1",
+                user_message="CURRENT USER DIRECTION",
+            ),
+            result,
+        ):
+            pass
+
+    asyncio.run(drain())
+    current = captured["messages"][-1]
+    assert current["role"] == "user"
+    assert "[AgentTask Plan" in current["content"]
+    assert "Complete the complex request" in current["content"]
+    assert current["content"].endswith("CURRENT USER DIRECTION")
+
+
+def test_incomplete_agent_task_blocks_after_bounded_local_recovery(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.agent_runtime.react_agent import AgentRunState
+    from app.conversation.agent_strategy import AgentLoopStrategy
+    from app.conversation.strategy import StrategyContext
+
+    strategy = AgentLoopStrategy()
+
+    async def fake_call(**_kwargs):
+        return object(), 0.0
+
+    async def fake_consume(*_args, **_kwargs):
+        yield "premature completion"
+
+    monkeypatch.setattr(strategy, "_call_llm_stream", fake_call)
+    monkeypatch.setattr(strategy, "_consume_stream", fake_consume)
+    monkeypatch.setattr(
+        "app.conversation.engine.check_turn_completion",
+        lambda *_args: (False, "agent_task_incomplete"),
     )
-    system_block = prompt_renderer.render_answer_prompt(
-        ctx,
-        system_prompt=f"{AGENT_SYSTEM_PROMPT}\n\nAvailable tools:\n{manifest}",
-        skip_fields={"current_input"},
+    monkeypatch.setattr(
+        "app.conversation.agent_strategy._load_agent_task_snapshot",
+        lambda *_args: {
+            "id": "at_live",
+            "objective": "Finish the complex request",
+            "version": 2,
+            "phases": [
+                {"id": "one", "title": "One", "status": "in_progress"},
+                {"id": "two", "title": "Two", "status": "pending"},
+            ],
+        },
     )
 
-    # Manifest is part of the system prompt and precedes the grounding.
-    assert "Available tools:" in system_block
-    assert system_block.index("Available tools:") < system_block.index("[Memory]")
-    # Stable prefix (summary, recent turns) precedes the per-turn grounding.
-    assert system_block.index("[Context Summary]") < system_block.index("[Memory]")
-    # The system instructions mention the label itself; compare against the
-    # rendered slot at the end of the block, not that explanatory occurrence.
-    assert system_block.index("[Recent Turns]") < system_block.rindex(
-        "[Retrieved Context]"
+    class _Compactor:
+        task_anchor = {"role": "user", "content": "complex request"}
+
+        async def compress(self, messages):
+            return messages, False
+
+        def reset_circuit_breaker(self):
+            return None
+
+    ctx = StrategyContext(
+        user_id="alice",
+        session_id="session1",
+        turn_id="turn1",
+        user_message="complex request",
     )
-    # The query is rendered as the user message, not wedged in the system block.
-    assert "the user query" not in system_block
+    blocks = []
+    events = []
+
+    async def drain():
+        async for event in strategy._loop(
+            ctx=ctx,
+            messages=[_Compactor.task_anchor],
+            blocks=blocks,
+            budget=AgentRunState(started_at=0.0),
+            client=object(),
+            profile=SimpleNamespace(),
+            compactor=_Compactor(),
+            tool_catalog=SimpleNamespace(user_pk=7),
+            tool_schemas=[],
+            base_task_content="complex request",
+        ):
+            events.append(event)
+
+    asyncio.run(drain())
+    assert ctx.extras["_terminal_outcome"] == "blocked"
+    assert blocks[-1]["text"].startswith("本轮已保留部分结果")
+    assert [event.type.value for event in events] == ["text"]
+    assert "[AgentTask Plan" in _Compactor.task_anchor["content"]
+    assert _Compactor.task_anchor["content"].endswith("complex request")
+
+
+def _run_bounded_tool_failure_loop(monkeypatch, argument_payloads):
+    from types import SimpleNamespace
+
+    from app.agent_runtime.react_agent import AgentRunState
+    from app.agent_runtime.tool_call_streaming import _ToolCallAccumulator
+    from app.agent_runtime.tool_policy import ToolEffect
+    from app.conversation.agent_strategy import AgentLoopStrategy
+    from app.conversation.strategy import StrategyContext
+
+    strategy = AgentLoopStrategy()
+    sampled = 0
+
+    async def fake_call(**_kwargs):
+        return object(), 0.0
+
+    async def fake_consume(
+        _stream,
+        _budget,
+        tool_calls_acc,
+        _reasoning_acc,
+        **_kwargs,
+    ):
+        nonlocal sampled
+        raw_args = argument_payloads[sampled % len(argument_payloads)]
+        sampled += 1
+        tool_calls_acc.append(
+            _ToolCallAccumulator(
+                id=f"call_{sampled}",
+                name="permanent_failure",
+                arguments=raw_args,
+            )
+        )
+        if False:  # pragma: no cover - preserve async-generator shape
+            yield ""
+
+    monkeypatch.setattr(strategy, "_call_llm_stream", fake_call)
+    monkeypatch.setattr(strategy, "_consume_stream", fake_consume)
+
+    class _Catalog:
+        user_pk = 7
+
+        def __contains__(self, name):
+            return name == "permanent_failure"
+
+        @staticmethod
+        def is_concurrency_safe(_name):
+            return False
+
+        @staticmethod
+        def effect_for(_name):
+            return ToolEffect.READ
+
+        @staticmethod
+        async def dispatch(_name, _args, _ctx):
+            return {"error": "provider_unavailable", "retryable": False}
+
+    class _Compactor:
+        task_anchor = {"role": "user", "content": "complete the task"}
+
+        async def compress(self, messages):
+            return messages, False
+
+        @staticmethod
+        def reset_circuit_breaker():
+            return None
+
+    ctx = StrategyContext(
+        user_id="alice",
+        session_id="session1",
+        turn_id=None,
+        user_message="complete the task",
+    )
+    blocks = []
+    events = []
+    budget = AgentRunState(started_at=0.0)
+
+    async def drain():
+        async for event in strategy._loop(
+            ctx=ctx,
+            messages=[_Compactor.task_anchor],
+            blocks=blocks,
+            budget=budget,
+            client=object(),
+            profile=SimpleNamespace(),
+            compactor=_Compactor(),
+            tool_catalog=_Catalog(),
+            tool_schemas=[],
+            base_task_content="complete the task",
+        ):
+            events.append(event)
+
+    asyncio.run(drain())
+    return ctx, blocks, events, budget, sampled
+
+
+def test_permanent_repeated_tool_failure_blocks_after_bounded_replan(monkeypatch):
+    ctx, blocks, events, budget, sampled = _run_bounded_tool_failure_loop(
+        monkeypatch,
+        ['{"query":"same"}'],
+    )
+
+    assert sampled == 4
+    assert ctx.extras["_terminal_outcome"] == "blocked"
+    assert budget.stop_reason in {"repeated_tool_failure", "tool_no_progress"}
+    assert len([block for block in blocks if block["type"] == "tool_result"]) == 4
+    assert blocks[-1]["text"].startswith("工具连续返回相同失败")
+    assert events[-1].type.value == "text"
+
+
+def test_equivalent_argument_variants_share_failure_loop_fuse(monkeypatch):
+    ctx, blocks, _events, budget, sampled = _run_bounded_tool_failure_loop(
+        monkeypatch,
+        [
+            '{"query":"same","limit":3}',
+            '{ "limit": 3, "query": "same" }',
+        ],
+    )
+
+    assert sampled == 4
+    assert ctx.extras["_terminal_outcome"] == "blocked"
+    assert budget.local_tool_recovery_incidents == 2
+    assert len([block for block in blocks if block["type"] == "tool_result"]) == 4
+
+
+def test_empty_model_response_blocks_after_bounded_local_recovery(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.agent_runtime.react_agent import AgentRunState
+    from app.conversation.agent_strategy import AgentLoopStrategy
+    from app.conversation.strategy import StrategyContext
+
+    strategy = AgentLoopStrategy()
+    calls = 0
+
+    async def fake_call(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return object(), 0.0
+
+    async def fake_consume(*_args, **_kwargs):
+        if False:  # pragma: no cover - preserve async-generator shape
+            yield ""
+
+    monkeypatch.setattr(strategy, "_call_llm_stream", fake_call)
+    monkeypatch.setattr(strategy, "_consume_stream", fake_consume)
+
+    class _Compactor:
+        task_anchor = {"role": "user", "content": "answer me"}
+
+        async def compress(self, messages):
+            return messages, False
+
+        @staticmethod
+        def reset_circuit_breaker():
+            return None
+
+    ctx = StrategyContext(
+        user_id="alice",
+        session_id="session1",
+        turn_id=None,
+        user_message="answer me",
+    )
+    blocks = []
+    events = []
+    budget = AgentRunState(started_at=0.0)
+
+    async def drain():
+        async for event in strategy._loop(
+            ctx=ctx,
+            messages=[_Compactor.task_anchor],
+            blocks=blocks,
+            budget=budget,
+            client=object(),
+            profile=SimpleNamespace(),
+            compactor=_Compactor(),
+            tool_catalog=SimpleNamespace(user_pk=7),
+            tool_schemas=[],
+            base_task_content="answer me",
+        ):
+            events.append(event)
+
+    asyncio.run(drain())
+    assert calls == 3
+    assert budget.stop_reason == "empty_model_response"
+    assert ctx.extras["_terminal_outcome"] == "blocked"
+    assert blocks[-1]["text"].startswith("模型连续未给出")
+    assert events[-1].type.value == "text"
 
 
 def test_reconstruct_history_messages_rebuilds_tool_roundtrips():
@@ -232,6 +653,7 @@ def test_reconstruct_history_messages_rebuilds_tool_roundtrips():
         "tool_call_id": "tc1",
         "content": "redis docs ...",
     }
+    assert msgs[3] == {"role": "assistant", "content": "Here's what I found."}
 
 
 def test_reconstruct_history_messages_legacy_text_only():
@@ -296,7 +718,7 @@ def test_tool_call_id_propagates_from_strategy_to_sse_events(monkeypatch):
     blocks: list[dict] = []
     KNOWN_TC_ID = "call_xyz_42"
     tool_calls_acc = [
-        _ToolCallAccumulator(id=KNOWN_TC_ID, name="recall_memory", arguments="{}"),
+        _ToolCallAccumulator(id=KNOWN_TC_ID, name="read_resume", arguments="{}"),
     ]
 
     events: list = []
@@ -359,7 +781,7 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
 
     # Stub the inner tool-dispatch + persistence so _execute_tools can
     # run without touching the registry / DB / post-sampling hooks.
-    # ``recall_memory`` is a real registered tool, so the ``name in
+    # ``read_resume`` is a real registered tool, so the ``name in
     # registry`` check passes unpatched — no need to monkeypatch
     # ``__contains__`` (reviewer flagged that as dead weight).
     async def fake_dispatch(name, args, ctx):
@@ -397,7 +819,7 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
     ]
     blocks: list[dict] = []
     tool_calls_acc = [
-        _ToolCallAccumulator(id="call_1", name="recall_memory", arguments="{}"),
+        _ToolCallAccumulator(id="call_1", name="read_resume", arguments="{}"),
     ]
 
     # ── Branch 1: non-empty reasoning_content → key MUST be present ──
@@ -435,7 +857,7 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
     # best and an API contract violation at worst.
     messages2: list[dict] = []
     tool_calls_acc2 = [
-        _ToolCallAccumulator(id="call_2", name="recall_memory", arguments="{}"),
+        _ToolCallAccumulator(id="call_2", name="read_resume", arguments="{}"),
     ]
 
     async def run_without_reasoning():
@@ -478,6 +900,11 @@ def test_concurrency_safe_tools_execute_in_parallel_and_replay_in_order(monkeypa
 
         def is_concurrency_safe(self, name):
             return name in {"read_a", "read_b"}
+
+        def effect_for(self, _name):
+            from app.agent_runtime.tool_policy import ToolEffect
+
+            return ToolEffect.READ
 
         async def dispatch(self, name, _args, _ctx):
             nonlocal active, max_active
@@ -551,35 +978,16 @@ def test_context_exhaustion_synthesizes_final_answer():
     assert "Agent 无法生成最终回答" in src
 
 
-def test_strategy_context_carries_global_memory_on(monkeypatch):
-    """Pre-P1-H the engine resolved ``is_global_memory_enabled_for_
-    session`` in ``_prepare``, and the agent strategy resolved it
-    AGAIN at the top of ``execute`` to gate the memory tools. Two DB
-    round-trips for a single boolean. P1-H plumbs the value through
-    ``StrategyContext.global_memory_on`` so the strategy reads the
-    cached value.
-
-    Pin: the strategy MUST NOT call ``is_global_memory_enabled_for_
-    session`` directly anymore (would silently re-introduce the
-    double-read). We verify by source inspection — a regression that
-    re-adds the call would fail this assertion.
-    """
+def test_strategy_has_no_legacy_global_memory_gate():
+    """The disabled mixed memory store must not shape the agent payload."""
     import inspect
 
     from app.conversation.agent_strategy import AgentLoopStrategy
+    from app.conversation.strategy import StrategyContext
 
     src = inspect.getsource(AgentLoopStrategy.execute)
-    assert "is_global_memory_enabled_for_session" not in src, (
-        "agent_strategy.execute() must NOT re-query the global-memory "
-        "toggle — engine resolves it once in _prepare and the value "
-        "lives on ctx.global_memory_on. Re-adding the direct call "
-        "silently regresses to 2x DB round-trips per agent turn."
-    )
-    # ctx.global_memory_on must be the field that's read in its place.
-    assert "ctx.global_memory_on" in src or "global_memory_on" in src, (
-        "agent_strategy.execute() should read ctx.global_memory_on; "
-        "if you renamed it, update this test."
-    )
+    assert "global_memory" not in src
+    assert "global_memory_on" not in StrategyContext.__dataclass_fields__
 
 
 def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
@@ -615,9 +1023,8 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
 
     # Stub the budget compactor so the loop reaches the LLM-stream call.
     class _StubCompactor:
-        def __init__(self, profile=None, user_id=None):
+        def __init__(self, profile=None, user_id=None, **_kwargs):
             self.profile = profile
-            self.last_summary = None
 
         async def compress(self, messages):
             return messages, False
@@ -633,11 +1040,6 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
         _StubCompactor,
     )
 
-    # Force memory toggle on so we don't have to mock recall_policy.
-    monkeypatch.setattr(
-        "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
-        lambda sid, uid: True,
-    )
     _stub_empty_tool_catalog(monkeypatch)
 
     # Make the inner LLM-stream call blow up — this is the crash we're
@@ -696,9 +1098,8 @@ def test_strategy_crash_yields_humanized_error_event(monkeypatch):
     )
 
     class _StubCompactor:
-        def __init__(self, profile=None, user_id=None):
+        def __init__(self, profile=None, user_id=None, **_kwargs):
             self.profile = profile
-            self.last_summary = None
 
         async def compress(self, messages):
             return messages, False
@@ -712,10 +1113,6 @@ def test_strategy_crash_yields_humanized_error_event(monkeypatch):
     monkeypatch.setattr(
         "app.conversation.agent_strategy.QueryLoopCompactor",
         _StubCompactor,
-    )
-    monkeypatch.setattr(
-        "app.services.memory.recall_policy.is_global_memory_enabled_for_session",
-        lambda sid, uid: True,
     )
     _stub_empty_tool_catalog(monkeypatch)
 
@@ -814,7 +1211,7 @@ class TestToolMetrics:
                 blocks=[],
                 tool_calls_acc=[
                     _ToolCallAccumulator(
-                        id="call_1", name="recall_memory", arguments="{}"
+                        id="call_1", name="read_resume", arguments="{}"
                     ),
                 ],
                 assistant_content="",
@@ -829,6 +1226,6 @@ class TestToolMetrics:
         metric_lines = [r for r in records if "tool_metric" in r.getMessage()]
         assert len(metric_lines) == 1
         msg = metric_lines[0].getMessage()
-        assert "recall_memory" in msg
+        assert "read_resume" in msg
         assert "latency_ms=" in msg
         assert "is_error=False" in msg

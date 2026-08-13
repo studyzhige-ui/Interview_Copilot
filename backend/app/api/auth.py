@@ -413,10 +413,10 @@ def _serialize_me(user: User) -> MeResponse:
         nickname=user.nickname,
         avatar_url=avatar_service.public_avatar_url(user),
         bio=user.bio,
+        default_execution_mode=user.default_execution_mode or "standard",
         email_verified=bool(user.email_verified),
         created_at=user.created_at.isoformat() if user.created_at else "",
         updated_at=user.updated_at.isoformat() if user.updated_at else "",
-        global_memory_enabled=bool(getattr(user, "global_memory_enabled", False)),
     )
 
 
@@ -437,7 +437,7 @@ def update_me(
         nickname=payload.nickname,
         avatar_url=payload.avatar_url,
         bio=payload.bio,
-        global_memory_enabled=payload.global_memory_enabled,
+        default_execution_mode=payload.default_execution_mode,
     )
     return _serialize_me(current_user)
 

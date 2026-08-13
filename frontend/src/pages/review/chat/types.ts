@@ -1,6 +1,10 @@
-import type { ChatMessageItem, ContentBlock, Source } from '@/types/api';
+import type { AgentInteraction, ChatMessageItem, ContentBlock, Source } from '@/types/api';
 
 export interface UIMessage {
+  /** Present for persisted transcript rows; optimistic live rows have no id yet. */
+  id?: number;
+  /** Canonical durable Turn identity, when this is a persisted Turn message. */
+  turnId?: string | null;
   role: 'user' | 'assistant' | 'system';
   /** Flat-text rendering for user / system messages and as a fallback
    *  for assistant messages with no ``blocks``. */
@@ -14,9 +18,10 @@ export interface UIMessage {
 }
 
 export interface Attachment {
-  document_id: string;
+  draft_id: string;
+  file_asset_id: string;
   filename: string;
-  status: 'processing' | 'ready' | 'failed';
+  status: 'uploading' | 'processing' | 'ready' | 'failed';
   error?: string;
 }
 
@@ -41,6 +46,7 @@ export interface SessionRuntime {
   streaming: boolean;
   hidePartialBar: boolean;
   loadedHistory: boolean;
+  interaction: AgentInteraction | null;
 }
 
 export function toUI(m: ChatMessageItem): UIMessage {
@@ -48,14 +54,18 @@ export function toUI(m: ChatMessageItem): UIMessage {
   // /chat/transcript always sets ``blocks`` (legacy rows are synthesised
   // into a single-text-block array server-side). Pass through unchanged
   // so the renderer can branch uniformly.
-  if (r === 'user') return { role: 'user', content: m.content, blocks: m.blocks };
+  if (r === 'user') return {
+    id: m.id, turnId: m.turn_id, role: 'user', content: m.content, blocks: m.blocks,
+  };
   if (r === 'assistant' || r === 'agent' || r === 'ai' || r === 'bot') {
     // The persisted RAG sources ride in a ``{type:"sources"}`` block —
     // lift it out so the source-card panel can consume it (BlockChain
     // skips it when rendering the answer body).
     const sourcesBlock = m.blocks?.find((b) => b.type === 'sources');
     const sources = sourcesBlock?.type === 'sources' ? sourcesBlock.sources : undefined;
-    return { role: 'assistant', content: m.content, blocks: m.blocks, sources };
+    return {
+      id: m.id, turnId: m.turn_id, role: 'assistant', content: m.content, blocks: m.blocks, sources,
+    };
   }
-  return { role: 'system', content: m.content };
+  return { id: m.id, turnId: m.turn_id, role: 'system', content: m.content };
 }

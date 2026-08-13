@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 class QueryPlan(BaseModel):
     needs_knowledge_retrieval: bool = False
     intents: list[SearchIntent] = Field(default_factory=list)
-    load_strategy: bool = False
     referenced_question_indexes: list[int] = Field(default_factory=list)
     planner_failed: bool = False
 
@@ -76,24 +75,13 @@ async def plan_query(
     *,
     user_message: str,
     recent_turns: list[dict],
-    learning_strategy_description: str = "",
-    global_memory_on: bool = True,
     interview_questions: list[tuple[int, str]] | None = None,
 ) -> QueryPlan:
-    memory_slot = (
-        "[Available Memory Files]\nLearning-strategy description: "
-        f"{learning_strategy_description or '(empty)'}"
-        if global_memory_on
-        else ""
-    )
     policy = current_rag_policy().retrieval
     system_prompt = build_query_planner_system_prompt(
-        global_memory_on=global_memory_on,
         max_intents=policy.max_intents,
     )
     parts = [system_prompt]
-    if memory_slot:
-        parts.append(memory_slot)
     available_question_indexes = {
         index for index, _question in (interview_questions or []) if index > 0
     }
@@ -130,8 +118,6 @@ async def plan_query(
                 plan.intents = fallback_query_plan(user_message).intents
         else:
             plan.intents = []
-        if not global_memory_on:
-            plan.load_strategy = False
         plan.referenced_question_indexes = list(
             dict.fromkeys(
                 index

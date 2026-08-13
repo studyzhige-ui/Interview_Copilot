@@ -10,7 +10,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, PositiveInt
 
-from app.agent_runtime.tool_registry import AgentToolContext, ToolEntry, registry
+from app.agent_runtime.tool_registry import AgentToolContext, ToolDefinition, registry
+from app.agent_runtime.tool_policy import ToolEffect
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +50,9 @@ def _read_interview_history_sync(
             return _read_single_record(args, ctx, interview_record_service)
         return _list_records(args, ctx, interview_record_service)
     except Exception as exc:
-        logger.warning("read_interview_history failed: %s", exc)
+        logger.warning("read_interview_history failed (%s)", type(exc).__name__)
         return {
-            "error": f"Failed to read interview history: {exc}",
+            "error": "Failed to read interview history",
             "record_id": args.record_id,
         }
 
@@ -143,7 +144,7 @@ def _list_records(args, ctx, service) -> dict[str, Any]:
 
 
 registry.register(
-    ToolEntry(
+    ToolDefinition(
         name="read_interview_history",
         description=(
             "Read past interview records and analysis. Without record_id: "
@@ -154,6 +155,7 @@ registry.register(
         ),
         args_model=ReadInterviewHistoryArgs,
         handler=_read_interview_history_handler,
+        effect=ToolEffect.READ,
         concurrency_safe=True,
         max_result_chars=10_000,
         emoji="📊",

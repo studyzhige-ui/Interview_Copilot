@@ -17,6 +17,7 @@ def record_db_session():
     import app.models.interview_qa  # noqa: F401
     import app.models.interview_record  # noqa: F401
     import app.models.interview_transcript  # noqa: F401
+    import app.models.job_opportunity  # noqa: F401
     import app.models.user  # noqa: F401
     from app.db.database import Base
     from app.models.user import User
@@ -35,6 +36,7 @@ def record_db_session():
         bind=engine,
         tables=[
             Base.metadata.tables["users"],
+            Base.metadata.tables["job_opportunities"],
             Base.metadata.tables["interview_records"],
             Base.metadata.tables["interview_qa"],
             Base.metadata.tables["interview_transcripts"],
@@ -122,6 +124,48 @@ def test_create_for_mock(record_db_session, monkeypatch):
 
     assert record.source == "mock"
     assert record.status == module.STATUS_PENDING
+
+
+def test_optional_job_opportunity_requires_same_owner(record_db_session):
+    from app.models.job_opportunity import JobOpportunity
+    from app.models.user import User
+    from app.services.interview import interview_record_service as module
+
+    alice_pk = (
+        record_db_session.query(User.id).filter(User.username == "alice").scalar()
+    )
+    bob_pk = record_db_session.query(User.id).filter(User.username == "bob").scalar()
+    record_db_session.add_all(
+        [
+            JobOpportunity(
+                id="jo_alice",
+                user_id=alice_pk,
+                company_name="Alice Co",
+                job_title="Backend Engineer",
+            ),
+            JobOpportunity(
+                id="jo_bob",
+                user_id=bob_pk,
+                company_name="Bob Co",
+                job_title="Frontend Engineer",
+            ),
+        ]
+    )
+    record_db_session.commit()
+
+    record = module.InterviewRecordService().create_for_upload(
+        user_id="alice",
+        job_opportunity_id="jo_alice",
+        db=record_db_session,
+    )
+    assert record.job_opportunity_id == "jo_alice"
+
+    with pytest.raises(module.InterviewOpportunityNotFoundError):
+        module.InterviewRecordService().create_for_mock(
+            user_id="alice",
+            job_opportunity_id="jo_bob",
+            db=record_db_session,
+        )
 
 
 def test_set_status_set_transcript_set_analysis(record_db_session, monkeypatch):

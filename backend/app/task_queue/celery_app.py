@@ -44,7 +44,7 @@ celery_app.conf.update(
     #   turns         → long-lived chat/Agent turns with reconnectable SSE
     #   transcription → serialized ASR/diarization, loads voice models
     #   pipeline      → serialized parsing/embedding/index synchronization
-    #   background    → mock review and durable memory intelligence
+    #   background    → mock review and other model-backed background work
     #   default       → short cleanup, catalog and scheduling jobs
     #
     # Container deployments run one process per queue; local scripts run one
@@ -59,11 +59,8 @@ celery_app.conf.update(
         "tasks.process_document_ingestion": {"queue": "pipeline"},
         "tasks.process_resume_parse": {"queue": "pipeline"},
         "tasks.drain_index_outbox_jobs": {"queue": "pipeline"},
-        "tasks.drain_intelligence_outbox_jobs": {"queue": "background"},
         "tasks.drain_cleanup_outbox_jobs": {"queue": "default"},
         # ── Short control/background jobs ──
-        "tasks.dream_for_user": {"queue": "default"},
-        "tasks.scan_and_dream_batch": {"queue": "default"},
         "tasks.process_mock_interview_review": {"queue": "background"},
         # Catalog refresh is pure outbound HTTP — no GPU or heavy in-process
         # model. It belongs to the short-control default queue.
@@ -73,6 +70,8 @@ celery_app.conf.update(
         "tasks.sweep_stale_pipeline_records": {"queue": "default"},
         "tasks.sweep_orphan_file_assets": {"queue": "default"},
         "tasks.sweep_runtime_files": {"queue": "default"},
+        "tasks.repair_pending_automation_turns": {"queue": "default"},
+        "tasks.schedule_due_persistent_tasks": {"queue": "default"},
     },
     # ── Reliability ─────────────────────────────────────────────────────
     # Default acks_late=True so a worker crash during a task re-queues the
@@ -96,40 +95,21 @@ celery_app.conf.update(
     # — important with our --pool=solo single-task model.
     worker_prefetch_multiplier=1,
     # ── Beat schedule ───────────────────────────────────────────────────
-    # Memory consolidation: nightly batch at 03:30 Asia/Shanghai.
-    # Iterates eligible users (gate 1: >=24h since last_dreamed_at AND
-    # gate 3: enough new chat activity), then dreams each user's
-    # silent records. See ``dreaming_worker`` docstring for full gate
-    # logic. This is the ONLY trigger — there's no per-record completion
-    # hook, no per-turn hook (see the
-    # ``dreaming_worker`` module docstring).
-    #
     # Model catalog refresh (P6-K): daily at 04:00 Asia/Shanghai. Hits
     # every vendor's /v1/models, drops + repopulates the global discovery
     # cache so the first user request of the day reads a warm entry
-    # instead of paying the ~2s fan-out latency. Scheduled after the
-    # dreaming batch (03:30) so the two heavy outbound-API jobs don't
-    # share the network/LLM window. CRITICAL: this runs with no
+    # instead of paying the ~2s fan-out latency. CRITICAL: this runs with no
     # user_id, so the cron host's env must have the API keys for any
     # vendor you want pre-warmed (per-user-only keys won't apply here).
     beat_schedule={
-        "memory-dream-nightly-batch": {
-            "task": "tasks.scan_and_dream_batch",
-            "schedule": crontab(hour=3, minute=30),
-        },
         "model-catalog-daily-refresh": {
             "task": "tasks.refresh_model_catalog",
             "schedule": crontab(hour=4, minute=0),
         },
-        # Split durable work by resource class so model-backed memory jobs
-        # cannot head-of-line block indexing or object-storage cleanup.
+        # Split durable work by resource class so indexing and object-storage
+        # cleanup do not head-of-line block each other.
         "index-outbox-reconcile-every-five-minutes": {
             "task": "tasks.drain_index_outbox_jobs",
-            "schedule": crontab(minute="*/5"),
-            "options": {"expires": 240},
-        },
-        "intelligence-outbox-reconcile-every-five-minutes": {
-            "task": "tasks.drain_intelligence_outbox_jobs",
             "schedule": crontab(minute="*/5"),
             "options": {"expires": 240},
         },
@@ -152,8 +132,17 @@ celery_app.conf.update(
             "schedule": crontab(minute="5-59/10"),
             "options": {"expires": 540},
         },
-        # Daily orphan-upload cleanup (UP-3) — off-peak, after the memory
-        # dreaming batch.
+        "pending-automation-dispatch-repair": {
+            "task": "tasks.repair_pending_automation_turns",
+            "schedule": crontab(minute="*"),
+            "options": {"expires": 50},
+        },
+        "persistent-task-scheduler": {
+            "task": "tasks.schedule_due_persistent_tasks",
+            "schedule": crontab(minute="*"),
+            "options": {"expires": 50},
+        },
+        # Daily orphan-upload cleanup (UP-3) — off-peak.
         "uploads-sweep-orphans-daily": {
             "task": "tasks.sweep_orphan_file_assets",
             "schedule": crontab(hour=4, minute=20),

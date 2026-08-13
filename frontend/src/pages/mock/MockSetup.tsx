@@ -10,6 +10,8 @@ import {
   type PersonalResume,
 } from '@/api/resumes';
 import { parseJdForMock } from '@/api/mock';
+import type { MockClientUiResult, MockPrefillPayload } from '@/types/clientAction';
+import { JobOpportunitySelect } from '@/pages/career/JobOpportunitySelect';
 
 export type InterviewerStyle = 'friendly' | 'professional' | 'rigorous' | 'pressure';
 export type TargetQuestionCount = 15 | 20 | 30;
@@ -26,8 +28,11 @@ interface Props {
     interviewer_style: InterviewerStyle;
     tts_voice: TtsVoice;
     target_question_count: TargetQuestionCount;
+    job_opportunity_id?: string;
   }) => void;
   starting: boolean;
+  prefill?: MockPrefillPayload;
+  onPrefillApplied?: (result: MockClientUiResult) => void;
 }
 
 const STYLE_OPTIONS: Array<{ id: InterviewerStyle; label: string; desc: string }> = [
@@ -80,18 +85,21 @@ interface JdState {
 const EMPTY_RESUME: ResumeState = { filename: '', id: null, loading: false };
 const EMPTY_JD: JdState = { filename: '', parsing: false };
 
-export function MockSetup({ onReady, starting }: Props) {
+export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Props) {
   const [resume, setResume] = useState<ResumeState>(EMPTY_RESUME);
   const [jdDocument, setJdDocument] = useState<JdState>(EMPTY_JD);
   const [resumeMode, setResumeMode] = useState<'upload' | 'existing'>('existing');
   const [storedResumes, setStoredResumes] = useState<PersonalResume[]>([]);
   const [loadingResumes, setLoadingResumes] = useState(true);
-  const [jdMode, setJdMode] = useState<'upload' | 'paste'>('upload');
-  const [jdText, setJdText] = useState('');
-  const [style, setStyle] = useState<InterviewerStyle>('professional');
+  const [jdMode, setJdMode] = useState<'upload' | 'paste'>(prefill ? 'paste' : 'upload');
+  const [jdText, setJdText] = useState(prefill?.jd_text ?? '');
+  const [style, setStyle] = useState<InterviewerStyle>(
+    prefill?.interviewer_style ?? 'professional',
+  );
   const [ttsVoice, setTtsVoice] = useState<TtsVoice>(loadPreferredVoice);
   const [targetQuestionCount, setTargetQuestionCount] =
-    useState<TargetQuestionCount>(20);
+    useState<TargetQuestionCount>(prefill?.target_question_count ?? 20);
+  const [jobOpportunityId, setJobOpportunityId] = useState(prefill?.job_opportunity_id ?? '');
   const resumeRef = useRef<HTMLInputElement | null>(null);
   const jdRef = useRef<HTMLInputElement | null>(null);
 
@@ -102,16 +110,24 @@ export function MockSetup({ onReady, starting }: Props) {
         if (!alive) return;
         setStoredResumes(rs);
         const usable = rs.filter((resume) => resume.has_text || resume.parse_status === 'ready');
-        const selected = usable.find((resume) => resume.is_default) ?? usable[0];
+        const selected = prefill
+          ? usable.find((resume) => resume.id === prefill.resume_id)
+          : (usable.find((resume) => resume.is_default) ?? usable[0]);
         setResumeMode(selected ? 'existing' : 'upload');
         if (selected) {
           setResume({ filename: selected.title, id: selected.id, loading: false });
+          if (prefill) onPrefillApplied?.({ outcome: 'acknowledged' });
+        } else if (prefill) {
+          onPrefillApplied?.({
+            outcome: 'failed',
+            reason: '预填引用的简历在当前客户端已不可用',
+          });
         }
       })
       .catch(() => { /* non-fatal — just hide the picker */ })
       .finally(() => { if (alive) setLoadingResumes(false); });
     return () => { alive = false; };
-  }, []);
+  }, [onPrefillApplied, prefill]);
 
   useEffect(() => {
     try {
@@ -145,10 +161,10 @@ export function MockSetup({ onReady, starting }: Props) {
       const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 409) {
         // Two-active-resume limit hit — guide the user to pick an existing one.
-        toast.error('已有两份简历，请从“选已有”中选择，或到“资料与记忆 > 简历”管理');
+        toast.error('已有两份简历，请从“选已有”中选择，或到“资料 > 资料库”管理');
         setResumeMode('existing');
       } else if ((e as Error)?.message?.includes('解析')) {
-        toast.error('简历处理未完成，请到“资料与记忆 > 简历”查看或替换');
+        toast.error('简历处理未完成，请到“资料 > 资料库”查看或替换');
         setResumeMode('existing');
       } else {
         toast.error('简历上传失败');
@@ -234,6 +250,18 @@ export function MockSetup({ onReady, starting }: Props) {
           <p className="px-1 text-[12px] leading-relaxed text-stone-500">
             预计题量只用于控制面试节奏，实际题数可能因回答和追问有所变化。
           </p>
+          <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-[0_2px_10px_rgba(15,23,42,0.04)]">
+            <label className="text-[16px] font-semibold text-stone-800">关联岗位机会（可选）</label>
+            <p className="mt-1 text-[12px] text-stone-500">选择后，本次模拟面试及后续复盘会关联到该求职进展。</p>
+            <div className="mt-3">
+              <JobOpportunitySelect
+                value={jobOpportunityId}
+                onChange={setJobOpportunityId}
+                ariaLabel="模拟面试关联岗位"
+                emptyLabel="不关联岗位"
+              />
+            </div>
+          </div>
           <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-[0_2px_10px_rgba(15,23,42,0.04)]">
             <label htmlFor="tts-voice" className="text-[16px] font-semibold text-stone-800">
               面试官音色
@@ -264,6 +292,7 @@ export function MockSetup({ onReady, starting }: Props) {
                 interviewer_style: style,
                 tts_voice: ttsVoice,
                 target_question_count: targetQuestionCount,
+                job_opportunity_id: jobOpportunityId || undefined,
               })
             }
           >

@@ -45,6 +45,7 @@ from app.services.interview.interview_record_service import (
     STATUS_REVIEW_FAILED,
     STATUS_REVIEW_READY,
     STATUS_TRANSCRIBING,
+    InterviewOpportunityNotFoundError,
     interview_record_service,
 )
 from app.services.uploads.file_asset_service import (
@@ -111,6 +112,7 @@ async def analyze_interview_endpoint(
             resume_ctx=resume_ctx,
             jd_text=jd_text,
             jd_file_asset_id=jd_file_asset_id,
+            job_opportunity_id=body.job_opportunity_id,
             language=body.language,
         )
 
@@ -122,8 +124,14 @@ async def analyze_interview_endpoint(
         }
     except HTTPException:
         raise
+    except InterviewOpportunityNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=404, detail="Job opportunity not found"
+        ) from exc
     except Exception as exc:  # noqa: BLE001
         db.rollback()
+        logger.exception("interview analysis dispatch failed")
         raise HTTPException(status_code=500, detail=humanize_error(exc)) from exc
 
 
@@ -219,6 +227,7 @@ def list_interview_records(
             source=r.source,
             title=r.title or "",
             tag=r.tag,
+            job_opportunity_id=r.job_opportunity_id,
             status=r.status,
             created_at=r.created_at.isoformat() if r.created_at else "",
         )
@@ -249,6 +258,7 @@ def get_interview_record(
         "title": record.title,
         "tag": record.tag,
         "category": record.category,
+        "job_opportunity_id": record.job_opportunity_id,
         "status": record.status,
         "analyzed_qa_count": record.analyzed_qa_count,
         "audio_file_asset_id": record.audio_file_asset_id,
@@ -354,12 +364,20 @@ def update_interview_record(
     record = record_admin.get_owned_record(db, record_id, current_user.username)
     if record is None:
         raise HTTPException(status_code=404, detail="Interview record not found")
-    changed = record_admin.update_record_fields(
-        db,
-        record,
-        title=payload.title,
-        tag=payload.tag,
-    )
+    try:
+        changed = record_admin.update_record_fields(
+            db,
+            record,
+            title=payload.title,
+            tag=payload.tag,
+            job_opportunity_id=payload.job_opportunity_id,
+            update_job_opportunity="job_opportunity_id" in payload.model_fields_set,
+        )
+    except InterviewOpportunityNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=404, detail="Job opportunity not found"
+        ) from exc
     if not changed:
         raise HTTPException(status_code=400, detail="No field to update")
     return {
@@ -367,6 +385,7 @@ def update_interview_record(
         "id": record.id,
         "title": record.title,
         "tag": record.tag,
+        "job_opportunity_id": record.job_opportunity_id,
     }
 
 
@@ -379,9 +398,9 @@ def delete_interview_record(
 ):
     """Hard-delete an interview record and every trace tied to it.
 
-    See ``record_admin.delete_record_cascade`` for the full cascade
-    contract (chat sessions go, v3 memory survives, knowledge docs only
-    with ``cascade_knowledge=true``).
+    See ``record_admin.delete_record_cascade`` for the full cascade contract;
+    derived knowledge documents are included only when
+    ``cascade_knowledge=true``.
     """
     import logging
 

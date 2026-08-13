@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Column, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, Integer, String, Text
 
 from app.db.database import Base
 from app.db.types import UTCDateTime as DateTime
@@ -25,23 +25,18 @@ class InterviewRecord(Base):
     """
 
     __tablename__ = "interview_records"
-    # Composite indexes serving the two list paths:
-    #   * user_created — record list ordered by created_at desc
-    #   * user_last_dreamed — dreaming-worker selection
-    # See alembic 0001_baseline:96 and 0002_memory_v3_schema:162.
+    # Record list ordered by creation time.
     __table_args__ = (
         Index("ix_interview_records_user_created", "user_id", "created_at"),
-        Index(
-            "ix_interview_records_user_last_dreamed",
-            "user_id",
-            "last_dreamed_at",
+        CheckConstraint(
+            "debrief_guidance_version >= 0",
+            name="ck_interview_records_debrief_guidance_version",
         ),
     )
 
     id = Column(String, primary_key=True, default=_generate_record_id)
     # Stable users.id FK (CLEANUP #2). The API + record service resolve the
-    # caller's username via resolve_user_pk; the dreaming worker bridges this
-    # back to the username for the memory dispatch (memory keys on username).
+    # caller's username via resolve_user_pk.
     user_id = Column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -49,6 +44,15 @@ class InterviewRecord(Base):
         nullable=False,
     )
     source = Column(String, nullable=False)  # "upload" | "mock"
+
+    # Real interviews usually belong to one concrete hiring process; mocks
+    # may either practice for one process or remain general training.
+    job_opportunity_id = Column(
+        String(35),
+        ForeignKey("job_opportunities.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     title = Column(String, default="未命名面试")
     # Primary interview category (后端/算法/系统设计…) for list filtering/display.
@@ -80,7 +84,7 @@ class InterviewRecord(Base):
     jd_text_snapshot = Column(Text, nullable=True)
     resume_structured_snapshot_json = Column(
         Text, nullable=True
-    )  # ResumeEvidence w/ ref_ids
+    )  # Structured resume snapshot with exact source ref_ids.
     jd_structured_json = Column(Text, nullable=True)  # JDRequirements w/ ref_ids
 
     # Current transcript reference — full text/segments live in the dedicated
@@ -90,6 +94,13 @@ class InterviewRecord(Base):
     # Top-level analysis result (per-question rows in interview_qa)
     analysis_json = Column(Text, nullable=True)
     analysis_schema_version = Column(Integer, nullable=False, default=3)
+
+    # User-visible guidance shared only by debrief Conversations bound to this
+    # record. It is owned here rather than in a generic Project/Preference
+    # registry and does not grant Tool permission.
+    debrief_guidance_text = Column(Text, nullable=True)
+    debrief_guidance_source_message_id = Column(Integer, nullable=True)
+    debrief_guidance_version = Column(Integer, nullable=False, default=0)
 
     # Status & progress. Upload: pending→transcribing→analyzing→completed/failed.
     # Mock (wired in CONVERSATION-MOCK): mock_in_progress→processing_review→
@@ -102,10 +113,3 @@ class InterviewRecord(Base):
     created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
     completed_at = Column(DateTime, nullable=True)
-
-    # Dreaming cursor: when the dreaming worker last distilled this
-    # record's debrief sessions into long-term memory docs. NULL = never
-    # dreamed yet. Workers skip records where ``updated_at <=
-    # last_dreamed_at`` (no new content since last dream). See
-    # ``app.services.memory.dreaming_worker`` for the selection logic.
-    last_dreamed_at = Column(DateTime, nullable=True)

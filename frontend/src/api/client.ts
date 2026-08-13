@@ -9,6 +9,10 @@ import { API_BASE, apiUrl } from './apiUrl';
 export const apiClient = axios.create({
   baseURL: API_BASE,
   timeout: 30_000,
+  // The Gmail authorize response sets one path-scoped HttpOnly OAuth-state
+  // cookie. Split frontend/API deployments must accept it; normal API calls
+  // still authenticate with the explicit Bearer token.
+  withCredentials: true,
 });
 
 apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {

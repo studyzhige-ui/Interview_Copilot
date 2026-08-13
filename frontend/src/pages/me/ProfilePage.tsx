@@ -25,15 +25,6 @@ export function ProfilePage() {
   // the stored avatar_url alone so an S3-uploaded blob isn't clobbered.
   const [avatarUrlInput, setAvatarUrlInput] = useState('');
   const [bio, setBio] = useState('');
-  // Phase-H global-memory toggle (cross-session). When ON the v3 memory
-  // bundle (user_profile + knowledge / strategy / habit docs) is injected
-  // into the LLM prompt for new chat sessions. When OFF the prompt skips
-  // the bundle entirely — debrief reference materials still load (they
-  // belong to the interview record, not to memory). Storage is unaffected
-  // either way: the personalization view can still read the saved docs.
-  // Opt-in by design: ``false`` for new accounts; per-session override
-  // available via the chat header.
-  const [globalMemoryEnabled, setGlobalMemoryEnabled] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -70,7 +61,6 @@ export function ProfilePage() {
       setAvatarUrl(m.avatar_url ?? '');
       setAvatarUrlInput('');
       setBio(m.bio ?? '');
-      setGlobalMemoryEnabled(Boolean(m.global_memory_enabled));
     } catch {
       if (isMounted.current) toast.error('个人信息加载失败');
     } finally {
@@ -86,8 +76,7 @@ export function ProfilePage() {
     !!me &&
     (nickname !== (me.nickname ?? '') ||
       avatarUrlInput.trim().length > 0 ||
-      bio !== (me.bio ?? '') ||
-      globalMemoryEnabled !== Boolean(me.global_memory_enabled));
+      bio !== (me.bio ?? ''));
 
   const onSave = async () => {
     setSaving(true);
@@ -98,7 +87,6 @@ export function ProfilePage() {
       const patch: Parameters<typeof updateMe>[0] = {
         nickname: nickname.trim(),
         bio: bio.trim(),
-        global_memory_enabled: globalMemoryEnabled,
       };
       const inputTrim = avatarUrlInput.trim();
       if (inputTrim) {
@@ -109,7 +97,6 @@ export function ProfilePage() {
       setStoreMe(next);
       setAvatarUrl(next.avatar_url ?? '');
       setAvatarUrlInput('');
-      setGlobalMemoryEnabled(Boolean(next.global_memory_enabled));
       toast.success('已保存');
     } catch {
       toast.error('保存失败');
@@ -243,40 +230,6 @@ export function ProfilePage() {
             </div>
           </div>
 
-          {/* Phase-H global-memory toggle. When OFF, the v3 memory bundle
-              (user_profile + knowledge / strategy / habit docs) is NOT
-              injected into the LLM prompt for new chat sessions. Debrief
-              reference materials (bound to an interview record) still
-              load — those are interview context, not memory. Sessions
-              can override this default via the chat-header toggle. */}
-          <div className="block mb-3.5">
-            <div className="text-xs font-medium text-stone-700 mb-1.5">
-              全局记忆（跨会话）
-            </div>
-            <label className="flex items-start gap-3 px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-md cursor-pointer hover:bg-stone-100/60">
-              <input
-                type="checkbox"
-                checked={globalMemoryEnabled}
-                onChange={(e) => setGlobalMemoryEnabled(e.target.checked)}
-                className="mt-0.5 accent-primary-500"
-              />
-              <div className="flex-1">
-                <div className="text-sm text-stone-800">
-                  {globalMemoryEnabled ? '开启' : '关闭'} ·
-                  {globalMemoryEnabled
-                    ? ' 新会话默认会读取你的全局记忆（个人资料、知识 / 策略 / 习惯文档）'
-                    : ' 新会话默认不读取任何跨会话记忆'}
-                </div>
-                <div className="text-[11px] text-stone-500 mt-1 leading-relaxed">
-                  关闭后：当前会话的上下文（对话历史、本场面试的复盘资料）仍会正常加载，
-                  只是不再注入跨会话的全局记忆。已保存的记忆仍可在「个人资料」中查看 / 编辑，
-                  不会被删除。
-                  <br />
-                  每个对话栏上方的「全局记忆」按钮可单独覆盖本会话的默认值。
-                </div>
-              </div>
-            </label>
-          </div>
         </div>
 
         <div className="mt-6 flex justify-end">

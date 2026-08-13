@@ -5,6 +5,7 @@ sweeper opens its own SessionLocal, so we monkeypatch the module's.
 """
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
@@ -219,6 +220,78 @@ def test_stale_factless_pipeline_rows_are_redispatched(db_session, monkeypatch):
     assert knowledge_calls == [document.id]
     assert resume_calls == [resume.id]
     assert document.task_id == "task-recovered"
+
+
+def test_pending_automation_repair_redispatches_bounded_candidates(
+    db_session,
+    monkeypatch,
+):
+    from app.services import persistent_task_service
+    from app.task_queue import dispatch
+    from app.worker.tasks import maintenance
+
+    monkeypatch.setattr(maintenance, "SessionLocal", lambda: _CtxSession(db_session))
+    monkeypatch.setattr(
+        persistent_task_service,
+        "repairable_automation_turn_ids",
+        lambda _db, **_kwargs: ["automation-turn-1", "automation-turn-2"],
+    )
+    monkeypatch.setattr(
+        persistent_task_service,
+        "repairable_persistent_task_ids",
+        lambda _db, **_kwargs: [],
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(dispatch, "dispatch_conversation_turn", calls.append)
+
+    result = maintenance.repair_pending_automation_turns.run()
+
+    assert result == {
+        "turn_candidates": 2,
+        "task_candidates": 0,
+        "admitted": 0,
+        "dispatched": 2,
+    }
+    assert calls == ["automation-turn-1", "automation-turn-2"]
+
+
+def test_persistent_task_scheduler_persists_before_dispatch(db_session, monkeypatch):
+    from app.services import persistent_task_service
+    from app.task_queue import dispatch
+    from app.worker.tasks import maintenance
+
+    monkeypatch.setattr(maintenance, "SessionLocal", lambda: _CtxSession(db_session))
+    monkeypatch.setattr(
+        persistent_task_service,
+        "due_persistent_task_ids",
+        lambda _db, **_kwargs: ["task-due", "task-raced"],
+    )
+
+    def schedule(_db, *, task_id, **_kwargs):
+        if task_id == "task-raced":
+            return None
+        return SimpleNamespace(
+            should_dispatch=True,
+            run_request=SimpleNamespace(turn_id="scheduled-turn"),
+        )
+
+    monkeypatch.setattr(
+        persistent_task_service,
+        "schedule_due_persistent_task",
+        schedule,
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(dispatch, "dispatch_conversation_turn", calls.append)
+
+    result = maintenance.schedule_due_persistent_tasks.run()
+
+    assert result == {
+        "candidates": 2,
+        "triggered": 1,
+        "admitted": 1,
+        "dispatched": 1,
+    }
+    assert calls == ["scheduled-turn"]
 
 
 # ── UP-3: orphan file-asset sweeper ─────────────────────────────────────

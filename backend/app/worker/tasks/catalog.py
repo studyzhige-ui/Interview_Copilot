@@ -1,20 +1,16 @@
 """Daily model-catalog refresh task (P6-K, light queue).
 
 Why this is a Celery beat task and not a separate cron entry on the
-host: we already run Celery beat for the dreaming nightly, the worker
-image has the full FastAPI / RAG stack imported and ready, and using
-beat means there's exactly one place to look for "what scheduled
-work runs in this project" (``celery_app.py: beat_schedule``).
+host: the worker image already has the application stack, and Beat keeps
+scheduled work in one explicit catalog (``celery_app.py: beat_schedule``).
 
 Why daily (not 24h TTL natural expiry): the natural-expiry path only
 refreshes on the FIRST user request after the cache expires — and
 that user pays the per-vendor /v1/models roundtrip latency (~200ms-2s
 each, ~9 vendors in parallel = ~2s overall). A pre-warmed cache means
 the morning's first user gets an instant /catalog response with the
-day's freshest model list. The scheduled time (04:00) is well before
-the workday so production users never collide with the refresh
-window, and well after the dreaming batch (03:30) so the two heavy
-jobs don't share the LLM/network at the same moment.
+day's freshest model list. The scheduled time (04:00) is before the workday so
+production users do not collide with the refresh window.
 """
 
 import logging

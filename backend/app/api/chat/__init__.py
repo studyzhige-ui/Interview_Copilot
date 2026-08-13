@@ -4,10 +4,8 @@ Submodules:
   - sessions       : session CRUD + full transcript
   - streaming      : SSE QA streaming
 
-Memory CRUD endpoints used to live here as ``chat/memory.py`` but were
-moved out in P8-1 — they manage cross-session memory docs (knowledge /
-strategy / habit / user_profile), not chat-session operations.
-See ``app.api.memory`` for the new home.
+Legacy cross-session Memory CRUD is intentionally not mounted. Stage 0 keeps
+the mixed store out of runtime Context/Recall until canonical owners exist.
 
 The package mounts every submodule's router into a single ``router`` so
 that ``app.main`` can keep its existing one-line include:
@@ -17,9 +15,10 @@ that ``app.main`` can keep its existing one-line include:
 
 from fastapi import APIRouter
 
-from app.api.chat import sessions, streaming
+from app.api.chat import client_actions, sessions, streaming
 
 router = APIRouter()
+router.include_router(client_actions.router)
 router.include_router(sessions.router)
 router.include_router(streaming.router)
 

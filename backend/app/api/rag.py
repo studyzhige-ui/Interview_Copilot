@@ -12,7 +12,6 @@ from app.core.error_messages import humanize_error
 from app.core.rate_limit import RATE_EXPENSIVE, RATE_UPLOAD, limiter
 from app.core.security import get_current_user
 from app.db.database import get_db
-from app.models.chat import Conversation
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
 from app.rag.application.service import rag_service
@@ -159,30 +158,6 @@ def create_knowledge_document(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        conversation_id: str | None = None
-        if body.source_kind == SourceKindEnum.chat_attachment:
-            if not body.conversation_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail="聊天附件必须绑定会话",
-                )
-            conversation = (
-                db.query(Conversation)
-                .filter(
-                    Conversation.id == body.conversation_id,
-                    Conversation.user_id == current_user.id,
-                )
-                .first()
-            )
-            if conversation is None:
-                raise HTTPException(status_code=404, detail="Conversation not found")
-            conversation_id = conversation.id
-        elif body.conversation_id:
-            raise HTTPException(
-                status_code=400,
-                detail="只有聊天附件可以绑定会话",
-            )
-
         upload = get_owned_file_asset(
             db,
             file_asset_id=body.upload_id,
@@ -211,7 +186,7 @@ def create_knowledge_document(
 
         document = KnowledgeDocument(
             user_id=current_user.id,
-            conversation_id=conversation_id,
+            conversation_id=None,
             file_asset_id=upload.id,
             title=body.title or default_title(upload),
             category=body.category.strip() or "默认",
@@ -308,6 +283,7 @@ def get_knowledge_document(
         .filter(
             KnowledgeDocument.id == document_id,
             KnowledgeDocument.user_id == current_user.id,
+            KnowledgeDocument.source_kind != "chat_attachment",
             KnowledgeDocument.deleted_at.is_(None),
         )
         .first()
@@ -329,6 +305,7 @@ def update_knowledge_document(
         .filter(
             KnowledgeDocument.id == document_id,
             KnowledgeDocument.user_id == current_user.id,
+            KnowledgeDocument.source_kind != "chat_attachment",
         )
         .first()
     )
@@ -372,6 +349,7 @@ def delete_knowledge_document(
         .filter(
             KnowledgeDocument.id == document_id,
             KnowledgeDocument.user_id == current_user.id,
+            KnowledgeDocument.source_kind != "chat_attachment",
         )
         .first()
     )

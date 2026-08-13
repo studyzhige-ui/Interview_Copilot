@@ -1,4 +1,4 @@
-"""Deterministic, evidence-backed cross-interview ability report."""
+"""Deterministic cross-interview report over canonical AbilitySignal state."""
 
 from __future__ import annotations
 
@@ -31,23 +31,39 @@ def _evidence_count(refs: Any) -> int:
 
 
 def _extract_ability_records(db: Any, user_id: str) -> list[dict[str, Any]]:
-    """Read active states without inventing scores for legacy label-only rows."""
-    from app.services.memory import memory_ability_state_service
+    """Read the one canonical inferred-state owner used by product surfaces."""
+    from app.core.user_identity import resolve_user_pk
+    from app.models.ability_signal import AbilitySignal, AbilitySignalSourceRef
 
     records: list[dict[str, Any]] = []
-    for state in memory_ability_state_service.load_active(user_id, db=db):
+    user_pk = resolve_user_pk(db, user_id)
+    if user_pk is None:
+        return records
+    states = (
+        db.query(AbilitySignal)
+        .filter(
+            AbilitySignal.user_id == user_pk,
+            AbilitySignal.status.in_(("active", "disputed")),
+        )
+        .order_by(AbilitySignal.formed_at.desc(), AbilitySignal.id.desc())
+        .all()
+    )
+    for state in states:
+        source_count = (
+            db.query(AbilitySignalSourceRef.id)
+            .filter(AbilitySignalSourceRef.ability_signal_id == state.id)
+            .count()
+        )
         records.append(
             {
                 "topic": state.topic,
-                "skill_type": state.skill_type,
-                "mastery_level": state.mastery_level,
+                "skill_type": state.signal_type,
+                "mastery_level": state.level,
                 "summary": state.summary or "",
-                "score": state.ability_score,
-                "score_version": state.score_version,
-                "evidence_count": _evidence_count(state.evidence_refs_json),
-                "time": state.last_evidence_at.isoformat()
-                if state.last_evidence_at
-                else "",
+                "score": state.score,
+                "score_version": state.rubric_version,
+                "evidence_count": source_count,
+                "time": state.formed_at.isoformat() if state.formed_at else "",
             }
         )
     return records
@@ -173,7 +189,7 @@ def _build_report(
             f"覆盖 {len(measured)}/{len(FIXED_AXES)} 个能力维度；"
             "旧的定性状态不会被伪造为数值。"
         ),
-        "generated_from": "memory_ability_states",
+        "generated_from": "ability_signals",
     }
 
 

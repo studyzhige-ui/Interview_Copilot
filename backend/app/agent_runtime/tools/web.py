@@ -21,9 +21,11 @@ from urllib.parse import urljoin
 import httpx
 from pydantic import BaseModel, Field
 
-from app.agent_runtime.tool_registry import AgentToolContext, ToolEntry, registry
+from app.agent_runtime.tool_registry import AgentToolContext, ToolDefinition, registry
+from app.agent_runtime.tool_policy import ToolEffect
 from app.core.ssrf import UrlNotSafe as _UrlNotSafe
-from app.core.ssrf import validate_safe_url as _validate_safe_url
+from app.core.ssrf import resolve_safe_url as _resolve_safe_url
+from app.core.ssrf import validate_safe_url as _validate_safe_url  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -73,12 +75,6 @@ class WebSearchArgs(BaseModel):
     limit: int = Field(default=5, ge=1, le=10, description="Max results")
 
 
-def _tavily_available(user_id: str | None = None) -> bool:
-    # Per-user key OR env key (AGT-9): a UI-key-only deployment used to
-    # hide web_search even for users who had configured their own key.
-    return bool(_resolve_tavily_key(user_id))
-
-
 def _resolve_tavily_key(user_id: str | None) -> str:
     """Prefer per-user encrypted key, fall back to global env var."""
     if user_id:
@@ -91,7 +87,7 @@ def _resolve_tavily_key(user_id: str | None) -> str:
             if per_user:
                 return per_user
         except Exception as exc:  # noqa: BLE001
-            logger.warning("tavily per-user key lookup failed: %s", exc)
+            logger.warning("tavily per-user key lookup failed (%s)", type(exc).__name__)
     return os.getenv("TAVILY_API_KEY", "")
 
 
@@ -101,11 +97,15 @@ async def _web_search_handler(
 ) -> dict[str, Any]:
     api_key = _resolve_tavily_key(ctx.user_id)
     if not api_key:
-        return {"error": "TAVILY_API_KEY not set (and no per-user key configured)"}
+        return {
+            "error": "connection_required",
+            "provider": "tavily",
+            "required_scope": "web_search",
+        }
 
     timeout = httpx.Timeout(15.0)
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             resp = await client.post(
                 "https://api.tavily.com/search",
                 json={
@@ -125,7 +125,8 @@ async def _web_search_handler(
     except httpx.TimeoutException:
         return {"error": "Tavily API request timed out", "query": args.query}
     except Exception as exc:
-        return {"error": f"Tavily API request failed: {exc}", "query": args.query}
+        logger.warning("Tavily request failed (%s)", type(exc).__name__)
+        return {"error": "Tavily API request failed", "query": args.query}
 
     results = []
     for item in data.get("results", []):
@@ -166,59 +167,74 @@ async def _read_url_handler(
         "Accept": "text/html,application/xhtml+xml,text/plain",
     }
 
-    # SSRF guard — refuse before opening the TCP socket.
-    try:
-        await asyncio.to_thread(_validate_safe_url, args.url)
-    except _UrlNotSafe as exc:
-        logger.warning("read_url refused unsafe url=%r: %s", args.url, exc)
-        return {"error": f"refused by safety check: {exc}", "url": args.url}
-
     try:
         async with httpx.AsyncClient(
             timeout=timeout,
             follow_redirects=False,
+            trust_env=False,
         ) as client:
             current_url = args.url
-            resp = None
-            for _ in range(_MAX_REDIRECTS + 1):
-                resp = await client.get(current_url, headers=headers)
-                if resp.status_code not in (301, 302, 303, 307, 308):
-                    break
-                location = resp.headers.get("location", "")
-                if not location:
-                    break
-                next_url = urljoin(str(resp.url), location)
+            raw_bytes = b""
+            content_type = ""
+            encoding = "utf-8"
+            for hop in range(_MAX_REDIRECTS + 1):
                 try:
-                    await asyncio.to_thread(_validate_safe_url, next_url)
+                    resolved = await asyncio.to_thread(_resolve_safe_url, current_url)
                 except _UrlNotSafe as exc:
-                    logger.warning(
-                        "read_url refused redirect target=%r: %s",
-                        next_url,
-                        exc,
-                    )
+                    logger.warning("read_url refused unsafe target: %s", exc)
                     return {
-                        "error": f"refused redirect to unsafe url: {exc}",
+                        "error": (
+                            f"refused redirect to unsafe url: {exc}"
+                            if hop
+                            else f"refused by safety check: {exc}"
+                        ),
                         "url": args.url,
                     }
-                current_url = next_url
+
+                request_headers = {**headers, "Host": resolved.host_header}
+                extensions = (
+                    {"sni_hostname": resolved.sni_hostname}
+                    if resolved.sni_hostname
+                    else None
+                )
+                async with client.stream(
+                    "GET",
+                    resolved.connect_url,
+                    headers=request_headers,
+                    extensions=extensions,
+                ) as resp:
+                    if resp.status_code in (301, 302, 303, 307, 308):
+                        location = resp.headers.get("location", "")
+                        if not location:
+                            return {
+                                "error": f"HTTP {resp.status_code}",
+                                "url": args.url,
+                            }
+                        current_url = urljoin(current_url, location)
+                        continue
+                    if resp.status_code != 200:
+                        return {
+                            "error": f"HTTP {resp.status_code}",
+                            "url": args.url,
+                        }
+                    content_type = resp.headers.get("content-type", "")
+                    encoding = resp.encoding or "utf-8"
+                    body = bytearray()
+                    async for chunk in resp.aiter_bytes():
+                        if len(body) + len(chunk) > _MAX_HTTP_BYTES:
+                            return {
+                                "error": (
+                                    "Page too large "
+                                    f"(limit {_MAX_HTTP_BYTES // (1024 * 1024)} MB)"
+                                ),
+                                "url": args.url,
+                            }
+                        body.extend(chunk)
+                    raw_bytes = bytes(body)
+                    break
             else:
                 return {"error": "too many redirects", "url": args.url}
-
-        assert resp is not None  # noqa: S101
-        if resp.status_code != 200:
-            return {"error": f"HTTP {resp.status_code}", "url": args.url}
-
-        # Response size guard — refuse before expensive conversion.
-        raw_bytes = resp.content
-        if len(raw_bytes) > _MAX_HTTP_BYTES:
-            size_mb = len(raw_bytes) / (1024 * 1024)
-            return {
-                "error": f"Page too large ({size_mb:.1f} MB, limit {_MAX_HTTP_BYTES // (1024 * 1024)} MB)",
-                "url": args.url,
-            }
-
-        content_type = resp.headers.get("content-type", "")
-        raw_text = resp.text
+        raw_text = raw_bytes.decode(encoding, errors="replace")
 
         # HTML → Markdown conversion with noise-tag stripping.
         if "html" in content_type:
@@ -237,7 +253,7 @@ async def _read_url_handler(
         content = f"{_EXTERNAL_CONTENT_NOTICE}{text.strip()}"
 
         return {
-            "url": str(resp.url),
+            "url": current_url,
             "title": title,
             "content": content,
             "char_count": len(text),
@@ -247,7 +263,8 @@ async def _read_url_handler(
     except httpx.TimeoutException:
         return {"error": "Request timed out", "url": args.url}
     except Exception as exc:
-        return {"error": f"Failed to fetch URL: {exc}", "url": args.url}
+        logger.warning("read_url request failed (%s)", type(exc).__name__)
+        return {"error": "Failed to fetch URL", "url": args.url}
 
 
 def _html_to_markdown(html: str) -> str:
@@ -314,7 +331,7 @@ def _extract_title(html: str) -> str:
 # ── Registration ────────────────────────────────────────────────────────
 
 registry.register(
-    ToolEntry(
+    ToolDefinition(
         name="web_search",
         description=(
             "Search the internet via Tavily. Returns titles, URLs, and "
@@ -324,15 +341,17 @@ registry.register(
         ),
         args_model=WebSearchArgs,
         handler=_web_search_handler,
-        concurrency_safe=True,
-        check_fn=_tavily_available,
+        effect=ToolEffect.READ,
+        # The user's search connection is checked at execution time; serialize
+        # this boundary so a connection wait pauses the untouched batch.
+        concurrency_safe=False,
         max_result_chars=12_000,
         emoji="🔍",
     )
 )
 
 registry.register(
-    ToolEntry(
+    ToolDefinition(
         name="read_url",
         description=(
             "Fetch a web page and extract its text content as Markdown. "
@@ -343,6 +362,7 @@ registry.register(
         ),
         args_model=ReadUrlArgs,
         handler=_read_url_handler,
+        effect=ToolEffect.READ,
         concurrency_safe=True,
         max_result_chars=16_000,
         emoji="📄",

@@ -299,6 +299,31 @@ def test_build_llm_instance_applies_user_connection_overrides(
     assert client.default_headers["X-Tenant"] == "tenant-a"
 
 
+def test_native_anthropic_client_removes_catalog_v1_suffix(monkeypatch):
+    """The native SDK appends /v1/messages; catalog REST bases already end /v1."""
+
+    captured: dict = {}
+    profile = _mkprofile("anthropic/claude-test", provider="anthropic")
+    monkeypatch.setattr(llm_client_factory, "resolve_api_key", lambda *_a, **_k: "sk")
+    monkeypatch.setattr(
+        llm_client_factory,
+        "_load_user_provider_overrides",
+        lambda *_a, **_k: llm_client_factory._NO_OVERRIDES,
+    )
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(llm_client_factory, "AsyncAnthropic", FakeAnthropic)
+    llm_client_factory._async_anthropic_cache.clear()
+
+    llm_client_factory.get_async_anthropic_client(profile, user_id="alice")
+
+    assert captured["base_url"] == "https://api.example.com"
+    assert captured["max_retries"] == 0
+
+
 # ── api_base override (P6-L plumbing for P6-M) ───────────────────────────
 
 

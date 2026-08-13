@@ -9,9 +9,126 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
+import httpx
+
 from app.core.config import settings
-from app.core.ssrf import validate_safe_url
+from app.core.ssrf import resolve_safe_url, validate_safe_url
 from app.services.capabilities.mcp_server_service import MCPServerConfig
+
+
+# A stdio MCP server is a deployment-trusted subprocess, but that does not
+# make every secret held by the API process part of its contract.  Keep only
+# the small set needed to locate executables and run them reliably across
+# POSIX and Windows.  Anything else must be supplied explicitly in the MCP
+# server's encrypted ``env`` configuration.
+_STDIO_INHERITED_ENV_KEYS = (
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+)
+_STDIO_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_STDIO_ENV_MAX_COUNT = 64
+_STDIO_ENV_MAX_NAME_CHARS = 128
+_STDIO_ENV_MAX_TOTAL_CHARS = 32_000
+
+
+class _PinnedAsyncTransport(httpx.AsyncBaseTransport):
+    """Resolve-once transport for one remote MCP origin.
+
+    Every request is dialled through the already-validated IP while retaining
+    the original Host header and TLS SNI. Absolute URLs for any other host are
+    rejected rather than creating an unchecked redirect/endpoint hop.
+    """
+
+    def __init__(self, *, hostname: str, connect_host: str, host_header: str) -> None:
+        self._hostname = hostname.casefold()
+        self._connect_host = connect_host
+        self._host_header = host_header
+        self._inner = httpx.AsyncHTTPTransport()
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        request_host = (request.url.host or "").casefold()
+        if request_host not in {self._hostname, self._connect_host.casefold()}:
+            raise httpx.ConnectError("MCP endpoint changed origin", request=request)
+        request.url = request.url.copy_with(host=self._connect_host)
+        request.headers["host"] = self._host_header
+        request.extensions["sni_hostname"] = self._hostname
+        return await self._inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+def _validated_stdio_config_env(configured: dict[str, str] | None) -> dict[str, str]:
+    """Validate the env explicitly granted to one stdio MCP server.
+
+    Validation happens again at execution time so legacy or directly-created
+    database rows cannot bypass the API schema.  Error messages deliberately
+    name only the key and never reveal configured values.
+    """
+
+    if not configured:
+        return {}
+    if not isinstance(configured, dict):
+        raise ValueError("stdio MCP env must be a string mapping")
+    if len(configured) > _STDIO_ENV_MAX_COUNT:
+        raise ValueError(
+            f"stdio MCP env has too many entries (max {_STDIO_ENV_MAX_COUNT})"
+        )
+
+    validated: dict[str, str] = {}
+    seen_names: set[str] = set()
+    total_chars = 0
+    for name, value in configured.items():
+        if not isinstance(name, str) or not isinstance(value, str):
+            raise ValueError("stdio MCP env keys and values must be strings")
+        if (
+            not name
+            or len(name) > _STDIO_ENV_MAX_NAME_CHARS
+            or _STDIO_ENV_NAME_RE.fullmatch(name) is None
+        ):
+            raise ValueError(f"invalid stdio MCP env key: {name!r}")
+        if "\x00" in value:
+            raise ValueError(f"stdio MCP env value contains NUL: {name!r}")
+        folded_name = name.casefold()
+        if folded_name in seen_names:
+            raise ValueError(f"duplicate stdio MCP env key: {name!r}")
+        seen_names.add(folded_name)
+        total_chars += len(name) + len(value) + 2
+        if total_chars > _STDIO_ENV_MAX_TOTAL_CHARS:
+            raise ValueError(
+                "stdio MCP env is too large "
+                f"(max {_STDIO_ENV_MAX_TOTAL_CHARS} characters)"
+            )
+        validated[name] = value
+    return validated
+
+
+def _stdio_environment(configured: dict[str, str] | None) -> dict[str, str]:
+    """Build the exact environment passed to a stdio MCP subprocess."""
+
+    inherited = {
+        name: value
+        for name in _STDIO_INHERITED_ENV_KEYS
+        if (value := os.environ.get(name)) is not None
+    }
+    for name, value in _validated_stdio_config_env(configured).items():
+        # Avoid ambiguous duplicate keys on Windows, whose environment is
+        # case-insensitive, while preserving the explicitly configured spelling.
+        for inherited_name in tuple(inherited):
+            if inherited_name.casefold() == name.casefold():
+                inherited.pop(inherited_name)
+        inherited[name] = value
+    return inherited
 
 
 @dataclass(frozen=True)
@@ -91,6 +208,9 @@ class MCPManager:
 
         validate_transport(config.transport)
         if config.transport == "stdio":
+            if not config.command:
+                raise ValueError("stdio MCP command is missing")
+            _validated_stdio_config_env(config.env)
             return
         if not config.url:
             raise ValueError("MCP server URL is missing")
@@ -106,22 +226,36 @@ class MCPManager:
 
         async with AsyncExitStack() as stack:
             if config.transport == "streamable_http":
-                import httpx2
-
+                resolved = await asyncio.to_thread(
+                    resolve_safe_url,
+                    config.url or "",
+                    allow_private=settings.MCP_ALLOW_PRIVATE_NETWORKS,
+                )
+                transport = _PinnedAsyncTransport(
+                    hostname=resolved.hostname,
+                    connect_host=httpx.URL(resolved.connect_url).host,
+                    host_header=resolved.host_header,
+                )
                 client = await stack.enter_async_context(
-                    httpx2.AsyncClient(
-                        headers=config.headers,
+                    httpx.AsyncClient(
+                        headers={**config.headers, "Host": resolved.host_header},
                         timeout=settings.AGENT_TOOL_TIMEOUT_SECONDS,
+                        # A server-side user-configured connection must not be
+                        # silently rerouted through process-level proxy env or
+                        # follow a redirect to a target that was never checked.
+                        trust_env=False,
+                        follow_redirects=False,
+                        transport=transport,
                     )
                 )
                 streams = await stack.enter_async_context(
-                    streamable_http_client(config.url or "", http_client=client)
+                    streamable_http_client(resolved.connect_url, http_client=client)
                 )
             else:
                 params = StdioServerParameters(
                     command=config.command or "",
                     args=config.args,
-                    env={**os.environ, **config.env},
+                    env=_stdio_environment(config.env),
                 )
                 streams = await stack.enter_async_context(stdio_client(params))
             session = await stack.enter_async_context(
@@ -164,7 +298,7 @@ class MCPManager:
             raise
         except BaseException as exc:
             runtime.status = "failed"
-            runtime.last_error = str(exc)
+            runtime.last_error = type(exc).__name__
             while not runtime.queue.empty():
                 request = runtime.queue.get_nowait()
                 if not request.future.done():
@@ -256,7 +390,7 @@ class MCPManager:
         failures: dict[int, str] = {}
         for config, result in zip(configs, results, strict=True):
             if isinstance(result, BaseException):
-                failures[config.id] = str(result)
+                failures[config.id] = type(result).__name__
             else:
                 tools.extend(result)
         return tools, failures

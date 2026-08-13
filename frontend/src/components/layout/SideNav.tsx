@@ -3,11 +3,17 @@ import { NavLink } from 'react-router-dom';
 import {
   ClipboardList,
   Mic,
-  MessageSquare,
   BarChart3,
   Library,
   Cpu,
   Puzzle,
+  BriefcaseBusiness,
+  FileText,
+  UserRoundSearch,
+  Bot,
+  TimerReset,
+  Settings,
+  SlidersHorizontal,
   Pin,
   PinOff,
   ChevronLeft,
@@ -29,21 +35,37 @@ interface NavGroup {
 
 const GROUPS: NavGroup[] = [
   {
+    label: 'Copilot',
+    items: [
+      { to: '/general-chat', label: '求职 Copilot', icon: Bot },
+      { to: '/persistent-tasks', label: '持续任务', icon: TimerReset },
+    ],
+  },
+  {
+    label: '求职管理',
+    items: [
+      { to: '/career-profile', label: '求职档案', icon: UserRoundSearch },
+      { to: '/career-process', label: '求职进程', icon: BriefcaseBusiness },
+      { to: '/artifacts', label: '求职材料', icon: FileText },
+    ],
+  },
+  {
     label: '面试工作台',
     items: [
       { to: '/mock', label: '模拟面试', icon: Mic },
       { to: '/review', label: '面试复盘', icon: ClipboardList },
-      { to: '/general-chat', label: '自由对话', icon: MessageSquare },
       { to: '/analytics', label: '能力成长', icon: BarChart3 },
     ],
   },
   {
     label: '资料',
-    items: [{ to: '/library', label: '资料与记忆', icon: Library }],
+    items: [{ to: '/library', label: '资料库', icon: Library }],
   },
   {
-    label: '配置',
+    label: '设置与连接',
     items: [
+      { to: '/settings/personalization', label: '协作偏好', icon: SlidersHorizontal },
+      { to: '/settings/connections', label: '外部连接', icon: Settings },
       { to: '/models', label: '回答模型', icon: Cpu },
       { to: '/capabilities', label: 'Skills 与 MCP', icon: Puzzle },
     ],

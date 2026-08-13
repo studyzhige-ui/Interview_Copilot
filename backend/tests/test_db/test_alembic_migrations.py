@@ -174,6 +174,15 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "mock_interview_runtime",
         "conversations",
         "conversation_messages",
+        "conversation_turns",
+        "job_opportunity_direction_links",
+        "pending_submissions",
+        "persistent_tasks",
+        "persistent_task_triggers",
+        "agent_tool_calls",
+        "gmail_integration_accounts",
+        "gmail_oauth_credentials",
+        "gmail_oauth_states",
         "memory_documents",
         "memory_ability_states",
         "memory_audit_logs",
@@ -188,14 +197,25 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     outbox_columns = {c["name"]: c for c in insp.get_columns("outbox_jobs")}
     turn_columns = {c["name"]: c for c in insp.get_columns("conversation_turns")}
     user_columns = {c["name"]: c for c in insp.get_columns("users")}
+    conversation_columns = {c["name"]: c for c in insp.get_columns("conversations")}
     runtime_columns = {c["name"]: c for c in insp.get_columns("mock_interview_runtime")}
     record_columns = {c["name"]: c for c in insp.get_columns("interview_records")}
     qa_columns = {c["name"]: c for c in insp.get_columns("interview_qa")}
     ability_columns = {c["name"]: c for c in insp.get_columns("memory_ability_states")}
     chunk_columns = {c["name"]: c for c in insp.get_columns("document_chunks")}
+    gmail_credential_columns = {
+        c["name"]: c for c in insp.get_columns("gmail_oauth_credentials")
+    }
+    gmail_state_columns = {c["name"]: c for c in insp.get_columns("gmail_oauth_states")}
     assert isinstance(outbox_columns["payload_json"]["type"], JSONB)
     assert isinstance(turn_columns["budget_json"]["type"], JSONB)
     assert isinstance(turn_columns["question_indexes_json"]["type"], JSONB)
+    assert isinstance(turn_columns["tool_snapshot_json"]["type"], JSONB)
+    assert isinstance(turn_columns["loaded_tool_schemas_json"]["type"], JSONB)
+    assert "capability_snapshot_json" not in turn_columns
+    assert "loaded_schemas_json" not in turn_columns
+    assert "global_memory_enabled" not in user_columns
+    assert "global_memory_enabled" not in conversation_columns
     assert user_columns["created_at"]["type"].timezone is True
     assert runtime_columns["answer_claimed_at"]["type"].timezone is True
     assert isinstance(runtime_columns["plan_json"]["type"], JSONB)
@@ -219,6 +239,12 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     assert isinstance(ability_columns["ability_score"]["type"], Float)
     assert chunk_columns["document_id"]["nullable"] is False
     assert "lexical_index_id" not in chunk_columns
+    assert "access_token" not in gmail_credential_columns
+    assert "refresh_token" not in gmail_credential_columns
+    assert gmail_credential_columns["access_token_ciphertext"]["nullable"] is False
+    assert gmail_credential_columns["refresh_token_ciphertext"]["nullable"] is False
+    assert gmail_state_columns["code_verifier_ciphertext"]["nullable"] is False
+    assert "code_verifier" not in gmail_state_columns
     assert "interview_plan" not in record_columns
     assert "debrief_summary" not in record_columns
 
@@ -232,6 +258,9 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "agent_runs",
         "agent_steps",
         "mock_interview_sessions",
+        "conversation_capability_states",
+        "agent_checkpoints",
+        "session_tasks",
     }
     leftover = legacy & tables
     assert not leftover, f"Legacy tables still present: {leftover}"
@@ -362,8 +391,8 @@ def test_interview_record_children_cascade(fresh_pg_db, monkeypatch):
             text(
                 "INSERT INTO users "
                 "(id, username, hashed_password, email_verified, "
-                "global_memory_enabled, created_at, updated_at) "
-                "VALUES (1, 'alice', 'x', FALSE, FALSE, NOW(), NOW())"
+                "created_at, updated_at) "
+                "VALUES (1, 'alice', 'x', FALSE, NOW(), NOW())"
             )
         )
         conn.execute(
@@ -391,16 +420,16 @@ def test_interview_record_children_cascade(fresh_pg_db, monkeypatch):
             )
         )
         conn.execute(
-                text(
-                    "INSERT INTO mock_interview_runtime "
-                    "(user_id, interview_record_id, conversation_id, "
-                    "current_stage_key, current_question_message_id, plan_json, "
-                    "interviewer_style, target_question_count, last_activity_at) "
-                    "VALUES (1, 'ir_cascade', 'conv_cascade', "
-                    "'self_intro', 1, '[{\"key\": \"self_intro\"}]', "
-                    "'professional', 20, NOW())"
-                )
+            text(
+                "INSERT INTO mock_interview_runtime "
+                "(user_id, interview_record_id, conversation_id, "
+                "current_stage_key, current_question_message_id, plan_json, "
+                "interviewer_style, target_question_count, last_activity_at) "
+                "VALUES (1, 'ir_cascade', 'conv_cascade', "
+                "'self_intro', 1, '[{\"key\": \"self_intro\"}]', "
+                "'professional', 20, NOW())"
             )
+        )
 
     # The parent delete must not raise or leave orphan rows.
     with engine.begin() as conn:

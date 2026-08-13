@@ -18,6 +18,7 @@ import { BlockChain } from './MessageBlocks';
 export function MessageList({
   listRef,
   activeSessionId,
+  activeTurnId,
   externalMode,
   messages,
   partial,
@@ -30,6 +31,7 @@ export function MessageList({
 }: {
   listRef: React.MutableRefObject<HTMLDivElement | null>;
   activeSessionId: string | null;
+  activeTurnId: string | null;
   externalMode: boolean;
   messages: UIMessage[];
   partial: string;
@@ -90,7 +92,14 @@ export function MessageList({
               style={{ position: 'absolute', top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` }}
             >
               <div className="pb-3">
-                <Bubble role={m.role} content={m.content} blocks={m.blocks} sources={m.sources} />
+                <Bubble
+                  role={m.role}
+                  content={m.content}
+                  blocks={m.blocks}
+                  sources={m.sources}
+                  sessionId={activeSessionId}
+                  turnId={m.turnId}
+                />
               </div>
             </div>
           );
@@ -104,7 +113,12 @@ export function MessageList({
                 the persisted assistant bubble — what you see during
                 streaming matches what you see after refresh. */}
             {inflightBlocks.length > 0 && (
-              <BlockChain blocks={inflightBlocks} />
+              <BlockChain
+                blocks={inflightBlocks}
+                auditRef={activeSessionId && activeTurnId
+                  ? { sessionId: activeSessionId, turnId: activeTurnId }
+                  : undefined}
+              />
             )}
             {/* Live typing tail. ``partial`` is what hasn't yet been
                 flushed into a finalized text block. */}

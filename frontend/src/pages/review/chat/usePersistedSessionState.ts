@@ -86,4 +86,6 @@ export function useSessionMode(activeSessionId: string | null, serverMode?: stri
 export function clearPersistedSessionState(sessionId: string) {
   try { localStorage.removeItem(`chat-draft:${sessionId}`); } catch { /* ignore */ }
   try { localStorage.removeItem(`chat-mode:${sessionId}`); } catch { /* ignore */ }
+  // One-time cleanup for builds that incorrectly treated this key as truth.
+  try { localStorage.removeItem(`execution-mode:${sessionId}`); } catch { /* ignore */ }
 }

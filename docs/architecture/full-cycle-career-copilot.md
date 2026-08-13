@@ -867,6 +867,8 @@ Prompt Cache 只优化成本和首 Token 延迟，不是 Product Context Source�
 
 Anthropic adapter 的物理缓存前缀层级是 `tools → system → messages`：ToolDefinition 变化会使 tools 及其后的 system/messages 前缀失效，system 变化影响 system/messages，message 变化只影响相应 message prefix。Compaction 只改变 messages 投影，不天然使字节未变的 tools/system 前缀失效。其他 Provider 由现有 adapter 映射自己的原生请求与缓存能力；不支持时发送完整请求。Anthropic 的 `cache_control`、TTL、cache scope、cache editing、beta header 与 deferred `tool_reference` 都只能是 adapter 细节，不能成为通用领域或执行语义。
 
+Anthropic 的缓存存储按 Provider workspace 共享，原生 `cache_control` 不提供产品用户级 namespace。因此共享部署只允许标记不含用户私有数据的确定性 ToolDefinitions 与稳定 system 前缀；History、显式指导、检索资料、Memory 与当前输入仍位于完整 messages 分区，但不设置缓存断点。不能为了提高命中率向模型可见内容注入伪用户 namespace，也不能接受私有 message 前缀跨产品用户物理复用。
+
 常用 ToolDefinitions 保持稳定、确定性排序。只有 Provider 原生支持 deferred tool/schema reference 时，adapter 才使用该能力；否则 Tool Search 命中后，下一次请求直接发送更新后的真实 ToolDefinitions，并接受实际的 cache invalidation，不能伪造通用 schema overlay 或 catalog delta。连接、scope、Policy 和当前可执行性始终在具体 Tool Call 的 preflight 实时检查，不通过缓存或重写 schema 推断。
 
 实现可以使用少量命名、可独立重算的 section，但只有一个 Context Assembly/序列化语义。新 Conversation、清空、Runtime/安全规则或模型变化、Profile/Strategy 变化、实际可见 ToolDefinition 的 name/schema/执行语义变化、Skill/Policy 内容变化或用户隔离范围变化，必须使对应分区重新计算。附件/来源发生版本替换、scope 移除、永久删除、授权撤销或解析投影失效时，旧正文必须从动态 messages 中消失，但不应使无关稳定 system 前缀整体失效。具体 cache hint、TTL、provider usage 字段和分段位置只在相应 Provider Stage Spec 中冻结；私有前缀不得跨用户或越过授权范围复用。

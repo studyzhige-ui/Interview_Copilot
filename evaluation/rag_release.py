@@ -326,7 +326,6 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         "planner_reliability": planner_attempt_metrics(
             args.planner_snapshot,
             rows,
-            global_memory_on=False,
         ),
         "calibration_samples": len(calibration_rows),
         "test_samples": len(test_rows),
@@ -471,7 +470,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--planner-snapshot",
         type=Path,
-        default=PROJECT_ROOT / "data" / "evaluation" / "planner" / "retrieval.json",
+        default=PROJECT_ROOT / "data" / "evaluation" / "planner" / "plans.json",
     )
     parser.add_argument("--planner-concurrency", type=int, default=16)
     parser.add_argument("--retry-unknown-paid-calls", action="store_true")

@@ -32,7 +32,6 @@ def dispatch_resume_parse(resume_id: str) -> AsyncResult:
 def dispatch_outbox_drain(lane: str) -> AsyncResult:
     task_name = {
         "index": "tasks.drain_index_outbox_jobs",
-        "intelligence": "tasks.drain_intelligence_outbox_jobs",
         "cleanup": "tasks.drain_cleanup_outbox_jobs",
     }.get(lane)
     if task_name is None:

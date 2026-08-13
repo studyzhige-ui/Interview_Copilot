@@ -21,6 +21,7 @@ export interface InterviewRecordListItem {
   source: 'upload' | 'mock' | 'draft';
   title: string;
   tag?: string | null;
+  job_opportunity_id?: string | null;
   status: InterviewRecordStatus | string;
   created_at: string;
 }
@@ -100,12 +101,206 @@ export interface ChatSessionListItem {
   updated_at: string;
   /** Persisted run mode (chat|agent) — seeds the CHAT/AGENT pill (AGT-4). */
   mode?: string;
+  execution_mode: 'standard' | 'auto';
+  execution_mode_version: number;
 }
 
 export interface ChatSessionCreateResp {
   session_id: string;
   title: string;
   type: string;
+  execution_mode: 'standard' | 'auto';
+  execution_mode_version: number;
+}
+
+export interface ChatSessionExecutionMode {
+  session_id: string;
+  execution_mode: 'standard' | 'auto';
+  version: number;
+}
+
+/** Durable Composer admission returned by ``POST /chat/{id}/turns``. */
+export interface ChatTurnAdmissionResp {
+  submission_id: string;
+  version: number;
+  status: 'admitted' | 'queued' | 'failed';
+  turn_id: string | null;
+  queue_position: number | null;
+  error?: string | null;
+}
+
+export type ProductObjectKind =
+  | 'career_profile'
+  | 'career_profile_direction'
+  | 'job_opportunity'
+  | 'next_action'
+  | 'artifact'
+  | 'interview_record';
+
+/** Explicit identity selected by the user; labels are display-only. */
+export interface ProductObjectReference {
+  kind: ProductObjectKind;
+  object_id: string;
+  label?: string;
+}
+
+/** One server-authoritative retained submission projection. */
+export interface PendingSubmissionItem {
+  submission_id: string;
+  version: number;
+  status: 'queued' | 'failed';
+  queue_position: number;
+  message: string;
+  mode: 'chat' | 'agent';
+  execution_mode: 'standard' | 'auto';
+  question_indexes: number[];
+  attachments: Array<{ draft_id: string }>;
+  object_references: ProductObjectReference[];
+  source_client_id: string | null;
+  /** Claim/preflight failure retained by the server until the user acts. */
+  error: string | null;
+}
+
+export interface AttachmentDraft {
+  draft_id: string;
+  file_asset_id: string;
+  conversation_id: string;
+  filename: string;
+  status: 'processing' | 'ready' | 'failed' | 'removed';
+  error_message: string | null;
+}
+
+/** Server-authoritative lifecycle projection for one explicit attachment. */
+export interface AttachmentSource {
+  source_id: string;
+  source_kind: 'draft' | 'conversation_attachment' | 'debrief_project_source';
+  scope_kind: 'composer_draft' | 'pending_submission' | 'conversation' | 'debrief_project';
+  scope_id: string;
+  status: 'processing' | 'ready' | 'failed';
+  file_asset_id: string | null;
+  file_asset_version: string | null;
+  document_id: string | null;
+  title: string;
+  error_message: string | null;
+  can_retry: boolean;
+}
+
+export interface AttachmentRetryResp {
+  source: AttachmentSource;
+  dispatched: boolean;
+}
+
+export interface ConversationAttachmentRemovalResp {
+  source_id: string;
+  status: 'removed';
+  resumed_turn: boolean;
+}
+
+export interface DebriefSourcePromotionResp {
+  source: AttachmentSource;
+}
+
+export type AgentInteractionKind =
+  | 'clarification'
+  | 'connection'
+  | 'approval'
+  | 'client_readiness';
+
+interface AgentInteractionBase {
+  id: string;
+  turn_id: string;
+  tool_call_id: string | null;
+  status: 'pending' | 'resolved' | 'rejected' | 'cancelled';
+  resolution?: Record<string, unknown> | null;
+  version: number;
+  created_at?: string;
+  resolved_at?: string | null;
+}
+
+export interface ClarificationInteraction extends AgentInteractionBase {
+  kind: 'clarification';
+  request: {
+    question?: string;
+    prompt?: string;
+    options?: Array<string | { value: string; label?: string; description?: string }>;
+    [key: string]: unknown;
+  };
+}
+
+export interface ConnectionInteraction extends AgentInteractionBase {
+  kind: 'connection';
+  request: {
+    provider?: string;
+    required_scope?: string | string[];
+    tool_name?: string;
+    call_id?: string;
+    effect?: string;
+    reason?: string;
+    arguments?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+}
+
+export interface ApprovalInteraction extends AgentInteractionBase {
+  kind: 'approval';
+  request: {
+    action?: string;
+    tool_name?: string;
+    call_id?: string;
+    effect?: string;
+    reason?: string;
+    arguments?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+}
+
+export interface ClientReadinessInteraction extends AgentInteractionBase {
+  kind: 'client_readiness';
+  request: {
+    requirement?: string;
+    action?: string;
+    handler?: string;
+    [key: string]: unknown;
+  };
+}
+
+export type AgentInteraction =
+  | ClarificationInteraction
+  | ConnectionInteraction
+  | ApprovalInteraction
+  | ClientReadinessInteraction;
+
+export type AgentTaskPhaseStatus = 'pending' | 'in_progress' | 'completed' | 'skipped';
+
+export interface AgentTaskReference {
+  owner: 'tool_call' | 'artifact' | 'artifact_version' | 'domain_record';
+  identity: string;
+}
+
+export interface AgentTaskPhase {
+  id: string;
+  title: string;
+  status: AgentTaskPhaseStatus;
+  result_refs: AgentTaskReference[];
+}
+
+/** Optional flat execution plan. A simple Turn legitimately returns null. */
+export interface AgentTask {
+  id: string;
+  turn_id: string;
+  objective: string;
+  completion_conditions: string[];
+  phases: AgentTaskPhase[];
+  version: number;
+  created_at: string;
+  updated_at: string;
+  frozen_at: string | null;
+}
+
+export interface ResolveAgentInteractionResp {
+  interaction: AgentInteraction;
+  turn_status: 'pending' | 'cancelled';
+  dispatch_generation: number;
 }
 
 /**
@@ -124,7 +319,9 @@ export interface ChatSessionCreateResp {
  */
 export type ContentBlock =
   | TextBlock
+  | AttachmentDraftBlock
   | AttachmentBlock
+  | ProductObjectReferenceBlock
   | ToolUseBlock
   | ToolResultBlock
   | SourcesBlock;
@@ -171,9 +368,29 @@ interface TextBlock {
 
 export interface AttachmentBlock {
   type: 'attachment';
-  document_id: string;
+  attachment_ref_id: string;
+  file_asset_id: string;
+  file_asset_version: string;
+  position: number;
+  scope: { kind: 'conversation'; conversation_id: string };
   title: string;
   source_kind: string;
+}
+
+/** Optimistic Composer projection before admission freezes AttachmentRef. */
+export interface AttachmentDraftBlock {
+  type: 'attachment_draft';
+  draft_id: string;
+  file_asset_id: string;
+  title: string;
+}
+
+/** Persisted server-resolved label plus the exact submitted identity. */
+export interface ProductObjectReferenceBlock {
+  type: 'product_object_reference';
+  kind: ProductObjectKind;
+  object_id: string;
+  label: string;
 }
 
 export interface ToolUseBlock {
@@ -200,6 +417,10 @@ export interface ToolResultBlock {
 }
 
 export interface ChatMessageItem {
+  /** Real ConversationMessage primary key; used for source-bound guidance. */
+  id: number;
+  /** Canonical admitted Turn owning this message; null for legacy/unbound rows. */
+  turn_id?: string | null;
   seq: number;
   role: string;
   /** Flat-text fallback. For agent turns this is the LAST text block
@@ -210,6 +431,25 @@ export interface ChatMessageItem {
   /** Planner's rewritten query for the turn — agent-mode only. */
   rewritten_query?: string | null;
   created_at: string | null;
+}
+
+/** Deep read-only projection of one durable Tool Call. */
+export interface AgentToolCallAudit {
+  call_id: string;
+  turn_id: string;
+  tool_name: string;
+  effect: string;
+  status: string;
+  dispatch_generation: number;
+  policy_decision: string;
+  policy_reason: string;
+  arguments: Record<string, unknown>;
+  result: unknown | null;
+  error: string | null;
+  timeout_seconds: number;
+  duration_ms: number | null;
+  started_at: string;
+  completed_at: string | null;
 }
 
 export interface ChatTranscriptResp {
@@ -314,57 +554,4 @@ export interface AnalyzeDispatchResp {
   message: string;
   record_id: string;
   task_id: string;
-}
-
-// ── v3 memory ──────────────────────────────────────────────────────────
-// Mirrors backend/app/api/memory.py. The four v3 doc types
-// (user_profile, knowledge, strategy, habit) replace the retired
-// ``memory_items`` table.
-
-export type MasteryLevel = 'weak' | 'improving' | 'stable' | 'strong';
-
-export interface MemoryOverviewResp {
-  user_profile_body: string;
-  learning_strategy_body: string;
-  ability_states: {
-    id: string;
-    topic: string;
-    skill_type: string;
-    mastery_level: 'weak' | 'improving' | 'stable' | 'strong';
-    summary: string;
-    last_evidence_at: string | null;
-    updated_at: string | null;
-  }[];
-}
-
-export type MemoryDocType = 'user_profile' | 'knowledge' | 'strategy' | 'habit';
-
-export type MemoryChangeType =
-  | 'patch_realtime'
-  | 'patch_dreaming'
-  | 'user_edit'
-  | 'user_delete'
-  | 'migration';
-
-export interface MemoryAuditEntry {
-  id: string;
-  doc_type: MemoryDocType;
-  topic: string | null;
-  change_type: MemoryChangeType;
-  summary: string;
-  source_record_id: string | null;
-  source_session_id: string | null;
-  created_at: string | null;
-}
-
-export interface MemoryAuditDetail extends MemoryAuditEntry {
-  before_body: string;
-  after_body: string;
-}
-
-export interface MemoryAuditListResp {
-  total: number;
-  limit: number;
-  offset: number;
-  entries: MemoryAuditEntry[];
 }

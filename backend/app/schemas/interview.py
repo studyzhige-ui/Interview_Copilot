@@ -26,6 +26,11 @@ class AnalyzeRequest(BaseModel):
     resume_file_asset_id: Optional[str] = None
     jd_text: Optional[str] = None
     jd_file_asset_id: Optional[str] = None
+    job_opportunity_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=35,
+    )
     # ISO-639-1 language hint for WhisperX. ``"zh"`` / ``"en"`` force the
     # decoder, ``"auto"`` lets Whisper detect per-clip (slower, occasionally
     # picks the wrong one — only worth it for genuinely mixed audio).
@@ -40,6 +45,7 @@ class InterviewRecordListItem(BaseModel):
     source: str
     title: str
     tag: Optional[str] = None
+    job_opportunity_id: Optional[str] = None
     status: str
     created_at: str
 
@@ -49,6 +55,12 @@ class InterviewRecordUpdateRequest(BaseModel):
 
     title: Optional[str] = Field(default=None, min_length=1, max_length=200)
     tag: Optional[str] = Field(default=None, max_length=32)
+    # Omitted keeps the current association; explicit null clears it.
+    job_opportunity_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=35,
+    )
 
 
 class QAEditRequest(BaseModel):

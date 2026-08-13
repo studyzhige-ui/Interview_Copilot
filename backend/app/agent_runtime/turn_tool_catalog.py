@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from jsonschema import ValidationError as JSONSchemaValidationError
-from jsonschema import validate as validate_json
 from pydantic import BaseModel, Field
 
 from app.agent_runtime.mcp import MCPToolDescriptor, manager
+from app.agent_runtime.tool_policy import ToolEffect
 from app.agent_runtime.tool_registry import (
     AgentToolContext,
     ToolRegistryView,
@@ -21,10 +21,16 @@ from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.conversation_turn import ConversationTurn
 from app.services.capabilities import (
-    conversation_capability_service,
     mcp_server_service,
     skill_service,
 )
+
+
+# Remote MCP remains configurable/testable through the capability API, but it
+# is not an Agent callable until its approval/resume path can execute the same
+# call identity exactly once.  Fail closed instead of advertising a Tool that
+# can only loop on ``policy_required``.
+_MCP_AGENT_EXECUTION_ENABLED = False
 
 
 class _SearchArgs(BaseModel):
@@ -35,6 +41,17 @@ class _LoadSkillArgs(BaseModel):
     name: str = Field(min_length=1, max_length=64)
 
 
+def cloud_sustainable_read_tool_names() -> frozenset[str]:
+    """Concrete built-ins eligible for unattended cloud execution now."""
+
+    snapshot = registry.snapshot()
+    return frozenset(
+        name
+        for name in snapshot.tool_names
+        if snapshot.effect_for(name) is ToolEffect.READ
+    )
+
+
 @dataclass
 class _LoadedState:
     mcp: dict[str, MCPToolDescriptor] = field(default_factory=dict)
@@ -42,7 +59,7 @@ class _LoadedState:
 
 @dataclass(frozen=True)
 class TurnToolCatalog:
-    """Immutable per-turn capability view plus explicitly persisted lazy state."""
+    """Immutable per-turn view of real tools and deferred tool descriptors."""
 
     builtins: ToolRegistryView
     excluded: frozenset[str]
@@ -53,8 +70,6 @@ class TurnToolCatalog:
     skills: tuple[dict, ...]
     mcp_tools: tuple[MCPToolDescriptor, ...]
     mcp_configs: Mapping[int, mcp_server_service.MCPServerConfig]
-    permissions: Mapping[str, str]
-    tool_history: tuple[dict, ...]
     loaded: _LoadedState = field(default_factory=_LoadedState, compare=False)
 
     @classmethod
@@ -65,20 +80,25 @@ class TurnToolCatalog:
         session_id: str = "",
         turn_id: str | None = None,
         exclude: set[str] | None = None,
+        builtin_allowlist: Collection[str] | None = None,
+        include_deferred: bool = True,
     ) -> "TurnToolCatalog":
+        """Freeze the concrete tool surface for one execution pass.
+
+        Unattended PersistentTask turns pass an explicit built-in allowlist
+        and disable deferred capabilities.  That keeps the normal Agent path
+        unchanged while ensuring an automation cannot discover MCP, Skills,
+        client actions, or a built-in added after the task was saved.
+        """
+
         def load():
             db = SessionLocal()
             try:
                 user_pk = resolve_user_pk(db, user_id)
                 if user_pk is None:
                     return None
-                state_payload = {"permissions": {}, "tool_history": []}
-                if session_id:
-                    state = conversation_capability_service.get_or_create(
-                        db, session_id, user_pk
-                    )
-                    state_payload = conversation_capability_service.payload(state)
-                    db.commit()
+                if not include_deferred:
+                    return user_pk, [], []
                 return (
                     user_pk,
                     skill_service.list_skills(
@@ -87,68 +107,57 @@ class TurnToolCatalog:
                         enabled_only=True,
                         include_content=False,
                     ),
-                    mcp_server_service.enabled_configs(db, user_pk),
-                    state_payload,
+                    (
+                        mcp_server_service.enabled_configs(db, user_pk)
+                        if _MCP_AGENT_EXECUTION_ENABLED
+                        else []
+                    ),
                 )
             finally:
                 db.close()
 
         loaded = await asyncio.to_thread(load)
         if loaded is None:
-            user_pk, skills, configs, session_state = (
-                0,
-                [],
-                [],
-                {
-                    "permissions": {},
-                    "tool_history": [],
-                },
-            )
+            user_pk, skills, configs = 0, [], []
         else:
-            user_pk, skills, configs, session_state = loaded
-        tools, _failures = await manager.discover(configs)
-        permissions = dict(session_state["permissions"])
+            user_pk, skills, configs = loaded
+        tools, _failures = (
+            await manager.discover(configs) if include_deferred else ([], [])
+        )
+
+        effective_exclude = set(exclude or set())
+        if builtin_allowlist is not None:
+            effective_exclude.update(set(registry.tool_names) - set(builtin_allowlist))
 
         catalog = cls(
-            builtins=registry.snapshot(exclude=exclude, user_id=user_id),
-            excluded=frozenset(exclude or set()),
+            builtins=registry.snapshot(exclude=effective_exclude, user_id=user_id),
+            excluded=frozenset(effective_exclude),
             user_id=user_id,
             user_pk=user_pk,
             session_id=session_id,
             turn_id=turn_id,
-            skills=tuple(dict(row) for row in skills),
-            mcp_tools=tuple(tools),
-            mcp_configs=MappingProxyType({config.id: config for config in configs}),
-            permissions=MappingProxyType(permissions),
-            tool_history=tuple(session_state["tool_history"]),
+            skills=tuple(
+                sorted(
+                    (dict(row) for row in skills),
+                    key=lambda row: (str(row["name"]), int(row["id"])),
+                )
+            ),
+            mcp_tools=tuple(
+                sorted(tools, key=lambda tool: (tool.name, tool.server_id))
+            ),
+            mcp_configs=MappingProxyType(
+                {
+                    config.id: config
+                    for config in sorted(configs, key=lambda config: config.id)
+                }
+            ),
         )
         await catalog._persist_snapshot()
         return catalog
 
-    def _decision(self, name: str, *, server_id: int | None = None) -> str:
-        return (
-            self.permissions.get(name)
-            or (
-                self.permissions.get(f"mcp_server:{server_id}")
-                if server_id is not None
-                else None
-            )
-            or "allow"
-        )
-
-    def _allowed(self, name: str, *, server_id: int | None = None) -> bool:
-        return self._decision(name, server_id=server_id) == "allow"
-
     def get_openai_schemas(self) -> list[dict[str, Any]]:
-        schemas = [
-            schema
-            for schema in self.builtins.get_openai_schemas(
-                exclude=set(self.excluded),
-                user_id=self.user_id,
-            )
-            if self._allowed(schema["function"]["name"])
-        ]
-        if self.skills and self._allowed("skill_search"):
+        schemas = list(self.builtins.get_openai_schemas())
+        if self.skills:
             schemas.append(
                 _pydantic_to_openai_schema(
                     "skill_search",
@@ -156,7 +165,6 @@ class TurnToolCatalog:
                     _SearchArgs,
                 )
             )
-        if self.skills and self._allowed("skill_load"):
             schemas.append(
                 _pydantic_to_openai_schema(
                     "skill_load",
@@ -164,7 +172,7 @@ class TurnToolCatalog:
                     _LoadSkillArgs,
                 )
             )
-        if self.mcp_tools and self._allowed("tool_search"):
+        if _MCP_AGENT_EXECUTION_ENABLED and self.mcp_tools:
             schemas.append(
                 _pydantic_to_openai_schema(
                     "tool_search",
@@ -172,12 +180,9 @@ class TurnToolCatalog:
                     _SearchArgs,
                 )
             )
-        schemas.extend(
-            self._mcp_schema(tool)
-            for tool in self.loaded.mcp.values()
-            if self._allowed(tool.name, server_id=tool.server_id)
-        )
-        return schemas
+        if _MCP_AGENT_EXECUTION_ENABLED:
+            schemas.extend(self._mcp_schema(tool) for tool in self.loaded.mcp.values())
+        return sorted(schemas, key=lambda schema: schema["function"]["name"])
 
     @staticmethod
     def _mcp_schema(tool: MCPToolDescriptor) -> dict[str, Any]:
@@ -194,90 +199,94 @@ class TurnToolCatalog:
         }
 
     def format_prompt(self) -> str:
-        denied_builtins = {
-            name
-            for name, decision in self.permissions.items()
-            if decision == "deny" and name in self.builtins
-        }
-        builtin_manifest = json.loads(
-            self.builtins.format_manifest(
-                exclude=set(self.excluded) | denied_builtins,
-                user_id=self.user_id,
-            )
+        parts = [self.builtins.format_guidance().strip()]
+        skills = sorted(
+            [
+                {"name": row["name"], "description": row["description"]}
+                for row in self.skills
+            ],
+            key=lambda row: row["name"],
         )
-        builtin_manifest = [
-            row for row in builtin_manifest if self._allowed(row["name"])
-        ]
-        parts = [
-            "Available built-in tools:\n"
-            + json.dumps(
-                builtin_manifest,
-                ensure_ascii=False,
-                indent=2,
-            ),
-            self.builtins.format_tool_prompts(
-                exclude=set(self.excluded) | denied_builtins,
-            ),
-        ]
-        skills = [
-            {"name": row["name"], "description": row["description"]}
-            for row in self.skills
-            if self._allowed(f"skill:{row['name']}")
-        ]
         if skills:
             parts.append(
-                "Enabled user skills (search/load instructions only when useful):\n"
-                + json.dumps(skills, ensure_ascii=False, indent=2)
+                "Enabled user skill index (use skill_search/skill_load when useful):\n"
+                + json.dumps(
+                    skills,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
             )
-        mcp_tools = [
-            {"name": tool.name, "description": tool.description}
-            for tool in self.mcp_tools
-            if self._allowed(tool.name, server_id=tool.server_id)
-        ]
-        if mcp_tools:
+        mcp_tools = sorted(
+            [
+                {"name": tool.name, "description": tool.description}
+                for tool in self.mcp_tools
+            ],
+            key=lambda row: row["name"],
+        )
+        if _MCP_AGENT_EXECUTION_ENABLED and mcp_tools:
             parts.append(
-                "Deferred user MCP tools (call tool_search before use):\n"
-                + json.dumps(mcp_tools, ensure_ascii=False, indent=2)
+                "Deferred MCP tool index (use tool_search to load concrete schemas):\n"
+                + json.dumps(
+                    mcp_tools,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
             )
         return "\n\n".join(part for part in parts if part)
 
     def __contains__(self, name: str) -> bool:
         if name in {"skill_search", "skill_load"} and self.skills:
-            return self._allowed(name)
-        if name == "tool_search" and self.mcp_tools:
-            return self._allowed(name)
-        tool = self.loaded.mcp.get(name)
-        if tool is not None:
-            return self._allowed(name, server_id=tool.server_id)
-        return (
-            name not in self.excluded and name in self.builtins and self._allowed(name)
-        )
+            return True
+        if name == "tool_search" and _MCP_AGENT_EXECUTION_ENABLED and self.mcp_tools:
+            return True
+        if _MCP_AGENT_EXECUTION_ENABLED and name in self.loaded.mcp:
+            return True
+        return name not in self.excluded and name in self.builtins
 
     def is_concurrency_safe(self, name: str) -> bool:
-        """Return true only for an explicitly safe, allowed built-in tool.
+        """Return true only for an explicitly safe built-in tool.
 
-        Skill discovery persists capability state and MCP tools have unknown
-        side effects, so both remain serial until stronger annotations exist.
+        Skill discovery and MCP tools have unknown side effects, so both remain
+        serial until concrete execution policy supplies stronger annotations.
         """
-        return (
-            name not in self.excluded
-            and self._allowed(name)
-            and self.builtins.is_concurrency_safe(name)
-        )
+        return name not in self.excluded and self.builtins.is_concurrency_safe(name)
+
+    def effect_for(self, name: str) -> ToolEffect:
+        if name in {"skill_search", "skill_load", "tool_search"}:
+            return ToolEffect.READ
+        if _MCP_AGENT_EXECUTION_ENABLED and (
+            name in self.loaded.mcp
+            or any(descriptor.name == name for descriptor in self.mcp_tools)
+        ):
+            return ToolEffect.UNKNOWN
+        if name in self.excluded:
+            return ToolEffect.UNKNOWN
+        return self.builtins.effect_for(name)
+
+    def policy_traits(
+        self,
+        name: str,
+        arguments: dict,
+        ctx: AgentToolContext,
+        current_task: str,
+    ) -> tuple[bool, bool]:
+        # Deferred discovery and MCP descriptors are deliberately conservative:
+        # no task authorizer exists until a concrete, reviewed definition does.
+        if name in {"skill_search", "skill_load", "tool_search"}:
+            return False, False
+        if _MCP_AGENT_EXECUTION_ENABLED and (
+            name in self.loaded.mcp
+            or any(descriptor.name == name for descriptor in self.mcp_tools)
+        ):
+            return False, False
+        if name in self.excluded:
+            return False, False
+        return self.builtins.policy_traits(name, arguments, ctx, current_task)
 
     async def dispatch(self, name: str, raw_args: dict, ctx: AgentToolContext) -> dict:
-        if name in {"skill_search", "skill_load", "tool_search"} and not self._allowed(
-            name
-        ):
-            return {"error": "permission_denied", "capability": name}
         if name == "skill_search" and self.skills:
             args = _SearchArgs.model_validate(raw_args)
-            matches = [
-                row
-                for row in skill_service.search(list(self.skills), args.query)
-                if self._allowed(f"skill:{row['name']}")
-            ]
-            await self._record_discovered([row["name"] for row in matches])
+            matches = skill_service.search(list(self.skills), args.query)
             return {
                 "skills": [
                     {"name": row["name"], "description": row["description"]}
@@ -286,23 +295,17 @@ class TurnToolCatalog:
             }
         if name == "skill_load" and self.skills:
             args = _LoadSkillArgs.model_validate(raw_args)
-            if not self._allowed(f"skill:{args.name}"):
-                return {
-                    "error": "permission_denied",
-                    "capability": f"skill:{args.name}",
-                }
             row = await self._load_skill(args.name)
             if row is None:
                 return {"error": "skill_not_found", "name": args.name}
             if row.get("error"):
                 return row
-            await self._record_discovered([row["name"]])
             return {
                 "name": row["name"],
                 "description": row["description"],
                 "instructions": row["content"],
             }
-        if name == "tool_search" and self.mcp_tools:
+        if name == "tool_search" and _MCP_AGENT_EXECUTION_ENABLED and self.mcp_tools:
             args = _SearchArgs.model_validate(raw_args)
             matches = self._search_mcp(args.query)
             self.loaded.mcp.update((tool.name, tool) for tool in matches)
@@ -313,28 +316,20 @@ class TurnToolCatalog:
                     for tool in matches
                 ]
             }
-        tool = self.loaded.mcp.get(name)
-        if tool is not None:
-            if not self._allowed(name, server_id=tool.server_id):
-                return {"error": "permission_denied", "capability": name}
-            try:
-                validate_json(instance=raw_args, schema=tool.input_schema)
-            except JSONSchemaValidationError as exc:
-                return {"error": "tool_args_validation_failed", "detail": exc.message}
-            return await manager.call_tool(
-                self.mcp_configs[tool.server_id], tool, raw_args
-            )
-        if not self._allowed(name):
-            return {"error": "permission_denied", "capability": name}
+        if _MCP_AGENT_EXECUTION_ENABLED:
+            tool = self.loaded.mcp.get(name)
+            if tool is not None:
+                return {"error": "policy_required", "tool_name": name}
+            if any(descriptor.name == name for descriptor in self.mcp_tools):
+                return {"error": "policy_required", "tool_name": name}
         return await self.builtins.dispatch(name, raw_args, ctx)
 
     def _search_mcp(self, query: str) -> list[MCPToolDescriptor]:
         needle = query.casefold().strip()
-        available = [
-            tool
-            for tool in self.mcp_tools
-            if self._allowed(tool.name, server_id=tool.server_id)
-        ]
+        available = sorted(
+            self.mcp_tools,
+            key=lambda tool: (tool.name, tool.server_id),
+        )
         exact = [tool for tool in available if tool.name.casefold() == needle]
         if exact:
             return exact
@@ -347,11 +342,6 @@ class TurnToolCatalog:
                 term in f"{tool.name} {tool.description}".casefold() for term in terms
             )
         ]
-        usage = {
-            item.get("tool_name"): index
-            for index, item in enumerate(reversed(self.tool_history))
-        }
-        matches.sort(key=lambda tool: usage.get(tool.name, len(usage)))
         return matches[:5]
 
     async def _load_skill(self, name: str) -> dict | None:
@@ -381,43 +371,39 @@ class TurnToolCatalog:
 
         return await asyncio.to_thread(load)
 
-    async def _record_discovered(self, names: list[str]) -> None:
-        if not names or not self.session_id or not self.user_pk:
-            return
-
-        def save() -> None:
-            db = SessionLocal()
-            try:
-                row = conversation_capability_service.get_or_create(
-                    db,
-                    self.session_id,
-                    self.user_pk,
-                )
-                conversation_capability_service.record_discovered_skills(db, row, names)
-            finally:
-                db.close()
-
-        await asyncio.to_thread(save)
-
     async def _persist_snapshot(self) -> None:
         if not self.turn_id:
             return
-        snapshot = {
-            "builtins": [
-                name
-                for name in self.builtins.tool_names
-                if name not in self.excluded and self._allowed(name)
-            ],
+        tool_snapshot = {
+            "tools": {
+                "builtins": [
+                    name
+                    for name in self.builtins.tool_names
+                    if name not in self.excluded
+                ],
+                "mcp": [
+                    {
+                        "name": tool.name,
+                        "server_id": tool.server_id,
+                        "remote_name": tool.remote_name,
+                    }
+                    for tool in sorted(
+                        self.mcp_tools if _MCP_AGENT_EXECUTION_ENABLED else (),
+                        key=lambda item: (item.name, item.server_id),
+                    )
+                ],
+            },
             "skills": [
                 {"id": row["id"], "name": row["name"], "revision": row["updated_at"]}
-                for row in self.skills
+                for row in sorted(self.skills, key=lambda item: item["name"])
             ],
             "mcp_servers": [
                 {"id": config.id, "name": config.name, "revision": config.revision}
-                for config in self.mcp_configs.values()
+                for config in sorted(
+                    (self.mcp_configs.values() if _MCP_AGENT_EXECUTION_ENABLED else ()),
+                    key=lambda item: item.id,
+                )
             ],
-            "mcp_tools": [tool.name for tool in self.mcp_tools],
-            "permissions": dict(self.permissions),
             "excluded": sorted(self.excluded),
         }
 
@@ -425,8 +411,8 @@ class TurnToolCatalog:
             db = SessionLocal()
             try:
                 row = db.get(ConversationTurn, self.turn_id)
-                if row is not None and not row.capability_snapshot_json:
-                    row.capability_snapshot_json = snapshot
+                if row is not None and not row.tool_snapshot_json:
+                    row.tool_snapshot_json = tool_snapshot
                     db.commit()
             finally:
                 db.close()
@@ -436,14 +422,17 @@ class TurnToolCatalog:
     async def _persist_loaded_schemas(self) -> None:
         if not self.turn_id:
             return
-        schemas = [self._mcp_schema(tool) for tool in self.loaded.mcp.values()]
+        schemas = sorted(
+            (self._mcp_schema(tool) for tool in self.loaded.mcp.values()),
+            key=lambda schema: schema["function"]["name"],
+        )
 
         def save() -> None:
             db = SessionLocal()
             try:
                 row = db.get(ConversationTurn, self.turn_id)
                 if row is not None:
-                    row.loaded_schemas_json = schemas
+                    row.loaded_tool_schemas_json = schemas
                     db.commit()
             finally:
                 db.close()

@@ -1,14 +1,8 @@
-"""Unified Tool Registry for the Agent Harness.
+"""The single registry of concrete tools exposed to the agent.
 
-Design reference: Hermes Agent ``tools/registry.py`` — module-level
-``registry.register()`` self-registration pattern with a singleton
-``ToolRegistry``.
-
-Key differences from the old ``tools.py``:
-  - No LlamaIndex / ``FunctionTool`` dependency (schema generated from Pydantic).
-  - Per-tool ``max_result_chars`` instead of a single global limit.
-  - ``check_fn`` for runtime availability checks.
-  - ``toolset`` grouping for scenario-based tool selection.
+Every registered definition owns a real typed input contract and handler.  The
+registry only stores, filters and looks up definitions; it never groups tools
+into business capabilities or chooses an implementation on the model's behalf.
 """
 
 import json
@@ -21,6 +15,8 @@ from pydantic import BaseModel, ValidationError
 
 from app.core.config import settings
 
+from .tool_policy import ToolEffect
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,28 +27,39 @@ logger = logging.getLogger(__name__)
 class AgentToolContext:
     user_id: str
     session_id: str
+    # Populated by the Turn host for runtime-scoped tools. Ordinary product
+    # tools do not need these fields and remain source-compatible in tests.
+    turn_id: str | None = None
+    user_pk: int | None = None
+    # Exact model-issued call identity for handlers that must suspend and
+    # resume a typed effect on the same Tool Call (for example Client Action).
+    tool_call_id: str | None = None
 
 
-# ── Tool Entry ───────────────────────────────────────────────────────────
+# ── Concrete tool definition ─────────────────────────────────────────────
 
 
-@dataclass
-class ToolEntry:
-    """A registered tool's complete descriptor."""
+@dataclass(frozen=True)
+class ToolDefinition:
+    """A model-callable concrete tool with one real execution handler."""
 
     name: str
     description: str
     args_model: type[BaseModel]
     handler: Callable[[BaseModel, AgentToolContext], Awaitable[dict[str, Any]]]
-    toolset: str = "default"
     max_result_chars: int = 8000
-    # Availability probe. May accept a keyword ``user_id`` — the registry
-    # passes the calling user when the signature allows it (AGT-9: a tool
-    # backed by a per-user key, e.g. web_search with a user-configured
-    # Tavily key, was wrongly hidden by an env-only check).
-    check_fn: Callable[..., bool] | None = None
     emoji: str = "🔧"
     prompt: str = ""
+    effect: ToolEffect = ToolEffect.UNKNOWN
+    # A deterministic predicate over the current admitted task and concrete
+    # arguments. It may narrow approval requirements, never widen ownership,
+    # Provider scope, or domain invariants enforced by the handler.
+    task_authorizer: (
+        Callable[[dict[str, Any], "AgentToolContext", str], bool] | None
+    ) = None
+    # Client Actions may bypass a redundant generic approval only when the
+    # exact action is both task-authorized and limited to reversible UI work.
+    reversible: bool = False
     # True only when multiple calls can run concurrently without observable
     # ordering dependencies. Unknown and mutating tools stay serial by default.
     concurrency_safe: bool = False
@@ -62,38 +69,26 @@ class ToolEntry:
 class ToolRegistryView:
     """A turn-local immutable snapshot of available built-in entries."""
 
-    entries: Mapping[str, ToolEntry]
+    entries: Mapping[str, ToolDefinition]
 
     def get_openai_schemas(self, **_kwargs: Any) -> list[dict[str, Any]]:
         return [
             _pydantic_to_openai_schema(entry.name, entry.description, entry.args_model)
-            for entry in self.entries.values()
+            for entry in self._ordered_entries()
         ]
 
-    def format_manifest(self, **_kwargs: Any) -> str:
-        manifest = []
-        for entry in self.entries.values():
-            schema = _pydantic_to_openai_schema(
-                entry.name,
-                entry.description,
-                entry.args_model,
-            )
-            manifest.append(
-                {
-                    "name": entry.name,
-                    "description": entry.description,
-                    "parameters": schema["function"]["parameters"],
-                }
-            )
-        return json.dumps(manifest, ensure_ascii=False, indent=2)
+    def format_guidance(self, **_kwargs: Any) -> str:
+        """Return optional tool-specific instructions without repeating schemas."""
 
-    def format_tool_prompts(self, **_kwargs: Any) -> str:
         sections = [
             f"## {entry.name}\n{entry.prompt}"
-            for entry in self.entries.values()
+            for entry in self._ordered_entries()
             if entry.prompt
         ]
         return "\n\n# Tool guidance\n\n" + "\n\n".join(sections) if sections else ""
+
+    def _ordered_entries(self) -> list[ToolDefinition]:
+        return [self.entries[name] for name in sorted(self.entries)]
 
     async def dispatch(
         self,
@@ -110,18 +105,38 @@ class ToolRegistryView:
         entry = self.entries.get(name)
         return bool(entry and entry.concurrency_safe)
 
+    def effect_for(self, name: str) -> ToolEffect:
+        entry = self.entries.get(name)
+        return entry.effect if entry else ToolEffect.UNKNOWN
+
+    def policy_traits(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        ctx: AgentToolContext,
+        current_task: str,
+    ) -> tuple[bool, bool]:
+        entry = self.entries.get(name)
+        if entry is None:
+            return False, False
+        authorized = bool(
+            entry.task_authorizer
+            and entry.task_authorizer(arguments, ctx, current_task)
+        )
+        return authorized, bool(entry.reversible)
+
     def __contains__(self, name: str) -> bool:
         return name in self.entries
 
     @property
     def tool_names(self) -> list[str]:
-        return list(self.entries)
+        return sorted(self.entries)
 
 
 # ── Schema generation (Pydantic → OpenAI function calling) ───────────────
 
 
-def _clean_schema(obj: Any) -> Any:
+def _clean_schema(obj: Any, *, schema_node: bool = True) -> Any:
     """Recursively strip Pydantic-specific keys from a JSON Schema object.
 
     OpenAI strict mode rejects ``title`` on property schemas and
@@ -129,15 +144,38 @@ def _clean_schema(obj: Any) -> Any:
     ``title`` one level deep, leaving nested Pydantic models dirty.
     """
     if isinstance(obj, dict):
-        obj.pop("title", None)
-        if "properties" not in obj:
-            obj.pop("description", None)
-        for val in obj.values():
-            _clean_schema(val)
+        # ``title`` can also be a legitimate field name inside a properties
+        # mapping. Strip metadata only from actual schema nodes, never from
+        # maps whose keys are user-defined property/definition names.
+        if schema_node:
+            obj.pop("title", None)
+            if "properties" not in obj:
+                obj.pop("description", None)
+        for key, val in obj.items():
+            _clean_schema(
+                val,
+                schema_node=key
+                not in {"properties", "$defs", "definitions", "patternProperties"},
+            )
     elif isinstance(obj, list):
         for item in obj:
             _clean_schema(item)
     return obj
+
+
+def _enforce_strict_object_contracts(obj: Any) -> None:
+    """Make every object node satisfy provider strict-function rules."""
+
+    if isinstance(obj, dict):
+        properties = obj.get("properties")
+        if isinstance(properties, dict):
+            obj["additionalProperties"] = False
+            obj["required"] = list(properties)
+        for value in obj.values():
+            _enforce_strict_object_contracts(value)
+    elif isinstance(obj, list):
+        for item in obj:
+            _enforce_strict_object_contracts(item)
 
 
 def _pydantic_to_openai_schema(
@@ -155,21 +193,28 @@ def _pydantic_to_openai_schema(
     for prop_name, prop_schema in properties.items():
         cleaned_props[prop_name] = _clean_schema(dict(prop_schema))
 
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": cleaned_props,
+        "required": required,
+        "additionalProperties": False,
+    }
+    # Preserve Pydantic's local definitions when nested typed models are
+    # present. Dropping them leaves dangling ``#/$defs/...`` references.
+    if json_schema.get("$defs"):
+        parameters["$defs"] = _clean_schema(dict(json_schema["$defs"]))
+
     schema: dict[str, Any] = {
         "type": "function",
         "function": {
             "name": name,
             "description": description,
-            "parameters": {
-                "type": "object",
-                "properties": cleaned_props,
-                "required": required,
-                "additionalProperties": False,
-            },
+            "parameters": parameters,
         },
     }
 
     if settings.AGENT_TOOL_SCHEMA_STRICT:
+        _enforce_strict_object_contracts(parameters)
         schema["function"]["strict"] = True
 
     return schema
@@ -182,7 +227,7 @@ class ToolRegistry:
     """Process-level tool registration centre."""
 
     def __init__(self) -> None:
-        self._entries: dict[str, ToolEntry] = {}
+        self._entries: dict[str, ToolDefinition] = {}
         self._default_tools_loaded = False
         self._loading_default_tools = False
 
@@ -204,13 +249,13 @@ class ToolRegistry:
         finally:
             self._loading_default_tools = False
 
-    def register(self, entry: ToolEntry) -> None:
-        if entry.name in self._entries:
-            logger.warning("Tool %r re-registered (overwriting)", entry.name)
-        self._entries[entry.name] = entry
-        logger.debug("Registered tool: %s [toolset=%s]", entry.name, entry.toolset)
+    def register(self, definition: ToolDefinition) -> None:
+        if definition.name in self._entries:
+            logger.warning("Tool %r re-registered (overwriting)", definition.name)
+        self._entries[definition.name] = definition
+        logger.debug("Registered concrete tool: %s", definition.name)
 
-    def get(self, name: str) -> ToolEntry | None:
+    def get(self, name: str) -> ToolDefinition | None:
         self._ensure_default_tools_loaded()
         return self._entries.get(name)
 
@@ -219,25 +264,15 @@ class ToolRegistry:
         *,
         exclude: set[str] | None = None,
         user_id: str | None = None,
-    ) -> list[ToolEntry]:
-        """Return entries passing check_fn and not in *exclude*.
-
-        ``user_id`` reaches check_fns that accept it (keyword) — env-only
-        probes keep their zero-arg signature.
-        """
+    ) -> list[ToolDefinition]:
+        """Return registered definitions not removed by deterministic visibility."""
         self._ensure_default_tools_loaded()
         exclude = exclude or set()
         entries = []
-        for entry in self._entries.values():
+        for name in sorted(self._entries):
+            entry = self._entries[name]
             if entry.name in exclude:
                 continue
-            if entry.check_fn is not None:
-                try:
-                    ok = entry.check_fn(user_id=user_id)
-                except TypeError:
-                    ok = entry.check_fn()
-                if not ok:
-                    continue
             entries.append(entry)
         return entries
 
@@ -249,54 +284,28 @@ class ToolRegistry:
     ) -> list[dict[str, Any]]:
         """Build OpenAI function-calling schemas for available tools.
 
-        ``exclude`` removes tools by name AFTER the ``check_fn`` filter.
-        The agent strategy uses this to hide memory tools when the
-        global-memory toggle is off — Claude Code's
-        ``isAutoMemoryEnabled=false`` semantics, kept symmetric with
-        :meth:`format_manifest` so the LLM never sees a tool in the
-        manifest that's missing from the schemas (or vice versa).
+        ``exclude`` is reserved for deterministic product/edition visibility.
+        Connection and scope are execution-time facts and therefore do not hide
+        an otherwise real tool definition.
         """
         return [
             _pydantic_to_openai_schema(e.name, e.description, e.args_model)
             for e in self._iter_available(exclude=exclude, user_id=user_id)
         ]
 
-    def format_manifest(
+    def format_guidance(
         self,
         *,
         exclude: set[str] | None = None,
         user_id: str | None = None,
     ) -> str:
-        """Human-readable tool manifest for the system prompt.
-
-        ``exclude`` filters by name — must match the same set passed to
-        :meth:`get_openai_schemas` so the schemas and the manifest
-        always agree about which tools the LLM is allowed to call.
-        """
-        manifest = []
-        for entry in self._iter_available(exclude=exclude, user_id=user_id):
-            schema = _pydantic_to_openai_schema(
-                entry.name,
-                entry.description,
-                entry.args_model,
-            )
-            manifest.append(
-                {
-                    "name": entry.name,
-                    "description": entry.description,
-                    "parameters": schema["function"]["parameters"],
-                }
-            )
-        return json.dumps(manifest, ensure_ascii=False, indent=2)
-
-    def format_tool_prompts(self, *, exclude: set[str] | None = None) -> str:
         """Collect non-empty ``prompt`` fields into a system-prompt block.
 
         Returns an empty string when no tools carry prompts, so callers
         can safely append without a conditional.
         """
         sections: list[str] = []
-        for entry in self._iter_available(exclude=exclude):
+        for entry in self._iter_available(exclude=exclude, user_id=user_id):
             if entry.prompt:
                 sections.append(f"## {entry.name}\n{entry.prompt}")
         if not sections:
@@ -325,6 +334,26 @@ class ToolRegistry:
         entry = self.get(name)
         return bool(entry and entry.concurrency_safe)
 
+    def effect_for(self, name: str) -> ToolEffect:
+        entry = self.get(name)
+        return entry.effect if entry else ToolEffect.UNKNOWN
+
+    def policy_traits(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        ctx: AgentToolContext,
+        current_task: str,
+    ) -> tuple[bool, bool]:
+        entry = self.get(name)
+        if entry is None:
+            return False, False
+        authorized = bool(
+            entry.task_authorizer
+            and entry.task_authorizer(arguments, ctx, current_task)
+        )
+        return authorized, bool(entry.reversible)
+
     def snapshot(
         self,
         *,
@@ -340,7 +369,7 @@ class ToolRegistry:
     @property
     def tool_names(self) -> list[str]:
         self._ensure_default_tools_loaded()
-        return list(self._entries.keys())
+        return sorted(self._entries)
 
     def __contains__(self, name: str) -> bool:
         self._ensure_default_tools_loaded()
@@ -353,7 +382,7 @@ registry = ToolRegistry()
 
 
 async def _dispatch_entry(
-    entry: ToolEntry,
+    entry: ToolDefinition,
     raw_args: dict[str, Any],
     ctx: AgentToolContext,
 ) -> dict[str, Any]:

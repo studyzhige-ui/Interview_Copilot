@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   loadPreferredVoice,
   MockSetup,
@@ -15,6 +15,11 @@ import {
   getInProgressMock,
   startMockInterview,
 } from '@/api/mock';
+import { reportMockClientActionUiResult } from '@/api/clientActions';
+import type {
+  MockClientUiResult,
+  MockRouteActionState,
+} from '@/types/clientAction';
 
 type Stage =
   | { kind: 'setup' }
@@ -32,10 +37,43 @@ interface InProgressBanner {
 }
 
 export function MockPage() {
-  const [stage, setStage] = useState<Stage>({ kind: 'setup' });
+  const location = useLocation();
+  const navigate = useNavigate();
+  const routeAction = (location.state as MockRouteActionState | null)?.mockClientAction;
+  const [stage, setStage] = useState<Stage>(() => {
+    if (
+      routeAction?.action === 'mock_interview.enter_live'
+      && routeAction.payload.kind === 'mock_enter_live'
+    ) {
+      return {
+        kind: 'live',
+        recordId: routeAction.payload.record_id,
+        ttsVoice: loadPreferredVoice(),
+      };
+    }
+    return { kind: 'setup' };
+  });
   const [starting, setStarting] = useState(false);
   const [inProgress, setInProgress] = useState<InProgressBanner | null>(null);
-  const navigate = useNavigate();
+  const reportedActionIds = useRef(new Set<string>());
+
+  const reportClientResult = useCallback((result: MockClientUiResult) => {
+    if (!routeAction || reportedActionIds.current.has(routeAction.action_id)) return;
+    reportedActionIds.current.add(routeAction.action_id);
+    reportMockClientActionUiResult(routeAction.action_id, result);
+    navigate('/mock', { replace: true, state: null });
+  }, [navigate, routeAction]);
+
+  useEffect(() => {
+    if (
+      routeAction?.action === 'mock_interview.enter_live'
+      && routeAction.payload.kind === 'mock_enter_live'
+      && stage.kind === 'live'
+      && stage.recordId === routeAction.payload.record_id
+    ) {
+      reportClientResult({ outcome: 'acknowledged' });
+    }
+  }, [reportClientResult, routeAction, stage]);
 
   useEffect(() => {
     if (stage.kind !== 'setup') return;
@@ -83,6 +121,7 @@ export function MockPage() {
     interviewer_style: InterviewerStyle;
     tts_voice: TtsVoice;
     target_question_count: TargetQuestionCount;
+    job_opportunity_id?: string;
   }) => {
     setStarting(true);
     try {
@@ -91,6 +130,7 @@ export function MockPage() {
         jd_text: payload.jd_text,
         interviewer_style: payload.interviewer_style,
         target_question_count: payload.target_question_count,
+        job_opportunity_id: payload.job_opportunity_id,
       });
       setStage({
         kind: 'live',
@@ -130,7 +170,18 @@ export function MockPage() {
             disabled={starting}
           />
         )}
-        <MockSetup onReady={handleReady} starting={starting} />
+        <MockSetup
+          key={routeAction?.action_id ?? 'manual'}
+          onReady={handleReady}
+          starting={starting}
+          prefill={
+            routeAction?.action === 'mock_interview.prefill'
+            && routeAction.payload.kind === 'mock_prefill'
+              ? routeAction.payload
+              : undefined
+          }
+          onPrefillApplied={reportClientResult}
+        />
       </>
     );
   }

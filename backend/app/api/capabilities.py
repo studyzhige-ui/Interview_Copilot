@@ -8,15 +8,10 @@ from app.models.user import User
 from app.schemas.capabilities import (
     CapabilityEnabledRequest,
     MCPServerConfigRequest,
-    SessionCapabilityPermissionRequest,
     SkillCreateRequest,
     SkillUpdateRequest,
 )
-from app.services.capabilities import (
-    conversation_capability_service,
-    mcp_server_service,
-    skill_service,
-)
+from app.services.capabilities import mcp_server_service, skill_service
 
 router = APIRouter(prefix="/capabilities", tags=["capabilities"])
 
@@ -32,49 +27,6 @@ def get_edition_policy():
 
     return current_edition_policy().public_payload(
         stdio_enabled=settings.MCP_ALLOW_STDIO,
-    )
-
-
-@router.get("/sessions/{session_id}")
-def get_session_capabilities(
-    session_id: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    try:
-        row = conversation_capability_service.get_or_create(
-            db, session_id, current_user.id
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    db.commit()
-    return conversation_capability_service.payload(row)
-
-
-@router.put("/sessions/{session_id}/permissions")
-def set_session_capability_permission(
-    session_id: str,
-    payload: SessionCapabilityPermissionRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    try:
-        row = conversation_capability_service.get_or_create(
-            db, session_id, current_user.id
-        )
-        conversation_capability_service.validate_capability(
-            db,
-            current_user.id,
-            payload.capability,
-        )
-    except ValueError as exc:
-        status_code = 404 if str(exc) == "Conversation not found" else 400
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
-    return conversation_capability_service.set_permission(
-        db,
-        row,
-        payload.capability,
-        payload.decision,
     )
 
 

@@ -9,7 +9,8 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, Field
 
-from app.agent_runtime.tool_registry import AgentToolContext, ToolEntry, registry
+from app.agent_runtime.tool_registry import AgentToolContext, ToolDefinition, registry
+from app.agent_runtime.tool_policy import ToolEffect
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -17,11 +18,6 @@ logger = logging.getLogger(__name__)
 
 def _lever_sites() -> list[str]:
     return [s.strip() for s in settings.LEVER_SITES.split(",") if s.strip()]
-
-
-def _jobs_available() -> bool:
-    """Manifest gate: hide search_jobs when no Lever sites are configured."""
-    return bool(_lever_sites())
 
 
 def _safe_text(value: Any) -> str:
@@ -51,7 +47,12 @@ async def _search_jobs_handler(
 ) -> dict[str, Any]:
     target_sites = _lever_sites()
     if not target_sites:
-        return {"error": "No Lever sites configured", "count": 0}
+        return {
+            "error": "connection_required",
+            "provider": "lever",
+            "required_scope": "job_search",
+            "count": 0,
+        }
 
     if args.job_id:
         return await _fetch_detail(args.job_id, target_sites)
@@ -109,9 +110,9 @@ async def _search_jobs_handler(
             "jobs": jobs,
         }
     except Exception as exc:
-        logger.warning("search_jobs failed: %s", exc)
+        logger.warning("search_jobs failed (%s)", type(exc).__name__)
         return {
-            "error": f"Lever API request failed: {exc}",
+            "error": "Lever API request failed",
             "count": len(jobs),
             "jobs": jobs,
         }
@@ -158,14 +159,14 @@ async def _fetch_detail(job_id: str, sites: list[str]) -> dict[str, Any]:
     except httpx.TimeoutException:
         return {"error": "Lever API request timed out", "job_id": job_id}
     except Exception as exc:
-        logger.warning("search_jobs detail fetch failed: %s", exc)
-        return {"error": f"Lever API request failed: {exc}", "job_id": job_id}
+        logger.warning("search_jobs detail fetch failed (%s)", type(exc).__name__)
+        return {"error": "Lever API request failed", "job_id": job_id}
 
     return {"error": "job not found", "job_id": job_id}
 
 
 registry.register(
-    ToolEntry(
+    ToolDefinition(
         name="search_jobs",
         description=(
             "Search job postings from configured Lever company pages. "
@@ -174,8 +175,11 @@ registry.register(
         ),
         args_model=SearchJobsArgs,
         handler=_search_jobs_handler,
-        concurrency_safe=True,
-        check_fn=_jobs_available,
+        effect=ToolEffect.READ,
+        # Connection readiness is resolved at call time. Keep this call as a
+        # batch barrier so a missing provider creates at most one Interaction
+        # before any later model-proposed calls dispatch.
+        concurrency_safe=False,
         max_result_chars=12_000,
         emoji="💼",
     )

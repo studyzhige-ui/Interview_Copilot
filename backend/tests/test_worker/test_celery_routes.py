@@ -6,9 +6,7 @@ Locks the two guarantees the worker-split depends on:
      adds a new task without registering it, this test fails so they
      remember to decide its queue explicitly (or land it on default).
   2. ``_worker_subscribes_to`` correctly detects the queue from CLI /
-     env signals. If it always returns False, the light worker would
-     load Whisper for nothing; if it always returns True, the dreaming
-     worker would crash on missing GPU memory.
+     env signals so only transcription workers load Whisper.
 """
 
 from __future__ import annotations
@@ -63,27 +61,24 @@ def test_control_tasks_route_to_default_queue():
 
     routes = celery_app.conf.task_routes
     control = [
-        "tasks.dream_for_user",
-        "tasks.scan_and_dream_batch",
         "tasks.refresh_model_catalog",
         "tasks.sweep_stale_interview_records",
         "tasks.sweep_stale_pipeline_records",
         "tasks.sweep_orphan_file_assets",
         "tasks.sweep_runtime_files",
+        "tasks.repair_pending_automation_turns",
+        "tasks.schedule_due_persistent_tasks",
         "tasks.drain_cleanup_outbox_jobs",
     ]
     for name in control:
         assert routes[name]["queue"] == "default"
 
 
-def test_background_intelligence_tasks_have_their_own_queue():
+def test_background_tasks_have_their_own_queue():
     from app.task_queue.celery_app import celery_app
 
     routes = celery_app.conf.task_routes
-    for name in (
-        "tasks.process_mock_interview_review",
-        "tasks.drain_intelligence_outbox_jobs",
-    ):
+    for name in ("tasks.process_mock_interview_review",):
         assert routes[name]["queue"] == "background"
 
 
@@ -93,13 +88,21 @@ def test_outbox_beat_entries_are_reconciliation_fallbacks_not_hot_pollers():
     schedule = celery_app.conf.beat_schedule
     names = (
         "index-outbox-reconcile-every-five-minutes",
-        "intelligence-outbox-reconcile-every-five-minutes",
         "cleanup-outbox-reconcile-every-five-minutes",
     )
     for name in names:
         entry = schedule[name]
         assert entry["schedule"].minute == set(range(0, 60, 5))
         assert entry["options"]["expires"] == 240
+
+
+def test_persistent_task_scheduler_runs_every_minute_with_short_expiry():
+    from app.task_queue.celery_app import celery_app
+
+    entry = celery_app.conf.beat_schedule["persistent-task-scheduler"]
+    assert entry["task"] == "tasks.schedule_due_persistent_tasks"
+    assert entry["schedule"].minute == set(range(60))
+    assert entry["options"]["expires"] == 50
 
 
 def test_community_compose_merges_background_and_default_workers():

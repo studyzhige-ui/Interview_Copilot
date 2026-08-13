@@ -31,12 +31,9 @@ from evaluation.runners import (
     plan_evaluation_rows,
 )
 
-SCHEMA_VERSION = 3
-DEFAULT_RETRIEVAL_SNAPSHOT = (
-    Path(settings.APP_DATA_DIR) / "evaluation" / "planner" / "retrieval.json"
-)
-DEFAULT_GLOBAL_MEMORY_SNAPSHOT = (
-    Path(settings.APP_DATA_DIR) / "evaluation" / "planner" / "global-memory-on.json"
+SCHEMA_VERSION = 4
+DEFAULT_PLANNER_SNAPSHOT = (
+    Path(settings.APP_DATA_DIR) / "evaluation" / "planner" / "plans.json"
 )
 
 
@@ -44,7 +41,7 @@ def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _planner_contract_sha256(*, global_memory_on: bool) -> str:
+def _planner_contract_sha256() -> str:
     policy = current_rag_policy().retrieval
     profile = get_internal_model_profile("router")
     contract = {
@@ -62,7 +59,6 @@ def _planner_contract_sha256(*, global_memory_on: bool) -> str:
             )
         ),
         "rendered_system_prompt": build_query_planner_system_prompt(
-            global_memory_on=global_memory_on,
             max_intents=policy.max_intents,
         ),
         "request": {
@@ -87,16 +83,10 @@ def _planner_contract_sha256(*, global_memory_on: bool) -> str:
     )
 
 
-def _snapshot_identity(
-    *,
-    global_memory_on: bool,
-) -> dict[str, Any]:
+def _snapshot_identity() -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
-        "global_memory_on": global_memory_on,
-        "planner_contract_sha256": _planner_contract_sha256(
-            global_memory_on=global_memory_on
-        ),
+        "planner_contract_sha256": _planner_contract_sha256(),
         "planner_model": f"{settings.INTERNAL_LLM_PROVIDER}/{settings.INTERNAL_LLM_MODEL}",
     }
 
@@ -136,13 +126,11 @@ def planner_results_sha256(
 
 def _load_matching_snapshot(
     path: Path,
-    *,
-    global_memory_on: bool,
 ) -> dict[tuple[str, str], dict[str, Any]]:
     if not path.is_file():
         return {}
     payload = json.loads(path.read_text(encoding="utf-8"))
-    expected = _snapshot_identity(global_memory_on=global_memory_on)
+    expected = _snapshot_identity()
     if any(payload.get(key) != value for key, value in expected.items()):
         return {}
     serialized = payload.get("plans")
@@ -154,11 +142,9 @@ def _load_matching_snapshot(
 def _persist_snapshot(
     path: Path,
     cached: dict[tuple[str, str], dict[str, Any]],
-    *,
-    global_memory_on: bool,
 ) -> None:
     payload = {
-        **_snapshot_identity(global_memory_on=global_memory_on),
+        **_snapshot_identity(),
         "updated_at": datetime.now(UTC).isoformat(),
         "cached_sample_count": len(cached),
         "plans": [cached[key] for key in sorted(cached)],
@@ -189,12 +175,10 @@ def _append_attempts(path: Path, records: list[dict[str, Any]]) -> None:
 def planner_attempt_metrics(
     path: Path,
     rows: list[dict[str, Any]],
-    *,
-    global_memory_on: bool,
 ) -> dict[str, Any]:
     """Report actual first-attempt reliability, including rejected fallbacks."""
     attempts_path = path.with_suffix(path.suffix + ".attempts.jsonl")
-    identity = _snapshot_identity(global_memory_on=global_memory_on)
+    identity = _snapshot_identity()
     wanted = {_row_key(row) for row in rows}
     attempts: list[dict[str, Any]] = []
     if attempts_path.is_file():
@@ -237,16 +221,12 @@ def planner_attempt_metrics(
 async def _load_or_create_planner_snapshot(
     rows: list[dict[str, Any]],
     *,
-    path: Path = DEFAULT_RETRIEVAL_SNAPSHOT,
+    path: Path = DEFAULT_PLANNER_SNAPSHOT,
     concurrency: int = DEFAULT_PLANNER_CONCURRENCY,
-    global_memory_on: bool = False,
     retry_unknown_paid_calls: bool = False,
 ) -> list[PlannerEvaluationResult]:
     """Reuse matching rows and plan only missing rows, preserving input order."""
-    cached = _load_matching_snapshot(
-        path,
-        global_memory_on=global_memory_on,
-    )
+    cached = _load_matching_snapshot(path)
     missing_rows = [row for row in rows if _row_key(row) not in cached]
     in_flight = path.with_suffix(path.suffix + ".inflight.json")
     if in_flight.is_file() and not retry_unknown_paid_calls:
@@ -257,7 +237,7 @@ async def _load_or_create_planner_snapshot(
     in_flight.unlink(missing_ok=True)
     failures: list[tuple[str, BaseException | None]] = []
     attempts_path = path.with_suffix(path.suffix + ".attempts.jsonl")
-    snapshot_identity = _snapshot_identity(global_memory_on=global_memory_on)
+    snapshot_identity = _snapshot_identity()
     for offset in range(0, len(missing_rows), concurrency):
         batch = missing_rows[offset : offset + concurrency]
         _write_json_fsync(
@@ -272,7 +252,6 @@ async def _load_or_create_planner_snapshot(
         generated = await plan_evaluation_rows(
             batch,
             concurrency=concurrency,
-            global_memory_on=global_memory_on,
         )
         _append_attempts(
             attempts_path,
@@ -313,11 +292,7 @@ async def _load_or_create_planner_snapshot(
             }
             batch_added = True
         if batch_added:
-            _persist_snapshot(
-                path,
-                cached,
-                global_memory_on=global_memory_on,
-            )
+            _persist_snapshot(path, cached)
         in_flight.unlink(missing_ok=True)
 
     if failures:
@@ -343,9 +318,8 @@ async def _load_or_create_planner_snapshot(
 async def load_or_create_planner_snapshot(
     rows: list[dict[str, Any]],
     *,
-    path: Path = DEFAULT_RETRIEVAL_SNAPSHOT,
+    path: Path = DEFAULT_PLANNER_SNAPSHOT,
     concurrency: int = DEFAULT_PLANNER_CONCURRENCY,
-    global_memory_on: bool = False,
     retry_unknown_paid_calls: bool = False,
 ) -> list[PlannerEvaluationResult]:
     """Create or extend one snapshot without concurrent paid planner calls."""
@@ -359,7 +333,6 @@ async def load_or_create_planner_snapshot(
                 rows,
                 path=path,
                 concurrency=concurrency,
-                global_memory_on=global_memory_on,
                 retry_unknown_paid_calls=retry_unknown_paid_calls,
             )
     except Timeout as exc:
@@ -369,8 +342,7 @@ async def load_or_create_planner_snapshot(
 
 
 __all__ = [
-    "DEFAULT_GLOBAL_MEMORY_SNAPSHOT",
-    "DEFAULT_RETRIEVAL_SNAPSHOT",
+    "DEFAULT_PLANNER_SNAPSHOT",
     "load_or_create_planner_snapshot",
     "planner_attempt_metrics",
     "planner_results_sha256",

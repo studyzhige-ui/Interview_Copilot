@@ -11,9 +11,8 @@ Design mirrors Claude Code's two-tier architecture:
        │
        │ owns:
        │   - session lifecycle (transcript_service.ensure_session)
-       │   - v3 memory recall (universal + on-demand bodies)
        │   - context assembly (ContextAssemblyPipeline)
-       │   - error humanisation + stop-hook dispatch
+       │   - error humanisation and durable outcome persistence
        │
        └─ delegates per-turn execution to one ExecutionStrategy:
             ├─ ChatPipelineStrategy  (L1 — fixed plan → retrieve → answer)

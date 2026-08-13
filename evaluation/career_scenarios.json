@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "architecture": "docs/architecture/full-cycle-career-copilot.md",
+  "memory_stage_spec": "docs/architecture/stages/stage-5-evaluation-memory.md",
+  "scenarios": [
+    {
+      "id": "stage0-durable-admission-and-interrupt",
+      "stage": 0,
+      "claims": ["FIFO admission", "idempotent submission", "explicit interrupt fence", "no pre-claim History"],
+      "backend_tests": ["backend/tests/test_services/chat/test_turn_executor.py"],
+      "frontend_tests": ["src/api/chat.test.ts", "src/pages/review/chat/ChatToolbar.test.tsx"]
+    },
+    {
+      "id": "stage0-tool-policy-and-recovery",
+      "stage": 0,
+      "claims": ["Standard and Auto parameter policy", "same-call waiting resume", "late receipt", "typed redaction"],
+      "backend_tests": ["backend/tests/test_agent_runtime/test_tool_policy.py", "backend/tests/test_agent_runtime/test_tool_call_executor.py", "backend/tests/test_api/test_tool_call_audit_api.py", "backend/tests/test_api/test_chat_api.py"],
+      "frontend_tests": ["src/pages/review/chat/InteractionCard.test.tsx", "src/pages/review/chat/MessageBlocks.test.tsx"]
+    },
+    {
+      "id": "stage0-agent-task-and-context",
+      "stage": 0,
+      "claims": ["single flat AgentTask", "current input anchor", "bounded local recovery", "deterministic provider payload"],
+      "backend_tests": ["backend/tests/test_services/chat/test_agent_task_service.py", "backend/tests/test_conversation/test_agent_strategy_stream.py"],
+      "frontend_tests": ["src/pages/review/chat/AgentTaskCard.test.tsx"]
+    },
+    {
+      "id": "stage0-native-provider-cache-and-execution-mode-cas",
+      "stage": 0,
+      "claims": ["one canonical Context projection for Chat and Agent", "native Anthropic tools-system-messages physical order with only non-private tools/system cached", "unsupported providers receive the complete semantic request", "cache usage reaches production telemetry", "Conversation owns Standard-Auto with independent CAS migration", "queued and active task snapshots remain frozen unless explicitly edited before claim", "frontend has no local execution-mode owner"],
+      "backend_tests": ["backend/tests/test_core/test_model_provider_adapter.py", "backend/tests/test_core/test_model_runtime.py", "backend/tests/test_conversation/test_provider_context.py", "backend/tests/test_conversation/test_chat_strategy.py", "backend/tests/test_conversation/test_agent_strategy_stream.py", "backend/tests/test_services/analytics/test_telemetry_service.py", "backend/tests/test_api/test_chat_api.py", "backend/tests/test_db/test_alembic_migrations.py"],
+      "frontend_tests": ["src/pages/review/chat/useSessionExecutionMode.test.tsx"]
+    },
+    {
+      "id": "stage0-typed-product-object-anchor",
+      "stage": 0,
+      "claims": ["explicit visible handoff", "closed kind and identity only", "claim and execution owner reread", "low-authority near-user data", "exact historical identity", "cross-tenant stale and deleted fail closed"],
+      "backend_tests": ["backend/tests/test_services/chat/test_product_object_reference.py"],
+      "frontend_tests": ["src/lib/copilotObjectReference.test.ts", "src/pages/chat/GeneralChatPage.test.tsx", "src/pages/review/chat/Bubble.test.tsx"]
+    },
+    {
+      "id": "stage1-attachment-claim-and-project-source",
+      "stage": 1,
+      "claims": ["draft before claim", "immutable AttachmentRef", "Conversation isolation", "explicit Debrief promotion", "retry and cleanup"],
+      "backend_tests": ["backend/tests/test_services/chat/test_attachment_ingress_service.py", "backend/tests/test_services/chat/test_attachment_source_service.py", "backend/tests/test_rag/test_attachment_sources.py"],
+      "frontend_tests": ["src/pages/review/chat/AttachmentSources.test.tsx"]
+    },
+    {
+      "id": "stage2-career-owner-and-process",
+      "stage": 2,
+      "claims": ["one CareerProfile owner", "AbilitySignal is inferred state", "JobOpportunity supports versioned multi-direction CareerProfile relations", "append-only ProcessEvent", "four-state NextAction"],
+      "backend_tests": ["backend/tests/test_api/test_career_profile_api.py", "backend/tests/test_api/test_career_process_api.py", "backend/tests/test_agent_runtime/test_career_tools.py", "backend/tests/test_services/test_career_process_service.py", "backend/tests/test_services/test_legacy_memory_migration.py"],
+      "frontend_tests": ["src/api/careerDomains.test.ts", "src/pages/career/CareerProfilePage.test.tsx", "src/pages/career/CareerProcessPage.test.tsx"]
+    },
+    {
+      "id": "stage3-artifact-offer-and-interview",
+      "stage": 3,
+      "claims": ["append-only Artifact versions", "related versus submitted", "exact submitted freeze", "Offer CAS diff", "owned optional JobOpportunity link"],
+      "backend_tests": ["backend/tests/test_api/test_artifacts_offers_api.py", "backend/tests/test_api/test_interview_api.py"],
+      "frontend_tests": ["src/pages/artifacts/ArtifactsPage.test.tsx", "src/api/careerDomains.test.ts"]
+    },
+    {
+      "id": "stage3-mock-client-action-handoff",
+      "stage": 3,
+      "claims": ["persist before delivery", "initiating client affinity", "takeover", "prefill readiness runtime and entered-UI are distinct"],
+      "backend_tests": ["backend/tests/test_services/chat/test_client_action_service.py", "backend/tests/test_api/test_client_actions_api.py", "backend/tests/test_agent_runtime/test_mock_interview_tool.py"],
+      "frontend_tests": ["src/components/layout/ClientActionBridge.test.tsx"]
+    },
+    {
+      "id": "stage4-persistent-task",
+      "stage": 4,
+      "claims": ["dedicated Conversation", "user FIFO priority", "scheduled and manual trigger", "waiting and merged compensation", "stop-this-run differs from pause-future", "history and delete", "scheduler dispatch repair", "server-current unattended Tool catalog"],
+      "backend_tests": ["backend/tests/test_services/test_persistent_task_service.py", "backend/tests/test_services/test_persistent_task_schedule.py", "backend/tests/test_api/test_stage4_integrations_api.py", "backend/tests/test_worker/test_maintenance_sweeper.py", "backend/tests/test_worker/test_celery_routes.py"],
+      "frontend_tests": ["src/pages/automation/PersistentTasksPage.test.tsx", "src/api/stage4.test.ts"]
+    },
+    {
+      "id": "stage4-gmail-connector",
+      "stage": 4,
+      "claims": ["browser-bound one-time OAuth state", "cross-browser and login-CSRF fail closed", "pre-click adapter availability", "encrypted provider-specific credential", "refresh and revoke", "bounded Gmail read", "no secret disclosure"],
+      "backend_tests": ["backend/tests/test_services/test_google_gmail_connector.py", "backend/tests/test_api/test_gmail_oauth_api.py", "backend/tests/test_agent_runtime/test_gmail_tool.py"],
+      "frontend_tests": ["src/pages/settings/ConnectionsPage.test.tsx", "src/api/stage4.test.ts"]
+    },
+    {
+      "id": "stage5-guidance-and-disabled-memory",
+      "stage": 5,
+      "claims": ["guidance owners remain distinct", "resolved precedence", "legacy writer absent", "Recall empty", "Memory producer release gate closed"],
+      "backend_tests": ["backend/tests/test_services/test_personalization_service.py", "backend/tests/test_evaluation/test_career_scenario_gate.py"],
+      "frontend_tests": ["src/api/personalization.test.ts", "src/pages/settings/CopilotPreferencesPage.test.tsx"]
+    }
+  ]
+}

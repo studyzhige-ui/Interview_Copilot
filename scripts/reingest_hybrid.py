@@ -1,8 +1,8 @@
-"""Drop + reingest the three Milvus 2.6 hybrid collections from the Postgres
+"""Drop + reingest the Milvus 2.6 hybrid collections from the Postgres
 fact sources. Use after deploying the hybrid migration so no stale dense-only
 metadata/schema survives.
 
-    python scripts/reingest_hybrid.py --drop                # all 3
+    python scripts/reingest_hybrid.py --drop                # all collections
     python scripts/reingest_hybrid.py --drop --only resume  # one
     python scripts/reingest_hybrid.py --document <id>       # one knowledge doc
     python scripts/reingest_hybrid.py --user <id>           # a user's docs
@@ -11,8 +11,6 @@ metadata/schema survives.
 Fact sources (Postgres is authoritative — this NEVER reads the old Milvus rows):
   * knowledge → document_chunks            (id=node_id, text, source_kind, document_id)
   * resume    → resume_sections            (id, content, resume_id, section_type, title)
-  * ability   → memory_ability_states      (id, search_text|topic+..+summary), archived_at IS NULL
-
 ``--drop`` recreates the collection from scratch (clean schema). Safe on an empty
 DB: 0 fact rows -> 0 inserts, no error. The embedding model is loaded directly
 (no model-catalog dependency).
@@ -114,38 +112,9 @@ def reingest_resume() -> int:
         db.close()
 
 
-def reingest_ability() -> int:
-    from app.models.memory_ability_state import MemoryAbilityState
-    from app.services.memory import ability_index
-
-    db = SessionLocal()
-    count = 0
-    try:
-        rows = (
-            db.query(MemoryAbilityState)
-            .filter(MemoryAbilityState.archived_at.is_(None))
-            .all()
-        )
-        for st in rows:
-            ability_index.upsert_ability(
-                st.id,
-                user_id=int(st.user_id),
-                search_text=st.search_text or "",
-                topic=st.topic or "",
-                skill_type=st.skill_type or "",
-                mastery_level=st.mastery_level or "",
-                summary=st.summary,
-            )
-            count += 1
-        return count
-    finally:
-        db.close()
-
-
 _TARGETS = {
     "knowledge": (milvus_hybrid.KNOWLEDGE, reingest_knowledge),
     "resume": (milvus_hybrid.RESUME, reingest_resume),
-    "ability": (milvus_hybrid.ABILITY, reingest_ability),
 }
 
 

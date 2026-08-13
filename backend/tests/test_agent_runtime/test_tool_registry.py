@@ -13,18 +13,18 @@ def test_tool_registry_has_expected_tools():
         "read_url",
         "read_file",
         "write_file",
-        "recall_memory",
-        "save_memory",
         "search_knowledge",
         "read_resume",
         "read_interview_history",
         "search_jobs",
         "task_create",
         "task_update",
-        "task_get",
-        "task_list",
-        "task_verify",
-        "task_checkpoint",
+        "read_career_context",
+        "track_search_job",
+        "record_career_event",
+        "read_artifacts",
+        "save_artifact",
+        "start_mock_interview",
     }
     assert expected == set(registry.tool_names)
 
@@ -33,7 +33,7 @@ def test_openai_schemas_generated():
     from app.agent_runtime.tool_registry import registry
 
     schemas = registry.get_openai_schemas()
-    assert len(schemas) >= 9  # web_search excluded when TAVILY_API_KEY is not set
+    assert len(schemas) == len(registry.tool_names)
     for schema in schemas:
         assert schema["type"] == "function"
         assert "name" in schema["function"]
@@ -62,65 +62,26 @@ def test_parse_tool_arguments_invalid():
         parse_tool_arguments("not json")
 
 
-def test_format_manifest():
+def test_registry_schemas_are_deterministically_sorted():
     from app.agent_runtime.tool_registry import registry
 
-    manifest = registry.format_manifest()
-    assert "web_search" in manifest
-    assert "read_resume" in manifest
+    names = [schema["function"]["name"] for schema in registry.get_openai_schemas()]
+    assert names == sorted(names)
 
 
-def test_registry_exclude_hides_tools_symmetrically():
-    """``exclude`` must drop a tool from BOTH the manifest AND the
-    OpenAI schemas — otherwise the LLM sees a tool in one place but
-    not the other and gets confused. The agent strategy relies on
-    this symmetry to gate memory tools when the global-memory
-    toggle is off (Claude Code's ``isAutoMemoryEnabled=false``
-    semantics).
-    """
+def test_registry_does_not_duplicate_schema_in_prompt_guidance():
     from app.agent_runtime.tool_registry import registry
 
-    memory_tools = {"recall_memory", "save_memory"}
-
-    schemas = registry.get_openai_schemas(exclude=memory_tools)
-    schema_names = {s["function"]["name"] for s in schemas}
-    assert "recall_memory" not in schema_names
-    assert "save_memory" not in schema_names
-    # Non-memory tools still present.
-    assert "read_resume" in schema_names
-    assert "search_jobs" in schema_names
-
-    manifest = registry.format_manifest(exclude=memory_tools)
-    assert "recall_memory" not in manifest
-    assert "save_memory" not in manifest
-    assert "read_resume" in manifest
+    guidance = registry.format_guidance()
+    assert '"parameters"' not in guidance
+    assert '"description"' not in guidance
 
 
-def test_result_summary_detects_disabled_payload():
-    """``recall_memory`` returning ``{"disabled": true, "reason": ...}``
-    must NOT fall through to the byte-counter "完成 (N chars)" fallback.
+def test_every_builtin_has_an_explicit_effect():
+    from app.agent_runtime.tool_policy import ToolEffect
+    from app.agent_runtime.tool_registry import registry
 
-    Pre-fix screenshot evidence: user toggled global memory OFF, the
-    LLM called recall_memory anyway, got back the 273-char
-    ``{"disabled": true, "reason": "用户已关闭..."}`` payload, and
-    the UI rendered "✅ 完成 (273 chars)" — looked like a successful
-    call to a casual user. We surface the disabled signal explicitly
-    so the summary is honest.
-    """
-    from app.agent_runtime.react_agent import _result_summary
-
-    s = _result_summary(
-        {
-            "disabled": True,
-            "reason": "用户已关闭全局记忆开关",
-            "user_profile": "",
-        }
+    assert all(
+        registry.get(name).effect is not ToolEffect.UNKNOWN
+        for name in registry.tool_names
     )
-    assert s.startswith("⊘")
-    assert "已关闭" in s
-    assert "完成" not in s  # MUST NOT use the success template
-
-    # Sanity check the existing branches still fire.
-    assert _result_summary({"error": "boom"}).startswith("❌")
-    assert _result_summary({"count": 0}) == "返回 0 条结果"
-    assert _result_summary({"count": 5}) == "返回 5 条结果"

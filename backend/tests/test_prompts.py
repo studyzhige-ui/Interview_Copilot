@@ -14,11 +14,6 @@ from app.prompts.interview import (
     MOCK_INTERVIEW_PLAN_PROMPT,
     MOCK_INTERVIEW_PREFIX,
 )
-from app.prompts.memory import (
-    DOC_COMPACT_PROMPT,
-    DREAMING_PROMPT,
-    REALTIME_EXTRACTION_PROMPT,
-)
 from app.prompts.resume import RESUME_PARSE_PROMPT
 from app.prompts.voice_analysis import (
     QA_EXTRACTION_PROMPT,
@@ -49,27 +44,6 @@ def test_all_prompt_templates_render() -> None:
             user_answer="answer",
             stage_keys_hint="technical | candidate_questions",
         ),
-        REALTIME_EXTRACTION_PROMPT.format(
-            user_profile="profile",
-            learning_strategy="strategy",
-            ability_index="abilities",
-            conversation="conversation",
-        ),
-        DREAMING_PROMPT.format(
-            record_id="record",
-            user_profile="profile",
-            learning_strategy="strategy",
-            ability_index="abilities",
-            record_messages="messages",
-            record_analysis_context="summary",
-        ),
-        DOC_COMPACT_PROMPT.format(
-            max_lines=10,
-            doc_label="profile",
-            line_count=20,
-            char_count=1000,
-            body="body",
-        ),
         RESUME_PARSE_PROMPT.format(resume_text="resume"),
         QA_EXTRACTION_PROMPT.format(transcript="transcript", resume_hint="resume"),
         QUESTION_ANALYSIS_PROMPT.format(
@@ -89,24 +63,15 @@ def test_all_prompt_templates_render() -> None:
     assert all(rendered)
     assert any('"sections"' in prompt for prompt in rendered)
     assert any('"qa_pairs"' in prompt for prompt in rendered)
-    assert sum('"patches"' in prompt for prompt in rendered) >= 2
 
 
-def test_query_planner_memory_privacy_contract() -> None:
-    enabled = build_query_planner_system_prompt(
-        global_memory_on=True,
-        max_intents=3,
-    )
-    disabled = build_query_planner_system_prompt(
-        global_memory_on=False,
-        max_intents=3,
-    )
+def test_query_planner_schema_contract() -> None:
+    prompt = build_query_planner_system_prompt(max_intents=3)
 
-    assert "at most 3" in enabled
-    assert "load_strategy=true" in enabled
-    assert '"alternate_query"' in enabled
-    assert '"required_terms"' in enabled
-    assert "load_strategy must be false" in disabled
+    assert "at most 3" in prompt
+    assert '"alternate_query"' in prompt
+    assert '"required_terms"' in prompt
+    assert "load_strategy" not in prompt
 
 
 def test_long_prompt_constants_live_in_prompt_package() -> None:

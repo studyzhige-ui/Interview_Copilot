@@ -64,7 +64,6 @@ async def plan_evaluation_rows(
     rows: list[dict[str, Any]],
     *,
     concurrency: int = DEFAULT_PLANNER_CONCURRENCY,
-    global_memory_on: bool,
 ) -> list[PlannerEvaluationResult]:
     """Plan independent evaluation rows concurrently while preserving order."""
     from app.conversation.query_planner import plan_query
@@ -80,8 +79,6 @@ async def plan_evaluation_rows(
                 plan = await plan_query(
                     user_message=row["query"],
                     recent_turns=[],
-                    learning_strategy_description="",
-                    global_memory_on=global_memory_on,
                 )
                 return PlannerEvaluationResult(
                     plan=plan,
@@ -763,7 +760,6 @@ async def run_retrieval(
         planned_rows = planned_rows or await plan_evaluation_rows(
             rows,
             concurrency=planner_concurrency,
-            global_memory_on=False,
         )
         if len(planned_rows) != len(rows):
             raise ValueError("planned_rows must align with rows")
@@ -1345,7 +1341,6 @@ async def _run_generation(
             planned_rows = await plan_evaluation_rows(
                 rows,
                 concurrency=planner_concurrency,
-                global_memory_on=True,
             )
         else:
             from evaluation.planner_snapshot import load_or_create_planner_snapshot
@@ -1354,7 +1349,6 @@ async def _run_generation(
                 rows,
                 path=planner_snapshot_path,
                 concurrency=planner_concurrency,
-                global_memory_on=True,
                 retry_unknown_paid_calls=retry_unknown_paid_calls,
             )
     if len(planned_rows) != len(rows):
@@ -1811,7 +1805,6 @@ async def _run_generation(
         summary["planner_reliability"] = planner_attempt_metrics(
             planner_snapshot_path,
             rows,
-            global_memory_on=True,
         )
     return summary
 
@@ -1970,7 +1963,6 @@ async def run_trajectory(
             planned_rows = await plan_evaluation_rows(
                 rows,
                 concurrency=concurrency,
-                global_memory_on=True,
             )
         else:
             from evaluation.planner_snapshot import load_or_create_planner_snapshot
@@ -1979,7 +1971,6 @@ async def run_trajectory(
                 rows,
                 path=planner_snapshot_path,
                 concurrency=concurrency,
-                global_memory_on=True,
                 retry_unknown_paid_calls=retry_unknown_paid_calls,
             )
 
@@ -2136,7 +2127,6 @@ async def run_trajectory(
         summary["planner_reliability"] = planner_attempt_metrics(
             planner_snapshot_path,
             rows,
-            global_memory_on=True,
         )
     return summary
 

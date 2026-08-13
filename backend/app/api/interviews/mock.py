@@ -62,6 +62,7 @@ from app.services.interview import (
     mock_runtime_service,
 )
 from app.services.interview.interview_record_service import (
+    InterviewOpportunityNotFoundError,
     STATUS_MOCK_IN_PROGRESS,
     STATUS_PROCESSING_REVIEW,
     STATUS_REVIEW_FAILED,
@@ -118,6 +119,7 @@ def start_mock_interview(
             jd_text=body.jd_text,
             interviewer_style=body.interviewer_style,
             target_question_count=body.target_question_count,
+            job_opportunity_id=body.job_opportunity_id,
         )
         db.commit()
     except mock_flow.ResumeNotFoundError as exc:
@@ -126,6 +128,11 @@ def start_mock_interview(
     except mock_flow.ResumeNotReadyError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except InterviewOpportunityNotFoundError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=404, detail="Job opportunity not found"
+        ) from exc
     except IntegrityError as exc:
         db.rollback()
         if (

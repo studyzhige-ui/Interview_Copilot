@@ -1,8 +1,9 @@
 # Interview Copilot
 
-Interview Copilot is an AI interview practice and review platform. It combines
-mock interviews, recording analysis, resume/JD retrieval, long-term learning
-memory, user Skills, and MCP tools.
+Interview Copilot is a cloud-first career copilot. It combines job-search
+tracking, mock interviews, recording analysis, resume/JD retrieval, durable
+artifacts, user Skills, and MCP tools. Long-term Agent Memory remains behind
+its evaluation gate; the current runtime does not produce or recall it.
 
 The repository ships one shared product core in two editions:
 
@@ -124,6 +125,25 @@ npm run lint
 npm run test:run
 npm run build
 ```
+
+Release validation must not compete with locally running model services for
+GPU memory. Run broad backend groups serially with CUDA hidden, or use the
+cross-stage runner, which enforces that policy for its child processes and
+terminates a timed-out child before continuing:
+
+```powershell
+$env:CUDA_VISIBLE_DEVICES = "-1"
+$env:TOKENIZERS_PARALLELISM = "false"
+python evaluation/career_scenario_eval.py
+```
+
+```bash
+CUDA_VISIBLE_DEVICES=-1 TOKENIZERS_PARALLELISM=false \
+  python evaluation/career_scenario_eval.py
+```
+
+Do not launch overlapping full-suite `pytest` commands in the same checkout.
+Protocol-faithful provider tests do not require a GPU.
 
 Database schema changes use Alembic:
 

@@ -4,6 +4,15 @@ SSRF URL validation lives in test_web_tool_ssrf.py.
 """
 
 import asyncio
+from types import SimpleNamespace
+
+
+def _resolved(url: str):
+    return SimpleNamespace(
+        connect_url=url,
+        host_header="example.com",
+        sni_hostname="example.com",
+    )
 
 
 class TestReadUrlImprovements:
@@ -18,6 +27,16 @@ class TestReadUrlImprovements:
             headers = {"content-type": "text/plain"}
             text = "Hello world"
             content = b"Hello world"
+            encoding = "utf-8"
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def aiter_bytes(self):
+                yield self.content
 
         class _FakeClient:
             async def __aenter__(self):
@@ -26,13 +45,13 @@ class TestReadUrlImprovements:
             async def __aexit__(self, *a):
                 pass
 
-            async def get(self, *a, **kw):
+            def stream(self, *a, **kw):
                 return _FakeResponse()
 
         monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _FakeClient())
         monkeypatch.setattr(
-            "app.agent_runtime.tools.web._validate_safe_url",
-            lambda url: None,
+            "app.agent_runtime.tools.web._resolve_safe_url",
+            _resolved,
         )
 
         from app.agent_runtime.tool_registry import AgentToolContext
@@ -55,6 +74,17 @@ class TestReadUrlImprovements:
             headers = {"content-type": "text/html"}
             text = "x" * 100
             content = b"x" * (6 * 1024 * 1024)  # 6 MB > 5 MB limit
+            encoding = "utf-8"
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def aiter_bytes(self):
+                yield self.content[: 3 * 1024 * 1024]
+                yield self.content[3 * 1024 * 1024 :]
 
         class _FakeClient:
             async def __aenter__(self):
@@ -63,13 +93,13 @@ class TestReadUrlImprovements:
             async def __aexit__(self, *a):
                 pass
 
-            async def get(self, *a, **kw):
+            def stream(self, *a, **kw):
                 return _FakeResponse()
 
         monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _FakeClient())
         monkeypatch.setattr(
-            "app.agent_runtime.tools.web._validate_safe_url",
-            lambda url: None,
+            "app.agent_runtime.tools.web._resolve_safe_url",
+            _resolved,
         )
 
         from app.agent_runtime.tool_registry import AgentToolContext
@@ -92,6 +122,16 @@ class TestReadUrlImprovements:
             headers = {"content-type": "text/plain"}
             text = "A" * (_MAX_CONTENT_CHARS + 10_000)
             content = text.encode()
+            encoding = "utf-8"
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def aiter_bytes(self):
+                yield self.content
 
         class _FakeClient:
             async def __aenter__(self):
@@ -100,13 +140,13 @@ class TestReadUrlImprovements:
             async def __aexit__(self, *a):
                 pass
 
-            async def get(self, *a, **kw):
+            def stream(self, *a, **kw):
                 return _FakeResponse()
 
         monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _FakeClient())
         monkeypatch.setattr(
-            "app.agent_runtime.tools.web._validate_safe_url",
-            lambda url: None,
+            "app.agent_runtime.tools.web._resolve_safe_url",
+            _resolved,
         )
 
         from app.agent_runtime.tool_registry import AgentToolContext

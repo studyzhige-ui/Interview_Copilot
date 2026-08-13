@@ -3,17 +3,11 @@
 Owns every concern that is identical between chat and agent paths:
 
   1. Session lifecycle ........  transcript_service.ensure_session
-  2. Memory recall ............  v3_context_loader (universal +
-                                  on-demand bodies, gated by the
-                                  GLOBAL memory toggle —
-                                  ``is_global_memory_enabled_for_session``)
-  3. Context assembly .........  ContextAssemblyPipeline + renderer
-  4. Per-turn execution .......  delegated to ExecutionStrategy
-  5. Persistence ..............  transcript_service.append_turn with
-                                  Claude-Code-style content blocks
-  6. Durable maintenance ......  realtime extraction outbox job committed
-                                  atomically with the assistant reply
-  7. Error handling ...........  _humanize_exc — translates upstream
+  2. Context assembly .........  ContextAssemblyPipeline + renderer
+  3. Per-turn execution .......  delegated to ExecutionStrategy
+  4. Persistence ..............  transcript_service.append_turn with
+                                   Claude-Code-style content blocks
+  5. Error handling ...........  _humanize_exc — translates upstream
                                   exceptions into actionable Chinese
 
 Strategy-specific work (loop control, tool dispatch, deterministic
@@ -39,21 +33,60 @@ from app.conversation.strategy import (
 )
 from app.core.error_messages import humanize_error
 from app.rag.application.service import rag_service
-from app.rag.application.attachment_evidence import (
-    load_attachment_evidence,
+from app.rag.application.attachment_sources import (
+    AttachmentParsingPendingError,
+    load_attachment_sources,
     merge_retrieval_results,
 )
 from app.rag.domain.models import EMPTY_PLANNER_NO_RETRIEVAL
 from app.services.analytics.telemetry_service import log_interaction_metrics
 from app.services.chat.chat_history_service import transcript_service
 from app.services.chat.context_assembly_pipeline import context_pipeline
-from app.services.memory.v3_context_loader import (
-    V3MemoryContext,
-    attach_active_bodies,
-    load_universal,
-)
 
 logger = logging.getLogger(__name__)
+
+_TURN_OUTCOMES = {"completed", "waiting", "blocked", "failed", "cancelled"}
+
+
+def check_turn_completion(
+    turn_id: str | None,
+    user_id: int,
+) -> tuple[bool, str | None]:
+    """Run the Shared Kernel's deterministic completed-candidate gate.
+
+    It reads only authoritative state for this Turn. It does not create a
+    product object, scan a Session, infer Tool semantics, or maintain another
+    task lifecycle.
+    """
+
+    if not turn_id or user_id <= 0:
+        return True, None
+
+    from app.db.database import SessionLocal
+    from app.models.agent_execution import AgentToolCall
+    from app.services.chat.agent_task_service import (
+        agent_task_structure_complete,
+        get_agent_task,
+    )
+
+    db = SessionLocal()
+    try:
+        task = get_agent_task(db, turn_id=turn_id, user_id=user_id)
+        unresolved = (
+            db.query(AgentToolCall.id)
+            .filter(
+                AgentToolCall.turn_id == turn_id,
+                AgentToolCall.status.in_(("running", "waiting", "unknown")),
+            )
+            .first()
+        )
+        if unresolved is not None:
+            return False, "unresolved_tool_calls"
+        if not agent_task_structure_complete(task):
+            return False, "agent_task_incomplete"
+        return True, None
+    finally:
+        db.close()
 
 
 class ConversationEngine:
@@ -68,20 +101,26 @@ class ConversationEngine:
         user_message: str,
         strategy: ExecutionStrategy,
         turn_id: str | None = None,
+        dispatch_generation: int = 1,
         question_indexes: tuple[int, ...] = (),
         attachments: tuple[dict, ...] = (),
+        product_object_context: str = "",
+        strategy_extras: dict | None = None,
     ) -> None:
         self.user_id = user_id
         self.session_id = session_id
         self.user_message = user_message
         self.strategy = strategy
         self.turn_id = turn_id
+        self.dispatch_generation = dispatch_generation
         self.question_indexes = tuple(
             dict.fromkeys(index for index in question_indexes if index > 0)
         )
         # Durable server-resolved snapshots from ConversationTurn. Raw client
         # ids never reach the runtime directly.
         self.attachments = tuple(dict(item) for item in attachments)
+        self.product_object_context = str(product_object_context or "")
+        self.strategy_extras = dict(strategy_extras or {})
 
         self._started_at = time.time()
         self._ctx: StrategyContext | None = None
@@ -98,11 +137,14 @@ class ConversationEngine:
         self._fallback_used: bool = False
         self._empty_reason: str | None = None
         self._rag_metrics: dict = {}
-        # Set in submit_message when a phase crashes. Persistence +
-        # post-turn maintenance gate on this so error-humanised text
-        # ("系统出了点问题…") doesn't enter conversation_messages or feed
-        # realtime memory extraction.
+        # Set in submit_message when a phase crashes or pauses. Persistence is
+        # terminal-only: a waiting Turn keeps the claimed user input but does
+        # not manufacture an assistant answer before its Interaction resolves.
         self._turn_status: str = "completed"
+
+    @property
+    def outcome(self) -> str:
+        return self._turn_status
 
     # ── Public entry ──────────────────────────────────────────────
 
@@ -116,6 +158,12 @@ class ConversationEngine:
 
         try:
             await self._prepare()
+        except AttachmentParsingPendingError:
+            # Parsing is an expected durable wait, not a failed answer. The
+            # Turn host owns releasing compute and resuming this same Turn
+            # when its frozen projections become terminal.
+            self._turn_status = "waiting"
+            raise
         except Exception as exc:  # noqa: BLE001
             self._turn_status = "failed"
             async for ev in self._yield_error(exc):
@@ -131,6 +179,9 @@ class ConversationEngine:
         try:
             async for event in self.strategy.execute(self._ctx, self._result):
                 yield event
+            if self._result.outcome not in _TURN_OUTCOMES:
+                raise ValueError(f"invalid Turn outcome: {self._result.outcome}")
+            self._turn_status = self._result.outcome
         except Exception as exc:  # noqa: BLE001
             # Strategies are expected to yield error events themselves
             # for known-bad states. This catch-all is the last-resort
@@ -138,7 +189,7 @@ class ConversationEngine:
             # but mark the turn as failed so persistence + post-turn
             # maintenance skip below (avoids writing the humanised
             # error string into conversation_messages as if it were a real
-            # answer, and avoids feeding it to memory extraction).
+            # answer or letting downstream post-turn work treat it as one).
             self._turn_status = "failed"
             logger.error(
                 "%s strategy crashed: %s\n%s",
@@ -153,11 +204,9 @@ class ConversationEngine:
                 elapsed_ms=self._elapsed_ms(),
             )
 
-        # Persistence + post-turn maintenance run only on success.
-        # A crashed turn shouldn't pollute the transcript with the
-        # humanised error message, and feeding that text into v3
-        # memory extraction would manufacture fake user-state facts.
-        if self._turn_status == "completed":
+        # A blocked Turn may have honest partial results worth retaining. A
+        # failed or waiting Turn must not be persisted as a successful answer.
+        if self._turn_status in {"completed", "blocked"}:
             try:
                 await self._persist_turn()
             except Exception as exc:  # noqa: BLE001
@@ -173,6 +222,7 @@ class ConversationEngine:
         yield HarnessEvent.done(
             step=self._result.steps_used,
             elapsed_ms=self._elapsed_ms(),
+            outcome=self._turn_status,
         )
 
     # ── Phase 1: Prepare ──────────────────────────────────────────
@@ -182,17 +232,9 @@ class ConversationEngine:
         differences only kick in inside ``strategy.execute()``.
 
         Flow:
-          1. Universal memory load (fast: a few local DB reads, no LLM).
-             Gives the planner the user_profile + ability states + the
-             learning_strategy one-liner it needs to decide whether to
-             load the full strategy body.
-          2. Single planner LLM call: rewrites query + decides RAG
-             + whether to load the strategy body. (Used to be two LLM
-             calls — planner then a separate selection LLM. Merged in
-             the post-Stage-G simplification.)
-          3. Concurrent: RAG retrieval (Milvus + reranker, ~hundreds
-             of ms) // the optional strategy-body load (cheap DB read).
-             Running them as tasks lets the RAG round-trip overlap.
+          1. Resolve the product runtime profile and current conversation state.
+          2. Run the Chat retrieval planner when the selected strategy needs it.
+          3. Load admitted sources through the shared RAG path.
         """
         # ``ensure_session`` opens a SessionLocal + INSERT — wrap in
         # to_thread so the event loop isn't blocked on the DB round-
@@ -205,38 +247,6 @@ class ConversationEngine:
             self.session_id,
             self.user_id,
         )
-
-        from app.services.memory.recall_policy import (
-            is_global_memory_enabled_for_session,
-        )
-
-        global_memory_on = await asyncio.to_thread(
-            is_global_memory_enabled_for_session,
-            self.session_id,
-            self.user_id,
-        )
-
-        # Step 1: cheap universal load — picks up user_profile + the
-        # three description / index lines the planner needs to make
-        # informed body-load decisions.
-        #
-        # When the global memory toggle is OFF, we skip this entirely:
-        # NO user_profile, NO knowledge index, NO descriptions, NO
-        # bodies. Per Stage-H semantics, the toggle is the cross-
-        # session memory gate (analog of Claude Code's
-        # ``isAutoMemoryEnabled``). Session-local context
-        # (recent_turns + debrief reference) still flows in normally —
-        # debrief reference is interview-bound material, not "memory".
-        if global_memory_on:
-            # load_universal is sync (opens 1 session via session_scope
-            # post-P1-F). Dispatching to a worker thread keeps the
-            # loop free during the 4-query universal pass.
-            universal_ctx = await asyncio.to_thread(
-                load_universal,
-                self.user_id,
-            )
-        else:
-            universal_ctx = V3MemoryContext()  # truly empty bundle
 
         # Product-specific context is prepared by the runtime profile.  The
         # shared kernel therefore has no direct knowledge of interview-record
@@ -255,12 +265,9 @@ class ConversationEngine:
         # at the end (LLMs attend more to the tail of the context).
         #
         # L2 (agent) mode skips the planner and recent-turn feeder read:
-        # every planner output except ``load_strategy`` is RAG routing —
-        # unused, because the agent retrieves via the
-        # ``search_knowledge`` tool — and the strategy body is available on
-        # demand through ``recall_memory(load_strategy=true)``. Paying a
-        # serial fast-LLM round-trip per agent turn for one discarded bool
-        # was waste.
+        # every planner output is RAG routing — unused, because the agent
+        # retrieves via the ``search_knowledge`` tool. Paying a serial
+        # fast-LLM round-trip for a discarded decision would be wasteful.
         agent_mode = self.strategy.name == "agent"
         if agent_mode:
             query_plan = QueryPlan()  # null plan: no retrieval, no body load
@@ -277,8 +284,6 @@ class ConversationEngine:
             query_plan = await plan_query(
                 user_message=self.user_message,
                 recent_turns=recent_turns,
-                learning_strategy_description=universal_ctx.learning_strategy_description,
-                global_memory_on=global_memory_on,
                 interview_questions=runtime_context.planner_question_catalog,
             )
 
@@ -287,7 +292,7 @@ class ConversationEngine:
             query_plan.referenced_question_indexes,
         )
 
-        # Step 3: concurrent RAG + memory body loads.
+        # Step 3: shared RAG/source loading.
         #
         # L2 (agent) mode skips engine-side RAG: the agent retrieves knowledge
         # on demand via the ``search_knowledge`` tool, so injecting it here
@@ -312,30 +317,13 @@ class ConversationEngine:
         # persistence without placing them in the global vector index.
         attachment_task = asyncio.create_task(
             asyncio.to_thread(
-                load_attachment_evidence,
+                load_attachment_sources,
                 user_id=self.user_id,
                 session_id=self.session_id,
                 query=self.user_message,
                 explicit_attachments=self.attachments,
             )
         )
-
-        bodies_task = (
-            asyncio.create_task(
-                attach_active_bodies(
-                    universal_ctx,
-                    user_id=self.user_id,
-                    load_strategy=query_plan.load_strategy,
-                )
-            )
-            if query_plan.load_strategy
-            else None
-        )
-
-        if bodies_task is not None:
-            v3_memory = await bodies_task
-        else:
-            v3_memory = universal_ctx
 
         knowledge_result = await knowledge_task if knowledge_task else None
         attachment_bundle = await attachment_task
@@ -348,8 +336,8 @@ class ConversationEngine:
         # flags. When retrieval ran, read everything off it (the facade
         # already stamped planner_failed onto it); when it didn't (direct
         # chat / agent mode), planner_failed still comes from the plan.
-        self._retrieval_attempted = (
-            knowledge_task is not None or bool(attachment_bundle.documents)
+        self._retrieval_attempted = knowledge_task is not None or bool(
+            attachment_bundle.documents
         )
         _state = knowledge_result.state if knowledge_result is not None else None
         self._retrieval_hit = bool(_state and _state.retrieval_hit)
@@ -371,18 +359,15 @@ class ConversationEngine:
                 "diagnostics": knowledge_result.diagnostics,
             }
 
-        v3_memory_block = v3_memory.render()
-
-        # Full answer context — memory and debrief reference land in
-        # SEPARATE slots now (post Stage-G refactor). Debrief reference
-        # is auto-injected by the pipeline when in debrief mode.
+        # Full answer context. Legacy mixed Memory remains disabled until its
+        # Stage 2 ownership migration; an empty canonical recall is honest.
         # We build the AssembledContext ONCE here and hand it to the
         # strategy so it can render with its own system rules without
         # re-running the pipeline (and re-fetching the debrief
         # reference from the DB).
         # ``current_query`` is the user_message verbatim. The planner
-        # no longer emits a ``standalone_query`` — the answer LLM
-        # resolves pronouns itself using [Recent Turns] + [Memory].
+        # no longer emits a ``standalone_query`` — the answer LLM resolves
+        # references from the admitted conversation projection itself.
         # assemble_answer_context is async: it loads all turns after the
         # compaction cursor and may trigger threshold-based compaction
         # (LLM summarization) before returning. Sync DB reads inside are
@@ -401,9 +386,10 @@ class ConversationEngine:
         assembled = await context_pipeline.assemble_answer_context(
             session_id=self.session_id,
             current_query=self.user_message,
-            memory_block=v3_memory_block,
+            memory_block="",
             debrief_reference=debrief_reference,
             attachment_manifest=attachment_bundle.manifest,
+            product_object_context=self.product_object_context,
             retrieval_result=knowledge_result,
             user_id=self.user_id,
             model_context_window=_window,
@@ -414,6 +400,7 @@ class ConversationEngine:
             session_id=self.session_id,
             user_message=self.user_message,
             turn_id=self.turn_id,
+            dispatch_generation=self.dispatch_generation,
             runtime_profile=runtime_profile.name,
             assembled=assembled,
             rewritten_query=None,
@@ -422,10 +409,7 @@ class ConversationEngine:
                 or bool(attachment_bundle.documents)
             ),
             retrieval_hit=self._retrieval_hit,
-            # Cached so the agent strategy doesn't re-query the DB for
-            # the same boolean — engine already resolved it for the
-            # universal-load gate above.
-            global_memory_on=global_memory_on,
+            extras=self.strategy_extras,
         )
 
     # ── Phase 3: Persist + maintenance ────────────────────────────
@@ -459,10 +443,6 @@ class ConversationEngine:
                 *ai_blocks,
                 {"type": "sources", "sources": self._ctx.assembled.sources},
             ]
-        enqueue_memory = bool(
-            self._ctx.global_memory_on
-            and not (self._result.extras or {}).get("degraded")
-        )
         if self.turn_id:
             await asyncio.to_thread(
                 transcript_service.complete_background_turn,
@@ -470,8 +450,6 @@ class ConversationEngine:
                 ai_msg=self._result.final_answer,
                 rewritten_query=self._ctx.rewritten_query,
                 ai_blocks=ai_blocks,
-                enqueue_memory=enqueue_memory,
-                memory_user_id=self.user_id,
             )
         else:
             await asyncio.to_thread(
@@ -482,46 +460,7 @@ class ConversationEngine:
                 ai_msg=self._result.final_answer,
                 rewritten_query=self._ctx.rewritten_query,
                 ai_blocks=ai_blocks,
-                enqueue_memory=enqueue_memory,
             )
-        # AGT-7②: fold the agent loop's autocompact summary into the
-        # session so the NEXT turn's assembly starts from it instead of
-        # re-summarizing the same history. Cursor moves to the last
-        # message BEFORE this turn — the summary was built from exactly
-        # that prefix (plus this turn's tool traffic, which also lives
-        # in this turn's blocks; the redundancy is deliberate and far
-        # cheaper than re-paying summarize every turn).
-        autocompact_summary = (self._result.extras or {}).get("autocompact_summary")
-        if autocompact_summary:
-            try:
-                meta = await asyncio.to_thread(
-                    transcript_service.get_session_meta,
-                    self.session_id,
-                )
-                turns = await asyncio.to_thread(
-                    transcript_service.get_turns_after,
-                    self.session_id,
-                    (meta or {}).get("compaction_cursor") or 0,
-                )
-                # The just-persisted pair is the tail; everything before
-                # this turn's user message is covered by the summary.
-                pre_turn = [
-                    m["seq"]
-                    for m in turns
-                    if not (m["role"] == "user" and m["content"] == self.user_message)
-                ][: max(0, len(turns) - 2)]
-                new_cursor = pre_turn[-1] if pre_turn else None
-                if new_cursor:
-                    await asyncio.to_thread(
-                        transcript_service.update_session_fields,
-                        self.session_id,
-                        summary=autocompact_summary,
-                        compaction_cursor=new_cursor,
-                    )
-            except Exception as exc:  # noqa: BLE001 — folding is an optimization
-                logger.warning(
-                    "autocompact fold failed for %s: %s", self.session_id, exc
-                )
 
     async def persist_background_failure(self, message: str) -> None:
         if not self.turn_id:
@@ -545,6 +484,11 @@ class ConversationEngine:
             latency=time.time() - self._started_at,
             prompt_tokens=self._result.prompt_tokens,
             completion_tokens=self._result.completion_tokens,
+            cache_read_tokens=self._result.cache_read_tokens,
+            cache_creation_tokens=self._result.cache_creation_tokens,
+            provider_id=self._result.provider_id,
+            prompt_cache_supported=self._result.prompt_cache_supported,
+            prompt_cache_enabled=self._result.prompt_cache_enabled,
             retrieval_attempted=self._retrieval_attempted,
             retrieval_hit=self._retrieval_hit,
             planner_failed=self._planner_failed,
@@ -588,7 +532,11 @@ class ConversationEngine:
             step=0,
             elapsed_ms=self._elapsed_ms(),
         )
-        yield HarnessEvent.done(step=0, elapsed_ms=self._elapsed_ms())
+        yield HarnessEvent.done(
+            step=0,
+            elapsed_ms=self._elapsed_ms(),
+            outcome="failed",
+        )
 
     @staticmethod
     def _humanize_exc(exc: Exception) -> str:
@@ -607,4 +555,4 @@ class ConversationEngine:
         return round((time.time() - self._started_at) * 1000, 2)
 
 
-__all__ = ["ConversationEngine"]
+__all__ = ["ConversationEngine", "check_turn_completion"]

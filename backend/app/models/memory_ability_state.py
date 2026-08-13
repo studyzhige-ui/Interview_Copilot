@@ -1,20 +1,8 @@
-"""``memory_ability_states``: the user's long-term mastery state per topic.
+"""Legacy inferred ability rows retained for Stage 2 AbilitySignal migration.
 
-One *active* row per ``(user, topic, skill_type)``. Replaces the old
-``knowledge_docs`` table — but the model is different: knowledge_docs stored a
-sectioned markdown body of "facts the user knows"; an ability state stores a
-compact *judgement* of how the user is doing on a topic (mastery + a short
-summary + evidence pointers), NOT the knowledge content itself (that belongs
-to the knowledge base: ``knowledge_documents`` / ``document_chunks``).
-
-It is distilled from interview QA, debrief conversations and general chat, but
-never stores files, transcripts or full answers. Postgres is the fact source;
-Milvus only holds an index copy of ``search_text`` + metadata so ability-state
-retrieval can run as its own hybrid collection, in parallel with (but separate
-from) knowledge retrieval.
-
-``user_id`` is the stable ``users.id`` (resolved from the runtime username via
-``app.core.user_identity.resolve_user_pk``).
+The old automatic Memory writers and search index are disabled. A bounded
+direct read may keep existing diagnostics visible during migration, but these
+rows are not Long-term Agent Memory and never enter Context or Recall.
 """
 
 from __future__ import annotations
@@ -83,7 +71,8 @@ class MemoryAbilityState(Base):
     # project_deep_dive (see SKILL_TYPES).
     skill_type = Column(String, nullable=False)
     # weak / improving / stable / strong (see MASTERY_LEVELS). Always set by
-    # the extraction; the default is only a placeholder for a partial write.
+    # the retired extraction pipeline; the default was a placeholder for a
+    # partial write.
     mastery_level = Column(String, nullable=False, default="improving")
     # Evidence-derived continuous score. NULL means the state predates the
     # continuous rubric or has no assessable performance evidence; it must not
@@ -97,7 +86,7 @@ class MemoryAbilityState(Base):
     # ``[{"type": "interview_qa", "id": "qa_x"}]``. Cleaned/anonymised when the
     # referenced business record is deleted (the state itself survives).
     evidence_refs_json = Column(JSONValue, nullable=True)
-    # topic + summary, newline-joined; indexed by the Milvus ability collection.
+    # Legacy text formerly copied to a Milvus index; no active index writer.
     search_text = Column(Text, nullable=True)
     # Most recent evidence timestamp — drives staleness.
     last_evidence_at = Column(DateTime, nullable=True)

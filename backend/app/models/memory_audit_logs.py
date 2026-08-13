@@ -1,20 +1,8 @@
-"""``memory_audit_logs``: append-only audit trail of every memory mutation.
+"""Legacy mixed-memory audit rows retained only as migration provenance.
 
-The v3 successor to ``memory_audit_log`` (singular). Captures who/what/when/why
-for both memory documents and ability states so a user can browse "what
-changed about my memory" and ops can debug "why is this in here".
-
-Two things it adds over the old table:
-
-* Typed links to the touched row — ``memory_document_id`` /
-  ``memory_ability_state_id`` (SET NULL on delete so history outlives the row).
-* ``idempotency_key`` — so a retried extraction job can detect it already
-  applied a patch and neither re-apply it nor double-write the audit trail.
-
-``doc_type`` / ``topic`` are redundant snapshots kept for cheap filtering.
-
-Write-heavy, read-rarely (the history UI). ``user_id`` is the stable
-``users.id``.
+Stage 0 has no runtime producer or public audit API for this table. Stage 2 may
+read it while classifying old data, but it is not Interaction History and is
+never a Context or Recall source.
 """
 
 from __future__ import annotations
@@ -34,9 +22,8 @@ from app.db.database import Base
 from app.db.types import JSONValue, utc_now
 from app.db.types import UTCDateTime as DateTime
 
-# Valid change provenances.
-# compaction_rewrite: the dreaming-time full-doc size compaction (MEM-5) —
-# audited with full before/after so an over-aggressive rewrite is revertible.
+# Historical values emitted by the retired writers. They remain only so Stage
+# 2 can interpret old audit rows during migration.
 CHANGE_TYPES = (
     "patch_realtime",
     "patch_dreaming",
@@ -85,7 +72,7 @@ class MemoryAuditEntry(Base):
     doc_type = Column(String, nullable=True)
     topic = Column(String, nullable=True)
 
-    # patch_realtime / patch_dreaming / user_edit / user_delete.
+    # Historical producer action.
     change_type = Column(String, nullable=False)
 
     # Provenance of the change.
@@ -94,7 +81,7 @@ class MemoryAuditEntry(Base):
     # JSON {"start": seq, "end": seq} of the source message range, when known.
     source_message_range_json = Column(JSONValue, nullable=True)
 
-    # Dedup key for a memory write job (NULL for user edits / un-keyed writes).
+    # Historical writer idempotency key.
     idempotency_key = Column(String, nullable=True)
 
     # Snapshots around the change (the document body, or — for an ability

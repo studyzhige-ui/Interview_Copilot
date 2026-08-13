@@ -43,25 +43,15 @@ def test_turn_tokens_counts_agent_blocks():
     assert _turn_tokens(agent_turn) > 10 * _turn_tokens(text_only)
 
 
-# ── AGT-9: check_fn receives the calling user when it can ────────────────
+# ── Real tools stay discoverable while connection facts are missing ──────
 
 
-def test_registry_passes_user_id_to_capable_check_fns():
-    from app.agent_runtime.tool_registry import ToolEntry, ToolRegistry
+def test_registry_visibility_does_not_depend_on_connection_probe():
+    from app.agent_runtime.tool_registry import ToolDefinition, ToolRegistry
     from pydantic import BaseModel
 
     class _Args(BaseModel):
         q: str = ""
-
-    seen: dict = {}
-
-    def ctx_probe(user_id=None):
-        seen["user_id"] = user_id
-        return user_id == "alice"
-
-    def env_probe():
-        seen["env_called"] = True
-        return True
 
     reg = ToolRegistry()
     reg._entries = {}
@@ -70,40 +60,28 @@ def test_registry_passes_user_id_to_capable_check_fns():
     async def _h(args, ctx):
         return {}
 
-    reg.register(
-        ToolEntry(
-            name="ctx_tool",
-            description="d",
-            args_model=_Args,
-            handler=_h,
-            check_fn=ctx_probe,
-        )
-    )
-    reg.register(
-        ToolEntry(
-            name="env_tool",
-            description="d",
-            args_model=_Args,
-            handler=_h,
-            check_fn=env_probe,
-        )
-    )
+    reg.register(ToolDefinition("real_tool", "d", _Args, _h))
 
     names = {e.name for e in reg._iter_available(user_id="alice")}
-    assert names == {"ctx_tool", "env_tool"}
-    assert seen["user_id"] == "alice" and seen["env_called"]
-
-    names = {e.name for e in reg._iter_available(user_id="bob")}
-    assert names == {"env_tool"}  # ctx probe rejected bob
+    assert names == {"real_tool"}
 
 
-def test_tavily_probe_accepts_user_key(monkeypatch):
+def test_tavily_tool_reports_connection_required_at_call_time(monkeypatch):
+    import asyncio
+
     import app.agent_runtime.tools.web as web
+    from app.agent_runtime.tool_registry import AgentToolContext
 
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    assert web._tavily_available() is False
-    monkeypatch.setattr(
-        web, "_resolve_tavily_key", lambda uid: "tvly-x" if uid == "alice" else ""
+    monkeypatch.setattr(web, "_resolve_tavily_key", lambda _uid: "")
+    result = asyncio.run(
+        web._web_search_handler(
+            web.WebSearchArgs(query="python"),
+            AgentToolContext(user_id="alice", session_id="s1"),
+        )
     )
-    assert web._tavily_available(user_id="alice") is True
-    assert web._tavily_available(user_id="bob") is False
+    assert result == {
+        "error": "connection_required",
+        "provider": "tavily",
+        "required_scope": "web_search",
+    }

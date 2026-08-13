@@ -45,21 +45,6 @@ export interface UserMCPServer {
   };
 }
 
-export type CapabilityDecision = 'allow' | 'deny' | 'inherit';
-
-export interface SessionCapabilityState {
-  conversation_id: string;
-  discovered_skills: string[];
-  permissions: Record<string, 'allow' | 'deny'>;
-  tool_history: Array<{
-    tool_name: string;
-    status: string;
-    turn_id: string;
-    at: string;
-  }>;
-  updated_at: string | null;
-}
-
 export interface MCPServerInput {
   name: string;
   transport: MCPTransport;
@@ -133,21 +118,4 @@ export async function testMCPServer(id: number): Promise<{
 
 export async function deleteMCPServer(id: number): Promise<void> {
   await apiClient.delete(`/capabilities/mcp-servers/${id}`);
-}
-
-export async function getSessionCapabilities(sessionId: string): Promise<SessionCapabilityState> {
-  const response = await apiClient.get(`/capabilities/sessions/${encodeURIComponent(sessionId)}`);
-  return response.data;
-}
-
-export async function setSessionCapabilityPermission(
-  sessionId: string,
-  capability: string,
-  decision: CapabilityDecision,
-): Promise<SessionCapabilityState> {
-  const response = await apiClient.put(
-    `/capabilities/sessions/${encodeURIComponent(sessionId)}/permissions`,
-    { capability, decision },
-  );
-  return response.data;
 }

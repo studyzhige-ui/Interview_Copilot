@@ -27,6 +27,7 @@ def test_prompt_renderer_keeps_expected_slot_order():
     ctx = AssembledContext(
         debrief_reference="[Resume]\n张三",
         summary="focusing on redis",
+        personalization_guidance="[Global CopilotPreference]\n- concise",
         memory_block="# 用户画像\n- name: alice",
         retrieved_context="[K1] [interview_qa score=0.900] Redis cache avalanche.",
         recent_turns=[
@@ -44,6 +45,7 @@ def test_prompt_renderer_keeps_expected_slot_order():
         prompt.index("[Record Context]"),
         prompt.index("[Context Summary]"),
         prompt.index("[Recent Turns]"),
+        prompt.index("[Explicit Guidance]"),
         prompt.index("[Memory]"),
         prompt.index("[Retrieved Context]"),
         prompt.index("[Current Query]"),
@@ -102,6 +104,43 @@ def test_rewrite_context_skips_heavy_slots():
     assert "[Context Summary]" in out
     assert "[Recent Turns]" in out
     assert "[Current Query]" in out
+
+
+def test_provider_partition_keeps_dynamic_context_beside_current_user():
+    renderer = PromptRenderer()
+    ctx = AssembledContext(
+        debrief_reference="stable record",
+        summary="stable summary",
+        memory_block="dynamic memory",
+        personalization_guidance="dynamic explicit guidance",
+        attachment_manifest="dynamic attachment",
+        retrieved_context="dynamic rag",
+        recent_turns=[{"role": "User", "content": "earlier"}],
+        current_input="current direction",
+    )
+
+    system = renderer.render_stable_system_prompt(ctx, system_prompt="rules")
+    current = renderer.render_current_user_message(ctx)
+
+    assert "stable record" not in system
+    assert "stable summary" not in system
+    assert "earlier" not in system
+    assert "dynamic memory" not in system
+    assert "dynamic explicit guidance" not in system
+    assert "dynamic attachment" not in system
+    assert "dynamic rag" not in system
+    assert "current direction" not in system
+    assert "stable record" in current
+
+    positions = [
+        current.index("[Explicit Guidance]"),
+        current.index("[Memory]"),
+        current.index("[Attachments]"),
+        current.index("[Retrieved Context]"),
+        current.index("[Current Query]"),
+    ]
+    assert positions == sorted(positions)
+    assert "stable summary" not in current
 
 
 # ── Debrief auto-inject contract ──────────────────────────────────────
@@ -191,7 +230,6 @@ def test_summary_comes_from_summary_column(monkeypatch):
                 "subject_id": None,
                 "turn_count": 0,
                 "compaction_cursor": 0,
-                "memory_extraction_cursor": 0,
                 "summary": "## 当前状态\n聚焦 redis 缓存",  # dedicated column
             }
 
@@ -270,7 +308,35 @@ def test_threshold_compaction_fires_and_advances_cursor(monkeypatch):
     turns = []
     for i in range(1, 21):
         role = "User" if i % 2 == 1 else "Agent"
-        turns.append({"seq": i, "role": role, "content": big_content})
+        turns.append(
+            {
+                "seq": i,
+                "role": role,
+                "content": big_content if i <= 16 else f"tail {i}",
+            }
+        )
+    turns[1]["blocks"] = [
+        {"type": "text", "text": "先查询"},
+        {
+            "type": "tool_use",
+            "id": "call_2",
+            "name": "search_knowledge",
+            "input": {"query": "redis"},
+        },
+        {
+            "type": "tool_result",
+            "tool_use_id": "call_2",
+            "content": "redis result",
+        },
+        {
+            "type": "tool_result",
+            "tool_use_id": "orphan",
+            "content": "must not enter summary",
+        },
+    ]
+    # The storage adapter should order by seq, but canonical assembly must not
+    # rely on that incidental query behavior.
+    turns.reverse()
 
     class FakeTranscript:
         def get_session_meta(self, session_id):
@@ -280,7 +346,7 @@ def test_threshold_compaction_fires_and_advances_cursor(monkeypatch):
                 "subject_type": None,
                 "subject_id": None,
                 "compaction_cursor": 0,
-                "summary": "",
+                "summary": "EARLY SUMMARY",
             }
 
         def get_turns_after(self, session_id, after_seq=0):
@@ -292,7 +358,10 @@ def test_threshold_compaction_fires_and_advances_cursor(monkeypatch):
     # Stub summarize_conversation to return a fixed summary.
     import app.services.chat.conversation_summarizer as cs_mod
 
+    summary_inputs: list[tuple[str, str]] = []
+
     async def fake_summarize(old, conv, *, user_id=None):
+        summary_inputs.append((old, conv))
         return "COMPRESSED SUMMARY"
 
     monkeypatch.setattr(cs_mod, "summarize_conversation", fake_summarize)
@@ -314,8 +383,16 @@ def test_threshold_compaction_fires_and_advances_cursor(monkeypatch):
     assert "summary" in updates[0]
     assert updates[0]["summary"] == "COMPRESSED SUMMARY"
     assert "compaction_cursor" in updates[0]
+    assert updates[0]["compaction_cursor"] == 16
+    assert summary_inputs[0][0] == "EARLY SUMMARY"
+    rendered_input = summary_inputs[0][1]
+    assert rendered_input.index("[tool_call id=call_2") < rendered_input.index(
+        "[tool_result id=call_2]"
+    )
+    assert "must not enter summary" not in rendered_input
     # Protected tail (COMPRESS_PROTECT_LAST_N=4) should remain.
     assert len(ctx.recent_turns) <= budget.COMPRESS_PROTECT_LAST_N
+    assert [turn["seq"] for turn in ctx.recent_turns] == [17, 18, 19, 20]
     assert ctx.summary == "COMPRESSED SUMMARY"
 
 

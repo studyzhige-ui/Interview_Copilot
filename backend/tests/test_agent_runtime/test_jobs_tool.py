@@ -1,22 +1,16 @@
-"""search_jobs tool — availability check_fn + network error handling."""
+"""search_jobs tool — call-time connection preflight and network handling."""
 
 import asyncio
 
 
-class TestSearchJobsCheckFn:
-    """search_jobs must be hidden from the manifest when LEVER_SITES is empty."""
+class TestSearchJobsConnectionPreflight:
+    """A real Tool stays discoverable and reports missing connection at call time."""
 
-    def test_jobs_hidden_when_lever_sites_empty(self, monkeypatch):
+    def test_tool_remains_registered_without_lever_configuration(self, monkeypatch):
         monkeypatch.setattr("app.core.config.settings.LEVER_SITES", "")
-        from app.agent_runtime.tools.jobs import _jobs_available
+        from app.agent_runtime.tool_registry import registry
 
-        assert _jobs_available() is False
-
-    def test_jobs_visible_when_lever_sites_set(self, monkeypatch):
-        monkeypatch.setattr("app.core.config.settings.LEVER_SITES", "acme-corp")
-        from app.agent_runtime.tools.jobs import _jobs_available
-
-        assert _jobs_available() is True
+        assert "search_jobs" in registry
 
     def test_handler_returns_error_when_no_sites(self, monkeypatch):
         monkeypatch.setattr("app.core.config.settings.LEVER_SITES", "")
@@ -30,8 +24,12 @@ class TestSearchJobsCheckFn:
                 ctx,
             )
         )
-        assert "error" in result
-        assert result["count"] == 0
+        assert result == {
+            "error": "connection_required",
+            "provider": "lever",
+            "required_scope": "job_search",
+            "count": 0,
+        }
 
 
 class TestSearchJobsErrorHandling:

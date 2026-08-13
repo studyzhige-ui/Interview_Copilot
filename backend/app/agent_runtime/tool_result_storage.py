@@ -8,7 +8,7 @@ this is recoverable — the full bytes stay on disk.
 
 Three levels of defense against context-window overflow:
 
-1. **Per-tool output cap** (``ToolEntry.max_result_chars``): enforced here
+1. **Per-tool output cap** (``ToolDefinition.max_result_chars``): enforced here
    in ``resolve_threshold`` — a result larger than the tool's registered cap
    is persisted (recoverable), not truncated. The effective threshold is
    ``min(max_result_chars, AGENT_PERSIST_THRESHOLD)``.
@@ -28,6 +28,7 @@ Three levels of defense against context-window overflow:
 import logging
 from pathlib import Path
 
+from app.agent_runtime.tool_redaction import redact_tool_text
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -111,7 +112,7 @@ def resolve_threshold(tool_name: str) -> int | float:
     """Resolve the effective persistence threshold for a tool.
 
     - Tools in ``_NEVER_PERSIST_TOOLS`` → ``inf`` (never persisted).
-    - Otherwise → ``min(ToolEntry.max_result_chars, AGENT_PERSIST_THRESHOLD)``.
+    - Otherwise → ``min(ToolDefinition.max_result_chars, AGENT_PERSIST_THRESHOLD)``.
       This is what makes the per-tool cap REAL: a tool registered with a
       2K cap gets its oversized result offloaded at 2K instead of riding
       the global 50K default into the LLM context and the SSE frame.
@@ -148,6 +149,9 @@ def maybe_persist_result(
 
     Falls back to inline truncation if the write fails.
     """
+    # Defense in depth: callers should already pass the execution-boundary
+    # projection, but overflow storage must never become a raw-secret bypass.
+    content = redact_tool_text(content)
     effective_threshold = (
         threshold if threshold is not None else resolve_threshold(tool_name)
     )
@@ -176,7 +180,11 @@ def maybe_persist_result(
         )
         return _build_persisted_message(preview, has_more, len(content), str(file_path))
     except Exception as exc:
-        logger.warning("Failed to persist tool result %s: %s", tool_call_id, exc)
+        logger.warning(
+            "Failed to persist tool result %s: %s",
+            tool_call_id,
+            redact_tool_text(str(exc)),
+        )
         # Fallback: inline truncation with a notice
         return (
             f"{preview}\n\n"
@@ -206,7 +214,8 @@ def enforce_turn_budget(
     candidates: list[tuple[int, int]] = []  # (index, size)
     total_size = 0
     for i, msg in enumerate(tool_messages):
-        content = msg.get("content", "")
+        content = redact_tool_text(str(msg.get("content", "")))
+        msg["content"] = content
         size = len(content)
         total_size += size
         if PERSISTED_OUTPUT_TAG not in content:

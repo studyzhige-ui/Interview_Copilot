@@ -197,6 +197,7 @@ def create_record_and_dispatch(
     jd_text: str,
     jd_file_asset_id: Optional[str],
     language: Optional[str],
+    job_opportunity_id: Optional[str] = None,
 ):
     """Create the InterviewRecord, consume the upload, dispatch the analysis.
 
@@ -213,6 +214,7 @@ def create_record_and_dispatch(
         jd_file_asset_id=jd_file_asset_id,
         resume_text_snapshot=resume_ctx.resume_text,
         jd_text_snapshot=jd_text,
+        job_opportunity_id=job_opportunity_id,
         db=db,
     )
     mark_file_asset_consumed(db, upload)

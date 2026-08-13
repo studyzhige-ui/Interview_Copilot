@@ -12,6 +12,7 @@ export async function startMockInterview(payload: {
   jd_text: string;
   interviewer_style: 'friendly' | 'professional' | 'rigorous' | 'pressure';
   target_question_count: 15 | 20 | 30;
+  job_opportunity_id?: string;
 }): Promise<MockStartResp> {
   const res = await apiClient.post('/mock-interviews/start', payload);
   return res.data;

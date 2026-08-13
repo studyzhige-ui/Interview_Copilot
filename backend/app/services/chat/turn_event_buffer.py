@@ -51,6 +51,10 @@ class TurnEventBuffer:
         await redis_client.lpush(key, "cancel")
         await redis_client.expire(key, self.ttl_seconds)
 
+    async def reset(self, turn_id: str) -> None:
+        """Start a fresh event generation when the same Turn resumes."""
+        await redis_client.delete(self._key(turn_id), self._cancel_key(turn_id))
+
     async def wait_cancel(self, turn_id: str) -> None:
         await redis_client.blpop(self._cancel_key(turn_id), timeout=0)
 

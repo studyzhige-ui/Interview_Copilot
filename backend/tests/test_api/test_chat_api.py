@@ -11,18 +11,19 @@ shared ``db_session`` fixture in ``tests/conftest.py`` references the missing
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Iterator
 
 import app.models  # noqa: F401  — ensure mappers registered
 import pytest
 from app.api import chat as chat_api
-from app.api import memory as memory_api
 from app.api.chat import sessions as conversations_mod
 from app.api.interviews import mock as mock_api
 from app.core.security import get_current_user
 from app.db.database import Base, get_db
 from app.models.chat import Conversation, ConversationMessage
 from app.models.conversation_turn import ConversationTurn
+from app.models.pending_submission import PendingSubmission
 from app.models.user import User
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -37,12 +38,16 @@ def test_terminal_sse_recovery_preserves_failure_and_cancellation():
     failed = [json.loads(event) for event in _recovery_events("failed", "worker died")]
     cancelled = [json.loads(event) for event in _recovery_events("cancelled", None)]
     completed = [json.loads(event) for event in _recovery_events("completed", None)]
+    blocked = [json.loads(event) for event in _recovery_events("blocked", None)]
 
     assert [event["type"] for event in failed] == ["error", "done"]
     assert failed[0]["data"]["error"] == "worker died"
     assert [event["type"] for event in cancelled] == ["error", "done"]
     assert cancelled[0]["data"]["error"] == "本轮已取消"
     assert [event["type"] for event in completed] == ["done"]
+    assert completed[-1]["data"]["outcome"] == "completed"
+    assert [event["type"] for event in blocked] == ["done"]
+    assert blocked[-1]["data"]["outcome"] == "blocked"
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
@@ -70,7 +75,7 @@ def _uid(db: Session, username: str) -> int:
 
 
 @pytest.fixture
-def db(monkeypatch) -> Iterator[Session]:
+def db() -> Iterator[Session]:
     # StaticPool + a single shared connection so the dependency-override
     # session and the test's own session see the same in-memory DB.
     engine = create_engine(
@@ -80,25 +85,6 @@ def db(monkeypatch) -> Iterator[Session]:
     )
     Base.metadata.create_all(bind=engine)
     Session_ = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-
-    # The v3 memory services (memory_document_service /
-    # memory_ability_state_service / _memory_audit) bypass FastAPI's
-    # ``get_db`` and open their own session via ``SessionLocal()`` imported
-    # at module-load time. To keep memory-endpoint tests honest we must
-    # rebind every such reference to a sessionmaker that points at THIS
-    # in-memory engine — otherwise those endpoints would talk to the real
-    # configured database (or fail with "no such table: memory_documents").
-    import app.services.memory._db_helpers as _helpers_mod
-    import app.services.memory._memory_audit as _audit_mod
-    import app.services.memory.memory_ability_state_service as _ability_mod
-    import app.services.memory.memory_document_service as _doc_mod
-
-    # Includes ``_db_helpers`` because the services route their
-    # ``SessionLocal()`` opens through ``_db_helpers.session_scope`` —
-    # rebinding only the service modules' own ``SessionLocal`` leaves the
-    # helper's binding pointed at the real configured DB.
-    for _mod in (_helpers_mod, _audit_mod, _ability_mod, _doc_mod):
-        monkeypatch.setattr(_mod, "SessionLocal", Session_, raising=False)
 
     session = Session_()
     try:
@@ -125,11 +111,6 @@ def client(db: Session) -> Iterator[TestClient]:
     app = FastAPI()
     app.include_router(chat_api.router, prefix="/api/v1")
     app.include_router(mock_api.router, prefix="/api/v1")
-    # /memory/* lives under app.api.memory now (moved out of chat/
-    # in P8-1 because the routes are cross-session memory CRUD,
-    # not chat-session operations). Mount it here so the existing
-    # tests targeting ``/api/v1/memory/...`` keep working.
-    app.include_router(memory_api.router, prefix="/api/v1")
     app.dependency_overrides[get_current_user] = fake_user
     app.dependency_overrides[get_db] = fake_db
     yield TestClient(app)
@@ -150,6 +131,26 @@ def test_create_chat_session_defaults_to_general(client: TestClient, db: Session
     assert row is not None
     assert row.user_id == alice_pk
     assert row.mode == "agent"
+    assert body["execution_mode_version"] == 0
+
+
+def test_new_conversation_inherits_account_execution_mode(
+    client: TestClient, db: Session
+):
+    alice_pk = _uid(db, "alice")
+    alice = db.get(User, alice_pk)
+    alice.default_execution_mode = "auto"
+    db.commit()
+    client.app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+        username="alice", default_execution_mode="auto"
+    )
+
+    response = client.post("/api/v1/chat/sessions", json={})
+
+    assert response.status_code == 200
+    assert response.json()["execution_mode"] == "auto"
+    assert response.json()["execution_mode_version"] == 0
+    assert db.get(Conversation, response.json()["session_id"]).execution_mode == "auto"
 
 
 def test_general_turn_cannot_downgrade_career_runtime_to_chat(
@@ -178,7 +179,11 @@ def test_general_turn_cannot_downgrade_career_runtime_to_chat(
 
     response = client.post(
         "/api/v1/chat/career_mode/turns",
-        json={"message": "直接回答也由 Agent 决策", "mode": "chat"},
+        json={
+            "submission_id": "sub-career-mode",
+            "message": "直接回答也由 Agent 决策",
+            "mode": "chat",
+        },
     )
 
     assert response.status_code == 202
@@ -205,15 +210,19 @@ def test_create_turn_is_backgrounded(client: TestClient, db: Session, monkeypatc
     response = client.post(
         "/api/v1/chat/s_turn/turns",
         json={
+            "submission_id": "sub-backgrounded",
             "message": "继续完成任务",
             "mode": "agent",
+            "execution_mode": "standard",
             "question_indexes": [5, 2, 5],
         },
     )
 
     assert response.status_code == 202
     turn = db.get(ConversationTurn, response.json()["turn_id"])
+    assert response.json()["status"] == "admitted"
     assert turn and turn.status == "pending" and turn.mode == "agent"
+    assert turn.submission_id == "sub-backgrounded"
     assert turn.question_indexes_json == [5, 2]
     assert db.get(Conversation, "s_turn").active_turn_id == turn.id
     user_message = (
@@ -226,6 +235,50 @@ def test_create_turn_is_backgrounded(client: TestClient, db: Session, monkeypatc
     )
     assert user_message.role == "User" and user_message.content == "继续完成任务"
     assert scheduled == [turn.id]
+
+
+def test_submission_retry_is_idempotent(client: TestClient, db: Session, monkeypatch):
+    from app.services.chat import turn_executor
+    from app.services.chat.turn_event_buffer import turn_event_buffer
+
+    user_id = _uid(db, "alice")
+    db.add(Conversation(id="s_retry", user_id=user_id, title="T", type="general"))
+    db.commit()
+
+    async def ping():
+        return None
+
+    scheduled: list[str] = []
+    monkeypatch.setattr(turn_event_buffer, "ping", ping)
+    monkeypatch.setattr(turn_executor, "schedule_turn", scheduled.append)
+    payload = {
+        "submission_id": "sub-retry",
+        "version": 1,
+        "message": "只发送一次",
+        "mode": "agent",
+    }
+
+    first = client.post("/api/v1/chat/s_retry/turns", json=payload)
+    second = client.post("/api/v1/chat/s_retry/turns", json=payload)
+
+    assert first.status_code == second.status_code == 202
+    assert first.json() == second.json()
+    assert first.json()["status"] == "admitted"
+    assert len(scheduled) == 1
+    assert db.query(PendingSubmission).filter_by(id="sub-retry").count() == 1
+    assert db.query(ConversationTurn).filter_by(submission_id="sub-retry").count() == 1
+    assert (
+        db.query(ConversationMessage)
+        .filter_by(conversation_id="s_retry", content="只发送一次")
+        .count()
+        == 1
+    )
+
+    conflict = client.post(
+        "/api/v1/chat/s_retry/turns",
+        json={**payload, "message": "不能覆盖原输入"},
+    )
+    assert conflict.status_code == 409
 
 
 def test_create_turn_dispatch_failure_is_terminal(
@@ -250,7 +303,11 @@ def test_create_turn_dispatch_failure_is_terminal(
     monkeypatch.setattr(turn_executor, "schedule_turn", fail_dispatch)
     response = client.post(
         "/api/v1/chat/s_dispatch/turns",
-        json={"message": "继续完成任务", "mode": "agent"},
+        json={
+            "submission_id": "sub-dispatch-failure",
+            "message": "继续完成任务",
+            "mode": "agent",
+        },
     )
 
     assert response.status_code == 503
@@ -260,7 +317,7 @@ def test_create_turn_dispatch_failure_is_terminal(
     assert db.get(Conversation, "s_dispatch").active_turn_id is None
 
 
-def test_create_turn_rejects_parallel_turn(
+def test_active_turn_queues_submission_without_writing_history(
     client: TestClient, db: Session, monkeypatch
 ):
     from app.services.chat.turn_event_buffer import turn_event_buffer
@@ -283,12 +340,53 @@ def test_create_turn_rejects_parallel_turn(
         return None
 
     monkeypatch.setattr(turn_event_buffer, "ping", ping)
+    payload = {
+        "submission_id": "sub-queued",
+        "message": "next request",
+        "mode": "agent",
+    }
     response = client.post(
         "/api/v1/chat/s_busy/turns",
-        json={"message": "duplicate", "mode": "agent"},
+        json=payload,
     )
-    assert response.status_code == 409
-    assert response.json()["detail"]["turn_id"] == "turn_busy"
+    assert response.status_code == 202
+    assert response.json() == {
+        "submission_id": "sub-queued",
+        "version": 1,
+        "status": "queued",
+        "turn_id": None,
+        "queue_position": 1,
+        "error": None,
+    }
+    pending = db.get(PendingSubmission, "sub-queued")
+    assert pending is not None and pending.status == "pending"
+    retry = client.post("/api/v1/chat/s_busy/turns", json=payload)
+    assert retry.status_code == 202 and retry.json() == response.json()
+    assert db.query(PendingSubmission).filter_by(id="sub-queued").count() == 1
+    assert (
+        db.query(ConversationMessage)
+        .filter_by(conversation_id="s_busy", content="next request")
+        .count()
+        == 0
+    )
+    queue = client.get("/api/v1/chat/s_busy/submissions")
+    assert queue.status_code == 200
+    assert queue.json() == [
+        {
+            "submission_id": "sub-queued",
+            "version": 1,
+            "status": "queued",
+            "queue_position": 1,
+            "message": "next request",
+            "mode": "agent",
+            "execution_mode": "standard",
+            "question_indexes": [],
+            "attachments": [],
+            "object_references": [],
+            "source_client_id": None,
+            "error": None,
+        }
+    ]
 
 
 def test_cancel_pending_turn_releases_session(
@@ -353,6 +451,203 @@ def test_list_conversations_is_user_scoped(client: TestClient, db: Session):
     assert resp.status_code == 200
     ids = [s["session_id"] for s in resp.json()]
     assert ids == ["s_a"]
+
+
+def test_execution_mode_get_patch_is_owner_scoped_and_cas(
+    client: TestClient, db: Session
+):
+    alice_pk = _uid(db, "alice")
+    db.add_all(
+        [
+            Conversation(
+                id="mode-alice",
+                user_id=alice_pk,
+                title="A",
+                type="general",
+                execution_mode="standard",
+            ),
+            Conversation(
+                id="mode-bob",
+                user_id=_uid(db, "bob"),
+                title="B",
+                type="general",
+                execution_mode="auto",
+            ),
+        ]
+    )
+    db.commit()
+
+    current = client.get("/api/v1/chat/sessions/mode-alice/execution-mode")
+    assert current.status_code == 200
+    assert current.json() == {
+        "session_id": "mode-alice",
+        "execution_mode": "standard",
+        "version": 0,
+    }
+
+    saved = client.patch(
+        "/api/v1/chat/sessions/mode-alice/execution-mode",
+        json={"execution_mode": "auto", "expected_version": 0},
+    )
+    assert saved.status_code == 200
+    assert saved.json() == {
+        "session_id": "mode-alice",
+        "execution_mode": "auto",
+        "version": 1,
+    }
+
+    stale = client.patch(
+        "/api/v1/chat/sessions/mode-alice/execution-mode",
+        json={"execution_mode": "standard", "expected_version": 0},
+    )
+    assert stale.status_code == 409
+    assert (
+        client.get("/api/v1/chat/sessions/mode-alice/execution-mode").json()["version"]
+        == 1
+    )
+    assert (
+        client.get("/api/v1/chat/sessions/mode-bob/execution-mode").status_code == 404
+    )
+    assert (
+        client.patch(
+            "/api/v1/chat/sessions/mode-bob/execution-mode",
+            json={"execution_mode": "standard", "expected_version": 0},
+        ).status_code
+        == 404
+    )
+
+
+def test_execution_mode_change_only_affects_future_admissions(
+    client: TestClient, db: Session, monkeypatch
+):
+    from app.services.chat.turn_event_buffer import turn_event_buffer
+
+    user_id = _uid(db, "alice")
+    conversation = Conversation(
+        id="mode-freeze",
+        user_id=user_id,
+        title="Freeze",
+        type="general",
+        execution_mode="standard",
+        active_turn_id="active-mode-turn",
+    )
+    active = ConversationTurn(
+        id="active-mode-turn",
+        conversation_id=conversation.id,
+        user_id=user_id,
+        mode="agent",
+        execution_mode="standard",
+        message="running",
+        status="running",
+    )
+    db.add_all([conversation, active])
+    db.commit()
+
+    async def ping():
+        return None
+
+    monkeypatch.setattr(turn_event_buffer, "ping", ping)
+    stale_device_payload = {
+        "version": 1,
+        "message": "queued",
+        "mode": "agent",
+        "execution_mode": "standard",
+    }
+    before = client.post(
+        "/api/v1/chat/mode-freeze/turns",
+        json={"submission_id": "mode-before", **stale_device_payload},
+    )
+    assert before.status_code == 202 and before.json()["status"] == "queued"
+    assert db.get(PendingSubmission, "mode-before").execution_mode == "standard"
+
+    changed = client.patch(
+        "/api/v1/chat/sessions/mode-freeze/execution-mode",
+        json={"execution_mode": "auto", "expected_version": 0},
+    )
+    assert changed.status_code == 200
+    db.expire_all()
+    assert db.get(ConversationTurn, active.id).execution_mode == "standard"
+    assert db.get(PendingSubmission, "mode-before").execution_mode == "standard"
+
+    # A stale device may still submit its last rendered value, but the server
+    # rereads the Conversation and freezes the current authoritative mode.
+    after = client.post(
+        "/api/v1/chat/mode-freeze/turns",
+        json={"submission_id": "mode-after", **stale_device_payload},
+    )
+    assert after.status_code == 202 and after.json()["status"] == "queued"
+    assert db.get(PendingSubmission, "mode-after").execution_mode == "auto"
+
+
+def test_pending_submission_execution_mode_is_an_explicit_editable_snapshot(
+    client: TestClient, db: Session, monkeypatch
+):
+    """Editing a queued task changes only that pre-claim task snapshot.
+
+    Conversation remains the owner for new submissions and an active Turn is
+    immutable.  The queued row is user-editable ingress until claim, so its
+    mode may intentionally diverge without becoming a second default owner.
+    """
+
+    from app.services.chat.turn_event_buffer import turn_event_buffer
+
+    user_id = _uid(db, "alice")
+    conversation = Conversation(
+        id="mode-edit-snapshot",
+        user_id=user_id,
+        title="Edit snapshot",
+        type="general",
+        execution_mode="standard",
+        active_turn_id="mode-edit-active",
+    )
+    active = ConversationTurn(
+        id="mode-edit-active",
+        conversation_id=conversation.id,
+        user_id=user_id,
+        mode="agent",
+        execution_mode="standard",
+        message="running",
+        status="running",
+    )
+    db.add_all([conversation, active])
+    db.commit()
+
+    async def ping():
+        return None
+
+    monkeypatch.setattr(turn_event_buffer, "ping", ping)
+    queued = client.post(
+        "/api/v1/chat/mode-edit-snapshot/turns",
+        json={
+            "submission_id": "mode-edit-queued",
+            "version": 1,
+            "message": "queued",
+            "mode": "agent",
+            "execution_mode": "auto",
+        },
+    )
+    assert queued.status_code == 202
+    # New admission ignored the stale/request value and copied Conversation.
+    assert db.get(PendingSubmission, "mode-edit-queued").execution_mode == "standard"
+
+    edited = client.patch(
+        "/api/v1/chat/mode-edit-snapshot/submissions/mode-edit-queued",
+        json={
+            "expected_version": 1,
+            "message": "queued",
+            "mode": "agent",
+            "execution_mode": "auto",
+            "question_indexes": [],
+            "attachments": [],
+            "object_references": [],
+        },
+    )
+    assert edited.status_code == 200
+    assert edited.json()["execution_mode"] == "auto"
+    db.expire_all()
+    assert db.get(Conversation, conversation.id).execution_mode == "standard"
+    assert db.get(ConversationTurn, active.id).execution_mode == "standard"
+    assert db.get(PendingSubmission, "mode-edit-queued").execution_mode == "auto"
 
 
 def test_rename_session_validates_non_empty(client: TestClient, db: Session):
@@ -428,6 +723,89 @@ def test_delete_session_rejects_active_turn(client: TestClient, db: Session):
     assert response.status_code == 409
 
 
+@pytest.mark.parametrize("turn_status", ["pending", "running", "waiting"])
+def test_delete_session_rejects_every_nonterminal_active_turn(
+    client: TestClient,
+    db: Session,
+    turn_status: str,
+):
+    user_id = _uid(db, "alice")
+    conversation = Conversation(
+        id=f"nonterminal-{turn_status}",
+        user_id=user_id,
+        title="t",
+        type="general",
+        active_turn_id=f"turn-{turn_status}",
+    )
+    turn = ConversationTurn(
+        id=f"turn-{turn_status}",
+        conversation_id=conversation.id,
+        user_id=user_id,
+        mode="agent",
+        message="work",
+        status=turn_status,
+        waiting_reason="interaction" if turn_status == "waiting" else None,
+    )
+    db.add_all([conversation, turn])
+    db.commit()
+
+    response = client.delete(f"/api/v1/chat/sessions/{conversation.id}")
+
+    assert response.status_code == 409
+    assert db.get(Conversation, conversation.id) is not None
+
+
+def test_delete_session_cannot_bypass_persistent_task_lifecycle(
+    client: TestClient,
+    db: Session,
+):
+    conversation = Conversation(
+        id="automation-conversation",
+        user_id=_uid(db, "alice"),
+        title="automation",
+        type="persistent_task",
+        mode="agent",
+    )
+    db.add(conversation)
+    db.commit()
+
+    response = client.delete("/api/v1/chat/sessions/automation-conversation")
+
+    assert response.status_code == 409
+    assert "PersistentTask" in response.json()["detail"]
+    assert db.get(Conversation, conversation.id) is not None
+
+
+def test_list_sessions_can_filter_persistent_task_conversations(
+    client: TestClient,
+    db: Session,
+):
+    user_id = _uid(db, "alice")
+    db.add_all(
+        [
+            Conversation(
+                id="automation-list",
+                user_id=user_id,
+                title="automation",
+                type="persistent_task",
+                mode="agent",
+            ),
+            Conversation(
+                id="ordinary-list",
+                user_id=user_id,
+                title="ordinary",
+                type="general",
+            ),
+        ]
+    )
+    db.commit()
+
+    response = client.get("/api/v1/chat/sessions", params={"type": "persistent_task"})
+
+    assert response.status_code == 200
+    assert [item["session_id"] for item in response.json()] == ["automation-list"]
+
+
 # ── /chat/transcript ──────────────────────────────────────────────────────
 
 
@@ -465,37 +843,6 @@ def test_transcript_404_for_other_user(client: TestClient, db: Session):
     db.add(Conversation(id="s_bob", user_id=_uid(db, "bob"), title="t", type="general"))
     db.commit()
     resp = client.get("/api/v1/chat/transcript", params={"session_id": "s_bob"})
-    assert resp.status_code == 404
-
-
-# ── /memory/* (v3) ────────────────────────────────────────────────────────
-
-
-def test_memory_overview_returns_v3_bundle(client: TestClient):
-    """Smoke: /memory/overview returns the v3 bundle (user_profile +
-    learning_strategy bodies + active ability states), empty for a user
-    with no memory yet."""
-    resp = client.get("/api/v1/memory/overview")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert "user_profile_body" in body
-    assert "learning_strategy_body" in body
-    assert "ability_states" in body
-    # Fresh user → empty bodies + empty ability list (not None / missing).
-    assert body["user_profile_body"] == ""
-    assert body["learning_strategy_body"] == ""
-    assert isinstance(body["ability_states"], list)
-    assert body["ability_states"] == []
-    # The retired knowledge/strategy/habit doc fields are gone.
-    assert "knowledge_topics" not in body
-    assert "strategy_body" not in body
-    assert "habit_body" not in body
-
-
-def test_memory_ability_state_delete_404_when_missing(client: TestClient):
-    """Archiving a non-existent ability state returns 404 (replaces the
-    retired ``/memory/knowledge/topics/{id}`` route)."""
-    resp = client.delete("/api/v1/memory/ability-states/does_not_exist")
     assert resp.status_code == 404
 
 
@@ -567,6 +914,7 @@ def test_mock_start_creates_record_conversation_runtime(
     the opening interviewer message — resolving resume context from the
     personal ``resumes`` entity. No pre-created chat session is required."""
     from app.models.interview_record import InterviewRecord
+    from app.models.job_opportunity import JobOpportunity
     from app.models.mock_interview_runtime import MockInterviewRuntime
     from app.models.resume import Resume
 
@@ -579,6 +927,14 @@ def test_mock_start_creates_record_conversation_runtime(
             is_default=True,
             raw_text_snapshot="三年后端开发经验，主导过推荐系统项目",
             parse_status="ready",
+        )
+    )
+    db.add(
+        JobOpportunity(
+            id="jo_mock",
+            user_id=pk,
+            company_name="Example Co",
+            job_title="Backend Engineer",
         )
     )
     db.commit()
@@ -616,6 +972,7 @@ def test_mock_start_creates_record_conversation_runtime(
             "jd_text": "高级后端工程师岗位，要求系统设计、数据库和稳定性经验。",
             "interviewer_style": "professional",
             "target_question_count": 30,
+            "job_opportunity_id": "jo_mock",
         },
     )
     assert resp.status_code == 200, resp.text
@@ -632,6 +989,7 @@ def test_mock_start_creates_record_conversation_runtime(
         .first()
     )
     assert record is not None and record.status == "mock_in_progress"
+    assert record.job_opportunity_id == "jo_mock"
     assert "推荐系统" in (record.resume_text_snapshot or "")
     # Runtime exists and points at the opening message.
     rt = (
@@ -642,6 +1000,58 @@ def test_mock_start_creates_record_conversation_runtime(
     assert rt is not None
     assert rt.current_question_message_id is not None
     assert rt.target_question_count == 30
+
+
+def test_mock_start_rejects_other_users_opportunity_before_planning(
+    client: TestClient,
+    db: Session,
+    monkeypatch,
+):
+    from app.models.job_opportunity import JobOpportunity
+    from app.models.resume import Resume
+
+    alice_pk = _uid(db, "alice")
+    bob_pk = _uid(db, "bob")
+    db.add_all(
+        [
+            Resume(
+                id="rsm_owned",
+                user_id=alice_pk,
+                title="我的简历",
+                raw_text_snapshot="三年后端开发经验",
+                parse_status="ready",
+            ),
+            JobOpportunity(
+                id="jo_bob",
+                user_id=bob_pk,
+                company_name="Other Co",
+                job_title="Backend Engineer",
+            ),
+        ]
+    )
+    db.commit()
+    planning_called = False
+
+    def fail_if_planned(*_args, **_kwargs):
+        nonlocal planning_called
+        planning_called = True
+        raise AssertionError("ownership must be checked before model planning")
+
+    monkeypatch.setattr(
+        "app.services.interview.mock_interview_service.generate_plan",
+        fail_if_planned,
+    )
+    response = client.post(
+        "/api/v1/mock-interviews/start",
+        json={
+            "resume_id": "rsm_owned",
+            "jd_text": "这是满足长度要求的后端工程师岗位说明文本。",
+            "job_opportunity_id": "jo_bob",
+        },
+    )
+
+    assert response.status_code == 404
+    assert planning_called is False
 
 
 def test_mock_start_rejects_resume_that_has_not_been_parsed(

@@ -9,6 +9,12 @@ vi.mock('@/api/interview', () => ({
   saveQAToKnowledge: vi.fn(),
   unsaveQAFromKnowledge: vi.fn(),
 }));
+vi.mock('./DebriefGuidanceControl', () => ({
+  DebriefGuidanceControl: () => <button type="button">本次复盘指导</button>,
+}));
+vi.mock('./InterviewOpportunityControl', () => ({
+  InterviewOpportunityControl: () => <div>岗位关联控件</div>,
+}));
 
 const detail: InterviewRecordDetail = {
   id: 'record-1',

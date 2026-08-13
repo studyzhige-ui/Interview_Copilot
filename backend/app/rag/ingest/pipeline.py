@@ -74,7 +74,7 @@ def _persist_nodes(
     _validate_node_ids(nodes)
     if not index_document:
         # Conversation attachments are private facts, not global knowledge.
-        # Persist their parsed chunks for exact reads / per-turn Evidence, but
+        # Persist their parsed chunks for exact reads / per-turn grounding, but
         # never embed or publish them into the user's Milvus collection. A
         # read-time post-filter would be too late: private rows could already
         # have displaced library candidates from Milvus' top-k result.

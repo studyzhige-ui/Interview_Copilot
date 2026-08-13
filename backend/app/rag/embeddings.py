@@ -38,5 +38,4 @@ def init_rag_settings() -> None:
     milvus_hybrid.validate_existing_dims(
         milvus_hybrid.KNOWLEDGE,
         milvus_hybrid.RESUME,
-        milvus_hybrid.ABILITY,
     )

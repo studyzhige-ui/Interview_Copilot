@@ -346,9 +346,8 @@ services:
     depends_on:
       <<: *runtime-dependencies
 
-  # Celery Beat — fires the nightly dreaming scan at 03:30 Asia/Shanghai.
-  # Sends tasks to the queue specified by task_routes. Beat itself does no
-  # work; one instance is sufficient.
+  # Celery Beat dispatches the periodic catalog and maintenance jobs declared
+  # in task_routes. Beat itself does no work; one instance is sufficient.
   beat:
     <<: *backend-service
     profiles: [full]

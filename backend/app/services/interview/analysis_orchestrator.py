@@ -170,44 +170,6 @@ class InterviewAnalysisOrchestrator:
 
             self._persist_analysis(record_id, report)
             interview_record_service.set_status(record_id, done_status)
-            # Event-driven dreaming (MEM-9): a finished analysis is exactly
-            # the "new growth evidence exists" moment. The quiet-window wait
-            # rides the OUTBOX (run_after) — a 6h Celery countdown would sit
-            # unacked past the broker's visibility_timeout (3700s) and be
-            # redelivered ~hourly. Idempotency-keyed per (user, record) so a
-            # reanalyze doesn't stack checks. Best-effort — the nightly scan
-            # remains the backstop.
-            if owner_username:
-                try:
-                    from datetime import timedelta as _td
-
-                    from app.services.memory.dreaming_worker import RECORD_QUIET_HOURS
-                    from app.services.outbox import enqueue_job
-
-                    with SessionLocal() as odb:
-                        rec_row = (
-                            odb.query(InterviewRecord)
-                            .filter(InterviewRecord.id == record_id)
-                            .first()
-                        )
-                        if rec_row is not None:
-                            enqueue_job(
-                                odb,
-                                user_pk=rec_row.user_id,
-                                job_type="dream_check_user",
-                                aggregate_type="interview_record",
-                                aggregate_id=record_id,
-                                payload={"username": owner_username},
-                                idempotency_key=f"dream_check:{record_id}",
-                                run_after=utc_now() + _td(hours=RECORD_QUIET_HOURS),
-                            )
-                            odb.commit()
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "event-driven dream scheduling failed for %s: %s",
-                        record_id,
-                        exc,
-                    )
             return {"status": done_status, "record_id": record_id}
 
         except Exception as exc:

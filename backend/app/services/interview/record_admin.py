@@ -86,6 +86,8 @@ def update_record_fields(
     *,
     title: str | None,
     tag: str | None,
+    job_opportunity_id: str | None = None,
+    update_job_opportunity: bool = False,
 ) -> bool:
     """Apply the PATCHable fields. Returns False when nothing was given."""
     changed = False
@@ -94,6 +96,15 @@ def update_record_fields(
         changed = True
     if tag is not None:
         record.tag = tag.strip() or None
+        changed = True
+    if update_job_opportunity:
+        record.job_opportunity_id = (
+            interview_record_service.require_owned_job_opportunity(
+                db,
+                user_pk=record.user_id,
+                job_opportunity_id=job_opportunity_id,
+            )
+        )
         changed = True
     if not changed:
         return False
@@ -252,13 +263,10 @@ def delete_record_cascade(
 
     Designed for "I want this interview gone — no leftover chat history."
 
-    **v3 memory survives.** Knowledge / strategy / habit / user_profile
-    docs accumulate across ALL of a user's interviews — they're
-    personal memory, not record artefacts. Deleting a record does NOT
-    touch them. If the user wants to wipe specific memory entries,
-    they use the ``/memory/*`` endpoints. (The legacy v2 cascade —
-    ``memory_items WHERE source_session_id IN sessions`` + Milvus row
-    deletes — is gone with the ``memory_items`` table itself.)
+    Legacy mixed-memory rows are migration-only and are not mutated here.
+    Stage 2 classification must reject or invalidate any migrated item whose
+    only source was this deleted record; runtime Context/Recall never reads the
+    legacy tables in the meantime.
 
     With ``cascade_knowledge`` the improved_qa knowledge documents this
     interview's QAs published are removed too (RFC §10.3 — user opt-in).
@@ -303,6 +311,40 @@ def delete_record_cascade(
             delete_mock_audio_assets(db, sid, record.user_id)
         _enqueue_record_asset_deletes(db, record)
 
+        from app.services.chat.attachment_source_service import (
+            cleanup_conversation_attachment_scope,
+            cleanup_interview_source_scope,
+        )
+
+        attachment_task_ids: list[str] = []
+        for session_id in session_ids:
+            cleanup = cleanup_conversation_attachment_scope(
+                db,
+                user_pk=record.user_id,
+                conversation_id=session_id,
+            )
+            attachment_task_ids.extend(cleanup.ingestion_task_ids)
+        interview_source_cleanup = cleanup_interview_source_scope(
+            db,
+            user_pk=record.user_id,
+            interview_record_id=record_id,
+        )
+        attachment_task_ids.extend(interview_source_cleanup.ingestion_task_ids)
+
+        # AbilitySignal is inferred product state rather than an FK projection.
+        # Preserve its direct source identities for provenance, while ensuring
+        # this delete cannot leave a live judgement with no scope/sources.
+        from app.services.ability_signal_service import (
+            invalidate_ability_signals_for_interview_delete,
+        )
+
+        invalidate_ability_signals_for_interview_delete(
+            db,
+            user_pk=record.user_id,
+            interview_record_id=record_id,
+            conversation_ids=tuple(session_ids),
+        )
+
         # ── (2) DB deletes in safe order ─────────────────────────────────
         if session_ids:
             db.query(ConversationMessage).filter(
@@ -321,6 +363,17 @@ def delete_record_cascade(
         db.delete(record)
         db.commit()
         from app.core.runtime_files import remove_session_results
+        from app.task_queue.dispatch import revoke_task
+
+        for task_id in dict.fromkeys(attachment_task_ids):
+            try:
+                revoke_task(task_id)
+            except Exception:  # noqa: BLE001 - cleanup is already durable
+                logger.warning(
+                    "Could not revoke deleted interview attachment task %s",
+                    task_id,
+                    exc_info=True,
+                )
 
         for session_id in session_ids:
             remove_session_results(session_id)

@@ -140,9 +140,7 @@ async def _judge(
         (
             str(item.get("content") or "")
             for item in reversed(recent_messages)
-            if str(item.get("role") or "").lower().startswith(
-                ("assistant", "agent")
-            )
+            if str(item.get("role") or "").lower().startswith(("assistant", "agent"))
         ),
         "",
     )

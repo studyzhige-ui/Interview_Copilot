@@ -39,8 +39,3 @@ class MCPServerConfigRequest(BaseModel):
 
 class CapabilityEnabledRequest(BaseModel):
     enabled: bool
-
-
-class SessionCapabilityPermissionRequest(BaseModel):
-    capability: str = Field(min_length=1, max_length=128)
-    decision: Literal["allow", "deny", "inherit"]

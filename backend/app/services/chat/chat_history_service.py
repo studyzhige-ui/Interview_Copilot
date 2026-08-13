@@ -11,8 +11,7 @@ brainstorming now lives as siblings under the same record.
 
 Content blocks (Stage G refactor — Anthropic Claude Code style):
   Each ConversationMessage carries TWO representations of the assistant turn:
-    * ``content``               — plain text preview (used by session
-                                  list UI, memory extraction)
+    * ``content``               — plain text preview used by the session list
     * ``content_blocks_json``   — JSON ``[BetaContentBlock, ...]`` so the
                                   agent loop's interleaved
                                   text / tool_use / tool_result chain
@@ -62,7 +61,6 @@ class TranscriptService:
         rewritten_query: str | None = None,
         ai_blocks: list[dict] | None = None,
         user_blocks: list[dict] | None = None,
-        enqueue_memory: bool = False,
     ) -> int:
         """Persist one ``User → Agent`` turn.
 
@@ -127,23 +125,6 @@ class TranscriptService:
 
             session_row.turn_count = (session_row.turn_count or 0) + 1
             session_row.updated_at = utc_now()
-            if enqueue_memory:
-                from app.services.memory.extraction_jobs import (
-                    enqueue_realtime_extraction_in_transaction,
-                )
-
-                enqueue_realtime_extraction_in_transaction(
-                    db,
-                    user_pk=session_row.user_id,
-                    session_id=session_id,
-                    user_id=user_id,
-                    record_id=(
-                        session_row.subject_id
-                        if session_row.subject_type == "interview_record"
-                        else None
-                    ),
-                    upto_seq=next_seq + 1,
-                )
             db.commit()
             return next_seq + 1
         except Exception:
@@ -159,8 +140,6 @@ class TranscriptService:
         ai_msg: str,
         rewritten_query: str | None = None,
         ai_blocks: list[dict] | None = None,
-        enqueue_memory: bool = False,
-        memory_user_id: str | None = None,
     ) -> int:
         """Idempotently append the assistant half of a reserved turn."""
         db: Session = SessionLocal()
@@ -212,23 +191,6 @@ class TranscriptService:
             if conversation is not None:
                 conversation.turn_count = (conversation.turn_count or 0) + 1
                 conversation.updated_at = utc_now()
-                if enqueue_memory and memory_user_id:
-                    from app.services.memory.extraction_jobs import (
-                        enqueue_realtime_extraction_in_transaction,
-                    )
-
-                    enqueue_realtime_extraction_in_transaction(
-                        db,
-                        user_pk=conversation.user_id,
-                        session_id=conversation.id,
-                        user_id=memory_user_id,
-                        record_id=(
-                            conversation.subject_id
-                            if conversation.subject_type == "interview_record"
-                            else None
-                        ),
-                        upto_seq=assistant_seq,
-                    )
             turn.assistant_message_seq = assistant_seq
             db.commit()
             return assistant_seq
@@ -270,8 +232,8 @@ class TranscriptService:
 
         Used by the context assembly pipeline to implement the
         incremental-append model (full history in context, compress at
-        threshold).  ``get_recent_turns`` is kept for callers that only
-        need a bounded window (planner, memory extraction).
+        threshold). ``get_recent_turns`` is kept for callers that only need a
+        bounded planner window.
         """
         db: Session = SessionLocal()
         try:
@@ -325,7 +287,28 @@ class TranscriptService:
                 .order_by(ConversationMessage.seq.asc())
                 .all()
             )
-            return [self._message_to_dict(row) for row in rows]
+            # Turn identity is not duplicated onto ConversationMessage. Resolve
+            # it from the canonical admitted Turn sequence links in one bounded
+            # query so replayed Tool cards can drill into the same call audit.
+            turns = (
+                db.query(
+                    ConversationTurn.id,
+                    ConversationTurn.user_message_seq,
+                    ConversationTurn.assistant_message_seq,
+                )
+                .filter(ConversationTurn.conversation_id == session_id)
+                .all()
+            )
+            turn_by_seq: dict[int, str] = {}
+            for turn_id, user_seq, assistant_seq in turns:
+                if user_seq is not None:
+                    turn_by_seq[user_seq] = turn_id
+                if assistant_seq is not None:
+                    turn_by_seq[assistant_seq] = turn_id
+            return [
+                self._message_to_dict(row, turn_id=turn_by_seq.get(row.seq))
+                for row in rows
+            ]
         finally:
             if owns_session:
                 db.close()
@@ -352,7 +335,6 @@ class TranscriptService:
                 "subject_id": row.subject_id,
                 "turn_count": row.turn_count or 0,
                 "compaction_cursor": row.compaction_cursor or 0,
-                "memory_extraction_cursor": row.memory_extraction_cursor or 0,
                 "summary": row.summary or "",
             }
         finally:
@@ -378,7 +360,11 @@ class TranscriptService:
             db.close()
 
     @staticmethod
-    def _message_to_dict(row: ConversationMessage) -> dict:
+    def _message_to_dict(
+        row: ConversationMessage,
+        *,
+        turn_id: str | None = None,
+    ) -> dict:
         """Serialize one row. ``blocks`` is always populated — either
         parsed from ``content_blocks_json`` or synthesised as a single
         text block from ``content`` (read-time backfill for legacy rows
@@ -402,6 +388,8 @@ class TranscriptService:
             # before or after the Stage-G refactor.
             blocks = [{"type": "text", "text": row.content or ""}]
         return {
+            "id": row.id,
+            "turn_id": turn_id,
             "seq": row.seq,
             "role": row.role,
             "content": row.content,

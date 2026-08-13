@@ -10,12 +10,15 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from .tool_redaction import redact_tool_text, redact_tool_value
+
 
 class HarnessEventType(str, Enum):
     STATUS = "status"
     SOURCES = "sources"
     TOOL_START = "tool_start"
     TOOL_DONE = "tool_done"
+    INTERACTION = "interaction"
     TEXT = "text"
     TEXT_DELTA = "text_delta"
     BUDGET = "budget"
@@ -86,10 +89,10 @@ class HarnessEvent:
             data={
                 "tool": name,
                 "tool_call_id": tool_call_id,
-                "args_summary": args_summary,
+                "args_summary": redact_tool_text(args_summary),
                 # live == replay (AGT-5): the full input dict, matching the
                 # persisted tool_use block (args_summary is display-only).
-                **({"input": input} if input is not None else {}),
+                **({"input": redact_tool_value(input)} if input is not None else {}),
             },
             step=step,
             elapsed_ms=elapsed_ms,
@@ -126,11 +129,27 @@ class HarnessEvent:
             data={
                 "tool": name,
                 "tool_call_id": tool_call_id,
-                "result_summary": result_summary,
-                "result_content": result_content,
+                "result_summary": redact_tool_text(result_summary),
+                "result_content": redact_tool_text(result_content),
                 "tool_latency_ms": round(tool_latency_ms, 2),
                 "is_error": is_error,
             },
+            step=step,
+            elapsed_ms=elapsed_ms,
+        )
+
+    @classmethod
+    def interaction(
+        cls,
+        interaction: dict[str, Any],
+        *,
+        step: int,
+        elapsed_ms: float,
+    ) -> "HarnessEvent":
+        """A durable user decision/input is required before this Turn resumes."""
+        return cls(
+            type=HarnessEventType.INTERACTION,
+            data={"interaction": redact_tool_value(interaction)},
             step=step,
             elapsed_ms=elapsed_ms,
         )
@@ -168,14 +187,28 @@ class HarnessEvent:
     ) -> "HarnessEvent":
         return cls(
             type=HarnessEventType.ERROR,
-            data={"error": message},
+            data={"error": redact_tool_text(message)},
             step=step,
             elapsed_ms=elapsed_ms,
         )
 
     @classmethod
-    def done(cls, *, step: int, elapsed_ms: float) -> "HarnessEvent":
-        return cls(type=HarnessEventType.DONE, step=step, elapsed_ms=elapsed_ms)
+    def done(
+        cls,
+        *,
+        step: int,
+        elapsed_ms: float,
+        outcome: str | None = None,
+    ) -> "HarnessEvent":
+        # ``done`` closes the transport stream; when the authoritative Kernel
+        # outcome is known it is carried explicitly instead of being inferred
+        # from stream closure or preceding diagnostic events.
+        return cls(
+            type=HarnessEventType.DONE,
+            data={"outcome": outcome} if outcome is not None else {},
+            step=step,
+            elapsed_ms=elapsed_ms,
+        )
 
     # -- serialization ---------------------------------------------------
 

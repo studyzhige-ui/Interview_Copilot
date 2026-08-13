@@ -17,7 +17,8 @@
  * browser back/forward stack can navigate.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, X as XIcon, MessageSquare, Sparkles } from 'lucide-react';
 import { Spinner } from '@/components/ui/Spinner';
@@ -34,6 +35,11 @@ import { useToastOnError } from '@/hooks/useToastOnError';
 import { ChatPanel } from '@/pages/review/chat/ChatPanel';
 import { clearPersistedSessionState } from '@/pages/review/chat/usePersistedSessionState';
 import type { ChatSessionListItem } from '@/types/api';
+import {
+  clearCopilotObjectHandoff,
+  productObjectReferenceLabel,
+  readCopilotObjectHandoff,
+} from '@/lib/copilotObjectReference';
 
 // Same key family as ChatPanel's internal (debrief) session list — one
 // cache namespace for every chat-session list in the app.
@@ -41,11 +47,19 @@ const SESSIONS_KEY = ['chat', 'sessions', { type: 'general' }] as const;
 
 export function GeneralChatPage() {
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   // Inline rename inside the sidebar — same pattern as review page.
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const productObjectReference = useMemo(
+    () => readCopilotObjectHandoff(searchParams),
+    [searchParams],
+  );
+  const clearProductObjectReference = useCallback(() => {
+    setSearchParams(clearCopilotObjectHandoff(searchParams), { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const { data: sessions = [], isPending: loading, error } = useQuery({
     queryKey: SESSIONS_KEY,
@@ -99,6 +113,8 @@ export function GeneralChatPage() {
           type: created.type,
           state_summary: '',
           mode: 'agent',
+          execution_mode: created.execution_mode,
+          execution_mode_version: created.execution_mode_version,
           turn_count: 0,
           updated_at: new Date().toISOString(),
         },
@@ -115,7 +131,7 @@ export function GeneralChatPage() {
   // Pending delete confirmation. Replaces the off-brand native
   // ``window.confirm`` (Chrome titles it "Code" because it's not a
   // PWA dialog — looks like a Chrome extension popup). Same
-  // ConfirmDialog used by Library, MemoryTab, and ChatPanel — keeps
+  // ConfirmDialog used by Library and ChatPanel — keeps
   // the visual language consistent across delete affordances.
   const [pendingDelete, setPendingDelete] = useState<{ id: string; title: string } | null>(null);
   const [deletingChat, setDeletingChat] = useState(false);
@@ -272,6 +288,9 @@ export function GeneralChatPage() {
             sessionTitle={activeSession?.title ?? '求职 Copilot'}
             fixedMode="AGENT"
             flexible
+            productObjectReferences={productObjectReference ? [productObjectReference] : []}
+            onRemoveProductObjectReference={clearProductObjectReference}
+            onProductObjectReferencesConsumed={clearProductObjectReference}
           />
         </div>
       ) : (
@@ -284,6 +303,11 @@ export function GeneralChatPage() {
             <div className="text-xs leading-relaxed max-w-xs">
               用自然语言管理岗位、材料、面试准备和求职进度。
             </div>
+            {productObjectReference && (
+              <div className="mt-3 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-700">
+                已选择：{productObjectReferenceLabel(productObjectReference)}。新建对话后会作为本轮显式输入。
+              </div>
+            )}
           </div>
         </div>
       )}

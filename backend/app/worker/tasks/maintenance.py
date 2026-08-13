@@ -107,6 +107,151 @@ def sweep_stale_interview_records(self):
 
 
 _PIPELINE_STALE_AFTER = timedelta(hours=2)
+_AUTOMATION_DISPATCH_REPAIR_AFTER = timedelta(minutes=1)
+
+
+@celery_app.task(
+    name="tasks.schedule_due_persistent_tasks",
+    time_limit=60,
+    soft_time_limit=50,
+)
+def schedule_due_persistent_tasks():
+    """Boundedly persist due cron occurrences, then dispatch admitted Turns."""
+
+    from app.agent_runtime.turn_tool_catalog import (
+        cloud_sustainable_read_tool_names,
+    )
+    from app.services.persistent_task_service import (
+        due_persistent_task_ids,
+        schedule_due_persistent_task,
+    )
+    from app.task_queue.dispatch import dispatch_conversation_turn
+
+    due_at = utc_now()
+    with SessionLocal() as db:
+        task_ids = due_persistent_task_ids(db, due_at=due_at, limit=100)
+    triggered = 0
+    admitted = 0
+    dispatched = 0
+    for task_id in task_ids:
+        with SessionLocal() as db:
+            try:
+                admission = schedule_due_persistent_task(
+                    db,
+                    task_id=task_id,
+                    due_at=due_at,
+                    cloud_sustainable_tool_names=(cloud_sustainable_read_tool_names()),
+                )
+                db.commit()
+            except Exception:  # noqa: BLE001 - one schedule cannot block the batch
+                db.rollback()
+                logger.warning(
+                    "scheduled PersistentTask intake failed for %s",
+                    task_id,
+                    exc_info=True,
+                )
+                continue
+        if admission is None:
+            continue
+        triggered += 1
+        if admission.should_dispatch and admission.run_request is not None:
+            admitted += 1
+            try:
+                dispatch_conversation_turn(admission.run_request.turn_id)
+            except Exception:  # noqa: BLE001 - durable repair re-dispatches it
+                logger.warning(
+                    "scheduled PersistentTask dispatch deferred for %s",
+                    admission.run_request.turn_id,
+                    exc_info=True,
+                )
+            else:
+                dispatched += 1
+    return {
+        "candidates": len(task_ids),
+        "triggered": triggered,
+        "admitted": admitted,
+        "dispatched": dispatched,
+    }
+
+
+@celery_app.task(
+    name="tasks.repair_pending_automation_turns",
+    time_limit=60,
+    soft_time_limit=50,
+)
+def repair_pending_automation_turns():
+    """Boundedly re-dispatch admitted automation Turns after broker loss."""
+
+    from app.services.persistent_task_service import (
+        admit_pending_persistent_task_triggers,
+        repairable_automation_turn_ids,
+        repairable_persistent_task_ids,
+    )
+    from app.agent_runtime.turn_tool_catalog import (
+        cloud_sustainable_read_tool_names,
+    )
+    from app.models.persistent_task import PersistentTask
+    from app.task_queue.dispatch import dispatch_conversation_turn
+
+    with SessionLocal() as db:
+        turn_ids = repairable_automation_turn_ids(
+            db,
+            stale_before=utc_now() - _AUTOMATION_DISPATCH_REPAIR_AFTER,
+            limit=100,
+        )
+        task_ids = repairable_persistent_task_ids(db, limit=100)
+    dispatched = 0
+    for turn_id in turn_ids:
+        try:
+            dispatch_conversation_turn(turn_id)
+        except Exception:  # noqa: BLE001 - next bounded sweep retries it
+            logger.warning(
+                "automation Turn repair dispatch failed for %s",
+                turn_id,
+                exc_info=True,
+            )
+        else:
+            dispatched += 1
+    admitted = 0
+    for task_id in task_ids:
+        with SessionLocal() as db:
+            task = db.get(PersistentTask, task_id)
+            if task is None:
+                continue
+            try:
+                admission = admit_pending_persistent_task_triggers(
+                    db,
+                    user_pk=task.user_id,
+                    task_id=task.id,
+                    cloud_sustainable_tool_names=(cloud_sustainable_read_tool_names()),
+                )
+                db.commit()
+            except Exception:  # noqa: BLE001 - one definition cannot block the batch
+                db.rollback()
+                logger.warning(
+                    "automation trigger admission repair failed for %s",
+                    task_id,
+                    exc_info=True,
+                )
+                continue
+        if admission.should_dispatch and admission.run_request is not None:
+            admitted += 1
+            try:
+                dispatch_conversation_turn(admission.run_request.turn_id)
+            except Exception:  # noqa: BLE001 - pending Turn repair handles it later
+                logger.warning(
+                    "repaired automation admission dispatch failed for %s",
+                    admission.run_request.turn_id,
+                    exc_info=True,
+                )
+            else:
+                dispatched += 1
+    return {
+        "turn_candidates": len(turn_ids),
+        "task_candidates": len(task_ids),
+        "admitted": admitted,
+        "dispatched": dispatched,
+    }
 
 
 @celery_app.task(

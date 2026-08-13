@@ -110,3 +110,28 @@ def test_sources_event_serializes_to_wire_shape():
     wire = ev.to_dict()
     assert wire["type"] == "sources"
     assert wire["data"]["sources"] == [{"ref": "K1"}]
+
+
+def test_engine_persists_honest_partial_answer_and_emits_blocked_outcome(
+    monkeypatch,
+):
+    class _BlockedStrategy:
+        name = "agent"
+
+        async def execute(self, _ctx, result):
+            result.outcome = "blocked"
+            result.final_answer = "已保留部分结果，但计划尚未完成。"
+            result.assistant_blocks = [{"type": "text", "text": result.final_answer}]
+            if False:
+                yield HarnessEvent.status("unreachable")
+
+    capture: dict = {}
+    engine = _engine(monkeypatch, sources=[], capture=capture)
+    engine.strategy = _BlockedStrategy()
+
+    events = asyncio.run(_collect(engine))
+
+    assert engine.outcome == "blocked"
+    assert capture["ai_blocks"][0]["text"].startswith("已保留部分结果")
+    assert events[-1].type == HarnessEventType.DONE
+    assert events[-1].data == {"outcome": "blocked"}

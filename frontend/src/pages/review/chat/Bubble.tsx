@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useState } from 'react';
-import { FileText } from 'lucide-react';
+import { FileText, Link2 } from 'lucide-react';
 import { MarkdownBody } from '@/components/ui/MarkdownBody';
 import { SourceCards, linkifyCitations } from '@/components/chat/SourceCards';
 import type { ContentBlock, Source } from '@/types/api';
@@ -22,14 +22,23 @@ import { BlockChain } from './MessageBlocks';
  * = []`` swaps in a fresh array — so the message's ``blocks`` ref
  * never changes after creation.
  */
-export const Bubble = memo(function Bubble({ role, content, blocks, sources }: {
+export const Bubble = memo(function Bubble({
+  role, content, blocks, sources, sessionId, turnId,
+}: {
   role: UIMessage['role'];
   content: string;
   blocks?: ContentBlock[];
   sources?: Source[];
+  sessionId?: string | null;
+  turnId?: string | null;
 }) {
   const mine = role === 'user';
-  const attachmentBlocks = blocks?.filter((block) => block.type === 'attachment') ?? [];
+  const attachmentBlocks = blocks?.filter(
+    (block) => block.type === 'attachment' || block.type === 'attachment_draft',
+  ) ?? [];
+  const objectReferenceBlocks = blocks?.filter(
+    (block) => block.type === 'product_object_reference',
+  ) ?? [];
   // Clicking a [K#] badge highlights + scrolls to its source card.
   const [highlightRef, setHighlightRef] = useState<string | null>(null);
   const citeRefs = useMemo(
@@ -56,7 +65,9 @@ export const Bubble = memo(function Bubble({ role, content, blocks, sources }: {
               <div className="mb-1.5 flex flex-wrap gap-1">
                 {attachmentBlocks.map((attachment) => (
                   <span
-                    key={attachment.document_id}
+                    key={attachment.type === 'attachment'
+                      ? attachment.attachment_ref_id
+                      : attachment.draft_id}
                     className="inline-flex max-w-full items-center gap-1 rounded-md bg-white/15 px-2 py-1 text-[11px]"
                     title={attachment.title}
                   >
@@ -66,10 +77,29 @@ export const Bubble = memo(function Bubble({ role, content, blocks, sources }: {
                 ))}
               </div>
             )}
+            {objectReferenceBlocks.length > 0 && (
+              <div className="mb-1.5 flex flex-wrap gap-1">
+                {objectReferenceBlocks.map((reference) => (
+                  <span
+                    key={`${reference.kind}:${reference.object_id}`}
+                    className="inline-flex max-w-full items-center gap-1 rounded-md bg-white/15 px-2 py-1 text-[11px]"
+                    title={`${reference.kind} · ${reference.object_id}`}
+                  >
+                    <Link2 size={11} className="shrink-0" />
+                    <span className="truncate">{reference.label}</span>
+                  </span>
+                ))}
+              </div>
+            )}
             <span className="whitespace-pre-wrap">{content}</span>
           </>
         ) : blocks && blocks.length > 0 ? (
-          <BlockChain blocks={blocks} citeRefs={citeRefs} onCiteClick={cite} />
+          <BlockChain
+            blocks={blocks}
+            citeRefs={citeRefs}
+            onCiteClick={cite}
+            auditRef={sessionId && turnId ? { sessionId, turnId } : undefined}
+          />
         ) : (
           <MarkdownBody
             source={citeRefs ? linkifyCitations(content, citeRefs) : content}

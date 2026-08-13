@@ -51,6 +51,7 @@ export async function startAnalyze(payload: {
    *  (much more accurate on monolingual audio). ``"auto"`` lets Whisper
    *  detect per clip — only use for genuinely mixed recordings. */
   language?: 'zh' | 'en' | 'auto';
+  job_opportunity_id?: string;
 }): Promise<AnalyzeDispatchResp> {
   const res = await apiClient.post('/analyze', payload);
   return res.data;
@@ -73,7 +74,7 @@ export async function getAnalyticsReport(): Promise<unknown> {
 
 export async function updateInterviewRecord(
   id: string,
-  patch: { title?: string; tag?: string },
+  patch: { title?: string; tag?: string; job_opportunity_id?: string | null },
 ): Promise<void> {
   await apiClient.patch(`/interview-records/${encodeURIComponent(id)}`, patch);
 }

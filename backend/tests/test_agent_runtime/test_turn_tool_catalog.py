@@ -7,11 +7,13 @@ from unittest.mock import AsyncMock
 from app.agent_runtime.mcp.manager import MCPManager, MCPToolDescriptor
 from app.agent_runtime.tool_registry import (
     AgentToolContext,
-    ToolEntry,
+    ToolDefinition,
     ToolRegistry,
     registry,
 )
 from app.agent_runtime.turn_tool_catalog import TurnToolCatalog
+from app.models.chat import Conversation
+from app.models.conversation_turn import ConversationTurn
 from app.models.user import User
 from app.models.user_skill import UserSkill
 from app.services.capabilities.mcp_server_service import MCPServerConfig
@@ -42,6 +44,18 @@ TOOL = MCPToolDescriptor(
         "required": ["a", "b"],
     },
 )
+SECOND_TOOL = MCPToolDescriptor(
+    name="mcp__demo__subtract",
+    server_id=7,
+    server_name="demo",
+    remote_name="subtract",
+    description="Subtract two values",
+    input_schema={
+        "type": "object",
+        "properties": {"a": {"type": "number"}, "b": {"type": "number"}},
+        "required": ["a", "b"],
+    },
+)
 
 
 class _Args(BaseModel):
@@ -55,14 +69,186 @@ async def _handler(args, _ctx):
 def test_builtin_turn_view_is_immutable():
     local = ToolRegistry()
     local._default_tools_loaded = True
-    local.register(ToolEntry("first", "First", _Args, _handler))
+    local.register(ToolDefinition("first", "First", _Args, _handler))
     view = local.snapshot()
-    local.register(ToolEntry("second", "Second", _Args, _handler))
+    local.register(ToolDefinition("second", "Second", _Args, _handler))
     assert "first" in view
     assert "second" not in view
 
 
-def test_tool_search_loads_schema_and_dispatches(monkeypatch):
+def test_unattended_catalog_is_exact_builtin_allowlist_without_deferred(
+    db_session,
+    monkeypatch,
+):
+    import app.agent_runtime.turn_tool_catalog as catalog_module
+
+    user = User(username="automation-catalog-owner", hashed_password="x")
+    db_session.add(user)
+    db_session.commit()
+    patch_session_locals(monkeypatch, db_session, catalog_module)
+    discover = AsyncMock(side_effect=AssertionError("MCP discovery must be disabled"))
+    monkeypatch.setattr(catalog_module.manager, "discover", discover)
+
+    catalog = asyncio.run(
+        TurnToolCatalog.create(
+            user.username,
+            builtin_allowlist={"web_search"},
+            include_deferred=False,
+        )
+    )
+
+    assert catalog.builtins.tool_names == ["web_search"]
+    assert catalog.skills == ()
+    assert catalog.mcp_tools == ()
+    assert {schema["function"]["name"] for schema in catalog.get_openai_schemas()} == {
+        "web_search"
+    }
+    discover.assert_not_awaited()
+
+
+def test_schemas_and_tool_search_results_are_sorted_by_name():
+    local = ToolRegistry()
+    local._default_tools_loaded = True
+    local.register(ToolDefinition("zeta", "Zeta", _Args, _handler))
+    local.register(ToolDefinition("alpha", "Alpha", _Args, _handler))
+    catalog = TurnToolCatalog(
+        builtins=local.snapshot(),
+        excluded=frozenset(),
+        user_id="alice",
+        user_pk=1,
+        session_id="",
+        turn_id=None,
+        skills=(
+            {
+                "id": 1,
+                "name": "plan",
+                "description": "Create a plan",
+                "updated_at": "1",
+            },
+        ),
+        mcp_tools=(SECOND_TOOL, TOOL),
+        mcp_configs=MappingProxyType({7: CONFIG}),
+    )
+
+    async def run():
+        result = await catalog.dispatch(
+            "tool_search",
+            {"query": "values"},
+            AgentToolContext(user_id="alice", session_id="s1"),
+        )
+        return result, catalog.get_openai_schemas()
+
+    result, schemas = asyncio.run(run())
+    schema_names = [row["function"]["name"] for row in schemas]
+    assert result == {"error": "unknown_tool", "tool_name": "tool_search"}
+    assert TOOL.name not in schema_names
+    assert SECOND_TOOL.name not in schema_names
+    assert schema_names == sorted(schema_names)
+
+
+def test_format_prompt_has_guidance_and_compact_indexes_without_builtin_schemas():
+    local = ToolRegistry()
+    local._default_tools_loaded = True
+    local.register(
+        ToolDefinition(
+            "visible",
+            "SCHEMA_DESCRIPTION_ONLY",
+            _Args,
+            _handler,
+            prompt="VISIBLE_GUIDANCE",
+        )
+    )
+    local.register(
+        ToolDefinition(
+            "hidden",
+            "Hidden",
+            _Args,
+            _handler,
+            prompt="HIDDEN_GUIDANCE",
+        )
+    )
+    catalog = TurnToolCatalog(
+        builtins=local.snapshot(exclude={"hidden"}),
+        excluded=frozenset({"hidden"}),
+        user_id="alice",
+        user_pk=1,
+        session_id="",
+        turn_id=None,
+        skills=(
+            {
+                "id": 2,
+                "name": "skill-z",
+                "description": "Last skill",
+                "updated_at": "2",
+            },
+            {
+                "id": 1,
+                "name": "skill-a",
+                "description": "First skill",
+                "updated_at": "1",
+            },
+        ),
+        mcp_tools=(SECOND_TOOL, TOOL),
+        mcp_configs=MappingProxyType({7: CONFIG}),
+    )
+
+    prompt = catalog.format_prompt()
+
+    assert "VISIBLE_GUIDANCE" in prompt
+    assert "HIDDEN_GUIDANCE" not in prompt
+    assert "SCHEMA_DESCRIPTION_ONLY" not in prompt
+    assert '"parameters"' not in prompt
+    assert '"required"' not in prompt
+    assert prompt.index('"name":"skill-a"') < prompt.index('"name":"skill-z"')
+    assert TOOL.name not in prompt
+    assert SECOND_TOOL.name not in prompt
+
+
+def test_turn_snapshot_uses_tools_payload_without_permissions(db_session, monkeypatch):
+    import app.agent_runtime.turn_tool_catalog as catalog_module
+
+    user = User(username="snapshot-owner", hashed_password="x")
+    db_session.add(user)
+    db_session.flush()
+    conversation = Conversation(user_id=user.id, mode="agent")
+    db_session.add(conversation)
+    db_session.flush()
+    turn = ConversationTurn(
+        conversation_id=conversation.id,
+        user_id=user.id,
+        mode="agent",
+        message="test",
+    )
+    db_session.add(turn)
+    db_session.commit()
+    patch_session_locals(monkeypatch, db_session, catalog_module)
+
+    local = ToolRegistry()
+    local._default_tools_loaded = True
+    local.register(ToolDefinition("zeta", "Zeta", _Args, _handler))
+    local.register(ToolDefinition("alpha", "Alpha", _Args, _handler))
+    catalog = TurnToolCatalog(
+        builtins=local.snapshot(),
+        excluded=frozenset(),
+        user_id=user.username,
+        user_pk=user.id,
+        session_id=conversation.id,
+        turn_id=turn.id,
+        skills=(),
+        mcp_tools=(SECOND_TOOL, TOOL),
+        mcp_configs=MappingProxyType({7: CONFIG}),
+    )
+
+    asyncio.run(catalog._persist_snapshot())
+
+    snapshot = turn.tool_snapshot_json
+    assert "tools" in snapshot
+    assert "permissions" not in snapshot
+    assert snapshot["tools"]["builtins"] == ["alpha", "zeta"]
+    assert snapshot["tools"]["mcp"] == []
+
+
+def test_mcp_is_not_callable_until_safe_execution_is_available(monkeypatch):
     catalog = TurnToolCatalog(
         builtins=registry.snapshot(user_id="alice"),
         excluded=frozenset(),
@@ -73,24 +259,28 @@ def test_tool_search_loads_schema_and_dispatches(monkeypatch):
         skills=(),
         mcp_tools=(TOOL,),
         mcp_configs=MappingProxyType({7: CONFIG}),
-        permissions=MappingProxyType({}),
-        tool_history=(),
     )
+    call_tool = AsyncMock(return_value={"result": 3})
     monkeypatch.setattr(
         "app.agent_runtime.turn_tool_catalog.manager.call_tool",
-        AsyncMock(return_value={"result": 3}),
+        call_tool,
     )
 
     async def run():
         ctx = AgentToolContext(user_id="alice", session_id="s1")
         loaded = await catalog.dispatch("tool_search", {"query": "add"}, ctx)
-        assert loaded["loaded_tools"][0]["name"] == TOOL.name
-        assert TOOL.name in {
+        assert loaded == {"error": "unknown_tool", "tool_name": "tool_search"}
+        assert TOOL.name not in {
             item["function"]["name"] for item in catalog.get_openai_schemas()
         }
-        return await catalog.dispatch(TOOL.name, {"a": 1, "b": 2}, ctx)
+        blocked = await catalog.dispatch(TOOL.name, {"a": 1, "b": 2}, ctx)
+        return blocked
 
-    assert asyncio.run(run()) == {"result": 3}
+    assert asyncio.run(run()) == {
+        "error": "unknown_tool",
+        "tool_name": TOOL.name,
+    }
+    call_tool.assert_not_awaited()
 
 
 def test_skill_content_is_progressively_loaded(monkeypatch):
@@ -111,8 +301,6 @@ def test_skill_content_is_progressively_loaded(monkeypatch):
         ),
         mcp_tools=(),
         mcp_configs=MappingProxyType({}),
-        permissions=MappingProxyType({}),
-        tool_history=(),
     )
     monkeypatch.setattr(
         TurnToolCatalog,
@@ -137,7 +325,7 @@ def test_skill_content_is_progressively_loaded(monkeypatch):
     assert "Do the work" in loaded["instructions"]
 
 
-def test_denied_discovery_tool_cannot_be_dispatched():
+def test_known_mcp_is_not_callable_even_before_schema_is_loaded():
     catalog = TurnToolCatalog(
         builtins=registry.snapshot(user_id="alice"),
         excluded=frozenset(),
@@ -145,30 +333,21 @@ def test_denied_discovery_tool_cannot_be_dispatched():
         user_pk=1,
         session_id="",
         turn_id=None,
-        skills=(
-            {
-                "id": 1,
-                "name": "plan",
-                "description": "Create a plan",
-                "updated_at": "1",
-            },
-        ),
-        mcp_tools=(),
-        mcp_configs=MappingProxyType({}),
-        permissions=MappingProxyType({"skill_search": "deny"}),
-        tool_history=(),
+        skills=(),
+        mcp_tools=(TOOL,),
+        mcp_configs=MappingProxyType({7: CONFIG}),
     )
 
     async def run():
         return await catalog.dispatch(
-            "skill_search",
-            {"query": "plan"},
+            TOOL.name,
+            {"a": 1, "b": 2},
             AgentToolContext(user_id="alice", session_id="s1"),
         )
 
     assert asyncio.run(run()) == {
-        "error": "permission_denied",
-        "capability": "skill_search",
+        "error": "unknown_tool",
+        "tool_name": TOOL.name,
     }
 
 
@@ -206,8 +385,6 @@ def test_lazy_skill_load_rejects_mid_turn_revision_change(db_session, monkeypatc
         ),
         mcp_tools=(),
         mcp_configs=MappingProxyType({}),
-        permissions=MappingProxyType({}),
-        tool_history=(),
     )
     skill.content = (
         "---\nname: plan\ndescription: Create a plan\n---\nNew instructions."

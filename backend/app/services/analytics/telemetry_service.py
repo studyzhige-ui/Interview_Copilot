@@ -35,6 +35,11 @@ async def log_interaction_metrics(
     fallback_used: bool = False,
     empty_reason: str | None = None,
     rag_metrics: dict | None = None,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+    provider_id: str = "",
+    prompt_cache_supported: bool = False,
+    prompt_cache_enabled: bool = False,
 ):
     """Persist interaction metrics without affecting the API response path.
 
@@ -57,6 +62,11 @@ async def log_interaction_metrics(
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
+            "cache_read_tokens": cache_read_tokens,
+            "cache_creation_tokens": cache_creation_tokens,
+            "provider_id": provider_id or None,
+            "prompt_cache_supported": prompt_cache_supported,
+            "prompt_cache_enabled": prompt_cache_enabled,
             "retrieval_attempted": retrieval_attempted,
             "retrieval_hit": retrieval_hit,
             "planner_failed": planner_failed,

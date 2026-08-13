@@ -18,8 +18,11 @@ import pytest
 from app.api.interviews import records as interview_mod
 from app.core.security import get_current_user
 from app.db.database import Base, get_db
+from app.db.types import utc_now
+from app.models.ability_signal import AbilitySignal, AbilitySignalSourceRef
 from app.models.file_asset import FileAsset
 from app.models.interview_record import InterviewRecord
+from app.models.job_opportunity import JobOpportunity
 from app.models.user import User
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -104,6 +107,12 @@ def client(db: Session) -> Iterator[TestClient]:
 def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
     db.add_all(
         [
+            JobOpportunity(
+                id="jo_analyze",
+                user_id=_uid(db, "alice"),
+                company_name="Example Co",
+                job_title="Backend Engineer",
+            ),
             FileAsset(
                 id="upl_audio",
                 user_id=_uid(db, "alice"),
@@ -146,6 +155,7 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
                 "upload_id": "upl_audio",
                 "resume_file_asset_id": "upl_resume",
                 "jd_text": "looking for Redis expert",
+                "job_opportunity_id": "jo_analyze",
             },
         )
     assert resp.status_code == 200, resp.text
@@ -165,7 +175,52 @@ def test_analyze_dispatches_celery_and_creates_record(client, db: Session):
     assert record is not None
     # Route resolves the caller's username → users.id and stores the pk.
     assert record.user_id == _uid(db, "alice")
+    assert record.job_opportunity_id == "jo_analyze"
     assert record.celery_task_id == "celery-abc"
+
+
+def test_analyze_rejects_other_users_opportunity_before_dispatch(
+    client,
+    db: Session,
+):
+    db.add(User(username="bob", hashed_password="x"))
+    db.flush()
+    db.add_all(
+        [
+            JobOpportunity(
+                id="jo_bob",
+                user_id=_uid(db, "bob"),
+                company_name="Other Co",
+                job_title="Backend Engineer",
+            ),
+            FileAsset(
+                id="upl_audio_other_job",
+                user_id=_uid(db, "alice"),
+                purpose="interview_audio",
+                original_filename="a.wav",
+                storage_uri="s3://b/uploads/alice/upl_audio_other_job/a.wav",
+                object_key="uploads/alice/upl_audio_other_job/a.wav",
+                upload_status="uploaded",
+                validation_status="passed",
+            ),
+        ]
+    )
+    db.commit()
+
+    with patch(
+        "app.services.interview.analysis_intake.dispatch_interview_analysis"
+    ) as dispatch:
+        response = client.post(
+            "/api/v1/analyze",
+            json={
+                "upload_id": "upl_audio_other_job",
+                "job_opportunity_id": "jo_bob",
+            },
+        )
+
+    assert response.status_code == 404
+    dispatch.assert_not_called()
+    assert db.query(InterviewRecord).count() == 0
 
 
 def test_analyze_returns_404_for_missing_audio_upload(client, db: Session):
@@ -356,6 +411,91 @@ def test_patch_interview_record_updates_title(client, db: Session):
     assert db.get(InterviewRecord, "ir_a").title == "new title"
 
 
+def test_patch_interview_record_links_owned_opportunity_and_can_clear(
+    client,
+    db: Session,
+):
+    alice_pk = _uid(db, "alice")
+    db.add_all(
+        [
+            JobOpportunity(
+                id="jo_alice",
+                user_id=alice_pk,
+                company_name="Example Co",
+                job_title="Backend Engineer",
+            ),
+            InterviewRecord(
+                id="ir_a",
+                user_id=alice_pk,
+                source="upload",
+                title="Interview",
+                status="completed",
+            ),
+        ]
+    )
+    db.commit()
+
+    linked = client.patch(
+        "/api/v1/interview-records/ir_a",
+        json={"job_opportunity_id": "jo_alice"},
+    )
+    assert linked.status_code == 200, linked.text
+    assert linked.json()["job_opportunity_id"] == "jo_alice"
+    assert (
+        client.get("/api/v1/interview-records/ir_a").json()["job_opportunity_id"]
+        == "jo_alice"
+    )
+    assert (
+        client.get("/api/v1/interview-records").json()[0]["job_opportunity_id"]
+        == "jo_alice"
+    )
+
+    cleared = client.patch(
+        "/api/v1/interview-records/ir_a",
+        json={"job_opportunity_id": None},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["job_opportunity_id"] is None
+    db.expire_all()
+    assert db.get(InterviewRecord, "ir_a").job_opportunity_id is None
+
+
+def test_patch_interview_record_rejects_other_users_opportunity(
+    client,
+    db: Session,
+):
+    alice_pk = _uid(db, "alice")
+    db.add(User(username="bob", hashed_password="x"))
+    db.flush()
+    bob_pk = _uid(db, "bob")
+    db.add_all(
+        [
+            JobOpportunity(
+                id="jo_bob",
+                user_id=bob_pk,
+                company_name="Other Co",
+                job_title="Frontend Engineer",
+            ),
+            InterviewRecord(
+                id="ir_a",
+                user_id=alice_pk,
+                source="upload",
+                title="Interview",
+                status="completed",
+            ),
+        ]
+    )
+    db.commit()
+
+    response = client.patch(
+        "/api/v1/interview-records/ir_a",
+        json={"job_opportunity_id": "jo_bob"},
+    )
+    assert response.status_code == 404
+    db.expire_all()
+    assert db.get(InterviewRecord, "ir_a").job_opportunity_id is None
+
+
 def test_patch_interview_record_400_when_empty(client, db: Session):
     db.add(
         InterviewRecord(
@@ -406,6 +546,29 @@ def test_delete_interview_record_cascades_conversations(client, db: Session):
             conversation_id="cs_1", seq=1, role="assistant", content="hello"
         )
     )
+    db.add(
+        AbilitySignal(
+            id="as_ir_delete",
+            user_id=alice_pk,
+            topic="communication",
+            signal_type="interview_performance",
+            summary="Only supported by this interview",
+            confidence=0.7,
+            scope_kind="interview_record",
+            scope_ref_id="ir_a",
+            formed_at=utc_now(),
+            status="active",
+        )
+    )
+    db.add(
+        AbilitySignalSourceRef(
+            id="assr_ir_delete",
+            ability_signal_id="as_ir_delete",
+            source_kind="interview_record",
+            source_id="ir_a",
+            source_version="analysis:3",
+        )
+    )
     db.commit()
 
     # The delete handler no longer touches Milvus (memory_items cascade
@@ -425,6 +588,11 @@ def test_delete_interview_record_cascades_conversations(client, db: Session):
         .count()
         == 0
     )
+    signal = db.get(AbilitySignal, "as_ir_delete")
+    assert signal.status == "invalidated"
+    assert signal.version == 2
+    assert "ir_a" in signal.status_reason
+    assert db.get(AbilitySignalSourceRef, "assr_ir_delete") is not None
 
 
 # ── /interview-records/{id}/events (SSE) ─────────────────────────────────

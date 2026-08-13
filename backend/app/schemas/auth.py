@@ -63,16 +63,7 @@ class MeUpdate(BaseModel):
     nickname: Optional[str] = Field(default=None, max_length=64)
     avatar_url: Optional[str] = Field(default=None, max_length=512)
     bio: Optional[str] = Field(default=None, max_length=2000)
-    # PATCH /me can flip the user-level GLOBAL memory toggle. Frontend
-    # exposes it in 个人中心; sessions without an explicit per-session
-    # override inherit this value. ``None`` here means "don't touch" —
-    # the handler only writes the column when the client actually
-    # sends a value. Semantics: when False, the LLM does NOT see the
-    # v3 memory bundle for this user; session-local context still
-    # flows. See ``recall_policy`` module docstring for the full
-    # contract.
-    #
-    global_memory_enabled: Optional[bool] = None
+    default_execution_mode: Literal["standard", "auto"] | None = None
 
     @field_validator("avatar_url", mode="before")
     @classmethod
@@ -108,13 +99,10 @@ class MeResponse(BaseModel):
     nickname: Optional[str]
     avatar_url: Optional[str]
     bio: Optional[str]
+    default_execution_mode: Literal["standard", "auto"] = "standard"
     email_verified: bool
     created_at: str
     updated_at: str
-    # User-level preferences. Today only one knob — surface it on the
-    # same /me payload to avoid a second round-trip when the profile
-    # page mounts.
-    global_memory_enabled: bool = False
 
 
 class AvatarSetRequest(BaseModel):

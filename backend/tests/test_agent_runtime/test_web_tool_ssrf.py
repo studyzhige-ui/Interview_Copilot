@@ -122,6 +122,19 @@ def test_validator_refuses_when_dns_fails():
             _validate_safe_url("https://nonexistent.invalid/")
 
 
+def test_resolver_pins_validated_ip_and_rejects_url_userinfo():
+    from app.core.ssrf import UrlNotSafe, resolve_safe_url
+
+    fake_dns = [(0, 0, 0, "", ("8.8.8.8", 443))]
+    with patch("app.core.ssrf.socket.getaddrinfo", return_value=fake_dns):
+        resolved = resolve_safe_url("https://public.example.com/path?q=1")
+        assert resolved.connect_url == "https://8.8.8.8/path?q=1"
+        assert resolved.host_header == "public.example.com"
+        assert resolved.sni_hostname == "public.example.com"
+        with pytest.raises(UrlNotSafe, match="userinfo"):
+            resolve_safe_url("https://user:secret@public.example.com/path")
+
+
 # ── handler integration ─────────────────────────────────────────────────
 
 
@@ -183,6 +196,16 @@ def test_handler_refuses_redirect_to_private_host():
             self.url = url
             self.headers = headers or {}
             self.text = text
+            self.encoding = "utf-8"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def aiter_bytes(self):
+            yield self.text.encode()
 
     async def fake_get(url, headers=None):  # noqa: ARG001
         return _Resp(
@@ -201,8 +224,12 @@ def test_handler_refuses_redirect_to_private_host():
         async def __aexit__(self, *_):
             return False
 
-        async def get(self, url, headers=None):
-            return await fake_get(url, headers)
+        def stream(self, _method, url, headers=None, extensions=None):  # noqa: ARG002
+            return _Resp(
+                302,
+                url,
+                headers={"location": "http://internal.local/secret"},
+            )
 
     ctx = AgentToolContext(user_id="alice", session_id="s1")
     args = ReadUrlArgs(url="http://public.example.com/page")

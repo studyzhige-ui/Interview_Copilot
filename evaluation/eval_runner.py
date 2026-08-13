@@ -123,21 +123,17 @@ async def _run_layers_unlocked(
             continue
         if layer == "generation":
             if judge_limit:
-                from evaluation.planner_snapshot import DEFAULT_GLOBAL_MEMORY_SNAPSHOT
-
                 layer_rows = select_generation_evaluation_rows(
                     layer_rows,
                     judge_limit=judge_limit,
                 )
-            else:
-                from evaluation.planner_snapshot import DEFAULT_GLOBAL_MEMORY_SNAPSHOT
             result = await run_generation(
                 layer_rows,
                 judge_limit=judge_limit,
                 retry_ragas_errors=retry_ragas_errors,
                 retry_unknown_paid_calls=retry_unknown_paid_calls,
                 planner_concurrency=planner_concurrency,
-                planner_snapshot_path=DEFAULT_GLOBAL_MEMORY_SNAPSHOT,
+                planner_snapshot_path=planner_snapshot,
             )
         elif layer == "retrieval":
             planned_rows = None
@@ -169,15 +165,12 @@ async def _run_layers_unlocked(
                 result["planner_reliability"] = planner_attempt_metrics(
                     planner_snapshot,
                     layer_rows,
-                    global_memory_on=False,
                 )
         else:
-            from evaluation.planner_snapshot import DEFAULT_GLOBAL_MEMORY_SNAPSHOT
-
             result = await run_trajectory(
                 layer_rows,
                 concurrency=planner_concurrency,
-                planner_snapshot_path=DEFAULT_GLOBAL_MEMORY_SNAPSHOT,
+                planner_snapshot_path=planner_snapshot,
                 retry_unknown_paid_calls=retry_unknown_paid_calls,
             )
         results[layer] = result
@@ -264,7 +257,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--planner-snapshot",
         type=Path,
-        default=PROJECT_ROOT / "data" / "evaluation" / "planner" / "retrieval.json",
+        default=PROJECT_ROOT / "data" / "evaluation" / "planner" / "plans.json",
         help="Validated immutable planner snapshot shared by retrieval runs.",
     )
     parser.add_argument(
@@ -478,9 +471,6 @@ def main() -> None:
         from app.rag.policy import resolve_rag_device
         from evaluation.rag_release import evaluation_code_sha256
         from evaluation.ragas_runner import _generation_contract_sha256
-        from evaluation.planner_snapshot import (
-            DEFAULT_GLOBAL_MEMORY_SNAPSHOT,
-        )
 
         rag_profile = {
             "min_score": settings.RAG_MIN_SCORE,
@@ -496,8 +486,8 @@ def main() -> None:
         }
         snapshot_paths = {
             "retrieval": args.planner_snapshot.resolve(),
-            "generation": DEFAULT_GLOBAL_MEMORY_SNAPSHOT.resolve(),
-            "trajectory": DEFAULT_GLOBAL_MEMORY_SNAPSHOT.resolve(),
+            "generation": args.planner_snapshot.resolve(),
+            "trajectory": args.planner_snapshot.resolve(),
         }
         planner_snapshots = {
             layer: {

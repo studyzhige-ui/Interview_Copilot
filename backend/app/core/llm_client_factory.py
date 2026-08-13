@@ -9,10 +9,11 @@ What lives here:
   * Internal-model API-key resolution (deployment environment only)
   * Per-user api_base / organization / extra_headers override
     (consumes ``user_model_provider_settings``)
-  * Two caches, both process-local:
+  * Three caches, all process-local:
       - LlamaIndex ``OpenAILike`` keyed by (role, profile_id)
-      - Raw ``AsyncOpenAI`` keyed by (user_id, profile_id) with an
-        LRU bound + auto-invalidate on key/base/header changes
+      - Native ``AsyncOpenAI`` and ``AsyncAnthropic`` clients keyed by
+        (user_id, profile_id), with an LRU bound + auto-invalidate on
+        key/base/header changes
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from dataclasses import asdict, dataclass
 from threading import Lock
 from typing import Any
 
-from llama_index.llms.openai_like import OpenAILike
+from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI, OpenAI
 
 from app.core import user_model_selection
@@ -142,14 +143,29 @@ _ASYNC_OPENAI_CACHE_MAX = 256
 _async_openai_cache: "OrderedDict[tuple[str | None, str], tuple[str, AsyncOpenAI]]" = (
     OrderedDict()
 )
+_async_anthropic_cache: "OrderedDict[tuple[str | None, str], tuple[str, AsyncAnthropic]]" = OrderedDict()
 
 
 def _key_fingerprint(api_key: str) -> str:
     return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16] if api_key else ""
 
 
-def _close_client_quietly(client: AsyncOpenAI) -> None:
-    """Best-effort cleanup of a cached AsyncOpenAI when we drop it."""
+def _native_anthropic_base_url(api_base: str) -> str:
+    """Translate the catalog's REST base into the native SDK base.
+
+    Provider discovery stores bases such as ``https://api.anthropic.com/v1``
+    because it appends ``/models`` itself.  The official Anthropic SDK instead
+    appends ``/v1/messages`` to ``base_url``.  Passing the catalog value
+    unchanged therefore calls ``/v1/v1/messages``.  Strip exactly one terminal
+    API-version segment while preserving any gateway prefix before it.
+    """
+
+    normalized = str(api_base or "").rstrip("/")
+    return normalized[:-3] if normalized.endswith("/v1") else normalized
+
+
+def _close_client_quietly(client: Any) -> None:
+    """Best-effort cleanup of a cached native provider client."""
     import asyncio
 
     aclose = getattr(client, "aclose", None) or getattr(client, "close", None)
@@ -228,8 +244,56 @@ def get_async_openai_client(
         return client
 
 
+def get_async_anthropic_client(
+    profile: ModelProfile,
+    user_id: str | None = None,
+) -> AsyncAnthropic:
+    """Return a cached native Anthropic client for one resolved profile.
+
+    Credentials and user endpoint/header overrides use the same resolution
+    path as every other answer model. The SDK retry count stays zero because
+    the Agent strategy owns bounded retry and compaction recovery.
+    """
+
+    if profile.provider != "anthropic":
+        raise ValueError("native Anthropic client requires an anthropic profile")
+    api_key = resolve_api_key(profile, user_id=user_id)
+    overrides = _load_user_provider_overrides(profile, user_id)
+    api_base = _native_anthropic_base_url(overrides.api_base or profile.api_base)
+    extra_headers = overrides.extra_headers
+    fp_input = (
+        f"{api_key}|{api_base}|org={overrides.organization_id or ''}|"
+        f"hdr={json.dumps(extra_headers, sort_keys=True) if extra_headers else ''}"
+    )
+    fp = _key_fingerprint(fp_input)
+    cache_key = (user_id, profile.id)
+    with _llm_cache_lock:
+        cached = _async_anthropic_cache.get(cache_key)
+        if cached is not None and cached[0] == fp:
+            _async_anthropic_cache.move_to_end(cache_key)
+            return cached[1]
+        if cached is not None:
+            _close_client_quietly(cached[1])
+
+        kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": api_base,
+            "timeout": float(settings.LLM_REQUEST_TIMEOUT_SECONDS),
+            "max_retries": 0,
+        }
+        if extra_headers:
+            kwargs["default_headers"] = dict(extra_headers)
+        client = AsyncAnthropic(**kwargs)
+        _async_anthropic_cache[cache_key] = (fp, client)
+        _async_anthropic_cache.move_to_end(cache_key)
+        while len(_async_anthropic_cache) > _ASYNC_OPENAI_CACHE_MAX:
+            _, evicted = _async_anthropic_cache.popitem(last=False)
+            _close_client_quietly(evicted[1])
+        return client
+
+
 def clear_llm_cache_for_provider(provider: str) -> None:
-    """Drop cached LLM + AsyncOpenAI instances for ``provider``.
+    """Drop cached LLM + native provider clients for ``provider``.
 
     Called after a user changes their API key / api_base so the next
     LLM call rebuilds with fresh credentials. We can't iterate
@@ -257,6 +321,15 @@ def clear_llm_cache_for_provider(provider: str) -> None:
             entry = _async_openai_cache.pop(k, None)
             if entry is not None:
                 _close_client_quietly(entry[1])
+        to_drop_anthropic = [
+            key
+            for key in _async_anthropic_cache
+            if isinstance(key[1], str) and key[1].startswith(prefix)
+        ]
+        for k in to_drop_anthropic:
+            entry = _async_anthropic_cache.pop(k, None)
+            if entry is not None:
+                _close_client_quietly(entry[1])
 
 
 # ── Catalog serialization ───────────────────────────────────────────────
@@ -281,11 +354,12 @@ def _build_llm_instance(
     *,
     request_overrides: dict[str, Any] | None = None,
 ):
-    """Construct a LlamaIndex ``OpenAILike`` for ``profile``.
+    """Construct the legacy LlamaIndex ``OpenAILike`` fallback for ``profile``.
 
-    Every supported provider is reached through the OpenAI-compatible
-    ``/v1/chat/completions`` protocol — provider switching is purely
-    a matter of (api_base, api_key, model_id), no per-vendor wrappers.
+    Production Chat/Agent calls use the native provider adapters.  This object
+    remains for older internal call sites and test doubles, so its optional
+    LlamaIndex/Transformers dependency must stay behind this function boundary;
+    importing the Cloud API must not load the Community ML stack.
 
     ``user_id`` is honoured so the user's API key + api_base override
     (P6-M) flow through. ``None`` → falls back to env-only.
@@ -295,6 +369,8 @@ def _build_llm_instance(
     with ``app.core.llm_tracing``'s module-level patch when import
     order works in our favour — but kept as a defence in depth.
     """
+    from llama_index.llms.openai_like import OpenAILike
+
     api_key = resolve_api_key(profile, user_id=user_id)
     overrides = _load_user_provider_overrides(profile, user_id)
     api_base = overrides.api_base or profile.api_base
@@ -400,6 +476,18 @@ def build_async_openai_client_for_role(
     return get_async_openai_client(profile, user_id=user_id), profile
 
 
+def build_provider_client_for_role(
+    role: str,
+    user_id: str | None = None,
+) -> tuple[Any, ModelProfile]:
+    """Return the selected role's native transport client and profile."""
+
+    profile = user_model_selection.get_profile_for_role(role, user_id=user_id)
+    if profile.provider == "anthropic":
+        return get_async_anthropic_client(profile, user_id=user_id), profile
+    return get_async_openai_client(profile, user_id=user_id), profile
+
+
 def build_async_openai_client_for_internal_role(
     role: str,
 ) -> tuple[AsyncOpenAI, ModelProfile]:
@@ -411,6 +499,7 @@ def build_async_openai_client_for_internal_role(
 __all__ = [
     "resolve_api_key",
     "get_async_openai_client",
+    "get_async_anthropic_client",
     "clear_llm_cache_for_provider",
     "profile_ready",
     "ready_profile_ids",
@@ -418,6 +507,7 @@ __all__ = [
     "get_llm_for_role",
     "get_internal_llm",
     "build_async_openai_client_for_role",
+    "build_provider_client_for_role",
     "build_async_openai_client_for_internal_role",
     "_serialize_profile",
 ]

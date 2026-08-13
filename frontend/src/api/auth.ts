@@ -71,17 +71,10 @@ export interface MeResponse {
   nickname: string | null;
   avatar_url: string | null;
   bio: string | null;
+  default_execution_mode: 'standard' | 'auto';
   email_verified: boolean;
   created_at: string;
   updated_at: string;
-  /** Global cross-session memory toggle (Phase H, mirrors Claude Code's
-   *  ``isAutoMemoryEnabled``). When OFF, new chat sessions do NOT inject
-   *  the v3 memory bundle (user_profile / knowledge / strategy / habit
-   *  docs) into the LLM prompt. The DB column is still readable for
-   *  the personalization page — toggle gates injection, not storage.
-   *  Per-session override available via the chat header.
-   *  Default: false (opt-in). */
-  global_memory_enabled: boolean;
 }
 
 export async function getMe(): Promise<MeResponse> {
@@ -93,7 +86,7 @@ export async function updateMe(patch: {
   nickname?: string;
   avatar_url?: string;
   bio?: string;
-  global_memory_enabled?: boolean;
+  default_execution_mode?: 'standard' | 'auto';
 }): Promise<MeResponse> {
   const res = await apiClient.patch('/auth/me', patch);
   return res.data;

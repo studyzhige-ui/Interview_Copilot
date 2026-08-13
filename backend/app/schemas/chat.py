@@ -21,6 +21,8 @@ class SessionCreateResponse(BaseModel):
     session_id: str
     title: str
     type: str
+    execution_mode: Literal["standard", "auto"] = "standard"
+    execution_mode_version: int = Field(default=0, ge=0)
 
 
 class SessionListItem(BaseModel):
@@ -30,23 +32,60 @@ class SessionListItem(BaseModel):
     # Persisted run mode (chat|agent) — seeds the FE's CHAT/AGENT pill
     # across devices (AGT-4).
     mode: str = "chat"
+    execution_mode: Literal["standard", "auto"] = "standard"
+    execution_mode_version: int = Field(default=0, ge=0)
     state_summary: str
     turn_count: int
     updated_at: str
 
 
 class AttachmentRef(BaseModel):
-    """One server-owned document explicitly attached to this user turn."""
+    """One durable Composer attachment draft selected for this submission."""
 
-    document_id: str = Field(min_length=1, max_length=128)
+    draft_id: str = Field(min_length=1, max_length=128)
+
+
+ProductObjectKind = Literal[
+    "career_profile",
+    "career_profile_direction",
+    "job_opportunity",
+    "next_action",
+    "artifact",
+    "interview_record",
+]
+
+
+class ProductObjectReference(BaseModel):
+    """A user-submitted product identity, never copied business fields."""
+
+    kind: ProductObjectKind
+    object_id: str = Field(min_length=1, max_length=128)
+
+    @field_validator("object_id")
+    @classmethod
+    def normalize_object_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("object_id cannot be blank")
+        return normalized
 
 
 class ChatTurnRequest(BaseModel):
+    # Stable client-generated identity. Retrying the same identity and version
+    # is idempotent; reusing it for different input is rejected.
+    submission_id: str = Field(min_length=1, max_length=128)
+    version: PositiveInt = 1
     message: str = Field(min_length=1, max_length=100_000)
     attachments: list[AttachmentRef] = Field(default_factory=list, max_length=10)
     # Explicit references selected from debrief QA cards. This is execution
     # input for one durable turn, not interview-record data.
     question_indexes: list[PositiveInt] = Field(default_factory=list)
+    # Explicit product objects selected through a user-visible handoff. The
+    # server trusts only kind + identity and rereads the authoritative owner.
+    object_references: list[ProductObjectReference] = Field(
+        default_factory=list,
+        max_length=8,
+    )
     # Execution strategy. ``chat`` runs the L1 chat pipeline (planner →
     # answer LLM, no tool use). ``agent`` runs the L2 ReAct loop with the
     # full tool registry. ``None`` = use the conversation's persisted mode
@@ -55,14 +94,82 @@ class ChatTurnRequest(BaseModel):
     # explicit value updates the stored mode. Never agent for
     # mock_interview conversations.
     mode: Literal["chat", "agent"] | None = Field(default=None)
+    # Policy mode is separate from Chat/Agent strategy.  Conversation is the
+    # authority for every new submission; this optional field remains only for
+    # rolling-client wire compatibility and cannot overwrite that setting.
+    # Once queued, PendingSubmission owns the editable pre-claim task snapshot.
+    execution_mode: Literal["standard", "auto"] | None = None
+    source_client_id: str | None = Field(default=None, max_length=128)
+
+
+class ChatTurnResponse(BaseModel):
+    submission_id: str
+    version: PositiveInt
+    status: Literal["admitted", "queued", "failed"]
+    turn_id: str | None = None
+    queue_position: PositiveInt | None = None
+    error: str | None = None
+
+
+class PendingSubmissionItem(BaseModel):
+    submission_id: str
+    version: PositiveInt
+    status: Literal["queued", "failed"] = "queued"
+    queue_position: PositiveInt
+    message: str
+    mode: Literal["chat", "agent"]
+    execution_mode: Literal["standard", "auto"] = "standard"
+    question_indexes: list[PositiveInt] = Field(default_factory=list)
+    attachments: list[AttachmentRef] = Field(default_factory=list)
+    object_references: list[ProductObjectReference] = Field(default_factory=list)
+    source_client_id: str | None = None
+    error: str | None = None
+
+
+class PendingSubmissionUpdateRequest(BaseModel):
+    expected_version: PositiveInt
+    message: str = Field(min_length=1, max_length=100_000)
+    attachments: list[AttachmentRef] = Field(default_factory=list, max_length=10)
+    question_indexes: list[PositiveInt] = Field(default_factory=list)
+    object_references: list[ProductObjectReference] = Field(
+        default_factory=list,
+        max_length=8,
+    )
+    mode: Literal["chat", "agent"]
+    execution_mode: Literal["standard", "auto"] = "standard"
+
+
+class PendingSubmissionCommandRequest(BaseModel):
+    expected_version: PositiveInt
+
+
+class AttachmentDraftCreateRequest(BaseModel):
+    file_asset_id: str = Field(min_length=1, max_length=128)
+    draft_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class AttachmentDraftResponse(BaseModel):
+    draft_id: str
+    file_asset_id: str
+    conversation_id: str
+    filename: str
+    status: Literal["processing", "ready", "failed", "removed"]
+    error_message: str | None = None
 
 
 class SessionRenameRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
 
 
-class MemoryRecallToggleBody(BaseModel):
-    enabled: bool
+class SessionExecutionModeUpdateRequest(BaseModel):
+    execution_mode: Literal["standard", "auto"]
+    expected_version: int = Field(ge=0)
+
+
+class SessionExecutionModeResponse(BaseModel):
+    session_id: str
+    execution_mode: Literal["standard", "auto"]
+    version: int = Field(ge=0)
 
 
 # ── Mock-interview DTOs ──────────────────────────────────────────────────
@@ -76,12 +183,17 @@ class MemoryRecallToggleBody(BaseModel):
 class MockStartRequest(BaseModel):
     resume_id: str = Field(min_length=1)
     jd_text: str = Field(min_length=20, max_length=50_000)
-    interviewer_style: Literal[
-        "friendly", "professional", "rigorous", "pressure"
-    ] = "professional"
+    interviewer_style: Literal["friendly", "professional", "rigorous", "pressure"] = (
+        "professional"
+    )
     # Advisory whole-interview length. This activates a prompt reminder but
     # never caps a stage or forcibly ends the interview.
     target_question_count: Literal[15, 20, 30] = 20
+    job_opportunity_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=35,
+    )
 
     @field_validator("resume_id", "jd_text", mode="before")
     @classmethod
@@ -185,8 +297,17 @@ __all__ = [
     "SessionListItem",
     "AttachmentRef",
     "ChatTurnRequest",
+    "ChatTurnResponse",
+    "PendingSubmissionItem",
+    "PendingSubmissionUpdateRequest",
+    "PendingSubmissionCommandRequest",
+    "ProductObjectKind",
+    "ProductObjectReference",
+    "AttachmentDraftCreateRequest",
+    "AttachmentDraftResponse",
     "SessionRenameRequest",
-    "MemoryRecallToggleBody",
+    "SessionExecutionModeUpdateRequest",
+    "SessionExecutionModeResponse",
     # Mock-interview DTOs (mirrored 1:1 by frontend/src/types/api.ts)
     "MockStartRequest",
     "MockLiveMessage",

@@ -10,7 +10,7 @@ guide for maintenance work, not a proposal for extra framework layers.
 | `backend/app/main.py` | FastAPI composition root: middleware, lifecycle checks, static mounts, and routers |
 | `backend/app/api/` | HTTP/SSE transport, authentication dependencies, request validation, and response mapping |
 | `backend/app/schemas/` | Pydantic request and response contracts |
-| `backend/app/services/` | Business use cases grouped by auth, chat, interview, knowledge, memory, resume, upload, voice, capabilities, and model source |
+| `backend/app/services/` | Business use cases grouped by auth, chat, career state, artifacts, interviews, personalization, knowledge, resume, upload, voice, integrations, and model source |
 | `backend/app/conversation/` | Chat/Agent conversation engine, strategy selection, planning, and event contracts |
 | `backend/app/agent_runtime/` | Current ReAct execution, turn-local Tool catalog, MCP clients, Tool Calls, cancellation, and result storage; target Tool/Policy semantics are defined by `full-cycle-career-copilot.md` |
 | `backend/app/rag/` | Parsing, cleaning, chunking, embedding/reranking providers, Milvus indexing, retrieval, and hydration |
@@ -55,7 +55,7 @@ Long-running request
 The API process does not own long Agent execution. `turns` workers execute
 conversation turns; `pipeline` workers handle document/index work;
 `transcription` workers isolate speech workloads; `background` workers handle
-model-backed review and memory extraction; `default` workers handle short
+model-backed interview review; `default` workers handle short
 control, cleanup, maintenance, and catalog jobs.
 
 The full Compose profile gives these five workload classes separate worker
@@ -69,13 +69,13 @@ same.
 | Chat and Agent turns | `turns` | Dedicated worker; cancellation and usage telemetry | conversation, turn, checkpoint, and tool-call rows |
 | Parsing, embedding, and vector synchronization | `pipeline` | Serialized where local model/GPU pressure requires it | PostgreSQL document/resume facts plus outbox jobs |
 | Speech recognition and diarization | `transcription` | Isolated from all text workloads | interview record, transcript, and QA rows |
-| Model-backed review and memory intelligence | `background` | Bounded independently from ingestion | interview state and typed outbox jobs |
+| Model-backed interview review | `background` | Bounded independently from ingestion | interview state and typed outbox jobs |
 | Cleanup, catalog, scheduling, and sweepers | `default` | Short control work only | database status and idempotent maintenance rules |
 
 Redis transports work; it is not the business source of truth. Worker tasks may
 be delivered more than once, so handlers must claim or status-gate work before
 side effects. Cross-system changes use the typed outbox and are claimed by
-`job_type`; a slow LLM memory job must never block a Milvus update or object
+`job_type`; a slow LLM review job must never block a Milvus update or object
 cleanup. PostgreSQL owns lifecycle state, object storage owns file bytes, and
 Milvus is a rebuildable retrieval index.
 

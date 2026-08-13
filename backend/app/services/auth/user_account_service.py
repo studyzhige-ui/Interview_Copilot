@@ -93,7 +93,7 @@ def update_profile(
     nickname: str | None,
     avatar_url: str | None,
     bio: str | None,
-    global_memory_enabled: bool | None,
+    default_execution_mode: str | None = None,
 ) -> bool:
     """Apply the PATCH /me fields; returns True iff something changed."""
     changed = False
@@ -106,10 +106,10 @@ def update_profile(
     if bio is not None:
         user.bio = bio.strip() or None
         changed = True
-    if global_memory_enabled is not None:
-        # Pydantic already gave us a real bool, just persist it. ``False`` is
-        # a legitimate write (the opt-in default) — no truthiness filtering.
-        user.global_memory_enabled = bool(global_memory_enabled)
+    if default_execution_mode is not None:
+        if default_execution_mode not in {"standard", "auto"}:
+            raise ValueError("unsupported default execution mode")
+        user.default_execution_mode = default_execution_mode
         changed = True
     if changed:
         db.add(user)

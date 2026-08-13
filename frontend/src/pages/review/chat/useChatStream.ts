@@ -1,8 +1,17 @@
 import { useCallback } from 'react';
 import { toast } from '@/store/uiStore';
 import { extractErr } from '@/api/client';
-import { cancelChatTurn, streamChatTurn } from '@/api/chat';
-import type { ToolResultBlock, ToolUseBlock } from '@/types/api';
+import {
+  cancelChatTurn,
+  createChatSubmissionIdentity,
+  streamChatTurn,
+} from '@/api/chat';
+import type { ChatSubmissionIdentity } from '@/api/chat';
+import type {
+  ProductObjectReference,
+  ToolResultBlock,
+  ToolUseBlock,
+} from '@/types/api';
 import type { Attachment, Mode, SessionRuntime } from './types';
 
 /**
@@ -16,36 +25,54 @@ export function useChatStream({
   getRuntime,
   bump,
   mode,
+  executionMode,
+  onQueueChanged,
+  onAgentTaskChanged,
+  onObjectReferencesConsumed,
 }: {
   activeSessionId: string | null;
   getRuntime: (id: string) => SessionRuntime;
   bump: () => void;
   mode: Mode;
+  executionMode: 'standard' | 'auto';
+  onQueueChanged?: () => void;
+  onAgentTaskChanged?: (sessionId: string, turnId: string) => void;
+  onObjectReferencesConsumed?: () => void;
 }) {
   const startStream = useCallback((
     payload: string | null,
     existingTurnId?: string,
     questionIndexes: number[] = [],
     attachments: Attachment[] = [],
+    objectReferences: ProductObjectReference[] = [],
+    submission?: ChatSubmissionIdentity,
   ) => {
     if (!activeSessionId) return;
     const r = getRuntime(activeSessionId);
     if (r.streaming || (r.turnId && !existingTurnId)) return;
 
+    let optimisticUserMessage: SessionRuntime['messages'][number] | null = null;
     if (payload !== null) {
-      r.messages.push({
+      optimisticUserMessage = {
         role: 'user',
         content: payload,
         blocks: [
           ...attachments.map((attachment) => ({
-            type: 'attachment' as const,
-            document_id: attachment.document_id,
+            type: 'attachment_draft' as const,
+            draft_id: attachment.draft_id,
+            file_asset_id: attachment.file_asset_id,
             title: attachment.filename,
-            source_kind: 'chat_attachment',
+          })),
+          ...objectReferences.map((reference) => ({
+            type: 'product_object_reference' as const,
+            kind: reference.kind,
+            object_id: reference.object_id,
+            label: reference.label ?? reference.object_id,
           })),
           { type: 'text' as const, text: payload },
         ],
-      });
+      };
+      r.messages.push(optimisticUserMessage);
     }
     r.partial = '';
     r.inflightBlocks = [];
@@ -74,8 +101,9 @@ export function useChatStream({
 
     const finalize = (errMsg?: string, detached = false) => {
       const rt = getRuntime(sid);
+      const waiting = Boolean(rt.interaction);
       if (!detached) flushPartial(rt);
-      if (!detached && rt.inflightBlocks.length > 0) {
+      if (!detached && !waiting && rt.inflightBlocks.length > 0) {
         // Build a flat-content fallback (last text block's body) so any
         // surface that ignores ``blocks`` still has something to show.
         const lastText = [...rt.inflightBlocks].reverse()
@@ -89,14 +117,16 @@ export function useChatStream({
       } else if (errMsg) {
         rt.messages.push({ role: 'system', content: `（连接中断：${errMsg}）` });
       }
-      rt.partial = '';
-      rt.inflightBlocks = [];
-      rt.inflightSources = [];
+      if (!waiting) {
+        rt.partial = '';
+        rt.inflightBlocks = [];
+        rt.inflightSources = [];
+      }
       rt.status = '';
       rt.streaming = false;
       rt.hidePartialBar = false;
       rt.abort = null;
-      if (!detached) rt.turnId = null;
+      if (!detached && !waiting) rt.turnId = null;
       bump();
     };
 
@@ -182,6 +212,15 @@ export function useChatStream({
         rt.status = `${icon} ${tool}${result_summary ? ` · ${result_summary}` : ''}`;
         rt.streaming = true;
         bump();
+        if ((tool === 'task_create' || tool === 'task_update') && rt.turnId) {
+          onAgentTaskChanged?.(sid, rt.turnId);
+        }
+      },
+      onInteraction: (interaction) => {
+        const rt = getRuntime(sid);
+        rt.interaction = interaction;
+        rt.status = '等待你的确认';
+        bump();
       },
       onStreamError: (message) => {
         // Terminal in-stream error (AGT-5): render it as a notice block in
@@ -200,14 +239,38 @@ export function useChatStream({
       // fixed AGENT mode. The backend applies the same runtime policy, so an
       // old client cannot silently downgrade a general session to L1 chat.
       mode: mode === 'AGENT' ? 'agent' : 'chat',
+      executionMode,
       questionIndexes,
-      attachments: attachments.map((attachment) => attachment.document_id),
+      attachments: attachments.map((attachment) => attachment.draft_id),
+      objectReferences,
       turnId: existingTurnId,
+      submission,
+      onAdmission: () => {
+        if (objectReferences.length > 0) onObjectReferencesConsumed?.();
+      },
       onTurnCreated: (turnId) => {
         getRuntime(sid).turnId = turnId;
+        // Expose the durable identity immediately so the optional AgentTask
+        // read projection can start before the first model status event.
+        bump();
       },
     })
-      .then(() => finalize())
+      .then((admission) => {
+        if (admission && admission.status !== 'admitted' && optimisticUserMessage) {
+          const runtime = getRuntime(sid);
+          const index = runtime.messages.indexOf(optimisticUserMessage);
+          if (index >= 0) runtime.messages.splice(index, 1);
+        }
+        if (admission?.status === 'queued') {
+          toast.info(`消息已排队${admission.queue_position ? ` · 第 ${admission.queue_position} 位` : ''}`);
+          onQueueChanged?.();
+        }
+        if (admission?.status === 'failed') {
+          toast.error(admission.error ?? '消息未通过发送校验，请编辑或撤回后重试');
+          onQueueChanged?.();
+        }
+        finalize();
+      })
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name === 'AbortError') {
           finalize(undefined, Boolean(getRuntime(sid).turnId));
@@ -217,15 +280,35 @@ export function useChatStream({
         finalize(detached ? undefined : extractErr(err, '连接失败'), detached);
         toast.error(extractErr(err, '发送失败'));
       });
-  }, [activeSessionId, getRuntime, bump, mode]);
+  }, [
+    activeSessionId,
+    getRuntime,
+    bump,
+    mode,
+    executionMode,
+    onQueueChanged,
+    onAgentTaskChanged,
+    onObjectReferencesConsumed,
+  ]);
 
   const sendMessage = useCallback(
     (
       payload: string,
       questionIndexes: number[] = [],
       attachments: Attachment[] = [],
+      objectReferences: ProductObjectReference[] = [],
     ) => {
-      startStream(payload, undefined, questionIndexes, attachments);
+      // Identity belongs to the user's Send action, not to an HTTP attempt.
+      // ``streamChatTurn`` reuses it for every admission retry.
+      const submission = createChatSubmissionIdentity();
+      startStream(
+        payload,
+        undefined,
+        questionIndexes,
+        attachments,
+        objectReferences,
+        submission,
+      );
     },
     [startStream],
   );

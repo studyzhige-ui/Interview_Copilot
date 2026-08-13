@@ -1,7 +1,7 @@
 import uuid
 
 from sqlalchemy import (
-    Boolean,
+    CheckConstraint,
     Column,
     ForeignKey,
     Index,
@@ -36,6 +36,17 @@ class Conversation(Base):
             "archived_at",
         ),
         Index("ix_conversations_user_updated", "user_id", "updated_at"),
+        CheckConstraint(
+            "guidance_version >= 0", name="ck_conversations_guidance_version"
+        ),
+        CheckConstraint(
+            "execution_mode IN ('standard', 'auto')",
+            name="ck_conversations_execution_mode",
+        ),
+        CheckConstraint(
+            "execution_mode_version >= 0",
+            name="ck_conversations_execution_mode_version",
+        ),
     )
 
     id = Column(String, primary_key=True, default=generate_uuid)
@@ -57,18 +68,33 @@ class Conversation(Base):
     # ReAct). mock_interview is always chat. Persisted snapshot of the mode the
     # SSE endpoint selects per request.
     mode = Column(String, nullable=False, default="chat")
+    # User-selected policy mode for the next ordinary task in this
+    # Conversation. Every admitted Turn copies it, so later changes never
+    # mutate an in-flight policy decision.
+    execution_mode = Column(
+        String(16), nullable=False, default="standard", server_default="standard"
+    )
+    # Independent CAS token for the Conversation-level Standard/Auto setting.
+    # It is deliberately separate from guidance_version: the two controls have
+    # different owners and changing either one must not create false conflicts
+    # for the other.
+    execution_mode_version = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     active_turn_id = Column(String, nullable=True)
+    # Explicit guidance for this Conversation only. The original user message
+    # remains the exact Interaction Record; this is a small, rebuildable read
+    # projection and never a Long-term Memory or global preference.
+    guidance_text = Column(Text, nullable=True)
+    guidance_source_message_id = Column(Integer, nullable=True)
+    guidance_version = Column(Integer, nullable=False, default=0)
     # Polymorphic subject binding (weak FK). subject_type whitelist =
     # {interview_record}; general -> NULL, debrief/mock_interview -> the bound
     # interview_record. The app layer validates existence + ownership. (The
     # legacy ``interview_id`` column it replaced was dropped in 0038.)
     subject_type = Column(String, nullable=True)
     subject_id = Column(String, nullable=True)
-    # Per-session global-memory override (NULL = use users.global_memory_enabled
-    # default). Resolved by services.memory.recall_policy.
-    global_memory_enabled = Column(Boolean, nullable=True)
     compaction_cursor = Column(Integer, default=0)
-    memory_extraction_cursor = Column(Integer, default=0)
     turn_count = Column(Integer, default=0)
     archived_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utc_now)
@@ -107,9 +133,8 @@ class ConversationMessage(Base):
     seq = Column(Integer, index=True, nullable=False)
     # user | assistant | tool | system.
     role = Column(String, nullable=False)
-    # Plain-text canonical form — used for session-list preview, memory
-    # extraction input, and the read-time fallback when an old row has
-    # no ``content_blocks_json``. Always populated.
+    # Plain-text canonical form — used for session-list preview and the
+    # read-time fallback when an old row has no ``content_blocks_json``.
     content = Column(Text, nullable=False)
     # Anthropic BetaContentBlock[]-shaped JSON. NULL on rows written
     # before the Stage-G conversation-engine refactor; non-NULL going

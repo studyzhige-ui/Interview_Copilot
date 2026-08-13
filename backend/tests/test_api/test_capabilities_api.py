@@ -4,7 +4,6 @@ import pytest
 from app.api import capabilities
 from app.core.security import get_current_user
 from app.db.database import get_db
-from app.models.chat import Conversation
 from app.models.user import User
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -116,21 +115,3 @@ def test_mcp_api_crud_and_connection_test(client, monkeypatch):
         client.delete(f"/api/v1/capabilities/mcp-servers/{server_id}").status_code
         == 204
     )
-
-
-def test_session_permission_api_is_user_scoped(client, db_session):
-    user = db_session.query(User).filter(User.username == "cap-api").one()
-    conversation = Conversation(user_id=user.id, title="permissions")
-    db_session.add(conversation)
-    db_session.commit()
-
-    initial = client.get(f"/api/v1/capabilities/sessions/{conversation.id}")
-    assert initial.status_code == 200
-    assert initial.json()["permissions"] == {}
-
-    changed = client.put(
-        f"/api/v1/capabilities/sessions/{conversation.id}/permissions",
-        json={"capability": "task_get", "decision": "deny"},
-    )
-    assert changed.status_code == 200
-    assert changed.json()["permissions"] == {"task_get": "deny"}

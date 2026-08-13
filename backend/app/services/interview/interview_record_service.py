@@ -25,6 +25,7 @@ from app.db.types import utc_now
 from app.models.interview_qa import InterviewQA, _generate_qa_id
 from app.models.interview_record import InterviewRecord, _generate_record_id
 from app.models.interview_transcript import InterviewTranscript, _generate_transcript_id
+from app.models.job_opportunity import JobOpportunity
 from app.services.interview.analysis_context import build_analysis_context
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,10 @@ MOCK_HIDDEN_STATUSES = (STATUS_MOCK_IN_PROGRESS, STATUS_PROCESSING_REVIEW)
 _PROCESSING_REVIEW_GRACE = timedelta(minutes=10)
 
 
+class InterviewOpportunityNotFoundError(ValueError):
+    """The requested opportunity does not belong to this Interview owner."""
+
+
 class InterviewRecordService:
     # ── Create ────────────────────────────────────────────────────────
 
@@ -73,6 +78,7 @@ class InterviewRecordService:
         jd_file_asset_id: str | None = None,
         resume_text_snapshot: str = "",
         jd_text_snapshot: str = "",
+        job_opportunity_id: str | None = None,
         db: Session | None = None,
     ) -> InterviewRecord:
         return self._create(
@@ -87,6 +93,7 @@ class InterviewRecordService:
             jd_file_asset_id=jd_file_asset_id,
             resume_text_snapshot=resume_text_snapshot,
             jd_text_snapshot=jd_text_snapshot,
+            job_opportunity_id=job_opportunity_id,
             status=STATUS_PENDING,
             db=db,
         )
@@ -99,6 +106,7 @@ class InterviewRecordService:
         resume_id: str | None = None,
         resume_text_snapshot: str = "",
         jd_text_snapshot: str = "",
+        job_opportunity_id: str | None = None,
         status: str = STATUS_PENDING,
         db: Session | None = None,
     ) -> InterviewRecord:
@@ -110,6 +118,7 @@ class InterviewRecordService:
             resume_source="personal_resume" if resume_id else None,
             resume_text_snapshot=resume_text_snapshot,
             jd_text_snapshot=jd_text_snapshot,
+            job_opportunity_id=job_opportunity_id,
             status=status,
             db=db,
         )
@@ -534,6 +543,7 @@ class InterviewRecordService:
         jd_file_asset_id: str | None = None,
         resume_text_snapshot: str = "",
         jd_text_snapshot: str = "",
+        job_opportunity_id: str | None = None,
         status: str = STATUS_PENDING,
         db: Session | None = None,
     ) -> InterviewRecord:
@@ -541,10 +551,17 @@ class InterviewRecordService:
         if own_db:
             db = SessionLocal()
         try:
+            user_pk = resolve_user_pk(db, user_id)
+            normalized_job_id = self.require_owned_job_opportunity(
+                db,
+                user_pk=user_pk,
+                job_opportunity_id=job_opportunity_id,
+            )
             record = InterviewRecord(
                 id=_generate_record_id(),
-                user_id=resolve_user_pk(db, user_id),
+                user_id=user_pk,
                 source=source,
+                job_opportunity_id=normalized_job_id,
                 title=title,
                 audio_file_asset_id=audio_file_asset_id,
                 resume_id=resume_id,
@@ -572,6 +589,32 @@ class InterviewRecordService:
         finally:
             if own_db:
                 db.close()
+
+    @staticmethod
+    def require_owned_job_opportunity(
+        db: Session,
+        *,
+        user_pk: int,
+        job_opportunity_id: str | None,
+    ) -> str | None:
+        """Normalize and verify an optional concrete hiring-process owner."""
+
+        if job_opportunity_id is None:
+            return None
+        normalized = job_opportunity_id.strip()
+        if not normalized:
+            return None
+        exists = (
+            db.query(JobOpportunity.id)
+            .filter(
+                JobOpportunity.id == normalized,
+                JobOpportunity.user_id == user_pk,
+            )
+            .scalar()
+        )
+        if exists is None:
+            raise InterviewOpportunityNotFoundError(normalized)
+        return normalized
 
 
 interview_record_service = InterviewRecordService()

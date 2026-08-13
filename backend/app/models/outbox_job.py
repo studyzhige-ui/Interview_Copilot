@@ -63,7 +63,7 @@ class OutboxJob(Base):
         nullable=False,
     )
     # Registered handlers cover object cleanup, knowledge/resume/ability index
-    # synchronization, realtime memory extraction, and dreaming.
+    # synchronization and object-storage cleanup.
     job_type = Column(String, index=True, nullable=False)
     aggregate_type = Column(String, nullable=True)
     aggregate_id = Column(String, nullable=True)

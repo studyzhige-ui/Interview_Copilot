@@ -16,6 +16,25 @@ logger = logging.getLogger(__name__)
 _TRANSIENT_INGEST_ERRORS = (ConnectionError, TimeoutError, OSError)
 
 
+def _wake_attachment_turns(document: KnowledgeDocument) -> list[str]:
+    """Best-effort handoff after a chat parsing projection becomes terminal."""
+
+    if document.source_kind != "chat_attachment":
+        return []
+    try:
+        from app.services.chat.attachment_waiting_service import (
+            wake_attachment_turns_for_projection,
+        )
+
+        return wake_attachment_turns_for_projection(document.id)
+    except Exception:  # noqa: BLE001 — parsing success/failure remains authoritative
+        logger.exception(
+            "Could not wake Turns waiting for attachment projection %s",
+            document.id,
+        )
+        return []
+
+
 @celery_app.task(
     bind=True,
     name="tasks.process_document_ingestion",
@@ -82,6 +101,7 @@ def process_document_ingestion(self, document_id: str):
                 "status": "skipped",
                 "document_id": document_id,
                 "current_status": document.status,
+                "resumed_turn_ids": _wake_attachment_turns(document),
             }
 
         # Defensive format re-check (ingestion §4.1.2) — the API already
@@ -126,7 +146,7 @@ def process_document_ingestion(self, document_id: str):
                 document_id=document.id,
                 upload_id=document.file_asset_id,
                 # Chat attachments remain conversation-scoped Postgres facts.
-                # They are supplied through the shared Evidence path and must
+                # They are supplied through the shared Source Resolver and must
                 # never compete in the user's global Milvus knowledge index.
                 index_document=document.source_kind != "chat_attachment",
             )
@@ -142,7 +162,11 @@ def process_document_ingestion(self, document_id: str):
                 db.add(document)
                 db.commit()
                 logger.info("[Task %s] Document ingestion completed.", self.request.id)
-                return {"status": "success", "document_id": document_id}
+                return {
+                    "status": "success",
+                    "document_id": document_id,
+                    "resumed_turn_ids": _wake_attachment_turns(document),
+                }
             # Facts are saved but the Milvus write was queued for outbox retry
             # (Milvus was down). Stay 'processing' until the index lands — the
             # milvus_upsert_document handler flips this to ready (or to failed if
@@ -161,7 +185,11 @@ def process_document_ingestion(self, document_id: str):
         db.add(document)
         db.commit()
         logger.warning("[Task %s] Document was empty or unparseable.", self.request.id)
-        return {"status": "failed", "error": "Empty or unparseable document"}
+        return {
+            "status": "failed",
+            "error": "Empty or unparseable document",
+            "resumed_turn_ids": _wake_attachment_turns(document),
+        }
 
     except (
         UnsupportedDocumentFormat,
@@ -177,7 +205,12 @@ def process_document_ingestion(self, document_id: str):
         db.add(document)
         db.commit()
         logger.warning("[Task %s] Permanent ingest rejection: %s", self.request.id, exc)
-        return {"status": "failed", "error": str(exc), "document_id": document_id}
+        return {
+            "status": "failed",
+            "error": str(exc),
+            "document_id": document_id,
+            "resumed_turn_ids": _wake_attachment_turns(document),
+        }
 
     except Exception as exc:
         # Distinguish mid-retry vs final-attempt the same way
@@ -205,6 +238,8 @@ def process_document_ingestion(self, document_id: str):
                     )[:500]
                 db.add(document)
                 db.commit()
+                if not will_retry:
+                    _wake_attachment_turns(document)
             except Exception as recovery_exc:  # noqa: BLE001
                 logger.error(
                     "Failed to update document %s status after task crash: %s",

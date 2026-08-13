@@ -1,10 +1,24 @@
 import { apiClient, authedFetch } from './client';
 import type {
   ChatSessionCreateResp,
+  ChatSessionExecutionMode,
   ChatSessionListItem,
+  ChatTurnAdmissionResp,
   ChatTranscriptResp,
+  PendingSubmissionItem,
+  ProductObjectReference,
+  AttachmentDraft,
+  AttachmentRetryResp,
+  AttachmentSource,
+  ConversationAttachmentRemovalResp,
+  AgentTask,
+  AgentToolCallAudit,
+  AgentInteraction,
+  ResolveAgentInteractionResp,
   Source,
 } from '@/types/api';
+import { emitMockClientActionNotice } from './clientActions';
+import type { MockClientActionName } from '@/types/clientAction';
 
 /**
  * Stream a chat turn over Server-Sent Events.
@@ -50,6 +64,7 @@ type HarnessEventType =
   | 'text'
   | 'tool_start'
   | 'tool_done'
+  | 'interaction'
   | 'budget'
   | 'error'
   | 'done';
@@ -136,33 +151,257 @@ export interface StreamChatHandlers {
   onText?: (content: string, step: number) => void;
   onToolStart?: (info: ToolStartInfo) => void;
   onToolDone?: (info: ToolDoneInfo) => void;
+  onInteraction?: (interaction: AgentInteraction) => void;
   onBudget?: (info: BudgetInfo, step: number) => void;
   /** Terminal in-stream error (AGT-5) — render into the transcript, don't throw. */
   onStreamError?: (message: string) => void;
 }
 
-/** Execution strategy for the turn — picks L1 chat vs L2 ReAct agent on
- *  the server side. The frontend's AGENT pill MUST set ``mode='agent'``
- *  to actually activate the tool registry (search_jobs, web_search,
- *  read_url, search_knowledge, read_resume, read_interview_history,
- *  read_file, write_file, recall_memory, save_memory). Without it the
- *  AGENT pill is decorative and the LLM never sees a single tool. */
+/** Execution strategy for the turn — picks direct chat vs the shared
+ *  tool-using Agent runtime on the server. */
 type ChatMode = 'chat' | 'agent';
+
+export interface ChatSubmissionIdentity {
+  submissionId: string;
+  version: number;
+  sourceClientId: string;
+}
+
+const SOURCE_CLIENT_ID_KEY = 'chat-source-client-instance-id-v2';
+
+function randomId(prefix: string): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid) return `${prefix}_${uuid}`;
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
+export function getSourceClientId(): string {
+  try {
+    // sessionStorage is scoped to one tab/client instance. localStorage made
+    // every tab share an identity, which could broadcast a Client Action to
+    // the wrong UI consumer.
+    const existing = sessionStorage.getItem(SOURCE_CLIENT_ID_KEY);
+    if (existing) return existing;
+    const created = randomId('client');
+    sessionStorage.setItem(SOURCE_CLIENT_ID_KEY, created);
+    return created;
+  } catch {
+    return randomId('client');
+  }
+}
+
+/** Create once for a real Send action, then reuse across transport retries. */
+export function createChatSubmissionIdentity(): ChatSubmissionIdentity {
+  return {
+    submissionId: randomId('submission'),
+    version: 1,
+    sourceClientId: getSourceClientId(),
+  };
+}
 
 export interface StreamChatOptions {
   signal?: AbortSignal;
   /** Defaults to the direct chat strategy. */
   mode?: ChatMode;
+  /** Legacy wire hint only. The server rereads the Conversation owner and
+   *  freezes the authoritative value on PendingSubmission/Turn admission. */
+  executionMode?: 'standard' | 'auto';
   /** Explicit 1-based QA-card references for this debrief turn. */
   questionIndexes?: number[];
-  /** Server-owned document ids validated for this exact turn. */
+  /** Durable Composer draft ids revalidated and frozen at admission. */
   attachments?: string[];
+  /** Explicit product identities; copied labels/business fields are omitted. */
+  objectReferences?: ProductObjectReference[];
   /** Subscribe to an already-running turn instead of creating one. */
   turnId?: string;
+  /** Stable identity created once by the Composer's Send action. */
+  submission?: ChatSubmissionIdentity;
+  onAdmission?: (admission: ChatTurnAdmissionResp) => void;
   onTurnCreated?: (turnId: string) => void;
 }
 
-function dispatchHarnessEvent(evt: HarnessEvent, handlers: StreamChatHandlers): boolean {
+function retryableAdmissionError(error: unknown): boolean {
+  const status = (error as { response?: { status?: number } })?.response?.status;
+  return status === undefined || status === 429 || status >= 500;
+}
+
+function retryDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+  return new Promise<void>((resolve, reject) => {
+    const timerId = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timerId);
+      reject(new DOMException('Aborted', 'AbortError'));
+    }, { once: true });
+  });
+}
+
+async function admitChatTurn(
+  sessionId: string,
+  message: string,
+  opts: StreamChatOptions,
+): Promise<ChatTurnAdmissionResp> {
+  const identity = opts.submission ?? createChatSubmissionIdentity();
+  const body = {
+    submission_id: identity.submissionId,
+    version: identity.version,
+    message,
+    mode: opts.mode ?? 'chat',
+    execution_mode: opts.executionMode ?? 'standard',
+    question_indexes: opts.questionIndexes ?? [],
+    attachments: (opts.attachments ?? []).map((draft_id) => ({ draft_id })),
+    object_references: (opts.objectReferences ?? []).map(({ kind, object_id }) => ({
+      kind,
+      object_id,
+    })),
+    source_client_id: identity.sourceClientId,
+  };
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const response = await apiClient.post(
+        `/chat/${encodeURIComponent(sessionId)}/turns`,
+        body,
+        { signal: opts.signal },
+      );
+      return response.data as ChatTurnAdmissionResp;
+    } catch (error) {
+      if (opts.signal?.aborted || attempt >= 2 || !retryableAdmissionError(error)) throw error;
+      await retryDelay(200 * 2 ** attempt, opts.signal);
+    }
+  }
+}
+
+export async function createAttachmentDraft(
+  sessionId: string,
+  fileAssetId: string,
+  draftId?: string,
+): Promise<AttachmentDraft> {
+  const response = await apiClient.post(
+    `/chat/${encodeURIComponent(sessionId)}/attachment-drafts`,
+    { file_asset_id: fileAssetId, ...(draftId ? { draft_id: draftId } : {}) },
+  );
+  return response.data as AttachmentDraft;
+}
+
+export async function removeAttachmentDraft(
+  sessionId: string,
+  draftId: string,
+): Promise<AttachmentDraft> {
+  const response = await apiClient.delete(
+    `/chat/${encodeURIComponent(sessionId)}/attachment-drafts/${encodeURIComponent(draftId)}`,
+  );
+  return response.data as AttachmentDraft;
+}
+
+export async function getAttachmentDraft(
+  sessionId: string,
+  draftId: string,
+  signal?: AbortSignal,
+): Promise<AttachmentDraft> {
+  const response = await apiClient.get(
+    `/chat/${encodeURIComponent(sessionId)}/attachment-drafts/${encodeURIComponent(draftId)}`,
+    { signal },
+  );
+  return response.data as AttachmentDraft;
+}
+
+export async function waitForAttachmentDraft(
+  sessionId: string,
+  draftId: string,
+  opts: { signal?: AbortSignal; pollMs?: number } = {},
+): Promise<AttachmentDraft> {
+  const pollMs = Math.max(250, opts.pollMs ?? 800);
+  for (;;) {
+    const draft = await getAttachmentDraft(sessionId, draftId, opts.signal);
+    if (draft.status === 'ready') return draft;
+    if (draft.status === 'failed' || draft.status === 'removed') return draft;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, pollMs);
+      opts.signal?.addEventListener('abort', () => {
+        clearTimeout(timer);
+        reject(new DOMException('Aborted', 'AbortError'));
+      }, { once: true });
+    });
+  }
+}
+
+/** List admitted Conversation attachments, or one retained submission's drafts. */
+export async function listAttachmentSources(
+  sessionId: string,
+  opts: { submissionId?: string; turnId?: string; signal?: AbortSignal } = {},
+): Promise<AttachmentSource[]> {
+  const response = await apiClient.get(
+    `/chat/${encodeURIComponent(sessionId)}/attachment-sources`,
+    {
+      params: {
+        ...(opts.submissionId ? { submission_id: opts.submissionId } : {}),
+        ...(opts.turnId ? { turn_id: opts.turnId } : {}),
+      },
+      signal: opts.signal,
+    },
+  );
+  return response.data as AttachmentSource[];
+}
+
+/** Retry the same failed parsing projection without changing source identity. */
+export async function retryAttachmentSource(
+  sessionId: string,
+  sourceId: string,
+): Promise<AttachmentRetryResp> {
+  const response = await apiClient.post(
+    `/chat/${encodeURIComponent(sessionId)}/attachment-sources/${encodeURIComponent(sourceId)}/retry`,
+  );
+  return response.data as AttachmentRetryResp;
+}
+
+/** Remove one failed claimed Conversation source and let the server decide
+ *  whether the attachment-waiting Turn can resume. */
+export async function removeFailedConversationAttachment(
+  sessionId: string,
+  attachmentRefId: string,
+): Promise<ConversationAttachmentRemovalResp> {
+  const response = await apiClient.delete(
+    `/chat/${encodeURIComponent(sessionId)}/attachment-sources/${encodeURIComponent(attachmentRefId)}`,
+  );
+  return response.data as ConversationAttachmentRemovalResp;
+}
+
+/** Explicitly share one Conversation attachment with this InterviewRecord only. */
+export async function promoteAttachmentToDebrief(
+  sessionId: string,
+  attachmentRefId: string,
+): Promise<AttachmentSource> {
+  const response = await apiClient.post(
+    `/chat/${encodeURIComponent(sessionId)}/attachment-sources/${encodeURIComponent(attachmentRefId)}/debrief`,
+  );
+  return (response.data as { source: AttachmentSource }).source;
+}
+
+export async function listDebriefSources(
+  interviewRecordId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<AttachmentSource[]> {
+  const response = await apiClient.get(
+    `/interviews/${encodeURIComponent(interviewRecordId)}/debrief-sources`,
+    { signal: opts.signal },
+  );
+  return response.data as AttachmentSource[];
+}
+
+export async function removeDebriefSource(
+  interviewRecordId: string,
+  sourceRefId: string,
+): Promise<void> {
+  await apiClient.delete(
+    `/interviews/${encodeURIComponent(interviewRecordId)}/debrief-sources/${encodeURIComponent(sourceRefId)}`,
+  );
+}
+
+function dispatchHarnessEvent(
+  evt: HarnessEvent,
+  handlers: StreamChatHandlers,
+  sessionId: string,
+): boolean {
   if (!evt || typeof evt.type !== 'string') return false;
   const data = (evt.data ?? {}) as Record<string, unknown>;
   const step = typeof evt.step === 'number' ? evt.step : 0;
@@ -197,6 +436,31 @@ function dispatchHarnessEvent(evt: HarnessEvent, handlers: StreamChatHandlers): 
         elapsed_ms: elapsed,
       });
       break;
+    case 'interaction': {
+      const interaction = data.interaction;
+      if (interaction && typeof interaction === 'object') {
+        const typed = interaction as AgentInteraction;
+        handlers.onInteraction?.(typed);
+        const request = typed.request as Record<string, unknown>;
+        if (
+          typed.kind === 'client_readiness'
+          && typed.tool_call_id
+          && request.protocol === 'mock_handoff.v1'
+          && typeof request.action_id === 'string'
+          && typeof request.action === 'string'
+        ) {
+          emitMockClientActionNotice({
+            sessionId,
+            turnId: typed.turn_id,
+            interactionId: typed.id,
+            version: typed.version,
+            actionId: request.action_id,
+            action: request.action as MockClientActionName,
+          });
+        }
+      }
+      break;
+    }
     case 'budget': handlers.onBudget?.(data as unknown as BudgetInfo, step); break;
     case 'error': handlers.onStreamError?.(String(data.error ?? 'stream error')); break;
     case 'done': return true;
@@ -210,6 +474,7 @@ async function readTurnEvents(
   url: string,
   cursor: { value: string },
   handlers: StreamChatHandlers,
+  sessionId: string,
   signal?: AbortSignal,
 ): Promise<boolean> {
   const controller = new AbortController();
@@ -251,7 +516,11 @@ async function readTurnEvents(
           .join('\n');
         if (!payload) continue;
         try {
-          if (dispatchHarnessEvent(JSON.parse(payload) as HarnessEvent, handlers)) return true;
+          if (dispatchHarnessEvent(
+            JSON.parse(payload) as HarnessEvent,
+            handlers,
+            sessionId,
+          )) return true;
         } catch { /* malformed forward-compatible event */ }
       }
     }
@@ -272,28 +541,23 @@ export async function streamChatTurn(
   message: string,
   handlers: StreamChatHandlers,
   opts: StreamChatOptions = {},
-): Promise<void> {
+): Promise<ChatTurnAdmissionResp | null> {
   const baseURL = (apiClient.defaults.baseURL ?? '').replace(/\/+$/, '');
   let turnId = opts.turnId;
+  let admission: ChatTurnAdmissionResp | null = null;
   if (!turnId) {
-    const response = await apiClient.post(
-      `/chat/${encodeURIComponent(sessionId)}/turns`,
-      {
-        message,
-        mode: opts.mode ?? 'chat',
-        question_indexes: opts.questionIndexes ?? [],
-        attachments: (opts.attachments ?? []).map((document_id) => ({ document_id })),
-      },
-      { signal: opts.signal },
-    );
-    turnId = String(response.data.turn_id);
+    admission = await admitChatTurn(sessionId, message, opts);
+    opts.onAdmission?.(admission);
+    if (admission.status !== 'admitted') return admission;
+    if (!admission.turn_id) throw new Error('服务端已接收请求，但未返回 turn_id');
+    turnId = admission.turn_id;
     opts.onTurnCreated?.(turnId);
   }
   const url = `${baseURL}/chat/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/events`;
   const cursor = { value: '0-0' };
   for (let attempt = 0; attempt < 6; attempt += 1) {
     try {
-      if (await readTurnEvents(url, cursor, handlers, opts.signal)) return;
+      if (await readTurnEvents(url, cursor, handlers, sessionId, opts.signal)) return admission;
     } catch (error) {
       if (opts.signal?.aborted || attempt === 5) throw error;
     }
@@ -305,12 +569,131 @@ export async function streamChatTurn(
       }, { once: true });
     });
   }
+  return admission;
+}
+
+export async function listPendingSubmissions(
+  sessionId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<PendingSubmissionItem[]> {
+  const response = await apiClient.get(
+    `/chat/${encodeURIComponent(sessionId)}/submissions`,
+    { signal: opts.signal },
+  );
+  return response.data as PendingSubmissionItem[];
+}
+
+export interface UpdatePendingSubmissionPayload {
+  expected_version: number;
+  message: string;
+  attachments: Array<{ draft_id: string }>;
+  question_indexes: number[];
+  object_references: ProductObjectReference[];
+  mode: 'chat' | 'agent';
+  execution_mode: 'standard' | 'auto';
+}
+
+/** CAS-edit one server-retained Composer submission without changing its place. */
+export async function updatePendingSubmission(
+  sessionId: string,
+  submissionId: string,
+  payload: UpdatePendingSubmissionPayload,
+): Promise<PendingSubmissionItem> {
+  const response = await apiClient.patch(
+    `/chat/${encodeURIComponent(sessionId)}/submissions/${encodeURIComponent(submissionId)}`,
+    payload,
+  );
+  return response.data as PendingSubmissionItem;
+}
+
+/** Explicitly retry a retained submission, using its server version as a CAS token. */
+export async function retryPendingSubmission(
+  sessionId: string,
+  submissionId: string,
+  expectedVersion: number,
+): Promise<ChatTurnAdmissionResp> {
+  const response = await apiClient.post(
+    `/chat/${encodeURIComponent(sessionId)}/submissions/${encodeURIComponent(submissionId)}/retry`,
+    { expected_version: expectedVersion },
+  );
+  return response.data as ChatTurnAdmissionResp;
+}
+
+/** Withdraw one unclaimed submission and let the server reconcile the queue. */
+export async function withdrawPendingSubmission(
+  sessionId: string,
+  submissionId: string,
+  expectedVersion: number,
+): Promise<void> {
+  await apiClient.delete(
+    `/chat/${encodeURIComponent(sessionId)}/submissions/${encodeURIComponent(submissionId)}`,
+    { params: { expected_version: expectedVersion } },
+  );
+}
+
+/** Request the one allowed FIFO exception: stop the active turn and send this item. */
+export async function interruptChatTurnForSubmission(
+  sessionId: string,
+  activeTurnId: string,
+  submissionId: string,
+  expectedVersion: number,
+): Promise<void> {
+  await apiClient.post(
+    `/chat/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(activeTurnId)}/interrupt`,
+    { submission_id: submissionId, expected_version: expectedVersion },
+  );
 }
 
 export async function cancelChatTurn(sessionId: string, turnId: string): Promise<void> {
   await apiClient.post(
     `/chat/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/cancel`,
   );
+}
+
+export async function resolveAgentInteraction(
+  sessionId: string,
+  turnId: string,
+  interactionId: string,
+  payload: {
+    expected_version: number;
+    status: 'resolved' | 'rejected' | 'cancelled';
+    resolution: Record<string, unknown>;
+  },
+): Promise<ResolveAgentInteractionResp> {
+  const response = await apiClient.post(
+    `/chat/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}`
+      + `/interactions/${encodeURIComponent(interactionId)}/resolve`,
+    payload,
+  );
+  return response.data as ResolveAgentInteractionResp;
+}
+
+/** Read the one optional flat plan for an active or historical Agent Turn. */
+export async function getAgentTask(
+  sessionId: string,
+  turnId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<AgentTask | null> {
+  const response = await apiClient.get(
+    `/chat/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/agent-task`,
+    { signal: opts.signal },
+  );
+  return response.data as AgentTask | null;
+}
+
+/** Load the durable audit layer for the same call id shown live and in History. */
+export async function getToolCallAudit(
+  sessionId: string,
+  turnId: string,
+  callId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<AgentToolCallAudit> {
+  const response = await apiClient.get(
+    `/chat/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}`
+      + `/tool-calls/${encodeURIComponent(callId)}`,
+    { signal: opts.signal },
+  );
+  return response.data as AgentToolCallAudit;
 }
 
 export async function createChatSession(payload: {
@@ -334,6 +717,29 @@ export async function listChatSessions(
     signal: opts.signal,
   });
   return res.data;
+}
+
+export async function getChatSessionExecutionMode(
+  sessionId: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<ChatSessionExecutionMode> {
+  const res = await apiClient.get(
+    `/chat/sessions/${encodeURIComponent(sessionId)}/execution-mode`,
+    { signal: opts.signal },
+  );
+  return res.data as ChatSessionExecutionMode;
+}
+
+export async function updateChatSessionExecutionMode(
+  sessionId: string,
+  executionMode: 'standard' | 'auto',
+  expectedVersion: number,
+): Promise<ChatSessionExecutionMode> {
+  const res = await apiClient.patch(
+    `/chat/sessions/${encodeURIComponent(sessionId)}/execution-mode`,
+    { execution_mode: executionMode, expected_version: expectedVersion },
+  );
+  return res.data as ChatSessionExecutionMode;
 }
 
 /**
@@ -369,32 +775,4 @@ export async function renameChatSession(sessionId: string, title: string): Promi
 
 export async function deleteChatSession(sessionId: string): Promise<void> {
   await apiClient.delete(`/chat/sessions/${encodeURIComponent(sessionId)}`);
-}
-
-
-// ── Global-memory toggle (per-session override + per-user default) ───────
-// The per-session value lives in the ``conversations.global_memory_enabled``
-// column (see backend recall_policy). The GET endpoint resolves the effective
-// value: per-session override → user-level default → False, so the switch UI
-// never lies about what the next turn will inject.
-//
-export async function getSessionGlobalMemory(
-  sessionId: string,
-  opts: { signal?: AbortSignal } = {},
-): Promise<boolean> {
-  const res = await apiClient.get(
-    `/chat/sessions/${encodeURIComponent(sessionId)}/global-memory`,
-    { signal: opts.signal },
-  );
-  return Boolean(res.data?.enabled);
-}
-
-export async function setSessionGlobalMemory(
-  sessionId: string,
-  enabled: boolean,
-): Promise<void> {
-  await apiClient.post(
-    `/chat/sessions/${encodeURIComponent(sessionId)}/global-memory`,
-    { enabled },
-  );
 }

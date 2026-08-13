@@ -1,5 +1,7 @@
 """HarnessEvent factories — SSE wire-format contracts for tool events."""
 
+import json
+
 
 def test_tool_start_and_tool_done_carry_tool_call_id():
     """Both ``tool_start`` and ``tool_done`` SSE events must surface
@@ -95,3 +97,47 @@ def test_tool_done_event_carries_full_result_content():
         is_error=False,
     )
     assert ev2.to_dict()["data"]["result_content"] == ""
+
+
+def test_tool_sse_redacts_nested_credentials_and_obvious_values():
+    from app.agent_runtime.harness_events import HarnessEvent
+
+    sentinel = "sk-proj-NESTED_SENTINEL_123456789"
+    start = HarnessEvent.tool_start(
+        "credential_probe",
+        f"api_key={sentinel}",
+        step=1,
+        elapsed_ms=1.0,
+        input={
+            "safe": "keep-me",
+            "headers": {"Authorization": f"Bearer {sentinel}"},
+            "nested": [{"client_secret": sentinel}],
+        },
+    )
+    done = HarnessEvent.tool_done(
+        "credential_probe",
+        f"provider returned Bearer {sentinel}",
+        step=1,
+        elapsed_ms=2.0,
+        tool_latency_ms=1.0,
+        is_error=True,
+        result_content=json.dumps(
+            {
+                "error": f"Authorization: Bearer {sentinel}",
+                "nested": [{"refresh_token": sentinel}],
+                "safe": "still-here",
+            }
+        ),
+    )
+
+    start_payload = start.to_dict()["data"]
+    done_payload = done.to_dict()["data"]
+    wire_payload = json.dumps([start_payload, done_payload], ensure_ascii=False)
+    assert sentinel not in wire_payload
+    assert start_payload["args_summary"] == "api_key=[REDACTED]"
+    assert start_payload["input"]["safe"] == "keep-me"
+    assert start_payload["input"]["headers"]["Authorization"] == "[REDACTED]"
+    assert start_payload["input"]["nested"][0]["client_secret"] == "[REDACTED]"
+    decoded_result = json.loads(done_payload["result_content"])
+    assert decoded_result["nested"][0]["refresh_token"] == "[REDACTED]"
+    assert decoded_result["safe"] == "still-here"

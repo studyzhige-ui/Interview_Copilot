@@ -9,7 +9,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.agent_runtime.tool_registry import AgentToolContext, ToolEntry, registry
+from app.agent_runtime.tool_registry import AgentToolContext, ToolDefinition, registry
+from app.agent_runtime.tool_policy import ToolEffect
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +45,8 @@ def _read_resume_sync(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, 
     try:
         return _read_resume_inner(args, ctx)
     except Exception as exc:
-        logger.warning("read_resume failed: %s", exc)
-        return {"error": f"Failed to read resume: {exc}", "section_count": 0}
+        logger.warning("read_resume failed (%s)", type(exc).__name__)
+        return {"error": "Failed to read resume", "section_count": 0}
 
 
 def _read_resume_inner(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str, Any]:
@@ -125,7 +126,7 @@ def _read_resume_inner(args: ReadResumeArgs, ctx: AgentToolContext) -> dict[str,
 
 
 registry.register(
-    ToolEntry(
+    ToolDefinition(
         name="read_resume",
         description=(
             "Read the user's default personal resume. Tries the parsed "
@@ -136,6 +137,7 @@ registry.register(
         ),
         args_model=ReadResumeArgs,
         handler=_read_resume_handler,
+        effect=ToolEffect.READ,
         concurrency_safe=True,
         # Bumped from 10K to 20K to accommodate the full-text fallback —
         # the handler caps full_text at 18K internally, leaving headroom

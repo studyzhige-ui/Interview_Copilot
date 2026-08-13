@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, Text
+from sqlalchemy import Boolean, CheckConstraint, Column, Integer, String, Text
 
 from app.db.database import Base
 from app.db.types import UTCDateTime as DateTime
@@ -7,6 +7,12 @@ from app.db.types import utc_now
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "default_execution_mode IN ('standard', 'auto')",
+            name="ck_users_default_execution_mode",
+        ),
+    )
 
     id = Column(Integer, primary_key=True)
     username = Column(String, unique=True, index=True, nullable=False)
@@ -30,32 +36,12 @@ class User(Base):
     # Stores an object-storage URI, local fallback URI, or public HTTP URL.
     avatar_url = Column(Text, nullable=True)
     bio = Column(Text, nullable=True)
-    # Per-user default for the GLOBAL (cross-session) memory toggle.
-    # When False, the LLM does NOT see the v3 memory bundle
-    # (user_profile + ability states + learning_strategy) — only
-    # session-local context (recent_turns, debrief reference) reaches
-    # the prompt. Matches Claude Code's
-    # ``isAutoMemoryEnabled`` semantics — global memdir off; per-
-    # session context untouched.
-    #
-    # Storage is unaffected: this is an INJECTION gate. The user's
-    # personalization page can still read memory_documents /
-    # memory_ability_states directly to render their memory inventory.
-    #
-    # Opt-in (default False) for new users — they get vanilla chat
-    # until they curate their memory and explicitly opt in.
-    #
-    # A per-session override lives in the
-    # ``conversations.global_memory_enabled`` column; service code reads the
-    # session value first and falls back here.
-    global_memory_enabled = Column(Boolean, default=False, nullable=False)
-    # When the nightly dreaming worker last consolidated this user's
-    # memory docs. NULL = never dreamed. Used as the "cursor" by the
-    # autoDream gate logic: the next nightly run only fires for this
-    # user if (a) it's been >=24h since this timestamp AND (b) the
-    # user has accumulated enough new chat activity since then. See
-    # ``app.services.memory.dreaming_worker``.
-    last_dreamed_at = Column(DateTime, nullable=True)
+    # Default for newly created Conversations only. Existing Conversations and
+    # admitted Turns keep their own snapshots, so changing this cannot widen a
+    # PersistentTask or an already-running task.
+    default_execution_mode = Column(
+        String(16), nullable=False, default="standard", server_default="standard"
+    )
     # Per-user model-role selection moved out to the ``user_model_selections``
     # table (one row per role, keyed by the stable users.id) — see
     # app.models.user_model_selections / app.core.user_model_selection.

@@ -5,7 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.agent_runtime.tool_registry import AgentToolContext, ToolEntry, registry
+from app.agent_runtime.tool_registry import AgentToolContext, ToolDefinition, registry
+from app.agent_runtime.tool_policy import ToolEffect
 from app.rag.application.service import rag_service
 from app.rag.domain.models import SearchIntent
 from app.rag.grounding.builder import grounding_builder
@@ -32,7 +33,7 @@ async def _search_knowledge_handler(
             user_id=ctx.user_id,
         )
     except Exception as exc:  # noqa: BLE001 — tool boundary
-        logger.warning("search_knowledge failed: %s", exc)
+        logger.warning("search_knowledge failed (%s)", type(exc).__name__)
         return {
             "error": "knowledge_retrieval_unavailable",
             "query": args.query,
@@ -70,7 +71,7 @@ async def _search_knowledge_handler(
 
 
 registry.register(
-    ToolEntry(
+    ToolDefinition(
         name="search_knowledge",
         description=(
             "Search the user's knowledge corpus (interview Q&A bank, "
@@ -81,6 +82,7 @@ registry.register(
         ),
         args_model=SearchKnowledgeArgs,
         handler=_search_knowledge_handler,
+        effect=ToolEffect.READ,
         max_result_chars=10_000,
         emoji="📚",
         prompt=(

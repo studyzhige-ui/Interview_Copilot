@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Upload, Search, Pencil, Trash2, FileText, RefreshCw,
-  ChevronLeft, ChevronRight, ArrowDown, ArrowUp, Folder, Brain,
+  ChevronLeft, ChevronRight, ArrowDown, ArrowUp, Folder,
 } from 'lucide-react';
 import { Btn } from '@/components/ui/Btn';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -21,10 +21,9 @@ import {
   uploadKnowledgeFile,
 } from '@/api/knowledge';
 import type { KnowledgeDoc } from '@/types/api';
-import { MemoryTab } from './memory/MemoryTab';
 import { ResumeSection } from './ResumeSection';
 
-type TopTab = 'knowledge' | 'resumes' | 'memory';
+type TopTab = 'knowledge' | 'resumes';
 
 // Personal resumes are a separate profile entity, not RAG material. Keeping
 // knowledge categories distinct prevents an uploaded resume from appearing to
@@ -76,7 +75,7 @@ export function LibraryPage() {
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto">
       <div className="flex flex-wrap items-center gap-3 mb-4">
-        <h2 className="text-xl font-semibold text-stone-800">资料与记忆</h2>
+        <h2 className="text-xl font-semibold text-stone-800">资料库</h2>
         <div className="ml-3 inline-flex items-center gap-1 p-0.5 bg-stone-100 rounded-lg">
           <TopTabBtn active={tab === 'knowledge'} icon={<Folder size={13} />} onClick={() => setTab('knowledge')}>
             知识库
@@ -84,14 +83,10 @@ export function LibraryPage() {
           <TopTabBtn active={tab === 'resumes'} icon={<FileText size={13} />} onClick={() => setTab('resumes')}>
             简历
           </TopTabBtn>
-          <TopTabBtn active={tab === 'memory'} icon={<Brain size={13} />}  onClick={() => setTab('memory')}>
-            记忆
-          </TopTabBtn>
         </div>
       </div>
       {tab === 'knowledge' && <FilesSection />}
       {tab === 'resumes' && <ResumeSection />}
-      {tab === 'memory' && <MemoryTab />}
     </div>
   );
 }

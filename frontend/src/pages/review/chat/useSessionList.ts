@@ -12,12 +12,20 @@ import { useToastOnError } from '@/hooks/useToastOnError';
 import type { ChatSessionListItem } from '@/types/api';
 import { clearPersistedSessionState } from './usePersistedSessionState';
 
-function toListItem(created: { session_id: string; title: string; type: string }): ChatSessionListItem {
+function toListItem(created: {
+  session_id: string;
+  title: string;
+  type: string;
+  execution_mode: 'standard' | 'auto';
+  execution_mode_version: number;
+}): ChatSessionListItem {
   return {
     session_id: created.session_id,
     title: created.title,
     type: created.type,
     state_summary: '',
+    execution_mode: created.execution_mode,
+    execution_mode_version: created.execution_mode_version,
     turn_count: 0,
     updated_at: new Date().toISOString(),
   };

@@ -121,6 +121,21 @@ def test_budget_resets_failure_streak_on_progress():
     assert budget.failed_outcome_streak == 0
 
 
+def test_local_tool_recovery_incidents_reset_after_genuine_progress():
+    from app.agent_runtime.react_agent import AgentRunState
+
+    budget = AgentRunState(started_at=time.perf_counter())
+    for _ in range(3):
+        budget.observe_tool_result("fetch", "fetch\x00{}", "same error", is_error=True)
+    assert budget.local_tool_recovery_incidents == 1
+
+    budget.observe_tool_result(
+        "fetch", "fetch\x00{}", "new successful value", is_error=False
+    )
+    assert budget.local_tool_recovery_incidents == 0
+    assert budget.local_tool_recovery_exhausted_reason is None
+
+
 # ── HarnessEvent ─────────────────────────────────────────────────────────
 
 
@@ -444,11 +459,11 @@ def test_microcompact_skips_already_cleared():
 # ── compress() integration ───────────────────────────────────────────────
 
 
-def test_compress_runs_microcompact_unconditionally(monkeypatch):
-    """compress() runs microcompact even when total is under threshold."""
+def test_compress_preserves_tool_results_below_pressure_threshold(monkeypatch):
+    """Provider-neutral compaction does not discard results every loop."""
     import asyncio
 
-    from app.agent_runtime.context_compactor import _CLEARED_CONTENT, QueryLoopCompactor
+    from app.agent_runtime.context_compactor import QueryLoopCompactor
 
     monkeypatch.setattr(QueryLoopCompactor, "autocompact", _stub_autocompact)
 
@@ -470,7 +485,7 @@ def test_compress_runs_microcompact_unconditionally(monkeypatch):
             {"role": "tool", "tool_call_id": f"c{i}", "content": f"result_{i}"}
         )
 
-    # Huge window → well under threshold, but microcompact still runs
+    # A huge window keeps the complete request well below pressure.
     pipeline = QueryLoopCompactor(
         profile=_profile(context_window=1_000_000, max_output_tokens=0),
     )
@@ -478,7 +493,7 @@ def test_compress_runs_microcompact_unconditionally(monkeypatch):
 
     assert [m for m in result if m.get("tool_call_id") == "c0"][0][
         "content"
-    ] == _CLEARED_CONTENT
+    ] == "result_0"
     assert [m for m in result if m.get("tool_call_id") == "c6"][0][
         "content"
     ] == "result_6"
@@ -524,8 +539,11 @@ def test_autocompact_summarizes_body_keeps_head_and_tail(monkeypatch):
     class _StubResponse:
         text = '{"summary": "SUMMARY_BODY"}'
 
+    prompts: list[str] = []
+
     class _StubLLM:
         async def acomplete(self, prompt, response_format=None):
+            prompts.append(prompt)
             return _StubResponse()
 
     import sys
@@ -554,7 +572,16 @@ def test_autocompact_summarizes_body_keeps_head_and_tail(monkeypatch):
             ],
         },
         {"role": "tool", "tool_call_id": "c1", "content": "old result"},
-        {"role": "assistant", "content": "a working step"},
+        {
+            "role": "assistant",
+            "content": "a working step",
+            "tool_calls": [
+                {
+                    "id": "c2",
+                    "function": {"name": "read_url", "arguments": "{}"},
+                }
+            ],
+        },
         {"role": "tool", "tool_call_id": "c2", "content": "recent result"},
     ]
 
@@ -573,12 +600,15 @@ def test_autocompact_summarizes_body_keeps_head_and_tail(monkeypatch):
         if message["content"] == "the task"
     )
     assert summary_index < task_index
+    assert result[summary_index]["role"] == "user"
     assert any(
         "SUMMARY_BODY" in m["content"] and "END OF CONTEXT SUMMARY" in m["content"]
         for m in result
     )
     assert result[-2:] == messages[-2:]
     assert len(result) < len(messages)
+    assert "[tool_call id=c1 name=web_search" in prompts[0]
+    assert "[tool_result id=c1]" in prompts[0]
 
 
 def test_autocompact_preserves_current_task_in_multi_turn_history(monkeypatch):
@@ -601,7 +631,7 @@ def test_autocompact_preserves_current_task_in_multi_turn_history(monkeypatch):
         {"role": "assistant", "content": "旧任务回答"},
         current_task,
         {"role": "assistant", "content": "正在读取 offer"},
-        {"role": "tool", "tool_call_id": "c1", "content": "结果"},
+        {"role": "assistant", "content": "已读取 offer"},
         {"role": "user", "content": "检测到重复调用，请调整计划"},
     ]
     pipeline = QueryLoopCompactor(profile=_profile(), task_anchor=current_task)
@@ -634,6 +664,78 @@ def test_autocompact_noop_when_nothing_to_summarize():
     ]
     result = asyncio.run(pipeline.autocompact(messages, keep_last=2))
     assert result == messages
+
+
+def test_autocompact_merges_prior_transient_summary_without_persisting(monkeypatch):
+    import asyncio
+
+    from app.agent_runtime.context_compactor import QueryLoopCompactor
+    from app.prompts.chat import AUTOCOMPACT_SUMMARY_WRAPPER
+
+    observed: list[tuple[str, str]] = []
+
+    async def fake_summary(old, conversation, *, user_id=None):
+        observed.append((old, conversation))
+        return "MERGED SUMMARY"
+
+    monkeypatch.setattr(
+        "app.services.chat.conversation_summarizer.summarize_conversation",
+        fake_summary,
+    )
+    current_task = {"role": "user", "content": "current task"}
+    messages = [
+        {"role": "system", "content": "stable system"},
+        {
+            "role": "system",
+            "content": AUTOCOMPACT_SUMMARY_WRAPPER.format(summary="OLD SUMMARY"),
+        },
+        {"role": "user", "content": "old user"},
+        {"role": "assistant", "content": "old answer"},
+        current_task,
+        {"role": "assistant", "content": "current work"},
+        {"role": "user", "content": "loop nudge"},
+    ]
+    pipeline = QueryLoopCompactor(profile=_profile(), task_anchor=current_task)
+
+    result = asyncio.run(pipeline.autocompact(messages, keep_last=2))
+
+    assert "OLD SUMMARY" in observed[0][0]
+    assert (
+        sum(
+            "[Historical Context Summary]" in str(message.get("content") or "")
+            for message in result
+        )
+        == 1
+    )
+    assert not hasattr(pipeline, "last_summary")
+
+
+def test_request_measurement_counts_tools_once_and_uses_provider_delta():
+    from app.agent_runtime.context_compactor import QueryLoopCompactor
+
+    messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "question"},
+    ]
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "large_tool",
+            "description": "x" * 1_000,
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+    without_tools = QueryLoopCompactor(profile=_profile())
+    with_tools = QueryLoopCompactor(profile=_profile(), tool_schemas=[schema])
+
+    assert with_tools._measure_tokens(messages) > without_tools._measure_tokens(
+        messages
+    )
+
+    with_tools.observe_provider_prompt_tokens(123, messages)
+    assert with_tools._measure_tokens(messages) == 123
+    appended = [*messages, {"role": "assistant", "content": "new delta " * 100}]
+    assert with_tools._measure_tokens(appended) > 123
 
 
 # ── Blocking-limit guard ──────────────────────────────────────────────────
@@ -766,7 +868,7 @@ def test_generate_preview():
 
 def test_resolve_threshold():
     """read_file is never offloaded (inf); registered tools are capped at
-    min(ToolEntry.max_result_chars, AGENT_PERSIST_THRESHOLD) — the per-tool
+    min(ToolDefinition.max_result_chars, AGENT_PERSIST_THRESHOLD) — the per-tool
     cap is enforced via persistence, not truncation; unknown tools fall back
     to the global threshold."""
     from app.agent_runtime.tool_registry import registry
@@ -831,6 +933,50 @@ def test_maybe_persist_result_large(tmp_path, monkeypatch):
     persisted_file = tmp_path / "agent-results" / "sess_persist" / "tc_large.txt"
     assert persisted_file.exists()
     assert persisted_file.read_text(encoding="utf-8") == content
+
+
+def test_persisted_tool_result_is_redacted_before_inline_or_disk_storage(
+    tmp_path,
+    monkeypatch,
+):
+    from app.agent_runtime.tool_result_storage import maybe_persist_result
+
+    sentinel = "sk-proj-PERSISTED_SENTINEL_123456789"
+    monkeypatch.setattr(
+        "app.agent_runtime.tool_result_storage.settings.APP_DATA_DIR", str(tmp_path)
+    )
+    content = '{"authorization":"Bearer ' + sentinel + '","body":"' + "X" * 100 + '"}'
+    result = maybe_persist_result(
+        content=content,
+        tool_name="web_search",
+        tool_call_id="tc_secret",
+        session_id="sess_secret",
+        threshold=20,
+    )
+
+    persisted_file = tmp_path / "agent-results" / "sess_secret" / "tc_secret.txt"
+    assert sentinel not in result
+    assert sentinel not in persisted_file.read_text(encoding="utf-8")
+    assert "[REDACTED]" in persisted_file.read_text(encoding="utf-8")
+
+
+def test_tool_call_payload_redacts_arguments_before_provider_replay():
+    from types import SimpleNamespace
+
+    from app.agent_runtime.react_agent import _tool_call_payload
+
+    sentinel = "sk-proj-ARGUMENT_SENTINEL_123456789"
+    payload = _tool_call_payload(
+        SimpleNamespace(
+            id="call-secret",
+            name="demo",
+            arguments='{"api_key":"' + sentinel + '","safe":"ok"}',
+        )
+    )
+
+    encoded = payload["function"]["arguments"]
+    assert sentinel not in encoded
+    assert "[REDACTED]" in encoded
 
 
 def test_maybe_persist_result_read_file_never_persists(tmp_path, monkeypatch):

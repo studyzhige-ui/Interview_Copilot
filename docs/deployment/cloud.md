@@ -43,6 +43,11 @@ production Cloud topology.
 
 - `ENVIRONMENT=production` and a generated `SECRET_KEY`
 - TLS and an explicit `CORS_ORIGINS`
+- When Gmail is enabled, configure its Google OAuth web client as one complete
+  unit: `GMAIL_GOOGLE_OAUTH_CLIENT_ID`,
+  `GMAIL_GOOGLE_OAUTH_CLIENT_SECRET`, `GMAIL_GOOGLE_OAUTH_REDIRECT_URI`, and
+  `GMAIL_OAUTH_PRODUCT_RETURN_URI`. Both URIs must use HTTPS in production;
+  register the redirect URI exactly in Google Cloud.
 - Correct `TRUSTED_PROXIES`
 - Rotated database and object-storage credentials
 - Database backup and restore test

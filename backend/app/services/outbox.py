@@ -5,9 +5,8 @@ write. A worker periodically calls :func:`run_due_outbox_jobs`, which claims a
 batch of due jobs (lock-guarded), runs the registered handler, and marks each
 succeeded / retry-with-backoff / dead.
 
-This module registers the object-storage cleanup handlers
-(``delete_object`` / ``cleanup_failed_upload``). Later packages register their
-own job types (ingest / transcribe / memory) against the same table + runner.
+This module registers object-storage cleanup handlers. Domain packages
+register their own indexing and cleanup job types against the same runner.
 """
 
 from __future__ import annotations
@@ -34,25 +33,19 @@ _HANDLERS: dict[str, Callable[[Session, OutboxJob], None]] = {}
 _BACKOFF_BASE_SECONDS = 60
 _BACKOFF_CAP_SECONDS = 3600
 
-OutboxLane = Literal["index", "intelligence", "cleanup"]
+OutboxLane = Literal["index", "cleanup"]
 
 INDEX_JOB_TYPES = frozenset(
     {
         "milvus_delete_document",
         "milvus_upsert_document",
         "milvus_reindex_resume",
-        "upsert_memory_ability_index",
-        "delete_memory_ability_index",
     }
-)
-INTELLIGENCE_JOB_TYPES = frozenset(
-    {"extract_memory_realtime", "extract_memory_dreaming", "dream_check_user"}
 )
 CLEANUP_JOB_TYPES = frozenset({"delete_object", "cleanup_failed_upload"})
 
 _JOB_LANES: dict[str, OutboxLane] = {
     **dict.fromkeys(INDEX_JOB_TYPES, "index"),
-    **dict.fromkeys(INTELLIGENCE_JOB_TYPES, "intelligence"),
     **dict.fromkeys(CLEANUP_JOB_TYPES, "cleanup"),
 }
 _WAKEUP_LANES_KEY = "outbox_wakeup_lanes"
@@ -323,7 +316,7 @@ def run_due_outbox_jobs(
         processed += 1
 
     # Dead-backlog visibility: dead jobs mean permanently-skipped side
-    # effects (leaked blobs / stale Milvus rows / lost memory extraction)
+    # effects (leaked blobs / stale Milvus rows)
     # and nothing else surfaces them. One WARNING per drain while
     # any exist is deliberate — quiet enough to live with, loud enough to
     # notice in logs.
