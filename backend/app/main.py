@@ -319,6 +319,7 @@ from app.api import (
     career_insights,
     career_profile,
     chat,
+    external_plugins,
     file_assets,
     gmail_integration,
     gmail_observations,
@@ -343,6 +344,7 @@ app.include_router(career_process.router, prefix="/api/v1")
 app.include_router(career_insights.router, prefix="/api/v1")
 app.include_router(career_profile.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
+app.include_router(external_plugins.router, prefix="/api/v1")
 app.include_router(file_assets.router, prefix="/api/v1")
 app.include_router(gmail_integration.router, prefix="/api/v1")
 app.include_router(gmail_observations.router, prefix="/api/v1")

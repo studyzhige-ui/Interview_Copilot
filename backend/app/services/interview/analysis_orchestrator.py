@@ -47,6 +47,7 @@ from app.services.interview.interview_record_service import (
     interview_record_service,
 )
 from app.services.uploads.file_asset_service import get_file_asset
+from app.services.voice.transcript_evidence import TranscriptEvidence
 
 logger = logging.getLogger(__name__)
 
@@ -102,19 +103,36 @@ class InterviewAnalysisOrchestrator:
                 # shells are durable checkpoints. A retry / redelivery
                 # resumes from whatever already exists instead of paying
                 # for ASR (+minutes) and extraction (+LLM) again.
-                transcript = interview_record_service.get_transcript_text(record_id)
-                if transcript.strip():
+                evidence_bundle = interview_record_service.get_transcript_evidence(
+                    record_id
+                )
+                if evidence_bundle is not None:
+                    transcript_row, evidence = evidence_bundle
+                    transcript_id = transcript_row.id
+                    transcript = transcript_row.text or ""
                     logger.info(
-                        "stage gate: reusing persisted transcript for %s (%d chars)",
+                        "stage gate: reusing v2 transcript evidence for %s (%d words)",
                         record_id,
-                        len(transcript),
+                        len(evidence.words),
                     )
                 else:
-                    transcript = await self._stage_transcribe(
+                    legacy_text = interview_record_service.get_transcript_text(
+                        record_id
+                    )
+                    if legacy_text.strip():
+                        raise RuntimeError(
+                            "transcript_evidence_required: 旧转写没有词级证据，"
+                            "请从原录音重新转写"
+                        )
+                    transcript_id, evidence, transcript = await self._stage_transcribe(
                         record_id, language=language
                     )
 
-                qa_pairs = self._load_existing_qa_shells(record_id)
+                qa_pairs = self._load_existing_qa_shells(
+                    record_id,
+                    source_transcript_id=transcript_id,
+                    require_provenance=True,
+                )
                 if qa_pairs:
                     logger.info(
                         "stage gate: reusing %d persisted QA shells for %s",
@@ -124,9 +142,8 @@ class InterviewAnalysisOrchestrator:
                 else:
                     qa_pairs = await self._stage_extract(
                         record_id,
-                        transcript,
-                        resume_text,
-                        user_id=owner_username,
+                        transcript_id,
+                        evidence,
                     )
             else:  # mock
                 qa_pairs = self._load_mock_qa(record_id)
@@ -183,14 +200,19 @@ class InterviewAnalysisOrchestrator:
 
     # ── Stages ────────────────────────────────────────────────────────
 
-    async def _stage_transcribe(self, record_id: str, language: str = "zh") -> str:
-        """Download audio + run WhisperX. Returns diarized transcript.
+    async def _stage_transcribe(
+        self, record_id: str, language: str = "zh"
+    ) -> tuple[str, TranscriptEvidence, str]:
+        """Download audio and persist immutable word-level evidence.
 
         ``language`` is forwarded to ``transcribe_media`` which passes it
         to WhisperX. ``"auto"`` becomes ``None`` (let Whisper detect)
         inside the transcription service.
         """
-        from app.services.voice.audio_transcription_service import transcribe_media
+        from app.services.uploads.file_asset_service import file_asset_version_token
+        from app.services.voice.audio_transcription_service import (
+            transcribe_interview_evidence,
+        )
 
         interview_record_service.set_status(record_id, STATUS_TRANSCRIBING)
 
@@ -217,6 +239,8 @@ class InterviewAnalysisOrchestrator:
                 )
 
             storage_uri = upload.storage_uri
+            file_asset_id = upload.id
+            file_asset_version = file_asset_version_token(upload)
         finally:
             db.close()
 
@@ -232,14 +256,19 @@ class InterviewAnalysisOrchestrator:
                 from app.core.storage import download_file_from_s3
 
                 download_file_from_s3(storage_uri, local_path)
-            transcript = await transcribe_media(local_path, language=language)
-            interview_record_service.set_transcript(
-                record_id,
-                transcript=transcript,
-                provider="local_whisperx",
+            evidence = await transcribe_interview_evidence(
+                local_path,
+                file_asset_id=file_asset_id,
+                file_asset_version=file_asset_version,
                 language=language,
             )
-            return transcript
+            transcript_id = interview_record_service.set_transcript_evidence(
+                record_id,
+                evidence=evidence,
+                provider="local_whisperx",
+            )
+            transcript = interview_record_service.get_transcript_text(record_id)
+            return transcript_id, evidence, transcript
         finally:
             if is_temp and local_path and os.path.exists(local_path):
                 os.unlink(local_path)
@@ -247,25 +276,43 @@ class InterviewAnalysisOrchestrator:
     async def _stage_extract(
         self,
         record_id: str,
-        transcript: str,
-        resume_text: str,
-        *,
-        user_id: str | None = None,
+        transcript_id: str,
+        evidence: TranscriptEvidence,
     ) -> list[dict[str, Any]]:
-        """LLM extracts structured Q&A pairs from the diarized transcript."""
-        from app.services.interview.analysis.service import (
-            extract_qa_pairs_with_llm,
+        """Project ID-only structure and reconstruct QA from evidence."""
+        from app.services.interview.transcript_structure_service import (
+            project_interview_qa,
         )
 
         interview_record_service.set_status(record_id, STATUS_EXTRACTING)
-        qa_pairs = await extract_qa_pairs_with_llm(
-            transcript,
-            resume_text,
-            user_id=user_id,
+        projected = await project_interview_qa(evidence)
+        interview_record_service.set_transcript_projection(
+            transcript_id,
+            structure=projected.structure.model_dump(mode="json"),
+            quality=projected.quality.model_dump(mode="json"),
         )
-        return qa_pairs or []
+        qa_pairs = projected.qa_pairs
+        for pair in qa_pairs:
+            pair["source_transcript_id"] = transcript_id
+        if not qa_pairs:
+            raise RuntimeError(
+                "未能从转写中恢复出可验证的问答轮次，请检查转写质量后重试"
+            )
+        self._persist_qa_shells(record_id, qa_pairs)
+        if projected.quality.status != "complete":
+            raise RuntimeError(
+                "qa_coverage_insufficient: 候选人回答覆盖率或词级证据置信度"
+                "未达到完整报告门槛，请先复核转写结构"
+            )
+        return qa_pairs
 
-    def _load_existing_qa_shells(self, record_id: str) -> list[dict[str, Any]]:
+    def _load_existing_qa_shells(
+        self,
+        record_id: str,
+        *,
+        source_transcript_id: str | None = None,
+        require_provenance: bool = False,
+    ) -> list[dict[str, Any]]:
         """Stage gate (ANA-3): QA shells persisted by an earlier attempt.
 
         Returns [] when none exist (fresh run). Rows are returned in
@@ -279,6 +326,15 @@ class InterviewAnalysisOrchestrator:
                 .order_by(InterviewQA.order_idx)
                 .all()
             )
+            if require_provenance and any(
+                row.source_transcript_id != source_transcript_id
+                or not isinstance(row.source_provenance_json, dict)
+                for row in rows
+            ):
+                raise RuntimeError(
+                    "transcript_evidence_required: 现有 QA 缺少词级来源，"
+                    "请删除旧 QA 并从原录音重新转写"
+                )
             return [
                 {
                     "index": i,
@@ -501,6 +557,8 @@ class InterviewAnalysisOrchestrator:
 
             top_level = {
                 "schema_version": 3,
+                "generation_status": report.get("generation_status", "complete"),
+                "generation_warnings": report.get("generation_warnings", []),
                 "overall": report.get("overall", {}),
                 "phase_summary": report.get("phase_summary", []),
                 "skill_radar": report.get("skill_radar", {}),

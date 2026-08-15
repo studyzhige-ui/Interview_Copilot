@@ -16,9 +16,9 @@ const PAGE_TITLES: Record<string, string> = {
   '/artifacts': '求职材料',
   '/library':   '资料库',
   '/models':    '回答模型',
-  '/capabilities': 'Skills 与 MCP',
+  '/capabilities': '插件市场',
+  '/plugins': '插件市场',
   '/settings/personalization': '协作偏好',
-  '/settings/connections': '外部连接',
   '/me':        '个人中心',
 };
 

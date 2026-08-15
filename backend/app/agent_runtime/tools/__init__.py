@@ -5,6 +5,7 @@ from app.agent_runtime.tools import (  # noqa: F401
     attachment_vision,
     career,
     career_domains,
+    external_plugins,
     file_tool,
     gmail,
     gmail_observation,
@@ -22,6 +23,7 @@ from app.agent_runtime.tool_registry import registry
 from app.services.google_gmail_connector import (
     build_configured_google_gmail_connector,
 )
+from app.services.oauth_plugin_connector import configured_external_plugin_connectors
 
 
 # A configured real adapter makes the read Tool discoverable even before a
@@ -31,3 +33,9 @@ from app.services.google_gmail_connector import (
 _gmail_connector = build_configured_google_gmail_connector()
 if _gmail_connector is not None:
     registry.register(gmail.build_gmail_search_messages_tool(lambda: _gmail_connector))
+
+_external_plugin_connectors = configured_external_plugin_connectors()
+if canva_connector := _external_plugin_connectors.get("canva"):
+    registry.register(external_plugins.build_canva_search_designs_tool(canva_connector))
+if notion_connector := _external_plugin_connectors.get("notion"):
+    registry.register(external_plugins.build_notion_search_pages_tool(notion_connector))

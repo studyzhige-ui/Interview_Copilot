@@ -57,6 +57,13 @@ class InterviewQA(Base):
     follow_up_depth = Column(Integer, nullable=False, default=0)
 
     # Source segment timestamps (upload only)
+    source_transcript_id = Column(
+        String,
+        ForeignKey("interview_transcripts.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    source_provenance_json = Column(JSON, nullable=True)
     source_segment_start = Column(Float, nullable=True)
     source_segment_end = Column(Float, nullable=True)
 

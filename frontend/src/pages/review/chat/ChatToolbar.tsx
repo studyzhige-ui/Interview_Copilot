@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
-  Send, Paperclip, Bot, MessageSquare, Square, X, FileText, AlertCircle,
-  Pencil, RotateCcw, Trash2, Zap,
+  Send, Plus, Bot, MessageSquare, Square, X, FileText, AlertCircle,
+  Pencil, RotateCcw, Trash2, Zap, ShieldCheck, ChevronDown, Check, Sparkles,
   Link2,
 } from 'lucide-react';
 import { Spinner } from '@/components/ui/Spinner';
@@ -15,7 +16,7 @@ import {
   waitForAttachmentDraft,
 } from '@/api/chat';
 import { useIsMounted } from '@/hooks/useIsMounted';
-import type { PendingSubmissionItem, ProductObjectReference } from '@/types/api';
+import type { ModelProfile, PendingSubmissionItem, ProductObjectReference } from '@/types/api';
 import { productObjectReferenceLabel } from '@/lib/copilotObjectReference';
 import type { Attachment, Mode } from './types';
 import {
@@ -37,6 +38,10 @@ export function ChatToolbar({
   executionMode,
   setExecutionMode,
   executionModePending,
+  modelProfiles,
+  activeModelProfileId,
+  activeModelName,
+  pickModel,
   input,
   setInput,
   streaming,
@@ -64,6 +69,10 @@ export function ChatToolbar({
   executionMode: 'standard' | 'auto';
   setExecutionMode: (next: 'standard' | 'auto') => Promise<void>;
   executionModePending: boolean;
+  modelProfiles: ModelProfile[];
+  activeModelProfileId: string;
+  activeModelName: string;
+  pickModel: (profile: ModelProfile) => Promise<boolean>;
   input: string;
   setInput: (v: string) => void;
   streaming: boolean;
@@ -87,6 +96,8 @@ export function ChatToolbar({
   onRemoveProductObjectReference: (reference: ProductObjectReference) => void;
 }) {
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const approvalMenuRef = useRef<HTMLDivElement | null>(null);
+  const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const activeSessionRef = useRef(activeSessionId);
   const pollingRef = useRef<AbortController | null>(null);
   const [uploadState, setUploadState] = useState<{
@@ -102,6 +113,8 @@ export function ChatToolbar({
   } | null>(null);
   const [actingSubmissionId, setActingSubmissionId] = useState<string | null>(null);
   const [retryingDraftId, setRetryingDraftId] = useState<string | null>(null);
+  const [approvalMenuOpen, setApprovalMenuOpen] = useState(false);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const uploading = uploadState.sessionId === activeSessionId && uploadState.active;
   const isMounted = useIsMounted();
 
@@ -111,6 +124,19 @@ export function ChatToolbar({
     pollingRef.current = new AbortController();
     return () => pollingRef.current?.abort();
   }, [activeSessionId]);
+
+  useEffect(() => {
+    const onDocumentPointerDown = (event: MouseEvent) => {
+      if (!approvalMenuRef.current?.contains(event.target as Node)) {
+        setApprovalMenuOpen(false);
+      }
+      if (!modelMenuRef.current?.contains(event.target as Node)) {
+        setModelMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocumentPointerDown);
+    return () => document.removeEventListener('mousedown', onDocumentPointerDown);
+  }, []);
 
   const onAttachFiles = async (files: FileList) => {
     if (!activeSessionId) return;
@@ -200,6 +226,9 @@ export function ChatToolbar({
   };
 
   const attachmentsReady = attachments.every((item) => item.status !== 'failed');
+  const callableModels = modelProfiles.filter((profile) => (
+    profile.ready && (mode !== 'AGENT' || profile.supports_function_calling)
+  ));
 
   const removeDraft = (attachment: Attachment) => {
     if (!activeSessionId) return;
@@ -541,116 +570,7 @@ export function ChatToolbar({
           ))}
         </div>
       )}
-      <div className="flex items-center gap-1.5 mb-2">
-        {allowModeSwitch ? (
-          <button
-            onClick={() => setMode((m) => (m === 'AGENT' ? 'CHAT' : 'AGENT'))}
-            className={[
-              'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium tracking-wider',
-              mode === 'AGENT'
-                ? 'bg-primary-50 border-primary-200 text-primary-700'
-                : 'bg-white border-stone-200 text-stone-600',
-            ].join(' ')}
-          >
-            <span className={[
-              'w-1.5 h-1.5 rounded-full',
-              mode === 'AGENT' ? 'bg-primary-500' : 'bg-stone-400',
-            ].join(' ')} />
-            {mode === 'AGENT' ? <><Bot size={11} /> AGENT</> : <><MessageSquare size={11} /> CHAT</>}
-          </button>
-        ) : (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-primary-200 bg-primary-50 text-[11px] font-medium tracking-wider text-primary-700">
-            <span className="w-1.5 h-1.5 rounded-full bg-primary-500" />
-            <Bot size={11} /> 求职 AGENT
-          </span>
-        )}
-        <button
-          type="button"
-          onClick={() => { void setExecutionMode(executionMode === 'auto' ? 'standard' : 'auto'); }}
-          disabled={executionModePending}
-          aria-label="切换 Standard Auto 执行模式"
-          title={executionMode === 'auto'
-            ? 'Auto：仅在当前任务明确范围内减少普通审批；风险与歧义仍会询问'
-            : 'Standard：外部副作用默认逐调用确认'}
-          className={[
-            'inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium disabled:cursor-wait disabled:opacity-60',
-            executionMode === 'auto'
-              ? 'border-warning-300 bg-warning-50 text-warning-800'
-              : 'border-stone-200 bg-white text-stone-600',
-          ].join(' ')}
-        >
-          {executionMode === 'auto' ? 'AUTO' : 'STANDARD'}
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept={CONVERSATION_ATTACHMENT_ACCEPT}
-          multiple
-          hidden
-          onChange={(e) => {
-            if (e.target.files && e.target.files.length > 0) onAttachFiles(e.target.files);
-            e.target.value = '';
-          }}
-        />
-        <button
-          onClick={() => fileRef.current?.click()}
-          disabled={!activeSessionId || uploading || attachments.length >= 10}
-          className="p-1.5 text-stone-500 hover:text-stone-700 disabled:opacity-50"
-          title="附加文件"
-        >
-          {uploading ? <Spinner size={12} /> : <Paperclip size={14} />}
-        </button>
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-          {attachments.length > 0 ? attachments.map((attachment) => (
-            <span
-              key={attachment.draft_id}
-              title={attachment.error || attachment.filename}
-              className={[
-                'inline-flex max-w-[150px] shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px]',
-                attachment.status === 'failed'
-                  ? 'border-danger-200 bg-danger-50 text-danger-700'
-                  : 'border-stone-200 bg-stone-50 text-stone-600',
-              ].join(' ')}
-            >
-              {attachment.status === 'processing' ? <Spinner size={10} />
-                : attachment.status === 'failed' ? <AlertCircle size={10} />
-                  : <FileText size={10} />}
-              <span className="truncate">{attachment.filename}</span>
-              {attachment.status === 'failed' && (
-                <button
-                  type="button"
-                  disabled={retryingDraftId === attachment.draft_id}
-                  onClick={() => { void retryDraft(attachment); }}
-                  aria-label={`重试附件 ${attachment.filename}`}
-                  className="text-primary-700 hover:text-primary-800 disabled:opacity-50"
-                >
-                  {retryingDraftId === attachment.draft_id
-                    ? <Spinner size={9} />
-                    : <RotateCcw size={10} />}
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => removeDraft(attachment)}
-                aria-label={`移除附件 ${attachment.filename}`}
-              >
-                <X size={10} />
-              </button>
-            </span>
-          )) : (
-            <span className="text-[11px] text-stone-400">点 📎 附加简历 / 文档</span>
-          )}
-        </div>
-        {attachments.length > 0 && (
-          <button
-            onClick={clearDrafts}
-            className="text-[11px] text-stone-400 hover:text-danger-500"
-          >
-            清空
-          </button>
-        )}
-      </div>
-      <div className="flex items-end gap-1.5">
+      <div className="overflow-visible rounded-[22px] border border-stone-200 bg-white shadow-sm transition focus-within:border-primary-300 focus-within:ring-2 focus-within:ring-primary-100">
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -658,31 +578,263 @@ export function ChatToolbar({
           disabled={!activeSessionId || streaming || uploading}
           placeholder={
             activeSessionId
-              ? '问点什么 · Shift+Enter 换行'
+              ? '随心输入 · Shift+Enter 换行'
               : (externalMode ? '先在左侧选择' : '点右上 + 新建一段会话')
           }
-          rows={2}
-          className="flex-1 resize-none border border-stone-200 rounded-lg px-3 py-2 text-[13px] outline-none focus:border-primary-300 bg-stone-50 text-stone-800 disabled:opacity-50"
+          rows={3}
+          aria-label="消息输入"
+          className="min-h-[84px] w-full resize-none bg-transparent px-4 pb-2 pt-3 text-[14px] leading-6 text-stone-800 outline-none placeholder:text-stone-400 disabled:opacity-50"
         />
-        {streaming ? (
-          <button
-            onClick={onCancel}
-            title="停止任务"
-            aria-label="停止任务"
-            className="w-9 h-9 rounded-lg bg-danger-500 text-white hover:bg-danger-700 flex items-center justify-center"
-          >
-            <Square size={12} fill="currentColor" />
-          </button>
-        ) : (
-          <button
-            onClick={onSend}
-            disabled={!activeSessionId || !input.trim() || uploading || !attachmentsReady}
-            className="w-9 h-9 rounded-lg bg-primary-500 text-white hover:bg-primary-600 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <Send size={14} />
-          </button>
+        {attachments.length > 0 && (
+          <div className="flex items-center gap-1.5 overflow-x-auto px-3 pb-2" aria-label="待发送附件">
+            {attachments.map((attachment) => (
+              <span
+                key={attachment.draft_id}
+                title={attachment.error || attachment.filename}
+                className={[
+                  'inline-flex max-w-[170px] shrink-0 items-center gap-1 rounded-lg border px-2 py-1 text-[11px]',
+                  attachment.status === 'failed'
+                    ? 'border-danger-200 bg-danger-50 text-danger-700'
+                    : 'border-stone-200 bg-stone-50 text-stone-600',
+                ].join(' ')}
+              >
+                {attachment.status === 'processing' ? <Spinner size={10} />
+                  : attachment.status === 'failed' ? <AlertCircle size={10} />
+                    : <FileText size={10} />}
+                <span className="truncate">{attachment.filename}</span>
+                {attachment.status === 'failed' && (
+                  <button
+                    type="button"
+                    disabled={retryingDraftId === attachment.draft_id}
+                    onClick={() => { void retryDraft(attachment); }}
+                    aria-label={`重试附件 ${attachment.filename}`}
+                    className="text-primary-700 hover:text-primary-800 disabled:opacity-50"
+                  >
+                    {retryingDraftId === attachment.draft_id
+                      ? <Spinner size={9} />
+                      : <RotateCcw size={10} />}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => removeDraft(attachment)}
+                  aria-label={`移除附件 ${attachment.filename}`}
+                >
+                  <X size={10} />
+                </button>
+              </span>
+            ))}
+            <button
+              type="button"
+              onClick={clearDrafts}
+              className="shrink-0 text-[11px] text-stone-400 hover:text-danger-500"
+            >
+              清空
+            </button>
+          </div>
         )}
+        <div className="flex items-end justify-between gap-2 px-2.5 pb-2.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <input
+              ref={fileRef}
+              type="file"
+              accept={CONVERSATION_ATTACHMENT_ACCEPT}
+              multiple
+              hidden
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) onAttachFiles(e.target.files);
+                e.target.value = '';
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              disabled={!activeSessionId || uploading || attachments.length >= 10}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-stone-600 transition hover:bg-stone-100 disabled:opacity-40"
+              title="添加附件"
+              aria-label="添加附件"
+            >
+              {uploading ? <Spinner size={14} /> : <Plus size={18} />}
+            </button>
+
+            {allowModeSwitch ? (
+              <button
+                type="button"
+                onClick={() => setMode((current) => (current === 'AGENT' ? 'CHAT' : 'AGENT'))}
+                aria-label="切换 Chat Agent 模式"
+                className={[
+                  'inline-flex h-8 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium tracking-wide transition',
+                  mode === 'AGENT'
+                    ? 'bg-primary-50 text-primary-700 hover:bg-primary-100'
+                    : 'text-stone-600 hover:bg-stone-100',
+                ].join(' ')}
+              >
+                {mode === 'AGENT' ? <Bot size={13} /> : <MessageSquare size={13} />}
+                {mode === 'AGENT' ? 'Agent' : 'Chat'}
+              </button>
+            ) : (
+              <span className="inline-flex h-8 items-center gap-1 rounded-full bg-primary-50 px-2.5 text-[11px] font-medium text-primary-700">
+                <Bot size={13} /> 求职 Agent
+              </span>
+            )}
+
+            <div ref={approvalMenuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setApprovalMenuOpen((open) => !open)}
+                disabled={executionModePending || !activeSessionId}
+                aria-label="选择审批模式"
+                aria-expanded={approvalMenuOpen}
+                className={[
+                  'inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium transition disabled:cursor-wait disabled:opacity-50',
+                  executionMode === 'auto'
+                    ? 'bg-warning-50 text-warning-800 hover:bg-warning-100'
+                    : 'text-stone-600 hover:bg-stone-100',
+                ].join(' ')}
+              >
+                <ShieldCheck size={14} />
+                {executionMode === 'auto' ? '自动审批' : '每次确认'}
+                <ChevronDown size={12} />
+              </button>
+              {approvalMenuOpen && (
+                <div className="absolute bottom-full left-0 z-40 mb-2 w-[310px] overflow-hidden rounded-xl border border-stone-200 bg-white p-1.5 shadow-xl">
+                  <div className="px-2.5 pb-1.5 pt-1 text-[11px] text-stone-400">工具操作如何获得批准？</div>
+                  <ApprovalModeOption
+                    title="每次确认"
+                    description="外部副作用默认逐次询问，适合希望逐步确认的任务。"
+                    selected={executionMode === 'standard'}
+                    onClick={() => {
+                      void setExecutionMode('standard').then(() => setApprovalMenuOpen(false));
+                    }}
+                  />
+                  <ApprovalModeOption
+                    title="自动审批"
+                    description="仅在当前任务明确范围内减少普通审批；风险、越界与歧义仍会询问。"
+                    selected={executionMode === 'auto'}
+                    onClick={() => {
+                      void setExecutionMode('auto').then(() => setApprovalMenuOpen(false));
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1.5">
+            <div ref={modelMenuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setModelMenuOpen((open) => !open)}
+                aria-label="选择回答模型"
+                aria-expanded={modelMenuOpen}
+                className="inline-flex h-8 max-w-[170px] items-center gap-1 rounded-full px-2.5 text-xs font-medium text-stone-700 transition hover:bg-stone-100"
+              >
+                <Sparkles size={13} className="shrink-0 text-accent-700" />
+                <span className="truncate">{activeModelName}</span>
+                <ChevronDown size={12} className="shrink-0 text-stone-400" />
+              </button>
+              {modelMenuOpen && (
+                <div className="absolute bottom-full right-0 z-40 mb-2 w-[300px] overflow-hidden rounded-xl border border-stone-200 bg-white shadow-xl">
+                  <div className="border-b border-stone-100 px-3 py-2.5">
+                    <div className="text-xs font-medium text-stone-700">选择回答模型</div>
+                    <div className="mt-0.5 text-[11px] text-stone-400">
+                      只显示已配置密钥且当前可调用的模型
+                      {mode === 'AGENT' ? '，并要求支持工具调用' : ''}
+                    </div>
+                  </div>
+                  <div className="max-h-[260px] overflow-y-auto p-1.5">
+                    {callableModels.length === 0 ? (
+                      <div className="px-2 py-3 text-xs text-stone-500">还没有符合当前模式的可用模型。</div>
+                    ) : callableModels.map((profile) => {
+                      const selected = profile.id === activeModelProfileId;
+                      return (
+                        <button
+                          key={profile.id}
+                          type="button"
+                          onClick={() => {
+                            void pickModel(profile).then((ok) => {
+                              if (ok) setModelMenuOpen(false);
+                            });
+                          }}
+                          className={[
+                            'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition',
+                            selected ? 'bg-primary-50 text-primary-800' : 'text-stone-700 hover:bg-stone-50',
+                          ].join(' ')}
+                        >
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[13px] font-medium">{profile.display_name}</span>
+                            <span className="block truncate font-mono text-[10px] text-stone-400">{profile.provider} · {profile.model}</span>
+                          </span>
+                          {selected && <Check size={15} className="shrink-0 text-primary-600" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="border-t border-stone-100 bg-stone-50 px-3 py-2 text-[11px] text-stone-500">
+                    需要更多模型？{' '}
+                    <Link to="/models" onClick={() => setModelMenuOpen(false)} className="font-medium text-primary-700 hover:text-primary-900">
+                      前往回答模型配置
+                    </Link>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {streaming ? (
+              <button
+                type="button"
+                onClick={onCancel}
+                title="停止任务"
+                aria-label="停止任务"
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-danger-500 text-white transition hover:bg-danger-700"
+              >
+                <Square size={12} fill="currentColor" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onSend}
+                disabled={!activeSessionId || !input.trim() || uploading || !attachmentsReady}
+                title="发送"
+                aria-label="发送消息"
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-stone-900 text-white transition hover:bg-stone-700 disabled:cursor-not-allowed disabled:bg-stone-200 disabled:text-stone-400"
+              >
+                <Send size={15} />
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </div>
+  );
+}
+
+function ApprovalModeOption({
+  title,
+  description,
+  selected,
+  onClick,
+}: {
+  title: string;
+  description: string;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition',
+        selected ? 'bg-stone-100 text-stone-900' : 'text-stone-700 hover:bg-stone-50',
+      ].join(' ')}
+    >
+      <ShieldCheck size={15} className="mt-0.5 shrink-0" />
+      <span className="min-w-0 flex-1">
+        <span className="block text-[13px] font-medium">{title}</span>
+        <span className="mt-0.5 block text-[11px] leading-4 text-stone-500">{description}</span>
+      </span>
+      {selected && <Check size={15} className="mt-0.5 shrink-0 text-primary-600" />}
+    </button>
   );
 }

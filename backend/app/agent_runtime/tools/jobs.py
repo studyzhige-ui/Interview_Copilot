@@ -79,15 +79,22 @@ async def _search_jobs_handler(
         return await _fetch_detail(args.job_id, target_sites)
 
     jobs: list[dict[str, Any]] = []
+    valid_sites: list[str] = []
+    invalid_sites: list[str] = []
+    timed_out_sites: list[str] = []
     timeout = httpx.Timeout(20.0)
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             for site in target_sites:
                 url = f"{settings.LEVER_API_BASE}/postings/{site}?mode=json"
                 try:
                     resp = await client.get(url)
                 except httpx.TimeoutException:
                     logger.warning("Lever API timeout for site=%s", site)
+                    timed_out_sites.append(site)
+                    continue
+                if resp.status_code == 404:
+                    invalid_sites.append(site)
                     continue
                 if resp.status_code != 200:
                     continue
@@ -97,6 +104,7 @@ async def _search_jobs_handler(
                     continue
                 if not isinstance(data, list):
                     continue
+                valid_sites.append(site)
                 for item in data:
                     title = _safe_text(item.get("text"))
                     desc = _safe_text(item.get("descriptionPlain"))
@@ -138,13 +146,37 @@ async def _search_jobs_handler(
             "jobs": jobs,
         }
 
-    return {"source": "lever", "count": len(jobs), "jobs": jobs[: args.limit]}
+    if invalid_sites and not valid_sites and not timed_out_sites:
+        return {
+            "error": "lever_sites_invalid",
+            "provider": "lever",
+            "reason": "configured_site_slugs_not_found",
+            "invalid_sites": invalid_sites,
+            "count": 0,
+            "jobs": [],
+        }
+    if timed_out_sites and not valid_sites:
+        return {
+            "error": "lever_sites_unreachable",
+            "provider": "lever",
+            "timed_out_sites": timed_out_sites,
+            "invalid_sites": invalid_sites,
+            "count": 0,
+            "jobs": [],
+        }
+    return {
+        "source": "lever",
+        "sites_checked": valid_sites,
+        "invalid_sites": invalid_sites,
+        "count": len(jobs),
+        "jobs": jobs[: args.limit],
+    }
 
 
 async def _fetch_detail(job_id: str, sites: list[str]) -> dict[str, Any]:
     timeout = httpx.Timeout(20.0)
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             for site in sites:
                 url = f"{settings.LEVER_API_BASE}/postings/{site}/{job_id}?mode=json"
                 try:

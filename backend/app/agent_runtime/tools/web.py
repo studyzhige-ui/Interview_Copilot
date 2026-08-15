@@ -1,22 +1,20 @@
-"""Web tools: web_search (Tavily) and read_url (httpx + markdownify).
+"""Web tools: web_search (Tavily + DuckDuckGo fallback) and read_url.
 
-web_search — Internet search via Tavily API.
+web_search — Internet search via Tavily, falling back to DuckDuckGo's
+             keyless HTML endpoint when Tavily is unavailable or unconfigured.
 read_url   — Fetch a web page, convert HTML to Markdown, return content.
              SSRF guard resolves DNS up-front and refuses private /
              loopback / link-local / reserved / multicast addresses.
-             Long pages are handled via the persist mechanism: content up
-             to ``_MAX_CONTENT_CHARS`` is kept; the Stage-A offloader
-             persists oversized results to disk and the model pages
-             through via ``read_file``.  This mirrors Claude Code's
-             WebFetch pipeline (fetch → HTML-to-MD → truncate) without
-             the secondary-model processing step.
+             Long pages are bounded before entering model context while the
+             canonical redacted Tool result remains attached to its durable
+             Tool Call identity for exact audit read-back.
 """
 
 import asyncio
 import logging
 import os
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import httpx
 from pydantic import BaseModel, Field
@@ -93,17 +91,116 @@ def _resolve_tavily_key(_user_id: str | None) -> str:
     return os.getenv("TAVILY_API_KEY", "")
 
 
+def _duckduckgo_result_url(href: str) -> str:
+    """Return a bounded public result URL from DuckDuckGo's redirect link."""
+
+    if href.startswith("//"):
+        href = f"https:{href}"
+    parsed = urlparse(href)
+    if parsed.netloc.endswith("duckduckgo.com"):
+        redirected = parse_qs(parsed.query).get("uddg", [""])[0]
+        if redirected:
+            href = unquote(redirected)
+            parsed = urlparse(href)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return href[:2000]
+
+
+async def _search_duckduckgo(args: WebSearchArgs) -> dict[str, Any]:
+    """Use DuckDuckGo's keyless HTML search as a best-effort fallback.
+
+    This deliberately has no account/credential semantics.  Results remain
+    external untrusted data and callers should use ``read_url`` for a source
+    they intend to rely on.
+    """
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; InterviewCopilot/1.0)",
+        "Accept": "text/html,application/xhtml+xml",
+    }
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(15.0),
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            resp = await client.get(
+                "https://html.duckduckgo.com/html/",
+                params={"q": args.query},
+                headers=headers,
+            )
+            if resp.status_code != 200:
+                return {
+                    "error": "DuckDuckGo search unavailable",
+                    "provider": "duckduckgo",
+                    "status_code": resp.status_code,
+                    "query": args.query,
+                }
+            html = resp.text
+    except httpx.TimeoutException:
+        return {
+            "error": "DuckDuckGo search timed out",
+            "provider": "duckduckgo",
+            "query": args.query,
+        }
+    except Exception as exc:
+        logger.warning("DuckDuckGo request failed (%s)", type(exc).__name__)
+        return {
+            "error": "DuckDuckGo search failed",
+            "provider": "duckduckgo",
+            "query": args.query,
+        }
+
+    try:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(html, "html.parser")
+        results: list[dict[str, str]] = []
+        for result in soup.select(".result"):
+            link = result.select_one("a.result__a")
+            if link is None:
+                continue
+            url = _duckduckgo_result_url(str(link.get("href") or ""))
+            if not url:
+                continue
+            snippet = result.select_one(".result__snippet")
+            results.append(
+                {
+                    "title": link.get_text(" ", strip=True)[:300],
+                    "url": url,
+                    "description": (
+                        snippet.get_text(" ", strip=True)[:300] if snippet else ""
+                    ),
+                }
+            )
+            if len(results) >= args.limit:
+                break
+    except Exception as exc:
+        logger.warning("DuckDuckGo response parse failed (%s)", type(exc).__name__)
+        return {
+            "error": "DuckDuckGo response could not be parsed",
+            "provider": "duckduckgo",
+            "query": args.query,
+        }
+
+    return {
+        "source": "duckduckgo",
+        "query": args.query,
+        "count": len(results),
+        "results": results,
+    }
+
+
 async def _web_search_handler(
     args: WebSearchArgs,
     ctx: AgentToolContext,
 ) -> dict[str, Any]:
     api_key = _resolve_tavily_key(ctx.user_id)
     if not api_key:
-        return {
-            "error": "connector_unavailable",
-            "provider": "tavily",
-            "reason": "deployment_credential_missing",
-        }
+        result = await _search_duckduckgo(args)
+        result["fallback_from"] = "tavily_not_configured"
+        return result
 
     timeout = httpx.Timeout(15.0)
     try:
@@ -119,16 +216,19 @@ async def _web_search_handler(
                 },
             )
             if resp.status_code != 200:
-                return {
-                    "error": f"Tavily API error: {resp.status_code}",
-                    "detail": resp.text[:500],
-                }
+                result = await _search_duckduckgo(args)
+                result["fallback_from"] = f"tavily_http_{resp.status_code}"
+                return result
             data = resp.json()
     except httpx.TimeoutException:
-        return {"error": "Tavily API request timed out", "query": args.query}
+        result = await _search_duckduckgo(args)
+        result["fallback_from"] = "tavily_timeout"
+        return result
     except Exception as exc:
         logger.warning("Tavily request failed (%s)", type(exc).__name__)
-        return {"error": "Tavily API request failed", "query": args.query}
+        result = await _search_duckduckgo(args)
+        result["fallback_from"] = "tavily_request_failed"
+        return result
 
     results = []
     for item in data.get("results", []):
@@ -151,16 +251,11 @@ def _web_search_preflight(
     _args: WebSearchArgs,
     ctx: AgentToolContext,
 ) -> ToolPreflightResult:
-    ready = bool(_resolve_tavily_key(ctx.user_id))
     return ToolPreflightResult(
-        connection_ready=ready,
-        # This credential is deployment-owned.  There is no user grant flow
-        # that could resolve a connection Interaction, so missing config is a
-        # terminal typed denial rather than a permanently waiting Turn.
-        hard_deny_reason=None if ready else "connector_unavailable",
-        resource_identities=("connector:tavily",),
-        provider_identity="tavily",
-        connection_identity="deployment-connector:tavily" if ready else None,
+        connection_ready=True,
+        resource_identities=("connector:web-search",),
+        provider_identity="tavily+duckduckgo",
+        connection_identity="public-connector:web-search",
     )
 
 
@@ -353,8 +448,9 @@ registry.register(
     ToolDefinition(
         name="web_search",
         description=(
-            "Search the internet via Tavily. Returns titles, URLs, and "
-            "short descriptions. Use for company info, interview "
+            "Search the internet via Tavily with an automatic keyless "
+            "DuckDuckGo fallback. Returns titles, URLs, and short "
+            "descriptions. Use for company info, interview "
             "experiences, technical articles, salary data, etc. Follow "
             "up with read_url to read a specific page in detail."
         ),
@@ -374,10 +470,9 @@ registry.register(
         name="read_url",
         description=(
             "Fetch a web page and extract its text content as Markdown. "
-            "Handles long pages: content up to 80K chars is returned "
-            "(automatically offloaded to disk if large — use read_file "
-            "to page through). Use after web_search to read specific "
-            "pages in detail."
+            "Content is bounded before model projection and its canonical "
+            "redacted result remains tied to the Tool Call for audit. Use "
+            "after web_search to read a specific page in detail."
         ),
         args_model=ReadUrlArgs,
         handler=_read_url_handler,

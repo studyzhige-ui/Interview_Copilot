@@ -15,11 +15,12 @@ from app.prompts.interview import (
     MOCK_INTERVIEW_PREFIX,
 )
 from app.prompts.resume import RESUME_PARSE_PROMPT
-from app.prompts.voice_analysis import (
-    QA_EXTRACTION_PROMPT,
-    QUESTION_ANALYSIS_PROMPT,
-    SYNTHESIS_PROMPT,
+from app.prompts.interview_transcript_structure import (
+    QA_EPISODE_PROMPT,
+    SPEAKER_ROLE_PROMPT,
+    UTTERANCE_STRUCTURE_PROMPT,
 )
+from app.prompts.voice_analysis import QUESTION_ANALYSIS_PROMPT, SYNTHESIS_PROMPT
 
 
 def test_all_prompt_templates_render() -> None:
@@ -45,7 +46,9 @@ def test_all_prompt_templates_render() -> None:
             stage_keys_hint="technical | candidate_questions",
         ),
         RESUME_PARSE_PROMPT.format(resume_text="resume"),
-        QA_EXTRACTION_PROMPT.format(transcript="transcript", resume_hint="resume"),
+        SPEAKER_ROLE_PROMPT.format(turns="turns"),
+        UTTERANCE_STRUCTURE_PROMPT.format(roles="roles", window="window"),
+        QA_EPISODE_PROMPT.format(utterances="utterances"),
         QUESTION_ANALYSIS_PROMPT.format(
             resume_context="resume",
             jd_context="jd",
@@ -62,7 +65,7 @@ def test_all_prompt_templates_render() -> None:
 
     assert all(rendered)
     assert any('"sections"' in prompt for prompt in rendered)
-    assert any('"qa_pairs"' in prompt for prompt in rendered)
+    assert any('"question_utterance_ids"' in prompt for prompt in rendered)
 
 
 def test_query_planner_schema_contract() -> None:

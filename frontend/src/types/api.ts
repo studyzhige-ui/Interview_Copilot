@@ -49,6 +49,25 @@ export interface InterviewQA {
   answer_audio_file_asset_id?: string | null;
   source_segment_start?: number | null;
   source_segment_end?: number | null;
+  source_transcript_id?: string | null;
+  source_provenance?: {
+    evidence_schema_version: number;
+    structure_schema_version: number;
+    structure_revision: number;
+    question_utterance_ids: string[];
+    answer_utterance_ids: string[];
+    crossing_utterance_ids: string[];
+    question_word_ids: string[];
+    answer_word_ids: string[];
+    hidden_words: Array<{ word_id: string; reason: string }>;
+    punctuation: Array<{ after_word_id: string; mark: string }>;
+    confidence: number;
+    manual_override?: {
+      question: boolean;
+      answer: boolean;
+      updated_at: string;
+    };
+  } | null;
   analyzed_at?: string | null;
   /** knowledge_documents.id when this QA's improved answer was saved (else null). */
   saved_document_id?: string | null;
@@ -56,6 +75,8 @@ export interface InterviewQA {
 
 export interface InterviewAnalysis {
   schema_version?: number;
+  generation_status?: 'complete' | 'partial' | 'failed';
+  generation_warnings?: string[];
   overall?: {
     score?: number | null;
     summary?: string;
@@ -77,6 +98,18 @@ export interface InterviewAnalysis {
   skill_radar?: Record<string, number | null>;
 }
 
+export interface InterviewTranscriptStructure {
+  schema_version: 1;
+  revision: number;
+  speaker_roles: Array<{
+    speaker_id: string;
+    role: 'interviewer' | 'candidate' | 'unknown';
+    confidence: number;
+  }>;
+  /** Full utterance projections remain an audit payload; this view only needs roles. */
+  utterances: unknown[];
+}
+
 export interface InterviewRecordDetail extends InterviewRecordListItem {
   analyzed_qa_count: number;
   category: string | null;
@@ -89,6 +122,18 @@ export interface InterviewRecordDetail extends InterviewRecordListItem {
   jd_file_asset_id: string | null;
   transcript: string | null;
   transcript_segments: unknown;
+  transcript_structure?: InterviewTranscriptStructure | null;
+  transcript_quality?: {
+    aligned_word_ratio: number;
+    known_speaker_word_ratio: number;
+    role_resolved_substantive_word_ratio: number;
+    candidate_substantive_word_coverage: number;
+    question_word_coverage: number;
+    hidden_word_ratio: number;
+    overlap_word_ratio: number;
+    low_confidence_episode_count: number;
+    status: 'complete' | 'needs_review';
+  } | null;
   analysis: InterviewAnalysis | null;
   qa: InterviewQA[];
   error_message: string | null;

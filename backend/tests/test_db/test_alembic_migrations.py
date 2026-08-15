@@ -370,6 +370,8 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "user_skill_resources",
         "gmail_integration_accounts",
         "gmail_oauth_states",
+        "external_plugin_accounts",
+        "external_plugin_oauth_states",
         "agent_memory_settings",
         "long_term_agent_memories",
         "long_term_agent_memory_sources",

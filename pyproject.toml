@@ -76,6 +76,10 @@ local = [
     "docling[rapidocr]==2.118.1",
     "faster-whisper==1.2.1",
     "whisperx==3.8.6",
+    # WhisperX -> pyannote pulls TorchCodec without constraining it to the
+    # pinned PyTorch ABI.  TorchCodec 0.7 is the compatible release line for
+    # torch 2.8; newer releases fail to load their Windows extension DLLs.
+    "torchcodec==0.7.0",
 ]
 cuda = [
     # Optional NVIDIA runtime; keep platform-specific wheels out of the

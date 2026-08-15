@@ -82,6 +82,13 @@
       "frontend_tests": ["src/pages/artifacts/ArtifactsPage.test.tsx", "src/api/careerDomains.test.ts"]
     },
     {
+      "id": "stage3-interview-audio-evidence-to-qa",
+      "stage": 3,
+      "claims": ["uploaded audio persists immutable forced-aligned word evidence", "regular diarization preserves overlap while exclusive diarization assigns the primary speaker", "structure models return only existing word and utterance identities", "question and answer display text is reconstructed from source words and never model-authored", "interviewer acknowledgements do not truncate a candidate answer", "display cleanup hides only audited filler noise and immediate exact repetitions", "candidate substantive-word coverage gates report completion", "legacy text-only transcripts fail closed and require retranscription"],
+      "backend_tests": ["backend/tests/test_services/voice/test_transcript_evidence.py", "backend/tests/test_services/interview/test_transcript_structure_service.py", "backend/tests/test_services/interview/test_analysis_pipeline_phase4.py", "backend/tests/test_services/interview/test_record_admin_reanalyze.py", "backend/tests/test_db/test_alembic_migrations.py"],
+      "frontend_tests": ["src/pages/review/QAPanel.test.tsx"]
+    },
+    {
       "id": "stage3-mock-client-action-handoff",
       "stage": 3,
       "claims": ["persist before delivery", "initiating client affinity", "takeover", "prefill readiness runtime and entered-UI are distinct"],

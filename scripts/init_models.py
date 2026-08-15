@@ -59,6 +59,13 @@ LOCAL_MODEL_CHOICES = {
         ("Systran/faster-whisper-medium", "balanced", None),
         ("Systran/faster-whisper-small", "lightweight", None),
     ),
+    "alignment": (
+        (
+            "jonatasgrosman/wav2vec2-large-xlsr-53-chinese-zh-cn",
+            "Chinese forced alignment for auditable interview QA",
+            None,
+        ),
+    ),
     "diarization": (
         (
             "pyannote-community/speaker-diarization-community-1",
@@ -81,6 +88,7 @@ RECOMMENDED_LOCAL_CONFIG = {
     "RERANKER_MODEL": LOCAL_MODEL_CHOICES["reranker"][0][0],
     "TRANSCRIPTION_PROVIDER": "local_whisperx",
     "TRANSCRIPTION_MODEL": LOCAL_MODEL_CHOICES["whisper"][0][0],
+    "TRANSCRIPTION_ALIGNMENT_MODEL": LOCAL_MODEL_CHOICES["alignment"][0][0],
     "DIARIZATION_MODE": "auto",
     "DIARIZATION_MODEL_ID": LOCAL_MODEL_CHOICES["diarization"][0][0],
     "PARSER_PROVIDER": "docling",
@@ -107,6 +115,7 @@ MODEL_DEFAULTS = {
     "EMBEDDING_MODEL": settings.EMBEDDING_MODEL,
     "RERANKER_MODEL": settings.RERANKER_MODEL,
     "TRANSCRIPTION_MODEL": settings.TRANSCRIPTION_MODEL,
+    "TRANSCRIPTION_ALIGNMENT_MODEL": settings.TRANSCRIPTION_ALIGNMENT_MODEL,
     "DIARIZATION_MODEL_ID": settings.DIARIZATION_MODEL_ID,
 }
 
@@ -115,6 +124,11 @@ ROLE_ENV_KEYS = {
     "reranker": ("RERANKER_MODEL", "RERANKER_PROVIDER", "local"),
     "whisper": (
         "TRANSCRIPTION_MODEL",
+        "TRANSCRIPTION_PROVIDER",
+        "local_whisperx",
+    ),
+    "alignment": (
+        "TRANSCRIPTION_ALIGNMENT_MODEL",
         "TRANSCRIPTION_PROVIDER",
         "local_whisperx",
     ),
@@ -173,6 +187,10 @@ def repo_dir(repo_id: str) -> Path:
 def prepare_runtime(hf_endpoint: str) -> None:
     prepare_hf_runtime()
     os.environ["HF_ENDPOINT"] = hf_endpoint
+    # Xet bridge endpoints are frequently unavailable on constrained Windows
+    # networks. Plain HTTPS/LFS supports resume and is sufficient here.
+    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "600")
 
 
 def download_snapshot(repo_id: str) -> Path:
@@ -183,6 +201,10 @@ def download_snapshot(repo_id: str) -> Path:
         repo_id=repo_id,
         local_dir=str(target_dir),
         max_workers=2,
+        # Runtime is PyTorch-only. Pulling duplicate TensorFlow/Flax weights
+        # more than doubles alignment downloads and creates extra failure
+        # points without providing any executable asset.
+        ignore_patterns=("*.msgpack", "tf_model.h5", "*.ot"),
     )
     return Path(path)
 
@@ -194,6 +216,8 @@ def _tree_size(path: Path) -> int:
     """Total size of all regular files under ``path``, following symlinks."""
     total = 0
     for entry in path.rglob("*"):
+        if ".cache" in entry.relative_to(path).parts:
+            continue
         try:
             real = entry.resolve()
             if real.is_file():
@@ -361,7 +385,14 @@ def _interactive_selection() -> set[str] | None:
     if profile == 1:
         _write_env(RECOMMENDED_LOCAL_CONFIG)
         print(f"\nSaved recommended local providers to {ENV_FILE}.")
-        return {"embedding", "reranker", "whisper", "diarization", "docling"}
+        return {
+            "embedding",
+            "reranker",
+            "whisper",
+            "alignment",
+            "diarization",
+            "docling",
+        }
 
     updates: dict[str, str] = {}
     selected_roles: set[str] = set()
@@ -369,10 +400,14 @@ def _interactive_selection() -> set[str] | None:
         "embedding": "Use a local embedding model for RAG?",
         "reranker": "Use a local reranker for RAG?",
         "whisper": "Use local WhisperX transcription?",
+        "alignment": "Download the forced-alignment model for interview QA?",
         "diarization": "Use local speaker diarization (also available with remote ASR)?",
     }
     for role, prompt in prompts.items():
-        if not _yes_no(prompt, default=role in {"embedding", "reranker"}):
+        default = role in {"embedding", "reranker"} or (
+            role == "alignment" and "whisper" in selected_roles
+        )
+        if not _yes_no(prompt, default=default):
             continue
         model_id, dimension = _select_model(role)
         model_key, provider_key, provider_value = ROLE_ENV_KEYS[role]
@@ -418,7 +453,15 @@ Examples:
     )
     parser.add_argument(
         "--only",
-        choices=("all", "embedding", "reranker", "whisper", "diarization", "docling"),
+        choices=(
+            "all",
+            "embedding",
+            "reranker",
+            "whisper",
+            "alignment",
+            "diarization",
+            "docling",
+        ),
         default=None,
         help="Download only a specific model type",
     )
@@ -473,6 +516,10 @@ Examples:
         "whisper": os.getenv(
             "TRANSCRIPTION_MODEL", MODEL_DEFAULTS["TRANSCRIPTION_MODEL"]
         ).strip(),
+        "alignment": os.getenv(
+            "TRANSCRIPTION_ALIGNMENT_MODEL",
+            MODEL_DEFAULTS["TRANSCRIPTION_ALIGNMENT_MODEL"],
+        ).strip(),
         "diarization": os.getenv(
             "DIARIZATION_MODEL_ID", MODEL_DEFAULTS["DIARIZATION_MODEL_ID"]
         ),
@@ -494,7 +541,7 @@ Examples:
 
     tasks = []
     skipped_roles: list[tuple[str, str]] = []
-    for role in ("embedding", "reranker", "whisper", "diarization"):
+    for role in ("embedding", "reranker", "whisper", "alignment", "diarization"):
         if selected_roles is not None:
             if role not in selected_roles:
                 continue

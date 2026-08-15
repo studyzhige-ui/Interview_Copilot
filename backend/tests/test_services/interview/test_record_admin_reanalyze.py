@@ -90,6 +90,51 @@ def test_reanalyze_dispatch_failure_rolls_back_to_failed(db_session, monkeypatch
     assert "派发失败" in (rec.error_message or "")
 
 
+def test_retranscribe_detaches_old_evidence_and_forces_qa_rebuild(
+    db_session, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.models.interview_qa import InterviewQA
+    from app.models.interview_transcript import InterviewTranscript
+
+    rec = _mk_record(db_session, "ir_retranscribe", status="completed")
+    transcript = InterviewTranscript(
+        id="it_old_evidence",
+        record_id=rec.id,
+        user_id=rec.user_id,
+        text="旧转写证据",
+        status="ready",
+    )
+    db_session.add(transcript)
+    db_session.flush()
+    rec.transcript_id = transcript.id
+    db_session.add(
+        InterviewQA(
+            record_id=rec.id,
+            order_idx=0,
+            question="旧问题",
+            answer="旧回答",
+        )
+    )
+    db_session.commit()
+    monkeypatch.setattr(
+        record_admin,
+        "dispatch_interview_analysis",
+        lambda rid: SimpleNamespace(id="task-retranscribe"),
+    )
+
+    record_admin.reanalyze_record(db_session, rec, retranscribe=True)
+
+    db_session.refresh(rec)
+    assert rec.transcript_id is None
+    assert db_session.get(InterviewTranscript, transcript.id) is not None
+    assert (
+        db_session.query(InterviewQA).filter(InterviewQA.record_id == rec.id).count()
+        == 0
+    )
+
+
 # ── ANA-3: orchestrator stage-gate shell loader ──────────────────────────
 
 

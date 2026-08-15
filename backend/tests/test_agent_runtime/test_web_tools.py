@@ -183,10 +183,10 @@ class TestReadUrlImprovements:
         assert "Copyright" not in md
 
 
-class TestWebSearchErrorHandling:
-    """web_search must catch network errors gracefully."""
+class TestWebSearchFallback:
+    """web_search falls back without turning deployment config into waiting."""
 
-    def test_timeout_returns_error_dict(self, monkeypatch):
+    def test_tavily_timeout_falls_back_to_duckduckgo(self, monkeypatch):
         import httpx as _httpx
 
         monkeypatch.setenv("TAVILY_API_KEY", "test-key")
@@ -201,6 +201,19 @@ class TestWebSearchErrorHandling:
             async def post(self, *a, **kw):
                 raise _httpx.TimeoutException("timed out")
 
+            async def get(self, *a, **kw):
+                return _httpx.Response(
+                    200,
+                    request=_httpx.Request("GET", str(a[0])),
+                    text=(
+                        '<div class="result">'
+                        '<a class="result__a" href="//duckduckgo.com/l/?uddg='
+                        'https%3A%2F%2Fexample.com%2Fjobs">Example jobs</a>'
+                        '<div class="result__snippet">A useful result</div>'
+                        '</div>'
+                    ),
+                )
+
         monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _TimeoutClient())
 
         from app.agent_runtime.tool_registry import AgentToolContext
@@ -213,19 +226,44 @@ class TestWebSearchErrorHandling:
                 ctx,
             )
         )
-        assert "error" in result
-        assert "timed out" in result["error"].lower()
+        assert result["source"] == "duckduckgo"
+        assert result["fallback_from"] == "tavily_timeout"
+        assert result["results"][0]["url"] == "https://example.com/jobs"
 
-    def test_missing_deployment_key_is_not_a_user_connection_prompt(self, monkeypatch):
+    def test_missing_tavily_key_uses_public_fallback_without_connection_prompt(
+        self, monkeypatch
+    ):
         monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+        import httpx as _httpx
+
+        class _DuckClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                pass
+
+            async def get(self, *a, **kw):
+                return _httpx.Response(
+                    200,
+                    request=_httpx.Request("GET", str(a[0])),
+                    text=(
+                        '<div class="result">'
+                        '<a class="result__a" href="https://example.com">Example</a>'
+                        '</div>'
+                    ),
+                )
+
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _DuckClient())
 
         from app.agent_runtime.tool_registry import AgentToolContext, registry
         from app.agent_runtime.tools.web import WebSearchArgs, _web_search_handler
 
         ctx = AgentToolContext(user_id="alice", session_id="s1")
         plan = asyncio.run(registry.plan_call("web_search", {"query": "test"}, ctx))
-        assert plan.connection_ready is False
-        assert plan.hard_deny_reason == "connector_unavailable"
+        assert plan.connection_ready is True
+        assert plan.hard_deny_reason is None
 
         result = asyncio.run(
             _web_search_handler(
@@ -234,8 +272,6 @@ class TestWebSearchErrorHandling:
             )
         )
 
-        assert result == {
-            "error": "connector_unavailable",
-            "provider": "tavily",
-            "reason": "deployment_credential_missing",
-        }
+        assert result["source"] == "duckduckgo"
+        assert result["fallback_from"] == "tavily_not_configured"
+        assert result["count"] == 1

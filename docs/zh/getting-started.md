@@ -118,7 +118,62 @@ python scripts/init_models.py
 Cloud 的 Embedding、Reranker、ASR 和说话人分离由运营方提供，不会暴露给普通
 用户配置。
 
-## 5. 首次业务验证
+## 5. 外部搜索配置
+
+通用网络搜索优先使用 Tavily；没有配置、超时或返回非成功状态时，会自动降级到
+无需密钥的 DuckDuckGo HTML 搜索。DuckDuckGo 是 best-effort 兜底，重要结论仍应
+通过 `read_url` 打开原始页面核验。
+
+```env
+# 可选；Tavily 可用时作为主搜索源
+TAVILY_API_KEY=
+```
+
+Lever Postings API 不是全网职位搜索，而是逐公司读取公开岗位。`LEVER_SITES` 必须
+填写真实 `https://jobs.lever.co/<site>` URL 中的 `<site>`；例如：
+
+```env
+LEVER_API_BASE=https://api.lever.co/v0
+LEVER_SITES=levelai,AIFund,spear-ai,weekdayworks
+```
+
+可以先直接验证某个 slug：
+
+```powershell
+Invoke-RestMethod 'https://api.lever.co/v0/postings/levelai?mode=json'
+```
+
+返回 JSON 数组表示配置有效，`404` 表示 slug 不存在或该公司已不再使用 Lever。
+例如 OpenAI 当前并不对应 `jobs.lever.co/openai`，因此不要把 `openai` 当作默认值。
+运行时会把无效 slug、超时站点和零匹配结果分别报告，不再合并成一个泛化错误。
+
+## 6. 插件市场连接 Gmail、Canva 与 Notion
+
+账号连接统一在 `/plugins` 插件市场内完成；`/settings/connections` 只保留兼容跳转，不再是独立产品页面。三种连接都必须完整配置后才启用按钮和对应 Tool，缺任一配置会保持 `adapter_available=false`。
+
+Gmail 使用 Google OAuth，只读邮件；现有变量见 `.env.community.example`。Canva 和 Notion 共用一套独立于 PostgreSQL 的加密 credential store，但使用各自的 OAuth client：
+
+```env
+PLUGIN_OAUTH_PRODUCT_RETURN_URI=http://localhost:5173/plugins
+PLUGIN_CREDENTIAL_STORE_FILE=D:/secure/interview-copilot/plugin-credentials.json
+PLUGIN_CREDENTIAL_STORE_KEY=<独立生成的 Fernet key>
+
+CANVA_OAUTH_CLIENT_ID=
+CANVA_OAUTH_CLIENT_SECRET=
+CANVA_OAUTH_REDIRECT_URI=http://localhost:8080/api/v1/integrations/plugins/canva/callback
+
+NOTION_OAUTH_CLIENT_ID=
+NOTION_OAUTH_CLIENT_SECRET=
+NOTION_OAUTH_REDIRECT_URI=http://localhost:8080/api/v1/integrations/plugins/notion/callback
+```
+
+- Canva 必须在 Developer Portal 创建 integration，并精确登记 callback。授权采用 Authorization Code + S256 PKCE；首版只请求 `design:meta:read`，提供设计标题/链接搜索，不生成、导出或修改设计。
+- Notion 必须创建 Public integration。用户在授权页选择愿意共享的页面；首版只搜索这些页面的标题/链接，不读取整个工作区，也不写页面。
+- credential 文件和 `PLUGIN_CREDENTIAL_STORE_KEY` 必须分开备份；两者都不能提交到 Git。生产 Cloud 应注入托管 secret-store 实现，而不是依赖容器本地文件。
+
+配置后重启 API，在插件市场逐个执行“连接 → 测试真实连接 → 撤销授权”验收。官方参考：[Canva OAuth](https://www.canva.dev/docs/connect/authentication/)、[Canva List designs](https://www.canva.dev/docs/connect/api-reference/designs/list-designs/)、[Notion Public Connections](https://developers.notion.com/guides/get-started/public-connections)、[Notion Search](https://developers.notion.com/reference/post-search)。
+
+## 7. 首次业务验证
 
 1. 注册并验证邮箱；本地故意关闭 SMTP 时，从后端输出读取验证码。
 2. 退出后在登录页通过“忘记密码”验证邮箱并重置密码。

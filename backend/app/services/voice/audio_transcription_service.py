@@ -1,5 +1,6 @@
 """Provider-neutral entry point for long-form audio transcription."""
 
+import asyncio
 import logging
 
 from app.services.voice.transcription_registry import resolve_transcription, transcribe
@@ -26,4 +27,35 @@ async def transcribe_media(file_path: str, language: str | None = "zh") -> str:
         raise
 
 
-__all__ = ["transcribe_media"]
+async def transcribe_interview_evidence(
+    file_path: str,
+    *,
+    file_asset_id: str,
+    file_asset_version: str,
+    language: str | None = "zh",
+):
+    """Produce auditable word evidence for interview review.
+
+    Generic document transcription may return text only. Interview QA cannot:
+    a provider without forced-aligned words and exclusive diarization is a
+    typed deployment limitation, not a reason to fall back to text guessing.
+    """
+
+    config = resolve_transcription()
+    if config.provider.kind != "local_whisperx":
+        raise RuntimeError(
+            "interview_evidence_provider_unsupported: configure the dedicated "
+            "local_whisperx analysis worker"
+        )
+    from app.services.voice.whisperx_engine import run_interview_evidence_sync
+
+    return await asyncio.to_thread(
+        run_interview_evidence_sync,
+        file_path,
+        file_asset_id=file_asset_id,
+        file_asset_version=file_asset_version,
+        language=language,
+    )
+
+
+__all__ = ["transcribe_interview_evidence", "transcribe_media"]

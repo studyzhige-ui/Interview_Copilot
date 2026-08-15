@@ -1,10 +1,10 @@
 import { memo, useCallback, useMemo, useState } from 'react';
-import { FileText, Link2 } from 'lucide-react';
+import { Check, Copy, FileText, Link2 } from 'lucide-react';
 import { MarkdownBody } from '@/components/ui/MarkdownBody';
 import { SourceCards, linkifyCitations } from '@/components/chat/SourceCards';
 import type { ContentBlock, Source } from '@/types/api';
 import type { UIMessage } from './types';
-import { BlockChain } from './MessageBlocks';
+import { BlockChain, finalAnswerText } from './MessageBlocks';
 
 /**
  * Wrapped in ``React.memo`` so finalized message bubbles in the
@@ -41,17 +41,28 @@ export const Bubble = memo(function Bubble({
   ) ?? [];
   // Clicking a [K#] badge highlights + scrolls to its source card.
   const [highlightRef, setHighlightRef] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const citeRefs = useMemo(
     () => (sources && sources.length ? new Set(sources.map((s) => s.ref)) : null),
     [sources],
   );
   const onCiteClick = useCallback((ref: string) => setHighlightRef(ref), []);
   const cite = citeRefs ? onCiteClick : undefined;
+  const answerText = useMemo(
+    () => (blocks?.length ? finalAnswerText(blocks, content) : content.trim()),
+    [blocks, content],
+  );
+  const copyAnswer = useCallback(async () => {
+    if (!answerText) return;
+    await navigator.clipboard.writeText(answerText);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  }, [answerText]);
   return (
     <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
       <div
         className={[
-          'max-w-[85%] px-3.5 py-2.5 text-[14px] leading-[1.65]',
+          'group max-w-[85%] px-3.5 py-2.5 text-[14px] leading-[1.65]',
           mine
             ? 'bg-primary-500 text-white rounded-2xl rounded-br-sm'
             : role === 'system'
@@ -99,6 +110,7 @@ export const Bubble = memo(function Bubble({
             citeRefs={citeRefs}
             onCiteClick={cite}
             auditRef={sessionId && turnId ? { sessionId, turnId } : undefined}
+            collapseTools
           />
         ) : (
           <MarkdownBody
@@ -108,6 +120,20 @@ export const Bubble = memo(function Bubble({
         )}
         {!mine && sources && sources.length > 0 && (
           <SourceCards sources={sources} highlightRef={highlightRef} />
+        )}
+        {role === 'assistant' && answerText && (
+          <div className="mt-2 flex justify-end border-t border-stone-200/70 pt-1.5">
+            <button
+              type="button"
+              onClick={() => { void copyAnswer(); }}
+              className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-stone-400 transition hover:bg-white hover:text-stone-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-300"
+              aria-label="复制回答"
+              title="复制回答"
+            >
+              {copied ? <Check size={12} /> : <Copy size={12} />}
+              {copied ? '已复制' : '复制'}
+            </button>
+          </div>
         )}
       </div>
     </div>

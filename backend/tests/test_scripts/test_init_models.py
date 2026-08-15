@@ -41,6 +41,7 @@ def test_recommended_selection_persists_complete_local_profile(tmp_path, monkeyp
         "embedding",
         "reranker",
         "whisper",
+        "alignment",
         "diarization",
         "docling",
     }

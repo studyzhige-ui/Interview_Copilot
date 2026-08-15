@@ -441,6 +441,19 @@ def _get_cached_llm(
         return instance
 
 
+def _legacy_request_overrides(profile: ModelProfile) -> dict[str, Any] | None:
+    """Provider fixes for legacy LlamaIndex completion call sites.
+
+    Native Chat/Agent adapters own their own payloads. Older structured JSON
+    workflows still use ``OpenAILike``; DeepSeek's thinking mode can put the
+    response outside ``message.content`` there, yielding an empty JSON body.
+    """
+
+    if profile.provider == "deepseek":
+        return {"extra_body": {"thinking": {"type": "disabled"}}}
+    return None
+
+
 def get_llm_for_role(role: str, user_id: str | None = None):
     """Return an answer model selected for one user-facing role."""
     profile = user_model_selection.get_profile_for_role(role, user_id=user_id)
@@ -448,22 +461,18 @@ def get_llm_for_role(role: str, user_id: str | None = None):
         cache_role=role,
         profile=profile,
         user_id=user_id,
+        request_overrides=_legacy_request_overrides(profile),
     )
 
 
 def get_internal_llm(role: str):
     """Return a platform-owned model using deployment credentials only."""
     profile = get_internal_model_profile(role)
-    request_overrides = (
-        {"extra_body": {"thinking": {"type": "disabled"}}}
-        if profile.provider == "deepseek"
-        else None
-    )
     return _get_cached_llm(
         cache_role=f"internal:{role}",
         profile=profile,
         user_id=None,
-        request_overrides=request_overrides,
+        request_overrides=_legacy_request_overrides(profile),
     )
 
 

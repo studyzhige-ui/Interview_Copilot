@@ -184,7 +184,13 @@ class ReanalyzeNotAllowed(ValueError):
 REANALYZE_DISPATCH_FAILED_MSG = "重新分析派发失败（任务队列暂不可用），请稍后重试。"
 
 
-def reanalyze_record(db: Session, record: InterviewRecord, *, drop_qa: bool = False):
+def reanalyze_record(
+    db: Session,
+    record: InterviewRecord,
+    *,
+    drop_qa: bool = False,
+    retranscribe: bool = False,
+):
     """ANA-7: re-run the analysis pipeline for a terminal upload record.
 
     Covers both recovery (``failed`` — the audio is still in storage, yet
@@ -218,6 +224,12 @@ def reanalyze_record(db: Session, record: InterviewRecord, *, drop_qa: bool = Fa
         except Exception as exc:  # noqa: BLE001
             logger.warning("reanalyze: stale-task revoke failed: %s", exc)
 
+    if retranscribe:
+        # Detach the current transcript rather than deleting it. The worker
+        # will create a new current transcript while the old ASR evidence stays
+        # available as an audit/recovery row under the same record owner.
+        record.transcript_id = None
+        drop_qa = True
     if drop_qa:
         db.query(InterviewQA).filter(InterviewQA.record_id == record.id).delete(
             synchronize_session=False,

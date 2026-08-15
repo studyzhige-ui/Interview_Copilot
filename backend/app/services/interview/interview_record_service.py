@@ -28,6 +28,10 @@ from app.models.interview_record import InterviewRecord, _generate_record_id
 from app.models.interview_transcript import InterviewTranscript, _generate_transcript_id
 from app.models.job_opportunity import JobOpportunity
 from app.services.interview.analysis_context import build_analysis_context
+from app.services.voice.transcript_evidence import (
+    TranscriptEvidence,
+    render_raw_turns,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +299,127 @@ class InterviewRecordService:
             if own_db:
                 db.close()
 
+    def set_transcript_evidence(
+        self,
+        record_id: str,
+        *,
+        evidence: TranscriptEvidence,
+        provider: str,
+        db: Session | None = None,
+    ) -> str:
+        """Append immutable v2 evidence and make it the record's current transcript."""
+
+        own_db = db is None
+        if own_db:
+            db = SessionLocal()
+        try:
+            row = (
+                db.query(InterviewRecord)
+                .filter(InterviewRecord.id == record_id)
+                .with_for_update()
+                .first()
+            )
+            if row is None:
+                raise ValueError(f"InterviewRecord {record_id} does not exist")
+            transcript = InterviewTranscript(
+                id=_generate_transcript_id(),
+                record_id=record_id,
+                user_id=row.user_id,
+                provider=provider,
+                language=evidence.language,
+                text=render_raw_turns(evidence),
+                evidence_schema_version=evidence.schema_version,
+                evidence_json=evidence.model_dump(mode="json"),
+                duration_seconds=evidence.audio.duration_seconds,
+                status="ready",
+                created_at=utc_now(),
+                updated_at=utc_now(),
+            )
+            db.add(transcript)
+            db.flush()
+            row.transcript_id = transcript.id
+            row.updated_at = utc_now()
+            transcript_id = transcript.id
+            if own_db:
+                db.commit()
+            return transcript_id
+        except Exception:
+            if own_db:
+                db.rollback()
+            raise
+        finally:
+            if own_db:
+                db.close()
+
+    def get_transcript_evidence(
+        self, record_id: str, db: Session | None = None
+    ) -> tuple[InterviewTranscript, TranscriptEvidence] | None:
+        own_db = db is None
+        if own_db:
+            db = SessionLocal()
+        try:
+            row = (
+                db.query(InterviewRecord)
+                .filter(InterviewRecord.id == record_id)
+                .first()
+            )
+            if row is None or not row.transcript_id:
+                return None
+            transcript = (
+                db.query(InterviewTranscript)
+                .filter(InterviewTranscript.id == row.transcript_id)
+                .first()
+            )
+            if (
+                transcript is None
+                or transcript.evidence_schema_version != 2
+                or not isinstance(transcript.evidence_json, dict)
+            ):
+                return None
+            return transcript, TranscriptEvidence.model_validate(
+                transcript.evidence_json
+            )
+        finally:
+            if own_db:
+                db.close()
+
+    def set_transcript_projection(
+        self,
+        transcript_id: str,
+        *,
+        structure: dict[str, Any],
+        quality: dict[str, Any],
+        db: Session | None = None,
+    ) -> None:
+        own_db = db is None
+        if own_db:
+            db = SessionLocal()
+        try:
+            transcript = (
+                db.query(InterviewTranscript)
+                .filter(InterviewTranscript.id == transcript_id)
+                .first()
+            )
+            if transcript is None:
+                raise ValueError(f"InterviewTranscript {transcript_id} does not exist")
+            transcript.structure_schema_version = int(
+                structure.get("schema_version") or 1
+            )
+            transcript.structure_json = structure
+            transcript.quality_json = quality
+            transcript.updated_at = utc_now()
+            if own_db:
+                db.commit()
+            else:
+                db.flush()
+        except Exception:
+            if own_db:
+                db.rollback()
+            raise
+        finally:
+            if own_db:
+                db.close()
+
     def get_transcript_text(self, record_id: str, db: Session | None = None) -> str:
         """Return the record's current transcript full text ("" if none)."""
         own_db = db is None
@@ -337,7 +462,13 @@ class InterviewRecordService:
             )
             if tr is None:
                 return {"text": None, "segments_json": None}
-            return {"text": tr.text, "segments_json": tr.segments_json}
+            return {
+                "text": tr.text,
+                "segments_json": tr.segments_json,
+                "evidence_json": tr.evidence_json,
+                "structure_json": tr.structure_json,
+                "quality_json": tr.quality_json,
+            }
         finally:
             db.close()
 
@@ -416,6 +547,8 @@ class InterviewRecordService:
                     follow_up_depth=int(payload.get("follow_up_depth") or 0),
                     source_segment_start=payload.get("source_segment_start"),
                     source_segment_end=payload.get("source_segment_end"),
+                    source_transcript_id=payload.get("source_transcript_id"),
+                    source_provenance_json=payload.get("source_provenance"),
                     answer_input_mode=str(payload.get("answer_input_mode") or "text"),
                     answer_audio_file_asset_id=payload.get(
                         "answer_audio_file_asset_id"

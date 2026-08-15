@@ -30,7 +30,6 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Sparkles, ChevronDown } from 'lucide-react';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { toast } from '@/store/uiStore';
 import {
@@ -255,13 +254,10 @@ export function ChatPanel({
 
   // ── Refs + dropdown-close-on-outside-click ───────────────────────────
   const listRef = useRef<HTMLDivElement | null>(null);
-  const modelRef = useRef<HTMLDivElement | null>(null);
   const sessionDropdownRef = useRef<HTMLDivElement | null>(null);
-  const [modelOpen, setModelOpen] = useState(false);
   const [sessionDropdownOpen, setSessionDropdownOpen] = useState(false);
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
-      if (!modelRef.current?.contains(e.target as Node)) setModelOpen(false);
       if (!sessionDropdownRef.current?.contains(e.target as Node)) setSessionDropdownOpen(false);
     };
     document.addEventListener('mousedown', onDoc);
@@ -391,11 +387,10 @@ export function ChatPanel({
         className,
       ].join(' ')}
     >
-      {/* Row 1: subtitle + model picker */}
+      {/* Row 1: conversation identity; model and approval controls live in the Composer. */}
       <div className="px-4 pt-4 pb-2.5 flex items-center justify-between gap-2 border-b border-stone-100">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-stone-800 truncate">{subtitle}</div>
-          <div className="text-[11px] text-stone-400 mt-0.5 truncate font-mono">{activeModelName}</div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {disconnectedTurnId && (
@@ -407,48 +402,6 @@ export function ChatPanel({
               重新连接
             </button>
           )}
-          <div ref={modelRef} className="relative">
-          <button
-            onClick={() => setModelOpen((v) => !v)}
-            title="当前回答模型"
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-stone-200 bg-stone-50 text-stone-700 text-xs hover:bg-stone-100 font-mono"
-          >
-            <Sparkles size={12} className="text-accent-700" />
-            <span className="truncate max-w-[100px]">{activeModelName}</span>
-            <ChevronDown size={12} className="text-stone-400" />
-          </button>
-          {modelOpen && (
-            <div className="absolute top-full right-0 mt-1 w-[260px] max-h-[340px] overflow-y-auto p-1 bg-white border border-stone-200 rounded-lg shadow-lg z-30">
-              <div className="px-2.5 py-1.5 text-[11px] text-stone-500 border-b border-stone-100 mb-1">
-                选择回答模型{mode === 'AGENT' ? '（Agent 模式需支持工具调用）' : ''}
-              </div>
-              {profiles.length === 0 && <div className="px-2.5 py-2 text-xs text-stone-400">载入中…</div>}
-              {profiles
-                .filter((p) => mode !== 'AGENT' || p.supports_function_calling)
-                .map((p) => {
-                  const sel = p.id === activeProfileId;
-                  return (
-                    <div
-                      key={p.id}
-                      // Close only on a successful pick — a not-ready /
-                      // unsupported model keeps the dropdown open (the
-                      // warn toast explains why), same as pre-split.
-                      onClick={() => { void pickModel(p).then((ok) => { if (ok) setModelOpen(false); }); }}
-                      className={[
-                        'px-2.5 py-1.5 rounded-md cursor-pointer leading-tight',
-                        sel ? 'bg-primary-50 text-primary-700' : 'text-stone-700 hover:bg-stone-50',
-                        !p.ready ? 'opacity-60' : '',
-                      ].join(' ')}
-                    >
-                      <div className="font-sans font-medium text-[13px]">{p.display_name}</div>
-                      <div className="text-[11px] text-stone-400 truncate font-mono">{p.model}</div>
-                      {!p.ready && <div className="text-[11px] text-warning-700">未配置 {p.api_key_env}</div>}
-                    </div>
-                  );
-                })}
-            </div>
-          )}
-          </div>
         </div>
       </div>
 
@@ -548,6 +501,10 @@ export function ChatPanel({
         executionMode={policyMode.executionMode}
         setExecutionMode={policyMode.setExecutionMode}
         executionModePending={policyMode.isPending}
+        modelProfiles={profiles}
+        activeModelProfileId={activeProfileId}
+        activeModelName={activeModelName}
+        pickModel={pickModel}
         input={input}
         setInput={setInput}
         streaming={streaming || !!interaction}

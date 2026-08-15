@@ -51,6 +51,14 @@ production Cloud topology.
   managed external implementation of the Gmail-specific credential-broker
   port. The Community encrypted-file store is ignored; without an external
   broker Gmail remains unavailable.
+- When Canva or Notion is enabled, configure
+  `PLUGIN_OAUTH_PRODUCT_RETURN_URI` plus that provider's client ID, client
+  secret, and exact HTTPS redirect URI. Cloud must inject a managed
+  implementation of `PluginCredentialStore`; the Community encrypted-file
+  store is a local-development fallback and must not become an ephemeral
+  container path. The first Canva capability is read-only design metadata
+  search; the first Notion capability searches only pages explicitly shared in
+  the OAuth page picker. No write scope is implied by connecting an account.
 - Correct `TRUSTED_PROXIES`
 - Rotated database and object-storage credentials
 - Database backup and restore test

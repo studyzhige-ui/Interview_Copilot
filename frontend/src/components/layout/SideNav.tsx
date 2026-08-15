@@ -14,7 +14,6 @@ import {
   Bot,
   TimerReset,
   Search,
-  Settings,
   SlidersHorizontal,
   Pin,
   PinOff,
@@ -71,9 +70,8 @@ const GROUPS: NavGroup[] = [
     label: '设置与连接',
     items: [
       { to: '/settings/personalization', label: '协作偏好', icon: SlidersHorizontal },
-      { to: '/settings/connections', label: '外部连接', icon: Settings },
       { to: '/models', label: '回答模型', icon: Cpu },
-      { to: '/capabilities', label: 'Skills 与 MCP', icon: Puzzle },
+      { to: '/plugins', label: '插件市场', icon: Puzzle },
     ],
   },
 ];

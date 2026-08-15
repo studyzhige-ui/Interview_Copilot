@@ -117,6 +117,7 @@ describe('QAPanel editing', () => {
     const { rerender } = render(<QAPanel detail={unassessed} loading={false} />);
     expect(screen.getAllByText('未评分').length).toBeGreaterThan(0);
     expect(screen.getByText('未考察')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: '能力雷达图' })).toBeInTheDocument();
 
     const zeroScore: InterviewRecordDetail = {
       ...unassessed,
@@ -139,6 +140,31 @@ describe('QAPanel editing', () => {
     expect(screen.queryByText('未考察')).not.toBeInTheDocument();
   });
 
+  it('offers report-only and full QA rebuild recovery for a partial upload analysis', () => {
+    const onReanalyze = vi.fn();
+    render(
+      <QAPanel
+        detail={{
+          ...detail,
+          analysis: {
+            generation_status: 'partial',
+            generation_warnings: ['综合报告生成失败；逐题评分仍保留，可重新生成报告。'],
+            overall: { score: 5, summary: '综合叙述生成失败。' },
+            skill_radar: { 基础知识: 5 },
+          },
+        }}
+        loading={false}
+        onReanalyze={onReanalyze}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('这份复盘只生成了部分结果');
+    fireEvent.click(screen.getByRole('button', { name: '重新生成报告' }));
+    fireEvent.click(screen.getByRole('button', { name: /重新整理 QA 与报告/ }));
+    expect(onReanalyze).toHaveBeenNthCalledWith(1, 'report');
+    expect(onReanalyze).toHaveBeenNthCalledWith(2, 'extract');
+  });
+
   it('lets multiple QA cards enter the same question-reference list', () => {
     const onToggleQuestion = vi.fn();
     render(
@@ -156,5 +182,36 @@ describe('QAPanel editing', () => {
 
     expect(onToggleQuestion).toHaveBeenNthCalledWith(1, 1);
     expect(onToggleQuestion).toHaveBeenNthCalledWith(2, 2);
+  });
+
+  it('labels raw transcript speakers from the persisted role projection', () => {
+    render(
+      <QAPanel
+        detail={{
+          ...detail,
+          transcript: [
+            '**[SPEAKER_00]**: 我来回答这个问题。',
+            '**[SPEAKER_01]**: 请继续。',
+            '**[UNKNOWN]**: 背景杂音',
+          ].join('\n'),
+          transcript_structure: {
+            schema_version: 1,
+            revision: 1,
+            speaker_roles: [
+              { speaker_id: 'SPEAKER_00', role: 'candidate', confidence: 0.98 },
+              { speaker_id: 'SPEAKER_01', role: 'interviewer', confidence: 0.97 },
+            ],
+            utterances: [],
+          },
+        }}
+        loading={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '原始转录' }));
+
+    expect(screen.getByText('候选人 · SPEAKER_00')).toBeInTheDocument();
+    expect(screen.getByText('面试官 · SPEAKER_01')).toBeInTheDocument();
+    expect(screen.getByText('角色未确认 · UNKNOWN')).toBeInTheDocument();
   });
 });

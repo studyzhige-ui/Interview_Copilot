@@ -97,6 +97,9 @@ class Settings(BaseSettings):
     # ASR (audio transcription)
     TRANSCRIPTION_PROVIDER: str = "local_whisperx"
     TRANSCRIPTION_MODEL: str = "deepdml/faster-whisper-large-v3-turbo-ct2"
+    TRANSCRIPTION_ALIGNMENT_MODEL: str = (
+        "jonatasgrosman/wav2vec2-large-xlsr-53-chinese-zh-cn"
+    )
 
     # Speaker diarization (separates "who said what"). Three modes:
     #   "auto"     — bundled when TRANSCRIPTION_PROVIDER=local_whisperx;
@@ -107,7 +110,7 @@ class Settings(BaseSettings):
     #                AND a remote ASR provider that supports word-level
     #                timestamps (e.g. openai/whisper-1).
     #   "none"     — never diarize; transcripts come back single-speaker.
-    DIARIZATION_MODE: str = "none"
+    DIARIZATION_MODE: str = "auto"
     # Interview diarization speaker bounds. 1:1 interviews are the norm
     # (2/2); bump MAX for panel interviews. Hardcoding 2 forced every
     # 3-speaker recording to merge two voices into one.
@@ -253,6 +256,21 @@ class Settings(BaseSettings):
     GMAIL_OAUTH_STATE_TTL_SECONDS: int = 600
     GMAIL_PROVIDER_TIMEOUT_SECONDS: float = 15.0
 
+    # Marketplace-native Canva and Notion OAuth connectors. Both providers
+    # share only the private credential-store port and product return page;
+    # their identities, scopes and adapters remain provider-specific.
+    PLUGIN_OAUTH_PRODUCT_RETURN_URI: str = ""
+    PLUGIN_CREDENTIAL_STORE_FILE: str = ""
+    PLUGIN_CREDENTIAL_STORE_KEY: SecretStr = SecretStr("")
+    PLUGIN_OAUTH_STATE_TTL_SECONDS: int = 600
+    PLUGIN_PROVIDER_TIMEOUT_SECONDS: float = 15.0
+    CANVA_OAUTH_CLIENT_ID: str = ""
+    CANVA_OAUTH_CLIENT_SECRET: SecretStr = SecretStr("")
+    CANVA_OAUTH_REDIRECT_URI: str = ""
+    NOTION_OAUTH_CLIENT_ID: str = ""
+    NOTION_OAUTH_CLIENT_SECRET: SecretStr = SecretStr("")
+    NOTION_OAUTH_REDIRECT_URI: str = ""
+
     # S3-compatible object storage. Defaults are for local MinIO development.
     AWS_ACCESS_KEY_ID: str = "minioadmin"
     AWS_SECRET_ACCESS_KEY: str = "minioadmin"
@@ -352,6 +370,10 @@ class Settings(BaseSettings):
             raise ValueError("GMAIL_OAUTH_STATE_TTL_SECONDS must be between 60 and 900")
         if not 1 <= self.GMAIL_PROVIDER_TIMEOUT_SECONDS <= 60:
             raise ValueError("GMAIL_PROVIDER_TIMEOUT_SECONDS must be between 1 and 60")
+        if not 60 <= self.PLUGIN_OAUTH_STATE_TTL_SECONDS <= 900:
+            raise ValueError("PLUGIN_OAUTH_STATE_TTL_SECONDS must be between 60 and 900")
+        if not 1 <= self.PLUGIN_PROVIDER_TIMEOUT_SECONDS <= 60:
+            raise ValueError("PLUGIN_PROVIDER_TIMEOUT_SECONDS must be between 1 and 60")
         if self.ANTHROPIC_PROMPT_CACHE_TTL not in {"5m", "1h"}:
             raise ValueError("ANTHROPIC_PROMPT_CACHE_TTL must be 5m or 1h")
         return self

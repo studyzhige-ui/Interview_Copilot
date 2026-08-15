@@ -69,4 +69,39 @@ describe('BlockChain durable Tool identity', () => {
     expect(await screen.findByRole('region', { name: '执行审计 call-a' })).toBeInTheDocument();
     expect(screen.getByText('Policy：allow')).toBeInTheDocument();
   });
+
+  it('collapses the completed tool trajectory behind one user-controlled summary', () => {
+    const blocks: ContentBlock[] = [
+      { type: 'text', text: '我先读取档案。' },
+      { type: 'tool_use', id: 'call-a', name: 'read_profile', input: {} },
+      {
+        type: 'tool_result', tool_use_id: 'call-a', is_error: false,
+        latency_ms: 9, summary: 'done', content: 'profile result',
+      },
+      { type: 'text', text: '档案已读取，现在搜索岗位。' },
+      { type: 'tool_use', id: 'call-b', name: 'search_jobs', input: {} },
+      {
+        type: 'tool_result', tool_use_id: 'call-b', is_error: true,
+        latency_ms: 10, summary: 'failed', content: 'provider unavailable',
+      },
+      { type: 'text', text: '最终回答' },
+    ];
+
+    render(<BlockChain blocks={blocks} collapseTools />);
+
+    expect(screen.getAllByRole('button', { name: /执行过程/ })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /执行过程/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText('2 次工具调用')).toBeInTheDocument();
+    expect(screen.getByText('1 次失败')).toBeInTheDocument();
+    expect(screen.queryByText('read_profile')).not.toBeInTheDocument();
+    expect(screen.queryByText('我先读取档案。')).not.toBeInTheDocument();
+    expect(screen.queryByText('档案已读取，现在搜索岗位。')).not.toBeInTheDocument();
+    expect(screen.getByText('最终回答')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /执行过程/ }));
+    expect(screen.getByText('read_profile')).toBeInTheDocument();
+    expect(screen.getByText('search_jobs')).toBeInTheDocument();
+    expect(screen.getByText('我先读取档案。')).toBeInTheDocument();
+    expect(screen.getByText('档案已读取，现在搜索岗位。')).toBeInTheDocument();
+  });
 });

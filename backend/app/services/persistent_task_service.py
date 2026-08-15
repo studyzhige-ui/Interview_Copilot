@@ -841,10 +841,6 @@ def repairable_automation_turn_ids(
         for (row_id,) in (
             db.query(ConversationTurn.id)
             .join(
-                PersistentTaskTrigger,
-                PersistentTaskTrigger.admitted_turn_id == ConversationTurn.id,
-            )
-            .join(
                 Conversation,
                 Conversation.id == ConversationTurn.conversation_id,
             )
@@ -852,8 +848,10 @@ def repairable_automation_turn_ids(
                 ConversationTurn.status == "pending",
                 ConversationTurn.created_at < stale_before,
                 Conversation.active_turn_id == ConversationTurn.id,
+                db.query(PersistentTaskTrigger.id)
+                .filter(PersistentTaskTrigger.admitted_turn_id == ConversationTurn.id)
+                .exists(),
             )
-            .distinct()
             .order_by(ConversationTurn.created_at, ConversationTurn.id)
             .limit(max(1, min(int(limit), 500)))
             .all()
@@ -872,18 +870,18 @@ def repairable_persistent_task_ids(
         task_id
         for (task_id,) in (
             db.query(PersistentTask.id)
-            .join(
-                PersistentTaskTrigger,
-                PersistentTaskTrigger.persistent_task_id == PersistentTask.id,
-            )
             .join(Conversation, Conversation.id == PersistentTask.conversation_id)
             .filter(
                 PersistentTask.state == "active",
-                PersistentTaskTrigger.admitted_at.is_(None),
                 Conversation.active_turn_id.is_(None),
                 Conversation.archived_at.is_(None),
+                db.query(PersistentTaskTrigger.id)
+                .filter(
+                    PersistentTaskTrigger.persistent_task_id == PersistentTask.id,
+                    PersistentTaskTrigger.admitted_at.is_(None),
+                )
+                .exists(),
             )
-            .distinct()
             .order_by(PersistentTask.updated_at, PersistentTask.id)
             .limit(max(1, min(int(limit), 500)))
             .all()

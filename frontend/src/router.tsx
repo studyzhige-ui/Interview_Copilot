@@ -64,9 +64,6 @@ const PersistentTasksPage = lazy(() =>
 const PersistentTaskConversationPage = lazy(() =>
   import('@/pages/automation/PersistentTasksPage').then((m) => ({ default: m.PersistentTaskConversationPage })),
 );
-const ConnectionsPage = lazy(() =>
-  import('@/pages/settings/ConnectionsPage').then((m) => ({ default: m.ConnectionsPage })),
-);
 const CopilotPreferencesPage = lazy(() =>
   import('@/pages/settings/CopilotPreferencesPage').then((m) => ({ default: m.CopilotPreferencesPage })),
 );
@@ -125,7 +122,8 @@ export const router = createBrowserRouter([
       { path: '/library', element: <LibraryPage /> },
       { path: '/models', element: <ModelsPage /> },
       { path: '/capabilities', element: <CapabilitiesPage /> },
-      { path: '/settings/connections', element: <ConnectionsPage /> },
+      { path: '/plugins', element: <CapabilitiesPage /> },
+      { path: '/settings/connections', element: <Navigate to="/plugins?plugin=gmail" replace /> },
       { path: '/settings/personalization', element: <CopilotPreferencesPage /> },
       { path: '/me', element: <ProfilePage /> },
     ],

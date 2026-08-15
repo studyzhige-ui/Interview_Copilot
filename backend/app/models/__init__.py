@@ -26,6 +26,10 @@ from app.models.conversation_attachment import (
 )
 from app.models.conversation_deletion_receipt import ConversationDeletionReceipt
 from app.models.document_chunk import DocumentChunk
+from app.models.external_plugin_connection import (
+    ExternalPluginAccount,
+    ExternalPluginOAuthState,
+)
 from app.models.file_asset import FileAsset
 from app.models.gmail_integration import (
     GmailIntegrationAccount,
@@ -98,6 +102,8 @@ __all__ = [
     "CareerProfileDirection",
     "CareerProfileDraftChange",
     "DocumentChunk",
+    "ExternalPluginAccount",
+    "ExternalPluginOAuthState",
     "FileAsset",
     "GmailIntegrationAccount",
     "GmailOAuthState",

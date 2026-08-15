@@ -138,7 +138,7 @@ export function InteractionCard({
         <p className="mt-1 font-mono text-[10px] text-stone-400">{reason}</p>
         <Actions>
           <a
-            href="/settings/connections"
+            href="/plugins?plugin=gmail"
             className="inline-flex items-center justify-center rounded-md border border-primary-300 bg-white px-3 py-1.5 text-xs font-medium text-primary-700 hover:bg-primary-50"
           >
             打开设置与连接

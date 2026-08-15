@@ -71,8 +71,35 @@ class TestSearchJobsErrorHandling:
                 ctx,
             )
         )
+        assert result["error"] == "lever_sites_unreachable"
+        assert result["timed_out_sites"] == ["acme"]
         assert result["count"] == 0
         assert result["jobs"] == []
+
+    def test_invalid_site_slug_is_reported_instead_of_silent_empty_result(
+        self, monkeypatch
+    ):
+        import httpx as _httpx
+
+        monkeypatch.setattr("app.core.config.settings.LEVER_SITES", "not-a-site")
+
+        class _NotFoundClient(_httpx.AsyncClient):
+            async def get(self, *a, **kw):
+                return _httpx.Response(404)
+
+        monkeypatch.setattr("httpx.AsyncClient", _NotFoundClient)
+
+        from app.agent_runtime.tool_registry import AgentToolContext
+        from app.agent_runtime.tools.jobs import SearchJobsArgs, _search_jobs_handler
+
+        result = asyncio.run(
+            _search_jobs_handler(
+                SearchJobsArgs(keywords="backend"),
+                AgentToolContext(user_id="alice", session_id="s1"),
+            )
+        )
+        assert result["error"] == "lever_sites_invalid"
+        assert result["invalid_sites"] == ["not-a-site"]
 
     def test_unexpected_error_returns_error_dict(self, monkeypatch):
         """Non-httpx exceptions (e.g. JSON decode, network) are caught at outer level."""

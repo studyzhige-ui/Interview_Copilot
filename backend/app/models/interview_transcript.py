@@ -9,9 +9,10 @@ record removes its transcripts.
 
 import uuid
 
-from sqlalchemy import Column, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import CheckConstraint, Column, Float, ForeignKey, Integer, String, Text
 
 from app.db.database import Base
+from app.db.types import JSONValue as JSON
 from app.db.types import UTCDateTime as DateTime
 from app.db.types import utc_now
 
@@ -22,6 +23,16 @@ def _generate_transcript_id() -> str:
 
 class InterviewTranscript(Base):
     __tablename__ = "interview_transcripts"
+    __table_args__ = (
+        CheckConstraint(
+            "evidence_schema_version IS NULL OR evidence_schema_version >= 2",
+            name="ck_interview_transcripts_evidence_schema",
+        ),
+        CheckConstraint(
+            "structure_schema_version IS NULL OR structure_schema_version >= 1",
+            name="ck_interview_transcripts_structure_schema",
+        ),
+    )
 
     id = Column(String, primary_key=True, default=_generate_transcript_id)
     record_id = Column(
@@ -44,7 +55,12 @@ class InterviewTranscript(Base):
     text = Column(Text, nullable=True)
     segments_json = Column(
         Text, nullable=True
-    )  # [{start,end,speaker,confidence,text}, ...]
+    )  # Retired v1 audit payload; new runtime uses evidence_json.
+    evidence_schema_version = Column(Integer, nullable=True)
+    evidence_json = Column(JSON, nullable=True)
+    structure_schema_version = Column(Integer, nullable=True)
+    structure_json = Column(JSON, nullable=True)
+    quality_json = Column(JSON, nullable=True)
     duration_seconds = Column(Float, nullable=True)
     status = Column(
         String, nullable=False, default="pending"

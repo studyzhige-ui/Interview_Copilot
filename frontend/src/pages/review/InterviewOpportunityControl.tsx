@@ -38,14 +38,17 @@ export function InterviewOpportunityControl({
   return (
     <div className="mt-3 flex flex-wrap items-end gap-2 rounded-lg border border-stone-200 bg-stone-50 p-3">
       <div className="min-w-[240px] flex-1">
-        <div className="mb-1 text-[11px] font-medium text-stone-500">本次面试对应岗位</div>
+        <div className="mb-1 text-[11px] font-medium text-stone-600">关联本次面试对应的求职机会（可选）</div>
         <JobOpportunitySelect
           value={value}
           onChange={setValue}
           disabled={saving}
-          ariaLabel="本次面试对应岗位"
-          emptyLabel="不关联岗位"
+          ariaLabel="关联本次面试对应的求职机会"
+          emptyLabel="暂不关联任何岗位"
         />
+        <p className="mt-1.5 text-[11px] leading-relaxed text-stone-500">
+          关联后，复盘会结合该岗位的 JD，并把本次面试纳入对应公司与职位的进程时间线；不关联也可以独立复盘。
+        </p>
       </div>
       <Btn
         kind="outline"

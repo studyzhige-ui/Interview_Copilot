@@ -59,8 +59,15 @@ export async function startAnalyze(payload: {
 
 /** ANA-7: re-run analysis for a failed/completed upload record. Stage gates
  *  on the backend reuse the persisted transcript + QA shells. */
-export async function reanalyzeRecord(recordId: string): Promise<void> {
-  await apiClient.post(`/interview-records/${encodeURIComponent(recordId)}/reanalyze`);
+export async function reanalyzeRecord(
+  recordId: string,
+  options: { fromStage?: 'extract' | 'transcribe' } = {},
+): Promise<void> {
+  await apiClient.post(
+    `/interview-records/${encodeURIComponent(recordId)}/reanalyze`,
+    undefined,
+    { params: options.fromStage ? { from_stage: options.fromStage } : undefined },
+  );
 }
 
 export async function cancelAnalyze(recordId: string): Promise<void> {

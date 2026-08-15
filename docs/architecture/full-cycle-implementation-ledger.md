@@ -55,7 +55,7 @@
 - 求职进程：`CareerProcessPage`、`CareerInsightsPage`、岗位 Offer 详情；
 - 求职资料：`CareerProfilePage`、`ArtifactsPage`、`LibraryPage`；
 - 面试中心：Mock、Interview Review、能力趋势；
-- 模型、Skills/MCP、协作偏好、外部连接在“设置与连接”。
+- 回答模型、协作偏好与插件市场在“设置与连接”；Gmail、Canva、Notion 的连接与撤销直接内联在各自插件卡片下，不再维护第二个“外部连接”页面。插件市场同时容纳真实 Adapter 与 Skills/MCP；未接入的 Calendar 等只显示 `coming_soon`，不注册 Tool、不伪装安装成功。
 
 这只是导航/组合视图，不创建四个聚合根。`AppShell.tsx` 是全局 Client Action Bridge 的稳定消费点；页面路由、选中项、DOM 和未提交表单不会隐式进入 Prompt。`copilotObjectReference.ts` 只在用户可见的“交给 Copilot”动作中提交 closed kind + identity，服务端由 `product_object_reference.py` 在 claim 和执行前重新读 owner。
 
@@ -88,7 +88,7 @@
 - 模型：`CareerProfile` + 稳定 identity 的 `CareerProfileDirection`；事实和方向仍保持不同校验/生命周期，但没有 CandidateProfile/TargetDirection 第二 owner。
 - 候选：`CareerProfileDraftChange` + `CareerProfileCandidateItem`；简历/文档/模型提取只产生 pending candidate，逐项 CAS 接受/拒绝，冲突保留当前值、候选值和来源。
 - Service/API：`career_profile_service.py`；`api/career_profile.py` 的 facts、directions、drafts/candidates 命令。
-- Agent/UI：`read_career_context`、`confirm_career_profile_change`、`prepare_resume_profile_candidates`、`resolve_resume_profile_candidates`；`CareerProfilePage.tsx`。
+- Agent/UI：`read_career_context`、`confirm_career_profile_change`、`prepare_resume_profile_candidates`、`resolve_resume_profile_candidates`；`CareerProfilePage.tsx` 以一个连续在线简历页面投影相同 owner，左侧目录、中间事实/方向正文、右侧完整度均不形成第二存储；学历、职级、办公方式、币种、技能类别等封闭值使用选项，只有开放事实使用文本输入。
 - 多方向与岗位关系：`JobOpportunityDirectionLink`（revision 0028）；一次临时搜索不写 Profile，当前 Turn 明确输入优先。
 
 ### 3.2 AbilitySignal 是独立推断型产品状态
@@ -185,13 +185,23 @@
 - `GoogleGmailConnector` 实现 OAuth state + PKCE、exact redirect allowlist、browser-binding one-time state、verified subject/scope、grant generation fencing、bounded Gmail read/history cursor、refresh/revoke。
 - App DB 的 `GmailIntegrationAccount` 只保存 masked account/scopes/status 和加密 opaque broker handle；raw access/refresh token 只在 `GmailCredentialStore` 边界。Community 可使用独立 recovery key、DB 外绝对路径、进程锁、原子替换、owner-only 权限的 encrypted-file broker；Cloud 必须注入 managed external broker，否则 Tool/连接不可用。
 - `GmailObservation`/immutable `GmailObservationSnapshot` 按 provider message identity 去重、cursor CAS 增量拉取；邮件内容是不可信 data。高置信唯一匹配才经领域 Service 可逆应用；模糊项形成 task-local `GmailObservationReviewCard`，不直接写 ProcessEvent。
-- API/UI/Tool：Connections 页 connect/status/test/revoke；Observation list/sync/review/retract；`gmail_search_messages`、`read_gmail_observations`、`review_gmail_observation`。
+- API/UI/Tool：插件市场 Gmail 卡片内联 connect/status/test/revoke；Observation list/sync/review/retract；`gmail_search_messages`、`read_gmail_observations`、`review_gmail_observation`。
 
 迁移：0030 增加 cursor、Observation/snapshot/review card；0034 删除 App DB token table并把非 revoked account 标为 reconnect required，凭据不迁移且 downgrade 只恢复空 schema。
 验证：`stage4-gmail-connector`、`stage4-gmail-observation-automation`。
 状态：协议与产品代码 `code_complete`；真实 Google consent/refresh/revoke/domain TLS 为 `deployment_required`。Outlook、日历、招聘平台等仍是目标能力，其接入顺序/contract 属于 §18.11～12；未实现 handler 不注册。
 
-### 6.2 Attachment 的 claim、读取、覆盖和生命周期
+### 6.2 Canva 与 Notion 插件连接
+
+- `OAuthPluginConnector` 只覆盖 closed provider `canva | notion`；授权状态以 HttpOnly browser-binding cookie + digest-only one-time DB state 绑定，Canva 叠加 S256 PKCE。
+- `ExternalPluginAccount` 只保存 masked account、scope、状态与加密 opaque credential handle；access/refresh token 仅进入 DB 外的 `PluginCredentialStore`。Community 是独立 key 的 encrypted-file 实现；Cloud 没有 managed store 注入时必须不可用。
+- 插件卡片直接承载 status/connect/test/revoke，不再跳转到第二个连接管理页。旧 `/settings/connections` 只保留到 `/plugins?plugin=gmail` 的兼容 redirect。
+- 首批 capability 保守只读：`canva_search_designs` 搜索用户拥有/共享设计的 metadata；`notion_search_pages` 只搜索 OAuth page picker 明确共享页面的标题与链接。两者都不生成、导出、发布或写页面。
+- 配置不完整时 API 返回 `adapter_available=false`、按钮禁用、Tool 不注册；已部署但用户未授权时才使用 connection-required waiting。
+
+迁移：0041。验证：`stage4-plugin-market-connectors`。状态：代码与协议测试 `code_complete`；真实 Canva/Notion consent、refresh、revoke 与 Cloud managed secret-store 为 `deployment_required`。
+
+### 6.3 Attachment 的 claim、读取、覆盖和生命周期
 
 - `FileAsset` 拥有 bytes/version；`KnowledgeDocument`、chunks、vector 是可重建解析/检索投影。
 - Composer upload 只创建 `ConversationAttachmentDraft`。统一 admission preflight 在写 History 前锁定校验；claim 与 UserMessage/Turn 同事务创建 immutable `ConversationAttachmentRef`，冻结 asset/version、Conversation、Turn、submission、顺序。
@@ -230,7 +240,7 @@ API/UI：`attachment_sources.py`、`file_assets.py`、Composer chips/queued sour
 - 完整 redacted Tool result 的 canonical owner 是 `AgentToolCall.result_json`。超过 model inline budget 时只投影 preview + exact call id；`read_file(tool_call_id, offset, limit)` 按 current user/session/Turn fence 从数据库回读，不写 worker-local `agent-results` 文件，也不形成第二份 store。
 - 本批为真实副作用增加跨 Turn/Conversation reconcile latch：`AgentToolCall` 在 dispatch/audit 记录中保存 typed concrete resource identities；删除 Conversation 时，未结算 call 的最小 `ConversationDeletionReceipt` 同步保留这些 identity。任何后续 Turn 或另一 Conversation 准备对同一 user/resource 发起冲突副作用时，Executor 必须查询 unresolved running/unknown/reconcile call 与删除 receipt；在 receipt/read-back 得出终局前 fail closed/要求 reconcile，不能因为旧 Conversation 已删除或 call id 不同而重复执行。resource identity 只用于冲突隔离与回执关联，不保存用户正文、不获得领域 owner 地位，也不把所有读取全局串行化。
 
-UI：`ChatPanel`/`usePendingSubmissions`；固定单列 Activity Control Layer 中 `AgentTaskCard` 在上、`InteractionCard` 在下；messages 保留 inline Tool 动态。`MessageBlocks` 和 audit API 从同一 call identity/read model 派生默认、inline、deep audit。
+UI：`ChatPanel`/`usePendingSubmissions`；固定单列 Activity Control Layer 中 `AgentTaskCard` 在上、`InteractionCard` 在下；streaming 时保留 inline Tool 动态，Turn 完成后同一批轨迹默认折叠成可重开的摘要。回答复制只取 assistant text blocks，不复制 Tool 参数/结果。`MessageBlocks` 和 audit API 从同一 call identity/read model 派生默认、inline、deep audit。
 迁移：0032、0035、0037、0040。
 验证：`stage0-durable-admission-and-interrupt`、`stage0-tool-policy-and-recovery`、`stage0-agent-task-and-context`、`stage0-native-provider-cache-and-execution-mode-cas`。
 状态：Turn/Tool recovery 与跨 Turn/Conversation resource reconcile latch 均为 `code_complete`。
@@ -269,7 +279,7 @@ UI：`ChatPanel`/`usePendingSubmissions`；固定单列 Activity Control Layer �
 - Skill 三层加载由 `skill_service.py` + `turn_tool_catalog.py` 实现：catalog/`skill_search` → 完整 `skill_load` → 按主说明 `skill_resource_load`。revision/content hash/source/profile/required/allowed Tool 持久化；AgentTask 绑定 exact version，PersistentTask 每次重验。
 - allowed-tools 只取交集收窄当前可用集合。Skill 不能提供 handler、connection、scope、Policy 或成功证明，也不 fork Agent。
 - MCP 与 built-in Tool 进入同一 executor/policy/redaction。Cloud hard-deny stdio；Community stdio 只传最小环境白名单。远程 HTTP/MCP 使用 SSRF/redirect/size边界；未知 effect 默认 fail closed。
-- Tavily/Web/Job/Gmail 使用各自 deployment/provider配置，不借用用户模型 API key；缺配置时 Tool unavailable/connection-required，不写伪 Interaction 或固定成功。
+- Tavily/Web/Job/Gmail 使用各自 deployment/provider配置，不借用用户模型 API key。`web_search` 的主源 Tavily 缺配置、超时或返回非成功状态时自动降级到 keyless DuckDuckGo best-effort 搜索；Lever 仍是逐公司 site 的公开 Postings API，无效 slug/超时/零匹配分别报告。只有真实 user grant 缺失才进入 connection waiting，部署配置缺失不写伪 Interaction 或固定成功。
 
 迁移：0032、0037。
 验证：`stage0-tool-policy-and-recovery`、`stage0-agent-task-and-context`、`stage0-native-provider-cache-and-execution-mode-cas`、`cross-stage-exact-history-and-workspaces`。
@@ -301,7 +311,7 @@ UI：`ChatPanel`/`usePendingSubmissions`；固定单列 Activity Control Layer �
 | integrations | Web/URL、Gmail、MCP adapters | 直接绕过 Application Service 写领域事实 |
 | infrastructure | DB/storage/queue/model adapters/cache telemetry | 产品生命周期与事实权威 |
 
-### 10.2 revision 0029～0040 线性迁移记录
+### 10.2 revision 0029～0041 线性迁移记录
 
 | Revision | down | 具体变化 | 执行/回滚注意 |
 |---|---|---|---|
@@ -317,8 +327,9 @@ UI：`ChatPanel`/`usePendingSubmissions`；固定单列 Activity Control Layer �
 | 0038 | 0037 | ArtifactVersion 加 exact `file_asset_version` | Attachment→Artifact promotion 必须冻结原版本，不能绑定同名/最新 asset |
 | 0039 | 0038 | 建 append-only `JobDescriptionSnapshot` 真实表和 Opportunity/source/version 约束；application ProcessEvent 保存 exact JD snapshot identity，使纠正/漏斗可沿历史冻结关系读取 | 新观察只能新增 snapshot；不得更新旧正文或让“最新 JD”倒改历史 application event。迁移、Service、API、Agent、UI 与自动化验证均已接入 |
 | 0040 | 0039 | `AgentToolCall` 与 `ConversationDeletionReceipt` 增 typed resource identities，用于 unresolved external-effect 的跨 Turn/Conversation conflict/reconcile 查询 | 只复制最小 resource correlation；终局前对同 user/resource 的冲突副作用 fail closed，终局后解除 latch。不得保存正文、复活 Conversation 或把不同资源全局串行 |
+| 0041 | 0040 | 建 Canva/Notion provider-specific OAuth account 与一次性 state 表 | App DB 只保留 masked account/scopes/status 与 opaque credential handle；token 位于独立加密 credential store。Canva 只注册 design metadata search，Notion 只注册用户授权页面的 title/link search；未配置真实 OAuth 时卡片禁用且 Tool 不注册 |
 
-目标链保持 `0028 → 0029 → … → 0038 → 0039 → 0040` 单 head。API startup 会拒绝未到 head 的 DB。静态 Alembic/ORM/identifier/single-head 检查已经进入 mandatory test；这些检查仍不能代替真实 Postgres 的 fresh upgrade、现存数据 upgrade、downgrade/restore、index/constraint/cascade 检查。
+目标链保持 `0028 → 0029 → … → 0039 → 0040 → 0041` 单 head。API startup 会拒绝未到 head 的 DB。静态 Alembic/ORM/identifier/single-head 检查已经进入 mandatory test；这些检查仍不能代替真实 Postgres 的 fresh upgrade、现存数据 upgrade、downgrade/restore、index/constraint/cascade 检查。
 
 ### 10.3 legacy 分类、quarantine 与删除
 
@@ -358,13 +369,14 @@ UI：`ChatPanel`/`usePendingSubmissions`；固定单列 Activity Control Layer �
 | 门禁 | 当次结果 |
 |---|---|
 | 后端完整测试集 `python -m pytest backend/tests -q` | `1443 passed, 5 skipped`；5 个 skip 均是需要可达真实 PostgreSQL 的迁移用例 |
-| 前端完整测试集 | `50 files / 161 tests passed`，单 worker |
+| 前端完整测试集 | `51 files / 162 tests passed`，单 worker |
 | 前端静态与生产构建 | TypeScript build、ESLint 零 warning、Vite production build 全部通过 |
 | Python 静态与编译 | 全仓 Ruff check、Ruff format、compileall、`git diff --check` 通过 |
-| 场景与迁移静态门禁 | 17 个 Stage 0～5/cross-stage 场景加载通过；Alembic `0040` 单 head；ORM/迁移列、identifier、链路静态测试通过 |
+| 场景与迁移静态门禁 | 17 个 Stage 0～5/cross-stage 场景加载通过；Alembic `0041` 单 head；ORM/迁移列、identifier、链路静态测试通过 |
 | 新增 targeted 链 | JD snapshot/Agent capture、Career merge/Event/JD read、Shared Source、visual local/full、resource reconcile latch、CopilotStatusSummary 均已纳入上述完整测试并通过 |
+| 插件市场增量链 | Canva/Notion OAuth service/API/Tool、Gmail 回归、Tool registry、ORM/storage、迁移共 `105 passed`；真实浏览器已验证 Gmail/Canva/Notion 卡片内联展开、旧连接导航消失、未配置状态 fail closed |
 
-本机没有现成 `TEST_PG_ADMIN_URL`。曾有界尝试拉取隔离 Postgres Docker 镜像，但镜像在 120 秒内未完成，已终止唯一 Docker CLI 并确认没有容器残留；因此真实 PostgreSQL fresh/legacy upgrade、downgrade/restore、index/constraint/cascade 仍严格保留为 `deployment_required`，没有把 mandatory skip 伪装成通过。
+本机应用 PostgreSQL 已把现存 schema 从 0040 真实升级到 0041；这证明当前应用库升级可执行，但不允许拿它做破坏性的 fresh/downgrade 演练。当前仍未配置专用 `TEST_PG_ADMIN_URL`，所以隔离库上的 fresh/legacy upgrade、downgrade/restore、index/constraint/cascade 仍严格保留为 `deployment_required`，没有把 mandatory skip 伪装成通过。
 
 ## 12. 场景与测试证据索引
 
@@ -385,7 +397,8 @@ UI：`ChatPanel`/`usePendingSubmissions`；固定单列 Activity Control Layer �
 | `stage3-artifact-offer-and-interview` | `test_artifacts_offers_api.py`、`test_interview_api.py`、`test_career_domain_tools.py` | `ArtifactsPage.test.tsx`、`src/api/careerDomains.test.ts` |
 | `stage3-mock-client-action-handoff` | `test_client_action_service.py`、`test_client_actions_api.py`、`test_mock_interview_tool.py` | `ClientActionBridge.test.tsx` |
 | `stage4-persistent-task` | `test_persistent_task_service.py`、`test_persistent_task_schedule.py`、`test_stage4_integrations_api.py`、`test_career_domain_tools.py`、`test_maintenance_sweeper.py`、`test_celery_routes.py` | `PersistentTasksPage.test.tsx`、`src/api/persistentTasks.test.ts`、`src/api/stage4.test.ts` |
-| `stage4-gmail-connector` | `test_google_gmail_connector.py`、`test_gmail_oauth_api.py`、`test_gmail_tool.py` | `ConnectionsPage.test.tsx`、`src/api/stage4.test.ts` |
+| `stage4-gmail-connector` | `test_google_gmail_connector.py`、`test_gmail_oauth_api.py`、`test_gmail_tool.py` | `PluginConnectionPanel.test.tsx`、`CapabilitiesPage.test.tsx`、`src/api/stage4.test.ts` |
+| `stage4-plugin-market-connectors` | `test_oauth_plugin_connector.py`、`test_external_plugins_api.py`、`test_external_plugin_tools.py`、`test_alembic_migrations.py` | `PluginConnectionPanel.test.tsx`、`CapabilitiesPage.test.tsx` |
 | `stage4-gmail-observation-automation` | `test_gmail_observation_service.py`、`test_gmail_observations_api.py`、`test_gmail_observation_tool.py` | `GmailObservationCards.test.tsx` |
 | `stage5-guidance-and-canonical-memory` | `test_personalization_service.py`、`test_personalization_tool.py`、`test_agent_memory_service.py`、`test_personalization_api.py`、`test_career_scenario_gate.py` | `src/api/personalization.test.ts`、`CopilotPreferencesPage.test.tsx`、`AgentMemorySettingsSection.test.tsx`、`ConversationMemoryControlsButton.test.tsx` |
 | `cross-stage-exact-history-and-workspaces` | `test_interaction_history_service.py`、`test_history_api.py`、`test_tool_registry.py` | `src/api/history.test.ts`、`HistorySearchPage.test.tsx`、`CopilotStatusSummary.test.tsx` |
@@ -436,8 +449,9 @@ UI：`ChatPanel`/`usePendingSubmissions`；固定单列 Activity Control Layer �
 
 ## 15. 生产发布前仍必须完成的外部门禁
 
-1. **Postgres**：为 `TEST_PG_ADMIN_URL` 提供隔离实例，执行包含 0039 JobDescriptionSnapshot 与 0040 Tool resource identities 的 fresh upgrade、现存数据 upgrade、downgrade/restore、单 head、index/constraint/cascade；生产执行前备份，并保存 0029 legacy Resume、legacy Memory/Attachment dry-run/apply 报告。静态/Alembic tests 已通过；单元测试或 SQLite 仍不能代替真实 Postgres。
+1. **Postgres**：为 `TEST_PG_ADMIN_URL` 提供隔离实例，执行包含 0039 JobDescriptionSnapshot、0040 Tool resource identities 与 0041 Canva/Notion OAuth account/state 的 fresh upgrade、现存数据 upgrade、downgrade/restore、单 head、index/constraint/cascade；生产执行前备份，并保存 0029 legacy Resume、legacy Memory/Attachment dry-run/apply 报告。静态/Alembic tests 已通过；单元测试或 SQLite 仍不能代替真实 Postgres。
 2. **Gmail**：配置真实 HTTPS redirect/product return、Google client、目标域 consent、Community 独立 broker recovery key/绝对路径或 Cloud managed broker；用非提交凭据验证 connect、browser binding、refresh、scope loss、revoke、reconnect、cursor。HTTP fake 不代替。
+3. **Canva/Notion**：分别在 provider developer console 注册公开 OAuth integration 和精确 callback；配置独立 credential-store recovery key/路径。用真实测试账号验证 Canva PKCE、Notion page picker、refresh/revoke 与只读 Tool；HTTP fake 不代替。
 3. **模型/Prompt Cache/Vision**：配置真实 provider/model，验证 Tool schema、streaming、cache read/create/miss telemetry、image transport、partial/cancel/retry；不支持能力时必须保持 typed unavailable。
 4. **云基础设施**：验证 Redis/SSE replay、Celery scheduler/maintenance、对象存储、RAG 索引重建、多 worker restart、unknown receipt reconciliation、备份/恢复。测试进程必须保持 CPU-only；不要为验证重复启动 GPU model workers。
 5. **浏览器与多客户端**：在真实部署做 refresh、multi-tab FIFO/CAS、initiating-client affinity/takeover、unsaved guard、Mock device readiness 和 AppShell route-switch handoff。React unit test不代替真实浏览器。

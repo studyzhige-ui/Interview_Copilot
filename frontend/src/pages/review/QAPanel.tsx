@@ -15,6 +15,7 @@ import type {
   InterviewAnalysis,
   InterviewQA,
   InterviewRecordDetail,
+  InterviewTranscriptStructure,
 } from '@/types/api';
 import { DebriefGuidanceControl } from './DebriefGuidanceControl';
 import { InterviewOpportunityControl } from './InterviewOpportunityControl';
@@ -24,6 +25,8 @@ type Tab = 'report' | 'qa' | 'transcript';
 interface Props {
   detail: InterviewRecordDetail | null;
   loading: boolean;
+  reanalyzing?: boolean;
+  onReanalyze?: (mode: 'report' | 'extract' | 'transcribe') => void;
   selectedQuestionIndexes?: number[];
   onToggleQuestion?: (index: number) => void;
 }
@@ -63,6 +66,8 @@ function formatLocal(iso: string | null | undefined): string {
 export function QAPanel({
   detail,
   loading,
+  reanalyzing = false,
+  onReanalyze,
   selectedQuestionIndexes = [],
   onToggleQuestion,
 }: Props) {
@@ -117,12 +122,29 @@ export function QAPanel({
         <ReportTabs tab={tab} onChange={setTab} hasTranscript={!!detail.transcript} />
 
         {tab === 'report' && (
-          <ReportView analysis={analysis} transcript={detail.transcript} qaCount={qa.length} />
+          <ReportView
+            analysis={analysis}
+            transcript={detail.transcript}
+            qaCount={qa.length}
+            reanalyzing={reanalyzing}
+            onReanalyze={onReanalyze}
+          />
         )}
         {tab === 'qa' && (
           qa.length === 0
           ? <EmptyState icon={<FileText size={24} />} title="这条记录还没有结构化 QA" description="模型可能还在分析，或这条记录不输出 per_question 字段。" />
           : <div className="flex flex-col gap-4">
+              {detail.transcript_quality && (
+                <div className="rounded-xl border border-primary-100 bg-primary-50/70 px-4 py-3 text-sm text-stone-700">
+                  <div className="font-medium text-stone-800">词级证据整理</div>
+                  <div className="mt-1 leading-6">
+                    候选人原回答覆盖 {Math.round(detail.transcript_quality.candidate_substantive_word_coverage * 100)}%
+                    {' · '}问题覆盖 {Math.round(detail.transcript_quality.question_word_coverage * 100)}%
+                    {' · '}隐藏 {Math.round(detail.transcript_quality.hidden_word_ratio * 100)}% 的明确停顿、杂音或紧邻重复词。
+                    正文由原始词级证据重建，不是摘要或改写。
+                  </div>
+                </div>
+              )}
               {qa.map((q) => (
                 <QAItem
                   key={`${q.id}:${q.question}:${q.answer}:${q.saved_document_id ?? ''}`}
@@ -136,7 +158,12 @@ export function QAPanel({
         )}
         {tab === 'transcript' && (
           detail.transcript
-            ? <TranscriptView transcript={detail.transcript} />
+            ? (
+                <TranscriptView
+                  transcript={detail.transcript}
+                  structure={detail.transcript_structure}
+                />
+              )
             : <EmptyState icon={<FileText size={24} />} title="暂无转录文本" description="该面试尚未完成语音转录。" />
         )}
       </div>
@@ -195,17 +222,25 @@ interface SpeakerLine {
   side: 'interviewer' | 'candidate' | 'unknown';
 }
 
-function parseLine(line: string): SpeakerLine | null {
+function parseLine(
+  line: string,
+  roleBySpeaker: ReadonlyMap<string, SpeakerLine['side']>,
+): SpeakerLine | null {
   // WhisperX/Pyannote ASR: `**[SPEAKER_01]**: text`
   const asrMatch = line.match(/^\*\*\[([^\]]+)\]\*\*:\s*(.*)$/);
   if (asrMatch) {
     const speaker = asrMatch[1];
-    const isInterviewer =
-      speaker.includes('00') || speaker.toLowerCase().includes('interviewer');
+    const semanticLabel = speaker.toLowerCase();
+    const side = roleBySpeaker.get(speaker)
+      ?? (semanticLabel.includes('interviewer')
+        ? 'interviewer'
+        : semanticLabel.includes('candidate')
+          ? 'candidate'
+          : 'unknown');
     return {
       speaker,
       text: asrMatch[2],
-      side: isInterviewer ? 'interviewer' : 'candidate',
+      side,
     };
   }
   // Mock composed transcript: `面试官: text` / `候选人: text`
@@ -222,8 +257,35 @@ function parseLine(line: string): SpeakerLine | null {
   return null;
 }
 
-function TranscriptView({ transcript }: { transcript: string }) {
+function transcriptSpeakerLabel(line: SpeakerLine): string {
+  const roleLabel = line.side === 'interviewer'
+    ? '面试官'
+    : line.side === 'candidate'
+      ? '候选人'
+      : '角色未确认';
+  const normalizedSpeaker = line.speaker.toLowerCase();
+  if (
+    normalizedSpeaker === '面试官'
+    || normalizedSpeaker === '候选人'
+    || normalizedSpeaker === 'interviewer'
+    || normalizedSpeaker === 'candidate'
+  ) {
+    return roleLabel;
+  }
+  return `${roleLabel} · ${line.speaker}`;
+}
+
+function TranscriptView({
+  transcript,
+  structure,
+}: {
+  transcript: string;
+  structure?: InterviewTranscriptStructure | null;
+}) {
   const lines = transcript.split('\n').filter((l) => l.trim());
+  const roleBySpeaker = new Map(
+    (structure?.speaker_roles ?? []).map((entry) => [entry.speaker_id, entry.role]),
+  );
 
   return (
     <div className="flex flex-col gap-3">
@@ -231,7 +293,7 @@ function TranscriptView({ transcript }: { transcript: string }) {
         原始对话文稿（mock 来源为结构化 Q&A 拼接；upload 来源为 ASR + 声纹分离输出）
       </div>
       {lines.map((line, i) => {
-        const parsed = parseLine(line);
+        const parsed = parseLine(line, roleBySpeaker);
         if (parsed) {
           const colorCls =
             parsed.side === 'interviewer'
@@ -244,7 +306,7 @@ function TranscriptView({ transcript }: { transcript: string }) {
               <span
                 className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full mr-2 ${colorCls}`}
               >
-                {parsed.speaker}
+                {transcriptSpeakerLabel(parsed)}
               </span>
               <span className="text-sm text-stone-700 leading-[1.7]">{parsed.text}</span>
             </div>
@@ -266,10 +328,14 @@ function ReportView({
   analysis,
   transcript,
   qaCount,
+  reanalyzing,
+  onReanalyze,
 }: {
   analysis: InterviewAnalysis | null;
   transcript: string | null;
   qaCount: number;
+  reanalyzing: boolean;
+  onReanalyze?: (mode: 'report' | 'extract' | 'transcribe') => void;
 }) {
   const overall = analysis?.overall;
   const has = analysis && (overall || qaCount > 0);
@@ -304,11 +370,50 @@ function ReportView({
   }).filter(Boolean);
   const phases = analysis?.phase_summary ?? [];
   const radar = Object.entries(analysis?.skill_radar ?? {});
+  const legacyPartial = /生成失败|调用都失败/.test(summary);
+  const generationStatus = analysis?.generation_status ?? (legacyPartial ? 'partial' : 'complete');
+  const warnings = analysis?.generation_warnings ?? (legacyPartial ? [summary] : []);
 
   // We're a study companion, not a gatekeeper: do NOT render verdict / grade /
   // any pass-fail framing. Score is kept as a self-benchmark only.
   return (
     <div className="flex flex-col gap-4">
+      {generationStatus !== 'complete' && (
+        <div className="rounded-2xl border border-warning-200 bg-warning-50 p-4" role="alert">
+          <div className="text-sm font-medium text-warning-800">这份复盘只生成了部分结果</div>
+          <div className="mt-1 text-xs leading-relaxed text-stone-600">
+            {warnings[0] || '逐题结果已保留，但综合报告或部分评分没有成功生成。'}
+          </div>
+          {onReanalyze && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={reanalyzing}
+                onClick={() => onReanalyze('report')}
+                className="rounded-lg bg-primary-600 px-3 py-2 text-xs font-medium text-white hover:bg-primary-700 disabled:opacity-60"
+              >
+                {reanalyzing ? '重新分析中…' : '重新生成报告'}
+              </button>
+              <button
+                type="button"
+                disabled={reanalyzing}
+                onClick={() => onReanalyze('extract')}
+                className="rounded-lg border border-warning-300 bg-white px-3 py-2 text-xs font-medium text-warning-800 hover:bg-warning-100 disabled:opacity-60"
+              >
+                QA 有错位？重新整理 QA 与报告
+              </button>
+              <button
+                type="button"
+                disabled={reanalyzing}
+                onClick={() => onReanalyze('transcribe')}
+                className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+              >
+                源转写混乱？从录音重新转写
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       <div className="grid grid-cols-[200px_1fr] gap-5 bg-white border border-stone-200 rounded-2xl p-6 shadow-xs">
         <div className="flex flex-col items-center justify-center bg-cream-50 rounded-xl p-5">
           <div className="text-xs text-stone-500 uppercase tracking-wider">本次表现</div>
@@ -356,23 +461,7 @@ function ReportView({
       {radar.length > 0 && (
         <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs">
           <div className="text-xs uppercase tracking-wider text-stone-500 mb-3">能力维度</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
-            {radar.map(([dimension, value]) => (
-              <div key={dimension}>
-                <div className="flex items-center text-sm mb-1.5">
-                  <span className="text-stone-700">{dimension}</span>
-                  <span className="ml-auto font-mono text-stone-500">
-                    {typeof value === 'number' ? `${Math.round(value * 10)}分` : '未考察'}
-                  </span>
-                </div>
-                <div className="h-1.5 rounded-full bg-stone-100 overflow-hidden">
-                  {typeof value === 'number' && (
-                    <div className="h-full rounded-full bg-primary-400" style={{ width: `${value * 10}%` }} />
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+          <AbilityRadarChart values={radar} />
         </div>
       )}
 
@@ -389,6 +478,89 @@ function ReportView({
           </ul>
         </div>
       )}
+    </div>
+  );
+}
+
+function AbilityRadarChart({ values }: { values: Array<[string, number | null]> }) {
+  const dimensions = values.slice(0, 8);
+  const count = dimensions.length;
+  const centerX = 180;
+  const centerY = 145;
+  const radius = 92;
+  const pointAt = (index: number, scale: number) => {
+    const angle = -Math.PI / 2 + (index * Math.PI * 2) / count;
+    return {
+      x: centerX + Math.cos(angle) * radius * scale,
+      y: centerY + Math.sin(angle) * radius * scale,
+    };
+  };
+  const polygon = (scale: number) => dimensions
+    .map((_, index) => {
+      const point = pointAt(index, scale);
+      return `${point.x.toFixed(1)},${point.y.toFixed(1)}`;
+    })
+    .join(' ');
+  const dataPolygon = dimensions
+    .map(([, value], index) => {
+      const point = pointAt(index, typeof value === 'number' ? Math.max(0, Math.min(10, value)) / 10 : 0);
+      return `${point.x.toFixed(1)},${point.y.toFixed(1)}`;
+    })
+    .join(' ');
+  const hasMeasuredValue = dimensions.some(([, value]) => typeof value === 'number');
+
+  return (
+    <div className="grid items-center gap-5 md:grid-cols-[minmax(300px,1fr)_220px]">
+      <svg
+        role="img"
+        aria-label="能力雷达图"
+        viewBox="0 0 360 300"
+        className="mx-auto w-full max-w-[420px]"
+      >
+        {[0.2, 0.4, 0.6, 0.8, 1].map((scale) => (
+          <polygon
+            key={scale}
+            points={polygon(scale)}
+            fill="none"
+            stroke={scale === 1 ? '#cbd5e1' : '#e7e5e4'}
+            strokeWidth="1"
+          />
+        ))}
+        {dimensions.map(([dimension], index) => {
+          const axis = pointAt(index, 1);
+          const label = pointAt(index, 1.28);
+          const anchor = Math.abs(label.x - centerX) < 8 ? 'middle' : label.x > centerX ? 'start' : 'end';
+          return (
+            <g key={dimension}>
+              <line x1={centerX} y1={centerY} x2={axis.x} y2={axis.y} stroke="#e7e5e4" strokeWidth="1" />
+              <text x={label.x} y={label.y} textAnchor={anchor} dominantBaseline="middle" className="fill-stone-600 text-[11px]">
+                {dimension}
+              </text>
+            </g>
+          );
+        })}
+        {hasMeasuredValue && (
+          <>
+            <polygon points={dataPolygon} fill="rgba(59,130,246,0.18)" stroke="#3b82f6" strokeWidth="2" />
+            {dimensions.map(([dimension, value], index) => {
+              if (typeof value !== 'number') return null;
+              const point = pointAt(index, Math.max(0, Math.min(10, value)) / 10);
+              return <circle key={dimension} cx={point.x} cy={point.y} r="3.5" fill="#2563eb" />;
+            })}
+          </>
+        )}
+      </svg>
+      <div className="space-y-2">
+        {dimensions.map(([dimension, value]) => (
+          <div key={dimension} className="flex items-center justify-between rounded-lg bg-stone-50 px-3 py-2 text-sm">
+            <span className="text-stone-700">{dimension}</span>
+            <span className="font-mono text-stone-500">
+              {typeof value === 'number' ? `${Math.round(value * 10)}分` : '未考察'}
+            </span>
+          </div>
+        ))}
+        <p className="text-[11px] leading-relaxed text-stone-400">仅展示本次问答中有直接证据的维度；“未考察”不等于能力不足。</p>
+      </div>
     </div>
   );
 }
@@ -503,6 +675,7 @@ function QAItem({
         <Pill tone="primary">Q{qa.order_idx + 1}</Pill>
         {qa.is_follow_up && <Pill tone="sand">追问</Pill>}
         <span className="text-xs text-stone-500">{phaseLabel}</span>
+        {qa.source_provenance?.manual_override && <Pill tone="sand">用户已编辑</Pill>}
         <span className={`ml-auto text-sm font-mono font-semibold ${scoreColor(score)}`}>
           {typeof score === 'number'
             ? `${Math.round(score * 10)}分`
@@ -580,6 +753,23 @@ function QAItem({
         >
           {answer || <span className="text-stone-400 font-sans">（未作答）</span>}
         </div>
+      )}
+
+      {qa.source_provenance && (
+        <details className="mt-3 text-xs text-stone-500">
+          <summary className="cursor-pointer select-none hover:text-stone-700">
+            查看原词整理记录
+          </summary>
+          <div className="mt-2 rounded-lg bg-stone-50 px-3 py-2 leading-5">
+            {qa.source_provenance.manual_override
+              ? '当前正文包含用户明确编辑；下列词级引用保留编辑前来源。'
+              : `回答引用 ${qa.source_provenance.answer_word_ids.length} 个原始词。`}
+            {' '}
+            保留 {qa.source_provenance.crossing_utterance_ids.length} 次交叉插话，
+            隐藏 {qa.source_provenance.hidden_words.length} 个可审计的非语义词；
+            结构置信度 {Math.round(qa.source_provenance.confidence * 100)}%。
+          </div>
+        </details>
       )}
 
       {qa.critique && (

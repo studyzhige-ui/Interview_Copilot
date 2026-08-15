@@ -294,8 +294,15 @@ export function ReviewPage() {
   };
   const retryReview = (recordId: string) =>
     retryRecord(recordId, retryMockReview, '重试复盘失败，请稍后再试');
-  const retryUploadAnalysis = (recordId: string) =>
-    retryRecord(recordId, reanalyzeRecord, '重新分析失败，请稍后再试');
+  const retryUploadAnalysis = (
+    recordId: string,
+    fromStage?: 'extract' | 'transcribe',
+  ) =>
+    retryRecord(
+      recordId,
+      (id) => reanalyzeRecord(id, fromStage ? { fromStage } : undefined),
+      '重新分析失败，请稍后再试',
+    );
 
   // ── Analysis lifecycle ──────────────────────────────────────────────────
   const startAnalysis = (
@@ -503,6 +510,13 @@ export function ReviewPage() {
                 key={detail?.id ?? 'empty'}
                 detail={detail}
                 loading={detailLoading}
+                reanalyzing={retryingReview === detail.id}
+                onReanalyze={(mode) => {
+                  void retryUploadAnalysis(
+                    detail.id,
+                    mode === 'report' ? undefined : mode,
+                  );
+                }}
                 selectedQuestionIndexes={selectedQuestionIndexes}
                 onToggleQuestion={toggleQuestion}
               />
@@ -547,6 +561,13 @@ export function ReviewPage() {
         key={detail?.id ?? 'empty'}
         detail={detail}
         loading={detailLoading}
+        reanalyzing={retryingReview === detail?.id}
+        onReanalyze={detail?.source === 'upload' ? (mode) => {
+          void retryUploadAnalysis(
+            detail.id,
+            mode === 'report' ? undefined : mode,
+          );
+        } : undefined}
         selectedQuestionIndexes={selectedQuestionIndexes}
         onToggleQuestion={toggleQuestion}
       />

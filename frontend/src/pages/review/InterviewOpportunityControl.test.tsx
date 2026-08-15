@@ -36,9 +36,10 @@ describe('InterviewOpportunityControl', () => {
 
   it('displays the persisted relation and explicitly clears it with null', async () => {
     renderControl('job-1');
-    const selector = await screen.findByRole('combobox', { name: '本次面试对应岗位' });
+    const selector = await screen.findByRole('combobox', { name: '关联本次面试对应的求职机会' });
     await waitFor(() => expect(selector).toHaveValue('job-1'));
     expect(screen.getByRole('option', { name: /甲公司 · 平台工程师/ })).toBeInTheDocument();
+    expect(screen.getByText(/复盘会结合该岗位的 JD/)).toBeInTheDocument();
 
     fireEvent.change(selector, { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: '清除关联' }));

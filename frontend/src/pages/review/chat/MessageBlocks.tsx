@@ -15,15 +15,24 @@ import type {
  * their durable call id, not adjacency: parallel completions may arrive in a
  * different order while still belonging to the same call card.
  */
-export function BlockChain({ blocks, citeRefs, onCiteClick, auditRef }: {
+export function BlockChain({
+  blocks, citeRefs, onCiteClick, auditRef, collapseTools = false,
+}: {
   blocks: ContentBlock[];
   /** When set, [K#] tokens in text blocks become clickable citation
    *  badges resolving to ``onCiteClick``. Agent turns omit both. */
   citeRefs?: Set<string> | null;
   onCiteClick?: (ref: string) => void;
   auditRef?: { sessionId: string; turnId: string };
+  collapseTools?: boolean;
 }) {
-  const out: React.ReactNode[] = [];
+  const out: Array<{
+    kind: 'content' | 'tool';
+    key: string;
+    node: React.ReactNode;
+    pending?: boolean;
+    isError?: boolean;
+  }> = [];
   const resultByCallId = new Map<string, { result: ToolResultBlock; index: number }>();
   blocks.forEach((block, index) => {
     if (block.type === 'tool_result' && block.tool_use_id && !resultByCallId.has(block.tool_use_id)) {
@@ -40,14 +49,16 @@ export function BlockChain({ blocks, citeRefs, onCiteClick, auditRef }: {
   while (i < blocks.length) {
     const b = blocks[i];
     if (b.type === 'text') {
-      out.push(
-        <div key={`b${i}`} className="prose-block">
+      out.push({
+        kind: 'content',
+        key: `b${i}`,
+        node: <div key={`b${i}`} className="prose-block">
           <MarkdownBody
             source={citeRefs ? linkifyCitations(b.text, citeRefs) : b.text}
             onCiteClick={onCiteClick}
           />
-        </div>
-      );
+        </div>,
+      });
       i += 1;
       continue;
     }
@@ -61,14 +72,18 @@ export function BlockChain({ blocks, citeRefs, onCiteClick, auditRef }: {
       const result = b.id
         ? resultByCallId.get(b.id)?.result ?? null
         : adjacentLegacyResult;
-      out.push(
-        <ToolCard
+      out.push({
+        kind: 'tool',
+        key: b.id || `b${i}`,
+        pending: !result,
+        isError: Boolean(result?.is_error),
+        node: <ToolCard
           key={b.id || `b${i}`}
           use={b}
           result={result}
           auditRef={auditRef}
         />,
-      );
+      });
       i += adjacentLegacyResult ? 2 : 1;
       continue;
     }
@@ -78,13 +93,91 @@ export function BlockChain({ blocks, citeRefs, onCiteClick, auditRef }: {
         continue;
       }
       // Preserve an unmatched result instead of silently dropping History.
-      out.push(<ToolCard key={`b${i}`} use={null} result={b} auditRef={auditRef} />);
+      out.push({
+        kind: 'tool',
+        key: `b${i}`,
+        isError: Boolean(b.is_error),
+        node: <ToolCard key={`b${i}`} use={null} result={b} auditRef={auditRef} />,
+      });
       i += 1;
       continue;
     }
     i += 1;  // unknown block type — skip
   }
-  return <>{out}</>;
+  if (!collapseTools) return <>{out.map((item) => item.node)}</>;
+
+  // A completed answer owns one process disclosure, not one disclosure per
+  // contiguous run of Tool cards.  Everything up to the last Tool result is
+  // execution narration; text after that boundary is the final answer.  This
+  // mirrors the live stream while keeping the settled message calm by default.
+  let lastToolIndex = -1;
+  for (let index = out.length - 1; index >= 0; index -= 1) {
+    if (out[index].kind === 'tool') {
+      lastToolIndex = index;
+      break;
+    }
+  }
+  if (lastToolIndex < 0) return <>{out.map((item) => item.node)}</>;
+  const processItems = out.slice(0, lastToolIndex + 1);
+  const finalItems = out.slice(lastToolIndex + 1);
+  return (
+    <>
+      <ExecutionTraceGroup items={processItems} />
+      {finalItems.map((item) => item.node)}
+    </>
+  );
+}
+
+export function finalAnswerText(blocks: ContentBlock[], fallback = ''): string {
+  let lastExecutionIndex = -1;
+  blocks.forEach((block, index) => {
+    if (block.type === 'tool_use' || block.type === 'tool_result') {
+      lastExecutionIndex = index;
+    }
+  });
+  const answerBlocks = blocks
+    .slice(lastExecutionIndex + 1)
+    .filter((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')
+    .map((block) => block.text.trim())
+    .filter(Boolean);
+  return answerBlocks.length ? answerBlocks.join('\n\n') : fallback.trim();
+}
+
+function ExecutionTraceGroup({ items }: {
+  items: Array<{
+    kind: 'content' | 'tool';
+    key: string;
+    node: React.ReactNode;
+    pending?: boolean;
+    isError?: boolean;
+  }>;
+}) {
+  const pending = items.some((item) => item.pending);
+  const toolItems = items.filter((item) => item.kind === 'tool');
+  const errors = toolItems.filter((item) => item.isError).length;
+  const [open, setOpen] = useState(pending);
+  return (
+    <section className="my-2 overflow-hidden rounded-lg border border-stone-200 bg-stone-50/80">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-stone-600 hover:bg-stone-100"
+      >
+        <ChevronRight
+          size={13}
+          className={`shrink-0 transition-transform ${open ? 'rotate-90' : ''}`}
+        />
+        <Wrench size={13} className="shrink-0 text-stone-500" />
+        <span className="font-medium text-stone-700">执行过程</span>
+        <span className="text-stone-400">{toolItems.length} 次工具调用</span>
+        <span className={`ml-auto ${errors ? 'text-danger-600' : pending ? 'text-stone-500' : 'text-accent-700'}`}>
+          {errors ? `${errors} 次失败` : pending ? '执行中' : '已完成'}
+        </span>
+      </button>
+      {open && <div className="border-t border-stone-200 px-2 py-1">{items.map((item) => item.node)}</div>}
+    </section>
+  );
 }
 
 /**

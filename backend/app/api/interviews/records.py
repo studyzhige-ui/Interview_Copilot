@@ -9,7 +9,7 @@ interview_record_service for record persistence).
 import asyncio
 import json
 import logging
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
@@ -21,6 +21,7 @@ from app.core.rate_limit import RATE_EXPENSIVE, limiter
 from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
+from app.db.types import utc_now
 from app.models.interview_qa import InterviewQA
 from app.models.user import User
 from app.schemas.interview import (
@@ -141,9 +142,12 @@ async def reanalyze_interview_record(
     request: Request,
     response: Response,
     record_id: str,
-    from_stage: str | None = Query(
+    from_stage: Literal["extract", "transcribe"] | None = Query(
         None,
-        description="'extract' 时丢弃已有 QA 壳、从抽取阶段重跑（默认只重新批改）",
+        description=(
+            "'extract' 丢弃 QA 后从原转写重跑；'transcribe' 从音频重新转写并"
+            "重建 QA；默认只重新批改"
+        ),
     ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -158,7 +162,10 @@ async def reanalyze_interview_record(
     try:
         task = await asyncio.to_thread(
             lambda: record_admin.reanalyze_record(
-                db, record, drop_qa=from_stage == "extract"
+                db,
+                record,
+                drop_qa=from_stage == "extract",
+                retranscribe=from_stage == "transcribe",
             ),
         )
     except record_admin.ReanalyzeNotAllowed as exc:
@@ -270,6 +277,8 @@ def get_interview_record(
         "jd_file_asset_id": record.jd_file_asset_id,
         "transcript": transcript["text"],
         "transcript_segments": _safe_json_loads(transcript["segments_json"]),
+        "transcript_structure": transcript.get("structure_json"),
+        "transcript_quality": transcript.get("quality_json"),
         "analysis": analysis,
         "qa": _serialize_qa_rows(db, qa_rows),
         "error_message": record.error_message,
@@ -335,6 +344,8 @@ def _serialize_qa(qa: InterviewQA, audio_urls: dict[str, str] | None = None) -> 
         "answer_audio_file_asset_id": qa.answer_audio_file_asset_id,
         "source_segment_start": qa.source_segment_start,
         "source_segment_end": qa.source_segment_end,
+        "source_transcript_id": qa.source_transcript_id,
+        "source_provenance": qa.source_provenance_json,
         "analyzed_at": qa.analyzed_at.isoformat() if qa.analyzed_at else None,
         "saved_document_id": qa.saved_document_id,
     }
@@ -456,6 +467,16 @@ def edit_interview_qa(
         qa.critique = payload.critique
     if payload.improved_answer is not None:
         qa.improved_answer = payload.improved_answer
+    if (payload.question is not None or payload.answer is not None) and isinstance(
+        qa.source_provenance_json, dict
+    ):
+        provenance = dict(qa.source_provenance_json)
+        provenance["manual_override"] = {
+            "question": payload.question is not None,
+            "answer": payload.answer is not None,
+            "updated_at": utc_now().isoformat(),
+        }
+        qa.source_provenance_json = provenance
     db.add(qa)
     db.commit()
     db.refresh(qa)
