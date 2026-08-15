@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
+import { Bot, Sparkles, ChevronRight } from 'lucide-react';
 import { SessionList } from './SessionList';
 import { QAPanel } from './QAPanel';
 import { ChatPanel } from './chat/ChatPanel';
@@ -15,29 +16,22 @@ import type { InterviewRecordDetail, InterviewRecordListItem } from '@/types/api
 import { useIsMounted } from '@/hooks/useIsMounted';
 
 const PANEL_KEY = 'review.panelWidths';
-
-// React Query cache key for the interview-record list. The refresh flows
-// below fetch with their own AbortControllers (they need the fresh rows
-// value for the active-id fallback logic) and write the result into this
-// cache entry, so every consumer sees one list.
 const RECORDS_KEY = ['interview', 'records'] as const;
 
 function loadWidths(): { left: number; right: number } {
   try {
     const raw = localStorage.getItem(PANEL_KEY);
-    if (!raw) return { left: 280, right: 400 };
+    if (!raw) return { left: 280, right: 380 };
     const v = JSON.parse(raw);
     return {
       left: typeof v.left === 'number' ? v.left : 280,
-      right: typeof v.right === 'number' ? v.right : 400,
+      right: typeof v.right === 'number' ? v.right : 380,
     };
   } catch {
-    return { left: 280, right: 400 };
+    return { left: 280, right: 380 };
   }
 }
 
-// Local-only draft (not yet persisted). The 'draft' source is a frontend
-// sentinel — see InterviewRecordListItem.source.
 interface Draft extends InterviewRecordListItem {
   source: 'draft';
 }
@@ -45,7 +39,7 @@ interface Draft extends InterviewRecordListItem {
 function makeDraft(): Draft {
   return {
     id: `draft-${Date.now()}`,
-    title: '新建面试',
+    title: '新建面试复盘',
     tag: null,
     source: 'draft',
     status: 'draft',
@@ -57,12 +51,8 @@ function isDraft(id: string | null): boolean {
   return !!id && id.startsWith('draft-');
 }
 
-// Per-active-id analysis runtime kept in ReviewPage state. The AnalysisRunner
-// component subscribed for that record_id stays mounted as long as the entry
-// exists in `analyses`, so SSE survives switching between sessions.
 interface AnalysisEntry {
   record_id: string;
-  // user-chosen metadata to apply to the freshly-created record after done
   title: string;
   tag?: string;
   state: AnalysisProgress;
@@ -78,6 +68,7 @@ export function ReviewPage() {
   const [widths, setWidths] = useState(loadWidths);
   const [analyses, setAnalyses] = useState<Record<string, AnalysisEntry>>({});
   const [mobilePane, setMobilePane] = useState<'records' | 'review' | 'chat'>('review');
+  const [copilotOpen, setCopilotOpen] = useState(true);
   const [questionSelection, setQuestionSelection] = useState<{
     recordId: string | null;
     indexes: number[];
@@ -86,17 +77,12 @@ export function ReviewPage() {
   const { data: records = [], error: recordsError, isFetchedAfterMount } = useQuery({
     queryKey: RECORDS_KEY,
     queryFn: ({ signal }) => listInterviewRecords(0, 50, { signal }),
-    // Always refresh on mount: mock-interview completion navigates here
-    // with ?id=<fresh record> that a cached list won't contain yet. The
-    // cached rows still paint instantly; the selection effect below just
-    // waits for the post-mount fetch before defaulting.
     refetchOnMount: 'always',
   });
   useToastOnError(recordsError, '面试记录加载失败');
+
   const setRecords = useCallback(
     (rows: InterviewRecordListItem[]) => {
-      // Cancel the in-flight (mount/background) refetch so its stale
-      // response can't land after this deliberate overwrite.
       void queryClient.cancelQueries({ queryKey: RECORDS_KEY });
       queryClient.setQueryData<InterviewRecordListItem[]>([...RECORDS_KEY], rows);
     },
@@ -104,7 +90,11 @@ export function ReviewPage() {
   );
 
   useEffect(() => {
-    try { localStorage.setItem(PANEL_KEY, JSON.stringify(widths)); } catch { /* ignore */ }
+    try {
+      localStorage.setItem(PANEL_KEY, JSON.stringify(widths));
+    } catch {
+      /* ignore */
+    }
   }, [widths]);
 
   const combined: InterviewRecordListItem[] = useMemo(
@@ -118,6 +108,7 @@ export function ReviewPage() {
     if (wanted && records.some((record) => record.id === wanted)) return wanted;
     return records[0]?.id ?? drafts[0]?.id ?? null;
   }, [drafts, isFetchedAfterMount, records, search]);
+
   const activeId = selectedActiveId ?? defaultActiveId;
   const selectedQuestionIndexes = questionSelection.recordId === activeId
     ? questionSelection.indexes
@@ -135,6 +126,7 @@ export function ReviewPage() {
           : [...indexes, index],
       };
     });
+    setCopilotOpen(true);
     setMobilePane('chat');
   }, [activeId]);
 
@@ -152,22 +144,15 @@ export function ReviewPage() {
 
   useEffect(() => {
     if (!activeId || isDraft(activeId)) {
-      // The selected record owns the detail pane; clear stale server data.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDetail(null);
       return;
     }
-    // Abort the in-flight detail fetch on activeId change — same race
-    // shape as the chat-panel transcript loader. Stale writes are
-    // already gated by ``alive`` but the backend keeps materialising
-    // the abandoned response without the abort.
     const controller = new AbortController();
     let alive = true;
     setDetailLoading(true);
     getInterviewRecord(activeId, { signal: controller.signal })
       .then((d) => alive && setDetail(d))
       .catch((e) => {
-        // Aborted on switch → benign, no toast.
         if ((e as { code?: string })?.code === 'ERR_CANCELED') return;
         if (alive) toast.error('记录详情加载失败');
       })
@@ -178,12 +163,12 @@ export function ReviewPage() {
     };
   }, [activeId]);
 
-
   const onNew = () => {
     const d = makeDraft();
     setDrafts((arr) => [d, ...arr]);
     setActiveId(d.id);
     setSearch({}, { replace: true });
+    setMobilePane('review');
   };
 
   const onDraftMutate = (id: string, patch: Partial<InterviewRecordListItem>) => {
@@ -193,9 +178,6 @@ export function ReviewPage() {
   };
 
   const onDraftDelete = (id: string) => {
-    // If there's an analysis in flight for this draft, tell the backend to
-    // revoke the Celery task. Fire-and-forget — if the cancel call itself
-    // fails we still drop the local state.
     const a = analyses[id];
     if (a) {
       cancelAnalyze(a.record_id).catch(() => {});
@@ -215,11 +197,6 @@ export function ReviewPage() {
   const isMounted = useIsMounted();
   const onRecordChangedAcRef = useRef<AbortController | null>(null);
   const onRecordChanged = async () => {
-    // Cancel any in-flight previous invocation so a fast
-    // rename → rename → delete sequence doesn't land the
-    // SECOND rename's detail while the user has just deleted
-    // the record. Also bail post-await if the user navigated
-    // away while the calls were in flight.
     onRecordChangedAcRef.current?.abort();
     const ac = new AbortController();
     onRecordChangedAcRef.current = ac;
@@ -230,23 +207,18 @@ export function ReviewPage() {
       if (activeId && !isDraft(activeId)) {
         const stillExists = rows.some((r) => r.id === activeId);
         if (!stillExists) {
-          // Active record was deleted — fall back to first row.
           const next = rows[0]?.id ?? null;
           setActiveId(next);
           setDetail(null);
           if (next) setSearch({ id: next }, { replace: true });
           else setSearch({}, { replace: true });
         } else {
-          // Active record was renamed / re-tagged — re-fetch its detail so
-          // QAPanel's header reflects the new title without the user having
-          // to switch tabs and back.
           try {
             const fresh = await getInterviewRecord(activeId, { signal: ac.signal });
             if (ac.signal.aborted || !isMounted.current) return;
             setDetail(fresh);
           } catch {
-            // Non-fatal — the list still shows the new title; the detail
-            // header will catch up on the next id-change useEffect.
+            // Non-fatal
           }
         }
       }
@@ -258,14 +230,7 @@ export function ReviewPage() {
     }
   };
 
-  // ── Mock review retry ───────────────────────────────────────────────────
-  // review_failed is a terminal state the sweeper/worker can land a mock
-  // record in; the retry endpoint flips it back to processing_review and
-  // re-dispatches the Celery review task.
-  // Holds the record id being retried (not a boolean — two review_failed
-  // records must not share one "retrying" flag).
   const [retryingReview, setRetryingReview] = useState<string | null>(null);
-  // One retry flow, two dispatchers (mock retry-review / upload reanalyze).
   const retryRecord = async (
     recordId: string,
     call: (id: string) => Promise<unknown>,
@@ -275,16 +240,11 @@ export function ReviewPage() {
     try {
       await call(recordId);
       if (!isMounted.current) return;
-      // Drop any stale (errored) runner entry — the auto-spawn effect bails
-      // on an existing entry, so leaving it would mean no SSE runner for the
-      // re-dispatched run and a pane frozen at "建立 SSE 连接中".
       setAnalyses((prev) => {
         if (!(recordId in prev)) return prev;
         const { [recordId]: _, ...rest } = prev;
         return rest;
       });
-      // Refresh list + detail: the new in-flight status is picked up by the
-      // auto-spawn effect, which opens an SSE runner for it.
       await onRecordChanged();
     } catch {
       if (isMounted.current) toast.error(errorToast);
@@ -292,6 +252,7 @@ export function ReviewPage() {
       if (isMounted.current) setRetryingReview(null);
     }
   };
+
   const retryReview = (recordId: string) =>
     retryRecord(recordId, retryMockReview, '重试复盘失败，请稍后再试');
   const retryUploadAnalysis = (
@@ -304,7 +265,6 @@ export function ReviewPage() {
       '重新分析失败，请稍后再试',
     );
 
-  // ── Analysis lifecycle ──────────────────────────────────────────────────
   const startAnalysis = (
     forActiveId: string,
     payload: { record_id: string; title: string; tag?: string },
@@ -335,16 +295,12 @@ export function ReviewPage() {
       const { [forActiveId]: _, ...rest } = prev;
       return rest;
     });
-    // Analysis completion can fire a few seconds after the user has
-    // navigated away — guard every setState past an await.
     try {
       const rows = await listInterviewRecords(0, 50);
       if (!isMounted.current) return;
       setRecords(rows);
       const target = entry?.record_id;
       if (target) {
-        // Drafts: rename / re-tag the freshly-promoted record. For mock-source
-        // records we created the row up front, so this is a no-op there.
         if (forActiveId !== target && entry) {
           await applyDraftMetadata(target, { title: entry.title, tag: entry.tag });
           if (!isMounted.current) return;
@@ -352,13 +308,12 @@ export function ReviewPage() {
           if (!isMounted.current) return;
           setRecords(refreshed);
         }
-        // Re-hydrate detail so QAPanel picks up the new qa[] + analysis.
         try {
           const fresh = await getInterviewRecord(target);
           if (!isMounted.current) return;
           setDetail(fresh);
         } catch {
-          // ignore — useEffect will retry on next activeId change
+          // ignore
         }
         if (!isMounted.current) return;
         setActiveId((cur) => (cur === forActiveId ? target : cur));
@@ -373,15 +328,8 @@ export function ReviewPage() {
   const onAnalysisError = (forActiveId: string, msg: string) => {
     toast.error(`分析失败：${msg}`);
     if (isDraft(forActiveId)) {
-      // Keep the entry so the user can see the error state; they can
-      // re-create the draft to retry. (Removing here would silently send
-      // them back to the upload cards without explanation.)
       return;
     }
-    // Real record (e.g. a mock review that just failed while the user was
-    // watching): drop the dead runner entry so a retry can register a fresh
-    // one, and refetch so the terminal status (review_failed) renders its
-    // retry card instead of a spinner frozen on the errored stream.
     setAnalyses((prev) => {
       if (!(forActiveId in prev)) return prev;
       const { [forActiveId]: _, ...rest } = prev;
@@ -392,30 +340,6 @@ export function ReviewPage() {
 
   const activeRecord = combined.find((r) => r.id === activeId) ?? null;
 
-  // ── Auto-spawn an AnalysisRunner for the active record ──────────────
-  // When the user lands on a record whose status is in-flight
-  // (pending/transcribing/extracting/analyzing) but no Runner has
-  // been registered yet, register one. Pre-fix this lived inside
-  // the render-time ``middle = (() => { ... })()`` closure, gated
-  // by ``queueMicrotask`` to avoid the setState-in-render warning.
-  // That worked in React 18 stable but is an anti-pattern: React 19
-  // / concurrent rendering can discard a render mid-flight, leaving
-  // the queued microtask's setState dangling against a non-
-  // committed state. An effect is the contractually-correct anchor.
-  //
-  // Deps are the four inputs the registration decision reads:
-  //   - activeId, the row we're considering
-  //   - whether it's a draft (drafts get a different path — see
-  //     middle's UploadCards branch)
-  //   - detail.status, the source of the analyzing-flag
-  //   - whether an entry for this activeId already exists in
-  //     analyses (otherwise we'd register a second Runner)
-  //
-  // Reading ``analyses[activeId]`` directly inside the effect would
-  // make every register-call into a re-trigger (analyses changes on
-  // setAnalyses), so we read it from a ref synced each render. This
-  // mirrors the "latest-state-ref" idiom we use elsewhere for
-  // AbortController patterns.
   useEffect(() => {
     if (!activeId || !detail || isDraft(activeId)) return;
     const status = (detail.status ?? '').toLowerCase();
@@ -423,8 +347,6 @@ export function ReviewPage() {
     if (!isAnalyzingStatus) return;
     if (analyses[activeId]) return;
 
-    // Materialize a durable runner when server state enters an active phase.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAnalyses((prev) => {
       if (prev[activeId]) return prev;
       return {
@@ -439,8 +361,6 @@ export function ReviewPage() {
     });
   }, [activeId, analyses, detail]);
 
-  // Map of record_id → live progress, used by SessionList to render a pill
-  // that shows the current sub-stage (connecting / transcribing / analyzing).
   const analyzingStates = useMemo(() => {
     const m = new Map<string, AnalysisProgress>();
     for (const [id, entry] of Object.entries(analyses)) {
@@ -450,124 +370,110 @@ export function ReviewPage() {
   }, [analyses]);
 
   const middle = (() => {
-    if (!activeId) return <QAPanel detail={null} loading={false} />;
-    const a = analyses[activeId] ?? null;
-    if (isDraft(activeId)) {
-      const draft = drafts.find((d) => d.id === activeId);
+    if (!activeId) {
       return (
         <UploadCards
-          key={activeId}
-          initialTitle={draft?.title}
-          analysis={a?.state ?? null}
-          onStart={(payload) => startAnalysis(activeId, payload)}
-        />
-      );
-    }
-    // For real records: if no content and not analyzing, show upload cards.
-    const status = (detail?.status ?? '').toLowerCase();
-    const isAnalyzingStatus = ['pending', 'transcribing', 'extracting', 'analyzing', 'processing_review'].includes(status);
-    const isMockSource = detail?.source === 'mock';
-    const hasContent = !!detail && (!!detail.transcript || hasStructuredQA(detail));
-
-    // A failed mock review must NOT fall into the AnalyzingState spinner
-    // below (it would spin forever) — show an explicit retry card wired
-    // to the retry-review endpoint.
-    if (detail && status === 'review_failed') {
-      return (
-        <ReviewFailedState
-          kind="mock"
-          message={detail.error_message ?? null}
-          retrying={retryingReview === detail.id}
-          onRetry={() => { void retryReview(detail.id); }}
+          analysis={null}
+          onStart={(payload) => {
+            const d = makeDraft();
+            setDrafts((arr) => [d, ...arr]);
+            setActiveId(d.id);
+            startAnalysis(d.id, payload);
+          }}
         />
       );
     }
 
-    // Failed upload analysis: the audio + transcript are still persisted —
-    // one-click rerun (ANA-7) instead of the old delete-and-reupload dead end.
-    // With partial results (transcript/QA rows persisted before the failure)
-    // keep them readable and show a slim retry banner instead of hiding
-    // everything behind the full-page card.
-    if (detail && status === 'failed' && !isMockSource) {
-      if (hasContent) {
-        return (
-          <div className="h-full flex flex-col">
-            <div className="mx-6 mt-4 flex items-center gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-2.5">
-              <span className="text-xs text-red-700 flex-1">
-                分析未完成：{detail.error_message || '中途出错'}。已保留的转录与逐题结果如下。
-              </span>
-              <button
-                type="button"
-                onClick={() => { void retryUploadAnalysis(detail.id); }}
-                disabled={retryingReview === detail.id}
-                className="text-xs text-white px-3 py-1.5 rounded bg-primary-600 hover:bg-primary-700 disabled:opacity-60 shrink-0"
-              >
-                {retryingReview === detail.id ? '重新派发中…' : '重新分析'}
-              </button>
-            </div>
-            <div className="flex-1 min-h-0">
-              <QAPanel
-                key={detail?.id ?? 'empty'}
-                detail={detail}
-                loading={detailLoading}
-                reanalyzing={retryingReview === detail.id}
-                onReanalyze={(mode) => {
-                  void retryUploadAnalysis(
-                    detail.id,
-                    mode === 'report' ? undefined : mode,
-                  );
-                }}
-                selectedQuestionIndexes={selectedQuestionIndexes}
-                onToggleQuestion={toggleQuestion}
-              />
-            </div>
-          </div>
-        );
-      }
-      return (
-        <ReviewFailedState
-          kind="upload"
-          message={detail.error_message ?? null}
-          retrying={retryingReview === detail.id}
-          onRetry={() => { void retryUploadAnalysis(detail.id); }}
-        />
-      );
-    }
-
-    // Mock records always come pre-attached to a record and a running analysis —
-    // they never need new uploads. While analysis is in flight, show a
-    // dedicated progress card backed by the existing SSE runner (auto-spawned
-    // below) instead of UploadCards.
-    if (detail && (isAnalyzingStatus || isMockSource) && !hasContent) {
-      // Runner registration moved into a dedicated useEffect above —
-      // see "Auto-spawn an AnalysisRunner for the active record".
-      // Here we just read the (possibly-still-loading) entry to
-      // pass progress through.
-      return <AnalyzingState progress={a?.state ?? null} sourceLabel={isMockSource ? '模拟面试' : '面试录音'} />;
-    }
-
-    if (!hasContent && !detailLoading) {
+    if (isDraft(activeId)) {
+      const entry = analyses[activeId];
       return (
         <UploadCards
           key={activeId}
           initialTitle={activeRecord?.title}
-          analysis={a?.state ?? null}
+          analysis={entry ? entry.state : null}
           onStart={(payload) => startAnalysis(activeId, payload)}
         />
       );
     }
+
+    const live = analyses[activeId];
+    if (live) {
+      const isMock = activeRecord?.source === 'mock';
+      return (
+        <AnalyzingState
+          progress={live.state}
+          sourceLabel={isMock ? '模拟面试' : '面试录音'}
+        />
+      );
+    }
+
+    if (detailLoading) {
+      return (
+        <div className="flex-1 min-w-0 flex items-center justify-center p-12">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-8 h-8 rounded-full border-2 border-blue-600 border-r-transparent animate-spin" />
+            <span className="text-xs font-medium text-slate-500">正在载入面试复盘数据…</span>
+          </div>
+        </div>
+      );
+    }
+
+    if (!detail) {
+      return (
+        <div className="p-8 text-center text-xs text-slate-400">
+          未能加载记录详情
+        </div>
+      );
+    }
+
+    const s = (detail.status ?? '').toLowerCase();
+
+    if (s === 'review_failed') {
+      return (
+        <ReviewFailedState
+          message={detail.error_message ?? null}
+          retrying={retryingReview === activeId}
+          onRetry={() => retryReview(activeId)}
+          kind="mock"
+        />
+      );
+    }
+
+    if (s === 'failed') {
+      return (
+        <ReviewFailedState
+          message={detail.error_message ?? null}
+          retrying={retryingReview === activeId}
+          onRetry={() => retryUploadAnalysis(activeId)}
+          kind="upload"
+        />
+      );
+    }
+
+    const isAnalyzed = s === 'completed' || s === 'analyzed' || hasStructuredQA(detail);
+
+    if (!isAnalyzed) {
+      return (
+        <UploadCards
+          key={activeId}
+          initialTitle={detail.title}
+          analysis={null}
+          onStart={(payload) => startAnalysis(activeId, payload)}
+        />
+      );
+    }
+
     return (
       <QAPanel
-        key={detail?.id ?? 'empty'}
+        key={detail.id}
         detail={detail}
-        loading={detailLoading}
-        reanalyzing={retryingReview === detail?.id}
-        onReanalyze={detail?.source === 'upload' ? (mode) => {
-          void retryUploadAnalysis(
-            detail.id,
-            mode === 'report' ? undefined : mode,
-          );
-        } : undefined}
+        loading={false}
+        reanalyzing={retryingReview === activeId}
+        onReanalyze={(mode) => {
+          if (mode === 'report') retryUploadAnalysis(activeId);
+          else if (mode === 'extract') retryUploadAnalysis(activeId, 'extract');
+          else if (mode === 'transcribe') retryUploadAnalysis(activeId, 'transcribe');
+        }}
         selectedQuestionIndexes={selectedQuestionIndexes}
         onToggleQuestion={toggleQuestion}
       />
@@ -575,33 +481,35 @@ export function ReviewPage() {
   })();
 
   return (
-    <div className="h-full flex flex-col lg:flex-row">
-      {/* Headless SSE runners — one per in-flight analysis, kept alive
-       *  regardless of which session the user is currently looking at. */}
-      {Object.entries(analyses).map(([id, a]) => (
+    <div className="h-full flex flex-col lg:flex-row relative overflow-hidden bg-[#F8FAFC]">
+      {/* Background Active Analysis Runners */}
+      {Object.entries(analyses).map(([draftId, entry]) => (
         <AnalysisRunner
-          key={id}
-          recordId={a.record_id}
-          onProgress={(p) => setAnalysisState(id, p)}
-          onDone={() => onAnalysisDone(id)}
-          onError={(m) => onAnalysisError(id, m)}
+          key={draftId}
+          recordId={entry.record_id}
+          onProgress={(p) => setAnalysisState(draftId, p)}
+          onDone={() => onAnalysisDone(draftId)}
+          onError={(msg) => onAnalysisError(draftId, msg)}
         />
       ))}
 
-      <div className="lg:hidden flex shrink-0 border-b border-stone-200 bg-white p-1.5">
-        {([
-          ['records', '面试记录'],
-          ['review', '复盘内容'],
-          ['chat', '复盘对话'],
-        ] as const).map(([pane, label]) => (
+      {/* Mobile Switch Tabs */}
+      <div className="flex items-center gap-1 border-b border-slate-200 bg-white/90 p-2 lg:hidden">
+        {(
+          [
+            ['records', '档案列表'],
+            ['review', '复盘报告'],
+            ['chat', 'Copilot 对话'],
+          ] as const
+        ).map(([pane, label]) => (
           <button
             key={pane}
             type="button"
             onClick={() => setMobilePane(pane)}
-            className={`flex-1 rounded-md px-3 py-2 text-sm ${
+            className={`flex-1 rounded-full px-3 py-1.5 text-xs font-semibold transition-all ${
               mobilePane === pane
-                ? 'bg-primary-50 font-medium text-primary-700'
-                : 'text-stone-500'
+                ? 'bg-blue-50 text-blue-700 shadow-xs'
+                : 'text-slate-500'
             }`}
           >
             {label}
@@ -609,6 +517,7 @@ export function ReviewPage() {
         ))}
       </div>
 
+      {/* Left Session List */}
       <SessionList
         records={combined}
         activeId={activeId}
@@ -626,37 +535,82 @@ export function ReviewPage() {
         width={widths.left}
         className={`${mobilePane === 'records' ? 'flex' : 'hidden'} lg:flex min-h-0 flex-1 lg:flex-none`}
       />
+
       <div className="hidden lg:contents">
         <Resizer
           value={widths.left}
           onChange={(v) => setWidths((w) => ({ ...w, left: v }))}
-          min={200}
-          max={420}
+          min={220}
+          max={400}
           direction="right"
         />
       </div>
-      <section className={`${mobilePane === 'review' ? 'block' : 'hidden'} lg:block flex-1 min-h-0 min-w-0 overflow-y-auto bg-cream-50`}>
+
+      {/* Center Stage Workspace */}
+      <section className={`${mobilePane === 'review' ? 'block' : 'hidden'} lg:block flex-1 min-h-0 min-w-0 overflow-y-auto relative`}>
         {middle}
+
+        {/* Floating Toggle for Copilot Sidebar (when collapsed) */}
+        {!copilotOpen && (
+          <button
+            type="button"
+            onClick={() => setCopilotOpen(true)}
+            className="hidden lg:flex fixed right-6 bottom-6 items-center gap-2 px-4 py-2.5 rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-medium text-xs shadow-lg shadow-blue-500/25 hover:scale-105 transition-all z-30 cursor-pointer"
+          >
+            <Bot size={16} />
+            <span>开启面试副驾 Copilot</span>
+          </button>
+        )}
       </section>
-      <div className="hidden lg:contents">
-        <Resizer
-          value={widths.right}
-          onChange={(v) => setWidths((w) => ({ ...w, right: v }))}
-          min={280}
-          max={560}
-          direction="left"
-        />
-      </div>
-      <ChatPanel
-        interviewId={!isDraft(activeId ?? '') ? activeId : null}
-        sessionTitle={activeRecord?.title ?? null}
-        sessionType="debrief"
-        width={widths.right}
-        questionIndexes={selectedQuestionIndexes}
-        onRemoveQuestion={removeQuestion}
-        onClearQuestions={clearQuestions}
-        className={`${mobilePane === 'chat' ? 'flex' : 'hidden'} lg:flex min-h-0 flex-1 lg:flex-none`}
-      />
+
+      {/* Right Copilot Chat Drawer / Split Panel */}
+      {copilotOpen && (
+        <>
+          <div className="hidden lg:contents">
+            <Resizer
+              value={widths.right}
+              onChange={(v) => setWidths((w) => ({ ...w, right: v }))}
+              min={280}
+              max={560}
+              direction="left"
+            />
+          </div>
+
+          <div
+            style={{ width: widths.right }}
+            className={`${mobilePane === 'chat' ? 'flex' : 'hidden'} lg:flex flex-col h-full bg-white/95 border-l border-slate-200/80 shadow-xs relative`}
+          >
+            {/* Copilot Header with Collapse */}
+            <div className="h-12 px-4 border-b border-slate-100 flex items-center justify-between shrink-0 bg-slate-50/60">
+              <div className="flex items-center gap-2">
+                <Sparkles size={15} className="text-purple-600" />
+                <span className="text-xs font-bold text-slate-800">本场面试副驾</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCopilotOpen(false)}
+                title="收起副驾侧栏"
+                className="hidden lg:flex p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors"
+              >
+                <ChevronRight size={15} />
+              </button>
+            </div>
+
+            <div className="flex-1 min-h-0 flex flex-col w-full">
+              <ChatPanel
+                interviewId={!isDraft(activeId ?? '') ? activeId : null}
+                sessionTitle={activeRecord?.title ?? null}
+                sessionType="debrief"
+                questionIndexes={selectedQuestionIndexes}
+                onRemoveQuestion={removeQuestion}
+                onClearQuestions={clearQuestions}
+                flexible={true}
+                className="flex-1 min-h-0 w-full"
+              />
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -674,37 +628,39 @@ function ReviewFailedState({
   message: string | null;
   retrying: boolean;
   onRetry: () => void;
-  /** mock = review generation failed; upload = analysis pipeline failed. */
   kind: 'mock' | 'upload';
 }) {
   const copy = kind === 'mock'
     ? {
-        header: '模拟面试 · 复盘生成失败',
-        title: '复盘没有生成成功',
-        hint: '生成过程中出现异常。面试问答内容已完整保留，可以直接重试。',
-        button: '重试复盘',
+        header: '模拟面试 · 复盘生成未完成',
+        title: '复盘生成遇到中断',
+        hint: '问答内容已完整安全保留，点击下方按钮即可直接重试生成。',
+        button: '重新生成复盘',
       }
     : {
-        header: '面试录音 · 分析失败',
-        title: '分析没有完成',
-        hint: '录音和已完成的中间结果都已保留，重新分析会从断点继续，不需要重新上传。',
-        button: '重新分析',
+        header: '面试录音 · 分析未完成',
+        title: '分析未完全结束',
+        hint: '音频与中间转录结果已保留，无需重复上传文件。',
+        button: '重新执行分析',
       };
+
   return (
-    <div className="max-w-3xl mx-auto p-10">
-      <div className="bg-white border border-red-200 rounded-2xl shadow-sm p-10">
-        <div className="text-xs text-stone-500 mb-2">{copy.header}</div>
-        <div className="text-sm text-red-700 mb-1 font-medium">{copy.title}</div>
-        <div className="text-xs text-stone-500 mb-6">
-          {message || copy.hint}
+    <div className="max-w-3xl mx-auto p-8 md:p-12">
+      <div className="bg-white border border-red-200/80 rounded-3xl shadow-sm p-8">
+        <div className="text-xs font-bold text-red-500 uppercase tracking-wider mb-2">
+          {copy.header}
         </div>
+        <div className="text-base font-bold text-slate-800 mb-1">{copy.title}</div>
+        <p className="text-xs text-slate-500 mb-6 leading-relaxed">
+          {message || copy.hint}
+        </p>
         <button
           type="button"
           onClick={onRetry}
           disabled={retrying}
-          className="text-sm text-white px-4 py-2 rounded-lg bg-primary-600 hover:bg-primary-700 disabled:opacity-60"
+          className="px-5 py-2.5 rounded-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-all shadow-sm disabled:opacity-50 cursor-pointer"
         >
-          {retrying ? '重新派发中…' : copy.button}
+          {retrying ? '正在重新派发中…' : copy.button}
         </button>
       </div>
     </div>
@@ -721,29 +677,34 @@ function AnalyzingState({
   const percent = progress?.percent ?? 0;
   const status = progress?.status ?? '';
   const phaseHint =
-    status === 'transcribing' ? '正在语音识别…'
-    : status === 'extracting' ? '正在抽取 Q&A…'
-    : status === 'analyzing' ? '正在逐题分析与综合…'
-    : status === 'processing_review' ? '正在生成复盘…'
-    : status === 'pending' ? '排队中…'
-    : '建立 SSE 连接中…';
+    status === 'transcribing' ? '正在进行高精度语音识别…'
+    : status === 'extracting' ? '正在抽取结构化 Q&A…'
+    : status === 'analyzing' ? '正在进行 STAR 深度多维诊断…'
+    : status === 'processing_review' ? '正在生成复盘诊断报告…'
+    : status === 'pending' ? '任务排队中…'
+    : '建立 SSE 实时连接中…';
+
   return (
-    <div className="max-w-3xl mx-auto p-10">
-      <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-10">
-        <div className="text-xs text-stone-500 mb-2">{sourceLabel} · 复盘生成中</div>
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-2 h-2 rounded-full bg-primary-500 animate-pulse" />
-          <div className="text-sm text-primary-700 font-mono">● {phaseHint} {percent}%</div>
+    <div className="max-w-3xl mx-auto p-8 md:p-12">
+      <div className="bg-white/90 backdrop-blur-xl border border-slate-200/90 rounded-3xl shadow-lg p-8">
+        <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
+          {sourceLabel} · AI 智能复盘中
         </div>
-        <div className="w-full h-2 bg-stone-100 rounded-full overflow-hidden mb-3">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-2.5 h-2.5 rounded-full bg-blue-600 animate-pulse" />
+          <div className="text-sm font-semibold text-blue-700 font-mono">
+            ● {phaseHint} {percent}%
+          </div>
+        </div>
+        <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden mb-4 p-0.5 shadow-inner">
           <div
-            className="h-full bg-primary-500 transition-all duration-300 ease-out"
+            className="h-full bg-gradient-to-r from-blue-500 to-purple-600 rounded-full transition-all duration-300 ease-out"
             style={{ width: `${percent}%` }}
           />
         </div>
-        <div className="text-[11px] text-stone-400 mt-3">
-          可以切到其他面试或对话页面，分析会继续在后台运行；完成后这里会自动切换到复盘视图。
-        </div>
+        <p className="text-xs text-slate-400 leading-relaxed">
+          任务在后台持续执行，完成后将自动刷新呈现全量复盘报告。
+        </p>
       </div>
     </div>
   );

@@ -3,10 +3,12 @@ import { useQuery } from '@tanstack/react-query';
 import {
   AlertTriangle,
   Braces,
-  Clock3,
+  Clock,
   MessageSquareText,
   Search,
   Wrench,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { readInteractionHistoryRecord, searchInteractionHistory } from '@/api/history';
 import { Btn } from '@/components/ui/Btn';
@@ -77,100 +79,105 @@ function ResultCard({ result }: { result: HistorySearchResult }) {
     : `Tool · ${result.tool_name ?? '名称未知'}`;
 
   return (
-    <article className="rounded-xl border border-stone-200 bg-white p-4 shadow-xs">
+    <article className="rounded-3xl border border-slate-200/90 bg-white p-5 shadow-xs hover:border-blue-200 transition-all space-y-3.5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <Icon size={16} className="shrink-0 text-primary-700" aria-hidden />
-            <h2 className="truncate text-sm font-semibold text-stone-800">{recordLabel}</h2>
+            <div className="w-7 h-7 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+              <Icon size={15} aria-hidden />
+            </div>
+            <h2 className="truncate text-sm font-bold text-slate-800">{recordLabel}</h2>
             <Pill tone={resultTone(result)}>
               {result.kind === 'message' ? 'message' : result.tool_status ?? '状态未知'}
             </Pill>
           </div>
-          <p className="mt-1 text-xs text-stone-500">
+          <p className="mt-1 text-xs text-slate-500">
             Conversation：{result.conversation_title || '未命名会话'}
-            <span className="ml-2">({result.conversation_type})</span>
+            <span className="ml-2 font-mono text-slate-400">({result.conversation_type})</span>
           </p>
         </div>
         <time
-          className="inline-flex shrink-0 items-center gap-1 text-xs text-stone-500"
+          className="inline-flex shrink-0 items-center gap-1.5 text-xs text-slate-400 font-mono"
           dateTime={result.occurred_at}
           title={result.occurred_at}
         >
-          <Clock3 size={13} aria-hidden />
-          {formatOccurredAt(result.occurred_at)}
+          <Clock size={13} aria-hidden />
+          <span>{formatOccurredAt(result.occurred_at)}</span>
         </time>
       </div>
 
-      <p className="mt-4 whitespace-pre-wrap break-words rounded-lg bg-stone-50 px-3 py-2.5 text-sm leading-relaxed text-stone-700">
-        {result.excerpt}
-      </p>
+      <div className="rounded-2xl bg-slate-50/70 p-3.5 text-sm text-slate-700 leading-relaxed whitespace-pre-wrap border border-slate-100 font-sans">
+        {result.excerpt || '（无正文预览）'}
+      </div>
 
-      <div className="mt-3">
-        <Btn
-          kind="ghost"
-          loading={loadingDetail}
-          onClick={async () => {
+      <div className="flex justify-end pt-1">
+        <button
+          type="button"
+          disabled={loadingDetail}
+          onClick={() => {
             if (detail) {
               setDetail(null);
               return;
             }
             setLoadingDetail(true);
             setDetailError(false);
-            try {
-              setDetail(await readInteractionHistoryRecord(result.identity));
-            } catch {
-              setDetailError(true);
-            } finally {
-              setLoadingDetail(false);
-            }
+            readInteractionHistoryRecord(result.identity)
+              .then((data) => setDetail(data))
+              .catch(() => setDetailError(true))
+              .finally(() => setLoadingDetail(false));
           }}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-blue-600 hover:bg-blue-50 transition-colors cursor-pointer"
         >
-          {detail ? '收起完整记录' : '精确回读完整记录'}
-        </Btn>
-        {detailError && <p className="mt-2 text-xs text-danger-600">完整记录读取失败。</p>}
-        {detail && (
-          <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-stone-200 bg-stone-950 p-3 text-xs text-stone-100">
-            {detail.kind === 'message'
-              ? detail.content
-              : JSON.stringify(
-                  {
-                    arguments: detail.arguments,
-                    result: detail.result,
-                    error: detail.error,
-                  },
-                  null,
-                  2,
-                )}
-          </pre>
-        )}
+          <Braces size={13} />
+          <span>{detail ? '收起完整上下文' : '查看完整结构化记录'}</span>
+          {detail ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        </button>
       </div>
 
-      <dl className="mt-3 grid gap-x-5 gap-y-2 text-xs text-stone-500 sm:grid-cols-2">
+      {loadingDetail && (
+        <div className="flex items-center gap-2 text-xs text-slate-500 py-2">
+          <Spinner size={13} />
+          <span>正在检索完整记录…</span>
+        </div>
+      )}
+
+      {detailError && (
+        <p className="text-xs text-red-500" role="alert">
+          读取详细记录失败，请稍后重试。
+        </p>
+      )}
+
+      {detail && (
+        <div className="rounded-2xl border border-slate-200 bg-slate-900 text-slate-100 p-4 text-xs font-mono overflow-x-auto shadow-inner">
+          <pre>{JSON.stringify(detail, null, 2)}</pre>
+        </div>
+      )}
+
+      <dl className="grid gap-2 border-t border-slate-100 pt-3 text-xs text-slate-500 sm:grid-cols-2 md:grid-cols-4">
         <div className="min-w-0">
-          <dt className="font-medium text-stone-600">Exact identity</dt>
-          <dd className="mt-0.5 break-all font-mono" data-testid="history-exact-identity">{result.identity}</dd>
+          <dt className="font-medium text-slate-400">Exact identity</dt>
+          <dd className="mt-0.5 break-all font-mono text-slate-700" data-testid="history-exact-identity">{result.identity}</dd>
         </div>
         <div className="min-w-0">
-          <dt className="font-medium text-stone-600">Conversation ID</dt>
-          <dd className="mt-0.5 break-all font-mono">{result.conversation_id}</dd>
+          <dt className="font-medium text-slate-400">Conversation ID</dt>
+          <dd className="mt-0.5 break-all font-mono text-slate-700">{result.conversation_id}</dd>
         </div>
         {result.turn_id && (
           <div className="min-w-0">
-            <dt className="font-medium text-stone-600">Turn ID</dt>
-            <dd className="mt-0.5 break-all font-mono">{result.turn_id}</dd>
+            <dt className="font-medium text-slate-400">Turn ID</dt>
+            <dd className="mt-0.5 break-all font-mono text-slate-700">{result.turn_id}</dd>
           </div>
         )}
         {result.kind === 'message' && result.message_id !== null && (
           <div>
-            <dt className="font-medium text-stone-600">Message</dt>
-            <dd className="mt-0.5 font-mono">#{result.message_id}{result.seq !== null ? ` · seq ${result.seq}` : ''}</dd>
+            <dt className="font-medium text-slate-400">Message</dt>
+            <dd className="mt-0.5 font-mono text-slate-700">#{result.message_id}{result.seq !== null ? ` · seq ${result.seq}` : ''}</dd>
           </div>
         )}
         {result.kind === 'tool_call' && result.tool_call_id && (
           <div className="min-w-0">
-            <dt className="font-medium text-stone-600">ToolCall ID</dt>
-            <dd className="mt-0.5 break-all font-mono">{result.tool_call_id}</dd>
+            <dt className="font-medium text-slate-400">ToolCall ID</dt>
+            <dd className="mt-0.5 break-all font-mono text-slate-700">{result.tool_call_id}</dd>
           </div>
         )}
       </dl>
@@ -217,113 +224,137 @@ export function HistorySearchPage() {
   const results = historyQuery.data?.results ?? [];
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5 p-4 md:p-6">
-      <header>
-        <div className="flex items-center gap-2">
-          <Search size={21} className="text-primary-700" aria-hidden />
-          <h1 className="text-xl font-semibold text-stone-800">历史记录</h1>
-        </div>
-        <p className="mt-1 text-sm text-stone-500">精确检索已保存的消息与 Tool 调用，不生成新的业务事实。</p>
-      </header>
-
-      <div className="flex gap-2 rounded-xl border border-warning-200 bg-warning-50 p-3 text-sm text-warning-700" role="note">
-        <AlertTriangle size={17} className="mt-0.5 shrink-0" aria-hidden />
-        <p>历史记录只说明当时发生过什么，不代表当前事实或当前状态；需要判断现状时，请重新读取对应真实资产与记录。</p>
-      </div>
-
-      <form className="rounded-xl border border-stone-200 bg-white p-4 shadow-xs" onSubmit={submit}>
-        <label className="block text-sm font-medium text-stone-700" htmlFor="history-query">搜索内容</label>
-        <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-          <div className="relative flex-1">
-            <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" aria-hidden />
-            <input
-              id="history-query"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="输入消息或 Tool 调用中的原文"
-              className="h-10 w-full rounded-md border border-stone-300 bg-white pl-9 pr-3 text-sm text-stone-800 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
-            />
+    <div className="h-full overflow-y-auto p-4 md:p-8">
+      <div className="mx-auto max-w-5xl space-y-6">
+        {/* Header */}
+        <header className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-50 text-purple-700 text-xs font-semibold mb-2">
+              <Clock size={13} />
+              <span>全局历史探索</span>
+            </div>
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">历史记录</h1>
+            <p className="mt-1 text-sm text-slate-500">
+              精确检索全站已保存的消息、对话与 Tool 真实调用轨迹。
+            </p>
           </div>
-          <Btn type="submit" icon={<Search size={15} />} loading={historyQuery.isFetching}>搜索历史</Btn>
-        </div>
-        {validationMessage && <p className="mt-2 text-xs text-danger-500" role="alert">{validationMessage}</p>}
+        </header>
 
-        <details className="mt-4 border-t border-stone-100 pt-3">
-          <summary className="cursor-pointer text-sm font-medium text-stone-600">范围与类型筛选</summary>
-          <div className="mt-3 grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto_auto]">
-            <label className="text-xs font-medium text-stone-600" htmlFor="history-conversation-id">
-              Conversation ID（可选）
+        <div className="flex gap-2 rounded-2xl border border-amber-200 bg-amber-50/80 p-4 text-xs text-amber-900" role="note">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" aria-hidden />
+          <p>历史记录只说明当时发生过什么，不代表当前事实或当前状态；需要判断现状时，请重新读取对应真实资产与记录。</p>
+        </div>
+
+        {/* Search Card */}
+        <form className="rounded-3xl border border-slate-200/90 bg-white p-6 shadow-sm space-y-4" onSubmit={submit}>
+          <div className="space-y-1.5">
+            <label className="text-sm font-semibold text-slate-700" htmlFor="history-query">
+              搜索内容
+            </label>
+            <div className="flex flex-col sm:flex-row gap-2.5">
+              <div className="relative flex-1">
+                <Search size={16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden />
+                <input
+                  id="history-query"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="输入消息或 Tool 调用中的原文..."
+                  className="h-11 w-full rounded-2xl border border-slate-200/90 bg-slate-50/50 pl-10 pr-4 text-sm text-slate-800 outline-none focus:border-blue-400 focus:bg-white transition-all"
+                />
+              </div>
+              <Btn type="submit" size="md" icon={<Search size={15} />} loading={historyQuery.isFetching} className="px-6 rounded-2xl">
+                搜索历史
+              </Btn>
+            </div>
+            {validationMessage && (
+              <p className="mt-2 text-xs text-red-500" role="alert">{validationMessage}</p>
+            )}
+          </div>
+
+          <details className="pt-2 border-t border-slate-100 space-y-3" open>
+            <summary className="cursor-pointer text-xs font-bold text-slate-500 uppercase tracking-wider select-none py-1">
+              范围与类型筛选
+            </summary>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-slate-500" htmlFor="history-conversation-id">
+                指定会话 ID（可选）
+              </label>
               <input
                 id="history-conversation-id"
                 value={conversationId}
                 onChange={(event) => setConversationId(event.target.value)}
-                placeholder="只搜索指定会话"
-                className="mt-1 h-9 w-full rounded-md border border-stone-300 px-3 font-mono text-xs font-normal text-stone-800 outline-none focus:border-primary-400"
+                placeholder="例如 conv-123456..."
+                className="h-9 w-full rounded-xl border border-slate-200/90 bg-slate-50/50 px-3 text-xs font-mono text-slate-800 outline-none focus:border-blue-400 focus:bg-white transition-all"
               />
-            </label>
-            <fieldset>
-              <legend className="text-xs font-medium text-stone-600">记录类型</legend>
-              <div className="mt-2 flex flex-wrap gap-3">
-                {KIND_OPTIONS.map((option) => (
-                  <label key={option.value} className="flex items-center gap-1.5 text-xs text-stone-700">
-                    <input
-                      type="checkbox"
-                      checked={kinds.includes(option.value)}
-                      onChange={() => setKinds((current) => toggleValue(current, option.value))}
-                    />
-                    {option.label}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-            <fieldset>
-              <legend className="text-xs font-medium text-stone-600">消息角色（可选）</legend>
-              <div className="mt-2 flex flex-wrap gap-3">
-                {ROLE_OPTIONS.map((option) => (
-                  <label key={option.value} className="flex items-center gap-1.5 text-xs text-stone-700">
-                    <input
-                      type="checkbox"
-                      checked={roles.includes(option.value)}
-                      onChange={() => setRoles((current) => toggleValue(current, option.value))}
-                    />
-                    {option.label}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          </div>
-        </details>
-      </form>
+            </div>
 
-      {historyQuery.isPending && submitted && (
-        <div className="flex justify-center py-12 text-stone-400"><Spinner size={20} /></div>
-      )}
-      {historyQuery.isError && (
-        <div className="rounded-xl border border-danger-200 bg-danger-50 p-4 text-sm text-danger-700" role="alert">
-          历史记录搜索失败，请稍后重试。
-        </div>
-      )}
-      {historyQuery.isSuccess && (
-        <section aria-live="polite">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-sm text-stone-600">
-              “{historyQuery.data.query}” 找到 {historyQuery.data.count} 条记录
-            </p>
-            <div className="inline-flex items-center gap-1 text-xs text-stone-400">
-              <Braces size={13} aria-hidden />精确记录投影
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+              <div className="space-y-2">
+                <div className="text-xs font-semibold text-slate-600">记录类型</div>
+                <div className="flex flex-wrap gap-3">
+                  {KIND_OPTIONS.map((opt) => (
+                    <label key={opt.value} className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        aria-label={opt.label}
+                        checked={kinds.includes(opt.value)}
+                        onChange={() => setKinds((curr) => toggleValue(curr, opt.value))}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>{opt.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-xs font-semibold text-slate-600">角色过滤</div>
+                <div className="flex flex-wrap gap-3">
+                  {ROLE_OPTIONS.map((opt) => (
+                    <label key={opt.value} className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        aria-label={opt.label}
+                        checked={roles.includes(opt.value)}
+                        onChange={() => setRoles((curr) => toggleValue(curr, opt.value))}
+                        className="rounded border-slate-300 text-purple-600 focus:ring-purple-500"
+                      />
+                      <span>{opt.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
             </div>
+          </details>
+        </form>
+
+        {/* Results Stream */}
+        <section className="space-y-4">
+          <div className="flex items-center justify-between text-xs text-slate-500">
+            <span>搜索结果 {submitted ? `(${results.length} 条)` : ''}</span>
           </div>
-          {results.length === 0 ? (
-            <div className="rounded-xl border border-stone-200 bg-white p-6">
-              <EmptyState title="没有匹配的历史记录" description="可以减少筛选条件或换一个关键词。" />
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {results.map((result) => <ResultCard key={result.identity} result={result} />)}
+
+          {historyQuery.isLoading && (
+            <div className="p-12 text-center text-slate-400 flex items-center justify-center gap-2">
+              <Spinner size={18} />
+              <span>正在全库检索历史记录…</span>
             </div>
           )}
+
+          {submitted && !historyQuery.isLoading && results.length === 0 && (
+            <EmptyState
+              icon={<Search size={32} />}
+              title="未找到匹配的历史记录"
+              description="尝试调整关键词或放宽类型与角色过滤条件。"
+            />
+          )}
+
+          {results.map((result) => (
+            <ResultCard key={result.identity} result={result} />
+          ))}
         </section>
-      )}
+      </div>
     </div>
   );
 }

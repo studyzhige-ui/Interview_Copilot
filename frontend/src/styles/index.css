@@ -2,66 +2,122 @@
 @import './tokens.css';
 @config '../../tailwind.config.js';
 
-/* Bump the base type scale ~14% so dense reading surfaces (review page,
-   chat bubbles, QA cards) feel comfortable on 1440-wide laptop screens.
-   This overrides the values from colors_and_type.css. */
 :root {
-  --text-xs:   13px;
-  --text-sm:   14px;
-  --text-base: 15px;
+  --text-xs:   12px;
+  --text-sm:   13.5px;
+  --text-base: 14.5px;
   --text-md:   16px;
   --text-lg:   18px;
-  --text-xl:   22px;
-  --text-2xl:  26px;
-  --text-3xl:  32px;
-  --text-4xl:  40px;
-}
-
-/* Saturated, vivid button palette — bumps the design tokens away from the
-   pastel/macaron defaults so primary CTAs stand out against the cream BG. */
-:root {
-  --color-primary-50:  #E8F2FF;
-  --color-primary-100: #CFE4FF;
-  --color-primary-200: #A8CEFF;
-  --color-primary-300: #7AB3FF;
-  --color-primary-400: #4D95FF;
-  --color-primary-500: #2A7BF5;   /* PRIMARY · 饱和度高的鲜蓝 */
-  --color-primary-600: #1862D9;
-  --color-primary-700: #114CAE;
-  --color-primary-800: #0C397F;
-  --color-primary-900: #082A5C;
-
-  --color-accent-50:   #E1F8EE;
-  --color-accent-100:  #BDF0D9;
-  --color-accent-300:  #6CDFAE;
-  --color-accent-500:  #16C083;   /* ACCENT · 鲜绿 */
-  --color-accent-600:  #0EA46E;
-  --color-accent-700:  #097A52;
-
-  --color-danger-50:  #FEECEC;
-  --color-danger-500: #E53935;
-  --color-danger-700: #B71C1C;
-
-  --color-warning-50:  #FFF4D6;
-  --color-warning-500: #F5A623;
-  --color-warning-700: #B47200;
+  --text-xl:   20px;
+  --text-2xl:  24px;
+  --text-3xl:  30px;
+  --text-4xl:  38px;
 }
 
 @layer base {
   html, body, #root {
     height: 100%;
+    margin: 0;
+    padding: 0;
   }
   html {
-    /* 1rem = 17px → all tailwind text-{xs,sm,base,…} that derive from rem
-       are scaled in lockstep. Tailwind text-sm = 0.875rem ≈ 14.9px etc. */
-    font-size: 17px;
+    font-size: 16px;
   }
   body {
-    background: var(--background);
+    background-color: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans);
     font-size: var(--text-base);
+    overflow-x: hidden;
   }
-  *, *::before, *::after { box-sizing: border-box; }
-  button { font-family: inherit; }
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+  button {
+    font-family: inherit;
+  }
+}
+
+/* ---------- Gemini Ambient Lighting & Glass ---------- */
+.gemini-ambient-bg {
+  background: radial-gradient(circle at 50% 12%, rgba(66, 133, 244, 0.08) 0%, rgba(155, 114, 203, 0.04) 38%, rgba(248, 250, 252, 0.95) 75%), #F8FAFC;
+}
+
+.gemini-glass {
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(226, 232, 240, 0.85);
+}
+
+.gemini-glass-subtle {
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(226, 232, 240, 0.6);
+}
+
+.gemini-glass-pill {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.06), 0 2px 6px -1px rgba(66, 133, 244, 0.08);
+}
+
+.gemini-gradient-text {
+  background: linear-gradient(135deg, #1A73E8 0%, #8B5CF6 50%, #EC4899 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gemini-gradient-bg {
+  background: linear-gradient(135deg, #4285F4 0%, #9B72CB 52%, #D96570 100%);
+}
+
+.gemini-card {
+  background: #FFFFFF;
+  border-radius: 20px;
+  border: 1px solid #E2E8F0;
+  box-shadow: 0 2px 12px -2px rgba(15, 23, 42, 0.04);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.gemini-card-interactive:hover {
+  border-color: #CBD5E1;
+  transform: translateY(-2px);
+  box-shadow: 0 10px 28px -4px rgba(15, 23, 42, 0.08), 0 2px 8px -2px rgba(66, 133, 244, 0.06);
+}
+
+/* Custom Gemini Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+
+/* Gemini Pulsing Animations */
+@keyframes gemini-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 1;
+    filter: drop-shadow(0 0 16px rgba(66, 133, 244, 0.45));
+  }
+}
+
+.animate-gemini-pulse {
+  animation: gemini-pulse 3s infinite ease-in-out;
 }

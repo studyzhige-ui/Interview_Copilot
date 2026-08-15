@@ -377,13 +377,12 @@ export function ChatPanel({
   const activeSession = sessionList.sessions.find((s) => s.session_id === activeSessionId);
   const activeSessionTitle = activeSession?.title ?? '选择会话';
 
-  // ────────────────────────────────────────────────────────────────────
   return (
     <aside
       style={flexible ? undefined : { '--chat-panel-width': `${width}px` } as CSSProperties}
       className={[
-        'bg-white border-l border-stone-200 flex flex-col',
-        flexible ? 'flex-1 min-w-0' : 'w-full lg:w-[var(--chat-panel-width)] shrink-0',
+        'bg-white flex flex-col h-full overflow-hidden w-full',
+        flexible ? 'flex-1 min-w-0 border-0' : 'lg:w-[var(--chat-panel-width)] shrink-0 border-l border-slate-200/80',
         className,
       ].join(' ')}
     >

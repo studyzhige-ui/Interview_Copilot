@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { Plus, MoreHorizontal, Pencil, Trash2, Search, Check, Tag, Loader2 } from 'lucide-react';
+import { Plus, MoreHorizontal, Pencil, Trash2, Search, Tag, Loader2, Sparkles } from 'lucide-react';
 import { Pill } from '@/components/ui/Pill';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { toast } from '@/store/uiStore';
@@ -16,35 +16,23 @@ interface Props {
   onChanged: () => void;
   onDraftMutate: (id: string, patch: Partial<InterviewRecordListItem>) => void;
   onDraftDelete: (id: string) => void;
-  /** Per-record live progress so the pill can show the current sub-stage. */
   analyzingStates?: Map<string, AnalysisProgress>;
   width?: number;
   className?: string;
 }
 
-/** Map backend stage strings to a short, user-readable Chinese label.
- *
- * The backend emits ``status`` like ``transcribing`` / ``extracting`` /
- * ``analyzing`` / ``writing_report``. We render them with the same prefix
- * style ("xx 中") so the user gets a stable, scannable indicator instead
- * of a generic "分析中" no matter which sub-stage they're in.
- *
- * Unknown statuses fall back to "处理中" rather than the raw English word —
- * better safe than leaking implementation jargon to the UI.
- */
 function progressLabel(p: AnalysisProgress | undefined): string {
   if (!p) return '';
   if (p.phase === 'connecting') return '连接中';
   if (p.phase === 'error')      return '失败';
   if (p.phase === 'done')       return '完成';
-  // phase === 'progress' — use the backend's sub-status string.
   const s = (p.status || '').toLowerCase();
   if (s.includes('transcrib'))    return '转写中';
-  if (s.includes('diariz'))       return '说话人分离中';
-  if (s.includes('extract'))      return '提取中';
+  if (s.includes('diariz'))       return '分离说话人';
+  if (s.includes('extract'))      return '提取问答';
   if (s.includes('summar'))       return '摘要中';
-  if (s.includes('analyz') || s.includes('analysis')) return '分析中';
-  if (s.includes('report') || s.includes('writ'))     return '生成报告中';
+  if (s.includes('analyz') || s.includes('analysis')) return '深度分析';
+  if (s.includes('report') || s.includes('writ'))     return '生成报告';
   return '处理中';
 }
 
@@ -54,9 +42,6 @@ function isDraftId(id: string): boolean {
 
 function formatDate(iso: string): string {
   if (!iso) return '';
-  // Treat naive backend timestamps as UTC; otherwise Windows / Safari would
-  // double-shift them into local time. After parsing, getMonth/getDate return
-  // the LOCAL clock so the sidebar shows the date in the user's timezone.
   const stamp = /[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + 'Z';
   const d = new Date(stamp);
   if (isNaN(d.getTime())) return iso.slice(0, 10);
@@ -74,9 +59,9 @@ const TAG_TONE: Record<string, 'sand' | 'primary' | 'success' | 'warn' | 'neutra
 };
 
 function tagOrSource(r: InterviewRecordListItem): { label: string; tone: 'sand' | 'primary' | 'success' | 'warn' | 'neutral' } {
-  if (r.tag) return { label: r.tag, tone: TAG_TONE[r.tag] ?? 'sand' };
+  if (r.tag) return { label: r.tag, tone: TAG_TONE[r.tag] ?? 'primary' };
   if (r.source === 'mock') return { label: '模拟', tone: 'primary' };
-  if (r.source === 'upload') return { label: '上传', tone: 'sand' };
+  if (r.source === 'upload') return { label: '录音', tone: 'sand' };
   if (r.source === 'draft') return { label: '草稿', tone: 'neutral' };
   return { label: r.source || '其他', tone: 'neutral' };
 }
@@ -99,10 +84,7 @@ export function SessionList({
   const [deleting, setDeleting] = useState<InterviewRecordListItem | null>(null);
   const [query, setQuery] = useState('');
   const popupRef = useRef<HTMLDivElement | null>(null);
-  // Editing state DOES NOT auto-close on outside click. Rename commits on
-  // Enter / input blur, cancels on Escape. (Previously we killed editing on
-  // any mousedown, which fired BEFORE the ✓/✕ button click handlers and
-  // silently dropped the user's edit before commitRename could read it.)
+
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
       const t = e.target as Node;
@@ -188,51 +170,74 @@ export function SessionList({
   return (
     <aside
       style={{ '--record-list-width': `${width}px` } as CSSProperties}
-      className={`w-full lg:w-[var(--record-list-width)] shrink-0 bg-white border-r border-stone-200 flex-col ${className}`}
+      className={`w-full lg:w-[var(--record-list-width)] shrink-0 bg-white/90 backdrop-blur-md border-r border-slate-200/80 flex flex-col h-full ${className}`}
     >
-      <div className="p-4 border-b border-stone-200">
-        <div className="flex items-center justify-between mb-2.5">
-          <div className="text-sm font-semibold text-stone-800">我的面试</div>
+      {/* Header with Search and New Review Action */}
+      <div className="p-3.5 border-b border-slate-100 flex flex-col gap-2.5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5 text-sm font-bold text-slate-800 tracking-tight">
+            <span>复盘档案</span>
+            <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">
+              {records.length}
+            </span>
+          </div>
+
           <button
+            type="button"
             onClick={onNew}
-            title="新建面试"
-            className="w-7 h-7 rounded-lg bg-primary-50 text-primary-600 hover:bg-primary-100 flex items-center justify-center"
+            title="新建面试复盘"
+            className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-blue-50 hover:bg-blue-100 text-blue-600 text-xs font-semibold transition-all active:scale-95 shadow-xs cursor-pointer"
           >
             <Plus size={14} />
+            <span>新建</span>
           </button>
         </div>
+
+        {/* Search Bar */}
         <div className="relative">
-          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索面试记录"
-            className="w-full pl-8 pr-2.5 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-xs text-stone-700 outline-none focus:border-primary-300"
+            placeholder="搜索面试记录..."
+            className="w-full pl-9 pr-3 py-1.5 bg-slate-50 hover:bg-slate-100/80 focus:bg-white border border-slate-200/80 rounded-full text-xs text-slate-800 placeholder-slate-400 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all"
           />
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto p-2">
+
+      {/* Record List Items */}
+      <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {filtered.length === 0 && (
-          <div className="text-xs text-stone-400 text-center mt-8 px-4 leading-relaxed">
-            还没有面试记录。点 + 新建一条，上传音视频和简历后自动开始分析。
+          <div className="flex flex-col items-center justify-center text-center py-12 px-4">
+            <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mb-2">
+              <Sparkles size={18} />
+            </div>
+            <div className="text-xs font-medium text-slate-700">暂无匹配面试记录</div>
+            <p className="text-[11px] text-slate-400 mt-1">
+              点击上方「新建」即可上传录音并智能解析
+            </p>
           </div>
         )}
+
         {filtered.map((r) => {
           const act = r.id === activeId;
           const pill = tagOrSource(r);
           const isEditing = editing?.id === r.id;
+          const progress = analyzingStates?.get(r.id);
+          const isAnalyzing = r.status === 'analyzing' || (progress && progress.phase === 'progress');
+
           return (
             <div
               key={r.id}
               onClick={() => onSelect(r.id)}
               className={[
-                'relative px-3 py-2.5 rounded-lg cursor-pointer mb-1 border',
+                'group relative p-3 rounded-2xl cursor-pointer transition-all duration-150 border select-none',
                 act
-                  ? 'bg-primary-50 border-primary-100'
-                  : 'border-transparent hover:bg-stone-50',
+                  ? 'bg-blue-50/80 border-blue-200/90 shadow-xs ring-1 ring-blue-100'
+                  : 'bg-transparent border-transparent hover:bg-slate-50 hover:border-slate-200/60',
               ].join(' ')}
             >
-              <div className="flex items-center gap-2">
+              <div className="flex items-start justify-between gap-2">
                 {isEditing ? (
                   <input
                     autoFocus
@@ -250,104 +255,99 @@ export function SessionList({
                         setEditing(null);
                       }
                     }}
-                    placeholder="按 Enter 保存，Esc 取消"
-                    className="flex-1 min-w-0 text-sm px-2 py-1 border border-primary-300 rounded outline-none focus:ring-2 focus:ring-primary-200"
+                    className="flex-1 px-2 py-1 bg-white border border-blue-400 rounded-lg text-xs font-semibold text-slate-800 outline-none"
                   />
                 ) : (
-                  <>
-                    <div
-                      className={[
-                        'flex-1 min-w-0 text-sm truncate',
-                        act ? 'text-primary-700 font-semibold' : 'text-stone-800 font-medium',
-                      ].join(' ')}
-                    >
-                      {r.title || '未命名面试'}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`text-xs font-semibold truncate ${act ? 'text-blue-900' : 'text-slate-800'}`}>
+                        {r.title || '未命名面试'}
+                      </span>
                     </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOpenMenu(openMenu === r.id ? null : r.id);
-                      }}
-                      className="w-6 h-6 rounded text-stone-400 hover:bg-stone-100 hover:text-stone-600 flex items-center justify-center"
-                    >
-                      <MoreHorizontal size={14} />
-                    </button>
-                  </>
+
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <Pill tone={pill.tone}>{pill.label}</Pill>
+                      <span className="text-[11px] text-slate-400">{formatDate(r.created_at)}</span>
+                      {isAnalyzing && (
+                        <span className="flex items-center gap-1 text-[11px] text-blue-600 font-medium ml-auto">
+                          <Loader2 size={11} className="animate-spin text-blue-500" />
+                          <span>{progressLabel(progress) || '分析中'}</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* More Actions Menu Button */}
+                {!isEditing && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOpenMenu(openMenu === r.id ? null : r.id);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-opacity"
+                  >
+                    <MoreHorizontal size={14} />
+                  </button>
                 )}
               </div>
-              <div className="flex items-center gap-2 mt-1.5">
-                <span className="text-xs text-stone-500">
-                  {formatDate(r.created_at)}
-                </span>
-                <Pill tone={pill.tone}>{pill.label}</Pill>
-                {analyzingStates?.has(r.id) && (() => {
-                  const p = analyzingStates.get(r.id);
-                  const errored = p?.phase === 'error';
-                  return (
-                    <span className={[
-                      'inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium rounded-full',
-                      errored ? 'bg-danger-50 text-danger-700' : 'bg-warning-50 text-warning-700',
-                    ].join(' ')}>
-                      {!errored && <Loader2 size={10} className="animate-spin" />}
-                      {progressLabel(p)}
-                      {p?.phase === 'progress' && typeof p.percent === 'number' && p.percent > 0 && (
-                        <span className="opacity-70">· {Math.round(p.percent)}%</span>
-                      )}
-                    </span>
-                  );
-                })()}
-              </div>
-              {openMenu === r.id && !isEditing && (
+
+              {/* Action Dropdown Popup */}
+              {openMenu === r.id && (
                 <div
                   ref={popupRef}
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute right-2 top-9 w-44 p-1 bg-white border border-stone-200 rounded-lg shadow-lg z-20"
+                  className="absolute right-2 top-10 w-36 bg-white rounded-xl shadow-xl border border-slate-200 p-1 z-40 animate-in fade-in zoom-in-95 duration-100"
                 >
                   <button
+                    type="button"
                     onClick={() => startRename(r)}
-                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[13px] text-stone-700 hover:bg-stone-50 rounded"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 rounded-lg"
                   >
-                    <Pencil size={13} />
+                    <Pencil size={13} className="text-slate-400" />
                     <span>重命名</span>
                   </button>
+
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setTagMenu(tagMenu === r.id ? null : r.id)}
+                      className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 rounded-lg"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Tag size={13} className="text-slate-400" />
+                        <span>标签分类</span>
+                      </div>
+                    </button>
+
+                    {tagMenu === r.id && (
+                      <div className="mt-1 p-1 bg-slate-50 rounded-lg border border-slate-200 flex flex-col gap-0.5">
+                        {TAG_OPTIONS.map((opt) => (
+                          <button
+                            key={opt}
+                            type="button"
+                            onClick={() => applyTag(r, opt)}
+                            className="w-full text-left px-2 py-1 text-[11px] text-slate-700 hover:bg-white hover:text-blue-600 rounded"
+                          >
+                            {opt}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="my-1 border-t border-slate-100" />
+
                   <button
-                    onClick={() => setTagMenu(tagMenu === r.id ? null : r.id)}
-                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[13px] text-stone-700 hover:bg-stone-50 rounded"
+                    type="button"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      setDeleting(r);
+                    }}
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-red-600 hover:bg-red-50 rounded-lg"
                   >
-                    <Tag size={13} />
-                    <span>标签</span>
-                    {r.tag && <Pill tone={TAG_TONE[r.tag] ?? 'sand'}>{r.tag}</Pill>}
-                  </button>
-                  {tagMenu === r.id && (
-                    <div className="ml-3 mt-1 mb-1 pl-2 border-l border-stone-100">
-                      {TAG_OPTIONS.map((t) => (
-                        <button
-                          key={t}
-                          onClick={() => applyTag(r, t)}
-                          className={[
-                            'w-full flex items-center gap-2 px-2 py-1 text-[12px] rounded',
-                            r.tag === t ? 'text-primary-700 bg-primary-50' : 'text-stone-700 hover:bg-stone-50',
-                          ].join(' ')}
-                        >
-                          {r.tag === t && <Check size={11} />}
-                          <span className={r.tag === t ? 'ml-0' : 'ml-[15px]'}>{t}</span>
-                        </button>
-                      ))}
-                      {r.tag && (
-                        <button
-                          onClick={() => applyTag(r, null)}
-                          className="w-full flex items-center gap-2 px-2 py-1 text-[12px] text-stone-500 hover:bg-stone-50 rounded"
-                        >
-                          <span className="ml-[15px]">清空标签</span>
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  <button
-                    onClick={() => { setDeleting(r); setOpenMenu(null); }}
-                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[13px] text-danger-500 hover:bg-danger-50 rounded"
-                  >
-                    <Trash2 size={13} />
+                    <Trash2 size={13} className="text-red-400" />
                     <span>删除</span>
                   </button>
                 </div>
@@ -357,19 +357,17 @@ export function SessionList({
         })}
       </div>
 
-      <ConfirmDialog
-        open={!!deleting}
-        danger
-        title={deleting && isDraftId(deleting.id) ? '取消新建' : '删除面试记录'}
-        description={
-          deleting && isDraftId(deleting.id)
-            ? `确认放弃「${deleting.title}」的本地草稿？`
-            : `确认删除「${deleting?.title}」？相关的复盘对话会保留但失去关联。`
-        }
-        confirmText={deleting && isDraftId(deleting.id) ? '丢弃' : '删除'}
-        onConfirm={confirmDelete}
-        onCancel={() => setDeleting(null)}
-      />
+      {deleting && (
+        <ConfirmDialog
+          open={!!deleting}
+          title="删除复盘记录"
+          description={`确定要删除「${deleting.title}」吗？此操作无法撤销。`}
+          confirmText="删除"
+          danger
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleting(null)}
+        />
+      )}
     </aside>
   );
 }

@@ -663,18 +663,18 @@ export function ChatToolbar({
                 onClick={() => setMode((current) => (current === 'AGENT' ? 'CHAT' : 'AGENT'))}
                 aria-label="切换 Chat Agent 模式"
                 className={[
-                  'inline-flex h-8 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium tracking-wide transition',
+                  'inline-flex h-8 items-center gap-1 rounded-full px-2.5 text-xs font-semibold tracking-wide transition',
                   mode === 'AGENT'
-                    ? 'bg-primary-50 text-primary-700 hover:bg-primary-100'
-                    : 'text-stone-600 hover:bg-stone-100',
+                    ? 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+                    : 'text-slate-600 hover:bg-slate-100',
                 ].join(' ')}
               >
-                {mode === 'AGENT' ? <Bot size={13} /> : <MessageSquare size={13} />}
+                {mode === 'AGENT' ? <Bot size={14} /> : <MessageSquare size={14} />}
                 {mode === 'AGENT' ? 'Agent' : 'Chat'}
               </button>
             ) : (
-              <span className="inline-flex h-8 items-center gap-1 rounded-full bg-primary-50 px-2.5 text-[11px] font-medium text-primary-700">
-                <Bot size={13} /> 求职 Agent
+              <span className="inline-flex h-8 items-center gap-1 rounded-full bg-blue-50 px-2.5 text-xs font-semibold text-blue-700">
+                <Bot size={14} /> 求职 Agent
               </span>
             )}
 
@@ -686,10 +686,10 @@ export function ChatToolbar({
                 aria-label="选择审批模式"
                 aria-expanded={approvalMenuOpen}
                 className={[
-                  'inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium transition disabled:cursor-wait disabled:opacity-50',
+                  'inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-semibold transition disabled:cursor-wait disabled:opacity-50',
                   executionMode === 'auto'
-                    ? 'bg-warning-50 text-warning-800 hover:bg-warning-100'
-                    : 'text-stone-600 hover:bg-stone-100',
+                    ? 'bg-amber-50 text-amber-800 hover:bg-amber-100'
+                    : 'text-slate-600 hover:bg-slate-100',
                 ].join(' ')}
               >
                 <ShieldCheck size={14} />

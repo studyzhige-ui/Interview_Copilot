@@ -6,6 +6,10 @@ import {
   FileText,
   MessageCircleQuestion,
   Pencil,
+  Sparkles,
+  AlertTriangle,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Pill } from '@/components/ui/Pill';
@@ -37,28 +41,17 @@ function asAnalysis(detail: InterviewRecordDetail | null): InterviewAnalysis | n
   return a && typeof a === 'object' ? a : null;
 }
 
-/** Render an ISO timestamp from the API in the user's local timezone.
- *
- * The backend sends UTC ISO strings (e.g. ``2026-05-17T02:34:55``). The
- * previous code used ``slice(0,19).replace('T',' ')`` which kept the
- * UTC clock unchanged — visually wrong for any user outside UTC.
- * ``toLocaleString`` with ``zh-CN`` + the user's resolved timezone gives
- * a stable "YYYY/M/D HH:MM:SS" rendering.
- *
- * Invalid / missing input returns an empty string so the surrounding "·"
- * separator collapses to nothing instead of "Invalid Date".
- */
 function formatLocal(iso: string | null | undefined): string {
   if (!iso) return '';
-  // FastAPI emits naive UTC strings without a Z suffix. Force-mark UTC so
-  // the Date constructor doesn't interpret it as local time on Windows /
-  // Safari (which would shift the clock twice).
   const stamp = /[zZ]|[+-]\d{2}:?\d{2}$/.test(iso) ? iso : iso + 'Z';
   const d = new Date(stamp);
   if (isNaN(d.getTime())) return iso.slice(0, 19);
   return d.toLocaleString('zh-CN', {
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
     hour12: false,
   });
 }
@@ -71,23 +64,26 @@ export function QAPanel({
   selectedQuestionIndexes = [],
   onToggleQuestion,
 }: Props) {
-  // Default to the report tab when content first lands; flip to QA only if the
-  // user explicitly switches. This matches the design spec.
   const [tab, setTab] = useState<Tab>('report');
+
   if (loading) {
     return (
-      <div className="flex-1 min-w-0 overflow-y-auto p-8">
-        <div className="text-sm text-stone-500">载入中...</div>
+      <div className="flex-1 min-w-0 flex items-center justify-center p-12">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 rounded-full border-2 border-blue-600 border-r-transparent animate-spin" />
+          <span className="text-xs font-medium text-slate-500">正在载入面试复盘数据…</span>
+        </div>
       </div>
     );
   }
+
   if (!detail) {
     return (
-      <div className="flex-1 min-w-0 overflow-y-auto">
+      <div className="flex-1 min-w-0 overflow-y-auto p-8">
         <EmptyState
-          icon={<FileText size={32} />}
-          title="选择一条面试记录"
-          description="左侧列表点击任意条目查看复盘内容。如果还没有记录，点 + 新建一条。"
+          icon={<Sparkles size={32} />}
+          title="选择或新建一条面试记录"
+          description="点击左侧列表查看过往复盘报告，或点击「新建」上传录音与简历开启智能诊断。"
         />
       </div>
     );
@@ -97,21 +93,25 @@ export function QAPanel({
   const qa = detail.qa ?? [];
 
   return (
-    <div className="flex-1 min-w-0 overflow-y-auto p-6">
-      <div className="max-w-3xl mx-auto">
-        <div className="mb-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <h2 className="text-xl font-semibold text-stone-800">{detail.title || '未命名'}</h2>
+    <div className="flex-1 min-w-0 overflow-y-auto p-4 md:p-8">
+      <div className="max-w-4xl mx-auto space-y-6">
+        {/* Header Title & Actions */}
+        <div className="bg-white/80 backdrop-blur-md rounded-3xl border border-slate-200/80 p-6 shadow-xs flex flex-col gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                {detail.tag && <Pill tone="sparkle">{detail.tag}</Pill>}
+                <span className="text-xs text-slate-400 font-mono">
+                  {formatLocal(detail.created_at)}
+                </span>
+              </div>
+              <h2 className="text-xl md:text-2xl font-bold text-slate-900 tracking-tight">
+                {detail.title || '未命名面试'}
+              </h2>
+            </div>
             <DebriefGuidanceControl interviewId={detail.id} />
           </div>
-          <div className="text-xs text-stone-500 mt-1">
-            {formatLocal(detail.created_at)} · {detail.status}
-            {detail.tag && (
-              <span className="ml-2 inline-flex">
-                <Pill tone="sand">{detail.tag}</Pill>
-              </span>
-            )}
-          </div>
+
           <InterviewOpportunityControl
             key={`${detail.id}:${detail.job_opportunity_id ?? ''}`}
             interviewId={detail.id}
@@ -119,8 +119,10 @@ export function QAPanel({
           />
         </div>
 
+        {/* Gemini Segmented Tab Bar */}
         <ReportTabs tab={tab} onChange={setTab} hasTranscript={!!detail.transcript} />
 
+        {/* Tab 1: Comprehensive Diagnosis Report */}
         {tab === 'report' && (
           <ReportView
             analysis={analysis}
@@ -130,18 +132,27 @@ export function QAPanel({
             onReanalyze={onReanalyze}
           />
         )}
+
+        {/* Tab 2: Question-by-Question STAR Breakdown */}
         {tab === 'qa' && (
-          qa.length === 0
-          ? <EmptyState icon={<FileText size={24} />} title="这条记录还没有结构化 QA" description="模型可能还在分析，或这条记录不输出 per_question 字段。" />
-          : <div className="flex flex-col gap-4">
+          qa.length === 0 ? (
+            <EmptyState
+              icon={<FileText size={28} />}
+              title="暂无结构化 QA 对"
+              description="模型可能还在分析中，或者本场面试未包含问答拆解。"
+            />
+          ) : (
+            <div className="space-y-4">
               {detail.transcript_quality && (
-                <div className="rounded-xl border border-primary-100 bg-primary-50/70 px-4 py-3 text-sm text-stone-700">
-                  <div className="font-medium text-stone-800">词级证据整理</div>
-                  <div className="mt-1 leading-6">
-                    候选人原回答覆盖 {Math.round(detail.transcript_quality.candidate_substantive_word_coverage * 100)}%
-                    {' · '}问题覆盖 {Math.round(detail.transcript_quality.question_word_coverage * 100)}%
-                    {' · '}隐藏 {Math.round(detail.transcript_quality.hidden_word_ratio * 100)}% 的明确停顿、杂音或紧邻重复词。
-                    正文由原始词级证据重建，不是摘要或改写。
+                <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-4 text-xs text-slate-700 leading-relaxed">
+                  <div className="font-semibold text-blue-900 flex items-center gap-1.5 mb-1">
+                    <Sparkles size={14} className="text-blue-600" />
+                    <span>词级原声证据整理</span>
+                  </div>
+                  <div>
+                    候选人原回答覆盖率 {Math.round(detail.transcript_quality.candidate_substantive_word_coverage * 100)}%
+                    {' · '}问题覆盖率 {Math.round(detail.transcript_quality.question_word_coverage * 100)}%
+                    {' · '}过滤 {Math.round(detail.transcript_quality.hidden_word_ratio * 100)}% 语气停顿与杂音。正文严格基于原声事实重建。
                   </div>
                 </div>
               )}
@@ -155,57 +166,56 @@ export function QAPanel({
                 />
               ))}
             </div>
+          )
         )}
+
+        {/* Tab 3: Full Time-synced Transcript */}
         {tab === 'transcript' && (
-          detail.transcript
-            ? (
-                <TranscriptView
-                  transcript={detail.transcript}
-                  structure={detail.transcript_structure}
-                />
-              )
-            : <EmptyState icon={<FileText size={24} />} title="暂无转录文本" description="该面试尚未完成语音转录。" />
+          detail.transcript ? (
+            <TranscriptView
+              transcript={detail.transcript}
+              structure={detail.transcript_structure}
+            />
+          ) : (
+            <EmptyState
+              icon={<FileText size={28} />}
+              title="暂无原始逐字稿"
+              description="该面试录音尚未完成语音转录。"
+            />
+          )
         )}
       </div>
     </div>
   );
 }
 
-function ReportTabs({ tab, onChange, hasTranscript }: { tab: Tab; onChange: (t: Tab) => void; hasTranscript: boolean }) {
+function ReportTabs({
+  tab,
+  onChange,
+  hasTranscript,
+}: {
+  tab: Tab;
+  onChange: (t: Tab) => void;
+  hasTranscript: boolean;
+}) {
   const tabs: Array<{ k: Tab; l: string }> = [
     { k: 'report', l: '分析报告' },
     { k: 'qa', l: 'QA 对' },
   ];
   if (hasTranscript) tabs.push({ k: 'transcript', l: '原始转录' });
 
-  const activeIdx = tabs.findIndex((t) => t.k === tab);
-  const pct = 100 / tabs.length;
-
   return (
-    <div
-      className="relative inline-flex p-1 mb-5 rounded-full border border-stone-200 shadow-xs"
-      style={{
-        background: 'rgba(255,255,255,0.62)',
-        backdropFilter: 'blur(14px)',
-        WebkitBackdropFilter: 'blur(14px)',
-      }}
-    >
-      <div
-        className="absolute top-1 bottom-1 bg-white rounded-full shadow-xs transition-[left] duration-[280ms]"
-        style={{
-          left: `calc(${activeIdx * pct}% + 4px)`,
-          width: `calc(${pct}% - 4px)`,
-          transitionTimingFunction: 'var(--ease-soft)',
-        }}
-      />
+    <div className="inline-flex p-1 rounded-full bg-slate-100/90 border border-slate-200 shadow-inner">
       {tabs.map((t) => (
         <button
           key={t.k}
+          type="button"
           onClick={() => onChange(t.k)}
-          className={[
-            'relative z-10 px-[22px] py-[7px] text-[13px] font-medium',
-            tab === t.k ? 'text-primary-700' : 'text-stone-600',
-          ].join(' ')}
+          className={`px-5 py-2 text-xs md:text-sm font-semibold rounded-full transition-all duration-200 cursor-pointer ${
+            tab === t.k
+              ? 'bg-white text-blue-700 shadow-sm'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
         >
           {t.l}
         </button>
@@ -226,7 +236,6 @@ function parseLine(
   line: string,
   roleBySpeaker: ReadonlyMap<string, SpeakerLine['side']>,
 ): SpeakerLine | null {
-  // WhisperX/Pyannote ASR: `**[SPEAKER_01]**: text`
   const asrMatch = line.match(/^\*\*\[([^\]]+)\]\*\*:\s*(.*)$/);
   if (asrMatch) {
     const speaker = asrMatch[1];
@@ -237,13 +246,8 @@ function parseLine(
         : semanticLabel.includes('candidate')
           ? 'candidate'
           : 'unknown');
-    return {
-      speaker,
-      text: asrMatch[2],
-      side,
-    };
+    return { speaker, text: asrMatch[2], side };
   }
-  // Mock composed transcript: `面试官: text` / `候选人: text`
   const mockMatch = line.match(/^(面试官|候选人|Interviewer|Candidate)\s*[:：]\s*(.*)$/i);
   if (mockMatch) {
     const role = mockMatch[1];
@@ -288,32 +292,40 @@ function TranscriptView({
   );
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="text-xs text-stone-500 mb-1">
-        原始对话文稿（mock 来源为结构化 Q&A 拼接；upload 来源为 ASR + 声纹分离输出）
+    <div className="space-y-3">
+      <div className="text-xs text-slate-500 mb-2">
+        原始语音识别与说话人分离文稿（已按时间戳对齐）：
       </div>
       {lines.map((line, i) => {
         const parsed = parseLine(line, roleBySpeaker);
         if (parsed) {
-          const colorCls =
-            parsed.side === 'interviewer'
-              ? 'bg-blue-100 text-blue-700'
-              : parsed.side === 'candidate'
-              ? 'bg-emerald-100 text-emerald-700'
-              : 'bg-stone-100 text-stone-600';
+          const isInterviewer = parsed.side === 'interviewer';
           return (
-            <div key={i} className="bg-white rounded-xl border border-stone-200 p-4 shadow-xs">
-              <span
-                className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full mr-2 ${colorCls}`}
-              >
-                {transcriptSpeakerLabel(parsed)}
-              </span>
-              <span className="text-sm text-stone-700 leading-[1.7]">{parsed.text}</span>
+            <div
+              key={i}
+              className={`rounded-2xl p-4 border transition-all ${
+                isInterviewer
+                  ? 'bg-blue-50/40 border-blue-100 text-slate-800'
+                  : 'bg-emerald-50/30 border-emerald-100 text-slate-800'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-1.5">
+                <span
+                  className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                    isInterviewer
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'bg-emerald-100 text-emerald-700'
+                  }`}
+                >
+                  {transcriptSpeakerLabel(parsed)}
+                </span>
+              </div>
+              <p className="text-sm leading-relaxed whitespace-pre-wrap">{parsed.text}</p>
             </div>
           );
         }
         return (
-          <div key={i} className="text-sm text-stone-500 leading-[1.7] px-1">
+          <div key={i} className="text-xs text-slate-500 leading-relaxed px-2">
             {line}
           </div>
         );
@@ -339,12 +351,13 @@ function ReportView({
 }) {
   const overall = analysis?.overall;
   const has = analysis && (overall || qaCount > 0);
+
   if (!has) {
     if (transcript) {
       return (
-        <div className="bg-white rounded-2xl border border-stone-200 p-5 shadow-xs">
-          <div className="text-xs text-stone-500 mb-2">原始转录</div>
-          <div className="text-sm text-stone-700 leading-relaxed whitespace-pre-wrap font-mono">
+        <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-xs">
+          <div className="text-xs font-semibold text-slate-500 mb-2">原始转录文稿</div>
+          <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap font-mono">
             {transcript}
           </div>
         </div>
@@ -352,9 +365,9 @@ function ReportView({
     }
     return (
       <EmptyState
-        icon={<FileText size={24} />}
-        title="这条记录还没有分析报告"
-        description="模型可能仍在生成。完成后请刷新本页查看。"
+        icon={<Sparkles size={28} />}
+        title="分析报告生成中或暂无内容"
+        description="系统仍在处理，完成后将展示完整的诊断指标。"
       />
     );
   }
@@ -374,23 +387,25 @@ function ReportView({
   const generationStatus = analysis?.generation_status ?? (legacyPartial ? 'partial' : 'complete');
   const warnings = analysis?.generation_warnings ?? (legacyPartial ? [summary] : []);
 
-  // We're a study companion, not a gatekeeper: do NOT render verdict / grade /
-  // any pass-fail framing. Score is kept as a self-benchmark only.
   return (
-    <div className="flex flex-col gap-4">
+    <div className="space-y-5">
+      {/* Partial Generation Alert */}
       {generationStatus !== 'complete' && (
-        <div className="rounded-2xl border border-warning-200 bg-warning-50 p-4" role="alert">
-          <div className="text-sm font-medium text-warning-800">这份复盘只生成了部分结果</div>
-          <div className="mt-1 text-xs leading-relaxed text-stone-600">
-            {warnings[0] || '逐题结果已保留，但综合报告或部分评分没有成功生成。'}
+        <div className="rounded-3xl border border-amber-200 bg-amber-50/80 p-5 shadow-xs" role="alert">
+          <div className="text-sm font-bold text-amber-900 flex items-center gap-2">
+            <AlertTriangle size={16} className="text-amber-600" />
+            <span>这份复盘只生成了部分结果</span>
           </div>
+          <p className="mt-1 text-xs text-slate-600 leading-relaxed">
+            {warnings[0] || '逐题结果已成功保留，但综合雷达图或部分评分未能生成完整。'}
+          </p>
           {onReanalyze && (
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="mt-4 flex flex-wrap gap-2.5">
               <button
                 type="button"
                 disabled={reanalyzing}
                 onClick={() => onReanalyze('report')}
-                className="rounded-lg bg-primary-600 px-3 py-2 text-xs font-medium text-white hover:bg-primary-700 disabled:opacity-60"
+                className="px-3.5 py-1.5 rounded-full bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition-all shadow-xs disabled:opacity-50"
               >
                 {reanalyzing ? '重新分析中…' : '重新生成报告'}
               </button>
@@ -398,7 +413,7 @@ function ReportView({
                 type="button"
                 disabled={reanalyzing}
                 onClick={() => onReanalyze('extract')}
-                className="rounded-lg border border-warning-300 bg-white px-3 py-2 text-xs font-medium text-warning-800 hover:bg-warning-100 disabled:opacity-60"
+                className="px-3.5 py-1.5 rounded-full border border-amber-300 bg-white text-amber-800 text-xs font-semibold hover:bg-amber-50 transition-all disabled:opacity-50"
               >
                 QA 有错位？重新整理 QA 与报告
               </button>
@@ -406,7 +421,7 @@ function ReportView({
                 type="button"
                 disabled={reanalyzing}
                 onClick={() => onReanalyze('transcribe')}
-                className="rounded-lg border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+                className="px-3.5 py-1.5 rounded-full border border-slate-300 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-50 transition-all disabled:opacity-50"
               >
                 源转写混乱？从录音重新转写
               </button>
@@ -414,43 +429,57 @@ function ReportView({
           )}
         </div>
       )}
-      <div className="grid grid-cols-[200px_1fr] gap-5 bg-white border border-stone-200 rounded-2xl p-6 shadow-xs">
-        <div className="flex flex-col items-center justify-center bg-cream-50 rounded-xl p-5">
-          <div className="text-xs text-stone-500 uppercase tracking-wider">本次表现</div>
-          <div className={`${score100 === null ? 'text-2xl' : 'text-[52px]'} font-bold text-primary-600 leading-none mt-2`}>
-            {score100 === null ? '未评分' : score100}
+
+      {/* Hero Score & Executive Summary Card */}
+      <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-6 bg-white rounded-3xl border border-slate-200/90 p-6 md:p-8 shadow-xs">
+        <div className="flex flex-col items-center justify-center bg-gradient-to-b from-blue-50/70 via-indigo-50/40 to-white rounded-2xl p-6 border border-blue-100/80 text-center">
+          <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+            综合表现指数
+          </span>
+          <div className="text-5xl font-extrabold text-blue-600 leading-none my-3 tracking-tight">
+            {score100 === null ? '待评' : score100}
           </div>
           {score100 !== null && (
-            <div className="text-xs text-stone-500 mt-1">/ 100 · 进步基准线</div>
+            <span className="text-[11.5px] font-medium text-slate-400">/ 100 · 评估基准分</span>
           )}
         </div>
-        <div className="flex flex-col gap-3 justify-center">
-          {summary && (
-            <div className="text-sm text-stone-600 leading-[1.7]">{summary}</div>
-          )}
+
+        <div className="flex flex-col justify-center gap-2.5">
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+            AI 综合诊断结论
+          </div>
+          <div className="text-sm md:text-[15px] text-slate-700 leading-relaxed">
+            {summary || '已根据面试问答深度完成综合诊断与评分。'}
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <BulletList tone="success" title="做得不错的地方" items={strengths} />
-        <BulletList tone="warn" title="下次可以更好的方向" items={weaknesses} />
+      {/* Strengths and Next Steps Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <BulletList tone="success" title="✨ 表现亮点与核心优势" items={strengths} />
+        <BulletList tone="warn" title="💡 下次可重点突破的方向" items={weaknesses} />
       </div>
 
+      {/* Phase Summaries */}
       {phases.length > 0 && (
-        <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs">
-          <div className="text-xs uppercase tracking-wider text-stone-500 mb-3">阶段表现</div>
+        <div className="bg-white rounded-3xl border border-slate-200/90 p-6 shadow-xs">
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">
+            分阶段面试表现
+          </div>
           <div className="space-y-3">
             {phases.map((phase) => (
-              <div key={phase.phase} className="rounded-xl bg-stone-50 px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-stone-800">{phase.phase_name}</span>
-                  <span className="text-xs text-stone-400">{phase.question_count} 题</span>
-                  <span className="ml-auto text-sm font-mono font-semibold text-primary-600">
-                    {typeof phase.score === 'number' ? `${Math.round(phase.score * 10)}分` : '未评分'}
-                  </span>
+              <div key={phase.phase} className="rounded-2xl bg-slate-50/80 p-4 border border-slate-100">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-bold text-slate-800">{phase.phase_name}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-400">{phase.question_count} 题</span>
+                    <span className="text-sm font-mono font-bold text-blue-600">
+                      {typeof phase.score === 'number' ? `${Math.round(phase.score * 10)}分` : '未评分'}
+                    </span>
+                  </div>
                 </div>
                 {phase.summary && (
-                  <div className="text-sm text-stone-600 leading-[1.7] mt-1.5">{phase.summary}</div>
+                  <p className="text-xs text-slate-600 mt-2 leading-relaxed">{phase.summary}</p>
                 )}
               </div>
             ))}
@@ -458,21 +487,27 @@ function ReportView({
         </div>
       )}
 
+      {/* Ability Radar */}
       {radar.length > 0 && (
-        <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs">
-          <div className="text-xs uppercase tracking-wider text-stone-500 mb-3">能力维度</div>
+        <div className="bg-white rounded-3xl border border-slate-200/90 p-6 shadow-xs">
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">
+            能力维度与考核雷达
+          </div>
           <AbilityRadarChart values={radar} />
         </div>
       )}
 
+      {/* Next Growth Action Plan */}
       {plan.length > 0 && (
-        <div className="bg-white rounded-2xl border border-stone-200 p-6 shadow-xs">
-          <div className="text-xs uppercase tracking-wider text-stone-500 mb-2.5">下一步行动</div>
-          <ul className="space-y-2">
+        <div className="bg-white rounded-3xl border border-slate-200/90 p-6 shadow-xs">
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
+            🎯 下一步针对性提分计划
+          </div>
+          <ul className="space-y-2.5">
             {plan.map((p, i) => (
-              <li key={i} className="text-sm text-stone-700 leading-[1.7]">
-                <span className="text-primary-500 mr-2">→</span>
-                {p}
+              <li key={i} className="flex items-start gap-2 text-sm text-slate-700 leading-relaxed">
+                <span className="text-blue-600 font-bold mt-0.5">→</span>
+                <span>{p}</span>
               </li>
             ))}
           </ul>
@@ -488,6 +523,7 @@ function AbilityRadarChart({ values }: { values: Array<[string, number | null]> 
   const centerX = 180;
   const centerY = 145;
   const radius = 92;
+
   const pointAt = (index: number, scale: number) => {
     const angle = -Math.PI / 2 + (index * Math.PI * 2) / count;
     return {
@@ -495,34 +531,32 @@ function AbilityRadarChart({ values }: { values: Array<[string, number | null]> 
       y: centerY + Math.sin(angle) * radius * scale,
     };
   };
+
   const polygon = (scale: number) => dimensions
     .map((_, index) => {
       const point = pointAt(index, scale);
       return `${point.x.toFixed(1)},${point.y.toFixed(1)}`;
     })
     .join(' ');
+
   const dataPolygon = dimensions
     .map(([, value], index) => {
       const point = pointAt(index, typeof value === 'number' ? Math.max(0, Math.min(10, value)) / 10 : 0);
       return `${point.x.toFixed(1)},${point.y.toFixed(1)}`;
     })
     .join(' ');
+
   const hasMeasuredValue = dimensions.some(([, value]) => typeof value === 'number');
 
   return (
-    <div className="grid items-center gap-5 md:grid-cols-[minmax(300px,1fr)_220px]">
-      <svg
-        role="img"
-        aria-label="能力雷达图"
-        viewBox="0 0 360 300"
-        className="mx-auto w-full max-w-[420px]"
-      >
+    <div className="grid items-center gap-6 md:grid-cols-[minmax(300px,1fr)_240px]">
+      <svg role="img" aria-label="能力雷达图" viewBox="0 0 360 300" className="mx-auto w-full max-w-[400px]">
         {[0.2, 0.4, 0.6, 0.8, 1].map((scale) => (
           <polygon
             key={scale}
             points={polygon(scale)}
             fill="none"
-            stroke={scale === 1 ? '#cbd5e1' : '#e7e5e4'}
+            stroke={scale === 1 ? '#cbd5e1' : '#e2e8f0'}
             strokeWidth="1"
           />
         ))}
@@ -532,8 +566,8 @@ function AbilityRadarChart({ values }: { values: Array<[string, number | null]> 
           const anchor = Math.abs(label.x - centerX) < 8 ? 'middle' : label.x > centerX ? 'start' : 'end';
           return (
             <g key={dimension}>
-              <line x1={centerX} y1={centerY} x2={axis.x} y2={axis.y} stroke="#e7e5e4" strokeWidth="1" />
-              <text x={label.x} y={label.y} textAnchor={anchor} dominantBaseline="middle" className="fill-stone-600 text-[11px]">
+              <line x1={centerX} y1={centerY} x2={axis.x} y2={axis.y} stroke="#e2e8f0" strokeWidth="1" />
+              <text x={label.x} y={label.y} textAnchor={anchor} dominantBaseline="middle" className="fill-slate-600 text-[11px] font-medium">
                 {dimension}
               </text>
             </g>
@@ -541,25 +575,28 @@ function AbilityRadarChart({ values }: { values: Array<[string, number | null]> 
         })}
         {hasMeasuredValue && (
           <>
-            <polygon points={dataPolygon} fill="rgba(59,130,246,0.18)" stroke="#3b82f6" strokeWidth="2" />
+            <polygon points={dataPolygon} fill="rgba(66,133,244,0.18)" stroke="#2563eb" strokeWidth="2.5" />
             {dimensions.map(([dimension, value], index) => {
               if (typeof value !== 'number') return null;
               const point = pointAt(index, Math.max(0, Math.min(10, value)) / 10);
-              return <circle key={dimension} cx={point.x} cy={point.y} r="3.5" fill="#2563eb" />;
+              return <circle key={dimension} cx={point.x} cy={point.y} r="4" fill="#1d4ed8" />;
             })}
           </>
         )}
       </svg>
+
       <div className="space-y-2">
         {dimensions.map(([dimension, value]) => (
-          <div key={dimension} className="flex items-center justify-between rounded-lg bg-stone-50 px-3 py-2 text-sm">
-            <span className="text-stone-700">{dimension}</span>
-            <span className="font-mono text-stone-500">
+          <div key={dimension} className="flex items-center justify-between rounded-xl bg-slate-50 px-3.5 py-2 text-xs font-medium">
+            <span className="text-slate-700">{dimension}</span>
+            <span className="font-mono font-bold text-blue-600">
               {typeof value === 'number' ? `${Math.round(value * 10)}分` : '未考察'}
             </span>
           </div>
         ))}
-        <p className="text-[11px] leading-relaxed text-stone-400">仅展示本次问答中有直接证据的维度；“未考察”不等于能力不足。</p>
+        <p className="text-[11px] text-slate-400 pt-1 leading-normal">
+          * 仅展示本次问答中有直接证据的维度；“未考察”不代表能力缺失。
+        </p>
       </div>
     </div>
   );
@@ -575,18 +612,18 @@ function BulletList({
   items: string[];
 }) {
   return (
-    <div className="bg-white rounded-2xl border border-stone-200 p-5 shadow-xs">
-      <div className={`text-sm font-semibold mb-2.5 ${tone === 'success' ? 'text-success-700' : 'text-warning-700'}`}>
+    <div className="bg-white rounded-3xl border border-slate-200/90 p-6 shadow-xs">
+      <div className={`text-sm font-bold mb-3 ${tone === 'success' ? 'text-emerald-700' : 'text-amber-800'}`}>
         {title}
       </div>
       {items.length === 0 ? (
-        <div className="text-sm text-stone-400">暂无内容</div>
+        <div className="text-xs text-slate-400">暂无具体归纳</div>
       ) : (
-        <ul className="space-y-2">
+        <ul className="space-y-2.5">
           {items.map((it, i) => (
-            <li key={i} className="text-sm text-stone-700 leading-[1.7]">
-              <span className={tone === 'success' ? 'text-success-500 mr-2' : 'text-warning-500 mr-2'}>·</span>
-              {it}
+            <li key={i} className="flex items-start gap-2.5 text-sm text-slate-700 leading-relaxed">
+              <span className={`font-bold text-base leading-none ${tone === 'success' ? 'text-emerald-500' : 'text-amber-500'}`}>•</span>
+              <span>{it}</span>
             </li>
           ))}
         </ul>
@@ -595,14 +632,14 @@ function BulletList({
   );
 }
 
-// ── QAItem (per spec) ────────────────────────────────────────────────────
+// ── QAItem Component ─────────────────────────────────────────────────────
 
 function scoreColor(score: number | undefined): string {
-  if (typeof score !== 'number') return 'text-stone-400';
+  if (typeof score !== 'number') return 'text-slate-400';
   const s100 = score * 10;
-  if (s100 >= 80) return 'text-success-700';
-  if (s100 >= 60) return 'text-warning-700';
-  return 'text-danger-500';
+  if (s100 >= 80) return 'text-emerald-600';
+  if (s100 >= 60) return 'text-amber-600';
+  return 'text-red-500';
 }
 
 function QAItem({
@@ -623,6 +660,7 @@ function QAItem({
   const [answer, setAnswer] = useState(qa.answer);
   const [savedDocId, setSavedDocId] = useState<string | null>(qa.saved_document_id ?? null);
   const [savingKb, setSavingKb] = useState(false);
+  const [copied, setCopied] = useState(false);
   const savedQuestion = useRef(qa.question);
   const savedAnswer = useRef(qa.answer);
 
@@ -633,8 +671,12 @@ function QAItem({
       await editInterviewQA(recordId, qa.id, { question });
       savedQuestion.current = question;
       toast.success('问题已保存');
-    } catch { toast.error('保存失败'); setQuestion(savedQuestion.current); }
+    } catch {
+      toast.error('保存失败');
+      setQuestion(savedQuestion.current);
+    }
   };
+
   const saveA = async () => {
     setEditingA(false);
     if (answer === savedAnswer.current) return;
@@ -642,7 +684,10 @@ function QAItem({
       await editInterviewQA(recordId, qa.id, { answer });
       savedAnswer.current = answer;
       toast.success('答案已保存');
-    } catch { toast.error('保存失败'); setAnswer(savedAnswer.current); }
+    } catch {
+      toast.error('保存失败');
+      setAnswer(savedAnswer.current);
+    }
   };
 
   const toggleKb = async () => {
@@ -664,33 +709,45 @@ function QAItem({
     }
   };
 
+  const handleCopyImproved = () => {
+    if (!qa.improved_answer) return;
+    navigator.clipboard.writeText(qa.improved_answer);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   const hasImproved = !!qa.improved_answer && qa.improved_answer.trim().length > 0;
   const score = qa.score ?? undefined;
   const phaseLabel = qa.phase_label || qa.phase;
 
   return (
-    <article className="bg-white rounded-2xl p-5 border border-stone-200 shadow-xs">
-      {/* Q-row */}
-      <div className="flex items-center gap-2 mb-2">
+    <article className="bg-white rounded-3xl p-6 border border-slate-200/90 shadow-xs hover:border-slate-300 transition-all">
+      {/* Question Header */}
+      <div className="flex items-center gap-2.5 mb-3 flex-wrap">
         <Pill tone="primary">Q{qa.order_idx + 1}</Pill>
-        {qa.is_follow_up && <Pill tone="sand">追问</Pill>}
-        <span className="text-xs text-stone-500">{phaseLabel}</span>
+        {qa.is_follow_up && <Pill tone="warn">追问</Pill>}
+        {phaseLabel && <span className="text-xs text-slate-500 font-medium">{phaseLabel}</span>}
         {qa.source_provenance?.manual_override && <Pill tone="sand">用户已编辑</Pill>}
-        <span className={`ml-auto text-sm font-mono font-semibold ${scoreColor(score)}`}>
-          {typeof score === 'number'
-            ? `${Math.round(score * 10)}分`
-            : qa.critique
-              ? '未评分'  /* grading was attempted but the model call failed (ANA-6) */
+
+        <div className="ml-auto flex items-center gap-3">
+          <span className={`text-sm font-mono font-bold ${scoreColor(score)}`}>
+            {typeof score === 'number'
+              ? `${Math.round(score * 10)}分`
+              : qa.critique
+              ? '未评分'
               : ''}
-        </span>
-        <button
-          onClick={() => setEditingQ((v) => !v)}
-          title="编辑问题"
-          className="w-6 h-6 rounded text-stone-400 hover:text-stone-600 hover:bg-stone-100 flex items-center justify-center"
-        >
-          <Pencil size={12} />
-        </button>
+          </span>
+          <button
+            type="button"
+            onClick={() => setEditingQ((v) => !v)}
+            title="编辑问题"
+            className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+          >
+            <Pencil size={13} />
+          </button>
+        </div>
       </div>
+
       {editingQ ? (
         <textarea
           autoFocus
@@ -701,145 +758,147 @@ function QAItem({
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) e.currentTarget.blur();
           }}
           rows={2}
-          className="w-full p-3 text-base font-medium bg-stone-50 border border-primary-200 rounded-lg outline-none resize-y mb-4"
+          className="w-full p-3 text-sm font-semibold bg-slate-50 border border-blue-300 rounded-2xl outline-none resize-y mb-4"
         />
       ) : (
-        <div
+        <h3
           onDoubleClick={() => setEditingQ(true)}
-          className="text-base font-medium text-stone-800 leading-[1.6] mb-4 cursor-text"
+          className="text-base font-bold text-slate-900 leading-snug mb-4 cursor-text"
         >
           {question}
-        </div>
+        </h3>
       )}
 
-      {/* A-row */}
-      <div className="flex items-center gap-2 mb-2">
-        <Pill tone="success">A</Pill>
-        <span className="text-xs text-stone-500">你的回答 · 可编辑</span>
-        {qa.answer_audio_url && (
-          // MOCK-7: voice answers keep their original clip — presigned URL
-          // minted by the backend per detail read.
-          <audio
-            controls
-            preload="none"
-            src={qa.answer_audio_url}
-            className="h-7 max-w-[220px]"
-          />
-        )}
-        <button
-          onClick={() => setEditingA((v) => !v)}
-          title="编辑回答"
-          className="ml-auto w-6 h-6 rounded text-stone-400 hover:text-stone-600 hover:bg-stone-100 flex items-center justify-center"
-        >
-          <Pencil size={12} />
-        </button>
-      </div>
-      {editingA ? (
-        <textarea
-          autoFocus
-          value={answer}
-          onChange={(e) => setAnswer(e.target.value)}
-          onBlur={saveA}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) e.currentTarget.blur();
-          }}
-          rows={4}
-          className="w-full p-3.5 text-[15px] font-mono bg-stone-50 border border-primary-200 rounded-lg outline-none resize-y leading-[1.7]"
-        />
-      ) : (
-        <div
-          onDoubleClick={() => setEditingA(true)}
-          className="text-[15px] font-mono text-stone-700 leading-[1.7] bg-stone-50 p-3.5 rounded-lg cursor-text whitespace-pre-wrap"
-        >
-          {answer || <span className="text-stone-400 font-sans">（未作答）</span>}
-        </div>
-      )}
-
-      {qa.source_provenance && (
-        <details className="mt-3 text-xs text-stone-500">
-          <summary className="cursor-pointer select-none hover:text-stone-700">
-            查看原词整理记录
-          </summary>
-          <div className="mt-2 rounded-lg bg-stone-50 px-3 py-2 leading-5">
-            {qa.source_provenance.manual_override
-              ? '当前正文包含用户明确编辑；下列词级引用保留编辑前来源。'
-              : `回答引用 ${qa.source_provenance.answer_word_ids.length} 个原始词。`}
-            {' '}
-            保留 {qa.source_provenance.crossing_utterance_ids.length} 次交叉插话，
-            隐藏 {qa.source_provenance.hidden_words.length} 个可审计的非语义词；
-            结构置信度 {Math.round(qa.source_provenance.confidence * 100)}%。
+      {/* Candidate Answer Box */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-xs text-slate-500">
+          <div className="flex items-center gap-1.5">
+            <span className="font-bold text-slate-700">候选人现场作答</span>
+            {qa.answer_audio_url && (
+              <audio
+                controls
+                preload="none"
+                src={qa.answer_audio_url}
+                className="h-6 max-w-[200px] ml-2"
+              />
+            )}
           </div>
-        </details>
-      )}
+          <button
+            type="button"
+            onClick={() => setEditingA((v) => !v)}
+            title="编辑回答文本"
+            className="text-blue-600 hover:underline inline-flex items-center gap-1"
+          >
+            <Pencil size={11} />
+            <span>编辑回答</span>
+          </button>
+        </div>
 
+        {editingA ? (
+          <textarea
+            autoFocus
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            onBlur={saveA}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) e.currentTarget.blur();
+            }}
+            rows={4}
+            className="w-full p-4 text-xs md:text-sm font-mono bg-slate-50 border border-blue-300 rounded-2xl outline-none resize-y leading-relaxed"
+          />
+        ) : (
+          <div
+            onDoubleClick={() => setEditingA(true)}
+            className="text-xs md:text-sm text-slate-700 leading-relaxed bg-slate-50/90 border border-slate-100 p-4 rounded-2xl cursor-text whitespace-pre-wrap font-sans"
+          >
+            {answer || <span className="text-slate-400 italic">（录音中未检测到清晰作答）</span>}
+          </div>
+        )}
+      </div>
+
+      {/* Critique / Review Feedback */}
       {qa.critique && (
-        <div className="mt-3.5 text-sm text-stone-600 leading-[1.7]">
-          <span className="text-warning-700 font-semibold">回顾：</span>
+        <div className="mt-3.5 p-3.5 rounded-2xl bg-amber-50/60 border border-amber-100 text-xs text-slate-700 leading-relaxed">
+          <span className="font-bold text-amber-800 mr-1.5">💡 表现点评：</span>
           {qa.critique}
         </div>
       )}
 
-      {onToggleQuestion && (
-        <div className="mt-4 flex justify-end">
+      {/* Action Toolbar */}
+      <div className="mt-4 pt-3.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+        {/* Toggle Improved Answer Button */}
+        <button
+          type="button"
+          onClick={() => setOpenS((v) => !v)}
+          className="inline-flex items-center gap-1.5 text-xs font-bold text-blue-600 hover:text-blue-700 transition-colors cursor-pointer"
+        >
+          <Sparkles size={14} className="text-blue-600" />
+          <span>🎯 查看 AI STAR 优化范式回答</span>
+          <ChevronRight
+            size={14}
+            className={`transition-transform duration-200 ${openS ? 'rotate-90' : ''}`}
+          />
+        </button>
+
+        {onToggleQuestion && (
           <button
             type="button"
             onClick={() => onToggleQuestion(qa.order_idx + 1)}
-            className={[
-              'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] transition-colors',
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
               selected
-                ? 'bg-primary-100 text-primary-800 hover:bg-primary-200'
-                : 'bg-stone-100 text-stone-600 hover:bg-primary-50 hover:text-primary-700',
-            ].join(' ')}
+                ? 'bg-blue-100 text-blue-800'
+                : 'bg-slate-100 text-slate-600 hover:bg-blue-50 hover:text-blue-700'
+            }`}
           >
-            <MessageCircleQuestion size={14} />
-            {selected ? '已加入追问' : '追问本题'}
+            <MessageCircleQuestion size={13} />
+            <span>{selected ? '已加入追问' : '追问本题'}</span>
           </button>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* Collapsible "优化回答" */}
-      <div className="mt-4 border-t border-stone-100 pt-3.5">
-        <button
-          onClick={() => setOpenS((v) => !v)}
-          className="flex items-center gap-2 w-full text-left text-sm font-medium text-primary-700"
-        >
-          <ChevronRight
-            size={15}
-            className="transition-transform duration-[180ms]"
-            style={{ transform: openS ? 'rotate(90deg)' : 'rotate(0deg)' }}
-          />
-          <span>优化回答</span>
-          {!openS && (
-            <span className="text-xs text-stone-400 font-normal">· 点击展开</span>
-          )}
-        </button>
-        {openS && (
-          <>
-            <div className="mt-3 p-4 rounded-xl bg-primary-50 border border-primary-100 text-stone-800 text-sm leading-[1.75] whitespace-pre-wrap">
-              {hasImproved ? qa.improved_answer : (
-                <span className="text-stone-500 italic">LLM 优化回答尚未生成</span>
-              )}
-            </div>
-            {hasImproved && (
+      {/* Collapsible Improved Answer Box */}
+      {openS && (
+        <div className="mt-3 p-5 rounded-2xl bg-gradient-to-b from-blue-50/50 via-purple-50/30 to-slate-50/50 border border-blue-200/80 animate-in fade-in duration-200">
+          <div className="flex items-center justify-between mb-2.5">
+            <span className="text-xs font-bold text-purple-900 flex items-center gap-1.5">
+              <Sparkles size={14} className="text-purple-600" />
+              <span>STAR 优化回答方案 (Situation · Task · Action · Result)</span>
+            </span>
+            <button
+              type="button"
+              onClick={handleCopyImproved}
+              className="text-xs font-medium text-slate-500 hover:text-purple-700 inline-flex items-center gap-1"
+            >
+              {copied ? <Check size={12} className="text-emerald-600" /> : <Copy size={12} />}
+              <span>{copied ? '已复制' : '复制范式'}</span>
+            </button>
+          </div>
+
+          <div className="text-xs md:text-sm text-slate-800 leading-relaxed whitespace-pre-wrap font-sans">
+            {hasImproved ? qa.improved_answer : (
+              <span className="text-slate-400 italic">LLM 深度优化回答生成中…</span>
+            )}
+          </div>
+
+          {hasImproved && (
+            <div className="mt-4 pt-3 border-t border-purple-100 flex items-center justify-end">
               <button
                 type="button"
                 onClick={toggleKb}
                 disabled={savingKb}
-                className={[
-                  'mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] transition-colors',
+                className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all ${
                   savedDocId
-                    ? 'bg-success-50 text-success-700 hover:bg-success-100'
-                    : 'bg-primary-50 text-primary-700 hover:bg-primary-100',
-                  savingKb ? 'opacity-60 cursor-wait' : '',
-                ].join(' ')}
+                    ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                    : 'bg-white border border-purple-200 text-purple-800 hover:bg-purple-50 shadow-xs'
+                }`}
               >
-                {savedDocId ? <BookmarkCheck size={14} /> : <BookmarkPlus size={14} />}
-                {savedDocId ? '已保存到知识库 · 点击移除' : '保存到知识库'}
+                {savedDocId ? <BookmarkCheck size={13} /> : <BookmarkPlus size={13} />}
+                <span>{savedDocId ? '已沉淀至个人知识库 · 点击移除' : '沉淀至知识库'}</span>
               </button>
-            )}
-          </>
-        )}
-      </div>
+            </div>
+          )}
+        </div>
+      )}
     </article>
   );
 }

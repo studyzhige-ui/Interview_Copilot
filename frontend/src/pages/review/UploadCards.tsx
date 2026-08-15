@@ -1,5 +1,15 @@
-import { useRef, useState } from 'react';
-import { Upload, FileText, Briefcase, Mic2, CheckCircle2, Loader2, Play, Tag } from 'lucide-react';
+import { useRef, useState, DragEvent } from 'react';
+import {
+  FileText,
+  Briefcase,
+  CheckCircle2,
+  Loader2,
+  Sparkles,
+  Tag,
+  ArrowRight,
+  FileAudio,
+  Radio,
+} from 'lucide-react';
 import { Btn } from '@/components/ui/Btn';
 import { Spinner } from '@/components/ui/Spinner';
 import { toast } from '@/store/uiStore';
@@ -21,9 +31,7 @@ type TagOpt = typeof TAGS[number];
 
 interface Props {
   initialTitle?: string;
-  /** Externally-managed analysis state for THIS card's session. */
   analysis: AnalysisProgress | null;
-  /** Caller hooks up the SSE runner; we just notify when /analyze succeeds. */
   onStart: (payload: {
     record_id: string;
     title: string;
@@ -40,10 +48,6 @@ export function UploadCards({ initialTitle, analysis, onStart }: Props) {
   const [title, setTitle] = useState(initialTitle ?? '');
   const [tag, setTag] = useState<TagOpt | ''>('');
   const [starting, setStarting] = useState(false);
-  // Whisper language hint. Forcing the language is the single biggest
-  // accuracy win on clean monolingual audio. Default 中文 because that's
-  // what 95% of our users record in; users with English interviews flip
-  // this once.
   const [language, setLanguage] = useState<'zh' | 'en' | 'auto'>('zh');
   const [jobOpportunityId, setJobOpportunityId] = useState('');
 
@@ -58,16 +62,13 @@ export function UploadCards({ initialTitle, analysis, onStart }: Props) {
     update(k, { filename: f.name, uploading: true });
     try {
       let uploadId = '';
-      // Audio stays on the legacy upload endpoint for now; resume + JD go
-      // through the unified presigned file-asset flow. JD is an ad-hoc snapshot
-      // source (purpose='jd') and never enters the knowledge base.
       if (k === 'audio') uploadId = (await uploadAudio(f)).upload_id;
       else if (k === 'resume') uploadId = await uploadFileAsset(f, 'resume');
       else uploadId = await uploadFileAsset(f, 'jd');
       update(k, { filename: f.name, uploadId, uploading: false });
     } catch {
       update(k, { filename: '', uploadId: undefined, uploading: false });
-      toast.error('上传失败');
+      toast.error('上传失败，请重试');
     }
   };
 
@@ -96,90 +97,150 @@ export function UploadCards({ initialTitle, analysis, onStart }: Props) {
     }
   };
 
-  // ── While analyzing ──────────────────────────────────────────────────
+  // ── While analyzing (Futuristic Gemini Pipeline) ──────────────────────────
   if (analysis !== null) {
+    const percent = Math.min(Math.max(analysis.percent, 0), 100);
+    const statusText = analysis.status || '正在进行 AI 深度多维分析';
+
     return (
-      <div className="max-w-3xl mx-auto p-10">
-        <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-10">
-          <div className="flex items-center gap-3 mb-4">
-            <Loader2 size={20} className="text-primary-500 animate-spin" />
-            <div className="text-sm text-primary-700 font-mono">
-              ● 正在转录与分析… {analysis.percent}%
+      <div className="max-w-3xl mx-auto p-6 md:p-12 flex flex-col items-center justify-center min-h-[520px]">
+        <div className="w-full bg-white/90 backdrop-blur-xl border border-slate-200/90 rounded-3xl shadow-xl p-8 md:p-10 relative overflow-hidden">
+          {/* Top glowing ambient line */}
+          <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 animate-pulse" />
+
+          <div className="flex items-center gap-3.5 mb-6">
+            <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center shadow-inner">
+              <Loader2 size={24} className="animate-spin text-blue-600" />
+            </div>
+            <div>
+              <div className="text-base font-bold text-slate-800 flex items-center gap-2">
+                <span>AI 正在全力解析面试录音…</span>
+                <span className="text-xs px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-mono font-bold">
+                  {percent}%
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">{statusText}</p>
             </div>
           </div>
-          <div className="w-full h-2 bg-stone-100 rounded-full overflow-hidden mb-3">
+
+          {/* Progress Track */}
+          <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden mb-6 p-0.5 shadow-inner">
             <div
-              className="h-full bg-primary-500 transition-all duration-300 ease-out"
-              style={{ width: `${analysis.percent}%` }}
+              className="h-full bg-gradient-to-r from-blue-500 via-purple-500 to-rose-500 rounded-full transition-all duration-500 ease-out"
+              style={{ width: `${Math.max(percent, 5)}%` }}
             />
           </div>
-          <div className="text-xs text-stone-500">
-            {analysis.phase === 'progress'
-              ? `阶段：${analysis.status ?? '处理中'}`
-              : analysis.phase === 'connecting'
-              ? '建立 SSE 连接中…'
-              : analysis.phase === 'error'
-              ? `连接错误：${analysis.message ?? ''}`
-              : '等待后端推送进度'}
+
+          {/* 4-Step Pipeline Visualizer */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+            {[
+              { title: '1. 语音转写', desc: 'Whisper 提取时间戳', active: percent >= 20 },
+              { title: '2. 问答拆解', desc: '多轮对话意图抽取', active: percent >= 50 },
+              { title: '3. STAR 诊断', desc: '能力雷达与扣分点', active: percent >= 80 },
+              { title: '4. 知识沉淀', desc: '最佳回答与知识库', active: percent >= 98 },
+            ].map((step, idx) => (
+              <div
+                key={idx}
+                className={`p-3 rounded-2xl border transition-all ${
+                  step.active
+                    ? 'bg-blue-50/60 border-blue-200 text-blue-900 shadow-xs'
+                    : 'bg-slate-50/70 border-slate-200/60 text-slate-400'
+                }`}
+              >
+                <div className="text-xs font-bold mb-1 flex items-center gap-1">
+                  {step.active ? (
+                    <CheckCircle2 size={13} className="text-blue-600 shrink-0" />
+                  ) : (
+                    <Radio size={13} className="text-slate-400 shrink-0" />
+                  )}
+                  <span>{step.title}</span>
+                </div>
+                <div className="text-[11px] opacity-80">{step.desc}</div>
+              </div>
+            ))}
           </div>
-          <div className="text-[11px] text-stone-400 mt-3">
-            可以切换到其他面试 / 对话页面，分析任务会继续在后台运行；左侧列表会显示「分析中」状态。
+
+          <div className="text-xs text-slate-400 text-center bg-slate-50 rounded-2xl py-2.5 px-4">
+            💡 提示：你可以自由切换至其他对话或页面，后台任务将持续运行，完成后会自动同步更新。
           </div>
         </div>
       </div>
     );
   }
 
-  // ── Upload state ─────────────────────────────────────────────────────
+  // ── Gemini Studio Drop Hub ──────────────────────────────────────────────
   return (
-    <div className="max-w-3xl mx-auto p-8">
-      <div className="flex items-center gap-3 mb-5">
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="给这次面试起个名字（例：字节后端二面）"
-          className="flex-1 px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm text-stone-800 outline-none focus:border-primary-300"
-        />
-        <div className="relative">
-          <Tag size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400 pointer-events-none" />
-          <select
-            value={tag}
-            onChange={(e) => setTag(e.target.value as TagOpt | '')}
-            className="pl-7 pr-7 py-2 bg-white border border-stone-200 rounded-lg text-xs text-stone-700 outline-none focus:border-primary-300 appearance-none"
-          >
-            <option value="">选标签（可选）</option>
-            {TAGS.map((t) => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
+    <div className="max-w-4xl mx-auto p-6 md:p-10 space-y-8 animate-in fade-in duration-300">
+      {/* Hero Welcome Header */}
+      <div className="text-center space-y-2">
+        <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-blue-50 border border-blue-100 text-blue-700 text-xs font-semibold shadow-xs">
+          <Sparkles size={14} className="text-blue-600" />
+          <span>智能面试复盘与全景诊断</span>
+        </div>
+        <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight">
+          开启一场全新的面试深度诊断
+        </h2>
+        <p className="text-sm text-slate-500 max-w-xl mx-auto leading-relaxed">
+          上传面试录音、简历及目标岗位 JD，AI 将为你还原对话全貌、深度评估候选人表现并输出 STAR 优化指南。
+        </p>
+      </div>
+
+      {/* Main Metadata Config Pill */}
+      <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-4 flex flex-col md:flex-row items-center gap-3">
+        <div className="flex-1 w-full relative">
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="为本次面试复盘命名（如：腾讯二面 / 阿里后端研发专场）"
+            className="w-full px-4 py-2.5 bg-slate-50 hover:bg-slate-100/70 focus:bg-white border border-slate-200/80 rounded-2xl text-sm font-medium text-slate-800 placeholder-slate-400 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all"
+          />
+        </div>
+
+        <div className="flex items-center gap-2 w-full md:w-auto">
+          <div className="relative flex-1 md:w-40">
+            <Tag size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <select
+              value={tag}
+              onChange={(e) => setTag(e.target.value as TagOpt | '')}
+              className="w-full pl-8 pr-7 py-2.5 bg-slate-50 hover:bg-slate-100/70 focus:bg-white border border-slate-200/80 rounded-2xl text-xs font-semibold text-slate-700 outline-none focus:border-blue-400 transition-all appearance-none cursor-pointer"
+            >
+              <option value="">选择专业标签</option>
+              {TAGS.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3.5 mb-4">
+      {/* 3 Dropzone Cards (Audio + Resume + JD) */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <UploadCard
-          icon={<Mic2 size={18} />}
-          title="上传音视频"
-          subtitle="MP3 / MP4 / WAV · 自动转录"
+          icon={<FileAudio size={22} />}
+          title="上传面试录音 / 视频"
+          subtitle="MP3 / M4A / WAV / MP4 格式"
           state={slots.audio}
           accept="audio/*,video/*"
           inputRef={audioRef}
           onPick={(f) => onPick('audio', f)}
           required
         />
+
         <UploadCard
-          icon={<FileText size={18} />}
-          title="上传简历"
-          subtitle="PDF / DOCX · 用于分析背景"
+          icon={<FileText size={22} />}
+          title="上传个人简历"
+          subtitle="PDF / DOCX 格式，用于对齐经历"
           state={slots.resume}
           accept=".pdf,.doc,.docx,.txt,.md"
           inputRef={resumeRef}
           onPick={(f) => onPick('resume', f)}
           required
         />
+
         <UploadCard
-          icon={<Briefcase size={18} />}
-          title="上传岗位 JD"
-          subtitle="TXT / MD · 可选，定位方向"
+          icon={<Briefcase size={22} />}
+          title="关联岗位 JD（可选）"
+          subtitle="TXT / MD / PDF，精准定位要求"
           state={slots.jd}
           accept=".pdf,.doc,.docx,.txt,.md"
           inputRef={jdRef}
@@ -187,63 +248,73 @@ export function UploadCards({ initialTitle, analysis, onStart }: Props) {
         />
       </div>
 
-      <div className="px-4 py-3 rounded-xl bg-primary-50 text-primary-700 text-[13px] flex items-center gap-2.5 mb-4">
-        <span className="w-1.5 h-1.5 rounded-full bg-primary-500" />
-        需要音视频 + 简历才能开始分析；岗位 JD 可选，提供后分析会更精准。
-      </div>
-
-      <div className="mb-4 rounded-xl border border-stone-200 bg-white p-4">
-        <label className="mb-2 block text-sm font-medium text-stone-700">关联岗位机会（可选）</label>
-        <JobOpportunitySelect
-          value={jobOpportunityId}
-          onChange={setJobOpportunityId}
-          ariaLabel="录音复盘关联岗位"
-          emptyLabel="不关联岗位"
-        />
-      </div>
-
-      {/* Whisper language picker — sits next to the start button so users
-          set it intentionally per upload. Forcing the language (vs auto)
-          is the single biggest accuracy win on clean monolingual audio. */}
-      <div className="flex flex-col items-center gap-3">
-        <div className="flex items-center gap-3 text-[13px] text-stone-600">
-          <span>转录语言：</span>
-          <div className="inline-flex rounded-lg border border-stone-200 bg-white overflow-hidden">
-            {([
-              { value: 'zh',   label: '中文'   },
-              { value: 'en',   label: 'English' },
-              { value: 'auto', label: '自动'   },
-            ] as const).map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => setLanguage(opt.value)}
-                className={[
-                  'px-3 py-1.5 text-[13px] transition-colors',
-                  language === opt.value
-                    ? 'bg-primary-50 text-primary-700 font-medium'
-                    : 'text-stone-600 hover:bg-stone-50',
-                ].join(' ')}
-              >
-                {opt.label}
-              </button>
-            ))}
+      {/* Associated Job Opportunity Selector & Language Setup */}
+      <div className="bg-white/80 rounded-3xl border border-slate-200/80 p-5 space-y-4 shadow-xs">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex-1">
+            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+              关联求职机会（可选）
+            </label>
+            <JobOpportunitySelect
+              value={jobOpportunityId}
+              onChange={setJobOpportunityId}
+              ariaLabel="录音复盘关联岗位"
+              emptyLabel="不关联具体岗位"
+            />
           </div>
-          <span className="text-stone-400 text-[11px]">
-            {language === 'auto'
-              ? '让 Whisper 自动检测（仅当录音中英混杂时推荐）'
-              : '强制指定语言可显著提升单语录音的转写质量'}
-          </span>
+
+          <div className="shrink-0">
+            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+              转录语言偏好
+            </label>
+            <div className="inline-flex rounded-2xl border border-slate-200 p-1 bg-slate-50">
+              {([
+                { value: 'zh', label: '中文为主' },
+                { value: 'en', label: 'English' },
+                { value: 'auto', label: '智能检测' },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setLanguage(opt.value)}
+                  className={`px-3 py-1 text-xs font-medium rounded-xl transition-all ${
+                    language === opt.value
+                      ? 'bg-white text-blue-700 shadow-xs font-semibold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
+      </div>
+
+      {/* Start Button Hero */}
+      <div className="flex flex-col items-center justify-center pt-2">
         <Btn
+          kind="sparkle"
           size="lg"
-          icon={<Play size={16} />}
           disabled={!canStart}
           loading={starting}
           onClick={onStartClick}
+          className="px-8 py-3.5 text-base font-semibold shadow-lg shadow-purple-500/20"
         >
-          {canStart ? '开始分析' : slots.audio.uploadId && slots.resume.uploadId ? '处理中…' : '请先完成必填上传'}
+          <Sparkles size={18} />
+          <span>
+            {canStart
+              ? '开始分析'
+              : slots.audio.uploadId && slots.resume.uploadId
+              ? '处理中…'
+              : '请先完成必填上传'}
+          </span>
+          <ArrowRight size={16} />
         </Btn>
+
+        <p className="text-xs text-slate-400 mt-3">
+          * 必填项：面试录音 + 个人简历。数据严格加密传输，保护个人隐私。
+        </p>
       </div>
     </div>
   );
@@ -281,16 +352,33 @@ function UploadCard({
   required?: boolean;
 }) {
   const done = !!state.uploadId;
+  const [isDragOver, setIsDragOver] = useState(false);
+
+  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) onPick(file);
+  };
+
   return (
     <div
       onClick={() => inputRef.current?.click()}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setIsDragOver(true);
+      }}
+      onDragLeave={() => setIsDragOver(false)}
+      onDrop={handleDrop}
       className={[
-        'p-5 bg-white rounded-2xl cursor-pointer transition-all border-2 border-dashed',
-        done
-          ? 'border-success-500'
+        'group relative p-6 bg-white rounded-3xl cursor-pointer transition-all duration-200 border-2',
+        isDragOver
+          ? 'border-blue-500 bg-blue-50/50 scale-[1.02]'
+          : done
+          ? 'border-emerald-300/80 bg-emerald-50/20 shadow-xs'
           : required
-          ? 'border-primary-300'
-          : 'border-stone-300',
+          ? 'border-dashed border-slate-300 hover:border-blue-400 hover:bg-slate-50/80'
+          : 'border-dashed border-slate-200 hover:border-slate-300 hover:bg-slate-50/60',
       ].join(' ')}
     >
       <input
@@ -304,28 +392,44 @@ function UploadCard({
           e.target.value = '';
         }}
       />
-      <div
-        className={[
-          'w-10 h-10 rounded-lg mb-3 flex items-center justify-center',
-          done ? 'bg-success-50 text-success-700' : 'bg-primary-50 text-primary-600',
-        ].join(' ')}
-      >
-        {state.uploading ? <Spinner size={16} /> : done ? <CheckCircle2 size={18} /> : icon}
-      </div>
-      <div className="text-sm font-semibold text-stone-800 flex items-center gap-1">
-        {title}
-        {required && <span className="text-[10px] text-danger-500">*</span>}
-      </div>
-      <div className="text-xs text-stone-500 mt-1">{subtitle}</div>
-      {done && state.filename && (
-        <div className="text-[11px] text-success-700 mt-2 truncate">{state.filename}</div>
-      )}
-      {!done && !state.uploading && (
-        <div className="text-[11px] text-stone-400 mt-2 inline-flex items-center gap-1">
-          <Upload size={11} />
-          点击上传
+
+      <div className="flex flex-col items-center text-center">
+        <div
+          className={[
+            'w-14 h-14 rounded-2xl mb-3.5 flex items-center justify-center transition-all duration-200',
+            done
+              ? 'bg-emerald-100 text-emerald-700 shadow-sm'
+              : required
+              ? 'bg-blue-50 text-blue-600 group-hover:scale-110'
+              : 'bg-slate-100 text-slate-500 group-hover:scale-110',
+          ].join(' ')}
+        >
+          {state.uploading ? (
+            <Spinner size={20} />
+          ) : done ? (
+            <CheckCircle2 size={24} className="text-emerald-600" />
+          ) : (
+            icon
+          )}
         </div>
-      )}
+
+        <div className="text-sm font-bold text-slate-800 flex items-center gap-1">
+          {title}
+          {required && <span className="text-red-500 font-normal">*</span>}
+        </div>
+
+        <div className="text-xs text-slate-400 mt-1">{subtitle}</div>
+
+        {done && state.filename ? (
+          <div className="mt-3 px-3 py-1 rounded-full bg-emerald-100/70 text-emerald-800 text-[11.5px] font-medium truncate max-w-full">
+            ✓ {state.filename}
+          </div>
+        ) : (
+          <div className="mt-3 text-[11.5px] font-semibold text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity">
+            点击或拖拽文件到此处
+          </div>
+        )}
+      </div>
     </div>
   );
 }

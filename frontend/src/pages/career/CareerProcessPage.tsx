@@ -4,7 +4,6 @@ import { Link } from 'react-router-dom';
 import {
   ArrowRight,
   BriefcaseBusiness,
-  CalendarClock,
   CheckCircle2,
   CircleDot,
   ExternalLink,
@@ -362,53 +361,629 @@ export function CareerProcessPage() {
     finally { setBusy(false); }
   };
 
-  if (jobsQuery.isLoading || actionsQuery.isLoading) return <div className="flex items-center gap-2 p-6 text-sm text-stone-500"><Spinner size={15} />正在加载求职进程…</div>;
-
-  return <div className="mx-auto max-w-7xl p-4 md:p-6">
-    <header className="mb-5 flex flex-wrap items-start justify-between gap-4"><div><h1 className="text-xl font-semibold text-stone-800">求职进程</h1><p className="mt-1 text-sm text-stone-500">岗位机会、已发生的流程事实与下一步行动各自保持清晰。</p></div><div className="flex gap-2"><Btn kind="ghost" size="sm" icon={<RefreshCw size={14} />} onClick={refresh}>刷新</Btn><Btn kind="outline" size="sm" icon={<GitMerge size={14} />} onClick={() => setMergeReviewOpen(true)}>检查重复{mergeCandidatesQuery.data?.length ? ` · ${mergeCandidatesQuery.data.length}` : ''}</Btn><Btn size="sm" icon={<Plus size={14} />} onClick={() => setOpportunityEditor(true)}>添加机会</Btn></div></header>
-    <div className="grid min-h-[520px] gap-5 lg:grid-cols-[330px_minmax(0,1fr)]">
-      <aside className="rounded-xl border border-stone-200 bg-white shadow-xs">
-        <div className="border-b border-stone-100 px-4 py-3 text-sm font-semibold text-stone-800">岗位机会 · {jobs.length}</div>
-        {jobs.length === 0 ? <EmptyState icon={<BriefcaseBusiness size={30} />} title="还没有跟进的岗位" action={<Btn size="sm" onClick={() => setOpportunityEditor(true)}>添加第一个机会</Btn>} /> : <div className="divide-y divide-stone-100">{jobs.map((job) => <button key={job.id} onClick={() => setSelectedId(job.id)} className={`w-full px-4 py-3 text-left transition ${effectiveSelectedId === job.id ? 'bg-primary-50' : 'hover:bg-stone-50'}`}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="truncate text-sm font-medium text-stone-800">{job.company_name}</div><div className="mt-0.5 truncate text-xs text-stone-600">{job.job_title}</div></div><Pill tone={jobTone(job)}>{job.outcome ? outcomeLabels[job.outcome] : jobPhaseLabels[job.phase]}</Pill></div><div className="mt-2 flex items-center justify-between text-[11px] text-stone-400"><span className="truncate">{job.current_step}</span><ArrowRight size={12} /></div></button>)}</div>}
-      </aside>
-      <main className="min-w-0 space-y-5">
-        {!selected ? <div className="rounded-xl border border-stone-200 bg-white"><EmptyState icon={<CircleDot size={30} />} title="选择一个岗位查看进程" /></div> : <>
-          <section className="rounded-xl border border-stone-200 bg-white p-5 shadow-xs">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-    <div>
-                <div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-semibold text-stone-800">{selected.company_name} · {selected.job_title}</h2><Pill tone={jobTone(selected)}>{selected.outcome ? outcomeLabels[selected.outcome] : jobPhaseLabels[selected.phase]}</Pill></div>
-                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">{selected.location && <span>{selected.location}</span>}{selected.team && <span>{selected.team}</span>}<span>当前：{selected.current_step}</span>{selected.source_url && <a className="inline-flex items-center gap-1 text-primary-700 hover:underline" href={selected.source_url} target="_blank" rel="noreferrer">岗位原页 <ExternalLink size={11} /></a>}</div>
-                <div className="mt-3 flex flex-wrap items-center gap-2" aria-label="关联求职方向">
-                  <span className="text-xs text-stone-500">求职方向：</span>
-                  {selected.direction_links.length === 0
-                    ? <span className="text-xs text-stone-400">未关联</span>
-                    : selected.direction_links.map((link) => <Pill key={link.career_profile_direction_id} tone="neutral">{directionsById.get(link.career_profile_direction_id)?.label ?? '已归档方向'}</Pill>)}
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Link to={copilotObjectHandoffHref('job_opportunity', selected.id, `${selected.company_name} · ${selected.job_title}`)}><Btn kind="outline" size="sm" icon={<Bot size={14} />}>询问 Copilot</Btn></Link>
-                {!selected.outcome && <Btn kind="outline" size="sm" onClick={() => setDirectionEditor(true)}>关联求职方向</Btn>}
-                {!selected.outcome && <Btn size="sm" icon={<Plus size={14} />} onClick={() => setEventEditor(true)}>记录进展</Btn>}
-                <Link to={`/career-process/${encodeURIComponent(selected.id)}/offer`}><Btn kind="outline" size="sm" icon={<FileText size={14} />}>Offer 条款</Btn></Link>
-              </div>
-            </div>
-          </section>
-          <JobDescriptionPanel key={selected.id} opportunityId={selected.id} sourceUrl={selected.source_url} />
-          <section className="rounded-xl border border-stone-200 bg-white shadow-xs"><div className="flex items-center gap-2 border-b border-stone-100 px-5 py-4"><History size={16} className="text-stone-500" /><h2 className="font-semibold text-stone-800">流程时间线</h2>{eventsQuery.isFetching && <Spinner size={13} className="text-stone-400" />}</div>{eventsQuery.data?.length ? <div className="divide-y divide-stone-100">{eventsQuery.data.map((event) => <article key={event.id} className="flex gap-3 px-5 py-4"><div className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${event.operation === 'retract' ? 'bg-stone-300' : 'bg-primary-500'}`} /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium text-stone-800">{event.kind === 'retraction' ? '更正旧记录' : eventLabels[event.kind]}</span><span className="text-[11px] text-stone-400">#{event.sequence} · {displayDate(event.occurred_at)}</span></div><p className="mt-1 text-sm leading-relaxed text-stone-600">{event.description}</p>{event.step_summary && <p className="mt-1 text-xs text-primary-700">阶段：{event.step_summary}</p>}</div>{event.operation === 'assert' && !selected.outcome && <button className="rounded p-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-700" onClick={() => { setCorrectingEvent(event); setEventEditor(true); }} aria-label={`更正第 ${event.sequence} 条流程记录`}><Pencil size={14} /></button>}</article>)}</div> : <EmptyState icon={<History size={28} />} title="暂无流程记录" description="新机会的第一条跟进记录会显示在这里。" />}</section>
-        </>}
-      </main>
-    </div>
-    <section className="mt-6"><div className="mb-3 flex items-center justify-between"><div><h2 className="font-semibold text-stone-800">下一步行动</h2><p className="mt-0.5 text-xs text-stone-500">跨岗位统一查看，但每条行动仍可明确关联岗位、面试、Offer 或材料。</p></div><Btn size="sm" icon={<Plus size={14} />} onClick={() => { setEditingAction(null); setActionEditor(true); }}>添加行动</Btn></div>{activeActions.length ? <div className="grid gap-3 md:grid-cols-2">{activeActions.map((action) => <ActionCard key={action.id} action={action} job={jobs.find((job) => job.id === action.job_opportunity_id)} busy={busy} onEdit={() => { setEditingAction(action); setActionEditor(true); }} onTransition={(transition) => run(() => transitionNextAction(action, transition), transition === 'complete' ? '行动已完成' : '行动状态已更新')} />)}</div> : <div className="rounded-xl border border-stone-200 bg-white"><EmptyState icon={<CalendarClock size={30} />} title="当前没有待办行动" /></div>}</section>
-
-    {opportunityEditor && <OpportunityEditor open busy={busy} directions={directions} onClose={() => setOpportunityEditor(false)} onSave={async (form, directionIds) => { if (!form.occurred_at) { toast.warn('请填写发生时间'); return; } const sourceIdentity = `ui:${crypto.randomUUID()}`; const ok = await run(() => createJobOpportunity({ company_name: form.company_name.trim(), job_title: form.job_title.trim(), entry_reason: form.entry_reason as 'explicit_tracking' | 'targeted_preparation' | 'user_confirmed_application', occurred_at: isoFromLocal(form.occurred_at), source_kind: 'user_assertion', source_identity: sourceIdentity, source_description: form.source_description.trim(), location: form.location.trim() || undefined, team: form.team.trim() || undefined, source_url: form.source_url.trim() || undefined, idempotency_key: sourceIdentity, directions: directionIds.map((directionId) => ({ direction_id: directionId, match_reason: `用户在创建岗位时明确关联到“${directionsById.get(directionId)?.label ?? directionId}”方向` })) }), '求职机会已加入跟进'); if (ok) setOpportunityEditor(false); }} />}
-    <Modal open={mergeReviewOpen} onClose={() => setMergeReviewOpen(false)} title="核对疑似重复岗位" width={760} footer={<Btn kind="ghost" onClick={() => setMergeReviewOpen(false)}>关闭</Btn>}>
-      <div className="space-y-5"><p className="text-sm leading-relaxed text-stone-600">系统只提示候选，不会自动合并。确认后双方外部标识和流程历史仍分别保留；误合并可随时撤销。</p>
-        {(mergesQuery.data ?? []).length > 0 && <section><h3 className="text-sm font-semibold text-stone-800">当前合并关系</h3><div className="mt-2 space-y-2">{(mergesQuery.data ?? []).map((merge) => { const duplicate = jobs.find((job) => job.id === merge.duplicate_opportunity_id); const canonical = jobs.find((job) => job.id === merge.canonical_opportunity_id); return <div key={merge.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-stone-200 p-3"><div className="text-sm text-stone-700"><span className="font-medium">{duplicate ? `${duplicate.company_name} · ${duplicate.job_title}` : merge.duplicate_opportunity_id}</span><span className="mx-2 text-stone-400">→</span><span>{canonical ? `${canonical.company_name} · ${canonical.job_title}` : merge.canonical_opportunity_id}</span><p className="mt-1 text-xs text-stone-500">{merge.reason}</p></div><Btn kind="ghost" size="sm" disabled={busy} onClick={() => run(() => retractJobOpportunityMerge({ merge, reason: '用户撤销岗位合并关系', operationKey: crypto.randomUUID() }), '岗位合并已撤销')}>撤销合并</Btn></div>; })}</div></section>}
-        <section><h3 className="text-sm font-semibold text-stone-800">待核对候选</h3>{mergeCandidatesQuery.isLoading ? <div className="mt-3 flex items-center gap-2 text-sm text-stone-500"><Spinner size={14} />正在检查…</div> : (mergeCandidatesQuery.data ?? []).length ? <div className="mt-2 space-y-3">{(mergeCandidatesQuery.data ?? []).map((candidate: JobOpportunityMergeCandidate) => { const duplicate = jobs.find((job) => job.id === candidate.duplicate_opportunity_id); const canonical = jobs.find((job) => job.id === candidate.canonical_opportunity_id); return <div key={`${candidate.duplicate_opportunity_id}:${candidate.canonical_opportunity_id}`} className="rounded-lg border border-amber-200 bg-amber-50/50 p-3"><div className="text-sm font-medium text-stone-800">{duplicate?.company_name} · {duplicate?.job_title}<span className="mx-2 text-stone-400">与</span>{canonical?.company_name} · {canonical?.job_title}</div><div className="mt-2 flex flex-wrap gap-1">{candidate.reasons.map((reason) => <Pill key={reason} tone="warn">{reason}</Pill>)}</div><div className="mt-3"><Btn size="sm" disabled={busy} onClick={() => run(() => mergeJobOpportunities({ duplicateOpportunityId: candidate.duplicate_opportunity_id, canonicalOpportunityId: candidate.canonical_opportunity_id, reason: `用户核对候选后确认重复：${candidate.reasons.join(', ')}`, operationKey: crypto.randomUUID() }), '重复岗位已建立可撤销合并关系')}>确认合并</Btn></div></div>; })}</div> : <p className="mt-2 text-sm text-stone-500">没有待核对的重复候选。</p>}</section>
+  if (jobsQuery.isLoading || actionsQuery.isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64 gap-2 text-sm text-slate-400">
+        <Spinner size={18} />
+        <span>正在载入求职进程看板…</span>
       </div>
-    </Modal>
-    {directionEditor && selected && <DirectionEditor key={`${selected.id}:${selected.direction_version}`} open busy={busy} opportunity={selected} directions={directions} onClose={() => setDirectionEditor(false)} onSave={async (directionIds) => { const existingById = new Map(selected.direction_links.map((link) => [link.career_profile_direction_id, link])); const ok = await run(() => replaceJobOpportunityDirections({ opportunityId: selected.id, expectedVersion: selected.direction_version, sourceIdentity: `ui:${crypto.randomUUID()}`, directions: directionIds.map((directionId) => ({ direction_id: directionId, match_reason: existingById.get(directionId)?.match_reason ?? `用户明确关联到“${directionsById.get(directionId)?.label ?? directionId}”方向` })) }), '求职方向关联已更新'); if (ok) setDirectionEditor(false); }} />}
-    {eventEditor && selected && <EventEditor key={correctingEvent?.id ?? 'append'} open busy={busy} initial={correctingEvent} onClose={() => { setEventEditor(false); setCorrectingEvent(null); }} onSave={async (form) => { if (!form.occurred_at) { toast.warn('请填写发生时间'); return; } const key = crypto.randomUUID(); const common = { opportunityId: selected.id, kind: form.kind as ProcessEventKind, occurredAt: isoFromLocal(form.occurred_at), description: form.description.trim(), stepSummary: form.step_summary.trim() || undefined, applicationChannel: form.kind === 'application_submitted' ? form.application_channel.trim() || undefined : undefined, sourceIdentity: `ui:${key}`, idempotencyKey: key }; const command = correctingEvent ? correctProcessEvent({ ...common, eventId: correctingEvent.id }) : appendProcessEvent(common); const ok = await run(() => command, correctingEvent ? '流程更正已追加' : '流程进展已记录'); if (ok) { setEventEditor(false); setCorrectingEvent(null); } }} />}
-    {actionEditor && <ActionEditor key={editingAction?.id ?? 'new'} open busy={busy} opportunities={jobs} interviews={interviewsQuery.data ?? []} offers={offersQuery.data ?? []} artifacts={artifactsQuery.data ?? []} selectedOpportunityId={effectiveSelectedId} initial={editingAction} onClose={() => { setActionEditor(false); setEditingAction(null); }} onSave={async (form) => { const key = crypto.randomUUID(); const timeKind = form.time_kind as NextActionTimeKind; if (timeKind === 'deadline' && !form.due_at) { toast.warn('请填写截止时间'); return; } if (timeKind === 'fixed' && !form.starts_at) { toast.warn('请填写开始时间'); return; } if (timeKind !== 'flexible' && (!form.original_time_text.trim() || !form.source_timezone.trim())) { toast.warn('请保留原始时间表达和时区'); return; } if (timeKind === 'fixed' && form.ends_at && new Date(form.ends_at) < new Date(form.starts_at)) { toast.warn('结束时间不能早于开始时间'); return; } const common = { content: form.content.trim(), time_kind: timeKind, job_opportunity_id: form.job_opportunity_id || undefined, interview_record_id: form.interview_record_id || undefined, offer_id: form.offer_id || undefined, artifact_id: form.artifact_id || undefined, starts_at: form.starts_at ? isoFromLocal(form.starts_at) : undefined, ends_at: form.ends_at ? isoFromLocal(form.ends_at) : undefined, due_at: form.due_at ? isoFromLocal(form.due_at) : undefined, original_time_text: timeKind === 'flexible' ? undefined : form.original_time_text.trim(), source_timezone: timeKind === 'flexible' ? undefined : form.source_timezone.trim(), reminder_at: form.reminder_at ? isoFromLocal(form.reminder_at) : undefined, reminder_channel: form.reminder_at ? 'in_app' as const : undefined }; const ok = editingAction ? await run(() => editNextAction({ action: editingAction, ...common }), '行动已更新') : await run(() => createNextAction({ ...common, status: form.status as 'suggested' | 'planned', source_kind: 'user_request', source_identity: `ui:${key}`, idempotency_key: key }), '下一步行动已保存'); if (ok) { setActionEditor(false); setEditingAction(null); } }} />}
-  </div>;
+    );
+  }
+
+  const inProcessCount = jobs.filter((j) => j.phase === 'in_process').length;
+  const offerCount = jobs.filter((j) => j.phase === 'offer' || j.outcome === 'accepted').length;
+
+  return (
+    <div className="mx-auto max-w-7xl p-4 md:p-8 space-y-6 animate-in fade-in duration-200">
+      {/* Header with Stage Metrics and Action Buttons */}
+      <header className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-200/80">
+        <div>
+          <div className="flex items-center gap-3">
+            <h1 className="text-xl font-bold text-slate-900 tracking-tight">求职进程看板</h1>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 font-semibold">
+                全部 {jobs.length}
+              </span>
+              <span className="text-xs px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold border border-blue-100">
+                推进中 {inProcessCount}
+              </span>
+              {offerCount > 0 && (
+                <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-semibold border border-emerald-100">
+                  Offer {offerCount}
+                </span>
+              )}
+            </div>
+          </div>
+          <p className="mt-1 text-xs text-slate-500">
+            全生命周期跟踪投递机会、流程事实记录与下一步待办行动。
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Btn kind="ghost" size="sm" icon={<RefreshCw size={14} />} onClick={refresh}>
+            刷新
+          </Btn>
+          <Btn kind="outline" size="sm" icon={<GitMerge size={14} />} onClick={() => setMergeReviewOpen(true)}>
+            检查重复{mergeCandidatesQuery.data?.length ? ` · ${mergeCandidatesQuery.data.length}` : ''}
+          </Btn>
+          <Btn size="sm" icon={<Plus size={14} />} onClick={() => setOpportunityEditor(true)}>
+            添加机会
+          </Btn>
+        </div>
+      </header>
+
+      {/* Main Content Area */}
+      {jobs.length === 0 ? (
+        <div className="p-12 text-center bg-white/90 backdrop-blur-md rounded-3xl border border-slate-200/90 shadow-sm max-w-2xl mx-auto space-y-4 my-8">
+          <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto shadow-xs">
+            <BriefcaseBusiness size={24} />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-slate-800">还没有跟进的求职机会</h3>
+            <p className="text-xs text-slate-500 max-w-md mx-auto mt-1 leading-relaxed">
+              记录你正在投递或面试的目标岗位，Copilot 将自动串联 JD 分析、面试复盘与下一步待办行动。
+            </p>
+          </div>
+          <Btn kind="primary" size="md" icon={<Plus size={15} />} onClick={() => setOpportunityEditor(true)} className="rounded-full shadow-xs">
+            添加第一个机会
+          </Btn>
+        </div>
+      ) : (
+        <div className="grid min-h-[520px] gap-6 lg:grid-cols-[330px_minmax(0,1fr)]">
+          {/* Left Opportunity Column */}
+          <aside className="rounded-3xl border border-slate-200/90 bg-white/90 backdrop-blur-md shadow-2xs overflow-hidden flex flex-col">
+            <div className="border-b border-slate-100 px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">
+              岗位机会清单 ({jobs.length})
+            </div>
+            <div className="divide-y divide-slate-100 flex-1 overflow-y-auto">
+              {jobs.map((job) => (
+                <button
+                  key={job.id}
+                  onClick={() => setSelectedId(job.id)}
+                  className={`w-full px-4 py-3.5 text-left transition-all cursor-pointer ${
+                    effectiveSelectedId === job.id
+                      ? 'bg-blue-50/80 border-l-4 border-blue-600 shadow-2xs'
+                      : 'hover:bg-slate-50/70 border-l-4 border-transparent'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-bold text-slate-800">{job.company_name}</div>
+                      <div className="mt-0.5 truncate text-xs text-slate-500">{job.job_title}</div>
+                    </div>
+                    <Pill tone={jobTone(job)}>
+                      {job.outcome ? outcomeLabels[job.outcome] : jobPhaseLabels[job.phase]}
+                    </Pill>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
+                    <span className="truncate">{job.current_step}</span>
+                    <ArrowRight size={12} className="text-slate-400" />
+                  </div>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          {/* Right Detail Pane */}
+          <main className="min-w-0 space-y-5">
+            {!selected ? (
+              <div className="rounded-3xl border border-slate-200/90 bg-white/80 p-8 text-center text-slate-400">
+                <CircleDot size={28} className="mx-auto mb-2 text-slate-300" />
+                <div className="text-xs font-semibold text-slate-600">选择左侧岗位查看详细进程与时间线</div>
+              </div>
+            ) : (
+              <>
+                <section className="rounded-3xl border border-slate-200/90 bg-white p-5 shadow-2xs">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="text-lg font-bold text-slate-900 tracking-tight">
+                          {selected.company_name} · {selected.job_title}
+                        </h2>
+                        <Pill tone={jobTone(selected)}>
+                          {selected.outcome ? outcomeLabels[selected.outcome] : jobPhaseLabels[selected.phase]}
+                        </Pill>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                        {selected.location && <span>{selected.location}</span>}
+                        {selected.team && <span>{selected.team}</span>}
+                        <span>当前阶段：{selected.current_step}</span>
+                        {selected.source_url && (
+                          <a
+                            className="inline-flex items-center gap-1 text-blue-600 hover:underline"
+                            href={selected.source_url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            岗位原页 <ExternalLink size={11} />
+                          </a>
+                        )}
+                      </div>
+                      <div className="mt-3 flex flex-wrap items-center gap-2" aria-label="关联求职方向">
+                        <span className="text-xs text-slate-500">求职方向：</span>
+                        {selected.direction_links.length === 0 ? (
+                          <span className="text-xs text-slate-400">未关联</span>
+                        ) : (
+                          selected.direction_links.map((link) => (
+                            <Pill key={link.career_profile_direction_id} tone="neutral">
+                              {directionsById.get(link.career_profile_direction_id)?.label ?? '已归档方向'}
+                            </Pill>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Link
+                        to={copilotObjectHandoffHref(
+                          'job_opportunity',
+                          selected.id,
+                          `${selected.company_name} · ${selected.job_title}`,
+                        )}
+                      >
+                        <Btn kind="outline" size="sm" icon={<Bot size={14} />}>
+                          询问 Copilot
+                        </Btn>
+                      </Link>
+                      {!selected.outcome && (
+                        <Btn kind="outline" size="sm" onClick={() => setDirectionEditor(true)}>
+                          关联求职方向
+                        </Btn>
+                      )}
+                      {!selected.outcome && (
+                        <Btn size="sm" icon={<Plus size={14} />} onClick={() => setEventEditor(true)}>
+                          记录进展
+                        </Btn>
+                      )}
+                      <Link to={`/career-process/${encodeURIComponent(selected.id)}/offer`}>
+                        <Btn kind="outline" size="sm" icon={<FileText size={14} />}>
+                          Offer 条款
+                        </Btn>
+                      </Link>
+                    </div>
+                  </div>
+                </section>
+
+                <JobDescriptionPanel
+                  key={selected.id}
+                  opportunityId={selected.id}
+                  sourceUrl={selected.source_url}
+                />
+
+                <section className="rounded-3xl border border-slate-200/90 bg-white shadow-2xs overflow-hidden">
+                  <div className="flex items-center gap-2 border-b border-slate-100 px-5 py-4">
+                    <History size={16} className="text-slate-500" />
+                    <h2 className="font-bold text-slate-800 text-sm">流程时间线</h2>
+                    {eventsQuery.isFetching && <Spinner size={13} className="text-slate-400" />}
+                  </div>
+                  {eventsQuery.data?.length ? (
+                    <div className="divide-y divide-slate-100">
+                      {eventsQuery.data.map((event) => (
+                        <article key={event.id} className="flex gap-3.5 px-5 py-4 hover:bg-slate-50/50 transition-colors">
+                          <div
+                            className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${
+                              event.operation === 'retract' ? 'bg-slate-300' : 'bg-blue-600'
+                            }`}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-semibold text-slate-800">
+                                {event.kind === 'retraction' ? '更正旧记录' : eventLabels[event.kind]}
+                              </span>
+                              <span className="text-[11px] text-slate-400">
+                                #{event.sequence} · {displayDate(event.occurred_at)}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                              {event.description}
+                            </p>
+                            {event.step_summary && (
+                              <p className="mt-1 text-xs font-medium text-blue-700">
+                                阶段：{event.step_summary}
+                              </p>
+                            )}
+                          </div>
+                          {event.operation === 'assert' && !selected.outcome && (
+                            <button
+                              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
+                              onClick={() => {
+                                setCorrectingEvent(event);
+                                setEventEditor(true);
+                              }}
+                              aria-label={`更正第 ${event.sequence} 条流程记录`}
+                            >
+                              <Pencil size={14} />
+                            </button>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <EmptyState
+                      icon={<History size={28} />}
+                      title="暂无流程记录"
+                      description="新机会的第一条跟进记录会显示在这里。"
+                    />
+                  )}
+                </section>
+              </>
+            )}
+          </main>
+        </div>
+      )}
+
+      {/* Next Actions Section */}
+      <section className="pt-2">
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-bold text-slate-800">下一步待办行动</h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              跨岗位统一跟进，支持关联特定岗位、面试复盘或 Offer 沟通。
+            </p>
+          </div>
+          <Btn
+            size="sm"
+            icon={<Plus size={14} />}
+            onClick={() => {
+              setEditingAction(null);
+              setActionEditor(true);
+            }}
+          >
+            添加行动
+          </Btn>
+        </div>
+        {activeActions.length ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            {activeActions.map((action) => (
+              <ActionCard
+                key={action.id}
+                action={action}
+                job={jobs.find((job) => job.id === action.job_opportunity_id)}
+                busy={busy}
+                onEdit={() => {
+                  setEditingAction(action);
+                  setActionEditor(true);
+                }}
+                onTransition={(transition) =>
+                  run(
+                    () => transitionNextAction(action, transition),
+                    transition === 'complete' ? '行动已完成' : '行动状态已更新',
+                  )
+                }
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-slate-200/80 bg-white/60 p-4 text-center text-xs text-slate-400">
+            当前没有待办行动，点击右上角「添加行动」即可新建计划。
+          </div>
+        )}
+      </section>
+
+      {opportunityEditor && (
+        <OpportunityEditor
+          open
+          busy={busy}
+          directions={directions}
+          onClose={() => setOpportunityEditor(false)}
+          onSave={async (form, directionIds) => {
+            if (!form.occurred_at) {
+              toast.warn('请填写发生时间');
+              return;
+            }
+            const sourceIdentity = `ui:${crypto.randomUUID()}`;
+            const ok = await run(
+              () =>
+                createJobOpportunity({
+                  company_name: form.company_name.trim(),
+                  job_title: form.job_title.trim(),
+                  entry_reason: form.entry_reason as
+                    | 'explicit_tracking'
+                    | 'targeted_preparation'
+                    | 'user_confirmed_application',
+                  occurred_at: isoFromLocal(form.occurred_at),
+                  source_kind: 'user_assertion',
+                  source_identity: sourceIdentity,
+                  source_description: form.source_description.trim(),
+                  location: form.location.trim() || undefined,
+                  team: form.team.trim() || undefined,
+                  source_url: form.source_url.trim() || undefined,
+                  idempotency_key: sourceIdentity,
+                  directions: directionIds.map((directionId) => ({
+                    direction_id: directionId,
+                    match_reason: `用户在创建岗位时明确关联到“${
+                      directionsById.get(directionId)?.label ?? directionId
+                    }”方向`,
+                  })),
+                }),
+              '求职机会已加入跟进',
+            );
+            if (ok) setOpportunityEditor(false);
+          }}
+        />
+      )}
+
+      <Modal
+        open={mergeReviewOpen}
+        onClose={() => setMergeReviewOpen(false)}
+        title="核对疑似重复岗位"
+        width={760}
+        footer={
+          <Btn kind="ghost" onClick={() => setMergeReviewOpen(false)}>
+            关闭
+          </Btn>
+        }
+      >
+        <div className="space-y-5">
+          <p className="text-sm leading-relaxed text-slate-600">
+            系统只提示候选，不会自动合并。确认后双方外部标识和流程历史仍分别保留；误合并可随时撤销。
+          </p>
+          {(mergesQuery.data ?? []).length > 0 && (
+            <section>
+              <h3 className="text-sm font-semibold text-slate-800">当前合并关系</h3>
+              <div className="mt-2 space-y-2">
+                {(mergesQuery.data ?? []).map((merge) => {
+                  const duplicate = jobs.find((job) => job.id === merge.duplicate_opportunity_id);
+                  const canonical = jobs.find((job) => job.id === merge.canonical_opportunity_id);
+                  return (
+                    <div
+                      key={merge.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 p-3"
+                    >
+                      <div className="text-sm text-slate-700">
+                        <span className="font-medium">
+                          {duplicate
+                            ? `${duplicate.company_name} · ${duplicate.job_title}`
+                            : merge.duplicate_opportunity_id}
+                        </span>
+                        <span className="mx-2 text-slate-400">→</span>
+                        <span>
+                          {canonical
+                            ? `${canonical.company_name} · ${canonical.job_title}`
+                            : merge.canonical_opportunity_id}
+                        </span>
+                        <p className="mt-1 text-xs text-slate-500">{merge.reason}</p>
+                      </div>
+                      <Btn
+                        kind="ghost"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() =>
+                          run(
+                            () =>
+                              retractJobOpportunityMerge({
+                                merge,
+                                reason: '用户撤销岗位合并关系',
+                                operationKey: crypto.randomUUID(),
+                              }),
+                            '岗位合并已撤销',
+                          )
+                        }
+                      >
+                        撤销合并
+                      </Btn>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          <section>
+            <h3 className="text-sm font-semibold text-slate-800">待核对候选</h3>
+            {mergeCandidatesQuery.isLoading ? (
+              <div className="mt-3 flex items-center gap-2 text-sm text-slate-500">
+                <Spinner size={14} />正在检查…
+              </div>
+            ) : (mergeCandidatesQuery.data ?? []).length ? (
+              <div className="mt-2 space-y-3">
+                {(mergeCandidatesQuery.data ?? []).map((candidate: JobOpportunityMergeCandidate) => {
+                  const duplicate = jobs.find(
+                    (job) => job.id === candidate.duplicate_opportunity_id,
+                  );
+                  const canonical = jobs.find(
+                    (job) => job.id === candidate.canonical_opportunity_id,
+                  );
+                  return (
+                    <div
+                      key={`${candidate.duplicate_opportunity_id}:${candidate.canonical_opportunity_id}`}
+                      className="rounded-2xl border border-amber-200 bg-amber-50/50 p-3"
+                    >
+                      <div className="text-sm font-medium text-slate-800">
+                        {duplicate?.company_name} · {duplicate?.job_title}
+                        <span className="mx-2 text-slate-400">与</span>
+                        {canonical?.company_name} · {canonical?.job_title}
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {candidate.reasons.map((reason) => (
+                          <Pill key={reason} tone="warn">
+                            {reason}
+                          </Pill>
+                        ))}
+                      </div>
+                      <div className="mt-3">
+                        <Btn
+                          size="sm"
+                          disabled={busy}
+                          onClick={() =>
+                            run(
+                              () =>
+                                mergeJobOpportunities({
+                                  duplicateOpportunityId: candidate.duplicate_opportunity_id,
+                                  canonicalOpportunityId: candidate.canonical_opportunity_id,
+                                  reason: `用户核对候选后确认重复：${candidate.reasons.join(', ')}`,
+                                  operationKey: crypto.randomUUID(),
+                                }),
+                              '重复岗位已建立可撤销合并关系',
+                            )
+                          }
+                        >
+                          确认合并
+                        </Btn>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-slate-500">没有待核对的重复候选。</p>
+            )}
+          </section>
+        </div>
+      </Modal>
+
+      {directionEditor && selected && (
+        <DirectionEditor
+          key={`${selected.id}:${selected.direction_version}`}
+          open
+          busy={busy}
+          opportunity={selected}
+          directions={directions}
+          onClose={() => setDirectionEditor(false)}
+          onSave={async (directionIds) => {
+            const existingById = new Map(
+              selected.direction_links.map((link) => [link.career_profile_direction_id, link]),
+            );
+            const ok = await run(
+              () =>
+                replaceJobOpportunityDirections({
+                  opportunityId: selected.id,
+                  expectedVersion: selected.direction_version,
+                  sourceIdentity: `ui:${crypto.randomUUID()}`,
+                  directions: directionIds.map((directionId) => ({
+                    direction_id: directionId,
+                    match_reason:
+                      existingById.get(directionId)?.match_reason ??
+                      `用户明确关联到“${directionsById.get(directionId)?.label ?? directionId}”方向`,
+                  })),
+                }),
+              '求职方向关联已更新',
+            );
+            if (ok) setDirectionEditor(false);
+          }}
+        />
+      )}
+
+      {eventEditor && selected && (
+        <EventEditor
+          key={correctingEvent?.id ?? 'append'}
+          open
+          busy={busy}
+          initial={correctingEvent}
+          onClose={() => {
+            setEventEditor(false);
+            setCorrectingEvent(null);
+          }}
+          onSave={async (form) => {
+            if (!form.occurred_at) {
+              toast.warn('请填写发生时间');
+              return;
+            }
+            const key = crypto.randomUUID();
+            const common = {
+              opportunityId: selected.id,
+              kind: form.kind as ProcessEventKind,
+              occurredAt: isoFromLocal(form.occurred_at),
+              description: form.description.trim(),
+              stepSummary: form.step_summary.trim() || undefined,
+              applicationChannel:
+                form.kind === 'application_submitted'
+                  ? form.application_channel.trim() || undefined
+                  : undefined,
+              sourceIdentity: `ui:${key}`,
+              idempotencyKey: key,
+            };
+            const command = correctingEvent
+              ? correctProcessEvent({ ...common, eventId: correctingEvent.id })
+              : appendProcessEvent(common);
+            const ok = await run(
+              () => command,
+              correctingEvent ? '流程更正已追加' : '流程进展已记录',
+            );
+            if (ok) {
+              setEventEditor(false);
+              setCorrectingEvent(null);
+            }
+          }}
+        />
+      )}
+
+      {actionEditor && (
+        <ActionEditor
+          key={editingAction?.id ?? 'new'}
+          open
+          busy={busy}
+          opportunities={jobs}
+          interviews={interviewsQuery.data ?? []}
+          offers={offersQuery.data ?? []}
+          artifacts={artifactsQuery.data ?? []}
+          selectedOpportunityId={effectiveSelectedId}
+          initial={editingAction}
+          onClose={() => {
+            setActionEditor(false);
+            setEditingAction(null);
+          }}
+          onSave={async (form) => {
+            const key = crypto.randomUUID();
+            const timeKind = form.time_kind as NextActionTimeKind;
+            if (timeKind === 'deadline' && !form.due_at) {
+              toast.warn('请填写截止时间');
+              return;
+            }
+            if (timeKind === 'fixed' && !form.starts_at) {
+              toast.warn('请填写开始时间');
+              return;
+            }
+            if (
+              timeKind !== 'flexible' &&
+              (!form.original_time_text.trim() || !form.source_timezone.trim())
+            ) {
+              toast.warn('请保留原始时间表达和时区');
+              return;
+            }
+            if (
+              timeKind === 'fixed' &&
+              form.ends_at &&
+              new Date(form.ends_at) < new Date(form.starts_at)
+            ) {
+              toast.warn('结束时间不能早于开始时间');
+              return;
+            }
+            const common = {
+              content: form.content.trim(),
+              time_kind: timeKind,
+              job_opportunity_id: form.job_opportunity_id || undefined,
+              interview_record_id: form.interview_record_id || undefined,
+              offer_id: form.offer_id || undefined,
+              artifact_id: form.artifact_id || undefined,
+              starts_at: form.starts_at ? isoFromLocal(form.starts_at) : undefined,
+              ends_at: form.ends_at ? isoFromLocal(form.ends_at) : undefined,
+              due_at: form.due_at ? isoFromLocal(form.due_at) : undefined,
+              original_time_text:
+                timeKind === 'flexible' ? undefined : form.original_time_text.trim(),
+              source_timezone: timeKind === 'flexible' ? undefined : form.source_timezone.trim(),
+              reminder_at: form.reminder_at ? isoFromLocal(form.reminder_at) : undefined,
+              reminder_channel: form.reminder_at ? ('in_app' as const) : undefined,
+            };
+            const ok = editingAction
+              ? await run(() => editNextAction({ action: editingAction, ...common }), '行动已更新')
+              : await run(
+                  () =>
+                    createNextAction({
+                      ...common,
+                      status: form.status as 'suggested' | 'planned',
+                      source_kind: 'user_request',
+                      source_identity: `ui:${key}`,
+                      idempotency_key: key,
+                    }),
+                  '下一步行动已保存',
+                );
+            if (ok) {
+              setActionEditor(false);
+              setEditingAction(null);
+            }
+          }}
+        />
+      )}
+    </div>
+  );
 }

@@ -236,53 +236,66 @@ export function PersistentTasksPage() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl p-4 md:p-6">
-      <header className="mb-5 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold text-stone-800">持续任务</h1>
-          <p className="mt-1 text-sm text-stone-500">只有你明确创建的任务才会在云端持续运行；每次执行只使用已列出的云端 Tool 和动作范围。</p>
-        </div>
-        <div className="flex gap-2">
-          <Btn kind="ghost" size="sm" icon={<RefreshCw size={14} />} onClick={() => { void refresh(); }}>刷新</Btn>
-          <Btn size="sm" icon={<Plus size={14} />} onClick={() => setEditor('create')}>新建持续任务</Btn>
-        </div>
-      </header>
-
-      <div className="grid min-h-[560px] gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="overflow-hidden rounded-xl border border-stone-200 bg-white shadow-xs">
-          <div className="border-b border-stone-100 px-4 py-3 text-sm font-semibold text-stone-800">任务 · {tasks.length}</div>
-          {tasks.length === 0 ? (
-            <EmptyState
-              icon={<CalendarClock size={30} />}
-              title="还没有持续任务"
-              description="创建后，每个任务都会拥有独立的专属对话。"
-              action={<Btn size="sm" onClick={() => setEditor('create')}>创建第一个任务</Btn>}
-            />
-          ) : (
-            <div className="divide-y divide-stone-100">
-              {tasks.map((task) => (
-                <button
-                  key={task.id}
-                  type="button"
-                  onClick={() => navigate(`/persistent-tasks/${encodeURIComponent(task.id)}`)}
-                  className={`w-full px-4 py-3 text-left transition ${selectedId === task.id ? 'bg-primary-50' : 'hover:bg-stone-50'}`}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="truncate text-sm font-medium text-stone-800">{task.title}</span>
-                    <Pill tone={task.state === 'active' ? 'success' : 'neutral'}>{task.state === 'active' ? '运行中' : '已暂停'}</Pill>
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-stone-500">{task.instruction}</p>
-                </button>
-              ))}
+    <div className="h-full overflow-y-auto p-4 md:p-8">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <header className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-slate-100">
+          <div>
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-semibold mb-2">
+              <Zap size={13} className="text-blue-600" />
+              <span>自动化与后台持续监控</span>
             </div>
-          )}
-        </aside>
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">自动化监控</h1>
+            <p className="mt-1 text-sm text-slate-500">
+              只有你明确创建的任务才会在云端持续运行；每次执行只使用已授权的云端 Tool 和动作范围。
+            </p>
+          </div>
+          <div className="flex items-center gap-2.5">
+            <Btn kind="ghost" size="sm" icon={<RefreshCw size={14} />} onClick={() => { void refresh(); }}>刷新状态</Btn>
+            <Btn size="sm" icon={<Plus size={14} />} onClick={() => setEditor('create')} className="rounded-full shadow-xs">新建持续任务</Btn>
+          </div>
+        </header>
 
-        <main className="min-w-0">
-          {!selected ? (
-            <div className="rounded-xl border border-stone-200 bg-white">
-              <EmptyState icon={<Zap size={30} />} title="选择一个持续任务查看详情" />
+        <div className="grid min-h-[560px] gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <aside className="overflow-hidden rounded-3xl border border-slate-200/90 bg-white shadow-xs flex flex-col">
+            <div className="border-b border-slate-100 px-4 py-3 text-sm font-bold text-slate-800 bg-slate-50/50">
+              任务列表 · {tasks.length}
             </div>
+            {tasks.length === 0 ? (
+              <EmptyState
+                icon={<CalendarClock size={30} />}
+                title="还没有自动化任务"
+                description="创建后，每个任务都会拥有独立的专属对话与执行审计。"
+                action={<Btn size="sm" onClick={() => setEditor('create')}>创建第一个任务</Btn>}
+              />
+            ) : (
+              <div className="divide-y divide-slate-100 overflow-y-auto">
+                {tasks.map((task) => (
+                  <button
+                    key={task.id}
+                    type="button"
+                    onClick={() => navigate(`/persistent-tasks/${encodeURIComponent(task.id)}`)}
+                    className={`w-full p-4 text-left transition-all cursor-pointer ${
+                      selectedId === task.id ? 'bg-blue-50/60 border-l-4 border-blue-600' : 'hover:bg-slate-50/70'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="truncate text-sm font-bold text-slate-800">{task.title}</span>
+                      <Pill tone={task.state === 'active' ? 'success' : 'neutral'}>
+                        {task.state === 'active' ? '运行中' : '已暂停'}
+                      </Pill>
+                    </div>
+                    <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-slate-500">{task.instruction}</p>
+                  </button>
+                ))}
+              </div>
+            )}
+          </aside>
+
+          <main className="min-w-0">
+            {!selected ? (
+              <div className="rounded-3xl border border-slate-200/90 bg-white p-8">
+                <EmptyState icon={<Zap size={30} />} title="选择一个持续任务查看详情" />
+              </div>
           ) : (
             <TaskDetail
               task={selected}
@@ -403,6 +416,7 @@ export function PersistentTasksPage() {
           })();
         }}
       />
+      </div>
     </div>
   );
 }
@@ -435,17 +449,17 @@ function TaskDetail({
   onDelete: () => void;
 }) {
   return (
-    <div className="space-y-4">
-      <section className="rounded-xl border border-stone-200 bg-white p-5 shadow-xs">
+    <div className="space-y-5">
+      <section className="rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-lg font-semibold text-stone-800">{task.title}</h2>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h2 className="text-lg font-bold text-slate-900 tracking-tight">{task.title}</h2>
               <Pill tone={task.state === 'active' ? 'success' : 'neutral'}>{task.state === 'active' ? '运行中' : '已暂停'}</Pill>
               <Pill>v{task.version}</Pill>
               {loading && <Spinner size={12} />}
             </div>
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-stone-700">{task.instruction}</p>
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{task.instruction}</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Link to={`/persistent-tasks/${encodeURIComponent(task.id)}/conversation`}>
@@ -463,7 +477,7 @@ function TaskDetail({
       </section>
 
       {admission && (
-        <div className="rounded-xl border border-primary-200 bg-primary-50 px-4 py-3 text-sm text-primary-800">
+        <div className="rounded-2xl border border-blue-200 bg-blue-50/80 px-4 py-3 text-sm text-blue-800">
           {admissionText(admission)}
         </div>
       )}
@@ -471,16 +485,16 @@ function TaskDetail({
       <section className="grid gap-4 md:grid-cols-2">
         <InfoCard title="触发条件">
           <div>{triggerText(task.trigger_spec_json)}</div>
-          <div className="mt-1 text-[11px] text-stone-400">{task.trigger_kind === 'scheduled' ? '定时触发' : '外部事件触发'}</div>
+          <div className="mt-1 text-xs text-slate-400">{task.trigger_kind === 'scheduled' ? '定时触发' : '外部事件触发'}</div>
         </InfoCard>
         <InfoCard title="更新时间">
           <div>{displayDate(task.updated_at)}</div>
-          <div className="mt-1 text-[11px] text-stone-400">创建于 {displayDate(task.created_at)}</div>
+          <div className="mt-1 text-xs text-slate-400">创建于 {displayDate(task.created_at)}</div>
         </InfoCard>
         <InfoCard title="下次计划运行">
           <div>{task.next_due_at ? displayDate(task.next_due_at) : '当前没有已计算的下次时间'}</div>
           {task.compensation_blocked_at && (
-            <div className="mt-1 text-[11px] text-warning-700">
+            <div className="mt-1 text-xs text-amber-700">
               本次停止后的补偿运行已阻止：{displayDate(task.compensation_blocked_at)}
             </div>
           )}
@@ -509,11 +523,11 @@ function TaskDetail({
         onRetry={onRetryTriggers}
       />
 
-      <section className="rounded-xl border border-stone-200 bg-stone-50 p-4">
+      <section className="rounded-3xl border border-slate-200/90 bg-slate-50/60 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-sm font-medium text-stone-700">删除任务</h3>
-            <p className="mt-1 text-xs text-stone-500">删除会先停止调度与新执行，安全取消当前 Turn，并分别说明待发送输入、附件、已保存结果和未结算外部调用。</p>
+            <h3 className="text-sm font-bold text-slate-800">删除任务</h3>
+            <p className="mt-1 text-xs text-slate-500">删除会先停止调度与新执行，安全取消当前 Turn，并分别说明待发送输入、附件、已保存结果和未结算外部调用。</p>
           </div>
           <Btn kind="danger" size="sm" icon={<Trash2 size={14} />} disabled={busy} onClick={onDelete}>删除任务</Btn>
         </div>
@@ -542,48 +556,48 @@ function TriggerHistory({
   onRetry: () => void;
 }) {
   return (
-    <section className="rounded-xl border border-stone-200 bg-white p-4 shadow-xs">
+    <section className="rounded-3xl border border-slate-200/90 bg-white p-5 shadow-xs">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <History size={16} className="shrink-0 text-stone-400" />
+          <History size={16} className="shrink-0 text-slate-400" />
           <div>
-            <h3 className="text-sm font-medium text-stone-800">触发历史</h3>
-            <p className="mt-0.5 text-xs text-stone-500">这里记录任务何时被触发及是否已接纳为 Turn；具体过程和结果在专属对话中。</p>
+            <h3 className="text-sm font-bold text-slate-800">触发历史</h3>
+            <p className="mt-0.5 text-xs text-slate-500">这里记录任务何时被触发及是否已接纳为 Turn；具体过程和结果在专属对话中。</p>
           </div>
         </div>
         {loading && <Spinner size={14} />}
       </div>
 
       {error ? (
-        <div className="mt-4 rounded-lg border border-danger-200 bg-danger-50 px-3 py-2 text-xs text-danger-700">
+        <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
           <div>{extractErr(error, '触发历史加载失败')}</div>
           <Btn className="mt-2" kind="ghost" size="sm" onClick={onRetry}>重试</Btn>
         </div>
       ) : triggers.length === 0 && !loading ? (
-        <div className="mt-4 rounded-lg bg-stone-50 px-3 py-4 text-center text-xs text-stone-500">暂无触发记录</div>
+        <div className="mt-4 rounded-2xl bg-slate-50/70 px-3 py-4 text-center text-xs text-slate-400">暂无触发记录</div>
       ) : (
-        <div className="mt-4 divide-y divide-stone-100 border-y border-stone-100">
+        <div className="mt-4 divide-y divide-slate-100 border-y border-slate-100">
           {triggers.map((trigger) => (
             <div key={trigger.id} className="py-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <Pill>{triggerKindText(trigger.kind)}</Pill>
-                    <span className="text-sm text-stone-700">{trigger.summary}</span>
+                    <span className="text-sm text-slate-700 font-medium">{trigger.summary}</span>
                   </div>
-                  <div className="mt-1 text-[11px] text-stone-400">
+                  <div className="mt-1 text-xs text-slate-400 font-mono">
                     发生于 {displayDate(trigger.occurred_at)} · 系统于 {displayDate(trigger.observed_at)} 观察到
                   </div>
                 </div>
                 {trigger.admitted_turn_id ? (
                   <Link
-                    className="shrink-0 text-xs text-primary-600 hover:text-primary-700"
+                    className="shrink-0 text-xs font-semibold text-blue-600 hover:text-blue-700"
                     to={`/persistent-tasks/${encodeURIComponent(task.id)}/conversation`}
                   >
                     已接纳为 Turn
                   </Link>
                 ) : (
-                  <span className="shrink-0 text-xs text-warning-700">等待接纳</span>
+                  <span className="shrink-0 text-xs font-semibold text-amber-700">等待接纳</span>
                 )}
               </div>
             </div>
@@ -596,8 +610,8 @@ function TriggerHistory({
 
 function InfoCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-xl border border-stone-200 bg-white p-4 text-sm text-stone-700 shadow-xs">
-      <h3 className="mb-2 text-xs font-medium text-stone-500">{title}</h3>
+    <section className="rounded-3xl border border-slate-200/90 bg-white p-5 text-sm text-slate-700 shadow-xs">
+      <h3 className="mb-2.5 text-xs font-bold text-slate-400 uppercase tracking-wider">{title}</h3>
       {children}
     </section>
   );

@@ -46,6 +46,9 @@ const ProfilePage = lazy(() =>
 const CareerProfilePage = lazy(() =>
   import('@/pages/career/CareerProfilePage').then((m) => ({ default: m.CareerProfilePage })),
 );
+const GrowthPage = lazy(() =>
+  import('@/pages/growth/GrowthPage').then((m) => ({ default: m.GrowthPage })),
+);
 const CareerProcessPage = lazy(() =>
   import('@/pages/career/CareerProcessPage').then((m) => ({ default: m.CareerProcessPage })),
 );
@@ -115,6 +118,7 @@ export const router = createBrowserRouter([
       { path: '/persistent-tasks/:taskId?', element: <PersistentTasksPage /> },
       { path: '/analytics', element: <AnalyticsPage /> },
       { path: '/career-profile', element: <CareerProfilePage /> },
+      { path: '/growth', element: <GrowthPage /> },
       { path: '/career-process', element: <CareerProcessPage /> },
       { path: '/career-insights', element: <CareerInsightsPage /> },
       { path: '/career-process/:opportunityId/offer', element: <OfferPage /> },

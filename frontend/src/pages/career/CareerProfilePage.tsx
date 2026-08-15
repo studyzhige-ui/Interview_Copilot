@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
-  AlertTriangle,
   Award,
   BookOpen,
   BriefcaseBusiness,
@@ -18,14 +17,12 @@ import {
   Trash2,
   X,
   Bot,
+  TrendingUp,
 } from 'lucide-react';
 import {
-  changeAbilitySignalStatus,
   getCareerProfile,
-  listAbilitySignals,
   listCareerProfileDrafts,
   removePersonalFact,
-  recomputeInterviewAbilitySignals,
   resolveCareerProfileDraft,
   resolveCareerProfileCandidates,
   saveCareerDirection,
@@ -41,7 +38,6 @@ import { Pill } from '@/components/ui/Pill';
 import { Spinner } from '@/components/ui/Spinner';
 import { toast } from '@/store/uiStore';
 import type {
-  AbilitySignal,
   CareerProfileDirection,
   ConfirmedPersonalFact,
   DirectionInput,
@@ -56,7 +52,6 @@ import { copilotObjectHandoffHref } from '@/lib/copilotObjectReference';
 
 const PROFILE_KEY = ['career-profile'] as const;
 const DRAFTS_KEY = ['career-profile-drafts'] as const;
-const SIGNALS_KEY = ['ability-signals'] as const;
 
 const lifecycleLabels: Record<DirectionLifecycle, string> = {
   exploring: '探索中',
@@ -120,61 +115,68 @@ function FactIcon({ kind }: { kind: PersonalFact['kind'] }) {
     contact: CircleUserRound,
     location: MapPin,
   }[kind];
-  return <Icon size={17} />;
+  return <Icon size={18} />;
 }
 
-type FactForm = Record<string, string> & { kind: PersonalFact['kind'] };
+type FactForm = {
+  kind: PersonalFact['kind'];
+  institution?: string;
+  degree?: string;
+  field_of_study?: string;
+  organization?: string;
+  role?: string;
+  name?: string;
+  technologies?: string;
+  category?: string;
+  title?: string;
+  channel?: 'email' | 'phone' | 'website' | 'other';
+  value?: string;
+  start_date?: string;
+  end_date?: string;
+  description?: string;
+};
 
-function factToForm(fact?: PersonalFact, initialKind: PersonalFact['kind'] = 'education'): FactForm {
-  if (!fact) return { kind: initialKind };
-  const form: FactForm = { kind: fact.kind };
-  for (const [key, value] of Object.entries(fact)) {
-    form[key] = Array.isArray(value) ? value.join('，') : String(value ?? '');
+function factToForm(fact?: PersonalFact, kind: PersonalFact['kind'] = 'experience'): FactForm {
+  if (!fact) return { kind };
+  switch (fact.kind) {
+    case 'education':
+      return { kind: 'education', institution: fact.institution, degree: fact.degree ?? '', field_of_study: fact.field_of_study ?? '', start_date: fact.start_date ?? '', end_date: fact.end_date ?? '', description: fact.description ?? '' };
+    case 'experience':
+      return { kind: 'experience', organization: fact.organization, role: fact.role, start_date: fact.start_date ?? '', end_date: fact.end_date ?? '', description: fact.description ?? '' };
+    case 'project':
+      return { kind: 'project', name: fact.name, role: fact.role ?? '', technologies: fact.technologies.join('，'), start_date: fact.start_date ?? '', end_date: fact.end_date ?? '', description: fact.description ?? '' };
+    case 'skill':
+      return { kind: 'skill', name: fact.name, category: fact.category ?? '' };
+    case 'achievement':
+      return { kind: 'achievement', title: fact.title, description: fact.description ?? '' };
+    case 'contact':
+      return { kind: 'contact', channel: fact.channel, value: fact.value };
+    case 'location':
+      return { kind: 'location', value: fact.value };
   }
-  return form;
 }
 
 function factFromForm(form: FactForm): PersonalFact {
-  const dates = { start_date: clean(form.start_date ?? ''), end_date: clean(form.end_date ?? '') };
   switch (form.kind) {
     case 'education':
-      return {
-        kind: 'education', institution: form.institution.trim(), degree: clean(form.degree ?? ''),
-        field_of_study: clean(form.field_of_study ?? ''), description: clean(form.description ?? ''), ...dates,
-      };
+      return { kind: 'education', institution: form.institution?.trim() || '', degree: clean(form.degree || ''), field_of_study: clean(form.field_of_study || ''), start_date: clean(form.start_date || ''), end_date: clean(form.end_date || ''), description: clean(form.description || '') };
     case 'experience':
-      return {
-        kind: 'experience', organization: form.organization.trim(), role: form.role.trim(),
-        description: clean(form.description ?? ''), ...dates,
-      };
+      return { kind: 'experience', organization: form.organization?.trim() || '', role: form.role?.trim() || '', start_date: clean(form.start_date || ''), end_date: clean(form.end_date || ''), description: clean(form.description || '') };
     case 'project':
-      return {
-        kind: 'project', name: form.name.trim(), role: clean(form.role ?? ''),
-        description: clean(form.description ?? ''), technologies: csv(form.technologies ?? ''), ...dates,
-      };
+      return { kind: 'project', name: form.name?.trim() || '', role: clean(form.role || ''), technologies: csv(form.technologies || ''), start_date: clean(form.start_date || ''), end_date: clean(form.end_date || ''), description: clean(form.description || '') };
     case 'skill':
-      return { kind: 'skill', name: form.name.trim(), category: clean(form.category ?? '') };
+      return { kind: 'skill', name: form.name?.trim() || '', category: clean(form.category || '') };
     case 'achievement':
-      return {
-        kind: 'achievement', title: form.title.trim(), description: clean(form.description ?? ''),
-        occurred_on: clean(form.occurred_on ?? ''),
-      };
+      return { kind: 'achievement', title: form.title?.trim() || '', description: clean(form.description || '') };
     case 'contact':
-      return {
-        kind: 'contact', channel: (form.channel || 'email') as 'email' | 'phone' | 'website' | 'other',
-        value: form.value.trim(),
-      };
-    case 'location': return { kind: 'location', value: form.value.trim() };
+      return { kind: 'contact', channel: form.channel || 'email', value: form.value?.trim() || '' };
+    case 'location':
+      return { kind: 'location', value: form.value?.trim() || '' };
   }
 }
 
 function FactEditor({
-  open,
-  initial,
-  initialKind,
-  busy,
-  onClose,
-  onSave,
+  open, initial, initialKind, busy, onClose, onSave,
 }: {
   open: boolean;
   initial?: ConfirmedPersonalFact;
@@ -184,68 +186,53 @@ function FactEditor({
   onSave: (fact: PersonalFact) => void;
 }) {
   const [form, setForm] = useState<FactForm>(() => factToForm(initial?.value, initialKind));
-  const update = (key: string, value: string) => setForm((current) => ({ ...current, [key]: value }));
-  const required =
-    form.kind === 'education' ? form.institution :
-    form.kind === 'experience' ? form.organization && form.role :
-    form.kind === 'project' || form.kind === 'skill' ? form.name :
-    form.kind === 'achievement' ? form.title : form.value;
+  const update = (key: string, value: unknown) => setForm((current) => ({ ...current, [key]: value }));
+  const isComplete = () => {
+    switch (form.kind) {
+      case 'education': return Boolean(form.institution?.trim());
+      case 'experience': return Boolean(form.organization?.trim() && form.role?.trim());
+      case 'project': return Boolean(form.name?.trim());
+      case 'skill': return Boolean(form.name?.trim());
+      case 'achievement': return Boolean(form.title?.trim());
+      case 'contact': return Boolean(form.value?.trim());
+      case 'location': return Boolean(form.value?.trim());
+    }
+  };
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={initial ? `编辑${factLabels[initial.value.kind]}` : `填写${factLabels[form.kind]}`}
-      width={680}
-      footer={
-        <>
-          <Btn kind="ghost" onClick={onClose} disabled={busy}>取消</Btn>
-          <Btn onClick={() => onSave(factFromForm(form))} disabled={!required} loading={busy}>保存</Btn>
-        </>
-      }
-    >
+    <Modal open={open} onClose={onClose} title={initial ? `编辑${factLabels[form.kind]}` : `新增${factLabels[form.kind]}`} width={680} footer={<>
+      <Btn kind="ghost" onClick={onClose} disabled={busy}>取消</Btn>
+      <Btn onClick={() => onSave(factFromForm(form))} disabled={!isComplete()} loading={busy}>保存</Btn>
+    </>}>
       <div className="grid gap-4 sm:grid-cols-2">
-        <FormItem label="类型">
-          <SelectInput
-            value={form.kind}
-            onChange={(event) => setForm({ kind: event.target.value as PersonalFact['kind'] })}
-            disabled={Boolean(initial)}
-          >
-            {Object.entries(factLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </SelectInput>
-        </FormItem>
+        {!initial && (
+          <div className="sm:col-span-2">
+            <FormItem label="类型">
+              <SelectInput value={form.kind} onChange={(e) => setForm(factToForm(undefined, e.target.value as PersonalFact['kind']))}>
+                {Object.entries(factLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </SelectInput>
+            </FormItem>
+          </div>
+        )}
         {form.kind === 'education' && <>
           <FormItem label="学校 / 机构"><TextInput value={form.institution ?? ''} onChange={(e) => update('institution', e.target.value)} /></FormItem>
-          <FormItem label="学历">
-            <SelectInput value={form.degree ?? ''} onChange={(e) => update('degree', e.target.value)}>
-              <option value="">请选择</option>
-              {['高中', '中专', '大专', '本科', '硕士', '博士', '其他'].map((value) => <option key={value} value={value}>{value}</option>)}
-            </SelectInput>
-          </FormItem>
-          <FormItem label="专业"><TextInput value={form.field_of_study ?? ''} onChange={(e) => update('field_of_study', e.target.value)} /></FormItem>
+          <FormItem label="学历 / 学位"><TextInput value={form.degree ?? ''} onChange={(e) => update('degree', e.target.value)} placeholder="如：本科 / 硕士" /></FormItem>
+          <div className="sm:col-span-2"><FormItem label="专业"><TextInput value={form.field_of_study ?? ''} onChange={(e) => update('field_of_study', e.target.value)} /></FormItem></div>
         </>}
         {form.kind === 'experience' && <>
-          <FormItem label="组织"><TextInput value={form.organization ?? ''} onChange={(e) => update('organization', e.target.value)} /></FormItem>
-          <FormItem label="岗位"><TextInput value={form.role ?? ''} onChange={(e) => update('role', e.target.value)} /></FormItem>
+          <FormItem label="公司 / 组织"><TextInput value={form.organization ?? ''} onChange={(e) => update('organization', e.target.value)} /></FormItem>
+          <FormItem label="职位 / 角色"><TextInput value={form.role ?? ''} onChange={(e) => update('role', e.target.value)} /></FormItem>
         </>}
         {form.kind === 'project' && <>
           <FormItem label="项目名称"><TextInput value={form.name ?? ''} onChange={(e) => update('name', e.target.value)} /></FormItem>
           <FormItem label="承担角色"><TextInput value={form.role ?? ''} onChange={(e) => update('role', e.target.value)} /></FormItem>
-          <FormItem label="技术栈" hint="用逗号分隔"><TextInput value={form.technologies ?? ''} onChange={(e) => update('technologies', e.target.value)} /></FormItem>
+          <div className="sm:col-span-2"><FormItem label="主要技术" hint="用逗号分隔"><TextInput value={form.technologies ?? ''} onChange={(e) => update('technologies', e.target.value)} /></FormItem></div>
         </>}
         {form.kind === 'skill' && <>
-          <FormItem label="技能"><TextInput value={form.name ?? ''} onChange={(e) => update('name', e.target.value)} /></FormItem>
-          <FormItem label="类别">
-            <SelectInput value={form.category ?? ''} onChange={(e) => update('category', e.target.value)}>
-              <option value="">请选择</option>
-              {['编程语言', 'AI / 数据', '框架与工具', '数据库', '云与 DevOps', '产品与协作', '外语', '其他'].map((value) => <option key={value} value={value}>{value}</option>)}
-            </SelectInput>
-          </FormItem>
+          <FormItem label="技能名称"><TextInput value={form.name ?? ''} onChange={(e) => update('name', e.target.value)} /></FormItem>
+          <FormItem label="技能分类"><TextInput value={form.category ?? ''} onChange={(e) => update('category', e.target.value)} placeholder="如：前端开发 / 后端架构" /></FormItem>
         </>}
-        {form.kind === 'achievement' && <>
-          <FormItem label="成果名称"><TextInput value={form.title ?? ''} onChange={(e) => update('title', e.target.value)} /></FormItem>
-          <FormItem label="发生日期"><TextInput type="date" value={form.occurred_on ?? ''} onChange={(e) => update('occurred_on', e.target.value)} /></FormItem>
-        </>}
+        {form.kind === 'achievement' && <div className="sm:col-span-2"><FormItem label="成果标题"><TextInput value={form.title ?? ''} onChange={(e) => update('title', e.target.value)} /></FormItem></div>}
         {form.kind === 'contact' && <>
           <FormItem label="渠道">
             <SelectInput value={form.channel || 'email'} onChange={(e) => update('channel', e.target.value)}>
@@ -414,36 +401,6 @@ function DraftSummary({
   );
 }
 
-function AbilityCard({ signal, onAction, onRecompute }: { signal: AbilitySignal; onAction: (action: 'dispute' | 'invalidate') => void; onRecompute: () => void }) {
-  const tone = signal.status === 'active' ? 'success' : signal.status === 'disputed' ? 'warn' : 'neutral';
-  const canChallenge = signal.status === 'active' || signal.status === 'disputed';
-  return (
-    <article className="rounded-xl border border-stone-200 bg-white p-4 shadow-xs">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="font-medium text-stone-800">{signal.topic}</h3>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-stone-500">
-            <span>{signal.signal_type}</span>{signal.level && <span>· {signal.level}</span>}
-            {signal.score !== null && <span>· {signal.score}</span>}
-          </div>
-        </div>
-        <Pill tone={tone}>{signal.status}</Pill>
-      </div>
-      <p className="mt-3 text-sm leading-relaxed text-stone-700">{signal.summary}</p>
-      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-stone-100" title={`置信度 ${Math.round((signal.confidence ?? 0) * 100)}%`}>
-        <div className="h-full bg-primary-500" style={{ width: `${Math.round((signal.confidence ?? 0) * 100)}%` }} />
-      </div>
-      <div className="mt-2 text-[11px] text-stone-500">置信度 {Math.round((signal.confidence ?? 0) * 100)}% · {signal.sources.length} 个真实来源</div>
-      {signal.limitations && <p className="mt-2 text-xs text-stone-500">局限：{signal.limitations}</p>}
-      {canChallenge && <div className="mt-3 flex gap-2">
-        {signal.status === 'active' && <Btn kind="outline" size="sm" onClick={() => onAction('dispute')}>提出异议</Btn>}
-        {signal.scope_kind === 'interview_record' && <Btn kind="ghost" size="sm" onClick={onRecompute}>根据原记录重算</Btn>}
-        <Btn kind="ghost" size="sm" onClick={() => onAction('invalidate')}>标记失效</Btn>
-      </div>}
-    </article>
-  );
-}
-
 function ResumeFactSection({
   id,
   title,
@@ -508,7 +465,6 @@ export function CareerProfilePage() {
   const queryClient = useQueryClient();
   const profileQuery = useQuery({ queryKey: PROFILE_KEY, queryFn: getCareerProfile });
   const draftsQuery = useQuery({ queryKey: DRAFTS_KEY, queryFn: listCareerProfileDrafts });
-  const signalsQuery = useQuery({ queryKey: SIGNALS_KEY, queryFn: () => listAbilitySignals(true) });
   const [factEditor, setFactEditor] = useState<{
     key: string;
     fact?: ConfirmedPersonalFact;
@@ -516,8 +472,6 @@ export function CareerProfilePage() {
   } | null>(null);
   const [directionEditor, setDirectionEditor] = useState<{ key: string; direction?: CareerProfileDirection } | null>(null);
   const [deleteFact, setDeleteFact] = useState<ConfirmedPersonalFact | null>(null);
-  const [signalAction, setSignalAction] = useState<{ signal: AbilitySignal; action: 'dispute' | 'invalidate' } | null>(null);
-  const [signalReason, setSignalReason] = useState('');
   const [busy, setBusy] = useState(false);
 
   const pendingDrafts = useMemo(() => draftsQuery.data?.filter((draft) => draft.status === 'pending') ?? [], [draftsQuery.data]);
@@ -545,7 +499,6 @@ export function CareerProfilePage() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: PROFILE_KEY }),
       queryClient.invalidateQueries({ queryKey: DRAFTS_KEY }),
-      queryClient.invalidateQueries({ queryKey: SIGNALS_KEY }),
     ]);
   };
 
@@ -573,7 +526,7 @@ export function CareerProfilePage() {
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold text-stone-800">在线求职档案</h1>
-          <p className="mt-1 text-sm text-stone-500">一页维护所有已确认信息；导入简历产生的候选仍需你逐项确认。</p>
+          <p className="mt-1 text-sm text-stone-500">一页维护所有已确认事实信息；导入简历产生的候选仍需你逐项确认。</p>
         </div>
         <div className="flex gap-2">
           <Link to={copilotObjectHandoffHref('career_profile', profile.id, '在线求职档案')}>
@@ -607,7 +560,7 @@ export function CareerProfilePage() {
           <div className="px-2 pb-2 text-xs font-semibold text-stone-800">档案目录</div>
           {[
             ['personal', '个人信息'], ['directions', '期望职位'], ['experience', '工作 / 实习'],
-            ['projects', '项目经历'], ['education', '教育经历'], ['skills', '专业技能'], ['abilities', '能力判断'],
+            ['projects', '项目经历'], ['education', '教育经历'], ['skills', '专业技能与成果'],
           ].map(([id, label]) => <a key={id} href={`#${id}`} className="flex items-center justify-between rounded-md px-2 py-2 text-sm text-stone-600 hover:bg-primary-50 hover:text-primary-700"><span>{label}</span><span className="text-stone-300">›</span></a>)}
         </nav>
 
@@ -644,11 +597,6 @@ export function CareerProfilePage() {
           <ResumeFactSection id="projects" title="项目经历" description="写清项目背景、你的角色、行动和可核验结果。" items={groupedFacts.get('project') ?? []} actions={[{ label: '填写项目经历', kind: 'project' }]} onAdd={(kind) => setFactEditor({ key: crypto.randomUUID(), kind })} onEdit={(fact) => setFactEditor({ key: crypto.randomUUID(), fact })} onDelete={setDeleteFact} />
           <ResumeFactSection id="education" title="教育经历" description="学校、学历、专业与在校经历。" items={groupedFacts.get('education') ?? []} actions={[{ label: '填写教育经历', kind: 'education' }]} onAdd={(kind) => setFactEditor({ key: crypto.randomUUID(), kind })} onEdit={(fact) => setFactEditor({ key: crypto.randomUUID(), fact })} onDelete={setDeleteFact} />
           <ResumeFactSection id="skills" title="专业技能与成果" description="技能类别使用固定选项；证书、奖项和成果可单独补充。" items={[...(groupedFacts.get('skill') ?? []), ...(groupedFacts.get('achievement') ?? [])]} actions={[{ label: '填写技能', kind: 'skill' }, { label: '填写成果', kind: 'achievement' }]} onAdd={(kind) => setFactEditor({ key: crypto.randomUUID(), kind })} onEdit={(fact) => setFactEditor({ key: crypto.randomUUID(), fact })} onDelete={setDeleteFact} />
-
-          <section id="abilities" className="scroll-mt-24 px-5 py-6 md:px-7">
-            <div className="mb-4 flex items-center justify-between"><div><h2 className="text-lg font-semibold text-stone-800">能力判断</h2><p className="mt-1 text-xs text-stone-500">这些是带真实来源的模型推断，不会混入你确认的个人事实。</p></div>{signalsQuery.isFetching && <Spinner size={14} className="text-stone-400" />}</div>
-            {signalsQuery.data?.length ? <div className="grid gap-4 md:grid-cols-2">{signalsQuery.data.map((signal) => <AbilityCard key={signal.id} signal={signal} onAction={(action) => { setSignalAction({ signal, action }); setSignalReason(''); }} onRecompute={() => { if (signal.scope_ref_id) void run(() => recomputeInterviewAbilitySignals(signal.scope_ref_id as string), '已根据原面试记录重算能力判断'); }} />)}</div> : <div className="rounded-lg border border-dashed border-stone-200 bg-stone-50/60 p-5 text-sm text-stone-500">完成一次真实面试复盘后，这里会形成带来源的能力判断。</div>}
-          </section>
         </main>
 
         <aside className="sticky top-4 space-y-4">
@@ -659,12 +607,32 @@ export function CareerProfilePage() {
               {profileChecks.map((item) => <a key={item.href} href={item.href} className="flex items-center gap-2 text-xs"><span className={`flex h-4 w-4 items-center justify-center rounded-full ${item.complete ? 'bg-accent-100 text-accent-700' : 'bg-warning-100 text-warning-700'}`}>{item.complete ? '✓' : '!'}</span><span className={item.complete ? 'text-stone-500' : 'text-stone-700'}>{item.label}</span></a>)}
             </div>
           </section>
+
+          {/* Continuous Growth Promo Card */}
+          <section className="rounded-xl border border-blue-200/80 bg-gradient-to-br from-blue-50/80 to-indigo-50/40 p-5 shadow-xs">
+            <div className="flex items-center gap-2 text-blue-700 font-semibold text-sm">
+              <TrendingUp size={16} />
+              <span>持续化成长与能力演进</span>
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-slate-600">
+              基于每次面试复盘与模拟对练沉淀真实能力图谱、进阶建议与技能雷达。
+            </p>
+            <Link to="/growth" className="mt-3 block">
+              <button
+                type="button"
+                className="w-full py-2 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer text-center"
+              >
+                查看我的成长图谱 ➔
+              </button>
+            </Link>
+          </section>
+
           <section className="rounded-xl border border-stone-200 bg-white p-5 shadow-xs">
             <h2 className="font-semibold text-stone-800">档案诊断</h2>
             <div className="mt-3 space-y-3 text-xs leading-relaxed text-stone-600">
               {profileChecks.filter((item) => !item.complete).slice(0, 3).map((item) => <a key={item.href} href={item.href} className="block rounded-lg bg-warning-50 p-3 text-warning-800">建议完善：{item.label}</a>)}
               {profileChecks.every((item) => item.complete) && <div className="rounded-lg bg-accent-50 p-3 text-accent-800">核心档案已经完整，可以继续优化成果描述和证据。</div>}
-              <div className="rounded-lg bg-stone-50 p-3">{signalsQuery.data?.length ?? 0} 条能力判断 · {pendingDrafts.length} 组待确认更新</div>
+              <div className="rounded-lg bg-stone-50 p-3">{pendingDrafts.length} 组待确认更新</div>
             </div>
           </section>
         </aside>
@@ -673,10 +641,6 @@ export function CareerProfilePage() {
       {factEditor && <FactEditor key={factEditor.key} open initial={factEditor.fact} initialKind={factEditor.kind} busy={busy} onClose={() => setFactEditor(null)} onSave={async (fact) => { if (await run(() => savePersonalFact({ profileVersion: profile.version, fact, factId: factEditor.fact?.id }), '个人事实已保存')) setFactEditor(null); }} />}
       {directionEditor && <DirectionEditor key={directionEditor.key} open initial={directionEditor.direction} busy={busy} onClose={() => setDirectionEditor(null)} onSave={async (direction) => { if (await run(() => saveCareerDirection({ profileVersion: profile.version, direction, directionId: directionEditor.direction?.id }), '求职方向已保存')) setDirectionEditor(null); }} />}
       <ConfirmDialog open={Boolean(deleteFact)} title="删除这条个人事实？" description={deleteFact ? factTitle(deleteFact.value) : ''} confirmText="删除" danger loading={busy} onCancel={() => setDeleteFact(null)} onConfirm={async () => { if (deleteFact && await run(() => removePersonalFact(deleteFact.id, profile.version), '个人事实已删除')) setDeleteFact(null); }} />
-      <Modal open={Boolean(signalAction)} onClose={() => setSignalAction(null)} title={signalAction?.action === 'dispute' ? '对能力判断提出异议' : '标记能力判断失效'} width={520} footer={<><Btn kind="ghost" onClick={() => setSignalAction(null)}>取消</Btn><Btn kind={signalAction?.action === 'invalidate' ? 'danger' : 'primary'} disabled={!signalReason.trim()} loading={busy} onClick={async () => { if (signalAction && await run(() => changeAbilitySignalStatus(signalAction.signal, signalAction.action, signalReason.trim()), '能力判断状态已更新')) setSignalAction(null); }}>确认</Btn></>}>
-        <div className="mb-3 flex items-start gap-2 rounded-md bg-warning-50 p-3 text-xs text-warning-700"><AlertTriangle size={15} className="mt-0.5 shrink-0" />状态变化会被保留，历史来源不会被删除。</div>
-        <FormItem label="原因"><TextArea rows={4} value={signalReason} onChange={(e) => setSignalReason(e.target.value)} placeholder="说明哪里不准确，或为什么已经不再适用" /></FormItem>
-      </Modal>
     </div>
   );
 }

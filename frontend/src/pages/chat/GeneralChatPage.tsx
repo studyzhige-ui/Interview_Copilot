@@ -1,26 +1,16 @@
-/**
- * /general-chat — the Career Agent control plane, detached from the
- * review workflow while sharing the conversation kernel.
- *
- * Layout mirrors ReviewPage: a left sidebar listing this user's general
- * chat sessions, and the right pane reuses ``ChatPanel`` to drive the
- * actual messaging. Each session in the left list owns its own
- * conversation dropdown via ChatPanel's internals — so this page only
- * needs to manage session-level CRUD (create / rename / delete) plus
- * "which session is selected".
- *
- * Why a dedicated page (instead of a type='general' inside the
- * review page): general chat doesn't anchor to an interview record, so
- * the review page's interview-record sidebar was an awkward host. Users
- * also want to leave general chat open while the review page deals
- * with uploads + analysis, which means it deserves its own URL the
- * browser back/forward stack can navigate.
- */
-
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, X as XIcon, MessageSquare, Sparkles } from 'lucide-react';
+import {
+  Plus,
+  Pencil,
+  X as XIcon,
+  Sparkles,
+  Target,
+  Briefcase,
+  TrendingUp,
+  FileCheck,
+} from 'lucide-react';
 import { Spinner } from '@/components/ui/Spinner';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { toast } from '@/store/uiStore';
@@ -35,17 +25,15 @@ import {
 import type { ConversationDeletionImpact } from '@/types/api';
 import { useToastOnError } from '@/hooks/useToastOnError';
 import { ChatPanel } from '@/pages/review/chat/ChatPanel';
-import { CopilotStatusSummary } from './CopilotStatusSummary';
 import { clearPersistedSessionState } from '@/pages/review/chat/usePersistedSessionState';
 import type { ChatSessionListItem } from '@/types/api';
+import { PromptStarterCard } from '@/components/ui/PromptStarterCard';
 import {
   clearCopilotObjectHandoff,
   productObjectReferenceLabel,
   readCopilotObjectHandoff,
 } from '@/lib/copilotObjectReference';
 
-// Same key family as ChatPanel's internal (debrief) session list — one
-// cache namespace for every chat-session list in the app.
 const SESSIONS_KEY = ['chat', 'sessions', { type: 'general' }] as const;
 
 export function GeneralChatPage() {
@@ -53,9 +41,9 @@ export function GeneralChatPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  // Inline rename inside the sidebar — same pattern as review page.
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
+
   const productObjectReference = useMemo(
     () => readCopilotObjectHandoff(searchParams),
     [searchParams],
@@ -70,11 +58,8 @@ export function GeneralChatPage() {
   });
   useToastOnError(error, '对话列表加载失败');
 
-  /** Mutate the cached list in place (create / rename / delete below). */
   const setSessions = useCallback(
     (updater: (cur: ChatSessionListItem[]) => ChatSessionListItem[]) => {
-      // Cancel any in-flight background refetch first — otherwise its
-      // (pre-mutation) response could land after this write and undo it.
       void queryClient.cancelQueries({ queryKey: SESSIONS_KEY });
       queryClient.setQueryData<ChatSessionListItem[]>(
         SESSIONS_KEY,
@@ -88,7 +73,6 @@ export function GeneralChatPage() {
     ? activeId
     : sessions[0]?.session_id ?? null;
 
-  // Focus the inline rename input when entering rename mode.
   useEffect(() => {
     if (!renaming) return;
     requestAnimationFrame(() => {
@@ -105,10 +89,8 @@ export function GeneralChatPage() {
     try {
       const created = await createChatSession({
         type: 'general',
-          title: `求职任务 ${sessions.length + 1}`,
+        title: `求职对话 ${sessions.length + 1}`,
       });
-      // Optimistic prepend — the new session is the most recent so it
-      // belongs at the top.
       setSessions((s) => [
         {
           session_id: created.session_id,
@@ -131,11 +113,6 @@ export function GeneralChatPage() {
     }
   };
 
-  // Pending delete confirmation. Replaces the off-brand native
-  // ``window.confirm`` (Chrome titles it "Code" because it's not a
-  // PWA dialog — looks like a Chrome extension popup). Same
-  // ConfirmDialog used by Library and ChatPanel — keeps
-  // the visual language consistent across delete affordances.
   const [pendingDelete, setPendingDelete] = useState<{
     id: string;
     title: string;
@@ -166,11 +143,7 @@ export function GeneralChatPage() {
     setDeletingChat(true);
     try {
       await deleteChatSession(id, pendingDelete.impact);
-      // Clean up the per-session localStorage drafts/mode so we don't
-      // leak keys (same helper ChatPanel uses on its own delete path).
       clearPersistedSessionState(id);
-      // Selection fallback is handled by the keep-selection-valid effect
-      // above once the cached list no longer contains the active id.
       setSessions((s) => s.filter((x) => x.session_id !== id));
       setPendingDelete(null);
     } catch (e) {
@@ -199,43 +172,55 @@ export function GeneralChatPage() {
   const activeSession = sessions.find((s) => s.session_id === selectedId);
 
   return (
-    <div className="flex h-full bg-cream-50">
-      {/* Left sidebar: session list */}
-      <aside className="w-[280px] shrink-0 bg-white border-r border-stone-200 flex flex-col">
-        <div className="h-14 px-4 flex items-center justify-between border-b border-stone-100">
-          <div className="text-sm font-semibold text-stone-800">求职 Copilot</div>
+    <div className="flex h-full bg-[#F8FAFC] overflow-hidden">
+      {/* Left Sidebar: Session List */}
+      <aside className="w-[280px] shrink-0 bg-white/90 backdrop-blur-md border-r border-slate-200/80 flex flex-col h-full select-none">
+        <div className="p-3.5 border-b border-slate-100 flex items-center justify-between">
+          <div className="flex items-center gap-1.5 text-sm font-bold text-slate-800 tracking-tight">
+            <span>Copilot</span>
+            <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">
+              {sessions.length}
+            </span>
+          </div>
+
           <button
+            type="button"
             onClick={onNew}
             disabled={creating}
-            title="新建一段对话"
-            className="inline-flex items-center gap-1 px-2.5 h-8 rounded-lg border border-dashed border-stone-300 text-stone-600 hover:bg-stone-50 hover:border-primary-300 hover:text-primary-700 text-xs disabled:opacity-50"
+            title="新建对话"
+            className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-blue-50 hover:bg-blue-100 text-blue-600 text-xs font-semibold transition-all active:scale-95 shadow-xs cursor-pointer disabled:opacity-50"
           >
-            <Plus size={13} />
+            <Plus size={14} />
             <span>新建</span>
           </button>
         </div>
-        <CopilotStatusSummary />
-        <div className="flex-1 overflow-y-auto p-2">
+
+        <div className="flex-1 overflow-y-auto p-2 space-y-1">
           {loading ? (
-            <div className="p-6 flex items-center justify-center text-stone-400">
-              <Spinner size={16} />
+            <div className="p-8 flex items-center justify-center text-slate-400">
+              <Spinner size={18} />
             </div>
           ) : sessions.length === 0 ? (
-            <div className="p-6 text-center text-stone-400 text-sm">
-              <MessageSquare size={20} className="mx-auto mb-2 text-stone-300" />
-              <div>还没有对话</div>
-              <div className="text-[11px] mt-1">点上方「新建」开始</div>
+            <div className="p-8 text-center text-slate-400">
+              <div className="w-10 h-10 mx-auto rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mb-2">
+                <Sparkles size={18} />
+              </div>
+              <div className="text-xs font-medium text-slate-700">暂无对话记录</div>
+              <p className="text-[11px] text-slate-400 mt-1">点上方「新建」即可开始畅聊</p>
             </div>
           ) : (
             sessions.map((s) => {
               const act = s.session_id === selectedId;
               const editing = renaming?.id === s.session_id;
+
               return (
                 <div
                   key={s.session_id}
                   className={[
-                    'group relative px-3 py-2.5 mb-1 rounded-lg cursor-pointer transition-colors',
-                    act ? 'bg-primary-50' : 'hover:bg-stone-50',
+                    'group relative p-3 rounded-2xl cursor-pointer transition-all duration-150 border',
+                    act
+                      ? 'bg-blue-50/80 border-blue-200/90 shadow-xs ring-1 ring-blue-100'
+                      : 'bg-transparent border-transparent hover:bg-slate-50 hover:border-slate-200/60',
                   ].join(' ')}
                   onClick={() => !editing && setActiveId(s.session_id)}
                 >
@@ -252,39 +237,40 @@ export function GeneralChatPage() {
                         else if (e.key === 'Escape') { e.preventDefault(); setRenaming(null); }
                       }}
                       placeholder="按 Enter 保存，Esc 取消"
-                      className="w-full text-sm px-2 py-1 border border-primary-300 rounded outline-none focus:ring-2 focus:ring-primary-200"
+                      className="w-full text-xs font-semibold px-2 py-1 bg-white border border-blue-400 rounded-lg outline-none"
                     />
                   ) : (
                     <>
-                      <div className={[
-                        'text-sm truncate pr-12',
-                        act ? 'text-primary-700 font-semibold' : 'text-stone-700',
-                      ].join(' ')}>
+                      <div className={`text-sm font-semibold truncate pr-12 ${act ? 'text-blue-900' : 'text-slate-800'}`}>
                         {s.title}
                       </div>
+
                       {s.turn_count > 0 && (
-                        <div className="text-[11px] text-stone-400 mt-0.5">
-                          {s.turn_count} 轮 · {new Date(s.updated_at).toLocaleString('zh-CN', {
+                        <div className="text-xs text-slate-400 mt-1">
+                          {s.turn_count} 轮对话 · {new Date(s.updated_at).toLocaleString('zh-CN', {
                             month: '2-digit', day: '2-digit',
                             hour: '2-digit', minute: '2-digit',
                           })}
                         </div>
                       )}
-                      <div className="absolute right-2 top-2 flex items-center gap-1 opacity-0 group-hover:opacity-100">
+
+                      <div className="absolute right-2 top-2.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
+                          type="button"
                           onClick={(e) => {
                             e.stopPropagation();
                             setRenaming({ id: s.session_id, title: s.title });
                           }}
                           title="重命名"
-                          className="w-6 h-6 rounded text-stone-400 hover:text-stone-700 hover:bg-stone-100 flex items-center justify-center"
+                          className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors"
                         >
                           <Pencil size={12} />
                         </button>
                         <button
+                          type="button"
                           onClick={(e) => { e.stopPropagation(); void onDelete(s.session_id); }}
                           title="删除"
-                          className="w-6 h-6 rounded text-stone-400 hover:text-danger-500 hover:bg-danger-50 flex items-center justify-center"
+                          className="p-1 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
                         >
                           <XIcon size={12} />
                         </button>
@@ -298,14 +284,12 @@ export function GeneralChatPage() {
         </div>
       </aside>
 
-      {/* Right pane: reuse ChatPanel for the active session. ``width``
-          is wide-open because there's no resizer on this page — keep
-          it simple, the side nav already takes its share. */}
+      {/* Main Conversation Stage or Welcome Hero */}
       {selectedId ? (
-        <div className="flex-1 min-w-0 flex">
+        <div className="flex-1 min-w-0 flex flex-col h-full bg-[#F8FAFC]">
           <ChatPanel
             sessionId={selectedId}
-            sessionTitle={activeSession?.title ?? '求职 Copilot'}
+            sessionTitle={activeSession?.title ?? 'Copilot'}
             fixedMode="AGENT"
             flexible
             productObjectReferences={productObjectReference ? [productObjectReference] : []}
@@ -314,24 +298,64 @@ export function GeneralChatPage() {
           />
         </div>
       ) : (
-        <div className="flex-1 flex items-center justify-center text-stone-400">
-          <div className="text-center">
-            <div className="w-14 h-14 mx-auto rounded-2xl bg-white border border-stone-200 flex items-center justify-center mb-3">
-              <Sparkles size={22} className="text-primary-500" />
+        <div className="flex-1 flex flex-col items-center justify-center p-8 overflow-y-auto">
+          <div className="max-w-2xl w-full text-center space-y-6 animate-in fade-in duration-300">
+            {/* Ambient Sparkle Badge */}
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-blue-50 border border-blue-100 text-blue-700 text-xs font-semibold shadow-xs">
+              <Sparkles size={15} className="text-blue-600" />
+              <span>AI 智能求职与面试辅导</span>
             </div>
-            <div className="text-base text-stone-600 font-medium mb-1">点左侧「新建」开始</div>
-            <div className="text-xs leading-relaxed max-w-xs">
-              用自然语言管理岗位、材料、面试准备和求职进度。
+
+            {/* Greeting Headline */}
+            <h2 className="text-3xl md:text-4xl font-extrabold text-slate-900 tracking-tight">
+              今天想演练或攻克哪家大厂的面试？
+            </h2>
+            <p className="text-sm md:text-base text-slate-600 max-w-lg mx-auto leading-relaxed">
+              全天候 AI 求职副驾。随时提问、演练核心项目、优化 STAR 经历或定制求职策略。
+            </p>
+
+            {/* Prompt Starter Bento Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-4 text-left">
+              <PromptStarterCard
+                icon={<Target size={20} />}
+                tag="匹配评估"
+                title="岗位匹配度与差距诊断"
+                description="评估我的个人技能树与目标岗位 JD 的匹配度，生成针对性复习清单。"
+                onClick={onNew}
+              />
+              <PromptStarterCard
+                icon={<Briefcase size={20} />}
+                tag="高频追问"
+                title="大厂项目深挖与八股演练"
+                description="根据我的微服务与高并发架构经历，模拟大厂面试官连续追问。"
+                onClick={onNew}
+              />
+              <PromptStarterCard
+                icon={<FileCheck size={20} />}
+                tag="经历优化"
+                title="STAR 经历亮点重构"
+                description="用 STAR 原则深度润色一段平淡的项目经历，突出可量化的业务价值。"
+                onClick={onNew}
+              />
+              <PromptStarterCard
+                icon={<TrendingUp size={20} />}
+                tag="Offer 决策"
+                title="薪资沟通与 Offer 谈判"
+                description="拿到大厂 Offer 后，如何礼貌且有力地向 HR 争取更高定级与薪资。"
+                onClick={onNew}
+              />
             </div>
+
             {productObjectReference && (
-              <div className="mt-3 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-700">
-                已选择：{productObjectReferenceLabel(productObjectReference)}。新建对话后会作为本轮显式输入。
+              <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50/80 p-3.5 text-xs text-blue-800 font-medium">
+                已选中关联对象：{productObjectReferenceLabel(productObjectReference)}。点击上方任意卡片新建会话后将自动挂载。
               </div>
             )}
           </div>
         </div>
       )}
 
+      {/* Delete Confirmation Modal */}
       <ConfirmDialog
         open={!!pendingDelete}
         danger

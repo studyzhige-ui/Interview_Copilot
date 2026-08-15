@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Upload, FileText, Briefcase, CheckCircle2, Mic, FileUp, ClipboardPaste, History } from 'lucide-react';
+import {
+  FileText,
+  Briefcase,
+  CheckCircle2,
+  Mic,
+  FileUp,
+  Volume2,
+  Radio,
+  ArrowRight,
+  UserCheck,
+} from 'lucide-react';
 import { Btn } from '@/components/ui/Btn';
 import { Spinner } from '@/components/ui/Spinner';
 import { toast } from '@/store/uiStore';
@@ -109,10 +119,10 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
       .then((rs) => {
         if (!alive) return;
         setStoredResumes(rs);
-        const usable = rs.filter((resume) => resume.has_text || resume.parse_status === 'ready');
+        const usable = rs.filter((r) => r.has_text || r.parse_status === 'ready');
         const selected = prefill
-          ? usable.find((resume) => resume.id === prefill.resume_id)
-          : (usable.find((resume) => resume.is_default) ?? usable[0]);
+          ? usable.find((r) => r.id === prefill.resume_id)
+          : (usable.find((r) => r.is_default) ?? usable[0]);
         setResumeMode(selected ? 'existing' : 'upload');
         if (selected) {
           setResume({ filename: selected.title, id: selected.id, loading: false });
@@ -124,7 +134,7 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
           });
         }
       })
-      .catch(() => { /* non-fatal — just hide the picker */ })
+      .catch(() => { /* non-fatal */ })
       .finally(() => { if (alive) setLoadingResumes(false); });
     return () => { alive = false; };
   }, [onPrefillApplied, prefill]);
@@ -133,7 +143,7 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
     try {
       localStorage.setItem(VOICE_PREF_KEY, ttsVoice);
     } catch {
-      // The interview still works when preference persistence is unavailable.
+      // ignore
     }
   }, [ttsVoice]);
 
@@ -148,8 +158,6 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
   const onResume = async (f: File) => {
     setResume({ filename: f.name, id: null, loading: true });
     try {
-      // Saves a NEW personal resume entity (parsed into sections server-side);
-      // its id is what the mock uses as resume context.
       const r = await createResumeFromFile(f);
       setStoredResumes((current) => [r, ...current.filter((item) => item.id !== r.id)]);
       const usable = await waitForResumeUsable(r.id);
@@ -160,11 +168,7 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
       setResume(EMPTY_RESUME);
       const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 409) {
-        // Two-active-resume limit hit — guide the user to pick an existing one.
-        toast.error('已有两份简历，请从“选已有”中选择，或到“资料 > 资料库”管理');
-        setResumeMode('existing');
-      } else if ((e as Error)?.message?.includes('解析')) {
-        toast.error('简历处理未完成，请到“资料 > 资料库”查看或替换');
+        toast.error('已有两份简历，请从“选已有”中选择');
         setResumeMode('existing');
       } else {
         toast.error('简历上传失败');
@@ -173,8 +177,6 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
   };
 
   const onJd = async (f: File) => {
-    // Mock-interview JD is single-use and must NOT join the personal library.
-    // We send it to a stateless parse endpoint that returns text only.
     setJdDocument({ filename: f.name, parsing: true });
     try {
       const { text } = await parseJdForMock(f);
@@ -184,34 +186,37 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
         return;
       }
       setJdText(text);
-      setJdMode('paste'); // surface the parsed text so the user can review/edit
+      setJdMode('paste');
       setJdDocument({ filename: f.name, parsing: false });
-      toast.success(`JD 已解析（${text.length} 字符）· 仅用于本次模拟`);
+      toast.success(`JD 已解析（${text.length} 字符）`);
     } catch {
       setJdDocument(EMPTY_JD);
       toast.error('JD 解析失败');
     }
   };
 
-  // JD always reduces to plain text — either the user pasted it directly,
-  // or parseJdForMock returned text from their uploaded file.
   const jdReady = jdText.trim().length >= 20;
   const ready = resume.id !== null && !resume.loading && jdReady;
 
   return (
-    <div className="h-full flex items-center justify-center px-4 md:px-6 py-8 overflow-y-auto">
-      <div className="max-w-[720px] w-full mx-auto flex flex-col items-center">
-        {/* Header: clean, single hierarchy — title + subtitle, both centered. */}
-        <header className="mb-9 text-center">
-          <h2 className="text-[26px] font-semibold text-stone-800 leading-tight">
-            开始之前，先准备两份材料
+    <div className="h-full overflow-y-auto p-4 md:p-8 flex items-center justify-center">
+      <div className="max-w-4xl w-full mx-auto space-y-6 animate-in fade-in duration-300">
+        {/* Studio Hero Banner */}
+        <div className="text-center space-y-2.5">
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-blue-50 border border-blue-100 text-blue-700 text-xs font-semibold shadow-xs">
+            <Radio size={14} className="text-blue-600 animate-pulse" />
+            <span>AI 模拟面试实战舱</span>
+          </div>
+          <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight">
+            模拟面试实战 · 实时对练
           </h2>
-          <p className="text-stone-500 text-[15px] mt-2.5 leading-relaxed">
-            上传简历和岗位 JD 后，AI 面试官会根据你的背景定制问题。
+          <p className="text-sm md:text-base text-slate-600 max-w-xl mx-auto leading-relaxed">
+            上传个人简历与目标岗位 JD，AI 考官将以标准大厂语调向你提问，支持实时双向语音对练。
           </p>
-        </header>
+        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full">
+        {/* 1. Unified Materials Capsule (Split Card: Resume + JD) with Readable Fonts */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <ResumeCard
             mode={resumeMode}
             setMode={setResumeMode}
@@ -233,27 +238,89 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
           />
         </div>
 
-        <div className="w-full mt-8 space-y-4">
-          <PrefGroup
-            label="面试官风格"
-            options={STYLE_OPTIONS}
-            value={style}
-            onChange={setStyle}
-          />
-          <PrefGroup
-            label="预计题量"
-            options={LENGTH_OPTIONS}
-            value={targetQuestionCount}
-            onChange={setTargetQuestionCount}
-            columns={3}
-          />
-          <p className="px-1 text-[12px] leading-relaxed text-stone-500">
-            预计题量只用于控制面试节奏，实际题数可能因回答和追问有所变化。
-          </p>
-          <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-[0_2px_10px_rgba(15,23,42,0.04)]">
-            <label className="text-[16px] font-semibold text-stone-800">关联岗位机会（可选）</label>
-            <p className="mt-1 text-[12px] text-stone-500">选择后，本次模拟面试及后续复盘会关联到该求职进展。</p>
-            <div className="mt-3">
+        {/* 2. Cohesive Interviewer Preferences Panel */}
+        <div className="p-6 md:p-8 rounded-3xl bg-white/90 backdrop-blur-md border border-slate-200/90 shadow-sm space-y-6">
+          {/* Style Options */}
+          <div className="space-y-3">
+            <div className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+              <UserCheck size={15} className="text-blue-600" />
+              <span>面试官风格偏好</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {STYLE_OPTIONS.map((opt) => {
+                const active = style === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setStyle(opt.id)}
+                    className={`p-3.5 rounded-2xl border text-left transition-all cursor-pointer ${
+                      active
+                        ? 'bg-blue-50/80 border-blue-300 text-blue-900 shadow-2xs ring-1 ring-blue-200'
+                        : 'bg-slate-50/50 border-slate-200/80 text-slate-700 hover:bg-slate-100/70'
+                    }`}
+                  >
+                    <div className="text-sm font-bold">{opt.label}</div>
+                    <div className="text-xs text-slate-500 mt-1 leading-snug">{opt.desc}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Length & Question Count */}
+          <div className="space-y-3">
+            <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              预计面试题量
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              {LENGTH_OPTIONS.map((opt) => {
+                const active = targetQuestionCount === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setTargetQuestionCount(opt.id)}
+                    className={`p-3 rounded-2xl border text-center transition-all cursor-pointer ${
+                      active
+                        ? 'bg-blue-50/80 border-blue-300 text-blue-900 shadow-2xs ring-1 ring-blue-200 font-bold'
+                        : 'bg-slate-50/50 border-slate-200/80 text-slate-700 hover:bg-slate-100/70 text-sm font-medium'
+                    }`}
+                  >
+                    <div className="text-sm font-bold">{opt.label}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">{opt.desc}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Inline dropdowns: Voice + Opportunity Link */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 border-t border-slate-100">
+            <div className="space-y-1.5">
+              <label htmlFor="tts-voice" className="text-sm font-semibold text-slate-700 flex items-center gap-1.5">
+                <Volume2 size={15} className="text-purple-600" />
+                <span>考官播报音色</span>
+              </label>
+              <select
+                id="tts-voice"
+                value={ttsVoice}
+                onChange={(e) => setTtsVoice(e.target.value as TtsVoice)}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200/80 rounded-2xl text-sm font-semibold text-slate-800 outline-none focus:border-blue-400 cursor-pointer"
+              >
+                {VOICE_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-semibold text-slate-700 flex items-center gap-1.5">
+                <Briefcase size={15} className="text-blue-600" />
+                <span>关联求职机会（可选）</span>
+              </label>
               <JobOpportunitySelect
                 value={jobOpportunityId}
                 onChange={setJobOpportunityId}
@@ -262,27 +329,13 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
               />
             </div>
           </div>
-          <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-[0_2px_10px_rgba(15,23,42,0.04)]">
-            <label htmlFor="tts-voice" className="text-[16px] font-semibold text-stone-800">
-              面试官音色
-            </label>
-            <select
-              id="tts-voice"
-              value={ttsVoice}
-              onChange={(event) => setTtsVoice(event.target.value as TtsVoice)}
-              className="mt-3 w-full px-3 py-2.5 bg-white border border-stone-300 rounded-lg text-[14px] text-stone-800 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
-            >
-              {VOICE_OPTIONS.map((option) => (
-                <option key={option.id} value={option.id}>{option.label}</option>
-              ))}
-            </select>
-          </div>
         </div>
 
-        <div className="mt-9 flex justify-center">
+        {/* Start Button Hero with comfortable sizing */}
+        <div className="flex flex-col items-center justify-center pt-2">
           <Btn
+            kind="sparkle"
             size="lg"
-            icon={ready ? <Mic size={16} /> : <Upload size={16} />}
             disabled={!ready || starting}
             loading={starting}
             onClick={() =>
@@ -295,9 +348,15 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
                 job_opportunity_id: jobOpportunityId || undefined,
               })
             }
+            className="px-10 py-3.5 text-base font-semibold shadow-lg shadow-purple-500/20"
           >
-            {ready ? '开始模拟面试' : '请先完成上传'}
+            <Mic size={18} />
+            <span>{ready ? '开始模拟面试' : '请先完成上传'}</span>
+            <ArrowRight size={16} />
           </Btn>
+          <p className="text-xs text-slate-400 mt-2.5">
+            * 准备完成后点击即可进入全真实时模拟面试
+          </p>
         </div>
       </div>
     </div>
@@ -325,13 +384,12 @@ function ResumeCard({
 }) {
   const done = state.id !== null;
   const hasStored = storedResumes.length > 0;
+
   return (
     <div
-      style={{ minHeight: 210 }}
-      className={[
-        'p-5 bg-white rounded-2xl transition-all border-2 border-dashed shadow-[0_2px_10px_rgba(15,23,42,0.04)] flex flex-col',
-        done ? 'border-success-500' : 'border-stone-300 hover:border-primary-300',
-      ].join(' ')}
+      className={`p-5 md:p-6 bg-white rounded-3xl border-2 transition-all shadow-xs flex flex-col justify-between ${
+        done ? 'border-emerald-300/80 bg-emerald-50/15' : 'border-slate-200/90 hover:border-blue-300'
+      }`}
     >
       <input
         ref={inputRef}
@@ -345,177 +403,100 @@ function ResumeCard({
         }}
       />
 
-      <div className="flex items-center gap-3 mb-3">
-        <div
-          className={[
-            'w-11 h-11 rounded-xl flex items-center justify-center shrink-0',
-            done ? 'bg-success-50 text-success-700' : 'bg-primary-50 text-primary-600',
-          ].join(' ')}
-        >
-          {state.loading ? <Spinner size={18} /> : done ? <CheckCircle2 size={20} /> : <FileText size={20} />}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-[16px] font-semibold text-stone-800 flex items-center gap-1.5 leading-tight">
-            上传简历
-            <span className="text-[11px] text-danger-500">*</span>
+      <div>
+        <div className="flex items-center justify-between mb-3.5">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
+              <FileText size={18} />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-slate-900">个人简历 *</div>
+              <div className="text-xs text-slate-500">用于提炼经历与个性化提问</div>
+            </div>
           </div>
-          <div className="text-[12px] text-stone-500 mt-0.5">用于个性化提问</div>
-        </div>
-      </div>
 
-      {/* Mode toggle: existing vs new upload */}
-      {hasStored && (
-        <div className="inline-flex p-0.5 bg-primary-50 border border-primary-100 rounded-lg mb-2.5 text-[13px]">
-          <button
-            type="button"
-            onClick={() => setMode('existing')}
-            className={[
-              'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md transition-colors',
-              mode === 'existing'
-                ? 'bg-primary-500 text-white font-medium shadow-sm'
-                : 'text-primary-700 hover:bg-primary-100',
-            ].join(' ')}
-          >
-            <History size={12} />
-            选已有 ({storedResumes.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('upload')}
-            className={[
-              'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md transition-colors',
-              mode === 'upload'
-                ? 'bg-primary-500 text-white font-medium shadow-sm'
-                : 'text-primary-700 hover:bg-primary-100',
-            ].join(' ')}
-          >
-            <FileUp size={12} />
-            上传新文件
-          </button>
+          {hasStored && (
+            <div className="flex p-0.5 bg-slate-100 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setMode('existing')}
+                className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all ${
+                  mode === 'existing'
+                    ? 'bg-white text-blue-700 shadow-2xs'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                选已有 ({storedResumes.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('upload')}
+                className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all ${
+                  mode === 'upload'
+                    ? 'bg-white text-blue-700 shadow-2xs'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                重新上传
+              </button>
+            </div>
+          )}
         </div>
-      )}
 
-      {/* Content area — fixed height so switching mode doesn't make the
-        * card jump. Vertical scroll if content exceeds the area. */}
-      <div className="flex-1 flex flex-col">
         {mode === 'existing' && hasStored ? (
-          <div className="flex flex-col gap-2">
-            <select
-              value={state.id ?? ''}
-              onChange={(e) => {
-                const r = storedResumes.find((x) => x.id === e.target.value);
-                if (r) onPickExisting(r);
-              }}
-              className="w-full px-3 py-2.5 bg-white border border-stone-300 rounded-lg text-[14px] text-stone-800 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
-            >
-              <option value="">— 选一份简历 —</option>
-              {storedResumes.map((r) => (
-                <option
-                  key={r.id}
-                  value={r.id}
-                  disabled={!r.has_text && r.parse_status !== 'ready'}
-                >
-                  {r.title}{r.is_default ? '（默认）' : ''}
-                  {!r.has_text && r.parse_status !== 'ready'
-                    ? r.parse_status === 'failed' ? '（解析失败）' : '（解析中）'
-                    : ''}
-                  {' · '}{(r.created_at || '').slice(0, 10)}
-                </option>
-              ))}
-            </select>
-            {done && (
-              <div className="text-[12px] text-success-700 truncate">
-                ✓ 当前：{state.filename}
+          <div className="space-y-2 max-h-40 overflow-y-auto pt-1">
+            {loadingResumes ? (
+              <div className="p-4 text-center text-slate-400 text-sm">
+                <Spinner size={16} /> 载入简历中…
               </div>
+            ) : (
+              storedResumes.map((r) => {
+                const isSelected = state.id === r.id;
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => onPickExisting(r)}
+                    className={`w-full p-3 rounded-2xl border text-left flex items-center justify-between transition-all cursor-pointer ${
+                      isSelected
+                        ? 'border-emerald-300 bg-emerald-50 text-emerald-900 font-semibold'
+                        : 'border-slate-100 bg-slate-50/50 hover:bg-slate-100/70 text-slate-700'
+                    }`}
+                  >
+                    <span className="text-sm truncate">{r.title}</span>
+                    {isSelected && <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />}
+                  </button>
+                );
+              })
             )}
           </div>
         ) : (
-          <button
-            type="button"
+          <div
             onClick={() => inputRef.current?.click()}
-            className={[
-              'w-full text-left px-3 py-2.5 rounded-lg transition-colors text-[14px]',
-              done
-                ? 'bg-success-50 text-success-700 hover:bg-success-100'
-                : 'bg-primary-50 text-primary-700 hover:bg-primary-100',
-            ].join(' ')}
+            className="p-6 border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-colors bg-slate-50/50 hover:bg-blue-50/30 text-center"
           >
-            {done ? (
-              <span className="truncate inline-block max-w-full">
-                {state.filename || '已上传'} · 点击替换
-              </span>
-            ) : loadingResumes ? (
-              <span className="inline-flex items-center gap-1.5">
-                <Spinner size={12} />
-                加载已有简历…
-              </span>
+            {state.loading ? (
+              <div className="flex items-center gap-2 text-sm text-blue-600 font-medium">
+                <Spinner size={16} /> 正在智能解析简历…
+              </div>
+            ) : done ? (
+              <div className="text-sm font-semibold text-emerald-700 flex items-center gap-1.5">
+                <CheckCircle2 size={16} />
+                <span>已就绪：{state.filename}</span>
+              </div>
             ) : (
-              <span className="flex items-center gap-2 leading-tight">
-                <Upload size={14} className="shrink-0" />
-                <span className="flex flex-col">
-                  <span className="text-[14px]">点击选择文件</span>
-                  <span className="text-[11px] text-primary-500/70 font-mono mt-0.5">
-                    PDF · DOCX · TXT · MD
-                  </span>
-                </span>
-              </span>
+              <>
+                <FileUp size={24} className="text-slate-400 mb-1.5" />
+                <span className="text-sm font-semibold text-slate-700">点击选择简历文件</span>
+                <span className="text-xs text-slate-400 mt-0.5">支持 PDF、DOCX、TXT、MD 格式</span>
+              </>
             )}
-          </button>
+          </div>
         )}
       </div>
     </div>
   );
 }
-
-function PrefGroup<T extends string | number>({
-  label,
-  options,
-  value,
-  onChange,
-  columns = 2,
-}: {
-  label: string;
-  options: Array<{ id: T; label: string; desc: string }>;
-  value: T;
-  onChange: (v: T) => void;
-  columns?: 2 | 3;
-}) {
-  return (
-    <div className="bg-white border border-stone-200 rounded-2xl p-5 shadow-[0_2px_10px_rgba(15,23,42,0.04)]">
-      <div className="text-[16px] font-semibold text-stone-800 mb-3.5">{label}</div>
-      <div className={`grid gap-2.5 ${columns === 3 ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2'}`}>
-        {options.map((opt) => {
-          const active = opt.id === value;
-          return (
-            <button
-              key={opt.id}
-              type="button"
-              onClick={() => onChange(opt.id)}
-              className={[
-                'text-left px-3.5 py-2.5 rounded-xl border transition-colors',
-                active
-                  ? 'border-primary-300 bg-primary-50'
-                  : 'border-stone-200 hover:border-stone-300 hover:bg-stone-50',
-              ].join(' ')}
-            >
-              <div className="text-[14px] font-medium text-stone-800 flex items-center gap-2 leading-tight">
-                <span
-                  className={[
-                    'w-3 h-3 rounded-full border shrink-0',
-                    active ? 'border-primary-500 bg-primary-500' : 'border-stone-300',
-                  ].join(' ')}
-                />
-                {opt.label}
-              </div>
-              <div className="text-[12px] text-stone-500 mt-1 ml-5 leading-snug">{opt.desc}</div>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 
 function JdCard({
   mode,
@@ -534,16 +515,13 @@ function JdCard({
   inputRef: React.RefObject<HTMLInputElement | null>;
   onPick: (f: File) => void;
 }) {
-  const doneText = text.trim().length >= 20;
-  const doneUpload = state.filename !== '' && doneText;
-  const done = mode === 'upload' ? doneUpload : doneText;
+  const ready = text.trim().length >= 20;
+
   return (
     <div
-      style={{ minHeight: 210 }}
-      className={[
-        'p-5 bg-white rounded-2xl transition-all border-2 border-dashed shadow-[0_2px_10px_rgba(15,23,42,0.04)] flex flex-col',
-        done ? 'border-success-500' : 'border-stone-300 hover:border-primary-300',
-      ].join(' ')}
+      className={`p-5 md:p-6 bg-white rounded-3xl border-2 transition-all shadow-xs flex flex-col justify-between ${
+        ready ? 'border-emerald-300/80 bg-emerald-50/15' : 'border-slate-200/90 hover:border-blue-300'
+      }`}
     >
       <input
         ref={inputRef}
@@ -556,103 +534,84 @@ function JdCard({
           e.target.value = '';
         }}
       />
-      <div className="flex items-center gap-3 mb-3">
-        <div
-          className={[
-            'w-11 h-11 rounded-xl flex items-center justify-center shrink-0',
-            done ? 'bg-success-50 text-success-700' : 'bg-primary-50 text-primary-600',
-          ].join(' ')}
-        >
-          {state.parsing ? <Spinner size={18} /> : done ? <CheckCircle2 size={20} /> : <Briefcase size={20} />}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-[16px] font-semibold text-stone-800 flex items-center gap-1.5 leading-tight">
-            上传岗位 JD
-            <span className="text-[11px] text-danger-500">*</span>
+
+      <div>
+        <div className="flex items-center justify-between mb-3.5">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-2xl bg-purple-50 text-purple-600 flex items-center justify-center">
+              <Briefcase size={18} />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-slate-900">目标岗位 JD *</div>
+              <div className="text-xs text-slate-500">用于定位考题难度与技术方向</div>
+            </div>
           </div>
-          <div className="text-[12px] text-stone-500 mt-0.5">用于定位提问方向</div>
+
+          <div className="flex p-0.5 bg-slate-100 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setMode('upload')}
+              className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all ${
+                mode === 'upload'
+                  ? 'bg-white text-blue-700 shadow-2xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              上传文件
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('paste')}
+              className={`px-3 py-1 text-xs font-semibold rounded-lg transition-all ${
+                mode === 'paste'
+                  ? 'bg-white text-blue-700 shadow-2xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              粘贴文本
+            </button>
+          </div>
         </div>
-      </div>
 
-      {/* Mode toggle: upload file OR paste text */}
-      <div className="inline-flex p-0.5 bg-primary-50 border border-primary-100 rounded-lg mb-2.5 text-[13px]">
-        <button
-          type="button"
-          onClick={() => setMode('upload')}
-          className={[
-            'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md transition-colors',
-            mode === 'upload'
-              ? 'bg-primary-500 text-white font-medium shadow-sm'
-              : 'text-primary-700 hover:bg-primary-100',
-          ].join(' ')}
-        >
-          <FileUp size={12} />
-          上传文件
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode('paste')}
-          className={[
-            'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md transition-colors',
-            mode === 'paste'
-              ? 'bg-primary-500 text-white font-medium shadow-sm'
-              : 'text-primary-700 hover:bg-primary-100',
-          ].join(' ')}
-        >
-          <ClipboardPaste size={12} />
-          粘贴文本
-        </button>
-      </div>
-
-      <div className="flex-1 flex flex-col">
-      {mode === 'upload' ? (
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          className={[
-            'w-full text-left px-3 py-2.5 rounded-lg transition-colors text-[14px]',
-            doneUpload
-              ? 'bg-success-50 text-success-700 hover:bg-success-100'
-              : 'bg-primary-50 text-primary-700 hover:bg-primary-100',
-          ].join(' ')}
-        >
-          {doneUpload ? (
-            <span className="truncate inline-block max-w-full">
-              {state.filename || '已上传'} · 点击替换
-            </span>
-          ) : (
-            <span className="flex items-center gap-2 leading-tight">
-              <Upload size={14} className="shrink-0" />
-              <span className="flex flex-col">
-                <span className="text-[14px]">点击选择文件</span>
-                <span className="text-[11px] text-primary-500/70 font-mono mt-0.5">
-                  PDF · DOCX · TXT · MD
-                </span>
-              </span>
-            </span>
-          )}
-        </button>
-      ) : (
-        <>
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="把 JD 全文粘贴到这里…（≥ 20 字才算有效）"
-            rows={3}
-            className="w-full px-3 py-2 bg-white border border-stone-300 rounded-lg text-[13px] text-stone-700 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100 resize-y leading-[1.55]"
-          />
-          <div className="text-[12px] text-stone-500 mt-1 flex justify-between">
-            <span className={doneText ? 'text-success-700 font-medium' : ''}>
-              {doneText ? '✓ 已就绪' : `当前 ${text.trim().length}/20 字`}
-            </span>
-            {text && (
-              <button type="button" onClick={() => setText('')} className="hover:text-danger-500">
-                清空
-              </button>
+        {mode === 'paste' ? (
+          <div className="pt-1">
+            <textarea
+              rows={4}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="把 JD 全文粘贴到这里（如岗位职责、任职要求等，至少20字）..."
+              className="w-full p-3.5 bg-slate-50 border border-slate-200/80 rounded-2xl text-sm text-slate-800 placeholder-slate-400 outline-none focus:border-blue-400 focus:bg-white transition-all leading-relaxed resize-none"
+            />
+            {ready && (
+              <div className="text-xs text-emerald-700 font-semibold mt-1.5 flex items-center gap-1.5">
+                <CheckCircle2 size={14} />
+                <span>JD 内容已就绪 ({text.trim().length} 字)</span>
+              </div>
             )}
           </div>
-        </>
-      )}
+        ) : (
+          <div
+            onClick={() => inputRef.current?.click()}
+            className="p-6 border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-colors bg-slate-50/50 hover:bg-blue-50/30 text-center"
+          >
+            {state.parsing ? (
+              <div className="flex items-center gap-2 text-sm text-blue-600 font-medium">
+                <Spinner size={16} /> 正在智能解析 JD...
+              </div>
+            ) : ready ? (
+              <div className="text-sm font-semibold text-emerald-700 flex items-center gap-1.5">
+                <CheckCircle2 size={16} />
+                <span>已就绪：{state.filename || `${text.slice(0, 15)}...`}</span>
+              </div>
+            ) : (
+              <>
+                <FileUp size={24} className="text-slate-400 mb-1.5" />
+                <span className="text-sm font-semibold text-slate-700">点击选择 JD 文件</span>
+                <span className="text-xs text-slate-400 mt-0.5">支持 PDF、DOCX、TXT、MD 格式</span>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
