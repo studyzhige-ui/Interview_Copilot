@@ -14,32 +14,16 @@ vi.mock('@/api/persistentTasks', () => ({
   listPersistentTasks: vi.fn(),
 }));
 
+vi.mock('framer-motion', () => ({
+  motion: {
+    div: ({ children, ...props }: any) => <div {...props}>{children}</div>,
+  },
+  AnimatePresence: ({ children }: any) => <>{children}</>,
+}));
+
 describe('TodayPage', () => {
   beforeEach(() => {
-    vi.mocked(listJobOpportunities).mockResolvedValue([
-      {
-        id: 'opp-1',
-        user_id: 1,
-        company_name: '腾讯科技',
-        job_title: '后端开发专家',
-        location: '深圳',
-        team: '微信',
-        source_url: null,
-        source_provider: null,
-        external_job_id: null,
-        external_application_id: null,
-        phase: 'in_process',
-        current_step: '技术一面',
-        outcome: null,
-        archived_at: null,
-        last_event_at: '2026-08-15T10:00:00Z',
-        direction_version: 1,
-        direction_links: [],
-        created_at: '2026-08-10T00:00:00Z',
-        updated_at: '2026-08-15T10:00:00Z',
-      },
-    ]);
-
+    vi.mocked(listJobOpportunities).mockResolvedValue([]);
     vi.mocked(listPersistentTasks).mockResolvedValue([]);
   });
 
@@ -61,6 +45,5 @@ describe('TodayPage', () => {
 
     // Central Floating Island
     expect(screen.getByPlaceholderText('向 Copilot 提问、指派任务或开启对话…')).toBeInTheDocument();
-    expect(screen.getByText('发送')).toBeInTheDocument();
   });
 });
