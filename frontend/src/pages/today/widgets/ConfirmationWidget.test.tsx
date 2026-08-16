@@ -74,7 +74,7 @@ describe('ConfirmationWidget', () => {
 
     await waitFor(() => {
       expect(screen.getByText('🎉 全部处理完毕')).toBeInTheDocument();
-      expect(screen.getByText('当前无待确认或阻断事项')).toBeInTheDocument();
+      expect(screen.getByText('当前无待确认事项')).toBeInTheDocument();
     });
   });
 });

@@ -6,7 +6,7 @@ import {
   Sparkles,
   Layers,
   CheckCircle2,
-  ChevronDown,
+  ChevronRight,
   Mail,
   UserCheck,
   Briefcase,
@@ -116,46 +116,45 @@ export function ConfirmationWidget({
   };
 
   return (
-    <div className="h-full flex flex-col justify-between select-none pl-3">
-      {/* Sector Header */}
-      <div className="flex items-center justify-between pb-2.5 mb-2 border-b border-slate-200/60">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center font-bold">
-            <ShieldAlert size={14} />
+    <div className="h-full flex flex-col justify-between select-none">
+      {/* Header */}
+      <div className="flex items-center justify-between pb-1.5 border-b border-slate-200/50">
+        <div className="flex items-center gap-1.5">
+          <div className="w-5 h-5 rounded-md bg-amber-100/70 text-amber-700 flex items-center justify-center font-bold">
+            <ShieldAlert size={12} />
           </div>
-          <div>
-            <h2 className="text-xs font-bold text-slate-900 tracking-tight">待我确认</h2>
-            <p className="text-[10px] text-slate-400">Agent 推进前需由你裁决的高优先级事项</p>
-          </div>
+          <span className="text-xs font-bold text-slate-800">待我确认</span>
+          <span className="text-[10px] text-slate-400">· 需人工裁决</span>
         </div>
-        <span className="text-[11px] font-mono font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-          {items.length} 待决
+        <span className="text-[10px] font-mono font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+          {items.length} 项
         </span>
       </div>
 
-      {/* Stacked Queue Container */}
-      <div className="flex-1 flex flex-col justify-center relative overflow-hidden py-1">
+      {/* Main Content Area (Borderless) */}
+      <div className="flex-1 flex flex-col justify-between py-2 overflow-hidden">
         {items.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 animate-in fade-in duration-300">
-            <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-1.5 shadow-2xs">
-              <CheckCircle2 size={20} />
+            <div className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mb-1 shadow-2xs">
+              <CheckCircle2 size={16} />
             </div>
             <p className="text-xs font-bold text-slate-800">🎉 全部处理完毕</p>
-            <p className="text-[10px] text-slate-400 mt-0.5">当前无待确认或阻断事项</p>
+            <p className="text-[10px] text-slate-400">当前无待确认事项</p>
           </div>
         ) : (
-          <div className="space-y-2 relative h-full flex flex-col justify-between">
-            {/* Top / Expanded Card */}
+          <div className="h-full flex flex-col justify-between space-y-2">
+            {/* Top Expanded Item (Rendered directly on canvas without card container) */}
             {currentItem && (
               <div
                 className={[
-                  'rounded-2xl border border-amber-200/90 bg-white/90 p-3.5 shadow-xs transition-all duration-300 transform',
+                  'space-y-1.5 transition-all duration-300 transform',
                   dismissingId === currentItem.id
-                    ? 'translate-x-16 opacity-0 pointer-events-none scale-95'
-                    : 'translate-x-0 opacity-100 scale-100',
+                    ? 'translate-x-12 opacity-0 pointer-events-none'
+                    : 'translate-x-0 opacity-100',
                 ].join(' ')}
               >
-                <div className="flex items-center justify-between gap-2 mb-1.5">
+                {/* Meta & Title */}
+                <div className="flex items-center justify-between gap-2">
                   {getCategoryBadge(currentItem.category)}
                   {currentItem.timestamp && (
                     <span className="text-[10px] text-slate-400 font-mono">
@@ -164,21 +163,22 @@ export function ConfirmationWidget({
                   )}
                 </div>
 
-                <h3 className="text-xs font-bold text-slate-900 leading-snug">
+                <div className="text-xs font-bold text-slate-900 leading-snug">
                   {currentItem.title}
-                </h3>
+                </div>
 
-                <p className="text-[11px] text-slate-600 mt-1 leading-relaxed bg-slate-50/70 p-2 rounded-xl border border-slate-100">
+                <p className="text-[11px] text-slate-600 leading-relaxed">
                   {currentItem.description}
                 </p>
 
-                <div className="mt-1.5 flex items-start gap-1 text-[10px] text-amber-900 bg-amber-50/90 p-1.5 rounded-xl border border-amber-200/70">
+                {/* Copilot Context Reason */}
+                <div className="flex items-start gap-1 text-[10px] text-amber-900/90 leading-tight">
                   <Sparkles size={11} className="text-amber-600 shrink-0 mt-0.5" />
-                  <span className="leading-tight">{currentItem.contextReason}</span>
+                  <span>{currentItem.contextReason}</span>
                 </div>
 
-                {/* Bottom Action Bar */}
-                <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center gap-2">
+                {/* Action Bar: Input + Confirm Button */}
+                <div className="pt-1.5 flex items-center gap-1.5">
                   <div className="flex-1 relative">
                     <input
                       type="text"
@@ -190,14 +190,14 @@ export function ConfirmationWidget({
                           handleDecision('edit');
                         }
                       }}
-                      className="w-full text-[11px] px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 focus:border-blue-400 focus:bg-white outline-none transition-all pr-6"
+                      className="w-full text-[11px] px-2.5 py-1 rounded-full bg-slate-100/90 hover:bg-slate-100 focus:bg-white border border-slate-200 focus:border-blue-400 outline-none transition-all pr-6"
                     />
                     {comment.trim() && (
                       <button
                         type="button"
                         onClick={() => handleDecision('edit')}
                         title="提交修改意见"
-                        className="absolute right-1 top-1 p-0.5 rounded text-blue-600 hover:bg-blue-50 cursor-pointer"
+                        className="absolute right-1 top-1 p-0.5 text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
                       >
                         <Send size={10} />
                       </button>
@@ -207,39 +207,33 @@ export function ConfirmationWidget({
                   <button
                     type="button"
                     onClick={() => handleDecision('approve')}
-                    className="inline-flex items-center justify-center gap-1 px-3 py-1 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-xs active:scale-95 transition-all cursor-pointer shrink-0"
+                    className="inline-flex items-center justify-center gap-1 px-3 py-1 rounded-full text-[11px] font-bold bg-blue-600 hover:bg-blue-700 active:scale-95 text-white shadow-xs transition-all cursor-pointer shrink-0"
                   >
-                    <Check size={12} />
-                    <span>{currentItem.suggestedAction || '确认'}</span>
+                    <Check size={11} />
+                    <span>{currentItem.suggestedAction || '确认发送回信'}</span>
                   </button>
                 </div>
               </div>
             )}
 
-            {/* Backlog / Collapsed Strips (Stacked Below) */}
-            <div className="space-y-1">
+            {/* Backlog Strips (Stacked lightweight pill rows below) */}
+            <div className="space-y-1 pt-1 border-t border-slate-100/80">
               {items
                 .filter((it) => it.id !== currentItem?.id)
-                .map((it, idx) => (
+                .slice(0, 2)
+                .map((it) => (
                   <div
                     key={it.id}
                     onClick={() => setActiveId(it.id)}
-                    style={{
-                      transform: `translateY(${idx * 1.5}px) scale(${1 - (idx + 1) * 0.02})`,
-                      opacity: 1 - (idx + 1) * 0.18,
-                    }}
-                    className="p-2 rounded-xl bg-white/70 border border-slate-200/80 shadow-2xs hover:border-blue-300 hover:bg-white hover:opacity-100 transition-all cursor-pointer flex items-center justify-between gap-2 select-none"
+                    className="px-2.5 py-1 rounded-full bg-slate-100/70 hover:bg-slate-200/80 transition-all cursor-pointer flex items-center justify-between gap-2 select-none group"
                   >
                     <div className="flex items-center gap-1.5 min-w-0">
-                      <Layers size={11} className="text-slate-400 shrink-0" />
-                      <span className="text-[11px] font-semibold text-slate-700 truncate">
+                      <Layers size={10} className="text-slate-400 shrink-0" />
+                      <span className="text-[10px] font-medium text-slate-600 group-hover:text-slate-900 truncate">
                         {it.title}
                       </span>
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <span className="text-[9px] text-slate-400">点击展开</span>
-                      <ChevronDown size={11} className="text-slate-400" />
-                    </div>
+                    <ChevronRight size={11} className="text-slate-400 group-hover:text-blue-600 transition-colors shrink-0" />
                   </div>
                 ))}
             </div>
@@ -247,9 +241,9 @@ export function ConfirmationWidget({
         )}
       </div>
 
-      {/* Subtle Footer */}
-      <div className="pt-2 border-t border-slate-200/50 flex items-center justify-between text-[10px] text-slate-400">
-        <span>手风琴队列逐一聚焦裁决</span>
+      {/* Footer */}
+      <div className="pt-1.5 border-t border-slate-200/50 flex items-center justify-between text-[9px] text-slate-400">
+        <span>手风琴队列单焦点流转</span>
         <span className="text-amber-800 font-semibold">无静默越权</span>
       </div>
     </div>
