@@ -57,7 +57,7 @@ describe('TodayPage', () => {
     expect(await screen.findByText('下一步')).toBeInTheDocument();
     expect(screen.getByText('待我确认')).toBeInTheDocument();
     expect(screen.getByText('求职动态')).toBeInTheDocument();
-    expect(screen.getByText('Copilot 动态')).toBeInTheDocument();
+    expect(screen.getByText('Copilot 工作')).toBeInTheDocument();
 
     // Central Floating Island
     expect(screen.getByPlaceholderText('向 Copilot 提问、指派任务或开启对话…')).toBeInTheDocument();

@@ -72,7 +72,6 @@ export function ConfirmationWidget({
   const handleDecision = (decision: 'approve' | 'edit') => {
     if (!currentItem) return;
 
-    // Trigger slide-out dismissal animation
     setDismissingId(currentItem.id);
 
     setTimeout(() => {
@@ -84,7 +83,6 @@ export function ConfirmationWidget({
       setDismissingId(null);
       setComment('');
 
-      // Auto promote next card
       if (remaining.length > 0) {
         setActiveId(remaining[0].id);
       }
@@ -95,22 +93,22 @@ export function ConfirmationWidget({
     switch (cat) {
       case 'external_action':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/80">
-            <Mail size={11} />
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+            <Mail size={10} />
             <span>外部动作审批</span>
           </span>
         );
       case 'fact':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200/80">
-            <Briefcase size={11} />
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-800 border border-blue-200">
+            <Briefcase size={10} />
             <span>进展事实确认</span>
           </span>
         );
       case 'profile_update':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
-            <UserCheck size={11} />
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+            <UserCheck size={10} />
             <span>档案更新确认</span>
           </span>
         );
@@ -118,46 +116,46 @@ export function ConfirmationWidget({
   };
 
   return (
-    <div className="h-full flex flex-col justify-between p-5.5 rounded-3xl bg-white/90 backdrop-blur-md border border-slate-200/90 shadow-2xs hover:shadow-xs transition-all select-none">
-      {/* Header */}
-      <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+    <div className="h-full flex flex-col justify-between select-none pl-3">
+      {/* Sector Header */}
+      <div className="flex items-center justify-between pb-2.5 mb-2 border-b border-slate-200/60">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold">
-            <ShieldAlert size={15} />
+          <div className="w-6 h-6 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center font-bold">
+            <ShieldAlert size={14} />
           </div>
           <div>
-            <h2 className="text-sm font-bold text-slate-900 tracking-tight">待我确认</h2>
-            <p className="text-[11px] text-slate-400">Agent 推进前需由你最终裁决的事项</p>
+            <h2 className="text-xs font-bold text-slate-900 tracking-tight">待我确认</h2>
+            <p className="text-[10px] text-slate-400">Agent 推进前需由你裁决的高优先级事项</p>
           </div>
         </div>
-        <span className="text-xs font-mono font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-100">
+        <span className="text-[11px] font-mono font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
           {items.length} 待决
         </span>
       </div>
 
       {/* Stacked Queue Container */}
-      <div className="flex-1 my-3 flex flex-col justify-center relative min-h-[220px]">
+      <div className="flex-1 flex flex-col justify-center relative overflow-hidden py-1">
         {items.length === 0 ? (
-          <div className="py-10 flex flex-col items-center justify-center text-center text-slate-400 animate-in fade-in duration-300">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-2 shadow-2xs">
-              <CheckCircle2 size={24} />
+          <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 animate-in fade-in duration-300">
+            <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-1.5 shadow-2xs">
+              <CheckCircle2 size={20} />
             </div>
-            <p className="text-sm font-bold text-slate-800">🎉 全部处理完毕</p>
-            <p className="text-xs text-slate-400 mt-1">当前无待确认或阻断事项</p>
+            <p className="text-xs font-bold text-slate-800">🎉 全部处理完毕</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">当前无待确认或阻断事项</p>
           </div>
         ) : (
-          <div className="space-y-2 relative">
+          <div className="space-y-2 relative h-full flex flex-col justify-between">
             {/* Top / Expanded Card */}
             {currentItem && (
               <div
                 className={[
-                  'rounded-2xl border border-amber-200/90 bg-gradient-to-b from-amber-50/30 to-white p-4 shadow-sm transition-all duration-300 transform',
+                  'rounded-2xl border border-amber-200/90 bg-white/90 p-3.5 shadow-xs transition-all duration-300 transform',
                   dismissingId === currentItem.id
-                    ? 'translate-x-12 opacity-0 pointer-events-none scale-95'
+                    ? 'translate-x-16 opacity-0 pointer-events-none scale-95'
                     : 'translate-x-0 opacity-100 scale-100',
                 ].join(' ')}
               >
-                <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="flex items-center justify-between gap-2 mb-1.5">
                   {getCategoryBadge(currentItem.category)}
                   {currentItem.timestamp && (
                     <span className="text-[10px] text-slate-400 font-mono">
@@ -166,42 +164,42 @@ export function ConfirmationWidget({
                   )}
                 </div>
 
-                <h3 className="text-xs md:text-sm font-bold text-slate-900 leading-snug">
+                <h3 className="text-xs font-bold text-slate-900 leading-snug">
                   {currentItem.title}
                 </h3>
 
-                <p className="text-xs text-slate-600 mt-1.5 leading-relaxed bg-slate-50/60 p-2 rounded-xl border border-slate-100">
+                <p className="text-[11px] text-slate-600 mt-1 leading-relaxed bg-slate-50/70 p-2 rounded-xl border border-slate-100">
                   {currentItem.description}
                 </p>
 
-                <div className="mt-2 flex items-start gap-1.5 text-[11px] text-amber-900 bg-amber-50/80 p-2 rounded-xl border border-amber-200/60">
-                  <Sparkles size={13} className="text-amber-600 shrink-0 mt-0.5" />
+                <div className="mt-1.5 flex items-start gap-1 text-[10px] text-amber-900 bg-amber-50/90 p-1.5 rounded-xl border border-amber-200/70">
+                  <Sparkles size={11} className="text-amber-600 shrink-0 mt-0.5" />
                   <span className="leading-tight">{currentItem.contextReason}</span>
                 </div>
 
-                {/* Bottom Action Bar: Confirm & Input */}
-                <div className="mt-3 pt-2.5 border-t border-slate-100 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                {/* Bottom Action Bar */}
+                <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center gap-2">
                   <div className="flex-1 relative">
                     <input
                       type="text"
                       value={comment}
                       onChange={(e) => setComment(e.target.value)}
-                      placeholder="补充意见或修改建议…"
+                      placeholder="意见输入 / 修改建议…"
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && comment.trim()) {
                           handleDecision('edit');
                         }
                       }}
-                      className="w-full text-xs px-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 focus:border-blue-400 focus:bg-white outline-none transition-all pr-7"
+                      className="w-full text-[11px] px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 focus:border-blue-400 focus:bg-white outline-none transition-all pr-6"
                     />
                     {comment.trim() && (
                       <button
                         type="button"
                         onClick={() => handleDecision('edit')}
                         title="提交修改意见"
-                        className="absolute right-1.5 top-1.5 p-1 rounded-lg text-blue-600 hover:bg-blue-50 cursor-pointer"
+                        className="absolute right-1 top-1 p-0.5 rounded text-blue-600 hover:bg-blue-50 cursor-pointer"
                       >
-                        <Send size={12} />
+                        <Send size={10} />
                       </button>
                     )}
                   </div>
@@ -209,48 +207,50 @@ export function ConfirmationWidget({
                   <button
                     type="button"
                     onClick={() => handleDecision('approve')}
-                    className="inline-flex items-center justify-center gap-1 px-4 py-1.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-xs active:scale-95 transition-all cursor-pointer shrink-0"
+                    className="inline-flex items-center justify-center gap-1 px-3 py-1 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-xs active:scale-95 transition-all cursor-pointer shrink-0"
                   >
-                    <Check size={13} />
+                    <Check size={12} />
                     <span>{currentItem.suggestedAction || '确认'}</span>
                   </button>
                 </div>
               </div>
             )}
 
-            {/* Backlog / Collapsed Cards (Stacked below) */}
-            {items
-              .filter((it) => it.id !== currentItem?.id)
-              .map((it, idx) => (
-                <div
-                  key={it.id}
-                  onClick={() => setActiveId(it.id)}
-                  style={{
-                    transform: `translateY(${idx * 2}px) scale(${1 - (idx + 1) * 0.02})`,
-                    opacity: 1 - (idx + 1) * 0.15,
-                  }}
-                  className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-2xs hover:border-blue-300 hover:opacity-100 transition-all cursor-pointer flex items-center justify-between gap-3 select-none"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Layers size={12} className="text-slate-400 shrink-0" />
-                    <span className="text-xs font-semibold text-slate-700 truncate">
-                      {it.title}
-                    </span>
+            {/* Backlog / Collapsed Strips (Stacked Below) */}
+            <div className="space-y-1">
+              {items
+                .filter((it) => it.id !== currentItem?.id)
+                .map((it, idx) => (
+                  <div
+                    key={it.id}
+                    onClick={() => setActiveId(it.id)}
+                    style={{
+                      transform: `translateY(${idx * 1.5}px) scale(${1 - (idx + 1) * 0.02})`,
+                      opacity: 1 - (idx + 1) * 0.18,
+                    }}
+                    className="p-2 rounded-xl bg-white/70 border border-slate-200/80 shadow-2xs hover:border-blue-300 hover:bg-white hover:opacity-100 transition-all cursor-pointer flex items-center justify-between gap-2 select-none"
+                  >
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <Layers size={11} className="text-slate-400 shrink-0" />
+                      <span className="text-[11px] font-semibold text-slate-700 truncate">
+                        {it.title}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className="text-[9px] text-slate-400">点击展开</span>
+                      <ChevronDown size={11} className="text-slate-400" />
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className="text-[10px] text-slate-400 font-medium">点击展开处理</span>
-                    <ChevronDown size={12} className="text-slate-400" />
-                  </div>
-                </div>
-              ))}
+                ))}
+            </div>
           </div>
         )}
       </div>
 
-      {/* Footer Hint */}
-      <div className="pt-2.5 border-t border-slate-100/80 flex items-center justify-between text-[11px] text-slate-400">
+      {/* Subtle Footer */}
+      <div className="pt-2 border-t border-slate-200/50 flex items-center justify-between text-[10px] text-slate-400">
         <span>手风琴队列逐一聚焦裁决</span>
-        <span className="text-amber-700 font-semibold">无静默越权</span>
+        <span className="text-amber-800 font-semibold">无静默越权</span>
       </div>
     </div>
   );

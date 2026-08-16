@@ -43,7 +43,6 @@ export function CareerDynamicWidget({
       }
     }
 
-    // Default mock history events if none
     if (list.length === 0) {
       return [
         {
@@ -76,76 +75,75 @@ export function CareerDynamicWidget({
       ];
     }
 
-    return list.slice(0, 6);
+    return list.slice(0, 4);
   }, [opportunities]);
 
   const getStatusIcon = (status: CareerEventItem['status']) => {
     switch (status) {
       case 'passed':
-        return <CheckCircle2 size={13} className="text-emerald-500 shrink-0" />;
+        return <CheckCircle2 size={12} className="text-emerald-500 shrink-0" />;
       case 'confirmed':
-        return <CheckCircle2 size={13} className="text-blue-500 shrink-0" />;
+        return <CheckCircle2 size={12} className="text-blue-500 shrink-0" />;
       case 'closed':
-        return <XCircle size={13} className="text-slate-400 shrink-0" />;
+        return <XCircle size={12} className="text-slate-400 shrink-0" />;
       case 'scheduled':
-        return <Clock size={13} className="text-indigo-500 shrink-0" />;
+        return <Clock size={12} className="text-indigo-500 shrink-0" />;
     }
   };
 
   return (
-    <div className="h-full flex flex-col justify-between p-5.5 rounded-3xl bg-white/90 backdrop-blur-md border border-slate-200/90 shadow-2xs hover:shadow-xs transition-all select-none">
-      {/* Header */}
-      <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+    <div className="h-full flex flex-col justify-between select-none pr-3">
+      {/* Sector Header */}
+      <div className="flex items-center justify-between pb-2.5 mb-2 border-b border-slate-200/60">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
-            <Activity size={15} />
+          <div className="w-6 h-6 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
+            <Activity size={14} />
           </div>
           <div>
-            <h2 className="text-sm font-bold text-slate-900 tracking-tight">求职动态</h2>
-            <p className="text-[11px] text-slate-400">外部招聘流程中已发生的确定性进展</p>
+            <h2 className="text-xs font-bold text-slate-900 tracking-tight">求职动态</h2>
+            <p className="text-[10px] text-slate-400">外部招聘流程中已发生的确定性进展</p>
           </div>
         </div>
         <button
           type="button"
           onClick={() => navigate('/career')}
-          className="text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-0.5 cursor-pointer"
+          className="text-[11px] text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-0.5 cursor-pointer"
         >
           <span>查看全部</span>
-          <ChevronRight size={12} />
+          <ChevronRight size={11} />
         </button>
       </div>
 
       {/* Timeline List */}
-      <div className="flex-1 overflow-y-auto my-3 space-y-3 pr-1 scrollbar-thin">
+      <div className="flex-1 overflow-y-auto pr-1 space-y-2 scrollbar-thin">
         {loading ? (
-          <div className="py-12 flex flex-col items-center justify-center text-slate-400 text-xs gap-2">
+          <div className="h-full flex flex-col items-center justify-center text-slate-400 text-xs gap-2">
             <Clock size={16} className="animate-spin text-emerald-500" />
             <span>载入求职动态…</span>
           </div>
         ) : (
-          <div className="relative pl-3 border-l-2 border-slate-100 space-y-3.5">
+          <div className="relative pl-2.5 border-l-2 border-slate-200/80 space-y-2 py-1">
             {events.map((ev) => (
               <div
                 key={ev.id}
                 onClick={() => navigate(ev.targetUrl)}
                 className="group cursor-pointer relative"
               >
-                {/* Timeline node */}
-                <div className="absolute -left-[19px] top-1 w-3 h-3 rounded-full bg-white border-2 border-slate-300 group-hover:border-blue-500 transition-colors" />
+                <div className="absolute -left-[15px] top-1.5 w-2 h-2 rounded-full bg-white border-2 border-slate-300 group-hover:border-emerald-500 transition-colors" />
 
-                <div className="p-2.5 rounded-2xl bg-slate-50/60 group-hover:bg-slate-100/80 border border-slate-100 transition-all">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5 truncate">
-                      <Building2 size={12} className="text-slate-400" />
+                <div className="p-2 rounded-xl bg-white/60 group-hover:bg-white border border-slate-200/60 group-hover:border-emerald-300 shadow-2xs hover:shadow-xs transition-all">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="text-[11px] font-bold text-slate-900 flex items-center gap-1 truncate">
+                      <Building2 size={11} className="text-slate-400 shrink-0" />
                       <span>{ev.companyName}</span>
                       <span className="text-slate-400 font-normal">· {ev.jobTitle}</span>
                     </span>
-                    <time className="text-[10px] text-slate-400 font-mono shrink-0">
+                    <time className="text-[9px] text-slate-400 font-mono shrink-0">
                       {ev.timeText}
                     </time>
                   </div>
 
-                  <div className="mt-1 flex items-center gap-1.5 text-xs text-slate-700">
+                  <div className="mt-0.5 flex items-center gap-1 text-[11px] text-slate-700">
                     {getStatusIcon(ev.status)}
                     <span className="truncate">{ev.eventName}</span>
                   </div>
@@ -156,10 +154,10 @@ export function CareerDynamicWidget({
         )}
       </div>
 
-      {/* Footer */}
-      <div className="pt-2.5 border-t border-slate-100/80 flex items-center justify-between text-[11px] text-slate-400">
+      {/* Subtle Footer */}
+      <div className="pt-2 border-t border-slate-200/50 flex items-center justify-between text-[10px] text-slate-400">
         <span>真实外部已发生事件流</span>
-        <span className="text-emerald-600 font-semibold">实战溯源</span>
+        <span className="text-emerald-600 font-medium">实战溯源</span>
       </div>
     </div>
   );
