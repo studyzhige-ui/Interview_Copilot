@@ -1,22 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
-  Sparkles,
-  MessageSquarePlus,
-  Compass,
-  FileBarChart2,
-  Mic2,
+  Sun,
   Workflow,
-  Contact,
-  TrendingUp,
-  Blocks,
+  Mic2,
+  FolderGit2,
   Zap,
-  Clock,
   Settings,
   LogOut,
   HelpCircle,
   PanelLeftClose,
-  PanelLeftOpen,
 } from 'lucide-react';
 import { Logo } from '@/components/ui/Logo';
 import { useAuthStore } from '@/store/authStore';
@@ -27,21 +20,16 @@ import { toast } from '@/store/uiStore';
 interface NavItem {
   to: string;
   label: string;
-  icon: typeof Compass;
+  icon: typeof Sun;
   badge?: string;
 }
 
-// First-Class Core Navigation Items with Modern Icons & Simplified Labels
-const NAV_ITEMS: NavItem[] = [
-  { to: '/general-chat', label: 'Copilot', icon: Sparkles },
-  { to: '/review', label: '面试复盘', icon: FileBarChart2 },
-  { to: '/mock', label: '模拟面试', icon: Mic2 },
-  { to: '/growth', label: '持续成长', icon: TrendingUp },
-  { to: '/career-process', label: '应聘进程', icon: Workflow },
-  { to: '/career-profile', label: '求职档案', icon: Contact },
-  { to: '/capabilities', label: '能力与插件', icon: Blocks },
-  { to: '/persistent-tasks', label: '自动化监控', icon: Zap },
-  { to: '/history', label: '历史记录', icon: Clock },
+// Exactly 4 First-Class User Areas according to Specification v0.1
+const PRIMARY_NAV_ITEMS: NavItem[] = [
+  { to: '/today', label: '今天', icon: Sun },
+  { to: '/career', label: '求职', icon: Workflow },
+  { to: '/interviews', label: '面试', icon: Mic2 },
+  { to: '/materials', label: '资料', icon: FolderGit2 },
 ];
 
 const COLLAPSED_KEY = 'sidenav.collapsed';
@@ -78,7 +66,6 @@ export function SideNav() {
     });
   };
 
-  // Click outside to close user menu popover
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
@@ -91,7 +78,6 @@ export function SideNav() {
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, [userMenuOpen]);
 
-  // If collapsed, hovering temporarily expands the sidebar
   const isExpanded = !collapsed || hovering;
   const displayName = me?.nickname || me?.username || '用户';
 
@@ -100,219 +86,168 @@ export function SideNav() {
       onMouseEnter={() => collapsed && setHovering(true)}
       onMouseLeave={() => collapsed && setHovering(false)}
       className={[
-        isExpanded ? 'w-[230px]' : 'w-[68px]',
-        'shrink-0 h-full border-r border-slate-200/80 bg-white/95 backdrop-blur-xl',
-        'flex flex-col justify-between select-none z-30 transition-all duration-200 ease-out relative',
-        collapsed && hovering ? 'shadow-2xl ring-1 ring-slate-200/80' : '',
+        'shrink-0 h-full flex flex-col justify-between select-none z-30 transition-all duration-300 ease-out border-r bg-white/95 backdrop-blur-xl border-slate-200/80 shadow-xs',
+        isExpanded ? 'w-[210px]' : 'w-[68px]',
       ].join(' ')}
     >
-      {/* Top Header: Logo & Toggle Button */}
-      <div className="p-3.5 flex items-center justify-between">
-        <div
-          onClick={() => navigate('/general-chat')}
-          className="flex items-center gap-2.5 cursor-pointer group min-w-0"
-          title="Interview Copilot"
-        >
-          <Logo size={28} />
-          {isExpanded && (
-            <div className="flex flex-col min-w-0">
-              <span className="font-bold text-sm tracking-tight text-slate-800 truncate">
-                Interview Copilot
-              </span>
-              <span className="text-xs text-slate-400 font-medium tracking-wide">
-                智能求职副驾
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* Dedicated Collapse / Expand Button */}
-        {isExpanded && (
-          <button
-            type="button"
-            onClick={toggleCollapsed}
-            title={collapsed ? '锁定展开侧边栏' : '折叠侧边栏'}
-            className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
-          >
-            {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-          </button>
-        )}
-      </div>
-
-      {/* When fully collapsed without hover, show single expand icon on top */}
-      {!isExpanded && (
-        <div className="px-3 pb-2 flex justify-center">
-          <button
-            type="button"
-            onClick={toggleCollapsed}
-            title="展开侧边栏"
-            className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
-          >
-            <PanelLeftOpen size={17} />
-          </button>
-        </div>
-      )}
-
-      {/* Floating Action Pills */}
-      <div className="px-3 pb-2.5 flex flex-col gap-2">
-        <button
-          type="button"
-          onClick={() => navigate('/general-chat')}
-          title="新建对话"
-          className={[
-            'w-full flex items-center justify-center gap-2 py-2.5 rounded-full font-semibold text-sm transition-all duration-200 cursor-pointer',
-            'bg-slate-100 text-slate-700 hover:bg-slate-200 hover:text-slate-900 border border-slate-200/60 shadow-2xs',
-            isExpanded ? 'px-4' : 'px-2',
-          ].join(' ')}
-        >
-          <MessageSquarePlus size={16} className="text-blue-600 shrink-0" />
-          {isExpanded && <span className="truncate">新建对话</span>}
-        </button>
-
-        <button
-          type="button"
-          onClick={() => navigate('/review')}
-          title="新建面试复盘"
-          className={[
-            'w-full flex items-center justify-center gap-2 py-2.5 rounded-full font-semibold text-sm transition-all duration-200 cursor-pointer',
-            'bg-gradient-to-r from-blue-600/10 via-purple-600/10 to-pink-600/10 hover:from-blue-600/15 hover:via-purple-600/15 hover:to-pink-600/15 text-purple-900 border border-purple-200/70 shadow-2xs',
-            isExpanded ? 'px-4' : 'px-2',
-          ].join(' ')}
-        >
-          <Sparkles size={15} className="text-purple-600 shrink-0" />
-          {isExpanded && <span className="truncate">新建复盘</span>}
-        </button>
-      </div>
-
-      {/* Navigation Group: 8 First-Class Navigation Items */}
-      <nav className="flex-1 px-3 py-1 flex flex-col gap-1 overflow-y-auto overflow-x-hidden">
-        {NAV_ITEMS.map(({ to, label, icon: Icon, badge }) => (
+      {/* Top Brand Logo */}
+      <div>
+        <div className="h-16 px-4 flex items-center justify-between border-b border-slate-100/80">
           <NavLink
-            key={to}
-            to={to}
-            title={isExpanded ? undefined : label}
-            aria-label={label}
-            className={({ isActive }) =>
-              [
-                'flex items-center gap-3 rounded-2xl text-sm font-medium transition-all duration-150 relative cursor-pointer',
-                isExpanded ? 'px-3.5 py-2.5' : 'p-2.5 justify-center',
-                isActive
-                  ? 'bg-blue-50 text-blue-700 font-semibold shadow-xs'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
-              ].join(' ')
-            }
+            to="/today"
+            className="flex items-center gap-2.5 overflow-hidden group py-1"
           >
-            <Icon size={18} className="shrink-0 text-slate-500 group-hover:text-slate-800" />
-            {isExpanded && <span className="truncate">{label}</span>}
-            {isExpanded && badge && (
-              <span className="ml-auto text-xs font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                {badge}
-              </span>
+            <Logo size={28} />
+            {isExpanded && (
+              <div className="flex flex-col min-w-0 transition-opacity duration-200">
+                <span className="font-black text-sm tracking-tight text-slate-900 leading-tight">
+                  Interview Copilot
+                </span>
+                <span className="text-[10px] font-mono font-medium text-slate-400">
+                  v0.1 AI OS
+                </span>
+              </div>
             )}
           </NavLink>
-        ))}
-      </nav>
 
-      {/* Bottom Profile Area & Popover Menu */}
-      <div ref={userMenuRef} className="border-t border-slate-100 p-2.5 flex flex-col gap-1 relative">
-        {/* User Card Trigger */}
-        <div
-          onClick={() => setUserMenuOpen((v) => !v)}
-          className={[
-            'flex items-center gap-2.5 p-2 rounded-2xl cursor-pointer hover:bg-slate-100 transition-all duration-150',
-            userMenuOpen ? 'bg-slate-100 shadow-2xs ring-1 ring-slate-200' : '',
-            isExpanded ? '' : 'justify-center',
-          ].join(' ')}
-          title="点击打开用户菜单与设置"
-          role="button"
-          aria-expanded={userMenuOpen}
-        >
-          <Avatar
-            src={me?.avatar_url}
-            name={displayName}
-            colorSeed={me?.username ?? subjectId ?? ''}
-            className="w-8 h-8 rounded-full ring-1 ring-slate-200"
-            fallbackClassName="text-xs font-semibold"
-          />
           {isExpanded && (
-            <div className="flex flex-col min-w-0 flex-1">
-              <span className="text-sm font-bold text-slate-800 truncate">
-                {displayName}
-              </span>
-              <span className="text-xs text-slate-400 truncate flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
-                已登录
-              </span>
-            </div>
+            <button
+              type="button"
+              onClick={toggleCollapsed}
+              title={collapsed ? '锁定展开侧边栏' : '折叠侧边栏'}
+              className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+            >
+              <PanelLeftClose size={15} />
+            </button>
           )}
         </div>
 
-        {/* Clean Floating Popover Menu (Above Profile) */}
-        {userMenuOpen && (
-          <div className="absolute bottom-full left-2 mb-2 w-60 bg-white/95 backdrop-blur-xl rounded-3xl shadow-xl border border-slate-200/90 p-2 z-50 animate-in fade-in zoom-in-95 duration-150 flex flex-col gap-1 text-slate-700">
-            {/* Header User Row */}
-            <div className="px-3 py-2.5 border-b border-slate-100 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <Avatar
-                  src={me?.avatar_url}
-                  name={displayName}
-                  colorSeed={me?.username ?? subjectId ?? ''}
-                  className="w-8 h-8 rounded-full"
-                  fallbackClassName="text-xs font-semibold"
+        {/* 4 Primary Navigation Items */}
+        <nav className="p-2.5 space-y-1">
+          {PRIMARY_NAV_ITEMS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  [
+                    'relative flex items-center gap-3 px-3 py-2.5 rounded-2xl text-xs font-bold transition-all duration-150 group cursor-pointer',
+                    isActive
+                      ? 'bg-blue-50/90 text-blue-600 shadow-2xs font-extrabold ring-1 ring-blue-200/80'
+                      : 'text-slate-600 hover:bg-slate-100/70 hover:text-slate-900',
+                    !isExpanded && 'justify-center px-2',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')
+                }
+              >
+                <Icon
+                  size={18}
+                  className="shrink-0 group-hover:scale-110 transition-transform"
                 />
-                <div className="flex flex-col min-w-0">
-                  <span className="text-sm font-bold text-slate-800 truncate max-w-[120px]">
-                    {displayName}
-                  </span>
-                  <span className="text-xs text-slate-400 truncate">
-                    {me?.username || '用户账号'}
-                  </span>
+                {isExpanded && (
+                  <span className="truncate tracking-tight">{item.label}</span>
+                )}
+              </NavLink>
+            );
+          })}
+        </nav>
+      </div>
+
+      {/* Secondary Bottom Navigation (Activity Center & User Settings) */}
+      <div className="p-2.5 border-t border-slate-100/80 space-y-1">
+        {/* Activity Center (Secondary Area) */}
+        <NavLink
+          to="/activities"
+          className={({ isActive }) =>
+            [
+              'relative flex items-center gap-3 px-3 py-2.5 rounded-2xl text-xs font-semibold transition-all duration-150 group cursor-pointer',
+              isActive
+                ? 'bg-purple-50 text-purple-700 shadow-2xs font-bold ring-1 ring-purple-200'
+                : 'text-slate-500 hover:bg-slate-100/70 hover:text-slate-900',
+              !isExpanded && 'justify-center px-2',
+            ]
+              .filter(Boolean)
+              .join(' ')
+          }
+        >
+          <Zap size={17} className="shrink-0 text-purple-600 group-hover:scale-110 transition-transform" />
+          {isExpanded && <span className="truncate">活动中心</span>}
+        </NavLink>
+
+        {/* User Profile & Settings Trigger */}
+        <div ref={userMenuRef} className="relative">
+          <button
+            type="button"
+            onClick={() => setUserMenuOpen((prev) => !prev)}
+            className={[
+              'w-full flex items-center gap-3 p-2 rounded-2xl hover:bg-slate-100/80 transition-all text-left cursor-pointer border border-transparent hover:border-slate-200',
+              !isExpanded && 'justify-center p-1.5',
+            ].join(' ')}
+          >
+            <Avatar name={displayName} className="w-7 h-7 rounded-xl text-xs shrink-0" />
+            {isExpanded && (
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-bold text-slate-800 truncate leading-tight">
+                  {displayName}
+                </div>
+                <div className="text-[10px] text-slate-400 font-mono truncate">
+                  ID: #{subjectId || '1001'}
                 </div>
               </div>
-            </div>
+            )}
+          </button>
 
-            {/* Menu Options */}
-            <div className="py-1 flex flex-col gap-0.5">
+          {/* User Popover Menu */}
+          {userMenuOpen && (
+            <div className="absolute left-full bottom-0 ml-2 w-48 bg-white rounded-2xl shadow-lg border border-slate-200/90 py-1.5 z-50 animate-in fade-in duration-150">
+              <div className="px-3.5 py-2 border-b border-slate-100">
+                <div className="text-xs font-bold text-slate-900 truncate">{displayName}</div>
+                <div className="text-[10px] text-slate-400">个人工作台</div>
+              </div>
+
               <button
                 type="button"
                 onClick={() => {
                   setUserMenuOpen(false);
                   openSettings('general');
                 }}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-2xl text-sm font-medium text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-colors text-left cursor-pointer"
+                className="w-full px-3.5 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2 text-left cursor-pointer transition-colors"
               >
-                <Settings size={16} className="text-slate-600" />
-                <span className="flex-1">系统设置</span>
+                <Settings size={14} className="text-slate-500" />
+                <span>系统设置</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => {
                   setUserMenuOpen(false);
-                  toast.success('Interview Copilot 提供全流程求职与面试辅导。');
+                  toast.info('Interview Copilot v0.1 - AI 驱动的个人求职操作系统');
                 }}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-2xl text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors text-left cursor-pointer"
+                className="w-full px-3.5 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2 text-left cursor-pointer transition-colors"
               >
-                <HelpCircle size={16} className="text-slate-400" />
-                <span className="flex-1">帮助与说明</span>
+                <HelpCircle size={14} className="text-slate-500" />
+                <span>使用帮助与关于</span>
               </button>
-            </div>
 
-            <div className="border-t border-slate-100 pt-1 flex flex-col gap-0.5">
+              <div className="my-1 border-t border-slate-100" />
+
               <button
                 type="button"
                 onClick={() => {
                   setUserMenuOpen(false);
                   logout();
+                  navigate('/auth');
                 }}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-2xl text-sm font-medium text-red-600 hover:bg-red-50 transition-colors text-left cursor-pointer"
+                className="w-full px-3.5 py-2 text-xs text-red-600 hover:bg-red-50 flex items-center gap-2 text-left cursor-pointer transition-colors"
               >
-                <LogOut size={16} />
-                <span className="flex-1">退出登录</span>
+                <LogOut size={14} />
+                <span>退出登录</span>
               </button>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </aside>
   );

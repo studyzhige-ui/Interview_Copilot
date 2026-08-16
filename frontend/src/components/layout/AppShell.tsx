@@ -6,6 +6,11 @@ import { ClientActionBridge } from './ClientActionBridge';
 import { SettingsModal } from '@/components/settings/SettingsModal';
 
 const PAGE_TITLES: Record<string, string> = {
+  '/today':     '今天 · 指令中心',
+  '/career':    '求职进程',
+  '/interviews': '面试中枢',
+  '/materials': '资料与档案',
+  '/activities': '活动中心 · Agent 控制台',
   '/review':    '面试复盘与诊断',
   '/mock':      '模拟面试实战',
   '/general-chat': 'Copilot',

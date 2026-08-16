@@ -4,15 +4,24 @@ import { useAuthStore } from '@/store/authStore';
 import { AppShell } from '@/components/layout/AppShell';
 import { Spinner } from '@/components/ui/Spinner';
 
-/**
- * Each page is loaded on demand so the initial bundle stays small.
- *
- * React.lazy expects a module with a `default` export. Our pages use named
- * exports (intentional — easier to grep), so each lazy() call adapts the
- * dynamic-import promise to remap the named export to ``default``. The
- * cost is one extra arrow function per route — bundlers tree-shake the
- * rest cleanly.
- */
+// 4 Primary Areas (Specification v0.1)
+const TodayPage = lazy(() =>
+  import('@/pages/today/TodayPage').then((m) => ({ default: m.TodayPage })),
+);
+const CareerPage = lazy(() =>
+  import('@/pages/career/CareerPage').then((m) => ({ default: m.CareerPage })),
+);
+const InterviewHubPage = lazy(() =>
+  import('@/pages/interviews/InterviewHubPage').then((m) => ({ default: m.InterviewHubPage })),
+);
+const MaterialsPage = lazy(() =>
+  import('@/pages/materials/MaterialsPage').then((m) => ({ default: m.MaterialsPage })),
+);
+const ActivityCenterPage = lazy(() =>
+  import('@/pages/activities/ActivityCenterPage').then((m) => ({ default: m.ActivityCenterPage })),
+);
+
+// Workspaces & Backwards-Compatible Views
 const AuthPage = lazy(() =>
   import('@/pages/auth/AuthPage').then((m) => ({ default: m.AuthPage })),
 );
@@ -71,16 +80,14 @@ const CopilotPreferencesPage = lazy(() =>
   import('@/pages/settings/CopilotPreferencesPage').then((m) => ({ default: m.CopilotPreferencesPage })),
 );
 
-/** Lightweight fallback while a chunk loads. Kept centred + brand-coloured. */
 function PageFallback() {
   return (
-    <div className="h-full w-full flex items-center justify-center text-stone-400">
+    <div className="h-full w-full flex items-center justify-center text-slate-400">
       <Spinner size={20} />
     </div>
   );
 }
 
-/** Wrap children in a Suspense boundary so each lazy chunk has a loader. */
 function LazyOutlet() {
   return (
     <Suspense fallback={<PageFallback />}>
@@ -97,7 +104,7 @@ function AuthGuard() {
 
 function GuestGuard() {
   const isAuthed = useAuthStore((s) => s.isAuthed);
-  if (isAuthed) return <Navigate to="/general-chat" replace />;
+  if (isAuthed) return <Navigate to="/today" replace />;
   return <LazyOutlet />;
 }
 
@@ -109,10 +116,18 @@ export const router = createBrowserRouter([
   {
     element: <AuthGuard />,
     children: [
-      { path: '/', element: <Navigate to="/general-chat" replace /> },
+      { path: '/', element: <Navigate to="/today" replace /> },
+      // 4 Primary Areas (Specification v0.1)
+      { path: '/today', element: <TodayPage /> },
+      { path: '/career', element: <CareerPage /> },
+      { path: '/interviews', element: <InterviewHubPage /> },
+      { path: '/materials', element: <MaterialsPage /> },
+
+      // Secondary Areas & Workspaces
+      { path: '/activities', element: <ActivityCenterPage /> },
+      { path: '/general-chat', element: <GeneralChatPage /> },
       { path: '/review', element: <ReviewPage /> },
       { path: '/mock', element: <MockPage /> },
-      { path: '/general-chat', element: <GeneralChatPage /> },
       { path: '/history', element: <HistorySearchPage /> },
       { path: '/persistent-tasks/:taskId/conversation', element: <PersistentTaskConversationPage /> },
       { path: '/persistent-tasks/:taskId?', element: <PersistentTasksPage /> },
@@ -132,5 +147,5 @@ export const router = createBrowserRouter([
       { path: '/me', element: <ProfilePage /> },
     ],
   },
-  { path: '*', element: <Navigate to="/" replace /> },
+  { path: '*', element: <Navigate to="/today" replace /> },
 ]);
