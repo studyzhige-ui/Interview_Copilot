@@ -129,104 +129,136 @@ export function TodayPage() {
   };
 
   return (
-    <div className="relative w-full h-full overflow-hidden select-none font-sans bg-white">
+    <div className="relative w-full h-full overflow-hidden select-none font-sans bg-[#F9FAFD]">
       
-      {/* ═══ 1. Ambient Area Backgrounds (Soft, Borderless) ═══ */}
+      {/* ═══ 1. Ambient Background Glows in 4 Quadrants ═══ */}
       <div className="absolute inset-0 z-0 pointer-events-none">
-        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-blue-100/60 blur-[120px]" />
-        <div className="absolute top-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-orange-100/50 blur-[120px]" />
-        <div className="absolute bottom-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-emerald-100/50 blur-[120px]" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-purple-100/50 blur-[120px]" />
+        <div className="absolute -top-[10%] -left-[10%] w-[55%] h-[55%] rounded-full bg-blue-100/60 blur-[130px]" />
+        <div className="absolute -top-[10%] -right-[10%] w-[55%] h-[55%] rounded-full bg-amber-100/50 blur-[130px]" />
+        <div className="absolute -bottom-[10%] -left-[10%] w-[55%] h-[55%] rounded-full bg-emerald-100/50 blur-[130px]" />
+        <div className="absolute -bottom-[10%] -right-[10%] w-[55%] h-[55%] rounded-full bg-indigo-100/50 blur-[130px]" />
       </div>
 
-      {/* ═══ 2. SVG Clip Path Definitions ═══ */}
-      <svg width="0" height="0" className="absolute pointer-events-none">
+      {/* ═══ 2. Gemini Astroid Sparkle Core (SVG) ═══ */}
+      {/* Outer Diffusion Glow */}
+      <svg
+        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[520px] h-[520px] pointer-events-none z-0 opacity-40 blur-3xl"
+        viewBox="0 0 500 500"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <path
+          d="M 250 20 C 250 148 352 250 480 250 C 352 250 250 352 250 480 C 250 352 148 250 20 250 C 148 250 250 148 250 20 Z"
+          fill="url(#geminiGlowGradient)"
+        />
         <defs>
-          <clipPath id="astroid-clip" clipPathUnits="objectBoundingBox">
-            <path d="M 0.5 0 Q 0.5 0.5 1 0.5 Q 0.5 0.5 0.5 1 Q 0.5 0.5 0 0.5 Q 0.5 0.5 0.5 0 Z" />
-          </clipPath>
+          <radialGradient id="geminiGlowGradient" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#60A5FA" />
+            <stop offset="40%" stopColor="#F59E0B" />
+            <stop offset="70%" stopColor="#EF4444" />
+            <stop offset="100%" stopColor="#3B82F6" />
+          </radialGradient>
         </defs>
       </svg>
 
-      {/* ═══ 3. Gemini Astroid Spark Core ═══ */}
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 w-[600px] h-[600px] pointer-events-none flex items-center justify-center">
-        {/* Deep ambient glow backing the star */}
-        <div className="absolute w-[360px] h-[360px] bg-gradient-to-tr from-emerald-300 via-blue-400 to-rose-400 rounded-full blur-[70px] opacity-30" />
-        
-        {/* The Crisp 4-Pointed Astroid Star */}
-        <div 
-          className="relative w-[340px] h-[340px] overflow-hidden"
-          style={{ clipPath: 'url(#astroid-clip)', WebkitClipPath: 'url(#astroid-clip)' }}
-        >
-          {/* Multi-color mesh gradient simulation */}
-          <div className="absolute inset-0 bg-gradient-to-tr from-emerald-400 via-blue-500 to-rose-500 opacity-90 mix-blend-screen" />
-          <div className="absolute inset-0 bg-gradient-to-bl from-amber-300/80 to-transparent mix-blend-overlay" />
-          <div className="absolute -top-10 -left-10 w-[200px] h-[200px] bg-yellow-300/60 blur-[40px]" />
-          <div className="absolute -bottom-10 -right-10 w-[200px] h-[200px] bg-indigo-500/60 blur-[40px]" />
-        </div>
-      </div>
+      {/* Sharp Multi-color Astroid Sparkle */}
+      <svg
+        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[420px] h-[420px] pointer-events-none z-10 drop-shadow-[0_12px_48px_rgba(66,133,244,0.22)]"
+        viewBox="0 0 500 500"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <defs>
+          <filter id="starInternalBlur">
+            <feGaussianBlur stdDeviation="35" />
+          </filter>
+          <clipPath id="astroidStarClip">
+            <path d="M 250 20 C 250 148 352 250 480 250 C 352 250 250 352 250 480 C 250 352 148 250 20 250 C 148 250 250 148 250 20 Z" />
+          </clipPath>
+        </defs>
 
-      {/* ═══ 4. Embedded Central Input Controls ═══ */}
+        <g clipPath="url(#astroidStarClip)">
+          {/* Base Sky Blue */}
+          <rect width="500" height="500" fill="#2563EB" />
+          {/* Top: Coral Red */}
+          <circle cx="250" cy="60" r="180" fill="#FF453A" filter="url(#starInternalBlur)" />
+          {/* Left / Bottom-Left: Yellow & Amber */}
+          <circle cx="80" cy="270" r="170" fill="#FBBC05" filter="url(#starInternalBlur)" />
+          {/* Bottom: Vivid Green */}
+          <circle cx="230" cy="430" r="170" fill="#34A853" filter="url(#starInternalBlur)" />
+          {/* Right: Vibrant Google Blue */}
+          <circle cx="420" cy="250" r="190" fill="#4285F4" filter="url(#starInternalBlur)" />
+          {/* Center Luminous Soft Light */}
+          <circle cx="260" cy="240" r="130" fill="#93C5FD" opacity="0.9" filter="url(#starInternalBlur)" />
+          <circle cx="250" cy="250" r="70" fill="#FFFFFF" opacity="0.4" filter="url(#starInternalBlur)" />
+        </g>
+      </svg>
+
+      {/* ═══ 3. Central Copilot Controls (Integrated seamlessly on the star) ═══ */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 flex flex-col items-center pointer-events-auto">
-        <h2 className="text-[28px] font-black text-slate-900 mb-1 tracking-tight drop-shadow-sm flex items-center gap-2">
-          {greeting}
-        </h2>
-        <p className="text-[13px] font-bold text-slate-600 mb-7 drop-shadow-sm">
-          今日 <span className="text-blue-600">{tasks.length}</span> 项待办
-        </p>
+        <div className="flex flex-col items-center mb-6">
+          <h2 className="text-2xl font-black text-slate-800 tracking-tight drop-shadow-sm">
+            {greeting}
+          </h2>
+          <p className="text-xs font-semibold text-slate-600 mt-1 drop-shadow-sm">
+            今日有 <span className="text-blue-600 font-bold">{tasks.length}</span> 项待办事项
+          </p>
+        </div>
+
+        {/* Integrated Frosted Glass Capsule */}
         <form 
           onSubmit={handleStartCopilot} 
-          className="w-[460px] h-[52px] bg-white/70 backdrop-blur-2xl shadow-[0_8px_32px_rgba(0,0,0,0.06)] border border-white rounded-full px-5 flex items-center gap-3 transition-all hover:shadow-[0_12px_40px_rgba(0,0,0,0.08)] hover:bg-white/80"
+          className="w-[430px] bg-white/85 backdrop-blur-xl border border-white/80 shadow-[0_12px_40px_rgba(0,0,0,0.08)] rounded-full px-5 py-3 flex items-center gap-3 transition-all hover:bg-white hover:shadow-[0_16px_48px_rgba(0,0,0,0.12)]"
         >
-          <Sparkles className="w-5 h-5 text-blue-600 shrink-0" />
+          <Sparkles className="w-4 h-4 text-blue-500 shrink-0" />
           <input
             type="text"
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             placeholder="向 Copilot 发送指令或提问…"
-            className="flex-1 bg-transparent text-[13px] font-medium outline-none text-slate-800 placeholder-slate-500"
+            className="flex-1 bg-transparent text-xs outline-none text-slate-800 placeholder-slate-400 font-medium"
           />
           <button
             type="submit"
-            className="w-8 h-8 flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-colors cursor-pointer shrink-0"
+            className="w-7 h-7 flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-transform hover:scale-105 cursor-pointer shrink-0 shadow-sm"
           >
-            <Send className="w-4 h-4 -ml-0.5" />
+            <Send className="w-3.5 h-3.5 -ml-0.5" />
           </button>
         </form>
       </div>
 
-      {/* ═══ 5. Free-floating Quadrants (No borders) ═══ */}
-      <div className="relative z-20 w-full h-full grid grid-cols-2 grid-rows-2">
-        
+      {/* ═══ 4. Four Borderless Immersive Quadrants ═══ */}
+      <div className="relative z-20 w-full h-full grid grid-cols-2 grid-rows-2 pointer-events-none">
+
         {/* ─── Q1 Top-Left: 下一步 ─── */}
-        <div className="flex items-center justify-center p-10 pr-24 pb-20">
-          <div className="w-full max-w-[320px] flex flex-col">
-            <div className="mb-4">
-              <div className="flex items-center gap-2 text-slate-900 font-bold text-base mb-1">
-                <span className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.6)]" />
+        <div className="flex items-center justify-center p-8 pr-32 pb-24">
+          <div className="w-full max-w-[310px] flex flex-col pointer-events-auto">
+            <div className="mb-3.5">
+              <div className="flex items-center gap-2 text-slate-900 font-bold text-sm mb-0.5">
+                <span className="w-2 h-2 rounded-full bg-blue-500" />
                 下一步
               </div>
-              <p className="text-[11px] font-medium text-slate-500">已确认需亲自推进的事项</p>
+              <p className="text-[11px] text-slate-500">已确认且需亲自推进的真实事项</p>
             </div>
+
             {nextStepItems.length === 0 ? (
-              <div className="flex flex-col items-start py-4 opacity-60">
-                <p className="text-xs font-bold text-slate-600">当前没有需要推进的动作</p>
+              <div className="flex flex-col items-center justify-center py-6 bg-white/40 backdrop-blur-sm rounded-2xl">
+                <CheckCircle2 className="w-6 h-6 text-slate-400 mb-1.5 stroke-[1.5]" />
+                <p className="text-xs font-medium text-slate-500">当前没有需要推进的动作</p>
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2 flex-1">
                 {nextStepItems.map((item) => (
                   <div
                     key={item.id}
                     onClick={() => navigate(`/career?opportunity=${item.id}`)}
-                    className="group flex items-center justify-between p-3.5 bg-white/40 hover:bg-white/70 backdrop-blur-sm rounded-2xl cursor-pointer transition-all border border-white/40 shadow-sm"
+                    className="flex items-center justify-between p-3 bg-white/70 hover:bg-white/95 backdrop-blur-md shadow-sm hover:shadow-md rounded-2xl cursor-pointer group transition-all"
                   >
                     <div className="min-w-0 pr-3">
-                      <div className="text-[13px] font-bold text-slate-800 group-hover:text-blue-700 truncate mb-0.5">
+                      <div className="text-xs font-bold text-slate-800 group-hover:text-blue-700 truncate mb-0.5">
                         推进 {item.step}
                       </div>
-                      <div className="text-[11px] font-medium text-slate-500 truncate">{item.company} · {item.title}</div>
+                      <div className="text-[10px] text-slate-500 truncate">{item.company} · {item.title}</div>
                     </div>
-                    <ArrowUpRight size={16} className="text-slate-400 group-hover:text-blue-600 shrink-0" />
+                    <ArrowUpRight size={14} className="text-slate-400 group-hover:text-blue-600 shrink-0" />
                   </div>
                 ))}
               </div>
@@ -235,19 +267,19 @@ export function TodayPage() {
         </div>
 
         {/* ─── Q2 Top-Right: 待我确认 (Card Deck Stack) ─── */}
-        <div className="flex items-center justify-center p-10 pl-24 pb-20">
-          <div className="w-full max-w-[340px] flex flex-col">
-            <div className="flex items-center justify-between mb-4 shrink-0">
-              <div className="flex items-center gap-2 text-slate-900 font-bold text-base">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)]" />
+        <div className="flex items-center justify-center p-8 pl-32 pb-24">
+          <div className="w-full max-w-[330px] flex flex-col pointer-events-auto">
+            <div className="flex items-center justify-between mb-3.5 shrink-0">
+              <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
                 待我确认
               </div>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200/60">
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100/80 text-amber-800">
                 {tasks.length} 待决
               </span>
             </div>
 
-            <div className="relative w-full h-[220px]">
+            <div className="relative w-full h-[210px]">
               <AnimatePresence>
                 {tasks.length > 0 ? (
                   tasks.map((task, idx) => {
@@ -258,39 +290,39 @@ export function TodayPage() {
                         layout
                         initial={{ opacity: 0, y: 30, scale: 0.95 }}
                         animate={{ 
-                          opacity: 1 - idx * 0.1, 
-                          y: idx * 12, 
+                          opacity: 1 - idx * 0.15, 
+                          y: idx * 10, 
                           scale: 1 - idx * 0.04,
                           zIndex: tasks.length - idx
                         }}
-                        exit={{ opacity: 0, x: 150, scale: 0.95 }}
+                        exit={{ opacity: 0, x: 200, scale: 0.9 }}
                         transition={{ duration: 0.3, ease: 'easeOut' }}
-                        className={`absolute top-0 left-0 w-full bg-white/95 backdrop-blur-xl border border-white shadow-[0_8px_24px_rgba(0,0,0,0.06)] rounded-2xl p-4 flex flex-col gap-2.5 ${!isTop && 'pointer-events-none'}`}
+                        className={`absolute top-0 left-0 w-full bg-white/90 backdrop-blur-xl shadow-[0_8px_28px_rgba(0,0,0,0.06)] rounded-2xl p-4 flex flex-col gap-2 ${!isTop && 'pointer-events-none'}`}
                         style={{ transformOrigin: 'top center' }}
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <h3 className="text-[13px] font-bold text-slate-900 leading-snug flex-1">{task.title}</h3>
-                          <div className="text-[9px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200/80 shrink-0">
+                          <h3 className="text-xs font-bold text-slate-900 leading-snug flex-1">{task.title}</h3>
+                          <div className="text-[9px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded shrink-0">
                             {task.badge}
                           </div>
                         </div>
-                        <p className="text-[11px] font-medium text-slate-600 leading-tight line-clamp-2">{task.desc}</p>
-                        <div className="bg-amber-50/50 border border-amber-100/80 py-1.5 px-2.5 text-[10px] text-amber-800 flex items-center gap-1.5 rounded-lg">
+                        <p className="text-[10px] text-slate-600 leading-tight line-clamp-2">{task.desc}</p>
+                        <div className="bg-amber-50/70 py-1 px-2 text-[10px] text-amber-800 flex items-center gap-1.5 rounded-lg">
                           <Sparkles size={11} className="text-amber-500 shrink-0" />
                           <span className="truncate">{task.copilotTip}</span>
                         </div>
-                        <div className="flex gap-2 pt-1 mt-1">
+                        <div className="flex gap-2 pt-0.5">
                           <input
                             type="text"
                             placeholder="补充意见…"
                             disabled={!isTop}
-                            className="flex-1 text-[11px] bg-slate-50 border border-slate-200/80 rounded-lg px-2.5 outline-none focus:border-blue-400 transition-colors h-8"
+                            className="flex-1 text-[10px] bg-slate-50 border border-slate-200/70 rounded-lg px-2.5 outline-none focus:border-blue-400 transition-colors h-7.5"
                           />
                           <button
                             type="button"
                             onClick={() => isTop && handleConfirm(task.id)}
                             disabled={!isTop}
-                            className="px-3.5 h-8 bg-slate-800 hover:bg-slate-900 text-white text-[11px] font-bold rounded-lg transition-colors whitespace-nowrap shadow-sm cursor-pointer disabled:opacity-50"
+                            className="px-3 h-7.5 bg-slate-800 hover:bg-slate-900 text-white text-[10px] font-bold rounded-lg transition-colors whitespace-nowrap shadow-sm cursor-pointer disabled:opacity-50"
                           >
                             确认执行
                           </button>
@@ -302,10 +334,10 @@ export function TodayPage() {
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className="absolute inset-0 flex flex-col items-center justify-center py-8 opacity-60 bg-white/40 backdrop-blur-md rounded-2xl border border-white/60 shadow-sm"
+                    className="absolute inset-0 flex flex-col items-center justify-center py-8 bg-white/40 backdrop-blur-sm rounded-2xl"
                   >
-                    <CheckCircle2 className="w-7 h-7 text-slate-400 mb-2 stroke-[1.5]" />
-                    <p className="text-xs font-bold text-slate-600">全部处理完毕</p>
+                    <CheckCircle2 className="w-6 h-6 text-slate-400 mb-1.5 stroke-[1.5]" />
+                    <p className="text-xs font-medium text-slate-500">全部处理完毕</p>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -314,32 +346,32 @@ export function TodayPage() {
         </div>
 
         {/* ─── Q3 Bottom-Left: 求职动态 ─── */}
-        <div className="flex items-center justify-center p-10 pr-24 pt-20">
-          <div className="w-full max-w-[320px] flex flex-col">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2 text-slate-900 font-bold text-base">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+        <div className="flex items-center justify-center p-8 pr-32 pt-24">
+          <div className="w-full max-w-[310px] flex flex-col pointer-events-auto">
+            <div className="flex items-center justify-between mb-3.5">
+              <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
                 求职动态
               </div>
               <button
                 type="button"
                 onClick={() => navigate('/career')}
-                className="text-[11px] text-slate-500 hover:text-emerald-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
+                className="text-[10px] text-slate-500 hover:text-emerald-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
               >
                 全部 <ArrowUpRight className="w-3 h-3" />
               </button>
             </div>
-            <div className="space-y-2">
+            <div className="flex-1 min-h-0 space-y-2">
               {careerEvents.map((ev) => (
                 <div
                   key={ev.id}
                   onClick={() => navigate('/career')}
-                  className="group flex items-center justify-between p-3.5 bg-white/40 hover:bg-white/70 backdrop-blur-sm rounded-2xl cursor-pointer transition-all border border-white/40 shadow-sm"
+                  className="flex items-center justify-between p-3 bg-white/70 hover:bg-white/95 backdrop-blur-md shadow-sm hover:shadow-md rounded-2xl cursor-pointer group transition-all"
                 >
-                  <span className="text-[13px] font-bold text-slate-800 group-hover:text-emerald-700 truncate pr-3">
+                  <span className="text-xs font-bold text-slate-800 group-hover:text-emerald-700 truncate pr-3">
                     {ev.company} · {ev.title}
                   </span>
-                  <span className={`text-[10px] font-bold shrink-0 bg-white/60 px-2 py-0.5 rounded-full border border-white/60 ${ev.isClosed ? 'text-slate-400' : 'text-emerald-600'}`}>
+                  <span className={`text-[10px] font-medium shrink-0 bg-white/80 px-2 py-0.5 rounded-full ${ev.isClosed ? 'text-slate-400' : 'text-emerald-600'}`}>
                     {ev.step}
                   </span>
                 </div>
@@ -349,36 +381,36 @@ export function TodayPage() {
         </div>
 
         {/* ─── Q4 Bottom-Right: Copilot 工作 ─── */}
-        <div className="flex items-center justify-center p-10 pl-24 pt-20">
-          <div className="w-full max-w-[340px] flex flex-col">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2 text-slate-900 font-bold text-base">
-                <span className="w-2.5 h-2.5 rounded-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.6)]" />
+        <div className="flex items-center justify-center p-8 pl-32 pt-24">
+          <div className="w-full max-w-[330px] flex flex-col pointer-events-auto">
+            <div className="flex items-center justify-between mb-3.5">
+              <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
+                <span className="w-2 h-2 rounded-full bg-purple-500" />
                 Copilot 工作
               </div>
               <button
                 type="button"
                 onClick={() => navigate('/activities')}
-                className="text-[11px] text-slate-500 hover:text-purple-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
+                className="text-[10px] text-slate-500 hover:text-purple-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
               >
                 控制台 <ArrowUpRight className="w-3 h-3" />
               </button>
             </div>
-            <div className="space-y-2">
+            <div className="flex-1 min-h-0 space-y-2">
               {copilotWork.map((item) => (
                 <div
                   key={item.id}
                   onClick={() => navigate('/activities')}
-                  className="group flex items-center justify-between p-3.5 bg-white/40 hover:bg-white/70 backdrop-blur-sm rounded-2xl cursor-pointer transition-all border border-white/40 shadow-sm"
+                  className="bg-white/70 hover:bg-white/95 backdrop-blur-md shadow-sm hover:shadow-md rounded-2xl p-3 flex items-center justify-between cursor-pointer group transition-all"
                 >
                   <div className="truncate pr-3 min-w-0">
-                    <div className="text-[13px] font-bold text-slate-800 group-hover:text-purple-700 truncate mb-0.5">{item.title}</div>
-                    <div className="text-[11px] font-medium text-slate-500 truncate">{item.detail}</div>
+                    <div className="text-xs font-bold text-slate-800 group-hover:text-purple-700 truncate mb-0.5">{item.title}</div>
+                    <div className="text-[10px] text-slate-500 truncate">{item.detail}</div>
                   </div>
-                  <span className={`px-2 py-1 rounded-full flex items-center gap-1.5 text-[9px] shrink-0 font-bold ${
+                  <span className={`px-2 py-0.5 rounded-full flex items-center gap-1.5 text-[9px] shrink-0 font-bold ${
                     item.state === 'active'
-                      ? 'bg-blue-50 text-blue-700 border border-blue-200/60'
-                      : 'bg-white/50 text-slate-500 border border-slate-200/60'
+                      ? 'bg-blue-50 text-blue-700'
+                      : 'bg-slate-100 text-slate-500'
                   }`}>
                     {item.state === 'active' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />}
                     {item.state === 'active' ? '运行中' : '待命中'}
