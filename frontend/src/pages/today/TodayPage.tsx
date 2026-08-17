@@ -228,11 +228,11 @@ export function TodayPage() {
 
       {/* ═══ 3. Central Copilot Nexus (Snugly encased in the Liquid Glass Star) ═══ */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 flex flex-col items-center pointer-events-auto">
-        <div className="flex flex-col items-center mb-4">
+        <div className="flex flex-col items-center mb-3.5">
           <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight drop-shadow-sm">
             {greeting}
           </h2>
-          <p className="text-xs sm:text-sm font-medium text-slate-500 mt-1">
+          <p className="text-xs sm:text-sm font-medium text-slate-500 mt-0.5">
             今日有 <span className="text-blue-600 font-bold">{tasks.length}</span> 项待办事项需推进
           </p>
         </div>
@@ -240,7 +240,7 @@ export function TodayPage() {
         {/* High-Gloss Frosted Glass Capsule Searchbox */}
         <form 
           onSubmit={handleStartCopilot} 
-          className="w-[450px] h-[54px] bg-white/85 backdrop-blur-2xl border border-white/90 shadow-[0_12px_36px_rgba(15,23,42,0.06),0_1px_2px_rgba(255,255,255,0.9)_inset] rounded-full px-5 flex items-center gap-3 transition-all hover:bg-white/95 hover:shadow-[0_16px_44px_rgba(15,23,42,0.09)]"
+          className="w-[440px] h-[52px] bg-white/85 backdrop-blur-2xl border border-white/90 shadow-[0_12px_36px_rgba(15,23,42,0.06),0_1px_2px_rgba(255,255,255,0.9)_inset] rounded-full px-5 flex items-center gap-3 transition-all hover:bg-white/95 hover:shadow-[0_16px_44px_rgba(15,23,42,0.09)]"
         >
           <Sparkles className="w-4 h-4 text-blue-500 shrink-0" />
           <input
@@ -252,47 +252,47 @@ export function TodayPage() {
           />
           <button
             type="submit"
-            className="w-8.5 h-8.5 flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-transform hover:scale-105 cursor-pointer shrink-0 shadow-sm"
+            className="w-8 h-8 flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-transform hover:scale-105 cursor-pointer shrink-0 shadow-sm"
           >
             <Send className="w-3.5 h-3.5 -ml-0.5" />
           </button>
         </form>
       </div>
 
-      {/* ═══ 4. Four Expansive Quadrants with Grand Scaled Typography ═══ */}
+      {/* ═══ 4. Four Expansive Quadrants Strictly Contained within Regions ═══ */}
       <div className="relative z-20 w-full h-full grid grid-cols-2 grid-rows-2 pointer-events-none">
 
         {/* ─── Q1 Top-Left: 下一步 (Next Steps) ─── */}
-        <div className="flex items-center justify-center p-8 pr-24 pb-14">
-          <div className="w-full max-w-[400px] flex flex-col pointer-events-auto">
-            <div className="mb-4">
-              <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight mb-0.5">
-                <span className="w-3 h-3 rounded-full bg-blue-500" />
+        <div className="flex items-center justify-center p-8 pr-28 pb-14">
+          <div className="w-full max-w-[340px] flex flex-col pointer-events-auto">
+            <div className="mb-3">
+              <div className="flex items-center gap-2 text-slate-900 font-black text-base tracking-tight mb-0.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
                 下一步
               </div>
-              <p className="text-sm text-slate-500 font-medium">已确认为真实面试并需推进的重点动作</p>
+              <p className="text-xs text-slate-500 font-normal">已确认为真实面试并需推进的重点动作</p>
             </div>
 
             {nextStepItems.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-9 bg-white/30 backdrop-blur-md rounded-2xl border border-white/50">
-                <CheckCircle2 className="w-7 h-7 text-slate-400 mb-2 stroke-[1.5]" />
-                <p className="text-sm font-medium text-slate-500">当前没有需要推进的动作</p>
+              <div className="flex flex-col items-center justify-center py-8 bg-white/30 backdrop-blur-md rounded-2xl border border-white/50">
+                <CheckCircle2 className="w-6 h-6 text-slate-400 mb-1.5 stroke-[1.5]" />
+                <p className="text-xs font-medium text-slate-500">当前没有需要推进的动作</p>
               </div>
             ) : (
-              <div className="space-y-3 flex-1">
+              <div className="space-y-2.5 flex-1">
                 {nextStepItems.map((item) => (
                   <div
                     key={item.id}
                     onClick={() => navigate(`/career?opportunity=${item.id}`)}
-                    className="flex items-center justify-between p-4.5 bg-white/70 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl cursor-pointer group transition-all"
+                    className="flex items-center justify-between p-3.5 bg-white/70 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl cursor-pointer group transition-all"
                   >
                     <div className="min-w-0 pr-3">
-                      <div className="text-base font-bold text-slate-900 group-hover:text-blue-600 truncate mb-0.5">
+                      <div className="text-sm font-bold text-slate-900 group-hover:text-blue-600 truncate mb-0.5">
                         推进 {item.step}
                       </div>
-                      <div className="text-sm text-slate-500 truncate">{item.company} · {item.title}</div>
+                      <div className="text-xs text-slate-500 truncate">{item.company} · {item.title}</div>
                     </div>
-                    <ArrowUpRight size={18} className="text-slate-400 group-hover:text-blue-600 shrink-0" />
+                    <ArrowUpRight size={16} className="text-slate-400 group-hover:text-blue-600 shrink-0" />
                   </div>
                 ))}
               </div>
@@ -300,29 +300,30 @@ export function TodayPage() {
           </div>
         </div>
 
-        {/* ─── Q2 Top-Right: 待我确认 (Identical-Sized Stepped Card Stack) ─── */}
-        <div className="flex items-center justify-center p-8 pl-24 pb-14">
-          <div className="w-full max-w-[420px] flex flex-col pointer-events-auto">
-            <div className="flex items-center justify-between mb-3.5 shrink-0">
+        {/* ─── Q2 Top-Right: 待我确认 (Strictly Contained Stepped Card Stack) ─── */}
+        <div className="flex items-center justify-center p-8 pl-28 pb-14">
+          <div className="w-full max-w-[350px] flex flex-col pointer-events-auto">
+            <div className="flex items-center justify-between mb-2.5 shrink-0">
               <div>
-                <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight">
-                  <span className="w-3 h-3 rounded-full bg-amber-500" />
+                <div className="flex items-center gap-2 text-slate-900 font-black text-base tracking-tight">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
                   待我确认
                 </div>
-                <p className="text-sm text-slate-500 font-medium mt-0.5">需授权或确认的事实与外部动作</p>
+                <p className="text-xs text-slate-500 font-normal mt-0.5">需授权或确认的事实与外部动作</p>
               </div>
-              <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-100/90 text-amber-800 border border-amber-200/60">
+              <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-amber-100/90 text-amber-800 border border-amber-200/60">
                 {tasks.length} 待决
               </span>
             </div>
 
-            {/* Stepped Physical Card Stack Container */}
-            <div className="relative w-full h-[280px] overflow-visible">
+            {/* Stepped Physical Card Stack Container (Strictly bounded to 215px) */}
+            <div className="relative w-full h-[215px] overflow-visible">
               <AnimatePresence mode="popLayout">
                 {tasks.length > 0 ? (
                   tasks.map((task, idx) => {
                     const isTop = idx === 0;
-                    const topOffset = isTop ? (tasks.length - 1) * 44 : (tasks.length - 1 - idx) * 44;
+                    // Tight stepped offset of 28px to keep stack within boundaries
+                    const topOffset = isTop ? (tasks.length - 1) * 28 : (tasks.length - 1 - idx) * 28;
                     const zIndex = isTop ? 30 : 20 - idx;
                     const bgGradientClass = task.bgGradient ? `bg-gradient-to-r ${task.bgGradient}` : 'bg-gradient-to-r from-amber-100 to-amber-50';
                     const headerTextClass = task.headerTextColor || 'text-slate-900';
@@ -335,26 +336,26 @@ export function TodayPage() {
                           layout
                           initial={{ opacity: 0, y: -10 }}
                           animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, x: 220 }}
+                          exit={{ opacity: 0, x: 200 }}
                           transition={{ duration: 0.25 }}
                           onClick={() => handlePromoteTask(task.id)}
                           style={{ top: `${topOffset}px`, zIndex }}
-                          className={`absolute left-0 w-full h-[190px] ${bgGradientClass} border border-white/80 shadow-[0_4px_16px_rgba(15,23,42,0.04)] rounded-2xl p-4 flex flex-col justify-between cursor-pointer transition-all hover:brightness-105`}
+                          className={`absolute left-0 w-full h-[150px] ${bgGradientClass} border border-white/80 shadow-[0_4px_16px_rgba(15,23,42,0.04)] rounded-2xl p-3 flex flex-col justify-between cursor-pointer transition-all hover:brightness-105`}
                         >
                           <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2 min-w-0 pr-3">
-                              <span className={`text-base font-bold ${headerTextClass} truncate`}>
+                            <div className="flex items-center gap-1.5 min-w-0 pr-2">
+                              <span className={`text-xs font-bold ${headerTextClass} truncate`}>
                                 {task.title}
                               </span>
                             </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <span className={`text-xs font-semibold ${headerTextClass} opacity-80`}>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <span className={`text-[11px] font-semibold ${headerTextClass} opacity-80`}>
                                 {task.statusHint || task.badge}
                               </span>
-                              <ChevronRight size={15} className="opacity-50" />
+                              <ChevronRight size={13} className="opacity-50" />
                             </div>
                           </div>
-                          <div className="text-xs text-slate-500/40 select-none pointer-events-none truncate pt-2">
+                          <div className="text-[11px] text-slate-500/40 select-none pointer-events-none truncate pt-1">
                             {task.desc}
                           </div>
                         </motion.div>
@@ -366,48 +367,48 @@ export function TodayPage() {
                       <motion.div
                         key={task.id}
                         layout
-                        initial={{ opacity: 0, y: 20, scale: 0.96 }}
+                        initial={{ opacity: 0, y: 15, scale: 0.96 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, x: 240, scale: 0.92 }}
+                        exit={{ opacity: 0, x: 220, scale: 0.92 }}
                         transition={{ duration: 0.28, ease: 'easeOut' }}
                         style={{ top: `${topOffset}px`, zIndex }}
-                        className="absolute left-0 w-full h-[190px] bg-white/95 backdrop-blur-2xl border border-white shadow-[0_16px_36px_rgba(15,23,42,0.09)] rounded-2xl p-4.5 flex flex-col justify-between"
+                        className="absolute left-0 w-full h-[150px] bg-white/95 backdrop-blur-2xl border border-white shadow-[0_12px_28px_rgba(15,23,42,0.08)] rounded-2xl p-3 flex flex-col justify-between"
                       >
                         <div>
-                          <div className="flex items-start justify-between gap-2 mb-1.5">
-                            <div className="flex items-center gap-2 flex-1 min-w-0">
-                              <div className="w-5.5 h-5.5 rounded-full bg-amber-500/15 text-amber-600 flex items-center justify-center shrink-0">
-                                <Sparkles size={13} />
+                          <div className="flex items-start justify-between gap-1.5 mb-1">
+                            <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                              <div className="w-4.5 h-4.5 rounded-full bg-amber-500/15 text-amber-600 flex items-center justify-center shrink-0">
+                                <Sparkles size={11} />
                               </div>
-                              <h3 className="text-base font-bold text-slate-900 leading-snug truncate">
+                              <h3 className="text-xs font-bold text-slate-900 leading-tight truncate">
                                 {task.title}
                               </h3>
                             </div>
-                            <div className="text-xs font-bold text-amber-800 bg-amber-100/90 px-2.5 py-0.5 rounded-md shrink-0 border border-amber-200/60">
+                            <div className="text-[10px] font-bold text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded-md shrink-0 border border-amber-200/60">
                               {task.badge}
                             </div>
                           </div>
 
-                          <p className="text-xs sm:text-sm text-slate-600 leading-relaxed line-clamp-1 mb-2">
+                          <p className="text-[11px] text-slate-600 leading-snug line-clamp-1 mb-1.5">
                             {task.desc}
                           </p>
 
-                          <div className="bg-amber-50/70 border border-amber-200/50 py-1.5 px-3 text-xs sm:text-sm text-amber-900 flex items-center gap-2 rounded-xl">
-                            <span className="font-semibold text-amber-700 shrink-0">建议:</span>
-                            <span className="truncate font-medium">{task.copilotTip}</span>
+                          <div className="bg-amber-50/70 border border-amber-200/50 py-1 px-2 text-[11px] text-amber-900 flex items-center gap-1.5 rounded-lg">
+                            <span className="font-semibold text-amber-700 shrink-0 text-[10px]">建议:</span>
+                            <span className="truncate font-medium text-[10px]">{task.copilotTip}</span>
                           </div>
                         </div>
 
-                        <div className="flex gap-2 pt-1">
+                        <div className="flex gap-1.5 pt-0.5">
                           <input
                             type="text"
                             placeholder="补充批注或确认意见…"
-                            className="flex-1 text-xs sm:text-sm bg-slate-50/80 border border-slate-200/80 rounded-xl px-3.5 h-8.5 outline-none focus:bg-white focus:border-blue-500 transition-colors"
+                            className="flex-1 text-[11px] bg-slate-50/80 border border-slate-200/80 rounded-lg px-2.5 h-7.5 outline-none focus:bg-white focus:border-blue-500 transition-colors"
                           />
                           <button
                             type="button"
                             onClick={() => handleConfirm(task.id)}
-                            className="px-4 h-8.5 bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-bold rounded-xl transition-colors whitespace-nowrap shadow-sm hover:shadow cursor-pointer"
+                            className="px-3 h-7.5 bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-bold rounded-lg transition-colors whitespace-nowrap shadow-sm hover:shadow cursor-pointer"
                           >
                             确认执行
                           </button>
@@ -419,10 +420,10 @@ export function TodayPage() {
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className="absolute inset-0 flex flex-col items-center justify-center py-8 bg-white/30 backdrop-blur-md rounded-2xl border border-white/50"
+                    className="absolute inset-0 flex flex-col items-center justify-center py-6 bg-white/30 backdrop-blur-md rounded-2xl border border-white/50"
                   >
-                    <CheckCircle2 className="w-8 h-8 text-slate-400 mb-2 stroke-[1.5]" />
-                    <p className="text-sm font-medium text-slate-500">今日待办已全部处理完毕</p>
+                    <CheckCircle2 className="w-6 h-6 text-slate-400 mb-1.5 stroke-[1.5]" />
+                    <p className="text-xs font-medium text-slate-500">今日待办已全部处理完毕</p>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -431,35 +432,35 @@ export function TodayPage() {
         </div>
 
         {/* ─── Q3 Bottom-Left: 求职动态 (Career Stream) ─── */}
-        <div className="flex items-center justify-center p-8 pr-24 pt-14">
-          <div className="w-full max-w-[400px] flex flex-col pointer-events-auto">
-            <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-center p-8 pr-28 pt-14">
+          <div className="w-full max-w-[340px] flex flex-col pointer-events-auto">
+            <div className="flex items-center justify-between mb-3">
               <div>
-                <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight">
-                  <span className="w-3 h-3 rounded-full bg-emerald-500" />
+                <div className="flex items-center gap-2 text-slate-900 font-black text-base tracking-tight">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
                   求职动态
                 </div>
-                <p className="text-sm text-slate-500 font-medium mt-0.5">近期岗位状态变更与最新回执</p>
+                <p className="text-xs text-slate-500 font-normal mt-0.5">近期岗位状态变更与最新回执</p>
               </div>
               <button
                 type="button"
                 onClick={() => navigate('/career')}
-                className="text-sm text-slate-500 hover:text-emerald-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
+                className="text-xs text-slate-500 hover:text-emerald-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
               >
-                全部 <ArrowUpRight className="w-4 h-4" />
+                全部 <ArrowUpRight className="w-3.5 h-3.5" />
               </button>
             </div>
-            <div className="flex-1 min-h-0 space-y-3">
+            <div className="flex-1 min-h-0 space-y-2.5">
               {careerEvents.map((ev) => (
                 <div
                   key={ev.id}
                   onClick={() => navigate('/career')}
-                  className="flex items-center justify-between p-4.5 bg-white/70 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl cursor-pointer group transition-all"
+                  className="flex items-center justify-between p-3.5 bg-white/70 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl cursor-pointer group transition-all"
                 >
-                  <span className="text-base font-bold text-slate-900 group-hover:text-emerald-700 truncate pr-3">
+                  <span className="text-sm font-bold text-slate-900 group-hover:text-emerald-700 truncate pr-3">
                     {ev.company} · {ev.title}
                   </span>
-                  <span className={`text-xs font-semibold shrink-0 bg-white/80 px-3 py-1 rounded-full border border-white/80 ${ev.isClosed ? 'text-slate-400' : 'text-emerald-600'}`}>
+                  <span className={`text-xs font-semibold shrink-0 bg-white/80 px-2.5 py-0.5 rounded-full border border-white/80 ${ev.isClosed ? 'text-slate-400' : 'text-emerald-600'}`}>
                     {ev.step}
                   </span>
                 </div>
@@ -469,41 +470,41 @@ export function TodayPage() {
         </div>
 
         {/* ─── Q4 Bottom-Right: Copilot 工作 (Agent Tasks) ─── */}
-        <div className="flex items-center justify-center p-8 pl-24 pt-14">
-          <div className="w-full max-w-[420px] flex flex-col pointer-events-auto">
-            <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-center p-8 pl-28 pt-14">
+          <div className="w-full max-w-[350px] flex flex-col pointer-events-auto">
+            <div className="flex items-center justify-between mb-3">
               <div>
-                <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight">
-                  <span className="w-3 h-3 rounded-full bg-purple-500" />
+                <div className="flex items-center gap-2 text-slate-900 font-black text-base tracking-tight">
+                  <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
                   Copilot 工作
                 </div>
-                <p className="text-sm text-slate-500 font-medium mt-0.5">AI Agent 常驻后台巡检与分析任务</p>
+                <p className="text-xs text-slate-500 font-normal mt-0.5">AI Agent 常驻后台巡检与分析任务</p>
               </div>
               <button
                 type="button"
                 onClick={() => navigate('/activities')}
-                className="text-sm text-slate-500 hover:text-purple-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
+                className="text-xs text-slate-500 hover:text-purple-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
               >
-                控制台 <ArrowUpRight className="w-4 h-4" />
+                控制台 <ArrowUpRight className="w-3.5 h-3.5" />
               </button>
             </div>
-            <div className="flex-1 min-h-0 space-y-3">
+            <div className="flex-1 min-h-0 space-y-2.5">
               {copilotWork.map((item) => (
                 <div
                   key={item.id}
                   onClick={() => navigate('/activities')}
-                  className="bg-white/70 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl p-4 flex items-center justify-between cursor-pointer group transition-all"
+                  className="bg-white/70 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl p-3.5 flex items-center justify-between cursor-pointer group transition-all"
                 >
                   <div className="truncate pr-3 min-w-0">
-                    <div className="text-base font-bold text-slate-900 group-hover:text-purple-700 truncate mb-0.5">{item.title}</div>
-                    <div className="text-sm text-slate-500 truncate">{item.detail}</div>
+                    <div className="text-sm font-bold text-slate-900 group-hover:text-purple-700 truncate mb-0.5">{item.title}</div>
+                    <div className="text-xs text-slate-500 truncate">{item.detail}</div>
                   </div>
-                  <span className={`px-3 py-1.5 rounded-full flex items-center gap-1.5 text-xs shrink-0 font-bold ${
+                  <span className={`px-2.5 py-1 rounded-full flex items-center gap-1.5 text-[10px] shrink-0 font-bold ${
                     item.state === 'active'
                       ? 'bg-blue-50 text-blue-700 border border-blue-100'
                       : 'bg-slate-100 text-slate-500 border border-slate-200'
                   }`}>
-                    {item.state === 'active' && <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />}
+                    {item.state === 'active' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />}
                     {item.state === 'active' ? '运行中' : '待命中'}
                   </span>
                 </div>
