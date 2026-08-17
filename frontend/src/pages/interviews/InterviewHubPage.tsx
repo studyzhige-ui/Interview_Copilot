@@ -69,12 +69,12 @@ export function InterviewHubPage() {
         {/* Top-Right: Violet & Purple (模拟对练) */}
         <div className="absolute -top-[20%] -right-[20%] w-[70%] h-[70%] rounded-full bg-gradient-to-bl from-purple-200/55 via-indigo-200/40 to-transparent blur-[130px]" />
         {/* Bottom-Center: Emerald & Mint (真实复盘) */}
-        <div className="absolute -bottom-[20%] left-1/2 -translate-x-1/2 w-[75%] h-[65%] rounded-full bg-gradient-to-t from-emerald-200/55 via-teal-200/40 to-transparent blur-[130px]" />
+        <div className="absolute -bottom-[20%] left-1/2 -translate-x-1/2 w-[80%] h-[70%] rounded-full bg-gradient-to-t from-emerald-200/55 via-teal-200/40 to-transparent blur-[130px]" />
         {/* Center Luminous Convergence */}
         <div className="absolute top-[48%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[50%] h-[50%] rounded-full bg-white/80 blur-[80px]" />
       </div>
 
-      {/* ═══ 2. Full-Span Apple Liquid Glass 3-Pointed Star (Vertices at 500,0, 1000,700, 0,700) ═══ */}
+      {/* ═══ 2. Full-Span Apple Liquid Glass 3-Pointed Star (Snug waist wrapping center) ═══ */}
       <svg
         className="absolute inset-0 w-full h-full pointer-events-none z-10"
         viewBox="0 0 1000 700"
@@ -106,10 +106,9 @@ export function InterviewHubPage() {
           </filter>
         </defs>
 
-        {/* ── Main Liquid Glass 3-Pointed Star (Bottom vertices exactly in the corners) ── */}
-        {/* Vertices touch (500,0), (1000,700), (0,700) */}
+        {/* ── Main Liquid Glass 3-Pointed Star (Bottom vertices in exact corners 0,700 and 1000,700) ── */}
         <path
-          d="M 500 0 C 500 240, 720 380, 1000 700 C 700 520, 300 520, 0 700 C 280 380, 500 240, 500 0 Z"
+          d="M 500 0 C 500 200, 640 280, 1000 700 C 700 450, 300 450, 0 700 C 360 280, 500 200, 500 0 Z"
           fill="url(#hubGlassSurface)"
           stroke="url(#hubGlassRimStroke)"
           strokeWidth="2"
@@ -118,7 +117,7 @@ export function InterviewHubPage() {
 
         {/* Primary Specular Light Refraction Bevels */}
         <path
-          d="M 500 0 C 500 240, 280 380, 0 700"
+          d="M 500 0 C 500 200, 360 280, 0 700"
           fill="none"
           stroke="rgba(255, 255, 255, 0.95)"
           strokeWidth="3"
@@ -126,7 +125,7 @@ export function InterviewHubPage() {
           opacity="0.95"
         />
         <path
-          d="M 500 0 C 500 240, 720 380, 1000 700"
+          d="M 500 0 C 500 200, 640 280, 1000 700"
           fill="none"
           stroke="rgba(255, 255, 255, 0.85)"
           strokeWidth="2.5"
@@ -134,7 +133,7 @@ export function InterviewHubPage() {
           opacity="0.85"
         />
         <path
-          d="M 0 700 C 300 520, 700 520, 1000 700"
+          d="M 0 700 C 300 450, 700 450, 1000 700"
           fill="none"
           stroke="rgba(255, 255, 255, 0.75)"
           strokeWidth="2"
@@ -176,7 +175,7 @@ export function InterviewHubPage() {
         </form>
       </div>
 
-      {/* ═══ 4. Three Distinct Sectors (Rendered Exactly in the Center of Each Region) ═══ */}
+      {/* ═══ 4. Three Distinct Sectors (Top-Left, Top-Right, Bottom-Center - Centered in each Region) ═══ */}
       <div className="relative z-20 w-full h-full flex flex-col pointer-events-none">
         
         {/* ── Top Half: Left (面试准备) & Right (模拟实战) ── */}
@@ -186,37 +185,37 @@ export function InterviewHubPage() {
           <div className="flex-1 flex flex-col justify-center items-center p-8 pl-12 pr-6">
             <div
               onClick={() => navigate('/general-chat?prompt=帮我做针对性面试备战与高频考点预测')}
-              className="w-full max-w-[360px] flex flex-col items-start cursor-pointer group pointer-events-auto transition-all"
+              className="w-full max-w-[380px] flex flex-col items-start cursor-pointer group pointer-events-auto transition-all"
             >
-              <div className="flex items-center gap-3 mb-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-blue-500/10 text-blue-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <BookOpen size={20} />
+              <div className="flex items-center gap-3.5 mb-3">
+                <div className="w-11 h-11 rounded-2xl bg-blue-500/10 text-blue-600 flex items-center justify-center group-hover:scale-105 transition-transform shadow-xs">
+                  <BookOpen size={22} />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900 group-hover:text-blue-600 transition-colors tracking-tight">
+                  <h3 className="text-xl font-extrabold text-slate-900 group-hover:text-blue-600 transition-colors tracking-tight">
                     面试准备与考点速查
                   </h3>
-                  <p className="text-xs text-slate-500 font-medium">针对性 JD 剖析与策略预测</p>
+                  <p className="text-xs font-semibold text-blue-600/80">针对性 JD 剖析与策略预测</p>
                 </div>
               </div>
 
-              <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mb-3.5">
+              <p className="text-sm text-slate-600 leading-relaxed mb-4">
                 深度拆解目标企业业务与技术栈，智能提取高频追问雷区，生成 STAR 结构化应答应考指南。
               </p>
 
-              <div className="flex flex-wrap gap-2 mb-3.5">
-                <span className="px-3 py-1 rounded-full bg-white/75 backdrop-blur-sm text-xs font-semibold text-slate-700 border border-white/85 shadow-xs">
+              <div className="flex flex-wrap gap-2 mb-4">
+                <span className="px-3.5 py-1.5 rounded-xl bg-white/80 backdrop-blur-md text-xs font-semibold text-slate-700 border border-white/90 shadow-xs">
                   JD 考点拆解
                 </span>
-                <span className="px-3 py-1 rounded-full bg-white/75 backdrop-blur-sm text-xs font-semibold text-slate-700 border border-white/85 shadow-xs">
+                <span className="px-3.5 py-1.5 rounded-xl bg-white/80 backdrop-blur-md text-xs font-semibold text-slate-700 border border-white/90 shadow-xs">
                   STAR 应答强化
                 </span>
-                <span className="px-3 py-1 rounded-full bg-white/75 backdrop-blur-sm text-xs font-semibold text-slate-700 border border-white/85 shadow-xs">
+                <span className="px-3.5 py-1.5 rounded-xl bg-white/80 backdrop-blur-md text-xs font-semibold text-slate-700 border border-white/90 shadow-xs">
                   业务深挖预测
                 </span>
               </div>
 
-              <span className="text-xs sm:text-sm text-blue-600 font-bold flex items-center gap-1 group-hover:translate-x-1 transition-transform">
+              <span className="text-sm text-blue-600 font-bold flex items-center gap-1.5 group-hover:translate-x-1 transition-transform">
                 开启考点备战 <ArrowUpRight className="w-4 h-4" />
               </span>
             </div>
@@ -226,70 +225,72 @@ export function InterviewHubPage() {
           <div className="flex-1 flex flex-col justify-center items-center p-8 pr-12 pl-6">
             <div
               onClick={() => setSearchParams({ tab: 'mock' })}
-              className="w-full max-w-[360px] flex flex-col items-end text-right cursor-pointer group pointer-events-auto transition-all"
+              className="w-full max-w-[380px] flex flex-col items-end text-right cursor-pointer group pointer-events-auto transition-all"
             >
-              <div className="flex items-center gap-3 mb-2.5 flex-row-reverse">
-                <div className="w-10 h-10 rounded-2xl bg-purple-500/10 text-purple-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <Mic2 size={20} />
+              <div className="flex items-center gap-3.5 mb-3 flex-row-reverse">
+                <div className="w-11 h-11 rounded-2xl bg-purple-500/10 text-purple-600 flex items-center justify-center group-hover:scale-105 transition-transform shadow-xs">
+                  <Mic2 size={22} />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900 group-hover:text-purple-600 transition-colors tracking-tight">
+                  <h3 className="text-xl font-extrabold text-slate-900 group-hover:text-purple-600 transition-colors tracking-tight">
                     模拟面试实战对练
                   </h3>
-                  <p className="text-xs text-slate-500 font-medium">多轮深度交互与应变诊断</p>
+                  <p className="text-xs font-semibold text-purple-600/80">多轮深度交互与应变诊断</p>
                 </div>
               </div>
 
-              <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mb-3.5">
+              <p className="text-sm text-slate-600 leading-relaxed mb-4">
                 沉浸式 AI 面试官全流程真实追问，支持多轮语音与文本对答，即时出具多维雷达评分与改进方案。
               </p>
 
-              <div className="flex flex-wrap gap-2 mb-3.5 justify-end">
-                <span className="px-3 py-1 rounded-full bg-white/75 backdrop-blur-sm text-xs font-semibold text-slate-700 border border-white/85 shadow-xs">
+              <div className="flex flex-wrap gap-2 mb-4 justify-end">
+                <span className="px-3.5 py-1.5 rounded-xl bg-white/80 backdrop-blur-md text-xs font-semibold text-slate-700 border border-white/90 shadow-xs">
                   多轮语音交互
                 </span>
-                <span className="px-3 py-1 rounded-full bg-white/75 backdrop-blur-sm text-xs font-semibold text-slate-700 border border-white/85 shadow-xs">
+                <span className="px-3.5 py-1.5 rounded-xl bg-white/80 backdrop-blur-md text-xs font-semibold text-slate-700 border border-white/90 shadow-xs">
                   压力追问考核
                 </span>
-                <span className="px-3 py-1 rounded-full bg-white/75 backdrop-blur-sm text-xs font-semibold text-slate-700 border border-white/85 shadow-xs">
+                <span className="px-3.5 py-1.5 rounded-xl bg-white/80 backdrop-blur-md text-xs font-semibold text-slate-700 border border-white/90 shadow-xs">
                   雷达能力诊断
                 </span>
               </div>
 
-              <span className="text-xs sm:text-sm text-purple-600 font-bold flex items-center gap-1.5 group-hover:-translate-x-1 transition-transform">
-                <Play className="w-3.5 h-3.5 fill-current" /> 进入模拟实战
+              <span className="text-sm text-purple-600 font-bold flex items-center gap-1.5 group-hover:-translate-x-1 transition-transform">
+                <Play className="w-4 h-4 fill-current" /> 进入模拟实战
               </span>
             </div>
           </div>
 
         </div>
 
-        {/* ── Bottom Half: Bottom-Center (Centered in the Bottom Region) ── */}
+        {/* ── Bottom Half: Bottom-Center (Centered in the spacious Bottom Region below waist) ── */}
         <div className="h-[38%] flex justify-center items-center pb-8 px-12">
           <div
             onClick={() => setSearchParams({ tab: 'review' })}
             className="w-full max-w-2xl flex flex-col items-center text-center cursor-pointer group pointer-events-auto transition-all"
           >
-            <div className="flex items-center gap-3 mb-2">
-              <div className="w-9 h-9 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center group-hover:scale-105 transition-transform">
-                <FileBarChart2 size={18} />
+            <div className="flex items-center gap-3.5 mb-2.5">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center group-hover:scale-105 transition-transform shadow-xs">
+                <FileBarChart2 size={20} />
               </div>
-              <h3 className="text-lg font-bold text-slate-900 group-hover:text-emerald-700 transition-colors tracking-tight">
-                真实面试录音深度复盘
-              </h3>
+              <div>
+                <h3 className="text-xl font-extrabold text-slate-900 group-hover:text-emerald-700 transition-colors tracking-tight">
+                  真实面试录音深度复盘
+                </h3>
+              </div>
             </div>
 
-            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mb-3.5 max-w-lg">
+            <p className="text-sm text-slate-600 leading-relaxed mb-4 max-w-xl">
               一键导入真实实战录音，WhisperX 极速逐字转写与智能切片，多维诊断答题缺陷并沉淀优质回答。
             </p>
 
             <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2 text-xs font-medium text-slate-600">
-                <span className="px-3 py-1 rounded-full bg-white/75 backdrop-blur-sm border border-white/85 shadow-xs font-semibold">逐字精准转写</span>
-                <span className="px-3 py-1 rounded-full bg-white/75 backdrop-blur-sm border border-white/85 shadow-xs font-semibold">证据链归档</span>
-                <span className="px-3 py-1 rounded-full bg-white/75 backdrop-blur-sm border border-white/85 shadow-xs font-semibold">答题重构优化</span>
+              <div className="flex items-center gap-2.5 text-xs font-semibold text-slate-700">
+                <span className="px-3.5 py-1.5 rounded-xl bg-white/80 backdrop-blur-md border border-white/90 shadow-xs">逐字精准转写</span>
+                <span className="px-3.5 py-1.5 rounded-xl bg-white/80 backdrop-blur-md border border-white/90 shadow-xs">证据链归档</span>
+                <span className="px-3.5 py-1.5 rounded-xl bg-white/80 backdrop-blur-md border border-white/90 shadow-xs">答题重构优化</span>
               </div>
-              <span className="text-xs sm:text-sm text-emerald-700 font-bold flex items-center gap-1.5 group-hover:translate-x-1 transition-transform ml-2">
+              <span className="text-sm text-emerald-700 font-bold flex items-center gap-1.5 group-hover:translate-x-1 transition-transform ml-2">
                 <UploadCloud className="w-4 h-4" /> 导入实战录音复盘
               </span>
             </div>

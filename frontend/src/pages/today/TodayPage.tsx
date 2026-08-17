@@ -7,7 +7,7 @@ import {
   Send,
   CheckCircle2,
   ArrowUpRight,
-  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import { listJobOpportunities } from '@/api/careerProcess';
 import { listPersistentTasks } from '@/api/persistentTasks';
@@ -28,6 +28,9 @@ interface ConfirmTask {
   desc: string;
   copilotTip: string;
   badge: string;
+  statusHint?: string;
+  bgGradient?: string;
+  textColor?: string;
 }
 
 const SEED_TASKS: ConfirmTask[] = [
@@ -37,6 +40,9 @@ const SEED_TASKS: ConfirmTask[] = [
     desc: '收到腾讯招聘团队发来的面试邀约，建议面试时间为下周二（8月19日）上午 10:30。',
     copilotTip: '检测到该时间段无冲突，是否授权发送确认回信？',
     badge: '外部动作审批',
+    statusHint: '待确认发送',
+    bgGradient: 'from-[#FEF3C7] to-[#FDE68A]',
+    textColor: 'text-amber-950',
   },
   {
     id: 2,
@@ -44,6 +50,9 @@ const SEED_TASKS: ConfirmTask[] = [
     desc: '系统检测到邮件更新，确认更新状态库。',
     copilotTip: '是否将该机会推进至「HR 面 / Offer 沟通」？',
     badge: '进展事实确认',
+    statusHint: '建议推进',
+    bgGradient: 'from-[#E0F2FE] to-[#BAE6FD]',
+    textColor: 'text-sky-950',
   },
   {
     id: 3,
@@ -51,6 +60,9 @@ const SEED_TASKS: ConfirmTask[] = [
     desc: '根据最新复盘录音提炼的项目经验沉淀。',
     copilotTip: '是否将该项已确证的工程经历提炼并沉淀到核心档案？',
     badge: '档案更新确认',
+    statusHint: '待归档',
+    bgGradient: 'from-[#F3E8FF] to-[#E9D5FF]',
+    textColor: 'text-purple-950',
   },
 ];
 
@@ -154,7 +166,7 @@ export function TodayPage() {
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[50%] h-[50%] rounded-full bg-white/80 blur-[80px]" />
       </div>
 
-      {/* ═══ 2. Enhanced Apple Liquid Glass Astroid Star (Snug waist wrapping center capsule) ═══ */}
+      {/* ═══ 2. Enhanced Apple Liquid Glass Astroid Star ═══ */}
       <svg
         className="absolute inset-0 w-full h-full pointer-events-none z-10"
         viewBox="0 0 1000 700"
@@ -186,8 +198,7 @@ export function TodayPage() {
           </filter>
         </defs>
 
-        {/* ── Main Liquid Glass 4-Pointed Star (Tightly wrapping center) ── */}
-        {/* Vertices touch (500,0), (1000,350), (500,700), (0,350) */}
+        {/* ── Main Liquid Glass 4-Pointed Star ── */}
         <path
           d="M 500 0 C 500 240, 680 350, 1000 350 C 680 350, 500 460, 500 700 C 500 460, 320 350, 0 350 C 320 350, 500 240, 500 0 Z"
           fill="url(#liquidGlassSurface)"
@@ -248,14 +259,14 @@ export function TodayPage() {
         </form>
       </div>
 
-      {/* ═══ 4. Four Expansive Quadrants with Redesigned Typography & Card Stack ═══ */}
+      {/* ═══ 4. Four Expansive Quadrants with Redesigned Typography & Reference Card Stack ═══ */}
       <div className="relative z-20 w-full h-full grid grid-cols-2 grid-rows-2 pointer-events-none">
 
         {/* ─── Q1 Top-Left: 下一步 (Next Steps) ─── */}
         <div className="flex items-center justify-center p-8 pr-28 pb-16">
-          <div className="w-full max-w-[350px] flex flex-col pointer-events-auto">
+          <div className="w-full max-w-[360px] flex flex-col pointer-events-auto">
             <div className="mb-3.5">
-              <div className="flex items-center gap-2 text-slate-900 font-bold text-base tracking-tight mb-0.5">
+              <div className="flex items-center gap-2 text-slate-900 font-extrabold text-base tracking-tight mb-0.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
                 下一步
               </div>
@@ -289,12 +300,12 @@ export function TodayPage() {
           </div>
         </div>
 
-        {/* ─── Q2 Top-Right: 待我确认 (3D Stacked Deck with Peeking Header Tabs) ─── */}
+        {/* ─── Q2 Top-Right: 待我确认 (Physical Stepped Card Stack Matching Reference) ─── */}
         <div className="flex items-center justify-center p-8 pl-28 pb-16">
           <div className="w-full max-w-[380px] flex flex-col pointer-events-auto">
             <div className="flex items-center justify-between mb-3 shrink-0">
               <div>
-                <div className="flex items-center gap-2 text-slate-900 font-bold text-base tracking-tight">
+                <div className="flex items-center gap-2 text-slate-900 font-extrabold text-base tracking-tight">
                   <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
                   待我确认
                 </div>
@@ -305,18 +316,21 @@ export function TodayPage() {
               </span>
             </div>
 
-            {/* Stacked Deck Container with Peeking Headers */}
-            <div className="relative w-full h-[260px]">
+            {/* Stepped Physical Card Stack Container */}
+            <div className="relative w-full h-[260px] overflow-visible">
               <AnimatePresence mode="popLayout">
                 {tasks.length > 0 ? (
                   tasks.map((task, idx) => {
                     const isTop = idx === 0;
-                    // Vertical position: top cards peek above the active card
-                    const topOffset = isTop ? (tasks.length - 1) * 36 : (tasks.length - 1 - idx) * 36;
+                    // Stepped offsets matching reference: Back cards step downwards by 40px each
+                    const topOffset = isTop ? (tasks.length - 1) * 42 : (tasks.length - 1 - idx) * 42;
                     const zIndex = isTop ? 30 : 20 - idx;
 
                     if (!isTop) {
-                      // ── Peeking Header Tab for Underlying Cards ──
+                      // ── Back Card Header Strip (Stepped & Visible above front card) ──
+                      const bgGradientClass = task.bgGradient ? `bg-gradient-to-r ${task.bgGradient}` : 'bg-gradient-to-r from-amber-100 to-amber-50';
+                      const textColorClass = task.textColor || 'text-slate-900';
+
                       return (
                         <motion.div
                           key={task.id}
@@ -327,37 +341,44 @@ export function TodayPage() {
                           transition={{ duration: 0.25 }}
                           onClick={() => handlePromoteTask(task.id)}
                           style={{ top: `${topOffset}px`, zIndex }}
-                          className="absolute left-0 w-full h-[38px] bg-white/75 hover:bg-white/95 backdrop-blur-md border border-white/90 shadow-sm rounded-2xl px-4 flex items-center justify-between cursor-pointer transition-all hover:shadow"
+                          className={`absolute left-0 w-full h-[46px] ${bgGradientClass} border border-white/80 shadow-sm rounded-2xl px-4 py-2 flex items-center justify-between cursor-pointer transition-all hover:brightness-105`}
                         >
-                          <div className="flex items-center gap-2 min-w-0 pr-2">
-                            <span className="text-[10px] font-bold text-amber-800 bg-amber-100/80 px-2 py-0.5 rounded shrink-0">
-                              {task.badge}
-                            </span>
-                            <span className="text-xs font-semibold text-slate-700 truncate">
+                          <div className="flex items-center gap-2 min-w-0 pr-3">
+                            <span className={`text-sm font-bold ${textColorClass} truncate`}>
                               {task.title}
                             </span>
                           </div>
-                          <ChevronDown size={14} className="text-slate-400 shrink-0" />
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className={`text-xs font-semibold ${textColorClass} opacity-80`}>
+                              {task.statusHint || task.badge}
+                            </span>
+                            <ChevronRight size={14} className="opacity-50" />
+                          </div>
                         </motion.div>
                       );
                     }
 
-                    // ── Fully Expanded Front Active Card ──
+                    // ── Front Active Card (Expanded at the Bottom of Stack) ──
                     return (
                       <motion.div
                         key={task.id}
                         layout
                         initial={{ opacity: 0, y: 20, scale: 0.96 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, x: 220, scale: 0.92 }}
+                        exit={{ opacity: 0, x: 240, scale: 0.92 }}
                         transition={{ duration: 0.28, ease: 'easeOut' }}
                         style={{ top: `${topOffset}px`, zIndex }}
-                        className="absolute left-0 w-full bg-white/95 backdrop-blur-2xl border border-white shadow-[0_12px_32px_rgba(15,23,42,0.08)] rounded-2xl p-4 flex flex-col gap-2.5"
+                        className="absolute left-0 w-full bg-white/95 backdrop-blur-2xl border border-white shadow-[0_16px_36px_rgba(15,23,42,0.09)] rounded-2xl p-4 flex flex-col gap-2.5"
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <h3 className="text-sm font-bold text-slate-900 leading-snug flex-1">
-                            {task.title}
-                          </h3>
+                          <div className="flex items-center gap-2 flex-1 min-w-0">
+                            <div className="w-6 h-6 rounded-full bg-amber-500/15 text-amber-600 flex items-center justify-center shrink-0">
+                              <Sparkles size={13} />
+                            </div>
+                            <h3 className="text-sm font-bold text-slate-900 leading-snug truncate">
+                              {task.title}
+                            </h3>
+                          </div>
                           <div className="text-[11px] font-bold text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded-md shrink-0 border border-amber-200/60">
                             {task.badge}
                           </div>
@@ -368,14 +389,14 @@ export function TodayPage() {
                         </p>
 
                         <div className="bg-amber-50/70 border border-amber-200/50 py-1.5 px-3 text-xs text-amber-900 flex items-center gap-2 rounded-xl">
-                          <Sparkles size={13} className="text-amber-500 shrink-0" />
+                          <span className="font-semibold text-amber-700 shrink-0">建议:</span>
                           <span className="truncate font-medium">{task.copilotTip}</span>
                         </div>
 
                         <div className="flex gap-2 pt-0.5">
                           <input
                             type="text"
-                            placeholder="补充批注或补充指令…"
+                            placeholder="补充批注或确认意见…"
                             className="flex-1 text-xs bg-slate-50/80 border border-slate-200/80 rounded-xl px-3 h-8.5 outline-none focus:bg-white focus:border-blue-500 transition-colors"
                           />
                           <button
@@ -406,10 +427,10 @@ export function TodayPage() {
 
         {/* ─── Q3 Bottom-Left: 求职动态 (Career Stream) ─── */}
         <div className="flex items-center justify-center p-8 pr-28 pt-16">
-          <div className="w-full max-w-[350px] flex flex-col pointer-events-auto">
+          <div className="w-full max-w-[360px] flex flex-col pointer-events-auto">
             <div className="flex items-center justify-between mb-3.5">
               <div>
-                <div className="flex items-center gap-2 text-slate-900 font-bold text-base tracking-tight">
+                <div className="flex items-center gap-2 text-slate-900 font-extrabold text-base tracking-tight">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
                   求职动态
                 </div>
@@ -447,7 +468,7 @@ export function TodayPage() {
           <div className="w-full max-w-[380px] flex flex-col pointer-events-auto">
             <div className="flex items-center justify-between mb-3.5">
               <div>
-                <div className="flex items-center gap-2 text-slate-900 font-bold text-base tracking-tight">
+                <div className="flex items-center gap-2 text-slate-900 font-extrabold text-base tracking-tight">
                   <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
                   Copilot 工作
                 </div>
