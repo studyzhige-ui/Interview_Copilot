@@ -132,21 +132,20 @@ export function TodayPage() {
     <div className="relative w-full h-full overflow-hidden select-none font-sans bg-[#FAFBFD]">
       
       {/* ═══ 1. Continuous Multi-Color Aurora Mesh Flow ═══ */}
-      {/* Seamless radial blooms converging at center and radiating to the four edges */}
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
         {/* Top-Left: Sky Blue & Cyan */}
-        <div className="absolute -top-[15%] -left-[15%] w-[65%] h-[65%] rounded-full bg-gradient-to-br from-sky-200/50 via-blue-200/40 to-transparent blur-[120px]" />
+        <div className="absolute -top-[20%] -left-[20%] w-[70%] h-[70%] rounded-full bg-gradient-to-br from-sky-200/55 via-blue-200/40 to-transparent blur-[130px]" />
         {/* Top-Right: Warm Amber & Coral Red */}
-        <div className="absolute -top-[15%] -right-[15%] w-[65%] h-[65%] rounded-full bg-gradient-to-bl from-rose-200/50 via-amber-200/40 to-transparent blur-[120px]" />
+        <div className="absolute -top-[20%] -right-[20%] w-[70%] h-[70%] rounded-full bg-gradient-to-bl from-rose-200/55 via-amber-200/40 to-transparent blur-[130px]" />
         {/* Bottom-Left: Fresh Mint & Emerald */}
-        <div className="absolute -bottom-[15%] -left-[15%] w-[65%] h-[65%] rounded-full bg-gradient-to-tr from-emerald-200/50 via-teal-200/40 to-transparent blur-[120px]" />
+        <div className="absolute -bottom-[20%] -left-[20%] w-[70%] h-[70%] rounded-full bg-gradient-to-tr from-emerald-200/55 via-teal-200/40 to-transparent blur-[130px]" />
         {/* Bottom-Right: Soft Violet & Indigo */}
-        <div className="absolute -bottom-[15%] -right-[15%] w-[65%] h-[65%] rounded-full bg-gradient-to-tl from-indigo-200/50 via-purple-200/40 to-transparent blur-[120px]" />
-        {/* Center Radiant Convergence */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[55%] h-[55%] rounded-full bg-white/70 blur-[90px]" />
+        <div className="absolute -bottom-[20%] -right-[20%] w-[70%] h-[70%] rounded-full bg-gradient-to-tl from-indigo-200/55 via-purple-200/40 to-transparent blur-[130px]" />
+        {/* Center Luminous Bloom */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[50%] h-[50%] rounded-full bg-white/80 blur-[80px]" />
       </div>
 
-      {/* ═══ 2. Full-Span Apple Liquid Glass Astroid Star (Vertices touch 4 boundaries) ═══ */}
+      {/* ═══ 2. Enhanced Apple Liquid Glass Astroid Star (Snugly wrapping central capsule) ═══ */}
       <svg
         className="absolute inset-0 w-full h-full pointer-events-none z-10"
         viewBox="0 0 1000 700"
@@ -154,62 +153,72 @@ export function TodayPage() {
         xmlns="http://www.w3.org/2000/svg"
       >
         <defs>
-          {/* Liquid Glass Translucent Gradient */}
+          {/* Multi-Stop Liquid Glass Translucent Refraction Gradient */}
           <linearGradient id="liquidGlassSurface" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.65" />
-            <stop offset="30%" stopColor="#F8FAFC" stopOpacity="0.45" />
-            <stop offset="70%" stopColor="#F1F5F9" stopOpacity="0.38" />
-            <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0.6" />
+            <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.75" />
+            <stop offset="25%" stopColor="#F8FAFC" stopOpacity="0.5" />
+            <stop offset="50%" stopColor="#FFFFFF" stopOpacity="0.65" />
+            <stop offset="75%" stopColor="#F1F5F9" stopOpacity="0.45" />
+            <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0.75" />
           </linearGradient>
 
-          {/* Specular Refraction Rim Highlight */}
+          {/* High-Gloss Specular Rim Highlight */}
           <linearGradient id="liquidGlassRimStroke" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="rgba(255, 255, 255, 0.95)" />
-            <stop offset="25%" stopColor="rgba(226, 232, 240, 0.6)" />
-            <stop offset="50%" stopColor="rgba(255, 255, 255, 0.85)" />
-            <stop offset="75%" stopColor="rgba(203, 213, 225, 0.5)" />
-            <stop offset="100%" stopColor="rgba(255, 255, 255, 0.95)" />
+            <stop offset="0%" stopColor="rgba(255, 255, 255, 1)" />
+            <stop offset="30%" stopColor="rgba(226, 232, 240, 0.7)" />
+            <stop offset="70%" stopColor="rgba(203, 213, 225, 0.6)" />
+            <stop offset="100%" stopColor="rgba(255, 255, 255, 1)" />
           </linearGradient>
 
-          {/* Liquid Glass Drop Shadow Filter */}
+          {/* Liquid Glass Tactile Drop Shadow & Caustic Light Filter */}
           <filter id="liquidGlassShadow" x="-10%" y="-10%" width="120%" height="120%">
-            <feDropShadow dx="0" dy="16" stdDeviation="30" floodColor="#0F172A" floodOpacity="0.04" />
-            <feDropShadow dx="0" dy="4" stdDeviation="10" floodColor="#0F172A" floodOpacity="0.03" />
+            <feDropShadow dx="0" dy="20" stdDeviation="35" floodColor="#0F172A" floodOpacity="0.06" />
+            <feDropShadow dx="0" dy="6" stdDeviation="12" floodColor="#0F172A" floodOpacity="0.04" />
           </filter>
         </defs>
 
-        {/* ── Main Liquid Glass 4-Pointed Star Body ── */}
-        {/* Vertices touch: (500,0), (1000,350), (500,700), (0,350) */}
+        {/* ── Main Liquid Glass 4-Pointed Star (Tighter waist for larger quadrants) ── */}
+        {/* Vertices touch (500,0), (1000,350), (500,700), (0,350) */}
         <path
-          d="M 500 0 C 500 180, 780 350, 1000 350 C 780 350, 500 520, 500 700 C 500 520, 220 350, 0 350 C 220 350, 500 180, 500 0 Z"
+          d="M 500 0 C 500 240, 680 350, 1000 350 C 680 350, 500 460, 500 700 C 500 460, 320 350, 0 350 C 320 350, 500 240, 500 0 Z"
           fill="url(#liquidGlassSurface)"
           stroke="url(#liquidGlassRimStroke)"
-          strokeWidth="1.5"
+          strokeWidth="2"
           filter="url(#liquidGlassShadow)"
         />
 
-        {/* Inner Specular Light Glint along Top-Left & Bottom-Right Rims */}
+        {/* Primary Specular Light Refraction Bevel along Top-Left & Bottom-Right Flanks */}
         <path
-          d="M 500 0 C 500 180, 220 350, 0 350"
+          d="M 500 0 C 500 240, 320 350, 0 350"
+          fill="none"
+          stroke="rgba(255, 255, 255, 0.95)"
+          strokeWidth="3"
+          strokeLinecap="round"
+          opacity="0.95"
+        />
+        <path
+          d="M 1000 350 C 680 350, 500 460, 500 700"
           fill="none"
           stroke="rgba(255, 255, 255, 0.85)"
           strokeWidth="2.5"
           strokeLinecap="round"
-          opacity="0.9"
+          opacity="0.85"
         />
+
+        {/* Subtle Caustic Highlight Curve */}
         <path
-          d="M 1000 350 C 780 350, 500 520, 500 700"
+          d="M 500 0 C 500 240, 680 350, 1000 350"
           fill="none"
-          stroke="rgba(255, 255, 255, 0.75)"
-          strokeWidth="2"
+          stroke="rgba(255, 255, 255, 0.7)"
+          strokeWidth="1.5"
           strokeLinecap="round"
-          opacity="0.8"
+          opacity="0.75"
         />
       </svg>
 
-      {/* ═══ 3. Central Copilot Nexus (Embedded on the Liquid Glass Center) ═══ */}
+      {/* ═══ 3. Central Copilot Nexus (Snugly encased in the Liquid Glass Star) ═══ */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 flex flex-col items-center pointer-events-auto">
-        <div className="flex flex-col items-center mb-6">
+        <div className="flex flex-col items-center mb-5">
           <h2 className="text-2xl font-black text-slate-800 tracking-tight drop-shadow-sm">
             {greeting}
           </h2>
@@ -218,10 +227,10 @@ export function TodayPage() {
           </p>
         </div>
 
-        {/* Integrated Frosted Glass Capsule Searchbox */}
+        {/* High-Gloss Frosted Glass Capsule Searchbox */}
         <form 
           onSubmit={handleStartCopilot} 
-          className="w-[430px] bg-white/80 backdrop-blur-2xl border border-white/90 shadow-[0_12px_36px_rgba(15,23,42,0.06)] rounded-full px-5 py-3 flex items-center gap-3 transition-all hover:bg-white/95 hover:shadow-[0_16px_44px_rgba(15,23,42,0.09)]"
+          className="w-[430px] bg-white/85 backdrop-blur-2xl border border-white/90 shadow-[0_12px_36px_rgba(15,23,42,0.06),0_1px_2px_rgba(255,255,255,0.9)_inset] rounded-full px-5 py-3 flex items-center gap-3 transition-all hover:bg-white/95 hover:shadow-[0_16px_44px_rgba(15,23,42,0.09)]"
         >
           <Sparkles className="w-4 h-4 text-blue-500 shrink-0" />
           <input
@@ -240,13 +249,13 @@ export function TodayPage() {
         </form>
       </div>
 
-      {/* ═══ 4. Four Distinct Quadrants (Outside the Liquid Glass Flanks) ═══ */}
+      {/* ═══ 4. Four Expansive Quadrants (Spacious & Integrated) ═══ */}
       <div className="relative z-20 w-full h-full grid grid-cols-2 grid-rows-2 pointer-events-none">
 
         {/* ─── Q1 Top-Left: 下一步 ─── */}
-        <div className="flex items-center justify-center p-8 pr-36 pb-24">
-          <div className="w-full max-w-[310px] flex flex-col pointer-events-auto">
-            <div className="mb-3.5">
+        <div className="flex items-center justify-center p-8 pr-28 pb-16">
+          <div className="w-full max-w-[340px] flex flex-col pointer-events-auto">
+            <div className="mb-4">
               <div className="flex items-center gap-2 text-slate-900 font-bold text-sm mb-0.5">
                 <span className="w-2 h-2 rounded-full bg-blue-500" />
                 下一步
@@ -255,25 +264,25 @@ export function TodayPage() {
             </div>
 
             {nextStepItems.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-6 bg-white/40 backdrop-blur-md rounded-2xl border border-white/60">
+              <div className="flex flex-col items-center justify-center py-8 bg-white/30 backdrop-blur-md rounded-2xl border border-white/50">
                 <CheckCircle2 className="w-6 h-6 text-slate-400 mb-1.5 stroke-[1.5]" />
                 <p className="text-xs font-medium text-slate-500">当前没有需要推进的动作</p>
               </div>
             ) : (
-              <div className="space-y-2 flex-1">
+              <div className="space-y-2.5 flex-1">
                 {nextStepItems.map((item) => (
                   <div
                     key={item.id}
                     onClick={() => navigate(`/career?opportunity=${item.id}`)}
-                    className="flex items-center justify-between p-3.5 bg-white/60 hover:bg-white/90 backdrop-blur-md shadow-[0_4px_16px_rgba(15,23,42,0.03)] border border-white/70 rounded-2xl cursor-pointer group transition-all"
+                    className="flex items-center justify-between p-4 bg-white/60 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl cursor-pointer group transition-all"
                   >
                     <div className="min-w-0 pr-3">
                       <div className="text-xs font-bold text-slate-800 group-hover:text-blue-700 truncate mb-0.5">
                         推进 {item.step}
                       </div>
-                      <div className="text-[10px] text-slate-500 truncate">{item.company} · {item.title}</div>
+                      <div className="text-[11px] text-slate-500 truncate">{item.company} · {item.title}</div>
                     </div>
-                    <ArrowUpRight size={14} className="text-slate-400 group-hover:text-blue-600 shrink-0" />
+                    <ArrowUpRight size={15} className="text-slate-400 group-hover:text-blue-600 shrink-0" />
                   </div>
                 ))}
               </div>
@@ -282,19 +291,19 @@ export function TodayPage() {
         </div>
 
         {/* ─── Q2 Top-Right: 待我确认 (3D Stacked Card Deck) ─── */}
-        <div className="flex items-center justify-center p-8 pl-36 pb-24">
-          <div className="w-full max-w-[330px] flex flex-col pointer-events-auto">
-            <div className="flex items-center justify-between mb-3.5 shrink-0">
+        <div className="flex items-center justify-center p-8 pl-28 pb-16">
+          <div className="w-full max-w-[360px] flex flex-col pointer-events-auto">
+            <div className="flex items-center justify-between mb-4 shrink-0">
               <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
                 <span className="w-2 h-2 rounded-full bg-amber-500" />
                 待我确认
               </div>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100/80 text-amber-800 border border-amber-200/50">
+              <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-100/80 text-amber-800 border border-amber-200/50">
                 {tasks.length} 待决
               </span>
             </div>
 
-            <div className="relative w-full h-[210px]">
+            <div className="relative w-full h-[220px]">
               <AnimatePresence>
                 {tasks.length > 0 ? (
                   tasks.map((task, idx) => {
@@ -312,7 +321,7 @@ export function TodayPage() {
                         }}
                         exit={{ opacity: 0, x: 200, scale: 0.9 }}
                         transition={{ duration: 0.3, ease: 'easeOut' }}
-                        className={`absolute top-0 left-0 w-full bg-white/90 backdrop-blur-xl border border-white/80 shadow-[0_8px_28px_rgba(15,23,42,0.06)] rounded-2xl p-4 flex flex-col gap-2 ${!isTop && 'pointer-events-none'}`}
+                        className={`absolute top-0 left-0 w-full bg-white/90 backdrop-blur-xl border border-white/80 shadow-[0_8px_30px_rgba(15,23,42,0.06)] rounded-2xl p-4 flex flex-col gap-2 ${!isTop && 'pointer-events-none'}`}
                         style={{ transformOrigin: 'top center' }}
                       >
                         <div className="flex items-start justify-between gap-2">
@@ -321,8 +330,8 @@ export function TodayPage() {
                             {task.badge}
                           </div>
                         </div>
-                        <p className="text-[10px] text-slate-600 leading-tight line-clamp-2">{task.desc}</p>
-                        <div className="bg-amber-50/60 border border-amber-100/70 py-1 px-2 text-[10px] text-amber-800 flex items-center gap-1.5 rounded-lg">
+                        <p className="text-[11px] text-slate-600 leading-tight line-clamp-2">{task.desc}</p>
+                        <div className="bg-amber-50/60 border border-amber-100/70 py-1.5 px-2.5 text-[10px] text-amber-800 flex items-center gap-1.5 rounded-lg">
                           <Sparkles size={11} className="text-amber-500 shrink-0" />
                           <span className="truncate">{task.copilotTip}</span>
                         </div>
@@ -331,13 +340,13 @@ export function TodayPage() {
                             type="text"
                             placeholder="补充意见…"
                             disabled={!isTop}
-                            className="flex-1 text-[10px] bg-slate-50 border border-slate-200/70 rounded-lg px-2.5 outline-none focus:border-blue-400 transition-colors h-7.5"
+                            className="flex-1 text-[11px] bg-slate-50 border border-slate-200/70 rounded-lg px-2.5 outline-none focus:border-blue-400 transition-colors h-8"
                           />
                           <button
                             type="button"
                             onClick={() => isTop && handleConfirm(task.id)}
                             disabled={!isTop}
-                            className="px-3 h-7.5 bg-slate-800 hover:bg-slate-900 text-white text-[10px] font-bold rounded-lg transition-colors whitespace-nowrap shadow-sm cursor-pointer disabled:opacity-50"
+                            className="px-3.5 h-8 bg-slate-800 hover:bg-slate-900 text-white text-[11px] font-bold rounded-lg transition-colors whitespace-nowrap shadow-sm cursor-pointer disabled:opacity-50"
                           >
                             确认执行
                           </button>
@@ -349,7 +358,7 @@ export function TodayPage() {
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className="absolute inset-0 flex flex-col items-center justify-center py-8 bg-white/40 backdrop-blur-md rounded-2xl border border-white/60"
+                    className="absolute inset-0 flex flex-col items-center justify-center py-8 bg-white/30 backdrop-blur-md rounded-2xl border border-white/50"
                   >
                     <CheckCircle2 className="w-6 h-6 text-slate-400 mb-1.5 stroke-[1.5]" />
                     <p className="text-xs font-medium text-slate-500">全部处理完毕</p>
@@ -361,9 +370,9 @@ export function TodayPage() {
         </div>
 
         {/* ─── Q3 Bottom-Left: 求职动态 ─── */}
-        <div className="flex items-center justify-center p-8 pr-36 pt-24">
-          <div className="w-full max-w-[310px] flex flex-col pointer-events-auto">
-            <div className="flex items-center justify-between mb-3.5">
+        <div className="flex items-center justify-center p-8 pr-28 pt-16">
+          <div className="w-full max-w-[340px] flex flex-col pointer-events-auto">
+            <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
                 <span className="w-2 h-2 rounded-full bg-emerald-500" />
                 求职动态
@@ -371,22 +380,22 @@ export function TodayPage() {
               <button
                 type="button"
                 onClick={() => navigate('/career')}
-                className="text-[10px] text-slate-500 hover:text-emerald-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
+                className="text-[11px] text-slate-500 hover:text-emerald-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
               >
                 全部 <ArrowUpRight className="w-3 h-3" />
               </button>
             </div>
-            <div className="flex-1 min-h-0 space-y-2">
+            <div className="flex-1 min-h-0 space-y-2.5">
               {careerEvents.map((ev) => (
                 <div
                   key={ev.id}
                   onClick={() => navigate('/career')}
-                  className="flex items-center justify-between p-3.5 bg-white/60 hover:bg-white/90 backdrop-blur-md shadow-[0_4px_16px_rgba(15,23,42,0.03)] border border-white/70 rounded-2xl cursor-pointer group transition-all"
+                  className="flex items-center justify-between p-4 bg-white/60 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl cursor-pointer group transition-all"
                 >
                   <span className="text-xs font-bold text-slate-800 group-hover:text-emerald-700 truncate pr-3">
                     {ev.company} · {ev.title}
                   </span>
-                  <span className={`text-[10px] font-medium shrink-0 bg-white/80 px-2 py-0.5 rounded-full border border-white/80 ${ev.isClosed ? 'text-slate-400' : 'text-emerald-600'}`}>
+                  <span className={`text-[10px] font-medium shrink-0 bg-white/80 px-2.5 py-0.5 rounded-full border border-white/80 ${ev.isClosed ? 'text-slate-400' : 'text-emerald-600'}`}>
                     {ev.step}
                   </span>
                 </div>
@@ -396,9 +405,9 @@ export function TodayPage() {
         </div>
 
         {/* ─── Q4 Bottom-Right: Copilot 工作 ─── */}
-        <div className="flex items-center justify-center p-8 pl-36 pt-24">
-          <div className="w-full max-w-[330px] flex flex-col pointer-events-auto">
-            <div className="flex items-center justify-between mb-3.5">
+        <div className="flex items-center justify-center p-8 pl-28 pt-16">
+          <div className="w-full max-w-[360px] flex flex-col pointer-events-auto">
+            <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
                 <span className="w-2 h-2 rounded-full bg-purple-500" />
                 Copilot 工作
@@ -406,23 +415,23 @@ export function TodayPage() {
               <button
                 type="button"
                 onClick={() => navigate('/activities')}
-                className="text-[10px] text-slate-500 hover:text-purple-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
+                className="text-[11px] text-slate-500 hover:text-purple-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
               >
                 控制台 <ArrowUpRight className="w-3 h-3" />
               </button>
             </div>
-            <div className="flex-1 min-h-0 space-y-2">
+            <div className="flex-1 min-h-0 space-y-2.5">
               {copilotWork.map((item) => (
                 <div
                   key={item.id}
                   onClick={() => navigate('/activities')}
-                  className="bg-white/60 hover:bg-white/90 backdrop-blur-md shadow-[0_4px_16px_rgba(15,23,42,0.03)] border border-white/70 rounded-2xl p-3 flex items-center justify-between cursor-pointer group transition-all"
+                  className="bg-white/60 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl p-3.5 flex items-center justify-between cursor-pointer group transition-all"
                 >
                   <div className="truncate pr-3 min-w-0">
                     <div className="text-xs font-bold text-slate-800 group-hover:text-purple-700 truncate mb-0.5">{item.title}</div>
-                    <div className="text-[10px] text-slate-500 truncate">{item.detail}</div>
+                    <div className="text-[11px] text-slate-500 truncate">{item.detail}</div>
                   </div>
-                  <span className={`px-2 py-0.5 rounded-full flex items-center gap-1.5 text-[9px] shrink-0 font-bold ${
+                  <span className={`px-2.5 py-1 rounded-full flex items-center gap-1.5 text-[9px] shrink-0 font-bold ${
                     item.state === 'active'
                       ? 'bg-blue-50 text-blue-700 border border-blue-100'
                       : 'bg-slate-100 text-slate-500 border border-slate-200'
