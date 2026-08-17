@@ -37,8 +37,8 @@ const SEED_TASKS: ConfirmTask[] = [
   {
     id: 1,
     title: '腾讯 HR 邮件：确认技术一面面试时间',
-    desc: '收到腾讯招聘团队发来的面试邀约，建议面试时间为下周二（8月19日）上午 10:30。',
-    copilotTip: '检测到该时间段无冲突，是否授权发送确认回信？',
+    desc: '收到腾讯招聘团队发来的面试邀约，建议面试时间为下周二（8月19日）上午 10:30。已同步对比您的日程表。',
+    copilotTip: '检测到该时间段无任何日程冲突，是否授权发送标准回信？',
     badge: '外部动作审批',
     statusHint: '待确认发送',
     bgGradient: 'from-[#FEF3C7] to-[#FDE68A]',
@@ -47,8 +47,8 @@ const SEED_TASKS: ConfirmTask[] = [
   {
     id: 2,
     title: '字节跳动：更新应聘进展至「二面通过」',
-    desc: '系统检测到邮件更新，确认更新状态库。',
-    copilotTip: '是否将该机会推进至「HR 面 / Offer 沟通」？',
+    desc: '系统通过招聘来信解析到最新阶段更新，建议同步流转至下一步状态库。',
+    copilotTip: '是否将该岗位机会正式推进至「HR 面 / Offer 沟通」？',
     badge: '进展事实确认',
     statusHint: '建议推进',
     bgGradient: 'from-[#E0F2FE] to-[#BAE6FD]',
@@ -57,8 +57,8 @@ const SEED_TASKS: ConfirmTask[] = [
   {
     id: 3,
     title: '求职档案：同步在面试中确证的项目亮点',
-    desc: '根据最新复盘录音提炼的项目经验沉淀。',
-    copilotTip: '是否将该项已确证的工程经历提炼并沉淀到核心档案？',
+    desc: '根据昨日复盘录音深度提炼出高并发架构实战经验与量化成果。',
+    copilotTip: '是否将该项已确证的工程经历提炼并沉淀到个人全局档案？',
     badge: '档案更新确认',
     statusHint: '待归档',
     bgGradient: 'from-[#F3E8FF] to-[#E9D5FF]',
@@ -152,21 +152,26 @@ export function TodayPage() {
   return (
     <div className="relative w-full h-full overflow-hidden select-none font-sans bg-[#FAFBFD]">
       
-      {/* ═══ 1. Vibrant Seamless Multi-Color Aurora Flow Radiating Outward ═══ */}
+      {/* ═══ 1. High-Impact Chromatic Center Aurora Burst (Fading to Light Airiness at Corners) ═══ */}
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-        {/* Top-Left: Sky Blue & Electric Cyan */}
-        <div className="absolute -top-[10%] -left-[10%] w-[60%] h-[60%] rounded-full bg-gradient-to-br from-sky-300/80 via-blue-200/50 to-transparent blur-[120px]" />
-        {/* Top-Right: Coral Rose & Warm Amber */}
-        <div className="absolute -top-[10%] -right-[10%] w-[60%] h-[60%] rounded-full bg-gradient-to-bl from-rose-300/75 via-amber-200/50 to-transparent blur-[120px]" />
-        {/* Bottom-Left: Emerald & Mint Green */}
-        <div className="absolute -bottom-[10%] -left-[10%] w-[60%] h-[60%] rounded-full bg-gradient-to-tr from-emerald-300/80 via-teal-200/50 to-transparent blur-[120px]" />
-        {/* Bottom-Right: Purple & Indigo Violet */}
-        <div className="absolute -bottom-[10%] -right-[10%] w-[60%] h-[60%] rounded-full bg-gradient-to-tl from-indigo-300/80 via-purple-200/50 to-transparent blur-[120px]" />
-        {/* Central Luminous Iridescent Chromatic Core (Radiating into 4 arms) */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[55%] h-[55%] rounded-full bg-gradient-to-tr from-teal-200/30 via-indigo-200/35 to-rose-200/30 blur-[85px]" />
+        {/* Core Chromatic Nebula centered on the Star Nexus */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[70vw] h-[70vh] rounded-full bg-[radial-gradient(circle_at_center,_rgba(147,197,253,0.7)_0%,_rgba(192,132,252,0.65)_30%,_rgba(253,186,116,0.6)_55%,_rgba(110,231,183,0.5)_75%,_transparent_100%)] blur-[95px]" />
+        
+        {/* Directional radiant bursts radiating from center towards the 4 quadrants, decaying to faint pastel */}
+        {/* Top-Left Ray: Sky Blue */}
+        <div className="absolute top-[20%] left-[20%] w-[45vw] h-[45vh] rounded-full bg-[radial-gradient(circle,_rgba(56,189,248,0.45)_0%,_rgba(186,230,253,0.2)_50%,_transparent_75%)] blur-[90px]" />
+        {/* Top-Right Ray: Coral Rose */}
+        <div className="absolute top-[20%] right-[20%] w-[45vw] h-[45vh] rounded-full bg-[radial-gradient(circle,_rgba(251,113,133,0.4)_0%,_rgba(254,205,211,0.18)_50%,_transparent_75%)] blur-[90px]" />
+        {/* Bottom-Left Ray: Emerald */}
+        <div className="absolute bottom-[20%] left-[20%] w-[45vw] h-[45vh] rounded-full bg-[radial-gradient(circle,_rgba(52,211,153,0.4)_0%,_rgba(167,243,208,0.18)_50%,_transparent_75%)] blur-[90px]" />
+        {/* Bottom-Right Ray: Purple Violet */}
+        <div className="absolute bottom-[20%] right-[20%] w-[45vw] h-[45vh] rounded-full bg-[radial-gradient(circle,_rgba(168,85,247,0.45)_0%,_rgba(233,213,255,0.2)_50%,_transparent_75%)] blur-[90px]" />
+
+        {/* Center Luminous Energy Spike */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[30vw] h-[30vh] rounded-full bg-white/75 blur-[55px]" />
       </div>
 
-      {/* ═══ 2. Enhanced Chromatic Apple Liquid Glass Astroid Star ═══ */}
+      {/* ═══ 2. Vibrant Chromatic Apple Liquid Glass Astroid Star ═══ */}
       <svg
         className="absolute inset-0 w-full h-full pointer-events-none z-10"
         viewBox="0 0 1000 700"
@@ -174,37 +179,38 @@ export function TodayPage() {
         xmlns="http://www.w3.org/2000/svg"
       >
         <defs>
-          {/* Multi-Stop Chromatic Liquid Glass Translucent Refraction */}
-          <linearGradient id="chromaticGlassSurface" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#E0F2FE" stopOpacity="0.65" />
-            <stop offset="25%" stopColor="#FFFFFF" stopOpacity="0.8" />
-            <stop offset="50%" stopColor="#FAF5FF" stopOpacity="0.55" />
-            <stop offset="75%" stopColor="#FFFFFF" stopOpacity="0.8" />
-            <stop offset="100%" stopColor="#EDE9FE" stopOpacity="0.65" />
+          {/* Saturated Chromatic Liquid Glass Translucent Refraction */}
+          <linearGradient id="vibrantGlassSurface" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#BAE6FD" stopOpacity="0.7" />
+            <stop offset="25%" stopColor="#FFFFFF" stopOpacity="0.85" />
+            <stop offset="50%" stopColor="#DDD6FE" stopOpacity="0.65" />
+            <stop offset="75%" stopColor="#FFFFFF" stopOpacity="0.85" />
+            <stop offset="100%" stopColor="#FED7AA" stopOpacity="0.7" />
           </linearGradient>
 
-          {/* High-Gloss Specular Rim Highlight */}
-          <linearGradient id="chromaticGlassRimStroke" x1="0%" y1="0%" x2="100%" y2="100%">
+          {/* High-Impact Chromatic Specular Rim Highlight */}
+          <linearGradient id="vibrantGlassRimStroke" x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stopColor="rgba(255, 255, 255, 1)" />
-            <stop offset="30%" stopColor="rgba(224, 242, 254, 0.85)" />
-            <stop offset="70%" stopColor="rgba(243, 232, 255, 0.85)" />
+            <stop offset="25%" stopColor="rgba(56, 189, 248, 0.85)" />
+            <stop offset="50%" stopColor="rgba(255, 255, 255, 1)" />
+            <stop offset="75%" stopColor="rgba(192, 132, 252, 0.85)" />
             <stop offset="100%" stopColor="rgba(255, 255, 255, 1)" />
           </linearGradient>
 
-          {/* Tactile Drop Shadow Filter */}
-          <filter id="liquidGlassShadow" x="-10%" y="-10%" width="120%" height="120%">
-            <feDropShadow dx="0" dy="20" stdDeviation="35" floodColor="#0F172A" floodOpacity="0.06" />
-            <feDropShadow dx="0" dy="6" stdDeviation="12" floodColor="#0F172A" floodOpacity="0.04" />
+          {/* Tactile Soft Drop Shadow */}
+          <filter id="vibrantGlassShadow" x="-10%" y="-10%" width="120%" height="120%">
+            <feDropShadow dx="0" dy="24" stdDeviation="40" floodColor="#0F172A" floodOpacity="0.08" />
+            <feDropShadow dx="0" dy="8" stdDeviation="16" floodColor="#0F172A" floodOpacity="0.05" />
           </filter>
         </defs>
 
         {/* ── Main Liquid Glass 4-Pointed Star ── */}
         <path
           d="M 500 0 C 500 240, 680 350, 1000 350 C 680 350, 500 460, 500 700 C 500 460, 320 350, 0 350 C 320 350, 500 240, 500 0 Z"
-          fill="url(#chromaticGlassSurface)"
-          stroke="url(#chromaticGlassRimStroke)"
-          strokeWidth="2"
-          filter="url(#liquidGlassShadow)"
+          fill="url(#vibrantGlassSurface)"
+          stroke="url(#vibrantGlassRimStroke)"
+          strokeWidth="2.5"
+          filter="url(#vibrantGlassShadow)"
         />
 
         {/* Primary Specular Light Refraction Bevels */}
@@ -212,27 +218,27 @@ export function TodayPage() {
           d="M 500 0 C 500 240, 320 350, 0 350"
           fill="none"
           stroke="rgba(255, 255, 255, 0.95)"
-          strokeWidth="3"
+          strokeWidth="3.5"
           strokeLinecap="round"
           opacity="0.95"
         />
         <path
           d="M 1000 350 C 680 350, 500 460, 500 700"
           fill="none"
-          stroke="rgba(255, 255, 255, 0.85)"
-          strokeWidth="2.5"
+          stroke="rgba(255, 255, 255, 0.9)"
+          strokeWidth="3"
           strokeLinecap="round"
-          opacity="0.85"
+          opacity="0.9"
         />
       </svg>
 
-      {/* ═══ 3. Central Copilot Nexus (Snugly encased in the Liquid Glass Star) ═══ */}
+      {/* ═══ 3. Central Copilot Nexus ═══ */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 flex flex-col items-center pointer-events-auto">
         <div className="flex flex-col items-center mb-3.5">
           <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight drop-shadow-sm">
             {greeting}
           </h2>
-          <p className="text-xs sm:text-sm font-medium text-slate-500 mt-0.5">
+          <p className="text-xs sm:text-sm font-medium text-slate-600 mt-0.5">
             今日有 <span className="text-blue-600 font-bold">{tasks.length}</span> 项待办事项需推进
           </p>
         </div>
@@ -240,9 +246,9 @@ export function TodayPage() {
         {/* High-Gloss Frosted Glass Capsule Searchbox */}
         <form 
           onSubmit={handleStartCopilot} 
-          className="w-[440px] h-[52px] bg-white/85 backdrop-blur-2xl border border-white/90 shadow-[0_12px_36px_rgba(15,23,42,0.06),0_1px_2px_rgba(255,255,255,0.9)_inset] rounded-full px-5 flex items-center gap-3 transition-all hover:bg-white/95 hover:shadow-[0_16px_44px_rgba(15,23,42,0.09)]"
+          className="w-[450px] h-[54px] bg-white/90 backdrop-blur-2xl border border-white shadow-[0_16px_40px_rgba(15,23,42,0.08),0_1px_2px_rgba(255,255,255,1)_inset] rounded-full px-5 flex items-center gap-3 transition-all hover:bg-white hover:shadow-[0_20px_48px_rgba(15,23,42,0.12)]"
         >
-          <Sparkles className="w-4 h-4 text-blue-500 shrink-0" />
+          <Sparkles className="w-4.5 h-4.5 text-blue-500 shrink-0" />
           <input
             type="text"
             value={inputText}
@@ -252,28 +258,28 @@ export function TodayPage() {
           />
           <button
             type="submit"
-            className="w-8.5 h-8.5 flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-transform hover:scale-105 cursor-pointer shrink-0 shadow-sm"
+            className="w-9 h-9 flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-transform hover:scale-105 cursor-pointer shrink-0 shadow-sm"
           >
             <Send className="w-3.5 h-3.5 -ml-0.5" />
           </button>
         </form>
       </div>
 
-      {/* ═══ 4. Four Quadrants Centered Exactly at Each Sector's Visual Centroid (Red Mark) ═══ */}
+      {/* ═══ 4. Four Quadrants Positioned at the Balanced Sweet-Spots ═══ */}
       <div className="absolute inset-0 z-20 pointer-events-none">
 
-        {/* ─── Q1 Top-Left: 下一步 (Centered at Visual Centroid: x=21%, y=21%) ─── */}
-        <div className="absolute top-[21%] left-[21%] -translate-x-1/2 -translate-y-1/2 w-[380px] flex flex-col pointer-events-auto">
+        {/* ─── Q1 Top-Left: 下一步 (Sweet Spot: centered at x=26%, y=26%, filling quadrant comfortably) ─── */}
+        <div className="absolute top-[26%] left-[26%] -translate-x-1/2 -translate-y-1/2 w-[410px] flex flex-col pointer-events-auto">
           <div className="mb-3.5">
             <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight mb-0.5">
-              <span className="w-3 h-3 rounded-full bg-blue-500" />
+              <span className="w-3 h-3 rounded-full bg-blue-500 shadow-sm" />
               下一步
             </div>
-            <p className="text-sm text-slate-500 font-medium">已确认为真实面试并需推进的重点动作</p>
+            <p className="text-sm text-slate-600 font-medium">已确认为真实面试并需推进的重点动作</p>
           </div>
 
           {nextStepItems.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 bg-white/40 backdrop-blur-md rounded-2xl border border-white/60">
+            <div className="flex flex-col items-center justify-center py-8 bg-white/50 backdrop-blur-md rounded-2xl border border-white/70 shadow-sm">
               <CheckCircle2 className="w-7 h-7 text-slate-400 mb-1.5 stroke-[1.5]" />
               <p className="text-sm font-medium text-slate-500">当前没有需要推进的动作</p>
             </div>
@@ -283,7 +289,7 @@ export function TodayPage() {
                 <div
                   key={item.id}
                   onClick={() => navigate(`/career?opportunity=${item.id}`)}
-                  className="flex items-center justify-between p-4 bg-white/75 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl cursor-pointer group transition-all"
+                  className="flex items-center justify-between p-4 bg-white/80 hover:bg-white backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/90 rounded-2xl cursor-pointer group transition-all"
                 >
                   <div className="min-w-0 pr-3">
                     <div className="text-base font-bold text-slate-900 group-hover:text-blue-600 truncate mb-0.5">
@@ -298,34 +304,34 @@ export function TodayPage() {
           )}
         </div>
 
-        {/* ─── Q2 Top-Right: 待我确认 (Centered at Visual Centroid: x=79%, y=21%) ─── */}
-        <div className="absolute top-[21%] right-[21%] translate-x-1/2 -translate-y-1/2 w-[390px] flex flex-col pointer-events-auto">
+        {/* ─── Q2 Top-Right: 待我确认 (Sweet Spot: centered at x=74%, y=26%, full detailed display) ─── */}
+        <div className="absolute top-[26%] right-[26%] translate-x-1/2 -translate-y-1/2 w-[420px] flex flex-col pointer-events-auto">
           <div className="flex items-center justify-between mb-3 shrink-0">
             <div>
               <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight">
-                <span className="w-3 h-3 rounded-full bg-amber-500" />
+                <span className="w-3 h-3 rounded-full bg-amber-500 shadow-sm" />
                 待我确认
               </div>
-              <p className="text-sm text-slate-500 font-medium mt-0.5">需授权或确认的事实与外部动作</p>
+              <p className="text-sm text-slate-600 font-medium mt-0.5">需授权或确认的事实与外部动作</p>
             </div>
-            <span className="text-xs font-bold px-3 py-0.5 rounded-full bg-amber-100/90 text-amber-800 border border-amber-200/60">
+            <span className="text-xs font-bold px-3 py-0.5 rounded-full bg-amber-100/90 text-amber-800 border border-amber-200/60 shadow-xs">
               {tasks.length} 待决
             </span>
           </div>
 
-          {/* Stepped Physical Card Stack Container */}
-          <div className="relative w-full h-[240px] overflow-visible">
+          {/* Stepped Physical Card Stack Container with Full Detailed Content on Active Card */}
+          <div className="relative w-full h-[270px] overflow-visible">
             <AnimatePresence mode="popLayout">
               {tasks.length > 0 ? (
                 tasks.map((task, idx) => {
                   const isTop = idx === 0;
-                  const topOffset = isTop ? (tasks.length - 1) * 32 : (tasks.length - 1 - idx) * 32;
+                  const topOffset = isTop ? (tasks.length - 1) * 36 : (tasks.length - 1 - idx) * 36;
                   const zIndex = isTop ? 30 : 20 - idx;
                   const bgGradientClass = task.bgGradient ? `bg-gradient-to-r ${task.bgGradient}` : 'bg-gradient-to-r from-amber-100 to-amber-50';
                   const headerTextClass = task.headerTextColor || 'text-slate-900';
 
                   if (!isTop) {
-                    // ── Behind Card: Full-sized card stepping behind ──
+                    // ── Behind Card: Full-sized card stepping behind with visible top bar ──
                     return (
                       <motion.div
                         key={task.id}
@@ -336,7 +342,7 @@ export function TodayPage() {
                         transition={{ duration: 0.25 }}
                         onClick={() => handlePromoteTask(task.id)}
                         style={{ top: `${topOffset}px`, zIndex }}
-                        className={`absolute left-0 w-full h-[165px] ${bgGradientClass} border border-white/80 shadow-[0_4px_16px_rgba(15,23,42,0.04)] rounded-2xl p-3.5 flex flex-col justify-between cursor-pointer transition-all hover:brightness-105`}
+                        className={`absolute left-0 w-full h-[190px] ${bgGradientClass} border border-white/80 shadow-[0_4px_16px_rgba(15,23,42,0.04)] rounded-2xl p-4 flex flex-col justify-between cursor-pointer transition-all hover:brightness-105`}
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2 min-w-0 pr-2">
@@ -345,10 +351,10 @@ export function TodayPage() {
                             </span>
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
-                            <span className={`text-xs font-semibold ${headerTextClass} opacity-80`}>
+                            <span className={`text-xs font-semibold ${headerTextClass} opacity-85`}>
                               {task.statusHint || task.badge}
                             </span>
-                            <ChevronRight size={14} className="opacity-50" />
+                            <ChevronRight size={14} className="opacity-60" />
                           </div>
                         </div>
                         <div className="text-xs text-slate-500/40 select-none pointer-events-none truncate pt-1">
@@ -358,7 +364,7 @@ export function TodayPage() {
                     );
                   }
 
-                  // ── Front Active Card: Full-sized card expanded on top ──
+                  // ── Front Active Card: Full detailed information without any truncation ──
                   return (
                     <motion.div
                       key={task.id}
@@ -368,43 +374,45 @@ export function TodayPage() {
                       exit={{ opacity: 0, x: 240, scale: 0.92 }}
                       transition={{ duration: 0.28, ease: 'easeOut' }}
                       style={{ top: `${topOffset}px`, zIndex }}
-                      className="absolute left-0 w-full h-[165px] bg-white/95 backdrop-blur-2xl border border-white shadow-[0_14px_32px_rgba(15,23,42,0.08)] rounded-2xl p-3.5 flex flex-col justify-between"
+                      className="absolute left-0 w-full bg-white/95 backdrop-blur-2xl border border-white shadow-[0_16px_36px_rgba(15,23,42,0.09)] rounded-2xl p-4.5 flex flex-col gap-2.5"
                     >
-                      <div>
-                        <div className="flex items-start justify-between gap-1.5 mb-1">
-                          <div className="flex items-center gap-2 flex-1 min-w-0">
-                            <div className="w-5 h-5 rounded-full bg-amber-500/15 text-amber-600 flex items-center justify-center shrink-0">
-                              <Sparkles size={12} />
-                            </div>
-                            <h3 className="text-sm font-bold text-slate-900 leading-snug truncate">
-                              {task.title}
-                            </h3>
+                      {/* Title & Badge */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <div className="w-6 h-6 rounded-full bg-amber-500/15 text-amber-600 flex items-center justify-center shrink-0">
+                            <Sparkles size={13} />
                           </div>
-                          <div className="text-[11px] font-bold text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded-md shrink-0 border border-amber-200/60">
-                            {task.badge}
-                          </div>
+                          <h3 className="text-sm sm:text-base font-bold text-slate-900 leading-snug">
+                            {task.title}
+                          </h3>
                         </div>
-
-                        <p className="text-xs text-slate-600 leading-relaxed line-clamp-1 mb-1.5">
-                          {task.desc}
-                        </p>
-
-                        <div className="bg-amber-50/70 border border-amber-200/50 py-1 px-2.5 text-xs text-amber-900 flex items-center gap-1.5 rounded-lg">
-                          <span className="font-semibold text-amber-700 shrink-0 text-[11px]">建议:</span>
-                          <span className="truncate font-medium text-[11px]">{task.copilotTip}</span>
+                        <div className="text-xs font-bold text-amber-800 bg-amber-100/90 px-2.5 py-0.5 rounded-md shrink-0 border border-amber-200/60">
+                          {task.badge}
                         </div>
                       </div>
 
-                      <div className="flex gap-2 pt-0.5">
+                      {/* Full Complete Description */}
+                      <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                        {task.desc}
+                      </p>
+
+                      {/* Full Complete Copilot Recommendation Callout */}
+                      <div className="bg-amber-50/80 border border-amber-200/60 p-2.5 text-xs sm:text-sm text-amber-950 rounded-xl flex items-start gap-2">
+                        <span className="font-bold text-amber-700 shrink-0">建议:</span>
+                        <span className="font-medium leading-relaxed">{task.copilotTip}</span>
+                      </div>
+
+                      {/* Action Row */}
+                      <div className="flex gap-2 pt-1">
                         <input
                           type="text"
                           placeholder="补充批注或确认意见…"
-                          className="flex-1 text-xs bg-slate-50/80 border border-slate-200/80 rounded-lg px-3 h-8 outline-none focus:bg-white focus:border-blue-500 transition-colors"
+                          className="flex-1 text-xs sm:text-sm bg-slate-50/90 border border-slate-200 rounded-xl px-3.5 h-8.5 outline-none focus:bg-white focus:border-blue-500 transition-colors"
                         />
                         <button
                           type="button"
                           onClick={() => handleConfirm(task.id)}
-                          className="px-3.5 h-8 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg transition-colors whitespace-nowrap shadow-sm hover:shadow cursor-pointer"
+                          className="px-4 h-8.5 bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-bold rounded-xl transition-colors whitespace-nowrap shadow-sm hover:shadow cursor-pointer"
                         >
                           确认执行
                         </button>
@@ -416,7 +424,7 @@ export function TodayPage() {
                 <motion.div
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  className="absolute inset-0 flex flex-col items-center justify-center py-6 bg-white/30 backdrop-blur-md rounded-2xl border border-white/50"
+                  className="absolute inset-0 flex flex-col items-center justify-center py-6 bg-white/40 backdrop-blur-md rounded-2xl border border-white/60 shadow-sm"
                 >
                   <CheckCircle2 className="w-7 h-7 text-slate-400 mb-1.5 stroke-[1.5]" />
                   <p className="text-sm font-medium text-slate-500">今日待办已全部处理完毕</p>
@@ -426,15 +434,15 @@ export function TodayPage() {
           </div>
         </div>
 
-        {/* ─── Q3 Bottom-Left: 求职动态 (Centered at Visual Centroid: x=21%, y=79%) ─── */}
-        <div className="absolute bottom-[21%] left-[21%] -translate-x-1/2 translate-y-1/2 w-[380px] flex flex-col pointer-events-auto">
+        {/* ─── Q3 Bottom-Left: 求职动态 (Sweet Spot: centered at x=26%, y=74%) ─── */}
+        <div className="absolute bottom-[26%] left-[26%] -translate-x-1/2 translate-y-1/2 w-[410px] flex flex-col pointer-events-auto">
           <div className="flex items-center justify-between mb-3.5">
             <div>
               <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight">
-                <span className="w-3 h-3 rounded-full bg-emerald-500" />
+                <span className="w-3 h-3 rounded-full bg-emerald-500 shadow-sm" />
                 求职动态
               </div>
-              <p className="text-sm text-slate-500 font-medium mt-0.5">近期岗位状态变更与最新回执</p>
+              <p className="text-sm text-slate-600 font-medium mt-0.5">近期岗位状态变更与最新回执</p>
             </div>
             <button
               type="button"
@@ -449,12 +457,12 @@ export function TodayPage() {
               <div
                 key={ev.id}
                 onClick={() => navigate('/career')}
-                className="flex items-center justify-between p-4 bg-white/75 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl cursor-pointer group transition-all"
+                className="flex items-center justify-between p-4 bg-white/80 hover:bg-white backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/90 rounded-2xl cursor-pointer group transition-all"
               >
                 <span className="text-base font-bold text-slate-900 group-hover:text-emerald-700 truncate pr-3">
                   {ev.company} · {ev.title}
                 </span>
-                <span className={`text-xs font-semibold shrink-0 bg-white/80 px-3 py-1 rounded-full border border-white/80 ${ev.isClosed ? 'text-slate-400' : 'text-emerald-600'}`}>
+                <span className={`text-xs font-semibold shrink-0 bg-white/90 px-3 py-1 rounded-full border border-slate-100 ${ev.isClosed ? 'text-slate-400' : 'text-emerald-600'}`}>
                   {ev.step}
                 </span>
               </div>
@@ -462,15 +470,15 @@ export function TodayPage() {
           </div>
         </div>
 
-        {/* ─── Q4 Bottom-Right: Copilot 工作 (Centered at Visual Centroid: x=79%, y=79%) ─── */}
-        <div className="absolute bottom-[21%] right-[21%] translate-x-1/2 translate-y-1/2 w-[390px] flex flex-col pointer-events-auto">
+        {/* ─── Q4 Bottom-Right: Copilot 工作 (Sweet Spot: centered at x=74%, y=74%) ─── */}
+        <div className="absolute bottom-[26%] right-[26%] translate-x-1/2 translate-y-1/2 w-[420px] flex flex-col pointer-events-auto">
           <div className="flex items-center justify-between mb-3.5">
             <div>
               <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight">
-                <span className="w-3 h-3 rounded-full bg-purple-500" />
+                <span className="w-3 h-3 rounded-full bg-purple-500 shadow-sm" />
                 Copilot 工作
               </div>
-              <p className="text-sm text-slate-500 font-medium mt-0.5">AI Agent 常驻后台巡检与分析任务</p>
+              <p className="text-sm text-slate-600 font-medium mt-0.5">AI Agent 常驻后台巡检与分析任务</p>
             </div>
             <button
               type="button"
@@ -485,7 +493,7 @@ export function TodayPage() {
               <div
                 key={item.id}
                 onClick={() => navigate('/activities')}
-                className="bg-white/75 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl p-4 flex items-center justify-between cursor-pointer group transition-all"
+                className="bg-white/80 hover:bg-white backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/90 rounded-2xl p-4 flex items-center justify-between cursor-pointer group transition-all"
               >
                 <div className="truncate pr-3 min-w-0">
                   <div className="text-base font-bold text-slate-900 group-hover:text-purple-700 truncate mb-0.5">{item.title}</div>

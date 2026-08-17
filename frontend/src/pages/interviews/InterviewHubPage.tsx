@@ -62,19 +62,24 @@ export function InterviewHubPage() {
   return (
     <div className="relative w-full h-full overflow-hidden select-none font-sans bg-[#FAFBFD]">
       
-      {/* ═══ 1. Vibrant Multi-Color Aurora Mesh Flow Radiating into Sectors ═══ */}
+      {/* ═══ 1. High-Impact Chromatic Center Aurora Burst (Fading to Light Airiness at Corners) ═══ */}
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-        {/* Top-Left: Sky Blue & Electric Cyan (面试准备) */}
-        <div className="absolute -top-[10%] -left-[10%] w-[60%] h-[60%] rounded-full bg-gradient-to-br from-sky-300/80 via-blue-200/50 to-transparent blur-[120px]" />
-        {/* Top-Right: Violet & Purple (模拟对练) */}
-        <div className="absolute -top-[10%] -right-[10%] w-[60%] h-[60%] rounded-full bg-gradient-to-bl from-purple-300/80 via-indigo-200/50 to-transparent blur-[120px]" />
-        {/* Bottom-Center: Emerald & Mint Green (真实复盘) */}
-        <div className="absolute -bottom-[10%] left-1/2 -translate-x-1/2 w-[85%] h-[55%] rounded-full bg-gradient-to-t from-emerald-300/80 via-teal-200/50 to-transparent blur-[120px]" />
-        {/* Central Luminous Iridescent Chromatic Core */}
-        <div className="absolute top-[48%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[55%] h-[55%] rounded-full bg-gradient-to-tr from-sky-200/35 via-purple-200/40 to-emerald-200/35 blur-[85px]" />
+        {/* Core Chromatic Tri-Color Nebula centered on the Tri-Star */}
+        <div className="absolute top-[48%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[70vw] h-[70vh] rounded-full bg-[radial-gradient(circle_at_center,_rgba(147,197,253,0.75)_0%,_rgba(192,132,252,0.7)_30%,_rgba(110,231,183,0.65)_60%,_transparent_100%)] blur-[95px]" />
+        
+        {/* Directional radiant bursts radiating into the 3 sectors, fading towards the edges */}
+        {/* Top-Left Ray: Sky Blue */}
+        <div className="absolute top-[20%] left-[20%] w-[45vw] h-[45vh] rounded-full bg-[radial-gradient(circle,_rgba(56,189,248,0.45)_0%,_rgba(186,230,253,0.18)_50%,_transparent_75%)] blur-[90px]" />
+        {/* Top-Right Ray: Purple Violet */}
+        <div className="absolute top-[20%] right-[20%] w-[45vw] h-[45vh] rounded-full bg-[radial-gradient(circle,_rgba(168,85,247,0.45)_0%,_rgba(233,213,255,0.18)_50%,_transparent_75%)] blur-[90px]" />
+        {/* Bottom-Center Ray: Emerald */}
+        <div className="absolute bottom-[15%] left-1/2 -translate-x-1/2 w-[60vw] h-[45vh] rounded-full bg-[radial-gradient(circle,_rgba(52,211,153,0.45)_0%,_rgba(167,243,208,0.18)_50%,_transparent_75%)] blur-[90px]" />
+
+        {/* Center Luminous Core */}
+        <div className="absolute top-[48%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[30vw] h-[30vh] rounded-full bg-white/75 blur-[55px]" />
       </div>
 
-      {/* ═══ 2. Harmonious Chromatic Apple Liquid Glass 3-Pointed Star ═══ */}
+      {/* ═══ 2. Harmonious Vibrant Chromatic Apple Liquid Glass 3-Pointed Star ═══ */}
       <svg
         className="absolute inset-0 w-full h-full pointer-events-none z-10"
         viewBox="0 0 1000 700"
@@ -82,37 +87,37 @@ export function InterviewHubPage() {
         xmlns="http://www.w3.org/2000/svg"
       >
         <defs>
-          {/* Multi-Stop Chromatic Liquid Glass Translucent Refraction */}
-          <linearGradient id="hubChromaticSurface" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#E0F2FE" stopOpacity="0.65" />
-            <stop offset="30%" stopColor="#FFFFFF" stopOpacity="0.8" />
-            <stop offset="60%" stopColor="#FAF5FF" stopOpacity="0.55" />
-            <stop offset="85%" stopColor="#FFFFFF" stopOpacity="0.8" />
-            <stop offset="100%" stopColor="#D1FAE5" stopOpacity="0.65" />
+          {/* Saturated Chromatic Liquid Glass Translucent Refraction */}
+          <linearGradient id="hubVibrantSurface" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#BAE6FD" stopOpacity="0.75" />
+            <stop offset="30%" stopColor="#FFFFFF" stopOpacity="0.85" />
+            <stop offset="60%" stopColor="#DDD6FE" stopOpacity="0.65" />
+            <stop offset="85%" stopColor="#FFFFFF" stopOpacity="0.85" />
+            <stop offset="100%" stopColor="#A7F3D0" stopOpacity="0.75" />
           </linearGradient>
 
-          {/* High-Gloss Specular Rim Highlight */}
-          <linearGradient id="hubChromaticRimStroke" x1="0%" y1="0%" x2="100%" y2="100%">
+          {/* High-Impact Chromatic Specular Rim Highlight */}
+          <linearGradient id="hubVibrantRimStroke" x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stopColor="rgba(255, 255, 255, 1)" />
-            <stop offset="30%" stopColor="rgba(224, 242, 254, 0.85)" />
-            <stop offset="70%" stopColor="rgba(243, 232, 255, 0.85)" />
+            <stop offset="30%" stopColor="rgba(56, 189, 248, 0.9)" />
+            <stop offset="70%" stopColor="rgba(192, 132, 252, 0.9)" />
             <stop offset="100%" stopColor="rgba(255, 255, 255, 1)" />
           </linearGradient>
 
-          {/* Tactile Drop Shadow Filter */}
-          <filter id="hubGlassShadow" x="-10%" y="-10%" width="120%" height="120%">
-            <feDropShadow dx="0" dy="20" stdDeviation="35" floodColor="#0F172A" floodOpacity="0.06" />
-            <feDropShadow dx="0" dy="6" stdDeviation="12" floodColor="#0F172A" floodOpacity="0.04" />
+          {/* Tactile Soft Drop Shadow */}
+          <filter id="hubVibrantShadow" x="-10%" y="-10%" width="120%" height="120%">
+            <feDropShadow dx="0" dy="24" stdDeviation="40" floodColor="#0F172A" floodOpacity="0.08" />
+            <feDropShadow dx="0" dy="8" stdDeviation="16" floodColor="#0F172A" floodOpacity="0.05" />
           </filter>
         </defs>
 
         {/* ── Main Pure 3-Cusp Astroid Star (Continuous, organic concave arcs) ── */}
         <path
           d="M 500 0 C 500 240, 700 360, 1000 700 C 680 310, 320 310, 0 700 C 300 360, 500 240, 500 0 Z"
-          fill="url(#hubChromaticSurface)"
-          stroke="url(#hubChromaticRimStroke)"
-          strokeWidth="2"
-          filter="url(#hubGlassShadow)"
+          fill="url(#hubVibrantSurface)"
+          stroke="url(#hubVibrantRimStroke)"
+          strokeWidth="2.5"
+          filter="url(#hubVibrantShadow)"
         />
 
         {/* Primary Specular Light Refraction Bevels along Rims */}
@@ -120,35 +125,35 @@ export function InterviewHubPage() {
           d="M 500 0 C 500 240, 300 360, 0 700"
           fill="none"
           stroke="rgba(255, 255, 255, 0.95)"
-          strokeWidth="3"
+          strokeWidth="3.5"
           strokeLinecap="round"
           opacity="0.95"
         />
         <path
           d="M 500 0 C 500 240, 700 360, 1000 700"
           fill="none"
+          stroke="rgba(255, 255, 255, 0.9)"
+          strokeWidth="3"
+          strokeLinecap="round"
+          opacity="0.9"
+        />
+        <path
+          d="M 0 700 C 320 310, 680 310, 1000 700"
+          fill="none"
           stroke="rgba(255, 255, 255, 0.85)"
           strokeWidth="2.5"
           strokeLinecap="round"
           opacity="0.85"
         />
-        <path
-          d="M 0 700 C 320 310, 680 310, 1000 700"
-          fill="none"
-          stroke="rgba(255, 255, 255, 0.8)"
-          strokeWidth="2"
-          strokeLinecap="round"
-          opacity="0.85"
-        />
       </svg>
 
-      {/* ═══ 3. Central Copilot Nexus (Snugly encased in the Tri-Star) ═══ */}
+      {/* ═══ 3. Central Copilot Nexus ═══ */}
       <div className="absolute top-[48%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 flex flex-col items-center pointer-events-auto">
         <div className="flex flex-col items-center mb-3.5">
           <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight drop-shadow-sm flex items-center gap-2">
             智能面试中枢
           </h2>
-          <p className="text-xs sm:text-sm font-medium text-slate-500 mt-0.5">
+          <p className="text-xs sm:text-sm font-medium text-slate-600 mt-0.5">
             备战 · 对练 · 复盘全流程护航
           </p>
         </div>
@@ -156,9 +161,9 @@ export function InterviewHubPage() {
         {/* High-Gloss Frosted Glass Capsule Searchbox */}
         <form 
           onSubmit={handleStartPrep} 
-          className="w-[440px] h-[52px] bg-white/85 backdrop-blur-2xl border border-white/90 shadow-[0_12px_36px_rgba(15,23,42,0.06),0_1px_2px_rgba(255,255,255,0.9)_inset] rounded-full px-5 flex items-center gap-3 transition-all hover:bg-white/95 hover:shadow-[0_16px_44px_rgba(15,23,42,0.09)]"
+          className="w-[450px] h-[54px] bg-white/90 backdrop-blur-2xl border border-white shadow-[0_16px_40px_rgba(15,23,42,0.08),0_1px_2px_rgba(255,255,255,1)_inset] rounded-full px-5 flex items-center gap-3 transition-all hover:bg-white hover:shadow-[0_20px_48px_rgba(15,23,42,0.12)]"
         >
-          <Sparkles className="w-4 h-4 text-indigo-500 shrink-0" />
+          <Sparkles className="w-4.5 h-4.5 text-indigo-500 shrink-0" />
           <input
             type="text"
             value={prepPrompt}
@@ -168,18 +173,18 @@ export function InterviewHubPage() {
           />
           <button
             type="submit"
-            className="w-8.5 h-8.5 flex items-center justify-center bg-indigo-600 hover:bg-indigo-700 text-white rounded-full transition-transform hover:scale-105 cursor-pointer shrink-0 shadow-sm"
+            className="w-9 h-9 flex items-center justify-center bg-indigo-600 hover:bg-indigo-700 text-white rounded-full transition-transform hover:scale-105 cursor-pointer shrink-0 shadow-sm"
           >
             <Send className="w-3.5 h-3.5 -ml-0.5" />
           </button>
         </form>
       </div>
 
-      {/* ═══ 4. Three Sectors Centered Exactly at Their Visual Centroids ═══ */}
+      {/* ═══ 4. Three Sectors Positioned at Balanced Sweet-Spots ═══ */}
       <div className="absolute inset-0 z-20 pointer-events-none">
         
-        {/* ─── Top-Left Sector: 面试准备与考点速查 (Centered at Visual Centroid: x=21%, y=21%) ─── */}
-        <div className="absolute top-[21%] left-[21%] -translate-x-1/2 -translate-y-1/2 w-[400px] flex flex-col items-start pointer-events-auto">
+        {/* ─── Top-Left Sector: 面试准备与考点速查 (Sweet Spot: x=26%, y=26%) ─── */}
+        <div className="absolute top-[26%] left-[26%] -translate-x-1/2 -translate-y-1/2 w-[420px] flex flex-col items-start pointer-events-auto">
           <div
             onClick={() => navigate('/general-chat?prompt=帮我做针对性面试备战与高频考点预测')}
             className="w-full flex flex-col items-start cursor-pointer group transition-all"
@@ -218,8 +223,8 @@ export function InterviewHubPage() {
           </div>
         </div>
 
-        {/* ─── Top-Right Sector: 模拟面试实战对练 (Centered at Visual Centroid: x=79%, y=21%) ─── */}
-        <div className="absolute top-[21%] right-[21%] translate-x-1/2 -translate-y-1/2 w-[400px] flex flex-col items-end pointer-events-auto">
+        {/* ─── Top-Right Sector: 模拟面试实战对练 (Sweet Spot: x=74%, y=26%) ─── */}
+        <div className="absolute top-[26%] right-[26%] translate-x-1/2 -translate-y-1/2 w-[420px] flex flex-col items-end pointer-events-auto">
           <div
             onClick={() => setSearchParams({ tab: 'mock' })}
             className="w-full flex flex-col items-end text-right cursor-pointer group transition-all"
@@ -258,8 +263,8 @@ export function InterviewHubPage() {
           </div>
         </div>
 
-        {/* ─── Bottom-Center Sector: 真实面试录音深度复盘 (Centered at Visual Centroid: x=50%, y=80%) ─── */}
-        <div className="absolute bottom-[20%] left-1/2 -translate-x-1/2 translate-y-1/2 w-full max-w-3xl flex flex-col items-center text-center pointer-events-auto">
+        {/* ─── Bottom-Center Sector: 真实面试录音深度复盘 (Sweet Spot: x=50%, y=78%) ─── */}
+        <div className="absolute bottom-[18%] left-1/2 -translate-x-1/2 translate-y-1/2 w-full max-w-3xl flex flex-col items-center text-center pointer-events-auto">
           <div
             onClick={() => setSearchParams({ tab: 'review' })}
             className="w-full flex flex-col items-center text-center cursor-pointer group transition-all"
