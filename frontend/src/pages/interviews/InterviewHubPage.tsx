@@ -62,19 +62,19 @@ export function InterviewHubPage() {
   return (
     <div className="relative w-full h-full overflow-hidden select-none font-sans bg-[#FAFBFD]">
       
-      {/* ═══ 1. Continuous Multi-Color Aurora Mesh Flow Aligned with Star Arms ═══ */}
+      {/* ═══ 1. Vibrant Multi-Color Aurora Mesh Flow Radiating into Sectors ═══ */}
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-        {/* Top-Left: Sky Blue & Cyan (面试准备) */}
-        <div className="absolute top-0 left-0 w-[55%] h-[55%] rounded-full bg-gradient-to-br from-sky-200/70 via-blue-100/50 to-transparent blur-[110px]" />
+        {/* Top-Left: Sky Blue & Electric Cyan (面试准备) */}
+        <div className="absolute -top-[10%] -left-[10%] w-[60%] h-[60%] rounded-full bg-gradient-to-br from-sky-300/80 via-blue-200/50 to-transparent blur-[120px]" />
         {/* Top-Right: Violet & Purple (模拟对练) */}
-        <div className="absolute top-0 right-0 w-[55%] h-[55%] rounded-full bg-gradient-to-bl from-purple-200/70 via-indigo-100/50 to-transparent blur-[110px]" />
-        {/* Bottom-Center: Emerald & Mint (真实复盘) */}
-        <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[85%] h-[50%] rounded-full bg-gradient-to-t from-emerald-200/75 via-teal-100/50 to-transparent blur-[110px]" />
-        {/* Center Luminous Convergence */}
-        <div className="absolute top-[48%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[45%] h-[45%] rounded-full bg-white/90 blur-[75px]" />
+        <div className="absolute -top-[10%] -right-[10%] w-[60%] h-[60%] rounded-full bg-gradient-to-bl from-purple-300/80 via-indigo-200/50 to-transparent blur-[120px]" />
+        {/* Bottom-Center: Emerald & Mint Green (真实复盘) */}
+        <div className="absolute -bottom-[10%] left-1/2 -translate-x-1/2 w-[85%] h-[55%] rounded-full bg-gradient-to-t from-emerald-300/80 via-teal-200/50 to-transparent blur-[120px]" />
+        {/* Central Luminous Iridescent Chromatic Core */}
+        <div className="absolute top-[48%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[55%] h-[55%] rounded-full bg-gradient-to-tr from-sky-200/35 via-purple-200/40 to-emerald-200/35 blur-[85px]" />
       </div>
 
-      {/* ═══ 2. Harmonious 3-Cusp Astroid Liquid Glass Star (Pure Natural Inward Concave) ═══ */}
+      {/* ═══ 2. Harmonious Chromatic Apple Liquid Glass 3-Pointed Star ═══ */}
       <svg
         className="absolute inset-0 w-full h-full pointer-events-none z-10"
         viewBox="0 0 1000 700"
@@ -82,20 +82,20 @@ export function InterviewHubPage() {
         xmlns="http://www.w3.org/2000/svg"
       >
         <defs>
-          {/* Multi-Stop Liquid Glass Translucent Refraction Gradient */}
-          <linearGradient id="hubGlassSurface" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.8" />
-            <stop offset="30%" stopColor="#F8FAFC" stopOpacity="0.55" />
-            <stop offset="60%" stopColor="#FFFFFF" stopOpacity="0.7" />
-            <stop offset="85%" stopColor="#F1F5F9" stopOpacity="0.5" />
-            <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0.8" />
+          {/* Multi-Stop Chromatic Liquid Glass Translucent Refraction */}
+          <linearGradient id="hubChromaticSurface" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#E0F2FE" stopOpacity="0.65" />
+            <stop offset="30%" stopColor="#FFFFFF" stopOpacity="0.8" />
+            <stop offset="60%" stopColor="#FAF5FF" stopOpacity="0.55" />
+            <stop offset="85%" stopColor="#FFFFFF" stopOpacity="0.8" />
+            <stop offset="100%" stopColor="#D1FAE5" stopOpacity="0.65" />
           </linearGradient>
 
           {/* High-Gloss Specular Rim Highlight */}
-          <linearGradient id="hubGlassRimStroke" x1="0%" y1="0%" x2="100%" y2="100%">
+          <linearGradient id="hubChromaticRimStroke" x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stopColor="rgba(255, 255, 255, 1)" />
-            <stop offset="30%" stopColor="rgba(226, 232, 240, 0.75)" />
-            <stop offset="70%" stopColor="rgba(203, 213, 225, 0.65)" />
+            <stop offset="30%" stopColor="rgba(224, 242, 254, 0.85)" />
+            <stop offset="70%" stopColor="rgba(243, 232, 255, 0.85)" />
             <stop offset="100%" stopColor="rgba(255, 255, 255, 1)" />
           </linearGradient>
 
@@ -109,8 +109,8 @@ export function InterviewHubPage() {
         {/* ── Main Pure 3-Cusp Astroid Star (Continuous, organic concave arcs) ── */}
         <path
           d="M 500 0 C 500 240, 700 360, 1000 700 C 680 310, 320 310, 0 700 C 300 360, 500 240, 500 0 Z"
-          fill="url(#hubGlassSurface)"
-          stroke="url(#hubGlassRimStroke)"
+          fill="url(#hubChromaticSurface)"
+          stroke="url(#hubChromaticRimStroke)"
           strokeWidth="2"
           filter="url(#hubGlassShadow)"
         />
@@ -175,14 +175,14 @@ export function InterviewHubPage() {
         </form>
       </div>
 
-      {/* ═══ 4. Three Distinct Sectors Centered Exactly in Their Organic Centroids ═══ */}
+      {/* ═══ 4. Three Sectors Centered Exactly at Their Visual Centroids ═══ */}
       <div className="absolute inset-0 z-20 pointer-events-none">
         
-        {/* ─── Top-Left Sector: 面试准备与考点速查 (Centered in Top-Left Organic Basin) ─── */}
-        <div className="absolute top-0 left-0 w-[45%] h-[55%] flex items-center justify-center p-8 pl-12 pr-6">
+        {/* ─── Top-Left Sector: 面试准备与考点速查 (Centered at Visual Centroid: x=21%, y=21%) ─── */}
+        <div className="absolute top-[21%] left-[21%] -translate-x-1/2 -translate-y-1/2 w-[400px] flex flex-col items-start pointer-events-auto">
           <div
             onClick={() => navigate('/general-chat?prompt=帮我做针对性面试备战与高频考点预测')}
-            className="w-full max-w-[400px] flex flex-col items-start cursor-pointer group pointer-events-auto transition-all"
+            className="w-full flex flex-col items-start cursor-pointer group transition-all"
           >
             <div className="flex items-center gap-3.5 mb-3">
               <div className="w-12 h-12 rounded-2xl bg-blue-500/10 text-blue-600 flex items-center justify-center group-hover:scale-105 transition-transform shadow-xs">
@@ -218,11 +218,11 @@ export function InterviewHubPage() {
           </div>
         </div>
 
-        {/* ─── Top-Right Sector: 模拟面试实战对练 (Centered in Top-Right Organic Basin) ─── */}
-        <div className="absolute top-0 right-0 w-[45%] h-[55%] flex items-center justify-center p-8 pr-12 pl-6">
+        {/* ─── Top-Right Sector: 模拟面试实战对练 (Centered at Visual Centroid: x=79%, y=21%) ─── */}
+        <div className="absolute top-[21%] right-[21%] translate-x-1/2 -translate-y-1/2 w-[400px] flex flex-col items-end pointer-events-auto">
           <div
             onClick={() => setSearchParams({ tab: 'mock' })}
-            className="w-full max-w-[400px] flex flex-col items-end text-right cursor-pointer group pointer-events-auto transition-all"
+            className="w-full flex flex-col items-end text-right cursor-pointer group transition-all"
           >
             <div className="flex items-center gap-3.5 mb-3 flex-row-reverse">
               <div className="w-12 h-12 rounded-2xl bg-purple-500/10 text-purple-600 flex items-center justify-center group-hover:scale-105 transition-transform shadow-xs">
@@ -258,11 +258,11 @@ export function InterviewHubPage() {
           </div>
         </div>
 
-        {/* ─── Bottom-Center Sector: 真实面试录音深度复盘 (Centered in Bottom Organic Basin) ─── */}
-        <div className="absolute bottom-0 left-0 w-full h-[45%] flex items-center justify-center pb-8 px-12">
+        {/* ─── Bottom-Center Sector: 真实面试录音深度复盘 (Centered at Visual Centroid: x=50%, y=80%) ─── */}
+        <div className="absolute bottom-[20%] left-1/2 -translate-x-1/2 translate-y-1/2 w-full max-w-3xl flex flex-col items-center text-center pointer-events-auto">
           <div
             onClick={() => setSearchParams({ tab: 'review' })}
-            className="w-full max-w-3xl flex flex-col items-center text-center cursor-pointer group pointer-events-auto transition-all"
+            className="w-full flex flex-col items-center text-center cursor-pointer group transition-all"
           >
             <div className="flex items-center gap-3.5 mb-3">
               <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center group-hover:scale-105 transition-transform shadow-xs">

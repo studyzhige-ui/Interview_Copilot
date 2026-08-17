@@ -152,21 +152,21 @@ export function TodayPage() {
   return (
     <div className="relative w-full h-full overflow-hidden select-none font-sans bg-[#FAFBFD]">
       
-      {/* ═══ 1. Continuous Multi-Color Aurora Mesh Flow ═══ */}
+      {/* ═══ 1. Vibrant Seamless Multi-Color Aurora Flow Radiating Outward ═══ */}
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-        {/* Top-Left: Sky Blue & Cyan */}
-        <div className="absolute top-0 left-0 w-[55%] h-[55%] rounded-full bg-gradient-to-br from-sky-200/70 via-blue-100/50 to-transparent blur-[110px]" />
-        {/* Top-Right: Warm Amber & Coral Red */}
-        <div className="absolute top-0 right-0 w-[55%] h-[55%] rounded-full bg-gradient-to-bl from-rose-200/70 via-amber-100/50 to-transparent blur-[110px]" />
-        {/* Bottom-Left: Fresh Mint & Emerald */}
-        <div className="absolute bottom-0 left-0 w-[55%] h-[55%] rounded-full bg-gradient-to-tr from-emerald-200/70 via-teal-100/50 to-transparent blur-[110px]" />
-        {/* Bottom-Right: Soft Violet & Indigo */}
-        <div className="absolute bottom-0 right-0 w-[55%] h-[55%] rounded-full bg-gradient-to-tl from-indigo-200/70 via-purple-100/50 to-transparent blur-[110px]" />
-        {/* Center Luminous Convergence */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[45%] h-[45%] rounded-full bg-white/90 blur-[75px]" />
+        {/* Top-Left: Sky Blue & Electric Cyan */}
+        <div className="absolute -top-[10%] -left-[10%] w-[60%] h-[60%] rounded-full bg-gradient-to-br from-sky-300/80 via-blue-200/50 to-transparent blur-[120px]" />
+        {/* Top-Right: Coral Rose & Warm Amber */}
+        <div className="absolute -top-[10%] -right-[10%] w-[60%] h-[60%] rounded-full bg-gradient-to-bl from-rose-300/75 via-amber-200/50 to-transparent blur-[120px]" />
+        {/* Bottom-Left: Emerald & Mint Green */}
+        <div className="absolute -bottom-[10%] -left-[10%] w-[60%] h-[60%] rounded-full bg-gradient-to-tr from-emerald-300/80 via-teal-200/50 to-transparent blur-[120px]" />
+        {/* Bottom-Right: Purple & Indigo Violet */}
+        <div className="absolute -bottom-[10%] -right-[10%] w-[60%] h-[60%] rounded-full bg-gradient-to-tl from-indigo-300/80 via-purple-200/50 to-transparent blur-[120px]" />
+        {/* Central Luminous Iridescent Chromatic Core (Radiating into 4 arms) */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[55%] h-[55%] rounded-full bg-gradient-to-tr from-teal-200/30 via-indigo-200/35 to-rose-200/30 blur-[85px]" />
       </div>
 
-      {/* ═══ 2. Enhanced Apple Liquid Glass Astroid Star ═══ */}
+      {/* ═══ 2. Enhanced Chromatic Apple Liquid Glass Astroid Star ═══ */}
       <svg
         className="absolute inset-0 w-full h-full pointer-events-none z-10"
         viewBox="0 0 1000 700"
@@ -174,20 +174,20 @@ export function TodayPage() {
         xmlns="http://www.w3.org/2000/svg"
       >
         <defs>
-          {/* Multi-Stop Liquid Glass Translucent Refraction Gradient */}
-          <linearGradient id="liquidGlassSurface" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.8" />
-            <stop offset="25%" stopColor="#F8FAFC" stopOpacity="0.55" />
-            <stop offset="50%" stopColor="#FFFFFF" stopOpacity="0.7" />
-            <stop offset="75%" stopColor="#F1F5F9" stopOpacity="0.5" />
-            <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0.8" />
+          {/* Multi-Stop Chromatic Liquid Glass Translucent Refraction */}
+          <linearGradient id="chromaticGlassSurface" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#E0F2FE" stopOpacity="0.65" />
+            <stop offset="25%" stopColor="#FFFFFF" stopOpacity="0.8" />
+            <stop offset="50%" stopColor="#FAF5FF" stopOpacity="0.55" />
+            <stop offset="75%" stopColor="#FFFFFF" stopOpacity="0.8" />
+            <stop offset="100%" stopColor="#EDE9FE" stopOpacity="0.65" />
           </linearGradient>
 
           {/* High-Gloss Specular Rim Highlight */}
-          <linearGradient id="liquidGlassRimStroke" x1="0%" y1="0%" x2="100%" y2="100%">
+          <linearGradient id="chromaticGlassRimStroke" x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stopColor="rgba(255, 255, 255, 1)" />
-            <stop offset="30%" stopColor="rgba(226, 232, 240, 0.75)" />
-            <stop offset="70%" stopColor="rgba(203, 213, 225, 0.65)" />
+            <stop offset="30%" stopColor="rgba(224, 242, 254, 0.85)" />
+            <stop offset="70%" stopColor="rgba(243, 232, 255, 0.85)" />
             <stop offset="100%" stopColor="rgba(255, 255, 255, 1)" />
           </linearGradient>
 
@@ -201,8 +201,8 @@ export function TodayPage() {
         {/* ── Main Liquid Glass 4-Pointed Star ── */}
         <path
           d="M 500 0 C 500 240, 680 350, 1000 350 C 680 350, 500 460, 500 700 C 500 460, 320 350, 0 350 C 320 350, 500 240, 500 0 Z"
-          fill="url(#liquidGlassSurface)"
-          stroke="url(#liquidGlassRimStroke)"
+          fill="url(#chromaticGlassSurface)"
+          stroke="url(#chromaticGlassRimStroke)"
           strokeWidth="2"
           filter="url(#liquidGlassShadow)"
         />
@@ -259,256 +259,248 @@ export function TodayPage() {
         </form>
       </div>
 
-      {/* ═══ 4. Four Expansive Quadrants Centered Exactly in Each Sector ═══ */}
+      {/* ═══ 4. Four Quadrants Centered Exactly at Each Sector's Visual Centroid (Red Mark) ═══ */}
       <div className="absolute inset-0 z-20 pointer-events-none">
 
-        {/* ─── Q1 Top-Left: 下一步 (Next Steps) ─── */}
-        <div className="absolute top-0 left-0 w-1/2 h-1/2 flex items-center justify-center p-8 pr-20 pb-12">
-          <div className="w-full max-w-[390px] flex flex-col pointer-events-auto">
-            <div className="mb-3.5">
-              <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight mb-0.5">
-                <span className="w-3 h-3 rounded-full bg-blue-500" />
-                下一步
-              </div>
-              <p className="text-sm text-slate-500 font-medium">已确认为真实面试并需推进的重点动作</p>
+        {/* ─── Q1 Top-Left: 下一步 (Centered at Visual Centroid: x=21%, y=21%) ─── */}
+        <div className="absolute top-[21%] left-[21%] -translate-x-1/2 -translate-y-1/2 w-[380px] flex flex-col pointer-events-auto">
+          <div className="mb-3.5">
+            <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight mb-0.5">
+              <span className="w-3 h-3 rounded-full bg-blue-500" />
+              下一步
             </div>
-
-            {nextStepItems.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-8 bg-white/30 backdrop-blur-md rounded-2xl border border-white/50">
-                <CheckCircle2 className="w-7 h-7 text-slate-400 mb-1.5 stroke-[1.5]" />
-                <p className="text-sm font-medium text-slate-500">当前没有需要推进的动作</p>
-              </div>
-            ) : (
-              <div className="space-y-3 flex-1">
-                {nextStepItems.map((item) => (
-                  <div
-                    key={item.id}
-                    onClick={() => navigate(`/career?opportunity=${item.id}`)}
-                    className="flex items-center justify-between p-4 bg-white/70 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl cursor-pointer group transition-all"
-                  >
-                    <div className="min-w-0 pr-3">
-                      <div className="text-base font-bold text-slate-900 group-hover:text-blue-600 truncate mb-0.5">
-                        推进 {item.step}
-                      </div>
-                      <div className="text-sm text-slate-500 truncate">{item.company} · {item.title}</div>
-                    </div>
-                    <ArrowUpRight size={18} className="text-slate-400 group-hover:text-blue-600 shrink-0" />
-                  </div>
-                ))}
-              </div>
-            )}
+            <p className="text-sm text-slate-500 font-medium">已确认为真实面试并需推进的重点动作</p>
           </div>
+
+          {nextStepItems.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-8 bg-white/40 backdrop-blur-md rounded-2xl border border-white/60">
+              <CheckCircle2 className="w-7 h-7 text-slate-400 mb-1.5 stroke-[1.5]" />
+              <p className="text-sm font-medium text-slate-500">当前没有需要推进的动作</p>
+            </div>
+          ) : (
+            <div className="space-y-3 flex-1">
+              {nextStepItems.map((item) => (
+                <div
+                  key={item.id}
+                  onClick={() => navigate(`/career?opportunity=${item.id}`)}
+                  className="flex items-center justify-between p-4 bg-white/75 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl cursor-pointer group transition-all"
+                >
+                  <div className="min-w-0 pr-3">
+                    <div className="text-base font-bold text-slate-900 group-hover:text-blue-600 truncate mb-0.5">
+                      推进 {item.step}
+                    </div>
+                    <div className="text-sm text-slate-500 truncate">{item.company} · {item.title}</div>
+                  </div>
+                  <ArrowUpRight size={18} className="text-slate-400 group-hover:text-blue-600 shrink-0" />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* ─── Q2 Top-Right: 待我确认 (Identical Sized Stepped Card Stack) ─── */}
-        <div className="absolute top-0 right-0 w-1/2 h-1/2 flex items-center justify-center p-8 pl-20 pb-12">
-          <div className="w-full max-w-[400px] flex flex-col pointer-events-auto">
-            <div className="flex items-center justify-between mb-3 shrink-0">
-              <div>
-                <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight">
-                  <span className="w-3 h-3 rounded-full bg-amber-500" />
-                  待我确认
-                </div>
-                <p className="text-sm text-slate-500 font-medium mt-0.5">需授权或确认的事实与外部动作</p>
+        {/* ─── Q2 Top-Right: 待我确认 (Centered at Visual Centroid: x=79%, y=21%) ─── */}
+        <div className="absolute top-[21%] right-[21%] translate-x-1/2 -translate-y-1/2 w-[390px] flex flex-col pointer-events-auto">
+          <div className="flex items-center justify-between mb-3 shrink-0">
+            <div>
+              <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight">
+                <span className="w-3 h-3 rounded-full bg-amber-500" />
+                待我确认
               </div>
-              <span className="text-xs font-bold px-3 py-0.5 rounded-full bg-amber-100/90 text-amber-800 border border-amber-200/60">
-                {tasks.length} 待决
-              </span>
+              <p className="text-sm text-slate-500 font-medium mt-0.5">需授权或确认的事实与外部动作</p>
             </div>
+            <span className="text-xs font-bold px-3 py-0.5 rounded-full bg-amber-100/90 text-amber-800 border border-amber-200/60">
+              {tasks.length} 待决
+            </span>
+          </div>
 
-            {/* Stepped Physical Card Stack Container (bounded to 240px) */}
-            <div className="relative w-full h-[240px] overflow-visible">
-              <AnimatePresence mode="popLayout">
-                {tasks.length > 0 ? (
-                  tasks.map((task, idx) => {
-                    const isTop = idx === 0;
-                    const topOffset = isTop ? (tasks.length - 1) * 32 : (tasks.length - 1 - idx) * 32;
-                    const zIndex = isTop ? 30 : 20 - idx;
-                    const bgGradientClass = task.bgGradient ? `bg-gradient-to-r ${task.bgGradient}` : 'bg-gradient-to-r from-amber-100 to-amber-50';
-                    const headerTextClass = task.headerTextColor || 'text-slate-900';
+          {/* Stepped Physical Card Stack Container */}
+          <div className="relative w-full h-[240px] overflow-visible">
+            <AnimatePresence mode="popLayout">
+              {tasks.length > 0 ? (
+                tasks.map((task, idx) => {
+                  const isTop = idx === 0;
+                  const topOffset = isTop ? (tasks.length - 1) * 32 : (tasks.length - 1 - idx) * 32;
+                  const zIndex = isTop ? 30 : 20 - idx;
+                  const bgGradientClass = task.bgGradient ? `bg-gradient-to-r ${task.bgGradient}` : 'bg-gradient-to-r from-amber-100 to-amber-50';
+                  const headerTextClass = task.headerTextColor || 'text-slate-900';
 
-                    if (!isTop) {
-                      // ── Behind Card: Full-sized card stepping behind ──
-                      return (
-                        <motion.div
-                          key={task.id}
-                          layout
-                          initial={{ opacity: 0, y: -10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, x: 220 }}
-                          transition={{ duration: 0.25 }}
-                          onClick={() => handlePromoteTask(task.id)}
-                          style={{ top: `${topOffset}px`, zIndex }}
-                          className={`absolute left-0 w-full h-[165px] ${bgGradientClass} border border-white/80 shadow-[0_4px_16px_rgba(15,23,42,0.04)] rounded-2xl p-3.5 flex flex-col justify-between cursor-pointer transition-all hover:brightness-105`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2 min-w-0 pr-2">
-                              <span className={`text-sm font-bold ${headerTextClass} truncate`}>
-                                {task.title}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <span className={`text-xs font-semibold ${headerTextClass} opacity-80`}>
-                                {task.statusHint || task.badge}
-                              </span>
-                              <ChevronRight size={14} className="opacity-50" />
-                            </div>
-                          </div>
-                          <div className="text-xs text-slate-500/40 select-none pointer-events-none truncate pt-1">
-                            {task.desc}
-                          </div>
-                        </motion.div>
-                      );
-                    }
-
-                    // ── Front Active Card: Full-sized card expanded on top ──
+                  if (!isTop) {
+                    // ── Behind Card: Full-sized card stepping behind ──
                     return (
                       <motion.div
                         key={task.id}
                         layout
-                        initial={{ opacity: 0, y: 15, scale: 0.96 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, x: 240, scale: 0.92 }}
-                        transition={{ duration: 0.28, ease: 'easeOut' }}
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, x: 220 }}
+                        transition={{ duration: 0.25 }}
+                        onClick={() => handlePromoteTask(task.id)}
                         style={{ top: `${topOffset}px`, zIndex }}
-                        className="absolute left-0 w-full h-[165px] bg-white/95 backdrop-blur-2xl border border-white shadow-[0_14px_32px_rgba(15,23,42,0.08)] rounded-2xl p-3.5 flex flex-col justify-between"
+                        className={`absolute left-0 w-full h-[165px] ${bgGradientClass} border border-white/80 shadow-[0_4px_16px_rgba(15,23,42,0.04)] rounded-2xl p-3.5 flex flex-col justify-between cursor-pointer transition-all hover:brightness-105`}
                       >
-                        <div>
-                          <div className="flex items-start justify-between gap-1.5 mb-1">
-                            <div className="flex items-center gap-2 flex-1 min-w-0">
-                              <div className="w-5 h-5 rounded-full bg-amber-500/15 text-amber-600 flex items-center justify-center shrink-0">
-                                <Sparkles size={12} />
-                              </div>
-                              <h3 className="text-sm font-bold text-slate-900 leading-snug truncate">
-                                {task.title}
-                              </h3>
-                            </div>
-                            <div className="text-[11px] font-bold text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded-md shrink-0 border border-amber-200/60">
-                              {task.badge}
-                            </div>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 min-w-0 pr-2">
+                            <span className={`text-sm font-bold ${headerTextClass} truncate`}>
+                              {task.title}
+                            </span>
                           </div>
-
-                          <p className="text-xs text-slate-600 leading-relaxed line-clamp-1 mb-1.5">
-                            {task.desc}
-                          </p>
-
-                          <div className="bg-amber-50/70 border border-amber-200/50 py-1 px-2.5 text-xs text-amber-900 flex items-center gap-1.5 rounded-lg">
-                            <span className="font-semibold text-amber-700 shrink-0 text-[11px]">建议:</span>
-                            <span className="truncate font-medium text-[11px]">{task.copilotTip}</span>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <span className={`text-xs font-semibold ${headerTextClass} opacity-80`}>
+                              {task.statusHint || task.badge}
+                            </span>
+                            <ChevronRight size={14} className="opacity-50" />
                           </div>
                         </div>
-
-                        <div className="flex gap-2 pt-0.5">
-                          <input
-                            type="text"
-                            placeholder="补充批注或确认意见…"
-                            className="flex-1 text-xs bg-slate-50/80 border border-slate-200/80 rounded-lg px-3 h-8 outline-none focus:bg-white focus:border-blue-500 transition-colors"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleConfirm(task.id)}
-                            className="px-3.5 h-8 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg transition-colors whitespace-nowrap shadow-sm hover:shadow cursor-pointer"
-                          >
-                            确认执行
-                          </button>
+                        <div className="text-xs text-slate-500/40 select-none pointer-events-none truncate pt-1">
+                          {task.desc}
                         </div>
                       </motion.div>
                     );
-                  })
-                ) : (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="absolute inset-0 flex flex-col items-center justify-center py-6 bg-white/30 backdrop-blur-md rounded-2xl border border-white/50"
-                  >
-                    <CheckCircle2 className="w-7 h-7 text-slate-400 mb-1.5 stroke-[1.5]" />
-                    <p className="text-sm font-medium text-slate-500">今日待办已全部处理完毕</p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
+                  }
+
+                  // ── Front Active Card: Full-sized card expanded on top ──
+                  return (
+                    <motion.div
+                      key={task.id}
+                      layout
+                      initial={{ opacity: 0, y: 15, scale: 0.96 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, x: 240, scale: 0.92 }}
+                      transition={{ duration: 0.28, ease: 'easeOut' }}
+                      style={{ top: `${topOffset}px`, zIndex }}
+                      className="absolute left-0 w-full h-[165px] bg-white/95 backdrop-blur-2xl border border-white shadow-[0_14px_32px_rgba(15,23,42,0.08)] rounded-2xl p-3.5 flex flex-col justify-between"
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-1.5 mb-1">
+                          <div className="flex items-center gap-2 flex-1 min-w-0">
+                            <div className="w-5 h-5 rounded-full bg-amber-500/15 text-amber-600 flex items-center justify-center shrink-0">
+                              <Sparkles size={12} />
+                            </div>
+                            <h3 className="text-sm font-bold text-slate-900 leading-snug truncate">
+                              {task.title}
+                            </h3>
+                          </div>
+                          <div className="text-[11px] font-bold text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded-md shrink-0 border border-amber-200/60">
+                            {task.badge}
+                          </div>
+                        </div>
+
+                        <p className="text-xs text-slate-600 leading-relaxed line-clamp-1 mb-1.5">
+                          {task.desc}
+                        </p>
+
+                        <div className="bg-amber-50/70 border border-amber-200/50 py-1 px-2.5 text-xs text-amber-900 flex items-center gap-1.5 rounded-lg">
+                          <span className="font-semibold text-amber-700 shrink-0 text-[11px]">建议:</span>
+                          <span className="truncate font-medium text-[11px]">{task.copilotTip}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 pt-0.5">
+                        <input
+                          type="text"
+                          placeholder="补充批注或确认意见…"
+                          className="flex-1 text-xs bg-slate-50/80 border border-slate-200/80 rounded-lg px-3 h-8 outline-none focus:bg-white focus:border-blue-500 transition-colors"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleConfirm(task.id)}
+                          className="px-3.5 h-8 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg transition-colors whitespace-nowrap shadow-sm hover:shadow cursor-pointer"
+                        >
+                          确认执行
+                        </button>
+                      </div>
+                    </motion.div>
+                  );
+                })
+              ) : (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="absolute inset-0 flex flex-col items-center justify-center py-6 bg-white/30 backdrop-blur-md rounded-2xl border border-white/50"
+                >
+                  <CheckCircle2 className="w-7 h-7 text-slate-400 mb-1.5 stroke-[1.5]" />
+                  <p className="text-sm font-medium text-slate-500">今日待办已全部处理完毕</p>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
 
-        {/* ─── Q3 Bottom-Left: 求职动态 (Career Stream) ─── */}
-        <div className="absolute bottom-0 left-0 w-1/2 h-1/2 flex items-center justify-center p-8 pr-20 pt-12">
-          <div className="w-full max-w-[390px] flex flex-col pointer-events-auto">
-            <div className="flex items-center justify-between mb-3.5">
-              <div>
-                <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight">
-                  <span className="w-3 h-3 rounded-full bg-emerald-500" />
-                  求职动态
-                </div>
-                <p className="text-sm text-slate-500 font-medium mt-0.5">近期岗位状态变更与最新回执</p>
+        {/* ─── Q3 Bottom-Left: 求职动态 (Centered at Visual Centroid: x=21%, y=79%) ─── */}
+        <div className="absolute bottom-[21%] left-[21%] -translate-x-1/2 translate-y-1/2 w-[380px] flex flex-col pointer-events-auto">
+          <div className="flex items-center justify-between mb-3.5">
+            <div>
+              <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight">
+                <span className="w-3 h-3 rounded-full bg-emerald-500" />
+                求职动态
               </div>
-              <button
-                type="button"
+              <p className="text-sm text-slate-500 font-medium mt-0.5">近期岗位状态变更与最新回执</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate('/career')}
+              className="text-sm text-slate-500 hover:text-emerald-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
+            >
+              全部 <ArrowUpRight className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="space-y-3 flex-1">
+            {careerEvents.map((ev) => (
+              <div
+                key={ev.id}
                 onClick={() => navigate('/career')}
-                className="text-sm text-slate-500 hover:text-emerald-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
+                className="flex items-center justify-between p-4 bg-white/75 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl cursor-pointer group transition-all"
               >
-                全部 <ArrowUpRight className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="flex-1 min-h-0 space-y-3">
-              {careerEvents.map((ev) => (
-                <div
-                  key={ev.id}
-                  onClick={() => navigate('/career')}
-                  className="flex items-center justify-between p-4 bg-white/70 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl cursor-pointer group transition-all"
-                >
-                  <span className="text-base font-bold text-slate-900 group-hover:text-emerald-700 truncate pr-3">
-                    {ev.company} · {ev.title}
-                  </span>
-                  <span className={`text-xs font-semibold shrink-0 bg-white/80 px-3 py-1 rounded-full border border-white/80 ${ev.isClosed ? 'text-slate-400' : 'text-emerald-600'}`}>
-                    {ev.step}
-                  </span>
-                </div>
-              ))}
-            </div>
+                <span className="text-base font-bold text-slate-900 group-hover:text-emerald-700 truncate pr-3">
+                  {ev.company} · {ev.title}
+                </span>
+                <span className={`text-xs font-semibold shrink-0 bg-white/80 px-3 py-1 rounded-full border border-white/80 ${ev.isClosed ? 'text-slate-400' : 'text-emerald-600'}`}>
+                  {ev.step}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* ─── Q4 Bottom-Right: Copilot 工作 (Agent Tasks) ─── */}
-        <div className="absolute bottom-0 right-0 w-1/2 h-1/2 flex items-center justify-center p-8 pl-20 pt-12">
-          <div className="w-full max-w-[400px] flex flex-col pointer-events-auto">
-            <div className="flex items-center justify-between mb-3.5">
-              <div>
-                <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight">
-                  <span className="w-3 h-3 rounded-full bg-purple-500" />
-                  Copilot 工作
-                </div>
-                <p className="text-sm text-slate-500 font-medium mt-0.5">AI Agent 常驻后台巡检与分析任务</p>
+        {/* ─── Q4 Bottom-Right: Copilot 工作 (Centered at Visual Centroid: x=79%, y=79%) ─── */}
+        <div className="absolute bottom-[21%] right-[21%] translate-x-1/2 translate-y-1/2 w-[390px] flex flex-col pointer-events-auto">
+          <div className="flex items-center justify-between mb-3.5">
+            <div>
+              <div className="flex items-center gap-2.5 text-slate-900 font-black text-lg tracking-tight">
+                <span className="w-3 h-3 rounded-full bg-purple-500" />
+                Copilot 工作
               </div>
-              <button
-                type="button"
+              <p className="text-sm text-slate-500 font-medium mt-0.5">AI Agent 常驻后台巡检与分析任务</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate('/activities')}
+              className="text-sm text-slate-500 hover:text-purple-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
+            >
+              控制台 <ArrowUpRight className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="space-y-3 flex-1">
+            {copilotWork.map((item) => (
+              <div
+                key={item.id}
                 onClick={() => navigate('/activities')}
-                className="text-sm text-slate-500 hover:text-purple-700 cursor-pointer flex items-center gap-0.5 font-bold transition-colors"
+                className="bg-white/75 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl p-4 flex items-center justify-between cursor-pointer group transition-all"
               >
-                控制台 <ArrowUpRight className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="flex-1 min-h-0 space-y-3">
-              {copilotWork.map((item) => (
-                <div
-                  key={item.id}
-                  onClick={() => navigate('/activities')}
-                  className="bg-white/70 hover:bg-white/95 backdrop-blur-md shadow-[0_4px_20px_rgba(15,23,42,0.03)] border border-white/80 rounded-2xl p-4 flex items-center justify-between cursor-pointer group transition-all"
-                >
-                  <div className="truncate pr-3 min-w-0">
-                    <div className="text-base font-bold text-slate-900 group-hover:text-purple-700 truncate mb-0.5">{item.title}</div>
-                    <div className="text-sm text-slate-500 truncate">{item.detail}</div>
-                  </div>
-                  <span className={`px-3 py-1.5 rounded-full flex items-center gap-1.5 text-xs shrink-0 font-bold ${
-                    item.state === 'active'
-                      ? 'bg-blue-50 text-blue-700 border border-blue-100'
-                      : 'bg-slate-100 text-slate-500 border border-slate-200'
-                  }`}>
-                    {item.state === 'active' && <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />}
-                    {item.state === 'active' ? '运行中' : '待命中'}
-                  </span>
+                <div className="truncate pr-3 min-w-0">
+                  <div className="text-base font-bold text-slate-900 group-hover:text-purple-700 truncate mb-0.5">{item.title}</div>
+                  <div className="text-sm text-slate-500 truncate">{item.detail}</div>
                 </div>
-              ))}
-            </div>
+                <span className={`px-3 py-1.5 rounded-full flex items-center gap-1.5 text-xs shrink-0 font-bold ${
+                  item.state === 'active'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-100'
+                    : 'bg-slate-100 text-slate-500 border border-slate-200'
+                }`}>
+                  {item.state === 'active' && <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />}
+                  {item.state === 'active' ? '运行中' : '待命中'}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
 
