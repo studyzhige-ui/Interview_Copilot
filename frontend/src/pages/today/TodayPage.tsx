@@ -129,84 +129,99 @@ export function TodayPage() {
   };
 
   return (
-    <div className="relative w-full h-full overflow-hidden select-none font-sans bg-[#F9FAFD]">
+    <div className="relative w-full h-full overflow-hidden select-none font-sans bg-[#FAFBFD]">
       
-      {/* ═══ 1. Ambient Background Glows in 4 Quadrants ═══ */}
-      <div className="absolute inset-0 z-0 pointer-events-none">
-        <div className="absolute -top-[10%] -left-[10%] w-[55%] h-[55%] rounded-full bg-blue-100/60 blur-[130px]" />
-        <div className="absolute -top-[10%] -right-[10%] w-[55%] h-[55%] rounded-full bg-amber-100/50 blur-[130px]" />
-        <div className="absolute -bottom-[10%] -left-[10%] w-[55%] h-[55%] rounded-full bg-emerald-100/50 blur-[130px]" />
-        <div className="absolute -bottom-[10%] -right-[10%] w-[55%] h-[55%] rounded-full bg-indigo-100/50 blur-[130px]" />
+      {/* ═══ 1. Continuous Multi-Color Aurora Mesh Flow ═══ */}
+      {/* Seamless radial blooms converging at center and radiating to the four edges */}
+      <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
+        {/* Top-Left: Sky Blue & Cyan */}
+        <div className="absolute -top-[15%] -left-[15%] w-[65%] h-[65%] rounded-full bg-gradient-to-br from-sky-200/50 via-blue-200/40 to-transparent blur-[120px]" />
+        {/* Top-Right: Warm Amber & Coral Red */}
+        <div className="absolute -top-[15%] -right-[15%] w-[65%] h-[65%] rounded-full bg-gradient-to-bl from-rose-200/50 via-amber-200/40 to-transparent blur-[120px]" />
+        {/* Bottom-Left: Fresh Mint & Emerald */}
+        <div className="absolute -bottom-[15%] -left-[15%] w-[65%] h-[65%] rounded-full bg-gradient-to-tr from-emerald-200/50 via-teal-200/40 to-transparent blur-[120px]" />
+        {/* Bottom-Right: Soft Violet & Indigo */}
+        <div className="absolute -bottom-[15%] -right-[15%] w-[65%] h-[65%] rounded-full bg-gradient-to-tl from-indigo-200/50 via-purple-200/40 to-transparent blur-[120px]" />
+        {/* Center Radiant Convergence */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[55%] h-[55%] rounded-full bg-white/70 blur-[90px]" />
       </div>
 
-      {/* ═══ 2. Gemini Astroid Sparkle Core (SVG) ═══ */}
-      {/* Outer Diffusion Glow */}
+      {/* ═══ 2. Full-Span Apple Liquid Glass Astroid Star (Vertices touch 4 boundaries) ═══ */}
       <svg
-        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[520px] h-[520px] pointer-events-none z-0 opacity-40 blur-3xl"
-        viewBox="0 0 500 500"
+        className="absolute inset-0 w-full h-full pointer-events-none z-10"
+        viewBox="0 0 1000 700"
+        preserveAspectRatio="none"
         xmlns="http://www.w3.org/2000/svg"
       >
-        <path
-          d="M 250 20 C 250 148 352 250 480 250 C 352 250 250 352 250 480 C 250 352 148 250 20 250 C 148 250 250 148 250 20 Z"
-          fill="url(#geminiGlowGradient)"
-        />
         <defs>
-          <radialGradient id="geminiGlowGradient" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#60A5FA" />
-            <stop offset="40%" stopColor="#F59E0B" />
-            <stop offset="70%" stopColor="#EF4444" />
-            <stop offset="100%" stopColor="#3B82F6" />
-          </radialGradient>
-        </defs>
-      </svg>
+          {/* Liquid Glass Translucent Gradient */}
+          <linearGradient id="liquidGlassSurface" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.65" />
+            <stop offset="30%" stopColor="#F8FAFC" stopOpacity="0.45" />
+            <stop offset="70%" stopColor="#F1F5F9" stopOpacity="0.38" />
+            <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0.6" />
+          </linearGradient>
 
-      {/* Sharp Multi-color Astroid Sparkle */}
-      <svg
-        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[420px] h-[420px] pointer-events-none z-10 drop-shadow-[0_12px_48px_rgba(66,133,244,0.22)]"
-        viewBox="0 0 500 500"
-        xmlns="http://www.w3.org/2000/svg"
-      >
-        <defs>
-          <filter id="starInternalBlur">
-            <feGaussianBlur stdDeviation="35" />
+          {/* Specular Refraction Rim Highlight */}
+          <linearGradient id="liquidGlassRimStroke" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="rgba(255, 255, 255, 0.95)" />
+            <stop offset="25%" stopColor="rgba(226, 232, 240, 0.6)" />
+            <stop offset="50%" stopColor="rgba(255, 255, 255, 0.85)" />
+            <stop offset="75%" stopColor="rgba(203, 213, 225, 0.5)" />
+            <stop offset="100%" stopColor="rgba(255, 255, 255, 0.95)" />
+          </linearGradient>
+
+          {/* Liquid Glass Drop Shadow Filter */}
+          <filter id="liquidGlassShadow" x="-10%" y="-10%" width="120%" height="120%">
+            <feDropShadow dx="0" dy="16" stdDeviation="30" floodColor="#0F172A" floodOpacity="0.04" />
+            <feDropShadow dx="0" dy="4" stdDeviation="10" floodColor="#0F172A" floodOpacity="0.03" />
           </filter>
-          <clipPath id="astroidStarClip">
-            <path d="M 250 20 C 250 148 352 250 480 250 C 352 250 250 352 250 480 C 250 352 148 250 20 250 C 148 250 250 148 250 20 Z" />
-          </clipPath>
         </defs>
 
-        <g clipPath="url(#astroidStarClip)">
-          {/* Base Sky Blue */}
-          <rect width="500" height="500" fill="#2563EB" />
-          {/* Top: Coral Red */}
-          <circle cx="250" cy="60" r="180" fill="#FF453A" filter="url(#starInternalBlur)" />
-          {/* Left / Bottom-Left: Yellow & Amber */}
-          <circle cx="80" cy="270" r="170" fill="#FBBC05" filter="url(#starInternalBlur)" />
-          {/* Bottom: Vivid Green */}
-          <circle cx="230" cy="430" r="170" fill="#34A853" filter="url(#starInternalBlur)" />
-          {/* Right: Vibrant Google Blue */}
-          <circle cx="420" cy="250" r="190" fill="#4285F4" filter="url(#starInternalBlur)" />
-          {/* Center Luminous Soft Light */}
-          <circle cx="260" cy="240" r="130" fill="#93C5FD" opacity="0.9" filter="url(#starInternalBlur)" />
-          <circle cx="250" cy="250" r="70" fill="#FFFFFF" opacity="0.4" filter="url(#starInternalBlur)" />
-        </g>
+        {/* ── Main Liquid Glass 4-Pointed Star Body ── */}
+        {/* Vertices touch: (500,0), (1000,350), (500,700), (0,350) */}
+        <path
+          d="M 500 0 C 500 180, 780 350, 1000 350 C 780 350, 500 520, 500 700 C 500 520, 220 350, 0 350 C 220 350, 500 180, 500 0 Z"
+          fill="url(#liquidGlassSurface)"
+          stroke="url(#liquidGlassRimStroke)"
+          strokeWidth="1.5"
+          filter="url(#liquidGlassShadow)"
+        />
+
+        {/* Inner Specular Light Glint along Top-Left & Bottom-Right Rims */}
+        <path
+          d="M 500 0 C 500 180, 220 350, 0 350"
+          fill="none"
+          stroke="rgba(255, 255, 255, 0.85)"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          opacity="0.9"
+        />
+        <path
+          d="M 1000 350 C 780 350, 500 520, 500 700"
+          fill="none"
+          stroke="rgba(255, 255, 255, 0.75)"
+          strokeWidth="2"
+          strokeLinecap="round"
+          opacity="0.8"
+        />
       </svg>
 
-      {/* ═══ 3. Central Copilot Controls (Integrated seamlessly on the star) ═══ */}
+      {/* ═══ 3. Central Copilot Nexus (Embedded on the Liquid Glass Center) ═══ */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 flex flex-col items-center pointer-events-auto">
         <div className="flex flex-col items-center mb-6">
           <h2 className="text-2xl font-black text-slate-800 tracking-tight drop-shadow-sm">
             {greeting}
           </h2>
-          <p className="text-xs font-semibold text-slate-600 mt-1 drop-shadow-sm">
+          <p className="text-xs font-semibold text-slate-500 mt-1">
             今日有 <span className="text-blue-600 font-bold">{tasks.length}</span> 项待办事项
           </p>
         </div>
 
-        {/* Integrated Frosted Glass Capsule */}
+        {/* Integrated Frosted Glass Capsule Searchbox */}
         <form 
           onSubmit={handleStartCopilot} 
-          className="w-[430px] bg-white/85 backdrop-blur-xl border border-white/80 shadow-[0_12px_40px_rgba(0,0,0,0.08)] rounded-full px-5 py-3 flex items-center gap-3 transition-all hover:bg-white hover:shadow-[0_16px_48px_rgba(0,0,0,0.12)]"
+          className="w-[430px] bg-white/80 backdrop-blur-2xl border border-white/90 shadow-[0_12px_36px_rgba(15,23,42,0.06)] rounded-full px-5 py-3 flex items-center gap-3 transition-all hover:bg-white/95 hover:shadow-[0_16px_44px_rgba(15,23,42,0.09)]"
         >
           <Sparkles className="w-4 h-4 text-blue-500 shrink-0" />
           <input
@@ -225,11 +240,11 @@ export function TodayPage() {
         </form>
       </div>
 
-      {/* ═══ 4. Four Borderless Immersive Quadrants ═══ */}
+      {/* ═══ 4. Four Distinct Quadrants (Outside the Liquid Glass Flanks) ═══ */}
       <div className="relative z-20 w-full h-full grid grid-cols-2 grid-rows-2 pointer-events-none">
 
         {/* ─── Q1 Top-Left: 下一步 ─── */}
-        <div className="flex items-center justify-center p-8 pr-32 pb-24">
+        <div className="flex items-center justify-center p-8 pr-36 pb-24">
           <div className="w-full max-w-[310px] flex flex-col pointer-events-auto">
             <div className="mb-3.5">
               <div className="flex items-center gap-2 text-slate-900 font-bold text-sm mb-0.5">
@@ -240,7 +255,7 @@ export function TodayPage() {
             </div>
 
             {nextStepItems.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-6 bg-white/40 backdrop-blur-sm rounded-2xl">
+              <div className="flex flex-col items-center justify-center py-6 bg-white/40 backdrop-blur-md rounded-2xl border border-white/60">
                 <CheckCircle2 className="w-6 h-6 text-slate-400 mb-1.5 stroke-[1.5]" />
                 <p className="text-xs font-medium text-slate-500">当前没有需要推进的动作</p>
               </div>
@@ -250,7 +265,7 @@ export function TodayPage() {
                   <div
                     key={item.id}
                     onClick={() => navigate(`/career?opportunity=${item.id}`)}
-                    className="flex items-center justify-between p-3 bg-white/70 hover:bg-white/95 backdrop-blur-md shadow-sm hover:shadow-md rounded-2xl cursor-pointer group transition-all"
+                    className="flex items-center justify-between p-3.5 bg-white/60 hover:bg-white/90 backdrop-blur-md shadow-[0_4px_16px_rgba(15,23,42,0.03)] border border-white/70 rounded-2xl cursor-pointer group transition-all"
                   >
                     <div className="min-w-0 pr-3">
                       <div className="text-xs font-bold text-slate-800 group-hover:text-blue-700 truncate mb-0.5">
@@ -266,15 +281,15 @@ export function TodayPage() {
           </div>
         </div>
 
-        {/* ─── Q2 Top-Right: 待我确认 (Card Deck Stack) ─── */}
-        <div className="flex items-center justify-center p-8 pl-32 pb-24">
+        {/* ─── Q2 Top-Right: 待我确认 (3D Stacked Card Deck) ─── */}
+        <div className="flex items-center justify-center p-8 pl-36 pb-24">
           <div className="w-full max-w-[330px] flex flex-col pointer-events-auto">
             <div className="flex items-center justify-between mb-3.5 shrink-0">
               <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
                 <span className="w-2 h-2 rounded-full bg-amber-500" />
                 待我确认
               </div>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100/80 text-amber-800">
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100/80 text-amber-800 border border-amber-200/50">
                 {tasks.length} 待决
               </span>
             </div>
@@ -297,17 +312,17 @@ export function TodayPage() {
                         }}
                         exit={{ opacity: 0, x: 200, scale: 0.9 }}
                         transition={{ duration: 0.3, ease: 'easeOut' }}
-                        className={`absolute top-0 left-0 w-full bg-white/90 backdrop-blur-xl shadow-[0_8px_28px_rgba(0,0,0,0.06)] rounded-2xl p-4 flex flex-col gap-2 ${!isTop && 'pointer-events-none'}`}
+                        className={`absolute top-0 left-0 w-full bg-white/90 backdrop-blur-xl border border-white/80 shadow-[0_8px_28px_rgba(15,23,42,0.06)] rounded-2xl p-4 flex flex-col gap-2 ${!isTop && 'pointer-events-none'}`}
                         style={{ transformOrigin: 'top center' }}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <h3 className="text-xs font-bold text-slate-900 leading-snug flex-1">{task.title}</h3>
-                          <div className="text-[9px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded shrink-0">
+                          <div className="text-[9px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded shrink-0 border border-amber-200/60">
                             {task.badge}
                           </div>
                         </div>
                         <p className="text-[10px] text-slate-600 leading-tight line-clamp-2">{task.desc}</p>
-                        <div className="bg-amber-50/70 py-1 px-2 text-[10px] text-amber-800 flex items-center gap-1.5 rounded-lg">
+                        <div className="bg-amber-50/60 border border-amber-100/70 py-1 px-2 text-[10px] text-amber-800 flex items-center gap-1.5 rounded-lg">
                           <Sparkles size={11} className="text-amber-500 shrink-0" />
                           <span className="truncate">{task.copilotTip}</span>
                         </div>
@@ -334,7 +349,7 @@ export function TodayPage() {
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className="absolute inset-0 flex flex-col items-center justify-center py-8 bg-white/40 backdrop-blur-sm rounded-2xl"
+                    className="absolute inset-0 flex flex-col items-center justify-center py-8 bg-white/40 backdrop-blur-md rounded-2xl border border-white/60"
                   >
                     <CheckCircle2 className="w-6 h-6 text-slate-400 mb-1.5 stroke-[1.5]" />
                     <p className="text-xs font-medium text-slate-500">全部处理完毕</p>
@@ -346,7 +361,7 @@ export function TodayPage() {
         </div>
 
         {/* ─── Q3 Bottom-Left: 求职动态 ─── */}
-        <div className="flex items-center justify-center p-8 pr-32 pt-24">
+        <div className="flex items-center justify-center p-8 pr-36 pt-24">
           <div className="w-full max-w-[310px] flex flex-col pointer-events-auto">
             <div className="flex items-center justify-between mb-3.5">
               <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
@@ -366,12 +381,12 @@ export function TodayPage() {
                 <div
                   key={ev.id}
                   onClick={() => navigate('/career')}
-                  className="flex items-center justify-between p-3 bg-white/70 hover:bg-white/95 backdrop-blur-md shadow-sm hover:shadow-md rounded-2xl cursor-pointer group transition-all"
+                  className="flex items-center justify-between p-3.5 bg-white/60 hover:bg-white/90 backdrop-blur-md shadow-[0_4px_16px_rgba(15,23,42,0.03)] border border-white/70 rounded-2xl cursor-pointer group transition-all"
                 >
                   <span className="text-xs font-bold text-slate-800 group-hover:text-emerald-700 truncate pr-3">
                     {ev.company} · {ev.title}
                   </span>
-                  <span className={`text-[10px] font-medium shrink-0 bg-white/80 px-2 py-0.5 rounded-full ${ev.isClosed ? 'text-slate-400' : 'text-emerald-600'}`}>
+                  <span className={`text-[10px] font-medium shrink-0 bg-white/80 px-2 py-0.5 rounded-full border border-white/80 ${ev.isClosed ? 'text-slate-400' : 'text-emerald-600'}`}>
                     {ev.step}
                   </span>
                 </div>
@@ -381,7 +396,7 @@ export function TodayPage() {
         </div>
 
         {/* ─── Q4 Bottom-Right: Copilot 工作 ─── */}
-        <div className="flex items-center justify-center p-8 pl-32 pt-24">
+        <div className="flex items-center justify-center p-8 pl-36 pt-24">
           <div className="w-full max-w-[330px] flex flex-col pointer-events-auto">
             <div className="flex items-center justify-between mb-3.5">
               <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
@@ -401,7 +416,7 @@ export function TodayPage() {
                 <div
                   key={item.id}
                   onClick={() => navigate('/activities')}
-                  className="bg-white/70 hover:bg-white/95 backdrop-blur-md shadow-sm hover:shadow-md rounded-2xl p-3 flex items-center justify-between cursor-pointer group transition-all"
+                  className="bg-white/60 hover:bg-white/90 backdrop-blur-md shadow-[0_4px_16px_rgba(15,23,42,0.03)] border border-white/70 rounded-2xl p-3 flex items-center justify-between cursor-pointer group transition-all"
                 >
                   <div className="truncate pr-3 min-w-0">
                     <div className="text-xs font-bold text-slate-800 group-hover:text-purple-700 truncate mb-0.5">{item.title}</div>
@@ -409,8 +424,8 @@ export function TodayPage() {
                   </div>
                   <span className={`px-2 py-0.5 rounded-full flex items-center gap-1.5 text-[9px] shrink-0 font-bold ${
                     item.state === 'active'
-                      ? 'bg-blue-50 text-blue-700'
-                      : 'bg-slate-100 text-slate-500'
+                      ? 'bg-blue-50 text-blue-700 border border-blue-100'
+                      : 'bg-slate-100 text-slate-500 border border-slate-200'
                   }`}>
                     {item.state === 'active' && <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />}
                     {item.state === 'active' ? '运行中' : '待命中'}

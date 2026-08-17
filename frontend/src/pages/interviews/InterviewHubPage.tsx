@@ -58,80 +58,95 @@ export function InterviewHubPage() {
   }
 
   return (
-    <div className="relative w-full h-full overflow-hidden select-none font-sans bg-[#F9FAFD]">
+    <div className="relative w-full h-full overflow-hidden select-none font-sans bg-[#FAFBFD]">
       
-      {/* ═══ 1. Ambient Background Glows ═══ */}
-      <div className="absolute inset-0 z-0 pointer-events-none">
-        <div className="absolute -top-[10%] left-1/2 -translate-x-1/2 w-[70%] h-[50%] rounded-full bg-blue-100/60 blur-[140px]" />
-        <div className="absolute -bottom-[10%] -left-[10%] w-[55%] h-[55%] rounded-full bg-emerald-100/50 blur-[140px]" />
-        <div className="absolute -bottom-[10%] -right-[10%] w-[55%] h-[55%] rounded-full bg-purple-100/50 blur-[140px]" />
+      {/* ═══ 1. Continuous Multi-Color Aurora Mesh Flow ═══ */}
+      <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
+        {/* Top: Sky Blue & Indigo Flow */}
+        <div className="absolute -top-[15%] left-1/2 -translate-x-1/2 w-[75%] h-[60%] rounded-full bg-gradient-to-b from-blue-200/50 via-indigo-200/35 to-transparent blur-[120px]" />
+        {/* Bottom-Left: Emerald & Mint Flow */}
+        <div className="absolute -bottom-[15%] -left-[15%] w-[65%] h-[65%] rounded-full bg-gradient-to-tr from-emerald-200/50 via-teal-200/35 to-transparent blur-[120px]" />
+        {/* Bottom-Right: Violet & Rose Flow */}
+        <div className="absolute -bottom-[15%] -right-[15%] w-[65%] h-[65%] rounded-full bg-gradient-to-tl from-purple-200/50 via-pink-200/35 to-transparent blur-[120px]" />
+        {/* Center Radiant Convergence */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[55%] h-[55%] rounded-full bg-white/70 blur-[90px]" />
       </div>
 
-      {/* ═══ 2. Three-Pointed Sparkle Core (SVG) ═══ */}
-      {/* Outer Glow */}
+      {/* ═══ 2. Full-Span Apple Liquid Glass 3-Pointed Star (Vertices touch boundaries) ═══ */}
       <svg
-        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[520px] h-[520px] pointer-events-none z-0 opacity-40 blur-3xl"
-        viewBox="0 0 500 500"
+        className="absolute inset-0 w-full h-full pointer-events-none z-10"
+        viewBox="0 0 1000 700"
+        preserveAspectRatio="none"
         xmlns="http://www.w3.org/2000/svg"
       >
-        <path
-          d="M 250 30 C 250 180 340 280 450 420 C 340 370 160 370 50 420 C 160 280 250 180 250 30 Z"
-          fill="url(#hubGlowGradient)"
-        />
         <defs>
-          <radialGradient id="hubGlowGradient" cx="50%" cy="55%" r="50%">
-            <stop offset="0%" stopColor="#818CF8" />
-            <stop offset="50%" stopColor="#34D399" />
-            <stop offset="100%" stopColor="#3B82F6" />
-          </radialGradient>
-        </defs>
-      </svg>
+          {/* Liquid Glass Translucent Gradient */}
+          <linearGradient id="hubGlassSurface" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.65" />
+            <stop offset="35%" stopColor="#F8FAFC" stopOpacity="0.45" />
+            <stop offset="65%" stopColor="#F1F5F9" stopOpacity="0.38" />
+            <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0.6" />
+          </linearGradient>
 
-      {/* Sharp Three-pointed Sparkle */}
-      <svg
-        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[420px] h-[420px] pointer-events-none z-10 drop-shadow-[0_12px_48px_rgba(99,102,241,0.22)]"
-        viewBox="0 0 500 500"
-        xmlns="http://www.w3.org/2000/svg"
-      >
-        <defs>
-          <filter id="hubInternalBlur">
-            <feGaussianBlur stdDeviation="35" />
+          {/* Specular Refraction Rim Highlight */}
+          <linearGradient id="hubGlassRimStroke" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="rgba(255, 255, 255, 0.95)" />
+            <stop offset="30%" stopColor="rgba(226, 232, 240, 0.6)" />
+            <stop offset="70%" stopColor="rgba(203, 213, 225, 0.5)" />
+            <stop offset="100%" stopColor="rgba(255, 255, 255, 0.95)" />
+          </linearGradient>
+
+          {/* Liquid Glass Drop Shadow Filter */}
+          <filter id="hubGlassShadow" x="-10%" y="-10%" width="120%" height="120%">
+            <feDropShadow dx="0" dy="16" stdDeviation="30" floodColor="#0F172A" floodOpacity="0.04" />
+            <feDropShadow dx="0" dy="4" stdDeviation="10" floodColor="#0F172A" floodOpacity="0.03" />
           </filter>
-          <clipPath id="triSparkleClip">
-            <path d="M 250 30 C 250 180 340 280 450 420 C 340 370 160 370 50 420 C 160 280 250 180 250 30 Z" />
-          </clipPath>
         </defs>
 
-        <g clipPath="url(#triSparkleClip)">
-          {/* Base Indigo */}
-          <rect width="500" height="500" fill="#4F46E5" />
-          {/* Top: Bright Blue */}
-          <circle cx="250" cy="70" r="180" fill="#38BDF8" filter="url(#hubInternalBlur)" />
-          {/* Bottom-Left: Emerald */}
-          <circle cx="100" cy="400" r="170" fill="#10B981" filter="url(#hubInternalBlur)" />
-          {/* Bottom-Right: Violet & Rose */}
-          <circle cx="400" cy="400" r="170" fill="#A855F7" filter="url(#hubInternalBlur)" />
-          {/* Center Luminous Core */}
-          <circle cx="250" cy="270" r="120" fill="#C7D2FE" opacity="0.9" filter="url(#hubInternalBlur)" />
-          <circle cx="250" cy="270" r="60" fill="#FFFFFF" opacity="0.5" filter="url(#hubInternalBlur)" />
-        </g>
+        {/* ── Main Liquid Glass 3-Pointed Star Body ── */}
+        {/* Vertices touch: (500,0), (1000,700), (0,700) */}
+        <path
+          d="M 500 0 C 500 240, 760 400, 1000 700 C 720 540, 280 540, 0 700 C 240 400, 500 240, 500 0 Z"
+          fill="url(#hubGlassSurface)"
+          stroke="url(#hubGlassRimStroke)"
+          strokeWidth="1.5"
+          filter="url(#hubGlassShadow)"
+        />
+
+        {/* Specular Inner Glints along the Concave Wings */}
+        <path
+          d="M 500 0 C 500 240, 240 400, 0 700"
+          fill="none"
+          stroke="rgba(255, 255, 255, 0.85)"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          opacity="0.9"
+        />
+        <path
+          d="M 500 0 C 500 240, 760 400, 1000 700"
+          fill="none"
+          stroke="rgba(255, 255, 255, 0.75)"
+          strokeWidth="2"
+          strokeLinecap="round"
+          opacity="0.8"
+        />
       </svg>
 
-      {/* ═══ 3. Central Copilot Controls ═══ */}
+      {/* ═══ 3. Central Copilot Controls (Inside the Liquid Glass Center) ═══ */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 flex flex-col items-center pointer-events-auto">
         <div className="flex flex-col items-center mb-6">
           <h2 className="text-2xl font-black text-slate-800 tracking-tight drop-shadow-sm flex items-center gap-2">
             智能面试中枢
           </h2>
-          <p className="text-xs font-semibold text-slate-600 mt-1 drop-shadow-sm">
+          <p className="text-xs font-semibold text-slate-500 mt-1">
             备战 · 对练 · 复盘全流程护航
           </p>
         </div>
 
-        {/* Integrated Frosted Glass Capsule */}
+        {/* Integrated Frosted Glass Capsule Searchbox */}
         <form 
           onSubmit={handleStartPrep} 
-          className="w-[430px] bg-white/85 backdrop-blur-xl border border-white/80 shadow-[0_12px_40px_rgba(0,0,0,0.08)] rounded-full px-5 py-3 flex items-center gap-3 transition-all hover:bg-white hover:shadow-[0_16px_48px_rgba(0,0,0,0.12)]"
+          className="w-[430px] bg-white/80 backdrop-blur-2xl border border-white/90 shadow-[0_12px_36px_rgba(15,23,42,0.06)] rounded-full px-5 py-3 flex items-center gap-3 transition-all hover:bg-white/95 hover:shadow-[0_16px_44px_rgba(15,23,42,0.09)]"
         >
           <Sparkles className="w-4 h-4 text-indigo-500 shrink-0" />
           <input
@@ -150,7 +165,7 @@ export function InterviewHubPage() {
         </form>
       </div>
 
-      {/* ═══ 4. Three Borderless Immersive Sectors ═══ */}
+      {/* ═══ 4. Three Distinct Sectors (Outside the Liquid Glass Wings) ═══ */}
       <div className="relative z-20 w-full h-full flex flex-col pointer-events-none">
         
         {/* ─── Top: 面试准备与考点速查 ─── */}
@@ -159,7 +174,7 @@ export function InterviewHubPage() {
             onClick={() => navigate('/general-chat?prompt=帮我做针对性面试备战与高频考点预测')}
             className="w-full max-w-lg flex flex-col items-center text-center cursor-pointer group pointer-events-auto"
           >
-            <div className="bg-white/80 backdrop-blur-md p-3 rounded-2xl shadow-sm mb-3 group-hover:scale-105 transition-transform">
+            <div className="bg-white/70 hover:bg-white/90 backdrop-blur-md p-3 rounded-2xl shadow-[0_4px_16px_rgba(15,23,42,0.03)] border border-white/80 mb-3 group-hover:scale-105 transition-all">
               <BookOpen size={22} className="text-blue-600" />
             </div>
             <h3 className="text-base font-bold text-slate-900 group-hover:text-blue-700 transition-colors mb-1.5">
@@ -169,9 +184,9 @@ export function InterviewHubPage() {
               智能解析目标岗位 JD、深挖业务背景、提炼核心追问考点与 STAR 结构化应答指南。
             </p>
             <div className="flex items-center justify-center gap-2 text-[11px] font-bold text-slate-500">
-              <span className="px-3 py-1 rounded-full bg-white/80 backdrop-blur-sm shadow-sm">JD 考点拆解</span>
-              <span className="px-3 py-1 rounded-full bg-white/80 backdrop-blur-sm shadow-sm">STAR 训练</span>
-              <span className="px-3 py-1 rounded-full bg-white/80 backdrop-blur-sm shadow-sm">业务深挖模拟</span>
+              <span className="px-3 py-1 rounded-full bg-white/70 backdrop-blur-sm border border-white/80 shadow-sm">JD 考点拆解</span>
+              <span className="px-3 py-1 rounded-full bg-white/70 backdrop-blur-sm border border-white/80 shadow-sm">STAR 训练</span>
+              <span className="px-3 py-1 rounded-full bg-white/70 backdrop-blur-sm border border-white/80 shadow-sm">业务深挖模拟</span>
             </div>
           </div>
         </div>
@@ -183,7 +198,7 @@ export function InterviewHubPage() {
           <div className="flex-1 flex items-center justify-center pl-12 pt-20 pb-10 pr-28">
             <div
               onClick={() => setSearchParams({ tab: 'review' })}
-              className="w-full max-w-[310px] flex flex-col items-start cursor-pointer group bg-white/70 hover:bg-white/95 backdrop-blur-md p-5 rounded-2xl shadow-sm hover:shadow-md transition-all pointer-events-auto"
+              className="w-full max-w-[310px] flex flex-col items-start cursor-pointer group bg-white/60 hover:bg-white/90 backdrop-blur-md p-5 rounded-2xl shadow-[0_4px_16px_rgba(15,23,42,0.03)] border border-white/70 hover:shadow-md transition-all pointer-events-auto"
             >
               <div className="flex items-center gap-3 mb-2.5">
                 <div className="p-2 rounded-xl bg-emerald-100/60 text-emerald-600 group-hover:bg-emerald-100 transition-colors">
@@ -206,7 +221,7 @@ export function InterviewHubPage() {
           <div className="flex-1 flex items-center justify-center pr-12 pt-20 pb-10 pl-28">
             <div
               onClick={() => setSearchParams({ tab: 'mock' })}
-              className="w-full max-w-[310px] flex flex-col items-start cursor-pointer group bg-white/70 hover:bg-white/95 backdrop-blur-md p-5 rounded-2xl shadow-sm hover:shadow-md transition-all pointer-events-auto"
+              className="w-full max-w-[310px] flex flex-col items-start cursor-pointer group bg-white/60 hover:bg-white/90 backdrop-blur-md p-5 rounded-2xl shadow-[0_4px_16px_rgba(15,23,42,0.03)] border border-white/70 hover:shadow-md transition-all pointer-events-auto"
             >
               <div className="flex items-center gap-3 mb-2.5">
                 <div className="p-2 rounded-xl bg-purple-100/60 text-purple-600 group-hover:bg-purple-100 transition-colors">
