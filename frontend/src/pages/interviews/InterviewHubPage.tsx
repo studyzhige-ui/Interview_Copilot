@@ -69,12 +69,12 @@ export function InterviewHubPage() {
         {/* Top-Right: Violet & Purple (模拟对练) */}
         <div className="absolute -top-[20%] -right-[20%] w-[70%] h-[70%] rounded-full bg-gradient-to-bl from-purple-200/55 via-indigo-200/40 to-transparent blur-[130px]" />
         {/* Bottom-Center: Emerald & Mint (真实复盘) */}
-        <div className="absolute -bottom-[20%] left-1/2 -translate-x-1/2 w-[80%] h-[70%] rounded-full bg-gradient-to-t from-emerald-200/55 via-teal-200/40 to-transparent blur-[130px]" />
+        <div className="absolute -bottom-[20%] left-1/2 -translate-x-1/2 w-[85%] h-[70%] rounded-full bg-gradient-to-t from-emerald-200/55 via-teal-200/40 to-transparent blur-[130px]" />
         {/* Center Luminous Convergence */}
         <div className="absolute top-[48%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-[50%] h-[50%] rounded-full bg-white/80 blur-[80px]" />
       </div>
 
-      {/* ═══ 2. Full-Span Apple Liquid Glass 3-Pointed Star (Snug waist wrapping center) ═══ */}
+      {/* ═══ 2. Full-Span Apple Liquid Glass 3-Pointed Star (Bottom curve snugly hugging central capsule) ═══ */}
       <svg
         className="absolute inset-0 w-full h-full pointer-events-none z-10"
         viewBox="0 0 1000 700"
@@ -106,9 +106,9 @@ export function InterviewHubPage() {
           </filter>
         </defs>
 
-        {/* ── Main Liquid Glass 3-Pointed Star (Bottom vertices in exact corners 0,700 and 1000,700) ── */}
+        {/* ── Main Liquid Glass 3-Pointed Star (Bottom curve converges right at bottom of capsule y≈400) ── */}
         <path
-          d="M 500 0 C 500 200, 640 280, 1000 700 C 700 450, 300 450, 0 700 C 360 280, 500 200, 500 0 Z"
+          d="M 500 0 C 500 220, 680 340, 1000 700 C 700 300, 300 300, 0 700 C 320 340, 500 220, 500 0 Z"
           fill="url(#hubGlassSurface)"
           stroke="url(#hubGlassRimStroke)"
           strokeWidth="2"
@@ -117,7 +117,7 @@ export function InterviewHubPage() {
 
         {/* Primary Specular Light Refraction Bevels */}
         <path
-          d="M 500 0 C 500 200, 360 280, 0 700"
+          d="M 500 0 C 500 220, 320 340, 0 700"
           fill="none"
           stroke="rgba(255, 255, 255, 0.95)"
           strokeWidth="3"
@@ -125,7 +125,7 @@ export function InterviewHubPage() {
           opacity="0.95"
         />
         <path
-          d="M 500 0 C 500 200, 640 280, 1000 700"
+          d="M 500 0 C 500 220, 680 340, 1000 700"
           fill="none"
           stroke="rgba(255, 255, 255, 0.85)"
           strokeWidth="2.5"
@@ -133,7 +133,7 @@ export function InterviewHubPage() {
           opacity="0.85"
         />
         <path
-          d="M 0 700 C 300 450, 700 450, 1000 700"
+          d="M 0 700 C 300 300, 700 300, 1000 700"
           fill="none"
           stroke="rgba(255, 255, 255, 0.75)"
           strokeWidth="2"
@@ -179,7 +179,7 @@ export function InterviewHubPage() {
       <div className="relative z-20 w-full h-full flex flex-col pointer-events-none">
         
         {/* ── Top Half: Left (面试准备) & Right (模拟实战) ── */}
-        <div className="h-[62%] flex">
+        <div className="h-[58%] flex">
           
           {/* ─── Top-Left: 面试准备与考点速查 (Centered in Top-Left Region) ─── */}
           <div className="flex-1 flex flex-col justify-center items-center p-8 pl-12 pr-6">
@@ -263,8 +263,8 @@ export function InterviewHubPage() {
 
         </div>
 
-        {/* ── Bottom Half: Bottom-Center (Centered in the spacious Bottom Region below waist) ── */}
-        <div className="h-[38%] flex justify-center items-center pb-8 px-12">
+        {/* ── Bottom Half: Bottom-Center (Spacious region below the snug bottom curve) ── */}
+        <div className="h-[42%] flex justify-center items-center pb-8 px-12">
           <div
             onClick={() => setSearchParams({ tab: 'review' })}
             className="w-full max-w-2xl flex flex-col items-center text-center cursor-pointer group pointer-events-auto transition-all"

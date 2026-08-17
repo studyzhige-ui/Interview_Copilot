@@ -30,7 +30,7 @@ interface ConfirmTask {
   badge: string;
   statusHint?: string;
   bgGradient?: string;
-  textColor?: string;
+  headerTextColor?: string;
 }
 
 const SEED_TASKS: ConfirmTask[] = [
@@ -42,7 +42,7 @@ const SEED_TASKS: ConfirmTask[] = [
     badge: '外部动作审批',
     statusHint: '待确认发送',
     bgGradient: 'from-[#FEF3C7] to-[#FDE68A]',
-    textColor: 'text-amber-950',
+    headerTextColor: 'text-amber-950',
   },
   {
     id: 2,
@@ -52,7 +52,7 @@ const SEED_TASKS: ConfirmTask[] = [
     badge: '进展事实确认',
     statusHint: '建议推进',
     bgGradient: 'from-[#E0F2FE] to-[#BAE6FD]',
-    textColor: 'text-sky-950',
+    headerTextColor: 'text-sky-950',
   },
   {
     id: 3,
@@ -62,7 +62,7 @@ const SEED_TASKS: ConfirmTask[] = [
     badge: '档案更新确认',
     statusHint: '待归档',
     bgGradient: 'from-[#F3E8FF] to-[#E9D5FF]',
-    textColor: 'text-purple-950',
+    headerTextColor: 'text-purple-950',
   },
 ];
 
@@ -259,7 +259,7 @@ export function TodayPage() {
         </form>
       </div>
 
-      {/* ═══ 4. Four Expansive Quadrants with Redesigned Typography & Reference Card Stack ═══ */}
+      {/* ═══ 4. Four Expansive Quadrants with Exact-Sized Stepped Card Stack ═══ */}
       <div className="relative z-20 w-full h-full grid grid-cols-2 grid-rows-2 pointer-events-none">
 
         {/* ─── Q1 Top-Left: 下一步 (Next Steps) ─── */}
@@ -300,7 +300,7 @@ export function TodayPage() {
           </div>
         </div>
 
-        {/* ─── Q2 Top-Right: 待我确认 (Physical Stepped Card Stack Matching Reference) ─── */}
+        {/* ─── Q2 Top-Right: 待我确认 (Identical-Sized Stepped Card Stack) ─── */}
         <div className="flex items-center justify-center p-8 pl-28 pb-16">
           <div className="w-full max-w-[380px] flex flex-col pointer-events-auto">
             <div className="flex items-center justify-between mb-3 shrink-0">
@@ -316,49 +316,55 @@ export function TodayPage() {
               </span>
             </div>
 
-            {/* Stepped Physical Card Stack Container */}
-            <div className="relative w-full h-[260px] overflow-visible">
+            {/* Stepped Physical Card Stack (All cards have exact identical full dimensions) */}
+            <div className="relative w-full h-[270px] overflow-visible">
               <AnimatePresence mode="popLayout">
                 {tasks.length > 0 ? (
                   tasks.map((task, idx) => {
                     const isTop = idx === 0;
-                    // Stepped offsets matching reference: Back cards step downwards by 40px each
+                    // Stepped offsets: every card is identical size (w-full h-[180px]) stacked with 42px offset
                     const topOffset = isTop ? (tasks.length - 1) * 42 : (tasks.length - 1 - idx) * 42;
                     const zIndex = isTop ? 30 : 20 - idx;
+                    const bgGradientClass = task.bgGradient ? `bg-gradient-to-r ${task.bgGradient}` : 'bg-gradient-to-r from-amber-100 to-amber-50';
+                    const headerTextClass = task.headerTextColor || 'text-slate-900';
 
                     if (!isTop) {
-                      // ── Back Card Header Strip (Stepped & Visible above front card) ──
-                      const bgGradientClass = task.bgGradient ? `bg-gradient-to-r ${task.bgGradient}` : 'bg-gradient-to-r from-amber-100 to-amber-50';
-                      const textColorClass = task.textColor || 'text-slate-900';
-
+                      // ── Behind Card: Full-sized card stepping behind ──
                       return (
                         <motion.div
                           key={task.id}
                           layout
                           initial={{ opacity: 0, y: -10 }}
                           animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, x: 200 }}
+                          exit={{ opacity: 0, x: 220 }}
                           transition={{ duration: 0.25 }}
                           onClick={() => handlePromoteTask(task.id)}
                           style={{ top: `${topOffset}px`, zIndex }}
-                          className={`absolute left-0 w-full h-[46px] ${bgGradientClass} border border-white/80 shadow-sm rounded-2xl px-4 py-2 flex items-center justify-between cursor-pointer transition-all hover:brightness-105`}
+                          className={`absolute left-0 w-full h-[180px] ${bgGradientClass} border border-white/80 shadow-[0_4px_16px_rgba(15,23,42,0.04)] rounded-2xl p-4 flex flex-col justify-between cursor-pointer transition-all hover:brightness-105`}
                         >
-                          <div className="flex items-center gap-2 min-w-0 pr-3">
-                            <span className={`text-sm font-bold ${textColorClass} truncate`}>
-                              {task.title}
-                            </span>
+                          {/* Top 42px visible header bar */}
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 min-w-0 pr-3">
+                              <span className={`text-sm font-bold ${headerTextClass} truncate`}>
+                                {task.title}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <span className={`text-xs font-semibold ${headerTextClass} opacity-80`}>
+                                {task.statusHint || task.badge}
+                              </span>
+                              <ChevronRight size={14} className="opacity-50" />
+                            </div>
                           </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <span className={`text-xs font-semibold ${textColorClass} opacity-80`}>
-                              {task.statusHint || task.badge}
-                            </span>
-                            <ChevronRight size={14} className="opacity-50" />
+                          {/* Bottom placeholder ensuring same physical card footprint */}
+                          <div className="text-xs text-slate-500/40 select-none pointer-events-none truncate pt-2">
+                            {task.desc}
                           </div>
                         </motion.div>
                       );
                     }
 
-                    // ── Front Active Card (Expanded at the Bottom of Stack) ──
+                    // ── Front Active Card: Full-sized card expanded on top ──
                     return (
                       <motion.div
                         key={task.id}
@@ -368,41 +374,43 @@ export function TodayPage() {
                         exit={{ opacity: 0, x: 240, scale: 0.92 }}
                         transition={{ duration: 0.28, ease: 'easeOut' }}
                         style={{ top: `${topOffset}px`, zIndex }}
-                        className="absolute left-0 w-full bg-white/95 backdrop-blur-2xl border border-white shadow-[0_16px_36px_rgba(15,23,42,0.09)] rounded-2xl p-4 flex flex-col gap-2.5"
+                        className="absolute left-0 w-full h-[180px] bg-white/95 backdrop-blur-2xl border border-white shadow-[0_16px_36px_rgba(15,23,42,0.09)] rounded-2xl p-4 flex flex-col justify-between"
                       >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-2 flex-1 min-w-0">
-                            <div className="w-6 h-6 rounded-full bg-amber-500/15 text-amber-600 flex items-center justify-center shrink-0">
-                              <Sparkles size={13} />
+                        <div>
+                          <div className="flex items-start justify-between gap-2 mb-1.5">
+                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                              <div className="w-5 h-5 rounded-full bg-amber-500/15 text-amber-600 flex items-center justify-center shrink-0">
+                                <Sparkles size={12} />
+                              </div>
+                              <h3 className="text-sm font-bold text-slate-900 leading-snug truncate">
+                                {task.title}
+                              </h3>
                             </div>
-                            <h3 className="text-sm font-bold text-slate-900 leading-snug truncate">
-                              {task.title}
-                            </h3>
+                            <div className="text-[11px] font-bold text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded-md shrink-0 border border-amber-200/60">
+                              {task.badge}
+                            </div>
                           </div>
-                          <div className="text-[11px] font-bold text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded-md shrink-0 border border-amber-200/60">
-                            {task.badge}
+
+                          <p className="text-xs text-slate-600 leading-relaxed line-clamp-1 mb-2">
+                            {task.desc}
+                          </p>
+
+                          <div className="bg-amber-50/70 border border-amber-200/50 py-1 px-2.5 text-xs text-amber-900 flex items-center gap-1.5 rounded-xl">
+                            <span className="font-semibold text-amber-700 shrink-0 text-[11px]">建议:</span>
+                            <span className="truncate font-medium text-[11px]">{task.copilotTip}</span>
                           </div>
                         </div>
 
-                        <p className="text-xs text-slate-600 leading-relaxed">
-                          {task.desc}
-                        </p>
-
-                        <div className="bg-amber-50/70 border border-amber-200/50 py-1.5 px-3 text-xs text-amber-900 flex items-center gap-2 rounded-xl">
-                          <span className="font-semibold text-amber-700 shrink-0">建议:</span>
-                          <span className="truncate font-medium">{task.copilotTip}</span>
-                        </div>
-
-                        <div className="flex gap-2 pt-0.5">
+                        <div className="flex gap-2 pt-1">
                           <input
                             type="text"
                             placeholder="补充批注或确认意见…"
-                            className="flex-1 text-xs bg-slate-50/80 border border-slate-200/80 rounded-xl px-3 h-8.5 outline-none focus:bg-white focus:border-blue-500 transition-colors"
+                            className="flex-1 text-xs bg-slate-50/80 border border-slate-200/80 rounded-xl px-3 h-8 outline-none focus:bg-white focus:border-blue-500 transition-colors"
                           />
                           <button
                             type="button"
                             onClick={() => handleConfirm(task.id)}
-                            className="px-4 h-8.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition-colors whitespace-nowrap shadow-sm hover:shadow cursor-pointer"
+                            className="px-3.5 h-8 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition-colors whitespace-nowrap shadow-sm hover:shadow cursor-pointer"
                           >
                             确认执行
                           </button>
