@@ -42,6 +42,21 @@ describe('direct user assertion shares one Operation', () => {
     expect(vi.mocked(confirmInvitation).mock.calls[1][0].facts.company_name).toBe('Corrected company');
     expect(vi.mocked(confirmInvitation).mock.calls[1][0].idempotency_key).not.toBe(vi.mocked(confirmInvitation).mock.calls[0][0].idempotency_key);
   });
+  it.each([403, 404, 422])('retains a previously unknown command after retry returns %s', async (status) => {
+    vi.mocked(confirmInvitation).mockRejectedValueOnce(new Error('response lost'))
+      .mockRejectedValueOnce({ isAxiosError: true, response: { status, data: { detail: 'retry rejected' } } });
+    const done = vi.fn(); render(<ManualInvitationForm onConfirmed={done} />); fill();
+    fireEvent.click(screen.getByRole('button', { name: '确认并保存面试' }));
+    await screen.findByRole('alert');
+    fireEvent.click(screen.getByRole('button', { name: '重试并核实原请求' }));
+    await screen.findByText('retry rejected');
+    expect(screen.getByLabelText('公司')).toBeDisabled();
+    expect(done).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '重试并核实原请求' }));
+    await waitFor(() => expect(done).toHaveBeenCalledWith(confirmed));
+    expect(confirmInvitation).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(confirmInvitation).mock.calls[2][0]).toEqual(vi.mocked(confirmInvitation).mock.calls[0][0]);
+  });
   it('never declares success for an unknown verification', async () => {
     vi.mocked(confirmInvitation).mockResolvedValue({ ...confirmed, verification: { ...confirmed.verification, conclusion: 'unknown' } });
     const done = vi.fn(); render(<ManualInvitationForm onConfirmed={done} />); fill();

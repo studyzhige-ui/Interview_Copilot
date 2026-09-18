@@ -30,9 +30,10 @@ export function ManualInvitationForm({ onConfirmed }: { onConfirmed: (result: Co
         || result.verification.operation_id !== result.operation_id) throw new Error('操作尚未核实，请勿重复创建另一份邀请');
       command.current = null; setUncertain(false); setDraft(invitationDraft()); onConfirmed(result);
     } catch (err) {
-      // These endpoint responses prove rejection before committing any operation.
-      // Conflicts, verification errors and response loss must retain exact identity.
-      if (isAxiosError(err) && [403, 404, 422].includes(err.response?.status ?? 0)) {
+      // A rejection on the first attempt proves no operation committed. A later
+      // rejection cannot settle an earlier lost response (e.g. permission revoked).
+      // Once uncertain, preserve the original identity until a verified receipt.
+      if (!uncertain && isAxiosError(err) && [403, 404, 422].includes(err.response?.status ?? 0)) {
         command.current = null;
       }
       setUncertain(command.current !== null);
