@@ -639,3 +639,86 @@ def test_interview_record_children_cascade(fresh_pg_db, monkeypatch):
     )
 
     engine.dispose()
+
+
+def test_0047_preserves_legacy_metadata_and_json_on_upgrade_and_downgrade(fresh_pg_db):
+    from datetime import datetime, UTC
+    from alembic import command
+    from sqlalchemy import create_engine, inspect, text
+    from sqlalchemy.orm import Session
+    from app.models.user import User
+    from app.models.chat import Conversation
+    from app.models.context_checkpoint import ContextCheckpoint
+
+    cfg = _make_alembic_config(fresh_pg_db)
+    command.upgrade(cfg, "0046")
+    engine = create_engine(fresh_pg_db)
+    when = datetime(2026, 1, 1, tzinfo=UTC)
+    payload = {"nested": ["中文", {"zero": 0, "missing": None}], "messages": []}
+    with Session(engine) as session:
+        user = User(
+            username="migration-retained-metadata",
+            hashed_password="not-a-login",
+            _legacy_last_dreamed_at=when,
+        )
+        session.add(user)
+        session.flush()
+        conversation = Conversation(
+            id="migration-context",
+            user_id=user.id,
+            type="general",
+            _legacy_memory_extraction_cursor=17,
+        )
+        session.add(conversation)
+        session.flush()
+        session.add(
+            ContextCheckpoint(
+                conversation_id=conversation.id,
+                scope="",
+                window_id="window-retained",
+                state=payload,
+            )
+        )
+        session.commit()
+    for revision, expected_type in (
+        ("head", "JSONB"),
+        ("0046", "JSON"),
+        ("head", "JSONB"),
+    ):
+        if revision == "0046":
+            command.downgrade(cfg, revision)
+        else:
+            command.upgrade(cfg, revision)
+        with engine.connect() as conn:
+            assert (
+                conn.execute(
+                    text(
+                        "SELECT memory_extraction_cursor FROM conversations WHERE id='migration-context'"
+                    )
+                ).scalar_one()
+                == 17
+            )
+            assert (
+                conn.execute(
+                    text(
+                        "SELECT last_dreamed_at FROM users WHERE username='migration-retained-metadata'"
+                    )
+                ).scalar_one()
+                == when
+            )
+            assert (
+                conn.execute(
+                    text(
+                        "SELECT state FROM context_checkpoints WHERE conversation_id='migration-context'"
+                    )
+                ).scalar_one()
+                == payload
+            )
+        column = next(
+            c
+            for c in inspect(engine).get_columns("context_checkpoints")
+            if c["name"] == "state"
+        )
+        assert str(column["type"]) == expected_type
+    command.check(cfg)
+    engine.dispose()

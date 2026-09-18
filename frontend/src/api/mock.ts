@@ -9,7 +9,10 @@ import type {
 
 export async function startMockInterview(payload: {
   resume_id: string;
-  jd_text: string;
+  jd_text?: string;
+  jd_snapshot_id?: string;
+  jd_snapshot_version?: number;
+  input_mode?: 'text' | 'voice';
   interviewer_style: 'friendly' | 'professional' | 'rigorous' | 'pressure';
   target_question_count: 15 | 20 | 30;
   job_opportunity_id?: string;

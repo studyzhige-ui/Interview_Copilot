@@ -1,10 +1,14 @@
 export type MockClientActionName =
   | 'mock_interview.prefill'
   | 'mock_interview.check_readiness'
-  | 'mock_interview.enter_live';
+  | 'mock_interview.enter_live'
+  | 'interview.preparation.open';
 
 export interface MockPrefillPayload {
   kind: 'mock_prefill';
+  input_mode?: 'text' | 'voice';
+  jd_snapshot_id?: string | null;
+  jd_snapshot_version?: number | null;
   resume_id: string;
   jd_text: string;
   interviewer_style: 'friendly' | 'professional' | 'rigorous' | 'pressure';
@@ -19,15 +23,27 @@ export interface MockReadinessPayload {
 
 export interface MockEnterLivePayload {
   kind: 'mock_enter_live';
+  input_mode?: 'text' | 'voice';
   record_id: string;
   conversation_id: string;
   runtime_status: 'mock_in_progress';
 }
 
+export interface InterviewPreparationOpenPayload {
+  kind: 'interview_preparation_open';
+  interview_id: string;
+  opportunity_id: string;
+  expected_interview_version: number;
+  expected_opportunity_version: number;
+  source_operation_id: string;
+  preferred_surface: 'interviews';
+}
+
 export type MockClientActionPayload =
   | MockPrefillPayload
   | MockReadinessPayload
-  | MockEnterLivePayload;
+  | MockEnterLivePayload
+  | InterviewPreparationOpenPayload;
 
 export interface MockClientAction {
   interaction_id: string;
@@ -62,6 +78,7 @@ export interface MockClientActionResolution {
 export interface MockClientUiResult {
   outcome: 'acknowledged' | 'refused' | 'failed';
   readiness?: 'ready';
+  fallback_mode?: 'text';
   reason?: string;
 }
 

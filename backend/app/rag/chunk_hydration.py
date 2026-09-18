@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Collection
 from typing import Any
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.document_chunk import DocumentChunk
@@ -45,6 +47,10 @@ def hydrate_chunks(
     db: Session,
     node_ids: list[str],
     *,
+    user_pk: int,
+    source_kind: str | None = None,
+    document_ids: Collection[str] | None = None,
+    attachment_document_ids: Collection[str] = (),
     enforce_index_generation: bool = False,
 ) -> list[dict[str, Any]]:
     """Resolve Milvus ``node_id`` hits to live, fully-attributed chunk dicts.
@@ -53,7 +59,9 @@ def hydrate_chunks(
     check (or never had a fact row) are silently dropped. ``text`` is the
     Postgres fact text, not the (possibly truncated) Milvus copy.
     """
-    if not node_ids:
+    if not isinstance(user_pk, int) or isinstance(user_pk, bool) or user_pk <= 0:
+        raise ValueError("A trusted positive user_pk is required for hydration")
+    if not node_ids or document_ids is not None and not document_ids:
         return []
     query = (
         db.query(DocumentChunk, KnowledgeDocument, FileAsset)
@@ -61,12 +69,24 @@ def hydrate_chunks(
         .outerjoin(FileAsset, KnowledgeDocument.file_asset_id == FileAsset.id)
         .filter(
             DocumentChunk.node_id.in_(node_ids),
+            DocumentChunk.user_id == user_pk,
+            KnowledgeDocument.user_id == user_pk,
+            DocumentChunk.source_kind == KnowledgeDocument.source_kind,
+            or_(FileAsset.id.is_(None), FileAsset.user_id == user_pk),
+            or_(
+                KnowledgeDocument.source_kind != "chat_attachment",
+                KnowledgeDocument.id.in_(attachment_document_ids),
+            ),
             DocumentChunk.deleted_at.is_(None),
             DocumentChunk.index_status == "indexed",
             KnowledgeDocument.deleted_at.is_(None),
             KnowledgeDocument.status == "ready",
         )
     )
+    if source_kind is not None:
+        query = query.filter(KnowledgeDocument.source_kind == source_kind)
+    if document_ids is not None:
+        query = query.filter(KnowledgeDocument.id.in_(document_ids))
     if enforce_index_generation:
         from app.rag.index.identity import current_index_identity
 

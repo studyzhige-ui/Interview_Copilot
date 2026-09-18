@@ -121,7 +121,7 @@ def test_hydrate_preserves_input_order_and_attributes(db: Session):
     )
     _seed_chunk(db, doc, uid, "n2", chunk_index=1, text="缓存穿透是查询不存在的数据。")
 
-    out = hydrate_chunks(db, ["n2", "n1"])
+    out = hydrate_chunks(db, ["n2", "n1"], user_pk=uid)
 
     # Rank order = input order, NOT db order.
     assert [c["node_id"] for c in out] == ["n2", "n1"]
@@ -158,6 +158,7 @@ def test_hydrate_drops_dead_chunks_and_documents(db: Session):
     out = hydrate_chunks(
         db,
         ["n-live", "n-chunk-deleted", "n-index-deleted", "n-dead-doc", "n-ghost"],
+        user_pk=uid,
     )
     assert [c["node_id"] for c in out] == ["n-live"]
 
@@ -170,7 +171,7 @@ def test_hydrate_drops_unready_chunk_and_document_states(db: Session):
     processing = _seed_doc(db, uid, status="processing", suffix="processing")
     _seed_chunk(db, processing, uid, "n-processing-doc")
 
-    out = hydrate_chunks(db, ["n-failed", "n-pending", "n-processing-doc"])
+    out = hydrate_chunks(db, ["n-failed", "n-pending", "n-processing-doc"], user_pk=uid)
     assert out == []
 
 
@@ -180,7 +181,7 @@ def test_hydrate_fileless_document(db: Session):
     doc = _seed_doc(db, uid, with_file=False, suffix="3")
     _seed_chunk(db, doc, uid, "n-qa")
 
-    out = hydrate_chunks(db, ["n-qa"])
+    out = hydrate_chunks(db, ["n-qa"], user_pk=uid)
     assert out[0]["file_name"] is None
     assert out[0]["document_title"] == "Redis 笔记 3"
 
@@ -190,10 +191,66 @@ def test_hydrate_malformed_metadata_json(db: Session):
     doc = _seed_doc(db, uid)
     _seed_chunk(db, doc, uid, "n-bad-meta", metadata_json="{not json")
 
-    out = hydrate_chunks(db, ["n-bad-meta"])
+    out = hydrate_chunks(db, ["n-bad-meta"], user_pk=uid)
     assert out[0]["section_title"] is None
     assert out[0]["heading_path"] is None
 
 
 def test_hydrate_empty_input(db: Session):
-    assert hydrate_chunks(db, []) == []
+    assert hydrate_chunks(db, [], user_pk=1) == []
+
+
+@pytest.mark.parametrize(
+    "corruption", ["document_owner", "chunk_owner", "file_owner", "source_kind"]
+)
+def test_canonical_ownership_rejects_corrupt_index_identity(db, corruption):
+    """The vector result can lie; canonical facts still decide visibility."""
+    uid = _seed_user(db)
+    other = User(username="bob", hashed_password="x")
+    db.add(other)
+    db.flush()
+    doc = _seed_doc(db, uid)
+    chunk = _seed_chunk(db, doc, uid, "foreign-node")
+    if corruption == "document_owner":
+        doc.user_id = other.id
+    elif corruption == "chunk_owner":
+        chunk.user_id = other.id
+    elif corruption == "file_owner":
+        db.get(FileAsset, doc.file_asset_id).user_id = other.id
+    else:
+        doc.source_kind = "chat_attachment"
+    db.flush()
+    assert hydrate_chunks(db, ["foreign-node"], user_pk=uid) == []
+
+
+def test_owned_attachment_requires_explicit_scope_even_if_node_id_is_known(db):
+    uid = _seed_user(db)
+    doc = _seed_doc(db, uid)
+    doc.source_kind = "chat_attachment"
+    _seed_chunk(db, doc, uid, "attachment")
+    assert hydrate_chunks(db, ["attachment"], user_pk=uid) == []
+    assert hydrate_chunks(db, ["attachment"], user_pk=uid, document_ids=[doc.id]) == []
+    out = hydrate_chunks(
+        db,
+        ["attachment"],
+        user_pk=uid,
+        document_ids=[doc.id],
+        attachment_document_ids=[doc.id],
+    )
+    assert [row["node_id"] for row in out] == ["attachment"]
+    assert (
+        hydrate_chunks(
+            db,
+            ["attachment"],
+            user_pk=uid,
+            document_ids=[],
+            attachment_document_ids=[doc.id],
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize("principal", [None, 0, -1, True, "1"])
+def test_hydration_never_has_an_unscoped_principal(db, principal):
+    with pytest.raises(ValueError):
+        hydrate_chunks(db, [], user_pk=principal)

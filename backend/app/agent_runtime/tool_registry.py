@@ -77,6 +77,7 @@ class ToolDispatchPlan:
     connection_identity: str | None = None
     receipt_ref_resolver: Callable[[dict[str, Any]], Collection[str]] | None = None
     error: dict[str, Any] | None = None
+    max_argument_chars: int | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,8 @@ class ToolDefinition:
     args_model: type[BaseModel]
     handler: Callable[[BaseModel, AgentToolContext], Awaitable[dict[str, Any]]]
     max_result_chars: int = 8000
+    # Trusted implementation metadata; never supplied by a model or MCP server.
+    max_argument_chars: int | None = None
     emoji: str = "🔧"
     prompt: str = ""
     effect: ToolEffect = ToolEffect.UNKNOWN
@@ -467,13 +470,24 @@ class ToolRegistry:
 registry = ToolRegistry()
 
 
+def argument_limit(entry: ToolDefinition) -> int:
+    limit = (
+        entry.max_argument_chars
+        if entry.max_argument_chars is not None
+        else settings.AGENT_MAX_TOOL_ARG_CHARS
+    )
+    if limit <= 0:
+        raise ValueError("Tool argument limit must be positive")
+    return min(limit, settings.AGENT_MAX_TOOL_WIRE_ARG_CHARS)
+
+
 async def _dispatch_entry(
     entry: ToolDefinition,
     raw_args: dict[str, Any],
     ctx: AgentToolContext,
 ) -> dict[str, Any]:
     args_json = json.dumps(raw_args, ensure_ascii=False)
-    if len(args_json) > settings.AGENT_MAX_TOOL_ARG_CHARS:
+    if len(args_json) > argument_limit(entry):
         return {"error": "tool_args_too_large", "tool_name": entry.name}
     try:
         validated = entry.args_model.model_validate(raw_args, extra="forbid")
@@ -531,7 +545,7 @@ async def _plan_entry(
     """Build the one concrete preflight projection used by the Agent loop."""
 
     encoded = json.dumps(raw_args, ensure_ascii=False, default=str)
-    if len(encoded) > settings.AGENT_MAX_TOOL_ARG_CHARS:
+    if len(encoded) > argument_limit(entry):
         return ToolDispatchPlan(
             tool_name=entry.name,
             arguments=dict(raw_args),
@@ -605,6 +619,7 @@ async def _plan_entry(
             else None
         ),
         receipt_ref_resolver=entry.receipt_ref_resolver,
+        max_argument_chars=argument_limit(entry),
     )
 
 
@@ -615,7 +630,7 @@ def parse_tool_arguments(raw_arguments: str) -> dict[str, Any]:
     if not raw_arguments:
         return {}
     try:
-        if len(raw_arguments) > settings.AGENT_MAX_TOOL_ARG_CHARS:
+        if len(raw_arguments) > settings.AGENT_MAX_TOOL_WIRE_ARG_CHARS:
             raise ValueError("tool arguments exceed limit")
 
         def object_pairs(pairs):

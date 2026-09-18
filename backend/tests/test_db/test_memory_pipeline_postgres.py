@@ -15,7 +15,8 @@ from tests.test_services.test_memory_pipeline import source
 
 
 def test_upgrade_preserves_legacy_rows_and_parallel_claim_is_fenced(
-    fresh_pg_db, monkeypatch  # noqa: F811 - imported pytest fixture
+    fresh_pg_db,  # noqa: F811 - imported pytest fixture
+    monkeypatch,
 ):
     cfg = _make_alembic_config(fresh_pg_db)
     command.upgrade(cfg, "0043")

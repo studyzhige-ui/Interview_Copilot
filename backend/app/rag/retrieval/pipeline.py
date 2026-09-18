@@ -87,11 +87,30 @@ class KnowledgeRetrievalPipeline:
         )
 
     @staticmethod
-    def _hydrate(node_ids: list[str]) -> list[dict[str, Any]]:
+    def _hydrate(
+        node_ids: list[str],
+        *,
+        user_pk: int,
+        source_kind: str | None,
+        intents: list[SearchIntent],
+    ) -> list[dict[str, Any]]:
         from app.rag.chunk_hydration import hydrate_chunks
 
         with SessionLocal() as db:
-            return hydrate_chunks(db, node_ids, enforce_index_generation=True)
+            explicit_ids = {
+                doc_id for intent in intents for doc_id in intent.document_ids
+            }
+            return hydrate_chunks(
+                db,
+                node_ids,
+                user_pk=user_pk,
+                source_kind=source_kind,
+                document_ids=explicit_ids
+                if all(i.document_ids for i in intents)
+                else None,
+                attachment_document_ids=explicit_ids,
+                enforce_index_generation=True,
+            )
 
     async def retrieve(
         self,
@@ -127,8 +146,12 @@ class KnowledgeRetrievalPipeline:
                 diagnostics=finish(),
             )
         principal_started = perf_counter()
-        with SessionLocal() as db:
-            user_pk = resolve_user_pk(db, user_id)
+
+        def resolve_principal() -> int | None:
+            with SessionLocal() as db:
+                return resolve_user_pk(db, user_id)
+
+        user_pk = await asyncio.to_thread(resolve_principal)
         diagnostics["timings_ms"]["principal"] = round(
             (perf_counter() - principal_started) * 1000,
             2,
@@ -275,7 +298,35 @@ class KnowledgeRetrievalPipeline:
 
         node_ids = [str(row.get("id") or "") for row in selected]
         hydrate_started = perf_counter()
-        hydrated = await asyncio.to_thread(self._hydrate, node_ids)
+        hydrated = await asyncio.to_thread(
+            self._hydrate,
+            node_ids,
+            user_pk=user_pk,
+            source_kind=source_kind,
+            intents=planned,
+        )
+        # A stale index must not redirect a restricted intent to another
+        # canonical document, even when another intent has a wider scope.
+        selected_scopes = {
+            str(row.get("id") or ""): set(row.get("intent_ids", [])) for row in selected
+        }
+        hydrated = [
+            chunk
+            for chunk in hydrated
+            if any(
+                intent.intent_id
+                in selected_scopes.get(str(chunk.get("node_id") or ""), set())
+                and (
+                    not intent.document_ids
+                    or chunk.get("document_id") in intent.document_ids
+                )
+                and (
+                    chunk.get("source_kind") != "chat_attachment"
+                    or chunk.get("document_id") in intent.document_ids
+                )
+                for intent in planned
+            )
+        ]
         diagnostics["timings_ms"]["hydrate"] = round(
             (perf_counter() - hydrate_started) * 1000,
             2,

@@ -65,7 +65,7 @@ def test_incomplete_stream_never_publishes_calls(stop):
 
 
 def test_stream_bounded_before_arguments_are_accumulated(monkeypatch):
-    monkeypatch.setattr(settings, "AGENT_MAX_TOOL_ARG_CHARS", 5)
+    monkeypatch.setattr(settings, "AGENT_MAX_TOOL_WIRE_ARG_CHARS", 5)
     assembler = ToolCallAssembler()
     assembler.feed(event(arguments="123"))
     with pytest.raises(ToolCallProtocolError):
@@ -256,7 +256,7 @@ def test_mcp_global_connections_are_isolated_across_live_loops():
 
 
 def test_mcp_list_changed_invalidates_cached_contract_before_execution(monkeypatch):
-    from mcp.types import ServerNotification, ToolListChangedNotification
+    from mcp.types import ToolListChangedNotification
 
     async def run():
         manager = MCPManager()
@@ -280,9 +280,7 @@ def test_mcp_list_changed_invalidates_cached_contract_before_execution(monkeypat
         try:
             old = (await manager.list_tools(config()))[0]
             schema_version = 2
-            manager._handle_notification(
-                config(), ServerNotification(ToolListChangedNotification())
-            )
+            manager._handle_notification(config(), ToolListChangedNotification())
             result = await manager.call_tool(config(), old, {})
             assert result["error"] == "mcp_tool_schema_changed"
             assert called == []

@@ -107,7 +107,7 @@
       "stage": 4,
       "claims": ["browser-bound one-time OAuth state", "cross-browser and login-CSRF fail closed", "pre-click adapter availability", "encrypted provider-specific credential", "refresh and revoke", "bounded Gmail read", "no secret disclosure"],
       "backend_tests": ["backend/tests/test_services/test_google_gmail_connector.py", "backend/tests/test_api/test_gmail_oauth_api.py", "backend/tests/test_agent_runtime/test_gmail_tool.py"],
-      "frontend_tests": ["src/pages/settings/ConnectionsPage.test.tsx", "src/api/stage4.test.ts"]
+      "frontend_tests": ["src/pages/capabilities/PluginConnectionPanel.test.tsx", "src/api/stage4.test.ts"]
     },
     {
       "id": "stage4-gmail-observation-automation",

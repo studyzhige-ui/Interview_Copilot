@@ -64,7 +64,11 @@ from app.models.job_opportunity import (
     NextAction,
     ProcessEvent,
 )
-from app.models.memory_pipeline import MemoryExtraction, MemoryWorkspace, MemoryReadReceipt
+from app.models.memory_pipeline import (
+    MemoryExtraction,
+    MemoryWorkspace,
+    MemoryReadReceipt,
+)
 from app.models.long_term_memory import (
     AgentMemorySetting,
     LongTermAgentMemory,
@@ -90,6 +94,7 @@ from app.models.user_model_selections import UserModelSelection
 from app.models.user_skill import UserSkill, UserSkillResource
 
 __all__ = [
+    "ContextCheckpoint",
     "ConversationMessage",
     "Conversation",
     "ConversationTurn",

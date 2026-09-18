@@ -217,10 +217,12 @@ def start_mock(
     *,
     username: str,
     resume_id: str,
-    jd_text: str,
+    jd_text: str | None,
     interviewer_style: str,
     target_question_count: int,
     job_opportunity_id: str | None = None,
+    jd_snapshot_id: str | None = None,
+    jd_snapshot_version: int | None = None,
 ) -> StartedMock:
     """Atomically create record + conversation + opening message + runtime.
 
@@ -237,7 +239,16 @@ def start_mock(
         db, username=username, resume_id=resume_id
     )
     resume_context = resolved_resume.text
-    jd_context = jd_text.strip()
+    from app.services.interview.mock_sources import resolve_job_description
+
+    jd_context = resolve_job_description(
+        db,
+        user_pk=user_pk,
+        jd_text=jd_text,
+        job_opportunity_id=normalized_job_id,
+        jd_snapshot_id=jd_snapshot_id,
+        jd_snapshot_version=jd_snapshot_version,
+    )
 
     plan = mock_interview_service.generate_plan(
         resume_context=resume_context,

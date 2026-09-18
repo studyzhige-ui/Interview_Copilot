@@ -75,7 +75,17 @@ def admit(messages: list[dict], *, tool_limit: int | None = None) -> list[dict]:
                         lo = mid + 1
                     else:
                         hi = mid
-                message = {**message, "content": head + marker + content[lo:]}
+                suffix = content[lo:]
+                # Token counts are not additive at concatenation boundaries.
+                # Keep the tail and explicit excerpt marker, shrinking the
+                # disposable prefix first; tiny budgets still stay bounded.
+                projected = head + marker + suffix
+                while head and token_count(projected) > tool_limit:
+                    head = head[: max(0, len(head) - max(1, len(head) // 100))]
+                    projected = head + marker + suffix
+                if token_count(projected) > tool_limit:
+                    projected = truncate_to_tokens(marker, tool_limit)
+                message = {**message, "content": projected}
         result.append(
             message
             if "_context" in message

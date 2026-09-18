@@ -5,6 +5,32 @@
 > 规范来源：[`Career Agent OS Blueprint`](../architecture/career-agent-os-blueprint.md)  
 > 当前切片：[`VS-01 面试邀请接收、确认与准备交接生命周期`](../architecture/vertical-slices/vs-01-interview-invitation-intake-confirmation-handoff.md)
 
+## 2026-09-19 审查分支：运行合同与产品接入收敛
+
+基线 `f0ad4a2a3fd078beeff93d7f724946a52dae2c00`；工作分支 `refactor/product-runtime-convergence`。
+本轮没有替换 Blueprint，也不把下列工程修复等同于全部产品切片发布。
+
+| 范围 | 已实施变化 | 验证与剩余边界 |
+|---|---|---|
+| 数据迁移 | `0047` 对齐新增 JSONB 字段和索引；保留历史 memory cursor / dreamed 元数据，不删除用户数据 | 新增旧数据 up/down/up 保真测试；真实 PostgreSQL 结果以本分支 CI 为准 |
+| Tool 副作用 | started mutation 在 timeout / cancel / transport exception 后保留 `unknown`；原执行状态保留在结果，继续资源 fence 与 same-call replay | 合成远端提交后断连、取消、异常与新 call 阻断测试；已返回的明确 provider rejection 不误标 unknown；供应商内部吞掉的错误仍须逐连接器核验 |
+| 工具输入 | 区分 wire cap、普通默认预算、可信 built-in 预算；长 JD 或 exact owned JD snapshot 共用 UI/Tool 验证 | 流式参数→解析→计划→执行回归；快照 owner/version 校验；不允许外部 MCP 声明自行抬高限制 |
+| RAG | canonical hydration 强制 principal、chunk/doc/asset owner、来源和显式附件范围；保持索引 generation/live checks | 伪造索引 metadata 与混合 scope 回归；不把合成污染实验称为线上泄露 |
+| 模拟面试 | 默认文字；语音失败由用户选择降级；Agent 预填只确认原设置，不另发 HTTP start；同路径 enter-live 能切换 | 共用 MockPreparationRequest 及领域 start；HTTP 与 Tool 不复制业务创建逻辑 |
+| 产品体验 | 全局页面内 Copilot 重用 GeneralChatPage/ChatPanel；`/interviews` 使用 Shared Operation；Today 投影 pending confirmations 与真实活动；`/activity` 区分业务/运行/页面状态 | 手动确认、response-loss 重试、fact confirm/correct/reject、版本冲突、收据核验、路由保留等组件测试 |
+| 基线回归 | MCP 2.0 snake_case / notification / MCPServer 适配；更新已退休 prompt 的测试；修复拼接后 token 预算边界及现有格式问题 | 不跳过旧回归、不关闭 lint、不以静态 manifest 文件存在代替运行验收 |
+
+本轮隔离环境已执行后端全套 **1581 passed / 11 skipped**（包括本地无 PostgreSQL 的测试），前端 **61 files / 205 tests passed**，类型检查、lint、生产构建通过。
+最后提交及 Python 3.11/3.13 + PostgreSQL 的验证以 PR 检查为准；本段数字不代表真实模型、浏览器端到端或生产供应商验收。
+
+### 未关闭的发布条件
+
+VS01-S09（真实 worker-kill / verifying recovery）和 VS01-S14（全部 adapter 的 commit-ambiguity recovery）仍为 partial，`release_ready` 保持 false。
+旧 Gmail invitation auto-apply 路径尚未切换，不能把手动/Agent/fixture 的共享操作写成全部外部入口已迁移。
+账户级持久成本预留/结算/限额、全依赖容量压测、所有旧 owner 路径退出、真实准备→练习→复盘→新题质量基准仍需实施或验收。
+长期记忆生产门禁未开启；本轮不修改质量分数、不伪造真实模型/客户使用数据，也不宣称所有知识模块已实现。
+手动邀请网络丢响应后的原请求保留目前限当前挂载表单；跨刷新待核实请求的可靠恢复仍需补齐，不能当作已完成的全客户端 exactly-once。
+
 ## 1. 账本职责
 
 本文是非产品规范的实施状态源。它把已批准 Blueprint、Contracts 与 Vertical Slice Spec 映射到当前代码资产、目标 owner、依赖、迁移、测试、切换和删除条件。

@@ -56,6 +56,7 @@ from app.schemas.chat import (
     MockStartResp,
     TTSRequest,
 )
+from app.services.interview.mock_sources import MockJobDescriptionUnavailable
 from app.services.interview import (
     mock_flow,
     mock_interview_service,
@@ -120,8 +121,13 @@ def start_mock_interview(
             interviewer_style=body.interviewer_style,
             target_question_count=body.target_question_count,
             job_opportunity_id=body.job_opportunity_id,
+            jd_snapshot_id=body.jd_snapshot_id,
+            jd_snapshot_version=body.jd_snapshot_version,
         )
         db.commit()
+    except MockJobDescriptionUnavailable as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except mock_flow.ResumeNotFoundError as exc:
         db.rollback()
         raise HTTPException(status_code=404, detail=str(exc)) from exc

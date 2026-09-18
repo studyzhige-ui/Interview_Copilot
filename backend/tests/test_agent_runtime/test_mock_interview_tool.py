@@ -94,6 +94,7 @@ def _seed(db_session, *, client_id: str | None = "client-a"):
     )
     args = tool_mod.StartMockInterviewArgs(
         resume_id="resume-1",
+        input_mode="voice",
         jd_text="A sufficiently explicit backend engineering job description.",
         interviewer_style="professional",
         target_question_count=20,
@@ -300,3 +301,39 @@ def test_mock_tool_without_initiating_client_fails_honestly(db_session, monkeypa
 
     assert result["error"] == "client_action_unavailable"
     assert "not initiated" in result["reason"]
+
+
+def test_text_mode_skips_microphone_and_freezes_prefill_jd(db_session, monkeypatch):
+    user, conversation, turn, ctx, args = _seed(db_session)
+    args = args.model_copy(update={"input_mode": "text", "jd_text": "J" * 4500})
+    monkeypatch.setattr(tool_mod, "SessionLocal", lambda: NoCloseSession(db_session))
+    monkeypatch.setattr(
+        tool_mod.mock_flow, "resolve_resume_context", lambda *_args, **_kw: "resume"
+    )
+    captured = []
+
+    def capture_start(_db, **kwargs):
+        captured.append(kwargs)
+        # Stop at the business seam: no fake claim of a live runtime here.
+        raise RuntimeError("test stopped after source verification")
+
+    monkeypatch.setattr(tool_mod.mock_flow, "start_mock", capture_start)
+    prefill = tool_mod._run_start_mock(args, ctx)
+    assert prefill["action"] == "mock_interview.prefill"
+    _resolve_phase(
+        db_session,
+        turn=turn,
+        conversation=conversation,
+        action="mock_interview.prefill",
+    )
+    assert tool_mod._run_start_mock(args, ctx)["error"] == "mock_start_failed"
+    assert captured[0]["jd_text"] == "J" * 4500
+    assert (
+        find_mock_client_action(
+            db_session,
+            turn_id=turn.id,
+            tool_call_id="call-mock",
+            action="mock_interview.check_readiness",
+        )
+        is None
+    )

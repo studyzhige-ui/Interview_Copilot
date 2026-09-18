@@ -1209,7 +1209,9 @@ def _finish(turn_id: str, status: str, error: str | None = None) -> bool:
                     db.commit()
                 except Exception:
                     db.rollback()
-                    logger.exception("Could not record memory citations for %s", turn_id)
+                    logger.exception(
+                        "Could not record memory citations for %s", turn_id
+                    )
             if status == "completed" and settings.AGENT_MEMORY_PRODUCER_ENABLED:
                 try:
                     from app.task_queue.dispatch import (

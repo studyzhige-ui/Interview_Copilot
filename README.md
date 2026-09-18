@@ -22,6 +22,15 @@ The repository ships one shared product core in two editions:
 · [Codebase architecture](docs/architecture/codebase.md) ·
 [Product and systems audit](docs/reports/full-product-and-systems-audit-2026-08-04.md)
 
+## Refactor branch status
+
+The `refactor/product-runtime-convergence` branch integrates the shared Copilot
+workspace, invitation confirmation/preparation, text-first mock handoff, and
+runtime/RAG correctness fixes. It is not a completed product release: the
+[existing implementation ledger](docs/implementation/career-agent-os-ledger.md)
+records verified scope and still-open recovery, quota, migration-cutover and
+quality gates. No historical user records are discarded to make migrations pass.
+
 ## Core features
 
 - Mock interviews grounded in a resume and job description

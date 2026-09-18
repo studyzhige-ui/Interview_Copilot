@@ -50,3 +50,10 @@
 发布前的模拟面试评测同时覆盖单轮和完整轨迹，包含阶段覆盖、重复追问、Python
 知识穷举、低价值深挖、题量提醒、提前结束、提示词注入、反问事实约束、语言切换
 和断线恢复。结构门禁还要求收尾消息只能提示用户结束，不能声称面试已经结束。
+
+
+## 审查分支的统一启动合同
+
+`MockPreparationRequest` 是 HTTP 和 Agent 工具的共同输入合同。新请求默认 `input_mode=text`，只有 `voice` 才检查麦克风；语音失败后可以明确选择文字降级，不重复创建 Runtime。历史未携带模式的 ClientAction 保持原有 voice 解释。
+JD 可直接输入（20–50,000 字符），或引用精确的 owned `jd_snapshot_id + jd_snapshot_version + job_opportunity_id`，两种入口互斥。服务端解析并冻结内容后再交接，不能把当前最新 JD 偷换成用户指定版本。
+Agent 的预填页面只确认本次冻结设置。其按钮提交 ClientAction 回执，不调用第二次 `/mock/start`；真实 Runtime 仍只由 `mock_flow.start_mock` 创建。页面回执和 Runtime read-back 继续分开。

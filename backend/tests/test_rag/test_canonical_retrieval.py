@@ -161,7 +161,14 @@ async def test_pipeline_preserves_missing_intent_for_grounding_gate(monkeypatch)
     monkeypatch.setattr(
         instance,
         "_hydrate",
-        lambda _ids: [{"node_id": "n1", "text": "first evidence"}],
+        lambda _ids, **_scope: [
+            {
+                "node_id": "n1",
+                "text": "first evidence",
+                "document_id": "doc",
+                "source_kind": "user_upload",
+            }
+        ],
     )
 
     result = await instance.retrieve(

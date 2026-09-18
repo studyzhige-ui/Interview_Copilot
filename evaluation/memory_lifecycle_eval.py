@@ -186,7 +186,9 @@ async def integration():
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
     with factory() as db:
-        user = User(username="synthetic-memory-evaluation", hashed_password="not-a-login")
+        user = User(
+            username="synthetic-memory-evaluation", hashed_password="not-a-login"
+        )
         db.add(user)
         db.flush()
         user_id = user.id
@@ -195,40 +197,89 @@ async def integration():
         db.add(conversation)
         db.flush()
         message = CASES[1][1][0]["text"]
-        db.add_all([
-            ConversationMessage(conversation_id=conversation.id, seq=1, role="User", content=message),
-            ConversationMessage(conversation_id=conversation.id, seq=2, role="Assistant", content="收到这次反馈。"),
-        ])
-        db.add(ConversationTurn(id="synthetic-turn", conversation_id=conversation.id,
-            user_id=user_id, mode="agent", message=message, status="completed",
-            user_message_seq=1, assistant_message_seq=2, completed_at=utc_now()-timedelta(hours=1)))
+        db.add_all(
+            [
+                ConversationMessage(
+                    conversation_id=conversation.id, seq=1, role="User", content=message
+                ),
+                ConversationMessage(
+                    conversation_id=conversation.id,
+                    seq=2,
+                    role="Assistant",
+                    content="收到这次反馈。",
+                ),
+            ]
+        )
+        db.add(
+            ConversationTurn(
+                id="synthetic-turn",
+                conversation_id=conversation.id,
+                user_id=user_id,
+                mode="agent",
+                message=message,
+                status="completed",
+                user_message_seq=1,
+                assistant_message_seq=2,
+                completed_at=utc_now() - timedelta(hours=1),
+            )
+        )
         db.commit()
     try:
-        with patch.object(memory_pipeline, "SessionLocal", factory), patch.object(
-            memory_recall, "SessionLocal", factory), patch.object(
-            memory_pipeline.settings, "AGENT_MEMORY_PRODUCER_ENABLED", True):
+        with (
+            patch.object(memory_pipeline, "SessionLocal", factory),
+            patch.object(memory_recall, "SessionLocal", factory),
+            patch.object(
+                memory_pipeline.settings, "AGENT_MEMORY_PRODUCER_ENABLED", True
+            ),
+        ):
             written = await memory_pipeline.process_turn("synthetic-turn")
-            block = await memory_recall.recall(conversation_id="synthetic-conversation",
-                user_pk=user_id, current_query="两份 offer 各有得失，我该怎么选？", turn_id="synthetic-turn")
+            block = await memory_recall.recall(
+                conversation_id="synthetic-conversation",
+                user_pk=user_id,
+                current_query="两份 offer 各有得失，我该怎么选？",
+                turn_id="synthetic-turn",
+            )
             with factory() as db:
                 extraction = db.get(MemoryExtraction, "synthetic-turn")
-                memories = db.query(LongTermAgentMemory).filter_by(user_id=user_id, status="active").all()
+                memories = (
+                    db.query(LongTermAgentMemory)
+                    .filter_by(user_id=user_id, status="active")
+                    .all()
+                )
                 published = len(memories)
                 evidence_matched = all(m.evidence_json for m in memories)
                 status = extraction.status
                 for row in memories:
-                    agent_memory_service.delete_memory(db, user_pk=user_id, memory_id=row.id,
-                        command=AgentMemoryStatusCommand(expected_version=row.version, reason="evaluation cleanup"))
+                    agent_memory_service.delete_memory(
+                        db,
+                        user_pk=user_id,
+                        memory_id=row.id,
+                        command=AgentMemoryStatusCommand(
+                            expected_version=row.version, reason="evaluation cleanup"
+                        ),
+                    )
                 db.commit()
-            after_delete = await memory_recall.recall(conversation_id="synthetic-conversation",
-                user_pk=user_id, current_query="帮我比较两个方案", turn_id="synthetic-turn")
+            after_delete = await memory_recall.recall(
+                conversation_id="synthetic-conversation",
+                user_pk=user_id,
+                current_query="帮我比较两个方案",
+                turn_id="synthetic-turn",
+            )
             reprocess = await memory_pipeline.process_turn("synthetic-turn")
-            return {"passed": written > 0 and published > 0 and evidence_matched and bool(block)
-                    and not after_delete and reprocess == 0,
-                    "extraction_status": status, "published": published,
-                    "recall_nonempty": bool(block), "deleted_recall_empty": not after_delete,
-                    "deleted_source_not_recreated": reprocess == 0,
-                    "database": "disposable in-memory SQLite; no user data accessed"}
+            return {
+                "passed": written > 0
+                and published > 0
+                and evidence_matched
+                and bool(block)
+                and not after_delete
+                and reprocess == 0,
+                "extraction_status": status,
+                "published": published,
+                "recall_nonempty": bool(block),
+                "deleted_recall_empty": not after_delete,
+                "deleted_source_not_recreated": reprocess == 0,
+                "database": "disposable in-memory SQLite; no user data accessed",
+            }
     finally:
         engine.dispose()
 

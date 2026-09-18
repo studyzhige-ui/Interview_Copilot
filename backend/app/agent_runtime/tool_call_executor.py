@@ -65,6 +65,7 @@ class ToolExecutionPlan:
     connection_identity: str | None = None
     resource_identities: tuple[str, ...] = ()
     receipt_ref_resolver: Callable[[dict[str, Any]], Collection[str]] | None = None
+    max_argument_chars: int | None = None
     existing_result: dict[str, Any] | None = None
     preflight_error: dict[str, Any] | None = None
 
@@ -120,6 +121,7 @@ async def plan_tool_call(
     connection_identity: str | None = None,
     resource_identities: Collection[str] = (),
     receipt_ref_resolver: Callable[[dict[str, Any]], Collection[str]] | None = None,
+    max_argument_chars: int | None = None,
 ) -> ToolExecutionPlan:
     """Preflight Policy and exact call identity before any handler starts.
 
@@ -164,6 +166,7 @@ async def plan_tool_call(
         connection_identity=connection_identity,
         resource_identities=bounded_resources,
         receipt_ref_resolver=receipt_ref_resolver,
+        max_argument_chars=max_argument_chars,
         existing_result=_safe_result(existing_result) if existing_result else None,
         preflight_error=(
             _safe_result(preflight_error) if preflight_error is not None else None
@@ -330,6 +333,7 @@ async def execute_tool_call(
 ) -> dict[str, Any]:
     """Execute one call with timeout/cancellation and durable lifecycle audit."""
     started = time.perf_counter()
+    handler_started = False
     encoded_arguments = json.dumps(arguments, ensure_ascii=False, default=str)
     redacted_arguments = redact_tool_value(arguments)
     encoded_redacted_arguments = json.dumps(
@@ -337,7 +341,13 @@ async def execute_tool_call(
         ensure_ascii=False,
         default=str,
     )
-    arguments_too_large = len(encoded_arguments) > settings.AGENT_MAX_TOOL_ARG_CHARS
+    argument_limit = min(
+        plan.max_argument_chars
+        if plan is not None and plan.max_argument_chars is not None
+        else settings.AGENT_MAX_TOOL_ARG_CHARS,
+        settings.AGENT_MAX_TOOL_WIRE_ARG_CHARS,
+    )
+    arguments_too_large = argument_limit <= 0 or len(encoded_arguments) > argument_limit
     audited_arguments = (
         redacted_arguments
         if not arguments_too_large
@@ -373,6 +383,13 @@ async def execute_tool_call(
     async def audit_cancellation() -> None:
         if not turn_id:
             return
+        cancel_status, cancel_result = _classify_interrupted_call(
+            effect=effect.value,
+            handler_started=handler_started,
+            status="cancelled",
+            result=None,
+            error="tool_cancelled",
+        )
         await asyncio.to_thread(
             _finish,
             call_id,
@@ -380,8 +397,8 @@ async def execute_tool_call(
             session_id,
             user_id,
             tool_name,
-            "cancelled",
-            None,
+            cancel_status,
+            cancel_result,
             "tool_cancelled",
             (time.perf_counter() - started) * 1000,
             dispatch_generation,
@@ -503,6 +520,7 @@ async def execute_tool_call(
             if finished is not None:
                 result = finished
         return result
+    dispatch_exception = False
     try:
         if turn_id:
             handler_admitted = await asyncio.to_thread(
@@ -516,27 +534,41 @@ async def execute_tool_call(
                     "error": "stale_dispatch_generation",
                     "tool_name": tool_name,
                 }
+        handler_started = True
         async with asyncio.timeout(timeout_seconds):
             result = _safe_result(await dispatch())
         status = _status_for_result(result)
         error = str(result.get("error")) if "error" in result else None
     except TimeoutError:
+        dispatch_exception = True
         result = {"error": "tool_timeout", "tool_name": tool_name}
         status, error = "timeout", "tool_timeout"
     except asyncio.CancelledError:
         await audit_cancellation()
         raise
     except ValueError as exc:
+        dispatch_exception = True
         safe_error = redact_tool_text(str(exc))
         result = {"error": safe_error}
         status, error = "failed", safe_error
     except Exception as exc:  # noqa: BLE001
+        dispatch_exception = True
         # Traceback exception text can contain request headers or signed URLs.
         # Keep the exception type for operations without copying its value.
         logger.error("tool call failed: %s (%s)", tool_name, type(exc).__name__)
         result = {"error": "tool_execution_failed", "tool_name": tool_name}
         status, error = "failed", type(exc).__name__
 
+    # Only exceptions/interruptions are ambiguous here; an explicit normal
+    # handler rejection is not converted into an unknown side effect.
+    if dispatch_exception:
+        status, result = _classify_interrupted_call(
+            effect=effect.value,
+            handler_started=handler_started,
+            status=status,
+            result=result,
+            error=error,
+        )
     if turn_id:
         receipt_refs = _declared_receipt_refs(
             plan.receipt_ref_resolver,
@@ -1198,6 +1230,36 @@ def record_tool_call_interrupt(
     return completion_sequence
 
 
+def _classify_interrupted_call(
+    *,
+    effect: str,
+    handler_started: bool,
+    status: str,
+    result: dict[str, Any] | None,
+    error: str | None,
+) -> tuple[str, dict[str, Any] | None]:
+    """Local failure is not evidence that an admitted mutation was rolled back.
+
+    The canonical lifecycle status remains the existing reconciliation fence.
+    The result separately preserves the local execution outcome. A handler
+    returning an explicit rejection goes through the normal result contract.
+    """
+    if (
+        handler_started
+        and effect not in {ToolEffect.READ.value, ToolEffect.RUNTIME_CONTROL.value}
+        and status in {"timeout", "cancelled", "failed"}
+    ):
+        return "unknown", {
+            **(result or {}),
+            "error": error or "tool_outcome_unknown",
+            "status": "unknown",
+            "execution_status": status,
+            "external_outcome": "unknown",
+            "requires_reconcile": True,
+        }
+    return status, result
+
+
 def _status_for_result(result: dict[str, Any]) -> str:
     reported_status = str(result.get("status") or "").casefold()
     if reported_status in {"partial", "unknown"}:
@@ -1249,11 +1311,19 @@ def _finish(
                     turn_id=turn_id,
                     call_id=call_id,
                     status=status,
-                    correlation=_safe_result(result),
+                    correlation=_safe_result(result or {}),
                 )
                 if settled:
                     db.commit()
             return result
+        if status in {"timeout", "cancelled"}:
+            status, result = _classify_interrupted_call(
+                effect=row.effect,
+                handler_started=_handler_was_started(row),
+                status=status,
+                result=result,
+                error=error,
+            )
         turn = db.get(ConversationTurn, turn_id)
         stale = (
             turn is None

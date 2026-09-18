@@ -42,6 +42,7 @@ interface Props {
   recordId: string;
   initialMessages?: MockLiveMessage[];
   ttsVoice: TtsVoice;
+  inputMode?: 'text' | 'voice';
   onFinished: (recordId: string) => void;
   onAbandoned: () => void;
 }
@@ -61,6 +62,7 @@ export function MockLive({
   recordId,
   initialMessages = [],
   ttsVoice,
+  inputMode = 'text',
   onFinished,
   onAbandoned,
 }: Props) {
@@ -75,7 +77,7 @@ export function MockLive({
   // The model may suggest wrapping up, but the candidate keeps control of
   // when the interview actually ends.
   const [endSuggested, setEndSuggested] = useState(false);
-  const [ttsMuted, setTtsMuted] = useState(false);
+  const [ttsMuted, setTtsMuted] = useState(inputMode === 'text');
   const [voiceDraft, setVoiceDraft] = useState<VoiceDraft | null>(null);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [retryRecording, setRetryRecording] = useState<Blob | null>(null);

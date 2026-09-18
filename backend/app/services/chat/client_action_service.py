@@ -409,6 +409,14 @@ def _resolution_payload(
     request: MockClientActionRequest,
     result: MockClientActionResultRequest,
 ) -> dict:
+    if result.fallback_mode is not None and (
+        request.action != "mock_interview.check_readiness"
+        or result.outcome != "acknowledged"
+        or result.readiness != "ready"
+    ):
+        raise ClientActionConflictError(
+            "Text fallback requires an explicit readiness acknowledgement"
+        )
     if request.action == "mock_interview.check_readiness":
         if result.outcome == "acknowledged" and result.readiness != "ready":
             raise ClientActionConflictError(
@@ -425,6 +433,7 @@ def _resolution_payload(
         "client_id": result.client_id,
         "outcome": result.outcome,
         "readiness": result.readiness,
+        **({"fallback_mode": result.fallback_mode} if result.fallback_mode else {}),
         "reason": result.reason.strip() if result.reason else None,
     }
 

@@ -15,7 +15,8 @@ from tests.test_db.test_alembic_migrations import fresh_pg_db, _make_alembic_con
 
 
 def test_tool_identity_upgrade_preserves_audit_and_fences_concurrent_execution(
-    fresh_pg_db, monkeypatch  # noqa: F811
+    fresh_pg_db,  # noqa: F811 - imported pytest fixture
+    monkeypatch,
 ):
     cfg = _make_alembic_config(fresh_pg_db)
     command.upgrade(cfg, "0045")

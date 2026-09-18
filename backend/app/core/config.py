@@ -125,6 +125,9 @@ class Settings(BaseSettings):
     AGENT_MAX_RESPONSE_TOKENS: int = 4096
     AGENT_TOOL_SCHEMA_STRICT: bool = True
     AGENT_MAX_TOOL_ARG_CHARS: int = 4000
+    # Transport cap, not an authorization to give every tool a larger payload.
+    # Only a trusted built-in definition may opt into a larger decoded budget.
+    AGENT_MAX_TOOL_WIRE_ARG_CHARS: int = 640_000
     LLM_REQUEST_TIMEOUT_SECONDS: int = 60
     # Anthropic native Messages prompt caching. Disabling it changes only
     # latency/cost; the adapter still sends the complete semantic request.
@@ -382,7 +385,9 @@ class Settings(BaseSettings):
         if not 1 <= self.GMAIL_PROVIDER_TIMEOUT_SECONDS <= 60:
             raise ValueError("GMAIL_PROVIDER_TIMEOUT_SECONDS must be between 1 and 60")
         if not 60 <= self.PLUGIN_OAUTH_STATE_TTL_SECONDS <= 900:
-            raise ValueError("PLUGIN_OAUTH_STATE_TTL_SECONDS must be between 60 and 900")
+            raise ValueError(
+                "PLUGIN_OAUTH_STATE_TTL_SECONDS must be between 60 and 900"
+            )
         if not 1 <= self.PLUGIN_PROVIDER_TIMEOUT_SECONDS <= 60:
             raise ValueError("PLUGIN_PROVIDER_TIMEOUT_SECONDS must be between 1 and 60")
         if self.ANTHROPIC_PROMPT_CACHE_TTL not in {"5m", "1h"}:

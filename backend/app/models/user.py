@@ -45,5 +45,8 @@ class User(Base):
     # Per-user model-role selection moved out to the ``user_model_selections``
     # table (one row per role, keyed by the stable users.id) — see
     # app.models.user_model_selections / app.core.user_model_selection.
+    # Retained only for lossless upgrades; no runtime reader/writer may use this
+    # retired cursor. Keeping it on its owner preserves deletion cascades.
+    _legacy_last_dreamed_at = Column("last_dreamed_at", DateTime, nullable=True)
     created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)

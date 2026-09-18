@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, PositiveInt, field_validator
 
+from app.schemas.mock_preparation import MockPreparationRequest
+
 # ── Generic chat session DTOs ────────────────────────────────────────────
 
 
@@ -182,25 +184,8 @@ class SessionExecutionModeResponse(BaseModel):
 # history. Mirrored 1:1 by the TS interfaces in frontend/src/types/api.ts.
 
 
-class MockStartRequest(BaseModel):
-    resume_id: str = Field(min_length=1)
-    jd_text: str = Field(min_length=20, max_length=50_000)
-    interviewer_style: Literal["friendly", "professional", "rigorous", "pressure"] = (
-        "professional"
-    )
-    # Advisory whole-interview length. This activates a prompt reminder but
-    # never caps a stage or forcibly ends the interview.
-    target_question_count: Literal[15, 20, 30] = 20
-    job_opportunity_id: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=35,
-    )
-
-    @field_validator("resume_id", "jd_text", mode="before")
-    @classmethod
-    def strip_required_context(cls, value: object) -> object:
-        return value.strip() if isinstance(value, str) else value
+class MockStartRequest(MockPreparationRequest):
+    """The HTTP adapter uses the same preparation contract as Agent tools."""
 
 
 class MockLiveMessage(BaseModel):

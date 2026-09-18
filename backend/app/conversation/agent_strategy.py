@@ -1208,6 +1208,7 @@ class AgentLoopStrategy:
         otherwise — see issue C in commit message).
         """
         from app.agent_runtime.tool_call_streaming import ToolCallAssembler
+
         assembler = ToolCallAssembler()
         async for chunk in stream:
             event = (
@@ -1463,6 +1464,7 @@ class AgentLoopStrategy:
                 connection_identity=dispatch_plan.connection_identity,
                 resource_identities=dispatch_plan.resource_identities,
                 receipt_ref_resolver=dispatch_plan.receipt_ref_resolver,
+                max_argument_chars=dispatch_plan.max_argument_chars,
             )
             return _PreparedToolCall(
                 model_index=model_index,

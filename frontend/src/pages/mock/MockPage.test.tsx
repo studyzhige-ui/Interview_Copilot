@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
@@ -21,6 +21,7 @@ vi.mock('./MockSetup', () => ({
   loadPreferredVoice: () => 'zh-CN-YunxiNeural',
   MockSetup: ({ onReady }: { onReady: (payload: Record<string, unknown>) => void }) => (
     <button type="button" onClick={() => onReady({
+      input_mode: 'text',
       resume_id: 'resume-1',
       jd_text: '这是一个长度足够的岗位说明，用于模拟面试测试。',
       interviewer_style: 'professional',
@@ -52,6 +53,7 @@ describe('MockPage JobOpportunity handoff', () => {
     render(<MemoryRouter><MockPage /></MemoryRouter>);
     fireEvent.click(screen.getByRole('button', { name: '开始测试模拟面试' }));
     await waitFor(() => expect(api.startMockInterview).toHaveBeenCalledWith({
+      input_mode: 'text',
       resume_id: 'resume-1',
       jd_text: '这是一个长度足够的岗位说明，用于模拟面试测试。',
       interviewer_style: 'professional',
@@ -60,4 +62,18 @@ describe('MockPage JobOpportunity handoff', () => {
     }));
     expect(await screen.findByText('Live record-1')).toBeInTheDocument();
   });
+});
+
+function RouteDriver() {
+  const navigate = useNavigate();
+  return <><button onClick={() => navigate('/mock', { state: { mockClientAction: {
+    action_id: 'live-new', action: 'mock_interview.enter_live', payload: { kind: 'mock_enter_live', record_id: 'new-record',
+      conversation_id: 'new-conversation', runtime_status: 'mock_in_progress', input_mode: 'text' } } } })}>接收新交接</button><MockPage /></>;
+}
+it('transitions from setup to live when React reuses the same route', async () => {
+  api.getInProgressMock.mockResolvedValue({ has_in_progress: false });
+  render(<MemoryRouter initialEntries={['/mock']}><RouteDriver /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: '接收新交接' }));
+  expect(await screen.findByText('Live new-record')).toBeInTheDocument();
+  expect(api.reportMockClientActionUiResult).toHaveBeenCalledWith('live-new', { outcome: 'acknowledged' });
 });
