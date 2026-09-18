@@ -12,7 +12,8 @@ export function FactConfirmationCard({ sessionId, turnId, interaction, onResolve
   const request = interaction.request;
   const [draft, setDraft] = useState(() => invitationDraft(request.invitation_facts));
   const [selection, setSelection] = useState('');
-  const [editing, setEditing] = useState(false);
+  const requiresCorrection = Boolean(request.missing_or_uncertain_fields?.length || request.conflicts?.length);
+  const [editing, setEditing] = useState(requiresCorrection);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const busy = useRef(false);
@@ -62,7 +63,7 @@ export function FactConfirmationCard({ sessionId, turnId, interaction, onResolve
     {error && <p role="alert">{error}</p>}
     <div className="flex flex-wrap gap-3 text-sm">
       <button disabled={pending} onClick={() => setEditing(!editing)}>{editing ? '取消更正' : '更正提取事实'}</button>
-      <button disabled={pending || !selection || (!editing && !!request.missing_or_uncertain_fields?.length)} onClick={() => { void decide(editing ? 'correct_and_confirm' : 'confirm'); }}>
+      <button disabled={pending || !selection || (!editing && requiresCorrection)} onClick={() => { void decide(editing ? 'correct_and_confirm' : 'confirm'); }}>
         {pending ? '提交中…' : editing ? '更正并确认' : '确认这些事实'}
       </button>
       <button disabled={pending} onClick={() => { void decide('reject'); }}>拒绝这条提取</button>

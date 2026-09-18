@@ -11,6 +11,9 @@ Anthropic-only fields.
 from __future__ import annotations
 
 import copy
+import inspect
+import logging
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
@@ -444,88 +447,113 @@ def normalize_openai_chunk(chunk: Any) -> ProviderStreamEvent:
     )
 
 
+async def close_provider_stream(stream: Any) -> None:
+    """Close native HTTP response ownership even when a wrapper is cancelled.
+
+    Cleanup has its own short bound and never changes a settled paid outcome.
+    Error values/headers may contain secrets, so log only the exception type.
+    """
+    close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+    if not callable(close):
+        return
+    try:
+        result = close()
+        if inspect.isawaitable(result):
+            await asyncio.wait_for(result, timeout=5.0)
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "Provider stream close failed (%s)", type(exc).__name__
+        )
+
+
 async def _normalize_openai_stream(stream: Any) -> AsyncIterator[ProviderStreamEvent]:
-    async for chunk in stream:
-        yield normalize_openai_chunk(chunk)
+    try:
+        async for chunk in stream:
+            yield normalize_openai_chunk(chunk)
+    finally:
+        await close_provider_stream(stream)
 
 
 async def _normalize_anthropic_stream(
     stream: Any,
 ) -> AsyncIterator[ProviderStreamEvent]:
-    async for event in stream:
-        event_type = str(_value(event, "type", "") or "")
-        if event_type == "message_start":
-            usage = _value(_value(event, "message"), "usage")
-            if usage is not None:
-                cache_read = int(_value(usage, "cache_read_input_tokens", 0) or 0)
-                cache_creation = int(
-                    _value(usage, "cache_creation_input_tokens", 0) or 0
-                )
-                uncached = int(_value(usage, "input_tokens", 0) or 0)
-                yield ProviderStreamEvent(
-                    usage=ProviderUsage(
-                        prompt_tokens=uncached + cache_read + cache_creation,
-                        cache_read_tokens=cache_read,
-                        cache_creation_tokens=cache_creation,
+    try:
+        async for event in stream:
+            event_type = str(_value(event, "type", "") or "")
+            if event_type == "message_start":
+                usage = _value(_value(event, "message"), "usage")
+                if usage is not None:
+                    cache_read = int(_value(usage, "cache_read_input_tokens", 0) or 0)
+                    cache_creation = int(
+                        _value(usage, "cache_creation_input_tokens", 0) or 0
                     )
-                )
-            continue
+                    uncached = int(_value(usage, "input_tokens", 0) or 0)
+                    yield ProviderStreamEvent(
+                        usage=ProviderUsage(
+                            prompt_tokens=uncached + cache_read + cache_creation,
+                            cache_read_tokens=cache_read,
+                            cache_creation_tokens=cache_creation,
+                        )
+                    )
+                continue
 
-        if event_type == "content_block_start":
-            block = _value(event, "content_block")
-            if _value(block, "type") == "tool_use":
-                initial_input = _value(block, "input", {}) or {}
-                yield ProviderStreamEvent(
-                    tool_call_deltas=(
-                        ProviderToolCallDelta(
-                            index=int(_value(event, "index", 0) or 0),
-                            call_id=str(_value(block, "id", "") or ""),
-                            name=str(_value(block, "name", "") or ""),
-                            arguments_delta=(
-                                json.dumps(initial_input, ensure_ascii=False)
-                                if initial_input
-                                else ""
+            if event_type == "content_block_start":
+                block = _value(event, "content_block")
+                if _value(block, "type") == "tool_use":
+                    initial_input = _value(block, "input", {}) or {}
+                    yield ProviderStreamEvent(
+                        tool_call_deltas=(
+                            ProviderToolCallDelta(
+                                index=int(_value(event, "index", 0) or 0),
+                                call_id=str(_value(block, "id", "") or ""),
+                                name=str(_value(block, "name", "") or ""),
+                                arguments_delta=(
+                                    json.dumps(initial_input, ensure_ascii=False)
+                                    if initial_input
+                                    else ""
+                                ),
                             ),
-                        ),
+                        )
                     )
-                )
-            continue
+                continue
 
-        if event_type == "content_block_delta":
-            delta = _value(event, "delta")
-            delta_type = _value(delta, "type")
-            if delta_type == "text_delta":
-                yield ProviderStreamEvent(
-                    text_delta=str(_value(delta, "text", "") or "")
-                )
-            elif delta_type == "input_json_delta":
-                yield ProviderStreamEvent(
-                    tool_call_deltas=(
-                        ProviderToolCallDelta(
-                            index=int(_value(event, "index", 0) or 0),
-                            arguments_delta=str(
-                                _value(delta, "partial_json", "") or ""
+            if event_type == "content_block_delta":
+                delta = _value(event, "delta")
+                delta_type = _value(delta, "type")
+                if delta_type == "text_delta":
+                    yield ProviderStreamEvent(
+                        text_delta=str(_value(delta, "text", "") or "")
+                    )
+                elif delta_type == "input_json_delta":
+                    yield ProviderStreamEvent(
+                        tool_call_deltas=(
+                            ProviderToolCallDelta(
+                                index=int(_value(event, "index", 0) or 0),
+                                arguments_delta=str(
+                                    _value(delta, "partial_json", "") or ""
+                                ),
                             ),
-                        ),
+                        )
                     )
-                )
-            elif delta_type == "thinking_delta":
-                yield ProviderStreamEvent(
-                    reasoning_delta=str(_value(delta, "thinking", "") or "")
-                )
-            continue
+                elif delta_type == "thinking_delta":
+                    yield ProviderStreamEvent(
+                        reasoning_delta=str(_value(delta, "thinking", "") or "")
+                    )
+                continue
 
-        if event_type == "message_delta":
-            usage = _value(event, "usage")
-            output_tokens = int(_value(usage, "output_tokens", 0) or 0)
-            yield ProviderStreamEvent(
-                usage=(
-                    ProviderUsage(completion_tokens=output_tokens)
-                    if output_tokens
-                    else None
-                ),
-                stop_reason=_value(_value(event, "delta"), "stop_reason"),
-            )
+            if event_type == "message_delta":
+                usage = _value(event, "usage")
+                output_tokens = int(_value(usage, "output_tokens", 0) or 0)
+                yield ProviderStreamEvent(
+                    usage=(
+                        ProviderUsage(completion_tokens=output_tokens)
+                        if output_tokens
+                        else None
+                    ),
+                    stop_reason=_value(_value(event, "delta"), "stop_reason"),
+                )
+    finally:
+        await close_provider_stream(stream)
 
 
 class ModelProviderAdapter:

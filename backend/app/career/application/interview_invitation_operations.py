@@ -42,6 +42,9 @@ from app.schemas.interview_invitation import (
     ConfirmInterviewInvitation,
     ConfirmInterviewInvitationResult,
     ExplicitUserAssertionBasis,
+    FactConfirmationRequest,
+    FactConfirmationResolution,
+    InterviewInvitationFacts,
     IntakeInterviewInvitationObservation,
     IntakeInterviewInvitationResult,
     InterviewInvitationCandidateView,
@@ -630,7 +633,7 @@ def _candidate_for_confirmation(
         raise InvitationVersionConflictError(
             f"candidate version is {candidate.version}"
         )
-    if candidate.status != "pending_confirmation":
+    if candidate.status not in {"pending_confirmation", "needs_clarification"}:
         raise InvitationStateConflictError(
             f"candidate cannot be confirmed from {candidate.status}"
         )
@@ -686,11 +689,40 @@ def _source_for_confirmation(
                 raise InvitationObjectNotFoundError("invitation source snapshot")
         return source, source.identity.strip(), source.version, None
 
-    candidate, _interaction = _candidate_for_confirmation(
+    candidate, interaction = _candidate_for_confirmation(
         db,
         user_pk=user_pk,
         basis=basis,
     )
+    request = FactConfirmationRequest.model_validate(interaction.request_json)
+    resolution = FactConfirmationResolution.model_validate(interaction.resolution_json)
+    if (
+        candidate.status == "needs_clarification"
+        or request.conflicts
+        or request.missing_or_uncertain_fields
+    ) and resolution.decision != "correct_and_confirm":
+        raise InvitationPolicyDeniedError(
+            "candidate requires explicit complete correction"
+        )
+    expected_facts = (
+        resolution.corrected_facts
+        if resolution.decision == "correct_and_confirm"
+        else InterviewInvitationFacts.model_validate(
+            request.invitation_facts.model_dump(mode="json")
+        )
+    )
+    # The shared owner rechecks exact approved inputs, not just an approval ID.
+    # This covers adapters that do not use the current thin Agent wrapper.
+    if (
+        expected_facts is None
+        or resolution.opportunity is None
+        or _json(expected_facts) != _json(command.facts)
+        or _json(resolution.opportunity) != _json(command.opportunity)
+        or _json(resolution.interview) != _json(command.interview)
+    ):
+        raise InvitationPolicyDeniedError(
+            "confirmed inputs differ from the user decision"
+        )
     source = InvitationSourceReference(
         kind="user_message",
         identity=basis.decision_identity,

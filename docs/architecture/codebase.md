@@ -82,6 +82,65 @@ side effects. Cross-system changes use the typed outbox and are claimed by
 cleanup. PostgreSQL owns lifecycle state, object storage owns file bytes, and
 Milvus is a rebuildable retrieval index.
 
+## Shared invitation ingress and primary-model accounting
+
+The invitation domain operation remains
+`career/application/interview_invitation_operations.py`. UI, Agent and source
+adapters do not each implement another invitation writer:
+
+- A manual UI request first registers its exact command with
+  `invitation_submission_service.py`. Execution and the shared Operation's
+  verification/receipt link commit together. The browser keeps only an opaque,
+  account-scoped request key in sessionStorage, not the invitation fields.
+  Reload performs a read-only receipt lookup; only an explicit resume retries
+  the exact registered command. `not_received` is not proof that a delayed POST
+  cannot arrive. Cancellation uses the same owner lock and can create a
+  tombstone before that delayed POST arrives. A committed operation is not
+  undone by cancelling its ingress request.
+- Gmail interview invitations use `gmail_invitation_adapter.py` and the same
+  provider-neutral source/candidate/typed fact-confirmation flow as fixture
+  observations. Confidence and task scopes never auto-confirm an interview.
+  Missing dates/timezones stay missing until the user corrects them. The shared
+  Operation binds exact facts, object selections and versions to the saved
+  decision. Legacy invitation review approval hands off to this path, rather
+  than appending a second invitation ProcessEvent. Other event types keep their
+  existing lifecycle. Views project terminal status from the canonical
+  candidate instead of inventing another editable Gmail business state.
+- `services/chat/model_budget_service.py` admits primary Chat/Agent model calls
+  atomically with `AgentModelDispatch`. Account UTC-day allowances survive
+  application restart and conversation deletion. Same call identity is never
+  a second dispatch permit. Known refusal releases token reservation but still
+  consumes a call; uncertain requests hold their reservation until an explicit
+  evidenced reconciliation. A completed response without usage consumes its
+  conservative reservation instead of being counted as free. Cache categories
+  are not added twice to logical prompt tokens; cumulative provider usage is
+  merged component by component across native stream events.
+
+This accounting covers **primary Chat/Agent only**, not internal model work,
+compaction, embedding/reranking, speech or external Tools. It is not a monetary
+invoice, provider price model or complete platform billing system. These limits
+are separate from task completion, per-call inactivity timeouts and total stream
+deadlines. The Models page exposes used/reserved allowances and this scope; it
+never treats a failed status read as zero usage. Operators set the four documented
+`MODEL_DAILY_*` / `MODEL_STREAM_*` settings. A day's limits freeze at its first
+admitted request; changing an environment variable does not rewrite existing
+usage windows. Reconciliation is an internal, evidence-requiring service seam,
+not a model-callable budget-reset tool or a completed operator UI.
+
+Migrations `0048` and `0049` add these state tables without rewriting existing
+career facts. Account deletion cascades their records; conversation deletion
+must not erase account usage. Pending manual commands necessarily contain the
+user-supplied invitation fields on the server. Cancel clears their payload;
+committed records retain the identity/receipt relationship. Do not expose or
+log these payloads as diagnostics. Automatic retention/expiry for unresolved
+commands and cancellation tombstones is not claimed: dropping a tombstone while
+an old request can still arrive would invalidate cancellation safety.
+
+Apply migrations before running the new application. Back up the database and
+verify restore first. Downgrading below these revisions drops their accounting
+and recovery records: export/reconcile them and quiesce pending requests first.
+Do not use downgrade as a quota-reset or to erase outcome-unknown receipts.
+
 ## Storage value contracts
 
 Database values follow two explicit rules, enforced by models, migrations and

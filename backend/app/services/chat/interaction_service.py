@@ -220,6 +220,26 @@ def resolve_interaction(
         )
 
     redacted_resolution = _redacted_payload(resolution)
+    interaction = db.get(AgentInteraction, interaction_id)
+    if interaction is not None and interaction.kind == "fact_confirmation":
+        from app.schemas.interview_invitation import (
+            FactConfirmationRequest,
+            FactConfirmationResolution,
+        )
+
+        request = FactConfirmationRequest.model_validate(interaction.request_json)
+        decision = FactConfirmationResolution.model_validate(redacted_resolution)
+        if decision.decision == "confirm" and (
+            request.missing_or_uncertain_fields or request.conflicts
+        ):
+            raise InteractionConflictError(
+                "missing_or_conflicting_invitation_requires_correction"
+            )
+        if not resolution_identity or not resolution_identity.strip():
+            raise InteractionConflictError("fact_confirmation_identity_required")
+        expected_status = "rejected" if decision.decision == "reject" else "resolved"
+        if status != expected_status:
+            raise InteractionConflictError("fact_confirmation_status_mismatch")
     normalized_resolution_identity = (
         resolution_identity.strip() if resolution_identity is not None else None
     )

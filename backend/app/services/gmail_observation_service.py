@@ -65,7 +65,6 @@ _AUTO_APPLY_KINDS = frozenset(
         "application_submitted",
         "application_acknowledged",
         "assessment_invited",
-        "interview_scheduled",
         "offer_received",
         "rejected",
         "posting_closed",
@@ -104,6 +103,7 @@ class GmailObservationProposalResult:
     card: GmailObservationReviewCard | None
     process_event_id: str | None
     outcome: str
+    invitation_handoff: dict | None = None
 
 
 def persist_incremental_batch(
@@ -406,6 +406,39 @@ def propose_observation(
     observation.unique_match = proposal.unique_match
     observation.analysis_summary = proposal.rationale
 
+    if proposal.event_kind == "interview_scheduled":
+        from app.career.application.gmail_invitation_adapter import (
+            route_gmail_invitation,
+        )
+
+        handoff = route_gmail_invitation(
+            db,
+            user_pk=user_pk,
+            observation=observation,
+            snapshot=snapshot,
+            facts=proposal.invitation_facts,
+            confidence=proposal.confidence,
+        )
+        observation.status = "pending_confirmation"
+        observation.version += 1
+        observation.updated_at = utc_now()
+        observation.notification_summary = (
+            "面试邀请已转入事实确认；尚未写入机会或面试日程。"
+        )
+        db.flush()
+        return GmailObservationProposalResult(
+            observation=observation,
+            card=None,
+            process_event_id=None,
+            outcome=(
+                "pending_confirmation"
+                if handoff["candidate_status"]
+                in {"needs_clarification", "pending_confirmation"}
+                else "invitation_already_reviewed"
+            ),
+            invitation_handoff=handoff,
+        )
+
     auto_allowed = _can_auto_apply(db, task, proposal)
     if proposal.disposition == "auto_apply" and auto_allowed:
         event = _apply_candidate(
@@ -503,6 +536,45 @@ def resolve_review_card(
 
     event_kind = str(command.event_kind or card.candidate_event_kind)
     _validate_mail_event_kind(event_kind)
+    if event_kind == "interview_scheduled":
+        from app.career.application.gmail_invitation_adapter import (
+            route_gmail_invitation,
+        )
+
+        handoff = route_gmail_invitation(
+            db,
+            user_pk=user_pk,
+            observation=observation,
+            snapshot=snapshot,
+            facts=None,
+            confidence=card.confidence,
+        )
+        card.status = "skipped"
+        card.resolution_note = (
+            "Transferred to typed invitation fact confirmation; no canonical write."
+        )
+        card.user_request_identity = command.user_request_identity
+        card.resolved_at = now
+        card.version += 1
+        card.updated_at = now
+        observation.status = "pending_confirmation"
+        observation.notification_summary = (
+            "请在工作台补充并确认具体面试安排；尚未写入岗位事实。"
+        )
+        observation.version += 1
+        db.flush()
+        return GmailObservationProposalResult(
+            observation=observation,
+            card=card,
+            process_event_id=None,
+            outcome=(
+                "pending_confirmation"
+                if handoff["candidate_status"]
+                in {"needs_clarification", "pending_confirmation"}
+                else "invitation_already_reviewed"
+            ),
+            invitation_handoff=handoff,
+        )
     opportunity_id = command.opportunity_id or card.candidate_opportunity_id
     new_opportunity = command.new_opportunity or (
         GmailObservationNewOpportunity.model_validate(card.new_opportunity_json)
@@ -641,6 +713,10 @@ def _apply_candidate(
     description: str,
     step_summary: str | None,
 ):
+    if event_kind == "interview_scheduled":
+        raise GmailObservationConflictError(
+            "interview_invitation_requires_shared_operation"
+        )
     if occurred_at is None:
         raise GmailObservationConflictError("candidate_occurred_at_required")
     if new_opportunity is not None:
@@ -890,19 +966,37 @@ def _snapshot(
 
 
 def _observation_view(db: Session, observation: GmailObservation) -> dict:
+    from app.career.application.gmail_invitation_adapter import read_invitation_handoff
+
     payload = GmailObservationView.model_validate(
         {
             **{
                 field: getattr(observation, field)
                 for field in GmailObservationView.model_fields
-                if field != "latest_snapshot"
+                if field not in {"latest_snapshot", "invitation_handoff"}
             },
+            "invitation_handoff": read_invitation_handoff(db, observation=observation),
             "latest_snapshot": GmailObservationSnapshotView.model_validate(
                 _latest_snapshot(db, observation.id)
             ),
         }
     )
-    return payload.model_dump(mode="json")
+    result = payload.model_dump(mode="json")
+    handoff = result.get("invitation_handoff")
+    if handoff and handoff["candidate_status"] in {
+        "confirmed",
+        "rejected",
+        "superseded",
+    }:
+        # Rebuild from the provider-neutral owner; the old observation is not a
+        # second state machine and must not display an eternal pending badge.
+        result["status"] = (
+            "applied" if handoff["candidate_status"] == "confirmed" else "dismissed"
+        )
+        result["notification_summary"] = (
+            "邀请候选已处理；正式事实与后续更正请在面试工作区核对。"
+        )
+    return result
 
 
 def _card_view(db: Session, card: GmailObservationReviewCard) -> dict:

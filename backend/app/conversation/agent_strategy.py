@@ -92,6 +92,8 @@ from app.services.chat.agent_task_service import (
     get_agent_task,
 )
 from app.services.chat.model_dispatch_service import (
+    ModelOutcomeUnknownError,
+    dispatch_failure_status,
     durable_model_stream,
     finish_model_dispatch,
     request_fingerprint,
@@ -1110,9 +1112,10 @@ class AgentLoopStrategy:
     ) -> tuple[Any, float]:
         attempt = 0
         current_call_id: str | None = None
+        current_deadline: float | None = None
 
         async def _make_call() -> Any:
-            nonlocal attempt, current_call_id
+            nonlocal attempt, current_call_id, current_deadline
             attempt += 1
             request = build_provider_request(
                 messages=messages,
@@ -1139,15 +1142,37 @@ class AgentLoopStrategy:
                     provider=str(getattr(profile, "provider", "unknown") or "unknown"),
                     model=str(getattr(profile, "model", "unknown") or "unknown"),
                     fingerprint=request_fingerprint(
-                        messages=messages,
-                        tools=tool_schemas,
+                        messages=request.messages,
+                        tools=request.tools,
+                        system=request.system,
+                        max_tokens=request.max_tokens,
+                        temperature=request.temperature,
                     ),
+                    token_allowance=len(
+                        json.dumps(
+                            {
+                                "system": request.system,
+                                "messages": request.messages,
+                                "tools": request.tools,
+                            },
+                            ensure_ascii=False,
+                        ).encode("utf-8")
+                    )
+                    + request.max_tokens
+                    + 1024,
                 )
+            current_deadline = (
+                asyncio.get_running_loop().time()
+                + settings.MODEL_STREAM_DEADLINE_SECONDS
+            )
             try:
-                return await ModelProviderAdapter(
-                    client=client,
-                    profile=profile,
-                ).start_stream(request)
+                return await asyncio.wait_for(
+                    ModelProviderAdapter(
+                        client=client,
+                        profile=profile,
+                    ).start_stream(request),
+                    settings.MODEL_STREAM_DEADLINE_SECONDS,
+                )
             except BaseException as exc:
                 if current_call_id:
                     await asyncio.to_thread(
@@ -1155,13 +1180,13 @@ class AgentLoopStrategy:
                         turn_id=turn_id,
                         call_id=current_call_id,
                         dispatch_generation=dispatch_generation,
-                        status=(
-                            "cancelled"
-                            if isinstance(exc, asyncio.CancelledError)
-                            else "failed"
-                        ),
+                        status=dispatch_failure_status(exc),
                         error_code=type(exc).__name__,
                     )
+                if dispatch_failure_status(exc) == "unknown" and not isinstance(
+                    exc, asyncio.CancelledError
+                ):
+                    raise ModelOutcomeUnknownError("model_outcome_unknown") from exc
                 raise
 
         async def _on_context_too_long() -> bool:
@@ -1181,6 +1206,7 @@ class AgentLoopStrategy:
             turn_id=turn_id,
             call_id=current_call_id,
             dispatch_generation=dispatch_generation,
+            deadline=current_deadline,
         )
         return tracked, round((time.perf_counter() - started) * 1000, 2)
 

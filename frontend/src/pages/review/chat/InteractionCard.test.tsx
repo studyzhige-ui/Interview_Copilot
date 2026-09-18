@@ -100,3 +100,12 @@ describe('invitation fact confirmation, not generic approval', () => {
     expect(resolveAgentInteraction).not.toHaveBeenCalled();
   });
 });
+
+it('requires complete correction when invitation time is missing or conflicting', () => {
+  renderCard({ ...factInteraction, request: { ...factInteraction.request,
+    missing_or_uncertain_fields: ['source_timezone'], conflicts: ['two possible start times'] } });
+  expect(screen.getByRole('button', { name: '更正并确认' })).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('关联求职机会'), { target: { value: 'new' } });
+  fireEvent.click(screen.getByRole('button', { name: '取消更正' }));
+  expect(screen.getByRole('button', { name: '确认这些事实' })).toBeDisabled();
+});

@@ -48,6 +48,7 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/interview_copilot
+      REQUIRE_TEST_POSTGRES: "1"
       REDIS_URL: redis://localhost:6379/0
       SECRET_KEY: ci-test-secret-key-not-for-production
       DEEPSEEK_API_KEY: test-key-not-real
@@ -86,7 +87,17 @@ jobs:
         run: |
           python -m pytest backend/tests \
             -v \
-            --tb=short
+            --tb=short \
+            --junitxml=test-results/backend.xml
+
+      - name: Preserve test results, including required PostgreSQL cases
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-tests-py${{ matrix.python-version }}
+          path: test-results/backend.xml
+          if-no-files-found: warn
+          retention-days: 7
 
   evaluation-dependencies:
     runs-on: ubuntu-latest

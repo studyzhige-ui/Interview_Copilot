@@ -22,7 +22,21 @@ def classify_api_error(error: Exception) -> ErrorCategory:
     """Classify an OpenAI-compatible API error into a recovery category."""
     from app.core.context_budget import ContextCapacityError
 
-    if isinstance(error, ContextCapacityError):
+    from app.services.chat.model_budget_service import ModelBudgetExceededError
+    from app.services.chat.model_dispatch_service import (
+        ModelOutcomeUnknownError,
+        ModelDispatchConflictError,
+    )
+
+    if isinstance(
+        error,
+        (
+            ContextCapacityError,
+            ModelBudgetExceededError,
+            ModelOutcomeUnknownError,
+            ModelDispatchConflictError,
+        ),
+    ):
         return ErrorCategory.FATAL
     msg = str(error).lower()
     err_type = type(error).__name__

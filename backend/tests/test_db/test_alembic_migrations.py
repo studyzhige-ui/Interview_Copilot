@@ -9,9 +9,9 @@ service used by the project). The test creates an isolated database
 ``interview_copilot_test_<uuid>`` for each run and drops it on teardown
 so concurrent runs / re-runs never collide.
 
-If Postgres is unreachable the test is skipped — that way `pytest` is
-still green in environments without Docker (e.g. lightweight CI),
-and CI that does spin up PG catches migration breakage.
+Local runs without PostgreSQL skip these cases. The required CI campaign sets
+REQUIRE_TEST_POSTGRES=1: an unreachable database then fails instead of silently
+skipping the migration, concurrency and process-death checks.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def _pg_available() -> bool:
     try:
         import psycopg2
 
-        conn = psycopg2.connect(PG_ADMIN_URL)
+        conn = psycopg2.connect(PG_ADMIN_URL, connect_timeout=3)
         conn.close()
         return True
     except Exception:
@@ -52,6 +52,10 @@ def _pg_available() -> bool:
 def fresh_pg_db():
     """Provision an isolated, empty Postgres DB; drop it on teardown."""
     if not _pg_available():
+        if os.environ.get("REQUIRE_TEST_POSTGRES") == "1":
+            pytest.fail(
+                "PostgreSQL is mandatory for this test campaign but is unavailable"
+            )
         pytest.skip(
             "Postgres not reachable at TEST_PG_ADMIN_URL — skipping migration test."
         )
@@ -61,7 +65,7 @@ def fresh_pg_db():
 
     db_name = f"ic_mig_test_{uuid.uuid4().hex[:12]}"
 
-    admin = psycopg2.connect(PG_ADMIN_URL)
+    admin = psycopg2.connect(PG_ADMIN_URL, connect_timeout=3)
     admin.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
     with admin.cursor() as cur:
         cur.execute(f'CREATE DATABASE "{db_name}"')
@@ -74,7 +78,7 @@ def fresh_pg_db():
     yield db_url
 
     # Teardown — disconnect everyone & drop.
-    admin = psycopg2.connect(PG_ADMIN_URL)
+    admin = psycopg2.connect(PG_ADMIN_URL, connect_timeout=3)
     admin.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
     with admin.cursor() as cur:
         cur.execute(

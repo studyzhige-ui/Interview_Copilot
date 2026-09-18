@@ -52,17 +52,18 @@ def test_model_dispatch_fences_generation_and_identity(db_session):
         model="claude-test",
         fingerprint=fingerprint,
     )
-    replay = start_model_dispatch(
-        db_session,
-        call_id="model:3:1:1",
-        turn_id=turn.id,
-        user_id=user.id,
-        dispatch_generation=3,
-        provider="anthropic",
-        model="claude-test",
-        fingerprint=fingerprint,
-    )
-    assert replay.id == row.id
+    with pytest.raises(ModelDispatchConflictError, match="already_running"):
+        start_model_dispatch(
+            db_session,
+            call_id="model:3:1:1",
+            turn_id=turn.id,
+            user_id=user.id,
+            dispatch_generation=3,
+            provider="anthropic",
+            model="claude-test",
+            fingerprint=fingerprint,
+        )
+    assert row.status == "running"
 
     with pytest.raises(ModelDispatchConflictError, match="identity_conflict"):
         start_model_dispatch(

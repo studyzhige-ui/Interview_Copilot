@@ -212,6 +212,8 @@ def _fact_interaction(
     candidate,
     *,
     decision: str,
+    corrected_facts=None,
+    opportunity=None,
 ):
     candidate_row = db_session.get(InterviewInvitationCandidate, candidate.id)
     assert candidate_row is not None
@@ -269,7 +271,26 @@ def _fact_interaction(
         user_id=user.id,
         expected_version=row.version,
         status="rejected" if decision == "reject" else "resolved",
-        resolution=InteractionPayload(root={"decision": decision}),
+        resolution=InteractionPayload(
+            root={
+                "protocol": "interview_invitation.fact_confirmation.v1",
+                "decision": decision,
+                **(
+                    {
+                        "opportunity": (
+                            opportunity or CreateOpportunity(kind="create_new")
+                        ).model_dump(mode="json")
+                    }
+                    if decision != "reject"
+                    else {}
+                ),
+                **(
+                    {"corrected_facts": corrected_facts.model_dump(mode="json")}
+                    if corrected_facts is not None
+                    else {}
+                ),
+            }
+        ),
         resolution_identity=decision_identity,
     )
     return conversation, turn, resolved, decision_identity
@@ -452,13 +473,20 @@ def test_link_existing_requires_current_opportunity_version(db_session) -> None:
 def test_candidate_confirmation_records_decision_and_evidence(db_session) -> None:
     user = _user(db_session)
     intake, source, candidate = _source_and_candidate(db_session, user)
+    opportunity = _existing_opportunity(db_session, user)
+    selected = LinkExistingOpportunity(
+        kind="link_existing",
+        opportunity_id=opportunity.id,
+        expected_version=opportunity.version,
+    )
     conversation, turn, interaction, decision_identity = _fact_interaction(
         db_session,
         user,
         candidate,
         decision="correct_and_confirm",
+        corrected_facts=_facts(location="Corrected remote location"),
+        opportunity=selected,
     )
-    opportunity = _existing_opportunity(db_session, user)
     command = ConfirmInterviewInvitation(
         idempotency_key="candidate-confirm-1",
         actor_kind="agent_on_behalf",

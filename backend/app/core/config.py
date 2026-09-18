@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
@@ -129,6 +129,15 @@ class Settings(BaseSettings):
     # Only a trusted built-in definition may opt into a larger decoded budget.
     AGENT_MAX_TOOL_WIRE_ARG_CHARS: int = 640_000
     LLM_REQUEST_TIMEOUT_SECONDS: int = 60
+    # UTC-day safety allowance for primary Chat/Agent model dispatches. This
+    # does not bill currency or replace task-completion reasoning. Limits are
+    # frozen on each account/day row; restart and Conversation deletion do not
+    # reset them. Internal models, compaction, speech and tools are not billed
+    # by this first accounting scope (the usage API advertises exclusions).
+    MODEL_DAILY_CALL_LIMIT: int = Field(default=500, ge=1, le=1_000_000)
+    MODEL_DAILY_TOKEN_LIMIT: int = Field(default=2_000_000, ge=1, le=2_000_000_000)
+    MODEL_STREAM_DEADLINE_SECONDS: float = Field(default=180, gt=0, le=3600)
+    MODEL_STREAM_MAX_BYTES: int = Field(default=2_000_000, ge=1024, le=50_000_000)
     # Anthropic native Messages prompt caching. Disabling it changes only
     # latency/cost; the adapter still sends the complete semantic request.
     ANTHROPIC_PROMPT_CACHE_ENABLED: bool = True

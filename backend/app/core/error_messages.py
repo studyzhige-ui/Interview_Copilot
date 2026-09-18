@@ -88,6 +88,15 @@ def humanize_error(exc: Exception) -> str:
 
     if isinstance(exc, ContextCapacityError):
         return str(exc)
+    from app.services.chat.model_budget_service import ModelBudgetExceededError
+    from app.services.chat.model_dispatch_service import ModelOutcomeUnknownError
+
+    if isinstance(exc, ModelBudgetExceededError):
+        return str(exc)
+    if isinstance(exc, ModelOutcomeUnknownError):
+        return (
+            "模型请求的远端结果未知，已保留当前记录和额度；未自动重发可能已计费的请求。"
+        )
     msg = str(exc).lower()
     status = _status_code(exc)
 

@@ -5,6 +5,42 @@
 > 规范来源：[`Career Agent OS Blueprint`](../architecture/career-agent-os-blueprint.md)  
 > 当前切片：[`VS-01 面试邀请接收、确认与准备交接生命周期`](../architecture/vertical-slices/vs-01-interview-invitation-intake-confirmation-handoff.md)
 
+
+## 2026-09-19 中断续作：额度、原请求恢复与 Gmail 事实确认
+
+状态：本节记录 `refactor/product-runtime-convergence` 在 `562c4b1b…` 基线后的
+续作实现；不是另一套 Blueprint，也不是完整产品发布。此前章节的数字是对应
+提交的历史证据。本节 CI 结果必须绑定后续实际提交，不能继承旧绿灯。
+
+| 工作项 | 实现与边界 | 验收状态 |
+|---|---|---|
+| 主回答模型账户额度 | UTC 日级调用/逻辑 token 预留与结算，与 dispatch 同事务；跨会话/刷新/删除不重置；同调用不重复获准；unknown 保守持有 | 本地合同回归通过；真实 PostgreSQL 争抢最后额度和同调用双 worker 测试已加入，待本次 CI |
+| 流与用量 | 整体 deadline、累计响应容量、显式关闭原生流；Anthropic 分阶段 usage 按字段累计且不重复加 cache；不明付费结果不盲重试 | 本地慢滴流、容量、未知结果、关闭、分段 usage 回归通过 |
+| 手动邀请刷新恢复 | 精确命令先持久入站，再与共享 Operation/verification 一起提交；浏览器仅保存账户内 opaque key；刷新只读收据；取消先到也能阻止迟到原 POST | 后端合同与前端刷新/取消/丢响应回归通过；不声称已跑真实浏览器 E2E |
+| Gmail 邀请旧路径切换 | invitation 不论置信度/旧 auto-apply scopes 均进入同一 Source/Candidate/fact_confirmation；缺失时间/时区保持未知；旧 review 卡转交而不直接写业务 | 高置信/缺失字段/重复观察/终态回读/跨用户/旧 mutator 拒绝回归通过；其他事件类型保持既有逻辑 |
+| 审批精确绑定 | confirm 不接受缺字段/冲突候选；correct_and_confirm 必须完整；事实和 Opportunity/Interview 选择必须匹配保存的用户决议 | 防审批借用、只提交 decision、终态重播回归通过 |
+| Pg 崩溃验收 | 独立进程在 verification 前或 COMMIT 后 `os._exit`，分别走 UI 原请求与 fixture 的真实 thin-tool 恢复；检查原子性、无重复和已核实收据 | 4 个杀进程组合 + 2 个并发案例 + 1 个增量迁移保真案例，尚待本次 CI；不等于全部 Celery worker 故障组合 |
+
+本地本轮全量结果（加最后一项异常 usage 回归之前）：后端 **1613 passed /
+18 skipped / 3 warnings**；前端 **62 文件 / 216 passed**；TypeScript、ESLint、
+生产构建与 Ruff 通过。18 项跳过来自 PostgreSQL 环境限制，不能计入通过。
+CI 设置 `REQUIRE_TEST_POSTGRES=1`，数据库不可用必须失败而不是变成跳过，并
+保存 JUnit 结果供追溯。最后的固定提交及 CI 数字在 PR 验收记录中补充。
+
+### 剩余门禁（仍不能自动合并或称全方案完成）
+
+- 本次只实现 primary Chat/Agent 的账户额度，不是全平台货币预算；internal
+  models、compaction、embedding/reranking、语音和外部 Tools 的全链成本与容量仍需
+  统一准入/真实负载验证。Models 页面明确显示排除范围。
+- VS01-S09 / S14 仍为 partial：杀进程案例只验证上述两个入口和共享事务边界；
+  全部真实 worker lease/recovery、Gmail 运行中丢响应、供应商核实仍须运行。
+- 全产品旧 owner/重复实现清理尚未全部完成；本轮切换的是 Gmail invitation
+  auto-apply 及其 legacy review 写入口，不删除历史记录或其他非邀请事件功能。
+- 真实模型质量基准、供应商原生返回与实际写入回读、浏览器端到端、完整
+  准备→练习→复盘→新题效果验证仍未运行。没有付费调用或真实外部消息。
+- 长期记忆生产保持原质量开关关闭，不用单元测试替代生产质量门禁。
+
+
 ## 2026-09-19 审查分支：运行合同与产品接入收敛
 
 基线 `f0ad4a2a3fd078beeff93d7f724946a52dae2c00`；工作分支 `refactor/product-runtime-convergence`。

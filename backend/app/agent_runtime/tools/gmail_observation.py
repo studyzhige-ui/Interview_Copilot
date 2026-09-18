@@ -114,6 +114,7 @@ async def review_gmail_observation(
                 )
                 payload = {
                     "outcome": result.outcome,
+                    "invitation_handoff": result.invitation_handoff,
                     "observation_id": result.observation.id,
                     "observation_status": result.observation.status,
                     "observation_version": result.observation.version,
@@ -162,7 +163,10 @@ def _task_authorizes_review(
     }
     if observation_id not in triggered:
         return False
-    if arguments.get("disposition") == "auto_apply":
+    if (
+        arguments.get("disposition") == "auto_apply"
+        and arguments.get("event_kind") != "interview_scheduled"
+    ):
         return gmail_observation_service.AUTO_APPLY_ACTION_SCOPE in set(
             payload.get("action_scope") or []
         )
@@ -190,8 +194,8 @@ registry.register(
         name="review_gmail_observation",
         description=(
             "Submit one semantic Gmail Observation result. The Application Service "
-            "either safely auto-applies a uniquely matched fact, creates a task-local "
-            "review card, or dismisses it; it never treats confidence as proof."
+            "always routes interview invitations to typed user fact confirmation. Other "
+            "authorized event kinds may be applied or reviewed; confidence is never proof."
         ),
         args_model=GmailObservationProposal,
         handler=review_gmail_observation,
@@ -201,7 +205,11 @@ registry.register(
         concurrency_safe=False,
         emoji="🧾",
         prompt=(
-            "First call read_gmail_observations. Use auto_apply only for a source-"
+            "First call read_gmail_observations. For interview_scheduled provide only "
+            "source-supported invitation_facts; leave missing time/timezone/role null. "
+            "Do not invent an opportunity or use mail received_at as the interview time. "
+            "An invitation always requires explicit user confirmation. For OTHER events "
+            "use auto_apply only for a source-"
             "clear, unique match and confidence >= 0.95; otherwise create a review "
             "card with needs_confirmation. Never auto-create a new opportunity or "
             "repeat an application_submitted fact. Never infer user decisions from email."

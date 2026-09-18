@@ -46,3 +46,21 @@ export async function getInvitationHandoff(id: string): Promise<InvitationHandof
 export async function listPendingConfirmations(): Promise<PendingConfirmation[]> {
   return (await apiClient.get('/interactions/pending-confirmations')).data;
 }
+
+export interface InvitationSubmissionReceipt {
+  status: 'not_received' | 'pending' | 'committed' | 'rejected' | 'cancelled';
+  idempotency_key: string;
+  result: ConfirmInvitationResult | null;
+  command: ConfirmInvitationCommand | null;
+}
+export async function getInvitationSubmission(key: string): Promise<InvitationSubmissionReceipt> {
+  return (await apiClient.get('/career/interview-invitations/submissions/receipt', {
+    params: { idempotency_key: key },
+  })).data;
+}
+export async function resumeInvitationSubmission(key: string): Promise<ConfirmInvitationResult> {
+  return (await apiClient.post('/career/interview-invitations/submissions/resume', { idempotency_key: key })).data;
+}
+export async function cancelInvitationSubmission(key: string): Promise<InvitationSubmissionReceipt> {
+  return (await apiClient.post('/career/interview-invitations/submissions/cancel', { idempotency_key: key })).data;
+}

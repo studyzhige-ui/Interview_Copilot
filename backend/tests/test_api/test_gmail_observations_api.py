@@ -233,7 +233,7 @@ def test_review_card_api_approves_then_observation_api_retracts(api_context):
             observation_id=observation.id,
             expected_version=1,
             disposition="needs_confirmation",
-            event_kind="interview_scheduled",
+            event_kind="assessment_invited",
             opportunity_id=job.id,
             occurred_at=NOW,
             description="面试邀请",

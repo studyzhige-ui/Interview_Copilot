@@ -13,6 +13,9 @@ and stream one LLM call."
 
 from __future__ import annotations
 
+import asyncio
+import json
+
 import logging
 import re
 from typing import AsyncGenerator
@@ -34,6 +37,8 @@ from app.services.chat.context_assembly_pipeline import (
     context_pipeline,
 )
 from app.services.chat.model_dispatch_service import (
+    ModelOutcomeUnknownError,
+    dispatch_failure_status,
     durable_model_stream,
     finish_model_dispatch,
     request_fingerprint,
@@ -237,8 +242,6 @@ class ChatPipelineStrategy:
                 f"model:{ctx.dispatch_generation}:chat:1" if ctx.turn_id else None
             )
             if model_call_id and ctx.user_pk > 0:
-                import asyncio
-
                 await asyncio.to_thread(
                     start_model_dispatch_for_turn,
                     call_id=model_call_id,
@@ -250,32 +253,53 @@ class ChatPipelineStrategy:
                     fingerprint=request_fingerprint(
                         messages=request.messages,
                         tools=request.tools,
+                        system=request.system,
+                        max_tokens=request.max_tokens,
+                        temperature=request.temperature,
                     ),
+                    token_allowance=len(
+                        json.dumps(
+                            {
+                                "system": request.system,
+                                "messages": request.messages,
+                                "tools": request.tools,
+                            },
+                            ensure_ascii=False,
+                        ).encode("utf-8")
+                    )
+                    + request.max_tokens
+                    + 1024,
                 )
+            model_deadline = (
+                asyncio.get_running_loop().time()
+                + settings.MODEL_STREAM_DEADLINE_SECONDS
+            )
             try:
-                provider_stream = await adapter.start_stream(request)
+                provider_stream = await asyncio.wait_for(
+                    adapter.start_stream(request),
+                    settings.MODEL_STREAM_DEADLINE_SECONDS,
+                )
             except BaseException as exc:
                 if model_call_id:
-                    import asyncio
-
                     await asyncio.to_thread(
                         finish_model_dispatch,
                         turn_id=ctx.turn_id,
                         call_id=model_call_id,
                         dispatch_generation=ctx.dispatch_generation,
-                        status=(
-                            "cancelled"
-                            if isinstance(exc, asyncio.CancelledError)
-                            else "failed"
-                        ),
+                        status=dispatch_failure_status(exc),
                         error_code=type(exc).__name__,
                     )
+                if dispatch_failure_status(exc) == "unknown" and not isinstance(
+                    exc, asyncio.CancelledError
+                ):
+                    raise ModelOutcomeUnknownError("model_outcome_unknown") from exc
                 raise
             response_generator = durable_model_stream(
                 provider_stream,
                 turn_id=ctx.turn_id,
                 call_id=model_call_id,
                 dispatch_generation=ctx.dispatch_generation,
+                deadline=model_deadline,
             )
             result.provider_id = str(getattr(profile, "provider", "") or "")
             result.prompt_cache_supported = adapter.prompt_cache_supported
