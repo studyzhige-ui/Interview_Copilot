@@ -4,25 +4,33 @@ on:
   push:
     branches: [refactor/product-runtime-convergence]
     paths: [.github/workflows/refactor-workspace.yml]
-
 permissions:
   contents: read
-
 jobs:
-  offline-dependencies:
+  offline-fixtures:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
-      - name: Build pinned wheelhouse (public packages only)
+      - name: Prepare public package caches only
+        env:
+          TIKTOKEN_CACHE_DIR: /tmp/refactor-fixtures/tiktoken
         run: |
-          python -m pip wheel '.[dev]' --wheel-dir "${RUNNER_TEMP}/wheelhouse"
+          mkdir -p /tmp/refactor-fixtures
+          npm ci --prefix frontend --no-audit --no-fund
+          tar -czf /tmp/refactor-fixtures/frontend-node-modules.tar.gz -C frontend node_modules
+          pip install tiktoken==0.13.0 tree-sitter-language-pack==1.14.3
+          python -c 'import tiktoken; tiktoken.get_encoding("cl100k_base"); import tree_sitter_language_pack as p; p.get_parser("python")'
+          test ! -d "$HOME/.cache/tree-sitter-language-pack" || tar -czf /tmp/refactor-fixtures/parsers.tar.gz -C "$HOME/.cache" tree-sitter-language-pack
       - uses: actions/upload-artifact@v4
         with:
-          name: refactor-wheelhouse-py313
-          path: ${{ runner.temp }}/wheelhouse
+          name: refactor-offline-fixtures
+          path: /tmp/refactor-fixtures
           retention-days: 1
