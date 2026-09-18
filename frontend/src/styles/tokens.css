@@ -1,20 +1,18 @@
 /* Shared theme tokens and base typography. */
 
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
-
-@font-face { font-family: "Inter"; src: url("../assets/fonts/Inter-var-2.ttf") format("truetype-variations"); font-weight: 100 900; font-style: normal; font-display: swap; }
+@font-face { font-family: "Inter"; src: url("../assets/fonts/Inter-var-2.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
 
 :root {
   /* ---------- Type ---------- */
   --font-sans: "Inter", "PingFang SC", "Noto Sans SC", "Hiragino Sans GB",
                "Microsoft YaHei", system-ui, -apple-system, sans-serif;
   --font-display: var(--font-sans);
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco,
                Consolas, "Liberation Mono", "Courier New", monospace;
 
   --text-xs: 12px;
-  --text-sm: 13px;
-  --text-base: 14px;
+  --text-sm: 14px;
+  --text-base: 15px;
   --text-md: 16px;
   --text-lg: 18px;
   --text-xl: 20px;
@@ -33,26 +31,26 @@
   --fw-semibold: 600;
   --fw-bold: 700;
 
-  /* ---------- Primary — Warm Sky ---------- */
-  --color-primary-50:  #EEF6FC;
-  --color-primary-100: #DAEBF7;
-  --color-primary-200: #BCDCF0;
-  --color-primary-300: #95C7E6;
-  --color-primary-400: #6FB1D9;
-  --color-primary-500: #5BA8D6;   /* PRIMARY · 蓝天 */
-  --color-primary-600: #4592C2;
-  --color-primary-700: #357AA6;
-  --color-primary-800: #285F84;
-  --color-primary-900: #1A4159;
+  /* ---------- Primary — evergreen ---------- */
+  --color-primary-50:  #EEF4F0;
+  --color-primary-100: #DDE9E0;
+  --color-primary-200: #BDD2C4;
+  --color-primary-300: #96B59F;
+  --color-primary-400: #6F987E;
+  --color-primary-500: #3F7055;
+  --color-primary-600: #315C45;
+  --color-primary-700: #284D3B;
+  --color-primary-800: #203D30;
+  --color-primary-900: #192F26;
 
   /* ---------- Accent — Amber Glow ---------- */
   /* ---------- Accent — Macaron Mint (primary button) ---------- */
   --color-accent-50:  #E8F5EF;
   --color-accent-100: #D0EBDE;
   --color-accent-300: #B0DEC8;
-  --color-accent-500: #8FCFB8;
-  --color-accent-600: #6FBCA0;
-  --color-accent-700: #4F9A7E;
+  --color-accent-500: #536B5C;
+  --color-accent-600: #425748;
+  --color-accent-700: #34463A;
 
   /* ---------- Macaron palette (categorical) ---------- */
   --color-macaron-peach:    #F8B79A;
@@ -72,21 +70,21 @@
   --color-sand-200: #F1E6D8;
   --color-sand-300: #E4D3BA;
 
-  /* ---------- Cloud (canvas) ---------- */
-  --color-cream-50:  #E9F1F8;
-  --color-cream-100: #DCE7F2;
+  /* ---------- Canvas ---------- */
+  --color-cream-50:  #FAFAF7;
+  --color-cream-100: #F3F3EE;
 
-  /* ---------- Cool Cloud neutrals ---------- */
-  --color-stone-50:  #EEF3F9;
-  --color-stone-100: #E4EBF3;
-  --color-stone-200: #D2DCE8;
-  --color-stone-300: #C1CCDA;
-  --color-stone-400: #94A2B4;
-  --color-stone-500: #6A7689;
-  --color-stone-600: #4D5868;
-  --color-stone-700: #364050;
-  --color-stone-800: #1F2937;
-  --color-stone-900: #111827;
+  /* ---------- Neutral reading surfaces ---------- */
+  --color-stone-50:  #F6F6F2;
+  --color-stone-100: #EFEFE9;
+  --color-stone-200: #E1E2DA;
+  --color-stone-300: #CACDC2;
+  --color-stone-400: #8B9185;
+  --color-stone-500: #6B7368;
+  --color-stone-600: #545E53;
+  --color-stone-700: #3D473D;
+  --color-stone-800: #29332D;
+  --color-stone-900: #1D2821;
 
   /* ---------- Semantic ---------- */
   --color-success-50:  #ECF3EB;

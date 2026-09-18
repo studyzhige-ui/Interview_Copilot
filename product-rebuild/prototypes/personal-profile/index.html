@@ -1,0 +1,1474 @@
+<!doctype html>
+<html lang="zh-CN" data-visualize-standalone>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'self' 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src 'self' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src 'self' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src 'self' blob: data:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Career OS · 个人资料</title>
+<style>:root {
+  color-scheme: light dark;
+  background-color: var(
+    --background,
+    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
+  ) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: var(
+    --color-background-primary,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --card: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  --card-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --popover: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255), rgb(45 45 45))
+  );
+  --popover-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --primary: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --primary-foreground: var(
+    --color-text-inverse,
+    light-dark(rgb(255 255 255), rgb(13 13 13))
+  );
+  --secondary: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
+  );
+  --secondary-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: var(
+    --color-text-secondary,
+    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
+  );
+  --accent: var(
+    --color-background-info,
+    light-dark(rgb(229 242 255), rgb(13 39 63))
+  );
+  --accent-foreground: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --destructive: var(
+    --color-text-warning,
+    light-dark(rgb(226 85 7), rgb(255 133 73))
+  );
+  --border: var(
+    --color-border-secondary,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+  --input: var(
+    --color-border-primary,
+    light-dark(
+      rgb(26 28 31 / 11.8%),
+      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+    )
+  );
+  --ring: var(
+    --color-ring-primary,
+    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
+  );
+  --font-size-base: var(--font-text-md-size, 14px);
+  --blue: light-dark(rgb(51 156 255), rgb(51 156 255));
+  --orange: light-dark(rgb(226 85 7), rgb(251 106 34));
+  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
+  --red: light-dark(rgb(224 46 42), rgb(255 103 100));
+  --purple: light-dark(rgb(146 79 247), rgb(173 123 249));
+  --yellow: light-dark(rgb(255 195 0), rgb(255 210 64));
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, "Segoe UI", sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --icon-size: 16px;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --corner-shape: round;
+  --radius: var(--border-radius-lg, 10px);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 17 17'%3E%3Cpath d='M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z'/%3E%3C/svg%3E");
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html > body {
+  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
+  --color-background-primary: var(
+    --background,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --color-text-primary: var(
+    --foreground,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --color-border-secondary: var(
+    --border,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+
+  margin: 0;
+  padding: var(--visualize-paint-gutter, 0px);
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans) !important;
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: pointer;
+  font-weight: var(--font-weight-medium, 500);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive > .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align="right"]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align="center"]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: var(--corner-shape);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget > :not(.card, .progress) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+hr {
+  width: 100%;
+  height: 1px;
+  margin-block: 6px;
+  border: 0;
+  background: var(--border);
+}
+
+.nav {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.progress {
+  display: flex;
+  height: 8px;
+  margin-block: calc((var(--line-height-normal, 1.5em) - 8px) / 2);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+}
+
+.progress-bar:only-child {
+  border-radius: var(--radius-full);
+}
+
+.progress-bar {
+  height: 100%;
+  flex-shrink: 0;
+  border: 0;
+  background: var(--viz-series-1);
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls > .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls > .form-label > :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.nav-link,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn,
+.nav-link {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover,
+.nav-link:not(:disabled):not([aria-disabled="true"]):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.nav-pills .nav-link {
+  min-width: 0;
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.nav-justified .nav-link {
+  flex: 1 1 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.nav-pills .nav-link.active {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+.btn:disabled,
+.nav-link:disabled,
+.nav-link[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type="file"] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type="file"]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type="file"]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type="color"] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type="color"]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: var(--corner-shape);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type="checkbox"] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type="checkbox"]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type="checkbox"]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: "";
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type="radio"] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type="radio"]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: "";
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+  [aria-pressed="true"],
+  [aria-selected="true"],
+  .is-selected
+) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed="true"], [aria-selected="true"], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible,
+.nav-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .btn,
+  .nav-link,
+  .form-control,
+  .form-select {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Keep small-screen WebKit from zooming when a text field receives focus. */
+  .form-control,
+  .form-select {
+    font-size: max(16px, var(--font-size-normal));
+  }
+
+  .form-control[type="file"]::file-selector-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .form-control-color[type="color"] {
+    width: 44px;
+    height: 44px;
+  }
+
+  .form-control:is(
+    [type="date"],
+    [type="datetime-local"],
+    [type="month"],
+    [type="time"],
+    [type="week"]
+  ) {
+    min-width: 0;
+    max-width: 100%;
+    padding-block: 8px;
+  }
+
+  .form-check {
+    min-height: 44px;
+    padding-inline: 15px;
+  }
+
+  .form-check-input {
+    position: relative;
+  }
+
+  .form-check-input::after {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    content: "";
+    transform: translate(-50%, -50%);
+  }
+
+  .form-check-label {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+  }
+
+  .form-range {
+    height: 44px;
+    touch-action: pan-y;
+  }
+
+  .form-range::-webkit-slider-runnable-track {
+    height: 44px;
+  }
+
+  .form-range::-moz-range-track {
+    height: 44px;
+  }
+
+  .form-range::-webkit-slider-thumb {
+    margin-top: 12px;
+  }
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget > svg {
+  width: 100%;
+}
+
+/* Model-authored chart rules can otherwise stretch icons after these styles load. */
+svg.lucide {
+  display: block;
+  width: var(--icon-size) !important;
+  height: var(--icon-size) !important;
+  flex: none;
+  margin: 0 !important;
+  stroke-width: 1.6;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html>body{padding:0}</style>
+</head>
+<body>
+<div id="career-profile" aria-label="Career OS 个人资料">
+<style>
+#career-profile{--p-bg:light-dark(#f7f9fc,#171e29);--p-paper:light-dark(#ffffff,#232d3b);--p-ink:light-dark(#293c50,#e4edf8);--p-muted:light-dark(#78879b,#a6b5c9);--p-line:light-dark(#e8edf5,#384456);--p-blue:light-dark(#326af0,#94b6ff);--p-soft:light-dark(#edf3ff,#293c5a);--p-glass:light-dark(#ffffffb8,#232d3bd9);font:14px/1.65 "Segoe UI","Microsoft YaHei",sans-serif;color:var(--p-ink);background:var(--p-bg);border-radius:20px;overflow:hidden;position:relative;isolation:isolate;color-scheme:light dark}#career-profile *{box-sizing:border-box}#career-profile [hidden]{display:none!important}#career-profile button,#career-profile input,#career-profile textarea,#career-profile select{font:inherit;color:inherit}#career-profile button{cursor:pointer}#career-profile button:disabled{opacity:.45;cursor:default}#career-profile h1,#career-profile h2,#career-profile h3,#career-profile p{margin:0}#career-profile h1{font-size:25px;font-weight:500;letter-spacing:-.6px}#career-profile h2{font-size:17px;font-weight:500}#career-profile h3{font-size:15px;font-weight:500}#career-profile small{font-size:12px;color:var(--p-muted)}#career-profile svg{width:18px;height:18px;flex-shrink:0}#career-profile .pp-shell{display:grid;grid-template-columns:164px minmax(0,1fr);min-height:910px}#career-profile .pp-side{padding:30px 14px;background:var(--p-paper);border-right:1px solid var(--p-line);display:flex;flex-direction:column;gap:7px}#career-profile .pp-brand{display:flex;align-items:center;gap:10px;font-size:18px;margin:0 8px 28px;font-weight:500}#career-profile .pp-mark{background:var(--p-blue);color:var(--p-paper);padding:8px;border-radius:12px;display:flex}#career-profile .pp-nav{display:flex;align-items:center;gap:12px;border:0;background:none;text-align:left;padding:12px;border-radius:12px;color:var(--p-muted)}#career-profile .pp-nav.active{color:var(--p-blue);background:var(--p-soft)}#career-profile .pp-account{margin-top:auto;padding-top:60px}#career-profile .pp-main{padding:26px 28px 20px;min-width:0;background:radial-gradient(ellipse at 8% 0,light-dark(#dfebff,#22334c),transparent 48%),radial-gradient(ellipse at 100% 15%,light-dark(#faf1e8,#382e2b),transparent 46%),radial-gradient(ellipse at 70% 100%,light-dark(#eae6fa,#302c44),transparent 46%),var(--p-bg)}#career-profile .pp-top{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:23px}#career-profile .pp-row{display:flex;align-items:center;gap:9px;flex-wrap:wrap}#career-profile .pp-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:8px 12px;border-radius:10px;border:1px solid var(--p-line);background:var(--p-paper);white-space:nowrap}#career-profile .pp-btn.primary{color:light-dark(#fff,#16233c);background:var(--p-blue);border-color:transparent}#career-profile .pp-link{background:none;border:0;color:var(--p-blue);padding:4px 0;display:inline-flex;align-items:center;gap:5px}#career-profile .pp-grid{display:grid;grid-template-columns:minmax(0,1fr) 224px;gap:18px;align-items:start}#career-profile .pp-document{background:var(--p-glass);border:1px solid var(--p-paper);border-radius:21px;box-shadow:0 12px 38px light-dark(#6c83a00a,#0001);overflow:hidden;backdrop-filter:blur(18px)}#career-profile .pp-dochead{display:flex;justify-content:space-between;align-items:center;padding:17px 24px;border-bottom:1px solid var(--p-line)}#career-profile .pp-docbody{display:grid;grid-template-columns:100px minmax(0,1fr);height:685px}#career-profile .pp-directory{padding:19px 10px;border-right:1px solid var(--p-line);display:flex;flex-direction:column;gap:3px}#career-profile .pp-directory button{font-size:12px;text-align:left;padding:8px 7px;border:0;background:none;border-radius:8px;color:var(--p-muted)}#career-profile .pp-directory button.active{background:var(--p-soft);color:var(--p-blue)}#career-profile .pp-scroll{overflow-y:auto;scroll-behavior:smooth;padding:0 24px 40px;scrollbar-width:thin;scrollbar-color:var(--p-line) transparent}#career-profile .pp-section{padding:25px 0;border-bottom:1px solid var(--p-line);scroll-margin-top:8px}#career-profile .pp-section:last-child{border:0}#career-profile .pp-sechead{display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;gap:8px}#career-profile .pp-sechead h2{display:flex;gap:9px;align-items:center}#career-profile .pp-sechead h2:before{content:"";width:3px;height:15px;border-radius:4px;background:var(--p-blue);opacity:.65}#career-profile .pp-edit{font-size:12px;opacity:.8}#career-profile .pp-copy{white-space:pre-wrap;line-height:1.85;font-size:13px}#career-profile .pp-avatar{width:55px;height:55px;border-radius:19px;background:linear-gradient(145deg,var(--p-soft),light-dark(#e7ddfa,#45395b));display:grid;place-items:center;color:var(--p-blue);font-size:20px;float:right}#career-profile .pp-tags{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}#career-profile .pp-tag{font-size:12px;color:var(--p-muted);background:var(--p-bg);padding:3px 9px;border-radius:7px}#career-profile .pp-intent{padding:11px 13px;background:var(--p-paper);border:1px solid var(--p-line);border-radius:11px;margin-top:8px}#career-profile .pp-intent small{display:block;margin-top:3px}#career-profile .pp-card{background:var(--p-glass);border:1px solid var(--p-paper);border-radius:18px;padding:18px;margin-bottom:14px;backdrop-filter:blur(16px)}#career-profile .pp-card h3{margin-bottom:9px}#career-profile .pp-file{display:flex;gap:10px;align-items:flex-start;padding:14px 0;border-bottom:1px solid var(--p-line);text-align:left;background:none;width:100%;border-top:0;border-left:0;border-right:0}#career-profile .pp-file strong{font-weight:500;font-size:13px;display:block}#career-profile .pp-file small{display:block;font-size:11px}#career-profile .pp-file svg{color:var(--p-blue);margin-top:3px}#career-profile .pp-tool{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;padding:12px 0;text-align:left}#career-profile .pp-tool>span{flex:1}#career-profile .pp-tool small{display:block;font-size:11px}#career-profile .pp-agent{margin-top:17px;border:1px solid var(--p-paper);padding:12px 16px;background:var(--p-glass);border-radius:18px;box-shadow:0 9px 30px light-dark(#7195dc12,#0002);backdrop-filter:blur(20px)}#career-profile .pp-agent form{display:flex;align-items:center;gap:12px}#career-profile .pp-agent input{min-width:0;width:100%;padding:8px 0;border:0;background:none;outline-offset:3px}#career-profile .pp-agent svg{color:var(--p-blue)}#career-profile .pp-agentmeta{display:flex;justify-content:space-between;gap:10px;margin-top:4px;font-size:11px;color:var(--p-muted)}#career-profile .pp-editor label{display:block;font-size:12px;margin:10px 0}#career-profile input,#career-profile textarea,#career-profile select{background:var(--p-paper);border:1px solid var(--p-line);border-radius:9px;padding:9px 11px;max-width:100%}#career-profile .pp-editor input,#career-profile .pp-editor textarea{width:100%;display:block;margin-top:6px;font-size:14px}#career-profile textarea{resize:vertical;min-height:145px}#career-profile .pp-suggestion{background:var(--p-soft);border-radius:10px;padding:12px;margin:10px 0;font-size:13px}#career-profile .pp-empty{font-size:13px;color:var(--p-muted)}#career-profile .pp-overlay{position:absolute;inset:0;background:light-dark(#24395730,#0009);backdrop-filter:blur(5px);z-index:20;display:flex;align-items:flex-start;justify-content:center;padding:56px 24px}#career-profile .pp-modal{background:var(--p-paper);border:1px solid var(--p-line);border-radius:22px;width:min(760px,100%);padding:24px;box-shadow:0 30px 90px #0002;max-height:790px;overflow:auto;animation:pp-rise .22s ease-out}#career-profile .pp-modalhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;gap:10px}#career-profile .pp-modal p{margin:10px 0;color:var(--p-muted);font-size:13px}#career-profile .pp-modal textarea{width:100%;margin:10px 0}#career-profile .pp-modal label{display:block;margin:12px 0}#career-profile .pp-check{display:flex!important;gap:10px;align-items:center;padding:10px;background:var(--p-bg);border-radius:9px}#career-profile .pp-preview{padding:28px;background:var(--p-bg);border:1px solid var(--p-line);border-radius:8px;margin:16px 0;max-height:420px;overflow:auto}#career-profile .pp-preview h2{margin-bottom:20px}#career-profile .pp-preview h3{margin:20px 0 6px;border-bottom:1px solid var(--p-line);padding-bottom:6px}#career-profile .pp-preview p{white-space:pre-wrap;color:var(--p-ink)}#career-profile .pp-chatbubble{padding:12px 15px;background:var(--p-soft);border-radius:12px;white-space:pre-wrap}#career-profile .pp-relation{display:grid;grid-template-columns:110px 1fr;gap:14px;padding:15px 0;border-bottom:1px solid var(--p-line);font-size:13px}#career-profile .pp-relation span{color:var(--p-muted)}#career-profile .pp-toast{position:absolute;bottom:26px;left:50%;transform:translateX(-50%);z-index:30;background:var(--p-ink);color:var(--p-paper);padding:10px 17px;border-radius:12px;max-width:85%;font-size:13px;box-shadow:0 8px 30px #0002}#career-profile .pp-save{color:var(--p-muted);font-size:11px}#career-profile .pp-new{width:100%;border:1px dashed var(--p-line);padding:12px;border-radius:12px;background:none;color:var(--p-blue);margin-top:22px}@keyframes pp-rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}@media(min-width:1250px){#career-profile .pp-shell{grid-template-columns:200px 1fr}#career-profile .pp-main{padding:30px 40px}#career-profile .pp-grid{grid-template-columns:minmax(0,1fr) 260px;gap:23px}#career-profile .pp-docbody{grid-template-columns:126px 1fr}#career-profile .pp-scroll{padding-left:32px;padding-right:32px}}@media(max-width:900px){#career-profile .pp-shell{grid-template-columns:62px 1fr}#career-profile .pp-side{padding:26px 7px}#career-profile .pp-brand{margin:0 5px 25px}#career-profile .pp-brandtext,#career-profile .pp-navlabel{display:none}#career-profile .pp-nav{justify-content:center}#career-profile .pp-main{padding:22px 18px}#career-profile .pp-grid{grid-template-columns:minmax(0,1fr) 194px}#career-profile .pp-docbody{grid-template-columns:1fr}#career-profile .pp-directory{flex-direction:row;overflow:auto;padding:10px;border-right:0;border-bottom:1px solid var(--p-line)}#career-profile .pp-directory button{white-space:nowrap}#career-profile .pp-docbody{height:auto}#career-profile .pp-scroll{height:620px;padding:0 18px 25px}}@media(max-width:650px){#career-profile .pp-shell{grid-template-columns:1fr}#career-profile .pp-side{display:none}#career-profile .pp-grid{grid-template-columns:1fr}#career-profile .pp-rail{display:grid;grid-template-columns:1fr 1fr;gap:12px}#career-profile .pp-card{margin:0;padding:14px}#career-profile .pp-card:last-child{grid-column:1/-1}#career-profile .pp-top{align-items:flex-start;flex-wrap:wrap}#career-profile .pp-dochead{padding:15px}#career-profile .pp-overlay{padding:22px 10px}#career-profile .pp-modal{padding:18px;max-height:850px}#career-profile .pp-relation{grid-template-columns:1fr;gap:4px}#career-profile .pp-agentmeta{flex-wrap:wrap}#career-profile .pp-scroll{height:670px}}@media(prefers-reduced-motion:reduce){#career-profile *{animation:none!important;scroll-behavior:auto!important}}
+</style>
+<style>
+#career-profile .pp-shell{height:100dvh;min-height:560px;max-height:1100px}#career-profile .pp-main{min-height:0;display:flex;flex-direction:column;padding:22px 28px 16px}#career-profile .pp-top{flex-shrink:0;margin-bottom:17px}#career-profile .pp-grid{min-height:0;flex:1;align-items:stretch;grid-template-columns:minmax(0,1fr) 236px}#career-profile .pp-center{min-height:0;display:flex;flex-direction:column}#career-profile .pp-document{min-height:0;flex:1;display:flex;flex-direction:column}#career-profile .pp-dochead{flex-shrink:0;padding:14px 22px}#career-profile .pp-docbody{min-height:0;flex:1;height:auto;grid-template-columns:110px minmax(0,1fr)}#career-profile .pp-scroll{height:auto;min-height:0;padding:0 25px 30px;overscroll-behavior:contain;position:relative}#career-profile .pp-directory{min-height:0;overflow:auto;scrollbar-width:thin;padding:12px 8px}#career-profile .pp-directory button{font-size:12px;flex-shrink:0}#career-profile .pp-agent{flex-shrink:0;margin-top:12px;padding:9px 15px}#career-profile .pp-agentmeta{margin-top:2px}#career-profile .pp-rail{min-height:0;overflow:auto;scrollbar-width:thin}#career-profile .pp-file{min-width:0;gap:8px}#career-profile .pp-file>span{min-width:0;flex:1}#career-profile .pp-file strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#career-profile .pp-side{min-height:0;overflow:auto;padding-top:24px}#career-profile .pp-account{padding-top:20px}#career-profile .pp-brand{margin-bottom:19px}#career-profile .pp-nav{padding:10px 12px;width:100%}#career-profile .pp-section{padding:22px 0}#career-profile .pp-record{padding:15px 0;border-top:1px solid var(--p-line)}#career-profile .pp-record:first-of-type{border-top:0;padding-top:0}#career-profile .pp-recordhead{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}#career-profile .pp-recordhead strong{font-weight:500;font-size:15px}#career-profile .pp-meta{color:var(--p-muted);font-size:12px;margin:4px 0 9px}#career-profile .pp-gridfields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:17px 20px}#career-profile .pp-field{min-width:0}#career-profile .pp-field.full{grid-column:1/-1}#career-profile .pp-field label{display:block;font-size:13px;margin:0 0 6px;color:var(--p-muted)}#career-profile .pp-field input:not([type=checkbox]),#career-profile .pp-field select,#career-profile .pp-field textarea{width:100%;min-width:0;font-size:14px;padding:10px 11px;line-height:1.5}#career-profile .pp-field textarea{min-height:132px;resize:vertical;border-top-left-radius:0;border-top-right-radius:0;margin:0;display:block}#career-profile .pp-richbar{display:flex;justify-content:space-between;align-items:center;padding:5px 10px;background:var(--p-bg);border:1px solid var(--p-line);border-bottom:0;border-radius:10px 10px 0 0}#career-profile .pp-richbar button{font-size:12px}#career-profile .pp-editbox{background:var(--p-bg);border:1px solid var(--p-line);border-radius:15px;padding:20px;margin-top:7px}#career-profile .pp-editor-actions{position:sticky;bottom:-30px;background:var(--p-bg);padding:14px 0 2px;display:flex;justify-content:flex-end;gap:10px;border-top:1px solid var(--p-line);margin-top:20px;z-index:2}#career-profile .pp-count{font-size:11px;color:var(--p-muted);text-align:right;margin-top:3px}#career-profile .pp-invalid{color:light-dark(#ac402f,#ffab99);font-size:12px;margin-top:10px}#career-profile .pp-open-edit>.pp-sechead{margin-bottom:10px}#career-profile .pp-context{font-size:12px;background:var(--p-soft);color:var(--p-blue);padding:3px 9px;border-radius:7px}#career-profile .pp-new{margin-top:15px}#career-profile .pp-filehint{font-size:11px;color:var(--p-muted);margin-top:6px}#career-profile .pp-overlay{padding:24px;align-items:center}#career-profile .pp-modal{max-height:calc(100% - 16px);display:flex;flex-direction:column;overflow:hidden;width:min(850px,100%)}#career-profile #pp-modal-body{overflow:auto;min-height:0;overscroll-behavior:contain}#career-profile .pp-modalhead{flex-shrink:0}#career-profile .pp-upload-zone{border:1px dashed var(--p-line);background:var(--p-bg);padding:30px 20px;border-radius:15px;text-align:center}#career-profile .pp-upload-zone input{max-width:100%;margin:16px 0 8px}#career-profile .pp-diff{padding:14px;background:var(--p-bg);border-radius:12px;margin:12px 0}#career-profile .pp-diffgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:8px}#career-profile .pp-diffgrid>div{min-width:0}#career-profile .pp-diffgrid input,#career-profile .pp-diffgrid textarea{width:100%;font-size:13px}#career-profile .pp-diffgrid textarea{min-height:75px}#career-profile .pp-status{font-size:12px;background:var(--p-soft);color:var(--p-blue);padding:10px 13px;border-radius:10px;margin:12px 0;white-space:pre-wrap}#career-profile .pp-pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}#career-profile .pp-avatar{margin-left:12px}#career-profile .pp-inline-ai{margin-top:8px;padding:12px;border-radius:10px;background:var(--p-soft);font-size:13px}#career-profile .pp-doc-export{white-space:pre-wrap;font-size:13px;line-height:1.8}#career-profile .pp-bottom-actions{position:sticky;bottom:0;display:flex;justify-content:flex-end;gap:10px;padding:15px 0 0;background:var(--p-paper);margin-top:12px}#career-profile .pp-drop-note{font-size:12px;color:var(--p-muted)}#career-profile #pp-files{max-height:240px;overflow:auto;scrollbar-width:thin}#career-profile .pp-hidebtn{font-size:11px;color:var(--p-muted);border:0;background:none}#career-profile .pp-basic-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;font-size:12px;margin-top:12px}#career-profile .pp-basic-grid>div{overflow-wrap:anywhere}#career-profile .pp-raw{white-space:pre-wrap;max-height:180px;overflow:auto;font-size:12px;padding:12px;background:var(--p-bg)}#career-profile .pp-docbody .pp-directory{display:flex;flex-direction:column}#career-profile .pp-unfilled{font-size:12px;color:var(--p-muted)}
+@media(min-width:1250px){#career-profile .pp-main{padding:25px 36px 18px}#career-profile .pp-grid{grid-template-columns:minmax(0,1fr) 260px}#career-profile .pp-docbody{grid-template-columns:126px minmax(0,1fr)}}@media(max-width:1000px){#career-profile .pp-docbody{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}#career-profile .pp-docbody .pp-directory{flex-direction:row;flex-wrap:nowrap;overflow-x:auto;padding:8px;border-right:0;border-bottom:1px solid var(--p-line)}#career-profile .pp-directory button{white-space:nowrap}#career-profile .pp-grid{grid-template-columns:minmax(0,1fr) 190px}#career-profile .pp-card{padding:14px}#career-profile .pp-scroll{padding:0 18px 24px}#career-profile .pp-editor-actions{bottom:-24px}}@media(max-width:650px){#career-profile .pp-shell{height:100dvh;min-height:540px}#career-profile .pp-main{padding:14px 12px 10px}#career-profile .pp-grid{display:flex;flex-direction:column;gap:10px}#career-profile .pp-center{flex:1;min-height:0}#career-profile .pp-rail{display:none}#career-profile .pp-top{margin-bottom:10px;gap:8px}#career-profile .pp-top h1{font-size:21px}#career-profile .pp-top small{display:none}#career-profile .pp-dochead{padding:10px 14px}#career-profile .pp-dochead .pp-save{display:none}#career-profile .pp-gridfields{grid-template-columns:1fr;gap:13px}#career-profile .pp-editbox{padding:13px}#career-profile .pp-diffgrid{grid-template-columns:1fr}#career-profile .pp-overlay{padding:10px}#career-profile .pp-agentmeta>span:last-child{display:none}#career-profile .pp-basic-grid{grid-template-columns:1fr}#career-profile .pp-agent input{font-size:13px}#career-profile .pp-sechead h2{font-size:16px}#career-profile .pp-btn{padding:7px 10px}#career-profile .pp-modal{padding:17px}}@media(max-height:680px) and (min-width:651px){#career-profile .pp-side{padding-top:15px}#career-profile .pp-nav{padding:7px 11px}#career-profile .pp-brand{margin-bottom:10px}#career-profile .pp-main{padding-top:15px}#career-profile .pp-top{margin-bottom:10px}}
+#career-profile .pp-agent .primary svg{color:inherit}</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+<div class="pp-shell"><aside class="pp-side"><div class="pp-brand"><span class="pp-mark"><i data-lucide="sprout"></i></span><span class="pp-brandtext">career os</span></div><nav id="pp-navs" aria-label="主导航"></nav><div class="pp-account"><button class="pp-nav" data-action="settings"><i data-lucide="settings-2"></i><span class="pp-navlabel">言予 · 设置</span></button></div></aside>
+<main class="pp-main"><header class="pp-top"><div><h1>个人资料</h1><small>记录你的经历，准备下一份机会。</small></div><div class="pp-row"><small>设计预览 · 示例档案</small><button class="pp-btn primary" data-action="upload"><i data-lucide="upload"></i>上传简历</button></div></header><div class="pp-grid"><div class="pp-center"><article class="pp-document"><header class="pp-dochead"><span>我的资料 <span class="pp-save" id="pp-saved">· 本机资料</span></span><div class="pp-row"><button class="pp-link" data-action="files" aria-label="查看简历附件"><i data-lucide="paperclip"></i></button><button class="pp-link" data-action="resume"><i data-lucide="file-text"></i>制作简历</button></div></header><div class="pp-docbody"><nav class="pp-directory" aria-label="资料目录" id="pp-directory"></nav><div class="pp-scroll" id="pp-sections"></div></div></article><div class="pp-agent"><form id="pp-agentform"><i data-lucide="sparkles"></i><input aria-label="向 Agent 提出资料需求" placeholder="一起整理经历，或完善这份资料…" required><button class="pp-btn primary" aria-label="发送"><i data-lucide="arrow-up"></i></button></form><div class="pp-agentmeta"><span id="pp-scope">个人资料 · 按需读取</span><span>修改前查看建议</span></div></div></div><aside class="pp-rail"><section class="pp-card"><div class="pp-row" style="justify-content:space-between"><h3>我的简历</h3><button class="pp-link" data-action="upload" aria-label="上传简历附件"><i data-lucide="plus"></i></button></div><div id="pp-files"></div><a href="/editor/index.html" class="pp-link" style="display:block;margin-top:14px">打开已保存的简历 ↗</a><button class="pp-link" data-action="resume" style="margin-top:12px">排版与导出 <i data-lucide="arrow-up-right"></i></button></section><section class="pp-card"><h3>需要时，完善一下</h3><button class="pp-tool" data-action="check"><i data-lucide="scan-text"></i><span>资料检查<small>日期、联系方式与表达</small></span><i data-lucide="chevron-right"></i></button><button class="pp-tool" data-action="ats"><i data-lucide="file-check-2"></i><span>ATS 简历检查<small>检查选定简历</small></span><i data-lucide="chevron-right"></i></button></section><section class="pp-card"><h3>资料与简历</h3><small>上传简历后，可以选择用解析结果更新资料；也可以只保留附件。</small><button class="pp-link" data-action="relations" style="margin-top:10px">查看资料使用关系 <i data-lucide="arrow-up-right"></i></button></section></aside></div></main></div>
+<div class="pp-overlay" id="pp-overlay" hidden><section class="pp-modal" role="dialog" aria-modal="true" aria-labelledby="pp-modal-title"><header class="pp-modalhead"><h2 id="pp-modal-title"></h2><button class="pp-btn" data-action="close" aria-label="关闭对话框"><i data-lucide="x"></i></button></header><div id="pp-modal-body"></div></section></div><div class="pp-toast" role="status" hidden></div>
+
+<script>
+(()=>{
+const root=document.getElementById('career-profile'),q=s=>root.querySelector(s),all=s=>[...root.querySelectorAll(s)],esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const F=(key,label,type='text',options={})=>({key,label,type,...options}),period=[F('start','开始时间','month'),F('end','结束时间','month'),F('ongoing','至今','checkbox')],long=(k,l,max=3000)=>F(k,l,'textarea',{full:true,polish:true,max});
+const defs=[
+{id:'basic',name:'个人信息',single:true,fields:[F('name','姓名'),F('status','当前求职状态','select',{options:['暂不填写','在校，寻找实习','在校，准备校招','离职，正在求职','在职，考虑机会','暂不求职']}),F('identity','当前身份','select',{options:['暂不填写','学生','职场人士']}),F('city','现居城市'),F('phone','手机号码','tel'),F('email','邮箱','email'),F('wechat','微信号（选填）'),F('available','到岗时间','date'),F('gender','性别（选填）','select',{options:['暂不填写','男','女','其他']}),F('birthday','出生年月（选填）','month'),F('birthplace','出生地（选填）')]},
+{id:'advantage',name:'个人优势',single:true,fields:[long('description','优势介绍',1500)]},
+{id:'intent',name:'求职意向',fields:[F('role','期望职位'),F('type','求职类型','select',{options:['暂不填写','实习','校招全职','社招全职','兼职']}),F('industry','期望行业'),F('cities','期望城市'),F('salary','期望薪资'),F('unit','薪资单位','select',{options:['月薪（元）','日薪（元）','年薪（万元）']}),F('negotiable','薪资面议','checkbox'),F('days','每周可实习天数','number',{min:1,max:7}),F('months','可实习月数','number',{min:1,max:36}),F('available','期望到岗日期','date')]},
+{id:'work',name:'工作 / 实习经历',fields:[F('company','公司名称'),F('role','职位名称'),F('department','部门（选填）'),F('industry','所属行业'),F('type','经历类型','select',{options:['实习','全职','兼职','其他']}),...period,long('description','工作内容'),long('achievement','工作业绩（选填）',1500)]},
+{id:'project',name:'项目经历',fields:[F('name','项目名称'),F('role','项目角色'),F('url','项目链接（选填）','url',{full:true}),...period,long('description','项目描述'),long('achievement','项目业绩（选填）',1500)]},
+{id:'education',name:'教育经历',fields:[F('school','学校名称'),F('degree','学历','select',{options:['暂不填写','高中 / 中专','专科','本科','硕士','博士','其他']}),F('major','专业'),F('mode','培养方式','select',{options:['暂不填写','全日制','非全日制']}),...period,F('rank','专业排名（选填）'),long('description','在校经历与荣誉（选填）',2000)]},
+{id:'skills',name:'专业技能',single:true,fields:[F('tags','技能关键词'),long('description','技能说明',2000)]},
+{id:'cert',name:'资格证书',optional:true,fields:[F('name','证书名称'),F('issuer','颁发机构（选填）'),F('date','取得时间','month'),F('number','证书编号（选填）')]},
+{id:'club',name:'社团 / 组织经历',optional:true,fields:[F('name','社团 / 组织名称'),F('role','担任职务'),...period,long('description','经历描述',2000)]},
+{id:'volunteer',name:'志愿者经历',optional:true,fields:[F('name','活动名称'),F('hours','服务时长（小时）','number',{min:0}),...period,long('description','经历描述',2000)]},
+{id:'works',name:'作品与链接',optional:true,fields:[F('name','作品名称'),F('url','作品链接','url'),long('description','作品介绍',1500)]}
+];
+const records={basic:[{name:'言予',status:'在校，准备校招',identity:'学生',city:'北京',email:'yanyu@example.com',available:'2026-10-01'}],advantage:[{description:'关注 AI 产品与用户体验，有从需求梳理到交互原型设计的项目经历。习惯通过访谈和可交互原型验证想法，持续学习产品分析与数据方法。'}],intent:[{role:'AI 产品实习生',type:'实习',industry:'互联网 / 科技',cities:'北京、上海',negotiable:true,days:'4',months:'6'},{role:'产品经理',type:'校招全职',industry:'互联网 / 科技',cities:'北京',negotiable:true}],work:[{company:'星河科技',role:'产品实习生',department:'产品部',type:'实习',industry:'互联网 / 科技',start:'2026-03',end:'2026-06',description:'参与内部知识工具的需求梳理，整理用户反馈并协助迭代检索结果页。'}],project:[{name:'知识问答助手',role:'项目负责人',start:'2026-01',end:'2026-05',description:'面向团队资料查找场景，完成需求访谈、信息架构与交互原型。根据试用反馈改进搜索结果和引用来源的展示。'}],education:[{school:'示例大学',degree:'硕士',major:'信息管理',mode:'全日制',start:'2024-09',end:'2027-06'}],skills:[{tags:'需求分析、用户访谈、原型设计、SQL',description:'能够使用 Figma 制作交互原型，使用 SQL 完成基础数据查询与分析。'}],cert:[],club:[],volunteer:[],works:[]};
+const active=new Set(defs.filter(d=>!d.optional).map(d=>d.id)),files=[];let editing=null,current='basic',returnFocus=null,timer,aiField=null,aiSource='',candidateFile=null,previewParts=[];const byid=id=>defs.find(d=>d.id===id),ico=n=>`<i data-lucide="${n}" aria-hidden="true"></i>`;
+function icons(){if(window.lucide)lucide.createIcons({attrs:{width:18,height:18}})}
+function toast(t){q('.pp-toast').textContent=t;q('.pp-toast').hidden=false;clearTimeout(timer);timer=setTimeout(()=>q('.pp-toast').hidden=true,3800)}
+function modal(t,h){returnFocus=document.activeElement;q('#pp-modal-title').textContent=t;q('#pp-modal-body').innerHTML=h;q('#pp-overlay').hidden=false;icons();q('[data-action=close]').focus({preventScroll:true})}
+function close(){q('#pp-overlay').hidden=true;if(returnFocus?.isConnected)returnFocus.focus({preventScroll:true})}
+function meta(r){return [r.role,r.degree,r.major,r.type,r.start&&(r.start+' — '+(r.ongoing?'至今':r.end||'未填写'))].filter(Boolean).join(' · ')}
+function display(id,r,i){if(id==='basic')return `<div class="pp-avatar">${esc((r.name||'我').slice(-1))}</div><h1>${esc(r.name||'你的姓名')}</h1><div class="pp-pills">${[r.identity,r.status,r.city].filter(v=>v&&v!=='暂不填写').map(v=>`<span class="pp-tag">${esc(v)}</span>`).join('')}</div><div class="pp-basic-grid">${byid('basic').fields.filter(f=>!['name','identity','status','city'].includes(f.key)&&r[f.key]&&r[f.key]!=='暂不填写').map(f=>`<div><small>${f.label.replace('（选填）','')}　</small>${esc(r[f.key])}</div>`).join('')}</div>`;
+if(id==='advantage')return `<div class="pp-copy">${esc(r.description||'想写时再补充你的个人优势。')}</div>`;
+if(id==='skills')return `<div class="pp-pills">${(r.tags||'').split(/[,，、]/).filter(Boolean).map(t=>`<span class="pp-tag">${esc(t)}</span>`).join('')}</div><p class="pp-copy" style="margin-top:10px">${esc(r.description)}</p>`;
+return `<div class="pp-recordhead"><strong>${esc(r.name||r.company||r.school||r.role||'未命名记录')}</strong><div class="pp-row"><button class="pp-link pp-edit" data-edit="${id}:${i}" aria-label="编辑${byid(id).name}第${i+1}条">${ico('pencil')}编辑</button><button class="pp-hidebtn" data-delete="${id}:${i}" aria-label="删除${byid(id).name}第${i+1}条">${ico('trash-2')}</button></div></div>${id==='intent'?`<div class="pp-meta">${esc([r.type,r.industry,r.cities].filter(Boolean).join(' · '))}</div><div class="pp-row"><span class="pp-tag">${esc(r.negotiable?'薪资面议':r.salary?(r.salary+' '+(r.unit||'')):'薪资暂未填写')}</span>${r.type==='实习'?[r.days&&`每周 ${r.days} 天`,r.months&&`${r.months} 个月`].filter(Boolean).map(v=>`<span class="pp-tag">${esc(v)}</span>`).join(''):''}</div>`:`<div class="pp-meta">${esc(meta(r))}</div>${r.issuer?`<small>${esc(r.issuer)} · ${esc(r.date)}</small>`:''}${r.hours?`<span class="pp-tag">${esc(r.hours)} 小时</span>`:''}${r.url?`<div class="pp-meta" style="overflow-wrap:anywhere">${esc(r.url)}</div>`:''}<div class="pp-copy">${esc(r.description)}</div>${r.achievement?`<small>成果与业绩</small><div class="pp-copy">${esc(r.achievement)}</div>`:''}${r.rank?`<small>专业排名 ${esc(r.rank)}</small>`:''}${r.number?`<small>证书编号 ${esc(r.number)}</small>`:''}`}`}
+function field(f,r){const id='ppf-'+f.key,v=r[f.key]??'',inert=(f.key==='end'&&r.ongoing)||(f.key==='salary'&&r.negotiable);if(f.type==='checkbox')return `<div class="pp-field"><label class="pp-check"><input type="checkbox" id="${id}" name="${f.key}" ${v?'checked':''}>${f.label}</label></div>`;
+let el;if(f.type==='select')el=`<select id="${id}" name="${f.key}">${f.options.map(o=>`<option ${o===v?'selected':''}>${o}</option>`).join('')}</select>`;else if(f.type==='textarea')el=`<div class="pp-richbar"><div class="pp-row"><button type="button" class="pp-link" data-list="${f.key}:bullet" aria-label="${f.label}添加项目符号">${ico('list')}</button><button type="button" class="pp-link" data-list="${f.key}:number" aria-label="${f.label}添加编号">${ico('list-ordered')}</button></div><button type="button" class="pp-link" data-polish="${f.key}">${ico('sparkles')}AI 润色</button></div><textarea id="${id}" name="${f.key}" maxlength="${f.max}" placeholder="填写${f.label.replace('（选填）','')}">${esc(v)}</textarea><div class="pp-count"><span data-count="${f.key}">${String(v).length}</span> / ${f.max}</div><div id="ppa-${f.key}" hidden></div>`;else el=`<input id="${id}" name="${f.key}" type="${f.type}" value="${esc(v)}" ${inert?'disabled':''} ${f.min!==undefined?`min="${f.min}"`:''} ${f.max!==undefined?`max="${f.max}"`:''} ${f.type==='number'?'step="1"':''} placeholder="${f.type==='month'||f.type==='date'?'':esc(f.label.replace('（选填）',''))}">`;
+return `<div class="pp-field ${f.full?'full':''}"><label for="${id}">${f.label}</label>${el}</div>`}
+function editor(d){const r=editing.draft;return `<form id="pp-editform" class="pp-editbox"><div class="pp-gridfields">${d.fields.filter(f=>!(d.id==='intent'&&['days','months'].includes(f.key)&&r.type!=='实习')).map(f=>field(f,r)).join('')}</div><div class="pp-invalid" id="pp-errors" role="alert" hidden></div><div class="pp-editor-actions"><button type="button" class="pp-btn" data-action="cancel-edit">取消</button><button type="submit" class="pp-btn primary">保存${editing.index===null?'新记录':'修改'}</button></div></form>`}
+function persistProfile(){try{localStorage.setItem('career-profile-records-v1',JSON.stringify({records,active:[...active]}))}catch{}}
+try{const saved=JSON.parse(localStorage.getItem('career-profile-records-v1')||'null');if(saved?.records){for(const d of defs)if(Array.isArray(saved.records[d.id]))records[d.id]=saved.records[d.id];active.clear();(saved.active||defs.filter(d=>!d.optional).map(d=>d.id)).forEach(k=>active.add(k))}}catch{}
+function render(){persistProfile();const old=q('#pp-sections').scrollTop;q('#pp-directory').innerHTML=defs.filter(d=>active.has(d.id)).map(d=>`<button data-jump="${d.id}" class="${current===d.id?'active':''}">${d.name.replace(' / 实习经历',' / 实习').replace(' / 组织经历',' / 组织')}</button>`).join('');q('#pp-sections').innerHTML=defs.filter(d=>active.has(d.id)).map(d=>{const open=editing?.id===d.id;return `<section id="pps-${d.id}" class="pp-section ${open?'pp-open-edit':''}"><header class="pp-sechead"><h2>${open?(editing.index===null?'添加':'编辑'):''}${d.name}</h2>${!open?`<div class="pp-row">${d.single?`<button class="pp-link pp-edit" data-edit="${d.id}:0">${ico('pencil')}编辑</button>`:`<button class="pp-link pp-edit" data-add="${d.id}">${ico('plus')}添加</button>`}${d.optional&&!records[d.id].length?`<button class="pp-hidebtn" data-hide="${d.id}">移除空板块</button>`:''}</div>`:''}</header>${open?editor(d):records[d.id].length?records[d.id].map((r,i)=>`<div class="pp-record">${display(d.id,r,i)}${['work','project','skills'].includes(d.id)?`<button class="pp-link" style="font-size:12px;margin-top:12px" data-practice="${d.id}:${i}">${ico('audio-lines')}围绕这段${d.id==='skills'?'技能':'经历'}练习</button>`:''}</div>`).join(''):`<span class="pp-unfilled">尚未填写，随时可以补充。</span>`}</section>`}).join('')+`<button class="pp-new" data-action="sections">＋ 添加资料板块</button>`;q('#pp-sections').scrollTop=old;q('#pp-scope').textContent=editing?'个人资料 / '+byid(editing.id).name:'个人资料 · 按需读取';renderFiles();icons()}
+function renderFiles(){q('#pp-files').innerHTML=files.length?files.map((f,i)=>`<button class="pp-file" data-file="${i}" aria-label="查看${esc(f.name)}">${ico('file-text')}<span><strong>${esc(f.name)}</strong><small>${esc(f.status||'已保留原文件')} · ${f.size?Math.ceil(f.size/1024)+' KB':'示例'}</small></span></button>`).join(''):`<small>还没有简历附件</small><p class="pp-filehint">上传 PDF / DOCX，可选择解析并更新档案。</p>`}
+function jump(id){current=id;const sc=q('#pp-sections'),el=q('#pps-'+id);sc.scrollTo({top:sc.scrollTop+el.getBoundingClientRect().top-sc.getBoundingClientRect().top,behavior:'smooth'});all('[data-jump]').forEach(b=>b.classList.toggle('active',b.dataset.jump===id))}
+function startEdit(id,index){if(editing){toast('请先保存或取消当前编辑');return}editing={id,index,draft:structuredClone(index===null?{}:records[id][index]||{})};current=id;render();jump(id)}
+function draft(){if(!editing)return;const d=byid(editing.id);d.fields.forEach(f=>{const el=q('#ppf-'+f.key);if(el)editing.draft[f.key]=f.type==='checkbox'?el.checked:el.value})}
+function validate(data){const issues=[];if(data.start&&data.end&&!data.ongoing&&data.start>data.end)issues.push('结束时间不能早于开始时间。');if(data.email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email))issues.push('请检查邮箱格式。');if(data.phone&&!/^\+?[\d\s()-]{7,20}$/.test(data.phone))issues.push('请检查手机号码格式。');return issues}
+function save(){draft();const errors=validate(editing.draft);if(errors.length){q('#pp-errors').textContent=errors.join(' ');q('#pp-errors').hidden=false;return}const {id,index,draft:r}=editing;if(r.ongoing)r.end='';if(r.negotiable)r.salary='';if(index===null)records[id].push(structuredClone(r));else records[id][index]=structuredClone(r);editing=null;render();jump(id);q('#pp-saved').textContent='· 刚刚保存';toast('资料已保存，已有简历版本不变')}
+function asText(d,r){return d.fields.filter(f=>r[f.key]!==undefined&&r[f.key]!==''&&r[f.key]!==false&&r[f.key]!=='暂不填写').map(f=>`${f.label.replace('（选填）','')}：${r[f.key]===true?'是':r[f.key]}`).join('\n')}
+function fileDetail(i){const f=files[i];modal(f.name,`<small>${esc(f.status||'已保留原文件')}</small>${f.text?`<details open><summary>提取的文字</summary><div class="pp-raw">${esc(f.text)}</div></details>`:'<p>原文件已保留，可以随时解析。</p>'}<div class="pp-row" style="margin-top:16px"><button class="pp-btn" data-download="${i}">下载原文件</button><button class="pp-btn primary" data-parse="${i}">${f.text?'查看解析结果':'解析简历'}</button></div><div id="pp-parse-status" role="status"></div>`)}
+function upload(){if(editing){toast('请先保存或取消当前编辑，再上传简历');return}modal('上传简历',`<div class="pp-upload-zone">${ico('file-up')}<h3>上传已有简历</h3><p>保留原文件，也可以用解析结果更新个人资料。</p><input type="file" id="pp-upload-file" accept=".pdf,.docx,.txt" aria-label="选择简历文件"><div class="pp-drop-note">PDF、DOCX、TXT · 最大 10 MB</div></div><div class="pp-row" style="justify-content:space-between;margin-top:16px"><small>文件在本机处理，不发送到外部服务。</small><button class="pp-link" data-action="demo-parse">体验示例解析</button></div><div id="pp-parse-status" role="status"></div>`)}
+async function parseFile(i){if(editing){toast('请先保存或取消当前编辑');return}candidateFile=i;const f=files[i];if(f.text){review(i);return}modal('解析简历',`<div class="pp-status" id="pp-parse-status" role="status">正在读取 ${esc(f.name)}…</div><small>仅提取本地文件文字，不上传简历。</small>`);try{let text='';if(/\.pdf$/i.test(f.name)){if(!window.pdfjsLib||!window.pdfjsWorker)throw Error('PDF 解析组件未加载，请检查网络后重试。');const task=pdfjsLib.getDocument({data:new Uint8Array(await f.blob.arrayBuffer()),useWorkerFetch:false,isEvalSupported:false}),pdf=await task.promise;try{if(pdf.numPages>50)throw Error('这份文件超过 50 页，请上传精简的简历文件。');for(let p=1;p<=pdf.numPages;p++){const page=await pdf.getPage(p),content=await page.getTextContent();let lastY=null;for(const item of content.items){if(lastY!==null&&Math.abs(item.transform[5]-lastY)>3)text+='\n';text+=item.str+(item.hasEOL?'\n':' ');lastY=item.transform[5]}text+='\n'}}finally{await pdf.destroy()}}else if(/\.docx$/i.test(f.name)){if(!window.mammoth)throw Error('DOCX 解析组件未加载，请稍后重试。');text=(await mammoth.extractRawText({arrayBuffer:await f.blob.arrayBuffer()})).value}else text=await f.blob.text();text=text.trim();if(!text)throw Error('没有提取到可用文字。扫描件需要 OCR，当前预览尚未接入；原附件已保留。');f.text=text;f.status='已提取文字';renderFiles();if(candidateFile===i&&!q('#pp-overlay').hidden)review(i)}catch(e){f.status='待解析';renderFiles();if(candidateFile===i&&!q('#pp-overlay').hidden)q('#pp-modal-body').innerHTML=`<div class="pp-status">${esc(e.message||'解析未成功，原文件已保留。')}</div><button class="pp-btn" data-parse="${i}">重试解析</button><button class="pp-link" data-action="close">只保留附件</button>`}}
+function extractCandidates(text){const list=[],seen=new Set(),put=(id,key,value)=>{if(!value||seen.has(id+key))return;seen.add(id+key);const old=records[id][0]?.[key]||'';if(value===old)return;list.push({id,key,value,old,label:byid(id).fields.find(f=>f.key===key).label})};const map={name:['姓名','Name'],city:['现居城市','现居地','城市','City'],phone:['手机号码','手机','电话','Phone'],email:['邮箱','电子邮箱','Email'],wechat:['微信号','微信'],available:['到岗日期']};for(const [k,labels]of Object.entries(map)){const re=new RegExp('(?:^|\\n)\\s*(?:'+labels.join('|')+')\\s*[:：]\\s*([^\\n]+)','i');const m=text.match(re);if(m)put('basic',k,m[1].trim())}const mail=text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);if(mail)put('basic','email',mail[0]);const phone=text.match(/(?:^|[^\d])(1[3-9]\d{9})(?!\d)/);if(phone)put('basic','phone',phone[1]);for(const [id,labels]of [['advantage',['个人优势','个人简介','自我评价']],['skills',['专业技能','技能说明']]]){const re=new RegExp('(?:^|\\n)\\s*(?:'+labels.join('|')+')\\s*[:：]?\\s*\\n?([\\s\\S]*?)(?=\\n\\s*(?:教育经历|工作经历|实习经历|项目经历|专业技能|个人优势|求职意向|资格证书|社团经历|志愿者经历)\\s*[:：]?|$)');const m=text.match(re);if(m)put(id,'description',m[1].trim())}return list}
+function review(i){const f=files[i];previewParts=extractCandidates(f.text);modal('是否根据简历更新档案？',`<span class="pp-context">${esc(f.name)}</span><p>只更新你选择的字段。未识别内容保留在原文件中，不清空现有资料。</p><small>当前预览按明确字段和联系方式识别；复杂经历的智能归类尚未接入。</small><div id="pp-diffs">${previewParts.map((c,n)=>`<div class="pp-diff"><label><input type="checkbox" data-candidate="${n}"> ${byid(c.id).name} / ${c.label} <small>${c.old?'与档案不同':'可补充'}</small></label><div class="pp-diffgrid"><div><small>当前档案</small><div class="pp-copy">${esc(c.old||'未填写')}</div></div><div><label for="ppc-${n}">简历内容（可修正）</label>${c.key==='description'?`<textarea id="ppc-${n}">${esc(c.value)}</textarea>`:`<input id="ppc-${n}" value="${esc(c.value)}">`}</div></div></div>`).join('')||'<div class="pp-status">未发现可直接更新的字段。你可以查看提取文字，手动补充到对应表单。</div>'}</div><details><summary>查看全部提取文字</summary><div class="pp-raw">${esc(f.text)}</div></details><div id="pp-merge-error" class="pp-invalid" role="alert"></div><div class="pp-bottom-actions"><button class="pp-btn" data-action="close">只保留简历</button><button class="pp-btn primary" data-action="merge" disabled>更新所选字段</button></div>`)}
+function resume(){if(editing){toast('请先保存当前资料，再制作简历');return}try{localStorage.setItem('career-profile-records-v1',JSON.stringify({records,active:[...active]}));sessionStorage.setItem('career-resume-seed',JSON.stringify({records,active:[...active]}));window.parent!==window?parent.postMessage({type:'career-open',path:'/editor/index.html'},location.origin):window.location.assign('/editor/index.html')}catch{toast('浏览器存储不可用，请在 Chrome 打开本地页面')}}
+function included(){let ds=all('#pp-included input:checked').map(el=>byid(el.value));if(q('#pp-template').value==='经历优先'){const order=['basic','intent','work','project','education','skills','advantage'];ds.sort((a,b)=>(order.indexOf(a.id)+1||99)-(order.indexOf(b.id)+1||99))}return ds}
+function resumeText(){return included().map(d=>d.name+'\n'+records[d.id].map(r=>asText(d,r)).join('\n\n')).join('\n\n')}
+function updatePreview(){q('#pp-resume-preview').innerHTML=included().map(d=>`<h3>${d.name}</h3><div class="pp-doc-export">${esc(records[d.id].map(r=>asText(d,r)).join('\n\n'))}</div>`).join('')}
+function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000)}
+root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b)return;const a=b.dataset.action;
+if(b.dataset.jump){jump(b.dataset.jump);return}if(b.dataset.edit){const [id,n]=b.dataset.edit.split(':');startEdit(id,+n);return}if(b.dataset.add){startEdit(b.dataset.add,null);return}if(b.dataset.hide){active.delete(b.dataset.hide);render();return}
+if(b.dataset.delete){if(editing){toast('请先结束当前编辑');return}const [id,n]=b.dataset.delete.split(':');modal('删除这条记录？',`<p>仅从个人资料移除，不改写已有简历文件。</p><div class="pp-row"><button class="pp-btn" data-action="close">取消</button><button class="pp-btn primary" data-remove="${id}:${n}">删除记录</button></div>`);return}if(b.dataset.remove){const [id,n]=b.dataset.remove.split(':');records[id].splice(+n,1);render();close();toast('记录已移除');return}
+if(b.dataset.file!==undefined){fileDetail(+b.dataset.file);return}if(b.dataset.download!==undefined){const f=files[+b.dataset.download];download(f.blob,f.name);return}if(b.dataset.parse!==undefined){await parseFile(+b.dataset.parse);return}
+if(b.dataset.list){const [key,type]=b.dataset.list.split(':'),el=q('#ppf-'+key),start=el.selectionStart,end=el.selectionEnd,lineStart=el.value.lastIndexOf('\n',start-1)+1,endPos=el.value.indexOf('\n',end),stop=endPos<0?el.value.length:endPos,part=el.value.slice(lineStart,stop).split('\n').map((l,i)=>(type==='bullet'?'• ':`${i+1}. `)+l).join('\n');el.setRangeText(part,lineStart,stop,'end');el.dispatchEvent(new Event('input',{bubbles:true}));el.focus({preventScroll:true});return}
+if(b.dataset.polish){const key=b.dataset.polish,el=q('#ppf-'+key),box=q('#ppa-'+key);if(!el.value.trim()){toast('先写一点内容，再使用润色');return}aiField=key;aiSource=el.value;box.hidden=false;box.className='pp-inline-ai';box.innerHTML=`<small>润色交互预览 · 未调用模型</small><p>保留事实，突出个人行动与结果；可以选择简洁表达或补充说明。</p><textarea id="pp-ai-draft" aria-label="润色建议草稿">${esc(el.value)}</textarea><div class="pp-row"><button type="button" class="pp-link" data-action="apply-ai">采用到编辑框</button><button type="button" class="pp-link" data-discard="${key}">收起</button></div>`;return}if(b.dataset.discard){q('#ppa-'+b.dataset.discard).hidden=true;return}
+if(b.dataset.practice){const [id,n]=b.dataset.practice.split(':');modal('个人练习场 · 自由练习',`<span class="pp-context">${byid(id).name}</span><div class="pp-preview"><p>${esc(asText(byid(id),records[id][+n]))}</p></div><p>以这段资料为练习内容。若为具体岗位准备，需另选该岗位，读取它的 JD 与材料。练习页面尚未接入本原型。</p>`);return}
+if(b.dataset.page){if(b.dataset.page==='岗位市场'){location.href='/market/index.html';return}if(b.dataset.page==='个人资料')return;modal(b.dataset.page,`<p>本次预览聚焦个人资料，此页面暂未接入。</p>`);return}
+if(a==='close'){close();return}if(a==='cancel-edit'){const id=editing.id;editing=null;render();jump(id)}if(a==='apply-ai'){if(q('#ppf-'+aiField).value!==aiSource){toast('原文已变化，请重新查看建议');return}q('#ppf-'+aiField).value=q('#pp-ai-draft').value;q('#ppf-'+aiField).dispatchEvent(new Event('input',{bubbles:true}));q('#ppa-'+aiField).hidden=true}
+if(a==='upload')upload();if(a==='files')modal('我的简历',files.length?files.map((f,i)=>`<button class="pp-file" data-file="${i}">${ico('file-text')}<span><strong>${esc(f.name)}</strong><small>${esc(f.status)}</small></span></button>`).join(''):'<p>暂无附件。点击上传简历即可添加。</p>');
+if(a==='demo-parse'){const text='姓名：言予\n现居城市：上海\n邮箱：yanyu.career@example.com\n个人优势\n关注 AI 产品与用户体验，具备需求梳理和交互原型设计的项目经历。\n专业技能\nSQL、用户访谈、原型设计。';files.unshift({name:'示例简历.txt',text,status:'示例解析结果',blob:new Blob([text],{type:'text/plain;charset=utf-8'})});renderFiles();review(0)}
+if(a==='merge'){const selected=all('[data-candidate]:checked'),copies={};for(const el of selected){const n=+el.dataset.candidate,c=previewParts[n];copies[c.id]??=structuredClone(records[c.id][0]||{});copies[c.id][c.key]=q('#ppc-'+n).value.trim()}const errors=Object.values(copies).flatMap(validate);if(errors.length){q('#pp-merge-error').textContent=errors.join(' ');return}for(const [id,r]of Object.entries(copies))records[id][0]=r;render();close();toast(`已更新 ${selected.length} 个字段，其他资料保持不变`)}
+if(a==='sections'){modal('添加资料板块',`<p>按需选择，不要求填写全部板块。</p>${defs.filter(d=>!active.has(d.id)).map(d=>`<label class="pp-check"><input type="checkbox" name="extra" value="${d.id}">${d.name}</label>`).join('')||'<p>全部板块已显示。</p>'}<button class="pp-btn primary" data-action="add-sections">添加所选板块</button>`)}if(a==='add-sections'){all('input[name=extra]:checked').forEach(el=>active.add(el.value));render();close()}
+if(a==='resume')resume();if(a==='download-txt')download(new Blob([resumeText()],{type:'text/plain;charset=utf-8'}),'基础简历.txt');if(a==='save-version'){const text=resumeText();files.unshift({name:`基础简历 v${files.length+1}.txt`,text,status:'独立资料快照',blob:new Blob([text],{type:'text/plain;charset=utf-8'})});renderFiles();close();toast('已保存独立简历版本')}
+if(a==='check'){const issues=defs.flatMap(d=>records[d.id].flatMap((r,i)=>validate(r).map(t=>`${d.name}第 ${i+1} 条：${t}`)));modal('资料检查',`<p>当前预览检查日期先后、手机和邮箱格式。</p>${issues.map(t=>`<div class="pp-status">${esc(t)}</div>`).join('')||'<div class="pp-status">未发现上述格式问题。</div>'}<small>事实核验和表达分析需接入真实 Agent；不以空板块扣分。</small>`)}
+if(a==='ats')modal('ATS 简历检查',`<label>选择简历<select>${files.length?files.map(f=>`<option>${esc(f.name)}</option>`).join(''):'<option>请先上传简历</option>'}</select></label><p>文字提取不等于 ATS 评分。版式兼容、字段识别与内容检查服务尚未接入，不显示虚构分数。</p>`);
+if(a==='relations')modal('资料使用关系',`<div class="pp-relation"><strong>岗位市场</strong><span>按需读取求职意向与经历，读取具体 JD 后分析岗位匹配。</span></div><div class="pp-relation"><strong>岗位工作台</strong><span>基础资料供生成材料使用；岗位专属简历独立保存，不自动回写档案。</span></div><div class="pp-relation"><strong>个人练习场</strong><span>读取相关经历或技能，练习记录另存；专项准备另选具体岗位。</span></div><div class="pp-relation"><strong>网申填写</strong><span>使用个人资料与当前岗位 JD、定制简历。不同岗位资料隔离。</span></div><div class="pp-relation"><strong>Today</strong><span>承接需要用户决定的资料冲突修正。</span></div>`);if(a==='settings')modal('设置',`<p>个性化、服务连接与数据管理沿用左下角入口，此原型尚未接入。</p>`);
+});
+root.addEventListener('submit',e=>{e.preventDefault();if(e.target.id==='pp-editform'){save();return}if(e.target.id==='pp-agentform'){const text=e.target.querySelector('input').value;modal('Agent · 个人资料',`<span class="pp-context">${esc(q('#pp-scope').textContent)}</span><div class="pp-chatbubble" style="margin-top:16px">${esc(text)}</div><p>将在此展开资料任务，按需读取相关板块，并将建议写回同一套字段编辑界面。</p><small>当前未调用模型，未修改资料。</small>`)}});
+root.addEventListener('input',e=>{if(e.target.closest('#pp-editform')){draft();const key=e.target.name,c=q('[data-count="'+key+'"]');if(c)c.textContent=e.target.value.length}});
+root.addEventListener('change',e=>{if(e.target.id==='pp-upload-file'){const f=e.target.files[0];if(!f)return;if(f.size>10*1024*1024||!(/\.(pdf|docx|txt)$/i.test(f.name))){q('#pp-parse-status').textContent='请选择 10 MB 以内的 PDF、DOCX 或 TXT 文件。';return}files.unshift({name:f.name,size:f.size,blob:f,status:'已保留原文件'});renderFiles();modal('简历已保留',`<h3 style="overflow-wrap:anywhere">${esc(f.name)}</h3><p>是否解析简历，查看可以更新到个人档案的内容？</p><div class="pp-row"><button class="pp-btn" data-action="close">只保留简历</button><button class="pp-btn primary" data-parse="0">解析并查看档案更新</button></div>`)}if(e.target.matches('[data-candidate]'))q('[data-action=merge]').disabled=!all('[data-candidate]:checked').length;if(e.target.closest('#pp-editform')&&['type','ongoing','negotiable'].includes(e.target.name)){draft();const scroll=q('#pp-sections').scrollTop;render();q('#pp-sections').scrollTop=scroll}if(e.target.id==='pp-template'||e.target.closest('#pp-included'))updatePreview()});
+q('#pp-sections').addEventListener('scroll',()=>{if(editing)return;const top=q('#pp-sections').getBoundingClientRect().top,sec=all('.pp-section').filter(s=>s.getBoundingClientRect().top<=top+65).at(-1);if(sec){current=sec.id.slice(4);all('[data-jump]').forEach(b=>b.classList.toggle('active',b.dataset.jump===current))}},{passive:true});
+root.addEventListener('keydown',e=>{if(q('#pp-overlay').hidden)return;if(e.key==='Escape')close();if(e.key==='Tab'){const els=[...q('.pp-modal').querySelectorAll('button,input,textarea,select,summary')].filter(x=>!x.disabled&&x.getClientRects().length);if(e.shiftKey&&document.activeElement===els[0]){e.preventDefault();els.at(-1).focus()}else if(!e.shiftKey&&document.activeElement===els.at(-1)){e.preventDefault();els[0].focus()}}});
+q('#pp-navs').innerHTML=[['sun','Today'],['user-round','个人资料'],['compass','岗位市场'],['briefcase-business','我的投递'],['audio-lines','个人练习场'],['layers','Offer池'],['messages-square','面经社区'],['blocks','插件市场']].map(([icon,name])=>`<button class="pp-nav ${name==='个人资料'?'active':''}" data-page="${name}" aria-label="${name}">${ico(icon)}<span class="pp-navlabel">${name}</span></button>`).join('');render();const design={padding:25};if(window.Tweak){const t=new Tweak({container:root,onChange:()=>q('.pp-scroll').style.paddingInline=design.padding+'px'});t.addSlider(design,'padding',{label:'正文左右留白',min:16,max:40,unit:'px'})}
+})();
+
+</script>
+</div>
+
+<script src="https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js"></script>
+<script src="https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js"></script>
+<script>
+(() => {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set(["top", "right", "bottom", "left"]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+  let lastPointerWasTouch = false;
+  let pinnedByTouch = false;
+
+  const getTrigger = (target) =>
+    target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest("[data-tooltip]")
+      : null;
+  const containsTarget = (trigger, target) =>
+    target?.nodeType != null && trigger.contains(target);
+  const getContent = (trigger) =>
+    trigger.getAttribute("data-tooltip")?.trim() ?? "";
+  const getPlacement = (trigger) => {
+    const placement = trigger.getAttribute("data-tooltip-placement");
+    return tooltipPlacements.has(placement) ? placement : "top";
+  };
+  const getTooltip = () => {
+    if (tooltip == null) {
+      tooltip = document.createElement("div");
+      tooltip.id = tooltipId;
+      tooltip.className = "tooltip";
+      tooltip.setAttribute("role", "tooltip");
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) => {
+    const ids = new Set(
+      (trigger.getAttribute("aria-describedby") ?? "")
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute("aria-describedby");
+    } else {
+      trigger.setAttribute("aria-describedby", [...ids].join(" "));
+    }
+  };
+  const clearOpenTimeout = () => {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) => {
+    clearOpenTimeout();
+    pinnedByTouch = false;
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) => {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              "--tooltip-available-width",
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              "--tooltip-available-height",
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: "fixed",
+    })
+      .then(({ x, y }) => {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = "visible";
+      })
+      .catch(() => {
+        if (activeTrigger === trigger && request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) => {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = "hidden";
+    floating.style.transform = "translate(0, 0)";
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () => {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) => {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() < skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() => {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) => {
+    if (event.pointerType === "touch") {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handlePointer = (event) => {
+    lastPointerWasTouch =
+      event.type === "pointerdown" && event.pointerType === "touch";
+  };
+  const handleTouchClick = (event) => {
+    const isTouch = event.pointerType === "touch" || lastPointerWasTouch;
+    lastPointerWasTouch = false;
+    if (!isTouch || event.detail === 0) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (
+      trigger == null ||
+      !trigger.isConnected ||
+      getContent(trigger).length === 0 ||
+      (pinnedByTouch && activeTrigger === trigger)
+    ) {
+      if (pinnedByTouch) {
+        closeTooltip();
+      }
+      return;
+    }
+    openTooltip(trigger);
+    pinnedByTouch = activeTrigger === trigger;
+    window.setTimeout(() => {
+      if (activeTrigger === trigger && !trigger.isConnected) {
+        closeTooltip(false);
+      }
+    }, 0);
+  };
+  const handleLeave = (event) => {
+    if (pinnedByTouch) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) => {
+    const trigger = getTrigger(event.target);
+    if (trigger?.matches(":focus-visible")) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) => {
+    if (event.key === "Escape") {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) => {
+    lastPointerWasTouch = false;
+    const trigger = getTrigger(event.target);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const destroy = () => {
+    closeTooltip(false);
+    lastPointerWasTouch = false;
+    document.removeEventListener("pointerover", handlePointerOpen);
+    document.removeEventListener("pointerdown", handlePointer);
+    document.removeEventListener("pointercancel", handlePointer);
+    document.removeEventListener("click", handleTouchClick);
+    document.removeEventListener("pointerout", handleLeave);
+    document.removeEventListener("focusin", handleFocusIn);
+    document.removeEventListener("focusout", handleLeave);
+    document.removeEventListener("keydown", handleKeyDown);
+    document.removeEventListener("contextmenu", handleContextMenu);
+    tooltip = null;
+  };
+
+  document.addEventListener("pointerover", handlePointerOpen);
+  document.addEventListener("pointerdown", handlePointer);
+  document.addEventListener("pointercancel", handlePointer);
+  document.addEventListener("click", handleTouchClick);
+  document.addEventListener("pointerout", handleLeave);
+  document.addEventListener("focusin", handleFocusIn);
+  document.addEventListener("focusout", handleLeave);
+  document.addEventListener("keydown", handleKeyDown);
+  document.addEventListener("contextmenu", handleContextMenu);
+  window.addEventListener("pagehide", destroy, { once: true });
+})();
+</script>
+<script id="codex-visualization-tabs">
+(() => {
+  const selector = '.nav[role="tablist"] [role="tab"]';
+  const disabled = ':disabled,[aria-disabled="true"]';
+  const selectTab = (selected) => {
+    const panelId = selected.getAttribute("aria-controls");
+    for (const tab of selected.closest('[role="tablist"]').querySelectorAll('[role="tab"]')) {
+      const active = tab === selected;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-selected", String(active));
+      const id = tab.getAttribute("aria-controls");
+      const panel = id && document.getElementById(id);
+      if (panel != null) {
+        panel.hidden = id !== panelId;
+        if (!panel.hidden && selected.id) {
+          panel.setAttribute("aria-labelledby", selected.id);
+        }
+      }
+    }
+  };
+  const interact = (event) => {
+    const tab = event.target?.closest?.(selector);
+    if (event.defaultPrevented || tab == null || tab.matches(disabled)) {
+      return;
+    }
+    if (event.type === "click") {
+      selectTab(tab);
+      return;
+    }
+    const tabs = Array.from(
+      tab.closest('[role="tablist"]').querySelectorAll('[role="tab"]'),
+    ).filter((candidate) => !candidate.matches(disabled));
+    const current = tabs.indexOf(tab);
+    let next;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      next = (current + 1) % tabs.length;
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      next = (current + tabs.length - 1) % tabs.length;
+    } else if (event.key === "Home") {
+      next = 0;
+    } else if (event.key === "End") {
+      next = tabs.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    tabs[next].focus();
+    selectTab(tabs[next]);
+  };
+
+  for (const list of document.querySelectorAll('.nav[role="tablist"]')) {
+    const selected =
+      list.querySelector('[role="tab"][aria-selected="true"]') ??
+      list.querySelector('[role="tab"].active') ??
+      list.querySelector('[role="tab"]');
+    if (selected != null) {
+      selectTab(selected);
+    }
+  }
+  document.addEventListener("click", interact);
+  document.addEventListener("keydown", interact);
+  window.addEventListener("pagehide", () => {
+    document.removeEventListener("click", interact);
+    document.removeEventListener("keydown", interact);
+  }, { once: true });
+})();
+</script>
+<script id="codex-visualization-lucide" async src="https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js"></script>
+<script>
+(() => {
+  const initialize = () => {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById("codex-visualization-lucide")
+    ?.addEventListener("load", initialize, { once: true });
+})();
+</script>
+
+<link rel="stylesheet" href="/shared/design-system.css"><script src="/shared/shell.js"></script></body>
+</html>

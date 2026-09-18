@@ -21,6 +21,7 @@ from app.models.user_skill import UserSkill
 from app.services.capabilities import skill_service
 from app.services.capabilities.mcp_server_service import MCPServerConfig
 from pydantic import BaseModel
+from mcp.types import Tool, ListToolsResult
 
 from tests.conftest import patch_session_locals
 
@@ -361,6 +362,52 @@ def test_loaded_mcp_schema_restores_callable_identity_for_same_call_resume(
     }
 
 
+def test_resume_does_not_silently_replace_previously_loaded_schema(
+    db_session, monkeypatch
+):
+    from dataclasses import replace
+    import app.agent_runtime.turn_tool_catalog as module
+
+    user = User(username="schema-drift", hashed_password="x")
+    db_session.add(user)
+    db_session.flush()
+    conversation = Conversation(user_id=user.id, mode="agent")
+    db_session.add(conversation)
+    db_session.flush()
+    turn = ConversationTurn(
+        conversation_id=conversation.id,
+        user_id=user.id,
+        mode="agent",
+        message="resume",
+        loaded_tool_schemas_json=[TurnToolCatalog._mcp_schema(TOOL)],
+    )
+    db_session.add(turn)
+    db_session.commit()
+    patch_session_locals(monkeypatch, db_session, module)
+    monkeypatch.setattr(
+        module.mcp_server_service, "enabled_configs", lambda *_: [CONFIG]
+    )
+    changed = replace(
+        TOOL, input_schema={"type": "object", "properties": {"new": {"type": "string"}}}
+    )
+    monkeypatch.setattr(
+        module.manager, "discover", AsyncMock(return_value=([changed], {}))
+    )
+    catalog = asyncio.run(
+        TurnToolCatalog.create(
+            user.username, session_id=conversation.id, turn_id=turn.id
+        )
+    )
+    assert TOOL.name not in catalog
+    assert catalog.mcp_tools == ()
+    assert catalog.mcp_discovery_errors[7] == "mcp_tool_schema_changed"
+    turn.dispatch_generation = 2
+    db_session.commit()
+    asyncio.run(catalog._persist_loaded_schemas())
+    db_session.refresh(turn)
+    assert turn.loaded_tool_schemas_json == [TurnToolCatalog._mcp_schema(TOOL)]
+
+
 def test_skill_content_is_progressively_loaded(monkeypatch):
     catalog = TurnToolCatalog(
         builtins=registry.snapshot(user_id="alice"),
@@ -603,13 +650,13 @@ def test_mcp_manager_maps_remote_tools(monkeypatch):
     instance = MCPManager()
     session = SimpleNamespace(
         list_tools=AsyncMock(
-            return_value=SimpleNamespace(
+            return_value=ListToolsResult(
                 tools=[
-                    SimpleNamespace(
+                    Tool(
                         name="add",
                         title=None,
                         description="Add",
-                        input_schema={"type": "object", "properties": {}},
+                        inputSchema={"type": "object", "properties": {}},
                     )
                 ]
             )
@@ -637,13 +684,13 @@ def test_mcp_runtime_reuses_connection_and_tool_cache(monkeypatch):
     opened = 0
     session = SimpleNamespace(
         list_tools=AsyncMock(
-            return_value=SimpleNamespace(
+            return_value=ListToolsResult(
                 tools=[
-                    SimpleNamespace(
+                    Tool(
                         name="add",
                         title=None,
                         description="Add",
-                        input_schema={"type": "object", "properties": {}},
+                        inputSchema={"type": "object", "properties": {}},
                     )
                 ]
             )
@@ -683,7 +730,7 @@ def test_mcp_runtime_isolated_by_user_and_revision(monkeypatch):
     instance = MCPManager()
     opened = 0
     session = SimpleNamespace(
-        list_tools=AsyncMock(return_value=SimpleNamespace(tools=[]))
+        list_tools=AsyncMock(return_value=ListToolsResult(tools=[]))
     )
 
     @asynccontextmanager
@@ -736,4 +783,6 @@ def test_mcp_runtime_close_releases_running_and_queued_callers(monkeypatch):
         return outcomes
 
     outcomes = asyncio.run(run())
-    assert all(isinstance(item, asyncio.CancelledError) for item in outcomes)
+    from app.agent_runtime.mcp.manager import MCPConnectionClosed
+
+    assert all(isinstance(item, MCPConnectionClosed) for item in outcomes)

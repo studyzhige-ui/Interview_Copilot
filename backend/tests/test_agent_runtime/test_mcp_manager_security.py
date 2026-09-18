@@ -36,7 +36,7 @@ def _config(transport: str, **overrides) -> MCPServerConfig:
 
 
 class _FakeClientSession:
-    def __init__(self, *_streams) -> None:
+    def __init__(self, *_streams, message_handler=None) -> None:
         self.initialized = False
 
     async def __aenter__(self):

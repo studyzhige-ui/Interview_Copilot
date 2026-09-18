@@ -52,6 +52,43 @@ def client(db: Session) -> Iterator[TestClient]:
     yield TestClient(app)
 
 
+def test_pipeline_status_and_receipts_are_user_scoped(client: TestClient, db: Session):
+    from app.models.memory_pipeline import MemoryExtraction
+    from app.db.types import utc_now
+
+    other = User(username="other-memory-owner", hashed_password="x")
+    db.add(other)
+    db.flush()
+    db.add(
+        MemoryExtraction(
+            turn_id="foreign-turn",
+            user_id=other.id,
+            conversation_id="foreign-conversation",
+            source_hash="hash",
+            status="failed",
+            observed_at=utc_now(),
+            error_code="ProviderError",
+        )
+    )
+    db.commit()
+    response = client.get("/api/v1/personalization/memory-pipeline")
+    assert response.status_code == 200
+    assert response.json()["extractions"] == {}
+    assert client.get("/api/v1/personalization/memory-receipts").json() == []
+    response = client.put(
+        "/api/v1/personalization/memory-receipts/foreign/feedback",
+        json={"feedback": "helpful"},
+    )
+    assert response.status_code == 404
+    assert (
+        client.put(
+            "/api/v1/personalization/memory-receipts/foreign/feedback",
+            json={"feedback": "arbitrary"},
+        ).status_code
+        == 422
+    )
+
+
 def test_personalization_api_routes_commands_to_three_real_owners(
     client: TestClient,
     db: Session,

@@ -1,5 +1,7 @@
 # Stage 4 Spec: connectors, execution modes and PersistentTask
 
+> Status: Historical Implementation Reference. This is not a current Contract or Vertical Slice Spec; see [`README.md`](./README.md) and the current [`Career Agent OS Blueprint`](../career-agent-os-blueprint.md).
+
 ## 1. Connector boundary
 
 The first connector is provider-specific Gmail read access. There is no generic

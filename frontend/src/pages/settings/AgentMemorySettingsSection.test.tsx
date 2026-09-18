@@ -6,6 +6,9 @@ const api = vi.hoisted(() => ({
   getAgentMemorySettings: vi.fn(),
   updateAgentMemorySettings: vi.fn(),
   getAgentMemories: vi.fn(),
+  getMemoryPipelineStatus: vi.fn().mockResolvedValue({ producer_available: true, extractions: {}, consolidation: null }),
+  getMemoryReceipts: vi.fn().mockResolvedValue([]),
+  setMemoryFeedback: vi.fn(),
   getCopilotPreference: vi.fn(),
   updateAgentMemory: vi.fn(),
   invalidateAgentMemory: vi.fn(),
@@ -139,7 +142,7 @@ describe('AgentMemorySettingsSection', () => {
     renderSection();
     expect(await screen.findByText(memory.content)).toBeInTheDocument();
     expect(screen.getByText(/学习陌生技术概念时/)).toBeInTheDocument();
-    expect(screen.getByText('Conversation conversation-2')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '查看来源对话' })).toHaveAttribute('href', '/general-chat?session=conversation-2');
     expect(screen.getByText('Turn turn-7')).toBeInTheDocument();
     expect(screen.getByText('有效')).toBeInTheDocument();
 

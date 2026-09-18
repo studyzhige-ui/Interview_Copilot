@@ -1,8 +1,18 @@
 import uuid
 
-from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 
 from app.db.database import Base
+from app.db.types import JSONValue as JSON
 from app.db.types import UTCDateTime as DateTime
 from app.db.types import utc_now
 
@@ -36,6 +46,18 @@ class InterviewRecord(Base):
             "ability_signal_generation >= 0",
             name="ck_interview_records_ability_signal_generation",
         ),
+        CheckConstraint(
+            "schedule_version >= 0",
+            name="ck_interview_records_schedule_version",
+        ),
+        CheckConstraint(
+            "scheduled_end_at IS NULL OR scheduled_start_at IS NOT NULL",
+            name="ck_interview_records_schedule_end_shape",
+        ),
+        UniqueConstraint(
+            "invitation_operation_id",
+            name="uq_interview_records_invitation_operation",
+        ),
     )
 
     id = Column(String, primary_key=True, default=_generate_record_id)
@@ -54,6 +76,34 @@ class InterviewRecord(Base):
     job_opportunity_id = Column(
         String(35),
         ForeignKey("job_opportunities.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Confirmed schedule owned by this Interview. Calendar remains an external
+    # provider projection and NextAction remains a user action, not a duplicate
+    # schedule owner.
+    schedule_version = Column(Integer, nullable=False, default=0, server_default="0")
+    scheduled_start_at = Column(DateTime, nullable=True)
+    scheduled_end_at = Column(DateTime, nullable=True)
+    original_time_text = Column(String(300), nullable=True)
+    source_timezone = Column(String(80), nullable=True)
+    stage_label = Column(String(200), nullable=True)
+    scheduled_location = Column(String(500), nullable=True)
+    meeting_url = Column(Text, nullable=True)
+    contact_json = Column(JSON, nullable=True)
+    invitation_source_kind = Column(String(32), nullable=True)
+    invitation_source_identity = Column(String(256), nullable=True)
+    invitation_source_version = Column(String(128), nullable=True)
+    invitation_candidate_id = Column(
+        String(36),
+        ForeignKey("interview_invitation_candidates.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    invitation_operation_id = Column(
+        String(36),
+        ForeignKey("application_operations.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )

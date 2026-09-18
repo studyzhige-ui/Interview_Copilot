@@ -47,6 +47,16 @@ describe('streamChatTurn', () => {
 
   afterEach(() => vi.useRealTimers());
 
+  it('does not report completion when every stream closes without a done event', async () => {
+    vi.useFakeTimers();
+    authedFetch.mockImplementation(async () => new Response(''));
+    const result = streamChatTurn('session-1', '', {}, { turnId: 'existing' }).catch((error: Error) => error);
+    await vi.runAllTimersAsync();
+    expect(await result).toEqual(expect.objectContaining({ message: expect.stringContaining('尚未收到完成状态') }));
+    expect(post).not.toHaveBeenCalled();
+    expect(authedFetch).toHaveBeenCalledTimes(6);
+  });
+
   it('creates a turn and reconnects from the last Redis stream cursor', async () => {
     post.mockResolvedValue({
       data: {

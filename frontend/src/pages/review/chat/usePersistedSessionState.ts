@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import type { Mode } from './types';
+import { saveUnconfirmed } from './submissionRecovery';
 
 function readDraft(key: string | null): string {
   if (!key) return '';
@@ -84,6 +85,7 @@ export function useSessionMode(activeSessionId: string | null, serverMode?: stri
 /** Remove the persisted draft + mode for a deleted session so
  *  localStorage doesn't accumulate orphaned keys. */
 export function clearPersistedSessionState(sessionId: string) {
+  saveUnconfirmed(sessionId);
   try { localStorage.removeItem(`chat-draft:${sessionId}`); } catch { /* ignore */ }
   try { localStorage.removeItem(`chat-mode:${sessionId}`); } catch { /* ignore */ }
   // One-time cleanup for builds that incorrectly treated this key as truth.

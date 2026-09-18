@@ -1,11 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { BarChart3, Lightbulb, AlertCircle, RefreshCw } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Spinner } from '@/components/ui/Spinner';
 import { Btn } from '@/components/ui/Btn';
-import { toast } from '@/store/uiStore';
 import { getAnalyticsReport } from '@/api/interview';
-import { useIsMounted } from '@/hooks/useIsMounted';
 
 interface RadarAxis {
   k: string;
@@ -83,31 +81,13 @@ function normalize(raw: unknown): NormalizedReport | { empty: true; message: str
 }
 
 export function AnalyticsPage() {
-  const [report, setReport] = useState<ReturnType<typeof normalize> | null>(null);
-  const [loading, setLoading] = useState(true);
+  const query = useQuery({ queryKey: ['analytics-report'], queryFn: getAnalyticsReport });
+  const report = query.isError && !query.data
+    ? { empty: true as const, message: '服务暂时不可用，请稍后重试' }
+    : normalize(query.data);
+  const refresh = () => { void query.refetch(); };
 
-  const isMounted = useIsMounted();
-  const refresh = async () => {
-    setLoading(true);
-    try {
-      const raw = await getAnalyticsReport();
-      if (!isMounted.current) return;
-      setReport(normalize(raw));
-    } catch {
-      if (isMounted.current) {
-        setReport({ empty: true, message: '服务暂时不可用，请稍后重试' });
-        toast.error('能力分析加载失败');
-      }
-    } finally {
-      if (isMounted.current) setLoading(false);
-    }
-  };
-
-  // Initial data synchronization is intentionally effect-driven.
-  // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps
-  useEffect(() => { void refresh(); }, []);
-
-  if (loading) {
+  if (query.isPending) {
     return (
       <div className="p-6 flex items-center gap-2 text-stone-500 text-sm">
         <Spinner size={14} /> 载入中...

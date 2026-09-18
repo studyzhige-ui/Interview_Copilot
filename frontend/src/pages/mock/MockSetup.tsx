@@ -199,7 +199,7 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
   const ready = resume.id !== null && !resume.loading && jdReady;
 
   return (
-    <div className="h-full flex items-center justify-center px-4 md:px-6 py-8 overflow-y-auto">
+    <div className="px-4 md:px-6 py-8">
       <div className="max-w-[720px] w-full mx-auto flex flex-col items-center">
         {/* Header: clean, single hierarchy — title + subtitle, both centered. */}
         <header className="mb-9 text-center">

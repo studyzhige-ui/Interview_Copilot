@@ -68,6 +68,8 @@ const CopilotPreferencesPage = lazy(() =>
   import('@/pages/settings/CopilotPreferencesPage').then((m) => ({ default: m.CopilotPreferencesPage })),
 );
 
+const TodayPage = lazy(() => import('@/pages/today/TodayPage').then((m) => ({ default: m.TodayPage })));
+
 /** Lightweight fallback while a chunk loads. Kept centred + brand-coloured. */
 function PageFallback() {
   return (
@@ -94,7 +96,7 @@ function AuthGuard() {
 
 function GuestGuard() {
   const isAuthed = useAuthStore((s) => s.isAuthed);
-  if (isAuthed) return <Navigate to="/general-chat" replace />;
+  if (isAuthed) return <Navigate to="/today" replace />;
   return <LazyOutlet />;
 }
 
@@ -106,7 +108,8 @@ export const router = createBrowserRouter([
   {
     element: <AuthGuard />,
     children: [
-      { path: '/', element: <Navigate to="/general-chat" replace /> },
+      { path: '/', element: <Navigate to="/today" replace /> },
+      { path: '/today', element: <TodayPage /> },
       { path: '/review', element: <ReviewPage /> },
       { path: '/mock', element: <MockPage /> },
       { path: '/general-chat', element: <GeneralChatPage /> },

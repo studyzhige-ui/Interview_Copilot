@@ -21,6 +21,7 @@ vi.mock('@/store/uiStore', () => ({
 }));
 
 import { useChatStream } from './useChatStream';
+import { cancelChatTurn } from '@/api/chat';
 
 function runtime(): SessionRuntime {
   return {
@@ -39,6 +40,17 @@ function runtime(): SessionRuntime {
 }
 
 describe('useChatStream durable admission', () => {
+  it('keeps the durable turn and subscription when cancellation is rejected', async () => {
+    const state = runtime();
+    state.turnId = 'running-turn';
+    state.abort = new AbortController();
+    vi.mocked(cancelChatTurn).mockRejectedValueOnce(new Error('offline'));
+    const { result } = renderHook(() => useChatStream({ activeSessionId: 'session-1', getRuntime: () => state, bump: vi.fn(), mode: 'AGENT', executionMode: 'standard' }));
+    await act(async () => result.current.cancel());
+    expect(state.turnId).toBe('running-turn');
+    expect(state.abort.signal.aborted).toBe(false);
+  });
+
   beforeEach(() => {
     createIdentity.mockReset().mockReturnValue({
       submissionId: 'submission-1',
@@ -92,6 +104,21 @@ describe('useChatStream durable admission', () => {
     // authoritative UserMessage/Turn.
     expect(state.messages).toHaveLength(0);
     expect(toastInfo).toHaveBeenCalledWith('消息已排队 · 第 2 位');
+  });
+
+  it('retries an unconfirmed send with its original identity and attachments', async () => {
+    streamChatTurn.mockRejectedValueOnce(new Error('response lost'));
+    const state = runtime();
+    const { result } = renderHook(() => useChatStream({ activeSessionId: 'session-1', getRuntime: () => state, bump: vi.fn(), mode: 'AGENT', executionMode: 'standard' }));
+    const attachments = [{ draft_id: 'draft-1', file_asset_id: 'asset-1', filename: 'resume.pdf', status: 'ready' as const }];
+    await act(async () => result.current.sendMessage('review my resume', [], attachments));
+    expect(state.unconfirmedSubmission?.attachments).toEqual(attachments);
+    const first = streamChatTurn.mock.calls[0][3];
+    await act(async () => result.current.retrySubmission());
+    expect(streamChatTurn.mock.calls[1][3].submission).toEqual(first.submission);
+    expect(streamChatTurn.mock.calls[1][3].attachments).toEqual(['draft-1']);
+    expect(createIdentity).toHaveBeenCalledTimes(1);
+    expect(state.unconfirmedSubmission).toBeUndefined();
   });
 
   it('refreshes the matching AgentTask after task projection tools finish', () => {

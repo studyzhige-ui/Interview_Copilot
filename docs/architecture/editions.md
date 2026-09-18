@@ -1,5 +1,8 @@
 # Edition architecture
 
+> Status: Current specialized deployment policy. It may restrict availability but may not redefine the product or target architecture.
+> Product and target-architecture authority: [`career-agent-os-blueprint.md`](./career-agent-os-blueprint.md).
+
 Interview Copilot has one application core and two distribution policies.
 Edition checks are enforced by the backend and exposed to the frontend through
 `GET /api/v1/capabilities/edition`.
@@ -7,9 +10,9 @@ Edition checks are enforced by the backend and exposed to the frontend through
 ## Product boundary
 
 The original interview-only boundary in this document has been superseded by
-the confirmed full-cycle Career Copilot direction. The durable product and
+the approved Career Agent OS direction. The current product and target-
 architecture source of truth is
-[`full-cycle-career-copilot.md`](./full-cycle-career-copilot.md). Edition policy
+[`career-agent-os-blueprint.md`](./career-agent-os-blueprint.md). Edition policy
 still controls deployment availability; it must not redefine the shared
 product domain from the current set of implemented pages or tools.
 
@@ -51,11 +54,14 @@ Edition policy is a deterministic deployment boundary. It can hard-deny a
 transport or setting, but it does not choose a business action, group tools, or
 create a capability-resolution layer.
 
-The runtime follows the single Tool plane defined by
-[`full-cycle-career-copilot.md`](./full-cycle-career-copilot.md): only concrete
+The runtime remains subject to the Harness, Shared Application Operation and
+Tool boundaries defined by
+[`career-agent-os-blueprint.md`](./career-agent-os-blueprint.md): only concrete
 ToolDefinitions with real handlers enter discovery, the model calls a concrete
-Tool directly, and the Executor checks current connection, scope, and Policy at
-the actual call. Turn-local catalogs and caches are implementation details;
+Tool adapter directly, and the Executor checks current connection, scope, and
+Policy at the actual call. A Tool may not bypass its Atomic Application
+Operation or Domain owner. Turn-local catalogs and caches are implementation
+details;
 they do not form another Tool plane or freeze facts that must be rechecked at
 execution time. User Skills and MCP tools must not mutate the process-global
 registry.

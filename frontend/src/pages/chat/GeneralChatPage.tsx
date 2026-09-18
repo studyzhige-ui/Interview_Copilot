@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, X as XIcon, MessageSquare, Sparkles } from 'lucide-react';
+import { Plus, Pencil, X as XIcon, MessageSquare } from 'lucide-react';
 import { Spinner } from '@/components/ui/Spinner';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { toast } from '@/store/uiStore';
@@ -38,6 +38,7 @@ import { ChatPanel } from '@/pages/review/chat/ChatPanel';
 import { CopilotStatusSummary } from './CopilotStatusSummary';
 import { clearPersistedSessionState } from '@/pages/review/chat/usePersistedSessionState';
 import type { ChatSessionListItem } from '@/types/api';
+import { collaborationStarters, readStarter } from '@/lib/collaborationStarters';
 import {
   clearCopilotObjectHandoff,
   productObjectReferenceLabel,
@@ -51,8 +52,18 @@ const SESSIONS_KEY = ['chat', 'sessions', { type: 'general' }] as const;
 export function GeneralChatPage() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const activeId = searchParams.get('session');
+  const starterId = readStarter(searchParams.get('start'));
+  const starter = starterId ? collaborationStarters[starterId] : null;
+  const setActiveId = (id: string) => setSearchParams((previous) => {
+    const next = new URLSearchParams(previous);
+    next.set('session', id);
+    next.delete('start');
+    return next;
+  });
   const [creating, setCreating] = useState(false);
+  const creationRequest = useRef<{ intent: string; id: string } | null>(null);
+  const creationInFlight = useRef(false);
   // Inline rename inside the sidebar — same pattern as review page.
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
@@ -64,7 +75,7 @@ export function GeneralChatPage() {
     setSearchParams(clearCopilotObjectHandoff(searchParams), { replace: true });
   }, [searchParams, setSearchParams]);
 
-  const { data: sessions = [], isPending: loading, error } = useQuery({
+  const { data: sessions = [], isPending: loading, error, refetch } = useQuery({
     queryKey: SESSIONS_KEY,
     queryFn: ({ signal }) => listChatSessions({ type: 'general' }, { signal }),
   });
@@ -84,9 +95,7 @@ export function GeneralChatPage() {
     [queryClient],
   );
 
-  const selectedId = activeId && sessions.some((row) => row.session_id === activeId)
-    ? activeId
-    : sessions[0]?.session_id ?? null;
+  const selectedId = starter ? null : activeId ?? sessions[0]?.session_id ?? null;
 
   // Focus the inline rename input when entering rename mode.
   useEffect(() => {
@@ -100,12 +109,16 @@ export function GeneralChatPage() {
   }, [renaming]);
 
   const onNew = async () => {
-    if (creating) return;
+    if (creationInFlight.current) return;
+    creationInFlight.current = true;
     setCreating(true);
+    const intent = starterId ?? 'general';
+    if (creationRequest.current?.intent !== intent) creationRequest.current = { intent, id: crypto.randomUUID() };
     try {
       const created = await createChatSession({
+        client_request_id: creationRequest.current.id,
         type: 'general',
-          title: `求职任务 ${sessions.length + 1}`,
+        title: starter?.title ?? `求职任务 ${sessions.length + 1}`,
       });
       // Optimistic prepend — the new session is the most recent so it
       // belongs at the top.
@@ -121,12 +134,21 @@ export function GeneralChatPage() {
           turn_count: 0,
           updated_at: new Date().toISOString(),
         },
-        ...s,
+        ...s.filter((row) => row.session_id !== created.session_id),
       ]);
+      if (starter) {
+        // Use the same per-session draft owner as the composer. A starter is
+        // editable user input and must never become an automatic model call.
+        try { localStorage.setItem(`chat-draft:${created.session_id}`, starter.draft); }
+        catch { toast.info('浏览器未能保存起步草稿，请在对话中描述你的目标'); }
+      }
       setActiveId(created.session_id);
+      creationRequest.current = null;
+      void queryClient.invalidateQueries({ queryKey: ['workspace'] });
     } catch (e) {
       toast.error(extractErr(e, '创建对话失败'));
     } finally {
+      creationInFlight.current = false;
       setCreating(false);
     }
   };
@@ -199,9 +221,9 @@ export function GeneralChatPage() {
   const activeSession = sessions.find((s) => s.session_id === selectedId);
 
   return (
-    <div className="flex h-full bg-cream-50">
+    <div className="copilot-page">
       {/* Left sidebar: session list */}
-      <aside className="w-[280px] shrink-0 bg-white border-r border-stone-200 flex flex-col">
+      <aside className="copilot-session-list">
         <div className="h-14 px-4 flex items-center justify-between border-b border-stone-100">
           <div className="text-sm font-semibold text-stone-800">求职 Copilot</div>
           <button
@@ -301,7 +323,7 @@ export function GeneralChatPage() {
       {/* Right pane: reuse ChatPanel for the active session. ``width``
           is wide-open because there's no resizer on this page — keep
           it simple, the side nav already takes its share. */}
-      {selectedId ? (
+      {error ? <div className="copilot-welcome" role="alert"><div><h2>暂时无法读取协作记录</h2><p>这不代表记录已丢失。恢复连接后可以继续原来的任务。</p><button className="today-primary-link" onClick={() => { void refetch(); }}>重新加载</button></div></div> : loading ? <div className="copilot-welcome" role="status">正在读取协作记录…</div> : selectedId ? (
         <div className="flex-1 min-w-0 flex">
           <ChatPanel
             sessionId={selectedId}
@@ -314,15 +336,13 @@ export function GeneralChatPage() {
           />
         </div>
       ) : (
-        <div className="flex-1 flex items-center justify-center text-stone-400">
-          <div className="text-center">
-            <div className="w-14 h-14 mx-auto rounded-2xl bg-white border border-stone-200 flex items-center justify-center mb-3">
-              <Sparkles size={22} className="text-primary-500" />
-            </div>
-            <div className="text-base text-stone-600 font-medium mb-1">点左侧「新建」开始</div>
-            <div className="text-xs leading-relaxed max-w-xs">
-              用自然语言管理岗位、材料、面试准备和求职进度。
-            </div>
+        <div className="copilot-welcome">
+          <div>
+            <span className="today-dateline">与你一起推进求职</span>
+            <h2>{starter?.title ?? '今天，想先完成什么？'}</h2>
+            <p>{starter?.detail ?? '描述一个具体目标，例如修改简历或准备面试。你可以随时补充资料，协作记录会保存在左侧。'}</p>
+            {starter && <p>接下来会为你准备一份可编辑的起步消息。确认后发送，再一起补充需要的信息。</p>}
+            <button className="today-primary-link" disabled={creating} onClick={onNew}>{creating ? '正在创建…' : starter ? '开始这项准备' : '开始新对话'}</button>
             {productObjectReference && (
               <div className="mt-3 rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-700">
                 已选择：{productObjectReferenceLabel(productObjectReference)}。新建对话后会作为本轮显式输入。

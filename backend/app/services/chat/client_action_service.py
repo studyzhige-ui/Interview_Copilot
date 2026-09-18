@@ -20,6 +20,8 @@ from app.models.conversation_turn import ConversationTurn
 from app.models.pending_submission import PendingSubmission
 from app.schemas.agent_interaction import InteractionPayload
 from app.schemas.client_action import (
+    ClientActionName,
+    ClientActionPayload,
     MockClientActionName,
     MockClientActionPayload,
     MockClientActionRequest,
@@ -136,6 +138,77 @@ def find_mock_client_action(
         if request.action_id == expected_id and request.action == action:
             return row, request
     return None
+
+
+def find_client_action(
+    db: Session,
+    *,
+    turn_id: str,
+    tool_call_id: str,
+    action: ClientActionName,
+) -> tuple[AgentInteraction, MockClientActionRequest] | None:
+    """Find any supported product Client Action by stable call-phase identity."""
+
+    expected_id = action_identity(
+        turn_id=turn_id,
+        tool_call_id=tool_call_id,
+        action=action,
+    )
+    for row in _rows_for_call(db, turn_id=turn_id, tool_call_id=tool_call_id):
+        try:
+            request = _parse_request(row)
+        except ClientActionNotFoundError:
+            continue
+        if request.action_id == expected_id and request.action == action:
+            return row, request
+    return None
+
+
+def create_client_action(
+    db: Session,
+    *,
+    turn: ConversationTurn,
+    tool_call_id: str,
+    action: ClientActionName,
+    payload: ClientActionPayload,
+    original_client_id: str,
+    bound_client_id: str,
+    protocol: str = "client_action.v1",
+) -> tuple[AgentInteraction, MockClientActionRequest]:
+    """Persist one generic typed action before any delivery attempt."""
+
+    existing = find_client_action(
+        db,
+        turn_id=turn.id,
+        tool_call_id=tool_call_id,
+        action=action,
+    )
+    if existing is not None:
+        return existing
+    request = MockClientActionRequest(
+        protocol=protocol,
+        action_id=action_identity(
+            turn_id=turn.id,
+            tool_call_id=tool_call_id,
+            action=action,
+        ),
+        action=action,
+        original_client_id=original_client_id,
+        bound_client_id=bound_client_id,
+        payload=payload,
+    )
+    try:
+        row = create_pending_interaction(
+            db,
+            turn_id=turn.id,
+            user_id=turn.user_id,
+            kind="client_readiness",
+            request=request,
+            tool_call_id=tool_call_id,
+        )
+    except InteractionConflictError as exc:
+        raise ClientActionConflictError(str(exc)) from exc
+    return row, request
 
 
 def create_mock_client_action(
@@ -435,7 +508,9 @@ __all__ = [
     "ClientActionUnavailableError",
     "action_identity",
     "action_resolution",
+    "create_client_action",
     "create_mock_client_action",
+    "find_client_action",
     "find_mock_client_action",
     "initiating_client_id",
     "latest_handoff_client",

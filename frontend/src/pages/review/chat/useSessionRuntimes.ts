@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SessionRuntime } from './types';
+import { readUnconfirmed } from './submissionRecovery';
 
 /** Cap for the per-session runtime LRU.
  *  Module scope so the ``useCallback([])`` closure inside ``getRuntime``
@@ -61,6 +62,7 @@ export function useSessionRuntimes() {
       map.set(id, r);
     } else {
       r = {
+        unconfirmedSubmission: readUnconfirmed(id),
         abort: null, turnId: null, messages: [], partial: '', inflightBlocks: [],
         inflightSources: [],
         status: '', streaming: false, hidePartialBar: false,

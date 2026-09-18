@@ -1,5 +1,7 @@
 # Stage 1 Spec: files, attachment claims and scoped retrieval
 
+> Status: Historical Implementation Reference. This is not a current Contract or Vertical Slice Spec; see [`README.md`](./README.md) and the current [`Career Agent OS Blueprint`](../career-agent-os-blueprint.md).
+
 ## 1. Ownership boundary
 
 `FileAsset` owns uploaded bytes and immutable asset versions.

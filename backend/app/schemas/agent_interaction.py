@@ -18,6 +18,8 @@ InteractionKind = Literal[
     "clarification",
     "connection",
     "approval",
+    "fact_confirmation",
+    "profile_update_confirmation",
     "client_readiness",
 ]
 InteractionStatus = Literal["pending", "resolved", "rejected", "cancelled"]
@@ -46,6 +48,7 @@ class ResolveInteractionRequest(BaseModel):
     expected_version: PositiveInt
     status: InteractionResolutionStatus
     resolution: InteractionPayload
+    resolution_identity: str | None = Field(default=None, max_length=128)
 
 
 class AgentInteractionView(BaseModel):
@@ -55,6 +58,7 @@ class AgentInteractionView(BaseModel):
     turn_id: str
     tool_call_id: str | None
     kind: InteractionKind
+    schema_version: PositiveInt
     status: InteractionStatus
     request: dict[str, JsonValue] = Field(validation_alias="request_json")
     resolution: dict[str, JsonValue] | None = Field(
@@ -63,7 +67,9 @@ class AgentInteractionView(BaseModel):
     )
     version: PositiveInt
     created_at: datetime
+    expires_at: datetime | None
     resolved_at: datetime | None
+    resolution_identity: str | None
 
 
 class ResolveInteractionResponse(BaseModel):
@@ -72,12 +78,23 @@ class ResolveInteractionResponse(BaseModel):
     dispatch_generation: PositiveInt
 
 
+class PendingInteractionProjection(BaseModel):
+    """User-level query projection; the Interaction remains the sole owner."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: str
+    turn_status: str
+    interaction: AgentInteractionView
+
+
 __all__ = [
     "AgentInteractionView",
     "InteractionKind",
     "InteractionPayload",
     "InteractionResolutionStatus",
     "InteractionStatus",
+    "PendingInteractionProjection",
     "ResolveInteractionRequest",
     "ResolveInteractionResponse",
     "ToolInteractionRequest",

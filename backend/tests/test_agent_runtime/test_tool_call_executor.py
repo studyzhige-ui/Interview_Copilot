@@ -91,6 +91,196 @@ def test_tool_call_timeout_is_audited(db_session, monkeypatch):
     assert db_session.query(AgentToolCall).one().status == "timeout"
 
 
+def test_cancel_before_admission_never_invokes_handler(db_session, monkeypatch):
+    import app.agent_runtime.tool_call_executor as module
+
+    patch_session_locals(monkeypatch, db_session, module)
+    user, conversation, turn = _turn(db_session)
+    called = []
+
+    async def run():
+        entered = asyncio.Event()
+
+        async def waiting_plan(**kwargs):
+            entered.set()
+            await asyncio.Future()
+
+        monkeypatch.setattr(module, "plan_tool_call", waiting_plan)
+
+        async def dispatch():
+            called.append(True)
+            return {}
+
+        task = asyncio.create_task(
+            execute_tool_call(
+                call_id="before",
+                turn_id=turn.id,
+                session_id=conversation.id,
+                user_id=user.id,
+                tool_name="read",
+                arguments={},
+                timeout_seconds=1,
+                dispatch=dispatch,
+                effect=ToolEffect.READ,
+            )
+        )
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+    assert not called
+    assert db_session.query(AgentToolCall).count() == 0
+
+
+@pytest.mark.parametrize("change", ["generation", "turn", "effect"])
+def test_execution_plan_cannot_cross_execution_identity(
+    db_session, monkeypatch, change
+):
+    import app.agent_runtime.tool_call_executor as module
+
+    patch_session_locals(monkeypatch, db_session, module)
+    user, conversation, turn = _turn(db_session)
+    called = []
+
+    async def run():
+        plan = await plan_tool_call(
+            call_id="bound",
+            turn_id=turn.id,
+            tool_name="read",
+            arguments={},
+            effect=ToolEffect.READ,
+        )
+
+        async def dispatch():
+            called.append(True)
+            return {}
+
+        return await execute_tool_call(
+            call_id="bound",
+            turn_id="other" if change == "turn" else turn.id,
+            session_id=conversation.id,
+            user_id=user.id,
+            tool_name="read",
+            arguments={},
+            timeout_seconds=1,
+            dispatch=dispatch,
+            effect=ToolEffect.INTERNAL_WRITE if change == "effect" else ToolEffect.READ,
+            dispatch_generation=2 if change == "generation" else 1,
+            plan=plan,
+        )
+
+    assert asyncio.run(run())["error"] == "tool_execution_plan_mismatch"
+    assert not called
+    assert db_session.query(AgentToolCall).count() == 0
+
+
+def test_replay_rechecks_turn_generation_and_session(db_session, monkeypatch):
+    import app.agent_runtime.tool_call_executor as module
+
+    patch_session_locals(monkeypatch, db_session, module)
+    user, conversation, turn = _turn(db_session)
+    called = []
+
+    async def dispatch():
+        called.append(True)
+        return {"ok": True}
+
+    async def run():
+        args = dict(
+            call_id="replay",
+            turn_id=turn.id,
+            session_id=conversation.id,
+            user_id=user.id,
+            tool_name="read",
+            arguments={},
+            timeout_seconds=1,
+            dispatch=dispatch,
+            effect=ToolEffect.READ,
+        )
+        assert await execute_tool_call(**args) == {"ok": True}
+        plan = await plan_tool_call(
+            call_id="replay",
+            turn_id=turn.id,
+            tool_name="read",
+            arguments={},
+            effect=ToolEffect.READ,
+        )
+        assert plan.existing_result == {"ok": True}
+        assert (await execute_tool_call(**{**args, "session_id": "wrong"}, plan=plan))[
+            "error"
+        ] == "tool_execution_owner_mismatch"
+        turn.dispatch_generation = 2
+        db_session.commit()
+        assert (await execute_tool_call(**args, plan=plan))[
+            "error"
+        ] == "stale_dispatch_generation"
+
+    asyncio.run(run())
+    assert len(called) == 1
+
+
+@pytest.mark.parametrize(
+    "value", [None, [], {"nan": float("nan")}, {"opaque": object()}]
+)
+def test_invalid_handler_result_is_failed_not_success(value):
+    result = asyncio.run(
+        execute_tool_call(
+            call_id="invalid-result",
+            turn_id=None,
+            session_id="",
+            user_id=1,
+            tool_name="read",
+            arguments={},
+            timeout_seconds=1,
+            dispatch=lambda: asyncio.sleep(0, result=value),
+            effect=ToolEffect.READ,
+        )
+    )
+    assert result == {"error": "tool_result_invalid"}
+
+
+def test_redacted_credentials_cannot_alias_a_completed_call(db_session, monkeypatch):
+    import app.agent_runtime.tool_call_executor as module
+
+    patch_session_locals(monkeypatch, db_session, module)
+    user, conversation, turn = _turn(db_session)
+    called = []
+
+    async def dispatch():
+        called.append(True)
+        return {"ok": True}
+
+    async def run():
+        args = dict(
+            call_id="secret",
+            turn_id=turn.id,
+            session_id=conversation.id,
+            user_id=user.id,
+            tool_name="read",
+            timeout_seconds=1,
+            dispatch=dispatch,
+            effect=ToolEffect.READ,
+        )
+        assert await execute_tool_call(
+            **args, arguments={"password": "first-secret"}
+        ) == {"ok": True}
+        assert await execute_tool_call(
+            **args, arguments={"password": "first-secret"}
+        ) == {"ok": True}
+        assert (
+            await execute_tool_call(**args, arguments={"password": "changed-secret"})
+        )["error"] == "tool_call_identity_conflict"
+
+    asyncio.run(run())
+    db_session.expire_all()
+    row = db_session.query(AgentToolCall).one()
+    assert row.arguments_json == {"password": "[REDACTED]"}
+    assert len(row.arguments_digest) == 64
+    assert len(called) == 1
+
+
 def test_tool_call_cancellation_is_audited(db_session, monkeypatch):
     import app.agent_runtime.tool_call_executor as executor_module
 
@@ -98,6 +288,13 @@ def test_tool_call_cancellation_is_audited(db_session, monkeypatch):
     user, conversation, turn = _turn(db_session)
 
     async def run():
+        started = asyncio.Event()
+
+        async def dispatch():
+            started.set()
+            await asyncio.sleep(10)
+            return {}
+
         task = asyncio.create_task(
             execute_tool_call(
                 call_id="call-cancelled",
@@ -107,15 +304,14 @@ def test_tool_call_cancellation_is_audited(db_session, monkeypatch):
                 tool_name="waiting",
                 arguments={},
                 timeout_seconds=10,
-                dispatch=lambda: asyncio.sleep(10, result={}),
+                dispatch=dispatch,
                 effect=ToolEffect.READ,
             )
         )
-        await asyncio.sleep(0.01)
+        await asyncio.wait_for(started.wait(), timeout=2)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        await asyncio.sleep(0.05)
 
     asyncio.run(run())
     db_session.expire_all()

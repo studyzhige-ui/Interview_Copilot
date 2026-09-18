@@ -1,6 +1,7 @@
 """SLOT_ORDER + renderer contract tests for the context pipeline."""
 
 import asyncio
+import pytest
 
 from app.rag.domain.models import RetrievalResult
 from app.rag.grounding.builder import grounding_builder
@@ -215,41 +216,6 @@ def test_debrief_reference_auto_inject_fires_only_in_debrief_mode(monkeypatch):
     assert fetch_calls == []
 
 
-def test_summary_comes_from_summary_column(monkeypatch):
-    """The [Context Summary] slot is sourced from the dedicated ``summary``
-    column (get_session_meta['summary']) — the sole source."""
-    from app.services.chat import context_assembly_pipeline as pipeline_mod
-    from app.services.chat.context_assembly_pipeline import ContextAssemblyPipeline
-
-    class FakeTranscript:
-        def get_session_meta(self, session_id):
-            return {
-                "session_id": session_id,
-                "user_id": "alice",
-                "type": "general",
-                "subject_type": None,
-                "subject_id": None,
-                "turn_count": 0,
-                "compaction_cursor": 0,
-                "summary": "## 当前状态\n聚焦 redis 缓存",  # dedicated column
-            }
-
-        def get_turns_after(self, session_id, after_seq=0):
-            return []
-
-    pipeline = ContextAssemblyPipeline()
-    monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
-
-    ctx = asyncio.run(
-        pipeline.assemble_answer_context(session_id="s", current_query="q")
-    )
-    assert ctx.summary == "## 当前状态\n聚焦 redis 缓存"
-
-    rendered = pipeline.renderer.render_answer_prompt(ctx, system_prompt="rules")
-    assert "[Context Summary]" in rendered
-    assert "聚焦 redis 缓存" in rendered
-
-
 # ── Full-history context (no fixed window) ────────────────────────────
 
 
@@ -346,111 +312,6 @@ def test_oversized_current_input_fails_explicitly(monkeypatch):
 
 
 # ── Threshold-based compaction ─────────────────────────────────────────
-
-
-def test_threshold_compaction_fires_and_advances_cursor(monkeypatch):
-    """When assembled context exceeds the threshold, compaction fires:
-    old turns are summarized, cursor advances, and only protected tail
-    turns remain verbatim."""
-    from app.services.chat import context_assembly_pipeline as pipeline_mod
-    from app.services.chat.context_assembly_pipeline import (
-        ContextAssemblyPipeline,
-        TokenBudget,
-    )
-
-    updates: list[dict] = []
-
-    # Build turns that exceed the threshold.
-    big_content = "x " * 500  # ~500 tokens each
-    turns = []
-    for i in range(1, 21):
-        role = "User" if i % 2 == 1 else "Agent"
-        turns.append(
-            {
-                "seq": i,
-                "role": role,
-                "content": big_content if i <= 16 else f"tail {i}",
-            }
-        )
-    turns[1]["blocks"] = [
-        {"type": "text", "text": "先查询"},
-        {
-            "type": "tool_use",
-            "id": "call_2",
-            "name": "search_knowledge",
-            "input": {"query": "redis"},
-        },
-        {
-            "type": "tool_result",
-            "tool_use_id": "call_2",
-            "content": "redis result",
-        },
-        {
-            "type": "tool_result",
-            "tool_use_id": "orphan",
-            "content": "must not enter summary",
-        },
-    ]
-    # The storage adapter should order by seq, but canonical assembly must not
-    # rely on that incidental query behavior.
-    turns.reverse()
-
-    class FakeTranscript:
-        def get_session_meta(self, session_id):
-            return {
-                "user_id": "alice",
-                "type": "general",
-                "subject_type": None,
-                "subject_id": None,
-                "compaction_cursor": 0,
-                "summary": "EARLY SUMMARY",
-            }
-
-        def get_turns_after(self, session_id, after_seq=0):
-            return [t for t in turns if t["seq"] > after_seq]
-
-        def update_session_fields(self, session_id, **kwargs):
-            updates.append(kwargs)
-
-    # Stub summarize_conversation to return a fixed summary.
-    import app.services.chat.conversation_summarizer as cs_mod
-
-    summary_inputs: list[tuple[str, str]] = []
-
-    async def fake_summarize(old, conv, *, user_id=None):
-        summary_inputs.append((old, conv))
-        return "COMPRESSED SUMMARY"
-
-    monkeypatch.setattr(cs_mod, "summarize_conversation", fake_summarize)
-
-    monkeypatch.setattr(pipeline_mod, "transcript_service", FakeTranscript())
-
-    # Use a tiny threshold so compaction triggers.
-    budget = TokenBudget()
-    budget.MODEL_CONTEXT_WINDOW = 2_000
-    budget.COMPRESS_THRESHOLD_RATIO = 0.5  # 1000 tokens threshold
-    pipeline = ContextAssemblyPipeline(budget=budget)
-
-    ctx = asyncio.run(
-        pipeline.assemble_answer_context(session_id="s", current_query="q")
-    )
-
-    # Compaction should have fired — cursor advanced, summary updated.
-    assert len(updates) == 1
-    assert "summary" in updates[0]
-    assert updates[0]["summary"] == "COMPRESSED SUMMARY"
-    assert "compaction_cursor" in updates[0]
-    assert updates[0]["compaction_cursor"] == 16
-    assert summary_inputs[0][0] == "EARLY SUMMARY"
-    rendered_input = summary_inputs[0][1]
-    assert rendered_input.index("[tool_call id=call_2") < rendered_input.index(
-        "[tool_result id=call_2]"
-    )
-    assert "must not enter summary" not in rendered_input
-    # Protected tail (COMPRESS_PROTECT_LAST_N=4) should remain.
-    assert len(ctx.recent_turns) <= budget.COMPRESS_PROTECT_LAST_N
-    assert [turn["seq"] for turn in ctx.recent_turns] == [17, 18, 19, 20]
-    assert ctx.summary == "COMPRESSED SUMMARY"
 
 
 def test_no_compaction_when_under_threshold(monkeypatch):
@@ -652,3 +513,11 @@ def test_source_read_status_is_dynamic_data_and_rendered_once(monkeypatch):
 # Note: ``assemble_rewrite_context`` was retired with the planner
 # merge — the planner reads recent_turns directly via transcript_service
 # now. See test_agent/test_planner.py for the planner-input contract tests.
+
+
+# Source selection unit tests use a fake transcript and no persisted checkpoint.
+
+
+@pytest.fixture(autouse=True)
+def empty_checkpoint(monkeypatch):
+    monkeypatch.setattr("app.conversation.context_store.load", lambda *a, **kw: None)

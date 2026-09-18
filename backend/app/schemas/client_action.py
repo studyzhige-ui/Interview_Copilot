@@ -1,8 +1,8 @@
-"""Typed contracts for the first product-owned Client Action handler.
+"""Typed contracts for product-owned Client Actions.
 
-Client Action is a delivery effect attached to an existing Tool Call, not a
-domain object or a general-purpose UI protocol.  These contracts deliberately
-cover only the Mock Interview handoff that the product implements today.
+Client Actions are durable, reversible client effects attached to a Tool Call.
+They never own Career Domain state and their acknowledgements never prove an
+Application Operation succeeded.
 """
 
 from __future__ import annotations
@@ -13,11 +13,23 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 
-ClientActionOutcome = Literal["acknowledged", "refused", "failed"]
+ClientActionOutcome = Literal[
+    "acknowledged",
+    "refused",
+    "unsupported",
+    "failed",
+    "expired",
+]
 MockClientActionName = Literal[
     "mock_interview.prefill",
     "mock_interview.check_readiness",
     "mock_interview.enter_live",
+]
+ClientActionName = Literal[
+    "mock_interview.prefill",
+    "mock_interview.check_readiness",
+    "mock_interview.enter_live",
+    "interview.preparation.open",
 ]
 
 
@@ -56,8 +68,27 @@ class MockEnterLivePayload(BaseModel):
     runtime_status: Literal["mock_in_progress"] = "mock_in_progress"
 
 
+class InterviewPreparationOpenPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["interview_preparation_open"] = "interview_preparation_open"
+    interview_id: str = Field(min_length=1, max_length=128)
+    opportunity_id: str = Field(min_length=1, max_length=35)
+    expected_interview_version: int = Field(ge=1)
+    expected_opportunity_version: int = Field(ge=1)
+    source_operation_id: str = Field(min_length=1, max_length=36)
+    preferred_surface: Literal["interviews"] = "interviews"
+
+
 MockClientActionPayload = Annotated[
     MockPrefillPayload | MockReadinessPayload | MockEnterLivePayload,
+    Field(discriminator="kind"),
+]
+ClientActionPayload = Annotated[
+    MockPrefillPayload
+    | MockReadinessPayload
+    | MockEnterLivePayload
+    | InterviewPreparationOpenPayload,
     Field(discriminator="kind"),
 ]
 
@@ -67,14 +98,14 @@ class MockClientActionRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    protocol: Literal["mock_handoff.v1"] = "mock_handoff.v1"
+    protocol: Literal["mock_handoff.v1", "client_action.v1"] = "mock_handoff.v1"
     action_id: str = Field(min_length=1, max_length=128)
-    action: MockClientActionName
+    action: ClientActionName
     original_client_id: str = Field(min_length=1, max_length=128)
     bound_client_id: str = Field(min_length=1, max_length=128)
     takeover_generation: int = Field(default=0, ge=0)
     takeover_history: list[dict[str, JsonValue]] = Field(default_factory=list)
-    payload: MockClientActionPayload
+    payload: ClientActionPayload
 
     @model_validator(mode="after")
     def validate_action_payload_pair(self) -> "MockClientActionRequest":
@@ -82,6 +113,7 @@ class MockClientActionRequest(BaseModel):
             "mock_interview.prefill": "mock_prefill",
             "mock_interview.check_readiness": "mock_readiness",
             "mock_interview.enter_live": "mock_enter_live",
+            "interview.preparation.open": "interview_preparation_open",
         }[self.action]
         if self.payload.kind != expected:
             raise ValueError(f"{self.action} requires payload kind {expected}")
@@ -125,8 +157,8 @@ class MockClientActionView(BaseModel):
     tool_call_id: str
     version: int
     action_id: str
-    action: MockClientActionName
-    payload: MockClientActionPayload
+    action: ClientActionName
+    payload: ClientActionPayload
     takeover_generation: int
     created_at: datetime
 
@@ -146,6 +178,9 @@ class MockClientActionResolutionResponse(BaseModel):
 
 __all__ = [
     "ClientActionOutcome",
+    "ClientActionName",
+    "ClientActionPayload",
+    "InterviewPreparationOpenPayload",
     "MockClientActionName",
     "MockClientActionPayload",
     "MockClientActionRequest",

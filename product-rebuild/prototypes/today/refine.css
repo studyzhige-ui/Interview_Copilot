@@ -1,0 +1,76 @@
+#career-today{--ct-scheduled:light-dark(#c88a29,#edbb68);--ct-glass:light-dark(#ffffffa8,#293346c9);--ct-shadow:light-dark(#728aab20,#00000040)}
+#career-today .ct-shell{min-height:700px;grid-template-columns:164px minmax(0,1fr)}
+#career-today .ct-main{padding:18px 32px 22px;overflow:hidden;background:radial-gradient(ellipse at 3% 10%,light-dark(#dfedff,#22334a),transparent 54%),radial-gradient(ellipse at 100% 0%,light-dark(#fff0da,#392e24),transparent 48%),radial-gradient(ellipse at 0% 100%,light-dark(#ddf4eb,#20372f),transparent 48%),radial-gradient(ellipse at 100% 100%,light-dark(#ece3ff,#302740),transparent 52%),var(--ct-bg)}
+#career-today .ct-topbar{margin-bottom:18px}
+#career-today .ct-dashboard{column-gap:clamp(28px,5%,78px);row-gap:0;align-items:start}
+#career-today .ct-panelhead{margin-bottom:10px}
+#career-today .ct-cal{gap:2px 5px}
+#career-today .ct-day{min-height:27px;padding:3px 0 7px;max-width:44px;width:100%;justify-self:center;border-radius:9px}
+#career-today .ct-week{margin-bottom:2px}
+#career-today .ct-legend{margin-top:7px;gap:10px;flex-wrap:wrap}
+#career-today .ct-day.ct-has:after,#career-today .ct-dot{background:var(--ct-scheduled);width:5px;height:5px}
+#career-today .ct-day.ct-today:after{background:light-dark(#ffe0a0,#edbb68)}
+#career-today .ct-day.ct-has:not(.ct-today){color:light-dark(#935d0b,#edbb68)}
+#career-today .ct-today-total{color:var(--ct-blue)}
+#career-today .ct-requests{position:relative;min-height:222px;transition:height .3s ease;padding-top:38px}
+#career-today .ct-request{position:absolute;left:0;right:0;top:38px;margin:0;border-radius:19px;padding:16px 18px;box-shadow:0 12px 28px var(--ct-shadow);transition:top .42s cubic-bezier(.2,.8,.2,1),transform .42s cubic-bezier(.2,.8,.2,1),opacity .22s;transform-origin:50% 0;z-index:2}
+#career-today .ct-request.ct-back{top:0;transform:scale(.96);background:var(--ct-lilac);padding:0;box-shadow:none;z-index:1;border-color:light-dark(#e4ddf1,#494059)}
+#career-today .ct-stack-tab{display:flex;align-items:center;gap:8px;width:100%;border:0;border-radius:19px;background:transparent;padding:11px 14px 22px;text-align:left;font-size:12px;font-weight:500}
+#career-today .ct-stack-tab span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex:1;min-width:0}
+#career-today .ct-stack-tab small{white-space:nowrap;color:light-dark(#7d6296,#cbb3e1)}
+#career-today .ct-request p{font-size:12px;line-height:1.7}
+#career-today .ct-request strong{font-size:14px}
+#career-today .ct-request.ct-removing{opacity:0;transform:translateX(24px) scale(.98)}
+#career-today .ct-hero{padding:21px 0 22px;margin:12px -20px 16px;min-height:196px;isolation:isolate}
+#career-today .ct-hero h1{font-size:25px;letter-spacing:-.6px}
+#career-today .ct-summary{margin:4px 0 13px}
+#career-today .ct-compose{width:min(78%,570px);padding:11px 12px 11px 17px;border-radius:22px;box-shadow:0 9px 35px var(--ct-shadow)}
+#career-today .ct-hero:before{content:"";position:absolute;inset:-15px -25px;z-index:-1;pointer-events:none;background:var(--ct-glass);backdrop-filter:blur(18px);clip-path:polygon(0% 50%,12% 44%,25% 36%,36% 28%,43% 19%,47% 10%,50% 0%,53% 10%,57% 19%,64% 28%,75% 36%,88% 44%,100% 50%,88% 56%,75% 64%,64% 72%,57% 81%,53% 90%,50% 100%,47% 90%,43% 81%,36% 72%,25% 64%,12% 56%);filter:drop-shadow(0 2px 0 var(--ct-paper))}
+#career-today .ct-hero:after{content:"";position:absolute;inset:36% 14%;z-index:-2;background:light-dark(#cbdcff80,#4a649650);filter:blur(36px);border-radius:50%;pointer-events:none}
+#career-today .ct-hero:before{inset:0 -25px;filter:none}
+#career-today .ct-star-transition{position:absolute;pointer-events:none;z-index:8;background:var(--ct-glass);backdrop-filter:blur(20px);clip-path:polygon(0% 50%,12% 44%,25% 36%,36% 28%,43% 19%,47% 10%,50% 0%,53% 10%,57% 19%,64% 28%,75% 36%,88% 44%,100% 50%,88% 56%,75% 64%,64% 72%,57% 81%,53% 90%,50% 100%,47% 90%,43% 81%,36% 72%,25% 64%,12% 56%);transform:scale(1);opacity:1;transition:transform .8s cubic-bezier(.6,0,.15,1),opacity .3s}
+#career-today .ct-star-transition.ct-expanded{transform:scale(12)}
+#career-today .ct-star-transition.ct-fading{opacity:0}
+#career-today .ct-chat{min-height:614px;position:relative}
+#career-today .ct-news{padding:8px 0}
+#career-today .ct-newsmeta{margin-top:2px}
+#career-today .ct-tabs{display:flex;gap:2px;border:1px solid var(--ct-line);background:var(--ct-paper);border-radius:10px;padding:3px}
+#career-today .ct-tabs button{border:0;background:transparent;color:var(--ct-muted);padding:3px 10px;border-radius:7px;font-size:11px}
+#career-today .ct-tabs button[aria-pressed=true]{background:var(--ct-soft);color:var(--ct-blue)}
+#career-today .ct-daygroup{font-size:11px;color:var(--ct-muted);display:flex;align-items:center;gap:7px;margin:8px 0 6px}
+#career-today .ct-daygroup:after{content:"";height:1px;background:var(--ct-line);flex:1}
+#career-today .ct-agenda-control{display:none}
+#career-today .ct-agenda-toggle{padding:12px}
+#career-today .ct-day-footer{font-size:11px;color:var(--ct-muted);padding:11px 2px}
+@media(min-width:1200px){#career-today .ct-main{padding-left:54px;padding-right:54px}#career-today .ct-dashboard{column-gap:80px}#career-today .ct-shell{min-height:730px}#career-today .ct-hero{min-height:210px;padding-top:28px}#career-today .ct-day{min-height:30px}#career-today .ct-compose{width:570px}}
+@media(max-width:820px){#career-today .ct-shell{grid-template-columns:60px minmax(0,1fr)}#career-today .ct-main{padding:18px 22px}#career-today .ct-dashboard{column-gap:26px}#career-today .ct-request{padding:14px}#career-today .ct-request strong{font-size:12px}#career-today .ct-legend{gap:7px}}
+@media(max-width:610px){#career-today .ct-shell{grid-template-columns:1fr;min-height:0}#career-today .ct-main{padding:18px}#career-today .ct-dashboard{gap:24px}#career-today .ct-hero{margin:0;min-height:182px;padding:16px 0}#career-today .ct-hero:before{inset:-8px -18px}#career-today .ct-compose{width:100%}#career-today .ct-day{min-height:35px}#career-today .ct-request{padding:16px}#career-today .ct-request.ct-back{padding:0}#career-today .ct-chat{min-height:620px}#career-today .ct-topbar small{display:none}#career-today textarea{font-size:16px}#career-today .ct-chathead{flex-wrap:wrap}}
+@media(prefers-reduced-motion:reduce){#career-today .ct-star-transition{transition:none}}
+#career-today .ct-dashboard{grid-template-rows:288px 228px 260px;align-items:stretch}
+#career-today .ct-panel{height:100%;min-height:0;display:flex;flex-direction:column;position:relative;z-index:3}
+#career-today .ct-panelhead{flex:none}
+#career-today .ct-requests{height:250px;min-height:250px;padding-top:0;transition:none}
+#career-today .ct-request,#career-today .ct-request.ct-back{height:212px;border-radius:20px;background:var(--ct-task-surface);border-color:var(--ct-task-line)}
+#career-today .ct-request[data-request="profile"]{--ct-task-surface:light-dark(#edf5ff,#26374b);--ct-task-line:light-dark(#dce8fa,#3d5471);--ct-task-ink:light-dark(#4773a3,#afcfee)}
+#career-today .ct-request[data-request="mail"]{--ct-task-surface:light-dark(#f2edfa,#372d46);--ct-task-line:light-dark(#e5dcf0,#524164);--ct-task-ink:light-dark(#85639e,#d2b4e5)}
+#career-today .ct-request.ct-back{transform:scale(.97);box-shadow:0 6px 20px var(--ct-shadow)}
+#career-today .ct-stack-tab{height:38px;padding:8px 14px;border-radius:20px 20px 0 0}
+#career-today .ct-stack-tab small,#career-today .ct-request .ct-eyebrow{color:var(--ct-task-ink)}
+#career-today .ct-request-content{height:100%;display:flex;flex-direction:column;min-height:0}
+#career-today .ct-request-content>.ct-actions{margin-top:auto;padding-top:10px;flex-shrink:0}
+#career-today .ct-request.ct-detail-open .ct-request-content>p{display:none}
+#career-today .ct-request .ct-inspect{min-height:0;overflow:auto;padding:8px 10px;background:var(--ct-task-surface);border-color:var(--ct-task-line);line-height:1.65}
+#career-today .ct-request select{background:var(--ct-task-surface);border-color:var(--ct-task-line)}
+#career-today .ct-hero{height:228px;min-height:0;margin:0 -20px;padding:30px 0 20px}
+#career-today .ct-hero:before,#career-today .ct-star-transition{clip-path:polygon(0% 50%,12% 40%,26% 28%,39% 16%,46% 7%,50% 0%,54% 7%,61% 16%,74% 28%,88% 40%,100% 50%,88% 60%,74% 72%,61% 84%,54% 93%,50% 100%,46% 93%,39% 84%,26% 72%,12% 60%);background:linear-gradient(115deg,light-dark(#eaf4fc44,#32445744),light-dark(#f7f5fa66,#39354866),light-dark(#ecf5f444,#2c453c44));backdrop-filter:blur(24px);filter:none}
+#career-today .ct-hero:before{inset:-40px -90px;background:linear-gradient(155deg,light-dark(#f1f8ffb8,#465b7277) 5%,light-dark(#f5f7fcb0,#3b425588) 48%,light-dark(#eeeef866,#443b5866) 90%);mask-image:radial-gradient(ellipse at center,#000 35%,#000d 72%,transparent 100%)}
+#career-today .ct-hero:after{inset:-35px -85px;clip-path:polygon(0% 50%,12% 40%,26% 28%,39% 16%,46% 7%,50% 0%,54% 7%,61% 16%,74% 28%,88% 40%,100% 50%,88% 60%,74% 72%,61% 84%,54% 93%,50% 100%,46% 93%,39% 84%,26% 72%,12% 60%);background:linear-gradient(180deg,transparent 25%,light-dark(#7895b321,#00000038) 72%,transparent);filter:blur(15px);transform:translateY(9px);mask-image:radial-gradient(ellipse,#000 30%,transparent 90%)}
+#career-today .ct-hero .ct-compose{width:min(78%,570px)}
+#career-today .ct-agenda,#career-today .ct-newslist{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding-right:4px;scrollbar-width:thin;scrollbar-color:var(--ct-line) transparent}
+#career-today .ct-calendar{overflow:auto;scrollbar-width:thin}
+#career-today .ct-hero textarea{overflow:auto}
+#career-today .ct-chips{max-height:52px;overflow:auto}
+@media(max-width:610px){#career-today .ct-dashboard{grid-template-rows:228px 290px 288px 260px 280px}#career-today .ct-hero{height:228px;margin:0;padding-top:25px}#career-today .ct-hero:before{inset:-25px -100px}#career-today .ct-hero .ct-compose{width:100%}#career-today .ct-request-content>.ct-actions{gap:7px}#career-today .ct-request{padding:12px}#career-today .ct-request.ct-back{padding:0}#career-today .ct-request .ct-inspect{font-size:11px}#career-today .ct-hero h1{font-size:23px}}
+#career-today .ct-hero:before{inset:-16px -32px;clip-path:var(--ct-contour);mask-image:radial-gradient(ellipse,#000 38%,#000c 74%,#0003 100%);backdrop-filter:none;filter:blur(3px);background:linear-gradient(150deg,light-dark(#f1f8ffb0,#465b7277),light-dark(#f5f7fcb0,#3b425588) 52%,light-dark(#f0eef885,#443b5866));}
+#career-today .ct-hero:after{inset:-16px -32px;clip-path:var(--ct-contour);mask-image:radial-gradient(ellipse,#000 30%,transparent 95%);filter:blur(10px);transform:translateY(5px);background:linear-gradient(180deg,transparent 20%,light-dark(#7895b324,#00000038) 72%,transparent);}
+#career-today .ct-star-transition{clip-path:var(--ct-contour)}

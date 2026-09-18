@@ -69,7 +69,7 @@ def test_control_tasks_route_to_default_queue():
         "tasks.sweep_expired_conversation_deletion_receipts",
         "tasks.repair_pending_automation_turns",
         "tasks.schedule_due_persistent_tasks",
-        "tasks.consolidate_agent_memory",
+        "tasks.discover_agent_memories",
         "tasks.drain_cleanup_outbox_jobs",
     ]
     for name in control:
@@ -240,3 +240,10 @@ def test_task_prerun_loads_only_the_runtime_required_by_task(monkeypatch):
         {"embedding": False, "reranker": False, "voice": False},
         {"embedding": False, "reranker": False, "voice": False},
     ]
+
+
+def test_memory_model_work_routes_to_background_queue():
+    from app.task_queue.celery_app import celery_app
+
+    for name in ("tasks.consolidate_agent_memory", "tasks.consolidate_user_memories"):
+        assert celery_app.conf.task_routes[name]["queue"] == "background"

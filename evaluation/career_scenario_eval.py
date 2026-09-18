@@ -134,7 +134,7 @@ def validate_canonical_memory_boundary(
     engine = (project_root / "backend/app/conversation/engine.py").read_text(
         encoding="utf-8"
     )
-    if "render_recall_block" not in engine or 'memory_block=""' in engine:
+    if "from app.services.memory_recall import recall" not in engine or 'memory_block=""' in engine:
         raise CareerScenarioGateError(
             "Engine must use only the canonical selective Memory Recall path"
         )

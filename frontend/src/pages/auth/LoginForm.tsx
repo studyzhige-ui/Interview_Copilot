@@ -33,7 +33,7 @@ export function LoginForm({ onSwitchToRegister, onForgotPassword }: Props = {}) 
     try {
       const tk = await login(username.trim(), password);
       setSession(tk.access_token, tk.refresh_token);
-      navigate('/review', { replace: true });
+      navigate('/today', { replace: true });
     } catch (err) {
       toast.error(loginErr(err));
     } finally {

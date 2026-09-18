@@ -1,4 +1,16 @@
 import type { AgentInteraction, ChatMessageItem, ContentBlock, Source } from '@/types/api';
+import type { ProductObjectReference } from '@/types/api';
+import type { ChatSubmissionIdentity } from '@/api/chat';
+
+export interface RecoverableSubmission {
+  payload: string;
+  questionIndexes: number[];
+  attachments: Attachment[];
+  objectReferences: ProductObjectReference[];
+  submission: ChatSubmissionIdentity;
+  mode: Mode;
+  executionMode: 'standard' | 'auto';
+}
 
 export interface UIMessage {
   /** Present for persisted transcript rows; optimistic live rows have no id yet. */
@@ -28,6 +40,7 @@ export interface Attachment {
 export type Mode = 'CHAT' | 'AGENT';
 
 export interface SessionRuntime {
+  unconfirmedSubmission?: RecoverableSubmission;
   abort: AbortController | null;  // in-flight SSE aborter (null between turns)
   turnId: string | null;
   messages: UIMessage[];

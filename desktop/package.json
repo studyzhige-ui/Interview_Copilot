@@ -1,0 +1,9 @@
+{
+  "name": "career-os-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Career OS desktop development foundation",
+  "main": "main.cjs",
+  "scripts": {"start": "node launch.cjs", "test": "node --test tests/*.test.cjs", "smoke": "node launch.cjs --smoke"},
+  "devDependencies": {"electron": "44.3.0"}
+}

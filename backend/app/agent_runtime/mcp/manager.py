@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import os
 import re
+import threading
 import time
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
@@ -14,6 +15,7 @@ import httpx
 from app.core.config import settings
 from app.core.ssrf import resolve_safe_url, validate_safe_url
 from app.services.capabilities.mcp_server_service import MCPServerConfig
+from .schema import tool_validator
 
 
 # A stdio MCP server is a deployment-trusted subprocess, but that does not
@@ -146,6 +148,11 @@ class _Request:
     operation: str
     arguments: dict[str, Any]
     future: asyncio.Future[Any]
+    started: bool = False
+
+
+class MCPConnectionClosed(RuntimeError):
+    """A shared connection ended; this is not cancellation of the caller's Turn."""
 
 
 @dataclass
@@ -157,6 +164,8 @@ class _ServerRuntime:
     last_error: str | None = None
     last_used: float = field(default_factory=time.monotonic)
     tools: list[MCPToolDescriptor] | None = None
+    pending: int = 0
+    catalog_generation: int = 0
 
 
 def _component(value: str) -> str:
@@ -165,10 +174,14 @@ def _component(value: str) -> str:
 
 def _tool_name(server: str, remote: str) -> str:
     name = f"mcp__{_component(server)}__{_component(remote)}"
-    if len(name) <= 64:
+    if (
+        len(name) <= 64
+        and _component(server) == server
+        and _component(remote) == remote
+    ):
         return name
-    digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
-    return f"{name[:55]}_{digest}"
+    digest = hashlib.sha256(f"{server}\0{remote}".encode("utf-8")).hexdigest()[:12]
+    return f"{name[:51]}_{digest}"
 
 
 class MCPManager:
@@ -195,7 +208,7 @@ class MCPManager:
                 stale = [
                     runtime
                     for runtime in self._runtimes.values()
-                    if runtime.last_used < cutoff
+                    if runtime.last_used < cutoff and runtime.pending == 0
                 ]
                 for runtime in stale:
                     self._runtimes.pop(
@@ -258,11 +271,26 @@ class MCPManager:
                     env=_stdio_environment(config.env),
                 )
                 streams = await stack.enter_async_context(stdio_client(params))
+
+            async def on_message(message):
+                self._handle_notification(config, message)
+
             session = await stack.enter_async_context(
-                ClientSession(streams[0], streams[1])
+                ClientSession(streams[0], streams[1], message_handler=on_message)
             )
             await session.initialize()
             yield session
+
+    def _handle_notification(self, config: MCPServerConfig, message) -> None:
+        from mcp.types import ServerNotification, ToolListChangedNotification
+
+        if isinstance(message, ServerNotification) and isinstance(
+            message.root, ToolListChangedNotification
+        ):
+            runtime = self._runtimes.get((config.user_id, config.id))
+            if runtime is not None and runtime.config.revision == config.revision:
+                runtime.tools = None
+                runtime.catalog_generation += 1
 
     async def _run(self, runtime: _ServerRuntime) -> None:
         request: _Request | None = None
@@ -274,14 +302,17 @@ class MCPManager:
                     if request.future.cancelled():
                         continue
                     runtime.last_used = time.monotonic()
+                    request.started = True
                     try:
                         if request.operation == "list_tools":
-                            value = await session.list_tools()
+                            value = await session.list_tools(**request.arguments)
                         else:
                             value = await session.call_tool(
                                 request.arguments["name"],
                                 arguments=request.arguments["arguments"],
                             )
+                    except asyncio.CancelledError:
+                        raise
                     except BaseException as exc:
                         if not request.future.done():
                             request.future.set_exception(exc)
@@ -289,11 +320,14 @@ class MCPManager:
                     else:
                         if not request.future.done():
                             request.future.set_result(value)
+                    runtime.last_used = time.monotonic()
                     request = None
         except asyncio.CancelledError:
             runtime.status = "closed"
             if request is not None and not request.future.done():
-                request.future.cancel()
+                request.future.set_exception(
+                    MCPConnectionClosed("mcp_connection_closed")
+                )
             self._cancel_queued(runtime)
             raise
         except BaseException as exc:
@@ -310,7 +344,9 @@ class MCPManager:
         while not runtime.queue.empty():
             queued = runtime.queue.get_nowait()
             if not queued.future.done():
-                queued.future.cancel()
+                queued.future.set_exception(
+                    MCPConnectionClosed("mcp_connection_closed")
+                )
 
     async def _get_runtime(self, config: MCPServerConfig) -> _ServerRuntime:
         self._ensure_reaper()
@@ -342,13 +378,21 @@ class MCPManager:
     ) -> Any:
         runtime = await self._get_runtime(config)
         future = asyncio.get_running_loop().create_future()
-        await runtime.queue.put(_Request(operation, arguments or {}, future))
+        request = _Request(operation, arguments or {}, future)
+        runtime.pending += 1
+        runtime.queue.put_nowait(request)
         try:
             async with asyncio.timeout(settings.AGENT_TOOL_TIMEOUT_SECONDS):
                 return await future
         except BaseException:
-            await self._discard(runtime)
+            # Cancelling a queued request must not abort another caller's
+            # currently executing operation on the shared server session.
+            if request.started:
+                await self._discard(runtime)
             raise
+        finally:
+            runtime.pending -= 1
+            runtime.last_used = time.monotonic()
 
     async def list_tools(
         self,
@@ -361,7 +405,25 @@ class MCPManager:
         runtime = await self._get_runtime(config)
         if runtime.tools is not None:
             return list(runtime.tools)
-        response = await self._request(config, "list_tools")
+        catalog_generation = runtime.catalog_generation
+        remote_tools = []
+        cursor = None
+        seen_cursors: set[str] = set()
+        for _ in range(100):
+            response = await self._request(
+                config, "list_tools", {"cursor": cursor} if cursor else {}
+            )
+            remote_tools.extend(response.tools)
+            if len(remote_tools) > 10_000:
+                raise ValueError("MCP tool catalog exceeds limit")
+            cursor = response.nextCursor
+            if not cursor:
+                break
+            if cursor in seen_cursors:
+                raise ValueError("MCP tool catalog cursor repeated")
+            seen_cursors.add(cursor)
+        else:
+            raise ValueError("MCP tool catalog page limit exceeded")
         tools = [
             MCPToolDescriptor(
                 name=_tool_name(config.name, tool.name),
@@ -370,11 +432,17 @@ class MCPManager:
                 remote_name=tool.name,
                 description=tool.description or tool.title or tool.name,
                 input_schema=dict(
-                    tool.input_schema or {"type": "object", "properties": {}}
+                    tool.inputSchema or {"type": "object", "properties": {}}
                 ),
             )
-            for tool in response.tools
+            for tool in remote_tools
         ]
+        if len({tool.name for tool in tools}) != len(tools):
+            raise ValueError("MCP tool catalog contains duplicate identities")
+        for tool in tools:
+            tool_validator(tool.input_schema)
+        if runtime.catalog_generation != catalog_generation:
+            raise ValueError("MCP tool catalog changed during discovery")
         runtime.tools = tools
         return list(tools)
 
@@ -401,6 +469,19 @@ class MCPManager:
         tool: MCPToolDescriptor,
         arguments: dict,
     ) -> dict:
+        if tool.server_id != config.id or tool.server_name != config.name:
+            return {"error": "mcp_tool_identity_mismatch"}
+        current = next(
+            (item for item in await self.list_tools(config) if item.name == tool.name),
+            None,
+        )
+        if current != tool:
+            return {"error": "mcp_tool_schema_changed", "tool_name": tool.name}
+        try:
+            if not tool_validator(tool.input_schema).is_valid(arguments):
+                return {"error": "tool_args_validation_failed", "tool_name": tool.name}
+        except Exception:
+            return {"error": "tool_schema_invalid", "tool_name": tool.name}
         result = await self._request(
             config,
             "call_tool",
@@ -460,4 +541,64 @@ class MCPManager:
         }
 
 
-manager = MCPManager()
+class LoopScopedMCPManager:
+    """Never share asyncio queues/tasks between API and worker event loops.
+
+    Workers keep a persistent loop per thread. Connection revisions are still
+    checked at every call; runtime status is a process-local observation.
+    """
+
+    def __init__(self) -> None:
+        self._guard = threading.RLock()
+        self._managers: dict[asyncio.AbstractEventLoop, MCPManager] = {}
+
+    def _current(self) -> MCPManager:
+        loop = asyncio.get_running_loop()
+        with self._guard:
+            for expired in list(self._managers):
+                if expired.is_closed():
+                    self._managers.pop(expired)
+            return self._managers.setdefault(loop, MCPManager())
+
+    async def discover(self, configs):
+        return await self._current().discover(configs)
+
+    async def list_tools(self, config, *, force=False):
+        return await self._current().list_tools(config, force=force)
+
+    async def call_tool(self, config, tool, arguments):
+        return await self._current().call_tool(config, tool, arguments)
+
+    async def invalidate(self, user_id: int, server_id: int) -> None:
+        current_loop = asyncio.get_running_loop()
+        with self._guard:
+            managers = list(self._managers.items())
+        for loop, runtime_manager in managers:
+            if loop.is_closed():
+                continue
+            if loop is current_loop:
+                await runtime_manager.invalidate(user_id, server_id)
+            else:
+                # Do not await an idle worker loop. It drains this callback
+                # when it resumes; revision fences also run before dispatch.
+                loop.call_soon_threadsafe(
+                    lambda manager=runtime_manager: asyncio.create_task(
+                        manager.invalidate(user_id, server_id)
+                    )
+                )
+
+    async def close_all(self) -> None:
+        await self._current().close_all()
+
+    def status(self, user_id: int, server_id: int):
+        with self._guard:
+            managers = list(self._managers.items())
+        for loop, runtime_manager in managers:
+            if not loop.is_closed():
+                status = runtime_manager.status(user_id, server_id)
+                if status is not None:
+                    return status
+        return None
+
+
+manager = LoopScopedMCPManager()

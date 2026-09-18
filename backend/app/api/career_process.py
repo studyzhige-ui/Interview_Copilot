@@ -192,6 +192,15 @@ def post_opportunity(
                 "use user_confirmed_application for a user assertion"
             ),
         )
+    if payload.entry_reason == "confirmed_interview_invitation":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "confirmed_interview_invitation must use the shared interview "
+                "invitation Operation so Opportunity, Interview, Evidence, "
+                "ProcessEvent, and Verification remain atomic"
+            ),
+        )
     admission = _run_domain(
         db,
         lambda: create_job_opportunity(

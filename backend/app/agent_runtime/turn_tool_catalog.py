@@ -7,10 +7,10 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from jsonschema import Draft202012Validator
 from pydantic import BaseModel, Field
 
 from app.agent_runtime.mcp import MCPToolDescriptor, manager
+from app.agent_runtime.mcp.schema import tool_validator
 from app.agent_runtime.tool_policy import ToolEffect
 from app.agent_runtime.tool_registry import (
     AgentToolContext,
@@ -61,7 +61,9 @@ def _typed_virtual_plan(
             error={"error": "tool_args_too_large", "tool_name": name},
         )
     try:
-        arguments = model.model_validate(raw_args).model_dump(mode="json")
+        arguments = model.model_validate(raw_args, extra="forbid").model_dump(
+            mode="json"
+        )
     except Exception:  # Pydantic's structured detail stays inside the Tool contract
         return ToolDispatchPlan(
             tool_name=name,
@@ -91,9 +93,8 @@ def _validate_mcp_arguments(
     if len(encoded) > settings.AGENT_MAX_TOOL_ARG_CHARS:
         return {"error": "tool_args_too_large", "tool_name": tool.name}
     try:
-        Draft202012Validator.check_schema(tool.input_schema)
         errors = sorted(
-            Draft202012Validator(tool.input_schema).iter_errors(raw_args),
+            tool_validator(tool.input_schema).iter_errors(raw_args),
             key=lambda error: tuple(str(item) for item in error.absolute_path),
         )
     except Exception:  # Invalid remote schema is not executable.
@@ -161,6 +162,7 @@ class TurnToolCatalog:
     runtime_profile: str = "career"
     loaded: _LoadedState = field(default_factory=_LoadedState, compare=False)
     activation_errors: tuple[str, ...] = ()
+    dispatch_generation: int = 1
 
     @classmethod
     async def create(
@@ -189,9 +191,17 @@ class TurnToolCatalog:
                 user_pk = resolve_user_pk(db, user_id)
                 if user_pk is None:
                     return None
-                loaded_mcp_names: set[str] = set()
+                loaded_mcp_names: dict[str, dict] = {}
+                generation = 1
                 if turn_id:
                     turn = db.get(ConversationTurn, turn_id)
+                    if (
+                        turn is None
+                        or turn.user_id != user_pk
+                        or turn.conversation_id != session_id
+                    ):
+                        raise ValueError("tool_catalog_owner_mismatch")
+                    generation = int(turn.dispatch_generation or 1)
                     for schema in (
                         turn.loaded_tool_schemas_json if turn is not None else []
                     ) or []:
@@ -202,7 +212,7 @@ class TurnToolCatalog:
                             function.get("name") if isinstance(function, dict) else None
                         )
                         if isinstance(name, str) and name:
-                            loaded_mcp_names.add(name)
+                            loaded_mcp_names[name] = schema
                 activated, activation_errors = (
                     skill_service.load_activated_skills_for_turn(
                         db,
@@ -219,7 +229,8 @@ class TurnToolCatalog:
                         [],
                         activated,
                         activation_errors,
-                        set(),
+                        {},
+                        generation,
                     )
                 return (
                     user_pk,
@@ -233,19 +244,29 @@ class TurnToolCatalog:
                     activated,
                     activation_errors,
                     loaded_mcp_names,
+                    generation,
                 )
             finally:
                 db.close()
 
         loaded = await asyncio.to_thread(load)
         if loaded is None:
-            user_pk, skills, configs, activated, activation_errors, loaded_mcp_names = (
+            (
+                user_pk,
+                skills,
+                configs,
+                activated,
+                activation_errors,
+                loaded_mcp_names,
+                generation,
+            ) = (
                 0,
                 [],
                 [],
                 [],
                 [],
-                set(),
+                {},
+                1,
             )
         else:
             (
@@ -255,16 +276,35 @@ class TurnToolCatalog:
                 activated,
                 activation_errors,
                 loaded_mcp_names,
+                generation,
             ) = loaded
         tools, failures = (
             await manager.discover(configs) if include_deferred else ([], [])
         )
+        failures = dict(failures)
+        stable_tools = []
+        for tool in tools:
+            previous = loaded_mcp_names.get(tool.name)
+            if previous is not None and previous != cls._mcp_schema(tool):
+                failures[tool.server_id] = "mcp_tool_schema_changed"
+                continue
+            stable_tools.append(tool)
+        tools = stable_tools
 
         effective_exclude = set(exclude or set())
         if builtin_allowlist is not None:
             effective_exclude.update(set(registry.tool_names) - set(builtin_allowlist))
 
         builtins = registry.snapshot(exclude=effective_exclude, user_id=user_id)
+        names = [tool.name for tool in tools]
+        reserved = set(builtins.tool_names) | {
+            "tool_search",
+            "skill_search",
+            "skill_load",
+            "skill_resource_load",
+        }
+        if len(names) != len(set(names)) or reserved.intersection(names):
+            raise ValueError("tool_catalog_identity_collision")
         available_tools = set(builtins.tool_names)
         visible_skills = [
             dict(row)
@@ -317,6 +357,7 @@ class TurnToolCatalog:
             mcp_discovery_errors=MappingProxyType(dict(failures)),
             loaded=loaded_state,
             activation_errors=tuple(activation_errors),
+            dispatch_generation=generation,
         )
         await catalog._persist_snapshot()
         return catalog
@@ -557,6 +598,17 @@ class TurnToolCatalog:
         return await self.builtins.plan_call(name, raw_args, ctx)
 
     async def dispatch(self, name: str, raw_args: dict, ctx: AgentToolContext) -> dict:
+        virtual_models = {
+            "skill_search": _SearchArgs,
+            "skill_load": _LoadSkillArgs,
+            "skill_resource_load": _LoadSkillResourceArgs,
+            "tool_search": _SearchArgs,
+        }
+        if name in virtual_models:
+            plan = _typed_virtual_plan(name, raw_args, virtual_models[name])
+            if plan.error:
+                return plan.error
+            raw_args = plan.arguments
         if name == "skill_search" and self.skills:
             args = _SearchArgs.model_validate(raw_args)
             matches = skill_service.search(list(self.skills), args.query)
@@ -604,6 +656,9 @@ class TurnToolCatalog:
             }
         tool = self._mcp_descriptor(name)
         if tool is not None:
+            error = _validate_mcp_arguments(tool, raw_args)
+            if error is not None:
+                return error
             config = await self._current_mcp_config(tool)
             if config is None:
                 return {
@@ -792,8 +847,13 @@ class TurnToolCatalog:
         def save() -> None:
             db = SessionLocal()
             try:
-                row = db.get(ConversationTurn, self.turn_id)
-                if row is not None and not row.tool_snapshot_json:
+                row = (
+                    db.query(ConversationTurn)
+                    .filter_by(id=self.turn_id)
+                    .with_for_update()
+                    .one_or_none()
+                )
+                if self._owns_turn(row) and not row.tool_snapshot_json:
                     row.tool_snapshot_json = tool_snapshot
                     db.commit()
             finally:
@@ -837,11 +897,25 @@ class TurnToolCatalog:
         def save() -> None:
             db = SessionLocal()
             try:
-                row = db.get(ConversationTurn, self.turn_id)
-                if row is not None:
+                row = (
+                    db.query(ConversationTurn)
+                    .filter_by(id=self.turn_id)
+                    .with_for_update()
+                    .one_or_none()
+                )
+                if self._owns_turn(row):
                     row.loaded_tool_schemas_json = schemas
                     db.commit()
             finally:
                 db.close()
 
         await asyncio.to_thread(save)
+
+    def _owns_turn(self, row) -> bool:
+        return bool(
+            row is not None
+            and row.user_id == self.user_pk
+            and row.conversation_id == self.session_id
+            and int(row.dispatch_generation or 1) == self.dispatch_generation
+            and row.status not in {"completed", "blocked", "failed", "cancelled"}
+        )

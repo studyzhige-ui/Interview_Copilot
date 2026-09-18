@@ -19,6 +19,7 @@ import { Pill } from '@/components/ui/Pill';
 import { Spinner } from '@/components/ui/Spinner';
 import { FormItem, TextArea, TextInput, csv, displayDate } from '@/pages/career/CareerFields';
 import { toast } from '@/store/uiStore';
+import { MemoryActivity } from './MemoryActivity';
 import type {
   AgentMemory,
   AgentMemorySettings,
@@ -112,12 +113,13 @@ export function AgentMemorySettingsSection() {
           </div>
         ) : (memoriesQuery.data ?? []).length === 0 ? (
           <div className="mt-4 rounded-lg bg-stone-50 px-4 py-5 text-center text-xs text-stone-500">
-            还没有形成长期协作经验。只有在你允许贡献、对话完成且出现明确有效/无效反馈时，系统才可能生成 Memory。
+            还没有形成长期协作经验。开启贡献后，系统会在对话结束并空闲一段时间后提取有依据的经验，再结合过去的记录整理；并非每段对话都需要记住。
           </div>
         ) : (
           <MemoryList memories={memoriesQuery.data ?? []} />
         )}
       </div>
+      <MemoryActivity memories={memoriesQuery.data ?? []} />
     </section>
   );
 }
@@ -213,6 +215,10 @@ function MemoryList({ memories }: { memories: AgentMemory[] }) {
     queryClient.setQueryData<AgentMemory[]>(AGENT_MEMORIES_KEY, (current = []) => (
       current.map((item) => item.id === saved.id ? saved : item)
     ));
+    // Forgetting a source can invalidate other experiences from the same turn.
+    void queryClient.invalidateQueries({ queryKey: AGENT_MEMORIES_KEY });
+    void queryClient.invalidateQueries({ queryKey: ['memory-pipeline'] });
+    void queryClient.invalidateQueries({ queryKey: ['memory-receipts'] });
   };
 
   const refreshAfterConflict = async () => {
@@ -265,7 +271,7 @@ function MemoryList({ memories }: { memories: AgentMemory[] }) {
   return (
     <div className="mt-4 space-y-3">
       {memories.map((memory) => (
-        <article key={memory.id} className="rounded-lg border border-stone-200 p-4">
+        <article key={memory.id} id={`memory-${memory.id}`} className="scroll-mt-6 rounded-lg border border-stone-200 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
@@ -323,7 +329,7 @@ function MemoryList({ memories }: { memories: AgentMemory[] }) {
               <ul className="mt-1.5 space-y-1.5">
                 {memory.sources.map((source) => (
                   <li key={`${source.source_conversation_identity}:${source.source_turn_identity}`} className="text-[11px] text-stone-500">
-                    <span className="font-mono text-stone-600">Conversation {source.source_conversation_identity}</span>
+                    <a className="text-primary-600 underline" href={`/general-chat?session=${encodeURIComponent(source.source_conversation_identity)}`}>查看来源对话</a>
                     {' · '}
                     <span className="font-mono text-stone-600">Turn {source.source_turn_identity}</span>
                     {' · '}{displayDate(source.observed_at)}
@@ -332,6 +338,12 @@ function MemoryList({ memories }: { memories: AgentMemory[] }) {
                 ))}
               </ul>
             )}
+            {(memory.evidence ?? []).map((evidence) => (
+              <blockquote key={evidence.id} className="mt-2 border-l-2 border-stone-200 pl-3 text-xs text-stone-600">
+                {evidence.support_quote}
+              </blockquote>
+            ))}
+            <p className="mt-2 text-[11px] text-stone-400">读取 {memory.recall_count} 次 · 回答中引用 {memory.usage_count ?? 0} 次</p>
           </div>
         </article>
       ))}

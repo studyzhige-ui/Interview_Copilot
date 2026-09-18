@@ -43,6 +43,9 @@ def test_tool_registry_has_expected_tools():
         "analyze_offers",
         "manage_persistent_task",
         "record_artifact_submission",
+        "review_interview_invitation_candidate",
+        "confirm_interview_invitation",
+        "open_interview_preparation",
     }
     assert expected == set(registry.tool_names)
 

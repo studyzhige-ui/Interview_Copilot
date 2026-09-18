@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { listChatSessions } from '@/api/chat';
+import { listChatSessions, createChatSession } from '@/api/chat';
 import { GeneralChatPage } from './GeneralChatPage';
 
 vi.mock('@/api/chat', () => ({
@@ -46,6 +46,8 @@ function renderPage(initialEntry = '/general-chat') {
 
 describe('GeneralChatPage', () => {
   beforeEach(() => {
+    localStorage.clear();
+    vi.mocked(createChatSession).mockReset();
     vi.mocked(listChatSessions).mockReset().mockResolvedValue([
       {
         session_id: 'session-1',
@@ -64,6 +66,25 @@ describe('GeneralChatPage', () => {
     renderPage();
 
     expect(await screen.findByText('会话：session-1 · 模式：AGENT')).toBeInTheDocument();
+  });
+
+  it('opens an explicit session instead of silently choosing the newest one', async () => {
+    renderPage('/general-chat?session=older-session');
+    expect(await screen.findByText('会话：older-session · 模式：AGENT')).toBeInTheDocument();
+  });
+
+  it('starts with an editable draft and reuses the creation identity after failure', async () => {
+    vi.mocked(createChatSession).mockRejectedValueOnce(new Error('connection lost')).mockResolvedValueOnce({
+      session_id: 'created', title: '一起改好我的简历', type: 'general', execution_mode: 'standard', execution_mode_version: 0,
+    });
+    renderPage('/general-chat?start=resume');
+    fireEvent.click(await screen.findByRole('button', { name: '开始这项准备' }));
+    const retry = await screen.findByRole('button', { name: '开始这项准备' });
+    fireEvent.click(retry);
+    expect(await screen.findByText('会话：created · 模式：AGENT')).toBeInTheDocument();
+    expect(createChatSession).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(createChatSession).mock.calls[0][0].client_request_id).toBe(vi.mocked(createChatSession).mock.calls[1][0].client_request_id);
+    expect(localStorage.getItem('chat-draft:created')).toContain('我想改进简历');
   });
 
   it('restores an explicit object handoff from the URL until admission consumes it', async () => {

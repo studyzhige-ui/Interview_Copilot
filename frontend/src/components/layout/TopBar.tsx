@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { LogOut, ChevronDown, UserRound } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { workspaceFor } from './navigation';
 import { useAuthStore } from '@/store/authStore';
 import { Avatar } from '@/components/ui/Avatar';
 
@@ -10,6 +11,8 @@ export function TopBar({ pageTitle }: { pageTitle?: string }) {
   const fetchMe = useAuthStore((s) => s.fetchMe);
   const logout = useAuthStore((s) => s.logout);
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const area = workspaceFor(pathname);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
 
@@ -29,10 +32,17 @@ export function TopBar({ pageTitle }: { pageTitle?: string }) {
   const avatarUrl = me?.avatar_url;
 
   return (
-    <header className="h-16 bg-white border-b border-stone-200 flex items-center px-6 shrink-0">
-      <div className="text-base font-medium text-stone-800">{pageTitle ?? ''}</div>
+    <header className="workspace-topbar">
+      <div className="workspace-area-name">{pageTitle ?? ''}</div>
+      {!!area?.tabs.length && <nav className="workspace-tabs" aria-label={`${area.label}导航`}>
+        {area.tabs.map((tab) => <NavLink key={tab.to} to={tab.to}>{tab.label}</NavLink>)}
+      </nav>}
+      {pathname !== '/general-chat' && <Link to="/general-chat" className="workspace-copilot-shortcut">打开 Copilot</Link>}
       <div className="ml-auto relative" ref={ref}>
         <button
+          aria-expanded={open}
+          aria-label="账户菜单"
+          onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); }}
           onClick={() => setOpen((v) => !v)}
           className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-md hover:bg-stone-50"
         >
@@ -43,7 +53,7 @@ export function TopBar({ pageTitle }: { pageTitle?: string }) {
             className="w-8 h-8"
             fallbackClassName="text-sm"
           />
-          <span className="text-sm text-stone-700">{displayName}</span>
+          <span className="workspace-account-name text-sm text-stone-700">{displayName}</span>
           <ChevronDown size={16} className="text-stone-400" />
         </button>
         {open && (

@@ -1,47 +1,7 @@
-"""Context assembly pipeline — slot-based prompt composition.
+"""Product context selection: Memory, RAG, runtime facts and history replay.
 
-Builds the LLM prompt for a chat / agent turn by populating named
-slots, then rendering them in a single authoritative order. Slot
-ordering is chosen for prompt-cache friendliness — most-stable
-content at the top, per-turn content at the bottom.
-
-Slots, in order from most → least cache-stable:
-
-  1. (System Prompt)       caller-supplied chat / RAG / agent instructions.
-                           Rendered raw, no [Tag] header.
-  2. [Record Context]      debrief sessions only — interview reference
-                           manifest (resume + JD + analysis summary). Stable
-                           for the duration of one debrief.
-  3. [Context Summary]     compaction summary (from the ``summary`` column);
-                           changes only when a compaction fires.
-  4. [Recent Turns]        ALL user↔agent dialogue pairs after the compaction
-                           cursor (incremental-append, no fixed window).
-  5. [Explicit Guidance]   resolved Global → Debrief → Conversation user rules.
-  6. [Memory]              optional low-authority canonical recall.
-  7. [Attachments]         validated file manifest (ids + lifecycle scope).
-  8. [Source Read Status]  deterministic success/failure projection for
-                           explicitly or planner-selected owner reads.
-  9. [Retrieved Context]   scoped RAG and attachment chunks.
- 10. [Referenced Objects]  server-reread typed product data explicitly
-                           attached to this Turn; never instructions.
- 11. [Current Query]       the user's admitted original input.
-
-Per-turn-variable grounding (memory + RAG) sits near the tail so a grounding
-change can't invalidate the cached stable prefix (summary + recent turns).
-
-A single :data:`SLOT_ORDER` constant is the SOLE place that decides
-slot ordering — both the answer-prompt renderer and the lightweight
-rewrite-context renderer iterate it. Adding a slot is one tuple
-entry plus a matching field on :class:`AssembledContext`; no second
-ordering definition to keep in sync.
-
-Compaction is triggered at assembly time when total context tokens exceed
-``MODEL_CONTEXT_WINDOW * COMPRESS_THRESHOLD_RATIO``. This matches the
-Claude Code model: full history in context, compress only at threshold.
-
-The active Agent loop may pressure-reduce durable ToolResult payloads to
-identity references, but it never creates a second prose summary.  This module
-remains the sole owner of the canonical Conversation ``summary + cursor``.
+The dispatch context manager owns compaction and durable replacement history.
+This stage selects sources; it does not rewrite history or advance cursors.
 """
 
 from __future__ import annotations
@@ -53,8 +13,8 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from app.core.tokens import token_count as count_tokens
-from app.core.tokens import truncate_to_tokens
 from app.core.config import settings
+from app.core.context_budget import RequestBudget
 from app.rag.domain.models import GroundingBundle, RetrievalResult
 from app.rag.grounding.builder import grounding_builder
 from app.services.chat.chat_history_service import transcript_service
@@ -74,7 +34,6 @@ class TokenBudget:
     # old hardcoded 1M meant a 128K model NEVER triggered L1 compression
     # and eventually 400'd on an overlong prompt).
     MODEL_CONTEXT_WINDOW = 128_000
-    COMPRESS_THRESHOLD_RATIO = 0.75
 
     def __init__(self, model_context_window: int | None = None):
         if model_context_window:
@@ -90,9 +49,6 @@ class TokenBudget:
     PRODUCT_OBJECT_CONTEXT_BUDGET = 6_000
     OUTPUT_TOKEN_RESERVE = settings.RAG_OUTPUT_TOKEN_RESERVE
     SAFETY_MARGIN = settings.RAG_CONTEXT_SAFETY_MARGIN
-
-    COMPRESS_PROTECT_FIRST_N = 3
-    COMPRESS_PROTECT_LAST_N = 4
 
 
 # ── AssembledContext dataclass ───────────────────────────────────────────
@@ -145,7 +101,7 @@ class AssembledContext:
     # [Recent Turns] — list of {seq, role, content} message dicts.
     recent_turns: list[dict] = field(default_factory=list)
 
-    # [Current Query] — the user's (rewritten) standalone question.
+    # [Current Query] — the user's original admitted question.
     current_input: str = ""
 
     # Final citation sources, aligned 1:1 with the [K#] refs inside
@@ -162,6 +118,14 @@ class AssembledContext:
     model_context_window: int = TokenBudget.MODEL_CONTEXT_WINDOW
     prompt_token_limit: int = 0
     output_token_reserve: int = TokenBudget.OUTPUT_TOKEN_RESERVE
+    context_report: dict = field(default_factory=dict)
+    conversation_id: str = ""
+    summary_cursor: int = 0
+    window_messages: list[dict] | None = None
+    checkpoint_version: int = 0
+    through_seq: int = 0
+    turn_id: str | None = None
+    dispatch_generation: int = 0
 
 
 class CurrentInputTooLargeError(ValueError):
@@ -284,51 +248,13 @@ class PromptRenderer:
         ctx.system_prompt = system_prompt.strip()
         skipped = set(skip_fields)
         prompt = self._render(ctx, skip_fields=skipped)
-        limit = int(ctx.prompt_token_limit or 0)
-        if not limit or count_tokens(prompt) <= limit:
+        if ctx.prompt_token_limit:
+            from app.conversation.provider_context import compose_provider_context
+
+            compose_provider_context(ctx, renderer=self, system_prompt=system_prompt)
+            prompt = self._render(ctx, skip_fields=skipped)
+        else:
             ctx.total_tokens = count_tokens(prompt)
-            return prompt
-
-        # The real system prompt is known only at render time. Reconcile any
-        # difference from the assembly-time reserve using a deterministic slot
-        # priority; system rules and current input are never truncated.
-        over = count_tokens(prompt) - limit
-        if ctx.retrieval_result is not None and ctx.grounding.token_count:
-            grounding = grounding_builder.build(
-                ctx.retrieval_result,
-                token_budget=max(0, ctx.grounding.token_count - over - 32),
-            )
-            ctx.grounding = grounding
-            ctx.retrieved_context = grounding.context_text
-            ctx.sources = grounding.sources
-            prompt = self._render(ctx, skip_fields=skipped)
-
-        for field_name in (
-            "memory_block",
-            "attachment_manifest",
-            "source_read_status",
-            "product_object_context",
-            "debrief_reference",
-            "personalization_guidance",
-            "summary",
-        ):
-            current = str(getattr(ctx, field_name) or "")
-            while current and count_tokens(prompt) > limit:
-                excess = count_tokens(prompt) - limit
-                current = truncate_to_tokens(
-                    current, max(0, count_tokens(current) - excess - 16)
-                )
-                setattr(ctx, field_name, current)
-                prompt = self._render(ctx, skip_fields=skipped)
-
-        while ctx.recent_turns and count_tokens(prompt) > limit:
-            ctx.recent_turns = (
-                ctx.recent_turns[2:] if len(ctx.recent_turns) >= 2 else []
-            )
-            prompt = self._render(ctx, skip_fields=skipped)
-        if count_tokens(prompt) > limit:
-            raise ValueError("final prompt exceeds the model context budget")
-        ctx.total_tokens = count_tokens(prompt)
         return prompt
 
     def render_context_text(self, ctx: AssembledContext) -> str:
@@ -419,62 +345,6 @@ def _turn_tokens(m: dict) -> int:
     return base
 
 
-def _summary_input(messages: list[dict]) -> str:
-    """Render persisted turns for compaction with complete Tool pairs only."""
-    rendered_turns: list[str] = []
-    for message in messages:
-        role = message["role"]
-        blocks = message.get("blocks") or []
-        if role == "User":
-            rendered_turns.append(f"{role}: {render_historical_user_content(message)}")
-            continue
-        if role != "Agent" or not blocks:
-            rendered_turns.append(f"{role}: {message['content']}")
-            continue
-
-        call_ids = {
-            str(block.get("id"))
-            for block in blocks
-            if block.get("type") == "tool_use" and block.get("id")
-        }
-        result_ids = {
-            str(block.get("tool_use_id"))
-            for block in blocks
-            if block.get("type") == "tool_result" and block.get("tool_use_id")
-        }
-        paired_ids = call_ids & result_ids
-        parts: list[str] = []
-        for block in blocks:
-            block_type = block.get("type")
-            if block_type == "text" and block.get("text"):
-                parts.append(str(block["text"]))
-            elif block_type == "tool_use" and str(block.get("id")) in paired_ids:
-                parts.append(
-                    "[tool_call "
-                    f"id={block['id']} "
-                    f"name={block.get('name', '?')} "
-                    "input="
-                    + json.dumps(
-                        block.get("input") or {},
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                    + "]"
-                )
-            elif (
-                block_type == "tool_result"
-                and str(block.get("tool_use_id")) in paired_ids
-            ):
-                parts.append(
-                    f"[tool_result id={block['tool_use_id']}] "
-                    f"{block.get('content', '')}"
-                )
-        rendered = "\n".join(parts) or message["content"]
-        rendered_turns.append(f"Agent: {rendered}")
-    return "\n\n".join(rendered_turns)
-
-
 class ContextAssemblyPipeline:
     def __init__(
         self,
@@ -498,11 +368,11 @@ class ContextAssemblyPipeline:
         retrieval_result: RetrievalResult | None = None,
         user_id: str | None = None,
         model_context_window: int | None = None,
+        model_output_tokens: int | None = None,
     ) -> AssembledContext:
         """Full context for answer generation.
 
-        ``memory_block``        future canonical low-authority recall;
-                                currently empty behind the Stage 5 gate
+        ``memory_block``        optional canonical low-authority recall
         ``debrief_reference``   interview reference manifest for debrief
                                 sessions. Caller may leave this empty
                                 in non-debrief mode and let the
@@ -510,10 +380,8 @@ class ContextAssemblyPipeline:
         ``source_read_status``  bounded success/failure facts for the current
                                 shared read-only source acquisition.
         ``retrieval_result``    canonical RAG result with intent provenance.
-        ``user_id``             the OWNER's username principal — drives the
-                                compaction summarizer's LLM resolution.
-                                (NOT ``meta["user_id"]``, which is the
-                                integer users.id pk.)
+        ``user_id``             OWNER's username principal; background
+                                compaction uses the selected answer model at dispatch.
         """
         return await self._assemble(
             session_id=session_id,
@@ -526,6 +394,7 @@ class ContextAssemblyPipeline:
             retrieval_result=retrieval_result,
             user_id=user_id,
             model_context_window=model_context_window,
+            model_output_tokens=model_output_tokens,
         )
 
     # ── Internal ──────────────────────────────────────────────────────
@@ -544,6 +413,7 @@ class ContextAssemblyPipeline:
         skip_debrief_autoinject: bool = False,
         user_id: str | None = None,
         model_context_window: int | None = None,
+        model_output_tokens: int | None = None,
     ) -> AssembledContext:
         meta = await asyncio.to_thread(
             transcript_service.get_session_meta,
@@ -551,11 +421,15 @@ class ContextAssemblyPipeline:
         )
         if meta is None:
             all_turns: list[dict] = []
+            checkpoint = None
         else:
+            from app.conversation.context_store import load
+
+            checkpoint = await asyncio.to_thread(load, session_id)
             all_turns = await asyncio.to_thread(
                 transcript_service.get_turns_after,
                 session_id,
-                after_seq=meta["compaction_cursor"],
+                after_seq=(checkpoint or {}).get("through_seq", 0),
             )
 
         cleaned_turns = self._repair_pairs(self._sanitize(all_turns))
@@ -604,8 +478,12 @@ class ContextAssemblyPipeline:
 
         window = model_context_window or self.budget.MODEL_CONTEXT_WINDOW
         output_reserve = min(self.budget.OUTPUT_TOKEN_RESERVE, max(128, window // 4))
-        safety_margin = min(self.budget.SAFETY_MARGIN, max(0, window // 10))
-        prompt_limit = max(1, window - output_reserve - safety_margin)
+        if model_output_tokens:
+            output_reserve = min(output_reserve, model_output_tokens)
+        request_budget = RequestBudget.resolve(
+            window, output_reserve, self.budget.SAFETY_MARGIN
+        )
+        prompt_limit = request_budget.input_limit
         system_reserve = min(
             self.budget.SYSTEM_PROMPT_BUDGET, max(1, prompt_limit // 4)
         )
@@ -620,66 +498,38 @@ class ContextAssemblyPipeline:
                 input_tokens=current_input_tokens,
                 prompt_limit=max(0, prompt_limit - system_reserve),
             )
-        memory_block = truncate_to_tokens(memory_block, self.budget.MEMORY_BUDGET)
-        personalization_guidance = truncate_to_tokens(
-            personalization_guidance,
-            self.budget.PERSONALIZATION_GUIDANCE_BUDGET,
+        # Optional recall must remain a complete evidence envelope with intact
+        # citation identities, never a token slice of JSON/Markdown.
+        assembly_omissions: list[str] = []
+        if count_tokens(memory_block) > self.budget.MEMORY_BUDGET:
+            memory_block = ""
+            assembly_omissions.append("memory_block")
+        # Explicit guidance and server-resolved identity/status envelopes are
+        # mandatory whole records. The final compiler either admits them or
+        # reports capacity failure; slicing them would corrupt their contract.
+        if count_tokens(debrief_reference) > self.budget.DEBRIEF_REFERENCE_BUDGET:
+            debrief_reference = ""
+            assembly_omissions.append("debrief_reference")
+        # Bootstrap from the original transcript, including histories previously
+        # hidden behind the legacy cursor. Never promote an old lossy summary.
+        from app.conversation.provider_context import reconstruct_history_messages
+        from app.conversation.context_window import admit
+
+        window_messages = admit(
+            [
+                *((checkpoint or {}).get("state", {}).get("messages", [])),
+                *reconstruct_history_messages(cleaned_turns),
+            ]
         )
-        attachment_manifest = truncate_to_tokens(
-            attachment_manifest,
-            self.budget.ATTACHMENT_MANIFEST_BUDGET,
-        )
-        source_read_status = truncate_to_tokens(
-            source_read_status,
-            self.budget.SOURCE_READ_STATUS_BUDGET,
-        )
-        product_object_context = truncate_to_tokens(
-            product_object_context,
-            self.budget.PRODUCT_OBJECT_CONTEXT_BUDGET,
-        )
-        debrief_reference = truncate_to_tokens(
-            debrief_reference, self.budget.DEBRIEF_REFERENCE_BUDGET
-        )
-        old_summary = str((meta or {}).get("summary") or "")
+        old_summary = ""
+        summary_cursor = 0
+        compaction_trace: dict = {"status": "deferred_to_dispatch"}
 
         effective_result = retrieval_result or RetrievalResult()
-        desired_grounding = min(
-            self.budget.RETRIEVED_CONTEXT_BUDGET,
-            sum(
-                count_tokens(str(chunk.get("text") or ""))
-                for chunk in effective_result.chunks
-            ),
-        )
-        turns_tokens = sum(_turn_tokens(message) for message in cleaned_turns)
-        overhead_tokens = (
-            system_reserve
-            + count_tokens(old_summary)
-            + count_tokens(memory_block)
-            + count_tokens(personalization_guidance)
-            + count_tokens(current_query)
-            + count_tokens(debrief_reference)
-            + count_tokens(attachment_manifest)
-            + count_tokens(source_read_status)
-            + count_tokens(product_object_context)
-            + desired_grounding
-        )
-        compress_threshold = min(
-            int(window * self.budget.COMPRESS_THRESHOLD_RATIO),
-            prompt_limit,
-        )
-        if (
-            turns_tokens + overhead_tokens > compress_threshold
-            and len(cleaned_turns) > self.budget.COMPRESS_PROTECT_LAST_N
-        ):
-            cleaned_turns, old_summary = await self._maybe_compact(
-                session_id=session_id,
-                user_id=user_id,
-                cleaned_turns=cleaned_turns,
-                old_summary=old_summary,
-            )
+        turns_tokens = count_tokens(json.dumps(window_messages, ensure_ascii=False))
 
-        # If the protected tail itself is too large, remove complete oldest
-        # pairs. Current input is a separate protected slot and is never lost.
+        # History is only removed after a successful durable summary. A failed
+        # summary must not silently turn into an unrelated short conversation.
         def fixed_tokens() -> int:
             return (
                 system_reserve
@@ -691,13 +541,10 @@ class ContextAssemblyPipeline:
                 + count_tokens(attachment_manifest)
                 + count_tokens(source_read_status)
                 + count_tokens(product_object_context)
-                + sum(_turn_tokens(message) for message in cleaned_turns)
+                + turns_tokens
             )
 
-        while cleaned_turns and fixed_tokens() > prompt_limit:
-            cleaned_turns = cleaned_turns[2:] if len(cleaned_turns) >= 2 else []
-
-        remaining = max(0, prompt_limit - fixed_tokens())
+        remaining = max(0, prompt_limit - (fixed_tokens() - turns_tokens))
         grounding = grounding_builder.build(
             effective_result,
             token_budget=min(self.budget.RETRIEVED_CONTEXT_BUDGET, remaining),
@@ -720,75 +567,24 @@ class ContextAssemblyPipeline:
             model_context_window=window,
             prompt_token_limit=prompt_limit,
             output_token_reserve=output_reserve,
+            conversation_id=session_id,
+            summary_cursor=summary_cursor,
+            window_messages=window_messages,
+            checkpoint_version=(checkpoint or {}).get("version", 0),
+            through_seq=max(
+                [m["seq"] for m in cleaned_turns],
+                default=(checkpoint or {}).get("through_seq", 0),
+            ),
+            context_report={
+                "compaction": compaction_trace,
+                "omitted": assembly_omissions,
+            },
         )
         ctx.context_text = self.renderer.render_context_text(ctx)
         ctx.total_tokens = count_tokens(
             self.renderer._render(ctx, skip_fields={"system_prompt"})
         )
         return ctx
-
-    # ── Assembly-time compaction ──────────────────────────────────────
-
-    async def _maybe_compact(
-        self,
-        *,
-        session_id: str,
-        user_id: str | None = None,
-        cleaned_turns: list[dict],
-        old_summary: str,
-    ) -> tuple[list[dict], str]:
-        """Compress old turns when the assembled context exceeds the threshold.
-
-        Protects the last ``COMPRESS_PROTECT_LAST_N`` messages (verbatim).
-        Everything before that is summarized into the session's ``summary``
-        column and the ``compaction_cursor`` is advanced.
-
-        Returns ``(remaining_turns, new_summary)``.
-        """
-        protect_n = self.budget.COMPRESS_PROTECT_LAST_N
-        boundary = max(0, len(cleaned_turns) - protect_n)
-        # Persisted turns are User→Agent pairs.  Align the boundary after an
-        # Agent turn even if a future Stage Spec changes ``protect_n``.
-        while boundary and cleaned_turns[boundary - 1]["role"] != "Agent":
-            boundary -= 1
-        to_compress = cleaned_turns[:boundary]
-        to_keep = cleaned_turns[boundary:]
-
-        if not to_compress:
-            return cleaned_turns, old_summary
-
-        conversation = _summary_input(to_compress)
-
-        from app.services.chat.conversation_summarizer import summarize_conversation
-
-        # NB: meta["user_id"] is the integer pk — the summarizer needs the
-        # username principal, threaded from the engine (dual-review fix).
-        new_summary = await summarize_conversation(
-            old_summary,
-            conversation,
-            user_id=user_id,
-        )
-        if not new_summary:
-            return cleaned_turns, old_summary
-
-        new_cursor = to_compress[-1]["seq"]
-
-        await asyncio.to_thread(
-            transcript_service.update_session_fields,
-            session_id,
-            summary=new_summary,
-            compaction_cursor=new_cursor,
-        )
-        logger.info(
-            "Assembly-time compaction for session %s: compressed %d messages, "
-            "cursor advanced to seq %d, summary=%d tokens",
-            session_id,
-            len(to_compress),
-            new_cursor,
-            count_tokens(new_summary),
-        )
-
-        return to_keep, new_summary
 
     @staticmethod
     def _sanitize(messages: list[dict]) -> list[dict]:

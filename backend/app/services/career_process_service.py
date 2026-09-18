@@ -55,6 +55,7 @@ _ENTRY_EVENT = {
     "targeted_preparation": "preparation_started",
     "user_confirmed_application": "application_submitted",
     "verified_submission": "application_submitted",
+    "confirmed_interview_invitation": "interview_scheduled",
 }
 
 _EVENT_PHASE = {
@@ -1168,6 +1169,7 @@ def _rebuild_projection(db: Session, opportunity: JobOpportunity) -> None:
         terminal_event.observed_at if terminal_event is not None else None
     )
     opportunity.last_event_at = max(row.occurred_at for row in events)
+    opportunity.version = int(opportunity.version or 0) + 1
     opportunity.updated_at = utc_now()
     db.add(opportunity)
 

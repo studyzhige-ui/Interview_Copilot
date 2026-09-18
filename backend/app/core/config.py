@@ -139,6 +139,14 @@ class Settings(BaseSettings):
     # Release gate: turn on only after the versioned Stage 5 owner/privacy/
     # deletion/relevance evaluation passes. User controls cannot bypass it.
     AGENT_MEMORY_PRODUCER_ENABLED: bool = False
+    AGENT_MEMORY_SCAN_LIMIT: int = 100
+    AGENT_MEMORY_MAX_INPUTS: int = 40
+    AGENT_MEMORY_MAX_AGE_DAYS: int = 90
+    AGENT_MEMORY_MAX_UNUSED_DAYS: int = 60
+    AGENT_MEMORY_LEASE_SECONDS: int = 300
+    AGENT_MEMORY_MODEL_TIMEOUT_SECONDS: int = 120
+    AGENT_MEMORY_RECALL_TIMEOUT_SECONDS: int = 12
+    AGENT_MEMORY_CONSOLIDATION_INPUT_TOKENS: int = 16000
     # Model-visible Tool-result projection thresholds. The canonical redacted
     # result remains on AgentToolCall and is paged by exact call identity.
     AGENT_RESULT_INLINE_THRESHOLD: int = 50_000
@@ -163,6 +171,9 @@ class Settings(BaseSettings):
     RAG_SEARCH_TIMEOUT_SECONDS: float = 8.0
     RAG_RERANK_TIMEOUT_SECONDS: float = 30.0
     RAG_OUTPUT_TOKEN_RESERVE: int = 4_096
+    CONTEXT_TOOL_OUTPUT_TOKENS: int = 10_000
+    CONTEXT_AUTO_COMPACT_TOKEN_LIMIT: int = 0
+    CONTEXT_AUTO_COMPACT_SCOPE: Literal["total", "body_after_prefix"] = "total"
     RAG_CONTEXT_SAFETY_MARGIN: int = 1_024
     RAG_RETRIEVED_CONTEXT_TOKENS: int = 8_000
     # Reranker-score relevance threshold — reranker branch ONLY. Calibrated

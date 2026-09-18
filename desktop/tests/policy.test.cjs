@@ -1,0 +1,3 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const path=require('node:path');const {webURL,safePath}=require('../policy.cjs');
+test('accepts recruitment URL and rejects privileged schemes or credentials',()=>{assert.equal(webURL('join.qq.com/post.html'),'https://join.qq.com/post.html');for(const url of ['file:///C:/Windows','javascript://alert(1)','career://ui/index.html','https://user:pass@example.com'])assert.throws(()=>webURL(url))});
+test('prevents prototype directory traversal',()=>{const root=path.resolve('fixtures');assert.equal(safePath(root,'today/index.html'),path.join(root,'today/index.html'));assert.throws(()=>safePath(root,'../secrets'));assert.throws(()=>safePath(root,path.resolve(root,'../../other'))) });

@@ -17,16 +17,18 @@ import type { Mode } from './types';
 export function useChatModels(mode: Mode) {
   const queryClient = useQueryClient();
 
-  const { data: catalog } = useQuery({
+  const catalogQuery = useQuery({
     queryKey: ['models', 'catalog'],
     queryFn: getModelsCatalog,
     refetchOnWindowFocus: true,
   });
-  const { data: runtime } = useQuery({
+  const runtimeQuery = useQuery({
     queryKey: ['models', 'runtime'],
     queryFn: getModelsRuntime,
     refetchOnWindowFocus: true,
   });
+  const catalog = catalogQuery.data;
+  const runtime = runtimeQuery.data;
   const profiles = catalog?.profiles ?? [];
 
   // Local optimistic override on top of the server-resolved selection —
@@ -66,5 +68,11 @@ export function useChatModels(mode: Mode) {
     }
   }, [activeProfileId, mode, queryClient]);
 
-  return { profiles, activeProfileId, activeModelName, pickModel };
+  const modelBlocker = catalogQuery.isError || runtimeQuery.isError
+    ? '暂时无法读取回答模型配置，请重新检查连接。'
+    : catalogQuery.isPending || runtimeQuery.isPending ? '正在检查回答模型…'
+      : !activeProfile?.ready ? '需要先配置一个回答模型，才能开始协作。'
+        : mode === 'AGENT' && !activeProfile.supports_function_calling ? '当前模型不能执行协作工具，请选择支持工具调用的模型。' : null;
+  const retryModels = () => { void catalogQuery.refetch(); void runtimeQuery.refetch(); };
+  return { profiles, activeProfileId, activeModelName, pickModel, modelBlocker, retryModels };
 }

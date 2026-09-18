@@ -1,7 +1,9 @@
 # 全流程求职 Copilot 实现符合性账本
 
-> 记录基线：`docs/architecture/full-cycle-career-copilot.md`（2026-08-13）及 Stage 0～5 Spec。
-> 本文用途：把已经冻结的产品语义映射到当前生产代码、迁移、API/Tool/UI 入口和可执行验证，使后续开发可以按真实 owner 继续，而不必重新推测方案。本文不是第二份产品定义；冲突时以权威蓝图负责该对象的主题章节和对应 Stage Spec 为准。
+> 状态：Historical / Superseded Implementation Ledger（2026-08-26）
+> 历史基线：[`full-cycle-career-copilot.md`](./full-cycle-career-copilot.md)（2026-08-13）及 Stage 0～5 Specs。
+> 当前权威：[`career-agent-os-blueprint.md`](./career-agent-os-blueprint.md)。
+> 保留用途：当前代码、迁移、API/Tool/UI 与测试的历史实施快照；其中的 `code_complete`、`open` 和页面语义不得视为 Career Agent OS 的现行完成声明。新的 Implementation Ledger 尚未建立。
 
 ## 0. 记录与状态规则
 

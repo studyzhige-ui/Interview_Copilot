@@ -1,10 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CareerProcessPage } from './CareerProcessPage';
 import { listJobDescriptionSnapshots, listJobOpportunities, listJobOpportunityMergeCandidates, listJobOpportunityMerges, listNextActions, listProcessEvents } from '@/api/careerProcess';
 import { getCareerProfile } from '@/api/careerProfile';
+import { listCurrentOffers } from '@/api/offers';
+import { listArtifacts } from '@/api/artifacts';
+import { listInterviewRecords } from '@/api/interview';
 
 vi.mock('@/api/careerProcess', () => ({
   appendProcessEvent: vi.fn(), createJobOpportunity: vi.fn(), createNextAction: vi.fn(),
@@ -24,6 +27,7 @@ vi.mock('@/api/interview', () => ({ listInterviewRecords: vi.fn().mockResolvedVa
 
 describe('CareerProcessPage', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.mocked(listJobOpportunityMergeCandidates).mockResolvedValue([]);
     vi.mocked(listJobOpportunityMerges).mockResolvedValue([]);
     vi.mocked(listJobDescriptionSnapshots).mockResolvedValue([]);
@@ -66,6 +70,43 @@ describe('CareerProcessPage', () => {
       reminder_delivered_at: null, reminder_dismissed_at: null, version: 0,
       created_at: '2026-08-13T10:00:00Z', updated_at: '2026-08-13T10:00:00Z',
     }]);
+  });
+
+  it('renders opportunities while actions are pending and defers dialog-only requests', async () => {
+    vi.mocked(listNextActions).mockReturnValue(new Promise(() => {}));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<MemoryRouter><QueryClientProvider client={client}><CareerProcessPage /></QueryClientProvider></MemoryRouter>);
+    expect(await screen.findByRole('heading', { name: '求职进程' })).toBeInTheDocument();
+    expect(screen.getByText('正在加载下一步行动…')).toBeInTheDocument();
+    expect(listInterviewRecords).not.toHaveBeenCalled();
+    expect(listCurrentOffers).not.toHaveBeenCalled();
+    expect(listArtifacts).not.toHaveBeenCalled();
+    expect(listJobOpportunityMergeCandidates).not.toHaveBeenCalled();
+    expect(listJobOpportunityMerges).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '检查重复' }));
+    await waitFor(() => expect(listJobOpportunityMergeCandidates).toHaveBeenCalledOnce());
+    expect(listJobOpportunityMerges).toHaveBeenCalledOnce();
+  });
+
+  it('loads only primary data for an empty account', async () => {
+    vi.mocked(listJobOpportunities).mockResolvedValue([]);
+    vi.mocked(listNextActions).mockResolvedValue([]);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<MemoryRouter><QueryClientProvider client={client}><CareerProcessPage /></QueryClientProvider></MemoryRouter>);
+    expect(await screen.findByText('先记下一个你想申请的岗位')).toBeInTheDocument();
+    expect(getCareerProfile).not.toHaveBeenCalled();
+    expect(listArtifacts).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '添加第一个机会' }));
+    await waitFor(() => expect(getCareerProfile).toHaveBeenCalledOnce());
+  });
+
+  it('opens the requested opportunity instead of silently selecting the first one', async () => {
+    const [job] = await listJobOpportunities();
+    vi.mocked(listJobOpportunities).mockResolvedValue([job, { ...job, id: 'job-2', company_name: '另一家公司' }]);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<MemoryRouter initialEntries={['/career-process?opportunity=job-2']}><QueryClientProvider client={client}><CareerProcessPage /></QueryClientProvider></MemoryRouter>);
+    expect(await screen.findByRole('link', { name: /Offer 条款/ })).toHaveAttribute('href', '/career-process/job-2/offer');
+    expect(listProcessEvents).toHaveBeenCalledWith('job-2');
   });
 
   it('shows an opportunity timeline and its active next action', async () => {

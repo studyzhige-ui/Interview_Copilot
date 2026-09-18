@@ -49,15 +49,15 @@ def test_provider_context_keeps_instructions_history_and_turn_data_partitioned()
         "user",
         "user",
         "assistant",
-        "user",
+        *(["user"] * 7),
     ]
     assert "[Context Summary]" in projection.messages[0]["content"]
     assert projection.messages[1]["content"] == "earlier question"
-    current = projection.messages[-1]["content"]
+    current = "\n".join(m["content"] for m in projection.messages[3:])
     assert "[Explicit Guidance]\nglobal then local guidance" in current
     assert "[Memory]\nlow-authority-memory" in current
     assert "[Retrieved Context]\nretrieved-body" in current
-    assert current.endswith("[Current Query]\ncurrent admitted direction")
+    assert current.endswith("current admitted direction")
 
 
 def test_provider_context_reconstructs_complete_tool_pair_by_call_identity():

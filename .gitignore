@@ -58,3 +58,6 @@ Thumbs.db
 
 # Claude Code local-only settings (per-machine permission allowlist)
 .claude/
+
+# Exports
+exports/

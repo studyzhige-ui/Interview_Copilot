@@ -53,7 +53,9 @@ celery_app.conf.update(
     task_default_queue="default",
     task_routes={
         "tasks.process_conversation_turn": {"queue": "turns"},
-        "tasks.consolidate_agent_memory": {"queue": "default"},
+        "tasks.consolidate_agent_memory": {"queue": "background"},
+        "tasks.consolidate_user_memories": {"queue": "background"},
+        "tasks.discover_agent_memories": {"queue": "default"},
         # ── Heavy: needs Whisper + diarization model ──
         "tasks.process_interview_analysis": {"queue": "transcription"},
         # ── Durable content pipeline: parsing / embedding / outbox handlers ──
@@ -106,6 +108,11 @@ celery_app.conf.update(
     # user_id, so the cron host's env must have the API keys for any
     # vendor you want pre-warmed (per-user-only keys won't apply here).
     beat_schedule={
+        "memory-discovery-every-five-minutes": {
+            "task": "tasks.discover_agent_memories",
+            "schedule": crontab(minute="*/5"),
+            "options": {"expires": 240},
+        },
         "model-catalog-daily-refresh": {
             "task": "tasks.refresh_model_catalog",
             "schedule": crontab(hour=4, minute=0),

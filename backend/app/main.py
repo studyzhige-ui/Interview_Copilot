@@ -310,12 +310,14 @@ if _trusted_proxies:
     )
 
 from app.api import (
+    workspace,
     agent_tasks,
     attachment_sources,
     artifacts,
     auth,
     capabilities,
     career_process,
+    career_activity,
     career_insights,
     career_profile,
     chat,
@@ -323,7 +325,9 @@ from app.api import (
     file_assets,
     gmail_integration,
     gmail_observations,
+    interview_invitations,
     interviews,
+    interactions,
     model_runtime,
     offers,
     operations,
@@ -341,6 +345,8 @@ app.include_router(artifacts.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(capabilities.router, prefix="/api/v1")
 app.include_router(career_process.router, prefix="/api/v1")
+app.include_router(workspace.router, prefix="/api/v1")
+app.include_router(career_activity.router, prefix="/api/v1")
 app.include_router(career_insights.router, prefix="/api/v1")
 app.include_router(career_profile.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
@@ -348,7 +354,9 @@ app.include_router(external_plugins.router, prefix="/api/v1")
 app.include_router(file_assets.router, prefix="/api/v1")
 app.include_router(gmail_integration.router, prefix="/api/v1")
 app.include_router(gmail_observations.router, prefix="/api/v1")
+app.include_router(interview_invitations.router, prefix="/api/v1")
 app.include_router(interviews.router, prefix="/api/v1")
+app.include_router(interactions.router, prefix="/api/v1")
 app.include_router(rag.router, prefix="/api/v1")
 app.include_router(model_runtime.router, prefix="/api/v1")
 app.include_router(offers.router, prefix="/api/v1")

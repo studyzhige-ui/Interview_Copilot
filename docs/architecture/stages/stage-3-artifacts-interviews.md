@@ -1,5 +1,7 @@
 # Stage 3 Spec: Artifacts, Interviews, Offers and Client Actions
 
+> Status: Historical Implementation Reference. This is not a current Contract or Vertical Slice Spec; see [`README.md`](./README.md) and the current [`Career Agent OS Blueprint`](../career-agent-os-blueprint.md).
+
 ## 1. Artifact and versions
 
 An `Artifact` exists only after explicit save/promotion or a product Flow whose

@@ -12,7 +12,8 @@ import type {
   ToolResultBlock,
   ToolUseBlock,
 } from '@/types/api';
-import type { Attachment, Mode, SessionRuntime } from './types';
+import type { Attachment, Mode, SessionRuntime, RecoverableSubmission } from './types';
+import { saveUnconfirmed } from './submissionRecovery';
 
 /**
  * The SSE send/cancel pair. Operates on the session-runtime cache: the
@@ -46,10 +47,16 @@ export function useChatStream({
     attachments: Attachment[] = [],
     objectReferences: ProductObjectReference[] = [],
     submission?: ChatSubmissionIdentity,
+    recovery?: RecoverableSubmission,
   ) => {
     if (!activeSessionId) return;
     const r = getRuntime(activeSessionId);
     if (r.streaming || (r.turnId && !existingTurnId)) return;
+    if (r.unconfirmedSubmission && !recovery && !existingTurnId) return;
+    if (payload !== null && submission) {
+      r.unconfirmedSubmission = recovery ?? { payload, questionIndexes, attachments, objectReferences, submission, mode, executionMode };
+      saveUnconfirmed(activeSessionId, r.unconfirmedSubmission);
+    }
 
     let optimisticUserMessage: SessionRuntime['messages'][number] | null = null;
     if (payload !== null) {
@@ -238,24 +245,32 @@ export function useChatStream({
       // Debrief's mode pill selects the strategy; Career ChatPanel passes a
       // fixed AGENT mode. The backend applies the same runtime policy, so an
       // old client cannot silently downgrade a general session to L1 chat.
-      mode: mode === 'AGENT' ? 'agent' : 'chat',
-      executionMode,
+      mode: (recovery?.mode ?? mode) === 'AGENT' ? 'agent' : 'chat',
+      executionMode: recovery?.executionMode ?? executionMode,
       questionIndexes,
       attachments: attachments.map((attachment) => attachment.draft_id),
       objectReferences,
       turnId: existingTurnId,
       submission,
       onAdmission: () => {
+        getRuntime(sid).unconfirmedSubmission = undefined;
+        saveUnconfirmed(sid);
         if (objectReferences.length > 0) onObjectReferencesConsumed?.();
       },
       onTurnCreated: (turnId) => {
-        getRuntime(sid).turnId = turnId;
+        const runtime = getRuntime(sid);
+        runtime.turnId = turnId;
+        if (optimisticUserMessage && runtime.messages.some((message) => message.role === 'user' && message.turnId === turnId)) {
+          const index = runtime.messages.indexOf(optimisticUserMessage);
+          if (index >= 0) runtime.messages.splice(index, 1);
+        }
         // Expose the durable identity immediately so the optional AgentTask
         // read projection can start before the first model status event.
         bump();
       },
     })
       .then((admission) => {
+        if (admission) { getRuntime(sid).unconfirmedSubmission = undefined; saveUnconfirmed(sid); }
         if (admission && admission.status !== 'admitted' && optimisticUserMessage) {
           const runtime = getRuntime(sid);
           const index = runtime.messages.indexOf(optimisticUserMessage);
@@ -277,6 +292,11 @@ export function useChatStream({
           return;
         }
         const detached = Boolean(getRuntime(sid).turnId);
+        if (!detached && optimisticUserMessage) {
+          const runtime = getRuntime(sid);
+          const index = runtime.messages.indexOf(optimisticUserMessage);
+          if (index >= 0) runtime.messages.splice(index, 1);
+        }
         finalize(detached ? undefined : extractErr(err, '连接失败'), detached);
         toast.error(extractErr(err, '发送失败'));
       });
@@ -318,6 +338,12 @@ export function useChatStream({
     [startStream],
   );
 
+  const retrySubmission = useCallback(() => {
+    if (!activeSessionId) return;
+    const saved = getRuntime(activeSessionId).unconfirmedSubmission;
+    if (saved) startStream(saved.payload, undefined, saved.questionIndexes, saved.attachments, saved.objectReferences, saved.submission, saved);
+  }, [activeSessionId, getRuntime, startStream]);
+
   /**
    * Abort the active server-side turn and close the local subscription.
    */
@@ -328,15 +354,20 @@ export function useChatStream({
     if (rt.turnId) {
       const turnId = rt.turnId;
       void cancelChatTurn(activeSessionId, turnId)
-        .catch(() => { /* the local abort still takes effect */ })
-        .finally(() => {
-          getRuntime(activeSessionId).turnId = null;
+        .then(() => {
+          const current = getRuntime(activeSessionId);
+          if (current.turnId !== turnId) return;
+          current.turnId = null;
           abort?.abort();
+          bump();
+        })
+        .catch((error) => {
+          toast.error(extractErr(error, '未能停止任务。任务可能仍在运行，请重新连接后再试。'));
         });
       return;
     }
     abort?.abort();
-  }, [activeSessionId, getRuntime]);
+  }, [activeSessionId, getRuntime, bump]);
 
-  return { sendMessage, resumeTurn, cancel };
+  return { sendMessage, resumeTurn, cancel, retrySubmission };
 }

@@ -49,7 +49,7 @@ async function refreshAccessToken(): Promise<string | null> {
 
   refreshInFlight = (async () => {
     try {
-      const res = await axios.post(apiUrl('/auth/refresh'), { refresh_token: refresh });
+      const res = await axios.post(apiUrl('/auth/refresh'), { refresh_token: refresh }, { timeout: 10_000 });
       const access = res.data?.access_token as string | undefined;
       const newRefresh = (res.data?.refresh_token as string | undefined) ?? refresh;
       if (!access) return null;

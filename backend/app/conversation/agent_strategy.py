@@ -64,15 +64,10 @@ from app.agent_runtime.tool_registry import (
     registry,
     safe_json_dumps,
 )
-from app.agent_runtime.tool_result_storage import (
-    enforce_turn_budget,
-    project_oversized_result,
-)
 from app.agent_runtime.tool_redaction import redact_tool_value
 from app.agent_runtime.turn_tool_catalog import TurnToolCatalog
 from app.conversation.events import HarnessEvent
 from app.conversation.provider_context import (
-    compose_provider_context,
     reconstruct_history_messages,
 )
 from app.conversation.strategy import StrategyContext, StrategyResult
@@ -294,6 +289,35 @@ def _append_replayed_tool(
     )
 
 
+def _load_completed_tool_tail(turn_id: str, user_pk: int) -> list[dict]:
+    """Replay completed tools after a worker crash even without an Interaction."""
+    from app.models.agent_execution import AgentToolCall
+
+    with SessionLocal() as db:
+        rows = (
+            db.query(AgentToolCall)
+            .filter(
+                AgentToolCall.turn_id == turn_id,
+                AgentToolCall.user_id == user_pk,
+                AgentToolCall.result_json.isnot(None),
+                AgentToolCall.status.notin_(("running", "waiting", "deferred")),
+            )
+            .order_by(AgentToolCall.id)
+            .all()
+        )
+        return [
+            {
+                "call_id": row.call_id,
+                "tool_name": row.tool_name,
+                "arguments": dict(row.arguments_json or {}),
+                "result": dict(row.result_json or {}),
+                "status": row.status,
+                "duration_ms": float(row.duration_ms or 0),
+            }
+            for row in rows
+        ]
+
+
 def _build_graceful_fallback(
     blocks: list[dict[str, Any]],
     error_message: str,
@@ -412,9 +436,6 @@ class AgentLoopStrategy:
         # Attachment sources are assembled before the loop through the same
         # GroundingBuilder used by L1 RAG. Surface them immediately;
         # the engine also persists the identical source list on completion.
-        if ctx.assembled is not None and ctx.assembled.sources:
-            yield HarnessEvent.sources(ctx.assembled.sources, step=0, elapsed_ms=0)
-
         # ── Per-turn state ────────────────────────────────────────
         budget = AgentRunState(started_at=time.perf_counter())
         # Local compatibility name is retained for focused tests; the factory
@@ -483,24 +504,26 @@ class AgentLoopStrategy:
         agent_system_prompt = f"{runtime_prompt}\n\n{tool_catalog.format_prompt()}"
         tool_schemas = tool_catalog.get_openai_schemas()
         history_messages: list[dict[str, Any]] = []
-        task_snapshot = await asyncio.to_thread(
-            _load_agent_task_snapshot,
-            ctx.turn_id,
-            tool_catalog.user_pk,
-        )
         if ctx.assembled is not None:
             # Only stable rules stay in the system prefix. The lossy summary
             # is the first chronological data message; prior exact turns
             # follow it, and per-turn product/RAG data stays beside the current
             # user input.
-            projection = compose_provider_context(
+            from app.conversation.context_manager import prepare
+
+            projection = await prepare(
                 ctx.assembled,
                 renderer=prompt_renderer,
                 system_prompt=agent_system_prompt,
+                tool_schemas=tool_schemas,
+                client=client,
+                profile=profile,
             )
             system_block = projection.system
             history_messages.extend(projection.messages[:-1])
             current_task_content = str(projection.messages[-1]["content"])
+            if ctx.assembled.sources:
+                yield HarnessEvent.sources(ctx.assembled.sources, step=0, elapsed_ms=0)
         else:
             system_block = agent_system_prompt
             current_task_content = ctx.user_message
@@ -518,10 +541,8 @@ class AgentLoopStrategy:
             )
         current_task_message: dict[str, Any] = {
             "role": "user",
-            "content": _current_task_content_with_plan(
-                base_current_task_content,
-                task_snapshot,
-            ),
+            "content": base_current_task_content,
+            "_context": {"kind": "user", "id": f"turn:{ctx.turn_id or 'current'}"},
         }
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_block},
@@ -533,7 +554,50 @@ class AgentLoopStrategy:
             user_id=ctx.user_id,
             task_anchor=current_task_message,
             tool_schemas=tool_schemas,
+            turn_id=ctx.turn_id,
+            output_tokens=min(
+                settings.AGENT_MAX_RESPONSE_TOKENS, profile.max_output_tokens
+            ),
         )
+        compactor.client = client
+        compactor.assembled = ctx.assembled
+        compactor.dispatch_generation = ctx.dispatch_generation
+        # Only this turn's contextual data is re-injected after compaction.
+        from app.conversation.context_window import kind
+
+        compactor.initial_context = []
+        for historical in reversed(history_messages):
+            if kind(historical) in {"user", "assistant", "tool", "summary"}:
+                break
+            compactor.initial_context.insert(0, historical)
+        covered_call_ids: set[str] = set()
+        if ctx.turn_id and ctx.dispatch_generation > 1:
+            from app.conversation import context_store
+
+            checkpoint = await asyncio.to_thread(
+                context_store.load, ctx.session_id, scope=ctx.turn_id
+            )
+            if checkpoint:
+                compactor.checkpoint_version = checkpoint["version"]
+                covered_call_ids = set(checkpoint["state"].get("covered_call_ids", []))
+                compactor.covered_call_ids = set(covered_call_ids)
+                messages[:] = [
+                    {"role": "system", "content": system_block},
+                    *checkpoint["state"]["messages"],
+                ]
+                compactor.task_anchor = next(
+                    (
+                        m
+                        for m in messages
+                        if m.get("_context", {}).get("id") == f"turn:{ctx.turn_id}"
+                    ),
+                    current_task_message,
+                )
+                if compactor.task_anchor is current_task_message:
+                    messages.append(current_task_message)
+                # Current owner reads supersede any contextual facts retained
+                # by the checkpoint; the actual user anchor remains unchanged.
+                messages.extend(compactor.initial_context)
 
         # Accumulated Anthropic-style content blocks for the final
         # assistant turn. Built up as the loop encounters text / tool
@@ -553,9 +617,23 @@ class AgentLoopStrategy:
             if ctx.dispatch_generation > 1
             else None
         )
+        if resume is None and ctx.turn_id and ctx.dispatch_generation > 1:
+            for prior_call in await asyncio.to_thread(
+                _load_completed_tool_tail, ctx.turn_id, tool_catalog.user_pk
+            ):
+                _append_replayed_tool(
+                    [] if str(prior_call["call_id"]) in covered_call_ids else messages,
+                    blocks,
+                    prior_call,
+                )
+                budget.tool_call_ids.add(str(prior_call["call_id"]))
         if resume is not None:
             for prior_call in resume["prior"]:
-                _append_replayed_tool(messages, blocks, prior_call)
+                _append_replayed_tool(
+                    [] if str(prior_call["call_id"]) in covered_call_ids else messages,
+                    blocks,
+                    prior_call,
+                )
                 budget.tool_call_ids.add(str(prior_call["call_id"]))
             waiting_call = dict(resume["waiting"])
             waiting_id = str(waiting_call["call_id"])
@@ -720,6 +798,10 @@ class AgentLoopStrategy:
             blocks.append({"type": "text", "text": final_answer})
 
         result.final_answer = final_answer
+        result.extras["context_messages"] = [
+            *messages,
+            {"role": "assistant", "content": final_answer},
+        ]
         result.assistant_blocks = blocks
         result.prompt_tokens = budget.prompt_tokens
         result.completion_tokens = budget.completion_tokens
@@ -784,10 +866,20 @@ class AgentLoopStrategy:
             )
             task_anchor = getattr(compactor, "task_anchor", None)
             if isinstance(task_anchor, dict):
-                task_anchor["content"] = _current_task_content_with_plan(
-                    base_task_content,
-                    task_snapshot,
-                )
+                # Runtime changes append after the stable history prefix. They
+                # never rewrite the user's intent or grant summary authority.
+                runtime_state = _current_task_content_with_plan("", task_snapshot)
+                if runtime_state and runtime_state != getattr(
+                    compactor, "runtime_state", None
+                ):
+                    from app.conversation.context_window import item
+
+                    messages.append(
+                        item(
+                            {"role": "user", "content": runtime_state}, "runtime_state"
+                        )
+                    )
+                    compactor.runtime_state = runtime_state
 
             # Proactive compaction: self-measure the prompt, run the cheap
             # pre-pass if it's over the threshold, and stop cleanly if the
@@ -837,6 +929,7 @@ class AgentLoopStrategy:
                 elif isinstance(ev, str):
                     assistant_content += ev
 
+            compactor.mark_consumed(request_messages)
             compactor.reset_circuit_breaker()
 
             # If the model emitted any text in this turn (whether it
@@ -1114,13 +1207,15 @@ class AgentLoopStrategy:
         replay back into the NEXT LLM call (the API errors out
         otherwise — see issue C in commit message).
         """
-        index_map: dict[int, _ToolCallAccumulator] = {}
+        from app.agent_runtime.tool_call_streaming import ToolCallAssembler
+        assembler = ToolCallAssembler()
         async for chunk in stream:
             event = (
                 chunk
                 if isinstance(chunk, ProviderStreamEvent)
                 else normalize_openai_chunk(chunk)
             )
+            assembler.feed(event)
             if event.usage is not None:
                 usage = event.usage
                 budget.prompt_tokens += usage.prompt_tokens
@@ -1156,25 +1251,7 @@ class AgentLoopStrategy:
                     elapsed_ms=round(budget.elapsed_seconds * 1000, 2),
                 )
 
-            if event.tool_call_deltas:
-                for tc_delta in event.tool_call_deltas:
-                    idx = tc_delta.index
-                    if idx not in index_map:
-                        acc = _ToolCallAccumulator(
-                            id=tc_delta.call_id,
-                            name=tc_delta.name,
-                            arguments="",
-                        )
-                        index_map[idx] = acc
-                        tool_calls_acc.append(acc)
-                    else:
-                        acc = index_map[idx]
-                    if tc_delta.call_id:
-                        acc.id = tc_delta.call_id
-                    if tc_delta.name:
-                        acc.name = tc_delta.name
-                    if tc_delta.arguments_delta:
-                        acc.arguments += tc_delta.arguments_delta
+        tool_calls_acc.extend(assembler.finish())
 
     # ── Tool execution ────────────────────────────────────────────
 
@@ -1263,12 +1340,7 @@ class AgentLoopStrategy:
             # AgentToolCall already owns the full redacted result. Keep only a
             # bounded pointer in model context; read_file can page the same
             # canonical row on any worker after retry or restart.
-            result_text = safe_json_dumps(observation)
-            result_text = project_oversized_result(
-                content=result_text,
-                tool_name=tool_name,
-                tool_call_id=tc.id,
-            )
+            result_text = safe_json_dumps(redact_tool_value(observation))
             return observation, result_text, latency_ms
 
         async def prepare_call(
@@ -1638,9 +1710,6 @@ class AgentLoopStrategy:
             call_index = batch_end
             if waiting is not None or ctx.extras.get("interaction_required"):
                 break
-
-        if turn_tool_messages:
-            enforce_turn_budget(turn_tool_messages)
 
         # Repeated identical tool calls: steer the model with a soft nudge
         # appended AFTER the tool results (never a hard stop). Placed after the

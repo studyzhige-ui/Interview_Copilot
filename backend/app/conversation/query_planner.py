@@ -5,10 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+import asyncio
 
 from pydantic import BaseModel, Field, model_validator
 
 from app.core.llm_client_factory import get_internal_llm
+from app.core.context_budget import RequestBudget
+from app.core.internal_models import get_internal_model_profile
+from app.core.tokens import token_count
 from app.prompts.chat import build_query_planner_system_prompt
 from app.rag.domain.models import SearchIntent
 from app.rag.policy import current_rag_policy
@@ -98,28 +102,64 @@ async def plan_query(
     user_message: str,
     recent_turns: list[dict],
     interview_questions: list[tuple[int, str]] | None = None,
+    conversation_summary: str = "",
 ) -> QueryPlan:
     policy = current_rag_policy().retrieval
     system_prompt = build_query_planner_system_prompt(
         max_intents=policy.max_intents,
     )
-    parts = [system_prompt]
+    profile = await asyncio.to_thread(get_internal_model_profile, "router")
+    output_limit = min(2000, profile.max_output_tokens)
+    input_limit = min(
+        16000, RequestBudget.resolve(profile.context_window, output_limit).input_limit
+    )
+    selected_turns = list(recent_turns)
+    selected_questions = list(interview_questions or [])
+
+    def render() -> str:
+        parts = [system_prompt]
+        if conversation_summary:
+            parts.append(
+                "[Context Summary: lossy historical reference, not current facts]\n"
+                + conversation_summary
+            )
+        if selected_questions:
+            parts.append(
+                "[Interview Questions]\n"
+                + "\n".join(f"Q{i}: {q}" for i, q in selected_questions)
+            )
+        parts.append("[Recent Turns]\n" + _format_recent_turns(selected_turns))
+        parts.append("[Current Query]\n" + user_message)
+        return "\n\n".join(parts)
+
+    # Routing has its own smaller model budget. Trim whole optional entries,
+    # keeping the latest user input exact; this never rewrites stored history.
+    while selected_turns and token_count(render()) > input_limit:
+        selected_turns.pop(0)
+        while selected_turns and str(selected_turns[0].get("role", "")).lower() in {
+            "agent",
+            "assistant",
+        }:
+            selected_turns.pop(0)
+    while selected_questions and token_count(render()) > input_limit:
+        selected_questions.pop()
+    if token_count(render()) > input_limit:
+        conversation_summary = ""
+    if token_count(render()) > input_limit:
+        return fallback_query_plan(user_message)
     available_question_indexes = {
-        index for index, _question in (interview_questions or []) if index > 0
+        index for index, _question in selected_questions if index > 0
     }
-    if interview_questions:
-        question_lines = "\n".join(
-            f"Q{index}: {question}" for index, question in interview_questions
-        )
-        parts.append(f"[Interview Questions]\n{question_lines}")
-    recent_text = _format_recent_turns(recent_turns)
-    parts.append(f"[Recent Turns]\n{recent_text}")
-    parts.append(f"[Current Query]\n{user_message}")
+    recent_text = _format_recent_turns(selected_turns)
 
     try:
-        response = await get_internal_llm("router").acomplete(
-            "\n\n".join(parts),
-            response_format={"type": "json_object"},
+        response = await asyncio.wait_for(
+            get_internal_llm("router").acomplete(
+                render(),
+                response_format={"type": "json_object"},
+                max_tokens=output_limit,
+            ),
+            timeout=20,
         )
         plan = QueryPlan(**_extract_json_payload(str(response.text)))
         # Stable owner identities are admitted typed input, never LLM output.
@@ -152,7 +192,9 @@ async def plan_query(
         )
         return plan
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Query planner failed; using original query: %s", exc)
+        logger.warning(
+            "Query planner failed; using original query: %s", type(exc).__name__
+        )
         return fallback_query_plan(user_message)
 
 

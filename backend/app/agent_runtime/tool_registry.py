@@ -7,6 +7,7 @@ into business capabilities or chooses an implementation on the model's behalf.
 
 import json
 import logging
+import re
 from collections.abc import Collection
 from dataclasses import dataclass
 from inspect import isawaitable
@@ -209,20 +210,13 @@ class ToolRegistryView:
 
 
 def _clean_schema(obj: Any, *, schema_node: bool = True) -> Any:
-    """Recursively strip Pydantic-specific keys from a JSON Schema object.
-
-    OpenAI strict mode rejects ``title`` on property schemas and
-    ``description`` on non-root objects.  The old code only popped
-    ``title`` one level deep, leaving nested Pydantic models dirty.
-    """
+    """Remove display titles while retaining useful parameter descriptions."""
     if isinstance(obj, dict):
         # ``title`` can also be a legitimate field name inside a properties
         # mapping. Strip metadata only from actual schema nodes, never from
         # maps whose keys are user-defined property/definition names.
         if schema_node:
             obj.pop("title", None)
-            if "properties" not in obj:
-                obj.pop("description", None)
         for key, val in obj.items():
             _clean_schema(
                 val,
@@ -259,13 +253,13 @@ def _pydantic_to_openai_schema(
     properties = json_schema.get("properties", {})
     required = json_schema.get("required", list(properties.keys()))
 
-    # Recursively clean Pydantic-specific keys that OpenAI strict mode
-    # rejects (title on leaf schemas, description on non-root objects).
+    # Preserve constraints and descriptions, including local definitions.
     cleaned_props = {}
     for prop_name, prop_schema in properties.items():
         cleaned_props[prop_name] = _clean_schema(dict(prop_schema))
 
     parameters: dict[str, Any] = {
+        **_clean_schema(json_schema),
         "type": "object",
         "properties": cleaned_props,
         "required": required,
@@ -322,8 +316,16 @@ class ToolRegistry:
             self._loading_default_tools = False
 
     def register(self, definition: ToolDefinition) -> None:
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", definition.name) is None:
+            raise ValueError("invalid tool name")
+        if not isinstance(definition.args_model, type) or not issubclass(
+            definition.args_model, BaseModel
+        ):
+            raise TypeError("tool arguments must have a typed model")
+        if not callable(definition.handler):
+            raise TypeError("tool handler must be callable")
         if definition.name in self._entries:
-            logger.warning("Tool %r re-registered (overwriting)", definition.name)
+            raise ValueError(f"duplicate tool registration: {definition.name}")
         self._entries[definition.name] = definition
         logger.debug("Registered concrete tool: %s", definition.name)
 
@@ -474,12 +476,14 @@ async def _dispatch_entry(
     if len(args_json) > settings.AGENT_MAX_TOOL_ARG_CHARS:
         return {"error": "tool_args_too_large", "tool_name": entry.name}
     try:
-        validated = entry.args_model.model_validate(raw_args)
+        validated = entry.args_model.model_validate(raw_args, extra="forbid")
     except ValidationError as exc:
         return {
             "error": "tool_args_validation_failed",
             "tool_name": entry.name,
-            "details": exc.errors(),
+            "details": exc.errors(
+                include_input=False, include_context=False, include_url=False
+            ),
         }
     return await entry.handler(validated, ctx)
 
@@ -537,7 +541,7 @@ async def _plan_entry(
             error={"error": "tool_args_too_large", "tool_name": entry.name},
         )
     try:
-        validated = entry.args_model.model_validate(raw_args)
+        validated = entry.args_model.model_validate(raw_args, extra="forbid")
     except ValidationError as exc:
         return ToolDispatchPlan(
             tool_name=entry.name,
@@ -548,7 +552,9 @@ async def _plan_entry(
             error={
                 "error": "tool_args_validation_failed",
                 "tool_name": entry.name,
-                "details": exc.errors(),
+                "details": exc.errors(
+                    include_input=False, include_context=False, include_url=False
+                ),
             },
         )
 
@@ -609,9 +615,27 @@ def parse_tool_arguments(raw_arguments: str) -> dict[str, Any]:
     if not raw_arguments:
         return {}
     try:
-        parsed = json.loads(raw_arguments)
+        if len(raw_arguments) > settings.AGENT_MAX_TOOL_ARG_CHARS:
+            raise ValueError("tool arguments exceed limit")
+
+        def object_pairs(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate JSON argument key")
+                result[key] = value
+            return result
+
+        def invalid_constant(_value):
+            raise ValueError("non-finite JSON argument")
+
+        parsed = json.loads(
+            raw_arguments,
+            object_pairs_hook=object_pairs,
+            parse_constant=invalid_constant,
+        )
     except Exception as exc:
-        raise ValueError(f"tool arguments are not valid JSON: {exc}") from exc
+        raise ValueError("tool arguments are not valid unambiguous JSON") from exc
     if not isinstance(parsed, dict):
         raise ValueError("tool arguments must be a JSON object")
     return parsed

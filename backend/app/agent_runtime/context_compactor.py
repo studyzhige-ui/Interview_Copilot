@@ -1,294 +1,158 @@
-"""Pressure-only reduction for the active Agent Turn projection.
-
-Conversation summaries have exactly one owner:
-``ContextAssemblyPipeline`` persists the canonical ``summary + cursor``.  The
-active Agent loop must not invent a second prose summary.  When a single Turn
-grows close to the provider limit this module only replaces *durably stored*
-ToolResult payloads with call-identity references.  The Tool Call/Result pair
-remains in the chronological projection and exact data remains available from
-``AgentToolCall``.
-
-The number of reduced results is derived from actual request pressure; there
-is no unconditional or fixed-N pruning policy.  If references are not enough,
-the caller stops honestly instead of silently creating another semantic owner.
-"""
+"""Agent adapter for the shared Codex-style context window lifecycle."""
 
 from __future__ import annotations
 
-import json
-import logging
-from typing import TYPE_CHECKING
-
-from app.agent_runtime.context_window import (
-    get_blocking_limit,
-    get_cheap_prepass_threshold,
-)
-from app.core.tokens import token_count
-
-if TYPE_CHECKING:
-    from app.core.model_catalog import ModelProfile
-
-logger = logging.getLogger(__name__)
-
-# ── Microcompact constants ──────────────────────────────────────────────────
-
-# Tools whose results can be deleted after use.  Aligned with Claude Code's
-# COMPACTABLE_TOOLS — only "read-once" tool outputs that the model has already
-# consumed in its reasoning.
-COMPACTABLE_TOOLS: frozenset[str] = frozenset(
-    {
-        "web_search",
-        "read_url",
-        "read_file",
-        "write_file",
-        "search_knowledge",
-        "read_interview_history",
-        "search_jobs",
-    }
-)
-
-_REFERENCE_PREFIX = "[Archived ToolResult"
-
-
-def _message_text(msg: dict) -> str:
-    """Flatten one message without losing Tool Call/Result correlation."""
-    parts = [str(msg.get("content") or "")]
-    for tc in msg.get("tool_calls", []):
-        if isinstance(tc, dict):
-            fn = tc.get("function", {})
-            parts.append(
-                "[tool_call "
-                f"id={tc.get('id', '?')} "
-                f"name={fn.get('name', '?')} "
-                f"input={fn.get('arguments', '')}]"
-            )
-    if msg.get("role") == "tool":
-        parts.insert(0, f"[tool_result id={msg.get('tool_call_id', '?')}]")
-    return " ".join(p for p in parts if p)
-
-
-def _request_tokens(messages: list[dict], tool_schemas: list[dict]) -> int:
-    """Estimate the complete provider request, including tools exactly once."""
-    payload = {"tools": tool_schemas, "messages": messages}
-    encoded = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return max(1, token_count(encoded))
+import asyncio
+from app.core.context_budget import RequestBudget, request_tokens, ContextCapacityError
+from app.conversation.context_window import admit, compact, item
 
 
 class ActiveTurnContextReducer:
-    """Pressure-gated ToolResult reference reduction for one Agent loop.
-
-    All pruning produces new lists and dictionaries; the original messages
-    remain the exact in-memory execution history.
-    """
-
     def __init__(
         self,
-        profile: ModelProfile,
-        user_id: str | None = None,
+        profile,
+        user_id=None,
         *,
-        task_anchor: dict | None = None,
-        tool_schemas: list[dict] | None = None,
+        task_anchor=None,
+        tool_schemas=None,
+        turn_id=None,
+        output_tokens=None,
     ):
         self.profile = profile
-        # Kept for a stable construction contract; reduction never calls an
-        # LLM and therefore never creates a second Conversation summary.
         self.user_id = user_id
-        # Exact in-memory user message that started this turn.  Identity is
-        # deliberately used instead of text matching: two turns may contain
-        # identical text, and loop-generated user nudges can appear after the
-        # real task.  The marker never enters the provider payload.
         self.task_anchor = task_anchor
-        # Concrete schemas live only in the provider ``tools`` parameter.  The
-        # compactor nevertheless has to count them because the provider does.
         self.tool_schemas = list(tool_schemas or [])
-        self.cheap_prepass_threshold = get_cheap_prepass_threshold(profile)
-        self.blocking_limit = get_blocking_limit(profile)
-        self.has_attempted_reactive_compact: bool = False
-        # Provider usage is authoritative for a completed request.  Until a
-        # fresh usage observation arrives, appended/pruned messages are
-        # measured as a delta from that observed request.
-        self._usage_prompt_tokens: int | None = None
-        self._usage_request_estimate: int | None = None
+        self.turn_id = turn_id
+        self.output_tokens = output_tokens or min(4096, profile.max_output_tokens)
+        budget = RequestBudget.resolve(profile.context_window, self.output_tokens)
+        self.request_budget = budget
+        self.cheap_prepass_threshold = budget.compact_at
+        self.blocking_limit = budget.input_limit
+        self.has_attempted_reactive_compact = False
+        self._usage_prompt_tokens = None
+        self._usage_request_estimate = None
+        self.client = None
+        self.assembled = None
+        self.initial_context = []
+        self.runtime_state = None
+        self.dispatch_generation = 0
+        self.checkpoint_version = 0
+        self.covered_call_ids = set()
 
-    # ── Proactive blocking-limit guard ───────────────────────────────
+    def _measure_tokens(self, messages):
+        estimate = request_tokens(messages, self.tool_schemas)
+        if self._usage_prompt_tokens is None:
+            return estimate
+        return max(
+            1, self._usage_prompt_tokens + estimate - self._usage_request_estimate
+        )
 
-    def is_at_blocking_limit(self, prompt_tokens: int) -> bool:
+    def is_at_blocking_limit(self, prompt_tokens):
         return prompt_tokens >= self.blocking_limit
 
-    # ── Main entry point ─────────────────────────────────────────────
-
-    async def compress(self, messages: list[dict]) -> tuple[list[dict], bool]:
-        """Reduce archived ToolResult payloads only under request pressure.
-
-        Returns ``(messages, at_blocking_limit)``.
-        """
-        total = self._measure_tokens(messages)
-        if not self.should_compact(total):
-            return messages, self.is_at_blocking_limit(total)
-
-        messages = self._reduce_tool_results(
-            messages, target=self.cheap_prepass_threshold
-        )
-        total = self._measure_tokens(messages)
-        return messages, self.is_at_blocking_limit(total)
-
-    # ── Phase 1: cheap microcompact (pressure-gated) ─────────────────
-
-    def _reduce_tool_results(
-        self,
-        messages: list[dict],
-        *,
-        target: int,
-    ) -> list[dict]:
-        """Replace the minimum oldest ToolResult payloads needed for ``target``."""
-        compactable_indices: list[int] = []
-        for i, msg in enumerate(messages):
-            if msg.get("role") != "tool":
-                continue
-            tool_name = self._find_tool_name(messages, msg.get("tool_call_id", ""))
-            if tool_name not in COMPACTABLE_TOOLS:
-                continue
-            content = str(msg.get("content") or "")
-            if content.startswith(_REFERENCE_PREFIX):
-                continue
-            compactable_indices.append(i)
-
-        result = list(messages)
-        reduced = 0
-        for index in compactable_indices:
-            if self._measure_tokens(result) < target:
-                break
-            call_id = str(result[index].get("tool_call_id") or "unknown")
-            tool_name = self._find_tool_name(result, call_id)
-            result[index] = {
-                **result[index],
-                "content": (
-                    f"{_REFERENCE_PREFIX}: call_id={call_id}; tool={tool_name}. "
-                    "Exact redacted result remains in the durable Tool Call record.]"
-                ),
-            }
-            reduced += 1
-
-        if reduced:
-            logger.info(
-                "Active Turn reduction archived %d ToolResult payloads", reduced
-            )
-        return self._sanitize_tool_pairs(result)
-
-    def should_compact(self, prompt_tokens: int) -> bool:
+    def should_compact(self, prompt_tokens):
         return prompt_tokens >= self.cheap_prepass_threshold
 
-    def _measure_tokens(self, messages: list[dict]) -> int:
-        fresh_estimate = _request_tokens(messages, self.tool_schemas)
-        if self._usage_prompt_tokens is None or self._usage_request_estimate is None:
-            return fresh_estimate
-        delta = fresh_estimate - self._usage_request_estimate
-        return max(1, self._usage_prompt_tokens + delta)
+    async def compress(self, messages):
+        projected = admit(messages)
+        prefix = request_tokens(
+            [m for m in projected if m.get("role") == "system"], self.tool_schemas
+        )
+        if self.request_budget.should_compact(self._measure_tokens(projected), prefix):
+            projected = await self._compact(projected)
+        return projected, self.is_at_blocking_limit(self._measure_tokens(projected))
 
-    def observe_provider_prompt_tokens(
-        self,
-        prompt_tokens: int,
-        messages: list[dict],
-    ) -> None:
-        """Anchor future measurements to provider usage plus request delta."""
-        if prompt_tokens <= 0:
-            return
-        self._usage_prompt_tokens = int(prompt_tokens)
-        self._usage_request_estimate = _request_tokens(messages, self.tool_schemas)
+    async def _compact(self, messages):
+        if self.client is None:
+            from app.core.llm_client_factory import build_provider_client_for_role
 
-    # ── Orphan tool-pair sanitization ────────────────────────────────
-
-    @staticmethod
-    def _sanitize_tool_pairs(messages: list[dict]) -> list[dict]:
-        call_ids: set[str] = set()
-        for msg in messages:
-            if msg.get("role") == "assistant":
-                for tc in msg.get("tool_calls", []):
-                    if isinstance(tc, dict) and tc.get("id"):
-                        call_ids.add(tc["id"])
-
-        result_ids: set[str] = set()
-        for msg in messages:
-            if msg.get("role") == "tool":
-                tcid = msg.get("tool_call_id")
-                if tcid:
-                    result_ids.add(tcid)
-
-        orphaned_results = result_ids - call_ids
-        orphaned_calls = call_ids - result_ids
-
-        if not orphaned_results and not orphaned_calls:
-            return messages
-
-        result = list(messages)
-
-        for tcid in orphaned_calls:
-            result.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tcid,
-                    "content": "[Result unavailable — pruned during context management]",
-                }
+            self.client, _ = build_provider_client_for_role(
+                "primary", user_id=self.user_id
             )
-
-        if orphaned_results:
-            result = [
-                msg
-                for msg in result
-                if not (
-                    msg.get("role") == "tool"
-                    and msg.get("tool_call_id") in orphaned_results
-                )
+        replacement, report = await compact(
+            messages,
+            client=self.client,
+            profile=self.profile,
+            output_tokens=self.output_tokens,
+        )
+        # The active task is exact, not the possibly clipped retained-user slice.
+        anchor_id = (self.task_anchor or {}).get("_context", {}).get("id")
+        if self.task_anchor is not None:
+            replacement = [
+                m
+                for m in replacement
+                if not (anchor_id and m.get("_context", {}).get("id") == anchor_id)
             ]
-
-        if orphaned_results or orphaned_calls:
-            logger.info(
-                "Sanitize tool pairs: fixed %d orphaned results, %d orphaned calls",
-                len(orphaned_results),
-                len(orphaned_calls),
+            insertion = max(1, len(replacement) - 1)  # before final summary
+            replacement[insertion:insertion] = [*self.initial_context, self.task_anchor]
+        if self.runtime_state:
+            replacement.insert(
+                len(replacement) - 1,
+                item({"role": "user", "content": self.runtime_state}, "runtime_state"),
             )
-        return result
+        anchor_index = next(
+            (
+                i
+                for i, m in enumerate(messages)
+                if anchor_id and m.get("_context", {}).get("id") == anchor_id
+            ),
+            len(messages),
+        )
+        covered = self.covered_call_ids | {
+            str(m.get("tool_call_id"))
+            for m in messages[anchor_index + 1 :]
+            if m.get("role") == "tool"
+        }
+        if self.assembled is not None and self.turn_id:
+            from app.conversation import context_store
 
-    # ── Reactive compact on context-overflow error ───────────────────
+            saved = await asyncio.to_thread(
+                context_store.save,
+                self.assembled.conversation_id,
+                scope=self.turn_id,
+                expected_version=self.checkpoint_version,
+                through_seq=self.assembled.through_seq,
+                state={
+                    "messages": [m for m in replacement if m.get("role") != "system"],
+                    "covered_call_ids": sorted(covered),
+                    "compaction": report,
+                },
+                turn_id=self.turn_id,
+                dispatch_generation=self.dispatch_generation,
+                replace=True,
+            )
+            if not saved:
+                raise ContextCapacityError(
+                    "上下文执行版本已变化，已保留原始工具记录，请重试。"
+                )
+            self.checkpoint_version = saved["version"]
+            self.assembled.context_report["compaction"] = report
+        self.covered_call_ids = covered
+        self._usage_prompt_tokens = None
+        self._usage_request_estimate = None
+        return replacement
 
-    async def on_context_too_long(
-        self,
-        messages: list[dict],
-    ) -> tuple[list[dict], bool]:
-        """Reactive recovery: reference every eligible ToolResult and retry once."""
+    async def on_context_too_long(self, messages):
         if self.has_attempted_reactive_compact:
-            logger.warning(
-                "Reactive compact already attempted — refusing retry to prevent loop"
-            )
             return messages, False
-
         self.has_attempted_reactive_compact = True
-        reduced = self._reduce_tool_results(messages, target=0)
-        changed = reduced != messages
-        if changed:
-            logger.info("Reactive ToolResult reference reduction applied")
-        return reduced, changed
+        return await self._compact(admit(messages)), True
 
-    def reset_circuit_breaker(self) -> None:
+    def observe_provider_prompt_tokens(self, prompt_tokens, messages):
+        if prompt_tokens > 0:
+            self._usage_prompt_tokens = int(prompt_tokens)
+            self._usage_request_estimate = request_tokens(messages, self.tool_schemas)
+
+    def mark_consumed(self, messages):
+        # Retained as loop observation hook; output admission no longer depends
+        # on a per-tool read-once whitelist.
+        pass
+
+    def reset_circuit_breaker(self):
         self.has_attempted_reactive_compact = False
 
-    # ── Helpers ──────────────────────────────────────────────────────
-
     @staticmethod
-    def _find_tool_name(messages: list[dict], tool_call_id: str) -> str:
-        """Return the tool name for a tool_call_id."""
-        if not tool_call_id:
-            return "unknown"
-        for msg in reversed(messages):
-            for tc in msg.get("tool_calls", []):
-                if isinstance(tc, dict) and tc.get("id") == tool_call_id:
-                    return tc.get("function", {}).get("name", "unknown")
-        return "unknown"
+    def _sanitize_tool_pairs(messages):
+        from app.core.context_messages import normalize_tool_pairs
 
-
-__all__ = ["ActiveTurnContextReducer", "COMPACTABLE_TOOLS"]
+        return normalize_tool_pairs(messages)

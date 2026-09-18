@@ -588,7 +588,9 @@ export async function streamChatTurn(
       }, { once: true });
     });
   }
-  return admission;
+  // EOF is not completion. Keep the durable turn available for reconnect
+  // rather than clearing the UI's identity after repeated truncated streams.
+  throw new Error('任务连接中断，尚未收到完成状态。请重新连接查看进展。');
 }
 
 export async function listPendingSubmissions(
@@ -716,6 +718,7 @@ export async function getToolCallAudit(
 }
 
 export async function createChatSession(payload: {
+  client_request_id?: string;
   // mock_interview sessions are created by the mock-interview start endpoint,
   // never here — this only opens general / debrief chats.
   type: 'general' | 'debrief';

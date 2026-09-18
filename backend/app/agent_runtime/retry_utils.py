@@ -20,6 +20,10 @@ class ErrorCategory(str, Enum):
 
 def classify_api_error(error: Exception) -> ErrorCategory:
     """Classify an OpenAI-compatible API error into a recovery category."""
+    from app.core.context_budget import ContextCapacityError
+
+    if isinstance(error, ContextCapacityError):
+        return ErrorCategory.FATAL
     msg = str(error).lower()
     err_type = type(error).__name__
 

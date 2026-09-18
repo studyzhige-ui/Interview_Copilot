@@ -10,6 +10,7 @@ from app.agent_runtime.tools import (  # noqa: F401
     gmail,
     gmail_observation,
     history,
+    interview_invitation,
     interview_history,
     jobs,
     knowledge,

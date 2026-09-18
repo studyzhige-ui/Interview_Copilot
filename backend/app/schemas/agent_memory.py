@@ -72,6 +72,16 @@ class AgentMemoryView(BaseModel):
     created_at: datetime
     updated_at: datetime
     sources: list[AgentMemorySourceView]
+    origin: str = "legacy"
+    index_text: str = ""
+    usage_count: int = 0
+    last_used_at: datetime | None = None
+    evidence: list[dict] = Field(default_factory=list)
+
+
+class MemoryFeedbackCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    feedback: Literal["helpful", "unhelpful"]
 
 
 class AgentMemoryUpdate(BaseModel):

@@ -45,6 +45,7 @@ export function ChatToolbar({
   input,
   setInput,
   streaming,
+  sendBlockedReason,
   onSend,
   onCancel,
   attachments,
@@ -76,6 +77,7 @@ export function ChatToolbar({
   input: string;
   setInput: (v: string) => void;
   streaming: boolean;
+  sendBlockedReason?: string;
   onSend: () => void;
   onCancel: () => void;
   attachments: Attachment[];
@@ -794,7 +796,7 @@ export function ChatToolbar({
               <button
                 type="button"
                 onClick={onSend}
-                disabled={!activeSessionId || !input.trim() || uploading || !attachmentsReady}
+                 disabled={!activeSessionId || !input.trim() || uploading || !attachmentsReady || !!sendBlockedReason}
                 title="发送"
                 aria-label="发送消息"
                 className="flex h-9 w-9 items-center justify-center rounded-full bg-stone-900 text-white transition hover:bg-stone-700 disabled:cursor-not-allowed disabled:bg-stone-200 disabled:text-stone-400"

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import time
@@ -52,6 +54,9 @@ class ToolExecutionPlan:
     tool_name: str
     arguments_fingerprint: str
     decision: ToolPolicyDecision
+    turn_id: str | None = None
+    dispatch_generation: int = 1
+    effect: ToolEffect = ToolEffect.UNKNOWN
     model_step: int | None = None
     model_call_index: int | None = None
     model_call_order: int | None = None
@@ -73,13 +78,27 @@ class ToolExecutionPlan:
 
 
 def _arguments_fingerprint(arguments: dict[str, Any]) -> str:
-    return json.dumps(
+    canonical = json.dumps(
         arguments,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
         default=str,
     )
+    return hmac.new(
+        settings.SECRET_KEY.encode("utf-8"),
+        ("tool-arguments-v1\0" + canonical).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _arguments_match(row, arguments: dict, digest: str | None) -> bool:
+    if row.arguments_json != arguments:
+        return False
+    if row.arguments_digest is not None:
+        return digest is not None and hmac.compare_digest(row.arguments_digest, digest)
+    # Legacy redacted values cannot establish the original secret identity.
+    return "[REDACTED]" not in json.dumps(arguments, ensure_ascii=False)
 
 
 async def plan_tool_call(
@@ -127,12 +146,16 @@ async def plan_tool_call(
             bounded_resources,
             dispatch_generation,
             resume_waiting,
+            _arguments_fingerprint(arguments),
         )
     return ToolExecutionPlan(
         call_id=call_id,
         tool_name=tool_name,
         arguments_fingerprint=_arguments_fingerprint(arguments),
         decision=decision,
+        turn_id=turn_id,
+        dispatch_generation=dispatch_generation,
+        effect=effect,
         model_step=model_step,
         model_call_index=model_call_index,
         model_call_order=model_call_order,
@@ -175,7 +198,13 @@ def _safe_result(result: dict[str, Any] | None) -> dict[str, Any]:
     Conversation history, persisted overflow storage, SSE, or audit views.
     """
 
-    safe = redact_tool_value(dict(result or {}))
+    if not isinstance(result, dict):
+        raise ValueError("tool_result_invalid")
+    try:
+        json.dumps(result, allow_nan=False)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("tool_result_invalid") from exc
+    safe = redact_tool_value(result)
     return dict(safe) if isinstance(safe, dict) else {"result": safe}
 
 
@@ -334,17 +363,11 @@ async def execute_tool_call(
         plan.call_id != call_id
         or plan.tool_name != tool_name
         or plan.arguments_fingerprint != _arguments_fingerprint(arguments)
+        or plan.turn_id != turn_id
+        or plan.dispatch_generation != dispatch_generation
+        or plan.effect != effect
     ):
         return {"error": "tool_execution_plan_mismatch", "tool_name": tool_name}
-    if plan.existing_result is not None:
-        if turn_id:
-            await asyncio.to_thread(
-                _record_replay,
-                call_id,
-                turn_id,
-                dispatch_generation,
-            )
-        return _safe_result(plan.existing_result)
     decision = plan.decision
 
     async def audit_cancellation() -> None:
@@ -387,6 +410,7 @@ async def execute_tool_call(
                 plan.provider_identity,
                 plan.connection_identity,
                 plan.resource_identities,
+                plan.arguments_fingerprint,
             )
         )
         try:
@@ -396,6 +420,10 @@ async def execute_tool_call(
             await audit_cancellation()
             raise
         if existing is not None:
+            if plan.existing_result is not None and existing == plan.existing_result:
+                await asyncio.to_thread(
+                    _record_replay, call_id, turn_id, dispatch_generation
+                )
             return existing
     if plan.preflight_error is not None:
         result = _safe_result(plan.preflight_error)
@@ -545,6 +573,7 @@ def _inspect_identity(
     resource_identities: Collection[str],
     dispatch_generation: int,
     resume_waiting: bool,
+    arguments_digest: str | None = None,
 ) -> dict[str, Any] | None:
     """Read the durable call fence without creating or mutating a row."""
 
@@ -572,7 +601,7 @@ def _inspect_identity(
             return None
         if (
             existing.tool_name != tool_name
-            or existing.arguments_json != arguments
+            or not _arguments_match(existing, arguments, arguments_digest)
             or _execution_identity_conflicts(
                 existing,
                 effect=effect,
@@ -633,10 +662,13 @@ async def defer_tool_calls(
                 or turn.status in {"completed", "blocked", "failed", "cancelled"}
             ):
                 return False
+            if turn.user_id != user_id or turn.conversation_id != session_id:
+                return False
             for call in calls:
                 call_id = str(call["call_id"])
                 tool_name = str(call["tool_name"])
                 arguments = dict(redact_tool_value(call.get("arguments") or {}))
+                arguments_digest = _arguments_fingerprint(call.get("arguments") or {})
                 existing = (
                     db.query(AgentToolCall)
                     .filter(
@@ -648,7 +680,7 @@ async def defer_tool_calls(
                 if existing is not None:
                     if (
                         existing.tool_name != tool_name
-                        or existing.arguments_json != arguments
+                        or not _arguments_match(existing, arguments, arguments_digest)
                         or _execution_identity_conflicts(
                             existing,
                             effect=str(call.get("effect") or ToolEffect.UNKNOWN.value),
@@ -668,6 +700,7 @@ async def defer_tool_calls(
                         tool_name=tool_name,
                         effect=str(call.get("effect") or ToolEffect.UNKNOWN.value),
                         arguments_json=arguments,
+                        arguments_digest=arguments_digest,
                         timeout_seconds=float(
                             call.get("timeout_seconds")
                             or settings.AGENT_TOOL_TIMEOUT_SECONDS
@@ -848,6 +881,7 @@ def _start(
     provider_identity: str | None = None,
     connection_identity: str | None = None,
     resource_identities: Collection[str] = (),
+    arguments_digest: str | None = None,
 ) -> dict[str, Any] | None:
     db = SessionLocal()
     try:
@@ -876,6 +910,8 @@ def _start(
                 "error": "stale_dispatch_generation",
                 "tool_name": tool_name,
             }
+        if turn.user_id != user_id or turn.conversation_id != session_id:
+            return {"error": "tool_execution_owner_mismatch", "tool_name": tool_name}
         resource_conflict = _unresolved_live_resource_conflict(
             db,
             user_id=user_id,
@@ -897,7 +933,7 @@ def _start(
         if existing is not None:
             if (
                 existing.tool_name != tool_name
-                or existing.arguments_json != arguments
+                or not _arguments_match(existing, arguments, arguments_digest)
                 or _execution_identity_conflicts(
                     existing,
                     effect=effect,
@@ -965,6 +1001,7 @@ def _start(
                 tool_name=tool_name,
                 effect=effect,
                 arguments_json=arguments,
+                arguments_digest=arguments_digest,
                 timeout_seconds=timeout_seconds,
                 status="running",
                 dispatch_generation=dispatch_generation,
@@ -1266,17 +1303,29 @@ def _finish(
                 "error": "stale_dispatch_generation",
                 "tool_name": tool_name,
             }
-        final_result = _safe_result(result)
+        final_result = _safe_result(result if result is not None else {})
         # Every emitted tool_done boundary, including a transition to waiting,
         # receives a Turn-atomic sequence. A resume clears the current field
         # while the bounded timeline preserves the earlier waiting boundary.
         completion_sequence = _next_completion_sequence(db, turn_id)
         if status == "waiting":
+            requested_kind = str(final_result.get("interaction_type") or "")
             kind = (
-                "connection"
-                if final_result.get("interaction_type") == "connection"
-                or final_result.get("error") == "connection_required"
-                else "approval"
+                requested_kind
+                if requested_kind
+                in {
+                    "clarification",
+                    "connection",
+                    "approval",
+                    "fact_confirmation",
+                    "profile_update_confirmation",
+                    "client_readiness",
+                }
+                else (
+                    "connection"
+                    if final_result.get("error") == "connection_required"
+                    else "approval"
+                )
             )
             request = ToolInteractionRequest(
                 tool_name=tool_name,

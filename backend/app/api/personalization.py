@@ -16,6 +16,7 @@ from app.schemas.agent_memory import (
     AgentMemoryView,
     ConversationMemoryControlsUpdate,
     ConversationMemoryControlsView,
+    MemoryFeedbackCommand,
 )
 from app.schemas.personalization import (
     CopilotPreferenceUpdate,
@@ -27,6 +28,82 @@ from app.services import agent_memory_service, personalization_service
 
 
 router = APIRouter(prefix="/personalization", tags=["personalization"])
+
+
+@router.get("/memory-pipeline")
+def memory_pipeline_status(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from sqlalchemy import func
+    from app.models.memory_pipeline import MemoryExtraction, MemoryWorkspace
+    from app.core.config import settings
+
+    counts = (
+        db.query(MemoryExtraction.status, func.count())
+        .filter(MemoryExtraction.user_id == current_user.id)
+        .group_by(MemoryExtraction.status)
+        .all()
+    )
+    workspace = db.get(MemoryWorkspace, current_user.id)
+    return {
+        "producer_available": settings.AGENT_MEMORY_PRODUCER_ENABLED,
+        "extractions": dict(counts),
+        "consolidation": {
+            "status": workspace.status,
+            "revision": workspace.revision,
+            "error_code": workspace.error_code,
+            "retry_at": workspace.retry_at,
+            "updated_at": workspace.updated_at,
+        }
+        if workspace
+        else None,
+    }
+
+
+@router.get("/memory-receipts")
+def memory_receipts(
+    turn_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from app.models.memory_pipeline import MemoryReadReceipt
+
+    query = db.query(MemoryReadReceipt).filter(
+        MemoryReadReceipt.user_id == current_user.id
+    )
+    if turn_id:
+        query = query.filter(MemoryReadReceipt.turn_id == turn_id)
+    return [
+        {
+            "id": r.id,
+            "turn_id": r.turn_id,
+            "memory_id": r.memory_id,
+            "memory_version": r.memory_version,
+            "cited_at": r.cited_at,
+            "feedback": r.feedback,
+            "created_at": r.created_at,
+        }
+        for r in query.order_by(MemoryReadReceipt.created_at.desc()).limit(100).all()
+    ]
+
+
+@router.put("/memory-receipts/{receipt_id}/feedback")
+def memory_feedback(
+    receipt_id: str,
+    body: MemoryFeedbackCommand,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from app.services.memory_recall import set_feedback
+
+    return _run_memory(
+        db,
+        lambda: set_feedback(
+            db, user_id=current_user.id, receipt_id=receipt_id, feedback=body.feedback
+        ),
+        commit=True,
+    )
 
 
 def _run(db: Session, operation, *, commit: bool = False):

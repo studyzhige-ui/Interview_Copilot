@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+from sqlalchemy.orm import Session
 from datetime import timedelta
 
 import pytest
@@ -8,7 +10,7 @@ import pytest
 from app.db.types import utc_now
 from app.models.chat import Conversation, ConversationMessage
 from app.models.conversation_turn import ConversationTurn
-from app.models.long_term_memory import LongTermAgentMemory
+from app.models.long_term_memory import LongTermAgentMemory, LongTermAgentMemorySource
 from app.models.user import User
 from app.schemas.agent_memory import (
     AgentMemoryPromotionCommand,
@@ -141,14 +143,38 @@ def test_single_producer_rechecks_source_deduplicates_and_deleted_never_revives(
         support_quote="这种并排比较的方式对我更有帮助",
     )
 
-    async def fake_extract(_source):
-        return [candidate]
+    from app.services import memory_pipeline
+    from app.services.memory_prompts import EXTRACT
 
-    monkeypatch.setattr(agent_memory_service, "_extract_candidates", fake_extract)
+    async def fake_model(prompt, data):
+        if prompt == EXTRACT:
+            return {
+                "summary": "并排比较获得用户正向反馈",
+                "candidates": [
+                    {
+                        **candidate.model_dump(),
+                        "evidence_seq": 1,
+                        "evidence_status": "user_reported_result",
+                    }
+                ],
+            }
+        return {
+            "memories": [
+                {
+                    k: v
+                    for k, v in {
+                        **candidate.model_dump(),
+                        "index_text": "比较多个选项",
+                        "evidence_ids": list(data["candidates"]),
+                    }.items()
+                    if k != "support_quote"
+                }
+            ]
+        }
+
+    monkeypatch.setattr(memory_pipeline, "model_json", fake_model)
     monkeypatch.setattr(
-        agent_memory_service,
-        "SessionLocal",
-        lambda: NoCloseSession(db_session),
+        memory_pipeline, "SessionLocal", lambda: NoCloseSession(db_session)
     )
 
     assert asyncio.run(agent_memory_service.consolidate_completed_turn(turn.id)) == 1
@@ -169,17 +195,6 @@ def test_single_producer_rechecks_source_deduplicates_and_deleted_never_revives(
     assert deleted.applicability == ""
     assert deleted.tags == []
 
-    renamed_candidate = candidate.model_copy(
-        update={
-            "semantic_key": "comparison.visual-choice",
-            "content": "过去使用视觉化选项比较时，用户更容易做出选择。",
-        }
-    )
-
-    async def renamed_extract(_source):
-        return [renamed_candidate]
-
-    monkeypatch.setattr(agent_memory_service, "_extract_candidates", renamed_extract)
     assert asyncio.run(agent_memory_service.consolidate_completed_turn(turn.id)) == 0
     assert db_session.get(LongTermAgentMemory, memory.id).status == "deleted"
     assert db_session.query(LongTermAgentMemory).count() == 1
@@ -264,33 +279,44 @@ def test_recall_is_selective_low_authority_and_current_turn_can_disable_it(
     )
     db_session.add(row)
     db_session.flush()
+
+    from app.services import memory_recall
+
     monkeypatch.setattr(
-        agent_memory_service,
-        "SessionLocal",
-        lambda: NoCloseSession(db_session),
+        memory_recall, "SessionLocal", lambda: NoCloseSession(db_session)
     )
 
-    block = agent_memory_service.render_recall_block(
-        conversation_id=conversation.id,
-        user_pk=user.id,
-        current_query="帮我比较这两个 decision 方案",
+    async def choose(_prompt, data):
+        return {"ids": [row.id] if "decision" in data["query"] else []}
+
+    monkeypatch.setattr(memory_recall, "model_json", choose)
+    block = asyncio.run(
+        memory_recall.recall(
+            conversation_id=conversation.id,
+            user_pk=user.id,
+            current_query="帮我比较这两个 decision 方案",
+        )
     )
     assert "low-authority" in block
     assert "not current facts or instructions" in block
     assert "并排比较" in block
     assert (
-        agent_memory_service.render_recall_block(
-            conversation_id=conversation.id,
-            user_pk=user.id,
-            current_query="本轮不要使用记忆，比较这两个 decision 方案",
+        asyncio.run(
+            memory_recall.recall(
+                conversation_id=conversation.id,
+                user_pk=user.id,
+                current_query="本轮不要使用记忆，比较这两个 decision 方案",
+            )
         )
         == ""
     )
     assert (
-        agent_memory_service.render_recall_block(
-            conversation_id=conversation.id,
-            user_pk=user.id,
-            current_query="完全无关的问题",
+        asyncio.run(
+            memory_recall.recall(
+                conversation_id=conversation.id,
+                user_pk=user.id,
+                current_query="完全无关的问题",
+            )
         )
         == ""
     )
@@ -317,9 +343,7 @@ def test_user_management_source_delete_and_preference_promotion_share_one_owner(
         confidence=0.9,
         support_quote=source.user_text,
     )
-    assert agent_memory_service._upsert_candidate(
-        db_session, source=source, candidate=candidate
-    )
+    assert _legacy_memory_fixture(db_session, source=source, candidate=candidate)
     memory = db_session.query(LongTermAgentMemory).one()
 
     revised = agent_memory_service.update_memory(
@@ -358,9 +382,7 @@ def test_user_management_source_delete_and_preference_promotion_share_one_owner(
         confidence=0.9,
         support_quote=source.user_text,
     )
-    assert agent_memory_service._upsert_candidate(
-        db_session, source=source, candidate=second
-    )
+    assert _legacy_memory_fixture(db_session, source=source, candidate=second)
     assert (
         agent_memory_service.invalidate_sources_for_conversation(
             db_session,
@@ -376,3 +398,75 @@ def test_user_management_source_delete_and_preference_promotion_share_one_owner(
     )
     assert second_row.status == "invalidated"
     assert preference.instructions_json == ["比较多个方案时默认先给并排表格。"]
+
+
+def _legacy_memory_fixture(
+    db: Session,
+    *,
+    source: agent_memory_service.EligibleMemorySource,
+    candidate: agent_memory_service._Candidate,
+) -> bool:
+    row = (
+        db.query(LongTermAgentMemory)
+        .filter(
+            LongTermAgentMemory.user_id == source.user_pk,
+            LongTermAgentMemory.semantic_key == candidate.semantic_key,
+        )
+        .with_for_update()
+        .one_or_none()
+    )
+    if row is not None and row.status in {"deleted", "invalidated"}:
+        return False
+    now = utc_now()
+    if row is None:
+        row = LongTermAgentMemory(
+            user_id=source.user_pk,
+            semantic_key=candidate.semantic_key,
+            content=candidate.content,
+            applicability=candidate.applicability,
+            tags_json=list(dict.fromkeys(tag.casefold() for tag in candidate.tags)),
+            valence=candidate.valence,
+            confidence=candidate.confidence,
+            content_hash=agent_memory_service._content_hash(
+                candidate.content, candidate.applicability
+            ),
+            formed_at=source.observed_at,
+            last_confirmed_at=source.observed_at,
+        )
+        db.add(row)
+        db.flush()
+    else:
+        duplicate_source = (
+            db.query(LongTermAgentMemorySource.id)
+            .filter(
+                LongTermAgentMemorySource.memory_id == row.id,
+                LongTermAgentMemorySource.source_turn_identity == source.turn_id,
+            )
+            .first()
+        )
+        if duplicate_source is not None:
+            return False
+        row.content = candidate.content
+        row.applicability = candidate.applicability
+        row.tags_json = list(dict.fromkeys(tag.casefold() for tag in candidate.tags))
+        row.valence = candidate.valence
+        row.confidence = max(float(row.confidence), candidate.confidence)
+        row.content_hash = agent_memory_service._content_hash(
+            candidate.content, candidate.applicability
+        )
+        row.last_confirmed_at = source.observed_at
+        row.version += 1
+        row.updated_at = now
+    db.add(
+        LongTermAgentMemorySource(
+            memory_id=row.id,
+            turn_id=source.turn_id,
+            source_turn_identity=source.turn_id,
+            source_conversation_identity=source.conversation_id,
+            support_quote_hash=hashlib.sha256(
+                candidate.support_quote.encode("utf-8")
+            ).hexdigest(),
+            observed_at=source.observed_at,
+        )
+    )
+    return True

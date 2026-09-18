@@ -21,6 +21,7 @@ OpportunityEntryReason = Literal[
     "targeted_preparation",
     "user_confirmed_application",
     "verified_submission",
+    "confirmed_interview_invitation",
 ]
 ProcessEventKind = Literal[
     "tracking_started",
@@ -372,6 +373,7 @@ class JobOpportunityView(BaseModel):
     outcome: JobOutcome | None
     archived_at: datetime | None
     last_event_at: datetime | None
+    version: int
     direction_version: int
     direction_links: list[JobOpportunityDirectionLinkView]
     created_at: datetime

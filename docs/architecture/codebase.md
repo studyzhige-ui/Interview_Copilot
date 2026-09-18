@@ -1,5 +1,8 @@
 # Codebase architecture
 
+> Status: Current implementation reference; non-normative for product and target architecture.
+> Product and target-architecture authority: [`career-agent-os-blueprint.md`](./career-agent-os-blueprint.md).
+
 This document describes the repository that exists today. It is a placement
 guide for maintenance work, not a proposal for extra framework layers.
 
@@ -12,7 +15,7 @@ guide for maintenance work, not a proposal for extra framework layers.
 | `backend/app/schemas/` | Pydantic request and response contracts |
 | `backend/app/services/` | Business use cases grouped by auth, chat, career state, artifacts, interviews, personalization, knowledge, resume, upload, voice, integrations, and model source |
 | `backend/app/conversation/` | Chat/Agent conversation engine, strategy selection, planning, and event contracts |
-| `backend/app/agent_runtime/` | Current ReAct execution, turn-local Tool catalog, MCP clients, Tool Calls, cancellation, and result storage; target Tool/Policy semantics are defined by `full-cycle-career-copilot.md` |
+| `backend/app/agent_runtime/` | Current ReAct execution, turn-local Tool catalog, MCP clients, Tool Calls, cancellation, and result storage; target Harness/Tool/Policy semantics are defined by `career-agent-os-blueprint.md` and future formal Contracts |
 | `backend/app/rag/` | Parsing, cleaning, chunking, embedding/reranking providers, Milvus indexing, retrieval, and hydration |
 | `backend/app/prompts/` | Production prompt text and prompt builders grouped by business purpose |
 | `backend/app/models/` | SQLAlchemy persistence models only |

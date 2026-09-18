@@ -1,5 +1,7 @@
 # Stage 0 Spec: shared Conversation and Agent runtime
 
+> Status: Historical Implementation Reference. This is not a current Contract or Vertical Slice Spec; see [`README.md`](./README.md) and the current [`Career Agent OS Blueprint`](../career-agent-os-blueprint.md).
+
 ## 1. Scope
 
 Stage 0 is the dependency root for every product flow. It freezes one durable

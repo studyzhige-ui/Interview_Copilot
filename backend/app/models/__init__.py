@@ -1,5 +1,10 @@
 from app.models.agent_execution import AgentToolCall
 from app.models.agent_interaction import AgentInteraction
+from app.models.application_operation import (
+    ApplicationOperation,
+    CareerDomainEvent,
+    OperationVerification,
+)
 from app.models.model_dispatch import AgentModelDispatch
 from app.models.agent_task import AgentTask, AgentTaskRevision
 from app.models.agent_task_skill import AgentTaskSkillBinding
@@ -18,6 +23,7 @@ from app.models.career_profile import (
     CareerProfileDraftChange,
 )
 from app.models.chat import Conversation, ConversationMessage
+from app.models.context_checkpoint import ContextCheckpoint
 from app.models.conversation_turn import ConversationTurn
 from app.models.copilot_preference import CopilotPreference
 from app.models.conversation_attachment import (
@@ -41,6 +47,12 @@ from app.models.gmail_observation import (
     GmailObservationSnapshot,
 )
 from app.models.interview_qa import InterviewQA
+from app.models.interview_invitation import (
+    InterviewInvitationCandidate,
+    InterviewInvitationEvidenceRef,
+    InterviewInvitationObservation,
+    InterviewInvitationSourceSnapshot,
+)
 from app.models.interview_record import InterviewRecord
 from app.models.interview_source import InterviewSourceRef
 from app.models.interview_transcript import InterviewTranscript
@@ -52,6 +64,7 @@ from app.models.job_opportunity import (
     NextAction,
     ProcessEvent,
 )
+from app.models.memory_pipeline import MemoryExtraction, MemoryWorkspace, MemoryReadReceipt
 from app.models.long_term_memory import (
     AgentMemorySetting,
     LongTermAgentMemory,
@@ -86,6 +99,9 @@ __all__ = [
     "ConversationDeletionReceipt",
     "AgentToolCall",
     "AgentInteraction",
+    "ApplicationOperation",
+    "CareerDomainEvent",
+    "OperationVerification",
     "AgentModelDispatch",
     "AgentTask",
     "AgentTaskRevision",
@@ -111,6 +127,10 @@ __all__ = [
     "GmailObservationReviewCard",
     "GmailObservationSnapshot",
     "InterviewQA",
+    "InterviewInvitationCandidate",
+    "InterviewInvitationEvidenceRef",
+    "InterviewInvitationObservation",
+    "InterviewInvitationSourceSnapshot",
     "InterviewRecord",
     "InterviewSourceRef",
     "InterviewTranscript",
@@ -124,6 +144,9 @@ __all__ = [
     "AgentMemorySetting",
     "LongTermAgentMemory",
     "LongTermAgentMemorySource",
+    "MemoryExtraction",
+    "MemoryWorkspace",
+    "MemoryReadReceipt",
     "MemoryAbilityState",
     "MemoryAuditEntry",
     "MemoryDocument",

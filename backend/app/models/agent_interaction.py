@@ -21,12 +21,18 @@ class AgentInteraction(Base):
     __tablename__ = "agent_interactions"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('clarification', 'connection', 'approval', 'client_readiness')",
+            "kind IN ('clarification', 'connection', 'approval', "
+            "'fact_confirmation', 'profile_update_confirmation', "
+            "'client_readiness')",
             name="ck_agent_interactions_kind",
         ),
         CheckConstraint(
             "status IN ('pending', 'resolved', 'rejected', 'cancelled')",
             name="ck_agent_interactions_status",
+        ),
+        CheckConstraint(
+            "schema_version >= 1",
+            name="ck_agent_interactions_schema_version",
         ),
         Index(
             "uq_agent_interactions_pending_turn",
@@ -48,11 +54,14 @@ class AgentInteraction(Base):
     # storage primary key.  Clarifications outside a Tool Call leave it NULL.
     tool_call_id = Column(String(128), nullable=True)
     kind = Column(String(32), nullable=False)
+    schema_version = Column(Integer, nullable=False, default=1, server_default="1")
     status = Column(String(16), nullable=False, default="pending")
     request_json = Column(JSON, nullable=False)
     resolution_json = Column(JSON, nullable=True)
+    resolution_identity = Column(String(128), nullable=True)
     version = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, nullable=False, default=utc_now)
+    expires_at = Column(DateTime, nullable=True)
     resolved_at = Column(DateTime, nullable=True)
 
 

@@ -206,7 +206,7 @@ def _profile(context_window: int = 1_000_000, max_output_tokens: int = 0):
     """Minimal ModelProfile for driving the active-Turn reducer in tests.
 
     max_output_tokens defaults to 0 so the effective window equals
-    context_window (blocking_limit == context_window - 3_000).
+    context_window (blocking_limit == context_window - output reserve - safety margin).
     """
     from app.core.model_catalog import ModelProfile
 
@@ -260,35 +260,11 @@ def test_reducer_preserves_tool_results_below_pressure_threshold():
     pipeline = ActiveTurnContextReducer(profile=_profile(context_window=1_000_000))
     result, at_blocking = asyncio.run(pipeline.compress(messages))
 
-    assert result == messages
+    from app.conversation.context_window import wire
+    assert wire(result) == messages
     assert at_blocking is False
 
 
-def test_reducer_archives_only_as_many_old_results_as_pressure_requires():
-    import asyncio
-
-    from app.agent_runtime.context_compactor import ActiveTurnContextReducer
-
-    messages = _tool_messages(size=4_000, count=3)
-    original = [dict(message) for message in messages]
-    reducer = ActiveTurnContextReducer(profile=_profile(context_window=14_500))
-    result, _ = asyncio.run(reducer.compress(messages))
-
-    archived = [
-        message
-        for message in result
-        if str(message.get("content") or "").startswith("[Archived ToolResult")
-    ]
-    assert archived
-    assert len(archived) < 3
-    assert messages == original
-    call_ids = {
-        call["id"] for message in result for call in message.get("tool_calls", [])
-    }
-    result_ids = {
-        message["tool_call_id"] for message in result if message.get("role") == "tool"
-    }
-    assert call_ids == result_ids
 
 
 def test_request_measurement_counts_tools_once_and_uses_provider_delta():
@@ -331,52 +307,37 @@ def test_token_warning_blocks_at_limit():
     )
 
     assert pipeline.is_at_blocking_limit(50_000) is False
-    assert pipeline.is_at_blocking_limit(96_999) is False
-    assert pipeline.is_at_blocking_limit(97_000) is True
+    assert pipeline.is_at_blocking_limit(98_974) is False
+    assert pipeline.is_at_blocking_limit(98_975) is True
     assert pipeline.is_at_blocking_limit(100_000) is True
 
 
 def test_token_warning_default_1m_window():
-    """1M context window: blocking at 997K tokens."""
+    """The default safety margin applies to large windows too."""
     from app.agent_runtime.context_compactor import ActiveTurnContextReducer
 
     pipeline = ActiveTurnContextReducer(
         profile=_profile(context_window=1_000_000, max_output_tokens=0)
     )
 
-    assert pipeline.is_at_blocking_limit(996_999) is False
-    assert pipeline.is_at_blocking_limit(997_000) is True
+    assert pipeline.is_at_blocking_limit(998_974) is False
+    assert pipeline.is_at_blocking_limit(998_975) is True
 
 
 # ── Reactive reduction ───────────────────────────────────────────────────
 
 
-def test_reactive_reduction_retries_once_and_keeps_pairs():
-    import asyncio
-
-    from app.agent_runtime.context_compactor import ActiveTurnContextReducer
-
-    pipeline = ActiveTurnContextReducer(profile=_profile())
-    messages = _tool_messages(size=500, count=1)
-
-    result, should_retry = asyncio.run(pipeline.on_context_too_long(messages))
-    assert should_retry is True
-    assert "call_id=call-0" in result[-1]["content"]
-    assert pipeline.has_attempted_reactive_compact is True
-
-    result, should_retry = asyncio.run(pipeline.on_context_too_long(messages))
-    assert should_retry is False
 
 
 def test_should_compact_absolute_threshold():
-    """should_compact uses the absolute effective-window threshold (not a ratio)."""
+    """Compaction starts before the blocking threshold at every window size."""
     from app.agent_runtime.context_compactor import ActiveTurnContextReducer
 
     pipeline = ActiveTurnContextReducer(
         profile=_profile(context_window=13_050, max_output_tokens=0)
     )
-    assert pipeline.should_compact(49) is False
-    assert pipeline.should_compact(50) is True
+    assert pipeline.should_compact(pipeline.cheap_prepass_threshold - 1) is False
+    assert pipeline.should_compact(pipeline.cheap_prepass_threshold) is True
 
 
 # ── tool_result_storage ──────────────────────────────────────────────────

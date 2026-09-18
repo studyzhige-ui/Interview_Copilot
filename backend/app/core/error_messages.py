@@ -84,6 +84,10 @@ def humanize_error(exc: Exception) -> str:
     win first (balance → auth → rate limit → not-found → context → network
     → server → bad-request → generic).
     """
+    from app.core.context_budget import ContextCapacityError
+
+    if isinstance(exc, ContextCapacityError):
+        return str(exc)
     msg = str(exc).lower()
     status = _status_code(exc)
 

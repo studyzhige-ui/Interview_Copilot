@@ -114,6 +114,10 @@ class JobOpportunity(Base):
             "direction_version >= 0",
             name="ck_job_opportunities_direction_version",
         ),
+        CheckConstraint(
+            "version >= 1",
+            name="ck_job_opportunities_version",
+        ),
         UniqueConstraint(
             "user_id",
             "idempotency_key",
@@ -168,6 +172,9 @@ class JobOpportunity(Base):
     # Independent CAS token for current CareerProfile direction links.
     # ProcessEvent history remains append-only when matching changes.
     direction_version = Column(Integer, nullable=False, default=0, server_default="0")
+    # CAS token for replayed opportunity state. Direction relations retain an
+    # independent token because matching can change without a process fact.
+    version = Column(Integer, nullable=False, default=1, server_default="1")
 
     idempotency_key = Column(String(200), nullable=True)
     created_at = Column(DateTime, nullable=False, default=utc_now)

@@ -10,7 +10,9 @@ tests that patch module globals (e.g. ``SessionLocal``) must target the
 submodule that owns the task.
 """
 
-from app.worker.tasks.agent_memory import consolidate_agent_memory
+from app.worker.tasks.agent_memory import (
+    consolidate_agent_memory, consolidate_user_memories, discover_agent_memories,
+)
 from app.worker.tasks.catalog import refresh_model_catalog_task
 from app.worker.tasks.chat import process_conversation_turn
 from app.worker.tasks.ingestion import process_document_ingestion
@@ -37,6 +39,8 @@ from app.worker.tasks.resume import process_resume_parse
 __all__ = [
     "process_conversation_turn",
     "consolidate_agent_memory",
+    "consolidate_user_memories",
+    "discover_agent_memories",
     "deliver_due_next_action_reminders",
     "process_interview_analysis",
     "process_mock_interview_review",

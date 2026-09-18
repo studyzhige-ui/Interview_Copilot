@@ -153,7 +153,9 @@ class ChatPipelineStrategy:
             result.outcome = "blocked"
             return
 
-        if ctx.needs_knowledge_retrieval and not ctx.retrieval_hit:
+        if ctx.needs_knowledge_retrieval and (
+            not ctx.retrieval_hit or not assembled.grounding.supported
+        ):
             answer = _insufficient_evidence_message(ctx.user_message)
             yield HarnessEvent.status("现有资料不足", step=0, elapsed_ms=0)
             yield HarnessEvent.text_delta(answer, step=0, elapsed_ms=0)
@@ -163,6 +165,19 @@ class ChatPipelineStrategy:
             result.completion_tokens = _count_tokens(answer)
             return
 
+        resolved_model = get_llm_for_role("primary", user_id=ctx.user_id)
+        if isinstance(resolved_model, tuple) and len(resolved_model) == 2:
+            from app.conversation.context_manager import prepare
+
+            await prepare(
+                assembled,
+                renderer=self.renderer,
+                system_prompt=RAG_SYSTEM_PROMPT
+                if ctx.needs_knowledge_retrieval
+                else DIRECT_SYSTEM_PROMPT,
+                client=resolved_model[0],
+                profile=resolved_model[1],
+            )
         prompt = self.renderer.render_answer_prompt(
             assembled,
             system_prompt=(
@@ -196,7 +211,6 @@ class ChatPipelineStrategy:
 
         # Final answers always use the model selected by the user. Internal
         # router/worker models are never allowed to answer on the user's behalf.
-        resolved_model = get_llm_for_role("primary", user_id=ctx.user_id)
         if isinstance(resolved_model, tuple) and len(resolved_model) == 2:
             client, profile = resolved_model
             projection = compose_provider_context(
@@ -335,6 +349,11 @@ class ChatPipelineStrategy:
             }
 
         result.final_answer = final_answer
+        if isinstance(resolved_model, tuple):
+            result.extras["context_messages"] = [
+                *projection.messages,
+                {"role": "assistant", "content": final_answer},
+            ]
         result.assistant_blocks = [{"type": "text", "text": final_answer}]
         result.steps_used = 1
         # Per-turn token estimate via local tiktoken — no global state,

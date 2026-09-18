@@ -1,10 +1,15 @@
 # Interview Copilot implementation Stage Specs
 
-This directory freezes implementation details for the stages defined by
-[`full-cycle-career-copilot.md`](../full-cycle-career-copilot.md). The parent
-document remains the only product and target-architecture authority. These
-specifications may choose physical fields, API seams, failure handling and
-executable gates, but they must not create a second product meaning.
+> Status: Historical Implementation Reference as of 2026-08-26.
+> Historical baseline: [`full-cycle-career-copilot.md`](../full-cycle-career-copilot.md).
+> Current authority: [`career-agent-os-blueprint.md`](../career-agent-os-blueprint.md).
+
+This directory preserves the physical Stage 0–5 contracts that were implemented
+under the superseded 2026-08-13 baseline. These files are no longer current
+Contracts or Vertical Slice Specs in the Career Agent OS authority hierarchy.
+Their tested concurrency, persistence, provenance and recovery invariants remain
+implementation evidence and may be adopted into new Contracts only after they
+are checked against the current Blueprint.
 
 The implementation order is dependency order rather than six isolated
 systems. Every stage uses the same Conversation admission, Context Assembly,

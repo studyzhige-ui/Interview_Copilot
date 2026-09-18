@@ -61,6 +61,26 @@ export interface AgentMemory {
   created_at: string;
   updated_at: string;
   sources: AgentMemorySource[];
+  origin?: string;
+  usage_count?: number;
+  last_used_at?: string | null;
+  evidence?: { id: string; turn_id: string; conversation_id: string; observed_at: string; support_quote: string }[];
+}
+
+export interface MemoryPipelineStatus {
+  producer_available: boolean;
+  extractions: Record<string, number>;
+  consolidation: { status: string; revision: number; error_code: string | null; retry_at: string | null; updated_at: string } | null;
+}
+
+export interface MemoryReceipt {
+  id: string;
+  turn_id: string;
+  memory_id: string;
+  memory_version: number;
+  cited_at: string | null;
+  feedback: 'helpful' | 'unhelpful' | null;
+  created_at: string;
 }
 
 export interface AgentMemoryPromotion {

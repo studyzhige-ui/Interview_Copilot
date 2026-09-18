@@ -288,6 +288,39 @@ async def resolve_turn_interaction(
     target_interaction = db.get(AgentInteraction, interaction_id)
     if (
         target_interaction is not None
+        and target_interaction.kind == "fact_confirmation"
+    ):
+        from pydantic import ValidationError
+
+        from app.schemas.interview_invitation import FactConfirmationResolution
+
+        try:
+            fact_resolution = FactConfirmationResolution.model_validate(
+                body.resolution.root
+            )
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "invalid_fact_confirmation_resolution",
+                    "errors": exc.errors(include_url=False),
+                },
+            ) from exc
+        if not (body.resolution_identity or "").strip():
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "fact_confirmation_identity_required"},
+            )
+        expected_status = (
+            "rejected" if fact_resolution.decision == "reject" else "resolved"
+        )
+        if body.status != expected_status:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "fact_confirmation_status_mismatch"},
+            )
+    if (
+        target_interaction is not None
         and target_interaction.kind == "client_readiness"
         and isinstance(target_interaction.request_json, dict)
         and target_interaction.request_json.get("protocol") == "mock_handoff.v1"
@@ -304,6 +337,7 @@ async def resolve_turn_interaction(
             expected_version=body.expected_version,
             status=body.status,
             resolution=body.resolution,
+            resolution_identity=body.resolution_identity,
         )
     except (InteractionNotFoundError, InteractionOwnershipError) as exc:
         db.rollback()
@@ -417,9 +451,11 @@ def _interaction_event(turn_id: str) -> str | None:
                 "turn_id": row.turn_id,
                 "tool_call_id": row.tool_call_id,
                 "kind": row.kind,
+                "schema_version": row.schema_version,
                 "status": row.status,
                 "request": request,
                 "version": row.version,
+                "expires_at": row.expires_at.isoformat() if row.expires_at else None,
             },
             step=0,
             elapsed_ms=0,

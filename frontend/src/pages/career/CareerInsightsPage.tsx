@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, BarChart3, Bell, FileCheck2, Scale, X } from 'lucide-react';
 import {
@@ -28,12 +29,21 @@ const bucketLabels: Record<NextActionAgendaItem['bucket'], string> = {
 const stageLabels = { applied: '已投递', in_process: '进入流程', offer: '收到 Offer', terminal: '明确结束' } as const;
 
 function ActionAgenda() {
+  const { hash } = useLocation();
   const agenda = useQuery({ queryKey: ['career-insights', 'agenda'], queryFn: getNextActionAgenda });
+  useEffect(() => {
+    if (hash && agenda.isSuccess) {
+      const target = document.getElementById(hash.slice(1));
+      target?.scrollIntoView({ block: 'center' });
+      target?.focus({ preventScroll: true });
+    }
+  }, [hash, agenda.isSuccess]);
   if (agenda.isLoading) return <Spinner />;
+  if (agenda.isError) return <div className="today-error" role="alert"><strong>暂时无法读取安排</strong><p>请检查服务连接后重试。</p><button disabled={agenda.isFetching} onClick={() => { void agenda.refetch(); }}>重新加载</button></div>;
   const items = agenda.data?.items ?? [];
   return <section className="rounded-xl border border-stone-200 bg-white p-5 shadow-xs">
     <div className="mb-4 flex items-center gap-2"><FileCheck2 size={17} className="text-primary-700" /><h2 className="font-semibold text-stone-800">行动总览</h2></div>
-    {items.length === 0 ? <EmptyState title="暂无跨会话行动" /> : <div className="grid gap-3 md:grid-cols-2">{items.map((item) => <article key={item.action.id} className={`rounded-lg border p-3 ${item.bucket === 'conflict' ? 'border-warning-300 bg-warning-50' : 'border-stone-200'}`}>
+    {items.length === 0 ? <EmptyState title="还没有安排" /> : <div className="grid gap-3 md:grid-cols-2">{items.map((item) => <article id={'action-' + encodeURIComponent(item.action.id)} tabIndex={-1} key={item.action.id} className={`rounded-lg border p-3 ${item.bucket === 'conflict' ? 'border-warning-300 bg-warning-50' : 'border-stone-200'}`}>
       <div className="flex items-start justify-between gap-3"><p className="text-sm font-medium text-stone-800">{item.action.content}</p><Pill tone={item.bucket === 'conflict' ? 'warn' : item.action.status === 'planned' ? 'primary' : 'neutral'}>{bucketLabels[item.bucket]}</Pill></div>
       <p className="mt-2 text-xs text-stone-500">{item.action.time_kind === 'fixed' ? `开始 ${displayDate(item.action.starts_at)}` : item.action.time_kind === 'deadline' ? `截止 ${displayDate(item.action.due_at)}` : '灵活安排'}</p>
       {(item.overdue || item.due_soon || item.duplicate_action_ids.length > 0) && <div className="mt-2 flex flex-wrap gap-1">{item.overdue && <Pill tone="danger">已逾期</Pill>}{item.due_soon && <Pill tone="warn">72 小时内</Pill>}{item.duplicate_action_ids.length > 0 && <Pill tone="neutral">疑似重复 {item.duplicate_action_ids.length}</Pill>}</div>}
@@ -57,7 +67,7 @@ function ReminderSettings() {
   };
   const update = <K extends keyof NotificationPreference>(key: K, value: NotificationPreference[K]) => setDraft({ ...current, [key]: value });
   return <section className="rounded-xl border border-stone-200 bg-white p-5 shadow-xs">
-    <div className="mb-4 flex items-center gap-2"><Bell size={17} className="text-primary-700" /><h2 className="font-semibold text-stone-800">行动提醒</h2><Pill tone="neutral">NextAction 通知安排</Pill></div>
+    <div className="mb-4 flex items-center gap-2"><Bell size={17} className="text-primary-700" /><h2 className="font-semibold text-stone-800">行动提醒</h2><Pill tone="neutral">应用内提醒</Pill></div>
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <FormItem label="启用应用内提醒"><label className="flex h-10 items-center gap-2 text-sm text-stone-700"><input type="checkbox" checked={current.enabled} onChange={(event) => update('enabled', event.target.checked)} />启用</label></FormItem>
       <FormItem label="时区"><TextInput value={current.timezone} onChange={(event) => update('timezone', event.target.value)} /></FormItem>
@@ -75,8 +85,8 @@ function FunnelPanel() {
   if (!funnel.data) return <EmptyState title="漏斗分析暂不可用" />;
   const { coverage, groups } = funnel.data;
   return <section className="rounded-xl border border-stone-200 bg-white p-5 shadow-xs">
-    <div className="mb-4 flex items-center gap-2"><BarChart3 size={17} className="text-primary-700" /><h2 className="font-semibold text-stone-800">历史岗位漏斗</h2><Pill tone="neutral">{coverage.sample_count} 个确证投递样本</Pill></div>
-    {coverage.sample_count === 0 ? <EmptyState title="还没有确证的投递样本" /> : <div className="space-y-3">{groups.map((group) => <article key={[group.direction_id, group.submitted_artifact_version_id, group.channel, group.calendar_month].join(':')} className="rounded-lg border border-stone-200 p-3">
+    <div className="mb-4 flex items-center gap-2"><BarChart3 size={17} className="text-primary-700" /><h2 className="font-semibold text-stone-800">历史岗位漏斗</h2><Pill tone="neutral">{coverage.sample_count} 次已记录投递</Pill></div>
+    {coverage.sample_count === 0 ? <EmptyState title="还没有投递记录" /> : <div className="space-y-3">{groups.map((group) => <article key={[group.direction_id, group.submitted_artifact_version_id, group.channel, group.calendar_month].join(':')} className="rounded-lg border border-stone-200 p-3">
       <div className="mb-3 flex flex-wrap gap-2"><Pill tone="primary">{group.direction_label ?? '方向未记录'}</Pill><Pill>{group.channel ?? '渠道未记录'}</Pill><Pill>{group.calendar_month}</Pill><Pill>{group.submitted_artifact_version_id ? `材料 ${group.submitted_artifact_version_id.slice(-8)}` : '材料版本未记录'}</Pill></div>
       <div className="grid gap-2 sm:grid-cols-4">{group.stages.map((stage) => <div key={stage.stage} className="rounded-md bg-stone-50 p-3"><div className="text-xs text-stone-500">{stageLabels[stage.stage]}</div><div className="mt-1 text-lg font-semibold text-stone-800">{Math.round(stage.conversion_from_sample * 100)}%</div><div className="text-[11px] text-stone-400">{stage.reached}/{group.sample_job_ids.length}{stage.median_wait_hours !== null ? ` · 中位 ${stage.median_wait_hours}h` : ''}</div></div>)}</div>
     </article>)}</div>}
@@ -144,11 +154,12 @@ function OfferPanel() {
       <div className="mt-3"><FormItem label="当前明确约束" hint="每行一个，只作为本次报告输入"><TextArea rows={3} value={constraints} onChange={(event) => setConstraints(event.target.value)} /></FormItem></div>
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3"><label className="text-sm text-stone-700"><input className="mr-2" type="checkbox" checked={saveArtifact} onChange={(event) => setSaveArtifact(event.target.checked)} />保存为版本化分析材料</label><Btn loading={busy} disabled={selected.length === 0 || baseCurrency.length !== 3} onClick={run}>生成比较报告</Btn></div>
     </>}
-    {result && <div className="mt-5 border-t border-stone-100 pt-4">{result.career_profile_constraints.length > 0 && <div className="mb-3 rounded-lg bg-primary-50 p-3 text-xs text-primary-800"><p className="font-medium">本次读取的已确认求职档案约束</p><ul className="mt-1 list-disc space-y-1 pl-4">{result.career_profile_constraints.map((value) => <li key={value}>{value}</li>)}</ul></div>}<div className="grid gap-3 md:grid-cols-2">{result.items.map((item) => <article key={item.offer_id} className="rounded-lg bg-stone-50 p-4"><h3 className="font-medium text-stone-800">{item.company_name} · {item.job_title}</h3><div className="mt-2 grid grid-cols-2 gap-2 text-xs"><span>年化基本薪资</span><strong>{item.annual_base_in_base_currency ?? '无法计算'} {result.base_currency}</strong><span>估算税后现金</span><strong>{item.estimated_after_tax_cash ?? '无法计算'} {result.base_currency}</strong><span>估算总价值</span><strong>{item.estimated_total_value ?? '无法计算'} {result.base_currency}</strong></div><details className="mt-3 text-xs"><summary>假设、缺失与风险</summary><ul className="mt-2 list-disc space-y-1 pl-4">{[...item.assumptions, ...item.missing_information, ...item.risks].map((value) => <li key={value}>{value}</li>)}</ul></details></article>)}</div>{result.artifact_id && <p className="mt-2 text-xs text-success-700">已保存为 Artifact：{result.artifact_id}</p>}</div>}
+    {result && <div className="mt-5 border-t border-stone-100 pt-4">{result.career_profile_constraints.length > 0 && <div className="mb-3 rounded-lg bg-primary-50 p-3 text-xs text-primary-800"><p className="font-medium">本次读取的已确认求职档案约束</p><ul className="mt-1 list-disc space-y-1 pl-4">{result.career_profile_constraints.map((value) => <li key={value}>{value}</li>)}</ul></div>}<div className="grid gap-3 md:grid-cols-2">{result.items.map((item) => <article key={item.offer_id} className="rounded-lg bg-stone-50 p-4"><h3 className="font-medium text-stone-800">{item.company_name} · {item.job_title}</h3><div className="mt-2 grid grid-cols-2 gap-2 text-xs"><span>年化基本薪资</span><strong>{item.annual_base_in_base_currency ?? '无法计算'} {result.base_currency}</strong><span>估算税后现金</span><strong>{item.estimated_after_tax_cash ?? '无法计算'} {result.base_currency}</strong><span>估算总价值</span><strong>{item.estimated_total_value ?? '无法计算'} {result.base_currency}</strong></div><details className="mt-3 text-xs"><summary>假设、缺失与风险</summary><ul className="mt-2 list-disc space-y-1 pl-4">{[...item.assumptions, ...item.missing_information, ...item.risks].map((value) => <li key={value}>{value}</li>)}</ul></details></article>)}</div>{result.artifact_id && <p className="mt-2 text-xs text-success-700">已保存到求职材料：{result.artifact_id}</p>}</div>}
     {selected.length === 1 && <div className="mt-5 border-t border-stone-100 pt-4"><h3 className="mb-2 text-sm font-medium text-stone-700">谈判草稿</h3><FormItem label="协商目标"><TextArea rows={3} value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="例如：希望将基本薪资提高到…，或延长回复截止" /></FormItem><div className="mt-2 flex justify-end"><Btn kind="outline" disabled={!objective.trim()} onClick={async () => { setBusy(true); try { const response = await createNegotiationDraft({ offerId: selected[0], objective, tone: 'professional', constraints: constraints.split('\n').filter(Boolean), saveArtifact }); setDraft({ text: response.draft_markdown, note: response.execution_note, artifactId: response.artifact_id }); } catch (error) { toast.error(extractErr(error)); } finally { setBusy(false); } }}>生成草稿</Btn></div>{draft && <div className="mt-3 rounded-lg border border-stone-200 p-3"><pre className="whitespace-pre-wrap font-sans text-sm text-stone-700">{draft.text}</pre><p className="mt-3 rounded-md bg-warning-50 p-2 text-xs text-warning-700">{draft.note}</p>{draft.artifactId && <p className="mt-1 text-xs text-success-700">已保存：{draft.artifactId}</p>}</div>}</div>}
   </section>;
 }
 
 export function CareerInsightsPage() {
-  return <div className="mx-auto max-w-7xl space-y-5 p-4 md:p-6"><header><h1 className="text-xl font-semibold text-stone-800">行动与决策</h1><p className="mt-1 text-sm text-stone-500">聚合下一步、通知安排、历史漏斗和 Offer 分析；事实、行动与带假设的报告保持分离。</p></header><ActionAgenda /><ReminderSettings /><FunnelPanel /><OfferPanel /></div>;
+  return <div className="mx-auto max-w-7xl space-y-5 p-4 md:p-6"><header><h1 className="text-xl font-semibold text-stone-800">行动与决策</h1><p className="mt-1 text-sm text-stone-500">安排下一步，回顾投递进展，认真比较每一个 Offer。</p></header><ActionAgenda /><ReminderSettings /><FunnelPanel /><OfferPanel /></div>;
 }
+

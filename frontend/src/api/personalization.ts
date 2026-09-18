@@ -77,6 +77,18 @@ export async function updateDebriefGuidance(
   ).data;
 }
 
+export async function getMemoryPipelineStatus(): Promise<import('@/types/personalization').MemoryPipelineStatus> {
+  return (await apiClient.get('/personalization/memory-pipeline')).data;
+}
+
+export async function getMemoryReceipts(): Promise<import('@/types/personalization').MemoryReceipt[]> {
+  return (await apiClient.get('/personalization/memory-receipts')).data;
+}
+
+export async function setMemoryFeedback(id: string, feedback: 'helpful' | 'unhelpful'): Promise<void> {
+  await apiClient.put(`/personalization/memory-receipts/${encodeURIComponent(id)}/feedback`, { feedback });
+}
+
 export async function getAgentMemorySettings(): Promise<AgentMemorySettings> {
   return (await apiClient.get('/personalization/memory-settings')).data;
 }

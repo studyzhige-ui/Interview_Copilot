@@ -99,7 +99,13 @@ def test_reasoning_content_roundtrips_into_next_assistant_message(monkeypatch):
                 reasoning_content=reasoning,
                 tool_calls=[tool_call] if tool_call else None,
             )
-            self.choices = [SimpleNamespace(delta=delta, index=0)]
+            self.choices = [
+                SimpleNamespace(
+                    delta=delta,
+                    index=0,
+                    finish_reason="tool_calls" if tool_call else None,
+                )
+            ]
 
     async def fake_stream():
         # Step 1: reasoning trace (no content yet)
@@ -255,7 +261,7 @@ def test_agent_provider_payload_partitions_stable_and_dynamic_context(monkeypatc
     assert "STABLE_SUMMARY" in messages[1]["content"]
     assert [message["role"] for message in messages[2:4]] == ["user", "assistant"]
 
-    current = messages[-1]["content"]
+    current = "\n".join(m.get("content", "") for m in messages[4:])
     assert "STABLE_RECORD" in current
     assert "DYNAMIC_MEMORY" in current
     assert "DYNAMIC_ATTACHMENT" in current
@@ -339,8 +345,7 @@ def test_agent_task_context_precedes_and_does_not_replace_current_user_anchor(
     asyncio.run(drain())
     current = captured["messages"][-1]
     assert current["role"] == "user"
-    assert "[AgentTask Plan" in current["content"]
-    assert "Complete the complex request" in current["content"]
+    assert "[AgentTask Plan" not in current["content"]
     assert current["content"].endswith("CURRENT USER DIRECTION")
 
 
@@ -379,6 +384,9 @@ def test_incomplete_agent_task_blocks_after_bounded_local_recovery(monkeypatch):
     )
 
     class _Compactor:
+        def mark_consumed(self, messages):
+            pass
+
         task_anchor = {"role": "user", "content": "complex request"}
 
         async def compress(self, messages):
@@ -415,7 +423,7 @@ def test_incomplete_agent_task_blocks_after_bounded_local_recovery(monkeypatch):
     assert ctx.extras["_terminal_outcome"] == "blocked"
     assert blocks[-1]["text"].startswith("本轮已保留部分结果")
     assert [event.type.value for event in events] == ["text"]
-    assert "[AgentTask Plan" in _Compactor.task_anchor["content"]
+    assert "[AgentTask Plan" not in _Compactor.task_anchor["content"]
     assert _Compactor.task_anchor["content"].endswith("complex request")
 
 
@@ -476,6 +484,9 @@ def _run_bounded_tool_failure_loop(monkeypatch, argument_payloads):
             return {"error": "provider_unavailable", "retryable": False}
 
     class _Compactor:
+        def mark_consumed(self, messages):
+            pass
+
         task_anchor = {"role": "user", "content": "complete the task"}
 
         async def compress(self, messages):
@@ -566,6 +577,9 @@ def test_empty_model_response_blocks_after_bounded_local_recovery(monkeypatch):
     monkeypatch.setattr(strategy, "_consume_stream", fake_consume)
 
     class _Compactor:
+        def mark_consumed(self, messages):
+            pass
+
         task_anchor = {"role": "user", "content": "answer me"}
 
         async def compress(self, messages):
@@ -642,7 +656,10 @@ def test_reconstruct_history_messages_rebuilds_tool_roundtrips():
 
     msgs = _reconstruct_history_messages(turns)
 
-    assert msgs[0] == {"role": "user", "content": "find redis stuff"}
+    assert {k: v for k, v in msgs[0].items() if k != "_context"} == {
+        "role": "user",
+        "content": "find redis stuff",
+    }
     asst = msgs[1]
     assert asst["role"] == "assistant"
     assert asst["tool_calls"][0]["id"] == "tc1"
@@ -695,14 +712,6 @@ def test_tool_call_id_propagates_from_strategy_to_sse_events(monkeypatch):
     monkeypatch.setattr(
         "app.agent_runtime.tool_registry.registry.dispatch",
         fake_dispatch,
-    )
-    monkeypatch.setattr(
-        "app.conversation.agent_strategy.project_oversized_result",
-        lambda content, **k: content,
-    )
-    monkeypatch.setattr(
-        "app.conversation.agent_strategy.enforce_turn_budget",
-        lambda *a, **k: None,
     )
 
     strategy = AgentLoopStrategy()
@@ -794,14 +803,6 @@ def test_reasoning_content_lands_in_next_assistant_message(monkeypatch):
 
     # project_oversized_result / enforce_turn_budget are imported into
     # the strategy module — patch at the use site.
-    monkeypatch.setattr(
-        "app.conversation.agent_strategy.project_oversized_result",
-        lambda content, **k: content,
-    )
-    monkeypatch.setattr(
-        "app.conversation.agent_strategy.enforce_turn_budget",
-        lambda *a, **k: None,
-    )
 
     # Build the minimum input set for _execute_tools.
     strategy = AgentLoopStrategy()
@@ -919,14 +920,6 @@ def test_concurrency_safe_tools_complete_live_and_replay_in_model_order(monkeypa
             active -= 1
             return {"tool": name}
 
-    monkeypatch.setattr(
-        "app.conversation.agent_strategy.project_oversized_result",
-        lambda content, **_kwargs: content,
-    )
-    monkeypatch.setattr(
-        "app.conversation.agent_strategy.enforce_turn_budget",
-        lambda *_args, **_kwargs: None,
-    )
     strategy = AgentLoopStrategy()
     messages: list[dict] = []
     blocks: list[dict] = []
@@ -1001,14 +994,6 @@ def test_batch_preflight_ask_starts_no_handler_in_batch_or_later(monkeypatch):
             dispatched.append(name)
             return {"tool": name}
 
-    monkeypatch.setattr(
-        "app.conversation.agent_strategy.project_oversized_result",
-        lambda content, **_kwargs: content,
-    )
-    monkeypatch.setattr(
-        "app.conversation.agent_strategy.enforce_turn_budget",
-        lambda *_args, **_kwargs: None,
-    )
     ctx = StrategyContext(user_id="alice", session_id="s1", user_message="run")
     events = []
 
@@ -1076,15 +1061,6 @@ def test_same_resource_reads_are_split_into_serial_batches(monkeypatch):
             await asyncio.sleep(0.01)
             active -= 1
             return {"tool": name}
-
-    monkeypatch.setattr(
-        "app.conversation.agent_strategy.project_oversized_result",
-        lambda content, **_kwargs: content,
-    )
-    monkeypatch.setattr(
-        "app.conversation.agent_strategy.enforce_turn_budget",
-        lambda *_args, **_kwargs: None,
-    )
 
     async def drain():
         async for _ in AgentLoopStrategy()._execute_tools(
@@ -1154,6 +1130,7 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
     # Stub OpenAI client + profile so we don't need a real LLM.
     class _StubProfile:
         model = "stub"
+        max_output_tokens = 4096
 
     monkeypatch.setattr(
         "app.conversation.agent_strategy.build_async_openai_client_for_role",
@@ -1162,6 +1139,9 @@ def test_graceful_fallback_is_wired_into_strategy_except_path(monkeypatch):
 
     # Stub the budget compactor so the loop reaches the LLM-stream call.
     class _StubCompactor:
+        def mark_consumed(self, messages):
+            pass
+
         def __init__(self, profile=None, user_id=None, **_kwargs):
             self.profile = profile
 
@@ -1230,6 +1210,7 @@ def test_strategy_crash_yields_humanized_error_event(monkeypatch):
 
     class _StubProfile:
         model = "stub"
+        max_output_tokens = 4096
 
     monkeypatch.setattr(
         "app.conversation.agent_strategy.build_async_openai_client_for_role",
@@ -1237,6 +1218,9 @@ def test_strategy_crash_yields_humanized_error_event(monkeypatch):
     )
 
     class _StubCompactor:
+        def mark_consumed(self, messages):
+            pass
+
         def __init__(self, profile=None, user_id=None, **_kwargs):
             self.profile = profile
 
@@ -1308,14 +1292,6 @@ class TestToolMetrics:
         monkeypatch.setattr(
             "app.agent_runtime.tool_registry.registry.dispatch",
             fake_dispatch,
-        )
-        monkeypatch.setattr(
-            "app.conversation.agent_strategy.project_oversized_result",
-            lambda content, **k: content,
-        )
-        monkeypatch.setattr(
-            "app.conversation.agent_strategy.enforce_turn_budget",
-            lambda *a, **k: None,
         )
 
         from app.agent_runtime.react_agent import AgentRunState

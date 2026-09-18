@@ -66,7 +66,7 @@ def test_registry_visibility_does_not_depend_on_connection_probe():
     assert names == {"real_tool"}
 
 
-def test_tavily_tool_reports_deployment_connector_unavailable_at_call_time(monkeypatch):
+def test_unconfigured_tavily_uses_declared_keyless_search_fallback(monkeypatch):
     import asyncio
 
     import app.agent_runtime.tools.web as web
@@ -74,6 +74,12 @@ def test_tavily_tool_reports_deployment_connector_unavailable_at_call_time(monke
 
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.setattr(web, "_resolve_tavily_key", lambda _uid: "")
+
+    async def keyless_search(args):
+        assert args.query == "python"
+        return {"source": "duckduckgo", "results": [], "count": 0}
+
+    monkeypatch.setattr(web, "_search_duckduckgo", keyless_search)
     result = asyncio.run(
         web._web_search_handler(
             web.WebSearchArgs(query="python"),
@@ -81,7 +87,8 @@ def test_tavily_tool_reports_deployment_connector_unavailable_at_call_time(monke
         )
     )
     assert result == {
-        "error": "connector_unavailable",
-        "provider": "tavily",
-        "reason": "deployment_credential_missing",
+        "source": "duckduckgo",
+        "results": [],
+        "count": 0,
+        "fallback_from": "tavily_not_configured",
     }

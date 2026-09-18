@@ -30,6 +30,8 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { extractErr } from '@/api/client';
+import { Link } from 'react-router-dom';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { toast } from '@/store/uiStore';
 import {
@@ -128,6 +130,8 @@ export function ChatPanel({
 
   // ── Input / mode / attachments / models ──────────────────────────────
   const { input, setInput } = useSessionDraft(activeSessionId);
+  const [historyFailure, setHistoryFailure] = useState<{ sessionId: string; message: string } | null>(null);
+  const [historyRetry, setHistoryRetry] = useState(0);
   const serverMode = sessionList.sessions.find(
     (s) => s.session_id === activeSessionId,
   )?.mode;
@@ -164,7 +168,7 @@ export function ChatPanel({
     },
     [activeSessionId],
   );
-  const { profiles, activeProfileId, activeModelName, pickModel } =
+  const { profiles, activeProfileId, activeModelName, pickModel, modelBlocker, retryModels } =
     useChatModels(mode);
   const [pendingRefreshToken, setPendingRefreshToken] = useState(0);
   const requestPendingRefresh = useCallback(
@@ -177,7 +181,7 @@ export function ChatPanel({
       queryKey: ['chat', 'agent-task', targetSessionId, turnId],
     });
   }, [queryClient]);
-  const { sendMessage, resumeTurn, cancel } = useChatStream({
+  const { sendMessage, resumeTurn, cancel, retrySubmission } = useChatStream({
     activeSessionId, getRuntime, bump, mode, executionMode: policyMode.executionMode,
     onQueueChanged: requestPendingRefresh,
     onAgentTaskChanged: refreshAgentTask,
@@ -285,12 +289,15 @@ export function ChatPanel({
         bump();
         if (resp.active_turn_id && !rt.streaming) resumeTurn(resp.active_turn_id);
       })
-      .catch(() => { /* empty / fresh session OR aborted on switch — both fine */ });
+      .catch((error) => {
+        if (!alive || controller.signal.aborted) return;
+        setHistoryFailure({ sessionId: activeSessionId, message: extractErr(error, '协作记录读取失败，请重新加载后继续。') });
+      });
     return () => {
       alive = false;
       controller.abort();
     };
-  }, [activeSessionId, getRuntime, bump, resumeTurn]);
+  }, [activeSessionId, getRuntime, bump, resumeTurn, historyRetry]);
 
   // A queued submission disappears from the projection when the backend
   // claims it. Re-read the authoritative transcript and subscribe only when
@@ -336,10 +343,16 @@ export function ChatPanel({
 
   // ── Send structured turn input ──────────────────────────────────────
   const send = () => {
+    if (modelBlocker) { toast.warn(modelBlocker); return; }
     const text = input.trim();
     if (!text || !activeSessionId) return;
     const runtime = getRuntime(activeSessionId);
+    if (!runtime.loadedHistory) {
+      toast.warn('正在确认已有协作记录，请加载完成后再发送。');
+      return;
+    }
     if (runtime.streaming || runtime.turnId) return;
+    if (runtime.unconfirmedSubmission) return;
     if (attachments.some((attachment) => (
       attachment.status === 'uploading' || attachment.status === 'failed'
     ))) return;
@@ -388,6 +401,14 @@ export function ChatPanel({
       ].join(' ')}
     >
       {/* Row 1: conversation identity; model and approval controls live in the Composer. */}
+      {!streaming && activeRuntime?.unconfirmedSubmission && <div role="alert" className="chat-recovery-notice"><strong>尚未确认上一条消息是否送达</strong><p>{activeRuntime.unconfirmedSubmission.payload}</p><p>内容和附件暂时保留在当前页面。请先确认送达，避免重复执行。</p><button onClick={retrySubmission}>确认送达并继续</button></div>}
+      {pending.error && <div role="status" className="chat-recovery-notice"><p>{pending.error}</p><button onClick={requestPendingRefresh}>刷新待发送消息</button></div>}
+      {modelBlocker && <div role="status" className="chat-recovery-notice"><p>{modelBlocker}</p><Link to="/models">配置回答模型</Link><span> · </span><button onClick={retryModels}>重新检查</button></div>}
+      {historyFailure?.sessionId === activeSessionId && !activeRuntime?.loadedHistory && <div role="alert" className="chat-recovery-notice">
+        <strong>没有读到已有记录，暂时不能发送新消息</strong><p>{historyFailure.message}</p>
+        <button onClick={() => { setHistoryFailure(null); setHistoryRetry((value) => value + 1); }}>重新加载记录</button>
+      </div>}
+      {disconnectedTurnId && <div role="status" className="chat-recovery-notice"><strong>与任务的连接已断开</strong><p>任务可能仍在后台执行。点击「重新连接」查看同一任务的进展，不需要重复发送。</p></div>}
       <div className="px-4 pt-4 pb-2.5 flex items-center justify-between gap-2 border-b border-stone-100">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-stone-800 truncate">{subtitle}</div>
@@ -508,6 +529,7 @@ export function ChatPanel({
         input={input}
         setInput={setInput}
         streaming={streaming || !!interaction}
+        sendBlockedReason={!activeRuntime?.loadedHistory ? '等待协作记录加载完成' : activeRuntime?.unconfirmedSubmission ? '请先确认上一条消息是否送达' : disconnectedTurnId ? '请先重新连接当前任务' : modelBlocker ?? undefined}
         onSend={send}
         onCancel={cancel}
         attachments={attachments}

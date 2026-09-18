@@ -51,6 +51,8 @@ class AgentToolCall(Base):
     tool_name = Column(String(128), nullable=False)
     effect = Column(String(32), nullable=False, default="unknown")
     arguments_json = Column(JSON, nullable=False, default=dict)
+    # Keyed digest binds exact inputs without persisting credentials.
+    arguments_digest = Column(String(64), nullable=True)
     timeout_seconds = Column(Float, nullable=False)
     status = Column(String(16), nullable=False, default="running")
     dispatch_generation = Column(Integer, nullable=False, default=1)

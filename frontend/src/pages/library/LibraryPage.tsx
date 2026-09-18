@@ -131,15 +131,17 @@ function FilesSection() {
   const queryClient = useQueryClient();
   const knowledgeQuery = useQuery({
     queryKey: ['knowledge', 'documents', filter],
-    queryFn: ({ signal }) => Promise.all([
-      listKnowledgeDocuments(filter ? { category: filter } : {}, { signal }),
-      listKnowledgeCategories({ signal }),
-    ]),
-    refetchInterval: (query) => query.state.data?.[0].some(
+    queryFn: ({ signal }) => listKnowledgeDocuments(filter ? { category: filter } : {}, { signal }),
+    refetchInterval: (query) => query.state.data?.some(
       (doc) => doc.status === 'processing' || doc.status === 'pending',
     ) ? 2500 : false,
   });
-  const [docs, cats] = knowledgeQuery.data ?? [[], []];
+  const categoriesQuery = useQuery({
+    queryKey: ['knowledge', 'categories'],
+    queryFn: ({ signal }) => listKnowledgeCategories({ signal }),
+  });
+  const docs = useMemo(() => knowledgeQuery.data ?? [], [knowledgeQuery.data]);
+  const cats = categoriesQuery.data ?? [];
   const loading = knowledgeQuery.isPending;
   const refresh = async () => {
     await queryClient.invalidateQueries({ queryKey: ['knowledge'] });

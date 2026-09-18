@@ -42,6 +42,7 @@ def _opportunity(opportunity_id: str, *, title: str):
         outcome=None,
         archived_at=None,
         last_event_at=NOW,
+        version=1,
         direction_version=0,
         direction_links=[],
         created_at=NOW,

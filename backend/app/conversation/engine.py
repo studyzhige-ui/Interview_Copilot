@@ -362,6 +362,10 @@ class ConversationEngine:
         if agent_mode:
             query_plan = QueryPlan()  # null plan: no retrieval, no body load
         else:
+            from app.conversation.context_store import load
+            from app.conversation.context_manager import latest_summary
+
+            planner_checkpoint = await asyncio.to_thread(load, self.session_id)
             if meta is None:
                 recent_turns: list[dict] = []
             else:
@@ -369,12 +373,28 @@ class ConversationEngine:
                     transcript_service.get_recent_turns,
                     self.session_id,
                     20,
-                    meta["compaction_cursor"],
+                    (planner_checkpoint or {}).get("through_seq", 0),
                 )
             query_plan = await plan_query(
                 user_message=self.user_message,
-                recent_turns=recent_turns,
+                recent_turns=[
+                    *[
+                        {
+                            "role": "User" if m.get("role") == "user" else "Agent",
+                            "content": str(m.get("content") or ""),
+                        }
+                        for m in (planner_checkpoint or {})
+                        .get("state", {})
+                        .get("messages", [])
+                        if m.get("_context", {}).get("kind", m.get("role"))
+                        in {"user", "assistant"}
+                    ][-20:],
+                    *recent_turns,
+                ],
                 interview_questions=runtime_context.planner_question_catalog,
+                conversation_summary=latest_summary(
+                    (planner_checkpoint or {}).get("state", {}).get("messages", [])
+                ),
             )
 
         # Explicit URLs are selected from the admitted current input rather
@@ -516,19 +536,20 @@ class ConversationEngine:
         try:
             from app.core.user_model_selection import get_profile_for_role
 
-            _window = get_profile_for_role(
-                "primary", user_id=self.user_id
-            ).context_window
+            _context_profile = get_profile_for_role("primary", user_id=self.user_id)
+            _window = _context_profile.context_window
+            _output_tokens = _context_profile.max_output_tokens
         except Exception:  # noqa: BLE001 — cold catalog: fall back to default
             _window = None
+            _output_tokens = None
         try:
-            from app.services.agent_memory_service import render_recall_block
+            from app.services.memory_recall import recall
 
-            memory_block = await asyncio.to_thread(
-                render_recall_block,
+            memory_block = await recall(
                 conversation_id=self.session_id,
                 user_pk=self.user_pk,
                 current_query=self.user_message,
+                turn_id=self.turn_id,
             )
         except Exception:  # noqa: BLE001 - optional personalization fails closed
             logger.exception("Long-term Agent Memory recall failed closed")
@@ -544,7 +565,10 @@ class ConversationEngine:
             retrieval_result=knowledge_result,
             user_id=self.user_id,
             model_context_window=_window,
+            model_output_tokens=_output_tokens,
         )
+        assembled.turn_id = self.turn_id
+        assembled.dispatch_generation = self.dispatch_generation
 
         self._ctx = StrategyContext(
             user_id=self.user_id,
@@ -597,7 +621,7 @@ class ConversationEngine:
                 {"type": "sources", "sources": self._ctx.assembled.sources},
             ]
         if self.turn_id:
-            await asyncio.to_thread(
+            assistant_seq = await asyncio.to_thread(
                 transcript_service.complete_background_turn,
                 turn_id=self.turn_id,
                 ai_msg=self._result.final_answer,
@@ -605,7 +629,7 @@ class ConversationEngine:
                 ai_blocks=ai_blocks,
             )
         else:
-            await asyncio.to_thread(
+            assistant_seq = await asyncio.to_thread(
                 transcript_service.append_turn,
                 session_id=self.session_id,
                 user_id=self.user_id,
@@ -613,6 +637,13 @@ class ConversationEngine:
                 ai_msg=self._result.final_answer,
                 rewritten_query=self._ctx.rewritten_query,
                 ai_blocks=ai_blocks,
+            )
+        model_history = self._result.extras.get("context_messages")
+        if model_history is not None and isinstance(assistant_seq, int):
+            from app.conversation.context_manager import finish
+
+            await finish(
+                self._ctx.assembled, messages=model_history, through_seq=assistant_seq
             )
 
     async def persist_background_failure(self, message: str) -> None:
@@ -667,6 +698,7 @@ class ConversationEngine:
                     len(self._ctx.assembled.grounding.missing_terms) if self._ctx else 0
                 ),
                 "citation": (self._result.extras or {}).get("citation_report"),
+                "context": self._ctx.assembled.context_report if self._ctx else {},
             },
         )
 

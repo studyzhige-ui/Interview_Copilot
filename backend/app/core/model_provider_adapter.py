@@ -17,6 +17,7 @@ from typing import Any, AsyncIterator
 
 from app.core.config import settings
 from app.core.model_catalog import ModelProfile
+from app.core.context_budget import ContextCapacityError, RequestBudget, request_tokens
 
 
 _IMAGE_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
@@ -96,6 +97,9 @@ def build_provider_request(
     compaction.  This is the sole final split before any provider call.
     """
 
+    # Internal source/intent metadata never enters provider protocol messages.
+    from app.conversation.context_window import wire
+    messages = wire(messages)
     system_parts: list[str] = []
     first_data_index = 0
     for first_data_index, message in enumerate(messages):
@@ -555,6 +559,19 @@ class ModelProviderAdapter:
         self,
         request: ProviderRequest,
     ) -> AsyncIterator[ProviderStreamEvent]:
+        # Final guard applies equally to Chat, Agent and restored tool loops.
+        # Cache reads still occupy the logical context window.
+        if request.max_tokens >= self.profile.context_window:
+            raise ContextCapacityError("输出预算已超过模型窗口，请调整模型或输出预算。")
+        budget = RequestBudget.resolve(self.profile.context_window, request.max_tokens)
+        estimate = request_tokens(
+            [{"role": "system", "content": request.system}, *request.messages],
+            request.tools,
+        )
+        if estimate > budget.input_limit:
+            raise ContextCapacityError(
+                "模型请求超出上下文预算；历史已保留，请缩小输入或选择更大窗口的模型。"
+            )
         if str(getattr(self.profile, "provider", "") or "") == "anthropic":
             payload = build_anthropic_payload(request)
             stream = await self.client.messages.create(

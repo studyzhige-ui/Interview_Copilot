@@ -205,7 +205,7 @@ if (-not $SkipBackend) {
         Set-Location $dir
         $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'
         [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
-        & python -m celery -A app.task_queue.celery_app.celery_app worker --loglevel=info --pool=solo --queues=default,background,pipeline,transcription 2>&1
+        & python -m celery -A app.task_queue.celery_app.celery_app worker --hostname=jobs@%h --loglevel=info --pool=solo --queues=default,background,pipeline,transcription 2>&1
     } -ArgumentList $backendDir
     $jobs += $j; $colors[$j.Name] = 'Yellow'
 
@@ -215,7 +215,7 @@ if (-not $SkipBackend) {
         Set-Location $dir
         $env:PYTHONIOENCODING = 'utf-8'; $env:PYTHONUTF8 = '1'
         [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
-        & python -m celery -A app.task_queue.celery_app.celery_app worker --loglevel=info --pool=threads --concurrency=2 --queues=turns 2>&1
+        & python -m celery -A app.task_queue.celery_app.celery_app worker --hostname=turns@%h --loglevel=info --pool=threads --concurrency=2 --queues=turns 2>&1
     } -ArgumentList $backendDir
     $jobs += $j; $colors[$j.Name] = 'DarkCyan'
 
@@ -249,7 +249,9 @@ if (-not $SkipFrontend) {
         try { chcp 65001 > $null } catch { }
         [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
         $env:FORCE_COLOR = '1'
-        & npm run dev -- --port $p 2>&1
+        # npm.ps1 consumes PowerShell's unquoted -- separator before forwarding
+        # arguments. Use the Windows executable shim so Vite receives --port.
+        & npm.cmd run dev -- --port $p 2>&1
     } -ArgumentList $frontendDir, $port
     $jobs += $j; $colors[$j.Name] = 'Cyan'
 }
@@ -289,7 +291,7 @@ function ShouldDrop([string]$line) {
 function ShouldShow([string]$line) {
     if (ShouldDrop $line) { return $false }
     if ($VerboseLogs) { return $true }
-    return $line -match '(?i)(\bWARNING\b|\bERROR\b|\bCRITICAL\b|Traceback|Exception|failed|startup sequence (begins|complete)|Application startup complete|VITE v.+ready|Local:\s+http|RAG embedding ready|Reranker ready|WhisperX (加载|ready)|Pyannote diarization ready|Worker voice runtime ready|celery@.+ ready\.|model_catalog seed loaded)'
+    return $line -match '(?i)(\bWARNING\b|\bERROR\b|\bCRITICAL\b|Traceback|Exception|failed|startup sequence (begins|complete)|Application startup complete|VITE v.+ready|Local:\s+http|RAG embedding ready|Reranker ready|WhisperX (加载|ready)|Pyannote diarization ready|Worker voice runtime ready|(?:celery|jobs|turns)@.+ ready\.|model_catalog seed loaded)'
 }
 function Trim-Timestamp([string]$line) {
     return ($line -replace '^\[?\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}[,.]\d+\]?\s*', '' `
@@ -310,8 +312,8 @@ try {
                 Add-Content -LiteralPath $logFile -Value ("[{0}] [{1}] {2}" -f (Get-Date -Format 'HH:mm:ss'), $job.Name, $text)
                 $becameReady = switch ($job.Name) {
                     'uvicorn' { $text -match 'Application startup complete'; break }
-                    'celery' { $text -match 'celery@.+ ready\.'; break }
-                    'turns' { $text -match 'celery@.+ ready\.'; break }
+                    'celery' { $text -match '(?:celery|jobs|turns)@.+ ready\.'; break }
+                    'turns' { $text -match '(?:celery|jobs|turns)@.+ ready\.'; break }
                     'beat' { $text -match 'beat: Starting'; break }
                     'vite' { $text -match 'VITE v.+ready'; break }
                     default { $false }

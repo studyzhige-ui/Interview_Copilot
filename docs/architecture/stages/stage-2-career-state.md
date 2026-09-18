@@ -1,5 +1,7 @@
 # Stage 2 Spec: CareerProfile and career-process state
 
+> Status: Historical Implementation Reference. This is not a current Contract or Vertical Slice Spec; see [`README.md`](./README.md) and the current [`Career Agent OS Blueprint`](../career-agent-os-blueprint.md).
+
 ## 1. One CareerProfile owner
 
 `CareerProfile` is the single user-visible and editable owner for confirmed

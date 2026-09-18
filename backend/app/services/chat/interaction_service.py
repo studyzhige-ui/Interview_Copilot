@@ -7,6 +7,7 @@ Interaction row used by the runtime and presentation layers.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import cast
 
 from pydantic import BaseModel
@@ -27,6 +28,8 @@ _KINDS = (
     "clarification",
     "connection",
     "approval",
+    "fact_confirmation",
+    "profile_update_confirmation",
     "client_readiness",
 )
 _RESOLUTION_STATUSES = ("resolved", "rejected", "cancelled")
@@ -72,6 +75,8 @@ def create_pending_interaction(
     kind: InteractionKind,
     request: BaseModel,
     tool_call_id: str | None = None,
+    schema_version: int = 1,
+    expires_at: datetime | None = None,
 ) -> AgentInteraction:
     """Create the Turn's only pending Interaction without committing.
 
@@ -82,6 +87,8 @@ def create_pending_interaction(
 
     if kind not in _KINDS:
         raise ValueError(f"Unsupported Interaction kind: {kind}")
+    if schema_version < 1:
+        raise ValueError("Interaction schema_version must be positive")
     _owned_turn(db, turn_id=turn_id, user_id=user_id)
 
     if tool_call_id is not None:
@@ -116,9 +123,11 @@ def create_pending_interaction(
         turn_id=turn_id,
         tool_call_id=tool_call_id,
         kind=kind,
+        schema_version=schema_version,
         status="pending",
         request_json=_redacted_payload(request),
         version=1,
+        expires_at=expires_at,
     )
     try:
         # The partial unique index is the final guard against concurrent
@@ -152,6 +161,27 @@ def get_pending_interaction(
     )
 
 
+def list_pending_interactions(
+    db: Session,
+    *,
+    user_id: int,
+    kinds: tuple[InteractionKind, ...] | None = None,
+) -> list[tuple[AgentInteraction, ConversationTurn]]:
+    """Return user-owned pending Interactions for projection-only surfaces."""
+
+    query = (
+        db.query(AgentInteraction, ConversationTurn)
+        .join(ConversationTurn, ConversationTurn.id == AgentInteraction.turn_id)
+        .filter(
+            ConversationTurn.user_id == user_id,
+            AgentInteraction.status == "pending",
+        )
+    )
+    if kinds:
+        query = query.filter(AgentInteraction.kind.in_(kinds))
+    return query.order_by(AgentInteraction.created_at.desc()).all()
+
+
 def resolve_interaction(
     db: Session,
     *,
@@ -160,6 +190,7 @@ def resolve_interaction(
     expected_version: int,
     status: InteractionResolutionStatus,
     resolution: BaseModel,
+    resolution_identity: str | None = None,
 ) -> AgentInteraction:
     """CAS-resolve an owned pending Interaction without committing.
 
@@ -189,6 +220,16 @@ def resolve_interaction(
         )
 
     redacted_resolution = _redacted_payload(resolution)
+    normalized_resolution_identity = (
+        resolution_identity.strip() if resolution_identity is not None else None
+    )
+    if normalized_resolution_identity == "":
+        raise ValueError("resolution_identity cannot be blank")
+    if (
+        normalized_resolution_identity is not None
+        and len(normalized_resolution_identity) > 128
+    ):
+        raise ValueError("resolution_identity exceeds 128 characters")
     resolved_at = utc_now()
     changed = (
         db.query(AgentInteraction)
@@ -202,6 +243,7 @@ def resolve_interaction(
             {
                 AgentInteraction.status: status,
                 AgentInteraction.resolution_json: redacted_resolution,
+                AgentInteraction.resolution_identity: normalized_resolution_identity,
                 AgentInteraction.version: AgentInteraction.version + 1,
                 AgentInteraction.resolved_at: resolved_at,
             },
@@ -244,5 +286,6 @@ __all__ = [
     "InteractionOwnershipError",
     "create_pending_interaction",
     "get_pending_interaction",
+    "list_pending_interactions",
     "resolve_interaction",
 ]

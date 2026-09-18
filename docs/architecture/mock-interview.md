@@ -1,5 +1,8 @@
 # 模拟面试架构
 
+> 状态：现行专项实施说明；不定义产品或目标架构
+> 上位规范：[`career-agent-os-blueprint.md`](./career-agent-os-blueprint.md)
+
 ## 产品形态
 
 当前版本是“文字对话 + 可选录音转写 + 面试官 TTS”。文字输入和录音输入是

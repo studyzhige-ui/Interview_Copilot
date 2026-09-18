@@ -14,8 +14,11 @@ The repository ships one shared product core in two editions:
   can replace providers, run local models, use custom endpoints, and enable
   local stdio MCP.
 
-[中文说明](docs/zh/README.md) · [Career Copilot product architecture](docs/architecture/full-cycle-career-copilot.md)
-· [Edition architecture](docs/architecture/editions.md)
+[中文说明](docs/zh/README.md) ·
+[Documentation system](docs/README.md) ·
+[Career Agent OS blueprint](docs/architecture/career-agent-os-blueprint.md) ·
+[Architecture document status](docs/architecture/README.md) ·
+[Edition architecture](docs/architecture/editions.md)
 · [Codebase architecture](docs/architecture/codebase.md) ·
 [Product and systems audit](docs/reports/full-product-and-systems-audit-2026-08-04.md)
 
@@ -159,7 +162,7 @@ backend/tests/     Backend test suite
 frontend/src/      React application
 alembic/           Database migrations
 evaluation/        Reproducible RAG/interview datasets, runners, and quality gates
-docs/              Architecture, deployment, and user documentation
+docs/              Product, experience, architecture, delivery, and user documentation
 scripts/           Setup, launch, maintenance, and model utilities
 pyproject.toml     Python dependencies, package metadata, and tool configuration
 docker-compose.yml Community infrastructure and full local stack

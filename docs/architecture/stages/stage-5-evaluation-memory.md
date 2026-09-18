@@ -1,5 +1,9 @@
 # Stage 5 Spec: career scenarios and Long-term Agent Memory gate
 
+> 2026-09-16：自动记忆流水线已演进为两阶段实现。当前运行机制见 [`Agent Memory 生命周期`](../agent-memory-lifecycle.md)；本文保留历史门禁与所有者边界说明。
+
+> Status: Historical Implementation Reference. This is not a current Contract or Vertical Slice Spec; see [`README.md`](./README.md) and the current [`Career Agent OS Blueprint`](../career-agent-os-blueprint.md).
+
 ## 1. Scope and authority
 
 This specification implements Stage 5 of the authoritative architecture. It

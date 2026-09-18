@@ -9,11 +9,20 @@ may change the wire shape, but they must not rebuild or reinterpret context.
 from __future__ import annotations
 
 import json
+import logging
+import hashlib
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.context_budget import ContextCapacityError, request_tokens
+from app.core.context_messages import normalize_tool_pairs
+from app.conversation.context_window import admit, item, kind
+from app.core.tokens import token_count
+from app.rag.grounding.builder import grounding_builder
+
 from app.services.chat.context_assembly_pipeline import AssembledContext, PromptRenderer
 from app.services.chat.context_assembly_pipeline import render_historical_user_content
+from app.services.chat.context_assembly_pipeline import SLOT_ORDER
 
 
 @dataclass(frozen=True)
@@ -48,7 +57,11 @@ def reconstruct_history_messages(turns: list[dict]) -> list[dict[str, Any]]:
         role = turn.get("role")
         if role == "User":
             messages.append(
-                {"role": "user", "content": render_historical_user_content(turn)}
+                item(
+                    {"role": "user", "content": render_historical_user_content(turn)},
+                    "user",
+                    identity=f"message:{turn.get('seq', 0)}",
+                )
             )
             continue
         if role != "Agent":
@@ -104,10 +117,10 @@ def reconstruct_history_messages(turns: list[dict]) -> list[dict[str, Any]]:
         # Legacy rows may carry content without structured blocks.
         if not blocks and turn.get("content"):
             messages.append({"role": "assistant", "content": turn["content"]})
-    return messages
+    return normalize_tool_pairs(messages)
 
 
-def compose_provider_context(
+def _project_context(
     assembled: AssembledContext,
     *,
     renderer: PromptRenderer,
@@ -125,7 +138,9 @@ def compose_provider_context(
         system_prompt=system_prompt,
     )
     messages: list[dict[str, Any]] = []
-    if assembled.summary:
+    if assembled.window_messages is not None:
+        messages.extend(assembled.window_messages)
+    elif assembled.summary:
         messages.append(
             {
                 "role": "user",
@@ -133,18 +148,146 @@ def compose_provider_context(
                     "[Context Summary]\n"
                     "The following is a lossy projection of earlier messages; "
                     "exact facts must be read from their owner or History.\n\n"
-                    f"{assembled.summary}"
+                    + (
+                        f"Conversation={assembled.conversation_id}; through_seq={assembled.summary_cursor}.\n"
+                        if assembled.conversation_id
+                        else ""
+                    )
+                    + assembled.summary
                 ),
             }
         )
-    messages.extend(reconstruct_history_messages(assembled.recent_turns))
+    if assembled.window_messages is None:
+        messages.extend(reconstruct_history_messages(assembled.recent_turns))
+    for name, tag, _ in SLOT_ORDER:
+        if name in {"system_prompt", "summary", "recent_turns", "current_input"}:
+            continue
+        content = str(getattr(assembled, name) or "").strip()
+        if content:
+            messages.append(
+                item({"role": "user", "content": f"{tag}\n{content}"}, name)
+            )
     messages.append(
-        {
-            "role": "user",
-            "content": renderer.render_current_user_message(assembled),
-        }
+        item(
+            {"role": "user", "content": assembled.current_input},
+            "user",
+            identity=f"turn:{assembled.turn_id or 'current'}",
+        )
     )
-    return ProviderContextProjection(system=system, messages=messages)
+    return ProviderContextProjection(system=system, messages=admit(messages))
+
+
+def compose_provider_context(
+    assembled: AssembledContext,
+    *,
+    renderer: PromptRenderer,
+    system_prompt: str,
+    tool_schemas: list[dict] | None = None,
+    prompt_limit: int | None = None,
+) -> ProviderContextProjection:
+    """Compile and admit the actual message/tool envelope before dispatch.
+
+    Optional evidence is reduced before history. History and the continuation
+    summary must never silently disappear when summarization fails. Structured
+    slots are admitted whole; references must not be cut inside a JSON object.
+    """
+    limit = assembled.prompt_token_limit if prompt_limit is None else prompt_limit
+    omitted: list[str] = list(assembled.context_report.get("omitted", []))
+
+    def measure() -> tuple[ProviderContextProjection, int]:
+        projection = _project_context(
+            assembled,
+            renderer=renderer,
+            system_prompt=system_prompt,
+        )
+        return projection, request_tokens(
+            projection.with_leading_system_message(), tool_schemas
+        )
+
+    projection, total = measure()
+    before = total
+    if limit and total > limit and assembled.memory_block:
+        assembled.memory_block = ""
+        omitted.append("memory_block")
+        projection, total = measure()
+    if limit and total > limit and assembled.retrieval_result is not None:
+        target = max(0, assembled.grounding.token_count - (total - limit) - 64)
+        bundle = grounding_builder.build(
+            assembled.retrieval_result, token_budget=target
+        )
+        assembled.grounding = bundle
+        assembled.retrieved_context = bundle.context_text
+        assembled.sources = bundle.sources
+        omitted.append("retrieved_context:reduced")
+        projection, total = measure()
+    for field_name in ("memory_block", "debrief_reference", "retrieved_context"):
+        if not limit or total <= limit:
+            break
+        if getattr(assembled, field_name):
+            setattr(assembled, field_name, "")
+            if field_name == "retrieved_context":
+                from app.rag.domain.models import GroundingBundle
+
+                assembled.grounding = GroundingBundle()
+                assembled.sources = []
+            omitted.append(field_name)
+            projection, total = measure()
+
+    def section_text(name: str) -> str:
+        value = getattr(assembled, name)
+        return (
+            json.dumps(value, ensure_ascii=False, sort_keys=True)
+            if isinstance(value, list)
+            else str(value)
+        )
+
+    assembled.context_report = {
+        **assembled.context_report,
+        "estimated_request_tokens": total,
+        "before_tokens": before,
+        "input_limit": limit,
+        "output_reserve": assembled.output_token_reserve,
+        "tool_count": len(tool_schemas or []),
+        "omitted": omitted,
+        "history_messages": len(assembled.window_messages)
+        if assembled.window_messages is not None
+        else len(assembled.recent_turns),
+        "summary_present": any(
+            kind(m) == "summary" for m in assembled.window_messages or []
+        )
+        or bool(assembled.summary),
+        "summary_cursor": assembled.summary_cursor,
+        "compiler_version": "codex-replacement-history-v1",
+        "checkpoint_version": assembled.checkpoint_version,
+        "sections": [
+            {
+                "slot": name,
+                "estimated_tokens": token_count(section_text(name)),
+                "content_hash": hashlib.sha256(section_text(name).encode()).hexdigest(),
+                "state": "lossy"
+                if name == "summary"
+                else "bounded"
+                if name == "retrieved_context"
+                else "complete",
+            }
+            for name, _, custom in SLOT_ORDER
+            if getattr(assembled, name)
+        ],
+        "tool_names": sorted(
+            str((tool.get("function") or {}).get("name") or "")
+            for tool in tool_schemas or []
+        ),
+        "source_refs": [source.get("ref") for source in assembled.sources],
+        "system_prefix_hash": hashlib.sha256(projection.system.encode()).hexdigest(),
+    }
+    logging.getLogger(__name__).info("Context admission %s", assembled.context_report)
+    if limit and total > limit:
+        raise ContextCapacityError(
+            "当前对话的必要上下文超出模型窗口，已保留原始历史。"
+            "请缩小本次输入或选择更大上下文的模型后重试。"
+        )
+    assembled.total_tokens = total
+    return projection
 
 
 __all__ = [

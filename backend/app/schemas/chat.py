@@ -1,6 +1,7 @@
 """Pydantic schemas for chat / mock-interview HTTP endpoints."""
 
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field, PositiveInt, field_validator
 
@@ -8,6 +9,7 @@ from pydantic import BaseModel, Field, PositiveInt, field_validator
 
 
 class SessionCreateRequest(BaseModel):
+    client_request_id: UUID | None = None
     # general | debrief (mock_interview sessions are created by the
     # mock-interview start endpoint, never here).
     type: Literal["general", "debrief"] = "general"

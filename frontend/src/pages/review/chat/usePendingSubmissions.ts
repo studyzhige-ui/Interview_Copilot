@@ -8,12 +8,13 @@ const REFRESH_MS = 3_000;
 export function usePendingSubmissions(
   sessionId: string | null,
   refreshToken: number,
-): { items: PendingSubmissionItem[]; loaded: boolean } {
+): { items: PendingSubmissionItem[]; loaded: boolean; error: string | null } {
   const [projection, setProjection] = useState<{
     sessionId: string | null;
     items: PendingSubmissionItem[];
     loaded: boolean;
-  }>({ sessionId: null, items: [], loaded: false });
+    error: string | null;
+  }>({ sessionId: null, items: [], loaded: false, error: null });
 
   useEffect(() => {
     if (!sessionId) return;
@@ -27,11 +28,15 @@ export function usePendingSubmissions(
         const items = await listPendingSubmissions(sessionId, {
           signal: controller.signal,
         });
-        setProjection({ sessionId, items, loaded: true });
+        if (!controller.signal.aborted) setProjection({ sessionId, items, loaded: true, error: null });
       } catch (error) {
-        if ((error as { name?: string })?.name !== 'AbortError') {
-          // The queue is auxiliary projection UI. Keep its last good value;
-          // send/stream errors are surfaced by their own request paths.
+        if (!controller.signal.aborted && (error as { name?: string })?.name !== 'AbortError') {
+          setProjection((previous) => ({
+            sessionId,
+            items: previous.sessionId === sessionId ? previous.items : [],
+            loaded: previous.sessionId === sessionId && previous.loaded,
+            error: '待发送消息暂时无法读取，显示的可能不是最新状态。',
+          }));
         }
       } finally {
         loading = false;
@@ -46,6 +51,6 @@ export function usePendingSubmissions(
     };
   }, [sessionId, refreshToken]);
 
-  if (projection.sessionId !== sessionId) return { items: [], loaded: false };
-  return { items: projection.items, loaded: projection.loaded };
+  if (projection.sessionId !== sessionId) return { items: [], loaded: false, error: null };
+  return { items: projection.items, loaded: projection.loaded, error: projection.error };
 }
