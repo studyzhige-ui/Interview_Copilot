@@ -324,7 +324,7 @@ def test_release_migration_columns_match_orm_registry():
 
 def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     """Install the release schema in a virgin PostgreSQL database."""
-    from sqlalchemy import Float, create_engine, inspect
+    from sqlalchemy import Float, Integer, create_engine, inspect
     from sqlalchemy.dialects.postgresql import JSONB
 
     from alembic import command
@@ -418,6 +418,12 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     assert runtime_columns["current_stage_key"]["nullable"] is False
     assert runtime_columns["current_question_message_id"]["nullable"] is False
     assert runtime_columns["target_question_count"]["nullable"] is False
+    assert isinstance(runtime_columns["answer_claim_generation"]["type"], Integer)
+    assert runtime_columns["answer_claim_generation"]["nullable"] is False
+    assert runtime_columns["answer_claim_generation"]["default"] in {
+        "0",
+        "'0'::integer",
+    }
     assert set(runtime_columns) == {
         "interview_record_id",
         "user_id",
@@ -428,6 +434,7 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "current_stage_key",
         "current_question_message_id",
         "answer_claimed_at",
+        "answer_claim_generation",
         "last_activity_at",
     }
     assert isinstance(qa_columns["score"]["type"], Float)
