@@ -77,6 +77,7 @@ class ToolDispatchPlan:
     connection_identity: str | None = None
     receipt_ref_resolver: Callable[[dict[str, Any]], Collection[str]] | None = None
     error: dict[str, Any] | None = None
+    max_argument_chars: int | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,8 @@ class ToolDefinition:
     args_model: type[BaseModel]
     handler: Callable[[BaseModel, AgentToolContext], Awaitable[dict[str, Any]]]
     max_result_chars: int = 8000
+    # Trusted implementation metadata; never supplied by a model or MCP server.
+    max_argument_chars: int | None = None
     emoji: str = "🔧"
     prompt: str = ""
     effect: ToolEffect = ToolEffect.UNKNOWN
@@ -294,26 +297,6 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._entries: dict[str, ToolDefinition] = {}
-        self._default_tools_loaded = False
-        self._loading_default_tools = False
-
-    def _ensure_default_tools_loaded(self) -> None:
-        """Import built-in tool modules once so self-registration runs.
-
-        Tool modules register themselves as an import side effect.  Keeping
-        this lazy avoids import-order coupling: callers can safely import the
-        registry directly and still see the default tool set on first use.
-        """
-        if self._default_tools_loaded or self._loading_default_tools:
-            return
-
-        self._loading_default_tools = True
-        try:
-            import app.agent_runtime.tools  # noqa: F401
-
-            self._default_tools_loaded = True
-        finally:
-            self._loading_default_tools = False
 
     def register(self, definition: ToolDefinition) -> None:
         if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", definition.name) is None:
@@ -330,7 +313,6 @@ class ToolRegistry:
         logger.debug("Registered concrete tool: %s", definition.name)
 
     def get(self, name: str) -> ToolDefinition | None:
-        self._ensure_default_tools_loaded()
         return self._entries.get(name)
 
     def _iter_available(
@@ -340,7 +322,6 @@ class ToolRegistry:
         user_id: str | None = None,
     ) -> list[ToolDefinition]:
         """Return registered definitions not removed by deterministic visibility."""
-        self._ensure_default_tools_loaded()
         exclude = exclude or set()
         entries = []
         for name in sorted(self._entries):
@@ -397,7 +378,6 @@ class ToolRegistry:
         Returns the tool result dict.  On validation error, returns an
         error dict instead of raising.
         """
-        self._ensure_default_tools_loaded()
         entry = self._entries.get(name)
         if entry is None:
             return {"error": "unknown_tool", "tool_name": name}
@@ -410,7 +390,6 @@ class ToolRegistry:
         raw_args: dict[str, Any],
         ctx: AgentToolContext,
     ) -> ToolDispatchPlan:
-        self._ensure_default_tools_loaded()
         entry = self._entries.get(name)
         if entry is None:
             return _missing_tool_plan(name, raw_args)
@@ -454,11 +433,9 @@ class ToolRegistry:
 
     @property
     def tool_names(self) -> list[str]:
-        self._ensure_default_tools_loaded()
         return sorted(self._entries)
 
     def __contains__(self, name: str) -> bool:
-        self._ensure_default_tools_loaded()
         return name in self._entries
 
 
@@ -467,13 +444,24 @@ class ToolRegistry:
 registry = ToolRegistry()
 
 
+def argument_limit(entry: ToolDefinition) -> int:
+    limit = (
+        entry.max_argument_chars
+        if entry.max_argument_chars is not None
+        else settings.AGENT_MAX_TOOL_ARG_CHARS
+    )
+    if limit <= 0:
+        raise ValueError("Tool argument limit must be positive")
+    return min(limit, settings.AGENT_MAX_TOOL_WIRE_ARG_CHARS)
+
+
 async def _dispatch_entry(
     entry: ToolDefinition,
     raw_args: dict[str, Any],
     ctx: AgentToolContext,
 ) -> dict[str, Any]:
     args_json = json.dumps(raw_args, ensure_ascii=False)
-    if len(args_json) > settings.AGENT_MAX_TOOL_ARG_CHARS:
+    if len(args_json) > argument_limit(entry):
         return {"error": "tool_args_too_large", "tool_name": entry.name}
     try:
         validated = entry.args_model.model_validate(raw_args, extra="forbid")
@@ -531,7 +519,7 @@ async def _plan_entry(
     """Build the one concrete preflight projection used by the Agent loop."""
 
     encoded = json.dumps(raw_args, ensure_ascii=False, default=str)
-    if len(encoded) > settings.AGENT_MAX_TOOL_ARG_CHARS:
+    if len(encoded) > argument_limit(entry):
         return ToolDispatchPlan(
             tool_name=entry.name,
             arguments=dict(raw_args),
@@ -605,6 +593,7 @@ async def _plan_entry(
             else None
         ),
         receipt_ref_resolver=entry.receipt_ref_resolver,
+        max_argument_chars=argument_limit(entry),
     )
 
 
@@ -615,7 +604,7 @@ def parse_tool_arguments(raw_arguments: str) -> dict[str, Any]:
     if not raw_arguments:
         return {}
     try:
-        if len(raw_arguments) > settings.AGENT_MAX_TOOL_ARG_CHARS:
+        if len(raw_arguments) > settings.AGENT_MAX_TOOL_WIRE_ARG_CHARS:
             raise ValueError("tool arguments exceed limit")
 
         def object_pairs(pairs):

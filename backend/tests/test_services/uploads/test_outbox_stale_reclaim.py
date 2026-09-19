@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from app.models.outbox_job import OutboxJob
-from app.services import outbox as outbox_service
+from app.platform import outbox as outbox_service
 
 
 def _enqueue(db, job_type: str, key: str) -> OutboxJob:

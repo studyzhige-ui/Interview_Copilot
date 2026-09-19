@@ -38,6 +38,7 @@ class InterviewRecord(Base):
     # Record list ordered by creation time.
     __table_args__ = (
         Index("ix_interview_records_user_created", "user_id", "created_at"),
+        Index("ix_interview_records_user_last_dreamed", "user_id", "last_dreamed_at"),
         CheckConstraint(
             "debrief_guidance_version >= 0",
             name="ck_interview_records_debrief_guidance_version",
@@ -69,6 +70,8 @@ class InterviewRecord(Base):
         index=True,
         nullable=False,
     )
+    # Migration-only legacy metadata; memory_pipeline is the active owner.
+    _legacy_last_dreamed_at = Column("last_dreamed_at", DateTime, nullable=True)
     source = Column(String, nullable=False)  # "upload" | "mock"
 
     # Real interviews usually belong to one concrete hiring process; mocks

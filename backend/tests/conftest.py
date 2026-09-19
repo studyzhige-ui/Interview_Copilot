@@ -153,3 +153,55 @@ def patch_session_locals(monkeypatch, db_session, *modules) -> None:
     """
     for mod in modules:
         monkeypatch.setattr(mod, "SessionLocal", lambda: NoCloseSession(db_session))
+
+
+@pytest.fixture
+def usage_database(tmp_path, monkeypatch):
+    """Real independent short transactions for provider-wire unit tests.
+
+    Opt-in, not a global accounting bypass. The provider is faked by the test;
+    admission/settlement persist to a real SQLite file with owner constraints.
+    Integration/browser tests use their PostgreSQL and real authentication.
+    """
+    from app.db.database import Base
+    from app.models.user import User
+    from app.models.model_budget import UsageAccount
+    from app.usage import runtime
+
+    ledger_engine = create_engine(
+        f"sqlite:///{tmp_path / 'consumption.sqlite'}",
+        connect_args={"check_same_thread": False},
+    )
+
+    @event.listens_for(ledger_engine, "connect")
+    def enable_fk(connection, _record):
+        connection.execute("PRAGMA foreign_keys=ON")
+
+    Base.metadata.create_all(ledger_engine)
+    factory = sessionmaker(bind=ledger_engine, expire_on_commit=False)
+    with factory() as session:
+        session.add_all(
+            [
+                User(id=1, username="alice", hashed_password="x"),
+                User(id=2, username="bob", hashed_password="x"),
+                User(id=7, username="mcp-owner", hashed_password="x"),
+            ]
+        )
+        session.flush()
+        session.add_all([UsageAccount(user_id=i) for i in (1, 2, 7)])
+        session.commit()
+    monkeypatch.setattr(runtime, "SessionLocal", factory)
+    token = runtime._scope.set(None)
+    try:
+        yield factory
+    finally:
+        runtime.reset(token)
+        ledger_engine.dispose()
+
+
+@pytest.fixture
+def usage_scope(usage_database):
+    from app.usage import runtime
+
+    with runtime.scope(1, "provider-wire-unit", username="alice"):
+        yield usage_database

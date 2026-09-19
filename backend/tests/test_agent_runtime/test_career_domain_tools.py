@@ -12,7 +12,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.agent_runtime.tool_policy import ToolEffect
-from app.agent_runtime.tool_registry import AgentToolContext, registry
+from app.agent_runtime.tool_registry import AgentToolContext
+from app.agent_runtime.builtin_tools import registry
 from app.db.database import Base
 from app.models.artifact import Artifact
 from app.models.chat import Conversation, ConversationMessage
@@ -26,8 +27,9 @@ from app.models.user import User
 from app.schemas.artifact import ArtifactWriteInput
 from app.schemas.career_profile import CareerProfileDraftInput, FactDraftChange
 from app.schemas.job_opportunity import NextActionCreate
-from app.services import artifact_service, career_profile_service
-from app.services.career_process_service import create_next_action
+from app.career.application import artifacts as artifact_service
+from app.career.application import profile as career_profile_service
+from app.career.application.process import create_next_action
 
 
 NOW = datetime(2026, 8, 13, 9, 0, tzinfo=UTC)
@@ -753,7 +755,7 @@ def test_interview_debrief_returns_real_processing_identity_not_completion(
     domain_db.add(asset)
     domain_db.commit()
 
-    from app.services.interview import analysis_intake
+    from app.interviews.application import analysis_intake
 
     monkeypatch.setattr(
         analysis_intake,

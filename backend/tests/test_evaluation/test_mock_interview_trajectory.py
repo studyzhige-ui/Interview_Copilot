@@ -4,11 +4,9 @@ from typing import Any
 
 import pytest
 
-from app.services.interview.mock_interview_service import (
-    BASE_INTERVIEW_STAGES,
-    MockPlan,
-    NextTurn,
-)
+from app.interviews.application.mock_interview_service import BASE_INTERVIEW_STAGES
+from app.interviews.application.mock_interview_service import MockPlan
+from app.interviews.application.mock_interview_service import NextTurn
 
 from evaluation.mock_interview_eval import (
     DEFAULT_TRAJECTORY_DATASET,
@@ -107,7 +105,7 @@ async def test_complete_trajectory_visits_every_stage_and_finishes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_disconnect_recovery_does_not_generate_the_same_turn_twice() -> None:
+async def test_disconnect_marker_is_not_reported_as_real_recovery() -> None:
     case = next(
         case
         for case in _load_cases(DEFAULT_TRAJECTORY_DATASET)
@@ -124,7 +122,9 @@ async def test_disconnect_recovery_does_not_generate_the_same_turn_twice() -> No
     )
 
     assert result["passed"] is True
-    assert result["recovered_disconnects"] == 1
+    assert result["recovery_validation"]["status"] == "not_exercised"
+    assert result["recovery_validation"]["dataset_markers_reached"] == 1
+    assert "disconnects_recovered" not in result["checks"]
     assert generator.calls == result["turns"] == 3
 
 

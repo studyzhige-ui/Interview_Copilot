@@ -212,4 +212,8 @@ async def get_current_user(
     # so every token minted before it fails here on next use.
     if token_version != user.token_version:
         raise credentials_exception
+    from app.usage.runtime import bind
+    import uuid
+
+    bind(int(user.id), f"http:{uuid.uuid4().hex}", username=user.username)
     return user

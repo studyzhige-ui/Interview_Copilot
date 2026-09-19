@@ -6,6 +6,7 @@ See third_party/codex-context for the unmodified compaction templates/license.
 """
 
 from __future__ import annotations
+from dataclasses import replace
 
 from copy import deepcopy
 from pathlib import Path
@@ -13,6 +14,7 @@ from uuid import uuid4
 
 from app.core.context_budget import ContextCapacityError, RequestBudget, request_tokens
 from app.core.context_messages import normalize_tool_pairs
+from app.core.context_wire import wire
 from app.core.tokens import token_count, truncate_to_tokens
 from app.core.config import settings
 
@@ -30,12 +32,6 @@ def item(message: dict, kind: str, *, identity: str | None = None, **metadata) -
         **deepcopy(message),
         "_context": {"kind": kind, "id": identity or str(uuid4()), **metadata},
     }
-
-
-def wire(messages: list[dict]) -> list[dict]:
-    return [
-        {k: v for k, v in message.items() if k != "_context"} for message in messages
-    ]
 
 
 def kind(message: dict) -> str:
@@ -75,7 +71,17 @@ def admit(messages: list[dict], *, tool_limit: int | None = None) -> list[dict]:
                         lo = mid + 1
                     else:
                         hi = mid
-                message = {**message, "content": head + marker + content[lo:]}
+                suffix = content[lo:]
+                # Token counts are not additive at concatenation boundaries.
+                # Keep the tail and explicit excerpt marker, shrinking the
+                # disposable prefix first; tiny budgets still stay bounded.
+                projected = head + marker + suffix
+                while head and token_count(projected) > tool_limit:
+                    head = head[: max(0, len(head) - max(1, len(head) // 100))]
+                    projected = head + marker + suffix
+                if token_count(projected) > tool_limit:
+                    projected = truncate_to_tokens(marker, tool_limit)
+                message = {**message, "content": projected}
         result.append(
             message
             if "_context" in message
@@ -169,7 +175,7 @@ async def compact(
             async with asyncio.timeout(120):
                 stream = await ModelProviderAdapter(
                     client=client, profile=profile
-                ).start_stream(request)
+                ).start_stream(replace(request, usage_meter="compaction"))
                 text, stop, usage = [], None, None
                 async for event in stream:
                     text.append(event.text_delta)

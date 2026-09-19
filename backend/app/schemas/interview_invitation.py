@@ -37,7 +37,9 @@ OperationActorKind = Literal[
 
 
 class InvitationSourceReference(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     kind: InvitationSourceKind
     identity: str = Field(min_length=1, max_length=256)
@@ -53,7 +55,9 @@ class InvitationSourceReference(BaseModel):
 
 
 class InterviewInvitationFacts(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     company_name: str = Field(min_length=1, max_length=200)
     job_title: str = Field(min_length=1, max_length=300)
@@ -79,7 +83,9 @@ class InterviewInvitationFacts(BaseModel):
 class InterviewInvitationCandidateFacts(BaseModel):
     """Partial facts are valid only while the candidate is non-canonical."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     company_name: str | None = Field(default=None, max_length=200)
     job_title: str | None = Field(default=None, max_length=300)
@@ -105,7 +111,9 @@ class InterviewInvitationCandidateFacts(BaseModel):
 
 
 class InvitationFieldEvidence(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     field_name: str = Field(min_length=1, max_length=80)
     source: InvitationSourceReference
@@ -127,7 +135,9 @@ class InvitationFieldEvidence(BaseModel):
 
 
 class IntakeInterviewInvitationObservation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     idempotency_key: str = Field(min_length=1, max_length=200)
     actor_kind: Literal["automation", "system_connector"]
@@ -140,7 +150,9 @@ class IntakeInterviewInvitationObservation(BaseModel):
 
 
 class InvitationObservationView(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(
+        from_attributes=True, json_schema_serialization_defaults_required=True
+    )
 
     id: str
     source_snapshot_id: str
@@ -158,6 +170,8 @@ class InvitationObservationView(BaseModel):
 
 
 class IntakeInterviewInvitationResult(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
     operation_id: str
     verification_id: str
     source_snapshot_id: str
@@ -169,7 +183,9 @@ class IntakeInterviewInvitationResult(BaseModel):
 class FixtureInterviewInvitationInput(BaseModel):
     """Deterministic first-slice ingress; never represents a live provider."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     idempotency_key: str = Field(min_length=1, max_length=160)
     source_identity: str = Field(min_length=1, max_length=256)
@@ -184,6 +200,8 @@ class FixtureInterviewInvitationInput(BaseModel):
 
 
 class FixtureInterviewInvitationResult(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
     source_snapshot_id: str
     observation: ObjectReference
     candidate: ObjectReference
@@ -202,7 +220,9 @@ class FixtureInterviewInvitationResult(BaseModel):
 
 
 class RegisterInterviewInvitationCandidate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     idempotency_key: str = Field(min_length=1, max_length=200)
     actor_kind: Literal["agent_on_behalf", "automation", "system_connector"]
@@ -265,7 +285,11 @@ class RegisterInterviewInvitationCandidate(BaseModel):
 
 
 class InterviewInvitationCandidateView(BaseModel):
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+    model_config = ConfigDict(
+        from_attributes=True,
+        populate_by_name=True,
+        json_schema_serialization_defaults_required=True,
+    )
 
     id: str
     observation_id: str | None
@@ -297,7 +321,9 @@ class InterviewInvitationCandidateView(BaseModel):
 
 
 class ObjectReference(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     kind: str
     id: str
@@ -307,7 +333,9 @@ class ObjectReference(BaseModel):
 class OpportunityMatchOption(BaseModel):
     """One owned canonical opportunity the user may explicitly select."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     opportunity_id: str = Field(min_length=1, max_length=35)
     expected_version: PositiveInt
@@ -319,7 +347,9 @@ class OpportunityMatchOption(BaseModel):
 class FactConfirmationRequest(BaseModel):
     """Durable ``fact_confirmation@1`` request shown by any experience surface."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     protocol: Literal["interview_invitation.fact_confirmation.v1"] = (
         "interview_invitation.fact_confirmation.v1"
@@ -366,6 +396,8 @@ class FactConfirmationRequest(BaseModel):
 
 
 class RegisterInterviewInvitationCandidateResult(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
     operation_id: str
     verification_id: str
     candidate: InterviewInvitationCandidateView
@@ -373,7 +405,9 @@ class RegisterInterviewInvitationCandidateResult(BaseModel):
 
 
 class ExplicitUserAssertionBasis(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     kind: Literal["explicit_user_assertion"]
     source: InvitationSourceReference
@@ -388,7 +422,9 @@ class ExplicitUserAssertionBasis(BaseModel):
 
 
 class CandidateConfirmationBasis(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     kind: Literal["candidate_confirmation"]
     candidate_id: str = Field(min_length=1, max_length=36)
@@ -404,7 +440,9 @@ ConfirmationBasis = Annotated[
 
 
 class LinkExistingOpportunity(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     kind: Literal["link_existing"]
     opportunity_id: str = Field(min_length=1, max_length=35)
@@ -412,7 +450,9 @@ class LinkExistingOpportunity(BaseModel):
 
 
 class CreateOpportunity(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     kind: Literal["create_new"]
     location: str | None = Field(default=None, max_length=200)
@@ -429,13 +469,17 @@ OpportunityResolution = Annotated[
 
 
 class CreateInterview(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     kind: Literal["create"] = "create"
 
 
 class UpdateExistingInterview(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     kind: Literal["update_existing"]
     interview_id: str = Field(min_length=1, max_length=128)
@@ -451,7 +495,9 @@ InterviewResolution = Annotated[
 class FactConfirmationResolution(BaseModel):
     """Typed user decision that resumes the owning Turn."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     protocol: Literal["interview_invitation.fact_confirmation.v1"] = (
         "interview_invitation.fact_confirmation.v1"
@@ -478,7 +524,9 @@ class FactConfirmationResolution(BaseModel):
 
 
 class OperationCausation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     conversation_id: str | None = Field(default=None, max_length=36)
     turn_id: str | None = Field(default=None, max_length=36)
@@ -487,7 +535,9 @@ class OperationCausation(BaseModel):
 
 
 class ConfirmInterviewInvitation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     schema_version: Literal[1] = 1
     idempotency_key: str = Field(min_length=1, max_length=200)
@@ -502,7 +552,9 @@ class ConfirmInterviewInvitation(BaseModel):
 
 
 class RejectInterviewInvitationCandidate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     schema_version: Literal[1] = 1
     idempotency_key: str = Field(min_length=1, max_length=200)
@@ -516,7 +568,11 @@ class RejectInterviewInvitationCandidate(BaseModel):
 
 
 class VerificationView(BaseModel):
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+    model_config = ConfigDict(
+        from_attributes=True,
+        populate_by_name=True,
+        json_schema_serialization_defaults_required=True,
+    )
 
     id: str
     operation_id: str
@@ -535,6 +591,8 @@ class VerificationView(BaseModel):
 
 
 class ConfirmInterviewInvitationResult(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
     operation_id: str
     replayed: bool = False
     opportunity: ObjectReference
@@ -547,6 +605,8 @@ class ConfirmInterviewInvitationResult(BaseModel):
 
 
 class RejectInterviewInvitationCandidateResult(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
     operation_id: str
     replayed: bool = False
     candidate: ObjectReference
@@ -555,6 +615,8 @@ class RejectInterviewInvitationCandidateResult(BaseModel):
 
 
 class InterviewInvitationHandoffView(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
     opportunity: ObjectReference
     interview: ObjectReference
     company_name: str

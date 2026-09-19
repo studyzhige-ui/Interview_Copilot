@@ -22,6 +22,20 @@ The repository ships one shared product core in two editions:
 · [Codebase architecture](docs/architecture/codebase.md) ·
 [Product and systems audit](docs/reports/full-product-and-systems-audit-2026-08-04.md)
 
+## Refactor branch status
+
+The `refactor/product-runtime-convergence` branch integrates the shared Copilot
+workspace, invitation confirmation/preparation, text-first mock handoff, and
+runtime/RAG correctness fixes. It is not a completed product release: the
+[existing implementation ledger](docs/implementation/career-agent-os-ledger.md)
+records implementation and fixed-commit evidence. The branch now also contains
+real Celery/PostgreSQL recovery and Chromium campaigns, mock-answer generation
+fences, explicit retry consent, bounded retrieval workers and fail-closed model
+configuration. Use the current PR's checks, not an earlier green commit, as the
+execution evidence. No historical user records are discarded to make migrations
+pass. Live model quality, full-platform monetary accounting and memory release
+remain separate gates.
+
 ## Core features
 
 - Mock interviews grounded in a resume and job description

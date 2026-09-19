@@ -10,7 +10,7 @@ from app.agent_runtime.tools.resume import ReadResumeArgs, _read_resume_handler
 from app.models.file_asset import FileAsset
 from app.models.resume import Resume
 from app.models.user import User
-from app.services.resume import resume_artifact_service
+from app.career.application.resumes import resume_artifact_service
 
 
 def _seed_user(db_session) -> User:

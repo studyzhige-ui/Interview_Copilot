@@ -13,15 +13,31 @@ from app.models.conversation_turn import ConversationTurn
 from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
-from app.services.chat.attachment_ingress_service import (
+from app.conversation.application.attachment_ingress_service import (
     AttachmentAssetUnavailableError,
+)
+from app.conversation.application.attachment_ingress_service import (
     AttachmentClaimConflictError,
+)
+from app.conversation.application.attachment_ingress_service import (
     AttachmentDraftConflictError,
+)
+from app.conversation.application.attachment_ingress_service import (
     AttachmentDraftUnavailableError,
+)
+from app.conversation.application.attachment_ingress_service import (
     attachment_ref_snapshot,
+)
+from app.conversation.application.attachment_ingress_service import (
     claim_attachment_drafts,
+)
+from app.conversation.application.attachment_ingress_service import (
     create_attachment_draft,
+)
+from app.conversation.application.attachment_ingress_service import (
     preflight_attachment_drafts,
+)
+from app.conversation.application.attachment_ingress_service import (
     remove_attachment_draft,
 )
 

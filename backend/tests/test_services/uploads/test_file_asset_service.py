@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import pytest
 from app.models.outbox_job import OutboxJob
 from app.models.user import User
-from app.services import outbox as outbox_service
-from app.services.uploads import file_asset_service
+from app.platform import outbox as outbox_service
+from app.files.application import file_asset_service
 
 
 def _make_user(db, username="alice") -> User:
@@ -46,7 +46,7 @@ def _stub_magic_gate(monkeypatch):
     about the byte-level detectors (those have their own unit tests in
     test_file_validation_detect.py), so stub the gate open by default; the
     magic/transient-specific tests override per-case."""
-    from app.services.uploads import file_validation
+    from app.files.application import file_validation
 
     monkeypatch.setattr(
         file_asset_service,
@@ -489,7 +489,7 @@ def test_confirm_rejects_actual_size_over_cap(db_session, monkeypatch):
 
 def test_confirm_rejects_wrong_magic(db_session, monkeypatch):
     """UP-6: content that fails the purpose's magic detection fails confirm."""
-    from app.services.uploads import file_validation
+    from app.files.application import file_validation
 
     _make_user(db_session)
     db_session.commit()

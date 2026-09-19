@@ -6,14 +6,14 @@ from app.task_queue.celery_app import celery_app
 
 @celery_app.task(name="tasks.consolidate_agent_memory")
 def consolidate_agent_memory(turn_id: str) -> int:
-    from app.services.agent_memory_service import consolidate_completed_turn
+    from app.memory.consolidation import process_turn
 
-    return int(run_async(consolidate_completed_turn(turn_id)))
+    return int(run_async(process_turn(turn_id)))
 
 
 @celery_app.task(name="tasks.discover_agent_memories")
 def discover_agent_memories() -> int:
-    from app.services.memory_pipeline import discover_turns
+    from app.memory.consolidation import discover_turns
     from app.core.config import settings
     from app.db.database import SessionLocal
     from app.models.memory_pipeline import MemoryWorkspace, MemoryExtraction
@@ -53,7 +53,7 @@ def discover_agent_memories() -> int:
 
 @celery_app.task(name="tasks.consolidate_user_memories")
 def consolidate_user_memories(user_id: int) -> int:
-    from app.services.memory_pipeline import consolidate_user
+    from app.memory.consolidation import consolidate_user
 
     return int(run_async(consolidate_user(user_id)))
 

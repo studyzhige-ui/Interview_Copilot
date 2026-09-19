@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import pytest
 from app.models.chat import Conversation
-from app.services.interview import mock_flow, mock_runtime_service
-from app.services.interview.interview_record_service import (
-    STATUS_MOCK_IN_PROGRESS,
-    STATUS_PROCESSING_REVIEW,
-    STATUS_REVIEW_FAILED,
-    interview_record_service,
-)
+from app.interviews.application import mock_flow
+from app.interviews.application import mock_runtime_service
+from app.interviews.application.interview_record_service import STATUS_MOCK_IN_PROGRESS
+from app.interviews.application.interview_record_service import STATUS_PROCESSING_REVIEW
+from app.interviews.application.interview_record_service import STATUS_REVIEW_FAILED
+from app.interviews.application.interview_record_service import interview_record_service
 
 
 @pytest.fixture(autouse=True)

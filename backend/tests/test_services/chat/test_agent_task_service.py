@@ -14,16 +14,18 @@ from app.schemas.agent_task import (
     CreateAgentTaskRequest,
     ReviseAgentTaskRequest,
 )
-from app.services.chat.agent_task_service import (
-    AgentTaskConflictError,
-    AgentTaskFrozenError,
-    AgentTaskOwnershipError,
+from app.conversation.application.agent_task_service import AgentTaskConflictError
+from app.conversation.application.agent_task_service import AgentTaskFrozenError
+from app.conversation.application.agent_task_service import AgentTaskOwnershipError
+from app.conversation.application.agent_task_service import (
     agent_task_structure_complete,
-    create_agent_task,
-    freeze_agent_task_for_terminal_turn,
-    get_agent_task,
-    revise_agent_task,
 )
+from app.conversation.application.agent_task_service import create_agent_task
+from app.conversation.application.agent_task_service import (
+    freeze_agent_task_for_terminal_turn,
+)
+from app.conversation.application.agent_task_service import get_agent_task
+from app.conversation.application.agent_task_service import revise_agent_task
 
 
 def _seed_turn(db_session, *, status: str = "running", mode: str = "agent"):

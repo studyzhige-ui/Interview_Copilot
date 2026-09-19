@@ -276,7 +276,7 @@ async def test_register_duplicate_email_returns_409(db_session_local):
 
 @pytest.mark.asyncio
 async def test_register_bad_code_returns_generic_400(db_session_local):
-    from app.services.auth.verification_code_service import CodeError
+    from app.identity.application.verification_code_service import CodeError
 
     with (
         patch("app.api.auth.assert_ip_not_locked", new_callable=AsyncMock),
@@ -588,7 +588,7 @@ async def test_reset_password_consumes_code_and_kills_old_tokens(db_session_loca
 async def test_reset_password_bad_code_is_generic_and_does_not_change_password(
     db_session_local,
 ):
-    from app.services.auth.verification_code_service import CodeError
+    from app.identity.application.verification_code_service import CodeError
 
     user = _register_sync(db_session_local, "alice", "oldpw1")
     with (

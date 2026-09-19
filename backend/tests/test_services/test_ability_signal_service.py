@@ -16,16 +16,16 @@ from app.schemas.ability_signal import (
     AbilitySignalCreateInput,
     AbilitySourceRefInput,
 )
-from app.services.ability_signal_service import (
-    AbilitySignalConflictError,
-    AbilitySignalSourceError,
-    create_ability_signal,
-    dispute_ability_signal,
-    invalidate_ability_signal,
+from app.career.application.signals import AbilitySignalConflictError
+from app.career.application.signals import AbilitySignalSourceError
+from app.career.application.signals import create_ability_signal
+from app.career.application.signals import dispute_ability_signal
+from app.career.application.signals import invalidate_ability_signal
+from app.career.application.signals import (
     invalidate_ability_signals_for_interview_reanalysis,
-    project_interview_ability_signals,
 )
-from app.services.career_profile_service import ensure_career_profile
+from app.career.application.signals import project_interview_ability_signals
+from app.career.application.profile import ensure_career_profile
 
 
 def _user(db_session, prefix: str = "ability") -> User:

@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from app.core.config import settings
+from app.core.model_policy import require_local_model
 
 logger = logging.getLogger(__name__)
 
@@ -132,13 +133,10 @@ def resolve_embedding() -> ResolvedEmbedding:
     """Read the three env vars + look the provider up."""
     pid = (settings.EMBEDDING_PROVIDER or "siliconflow").strip().lower()
     if pid not in PROVIDERS:
-        logger.warning(
-            "Unknown EMBEDDING_PROVIDER=%r, falling back to 'siliconflow'. "
-            "Known providers: %s",
-            pid,
-            ", ".join(PROVIDERS),
-        )
-        pid = "siliconflow"
+        raise ValueError(f"Unknown EMBEDDING_PROVIDER: {pid!r}")
+    require_local_model(
+        "embedding", is_local=PROVIDERS[pid].kind == "local_huggingface"
+    )
     model = (settings.EMBEDDING_MODEL or "BAAI/bge-m3").strip()
     dim = int(settings.EMBEDDING_DIM or 1024)
     return ResolvedEmbedding(
@@ -156,7 +154,10 @@ def list_providers() -> list[dict[str, Any]]:
             "china_friendly": p.china_friendly,
             "api_key_env": p.api_key_env,
             "ready": p.kind == "local_huggingface"
-            or bool(os.getenv(p.api_key_env, "").strip()),
+            or (
+                settings.AUXILIARY_MODEL_POLICY != "local_only"
+                and bool(os.getenv(p.api_key_env, "").strip())
+            ),
         }
         for pid, p in PROVIDERS.items()
     ]
@@ -172,8 +173,6 @@ def build_embedding() -> Any:
     p = cfg.provider
 
     if p.kind == "local_huggingface":
-        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-
         from app.core.hf_runtime import (
             format_missing_model_error,
             prepare_hf_runtime,
@@ -181,6 +180,7 @@ def build_embedding() -> Any:
         )
 
         hf_cache_dir = prepare_hf_runtime()
+        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
         from app.rag.policy import resolve_rag_device
 
         device = resolve_rag_device()
@@ -199,11 +199,14 @@ def build_embedding() -> Any:
             device,
             cfg.dim,
         )
-        return HuggingFaceEmbedding(
+        from app.usage.embedding import AccountLocalEmbedding
+
+        inner = HuggingFaceEmbedding(
             model_name=model_name,
             device=device,
             cache_folder=str(hf_cache_dir),
         )
+        return AccountLocalEmbedding(inner, cfg.model)
 
     api_key = os.getenv(p.api_key_env, "").strip()
     if not api_key:
@@ -213,7 +216,7 @@ def build_embedding() -> Any:
         )
 
     if p.kind == "openai":
-        from llama_index.embeddings.openai import OpenAIEmbedding
+        from app.usage.embedding import AccountOpenAIEmbedding as OpenAIEmbedding
 
         logger.info("Embedding: OpenAI model=%s dim=%d", cfg.model, cfg.dim)
         return OpenAIEmbedding(
@@ -221,11 +224,16 @@ def build_embedding() -> Any:
             api_key=api_key,
             api_base=p.api_base or None,
             dimensions=cfg.dim,
+            max_retries=0,
+            embed_batch_size=10,
+            usage_provider=cfg.provider_id,
         )
 
     if p.kind == "openai_compat":
         try:
-            from llama_index.embeddings.openai_like import OpenAILikeEmbedding
+            from app.usage.embedding import (
+                AccountOpenAILikeEmbedding as OpenAILikeEmbedding,
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "openai_compat embedding requires `llama-index-embeddings-openai-like`. "
@@ -242,6 +250,8 @@ def build_embedding() -> Any:
             api_key=api_key,
             api_base=p.api_base,
             embed_batch_size=10,
+            max_retries=0,
+            usage_provider=cfg.provider_id,
         )
 
     raise RuntimeError(f"Unknown provider kind: {p.kind!r}")

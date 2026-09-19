@@ -33,6 +33,7 @@ from app.core import user_model_selection
 from app.core.config import settings
 from app.core.internal_models import get_internal_model_profile
 from app.core.model_catalog import ModelProfile
+from app.core.model_connection_error import ModelConnectionUnavailable
 from app.core.model_readiness import (
     profile_ready,
     ready_profile_ids,
@@ -89,7 +90,9 @@ def _load_user_provider_overrides(
         from app.db.database import SessionLocal
         from app.models.user import User
         from app.models.user_model_provider_settings import UserModelProviderSettings
-        from app.services.auth.user_provider_settings_service import parse_extra_headers
+        from app.identity.application.user_provider_settings_service import (
+            parse_extra_headers,
+        )
 
         with SessionLocal() as db:
             row = (
@@ -113,14 +116,13 @@ def _load_user_provider_overrides(
             organization_id=str(org_id) if org_id else None,
             extra_headers=parse_extra_headers(extra_headers_json),
         )
-    except Exception as exc:  # noqa: BLE001 — never crash chat on DB blip
+    except Exception as exc:  # noqa: BLE001 — outbound authority boundary
+        # A DB outage is not evidence that the user selected the default host.
+        # Do not send private context to a different destination or log headers.
         logger.warning(
-            "user_model_provider_settings lookup failed for user=%s provider=%s: %s",
-            user_id,
-            profile.provider,
-            exc,
+            "Provider connection lookup unavailable (%s)", type(exc).__name__
         )
-        return _NO_OVERRIDES
+        raise ModelConnectionUnavailable() from exc
 
 
 def _resolve_api_base(profile: ModelProfile, user_id: str | None = None) -> str:
@@ -385,6 +387,18 @@ def _build_llm_instance(
     if overrides.extra_headers:
         client_kwargs["default_headers"] = dict(overrides.extra_headers)
 
+    if profile.provider == "anthropic":
+        from anthropic import Anthropic, AsyncAnthropic
+        from app.core.anthropic_completion import AnthropicCompletion
+
+        client_kwargs.pop("organization", None)
+        return AnthropicCompletion(
+            profile=profile,
+            sync_client=Anthropic(**client_kwargs),
+            async_client=AsyncAnthropic(**client_kwargs),
+            temperature=LLM_TEMPERATURE,
+        )
+
     sync_client = OpenAI(**client_kwargs)
     async_client = AsyncOpenAI(**client_kwargs)
     llm = OpenAILike(
@@ -394,6 +408,10 @@ def _build_llm_instance(
         is_chat_model=True,
         is_function_calling_model=profile.supports_function_calling,
         context_window=profile.context_window,
+        max_tokens=profile.max_output_tokens,
+        # Disable the wrapper retry decorator as well as the native SDK's retry.
+        # Callers distinguish a known malformed response from unknown transport.
+        max_retries=0,
         temperature=LLM_TEMPERATURE,
         additional_kwargs=dict(request_overrides or {}),
         default_headers=dict(overrides.extra_headers) or None,
@@ -457,23 +475,29 @@ def _legacy_request_overrides(profile: ModelProfile) -> dict[str, Any] | None:
 def get_llm_for_role(role: str, user_id: str | None = None):
     """Return an answer model selected for one user-facing role."""
     profile = user_model_selection.get_profile_for_role(role, user_id=user_id)
-    return _get_cached_llm(
+    from app.usage.runtime import MeteredLLM
+
+    inner = _get_cached_llm(
         cache_role=role,
         profile=profile,
         user_id=user_id,
         request_overrides=_legacy_request_overrides(profile),
     )
+    return MeteredLLM(inner, profile, "model_completion", username=user_id)
 
 
 def get_internal_llm(role: str):
     """Return a platform-owned model using deployment credentials only."""
     profile = get_internal_model_profile(role)
-    return _get_cached_llm(
+    from app.usage.runtime import MeteredLLM
+
+    inner = _get_cached_llm(
         cache_role=f"internal:{role}",
         profile=profile,
         user_id=None,
         request_overrides=_legacy_request_overrides(profile),
     )
+    return MeteredLLM(inner, profile, f"internal_{role}")
 
 
 def build_async_openai_client_for_role(

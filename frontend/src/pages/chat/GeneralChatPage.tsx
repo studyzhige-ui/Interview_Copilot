@@ -32,7 +32,7 @@ import {
   listChatSessions,
   renameChatSession,
 } from '@/api/chat';
-import type { ConversationDeletionImpact } from '@/types/api';
+import type { ProductObjectReference, ConversationDeletionImpact } from '@/types/api';
 import { useToastOnError } from '@/hooks/useToastOnError';
 import { ChatPanel } from '@/pages/review/chat/ChatPanel';
 import { CopilotStatusSummary } from './CopilotStatusSummary';
@@ -49,13 +49,20 @@ import {
 // cache namespace for every chat-session list in the app.
 const SESSIONS_KEY = ['chat', 'sessions', { type: 'general' }] as const;
 
-export function GeneralChatPage() {
+interface Props {
+  embedded?: boolean;
+  objectReference?: ProductObjectReference | null;
+  onObjectReferenceConsumed?: () => void;
+}
+
+export function GeneralChatPage({ embedded = false, objectReference = null, onObjectReferenceConsumed }: Props = {}) {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeId = searchParams.get('session');
-  const starterId = readStarter(searchParams.get('start'));
+  const [embeddedSessionId, setEmbeddedSessionId] = useState<string | null>(null);
+  const activeId = embedded ? embeddedSessionId : searchParams.get('session');
+  const starterId = embedded ? null : readStarter(searchParams.get('start'));
   const starter = starterId ? collaborationStarters[starterId] : null;
-  const setActiveId = (id: string) => setSearchParams((previous) => {
+  const setActiveId = (id: string) => embedded ? setEmbeddedSessionId(id) : setSearchParams((previous) => {
     const next = new URLSearchParams(previous);
     next.set('session', id);
     next.delete('start');
@@ -68,12 +75,13 @@ export function GeneralChatPage() {
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const productObjectReference = useMemo(
-    () => readCopilotObjectHandoff(searchParams),
-    [searchParams],
+    () => embedded ? objectReference : readCopilotObjectHandoff(searchParams),
+    [embedded, objectReference, searchParams],
   );
   const clearProductObjectReference = useCallback(() => {
-    setSearchParams(clearCopilotObjectHandoff(searchParams), { replace: true });
-  }, [searchParams, setSearchParams]);
+    if (embedded) onObjectReferenceConsumed?.();
+    else setSearchParams(clearCopilotObjectHandoff(searchParams), { replace: true });
+  }, [embedded, onObjectReferenceConsumed, searchParams, setSearchParams]);
 
   const { data: sessions = [], isPending: loading, error, refetch } = useQuery({
     queryKey: SESSIONS_KEY,
@@ -221,7 +229,7 @@ export function GeneralChatPage() {
   const activeSession = sessions.find((s) => s.session_id === selectedId);
 
   return (
-    <div className="copilot-page">
+    <div className={embedded ? "copilot-page copilot-embedded" : "copilot-page"}>
       {/* Left sidebar: session list */}
       <aside className="copilot-session-list">
         <div className="h-14 px-4 flex items-center justify-between border-b border-stone-100">

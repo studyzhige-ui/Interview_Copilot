@@ -15,6 +15,9 @@ import tempfile
 import time
 
 from app.core.config import settings
+from app.core.model_policy import LocalModelPolicyError, require_local_model
+from app.core.execution_errors import ModelOutcomeUnknownError
+from app.usage.service import ModelBudgetExceededError
 from app.core.runtime_files import runtime_temp_dir
 from app.rag.cleaning import EmptyContentError, canonicalize_document
 from app.rag.documents import CanonicalDocument
@@ -100,6 +103,7 @@ def _candidates(ext: str) -> list:
 
     ordered: list = []
     if primary_id == "llamaparse":
+        require_local_model("document_parsing", is_local=False)
         if _has_llama_cloud():
             ordered.append(LlamaParseParser())
         if _docling_available():
@@ -122,7 +126,9 @@ def _run_candidates(
 ) -> CanonicalDocument | None:
     """Try candidates in order; return the first canonical document with its
     ``parser_profile`` stamped, or None if every candidate fails / yields empty.
-    Never raises — the caller decides the friendly final error message."""
+    Ordinary parse errors allow a format fallback. Quota and unconfirmed paid
+    outcomes propagate: changing parser is not permission to bypass accounting.
+    """
     warnings: list[str] = []
     best: tuple[float, CanonicalDocument, str, bool] | None = None
     t0 = time.perf_counter()
@@ -143,6 +149,12 @@ def _run_candidates(
             quality = assess_parse_quality(canonical)
             canonical.parser_profile["quality_score"] = round(quality.score, 4)
             canonical.parser_profile["quality_warnings"] = list(quality.warnings)
+        except (
+            ModelBudgetExceededError,
+            ModelOutcomeUnknownError,
+            LocalModelPolicyError,
+        ):
+            raise
         except Exception as exc:  # noqa: BLE001 — record + try the next candidate
             logger.warning("parser %s failed on %s: %s", parser.id, file_path, exc)
             warnings.append(f"{parser.id}: {exc}")

@@ -65,6 +65,7 @@ export async function resolveMockClientAction(
     expected_version: action.version,
     outcome: result.outcome,
     ...(result.readiness ? { readiness: result.readiness } : {}),
+    ...(result.fallback_mode ? { fallback_mode: result.fallback_mode } : {}),
     ...(result.reason ? { reason: result.reason } : {}),
   });
   return response.data as MockClientActionResolution;

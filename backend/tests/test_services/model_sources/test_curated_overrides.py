@@ -21,14 +21,12 @@ Locked behaviours:
 
 from __future__ import annotations
 
-from app.services.model_sources.base import ModelEntry
-from app.services.model_sources.curated import (
-    CURATED,
-    ModelOverride,
-    _auto_display_name,
-    _auto_tier_rank,
-    apply_overrides,
-)
+from app.providers.catalog.base import ModelEntry
+from app.providers.catalog.curated import CURATED
+from app.providers.catalog.curated import ModelOverride
+from app.providers.catalog.curated import _auto_display_name
+from app.providers.catalog.curated import _auto_tier_rank
+from app.providers.catalog.curated import apply_overrides
 
 
 def _entry(provider: str, model: str, display_name: str | None = None) -> ModelEntry:
@@ -172,7 +170,7 @@ def test_hidden_curated_entries_dropped():
     """Anthropic / NVIDIA CURATED entries with hidden=True drop out."""
     # No CURATED hidden=True entries exist post-P7-F. Verify the
     # mechanism still works by injecting one in-test.
-    from app.services.model_sources import curated as cm
+    from app.providers.catalog import curated as cm
 
     cm.CURATED[("anthropic", "test-hidden-entry")] = ModelOverride(hidden=True)
     try:

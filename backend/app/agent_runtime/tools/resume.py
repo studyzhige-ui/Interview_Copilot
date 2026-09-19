@@ -38,7 +38,7 @@ def _read_resume_sync(ctx: AgentToolContext) -> dict[str, Any]:
 def _read_resume_inner(ctx: AgentToolContext) -> dict[str, Any]:
     from app.core.user_identity import resolve_user_pk
     from app.db.database import SessionLocal
-    from app.services.resume import resume_artifact_service
+    from app.career.application.resumes import resume_artifact_service
 
     with SessionLocal() as db:
         user_pk = resolve_user_pk(db, ctx.user_id)

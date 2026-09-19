@@ -48,6 +48,8 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/interview_copilot
+      REQUIRE_TEST_POSTGRES: "1"
+      PYTHONPATH: backend
       REDIS_URL: redis://localhost:6379/0
       SECRET_KEY: ci-test-secret-key-not-for-production
       DEEPSEEK_API_KEY: test-key-not-real
@@ -77,6 +79,14 @@ jobs:
       - name: Compile check
         run: python -m compileall -q backend/app evaluation scripts
 
+      - name: Verify canonical shared protocol snapshot
+        run: python scripts/export_shared_contracts.py --check
+
+      - name: Validate finite model-evaluation plan without calling providers
+        run: |
+          mkdir -p test-results
+          python evaluation/mock_interview_eval.py --plan-only > test-results/mock-preflight.json
+
       - name: Apply and verify database migrations
         run: |
           alembic upgrade head
@@ -86,7 +96,19 @@ jobs:
         run: |
           python -m pytest backend/tests \
             -v \
-            --tb=short
+            --tb=short \
+            --junitxml=test-results/backend.xml
+
+      - name: Preserve test results, including required PostgreSQL cases
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-tests-py${{ matrix.python-version }}
+          path: |
+            test-results/backend.xml
+            test-results/mock-preflight.json
+          if-no-files-found: warn
+          retention-days: 7
 
   evaluation-dependencies:
     runs-on: ubuntu-latest
@@ -154,6 +176,11 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
+      - name: Check generated Python-TypeScript protocols
+        run: |
+          npm ci --prefix ../scripts/contract_codegen --ignore-scripts --no-audit --no-fund
+          npm run --prefix ../scripts/contract_codegen check
+
       - name: Type check
         run: npx tsc --noEmit
 
@@ -167,3 +194,67 @@ jobs:
 
       - name: Test (vitest)
         run: npm run test:run
+
+  browser:
+    name: browser (real HTTP and PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:15.18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: interview_copilot
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:8.10.0-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/interview_copilot
+      TEST_PG_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      REQUIRE_TEST_POSTGRES: "1"
+      TEST_REDIS_URL: redis://localhost:6379/0
+      PYTHONPATH: backend
+      IC_RUN_BROWSER: "1"
+      SECRET_KEY: ci-browser-secret-not-for-production
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install test dependencies
+        run: pip install -e ".[dev]" playwright==1.57.0
+      - name: Install isolated Chromium and OS dependencies
+        run: python -m playwright install --with-deps chromium
+      - name: Build the actual production frontend
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund && npm run build
+        env:
+          VITE_API_BASE: /api/v1
+      - name: Real browser response-loss and product interaction campaign
+        run: python -m pytest backend/tests/browser -v --tb=short --junitxml=test-results/browser.xml
+      - name: VS-01 full deterministic contract gate
+        run: python -m evaluation.career_agent_os_eval --report test-results/vs01.json
+      - name: Preserve real browser campaign results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-results
+          path: |
+            test-results/browser.xml
+            test-results/vs01.json
+          if-no-files-found: warn
+          retention-days: 7

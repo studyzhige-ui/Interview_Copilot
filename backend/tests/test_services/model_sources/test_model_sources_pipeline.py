@@ -14,9 +14,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from app.services.model_sources import pipeline as pipeline_mod
-from app.services.model_sources.base import ModelEntry
-from app.services.model_sources.vendors.base import VendorFetchFailed
+from app.providers.catalog import pipeline as pipeline_mod
+from app.providers.catalog.base import ModelEntry
+from app.providers.catalog.vendors.base import VendorFetchFailed
 
 
 class _FakeRedis:
@@ -61,7 +61,7 @@ def fake_redis(monkeypatch):
 def stubbed_specs(monkeypatch):
     """Pin the spec list to a small set so tests don't depend on real
     vendor lineup. Each stub spec just carries a provider id."""
-    from app.services.model_sources.vendors import VendorAdapterSpec
+    from app.providers.catalog.vendors import VendorAdapterSpec
 
     stubs = [
         VendorAdapterSpec(provider="alpha", models_path="/models", auth_style="bearer"),
@@ -69,7 +69,7 @@ def stubbed_specs(monkeypatch):
     ]
     monkeypatch.setattr(pipeline_mod, "ALL_SPECS", stubs)
     # Pretend both providers exist in PROVIDERS so resolve_key works.
-    from app.services.model_sources.base import ProviderDefaults
+    from app.providers.catalog.base import ProviderDefaults
 
     fake_defaults = {
         "alpha": ProviderDefaults(
@@ -211,7 +211,7 @@ async def test_load_catalog_reads_per_provider(monkeypatch, fake_redis):
         ]
     )
     # Pin known_provider_ids so load_catalog only checks openai.
-    import app.services.model_sources.providers as p_mod
+    import app.providers.catalog.providers as p_mod
 
     monkeypatch.setattr(p_mod, "PROVIDERS", {"openai": object()})
     # pipeline_mod imports PROVIDERS at top-level too:
@@ -237,7 +237,7 @@ async def test_load_catalog_for_falls_back_to_lkg(monkeypatch, fake_redis):
 @pytest.mark.asyncio
 async def test_load_catalog_empty_when_redis_cold(monkeypatch, fake_redis):
     """Redis wiped + seed empty → empty dict, no exception."""
-    import app.services.model_sources.providers as p_mod
+    import app.providers.catalog.providers as p_mod
 
     monkeypatch.setattr(p_mod, "PROVIDERS", {"openai": object()})
     monkeypatch.setattr(pipeline_mod, "PROVIDERS", {"openai": object()})

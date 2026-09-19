@@ -7,12 +7,12 @@ from app.models.chat import Conversation
 from app.models.conversation_turn import ConversationTurn
 from app.models.model_dispatch import AgentModelDispatch
 from app.models.user import User
-from app.services.chat.model_dispatch_service import (
+from app.conversation.application.model_dispatch_service import (
     ModelDispatchConflictError,
-    durable_model_stream,
-    request_fingerprint,
-    start_model_dispatch,
 )
+from app.conversation.application.model_dispatch_service import durable_model_stream
+from app.conversation.application.model_dispatch_service import request_fingerprint
+from app.conversation.application.model_dispatch_service import start_model_dispatch
 
 from tests.conftest import patch_session_locals
 
@@ -52,17 +52,18 @@ def test_model_dispatch_fences_generation_and_identity(db_session):
         model="claude-test",
         fingerprint=fingerprint,
     )
-    replay = start_model_dispatch(
-        db_session,
-        call_id="model:3:1:1",
-        turn_id=turn.id,
-        user_id=user.id,
-        dispatch_generation=3,
-        provider="anthropic",
-        model="claude-test",
-        fingerprint=fingerprint,
-    )
-    assert replay.id == row.id
+    with pytest.raises(ModelDispatchConflictError, match="already_running"):
+        start_model_dispatch(
+            db_session,
+            call_id="model:3:1:1",
+            turn_id=turn.id,
+            user_id=user.id,
+            dispatch_generation=3,
+            provider="anthropic",
+            model="claude-test",
+            fingerprint=fingerprint,
+        )
+    assert row.status == "running"
 
     with pytest.raises(ModelDispatchConflictError, match="identity_conflict"):
         start_model_dispatch(
@@ -92,7 +93,7 @@ def test_model_dispatch_fences_generation_and_identity(db_session):
 
 
 def test_durable_stream_persists_partial_and_terminal_usage(db_session, monkeypatch):
-    import app.services.chat.model_dispatch_service as service_module
+    import app.conversation.application.model_dispatch_service as service_module
 
     patch_session_locals(monkeypatch, db_session, service_module)
     user, turn = _turn(db_session)

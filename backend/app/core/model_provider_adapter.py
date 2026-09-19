@@ -11,11 +11,14 @@ Anthropic-only fields.
 from __future__ import annotations
 
 import copy
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
 from app.core.config import settings
+from app.core.provider_streams import close_provider_stream
+from app.core.provider_usage import counter
 from app.core.model_catalog import ModelProfile
 from app.core.context_budget import ContextCapacityError, RequestBudget, request_tokens
 
@@ -46,6 +49,8 @@ class ProviderUsage:
     completion_tokens: int = 0
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
+    input_known: bool = True
+    output_known: bool = True
 
 
 @dataclass(frozen=True)
@@ -68,6 +73,9 @@ class ProviderRequest:
     tools: list[dict[str, Any]] = field(default_factory=list)
     max_tokens: int = 4_096
     temperature: float = 0.2
+    # Internal, never serialized into provider messages or accepted from a user.
+    usage_permit: str | None = None
+    usage_meter: str = "model_stream"
 
 
 def _value(value: Any, name: str, default: Any = None) -> Any:
@@ -98,7 +106,8 @@ def build_provider_request(
     """
 
     # Internal source/intent metadata never enters provider protocol messages.
-    from app.conversation.context_window import wire
+    from app.core.context_messages import wire
+
     messages = wire(messages)
     system_parts: list[str] = []
     first_data_index = 0
@@ -402,15 +411,17 @@ def normalize_openai_chunk(chunk: Any) -> ProviderStreamEvent:
     if usage is not None:
         details = _value(usage, "prompt_tokens_details")
         normalized_usage = ProviderUsage(
-            prompt_tokens=int(_value(usage, "prompt_tokens", 0) or 0),
-            completion_tokens=int(_value(usage, "completion_tokens", 0) or 0),
-            cache_read_tokens=int(
+            prompt_tokens=counter(_value(usage, "prompt_tokens")),
+            completion_tokens=counter(_value(usage, "completion_tokens")),
+            input_known=_value(usage, "prompt_tokens") is not None,
+            output_known=_value(usage, "completion_tokens") is not None,
+            cache_read_tokens=counter(
                 _value(details, "cached_tokens", 0)
                 or _value(usage, "cache_read_input_tokens", 0)
                 or _value(usage, "cache_read_tokens", 0)
                 or 0
             ),
-            cache_creation_tokens=int(
+            cache_creation_tokens=counter(
                 _value(usage, "cache_creation_input_tokens", 0)
                 or _value(usage, "cache_creation_tokens", 0)
                 or 0
@@ -444,87 +455,97 @@ def normalize_openai_chunk(chunk: Any) -> ProviderStreamEvent:
 
 
 async def _normalize_openai_stream(stream: Any) -> AsyncIterator[ProviderStreamEvent]:
-    async for chunk in stream:
-        yield normalize_openai_chunk(chunk)
+    try:
+        async for chunk in stream:
+            yield normalize_openai_chunk(chunk)
+    finally:
+        await close_provider_stream(stream)
 
 
 async def _normalize_anthropic_stream(
     stream: Any,
 ) -> AsyncIterator[ProviderStreamEvent]:
-    async for event in stream:
-        event_type = str(_value(event, "type", "") or "")
-        if event_type == "message_start":
-            usage = _value(_value(event, "message"), "usage")
-            if usage is not None:
-                cache_read = int(_value(usage, "cache_read_input_tokens", 0) or 0)
-                cache_creation = int(
-                    _value(usage, "cache_creation_input_tokens", 0) or 0
-                )
-                uncached = int(_value(usage, "input_tokens", 0) or 0)
-                yield ProviderStreamEvent(
-                    usage=ProviderUsage(
-                        prompt_tokens=uncached + cache_read + cache_creation,
-                        cache_read_tokens=cache_read,
-                        cache_creation_tokens=cache_creation,
+    try:
+        async for event in stream:
+            event_type = str(_value(event, "type", "") or "")
+            if event_type == "message_start":
+                usage = _value(_value(event, "message"), "usage")
+                if usage is not None:
+                    cache_read = counter(_value(usage, "cache_read_input_tokens"))
+                    cache_creation = counter(
+                        _value(usage, "cache_creation_input_tokens")
                     )
-                )
-            continue
+                    uncached = counter(_value(usage, "input_tokens"))
+                    yield ProviderStreamEvent(
+                        usage=ProviderUsage(
+                            prompt_tokens=uncached + cache_read + cache_creation,
+                            cache_read_tokens=cache_read,
+                            cache_creation_tokens=cache_creation,
+                            input_known=_value(usage, "input_tokens") is not None,
+                            output_known=False,
+                        )
+                    )
+                continue
 
-        if event_type == "content_block_start":
-            block = _value(event, "content_block")
-            if _value(block, "type") == "tool_use":
-                initial_input = _value(block, "input", {}) or {}
-                yield ProviderStreamEvent(
-                    tool_call_deltas=(
-                        ProviderToolCallDelta(
-                            index=int(_value(event, "index", 0) or 0),
-                            call_id=str(_value(block, "id", "") or ""),
-                            name=str(_value(block, "name", "") or ""),
-                            arguments_delta=(
-                                json.dumps(initial_input, ensure_ascii=False)
-                                if initial_input
-                                else ""
+            if event_type == "content_block_start":
+                block = _value(event, "content_block")
+                if _value(block, "type") == "tool_use":
+                    initial_input = _value(block, "input", {}) or {}
+                    yield ProviderStreamEvent(
+                        tool_call_deltas=(
+                            ProviderToolCallDelta(
+                                index=int(_value(event, "index", 0) or 0),
+                                call_id=str(_value(block, "id", "") or ""),
+                                name=str(_value(block, "name", "") or ""),
+                                arguments_delta=(
+                                    json.dumps(initial_input, ensure_ascii=False)
+                                    if initial_input
+                                    else ""
+                                ),
                             ),
-                        ),
+                        )
                     )
-                )
-            continue
+                continue
 
-        if event_type == "content_block_delta":
-            delta = _value(event, "delta")
-            delta_type = _value(delta, "type")
-            if delta_type == "text_delta":
-                yield ProviderStreamEvent(
-                    text_delta=str(_value(delta, "text", "") or "")
-                )
-            elif delta_type == "input_json_delta":
-                yield ProviderStreamEvent(
-                    tool_call_deltas=(
-                        ProviderToolCallDelta(
-                            index=int(_value(event, "index", 0) or 0),
-                            arguments_delta=str(
-                                _value(delta, "partial_json", "") or ""
+            if event_type == "content_block_delta":
+                delta = _value(event, "delta")
+                delta_type = _value(delta, "type")
+                if delta_type == "text_delta":
+                    yield ProviderStreamEvent(
+                        text_delta=str(_value(delta, "text", "") or "")
+                    )
+                elif delta_type == "input_json_delta":
+                    yield ProviderStreamEvent(
+                        tool_call_deltas=(
+                            ProviderToolCallDelta(
+                                index=int(_value(event, "index", 0) or 0),
+                                arguments_delta=str(
+                                    _value(delta, "partial_json", "") or ""
+                                ),
                             ),
-                        ),
+                        )
                     )
-                )
-            elif delta_type == "thinking_delta":
-                yield ProviderStreamEvent(
-                    reasoning_delta=str(_value(delta, "thinking", "") or "")
-                )
-            continue
+                elif delta_type == "thinking_delta":
+                    yield ProviderStreamEvent(
+                        reasoning_delta=str(_value(delta, "thinking", "") or "")
+                    )
+                continue
 
-        if event_type == "message_delta":
-            usage = _value(event, "usage")
-            output_tokens = int(_value(usage, "output_tokens", 0) or 0)
-            yield ProviderStreamEvent(
-                usage=(
-                    ProviderUsage(completion_tokens=output_tokens)
-                    if output_tokens
-                    else None
-                ),
-                stop_reason=_value(_value(event, "delta"), "stop_reason"),
-            )
+            if event_type == "message_delta":
+                usage = _value(event, "usage")
+                output_tokens = counter(_value(usage, "output_tokens"))
+                yield ProviderStreamEvent(
+                    usage=(
+                        ProviderUsage(
+                            completion_tokens=output_tokens, input_known=False
+                        )
+                        if _value(usage, "output_tokens") is not None
+                        else None
+                    ),
+                    stop_reason=_value(_value(event, "delta"), "stop_reason"),
+                )
+    finally:
+        await close_provider_stream(stream)
 
 
 class ModelProviderAdapter:
@@ -572,6 +593,36 @@ class ModelProviderAdapter:
             raise ContextCapacityError(
                 "模型请求超出上下文预算；历史已保留，请缩小输入或选择更大窗口的模型。"
             )
+        from app.usage import runtime as accounting
+
+        if request.usage_permit is not None:
+            # The primary dispatcher already reserved in its admission transaction.
+            # Atomically claim that one-use transport permit, never bill twice.
+            await asyncio.to_thread(accounting.claim_primary, request, self.profile)
+            return await self._open_stream(request)
+        units, allowance = accounting.llm_allowance(
+            {
+                "system": request.system,
+                "messages": request.messages,
+                "tools": request.tools,
+            },
+            request.max_tokens,
+        )
+        return await accounting.start_stream(
+            lambda: self._open_stream(request),
+            meter=request.usage_meter,
+            provider=self.profile.provider,
+            model=self.profile.model,
+            content={
+                "request": request,
+                "destination": str(getattr(self.client, "base_url", "")),
+            },
+            units=units,
+            token_allowance=allowance,
+        )
+
+    async def _open_stream(self, request: ProviderRequest):
+        """Native wire only; all callers go through metered start_stream."""
         if str(getattr(self.profile, "provider", "") or "") == "anthropic":
             payload = build_anthropic_payload(request)
             stream = await self.client.messages.create(

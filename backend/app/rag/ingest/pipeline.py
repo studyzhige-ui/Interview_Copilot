@@ -122,7 +122,7 @@ def _persist_nodes(
             document_id,
             exc,
         )
-        from app.services.knowledge.index_jobs import enqueue_milvus_upsert
+        from app.rag.application.library.index_jobs import enqueue_milvus_upsert
 
         with database_module.SessionLocal() as db:
             enqueue_milvus_upsert(db, user_pk=user_id, document_id=document_id)
@@ -168,47 +168,50 @@ async def ingest_document(
     _embed_model: Any | None = None,
     index_document: bool = True,
 ) -> dict[str, Any]:
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"未找到待摄取的档案: {file_path}")
-    from app.rag.parsing import parse_document
+    from app.usage.runtime import for_owner
 
-    canonical = parse_document(file_path)
-    metadata: dict[str, Any] = {
-        "source_kind": source_kind,
-        "user_id": user_id,
-        "file_name": os.path.basename(file_path),
-        "document_id": document_id,
-    }
-    if upload_id:
-        metadata["upload_id"] = upload_id
-    nodes = _prepare_nodes(
-        canonical,
-        metadata=metadata,
-        document_id=document_id,
-        chunker=_chunker,
-        document_title_loader=_document_title_loader,
-    )
-    for node in nodes:
+    with for_owner(user_id, operation=f"ingest_document:{document_id}"):
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"未找到待摄取的档案: {file_path}")
+        from app.rag.parsing import parse_document
+
+        canonical = parse_document(file_path)
+        metadata: dict[str, Any] = {
+            "source_kind": source_kind,
+            "user_id": user_id,
+            "file_name": os.path.basename(file_path),
+            "document_id": document_id,
+        }
         if upload_id:
-            node.metadata["upload_id"] = upload_id
-    chunk_info = _persist_nodes(
-        nodes,
-        user_id=user_id,
-        source_kind=source_kind,
-        document_id=document_id,
-        embed_model=_embed_model,
-        document_title_loader=_document_title_loader,
-        index_document=index_document,
-    )
-    return {
-        "success": True,
-        "indexed": chunk_info["indexed"],
-        "vector_indexed": chunk_info.get("vector_indexed", True),
-        "chunk_count": chunk_info["chunk_count"],
-        "node_ids": chunk_info["node_ids"],
-        "ref_doc_ids": list({node.ref_doc_id for node in nodes if node.ref_doc_id}),
-        "content_text": canonical.text[:200000],
-    }
+            metadata["upload_id"] = upload_id
+        nodes = _prepare_nodes(
+            canonical,
+            metadata=metadata,
+            document_id=document_id,
+            chunker=_chunker,
+            document_title_loader=_document_title_loader,
+        )
+        for node in nodes:
+            if upload_id:
+                node.metadata["upload_id"] = upload_id
+        chunk_info = _persist_nodes(
+            nodes,
+            user_id=user_id,
+            source_kind=source_kind,
+            document_id=document_id,
+            embed_model=_embed_model,
+            document_title_loader=_document_title_loader,
+            index_document=index_document,
+        )
+        return {
+            "success": True,
+            "indexed": chunk_info["indexed"],
+            "vector_indexed": chunk_info.get("vector_indexed", True),
+            "chunk_count": chunk_info["chunk_count"],
+            "node_ids": chunk_info["node_ids"],
+            "ref_doc_ids": list({node.ref_doc_id for node in nodes if node.ref_doc_id}),
+            "content_text": canonical.text[:200000],
+        }
 
 
 async def ingest_text(
@@ -221,19 +224,22 @@ async def ingest_text(
     _document_title_loader=_document_title,
     _embed_model: Any | None = None,
 ) -> dict[str, Any]:
-    return await _ingest_textual_source(
-        text,
-        source_kind,
-        user_id,
-        document_id=document_id,
-        parser_id="text_input",
-        content_kind="markdown" if source_kind == "improved_qa" else "text",
-        parser_profile={"tier": "native", "fallback_used": False},
-        chunker=_chunker,
-        document_title_loader=_document_title_loader,
-        embed_model=_embed_model,
-        index_document=True,
-    )
+    from app.usage.runtime import for_owner
+
+    with for_owner(user_id, operation=f"ingest_text:{document_id}"):
+        return await _ingest_textual_source(
+            text,
+            source_kind,
+            user_id,
+            document_id=document_id,
+            parser_id="text_input",
+            content_kind="markdown" if source_kind == "improved_qa" else "text",
+            parser_profile={"tier": "native", "fallback_used": False},
+            chunker=_chunker,
+            document_title_loader=_document_title_loader,
+            embed_model=_embed_model,
+            index_document=True,
+        )
 
 
 async def ingest_transcript(
@@ -253,25 +259,27 @@ async def ingest_transcript(
     Conversation attachments; it never publishes audio-derived text into the
     user's global Milvus collection.
     """
+    from app.usage.runtime import for_owner
 
-    return await _ingest_textual_source(
-        text,
-        source_kind,
-        user_id,
-        document_id=document_id,
-        upload_id=upload_id,
-        parser_id="audio_transcription",
-        content_kind="transcript",
-        parser_profile={
-            "tier": "transcription",
-            "fallback_used": False,
-            "warnings": ["当前来源由音频转写生成，未检查音画内容或视觉布局。"],
-        },
-        chunker=_chunker,
-        document_title_loader=_document_title_loader,
-        embed_model=None,
-        index_document=False,
-    )
+    with for_owner(user_id, operation=f"ingest_transcript:{document_id}"):
+        return await _ingest_textual_source(
+            text,
+            source_kind,
+            user_id,
+            document_id=document_id,
+            upload_id=upload_id,
+            parser_id="audio_transcription",
+            content_kind="transcript",
+            parser_profile={
+                "tier": "transcription",
+                "fallback_used": False,
+                "warnings": ["当前来源由音频转写生成，未检查音画内容或视觉布局。"],
+            },
+            chunker=_chunker,
+            document_title_loader=_document_title_loader,
+            embed_model=None,
+            index_document=False,
+        )
 
 
 async def _ingest_textual_source(

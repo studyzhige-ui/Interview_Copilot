@@ -7,11 +7,9 @@ from __future__ import annotations
 
 import pytest
 from app.models.file_asset import FileAsset
-from app.services.interview import analysis_intake
-from app.services.interview.interview_record_service import (
-    STATUS_FAILED,
-    STATUS_PENDING,
-)
+from app.interviews.application import analysis_intake
+from app.interviews.application.interview_record_service import STATUS_FAILED
+from app.interviews.application.interview_record_service import STATUS_PENDING
 
 
 @pytest.fixture(autouse=True)
@@ -50,7 +48,7 @@ def _resume_ctx():
 
 
 def test_dispatch_failure_parks_record_failed_and_reraises(db_session, monkeypatch):
-    from app.services.interview import interview_record_service as irs_module
+    from app.interviews.application import interview_record_service as irs_module
 
     # set_status opens its own SessionLocal — point it at the test session.
     class _NoClose:
@@ -93,7 +91,7 @@ def test_dispatch_failure_parks_record_failed_and_reraises(db_session, monkeypat
 
 
 def test_dispatch_success_leaves_record_pending_with_task_id(db_session, monkeypatch):
-    from app.services.interview import interview_record_service as irs_module
+    from app.interviews.application import interview_record_service as irs_module
 
     class _NoClose:
         def __init__(self, inner):

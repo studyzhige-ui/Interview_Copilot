@@ -31,7 +31,7 @@ class ScheduledTriggerSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_schedule(self) -> "ScheduledTriggerSpec":
-        from app.services.persistent_task_schedule import validate_cron_schedule
+        from app.core.cron_schedule import validate_cron_schedule
 
         self.schedule, self.timezone = validate_cron_schedule(
             self.schedule, self.timezone

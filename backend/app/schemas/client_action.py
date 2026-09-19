@@ -34,9 +34,14 @@ ClientActionName = Literal[
 
 
 class MockPrefillPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     kind: Literal["mock_prefill"] = "mock_prefill"
+    input_mode: Literal["text", "voice"] = "voice"
+    jd_snapshot_id: str | None = Field(default=None, min_length=1, max_length=36)
+    jd_snapshot_version: int | None = Field(default=None, ge=1)
     resume_id: str = Field(min_length=1, max_length=128)
     jd_text: str = Field(min_length=20, max_length=50_000)
     interviewer_style: Literal["friendly", "professional", "rigorous", "pressure"]
@@ -49,7 +54,9 @@ class MockPrefillPayload(BaseModel):
 
 
 class MockReadinessPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     kind: Literal["mock_readiness"] = "mock_readiness"
     requirements: list[Literal["microphone"]] = Field(
@@ -60,16 +67,21 @@ class MockReadinessPayload(BaseModel):
 
 
 class MockEnterLivePayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     kind: Literal["mock_enter_live"] = "mock_enter_live"
+    input_mode: Literal["text", "voice"] = "voice"
     record_id: str = Field(min_length=1, max_length=128)
     conversation_id: str = Field(min_length=1, max_length=128)
     runtime_status: Literal["mock_in_progress"] = "mock_in_progress"
 
 
 class InterviewPreparationOpenPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     kind: Literal["interview_preparation_open"] = "interview_preparation_open"
     interview_id: str = Field(min_length=1, max_length=128)
@@ -96,7 +108,9 @@ ClientActionPayload = Annotated[
 class MockClientActionRequest(BaseModel):
     """Durable request stored in the existing AgentInteraction record."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     protocol: Literal["mock_handoff.v1", "client_action.v1"] = "mock_handoff.v1"
     action_id: str = Field(min_length=1, max_length=128)
@@ -123,13 +137,16 @@ class MockClientActionRequest(BaseModel):
 class MockClientActionResultRequest(BaseModel):
     """Authenticated response from the one client bound to an action."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     action_id: str = Field(min_length=1, max_length=128)
     client_id: str = Field(min_length=1, max_length=128)
     expected_version: int = Field(ge=1)
     outcome: ClientActionOutcome
     readiness: Literal["ready"] | None = None
+    fallback_mode: Literal["text"] | None = None
     reason: str | None = Field(default=None, max_length=1_000)
 
     @model_validator(mode="after")
@@ -142,7 +159,9 @@ class MockClientActionResultRequest(BaseModel):
 
 
 class MockClientActionTakeoverRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     action_id: str = Field(min_length=1, max_length=128)
     expected_version: int = Field(ge=1)
@@ -150,7 +169,9 @@ class MockClientActionTakeoverRequest(BaseModel):
 
 
 class MockClientActionView(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     interaction_id: str
     turn_id: str
@@ -164,7 +185,9 @@ class MockClientActionView(BaseModel):
 
 
 class MockClientActionResolutionResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", json_schema_serialization_defaults_required=True
+    )
 
     action_id: str
     interaction_id: str

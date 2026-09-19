@@ -201,6 +201,9 @@ def test_empty_reason_enum_is_frozen():
         "milvus_unavailable",
         "reranker_unavailable",
         "principal_unresolved",
+        "capacity_exhausted",
+        "retrieval_incomplete",
+        "canonical_unavailable",
     }
 
 

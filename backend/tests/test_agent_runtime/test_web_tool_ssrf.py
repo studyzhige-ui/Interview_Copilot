@@ -19,6 +19,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("usage_scope")
+
 # ── _validate_safe_url ──────────────────────────────────────────────────
 
 

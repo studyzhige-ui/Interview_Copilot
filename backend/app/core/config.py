@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
@@ -34,6 +34,16 @@ class Settings(BaseSettings):
         "postgresql://postgres:postgres@localhost:5432/interview_copilot"
     )
     LLAMA_CLOUD_API_KEY: str = ""
+    CLOUD_PARSE_TIER: Literal["fast", "cost_effective", "agentic", "agentic_plus"] = (
+        "cost_effective"
+    )
+    CLOUD_PARSE_VERSION: str = Field("latest", min_length=1, max_length=80)
+    CLOUD_PARSE_MAX_PAGES: int = Field(500, ge=1, le=10000)
+    CLOUD_PARSE_MAX_INPUT_BYTES: int = Field(
+        50 * 1024 * 1024, ge=1, le=500 * 1024 * 1024
+    )
+    CLOUD_PARSE_MAX_OUTPUT_BYTES: int = Field(20_000_000, ge=1, le=100_000_000)
+    CLOUD_PARSE_DEADLINE_SECONDS: float = Field(300.0, gt=0, le=3600)
 
     # Runtime data paths
     APP_DATA_DIR: str = _default_app_data_dir()
@@ -48,6 +58,12 @@ class Settings(BaseSettings):
     MILVUS_HNSW_EF_SEARCH: int = 64
     # Hugging Face, model, and framework caches
     CACHE_DIR: str = ""
+    # Optional read-only weights shared from a Windows data drive into WSL.
+    # Framework metadata/locks remain under writable CACHE_DIR.
+    MODEL_ROOT_DIR: str = ""
+    MODEL_REVISIONS_JSON: dict[str, str] = Field(default_factory=dict)
+    LOCAL_MODELS_OFFLINE: bool = False
+    AUXILIARY_MODEL_POLICY: Literal["configured", "local_only"] = "configured"
 
     # Logs and telemetry
     LOG_DIR: str = ""
@@ -125,12 +141,35 @@ class Settings(BaseSettings):
     AGENT_MAX_RESPONSE_TOKENS: int = 4096
     AGENT_TOOL_SCHEMA_STRICT: bool = True
     AGENT_MAX_TOOL_ARG_CHARS: int = 4000
+    # Transport cap, not an authorization to give every tool a larger payload.
+    # Only a trusted built-in definition may opt into a larger decoded budget.
+    AGENT_MAX_TOOL_WIRE_ARG_CHARS: int = 640_000
     LLM_REQUEST_TIMEOUT_SECONDS: int = 60
+    # UTC-day account-wide dispatch/token limits. Historical names are retained
+    # for deployment compatibility; all model, speech and tool meters share the
+    # ledger. Money uses exact frozen operator rates, never guessed prices.
+    MODEL_DAILY_CALL_LIMIT: int = Field(default=500, ge=1, le=1_000_000)
+    MODEL_DAILY_TOKEN_LIMIT: int = Field(default=2_000_000, ge=1, le=2_000_000_000)
+    # Global consumption envelope. Missing prices are visible as unpriced; a
+    # monetary ceiling rejects unpriced work rather than treating it as free.
+    USAGE_CURRENCY: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
+    USAGE_DAILY_COST_LIMIT_MICROS: int | None = Field(default=None, ge=1, le=10**12)
+    USAGE_RATE_CARD_JSON: str = "{}"
+    USAGE_DAILY_UNITS_JSON: str = '{"audio_ms":14400000,"characters":2000000,"documents":50000,"pages":5000,"bytes":1073741824,"external_requests":2000,"tool_invocations":1000}'
+    USAGE_AUDIO_MAX_BYTES: int = Field(500 * 1024 * 1024, ge=1, le=2**31 - 1)
+    USAGE_AUDIO_MAX_MS: int = Field(3_600_000, ge=1, le=86_400_000)
+    USAGE_AUDIO_PROBE_SECONDS: float = Field(30.0, gt=0, le=300)
+    USAGE_TTS_MAX_BYTES: int = Field(10_000_000, ge=1, le=100_000_000)
+    USAGE_MAX_UNRESOLVED: int = Field(default=100, ge=1, le=100000)
+    MODEL_STREAM_DEADLINE_SECONDS: float = Field(default=180, gt=0, le=3600)
+    MODEL_STREAM_MAX_BYTES: int = Field(default=2_000_000, ge=1024, le=50_000_000)
     # Anthropic native Messages prompt caching. Disabling it changes only
     # latency/cost; the adapter still sends the complete semantic request.
     ANTHROPIC_PROMPT_CACHE_ENABLED: bool = True
     ANTHROPIC_PROMPT_CACHE_TTL: str = "5m"
     TURN_HEARTBEAT_SECONDS: int = 10
+    TURN_RECOVERY_BATCH_SIZE: int = Field(default=100, ge=1, le=1000)
+    TURN_RECOVERY_MAX_ATTEMPTS: int = Field(default=3, ge=0, le=10)
     TURN_STALE_SECONDS: int = 60
     # Delay before the single automatic Memory producer rechecks that a
     # completed source Turn's Conversation is idle. Contribution remains
@@ -170,6 +209,16 @@ class Settings(BaseSettings):
     RAG_RRF_K: int = 60
     RAG_SEARCH_TIMEOUT_SECONDS: float = 8.0
     RAG_RERANK_TIMEOUT_SECONDS: float = 30.0
+    # Per-process bounds. Queue permits survive cancellation of the async waiter.
+    # Reranker defaults to one worker: model instances need not be thread-safe.
+    RAG_STORAGE_WORKERS: int = Field(default=4, ge=1, le=32)
+    RAG_STORAGE_QUEUE: int = Field(default=8, ge=0, le=128)
+    RAG_SEARCH_WORKERS: int = Field(default=4, ge=1, le=32)
+    RAG_SEARCH_QUEUE: int = Field(default=16, ge=0, le=128)
+    RAG_EMBEDDING_WORKERS: int = Field(default=2, ge=1, le=16)
+    RAG_EMBEDDING_QUEUE: int = Field(default=8, ge=0, le=128)
+    RAG_RERANK_WORKERS: int = Field(default=1, ge=1, le=8)
+    RAG_RERANK_QUEUE: int = Field(default=8, ge=0, le=128)
     RAG_OUTPUT_TOKEN_RESERVE: int = 4_096
     CONTEXT_TOOL_OUTPUT_TOKENS: int = 10_000
     CONTEXT_AUTO_COMPACT_TOKEN_LIMIT: int = 0
@@ -316,6 +365,25 @@ class Settings(BaseSettings):
     # rarely the bottleneck.
     REDIS_POOL_SIZE: int = 50
 
+    @field_validator("USAGE_RATE_CARD_JSON")
+    @classmethod
+    def _usage_rates_valid(cls, value: str) -> str:
+        from app.usage.pricing import rate_catalog
+
+        rate_catalog(value)
+        return value
+
+    @field_validator("USAGE_DAILY_UNITS_JSON")
+    @classmethod
+    def _usage_limits_valid(cls, value: str) -> str:
+        import json
+        from app.usage.pricing import quantities
+
+        limits = quantities(json.loads(value))
+        if any(v <= 0 for v in limits.values()):
+            raise ValueError("resource allowances must be positive")
+        return value
+
     @field_validator(
         "CACHE_DIR",
         "LOG_DIR",
@@ -382,7 +450,9 @@ class Settings(BaseSettings):
         if not 1 <= self.GMAIL_PROVIDER_TIMEOUT_SECONDS <= 60:
             raise ValueError("GMAIL_PROVIDER_TIMEOUT_SECONDS must be between 1 and 60")
         if not 60 <= self.PLUGIN_OAUTH_STATE_TTL_SECONDS <= 900:
-            raise ValueError("PLUGIN_OAUTH_STATE_TTL_SECONDS must be between 60 and 900")
+            raise ValueError(
+                "PLUGIN_OAUTH_STATE_TTL_SECONDS must be between 60 and 900"
+            )
         if not 1 <= self.PLUGIN_PROVIDER_TIMEOUT_SECONDS <= 60:
             raise ValueError("PLUGIN_PROVIDER_TIMEOUT_SECONDS must be between 1 and 60")
         if self.ANTHROPIC_PROMPT_CACHE_TTL not in {"5m", "1h"}:
@@ -520,4 +590,9 @@ def _validate_production_safety(s: "Settings") -> None:
 
 
 settings = Settings()
+# Apply before any optional HF/Transformers import. Download commands opt into a
+# separate online setup process; changing policy in a running process is unsupported.
+if settings.LOCAL_MODELS_OFFLINE or settings.AUXILIARY_MODEL_POLICY == "local_only":
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
 _validate_production_safety(settings)

@@ -3,6 +3,7 @@
 SSRF URL validation lives in test_web_tool_ssrf.py.
 """
 
+import pytest
 import asyncio
 from types import SimpleNamespace
 
@@ -11,6 +12,8 @@ from types import SimpleNamespace
 # real httpx client at import time; replacing it first corrupts that unrelated
 # class definition in a fresh pytest process.
 from app.agent_runtime.tools import web as _web_tool  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures("usage_scope")
 
 
 def _resolved(url: str):
@@ -210,7 +213,7 @@ class TestWebSearchFallback:
                         '<a class="result__a" href="//duckduckgo.com/l/?uddg='
                         'https%3A%2F%2Fexample.com%2Fjobs">Example jobs</a>'
                         '<div class="result__snippet">A useful result</div>'
-                        '</div>'
+                        "</div>"
                     ),
                 )
 
@@ -251,13 +254,14 @@ class TestWebSearchFallback:
                     text=(
                         '<div class="result">'
                         '<a class="result__a" href="https://example.com">Example</a>'
-                        '</div>'
+                        "</div>"
                     ),
                 )
 
         monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _DuckClient())
 
-        from app.agent_runtime.tool_registry import AgentToolContext, registry
+        from app.agent_runtime.tool_registry import AgentToolContext
+        from app.agent_runtime.builtin_tools import registry
         from app.agent_runtime.tools.web import WebSearchArgs, _web_search_handler
 
         ctx = AgentToolContext(user_id="alice", session_id="s1")

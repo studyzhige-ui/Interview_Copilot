@@ -44,7 +44,7 @@
 - Shared Kernel 的完成裁定和 Tool pipeline 阻止“模型说完成”冒充执行完成。Offer 接受/拒绝、签署、确认入职和受限面试代答没有伪按钮、伪 Tool 或 Auto 绕过。
 - 公开 Web/URL、岗位搜索、Gmail、文件、Artifact、历史、面试、Career Domain、PersistentTask、Mock handoff 均以 concrete Tool 或 Application Service 进入；没有真实 handler 的未来 Connector 不注册。
 
-实现入口：`backend/app/services/chat/turn_executor.py`、`backend/app/agent_runtime/tool_call_executor.py`、`backend/app/agent_runtime/tools/`、`backend/app/services/artifact_service.py`、`career_process_service.py`、`offer_service.py`、`persistent_task_service.py`。
+实现入口：`backend/app/conversation/application/turn_executor.py`、`backend/app/agent_runtime/tool_call_executor.py`、`backend/app/agent_runtime/tools/`、`backend/app/career/application/artifacts.py`、`career_process_service.py`、`offer_service.py`、`persistent_task_service.py`。
 
 验证：场景 `stage0-tool-policy-and-recovery`、`stage2-career-owner-and-process`、`stage3-artifact-offer-and-interview`、`stage4-persistent-task`。
 状态：`code_complete`；真实外部动作的 live receipt 验证为 `deployment_required`。

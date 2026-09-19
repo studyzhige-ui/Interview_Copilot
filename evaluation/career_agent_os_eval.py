@@ -8,6 +8,9 @@ import os
 import subprocess
 import sys
 import time
+import hashlib
+import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +31,18 @@ def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, Any]:
     return value
 
 
+def _contained_file(root: Path, relative: str) -> Path:
+    path = Path(relative)
+    if not relative or path.is_absolute() or ".." in path.parts:
+        raise CareerAgentOSGateError(f"unsafe evidence path: {relative!r}")
+    resolved = (root / path).resolve()
+    if not resolved.is_relative_to(root.resolve()) or not resolved.is_file():
+        raise CareerAgentOSGateError(
+            f"evidence file is missing or escapes root: {relative!r}"
+        )
+    return resolved
+
+
 def validate_manifest(
     manifest: dict[str, Any],
     *,
@@ -44,12 +59,17 @@ def validate_manifest(
         *[str(item) for item in manifest.get("contracts") or []],
     ]
     for relative in required_documents:
-        if not relative or not (project_root / relative).is_file():
-            raise CareerAgentOSGateError(f"required document is missing: {relative!r}")
+        _contained_file(project_root, relative)
 
     scenarios = manifest.get("scenarios")
     if not isinstance(scenarios, list):
         raise CareerAgentOSGateError("scenarios must be a list")
+    if len(scenarios) != len(VS01_SCENARIOS) or not all(
+        isinstance(item, dict) for item in scenarios
+    ):
+        raise CareerAgentOSGateError(
+            "VS-01 requires exactly 15 unique scenario objects"
+        )
     actual_ids = {
         str(item.get("id") or "") for item in scenarios if isinstance(item, dict)
     }
@@ -73,18 +93,28 @@ def validate_manifest(
             incomplete.append(scenario_id)
         if not str(scenario.get("claim") or "").strip():
             raise CareerAgentOSGateError(f"{scenario_id}: claim is required")
+        if coverage == "covered" and not (
+            scenario.get("backend_tests") or scenario.get("frontend_tests")
+        ):
+            raise CareerAgentOSGateError(
+                f"{scenario_id}: covered requires executable evidence"
+            )
         for relative in scenario.get("backend_tests") or []:
             relative = str(relative)
-            if not (project_root / relative).is_file():
+            _contained_file(project_root, relative)
+            if not relative.startswith("backend/tests/") or not relative.endswith(
+                ".py"
+            ):
                 raise CareerAgentOSGateError(
-                    f"{scenario_id}: missing backend test {relative}"
+                    f"{scenario_id}: not a backend test: {relative}"
                 )
             backend_tests.append(relative)
         for relative in scenario.get("frontend_tests") or []:
             relative = str(relative)
-            if not (project_root / "frontend" / relative).is_file():
+            _contained_file(project_root / "frontend", relative)
+            if not relative.startswith("src/") or ".test." not in relative:
                 raise CareerAgentOSGateError(
-                    f"{scenario_id}: missing frontend test {relative}"
+                    f"{scenario_id}: not a frontend test: {relative}"
                 )
             frontend_tests.append(relative)
     return {
@@ -124,6 +154,56 @@ def _run(command: list[str], *, cwd: Path) -> dict[str, Any]:
     }
 
 
+def _executed_evidence(path: Path, bindings: list[str], *, frontend: bool) -> dict:
+    """Fresh JUnit only: exit code zero or a skipped suite is not evidence."""
+    if not path.is_file():
+        return {"passed": False, "error": "test_report_missing"}
+    raw = path.read_bytes()
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return {"passed": False, "error": "test_report_invalid"}
+    cases = list(root.iter("testcase"))
+    covered = set()
+    failed = skipped = 0
+    for case in cases:
+        failed += int(
+            case.find("failure") is not None or case.find("error") is not None
+        )
+        skipped += int(case.find("skipped") is not None)
+        name = case.get("classname", "").replace("\\", "/")
+        file = case.get("file", "").replace("\\", "/")
+        for binding in bindings:
+            if frontend:
+                match = name.endswith(binding) or file.endswith(binding)
+            else:
+                # Pytest can report either repository-root modules
+                # (backend.tests.*) or backend-root modules (tests.*), depending
+                # on its import root. Match only these exact module boundaries;
+                # unrelated suffixes must not satisfy a required file binding.
+                dotted = binding.removesuffix(".py").replace("/", ".")
+                module_names = (dotted, dotted.removeprefix("backend."))
+                match = (
+                    any(
+                        name == module or name.startswith(module + ".")
+                        for module in module_names
+                    )
+                    or file == binding
+                    or file.endswith("/" + binding)
+                )
+            if match:
+                covered.add(binding)
+    missing = sorted(set(bindings) - covered)
+    return {
+        "passed": bool(cases) and not failed and not skipped and not missing,
+        "tests": len(cases),
+        "failures_or_errors": failed,
+        "skipped": skipped,
+        "missing_bindings": missing,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+
+
 def run_gate(
     manifest: dict[str, Any],
     *,
@@ -132,35 +212,78 @@ def run_gate(
     frontend_only: bool = False,
     project_root: Path = PROJECT_ROOT,
 ) -> dict[str, Any]:
+    if sum((static_only, backend_only, frontend_only)) > 1:
+        raise CareerAgentOSGateError("gate modes are mutually exclusive")
     validation = validate_manifest(manifest, project_root=project_root)
     commands: list[dict[str, Any]] = []
-    if not static_only and not frontend_only:
-        commands.append(
-            _run(
-                [sys.executable, "-m", "pytest", *validation["backend_tests"], "-q"],
-                cwd=project_root,
+    reports = {}
+    # A newly allocated directory prevents a previous successful report from
+    # being reused when today's runner fails before writing its own results.
+    with tempfile.TemporaryDirectory(prefix="career-os-gate-") as temporary:
+        output = Path(temporary)
+        if not static_only and not frontend_only:
+            path = output / "backend.xml"
+            commands.append(
+                _run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "pytest",
+                        *validation["backend_tests"],
+                        "-q",
+                        f"--junitxml={path}",
+                    ],
+                    cwd=project_root,
+                )
             )
-        )
-    if not static_only and not backend_only:
-        commands.append(
-            _run(
-                [
-                    "npm.cmd" if os.name == "nt" else "npm",
-                    "run",
-                    "test:run",
-                    "--",
-                    *validation["frontend_tests"],
-                    "--maxWorkers=1",
-                    "--no-file-parallelism",
-                ],
-                cwd=project_root / "frontend",
+            reports["backend"] = _executed_evidence(
+                path, validation["backend_tests"], frontend=False
             )
-        )
+        if not static_only and not backend_only:
+            path = output / "frontend.xml"
+            commands.append(
+                _run(
+                    [
+                        "npm.cmd" if os.name == "nt" else "npm",
+                        "run",
+                        "test:run",
+                        "--",
+                        *validation["frontend_tests"],
+                        "--maxWorkers=1",
+                        "--no-file-parallelism",
+                        "--reporter=junit",
+                        f"--outputFile={path}",
+                    ],
+                    cwd=project_root / "frontend",
+                )
+            )
+            reports["frontend"] = _executed_evidence(
+                path, validation["frontend_tests"], frontend=True
+            )
+    full = not (static_only or backend_only or frontend_only)
+    executed = (
+        bool(commands)
+        and all(c["passed"] for c in commands)
+        and all(r["passed"] for r in reports.values())
+    )
     return {
         "manifest": validation,
         "commands": commands,
-        "passed": validation["release_ready"]
-        and all(item["passed"] for item in commands),
+        "executed_evidence": reports,
+        "validation_passed": True,
+        "selected_checks_passed": executed,
+        "mode": "static"
+        if static_only
+        else "backend"
+        if backend_only
+        else "frontend"
+        if frontend_only
+        else "full",
+        "passed": full
+        and validation["release_ready"]
+        and executed
+        and set(reports) == {"backend", "frontend"},
+        "scope": "VS-01 deterministic contracts; not live model or product-quality acceptance",
     }
 
 

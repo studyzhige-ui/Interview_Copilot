@@ -11,7 +11,7 @@ from app.models.agent_execution import AgentToolCall
 from app.models.chat import Conversation, ConversationMessage
 from app.models.conversation_turn import ConversationTurn
 from app.models.user import User
-from app.services.chat.chat_history_service import transcript_service
+from app.conversation.application.chat_history_service import transcript_service
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -191,9 +191,7 @@ def test_tool_call_audit_bounds_large_result_but_history_keeps_exact_record(
     client: TestClient,
     db: Session,
 ):
-    from app.services.interaction_history_service import (
-        get_interaction_history_record,
-    )
+    from app.conversation.history_queries import get_interaction_history_record
 
     conversation, turn = _seed_call(
         db,

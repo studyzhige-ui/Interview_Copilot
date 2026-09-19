@@ -320,7 +320,7 @@ def test_pending_automation_repair_redispatches_bounded_candidates(
     db_session,
     monkeypatch,
 ):
-    from app.services import persistent_task_service
+    from app.automation.application import tasks as persistent_task_service
     from app.task_queue import dispatch
     from app.worker.tasks import maintenance
 
@@ -350,7 +350,7 @@ def test_pending_automation_repair_redispatches_bounded_candidates(
 
 
 def test_persistent_task_scheduler_persists_before_dispatch(db_session, monkeypatch):
-    from app.services import persistent_task_service
+    from app.automation.application import tasks as persistent_task_service
     from app.task_queue import dispatch
     from app.worker.tasks import maintenance
 

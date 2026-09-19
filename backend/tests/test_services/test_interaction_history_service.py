@@ -4,7 +4,8 @@ import asyncio
 
 import pytest
 
-from app.agent_runtime.tool_registry import AgentToolContext, registry
+from app.agent_runtime.tool_registry import AgentToolContext
+from app.agent_runtime.builtin_tools import registry
 from app.db.types import utc_now
 from app.models.agent_execution import AgentToolCall
 from app.models.chat import Conversation, ConversationMessage
@@ -14,7 +15,7 @@ from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
 from app.schemas.history_search import HistorySearchQuery
-from app.services import interaction_history_service
+from app.conversation import history_queries as interaction_history_service
 from tests.conftest import NoCloseSession
 
 

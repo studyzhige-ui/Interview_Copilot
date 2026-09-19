@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import pytest
-from app.services.knowledge.document_formats import (
-    ALLOWED_KNOWLEDGE_EXTENSIONS,
-    UnsupportedDocumentFormat,
+from app.rag.application.library.document_formats import ALLOWED_KNOWLEDGE_EXTENSIONS
+from app.rag.application.library.document_formats import UnsupportedDocumentFormat
+from app.rag.application.library.document_formats import (
     validate_knowledge_document_format,
 )
 

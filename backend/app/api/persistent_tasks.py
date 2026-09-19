@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.agent_runtime.turn_tool_catalog import (
     cloud_sustainable_automation_tool_names,
 )
-from app.agent_runtime.tool_registry import registry
+from app.agent_runtime.builtin_tools import registry
 from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.user import User
@@ -28,8 +28,8 @@ from app.schemas.persistent_task import (
     PersistentTaskUpdate,
     PersistentTaskView,
 )
-from app.services import persistent_task_service
-from app.services.chat.turn_executor import schedule_turn
+from app.automation.application import tasks as persistent_task_service
+from app.conversation.application.turn_executor import schedule_turn
 
 
 router = APIRouter(prefix="/persistent-tasks", tags=["persistent-tasks"])
@@ -214,7 +214,7 @@ def delete_persistent_task(
     if result.cancelled_turn_id:
         try:
             from app.core.async_runtime import run_async
-            from app.services.chat.turn_event_buffer import turn_event_buffer
+            from app.conversation.application.turn_event_buffer import turn_event_buffer
 
             run_async(turn_event_buffer.request_cancel(result.cancelled_turn_id))
         except Exception:  # noqa: BLE001 - DB dispatch fence is authoritative

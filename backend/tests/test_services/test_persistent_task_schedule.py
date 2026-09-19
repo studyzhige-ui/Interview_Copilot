@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.services.persistent_task_schedule import (
+from app.core.cron_schedule import (
     ScheduleValidationError,
     next_cron_occurrence,
     validate_cron_schedule,

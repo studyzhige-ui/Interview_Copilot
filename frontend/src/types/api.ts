@@ -309,9 +309,12 @@ export type AgentInteractionKind =
   | 'clarification'
   | 'connection'
   | 'approval'
-  | 'client_readiness';
+  | 'client_readiness'
+  | 'fact_confirmation'
+  | 'profile_update_confirmation';
 
 interface AgentInteractionBase {
+  schema_version?: number;
   id: string;
   turn_id: string;
   tool_call_id: string | null;
@@ -369,11 +372,33 @@ export interface ClientReadinessInteraction extends AgentInteractionBase {
   };
 }
 
+export interface FactConfirmationInteraction extends AgentInteractionBase {
+  kind: 'fact_confirmation';
+  request: {
+    protocol: string;
+    invitation_facts: Partial<import('./generated/shared-protocols').components['schemas']['InterviewInvitationCandidateFactsResponseContract']>;
+    expected_candidate_version: number;
+    candidate_reference: { kind: string; id: string; version: number | null };
+    missing_or_uncertain_fields: string[];
+    conflicts: string[];
+    source_and_evidence_references: Array<{ kind: string; identity: string; version?: string | null }>;
+    opportunity_match_options: Array<{ opportunity_id: string; expected_version: number;
+      company_name: string; job_title: string; current_step: string }>;
+    [key: string]: unknown;
+  };
+}
+export interface ProfileUpdateConfirmationInteraction extends AgentInteractionBase {
+  kind: 'profile_update_confirmation';
+  request: Record<string, unknown>;
+}
+
 export type AgentInteraction =
   | ClarificationInteraction
   | ConnectionInteraction
   | ApprovalInteraction
-  | ClientReadinessInteraction;
+  | ClientReadinessInteraction
+  | FactConfirmationInteraction
+  | ProfileUpdateConfirmationInteraction;
 
 export type AgentTaskPhaseStatus = 'pending' | 'in_progress' | 'completed' | 'skipped';
 

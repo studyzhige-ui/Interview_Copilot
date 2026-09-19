@@ -15,8 +15,8 @@ from app.schemas.career_profile import (
     CareerProfileCandidateBatchResolutionInput,
     CareerProfileCandidateDecisionInput,
 )
-from app.services import career_profile_service
-from app.services.resume import resume_artifact_service
+from app.career.application import profile as career_profile_service
+from app.career.application.resumes import resume_artifact_service
 
 
 class PrepareResumeProfileCandidatesArgs(BaseModel):

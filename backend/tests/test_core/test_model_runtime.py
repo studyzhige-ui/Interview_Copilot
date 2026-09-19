@@ -59,6 +59,12 @@ def _stub_profile_cache(monkeypatch):
     every ROLE_DEFAULTS entry plus a non-FC profile and a known
     fallback for the fallback-chain tests.
     """
+    # No stored user credentials in this catalog/selection unit fixture. A DB
+    # outage must no longer be silently treated as an absent credential.
+    monkeypatch.setattr(
+        "app.identity.application.user_api_key_service.get_user_api_key_plaintext",
+        lambda *_args, **_kwargs: None,
+    )
     catalog = {
         "deepseek/deepseek-v4-flash": _mkprofile("deepseek/deepseek-v4-flash", fc=True),
         "deepseek/deepseek-v4-pro": _mkprofile("deepseek/deepseek-v4-pro", fc=True),
@@ -389,17 +395,20 @@ def test_cloud_ignores_stored_provider_override(monkeypatch, _stub_profile_cache
     assert llm_client_factory._resolve_api_base(prof, user_id="alice") == prof.api_base
 
 
-def test_resolve_api_base_returns_default_when_db_lookup_fails(
+def test_resolve_api_base_fails_closed_when_db_lookup_fails(
     monkeypatch, _stub_profile_cache
 ):
-    """DB outage shouldn't break chat completion — fall back to default."""
+    """A failed lookup does not authorize a different data destination."""
     prof = _stub_profile_cache["openai/gpt-4o"]
 
     def boom():
         raise RuntimeError("DB down")
 
     monkeypatch.setattr("app.db.database.SessionLocal", boom)
-    assert llm_client_factory._resolve_api_base(prof, user_id="alice") == prof.api_base
+    from app.core.model_connection_error import ModelConnectionUnavailable
+
+    with pytest.raises(ModelConnectionUnavailable):
+        llm_client_factory._resolve_api_base(prof, user_id="alice")
 
 
 # ── MDL-1/MDL-3: ready-aware role resolution ─────────────────────────────
@@ -411,7 +420,7 @@ def _stub_user_keys(monkeypatch, providers: set[str]):
     Stubs ``get_user_api_key_plaintext`` — the single source both
     ``resolve_api_key`` and ``ready_profile_ids`` sit on (one definition
     of "ready", per the Phase 3 review)."""
-    import app.services.auth.user_api_key_service as key_svc
+    import app.identity.application.user_api_key_service as key_svc
 
     monkeypatch.setattr(
         key_svc,

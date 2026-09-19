@@ -22,7 +22,7 @@ from app.schemas.gmail_observation import (
     GmailObservationProposal,
     GmailObservationRetract,
 )
-from app.services import gmail_observation_service as service
+from app.integrations.gmail import observations as service
 
 
 NOW = datetime(2026, 8, 13, 8, 0, tzinfo=UTC)
@@ -222,7 +222,11 @@ def test_ambiguous_observation_creates_task_local_card_not_process_event(db_sess
     )
 
     assert result.outcome == "pending_confirmation"
-    assert result.card is not None
+    assert result.card is None
+    assert result.invitation_handoff is not None
+    assert result.invitation_handoff["candidate_status"] == "needs_clarification"
+    assert result.invitation_handoff["interaction_id"]
+    assert result.invitation_handoff["canonical_write"] is False
     assert observation.status == "pending_confirmation"
     assert (
         db_session.query(ProcessEvent)
@@ -248,7 +252,7 @@ def test_approved_card_applies_fact_and_retraction_preserves_history(db_session)
             observation_id=observation.id,
             expected_version=1,
             disposition="needs_confirmation",
-            event_kind="interview_scheduled",
+            event_kind="assessment_invited",
             opportunity_id=opportunity.id,
             occurred_at=NOW,
             description="面试安排",
@@ -312,7 +316,7 @@ def test_auto_apply_requires_scope_unique_match_and_high_confidence(db_session):
             observation_id=observation.id,
             expected_version=1,
             disposition="auto_apply",
-            event_kind="interview_scheduled",
+            event_kind="assessment_invited",
             opportunity_id=opportunity.id,
             occurred_at=NOW,
             description="招聘方明确安排面试",
@@ -343,7 +347,7 @@ def test_auto_apply_to_archived_line_falls_back_to_card(db_session):
             observation_id=observation.id,
             expected_version=1,
             disposition="auto_apply",
-            event_kind="interview_scheduled",
+            event_kind="assessment_invited",
             opportunity_id=opportunity.id,
             occurred_at=NOW,
             description="晚到的面试安排",

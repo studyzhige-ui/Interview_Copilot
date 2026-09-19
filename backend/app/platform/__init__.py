@@ -1,0 +1,1 @@
+"""platform ownership boundary."""

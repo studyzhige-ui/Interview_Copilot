@@ -78,24 +78,20 @@ describe('MockSetup', () => {
     );
   });
 
-  it('retains a JobOpportunity supplied by the typed prefill handoff', async () => {
+  it('confirms frozen Agent settings without issuing a second HTTP start', async () => {
     const onReady = vi.fn<Parameters<typeof MockSetup>[0]['onReady']>();
-    renderSetup(onReady, {
-      prefill: {
-        kind: 'mock_prefill', resume_id: 'resume-1',
-        jd_text: '这是一个长度足够的预填岗位说明，要求熟悉 Python 与数据库。',
-        interviewer_style: 'professional', target_question_count: 20,
-        job_opportunity_id: 'job-1',
-      },
-      onPrefillApplied: vi.fn(),
-    });
-
-    await waitFor(() => expect(screen.getByRole('combobox', {
-      name: '模拟面试关联岗位',
-    })).toHaveValue('job-1'));
-    fireEvent.click(screen.getByRole('button', { name: /开始模拟面试/ }));
-    expect(onReady).toHaveBeenCalledWith(expect.objectContaining({
-      job_opportunity_id: 'job-1',
-    }));
+    const applied = vi.fn();
+    renderSetup(onReady, { prefill: {
+      kind: 'mock_prefill', resume_id: 'resume-1', input_mode: 'text',
+      jd_text: '这是一个长度足够的预填岗位说明，要求熟悉 Python 与数据库。',
+      interviewer_style: 'professional', target_question_count: 20, job_opportunity_id: 'job-1',
+    }, onPrefillApplied: applied });
+    await waitFor(() => expect(screen.getByRole('button', { name: '确认设置并继续' })).not.toBeDisabled());
+    expect(applied).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('本次岗位说明')).toHaveAttribute('readonly');
+    expect(screen.getByText('关联机会：job-1')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '确认设置并继续' }));
+    expect(applied).toHaveBeenCalledWith({ outcome: 'acknowledged' });
+    expect(onReady).not.toHaveBeenCalled();
   });
 });

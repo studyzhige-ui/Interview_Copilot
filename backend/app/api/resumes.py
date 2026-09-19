@@ -14,8 +14,10 @@ from app.core.security import get_current_user
 from app.db.database import get_db
 from app.models.user import User
 from app.schemas.resumes import ResumeCreateRequest, ResumeResponse
-from app.services.resume import resume_artifact_service
-from app.services.resume.resume_dispatch_service import dispatch_parse_after_commit
+from app.career.application.resumes import resume_artifact_service
+from app.career.application.resumes.resume_dispatch_service import (
+    dispatch_parse_after_commit,
+)
 
 router = APIRouter()
 

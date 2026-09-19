@@ -12,13 +12,11 @@ from app.models.chat import Conversation
 from app.models.conversation_turn import ConversationTurn
 from app.models.user import User
 from app.schemas.agent_interaction import AgentInteractionView, InteractionPayload
-from app.services.chat.interaction_service import (
-    InteractionConflictError,
-    InteractionOwnershipError,
-    create_pending_interaction,
-    get_pending_interaction,
-    resolve_interaction,
-)
+from app.conversation.application.interaction_service import InteractionConflictError
+from app.conversation.application.interaction_service import InteractionOwnershipError
+from app.conversation.application.interaction_service import create_pending_interaction
+from app.conversation.application.interaction_service import get_pending_interaction
+from app.conversation.application.interaction_service import resolve_interaction
 
 
 class ApprovalRequest(BaseModel):

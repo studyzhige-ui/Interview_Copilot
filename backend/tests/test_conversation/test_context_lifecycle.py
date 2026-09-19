@@ -8,10 +8,8 @@ import pytest
 from app.conversation.provider_context import compose_provider_context
 from app.core.context_budget import ContextCapacityError, RequestBudget, request_tokens
 from app.core.model_catalog import ModelProfile
-from app.services.chat.context_assembly_pipeline import (
-    AssembledContext,
-    PromptRenderer,
-)
+from app.conversation.application.context_assembly_pipeline import AssembledContext
+from app.conversation.application.context_assembly_pipeline import PromptRenderer
 
 
 def profile(window=4000):

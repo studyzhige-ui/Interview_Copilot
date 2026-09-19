@@ -8,14 +8,12 @@ import pytest
 from app.models.ability_signal import AbilitySignal, AbilitySignalSourceRef
 from app.models.user import User
 
-_SVC = "app.services.analytics.diagnostics_report_service"
+_SVC = "app.observability.diagnostics_report_service"
 
 
 def test_extract_records_reads_canonical_ability_signal_only(db_session):
     from app.models.memory_ability_state import MemoryAbilityState
-    from app.services.analytics.diagnostics_report_service import (
-        _extract_ability_records,
-    )
+    from app.observability.diagnostics_report_service import _extract_ability_records
 
     user = User(
         username="canonical-ability-report-user",
@@ -66,7 +64,7 @@ def test_extract_records_reads_canonical_ability_signal_only(db_session):
 @pytest.mark.asyncio
 async def test_generate_report_empty_when_no_ability_records():
     with patch(f"{_SVC}._extract_ability_records", return_value=[]):
-        from app.services.analytics.diagnostics_report_service import (
+        from app.observability.diagnostics_report_service import (
             generate_comprehensive_report,
         )
 
@@ -76,7 +74,7 @@ async def test_generate_report_empty_when_no_ability_records():
 
 @pytest.mark.asyncio
 async def test_generate_report_empty_when_no_user():
-    from app.services.analytics.diagnostics_report_service import (
+    from app.observability.diagnostics_report_service import (
         generate_comprehensive_report,
     )
 
@@ -116,7 +114,7 @@ async def test_report_aggregates_observed_axes_without_model_call():
         },
     ]
     with patch(f"{_SVC}._extract_ability_records", return_value=records):
-        from app.services.analytics.diagnostics_report_service import (
+        from app.observability.diagnostics_report_service import (
             generate_comprehensive_report,
         )
 
@@ -148,7 +146,7 @@ async def test_missing_evidence_is_unknown_not_zero():
         }
     ]
     with patch(f"{_SVC}._extract_ability_records", return_value=records):
-        from app.services.analytics.diagnostics_report_service import (
+        from app.observability.diagnostics_report_service import (
             generate_comprehensive_report,
         )
 
@@ -172,7 +170,7 @@ async def test_unknown_score_scale_is_rejected_instead_of_silently_reinterpreted
         }
     ]
     with patch(f"{_SVC}._extract_ability_records", return_value=records):
-        from app.services.analytics.diagnostics_report_service import (
+        from app.observability.diagnostics_report_service import (
             generate_comprehensive_report,
         )
 
@@ -197,7 +195,7 @@ async def test_legacy_label_without_numeric_evidence_is_not_given_a_fake_score()
         }
     ]
     with patch(f"{_SVC}._extract_ability_records", return_value=records):
-        from app.services.analytics.diagnostics_report_service import (
+        from app.observability.diagnostics_report_service import (
             generate_comprehensive_report,
         )
 

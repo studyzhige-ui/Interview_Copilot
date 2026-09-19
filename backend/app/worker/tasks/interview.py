@@ -4,7 +4,7 @@ import logging
 
 from app.core.error_messages import humanize_error
 from app.db.database import SessionLocal
-from app.services.interview.interview_record_service import STATUS_PROCESSING_REVIEW
+from app.interviews.application.interview_record_service import STATUS_PROCESSING_REVIEW
 from app.task_queue.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -59,14 +59,17 @@ def _run_interview_pipeline(self, record_id: str, *, language: str):
     ack we lost), short-circuit instead of re-running the entire pipeline.
     """
     from app.models.interview_record import InterviewRecord
-    from app.services.interview.analysis_orchestrator import analysis_orchestrator
-    from app.services.interview.interview_record_service import interview_record_service
+    from app.interviews.application.analysis_orchestrator import analysis_orchestrator
+    from app.interviews.application.interview_record_service import (
+        interview_record_service,
+    )
 
     # ── Idempotency gate ────────────────────────────────────────────────
     db = SessionLocal()
     try:
         row = db.query(InterviewRecord).filter(InterviewRecord.id == record_id).first()
         source = row.source if row is not None else "upload"
+        owner_pk = row.user_id if row is not None else None
         if row is not None and row.status in ("completed", "review_ready"):
             logger.info(
                 "[Task %s] InterviewRecord %s already terminal (%s); skipping re-run.",
@@ -97,7 +100,12 @@ def _run_interview_pipeline(self, record_id: str, *, language: str):
         logger.warning("Failed to stash celery_task_id on %s", record_id)
 
     try:
-        return analysis_orchestrator.run(record_id, language=language)
+        from app.usage.runtime import scope
+
+        if owner_pk is None:
+            raise ValueError("interview_consumption_owner_missing")
+        with scope(owner_pk, f"interview:{record_id}:{self.request.id}"):
+            return analysis_orchestrator.run(record_id, language=language)
     except Exception as exc:  # noqa: BLE001
         # The orchestrator itself catches and writes STATUS_FAILED before
         # re-raising (see analysis_orchestrator.py:126), so in the common

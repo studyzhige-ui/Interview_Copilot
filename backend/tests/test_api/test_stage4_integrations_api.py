@@ -12,11 +12,9 @@ from app.db.database import Base, get_db
 from app.models.conversation_turn import ConversationTurn
 from app.models.persistent_task import PersistentTaskTrigger
 from app.models.user import User
-from app.services.gmail_integration_service import (
-    GMAIL_READONLY_SCOPE,
-    GmailGrantInspection,
-    bind_verified_grant,
-)
+from app.integrations.gmail.contract import GMAIL_READONLY_SCOPE
+from app.integrations.gmail.contract import GmailGrantInspection
+from app.integrations.gmail.contract import bind_verified_grant
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -87,7 +85,7 @@ def api_context(db: Session, monkeypatch):
         "schedule_turn",
         dispatched_turns.append,
     )
-    from app.services.chat.turn_event_buffer import turn_event_buffer
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     async def request_cancel(_turn_id: str) -> None:
         return None

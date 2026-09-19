@@ -2,7 +2,7 @@
 
 The universe of available models is sourced live from each vendor's
 own ``/v1/models`` endpoint via per-vendor adapters in
-``app.services.model_sources.vendors``. The pipeline writes
+``app.providers.catalog.vendors``. The pipeline writes
 per-provider entries to Redis (24h TTL) plus a no-TTL last-known-good
 snapshot. THIS module mirrors that cache into a small process-local
 map for synchronous validators and model resolution so a chat request does not
@@ -29,18 +29,14 @@ from threading import Lock
 from time import time
 
 from app.db.redis import sync_redis_client
-from app.services.model_sources import (
-    PROVIDERS,
-    ModelEntry,
-    ProviderDefaults,
-    get_provider_defaults,
-)
-from app.services.model_sources.pipeline import (  # internal helpers reused below
-    _deserialize_entries,
-    _redis_key,
-    _redis_key_lkg,
-    load_seed_catalog_sync,
-)
+from app.providers.catalog import PROVIDERS
+from app.providers.catalog import ModelEntry
+from app.providers.catalog import ProviderDefaults
+from app.providers.catalog import get_provider_defaults
+from app.providers.catalog.pipeline import _deserialize_entries
+from app.providers.catalog.pipeline import _redis_key
+from app.providers.catalog.pipeline import _redis_key_lkg
+from app.providers.catalog.pipeline import load_seed_catalog_sync
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +175,7 @@ def _rebuild_cache_locked(grouped: dict[str, list[ModelEntry]]) -> None:
 def repopulate_profile_cache(grouped: dict[str, list[ModelEntry]]) -> None:
     """Public hook for the pipeline's async refresh path.
 
-    Called from ``app.services.model_sources.pipeline.refresh_catalog``
+    Called from ``app.providers.catalog.pipeline.refresh_catalog``
     after a successful Redis write so this process's sync cache stays
     aligned without a separate Redis round-trip.
     """

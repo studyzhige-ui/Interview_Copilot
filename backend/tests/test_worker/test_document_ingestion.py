@@ -98,7 +98,7 @@ def _seed_doc(
 def test_chat_audio_is_transcribed_into_private_citable_chunks(worker_db, monkeypatch):
     import app.core.storage as storage_mod
     import app.rag.ingest.pipeline as ingestion_mod
-    import app.services.voice.audio_transcription_service as transcription_mod
+    import app.media.application.audio_transcription_service as transcription_mod
     from app.worker.tasks import process_document_ingestion
 
     monkeypatch.setattr(
@@ -294,7 +294,7 @@ def test_worker_keeps_processing_when_index_queued(worker_db, monkeypatch):
 
 def test_ready_chat_projection_notifies_waiting_turn_service(worker_db, monkeypatch):
     import app.core.storage as storage_mod
-    import app.services.chat.attachment_waiting_service as waiting_service
+    import app.conversation.application.attachment_waiting_service as waiting_service
     from app.worker.tasks import process_document_ingestion
 
     monkeypatch.setattr(
@@ -320,7 +320,7 @@ def test_ready_chat_projection_notifies_waiting_turn_service(worker_db, monkeypa
     monkeypatch.setattr(
         waiting_service,
         "wake_attachment_turns_for_projection",
-        lambda document_id: notified.append(document_id) or ["turn-1"],
+        lambda document_id, *, actions: notified.append(document_id) or ["turn-1"],
     )
 
     doc_id = _seed_doc(

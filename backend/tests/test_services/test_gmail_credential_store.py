@@ -7,13 +7,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.services.gmail_credential_store import (
-    EncryptedFileGmailCredentialStore,
-    GmailCredentialConflictError,
-    GmailCredentialNotFoundError,
-    GmailCredentialStoreUnavailableError,
-    InMemoryGmailCredentialStore,
-)
+from app.integrations.gmail.credentials import EncryptedFileGmailCredentialStore
+from app.integrations.gmail.credentials import GmailCredentialConflictError
+from app.integrations.gmail.credentials import GmailCredentialNotFoundError
+from app.integrations.gmail.credentials import GmailCredentialStoreUnavailableError
+from app.integrations.gmail.credentials import InMemoryGmailCredentialStore
 
 
 STORE_KEY = "gmail-credential-recovery-key-with-at-least-32-characters"

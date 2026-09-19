@@ -25,6 +25,7 @@ interface Props {
   onReady: (payload: {
     resume_id: string;
     jd_text: string;
+    input_mode: 'text' | 'voice';
     interviewer_style: InterviewerStyle;
     tts_voice: TtsVoice;
     target_question_count: TargetQuestionCount;
@@ -96,6 +97,7 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
   const [style, setStyle] = useState<InterviewerStyle>(
     prefill?.interviewer_style ?? 'professional',
   );
+  const [inputMode, setInputMode] = useState<'text' | 'voice'>(prefill?.input_mode ?? 'text');
   const [ttsVoice, setTtsVoice] = useState<TtsVoice>(loadPreferredVoice);
   const [targetQuestionCount, setTargetQuestionCount] =
     useState<TargetQuestionCount>(prefill?.target_question_count ?? 20);
@@ -116,7 +118,6 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
         setResumeMode(selected ? 'existing' : 'upload');
         if (selected) {
           setResume({ filename: selected.title, id: selected.id, loading: false });
-          if (prefill) onPrefillApplied?.({ outcome: 'acknowledged' });
         } else if (prefill) {
           onPrefillApplied?.({
             outcome: 'failed',
@@ -124,7 +125,9 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
           });
         }
       })
-      .catch(() => { /* non-fatal — just hide the picker */ })
+      .catch(() => {
+        if (alive && prefill) onPrefillApplied?.({ outcome: 'failed', reason: '无法核实预填简历，请重试' });
+      })
       .finally(() => { if (alive) setLoadingResumes(false); });
     return () => { alive = false; };
   }, [onPrefillApplied, prefill]);
@@ -195,8 +198,24 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
 
   // JD always reduces to plain text — either the user pasted it directly,
   // or parseJdForMock returned text from their uploaded file.
-  const jdReady = jdText.trim().length >= 20;
+  const jdReady = jdText.trim().length >= 20 && jdText.trim().length <= 50_000;
   const ready = resume.id !== null && !resume.loading && jdReady;
+
+  // A ClientAction is not a second HTTP start. Its frozen settings must be
+  // visible and confirmed, not silently edited and then ignored by the Tool.
+  if (prefill) return <section aria-label="确认模拟面试设置" className="mx-auto max-w-3xl space-y-4 p-6">
+    <h2 className="text-xl font-semibold">确认本次模拟面试设置</h2>
+    <p>简历：{resume.filename || '正在核实…'}</p>
+    <p>回答方式：{prefill.input_mode === 'text' ? '文字，无需麦克风' : '语音，需检查麦克风'}</p>
+    <p>风格：{prefill.interviewer_style} · 预计题量：{prefill.target_question_count}</p>
+    {prefill.job_opportunity_id && <p>关联机会：{prefill.job_opportunity_id}</p>}
+    <label className="grid gap-2">本次岗位说明<textarea readOnly rows={8} className="rounded-lg border p-3" value={prefill.jd_text} /></label>
+    <p className="text-sm">以上设置绑定本次请求。需要调整时，请取消后修改 Copilot 请求。</p>
+    <div className="flex gap-4">
+      <button disabled={!ready || loadingResumes || starting} onClick={() => onPrefillApplied?.({ outcome: 'acknowledged' })}>确认设置并继续</button>
+      <button disabled={starting} onClick={() => onPrefillApplied?.({ outcome: 'refused', reason: '用户取消本次模拟面试设置' })}>取消启动</button>
+    </div>
+  </section>;
 
   return (
     <div className="px-4 md:px-6 py-8">
@@ -239,6 +258,16 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
             options={STYLE_OPTIONS}
             value={style}
             onChange={setStyle}
+          />
+          <PrefGroup
+            label="回答方式"
+            options={[
+              { id: 'text' as const, label: '文字面试', desc: '无需麦克风，默认静音' },
+              { id: 'voice' as const, label: '语音面试', desc: '可录音转写，文字仍可使用' },
+            ]}
+            value={inputMode}
+            onChange={setInputMode}
+            columns={2}
           />
           <PrefGroup
             label="预计题量"
@@ -289,6 +318,7 @@ export function MockSetup({ onReady, starting, prefill, onPrefillApplied }: Prop
               onReady({
                 resume_id: resume.id!,
                 jd_text: jdText.trim(),
+                input_mode: inputMode,
                 interviewer_style: style,
                 tts_voice: ttsVoice,
                 target_question_count: targetQuestionCount,

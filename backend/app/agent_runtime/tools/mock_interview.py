@@ -8,9 +8,11 @@ Application Service remains the sole creator of records and runtime state.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from app.schemas.mock_preparation import MockPreparationRequest
+from app.interviews.application.mock_sources import resolve_job_description
+from app.interviews.application.mock_sources import MockJobDescriptionUnavailable
 from sqlalchemy.exc import IntegrityError
 
 from app.agent_runtime.tool_policy import ToolEffect
@@ -27,36 +29,25 @@ from app.schemas.client_action import (
     MockPrefillPayload,
     MockReadinessPayload,
 )
-from app.services.chat.client_action_service import (
-    ClientActionConflictError,
+from app.conversation.application.client_action_service import ClientActionConflictError
+from app.conversation.application.client_action_service import (
     ClientActionUnavailableError,
-    action_resolution,
-    create_mock_client_action,
-    find_mock_client_action,
-    latest_handoff_client,
 )
-from app.services.interview import mock_flow, mock_runtime_service
-from app.services.interview.interview_record_service import (
-    STATUS_MOCK_IN_PROGRESS,
+from app.conversation.application.client_action_service import action_resolution
+from app.conversation.application.client_action_service import create_mock_client_action
+from app.conversation.application.client_action_service import find_mock_client_action
+from app.conversation.application.client_action_service import latest_handoff_client
+from app.interviews.application import mock_flow
+from app.interviews.application import mock_runtime_service
+from app.interviews.application.interview_record_service import STATUS_MOCK_IN_PROGRESS
+from app.interviews.application.interview_record_service import (
     InterviewOpportunityNotFoundError,
-    interview_record_service,
 )
+from app.interviews.application.interview_record_service import interview_record_service
 
 
-class StartMockInterviewArgs(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    resume_id: str = Field(min_length=1, max_length=128)
-    jd_text: str = Field(min_length=20, max_length=50_000)
-    interviewer_style: Literal["friendly", "professional", "rigorous", "pressure"] = (
-        "professional"
-    )
-    target_question_count: Literal[15, 20, 30] = 20
-    job_opportunity_id: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=35,
-    )
+class StartMockInterviewArgs(MockPreparationRequest):
+    """A thin model-facing adapter over the shared preparation contract."""
 
 
 def _task_authorizes_mock_start(
@@ -188,12 +179,20 @@ def _run_start_mock(
                     "error": "job_opportunity_not_found",
                     "reason": "The requested job opportunity is unavailable",
                 }
+            jd_text = resolve_job_description(
+                db,
+                user_pk=turn.user_id,
+                jd_text=args.jd_text,
+                job_opportunity_id=args.job_opportunity_id,
+                jd_snapshot_id=args.jd_snapshot_id,
+                jd_snapshot_version=args.jd_snapshot_version,
+            )
             row, request = create_mock_client_action(
                 db,
                 turn=turn,
                 tool_call_id=ctx.tool_call_id,
                 action="mock_interview.prefill",
-                payload=MockPrefillPayload(**args.model_dump()),
+                payload=MockPrefillPayload(**{**args.model_dump(), "jd_text": jd_text}),
                 original_client_id=original_client_id,
                 bound_client_id=active_client_id,
             )
@@ -207,43 +206,53 @@ def _run_start_mock(
         if stopped is not None:
             return stopped
 
-        readiness = find_mock_client_action(
-            db,
-            turn_id=turn.id,
-            tool_call_id=ctx.tool_call_id,
-            action="mock_interview.check_readiness",
-        )
-        if readiness is None:
-            original_client_id, active_client_id = latest_handoff_client(
+        # Prefill is a persisted source snapshot. Resume must not silently
+        # resolve a newer JD or introduce a microphone requirement to text mode.
+        preparation = prefill_request.payload
+        if not isinstance(preparation, MockPrefillPayload):
+            return {"error": "invalid_client_action_state", "phase": "prefill"}
+        input_mode = preparation.input_mode
+        if input_mode == "voice":
+            readiness = find_mock_client_action(
                 db,
-                turn=turn,
-                tool_call_id=ctx.tool_call_id,
-            )
-            row, request = create_mock_client_action(
-                db,
-                turn=turn,
+                turn_id=turn.id,
                 tool_call_id=ctx.tool_call_id,
                 action="mock_interview.check_readiness",
-                payload=MockReadinessPayload(),
-                original_client_id=original_client_id,
-                bound_client_id=active_client_id,
             )
-            db.commit()
-            return _waiting_result(row, request)
+            if readiness is None:
+                original_client_id, active_client_id = latest_handoff_client(
+                    db,
+                    turn=turn,
+                    tool_call_id=ctx.tool_call_id,
+                )
+                row, request = create_mock_client_action(
+                    db,
+                    turn=turn,
+                    tool_call_id=ctx.tool_call_id,
+                    action="mock_interview.check_readiness",
+                    payload=MockReadinessPayload(),
+                    original_client_id=original_client_id,
+                    bound_client_id=active_client_id,
+                )
+                db.commit()
+                return _waiting_result(row, request)
 
-        readiness_row, readiness_request = readiness
-        if readiness_row.status == "pending":
-            return _waiting_result(readiness_row, readiness_request)
-        stopped = _terminal_client_result(readiness_row, phase="readiness")
-        if stopped is not None:
-            return stopped
-        readiness_result = action_resolution(readiness_row) or {}
-        if readiness_result.get("readiness") != "ready":
-            return {
-                "error": "client_not_ready",
-                "phase": "readiness",
-                "reason": "The client did not prove microphone readiness",
-            }
+            readiness_row, readiness_request = readiness
+            if readiness_row.status == "pending":
+                return _waiting_result(readiness_row, readiness_request)
+            stopped = _terminal_client_result(readiness_row, phase="readiness")
+            if stopped is not None:
+                return stopped
+            readiness_result = action_resolution(readiness_row) or {}
+            if readiness_result.get("readiness") != "ready":
+                return {
+                    "error": "client_not_ready",
+                    "phase": "readiness",
+                    "reason": "The client did not prove microphone readiness",
+                }
+
+            if readiness_result.get("fallback_mode") == "text":
+                input_mode = "text"
 
         enter_live = find_mock_client_action(
             db,
@@ -261,7 +270,7 @@ def _run_start_mock(
                 db,
                 username=ctx.user_id,
                 resume_id=args.resume_id,
-                jd_text=args.jd_text,
+                jd_text=preparation.jd_text,
                 interviewer_style=args.interviewer_style,
                 target_question_count=args.target_question_count,
                 job_opportunity_id=args.job_opportunity_id,
@@ -279,6 +288,7 @@ def _run_start_mock(
                 payload=MockEnterLivePayload(
                     record_id=started.record.id,
                     conversation_id=started.conversation.id,
+                    input_mode=input_mode,
                 ),
                 original_client_id=original_client_id,
                 bound_client_id=active_client_id,
@@ -352,6 +362,9 @@ def _run_start_mock(
             "ui_entered": True,
             "handoff": "completed",
         }
+    except MockJobDescriptionUnavailable as exc:
+        db.rollback()
+        return {"error": "job_description_unavailable", "reason": str(exc)}
     except ClientActionUnavailableError as exc:
         db.rollback()
         return {"error": "client_action_unavailable", "reason": str(exc)}
@@ -392,16 +405,19 @@ registry.register(
         name="start_mock_interview",
         description=(
             "Prepare and start the product's real-time Mock Interview Flow from an "
-            "owned resume and explicit job description. The same Tool Call waits "
-            "for typed product-client prefill, microphone readiness, and enter-live "
+            "owned resume and explicit job description or exact owned JD snapshot. "
+            "Default text mode never requests microphone access. The same Tool Call waits "
+            "for typed product-client prefill, optional voice readiness, and enter-live "
             "acknowledgements; only the returned runtime identity proves start."
         ),
         args_model=StartMockInterviewArgs,
+        max_argument_chars=110_000,
         handler=_start_mock_interview_handler,
         effect=ToolEffect.CLIENT_ACTION,
         task_authorizer=_task_authorizes_mock_start,
         reversible=True,
         concurrency_safe=False,
+        resource_resolver=lambda _args, ctx: (f"mock_interview_user:{ctx.user_pk}",),
         emoji="🎙️",
         prompt=(
             "Use only when the user explicitly asks to start a mock interview and "

@@ -11,18 +11,16 @@ from app.models.offer import Offer
 from app.models.job_opportunity import NextAction
 from app.models.user import User
 from app.schemas.offer import OfferSourceInput, OfferTermsInput
-from app.services.offer_service import (
-    OfferOperationConflictError,
-    OfferOwnershipError,
-    OfferSourceUnavailableError,
-    OfferStaleConfirmationError,
-    OfferTermsConfirmationRequired,
-    OfferTermsResolutionError,
-    confirm_offer_terms_change,
-    current_offer_token,
-    get_current_offer,
-    record_current_offer,
-)
+from app.career.application.offers import OfferOperationConflictError
+from app.career.application.offers import OfferOwnershipError
+from app.career.application.offers import OfferSourceUnavailableError
+from app.career.application.offers import OfferStaleConfirmationError
+from app.career.application.offers import OfferTermsConfirmationRequired
+from app.career.application.offers import OfferTermsResolutionError
+from app.career.application.offers import confirm_offer_terms_change
+from app.career.application.offers import current_offer_token
+from app.career.application.offers import get_current_offer
+from app.career.application.offers import record_current_offer
 
 
 NOW = datetime(2026, 8, 13, 8, 0, tzinfo=timezone.utc)

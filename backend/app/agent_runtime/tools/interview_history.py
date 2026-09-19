@@ -40,7 +40,7 @@ def _read_interview_history_sync(
     ctx: AgentToolContext,
 ) -> dict[str, Any]:
     try:
-        from app.services.interview.interview_record_service import (
+        from app.interviews.application.interview_record_service import (
             interview_record_service,
         )
 

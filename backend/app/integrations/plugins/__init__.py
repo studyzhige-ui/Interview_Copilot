@@ -1,0 +1,1 @@
+"""integrations / plugins ownership boundary."""

@@ -5,7 +5,7 @@ from app.models.interview_qa import InterviewQA
 from app.models.interview_record import InterviewRecord
 from app.models.user import User
 
-module = import_module("app.services.interview.analysis_orchestrator")
+module = import_module("app.interviews.application.analysis_orchestrator")
 
 
 def test_persist_analysis_keeps_zero_and_null_distinct(db_session, monkeypatch):

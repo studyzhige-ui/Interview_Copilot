@@ -7,6 +7,11 @@ from types import SimpleNamespace
 import pytest
 
 from app.rag.domain.models import SearchIntent
+from app.core.execution_errors import (
+    ConsumptionSettlementUnconfirmedError,
+    ModelOutcomeUnknownError,
+)
+from app.usage.service import ModelBudgetExceededError
 from app.rag.retrieval.candidates import IntentCandidates
 from app.rag.retrieval.reranking import select_coverage_aware
 
@@ -104,6 +109,7 @@ async def test_pipeline_preserves_missing_intent_for_grounding_gate(monkeypatch)
     policy = SimpleNamespace(
         retrieval=SimpleNamespace(
             max_intents=4,
+            search_timeout_seconds=1,
             candidate_count=10,
             final_count=3,
             min_score=0.5,
@@ -161,7 +167,14 @@ async def test_pipeline_preserves_missing_intent_for_grounding_gate(monkeypatch)
     monkeypatch.setattr(
         instance,
         "_hydrate",
-        lambda _ids: [{"node_id": "n1", "text": "first evidence"}],
+        lambda _ids, **_scope: [
+            {
+                "node_id": "n1",
+                "text": "first evidence",
+                "document_id": "doc",
+                "source_kind": "user_upload",
+            }
+        ],
     )
 
     result = await instance.retrieve(
@@ -223,6 +236,7 @@ async def test_pipeline_reranker_failure_fails_closed(monkeypatch):
     policy = SimpleNamespace(
         retrieval=SimpleNamespace(
             max_intents=4,
+            search_timeout_seconds=1,
             candidate_count=10,
             final_count=3,
             min_score=0.5,
@@ -275,3 +289,39 @@ async def test_pipeline_reranker_failure_fails_closed(monkeypatch):
     assert result.retrieval_hit is False
     assert result.state.empty_reason == "reranker_unavailable"
     assert result.state.degraded is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_type",
+    [
+        ConsumptionSettlementUnconfirmedError,
+        ModelOutcomeUnknownError,
+        ModelBudgetExceededError,
+    ],
+)
+async def test_candidate_fusion_does_not_mask_consumption_errors(
+    monkeypatch, error_type
+):
+    from app.rag import milvus_hybrid
+    from app.rag.retrieval import candidates
+
+    error = error_type("synthetic consumption boundary")
+    calls = []
+
+    async def embedding(_query):
+        calls.append("embedding")
+        raise error
+
+    def sparse(*_args, **_kwargs):
+        calls.append("sparse")
+        return [{"id": "n1", "text": "real lexical candidate", "user_id": 7}]
+
+    monkeypatch.setattr(candidates, "_query_embedding", embedding)
+    monkeypatch.setattr(milvus_hybrid, "sparse_search", sparse)
+    with pytest.raises(error_type) as caught:
+        await candidates.search_intent_candidates(
+            SearchIntent(query="redis"), user_pk=7, source_kind=None, candidate_count=10
+        )
+    assert caught.value is error
+    assert sorted(calls) == ["embedding", "sparse"]

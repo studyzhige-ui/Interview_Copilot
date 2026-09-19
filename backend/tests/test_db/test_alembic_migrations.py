@@ -9,9 +9,9 @@ service used by the project). The test creates an isolated database
 ``interview_copilot_test_<uuid>`` for each run and drops it on teardown
 so concurrent runs / re-runs never collide.
 
-If Postgres is unreachable the test is skipped — that way `pytest` is
-still green in environments without Docker (e.g. lightweight CI),
-and CI that does spin up PG catches migration breakage.
+Local runs without PostgreSQL skip these cases. The required CI campaign sets
+REQUIRE_TEST_POSTGRES=1: an unreachable database then fails instead of silently
+skipping the migration, concurrency and process-death checks.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def _pg_available() -> bool:
     try:
         import psycopg2
 
-        conn = psycopg2.connect(PG_ADMIN_URL)
+        conn = psycopg2.connect(PG_ADMIN_URL, connect_timeout=3)
         conn.close()
         return True
     except Exception:
@@ -52,6 +52,10 @@ def _pg_available() -> bool:
 def fresh_pg_db():
     """Provision an isolated, empty Postgres DB; drop it on teardown."""
     if not _pg_available():
+        if os.environ.get("REQUIRE_TEST_POSTGRES") == "1":
+            pytest.fail(
+                "PostgreSQL is mandatory for this test campaign but is unavailable"
+            )
         pytest.skip(
             "Postgres not reachable at TEST_PG_ADMIN_URL — skipping migration test."
         )
@@ -61,7 +65,7 @@ def fresh_pg_db():
 
     db_name = f"ic_mig_test_{uuid.uuid4().hex[:12]}"
 
-    admin = psycopg2.connect(PG_ADMIN_URL)
+    admin = psycopg2.connect(PG_ADMIN_URL, connect_timeout=3)
     admin.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
     with admin.cursor() as cur:
         cur.execute(f'CREATE DATABASE "{db_name}"')
@@ -74,7 +78,7 @@ def fresh_pg_db():
     yield db_url
 
     # Teardown — disconnect everyone & drop.
-    admin = psycopg2.connect(PG_ADMIN_URL)
+    admin = psycopg2.connect(PG_ADMIN_URL, connect_timeout=3)
     admin.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
     with admin.cursor() as cur:
         cur.execute(
@@ -320,7 +324,7 @@ def test_release_migration_columns_match_orm_registry():
 
 def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     """Install the release schema in a virgin PostgreSQL database."""
-    from sqlalchemy import Float, create_engine, inspect
+    from sqlalchemy import Float, Integer, create_engine, inspect
     from sqlalchemy.dialects.postgresql import JSONB
 
     from alembic import command
@@ -414,6 +418,12 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
     assert runtime_columns["current_stage_key"]["nullable"] is False
     assert runtime_columns["current_question_message_id"]["nullable"] is False
     assert runtime_columns["target_question_count"]["nullable"] is False
+    assert isinstance(runtime_columns["answer_claim_generation"]["type"], Integer)
+    assert runtime_columns["answer_claim_generation"]["nullable"] is False
+    assert runtime_columns["answer_claim_generation"]["default"] in {
+        "0",
+        "'0'::integer",
+    }
     assert set(runtime_columns) == {
         "interview_record_id",
         "user_id",
@@ -424,6 +434,7 @@ def test_alembic_upgrade_head_on_fresh_postgres(fresh_pg_db, monkeypatch):
         "current_stage_key",
         "current_question_message_id",
         "answer_claimed_at",
+        "answer_claim_generation",
         "last_activity_at",
     }
     assert isinstance(qa_columns["score"]["type"], Float)
@@ -638,4 +649,87 @@ def test_interview_record_children_cascade(fresh_pg_db, monkeypatch):
         f"mock_interview_runtime not cascaded — {runtime_left} orphan rows"
     )
 
+    engine.dispose()
+
+
+def test_0047_preserves_legacy_metadata_and_json_on_upgrade_and_downgrade(fresh_pg_db):
+    from datetime import datetime, UTC
+    from alembic import command
+    from sqlalchemy import create_engine, inspect, text
+    from sqlalchemy.orm import Session
+    from app.models.user import User
+    from app.models.chat import Conversation
+    from app.models.context_checkpoint import ContextCheckpoint
+
+    cfg = _make_alembic_config(fresh_pg_db)
+    command.upgrade(cfg, "0046")
+    engine = create_engine(fresh_pg_db)
+    when = datetime(2026, 1, 1, tzinfo=UTC)
+    payload = {"nested": ["中文", {"zero": 0, "missing": None}], "messages": []}
+    with Session(engine) as session:
+        user = User(
+            username="migration-retained-metadata",
+            hashed_password="not-a-login",
+            _legacy_last_dreamed_at=when,
+        )
+        session.add(user)
+        session.flush()
+        conversation = Conversation(
+            id="migration-context",
+            user_id=user.id,
+            type="general",
+            _legacy_memory_extraction_cursor=17,
+        )
+        session.add(conversation)
+        session.flush()
+        session.add(
+            ContextCheckpoint(
+                conversation_id=conversation.id,
+                scope="",
+                window_id="window-retained",
+                state=payload,
+            )
+        )
+        session.commit()
+    for revision, expected_type in (
+        ("head", "JSONB"),
+        ("0046", "JSON"),
+        ("head", "JSONB"),
+    ):
+        if revision == "0046":
+            command.downgrade(cfg, revision)
+        else:
+            command.upgrade(cfg, revision)
+        with engine.connect() as conn:
+            assert (
+                conn.execute(
+                    text(
+                        "SELECT memory_extraction_cursor FROM conversations WHERE id='migration-context'"
+                    )
+                ).scalar_one()
+                == 17
+            )
+            assert (
+                conn.execute(
+                    text(
+                        "SELECT last_dreamed_at FROM users WHERE username='migration-retained-metadata'"
+                    )
+                ).scalar_one()
+                == when
+            )
+            assert (
+                conn.execute(
+                    text(
+                        "SELECT state FROM context_checkpoints WHERE conversation_id='migration-context'"
+                    )
+                ).scalar_one()
+                == payload
+            )
+        column = next(
+            c
+            for c in inspect(engine).get_columns("context_checkpoints")
+            if c["name"] == "state"
+        )
+        assert str(column["type"]) == expected_type
+    command.check(cfg)
     engine.dispose()

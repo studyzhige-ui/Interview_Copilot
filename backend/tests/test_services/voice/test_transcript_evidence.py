@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from app.services.voice.transcript_evidence import (
-    build_transcript_evidence,
-    render_raw_turns,
-    render_word_ids,
-    strict_display_hidden_words,
-)
+from app.media.application.transcript_evidence import build_transcript_evidence
+from app.media.application.transcript_evidence import render_raw_turns
+from app.media.application.transcript_evidence import render_word_ids
+from app.media.application.transcript_evidence import strict_display_hidden_words
 
 
 def _evidence():

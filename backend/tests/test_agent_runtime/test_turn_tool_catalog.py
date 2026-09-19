@@ -1,3 +1,4 @@
+import pytest
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -5,12 +6,10 @@ from types import MappingProxyType, SimpleNamespace
 from unittest.mock import AsyncMock
 
 from app.agent_runtime.mcp.manager import MCPManager, MCPToolDescriptor
-from app.agent_runtime.tool_registry import (
-    AgentToolContext,
-    ToolDefinition,
-    ToolRegistry,
-    registry,
-)
+from app.agent_runtime.tool_registry import AgentToolContext
+from app.agent_runtime.tool_registry import ToolDefinition
+from app.agent_runtime.tool_registry import ToolRegistry
+from app.agent_runtime.builtin_tools import registry
 from app.agent_runtime.turn_tool_catalog import TurnToolCatalog
 from app.models.chat import Conversation
 from app.models.conversation_turn import ConversationTurn
@@ -18,15 +17,18 @@ from app.models.agent_task import AgentTask
 from app.models.agent_task_skill import AgentTaskSkillBinding
 from app.models.user import User
 from app.models.user_skill import UserSkill
-from app.services.capabilities import skill_service
-from app.services.capabilities.mcp_server_service import MCPServerConfig
+from app.capabilities.application import skill_service
+from app.capabilities.application.mcp_server_service import MCPServerConfig
 from pydantic import BaseModel
 from mcp.types import Tool, ListToolsResult
 
 from tests.conftest import patch_session_locals
 
+pytestmark = pytest.mark.usefixtures("usage_database")
+
 CONFIG = MCPServerConfig(
     id=7,
+    user_id=1,
     name="demo",
     transport="streamable_http",
     url="https://example.com/mcp",

@@ -100,7 +100,7 @@ describe('MockLive', () => {
     expect(screen.getByText('请讲讲最近的项目')).toBeInTheDocument();
   });
 
-  it('reconciles a lost response and automatically resumes the interviewer turn', async () => {
+  it('reconciles read-only and generates again only after explicit consent', async () => {
     vi.mocked(submitMockAnswer)
       .mockRejectedValueOnce(new Error('network lost'))
       .mockResolvedValueOnce({
@@ -129,6 +129,12 @@ describe('MockLive', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: '提交' }));
 
+    await screen.findByRole('button', { name: '重试生成下一题' });
+    expect(submitMockAnswer).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: '重新连接' }));
+    await waitFor(() => expect(getMockLiveState).toHaveBeenCalledTimes(2));
+    expect(submitMockAnswer).toHaveBeenCalledTimes(1);
+    fireEvent.click(await screen.findByRole('button', { name: '重试生成下一题' }));
     expect(await screen.findByText('请继续讲项目难点')).toBeInTheDocument();
     await waitFor(() => expect(submitMockAnswer).toHaveBeenCalledTimes(2));
     expect(submitMockAnswer).toHaveBeenLastCalledWith('record-1', {
@@ -236,4 +242,25 @@ describe('MockLive', () => {
     fireEvent.click(finishSuggestion);
     expect(screen.getByText('结束本次面试')).toBeInTheDocument();
   });
+  it('reloads a dangling answer without automatically creating another paid request', async () => {
+    vi.mocked(getMockLiveState).mockResolvedValue({ messages: [opening, { id: 11, speaker: 'candidate', text: '服务器已保存的回答' }] });
+    render(<MockLive recordId="record-1" ttsVoice="zh-CN-YunxiNeural" onFinished={vi.fn()} onAbandoned={vi.fn()} />);
+    await screen.findByRole('button', { name: '重试生成下一题' });
+    expect(screen.getByText('服务器已保存的回答')).toBeInTheDocument();
+    expect(submitMockAnswer).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: '提交' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '结束面试' })).toBeEnabled();
+  });
+
+  it('uses a late canonical reply without posting again', async () => {
+    vi.mocked(submitMockAnswer).mockRejectedValueOnce(new Error('response lost'));
+    vi.mocked(getMockLiveState).mockResolvedValue({ messages: [opening, { id: 11, speaker: 'candidate', text: '回答' }, { id: 12, speaker: 'interviewer', text: '已提交的下一题' }] });
+    render(<MockLive recordId="record-1" initialMessages={[opening]} ttsVoice="zh-CN-YunxiNeural" onFinished={vi.fn()} onAbandoned={vi.fn()} />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '回答' } });
+    fireEvent.click(screen.getByRole('button', { name: '提交' }));
+    await screen.findByText('已提交的下一题');
+    expect(submitMockAnswer).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: '重试生成下一题' })).not.toBeInTheDocument();
+  });
+
 });
