@@ -1,0 +1,108 @@
+name: Validate continuation source objects
+on:
+  push:
+    branches: [refactor/product-runtime-convergence]
+    paths: [.github/workflows/refactor-final-objects.yml]
+permissions:
+  contents: write
+concurrency:
+  group: continuation-source-objects
+  cancel-in-progress: false
+jobs:
+  objects:
+    if: github.repository == 'studyzhige-ui/Interview_Copilot' && github.ref == 'refs/heads/refactor/product-runtime-convergence'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Preserve only temporary source transport for integrity diagnosis
+        run: tar -cf "$RUNNER_TEMP/source-transport.tar" .refactor-final
+      - uses: actions/upload-artifact@v4
+        with:
+          name: continuation-transport
+          path: ${{ runner.temp }}/source-transport.tar
+          retention-days: 1
+      - name: Validate and materialize exact tested source
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 91b253b432d12d55ab93399cd6ab63a177572adf HEAD
+          python - <<'PY'
+          import base64, gzip, hashlib, json, subprocess
+          from pathlib import Path
+          changes = subprocess.check_output(['git','diff','--name-only','91b253b432d12d55ab93399cd6ab63a177572adf','HEAD']).decode().splitlines()
+          assert all(p.startswith('.refactor-final/') or p == '.github/workflows/refactor-final-objects.yml' for p in changes), 'concurrent source change'
+          parts = ['01','02'] + [f'{i:02}{s}' for i in range(3,7) for s in 'abcd']
+          encoded = ''.join(Path(f'.refactor-final/{p}.txt').read_text() for p in parts)
+          packed = base64.b64decode(encoded, validate=True)
+          assert hashlib.sha256(packed).hexdigest() == '136a04830b4806d543509074c0f5ee094f87f449569be0f6083f34d398d7a9a2', 'transport integrity mismatch'
+          raw = gzip.decompress(packed)
+          assert hashlib.sha256(raw).hexdigest() == '5fab5ef7487744e8f076bf681d492c422b6a3a316677feb9701812370e37d37a'
+          pending = {}
+          for name, before_hash, after_hash, edits in json.loads(raw):
+              path = Path(name)
+              assert not path.is_absolute() and not {'.git','..'} & set(path.parts)
+              assert all(not p.is_symlink() for p in [path,*path.parents])
+              assert name not in pending
+              before = path.read_bytes() if path.exists() else b''
+              assert hashlib.sha256(before).hexdigest() == before_hash, ('preimage',name)
+              if after_hash is None:
+                  assert edits is None and path.is_file()
+                  pending[name] = None
+                  continue
+              lines = before.decode('utf-8').splitlines(keepends=True)
+              end = len(lines)
+              for start, stop, text in reversed(edits):
+                  assert 0 <= start <= stop <= end
+                  lines[start:stop] = [text]
+                  end = start
+              after = ''.join(lines).encode('utf-8')
+              assert hashlib.sha256(after).hexdigest() == after_hash, ('target',name)
+              pending[name] = after
+          assert len(pending) == 54
+          for name, after in pending.items():
+              path = Path(name)
+              if after is None:
+                  path.unlink()
+              else:
+                  path.parent.mkdir(parents=True, exist_ok=True)
+                  path.write_bytes(after)
+          PY
+          git rm -r .refactor-final .github/workflows/refactor-final-objects.yml
+          git add -A
+          test "$(git write-tree)" = '774bdd9e620eea66798100481a84546befe88284'
+          python -m compileall -q backend/app backend/tests evaluation scripts
+      - name: Create verified Git objects without moving any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import base64, json, os, subprocess, urllib.request
+          from pathlib import Path
+          api = 'https://api.github.com/repos/studyzhige-ui/Interview_Copilot/git/'
+          def post(path, value):
+              req = urllib.request.Request(api+path, data=json.dumps(value).encode(), method='POST', headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'})
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  return json.load(r)
+          entries = []
+          for path in subprocess.check_output(['git','diff','--cached','--name-only','HEAD']).decode().splitlines():
+              item = Path(path)
+              if not item.exists():
+                  entries.append({'path':path,'mode':'100644','type':'blob','sha':None})
+                  continue
+              mode, expected, _ = subprocess.check_output(['git','ls-files','-s','--',path]).decode().split(None,3)[:3]
+              blob = post('blobs', {'content':base64.b64encode(item.read_bytes()).decode(),'encoding':'base64'})
+              assert blob['sha'] == expected, ('blob mismatch',path)
+              entries.append({'path':path,'mode':mode,'type':'blob','sha':expected})
+          base = subprocess.check_output(['git','rev-parse','HEAD^{tree}']).decode().strip()
+          tree = post('trees', {'base_tree':base,'tree':entries})
+          assert tree['sha'] == '774bdd9e620eea66798100481a84546befe88284', 'tree mismatch'
+          print('Verified source tree:', tree['sha'])
+          print('No branch or commit was created by this workflow.')
+          PY
