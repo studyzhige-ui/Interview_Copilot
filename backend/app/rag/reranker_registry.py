@@ -25,6 +25,7 @@ from llama_index.core.postprocessor.types import BaseNodePostprocessor
 from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
 
 from app.core.config import settings
+from app.core.model_policy import require_local_model
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,9 @@ def resolve_reranker() -> ResolvedReranker:
     pid = (settings.RERANKER_PROVIDER or "siliconflow").strip().lower()
     if pid not in PROVIDERS:
         raise ValueError(f"Unknown RERANKER_PROVIDER: {pid!r}")
+    require_local_model(
+        "reranking", is_local=PROVIDERS[pid].kind == "local_hf_crossencoder"
+    )
     model = (settings.RERANKER_MODEL or "BAAI/bge-reranker-v2-m3").strip()
     return ResolvedReranker(provider_id=pid, provider=PROVIDERS[pid], model=model)
 
@@ -104,7 +108,10 @@ def list_providers() -> list[dict[str, Any]]:
             "china_friendly": p.china_friendly,
             "api_key_env": p.api_key_env,
             "ready": p.kind == "local_hf_crossencoder"
-            or bool(os.getenv(p.api_key_env, "").strip()),
+            or (
+                settings.AUXILIARY_MODEL_POLICY != "local_only"
+                and bool(os.getenv(p.api_key_env, "").strip())
+            ),
         }
         for pid, p in PROVIDERS.items()
     ]
@@ -168,6 +175,7 @@ class RemoteAPIRerank(BaseNodePostprocessor):
         if not nodes or query_bundle is None:
             return nodes[: self.top_n]
 
+        require_local_model("reranking", is_local=False)
         documents = [n.node.get_content() for n in nodes]
         payload = {
             "model": self.model,
@@ -274,8 +282,6 @@ def build_reranker(top_n: int) -> Any:
     p = cfg.provider
 
     if p.kind == "local_hf_crossencoder":
-        from llama_index.postprocessor.sbert_rerank import SentenceTransformerRerank
-
         from app.core.hf_runtime import (
             format_missing_model_error,
             prepare_hf_runtime,
@@ -283,6 +289,7 @@ def build_reranker(top_n: int) -> Any:
         )
 
         prepare_hf_runtime()
+        from llama_index.postprocessor.sbert_rerank import SentenceTransformerRerank
         from app.rag.policy import current_rag_policy, resolve_rag_device
 
         local_path = resolve_local_snapshot(cfg.model)

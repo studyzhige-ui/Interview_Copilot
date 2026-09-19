@@ -218,6 +218,7 @@ def generate_plan(
     jd_context: str = "",
     interviewer_style: str = "professional",
     user_id: str | None = None,
+    llm: Any | None = None,
 ) -> MockPlan:
     """Generate and freeze personalized guidance for the stable four stages."""
     prompt = MOCK_INTERVIEW_PLAN_PROMPT.format(
@@ -225,7 +226,8 @@ def generate_plan(
         jd=(jd_context or "").strip() or "（未提供 JD）",
         style=_style_brief(interviewer_style),
     )
-    llm = get_llm_for_role("primary", user_id=user_id)
+    if llm is None:
+        llm = get_llm_for_role("primary", user_id=user_id)
     output_limit = _guard_prompt(llm, prompt, output=4096)
     response = llm.complete(
         prompt, response_format={"type": "json_object"}, max_tokens=output_limit
@@ -271,6 +273,7 @@ async def generate_next_turn(
     user_answer: str,
     user_id: str | None = None,
     length_warning_active: bool = False,
+    llm: Any | None = None,
 ) -> NextTurn:
     """Generate one interviewer line from the frozen guidance and full history."""
     stage_keys = [stage["key"] for stage in stages]
@@ -317,7 +320,8 @@ async def generate_next_turn(
         stage_keys_hint=" | ".join(stage_keys),
     )
 
-    llm = get_llm_for_role("primary", user_id=user_id)
+    if llm is None:
+        llm = get_llm_for_role("primary", user_id=user_id)
     last_error: Exception | None = None
     for attempt in range(2):
         correction = (

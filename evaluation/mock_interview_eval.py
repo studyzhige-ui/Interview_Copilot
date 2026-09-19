@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
+import os
+import uuid
+from datetime import datetime, timezone
+from functools import partial
 import re
 import statistics
 import sys
@@ -16,10 +21,26 @@ from typing import Any, Awaitable, Callable
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_ROOT = PROJECT_ROOT / "backend"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.core.llm_client_factory import get_internal_llm  # noqa: E402
+from app.core.llm_client_factory import get_llm_for_role  # noqa: E402
+from evaluation.llm_factory import load_judge_llm_config  # noqa: E402
+from evaluation.mock_contracts import (  # noqa: E402
+    JUDGE_DIMENSIONS,
+    JudgeResult,
+    TurnCase,
+    TrajectoryCase,
+    strict_json,
+)
+from evaluation.mock_run import (  # noqa: E402
+    CallJournal,
+    MockJudgeClient,
+    RecordedGenerator,
+    write_report,
+)
 from app.prompts.interview import MOCK_INTERVIEW_JUDGE_PROMPT  # noqa: E402
 from app.interviews.application.mock_interview_service import MockPlan  # noqa: E402 — CLI package bootstrap above
 from app.interviews.application.mock_interview_service import NextTurn  # noqa: E402 — CLI package bootstrap above
@@ -32,32 +53,51 @@ DEFAULT_TURN_DATASET = Path(__file__).with_name("mock_interview_dataset.jsonl")
 DEFAULT_TRAJECTORY_DATASET = Path(__file__).with_name(
     "mock_interview_trajectory_dataset.jsonl"
 )
-JUDGE_DIMENSIONS = (
-    "relevance",
-    "follow_up",
-    "naturalness",
-    "grounding",
-    "safety",
-    "language_fit",
-)
 TurnGenerator = Callable[..., Awaitable[NextTurn]]
 PlanGenerator = Callable[..., MockPlan]
 TurnJudge = Callable[[dict[str, Any], str, str, bool], Awaitable[dict[str, Any]]]
 
 
-def _load_cases(path: Path) -> list[dict[str, Any]]:
+def _load_cases(path: Path, kind: str | None = None) -> list[dict[str, Any]]:
+    if path.stat().st_size > 8_000_000:
+        raise ValueError("evaluation dataset exceeds capacity")
+    cases = []
+    seen = set()
     with path.open(encoding="utf-8") as file:
-        return [json.loads(line) for line in file if line.strip()]
+        for line_number, line in enumerate(file, 1):
+            if not line.strip():
+                continue
+            try:
+                raw = strict_json(line)
+                contract = (
+                    TurnCase
+                    if kind == "turn"
+                    or (kind is None and isinstance(raw, dict) and "user_answer" in raw)
+                    else TrajectoryCase
+                )
+                case = contract.model_validate(raw).model_dump(exclude_unset=True)
+            except (ValueError, RecursionError):
+                # A Pydantic error can contain private resume or answer text.
+                raise ValueError(
+                    f"invalid evaluation case at line {line_number}"
+                ) from None
+            if case["id"] in seen:
+                raise ValueError(f"duplicate case id at line {line_number}")
+            seen.add(case["id"])
+            cases.append(case)
+            if len(cases) > 1000:
+                raise ValueError("too many evaluation cases")
+    return cases
 
 
 def _parse_json(text: str) -> dict[str, Any]:
+    if not isinstance(text, str) or len(text.encode("utf-8")) > 64_000:
+        raise ValueError("judge JSON exceeds capacity")
     raw = text.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[-1].removesuffix("```").strip()
-    data = json.loads(raw)
-    if not isinstance(data, dict):
-        raise ValueError("Judge output must be a JSON object")
-    return data
+    data = strict_json(raw, max_bytes=64_000)
+    return JudgeResult.model_validate(data).model_dump()
 
 
 def _expected_language(answer: str) -> str:
@@ -118,6 +158,8 @@ async def _judge(
     message: str,
     generated_stage: str,
     ready_to_finish: bool,
+    *,
+    client: MockJudgeClient | None = None,
 ) -> dict[str, Any]:
     payload = {
         key: case.get(key)
@@ -148,18 +190,20 @@ async def _judge(
         case_json=json.dumps(payload, ensure_ascii=False),
         message=message,
     )
-    # Unknown paid transport outcomes are not a reason for an automatic retry.
-    response = await get_internal_llm("worker").acomplete(
-        prompt, response_format={"type": "json_object"}
-    )
-    result = _parse_json(str(response.text))
-    for key in JUDGE_DIMENSIONS:
-        result[key] = max(1, min(5, int(result[key])))
-    return result
+    # Same independently configurable judge as the RAG suite, not internal worker.
+    owned = client is None
+    if owned:
+        client = MockJudgeClient(load_judge_llm_config(), CallJournal(1))
+    try:
+        return _parse_json(await client.complete(prompt))
+    finally:
+        if owned:
+            await client.aclose()
 
 
 def _judge_mean(judge: dict[str, Any]) -> float:
-    return statistics.mean(judge[key] for key in JUDGE_DIMENSIONS)
+    validated = JudgeResult.model_validate(judge)
+    return statistics.mean(getattr(validated, key) for key in JUDGE_DIMENSIONS)
 
 
 async def _evaluate_turn(
@@ -191,6 +235,8 @@ async def _evaluate_turn(
         "expected_language": case.get("expected_language")
         or _expected_language(case["user_answer"]),
     }
+    generation_ms = (time.perf_counter() - started) * 1000
+    judge_started = time.perf_counter()
     judge = await judge_turn(
         evaluated_case,
         turn.interviewer_message,
@@ -220,7 +266,8 @@ async def _evaluate_turn(
         "checks": checks,
         "judge": judge,
         "judge_mean": round(mean_score, 3),
-        "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+        "latency_ms": round(generation_ms, 1),
+        "judge_latency_ms": round((time.perf_counter() - judge_started) * 1000, 1),
     }
 
 
@@ -272,11 +319,13 @@ async def _evaluate_trajectory(
     current_stage = str(case.get("current_stage") or plan.first_stage_key)
     recent_messages = list(case.get("recent_messages") or [])
     questions = _initial_questions(case, plan)
+    if not recent_messages:
+        recent_messages = [{"role": "assistant", "content": questions[-1]["text"]}]
     visited_stages = [current_stage]
     stage_answer_counts: Counter[str] = Counter()
     details: list[dict[str, Any]] = []
-    recovery_turns = {int(item) for item in case.get("disconnect_after_turns", [])}
-    recovered = 0
+    recovery_turns = set(case.get("disconnect_after_turns", []))
+    reached_markers = 0
     max_turns = int(case.get("max_turns") or len(case.get("steps") or []))
     ready_to_finish = False
 
@@ -320,6 +369,8 @@ async def _evaluate_trajectory(
                 or turn_index + 1 >= int(case.get("warning_turns") or 20)
             ),
         }
+        generation_ms = (time.perf_counter() - started) * 1000
+        judge_started = time.perf_counter()
         judge = await judge_turn(
             evaluated_case,
             turn.interviewer_message,
@@ -355,7 +406,10 @@ async def _evaluate_trajectory(
                 "checks": checks,
                 "judge": judge,
                 "judge_mean": round(mean_score, 3),
-                "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+                "latency_ms": round(generation_ms, 1),
+                "judge_latency_ms": round(
+                    (time.perf_counter() - judge_started) * 1000, 1
+                ),
             }
         )
         print(
@@ -378,11 +432,10 @@ async def _evaluate_trajectory(
             visited_stages.append(current_stage)
         ready_to_finish = turn.is_ready_to_finish
 
-        # Simulate a response committed by the server but lost to the browser.
-        # Recovery resumes from the persisted logical state and must not invoke
-        # the model twice for the same answer.
+        # Dataset markers are not transport faults. Actual recovery belongs to
+        # the separate PostgreSQL/Celery/browser tests, not this model loop.
         if turn_index + 1 in recovery_turns:
-            recovered += 1
+            reached_markers += 1
         if ready_to_finish:
             break
 
@@ -395,40 +448,75 @@ async def _evaluate_trajectory(
         "completion": (
             ready_to_finish if case.get("expect_complete") else not ready_to_finish
         ),
-        "disconnects_recovered": recovered == len(recovery_turns),
     }
     return {
         "id": case["id"],
         "passed": all(trajectory_checks.values()),
         "checks": trajectory_checks,
         "visited_stages": visited_stages,
-        "recovered_disconnects": recovered,
+        "recovery_validation": {
+            "status": "not_exercised",
+            "dataset_markers_reached": reached_markers,
+            "reason": "model trajectory only; no transport or process was interrupted",
+        },
         "turns": len(details),
         "details": details,
     }
 
 
+def _checked_pass(item: dict[str, Any], *, trajectory: bool = False) -> bool:
+    checks = item["checks"]
+    if (
+        not isinstance(checks, dict)
+        or not checks
+        or any(type(v) is not bool for v in checks.values())
+    ):
+        raise ValueError("invalid evaluation checks")
+    if type(item.get("passed")) is not bool:
+        raise ValueError("invalid evaluation pass indicator")
+    actual = all(checks.values())
+    if trajectory:
+        children = item["details"]
+        actual = (
+            actual and bool(children) and all(_checked_pass(row) for row in children)
+        )
+    else:
+        judge = item["judge"]
+        actual = (
+            actual
+            and _judge_mean(judge) >= 4
+            and all(judge[key] >= 4 for key in ("grounding", "safety", "language_fit"))
+        )
+    if item["passed"] != actual:
+        raise ValueError("evaluation summary disagrees with evidence")
+    return actual
+
+
 def _aggregate_turns(details: list[dict[str, Any]]) -> dict[str, Any]:
     if not details:
-        return {"samples": 0, "passed": 0, "pass_rate": 1.0, "details": []}
+        return {
+            "status": "empty",
+            "samples": 0,
+            "passed": 0,
+            "pass_rate": None,
+            "details": [],
+        }
+    means = [_judge_mean(item["judge"]) for item in details]
+    passes = [_checked_pass(item) for item in details]
     return {
+        "status": "completed",
         "samples": len(details),
-        "passed": sum(item["passed"] for item in details),
-        "pass_rate": round(sum(item["passed"] for item in details) / len(details), 4),
-        "mean_judge_score": round(
-            statistics.mean(item["judge_mean"] for item in details), 4
-        ),
-        "safety_pass_rate": round(
-            sum(item["judge"]["safety"] >= 4 for item in details) / len(details), 4
-        ),
-        "grounding_pass_rate": round(
-            sum(item["judge"]["grounding"] >= 4 for item in details) / len(details),
-            4,
-        ),
-        "language_pass_rate": round(
-            sum(item["judge"]["language_fit"] >= 4 for item in details) / len(details),
-            4,
-        ),
+        "passed": sum(passes),
+        "pass_rate": sum(passes) / len(details),
+        "mean_judge_score": statistics.mean(means),
+        "safety_pass_rate": sum(item["judge"]["safety"] >= 4 for item in details)
+        / len(details),
+        "grounding_pass_rate": sum(item["judge"]["grounding"] >= 4 for item in details)
+        / len(details),
+        "language_pass_rate": sum(
+            item["judge"]["language_fit"] >= 4 for item in details
+        )
+        / len(details),
         "latency_ms": {
             "mean": round(statistics.mean(item["latency_ms"] for item in details), 1),
             "max": round(max(item["latency_ms"] for item in details), 1),
@@ -437,87 +525,216 @@ def _aggregate_turns(details: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-async def _run_turns(cases: list[dict[str, Any]], username: str) -> dict[str, Any]:
-    details = []
-    for index, case in enumerate(cases, 1):
-        result = await _evaluate_turn(case, username)
-        details.append(result)
-        print(
-            f"[turn {index}/{len(cases)}] {case['id']}: "
-            f"{'PASS' if result['passed'] else 'FAIL'} "
-            f"(judge={result['judge_mean']:.2f})"
-        )
-    return _aggregate_turns(details)
-
-
-async def _run_trajectories(
-    cases: list[dict[str, Any]], username: str
-) -> dict[str, Any]:
-    details = []
-    for index, case in enumerate(cases, 1):
-        result = await _evaluate_trajectory(case, username)
-        details.append(result)
-        print(
-            f"[trajectory {index}/{len(cases)}] {case['id']}: "
-            f"{'PASS' if result['passed'] else 'FAIL'} "
-            f"({result['turns']} turns)"
-        )
-    all_turns = [turn for item in details for turn in item["details"]]
-    turn_metrics = _aggregate_turns(all_turns)
+def _aggregate_trajectories(details: list[dict[str, Any]]) -> dict[str, Any]:
+    metrics = _aggregate_turns([turn for item in details for turn in item["details"]])
+    passes = [_checked_pass(item, trajectory=True) for item in details]
     return {
+        "status": "completed" if details else "empty",
         "samples": len(details),
-        "passed": sum(item["passed"] for item in details),
-        "pass_rate": round(sum(item["passed"] for item in details) / len(details), 4)
-        if details
-        else 1.0,
-        "turn_metrics": {k: v for k, v in turn_metrics.items() if k != "details"},
+        "passed": sum(passes),
+        "pass_rate": sum(passes) / len(details) if details else None,
+        "turn_metrics": {k: v for k, v in metrics.items() if k != "details"},
         "details": details,
     }
 
 
-async def _run(args) -> dict[str, Any]:
-    def selected(cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if not args.case:
-            return cases
-        wanted = set(args.case)
-        matches = [case for case in cases if case["id"] in wanted]
-        missing = wanted - {case["id"] for case in matches}
-        if missing:
-            raise ValueError(f"unknown evaluation case(s): {sorted(missing)}")
-        return matches
+def _prepare_cases(args) -> dict[str, list[dict[str, Any]]]:
+    selected = {}
+    if args.mode in {"all", "turn"}:
+        selected["turns"] = _load_cases(args.turn_dataset, "turn")
+    if args.mode in {"all", "trajectory"}:
+        selected["trajectories"] = _load_cases(args.trajectory_dataset, "trajectory")
+    wanted = set(args.case or [])
+    available = {case["id"] for cases in selected.values() for case in cases}
+    if wanted - available:
+        raise ValueError(f"unknown evaluation case(s): {sorted(wanted - available)}")
+    for section, cases in selected.items():
+        matches = [c for c in cases if not wanted or c["id"] in wanted]
+        if not matches:
+            raise ValueError(
+                f"selected {section} has no cases; select an appropriate --mode"
+            )
+        selected[section] = matches
+    if not selected:
+        raise ValueError("no evaluation mode selected")
+    return selected
 
-    turns = (
-        await _run_turns(selected(_load_cases(args.turn_dataset)), args.user)
-        if args.mode in {"all", "turn"}
-        else _aggregate_turns([])
+
+def _manifest(args, selected) -> dict[str, Any]:
+    sources = [
+        Path(__file__),
+        Path(__file__).with_name("mock_contracts.py"),
+        Path(__file__).with_name("mock_run.py"),
+        Path(__file__).with_name("llm_factory.py"),
+        BACKEND_ROOT / "app/prompts/interview.py",
+        BACKEND_ROOT / "app/interviews/application/mock_interview_service.py",
+    ]
+    maximum = sum(
+        4 * len(cases)
+        if key == "turns"
+        else sum(1 + 3 * case["max_turns"] for case in cases)
+        for key, cases in selected.items()
     )
-    trajectories = (
-        await _run_trajectories(
-            selected(_load_cases(args.trajectory_dataset)), args.user
+    cap = getattr(args, "max_model_calls", 256)
+    if type(cap) is not int or not 1 <= cap <= 100_000 or maximum > cap:
+        raise ValueError(
+            f"campaign upper bound {maximum} exceeds --max-model-calls {cap}"
         )
-        if args.mode in {"all", "trajectory"}
-        else {"samples": 0, "passed": 0, "pass_rate": 1.0, "details": []}
-    )
-    return {"turns": turns, "trajectories": trajectories}
+    return {
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "sample_ids": {
+            key: [case["id"] for case in cases] for key, cases in selected.items()
+        },
+        "sample_sha256": {
+            key: hashlib.sha256(
+                json.dumps(
+                    cases, ensure_ascii=False, sort_keys=True, allow_nan=False
+                ).encode()
+            ).hexdigest()
+            for key, cases in selected.items()
+        },
+        "source_sha256": {
+            str(path.relative_to(PROJECT_ROOT)): hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest()
+            for path in sources
+        },
+        "model_call_upper_bound": maximum,
+        "max_model_calls": cap,
+        "automatic_transport_retries": 0,
+        "quality_scope": "model-backed synthetic trajectories, not recovery or learning-effect validation",
+        "judge_independence": "separate configuration/prompt; same-provider bias remains possible",
+    }
+
+
+async def _run(args, *, selected=None, journal=None, checkpoint=None) -> dict[str, Any]:
+    selected = _prepare_cases(args) if selected is None else selected
+    manifest = _manifest(args, selected)
+    report = {
+        "schema_version": 2,
+        "status": "running",
+        "requested_sections": list(selected),
+        "manifest": manifest,
+        "turns": {**_aggregate_turns([]), "status": "not_run"},
+        "trajectories": {**_aggregate_trajectories([]), "status": "not_run"},
+    }
+    journal = journal or CallJournal(manifest["max_model_calls"])
+    client = None
+    try:
+        # Resolve once, before any generation. Planning and all answers use the
+        # same metered model instance, even if the user's selection later changes.
+        generator = RecordedGenerator(
+            get_llm_for_role("primary", user_id=args.user), journal
+        )
+        profile = generator._profile
+        manifest["generator"] = {
+            "provider": profile.provider,
+            "model": profile.model,
+            "context_window": profile.context_window,
+            "max_output_tokens": profile.max_output_tokens,
+        }
+        judge_config = load_judge_llm_config()
+        manifest["judge"] = {
+            "model": judge_config.model,
+            "endpoint_sha256": hashlib.sha256(
+                judge_config.api_base.encode()
+            ).hexdigest(),
+            "temperature": 0,
+            "max_tokens": 4096,
+            "thinking_mode": judge_config.thinking_mode,
+        }
+        client = MockJudgeClient(judge_config, journal)
+        dependencies = {
+            "plan_generator": partial(generate_plan, llm=generator),
+            "turn_generator": partial(generate_next_turn, llm=generator),
+            "judge_turn": partial(_judge, client=client),
+        }
+        if checkpoint:
+            checkpoint(report)
+        for section, cases in selected.items():
+            details = []
+            evaluate = _evaluate_turn if section == "turns" else _evaluate_trajectory
+            aggregate = (
+                _aggregate_turns if section == "turns" else _aggregate_trajectories
+            )
+            for index, case in enumerate(cases, 1):
+                result = await evaluate(case, args.user, **dependencies)
+                details.append(result)
+                report[section] = aggregate(details)
+                report[section]["status"] = (
+                    "running" if index < len(cases) else "completed"
+                )
+                report["model_calls_started"] = journal.count
+                if checkpoint:
+                    checkpoint(report)
+                print(
+                    f"[{section} {index}/{len(cases)}] {case['id']}: "
+                    f"{'PASS' if result['passed'] else 'FAIL'}",
+                    flush=True,
+                )
+        report["status"] = "completed"
+        report["gate_passed"] = _passes_gate(report)
+        return report
+    except BaseException as exc:
+        report["status"] = "interrupted"
+        report["error_type"] = type(exc).__name__
+        report["gate_passed"] = False
+        report["model_calls_started"] = journal.count
+        if checkpoint:
+            checkpoint(report)
+        raise
+    finally:
+        if client is not None:
+            try:
+                await client.aclose()
+            except BaseException as exc:
+                report["status"] = "interrupted"
+                report["error_type"] = type(exc).__name__
+                report["gate_passed"] = False
+                if checkpoint:
+                    checkpoint(report)
+                raise
 
 
 def _passes_gate(result: dict[str, Any]) -> bool:
-    turns = result["turns"]
-    trajectories = result["trajectories"]
-    turn_gate = turns["samples"] == 0 or (
-        turns["pass_rate"] >= 0.85
-        and turns["mean_judge_score"] >= 4
-        and turns["safety_pass_rate"] == 1
-        and turns["grounding_pass_rate"] == 1
-        and turns["language_pass_rate"] == 1
-    )
-    trajectory_gate = trajectories["samples"] == 0 or (
-        trajectories["pass_rate"] >= 0.8
-        and trajectories["turn_metrics"]["safety_pass_rate"] == 1
-        and trajectories["turn_metrics"]["grounding_pass_rate"] == 1
-        and trajectories["turn_metrics"]["language_pass_rate"] == 1
-    )
-    return turn_gate and trajectory_gate
+    if result.get("schema_version") != 2 or result.get("status") != "completed":
+        return False
+    selected = result.get("requested_sections")
+    if (
+        not isinstance(selected, list)
+        or not selected
+        or not all(isinstance(s, str) for s in selected)
+        or len(selected) != len(set(selected))
+    ):
+        return False
+    try:
+        for section in selected:
+            if section not in {"turns", "trajectories"}:
+                return False
+            data = result[section]
+            if data.get("status") != "completed" or not data.get("details"):
+                return False
+            if section == "turns":
+                metrics = _aggregate_turns(data["details"])
+                if metrics["pass_rate"] < 0.85 or metrics["mean_judge_score"] < 4:
+                    return False
+            else:
+                aggregate = _aggregate_trajectories(data["details"])
+                metrics = aggregate["turn_metrics"]
+                if aggregate["pass_rate"] < 0.8 or metrics["samples"] == 0:
+                    return False
+            if any(
+                metrics[key] != 1
+                for key in (
+                    "safety_pass_rate",
+                    "grounding_pass_rate",
+                    "language_pass_rate",
+                )
+            ):
+                return False
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return False
+    return True
 
 
 def main() -> None:
@@ -529,34 +746,61 @@ def main() -> None:
     )
     parser.add_argument("--user", default="eval_user_a")
     parser.add_argument(
-        "--case",
-        action="append",
-        help="Run one case id; repeat the option to select multiple cases.",
+        "--case", action="append", help="Select case ids across the selected mode(s)."
     )
-    parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help="New private report file; existing runs are never overwritten.",
+    )
+    parser.add_argument("--max-model-calls", type=int, default=256)
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="Validate data and print finite campaign manifest; no model or DB calls.",
+    )
     args = parser.parse_args()
-
-    from app.usage.runtime import for_username
-
-    with for_username(args.user):
-        result = asyncio.run(_run(args))
-    output = args.output or (
-        PROJECT_ROOT / "data" / "evaluation" / "mock_interview_report.json"
+    # Preflight EVERY selected dataset before resolving credentials or sending a call.
+    selected = _prepare_cases(args)
+    manifest = _manifest(args, selected)
+    if args.plan_only:
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+        return
+    output = (
+        args.output
+        or PROJECT_ROOT / "data/evaluation/mock" / f"{uuid.uuid4().hex}.json"
     )
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(result, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    summary = {
-        "turns": {k: v for k, v in result["turns"].items() if k != "details"},
-        "trajectories": {
-            k: v for k, v in result["trajectories"].items() if k != "details"
-        },
-    }
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
-    print(f"Report saved to: {output}")
-    if not _passes_gate(result):
+    with output.open("x", encoding="utf-8") as handle:
+        output.chmod(0o600)
+        json.dump(
+            {"schema_version": 2, "status": "preparing", "manifest": manifest}, handle
+        )
+        handle.flush()
+        os.fsync(handle.fileno())
+    journal = CallJournal(args.max_model_calls, output.with_suffix(".calls.jsonl"))
+    from app.usage.runtime import for_username
+
+    try:
+        with for_username(args.user):
+            result = asyncio.run(
+                _run(
+                    args,
+                    selected=selected,
+                    journal=journal,
+                    checkpoint=lambda report: write_report(output, report),
+                )
+            )
+        write_report(output, result)
+    except (Exception, KeyboardInterrupt) as exc:
+        # Never print provider errors or retry a potentially paid call.
+        print(
+            f"Evaluation interrupted ({type(exc).__name__}); inspect {output} and its call journal.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
+    print(f"Report saved to: {output}; gate_passed={result['gate_passed']}")
+    if not result["gate_passed"]:
         raise SystemExit(1)
 
 

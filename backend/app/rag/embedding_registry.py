@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from app.core.config import settings
+from app.core.model_policy import require_local_model
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,9 @@ def resolve_embedding() -> ResolvedEmbedding:
     pid = (settings.EMBEDDING_PROVIDER or "siliconflow").strip().lower()
     if pid not in PROVIDERS:
         raise ValueError(f"Unknown EMBEDDING_PROVIDER: {pid!r}")
+    require_local_model(
+        "embedding", is_local=PROVIDERS[pid].kind == "local_huggingface"
+    )
     model = (settings.EMBEDDING_MODEL or "BAAI/bge-m3").strip()
     dim = int(settings.EMBEDDING_DIM or 1024)
     return ResolvedEmbedding(
@@ -150,7 +154,10 @@ def list_providers() -> list[dict[str, Any]]:
             "china_friendly": p.china_friendly,
             "api_key_env": p.api_key_env,
             "ready": p.kind == "local_huggingface"
-            or bool(os.getenv(p.api_key_env, "").strip()),
+            or (
+                settings.AUXILIARY_MODEL_POLICY != "local_only"
+                and bool(os.getenv(p.api_key_env, "").strip())
+            ),
         }
         for pid, p in PROVIDERS.items()
     ]
@@ -166,8 +173,6 @@ def build_embedding() -> Any:
     p = cfg.provider
 
     if p.kind == "local_huggingface":
-        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-
         from app.core.hf_runtime import (
             format_missing_model_error,
             prepare_hf_runtime,
@@ -175,6 +180,7 @@ def build_embedding() -> Any:
         )
 
         hf_cache_dir = prepare_hf_runtime()
+        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
         from app.rag.policy import resolve_rag_device
 
         device = resolve_rag_device()

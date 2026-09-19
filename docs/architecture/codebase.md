@@ -521,3 +521,67 @@ writer. Operator migration tools are isolated rather than silently deleting user
 history. It is not a claim to have implemented every future feature in the target
 Blueprint (for example a future external calendar branch), nor a new semantic
 quality or production load score. Existing quality/memory gates remain active.
+
+## Local-first refactor: evaluator and model boundary (2026-09-19)
+
+This is the first implementation batch of the approved functional refactor, not
+completion of pgvector migration, real-time voice, or the complete product review.
+The prior unified-accounting/owner migration remains intact. Current work status
+is tracked in the existing implementation ledger.
+
+`evaluation/mock_contracts.py` validates dataset and judge contracts;
+`mock_run.py` owns the finite campaign journal and judge client; the mock evaluator
+reuses the production interview generator through an injected resolved model.
+It does not implement another interview business engine. Its synthetic turn
+markers do not claim actual recovery. Existing DB/worker/browser tests retain that
+responsibility.
+
+`core/model_assets.py` is a read-only structural inspector. The runtime facade
+`core/hf_runtime.py`, setup command and local doctor all use it; there are no
+competing "directory nonempty" and "total size >10MB" definitions of readiness.
+Recognized Transformer/CT2 assets require config, weights and tokenizer/vocabulary;
+indexed weights require every declared shard. Safetensors checks bound the header
+and validate extents without loading tensors. LFS pointers, zero-length assets,
+unsafe shard paths and incomplete active revisions are rejected. HF refs resolve
+the selected snapshot: commit hashes are NOT ordered by recency. Multiple cached
+snapshots without a ref require an explicit choice.
+
+Existing `org--model` flat exports remain supported without inventing their
+revision provenance. Explicit `MODEL_REVISIONS_JSON` pins require an exact SHA and
+an exact cached or managed revision; no fall back to an unversioned export.
+Completed setup downloads produce size/hash manifests and activate a version
+under `org--model/.revisions/<sha>` with one atomic pointer. An interrupted setup
+cannot overwrite the old flat export or change the active pointer. These are
+operator-owned local receipts, not vendor signatures. Runtime checks size and
+structure; an explicit doctor `--verify-hashes` reads full files when a receipt is
+available. Legacy exports without a receipt remain clearly unverified by hash.
+
+Custom pyannote/Docling bundles are reported as `bundle_requires_loader`, not
+certified complete: component resolution, licenses, GPU compatibility and actual
+inference require their offline loader and hardware tests. No pickle/model code
+is deserialized by the doctor. This change does not claim to validate the user's
+actual local weights from GitHub.
+
+`MODEL_ROOT_DIR` can reference read-only weights independently of writable
+`CACHE_DIR` (HF metadata and Torch caches). Windows drive paths passed to Linux
+are diagnosed, never interpreted as a local folder named `D:`. The optional
+`AUXILIARY_MODEL_POLICY=local_only` rejects online embedding, reranking, ASR,
+cloud parsing and current online edge-tts at their entry points, irrespective of
+whether a credential exists. It also activates HF offline mode before optional
+model imports. Ordinary parser fallback cannot swallow this policy error.
+This is an application policy, not an OS-level network sandbox or permission to
+load unaudited remote model code. DeepSeek remains an online language model.
+The legacy `configured` policy remains the default for existing deployments.
+
+`init_models.py --dry-run` no longer contacts HF or creates runtime directories.
+Remote size lookup requires `--check-remote`. Actual setup explicitly enables
+network access in its own process, freezes the resolved revision, checks expected
+file sizes, records hashes, then activates. It must not run concurrently from
+Windows and WSL against the same writable model tree. Do not turn offline mode
+off in a live inference process to install models.
+
+Official references:
+- [HF cache refs, snapshots and blobs](https://huggingface.co/docs/huggingface_hub/guides/manage-cache).
+- [Transformers offline loading](https://huggingface.co/docs/transformers/installation).
+- [Safetensors format](https://github.com/huggingface/safetensors#format).
+- [Pydantic strict mode](https://docs.pydantic.dev/latest/concepts/strict_mode/).

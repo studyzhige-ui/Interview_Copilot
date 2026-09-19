@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
 from app.core.config import settings
+from app.core.model_policy import require_local_model
 from app.media.application.workers import pool
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,9 @@ def resolve_transcription() -> ResolvedTranscription:
     pid = (settings.TRANSCRIPTION_PROVIDER or "local_whisperx").strip().lower()
     if pid not in PROVIDERS:
         raise ValueError(f"Unknown TRANSCRIPTION_PROVIDER: {pid!r}")
+    require_local_model(
+        "transcription", is_local=PROVIDERS[pid].kind == "local_whisperx"
+    )
     model = (
         settings.TRANSCRIPTION_MODEL or "deepdml/faster-whisper-large-v3-turbo-ct2"
     ).strip()
@@ -101,7 +105,10 @@ def list_providers() -> list[dict[str, Any]]:
             "supports_word_timestamps": p.supports_word_timestamps,
             "api_key_env": p.api_key_env,
             "ready": p.kind == "local_whisperx"
-            or bool(os.getenv(p.api_key_env, "").strip()),
+            or (
+                settings.AUXILIARY_MODEL_POLICY != "local_only"
+                and bool(os.getenv(p.api_key_env, "").strip())
+            ),
         }
         for pid, p in PROVIDERS.items()
     ]

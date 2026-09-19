@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     MILVUS_HNSW_EF_SEARCH: int = 64
     # Hugging Face, model, and framework caches
     CACHE_DIR: str = ""
+    # Optional read-only weights shared from a Windows data drive into WSL.
+    # Framework metadata/locks remain under writable CACHE_DIR.
+    MODEL_ROOT_DIR: str = ""
+    MODEL_REVISIONS_JSON: dict[str, str] = Field(default_factory=dict)
+    LOCAL_MODELS_OFFLINE: bool = False
+    AUXILIARY_MODEL_POLICY: Literal["configured", "local_only"] = "configured"
 
     # Logs and telemetry
     LOG_DIR: str = ""
@@ -584,4 +590,9 @@ def _validate_production_safety(s: "Settings") -> None:
 
 
 settings = Settings()
+# Apply before any optional HF/Transformers import. Download commands opt into a
+# separate online setup process; changing policy in a running process is unsupported.
+if settings.LOCAL_MODELS_OFFLINE or settings.AUXILIARY_MODEL_POLICY == "local_only":
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
 _validate_production_safety(settings)

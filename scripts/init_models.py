@@ -13,6 +13,10 @@ temporary download state stay under data/cache/ as well.
 """
 
 import argparse
+import fnmatch
+import hashlib
+import json
+import tempfile
 import os
 import re
 import sys
@@ -29,6 +33,7 @@ sys.path.insert(0, str(SOURCE_ROOT))
 load_dotenv(ROOT_DIR / ".env")
 
 from app.core.config import settings  # noqa: E402
+from app.core.model_assets import inspect_directory, inspect_model, validate_model_id  # noqa: E402
 from app.core.hf_runtime import (  # noqa: E402
     DOCLING_MODELS_DIR,
     HF_CACHE_DIR,
@@ -135,16 +140,8 @@ ROLE_ENV_KEYS = {
     "diarization": ("DIARIZATION_MODEL_ID", "DIARIZATION_MODE", "auto"),
 }
 
-# ── Size lookup: query HuggingFace live; no hardcoded fallback ───────────
-#
-# Old version kept a hand-maintained SIZE_ESTIMATES table — every time HF
-# released a new model variant (e.g. large-v3) we'd print "unknown size"
-# until someone updated the table. Now we ask HF directly via the
-# `HfApi.model_info(..., files_metadata=True)` call and sum every file
-# in the repo (matches what ``snapshot_download`` will pull).
-#
-# Costs ~0.5-2s per repo (one HTTPS HEAD per repo). For a 4-role dry-run
-# that's ~3-8s, which is fine. Cached after the first call within one run.
+# Remote metadata is opt-in during dry runs. Real downloads resolve an exact
+# immutable revision once, verify all expected file sizes and record hashes.
 
 
 def _humanize_bytes(n: float) -> str:
@@ -186,6 +183,10 @@ def repo_dir(repo_id: str) -> Path:
 
 def prepare_runtime(hf_endpoint: str) -> None:
     prepare_hf_runtime()
+    # This explicit setup command is the only process allowed to fetch weights.
+    # Do this BEFORE importing huggingface_hub (it reads environment at import).
+    os.environ["HF_HUB_OFFLINE"] = "0"
+    os.environ["TRANSFORMERS_OFFLINE"] = "0"
     os.environ["HF_ENDPOINT"] = hf_endpoint
     # Xet bridge endpoints are frequently unavailable on constrained Windows
     # networks. Plain HTTPS/LFS supports resume and is sufficient here.
@@ -194,64 +195,98 @@ def prepare_runtime(hf_endpoint: str) -> None:
 
 
 def download_snapshot(repo_id: str) -> Path:
-    from huggingface_hub import snapshot_download
+    validate_model_id(repo_id)
+    from huggingface_hub import HfApi, snapshot_download
 
-    target_dir = repo_dir(repo_id)
-    path = snapshot_download(
-        repo_id=repo_id,
-        local_dir=str(target_dir),
-        max_workers=2,
-        # Runtime is PyTorch-only. Pulling duplicate TensorFlow/Flax weights
-        # more than doubles alignment downloads and creates extra failure
-        # points without providing any executable asset.
-        ignore_patterns=("*.msgpack", "tf_model.h5", "*.ot"),
+    requested = settings.MODEL_REVISIONS_JSON.get(repo_id, "main")
+    info = HfApi().model_info(repo_id, revision=requested, files_metadata=True)
+    revision = info.sha
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise ValueError("download_revision_unresolved")
+    ignored = ("*.msgpack", "tf_model.h5", "*.ot")
+    expected = [
+        entry
+        for entry in info.siblings
+        if not any(fnmatch.fnmatch(entry.rfilename, pat) for pat in ignored)
+    ]
+    if not expected or len(expected) > 4096:
+        raise ValueError("download_file_manifest_capacity")
+    export_root = repo_dir(repo_id)
+    target_dir = export_root / ".revisions" / revision
+    path = Path(
+        snapshot_download(
+            repo_id=repo_id,
+            revision=revision,
+            local_dir=str(target_dir),
+            max_workers=2,
+            ignore_patterns=ignored,
+        )
     )
-    return Path(path)
-
-
-_MIN_DOWNLOADED_BYTES = 10 * 1024 * 1024  # 10 MB — bigger than any config-only stub
-
-
-def _tree_size(path: Path) -> int:
-    """Total size of all regular files under ``path``, following symlinks."""
-    total = 0
-    for entry in path.rglob("*"):
-        if ".cache" in entry.relative_to(path).parts:
-            continue
-        try:
-            real = entry.resolve()
-            if real.is_file():
-                total += real.stat().st_size
-        except (OSError, FileNotFoundError):
-            continue
-    return total
+    if path.resolve() != target_dir.resolve():
+        raise ValueError("download_returned_unexpected_directory")
+    files = {}
+    for entry in expected:
+        relative = Path(entry.rfilename)
+        if relative.is_absolute() or ".." in relative.parts or "\\" in str(relative):
+            raise ValueError("download_file_outside_model")
+        asset = (path / relative).resolve(strict=True)
+        if not asset.is_relative_to(path.resolve()) or not asset.is_file():
+            raise ValueError("download_file_outside_model")
+        if (
+            type(entry.size) is not int
+            or entry.size < 0
+            or asset.stat().st_size != entry.size
+        ):
+            raise ValueError("download_file_incomplete")
+        # Empty repository placeholders are not inference assets.
+        if entry.size:
+            with asset.open("rb") as handle:
+                digest = hashlib.file_digest(handle, "sha256").hexdigest()
+            files[entry.rfilename] = {"size": entry.size, "sha256": digest}
+    manifest = {
+        "schema_version": 1,
+        "model_id": repo_id,
+        "revision": revision,
+        "files": files,
+    }
+    fd, name = tempfile.mkstemp(prefix=".snapshot-", dir=path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, sort_keys=True, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(name, path / ".copilot-snapshot.json")
+    finally:
+        Path(name).unlink(missing_ok=True)
+    report = inspect_directory(repo_id, path, revision=revision)
+    if not report.loadable_candidate:
+        raise ValueError("download_layout_incomplete:" + ",".join(report.issues))
+    fd, name = tempfile.mkstemp(prefix=".activate-", dir=export_root)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(revision + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(name, export_root / ".copilot-active-revision")
+    finally:
+        Path(name).unlink(missing_ok=True)
+    return path
 
 
 def is_already_downloaded(repo_id: str) -> bool:
-    """Check if a model is fully present locally.
-
-    Single rule for every role: the target directory's total file size must
-    clear ``_MIN_DOWNLOADED_BYTES`` (10 MB). That threshold:
-
-      * passes genuine small models (pyannote diarization ~32 MB across subdirs)
-      * fails config-only stubs from interrupted downloads (a few KB)
-      * is well below the smallest real model weight, so no false negatives
-
-    Re-running ``init_models.py`` after a partial download is safe — the
-    underlying ``snapshot_download`` resumes byte-by-byte where it stopped.
-    """
-    target = repo_dir(repo_id)
-    if target.exists() and _tree_size(target) >= _MIN_DOWNLOADED_BYTES:
-        return True
-    # Fall back to the HF hub cache layout (snapshot_download default).
-    snapshot_root = HF_CACHE_DIR / f"models--{repo_id.replace('/', '--')}" / "snapshots"
-    if snapshot_root.exists() and _tree_size(snapshot_root) >= _MIN_DOWNLOADED_BYTES:
-        return True
-    return False
+    """Reuse the same read-only structure/revision check as runtime loading."""
+    result = inspect_model(
+        repo_id,
+        model_root=MODEL_DIR,
+        cache_root=HF_CACHE_DIR,
+        revision=settings.MODEL_REVISIONS_JSON.get(repo_id),
+    )
+    return result.loadable_candidate
 
 
 def is_docling_downloaded() -> bool:
-    return _tree_size(DOCLING_MODELS_DIR) >= _MIN_DOWNLOADED_BYTES
+    # Custom bundles must additionally pass Docling's offline loader check.
+    return inspect_directory("docling", DOCLING_MODELS_DIR).loadable_candidate
 
 
 def download_docling_models() -> Path:
@@ -276,7 +311,7 @@ def _provider_status(role: str) -> tuple[bool, str, str]:
     elif role == "reranker":
         pid = (os.getenv("RERANKER_PROVIDER") or "local").strip().lower()
         local = pid == "local"
-    elif role in ("whisper", "diarization"):
+    elif role in ("whisper", "alignment", "diarization"):
         # Whisper + Pyannote share one toggle: TRANSCRIPTION_PROVIDER. The
         # local provider uses both; remote providers use neither (unless
         # DIARIZATION_MODE=pyannote forces local Pyannote in hybrid mode —
@@ -468,7 +503,12 @@ Examples:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Show what would be downloaded without actually downloading",
+        help="Read-only local plan: no downloads, remote size requests or directory writes",
+    )
+    parser.add_argument(
+        "--check-remote",
+        action="store_true",
+        help="Explicitly permit remote size lookup (including with --dry-run)",
     )
     parser.add_argument(
         "--force-all",
@@ -488,8 +528,10 @@ Examples:
     )
     args = parser.parse_args()
 
-    if args.interactive and args.non_interactive:
-        parser.error("--interactive and --non-interactive are mutually exclusive")
+    if args.interactive and (args.non_interactive or args.dry_run):
+        parser.error(
+            "--interactive cannot be combined with --non-interactive or --dry-run"
+        )
 
     should_prompt = args.interactive or (
         sys.stdin.isatty()
@@ -538,6 +580,9 @@ Examples:
     # huggingface.co. prepare_runtime() sets this too, but only runs later
     # for the actual download path.
     os.environ["HF_ENDPOINT"] = args.hf_endpoint
+    if args.check_remote:
+        os.environ["HF_HUB_OFFLINE"] = "0"
+        os.environ["TRANSFORMERS_OFFLINE"] = "0"
 
     tasks = []
     skipped_roles: list[tuple[str, str]] = []
@@ -556,9 +601,11 @@ Examples:
             skipped_roles.append((role, provider_id))
             continue
         already = is_already_downloaded(repo_id)
-        size = get_remote_size(repo_id)
+        size = get_remote_size(repo_id) if args.check_remote else "not queried"
         status = (
-            "[ok]   already downloaded" if already else f"[get]  will download ({size})"
+            "[local] structural candidate; loader/GPU not tested"
+            if already
+            else f"[get]  missing or incomplete ({size})"
         )
         print(f"  {role:>13}: {repo_id}")
         print(f"                {status}    [{reason}]")
@@ -573,14 +620,17 @@ Examples:
     )
     if include_docling:
         try:
-            import docling  # noqa: F401
+            import importlib.util
+
+            if importlib.util.find_spec("docling") is None:
+                raise ImportError("docling")
         except ImportError:
             print(f"  {'docling':>13}: default parsing artifacts")
             print("                [skip] local dependency is not installed")
         else:
             already = is_docling_downloaded()
             status = (
-                "[ok]   already downloaded"
+                "[local] bundle present; offline loader not exercised"
                 if already
                 else "[get]  will download default parsing artifacts"
             )
@@ -597,7 +647,9 @@ Examples:
         print()
 
     if not tasks and not needs_docling:
-        print("All models are already downloaded. Nothing to do.")
+        print(
+            "No selected download tasks. This is not an inference/GPU acceptance result."
+        )
         return 0
 
     if args.dry_run:
@@ -614,7 +666,9 @@ Examples:
         print(f"[{role}] Downloading {repo_id} ...")
         try:
             target = download_snapshot(repo_id)
-            print(f"[{role}] [done] Ready: {target}")
+            print(
+                f"[{role}] [downloaded] {target}; offline loader/GPU test still required"
+            )
         except Exception as exc:
             failures += 1
             print(f"[{role}] [fail] {exc}", file=sys.stderr)
@@ -627,7 +681,9 @@ Examples:
         print("[docling] Downloading default parsing artifacts ...")
         try:
             target = download_docling_models()
-            print(f"[docling] [done] Ready: {target}")
+            print(
+                f"[docling] [downloaded] {target}; offline loader test still required"
+            )
         except Exception as exc:
             failures += 1
             print(f"[docling] [fail] {exc}", file=sys.stderr)

@@ -16,6 +16,7 @@ from pathlib import Path
 import httpx
 
 from app.core.config import settings
+from app.core.model_policy import require_local_model
 from app.core.execution_errors import ModelOutcomeUnknownError
 from app.rag.documents import ParsedDocument, ParsedPage
 from app.usage import runtime
@@ -41,6 +42,7 @@ def _json(client, method, url, deadline, **kwargs):
 
 
 def parse(file_path: str) -> ParsedDocument:
+    require_local_model("document_parsing", is_local=False)
     path = Path(file_path).resolve(strict=True)
     if (
         not path.is_file()

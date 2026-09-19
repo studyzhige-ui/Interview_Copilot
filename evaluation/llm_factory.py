@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 @dataclass(frozen=True)
 class EvaluationLLMConfig:
-    api_key: str
+    api_key: str = field(repr=False)
     api_base: str
     model: str
     thinking_mode: str | None

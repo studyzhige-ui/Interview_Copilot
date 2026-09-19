@@ -82,6 +82,11 @@ jobs:
       - name: Verify canonical shared protocol snapshot
         run: python scripts/export_shared_contracts.py --check
 
+      - name: Validate finite model-evaluation plan without calling providers
+        run: |
+          mkdir -p test-results
+          python evaluation/mock_interview_eval.py --plan-only > test-results/mock-preflight.json
+
       - name: Apply and verify database migrations
         run: |
           alembic upgrade head
@@ -99,7 +104,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: backend-tests-py${{ matrix.python-version }}
-          path: test-results/backend.xml
+          path: |
+            test-results/backend.xml
+            test-results/mock-preflight.json
           if-no-files-found: warn
           retention-days: 7
 

@@ -10,6 +10,7 @@ import logging
 import edge_tts
 
 from app.core.config import settings
+from app.core.model_policy import require_local_model
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class TTSService:
         if not text.strip():
             return b""
 
+        require_local_model("tts", is_local=False)
         from app.usage import runtime
         from app.core.provider_streams import close_provider_stream
 
