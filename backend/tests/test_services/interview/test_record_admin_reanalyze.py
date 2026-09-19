@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from app.models.interview_record import InterviewRecord
-from app.services.interview import record_admin
+from app.interviews.application import record_admin
 
 
 @pytest.fixture(autouse=True)
@@ -143,10 +143,10 @@ def test_load_existing_qa_shells_roundtrip(db_session, monkeypatch):
     # name, so ``import ... as orch`` binds the INSTANCE — go via sys.modules.
     import sys
 
-    import app.services.interview.analysis_orchestrator  # noqa: F401
+    import app.interviews.application.analysis_orchestrator  # noqa: F401
     from app.models.interview_qa import InterviewQA
 
-    orch = sys.modules["app.services.interview.analysis_orchestrator"]
+    orch = sys.modules["app.interviews.application.analysis_orchestrator"]
 
     rec = _mk_record(db_session, "ir_gate1", status="analyzing")
     db_session.add_all(
@@ -199,9 +199,9 @@ def test_load_existing_qa_shells_empty_for_fresh_record(db_session, monkeypatch)
     # name, so ``import ... as orch`` binds the INSTANCE — go via sys.modules.
     import sys
 
-    import app.services.interview.analysis_orchestrator  # noqa: F401
+    import app.interviews.application.analysis_orchestrator  # noqa: F401
 
-    orch = sys.modules["app.services.interview.analysis_orchestrator"]
+    orch = sys.modules["app.interviews.application.analysis_orchestrator"]
 
     rec = _mk_record(db_session, "ir_gate2", status="pending")
 

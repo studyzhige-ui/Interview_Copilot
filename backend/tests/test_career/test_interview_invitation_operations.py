@@ -63,11 +63,9 @@ from app.schemas.interview_invitation import (
     RejectInterviewInvitationCandidate,
 )
 from app.schemas.job_opportunity import OpportunityCreate
-from app.services.career_process_service import create_job_opportunity
-from app.services.chat.interaction_service import (
-    create_pending_interaction,
-    resolve_interaction,
-)
+from app.career.application.process import create_job_opportunity
+from app.conversation.application.interaction_service import create_pending_interaction
+from app.conversation.application.interaction_service import resolve_interaction
 
 
 NOW = datetime(2026, 8, 26, 9, 0, tzinfo=UTC)

@@ -156,8 +156,8 @@ def test_new_conversation_inherits_account_execution_mode(
 def test_general_turn_cannot_downgrade_career_runtime_to_chat(
     client: TestClient, db: Session, monkeypatch
 ):
-    from app.services.chat import turn_executor
-    from app.services.chat.turn_event_buffer import turn_event_buffer
+    from app.conversation.application import turn_executor
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     user_id = _uid(db, "alice")
     db.add(
@@ -194,8 +194,8 @@ def test_general_turn_cannot_downgrade_career_runtime_to_chat(
 
 
 def test_create_turn_is_backgrounded(client: TestClient, db: Session, monkeypatch):
-    from app.services.chat import turn_executor
-    from app.services.chat.turn_event_buffer import turn_event_buffer
+    from app.conversation.application import turn_executor
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     user_id = _uid(db, "alice")
     db.add(Conversation(id="s_turn", user_id=user_id, title="T", type="general"))
@@ -238,8 +238,8 @@ def test_create_turn_is_backgrounded(client: TestClient, db: Session, monkeypatc
 
 
 def test_submission_retry_is_idempotent(client: TestClient, db: Session, monkeypatch):
-    from app.services.chat import turn_executor
-    from app.services.chat.turn_event_buffer import turn_event_buffer
+    from app.conversation.application import turn_executor
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     user_id = _uid(db, "alice")
     db.add(Conversation(id="s_retry", user_id=user_id, title="T", type="general"))
@@ -286,8 +286,8 @@ def test_create_turn_dispatch_failure_is_terminal(
     db: Session,
     monkeypatch,
 ):
-    from app.services.chat import turn_executor
-    from app.services.chat.turn_event_buffer import turn_event_buffer
+    from app.conversation.application import turn_executor
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     user_id = _uid(db, "alice")
     db.add(Conversation(id="s_dispatch", user_id=user_id, title="T", type="general"))
@@ -320,7 +320,7 @@ def test_create_turn_dispatch_failure_is_terminal(
 def test_active_turn_queues_submission_without_writing_history(
     client: TestClient, db: Session, monkeypatch
 ):
-    from app.services.chat.turn_event_buffer import turn_event_buffer
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     user_id = _uid(db, "alice")
     conversation = Conversation(id="s_busy", user_id=user_id, title="T", type="general")
@@ -392,7 +392,7 @@ def test_active_turn_queues_submission_without_writing_history(
 def test_cancel_pending_turn_releases_session(
     client: TestClient, db: Session, monkeypatch
 ):
-    from app.services.chat.turn_event_buffer import turn_event_buffer
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     user_id = _uid(db, "alice")
     conversation = Conversation(
@@ -520,7 +520,7 @@ def test_execution_mode_get_patch_is_owner_scoped_and_cas(
 def test_execution_mode_change_only_affects_future_admissions(
     client: TestClient, db: Session, monkeypatch
 ):
-    from app.services.chat.turn_event_buffer import turn_event_buffer
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     user_id = _uid(db, "alice")
     conversation = Conversation(
@@ -589,7 +589,7 @@ def test_pending_submission_execution_mode_is_an_explicit_editable_snapshot(
     mode may intentionally diverge without becoming a second default owner.
     """
 
-    from app.services.chat.turn_event_buffer import turn_event_buffer
+    from app.conversation.application.turn_event_buffer import turn_event_buffer
 
     user_id = _uid(db, "alice")
     conversation = Conversation(
@@ -940,7 +940,7 @@ def test_mock_start_creates_record_conversation_runtime(
     from app.models.interview_record import InterviewRecord
     from app.models.job_opportunity import JobOpportunity
     from app.models.mock_interview_runtime import MockInterviewRuntime
-    from app.services.resume import resume_artifact_service
+    from app.career.application.resumes import resume_artifact_service
 
     pk = _uid(db, "alice")
     resume = resume_artifact_service.create_resume_artifact(
@@ -984,7 +984,7 @@ def test_mock_start_creates_record_conversation_runtime(
             )()
 
     monkeypatch.setattr(
-        "app.services.interview.mock_interview_service.get_llm_for_role",
+        "app.interviews.application.mock_interview_service.get_llm_for_role",
         lambda *args, **kwargs: _PlanningLLM(),
     )
 
@@ -1034,7 +1034,7 @@ def test_mock_start_rejects_other_users_opportunity_before_planning(
     monkeypatch,
 ):
     from app.models.job_opportunity import JobOpportunity
-    from app.services.resume import resume_artifact_service
+    from app.career.application.resumes import resume_artifact_service
 
     alice_pk = _uid(db, "alice")
     bob_pk = _uid(db, "bob")
@@ -1064,7 +1064,7 @@ def test_mock_start_rejects_other_users_opportunity_before_planning(
         raise AssertionError("ownership must be checked before model planning")
 
     monkeypatch.setattr(
-        "app.services.interview.mock_interview_service.generate_plan",
+        "app.interviews.application.mock_interview_service.generate_plan",
         fail_if_planned,
     )
     response = client.post(
@@ -1085,7 +1085,7 @@ def test_mock_start_rejects_resume_that_has_not_been_parsed(
     db: Session,
 ):
     from app.models.file_asset import FileAsset
-    from app.services.resume import resume_artifact_service
+    from app.career.application.resumes import resume_artifact_service
 
     pk = _uid(db, "alice")
     asset = FileAsset(
@@ -1150,7 +1150,7 @@ def test_mock_start_rejects_unmigrated_legacy_resume_without_reading_it(
         raise AssertionError("unmigrated Resume must fail before planning")
 
     monkeypatch.setattr(
-        "app.services.interview.mock_interview_service.generate_plan",
+        "app.interviews.application.mock_interview_service.generate_plan",
         fail_if_planned,
     )
     response = client.post(
@@ -1191,11 +1191,11 @@ def test_mock_answer_audio_transcribes_and_stores_one_asset(
         return f"s3://test/{object_key}"
 
     monkeypatch.setattr(
-        "app.services.voice.short_clip_transcription.transcribe_short_clip",
+        "app.media.application.short_clip_transcription.transcribe_short_clip",
         fake_transcribe,
     )
     monkeypatch.setattr(
-        "app.services.uploads.file_asset_service.upload_file_to_owned_key",
+        "app.files.application.file_asset_service.upload_file_to_owned_key",
         fake_store,
     )
 
@@ -1236,7 +1236,7 @@ def test_mock_answer_audio_does_not_store_empty_transcript(
         return "  "
 
     monkeypatch.setattr(
-        "app.services.voice.short_clip_transcription.transcribe_short_clip",
+        "app.media.application.short_clip_transcription.transcribe_short_clip",
         fake_transcribe,
     )
     audio = b"\x1a\x45\xdf\xa3" + b"mock-webm-audio" * 3
@@ -1271,11 +1271,11 @@ def test_mock_answer_audio_reports_storage_failure_and_marks_asset_failed(
         raise RuntimeError("storage unavailable")
 
     monkeypatch.setattr(
-        "app.services.voice.short_clip_transcription.transcribe_short_clip",
+        "app.media.application.short_clip_transcription.transcribe_short_clip",
         fake_transcribe,
     )
     monkeypatch.setattr(
-        "app.services.uploads.file_asset_service.upload_file_to_owned_key",
+        "app.files.application.file_asset_service.upload_file_to_owned_key",
         fail_store,
     )
     audio = b"\x1a\x45\xdf\xa3" + b"mock-webm-audio" * 3
@@ -1298,7 +1298,7 @@ def test_mock_answer_audio_reports_unavailable_transcription_without_storing(
     monkeypatch,
 ):
     from app.models.file_asset import FileAsset
-    from app.services.voice.short_clip_transcription import TranscriptionUnavailable
+    from app.media.application.short_clip_transcription import TranscriptionUnavailable
 
     record_id, _ = _seed_started_mock(
         db,
@@ -1310,7 +1310,7 @@ def test_mock_answer_audio_reports_unavailable_transcription_without_storing(
         raise TranscriptionUnavailable("model unavailable")
 
     monkeypatch.setattr(
-        "app.services.voice.short_clip_transcription.transcribe_short_clip",
+        "app.media.application.short_clip_transcription.transcribe_short_clip",
         fail_transcribe,
     )
     audio = b"\x1a\x45\xdf\xa3" + b"mock-webm-audio" * 3
@@ -1334,7 +1334,7 @@ def test_mock_answer_appends_messages_and_advances(
     generates the next interviewer line, persists it, and advances the runtime
     stage — without any Director/retry machinery."""
     from app.models.mock_interview_runtime import MockInterviewRuntime
-    from app.services.interview.mock_interview_service import NextTurn
+    from app.interviews.application.mock_interview_service import NextTurn
 
     record_id, conv_id = _seed_started_mock(db)
     runtime = (
@@ -1351,7 +1351,7 @@ def test_mock_answer_appends_messages_and_advances(
         )
 
     monkeypatch.setattr(
-        "app.services.interview.mock_interview_service.generate_next_turn",
+        "app.interviews.application.mock_interview_service.generate_next_turn",
         fake_next_turn,
     )
 
@@ -1391,7 +1391,7 @@ def test_mock_answer_failure_preserves_candidate_answer_for_recovery(
     monkeypatch,
 ):
     from app.models.mock_interview_runtime import MockInterviewRuntime
-    from app.services.interview.mock_interview_service import (
+    from app.interviews.application.mock_interview_service import (
         NextTurnGenerationError,
     )
 
@@ -1410,7 +1410,7 @@ def test_mock_answer_failure_preserves_candidate_answer_for_recovery(
         raise NextTurnGenerationError("LLM unavailable")
 
     monkeypatch.setattr(
-        "app.services.interview.mock_interview_service.generate_next_turn",
+        "app.interviews.application.mock_interview_service.generate_next_turn",
         fail_next_turn,
     )
     response = client.post(
@@ -1465,7 +1465,8 @@ def test_mock_finish_transitions_to_processing_review_and_dispatches(
         return _FakeAsyncResult()
 
     monkeypatch.setattr(
-        "app.services.interview.mock_flow.dispatch_mock_interview_review", fake_delay
+        "app.interviews.application.mock_flow.dispatch_mock_interview_review",
+        fake_delay,
     )
 
     resp = client.post(f"/api/v1/mock-interviews/{record_id}/finish")

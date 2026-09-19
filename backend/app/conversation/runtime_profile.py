@@ -12,11 +12,9 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from app.services.chat.interview_reference import (
-    InterviewReference,
-    load_interview_reference,
-    render_interview_reference,
-)
+from app.conversation.application.interview_reference import InterviewReference
+from app.conversation.application.interview_reference import load_interview_reference
+from app.conversation.application.interview_reference import render_interview_reference
 
 ConversationMode = str
 

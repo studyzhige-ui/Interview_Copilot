@@ -118,12 +118,12 @@ def overview(
     )
 
 
-@router.get("/model-usage")
+@router.get("/model-usage", deprecated=True)
 def primary_model_usage(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Read-only, owner-scoped accounting; this is not a provider invoice."""
-    from app.services.chat.model_budget_service import usage_view
+    from app.usage.service import usage_view
 
     return usage_view(db, user_id=current_user.id)

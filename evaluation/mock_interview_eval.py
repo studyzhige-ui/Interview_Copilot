@@ -21,14 +21,12 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.core.llm_client_factory import get_internal_llm  # noqa: E402
 from app.prompts.interview import MOCK_INTERVIEW_JUDGE_PROMPT  # noqa: E402
-from app.services.interview.mock_interview_service import (  # noqa: E402
-    MockPlan,
-    NextTurn,
-    build_prefix,
-    detect_response_language,
-    generate_next_turn,
-    generate_plan,
-)
+from app.interviews.application.mock_interview_service import MockPlan  # noqa: E402 — CLI package bootstrap above
+from app.interviews.application.mock_interview_service import NextTurn  # noqa: E402 — CLI package bootstrap above
+from app.interviews.application.mock_interview_service import build_prefix  # noqa: E402 — CLI package bootstrap above
+from app.interviews.application.mock_interview_service import detect_response_language  # noqa: E402 — CLI package bootstrap above
+from app.interviews.application.mock_interview_service import generate_next_turn  # noqa: E402 — CLI package bootstrap above
+from app.interviews.application.mock_interview_service import generate_plan  # noqa: E402 — CLI package bootstrap above
 
 DEFAULT_TURN_DATASET = Path(__file__).with_name("mock_interview_dataset.jsonl")
 DEFAULT_TRAJECTORY_DATASET = Path(__file__).with_name(
@@ -150,21 +148,10 @@ async def _judge(
         case_json=json.dumps(payload, ensure_ascii=False),
         message=message,
     )
-    last_error: Exception | None = None
-    response = None
-    for attempt in range(2):
-        try:
-            response = await get_internal_llm("worker").acomplete(
-                prompt,
-                response_format={"type": "json_object"},
-            )
-            break
-        except Exception as exc:  # noqa: BLE001 - one transient eval retry
-            last_error = exc
-            if attempt == 0:
-                print("  judge request failed; retrying once", flush=True)
-    if response is None:
-        raise RuntimeError("mock interview judge failed twice") from last_error
+    # Unknown paid transport outcomes are not a reason for an automatic retry.
+    response = await get_internal_llm("worker").acomplete(
+        prompt, response_format={"type": "json_object"}
+    )
     result = _parse_json(str(response.text))
     for key in JUDGE_DIMENSIONS:
         result[key] = max(1, min(5, int(result[key])))
@@ -549,7 +536,10 @@ def main() -> None:
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
-    result = asyncio.run(_run(args))
+    from app.usage.runtime import for_username
+
+    with for_username(args.user):
+        result = asyncio.run(_run(args))
     output = args.output or (
         PROJECT_ROOT / "data" / "evaluation" / "mock_interview_report.json"
     )

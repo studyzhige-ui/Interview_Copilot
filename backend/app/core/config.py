@@ -34,6 +34,16 @@ class Settings(BaseSettings):
         "postgresql://postgres:postgres@localhost:5432/interview_copilot"
     )
     LLAMA_CLOUD_API_KEY: str = ""
+    CLOUD_PARSE_TIER: Literal["fast", "cost_effective", "agentic", "agentic_plus"] = (
+        "cost_effective"
+    )
+    CLOUD_PARSE_VERSION: str = Field("latest", min_length=1, max_length=80)
+    CLOUD_PARSE_MAX_PAGES: int = Field(500, ge=1, le=10000)
+    CLOUD_PARSE_MAX_INPUT_BYTES: int = Field(
+        50 * 1024 * 1024, ge=1, le=500 * 1024 * 1024
+    )
+    CLOUD_PARSE_MAX_OUTPUT_BYTES: int = Field(20_000_000, ge=1, le=100_000_000)
+    CLOUD_PARSE_DEADLINE_SECONDS: float = Field(300.0, gt=0, le=3600)
 
     # Runtime data paths
     APP_DATA_DIR: str = _default_app_data_dir()
@@ -129,13 +139,22 @@ class Settings(BaseSettings):
     # Only a trusted built-in definition may opt into a larger decoded budget.
     AGENT_MAX_TOOL_WIRE_ARG_CHARS: int = 640_000
     LLM_REQUEST_TIMEOUT_SECONDS: int = 60
-    # UTC-day safety allowance for primary Chat/Agent model dispatches. This
-    # does not bill currency or replace task-completion reasoning. Limits are
-    # frozen on each account/day row; restart and Conversation deletion do not
-    # reset them. Internal models, compaction, speech and tools are not billed
-    # by this first accounting scope (the usage API advertises exclusions).
+    # UTC-day account-wide dispatch/token limits. Historical names are retained
+    # for deployment compatibility; all model, speech and tool meters share the
+    # ledger. Money uses exact frozen operator rates, never guessed prices.
     MODEL_DAILY_CALL_LIMIT: int = Field(default=500, ge=1, le=1_000_000)
     MODEL_DAILY_TOKEN_LIMIT: int = Field(default=2_000_000, ge=1, le=2_000_000_000)
+    # Global consumption envelope. Missing prices are visible as unpriced; a
+    # monetary ceiling rejects unpriced work rather than treating it as free.
+    USAGE_CURRENCY: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
+    USAGE_DAILY_COST_LIMIT_MICROS: int | None = Field(default=None, ge=1, le=10**12)
+    USAGE_RATE_CARD_JSON: str = "{}"
+    USAGE_DAILY_UNITS_JSON: str = '{"audio_ms":14400000,"characters":2000000,"documents":50000,"pages":5000,"bytes":1073741824,"external_requests":2000,"tool_invocations":1000}'
+    USAGE_AUDIO_MAX_BYTES: int = Field(500 * 1024 * 1024, ge=1, le=2**31 - 1)
+    USAGE_AUDIO_MAX_MS: int = Field(3_600_000, ge=1, le=86_400_000)
+    USAGE_AUDIO_PROBE_SECONDS: float = Field(30.0, gt=0, le=300)
+    USAGE_TTS_MAX_BYTES: int = Field(10_000_000, ge=1, le=100_000_000)
+    USAGE_MAX_UNRESOLVED: int = Field(default=100, ge=1, le=100000)
     MODEL_STREAM_DEADLINE_SECONDS: float = Field(default=180, gt=0, le=3600)
     MODEL_STREAM_MAX_BYTES: int = Field(default=2_000_000, ge=1024, le=50_000_000)
     # Anthropic native Messages prompt caching. Disabling it changes only
@@ -339,6 +358,25 @@ class Settings(BaseSettings):
     # multiplication applies; Redis default maxclients is 10000 so this is
     # rarely the bottleneck.
     REDIS_POOL_SIZE: int = 50
+
+    @field_validator("USAGE_RATE_CARD_JSON")
+    @classmethod
+    def _usage_rates_valid(cls, value: str) -> str:
+        from app.usage.pricing import rate_catalog
+
+        rate_catalog(value)
+        return value
+
+    @field_validator("USAGE_DAILY_UNITS_JSON")
+    @classmethod
+    def _usage_limits_valid(cls, value: str) -> str:
+        import json
+        from app.usage.pricing import quantities
+
+        limits = quantities(json.loads(value))
+        if any(v <= 0 for v in limits.values()):
+            raise ValueError("resource allowances must be positive")
+        return value
 
     @field_validator(
         "CACHE_DIR",

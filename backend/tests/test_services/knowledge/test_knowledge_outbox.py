@@ -17,7 +17,7 @@ import pytest
 from app.models.document_chunk import DocumentChunk
 from app.models.knowledge import KnowledgeDocument
 from app.models.outbox_job import OutboxJob
-from app.services.knowledge import index_jobs as ko
+from app.rag.application.library import index_jobs as ko
 from app.worker.outbox_handlers import knowledge as knowledge_handlers
 
 
@@ -123,7 +123,7 @@ def test_enqueue_milvus_delete_coalesces_duplicates(db_session):
 
 
 def test_delete_queues_outbox_when_milvus_fails(db_session, monkeypatch):
-    from app.services.knowledge import knowledge_service as ks
+    from app.rag.application.library import knowledge_service as ks
 
     db_session.add(
         KnowledgeDocument(
@@ -177,7 +177,7 @@ def test_enqueue_then_drain_runs_registered_handler(db_session, monkeypatch):
     called. The direct-handler tests above can't exercise the claim/run/status
     lifecycle this does."""
     import app.worker.outbox_handlers.knowledge  # noqa: F401 — registers handler
-    from app.services.outbox import run_due_outbox_jobs
+    from app.platform.outbox import run_due_outbox_jobs
 
     calls = []
     import app.rag.milvus_hybrid as mh
@@ -202,7 +202,7 @@ def test_enqueue_then_drain_runs_registered_handler(db_session, monkeypatch):
 
 
 def test_delete_always_uses_transactional_outbox(db_session):
-    from app.services.knowledge import knowledge_service as ks
+    from app.rag.application.library import knowledge_service as ks
 
     db_session.add(
         KnowledgeDocument(
@@ -358,7 +358,7 @@ def test_upsert_drain_persistent_failure_ends_dead_and_doc_failed(
     kept 'processing' on runs 1–4."""
     import app.rag.index.knowledge as ing
     import app.worker.outbox_handlers.knowledge  # noqa: F401 — registers handler
-    from app.services.outbox import run_due_outbox_jobs
+    from app.platform.outbox import run_due_outbox_jobs
 
     _seed_doc(db_session, "kdoc_e2e")  # status=processing
 
@@ -387,7 +387,7 @@ def test_upsert_drain_recovers_to_ready(db_session, monkeypatch):
     through the real runner (the primary recovery path C2 exists for)."""
     import app.rag.index.knowledge as ing
     import app.worker.outbox_handlers.knowledge  # noqa: F401
-    from app.services.outbox import run_due_outbox_jobs
+    from app.platform.outbox import run_due_outbox_jobs
 
     _seed_doc(db_session, "kdoc_rec")
     calls = {"n": 0}
@@ -417,7 +417,7 @@ def test_upsert_drain_does_not_resurrect_hard_deleted_doc(db_session, monkeypatc
     stays 'deleting' (never resurrected to ready)."""
     import app.worker.outbox_handlers.knowledge  # noqa: F401
     from app.rag.document_chunk_service import delete_document_chunks
-    from app.services.outbox import run_due_outbox_jobs
+    from app.platform.outbox import run_due_outbox_jobs
 
     _seed_doc(db_session, "kdoc_race")  # processing
     db_session.add(

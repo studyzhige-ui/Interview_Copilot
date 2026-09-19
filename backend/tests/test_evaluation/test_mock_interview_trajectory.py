@@ -4,11 +4,9 @@ from typing import Any
 
 import pytest
 
-from app.services.interview.mock_interview_service import (
-    BASE_INTERVIEW_STAGES,
-    MockPlan,
-    NextTurn,
-)
+from app.interviews.application.mock_interview_service import BASE_INTERVIEW_STAGES
+from app.interviews.application.mock_interview_service import MockPlan
+from app.interviews.application.mock_interview_service import NextTurn
 
 from evaluation.mock_interview_eval import (
     DEFAULT_TRAJECTORY_DATASET,

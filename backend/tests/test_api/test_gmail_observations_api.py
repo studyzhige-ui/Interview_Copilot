@@ -18,13 +18,12 @@ from app.schemas.gmail_observation import (
     GmailIncrementalMessage,
     GmailObservationProposal,
 )
-from app.services import gmail_observation_service, gmail_observation_sync_service
-from app.services.gmail_integration_service import (
-    GMAIL_READONLY_SCOPE,
-    GmailGrantInspection,
-    GmailProviderAdapterError,
-    bind_verified_grant,
-)
+from app.integrations.gmail import observations as gmail_observation_service
+from app.integrations.gmail import sync as gmail_observation_sync_service
+from app.integrations.gmail.contract import GMAIL_READONLY_SCOPE
+from app.integrations.gmail.contract import GmailGrantInspection
+from app.integrations.gmail.contract import GmailProviderAdapterError
+from app.integrations.gmail.contract import bind_verified_grant
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine

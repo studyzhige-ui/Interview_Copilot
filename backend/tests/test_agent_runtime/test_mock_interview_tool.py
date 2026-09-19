@@ -15,10 +15,8 @@ from app.models.mock_interview_runtime import MockInterviewRuntime
 from app.models.pending_submission import PendingSubmission
 from app.models.user import User
 from app.schemas.client_action import MockClientActionResultRequest
-from app.services.chat.client_action_service import (
-    find_mock_client_action,
-    resolve_pending_action,
-)
+from app.conversation.application.client_action_service import find_mock_client_action
+from app.conversation.application.client_action_service import resolve_pending_action
 from tests.conftest import NoCloseSession
 
 

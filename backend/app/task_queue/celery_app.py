@@ -247,9 +247,7 @@ def _ensure_worker_runtime(
 
     with _runtime_lock:
         if voice and not _voice_runtime_ready:
-            from app.services.voice.whisperx_engine import (
-                init_whisper_model,
-            )
+            from app.media.application.whisperx_engine import init_whisper_model
 
             init_whisper_model()
             _voice_runtime_ready = True

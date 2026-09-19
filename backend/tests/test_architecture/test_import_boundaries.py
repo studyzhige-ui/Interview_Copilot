@@ -6,21 +6,52 @@ import ast
 from importlib.util import resolve_name
 from pathlib import Path
 
-APP_ROOT = Path(__file__).parents[3] / "app"
+APP_ROOT = Path(__file__).parents[2] / "app"
 
+APPLICATION_OWNERS = (
+    "career",
+    "automation",
+    "conversation",
+    "files",
+    "identity",
+    "interviews",
+    "integrations",
+    "memory",
+    "media",
+    "usage",
+    "capabilities",
+    "observability",
+    "platform",
+    "providers",
+    "maintenance",
+)
 FORBIDDEN_IMPORTS = {
-    "app.api": ("app.worker",),
-    "app.models": ("app.api", "app.services", "app.worker", "app.rag"),
-    "app.schemas": ("app.api", "app.services", "app.worker"),
+    "app.api": ("app.worker", "app.maintenance"),
+    "app.models": (
+        "app.api",
+        "app.worker",
+        "app.rag",
+        *(f"app.{name}" for name in APPLICATION_OWNERS),
+    ),
+    "app.schemas": (
+        "app.api",
+        "app.worker",
+        *(f"app.{name}.application" for name in APPLICATION_OWNERS),
+    ),
     "app.core": ("app.api", "app.worker"),
-    "app.services": ("app.api", "app.worker"),
-    "app.rag": ("app.api", "app.worker"),
+    "app.rag": ("app.api", "app.worker", "app.maintenance"),
+    **{f"app.{name}": ("app.api", "app.worker") for name in APPLICATION_OWNERS},
 }
 
 
 def _modules() -> dict[str, Path]:
+    assert APP_ROOT.is_dir() and (APP_ROOT / "main.py").is_file()
     return {
-        ".".join(path.relative_to(APP_ROOT.parent).with_suffix("").parts): path
+        ".".join(
+            path.relative_to(APP_ROOT.parent).with_suffix("").parts[:-1]
+            if path.name == "__init__.py"
+            else path.relative_to(APP_ROOT.parent).with_suffix("").parts
+        ): path
         for path in APP_ROOT.rglob("*.py")
     }
 
@@ -91,3 +122,46 @@ def test_application_import_graph_is_acyclic() -> None:
 
     for module in sorted(graph):
         visit(module)
+
+
+def test_scan_is_real_and_retired_owners_cannot_return():
+    modules = _modules()
+    assert {
+        "app.main",
+        "app.conversation",
+        "app.usage.runtime",
+        "app.rag.retrieval.pipeline",
+    } <= modules.keys(), "architecture test must inspect the actual application"
+    assert "app.conversation" in modules  # __init__ side effects count too
+    assert not (APP_ROOT / "services").exists(), "no duplicate legacy service owner"
+    for module, path in modules.items():
+        for _, target in _raw_imports(path, module):
+            assert not (target == "app.services" or target.startswith("app.services."))
+            if target == "app.maintenance" or target.startswith("app.maintenance."):
+                assert module.startswith("app.maintenance"), (module, target)
+
+
+def test_only_application_owners_create_domain_rows():
+    """HTTP handlers may own a short transaction, never a second ORM writer."""
+    for path in [
+        p
+        for directory in ("api", "agent_runtime/tools", "worker/tasks")
+        for p in (APP_ROOT / directory).rglob("*.py")
+    ]:
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                # commit is intentionally allowed: caller-owned application UoW.
+                assert not (
+                    isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "db"
+                    and node.func.attr in {"add", "add_all", "delete"}
+                ), (
+                    path,
+                    node.lineno,
+                    "domain mutations belong to the application owner",
+                )
+
+
+def test_runtime_package_assets_exist():
+    assert (APP_ROOT / "providers/catalog/seed_catalog.json").is_file()
+    assert list((APP_ROOT / "conversation/context_templates").glob("*.md"))

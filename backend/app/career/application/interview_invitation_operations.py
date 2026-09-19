@@ -62,13 +62,11 @@ from app.schemas.interview_invitation import (
     VerificationView,
 )
 from app.schemas.job_opportunity import OpportunityCreate, ProcessEventAppend
-from app.services.career_process_service import (
-    CareerIdempotencyConflictError,
-    CareerProcessError,
-    OpportunityAdmission,
-    append_confirmed_process_event,
-    create_job_opportunity,
-)
+from app.career.application.process import CareerIdempotencyConflictError
+from app.career.application.process import CareerProcessError
+from app.career.application.process import OpportunityAdmission
+from app.career.application.process import append_confirmed_process_event
+from app.career.application.process import create_job_opportunity
 
 
 class InterviewInvitationOperationError(ValueError):

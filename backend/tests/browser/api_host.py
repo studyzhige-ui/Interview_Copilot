@@ -34,7 +34,7 @@ ModelProviderAdapter.start_stream = reject_live_model
 # installed by the production app. The scenario tests behavior, not model quality.
 import json  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
-from app.services.interview import mock_interview_service  # noqa: E402
+from app.interviews.application import mock_interview_service  # noqa: E402
 
 
 class FixtureInterviewModel:

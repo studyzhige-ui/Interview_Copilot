@@ -297,26 +297,6 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._entries: dict[str, ToolDefinition] = {}
-        self._default_tools_loaded = False
-        self._loading_default_tools = False
-
-    def _ensure_default_tools_loaded(self) -> None:
-        """Import built-in tool modules once so self-registration runs.
-
-        Tool modules register themselves as an import side effect.  Keeping
-        this lazy avoids import-order coupling: callers can safely import the
-        registry directly and still see the default tool set on first use.
-        """
-        if self._default_tools_loaded or self._loading_default_tools:
-            return
-
-        self._loading_default_tools = True
-        try:
-            import app.agent_runtime.tools  # noqa: F401
-
-            self._default_tools_loaded = True
-        finally:
-            self._loading_default_tools = False
 
     def register(self, definition: ToolDefinition) -> None:
         if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", definition.name) is None:
@@ -333,7 +313,6 @@ class ToolRegistry:
         logger.debug("Registered concrete tool: %s", definition.name)
 
     def get(self, name: str) -> ToolDefinition | None:
-        self._ensure_default_tools_loaded()
         return self._entries.get(name)
 
     def _iter_available(
@@ -343,7 +322,6 @@ class ToolRegistry:
         user_id: str | None = None,
     ) -> list[ToolDefinition]:
         """Return registered definitions not removed by deterministic visibility."""
-        self._ensure_default_tools_loaded()
         exclude = exclude or set()
         entries = []
         for name in sorted(self._entries):
@@ -400,7 +378,6 @@ class ToolRegistry:
         Returns the tool result dict.  On validation error, returns an
         error dict instead of raising.
         """
-        self._ensure_default_tools_loaded()
         entry = self._entries.get(name)
         if entry is None:
             return {"error": "unknown_tool", "tool_name": name}
@@ -413,7 +390,6 @@ class ToolRegistry:
         raw_args: dict[str, Any],
         ctx: AgentToolContext,
     ) -> ToolDispatchPlan:
-        self._ensure_default_tools_loaded()
         entry = self._entries.get(name)
         if entry is None:
             return _missing_tool_plan(name, raw_args)
@@ -457,11 +433,9 @@ class ToolRegistry:
 
     @property
     def tool_names(self) -> list[str]:
-        self._ensure_default_tools_loaded()
         return sorted(self._entries)
 
     def __contains__(self, name: str) -> bool:
-        self._ensure_default_tools_loaded()
         return name in self._entries
 
 

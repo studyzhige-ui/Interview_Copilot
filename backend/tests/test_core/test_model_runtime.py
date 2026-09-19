@@ -62,7 +62,7 @@ def _stub_profile_cache(monkeypatch):
     # No stored user credentials in this catalog/selection unit fixture. A DB
     # outage must no longer be silently treated as an absent credential.
     monkeypatch.setattr(
-        "app.services.auth.user_api_key_service.get_user_api_key_plaintext",
+        "app.identity.application.user_api_key_service.get_user_api_key_plaintext",
         lambda *_args, **_kwargs: None,
     )
     catalog = {
@@ -420,7 +420,7 @@ def _stub_user_keys(monkeypatch, providers: set[str]):
     Stubs ``get_user_api_key_plaintext`` — the single source both
     ``resolve_api_key`` and ``ready_profile_ids`` sit on (one definition
     of "ready", per the Phase 3 review)."""
-    import app.services.auth.user_api_key_service as key_svc
+    import app.identity.application.user_api_key_service as key_svc
 
     monkeypatch.setattr(
         key_svc,

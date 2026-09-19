@@ -23,11 +23,9 @@ from app.schemas.interview_invitation import (
     InterviewInvitationFacts,
 )
 from app.schemas.gmail_observation import GmailObservationProposal
-from app.services import gmail_observation_service as gmail
-from app.services.chat.interaction_service import (
-    InteractionConflictError,
-    resolve_interaction,
-)
+from app.integrations.gmail import observations as gmail
+from app.conversation.application.interaction_service import InteractionConflictError
+from app.conversation.application.interaction_service import resolve_interaction
 from tests.test_services.test_gmail_observation_service import (
     NOW,
     _user,

@@ -70,10 +70,10 @@
 
 - `backend/app/conversation/engine.py`
 - `backend/app/conversation/agent_strategy.py`
-- `backend/app/services/chat/turn_executor.py`
-- `backend/app/services/chat/context_assembly_pipeline.py`
-- `backend/app/services/chat/model_dispatch_service.py`
-- `backend/app/services/chat/client_action_service.py`
+- `backend/app/conversation/application/turn_executor.py`
+- `backend/app/conversation/application/context_assembly_pipeline.py`
+- `backend/app/conversation/application/model_dispatch_service.py`
+- `backend/app/conversation/application/client_action_service.py`
 - `backend/app/agent_runtime/tool_policy.py`
 - `backend/app/agent_runtime/tool_registry.py`
 - `backend/app/agent_runtime/turn_tool_catalog.py`
@@ -82,10 +82,10 @@
 - `backend/app/agent_runtime/harness_events.py`
 - `backend/app/core/model_provider_adapter.py`
 - `backend/app/core/llm_tracing.py`
-- `backend/app/services/agent_memory_service.py`
-- `backend/app/services/persistent_task_service.py`
-- `backend/app/services/gmail_observation_service.py`
-- `backend/app/services/analytics/telemetry_service.py`
+- `backend/app/memory/lifecycle.py`
+- `backend/app/automation/application/tasks.py`
+- `backend/app/integrations/gmail/observations.py`
+- `backend/app/observability/telemetry_service.py`
 
 ### 1.4 测试与 evaluation
 

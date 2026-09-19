@@ -92,8 +92,10 @@ def humanize_error(exc: Exception) -> str:
 
     if isinstance(exc, ContextCapacityError):
         return str(exc)
-    from app.services.chat.model_budget_service import ModelBudgetExceededError
-    from app.services.chat.model_dispatch_service import ModelOutcomeUnknownError
+    from app.usage.service import ModelBudgetExceededError
+    from app.conversation.application.model_dispatch_service import (
+        ModelOutcomeUnknownError,
+    )
 
     if isinstance(exc, ModelBudgetExceededError):
         return str(exc)

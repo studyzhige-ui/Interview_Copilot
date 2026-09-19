@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from alembic import command
 from app.models.memory_pipeline import MemoryExtraction
-from app.services import memory_pipeline as pipeline
+from app.memory import consolidation as pipeline
 from tests.test_db.test_alembic_migrations import fresh_pg_db, _make_alembic_config  # noqa: F401
 from tests.test_services.test_memory_pipeline import source
 

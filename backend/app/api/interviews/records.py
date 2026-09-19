@@ -1,10 +1,13 @@
 """Interview analysis and record HTTP endpoints.
 
 Thin router: auth, request validation, and HTTP status mapping only.
-Business logic lives in ``app.services.interview`` (analysis_intake for
+Business logic lives in ``app.interviews.application`` (analysis_intake for
 the /analyze flow, record_admin for owned-record maintenance,
 interview_record_service for record persistence).
 """
+
+from app.api.command_errors import command_errors
+
 
 import asyncio
 import json
@@ -21,7 +24,6 @@ from app.core.rate_limit import RATE_EXPENSIVE, limiter
 from app.core.security import get_current_user
 from app.core.user_identity import resolve_user_pk
 from app.db.database import get_db
-from app.db.types import utc_now
 from app.models.interview_qa import InterviewQA
 from app.models.user import User
 from app.schemas.interview import (
@@ -31,28 +33,25 @@ from app.schemas.interview import (
     QAEditRequest,
     SaveQARequest,
 )
-from app.services.analytics.diagnostics_report_service import (
-    ABILITY_SCORE_SCALE_VERSION,
-    generate_comprehensive_report,
-)
-from app.services.interview import analysis_intake, record_admin
-from app.services.interview.interview_record_service import (
-    STATUS_ANALYZING,
-    STATUS_COMPLETED,
-    STATUS_EXTRACTING,
-    STATUS_FAILED,
-    STATUS_PENDING,
-    STATUS_PROCESSING_REVIEW,
-    STATUS_REVIEW_FAILED,
-    STATUS_REVIEW_READY,
-    STATUS_TRANSCRIBING,
+from app.observability.diagnostics_report_service import ABILITY_SCORE_SCALE_VERSION
+from app.observability.diagnostics_report_service import generate_comprehensive_report
+from app.interviews.application import analysis_intake
+from app.interviews.application import record_admin
+from app.interviews.application.interview_record_service import STATUS_ANALYZING
+from app.interviews.application.interview_record_service import STATUS_COMPLETED
+from app.interviews.application.interview_record_service import STATUS_EXTRACTING
+from app.interviews.application.interview_record_service import STATUS_FAILED
+from app.interviews.application.interview_record_service import STATUS_PENDING
+from app.interviews.application.interview_record_service import STATUS_PROCESSING_REVIEW
+from app.interviews.application.interview_record_service import STATUS_REVIEW_FAILED
+from app.interviews.application.interview_record_service import STATUS_REVIEW_READY
+from app.interviews.application.interview_record_service import STATUS_TRANSCRIBING
+from app.interviews.application.interview_record_service import (
     InterviewOpportunityNotFoundError,
-    interview_record_service,
 )
-from app.services.uploads.file_asset_service import (
-    UPLOAD_STATUS_CONSUMED,
-    get_owned_file_asset,
-)
+from app.interviews.application.interview_record_service import interview_record_service
+from app.files.application.file_asset_service import UPLOAD_STATUS_CONSUMED
+from app.files.application.file_asset_service import get_owned_file_asset
 
 logger = logging.getLogger(__name__)
 
@@ -303,7 +302,7 @@ def _serialize_qa_rows(db: Session, qa_rows: list[InterviewQA]) -> list[dict]:
     """Serialize QA rows with voice-answer playback URLs batch-minted in ONE
     asset query (a 30-question record used to open 30 sessions). local://
     deployments get no URL — playback degrades gracefully."""
-    from app.services.uploads.file_asset_service import presigned_get_urls
+    from app.files.application.file_asset_service import presigned_get_urls
 
     urls = presigned_get_urls(
         db,
@@ -449,37 +448,14 @@ def edit_interview_qa(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Edit a single InterviewQA row by id."""
-    qa = record_admin.get_owned_qa(
-        db,
-        user_pk=resolve_user_pk(db, current_user.username),
-        record_id=record_id,
-        qa_id=qa_id,
-    )
-    if qa is None:
-        raise HTTPException(status_code=404, detail="QA row not found")
-
-    if payload.question is not None:
-        qa.question = payload.question
-    if payload.answer is not None:
-        qa.answer = payload.answer
-    if payload.critique is not None:
-        qa.critique = payload.critique
-    if payload.improved_answer is not None:
-        qa.improved_answer = payload.improved_answer
-    if (payload.question is not None or payload.answer is not None) and isinstance(
-        qa.source_provenance_json, dict
-    ):
-        provenance = dict(qa.source_provenance_json)
-        provenance["manual_override"] = {
-            "question": payload.question is not None,
-            "answer": payload.answer is not None,
-            "updated_at": utc_now().isoformat(),
-        }
-        qa.source_provenance_json = provenance
-    db.add(qa)
-    db.commit()
-    db.refresh(qa)
+    with command_errors():
+        qa = record_admin.edit_owned_qa(
+            db,
+            record_id=record_id,
+            qa_id=qa_id,
+            payload=payload,
+            current_user=current_user,
+        )
     return {"status": "success", "qa": _serialize_qa_rows(db, [qa])[0]}
 
 
@@ -512,10 +488,8 @@ async def save_qa_to_knowledge_endpoint(
     record = record_admin.get_owned_record(db, record_id, current_user.username)
     if record is None:
         raise HTTPException(status_code=404, detail="Interview record not found")
-    from app.services.knowledge.qa_publish_service import (
-        DEFAULT_CATEGORY,
-        save_qa_to_knowledge,
-    )
+    from app.rag.application.library.qa_publish_service import DEFAULT_CATEGORY
+    from app.rag.application.library.qa_publish_service import save_qa_to_knowledge
 
     try:
         doc = await save_qa_to_knowledge(
@@ -553,7 +527,7 @@ def unsave_qa_from_knowledge_endpoint(
     )
     if qa is None:
         raise HTTPException(status_code=404, detail="QA row not found")
-    from app.services.knowledge.qa_publish_service import unsave_qa_from_knowledge
+    from app.rag.application.library.qa_publish_service import unsave_qa_from_knowledge
 
     removed = unsave_qa_from_knowledge(db, user_pk=user_pk, qa=qa)
     return {"status": "success", "removed": removed}

@@ -324,23 +324,35 @@ def build_ragas_embeddings():
 
     embed_model = Settings.embed_model
 
+    from app.usage.runtime import for_username
+
+    owner = os.getenv("EVAL_USAGE_USER", "eval_user_a").strip()
+    if not owner:
+        raise ValueError("EVAL_USAGE_USER must identify an existing evaluation account")
+
     class LlamaIndexRagasEmbedding(BaseRagasEmbedding):
         def embed_text(self, text: str, **_kwargs) -> list[float]:
-            return embed_model.get_text_embedding(text)
+            with for_username(owner):
+                return embed_model.get_text_embedding(text)
 
         async def aembed_text(self, text: str, **_kwargs) -> list[float]:
-            async_method = getattr(embed_model, "aget_text_embedding", None)
-            if async_method is not None:
-                return await async_method(text)
-            return await asyncio.to_thread(embed_model.get_text_embedding, text)
+            with for_username(owner):
+                async_method = getattr(embed_model, "aget_text_embedding", None)
+                if async_method is not None:
+                    return await async_method(text)
+                return await asyncio.to_thread(embed_model.get_text_embedding, text)
 
         def embed_texts(self, texts: list[str], **_kwargs) -> list[list[float]]:
-            return embed_model.get_text_embedding_batch(texts)
+            with for_username(owner):
+                return embed_model.get_text_embedding_batch(texts)
 
         async def aembed_texts(self, texts: list[str], **_kwargs) -> list[list[float]]:
-            async_method = getattr(embed_model, "aget_text_embedding_batch", None)
-            if async_method is not None:
-                return await async_method(texts)
-            return await asyncio.to_thread(embed_model.get_text_embedding_batch, texts)
+            with for_username(owner):
+                async_method = getattr(embed_model, "aget_text_embedding_batch", None)
+                if async_method is not None:
+                    return await async_method(texts)
+                return await asyncio.to_thread(
+                    embed_model.get_text_embedding_batch, texts
+                )
 
     return LlamaIndexRagasEmbedding()

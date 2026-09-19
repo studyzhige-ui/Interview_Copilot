@@ -132,13 +132,7 @@ def resolve_embedding() -> ResolvedEmbedding:
     """Read the three env vars + look the provider up."""
     pid = (settings.EMBEDDING_PROVIDER or "siliconflow").strip().lower()
     if pid not in PROVIDERS:
-        logger.warning(
-            "Unknown EMBEDDING_PROVIDER=%r, falling back to 'siliconflow'. "
-            "Known providers: %s",
-            pid,
-            ", ".join(PROVIDERS),
-        )
-        pid = "siliconflow"
+        raise ValueError(f"Unknown EMBEDDING_PROVIDER: {pid!r}")
     model = (settings.EMBEDDING_MODEL or "BAAI/bge-m3").strip()
     dim = int(settings.EMBEDDING_DIM or 1024)
     return ResolvedEmbedding(
@@ -199,11 +193,14 @@ def build_embedding() -> Any:
             device,
             cfg.dim,
         )
-        return HuggingFaceEmbedding(
+        from app.usage.embedding import AccountLocalEmbedding
+
+        inner = HuggingFaceEmbedding(
             model_name=model_name,
             device=device,
             cache_folder=str(hf_cache_dir),
         )
+        return AccountLocalEmbedding(inner, cfg.model)
 
     api_key = os.getenv(p.api_key_env, "").strip()
     if not api_key:
@@ -213,7 +210,7 @@ def build_embedding() -> Any:
         )
 
     if p.kind == "openai":
-        from llama_index.embeddings.openai import OpenAIEmbedding
+        from app.usage.embedding import AccountOpenAIEmbedding as OpenAIEmbedding
 
         logger.info("Embedding: OpenAI model=%s dim=%d", cfg.model, cfg.dim)
         return OpenAIEmbedding(
@@ -221,11 +218,16 @@ def build_embedding() -> Any:
             api_key=api_key,
             api_base=p.api_base or None,
             dimensions=cfg.dim,
+            max_retries=0,
+            embed_batch_size=10,
+            usage_provider=cfg.provider_id,
         )
 
     if p.kind == "openai_compat":
         try:
-            from llama_index.embeddings.openai_like import OpenAILikeEmbedding
+            from app.usage.embedding import (
+                AccountOpenAILikeEmbedding as OpenAILikeEmbedding,
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "openai_compat embedding requires `llama-index-embeddings-openai-like`. "
@@ -242,6 +244,8 @@ def build_embedding() -> Any:
             api_key=api_key,
             api_base=p.api_base,
             embed_batch_size=10,
+            max_retries=0,
+            usage_provider=cfg.provider_id,
         )
 
     raise RuntimeError(f"Unknown provider kind: {p.kind!r}")

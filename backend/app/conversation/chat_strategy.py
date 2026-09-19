@@ -13,8 +13,11 @@ and stream one LLM call."
 
 from __future__ import annotations
 
+from dataclasses import replace
+from app.usage import runtime as usage_runtime
+from app.usage.service import reservation_id
+
 import asyncio
-import json
 
 import logging
 import re
@@ -31,17 +34,15 @@ from app.core.model_provider_adapter import ModelProviderAdapter, build_provider
 from app.core.tokens import token_count as _count_tokens
 from app.prompts.chat import DIRECT_SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
 from app.rag.grounding.citations import CitationStreamGuard, validate_citations
-from app.services.chat.context_assembly_pipeline import (
-    AssembledContext,
-    PromptRenderer,
-    context_pipeline,
-)
-from app.services.chat.model_dispatch_service import (
-    ModelOutcomeUnknownError,
-    dispatch_failure_status,
-    durable_model_stream,
-    finish_model_dispatch,
-    request_fingerprint,
+from app.conversation.application.context_assembly_pipeline import AssembledContext
+from app.conversation.application.context_assembly_pipeline import PromptRenderer
+from app.conversation.application.context_assembly_pipeline import context_pipeline
+from app.conversation.application.model_dispatch_service import ModelOutcomeUnknownError
+from app.conversation.application.model_dispatch_service import dispatch_failure_status
+from app.conversation.application.model_dispatch_service import durable_model_stream
+from app.conversation.application.model_dispatch_service import finish_model_dispatch
+from app.conversation.application.model_dispatch_service import request_fingerprint
+from app.conversation.application.model_dispatch_service import (
     start_model_dispatch_for_turn,
 )
 
@@ -257,18 +258,28 @@ class ChatPipelineStrategy:
                         max_tokens=request.max_tokens,
                         temperature=request.temperature,
                     ),
-                    token_allowance=len(
-                        json.dumps(
-                            {
-                                "system": request.system,
-                                "messages": request.messages,
-                                "tools": request.tools,
-                            },
-                            ensure_ascii=False,
-                        ).encode("utf-8")
-                    )
-                    + request.max_tokens
-                    + 1024,
+                    token_allowance=usage_runtime.llm_allowance(
+                        {
+                            "system": request.system,
+                            "messages": request.messages,
+                            "tools": request.tools,
+                        },
+                        request.max_tokens,
+                    )[1],
+                    usage_units=usage_runtime.llm_allowance(
+                        {
+                            "system": request.system,
+                            "messages": request.messages,
+                            "tools": request.tools,
+                        },
+                        request.max_tokens,
+                    )[0],
+                )
+                request = replace(
+                    request,
+                    usage_permit=reservation_id(
+                        ctx.user_pk, ctx.turn_id, model_call_id
+                    ),
                 )
             model_deadline = (
                 asyncio.get_running_loop().time()

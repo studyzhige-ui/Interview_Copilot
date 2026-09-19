@@ -10,7 +10,7 @@ from app.core.model_catalog import ModelProfile
 from app.core.model_provider_adapter import ProviderStreamEvent, ProviderUsage
 from app.rag.domain.models import RetrievalResult, SearchIntent
 from app.rag.grounding.builder import grounding_builder
-from app.services.chat.context_assembly_pipeline import AssembledContext
+from app.conversation.application.context_assembly_pipeline import AssembledContext
 
 
 @pytest.mark.parametrize("uses_rag", [False, True])

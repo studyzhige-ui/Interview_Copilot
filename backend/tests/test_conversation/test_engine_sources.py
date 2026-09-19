@@ -19,7 +19,7 @@ from app.agent_runtime.harness_events import HarnessEventType
 from app.conversation.engine import ConversationEngine
 from app.conversation.events import HarnessEvent
 from app.conversation.strategy import StrategyContext
-from app.services.chat.context_assembly_pipeline import AssembledContext
+from app.conversation.application.context_assembly_pipeline import AssembledContext
 
 
 class _NoopStrategy:

@@ -1,0 +1,40 @@
+"""Explicit composition of concrete built-ins, separate from registry primitives."""
+
+from app.agent_runtime.tools import (  # noqa: F401
+    agent_task,
+    attachment_vision,
+    career,
+    career_domains,
+    external_plugins,
+    file_tool,
+    gmail,
+    gmail_observation,
+    history,
+    interview_invitation,
+    interview_history,
+    jobs,
+    knowledge,
+    mock_interview,
+    personalization,
+    resume,
+    resume_profile,
+    web,
+)
+from app.agent_runtime.tool_registry import registry
+from app.integrations.gmail.connector import build_configured_google_gmail_connector
+from app.integrations.plugins.connector import configured_external_plugin_connectors
+
+
+# A configured real adapter makes the read Tool discoverable even before a
+# particular user connects. Missing user grant/scope is then handled as the
+# existing same-call connection Interaction; incomplete deployment config
+# means no callable handler and therefore no Tool registration at all.
+_gmail_connector = build_configured_google_gmail_connector()
+if _gmail_connector is not None:
+    registry.register(gmail.build_gmail_search_messages_tool(lambda: _gmail_connector))
+
+_external_plugin_connectors = configured_external_plugin_connectors()
+if canva_connector := _external_plugin_connectors.get("canva"):
+    registry.register(external_plugins.build_canva_search_designs_tool(canva_connector))
+if notion_connector := _external_plugin_connectors.get("notion"):
+    registry.register(external_plugins.build_notion_search_pages_tool(notion_connector))

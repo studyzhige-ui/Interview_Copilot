@@ -5,16 +5,14 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from app.services.interview import mock_interview_service as mod
-from app.services.interview.mock_interview_service import (
-    BASE_INTERVIEW_STAGES,
-    NextTurnGenerationError,
-    build_prefix,
-    detect_response_language,
-    generate_next_turn,
-    generate_plan,
-    prefix_hash,
-)
+from app.interviews.application import mock_interview_service as mod
+from app.interviews.application.mock_interview_service import BASE_INTERVIEW_STAGES
+from app.interviews.application.mock_interview_service import NextTurnGenerationError
+from app.interviews.application.mock_interview_service import build_prefix
+from app.interviews.application.mock_interview_service import detect_response_language
+from app.interviews.application.mock_interview_service import generate_next_turn
+from app.interviews.application.mock_interview_service import generate_plan
+from app.interviews.application.mock_interview_service import prefix_hash
 
 
 def test_build_prefix_is_deterministic():

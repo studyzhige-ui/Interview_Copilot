@@ -18,7 +18,7 @@ def test_save_refresh_and_unsave_qa(db_session, monkeypatch):
     from app.models.interview_record import InterviewRecord
     from app.models.knowledge import KnowledgeDocument
     from app.models.user import User
-    from app.services.knowledge import qa_publish_service
+    from app.rag.application.library import qa_publish_service
 
     user = User(username="alice", hashed_password="x")
     db_session.add(user)
@@ -93,7 +93,7 @@ def test_save_refresh_and_unsave_qa(db_session, monkeypatch):
         db.commit()
 
     monkeypatch.setattr(
-        "app.services.knowledge.knowledge_service.hard_delete_knowledge_document",
+        "app.rag.application.library.knowledge_service.hard_delete_knowledge_document",
         _fake_delete,
     )
     assert (
@@ -109,7 +109,7 @@ def test_unsave_noop_when_not_saved(db_session):
     from app.models.interview_qa import InterviewQA
     from app.models.interview_record import InterviewRecord
     from app.models.user import User
-    from app.services.knowledge import qa_publish_service
+    from app.rag.application.library import qa_publish_service
 
     user = User(username="bob", hashed_password="x")
     db_session.add(user)
@@ -140,7 +140,7 @@ def test_save_stays_processing_while_index_retry_is_queued(db_session, monkeypat
     from app.models.interview_qa import InterviewQA
     from app.models.interview_record import InterviewRecord
     from app.models.user import User
-    from app.services.knowledge import qa_publish_service
+    from app.rag.application.library import qa_publish_service
 
     user = User(username="queued", hashed_password="x")
     db_session.add(user)
@@ -182,7 +182,7 @@ def test_save_marks_document_failed_when_indexing_fails(db_session, monkeypatch)
     from app.models.interview_record import InterviewRecord
     from app.models.knowledge import KnowledgeDocument
     from app.models.user import User
-    from app.services.knowledge import qa_publish_service
+    from app.rag.application.library import qa_publish_service
 
     user = User(username="failed", hashed_password="x")
     db_session.add(user)

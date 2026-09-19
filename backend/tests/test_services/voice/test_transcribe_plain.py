@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from app.services.voice import transcription_registry as reg
+from app.media.application import transcription_registry as reg
 
 
 def test_local_provider_raises_localprovideronly(monkeypatch):

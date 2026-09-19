@@ -6,14 +6,10 @@ import logging
 
 from app.core.async_runtime import run_async
 from app.db.database import SessionLocal
-from app.services import (
-    gmail_integration_service,
-    gmail_observation_service,
-    gmail_observation_sync_service,
-)
-from app.services.google_gmail_connector import (
-    build_configured_google_gmail_connector,
-)
+from app.integrations.gmail import contract as gmail_integration_service
+from app.integrations.gmail import observations as gmail_observation_service
+from app.integrations.gmail import sync as gmail_observation_sync_service
+from app.integrations.gmail.connector import build_configured_google_gmail_connector
 from app.task_queue.celery_app import celery_app
 
 

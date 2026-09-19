@@ -58,7 +58,7 @@ async def _main() -> int:
     parser.add_argument(
         "--write-seed",
         action="store_true",
-        help="After refreshing, write backend/app/services/model_sources/"
+        help="After refreshing, write backend/app/providers/catalog/"
         "seed_catalog.json with the current catalog snapshot. "
         "This file ships with the repo so fresh clones show a "
         "populated Models page before users configure any keys.",
@@ -66,8 +66,8 @@ async def _main() -> int:
     args = parser.parse_args()
 
     # Lazy imports so --help doesn't load the full backend stack.
-    from app.services.model_sources.pipeline import refresh_catalog
-    from app.services.model_sources.providers import PROVIDERS
+    from app.providers.catalog.pipeline import refresh_catalog
+    from app.providers.catalog.providers import PROVIDERS
 
     # Pipeline never raises — vendor-level failures fall back to LKG
     # internally. If ALL 9 vendors fail (cold cache + no LKG), we get
@@ -75,7 +75,7 @@ async def _main() -> int:
     grouped = await refresh_catalog()
 
     if args.write_seed:
-        seed_path = ROOT / "backend/app/services/model_sources/seed_catalog.json"
+        seed_path = ROOT / "backend/app/providers/catalog/seed_catalog.json"
         snapshot = {
             provider: [
                 {

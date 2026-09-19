@@ -9,7 +9,7 @@ from app.core import llm_client_factory, model_readiness, user_model_selection
 from app.core.error_messages import humanize_error
 from app.models.user import User
 from app.models.user_model_credentials import UserModelCredential
-from app.services.auth import user_api_key_service as keys
+from app.identity.application import user_api_key_service as keys
 from app.core.secrets import encrypt_secret
 
 

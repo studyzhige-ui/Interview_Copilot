@@ -27,17 +27,21 @@ free, and the user-facing tool cards still come from
 
 from __future__ import annotations
 
+from dataclasses import replace
+from app.usage import runtime as usage_runtime
+from app.usage.service import reservation_id
+
 import asyncio
 import json
 import logging
 import time
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, AsyncGenerator
 
 
 # Trigger tool self-registration on first import.
-import app.agent_runtime.tools  # noqa: F401
+import app.agent_runtime.builtin_tools  # noqa: F401
 from app.agent_runtime.context_compactor import ActiveTurnContextReducer
 from app.agent_runtime.react_agent import (
     AgentRunState,
@@ -57,13 +61,11 @@ from app.agent_runtime.tool_call_executor import (
 )
 from app.agent_runtime.tool_policy import ToolEffect, ToolPolicyContext
 from app.agent_runtime.tool_call_streaming import _ToolCallAccumulator
-from app.agent_runtime.tool_registry import (
-    AgentToolContext,
-    ToolDispatchPlan,
-    parse_tool_arguments,
-    registry,
-    safe_json_dumps,
-)
+from app.agent_runtime.tool_registry import AgentToolContext
+from app.agent_runtime.tool_registry import ToolDispatchPlan
+from app.agent_runtime.tool_registry import parse_tool_arguments
+from app.agent_runtime.builtin_tools import registry
+from app.agent_runtime.tool_registry import safe_json_dumps
 from app.agent_runtime.tool_redaction import redact_tool_value
 from app.agent_runtime.turn_tool_catalog import TurnToolCatalog
 from app.conversation.events import HarnessEvent
@@ -87,16 +89,14 @@ from app.models.agent_execution import AgentToolCall
 from app.models.agent_interaction import AgentInteraction
 from app.prompts.agent import agent_system_prompt_for_runtime
 from app.schemas.agent_task import AgentTaskView
-from app.services.chat.agent_task_service import (
-    AgentTaskNotFoundError,
-    get_agent_task,
-)
-from app.services.chat.model_dispatch_service import (
-    ModelOutcomeUnknownError,
-    dispatch_failure_status,
-    durable_model_stream,
-    finish_model_dispatch,
-    request_fingerprint,
+from app.conversation.application.agent_task_service import AgentTaskNotFoundError
+from app.conversation.application.agent_task_service import get_agent_task
+from app.conversation.application.model_dispatch_service import ModelOutcomeUnknownError
+from app.conversation.application.model_dispatch_service import dispatch_failure_status
+from app.conversation.application.model_dispatch_service import durable_model_stream
+from app.conversation.application.model_dispatch_service import finish_model_dispatch
+from app.conversation.application.model_dispatch_service import request_fingerprint
+from app.conversation.application.model_dispatch_service import (
     start_model_dispatch_for_turn,
 )
 
@@ -204,7 +204,7 @@ def _load_tool_resume_snapshot(
             None,
         )
         if interaction is None:
-            from app.services.chat.invitation_turn_recovery import (
+            from app.conversation.application.invitation_turn_recovery import (
                 is_local_recovery_call,
             )
 
@@ -511,7 +511,9 @@ class AgentLoopStrategy:
         # ``current_input`` is skipped here and sent as the user message
         # instead, so the model has a user turn to answer and the loop can
         # append assistant/tool turns after it.
-        from app.services.chat.context_assembly_pipeline import prompt_renderer
+        from app.conversation.application.context_assembly_pipeline import (
+            prompt_renderer,
+        )
 
         runtime_prompt = agent_system_prompt_for_runtime(ctx.runtime_profile)
         agent_system_prompt = f"{runtime_prompt}\n\n{tool_catalog.format_prompt()}"
@@ -1164,18 +1166,26 @@ class AgentLoopStrategy:
                         max_tokens=request.max_tokens,
                         temperature=request.temperature,
                     ),
-                    token_allowance=len(
-                        json.dumps(
-                            {
-                                "system": request.system,
-                                "messages": request.messages,
-                                "tools": request.tools,
-                            },
-                            ensure_ascii=False,
-                        ).encode("utf-8")
-                    )
-                    + request.max_tokens
-                    + 1024,
+                    token_allowance=usage_runtime.llm_allowance(
+                        {
+                            "system": request.system,
+                            "messages": request.messages,
+                            "tools": request.tools,
+                        },
+                        request.max_tokens,
+                    )[1],
+                    usage_units=usage_runtime.llm_allowance(
+                        {
+                            "system": request.system,
+                            "messages": request.messages,
+                            "tools": request.tools,
+                        },
+                        request.max_tokens,
+                    )[0],
+                )
+                request = replace(
+                    request,
+                    usage_permit=reservation_id(user_pk, turn_id, current_call_id),
                 )
             current_deadline = (
                 asyncio.get_running_loop().time()

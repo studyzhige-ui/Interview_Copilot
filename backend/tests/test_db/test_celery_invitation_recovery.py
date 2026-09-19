@@ -31,8 +31,8 @@ from app.schemas.interview_invitation import (
 from app.career.application.fixture_invitation_adapter import (
     ingest_fixture_interview_invitation,
 )
-from app.services.chat import turn_executor
-from app.services.chat.interaction_service import resolve_interaction
+from app.conversation.application import turn_executor
+from app.conversation.application.interaction_service import resolve_interaction
 from tests.test_career.test_gmail_invitation_cutover import _proposal, _facts
 from tests.test_db.test_budget_and_invitation_recovery_postgres import (
     database as database_fixture,
@@ -101,7 +101,7 @@ def test_celery_worker_kill_resumes_same_decision_and_turn(
             from app.agent_runtime.tools.interview_invitation import (
                 ConfirmAssertedInterviewInvitationArgs,
             )
-            from app.services.chat.invitation_turn_recovery import (
+            from app.conversation.application.invitation_turn_recovery import (
                 recover_invitation_turn,
             )
 

@@ -21,7 +21,9 @@ from app.agent_runtime.tool_registry import (
     parse_tool_arguments,
 )
 from app.core.config import settings
-from app.services.capabilities.mcp_server_service import MCPServerConfig
+from app.capabilities.application.mcp_server_service import MCPServerConfig
+
+pytestmark = pytest.mark.usefixtures("usage_database")
 
 
 def event(*, index=0, call_id="c1", name="lookup", arguments="{}", stop=None):

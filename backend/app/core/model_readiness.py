@@ -16,7 +16,7 @@ def resolve_api_key(profile: ModelProfile, user_id: str | None = None) -> str:
     """Resolve a user's stored provider key, then the deployment fallback."""
     if user_id:
         try:
-            from app.services.auth.user_api_key_service import (
+            from app.identity.application.user_api_key_service import (
                 get_user_api_key_plaintext,
             )
 

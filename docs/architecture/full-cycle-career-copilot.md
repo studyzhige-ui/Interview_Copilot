@@ -1546,9 +1546,9 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 - backend/app/agent_runtime/turn_tool_catalog.py
 - backend/app/conversation/agent_strategy.py
 - backend/app/conversation/query_planner.py、backend/app/agent_runtime/context_compactor.py
-- backend/app/services/chat/turn_executor.py
-- backend/app/services/chat/turn_event_buffer.py、backend/app/services/chat/chat_history_service.py、backend/app/services/chat/agent_recovery_service.py
-- backend/app/services/chat/context_assembly_pipeline.py
+- backend/app/conversation/application/turn_executor.py
+- backend/app/conversation/application/turn_event_buffer.py、backend/app/conversation/application/chat_history_service.py、backend/app/services/chat/agent_recovery_service.py
+- backend/app/conversation/application/context_assembly_pipeline.py
 - backend/app/services/chat/attachment_service.py、backend/app/rag/application/attachment_evidence.py
 - backend/app/api/rag.py、backend/app/api/chat/streaming.py、backend/app/api/chat/sessions.py
 - backend/app/models/file_asset.py、backend/app/models/knowledge.py、backend/app/models/conversation_turn.py
@@ -1561,7 +1561,7 @@ Tool Call 只有同时满足以下条件才可进入同一个安全批次并真�
 - frontend/src/pages/review/chat/ChatToolbar.tsx、ChatPanel.tsx、useChatStream.ts、types.ts
 - backend/app/agent_runtime/harness_events.py、backend/app/agent_runtime/tool_call_executor.py
 - backend/app/agent_runtime/mcp/manager.py、backend/app/agent_runtime/tools/web.py
-- backend/app/models/user_model_credentials.py、backend/app/services/auth/user_api_key_service.py
+- backend/app/models/user_model_credentials.py、backend/app/identity/application/user_api_key_service.py
 - frontend/src/pages/review/chat/MessageList.tsx、MessageBlocks.tsx、Bubble.tsx、useSessionRuntimes.ts
 - frontend/src/api/knowledge.ts、frontend/src/api/fileAssets.ts
 

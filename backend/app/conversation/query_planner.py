@@ -16,11 +16,9 @@ from app.core.tokens import token_count
 from app.prompts.chat import build_query_planner_system_prompt
 from app.rag.domain.models import SearchIntent
 from app.rag.policy import current_rag_policy
-from app.services.chat.source_requests import (
-    ReadOnlySourceRequest,
-    fallback_source_requests,
-    strip_planner_identities,
-)
+from app.conversation.application.source_requests import ReadOnlySourceRequest
+from app.conversation.application.source_requests import fallback_source_requests
+from app.conversation.application.source_requests import strip_planner_identities
 
 logger = logging.getLogger(__name__)
 

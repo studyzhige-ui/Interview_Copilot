@@ -6,7 +6,7 @@ from app.models.memory_ability_state import MemoryAbilityState
 from app.models.memory_audit_logs import MemoryAuditEntry
 from app.models.memory_document import MemoryDocument
 from app.models.user import User
-from app.services.legacy_memory_migration import migrate_legacy_memory
+from app.maintenance.memory_migration import migrate_legacy_memory
 
 
 def _seed(db_session):

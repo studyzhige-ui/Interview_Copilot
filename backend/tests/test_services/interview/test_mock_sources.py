@@ -7,10 +7,8 @@ from app.models.job_opportunity import JobOpportunity
 from app.models.job_description_snapshot import JobDescriptionSnapshot
 from app.schemas.chat import MockStartRequest
 from app.agent_runtime.tools.mock_interview import StartMockInterviewArgs
-from app.services.interview.mock_sources import (
-    resolve_job_description,
-    MockJobDescriptionUnavailable,
-)
+from app.interviews.application.mock_sources import resolve_job_description
+from app.interviews.application.mock_sources import MockJobDescriptionUnavailable
 
 
 @pytest.mark.parametrize("model", [MockStartRequest, StartMockInterviewArgs])

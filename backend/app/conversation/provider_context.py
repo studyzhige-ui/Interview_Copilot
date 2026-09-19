@@ -20,9 +20,9 @@ from app.conversation.context_window import admit, item, kind
 from app.core.tokens import token_count
 from app.rag.grounding.builder import grounding_builder
 
-from app.services.chat.context_assembly_pipeline import AssembledContext, PromptRenderer
-from app.services.chat.context_assembly_pipeline import render_historical_user_content
-from app.services.chat.context_assembly_pipeline import SLOT_ORDER
+from app.conversation.context_contracts import AssembledContext, ContextRenderer
+from app.conversation.context_contracts import render_historical_user_content
+from app.conversation.context_contracts import SLOT_ORDER
 
 
 @dataclass(frozen=True)
@@ -123,7 +123,7 @@ def reconstruct_history_messages(turns: list[dict]) -> list[dict[str, Any]]:
 def _project_context(
     assembled: AssembledContext,
     *,
-    renderer: PromptRenderer,
+    renderer: ContextRenderer,
     system_prompt: str,
 ) -> ProviderContextProjection:
     """Project one assembled Turn without changing source selection.
@@ -180,7 +180,7 @@ def _project_context(
 def compose_provider_context(
     assembled: AssembledContext,
     *,
-    renderer: PromptRenderer,
+    renderer: ContextRenderer,
     system_prompt: str,
     tool_schemas: list[dict] | None = None,
     prompt_limit: int | None = None,

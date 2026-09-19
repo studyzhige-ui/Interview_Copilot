@@ -139,3 +139,24 @@ of automatically repeating a possibly paid call.
 
 Measured values belong in the current release report and the latest
 `docs/reports/rag-evaluation-*.md`, not duplicated here as a stale baseline.
+
+
+## Consumption attribution after the owner migration
+
+Production ingestion, retrieval, reindex and user-model boundaries use the same
+account ledger as the application. Supply/create the intended isolated evaluation
+account; account IDs are obtained from canonical records, not guessed from vector
+metadata. `EVAL_USAGE_USER` selects the optional production embedding account
+(default `eval_user_a`). Its rate card/quotas apply, so missing owners or exhausted
+budgets fail rather than silently using an unmetered deployment credential.
+The independent Ragas generator/judge retains separate evaluation credentials,
+checkpoints and cost data; do not present those as per-user application invoices.
+
+`memory_lifecycle_eval` runs its internal production model wrapper under a
+synthetic local account and retains `<report-stem>.usage.sqlite` beside its output.
+It does not read production users. Keep this file (especially unresolved receipts)
+when examining interrupted runs; deleting it is not evidence of a refund. Mock
+interview evaluation uses its explicit `--user` account. Operator reindex and
+library ingestion derive the authenticated/stored numeric document owner.
+
+No live benchmark was run simply by implementing or importing these boundaries.

@@ -362,7 +362,7 @@ def test_resolve_threshold():
     cap is enforced via a durable reference, not destructive truncation;
     unknown tools fall back
     to the global threshold."""
-    from app.agent_runtime.tool_registry import registry
+    from app.agent_runtime.builtin_tools import registry
     from app.agent_runtime.tool_result_storage import resolve_threshold
     from app.core.config import settings
 

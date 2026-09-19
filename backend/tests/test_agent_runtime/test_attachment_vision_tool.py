@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import asyncio
 import hashlib
 from types import SimpleNamespace
@@ -8,7 +10,8 @@ import fitz
 from sqlalchemy.orm import sessionmaker
 
 from app.agent_runtime.tool_policy import ToolEffect
-from app.agent_runtime.tool_registry import AgentToolContext, registry
+from app.agent_runtime.tool_registry import AgentToolContext
+from app.agent_runtime.builtin_tools import registry
 from app.agent_runtime.tools import attachment_vision
 from app.agent_runtime.tools.attachment_vision import InspectAttachmentPagesArgs
 from app.core.model_catalog import ModelProfile
@@ -18,6 +21,8 @@ from app.models.conversation_turn import ConversationTurn
 from app.models.file_asset import FileAsset
 from app.models.knowledge import KnowledgeDocument
 from app.models.user import User
+
+pytestmark = pytest.mark.usefixtures("usage_scope")
 
 
 def _profile(*, supports_vision: bool) -> ModelProfile:

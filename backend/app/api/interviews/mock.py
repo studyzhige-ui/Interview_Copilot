@@ -2,7 +2,7 @@
 
 Thin router: auth, request/response mapping, and commit/rollback control.
 The run lifecycle (create/answer/finish/abandon) lives in
-``services.interview.mock_flow``; LLM planning in ``mock_interview_service``;
+``interviews.application.mock_flow``; LLM planning in ``mock_interview_service``;
 runtime rows in ``mock_runtime_service``.
 
   start         -> create record + conversation + runtime + opening message
@@ -55,23 +55,17 @@ from app.schemas.chat import (
     MockStartResp,
     TTSRequest,
 )
-from app.services.interview.mock_sources import MockJobDescriptionUnavailable
-from app.services.interview import (
-    mock_flow,
-    mock_interview_service,
-    mock_runtime_service,
-)
-from app.services.interview.interview_record_service import (
+from app.interviews.application.mock_sources import MockJobDescriptionUnavailable
+from app.interviews.application import mock_flow
+from app.interviews.application import mock_interview_service
+from app.interviews.application import mock_runtime_service
+from app.interviews.application.interview_record_service import (
     InterviewOpportunityNotFoundError,
-    STATUS_MOCK_IN_PROGRESS,
-    STATUS_PROCESSING_REVIEW,
-    STATUS_REVIEW_FAILED,
 )
-from app.services.uploads.file_asset_service import (
-    get_owned_file_asset,
-    mark_file_asset_consumed,
-    store_validated_file_asset,
-)
+from app.interviews.application.interview_record_service import STATUS_MOCK_IN_PROGRESS
+from app.files.application.file_asset_service import get_owned_file_asset
+from app.files.application.file_asset_service import mark_file_asset_consumed
+from app.files.application.file_asset_service import store_validated_file_asset
 
 logger = logging.getLogger(__name__)
 
@@ -282,45 +276,13 @@ def finish_mock_interview(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Move the record into processing_review and dispatch the review task,
-    which parses structured QA from the conversation messages and scores it."""
-    record = _owned_mock_record_or_404(
-        db, record_id, current_user.username, for_update=True
-    )
-    # MOCK-3: only an in-progress run can finish — a double-click or a stale
-    # tab must not re-dispatch a review that is already running/done.
-    if record.status != STATUS_MOCK_IN_PROGRESS:
-        raise HTTPException(
-            status_code=409,
-            detail="该面试不在进行中（复盘可能已在生成或已完成）",
+    from app.api.command_errors import command_errors
+
+    with command_errors():
+        result = mock_flow.finish_for_review(
+            db, record_id=record_id, username=current_user.username
         )
-    runtime = mock_runtime_service.get_runtime_for_record(
-        db, interview_record_id=record_id
-    )
-
-    if runtime is None:
-        raise HTTPException(status_code=409, detail="该模拟面试不在进行中")
-
-    # Require at least one answered turn — an interview with no candidate
-    # answers has nothing to review (the FE also gates this, defense in depth).
-    if mock_flow.count_answered_turns(db, runtime.conversation_id) == 0:
-        raise HTTPException(status_code=400, detail="至少回答一题才能生成复盘")
-    record.status = STATUS_PROCESSING_REVIEW
-    db.commit()
-
-    try:
-        mock_flow.dispatch_review(
-            db,
-            record_id,
-            delete_live_runtime=True,
-        )
-    except Exception as exc:  # noqa: BLE001 — dispatch_review already rolled back
-        raise HTTPException(
-            status_code=503,
-            detail="复盘任务派发失败（任务队列暂不可用），面试内容已保留，请稍后再点一次「结束面试」。",
-        ) from exc
-
-    return MockFinishResp(status="processing_review", record_id=record_id)
+    return MockFinishResp(**result)
 
 
 @router.post(
@@ -334,30 +296,13 @@ def retry_mock_review(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Re-run review generation from the preserved conversation messages after
-    a review_failed (or stuck processing_review)."""
-    record = _owned_mock_record_or_404(
-        db, record_id, current_user.username, for_update=True
-    )
-    if record.status not in (STATUS_REVIEW_FAILED, STATUS_PROCESSING_REVIEW):
-        raise HTTPException(status_code=400, detail="当前状态不可重试复盘")
+    from app.api.command_errors import command_errors
 
-    record.status = STATUS_PROCESSING_REVIEW
-    db.commit()
-
-    try:
-        mock_flow.dispatch_review(
-            db,
-            record_id,
-            rollback_status=STATUS_REVIEW_FAILED,
+    with command_errors():
+        result = mock_flow.finish_for_review(
+            db, record_id=record_id, username=current_user.username, retry=True
         )
-    except Exception as exc:  # noqa: BLE001 — dispatch_review already rolled back
-        raise HTTPException(
-            status_code=503,
-            detail="复盘任务派发失败（任务队列暂不可用），请稍后重试。",
-        ) from exc
-
-    return MockRetryReviewResp(status="processing_review", record_id=record_id)
+    return MockRetryReviewResp(**result)
 
 
 # ── DELETE (abandon) ───────────────────────────────────────────────────────
@@ -471,8 +416,8 @@ async def parse_jd_for_mock(
     _current_user: User = Depends(get_current_user),
 ):
     """Parse a JD file inline and return its plain text. Does NOT persist."""
-    from app.services.interview.document_text import extract_document_text
-    from app.services.uploads.file_validation import read_validated_upload
+    from app.interviews.application.document_text import extract_document_text
+    from app.files.application.file_validation import read_validated_upload
 
     if file.size is not None and file.size > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="JD 文件过大（限制 10MB）")
@@ -518,11 +463,9 @@ async def prepare_answer_audio(
     db: Session = Depends(get_db),
 ):
     """Transcribe and keep one recording without a second client upload."""
-    from app.services.uploads.file_validation import read_validated_upload
-    from app.services.voice.short_clip_transcription import (
-        TranscriptionUnavailable,
-        transcribe_short_clip,
-    )
+    from app.files.application.file_validation import read_validated_upload
+    from app.media.application.short_clip_transcription import TranscriptionUnavailable
+    from app.media.application.short_clip_transcription import transcribe_short_clip
 
     record = _owned_mock_record_or_404(db, record_id, current_user.username)
     runtime = mock_runtime_service.get_runtime_for_record(
@@ -608,7 +551,7 @@ async def synthesize_speech(
     _current_user: User = Depends(get_current_user),
 ):
     """Convert text to speech using edge-tts. Returns an mp3 audio stream."""
-    from app.services.voice.tts_service import tts_service
+    from app.media.application.tts_service import tts_service
 
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="Text is empty")

@@ -12,24 +12,23 @@ from pydantic import BaseModel, Field
 from app.agent_runtime.mcp import MCPToolDescriptor, manager
 from app.agent_runtime.mcp.schema import tool_validator
 from app.agent_runtime.tool_policy import ToolEffect
-from app.agent_runtime.tool_registry import (
-    AgentToolContext,
-    ToolDispatchPlan,
-    ToolRegistryView,
-    _pydantic_to_openai_schema,
-    registry,
-)
+from app.agent_runtime.tool_registry import AgentToolContext
+from app.agent_runtime.tool_registry import ToolDispatchPlan
+from app.agent_runtime.tool_registry import ToolRegistryView
+from app.agent_runtime.tool_registry import _pydantic_to_openai_schema
+from app.agent_runtime.builtin_tools import registry
 from app.core.config import settings
 from app.core.user_identity import resolve_user_pk
 from app.db.database import SessionLocal
 from app.models.conversation_turn import ConversationTurn
-from app.services.capabilities import (
-    mcp_server_service,
-    skill_service,
+from app.capabilities.application import mcp_server_service
+from app.capabilities.application import skill_service
+
+
+from app.agent_runtime.automation_policy import (
+    cloud_sustainable_read_tool_names as cloud_sustainable_read_tool_names,
+    cloud_sustainable_automation_tool_names as cloud_sustainable_automation_tool_names,
 )
-
-
-_CLOUD_AUTOMATION_INTERNAL_TOOLS = frozenset({"review_gmail_observation"})
 
 
 class _SearchArgs(BaseModel):
@@ -109,34 +108,6 @@ def _validate_mcp_arguments(
             ],
         }
     return None
-
-
-def cloud_sustainable_read_tool_names() -> frozenset[str]:
-    """Concrete built-ins eligible for unattended cloud execution now."""
-
-    snapshot = registry.snapshot()
-    return frozenset(
-        name
-        for name in snapshot.tool_names
-        if snapshot.effect_for(name) is ToolEffect.READ
-    )
-
-
-def cloud_sustainable_automation_tool_names() -> frozenset[str]:
-    """Exact built-ins allowed in unattended PersistentTask definitions.
-
-    Most are reads.  The sole write exception is the Gmail Observation review
-    command: it is task-scoped, reversible through append-only correction, and
-    independently revalidates source/Turn identity before any domain change.
-    """
-
-    snapshot = registry.snapshot()
-    return cloud_sustainable_read_tool_names().union(
-        name
-        for name in _CLOUD_AUTOMATION_INTERNAL_TOOLS
-        if name in snapshot.entries
-        and snapshot.effect_for(name) is ToolEffect.INTERNAL_WRITE
-    )
 
 
 @dataclass

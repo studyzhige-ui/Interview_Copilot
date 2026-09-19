@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.agent_runtime import tool_call_executor
-from app.agent_runtime.tool_registry import registry
+from app.agent_runtime.builtin_tools import registry
 from app.agent_runtime.turn_tool_catalog import TurnToolCatalog
 from app.agent_runtime.tools import interview_invitation as invitation_tool
 from app.conversation import agent_strategy, context_store
@@ -25,9 +25,11 @@ from app.models.interview_record import InterviewRecord
 from app.models.job_opportunity import NextAction, ProcessEvent
 from app.models.model_dispatch import AgentModelDispatch
 from app.schemas.interview_invitation import FactConfirmationResolution
-from app.services.chat import turn_executor
-from app.services.chat.interaction_service import resolve_interaction
-from app.services.chat.invitation_turn_recovery import recover_invitation_turn
+from app.conversation.application import turn_executor
+from app.conversation.application.interaction_service import resolve_interaction
+from app.conversation.application.invitation_turn_recovery import (
+    recover_invitation_turn,
+)
 from tests.conftest import patch_session_locals
 from tests.test_career.test_gmail_invitation_cutover import _proposal, _facts
 
@@ -189,8 +191,8 @@ def test_pending_confirmation_restores_wait_without_inventing_decision(db_sessio
 def test_stale_worker_cannot_heartbeat_wait_finish_or_write_transcript(
     db_session, monkeypatch
 ):
-    from app.services.chat import chat_history_service
-    from app.services.chat.chat_history_service import transcript_service
+    from app.conversation.application import chat_history_service
+    from app.conversation.application.chat_history_service import transcript_service
 
     user, turn, _, _, _ = saved_decision(db_session)
     patch_session_locals(monkeypatch, db_session, turn_executor, chat_history_service)

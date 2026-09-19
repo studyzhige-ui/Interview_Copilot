@@ -19,15 +19,13 @@ from app.schemas.external_plugin_connection import (
     ExternalPluginProvider,
     ExternalPluginStatusView,
 )
-from app.services.oauth_plugin_connector import (
-    ExternalPluginError,
-    OAuthPluginConnector,
-    bind_external_plugin_account,
-    configured_external_plugin_connectors,
-    get_external_plugin_account,
-    revoke_external_plugin_account,
-    test_external_plugin_account,
-)
+from app.integrations.plugins.connector import ExternalPluginError
+from app.integrations.plugins.connector import OAuthPluginConnector
+from app.integrations.plugins.connector import bind_external_plugin_account
+from app.integrations.plugins.connector import configured_external_plugin_connectors
+from app.integrations.plugins.connector import get_external_plugin_account
+from app.integrations.plugins.connector import revoke_external_plugin_account
+from app.integrations.plugins.connector import test_external_plugin_account
 
 
 router = APIRouter(prefix="/integrations/plugins", tags=["integrations"])

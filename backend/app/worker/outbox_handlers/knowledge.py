@@ -3,14 +3,15 @@
 from sqlalchemy.orm import Session
 
 from app.models.outbox_job import OutboxJob
-from app.services.knowledge.index_jobs import JOB_MILVUS_DELETE, JOB_MILVUS_UPSERT
-from app.services.outbox import register_handler
+from app.rag.application.library.index_jobs import JOB_MILVUS_DELETE
+from app.rag.application.library.index_jobs import JOB_MILVUS_UPSERT
+from app.platform.outbox import register_handler
 
 
 def handle_milvus_upsert(db: Session, job: OutboxJob) -> None:
     from app.rag.index.knowledge import reindex_document
-    from app.services.knowledge.knowledge_service import (
-        mark_document_index_failed,
+    from app.rag.application.library.knowledge_service import mark_document_index_failed
+    from app.rag.application.library.knowledge_service import (
         mark_document_indexed_ready,
     )
 

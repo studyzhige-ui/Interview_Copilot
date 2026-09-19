@@ -8,7 +8,7 @@ from app.models.chat import Conversation
 from app.models.conversation_turn import ConversationTurn
 from app.models.file_asset import FileAsset
 from app.models.user import User
-from app.services.uploads import file_asset_service
+from app.files.application import file_asset_service
 from tests.conftest import NoCloseSession
 
 

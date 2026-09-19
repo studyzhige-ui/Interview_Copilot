@@ -90,11 +90,7 @@ class ResolvedReranker:
 def resolve_reranker() -> ResolvedReranker:
     pid = (settings.RERANKER_PROVIDER or "siliconflow").strip().lower()
     if pid not in PROVIDERS:
-        logger.warning(
-            "Unknown RERANKER_PROVIDER=%r, falling back to 'siliconflow'",
-            pid,
-        )
-        pid = "siliconflow"
+        raise ValueError(f"Unknown RERANKER_PROVIDER: {pid!r}")
     model = (settings.RERANKER_MODEL or "BAAI/bge-reranker-v2-m3").strip()
     return ResolvedReranker(provider_id=pid, provider=PROVIDERS[pid], model=model)
 
@@ -153,6 +149,7 @@ class RemoteAPIRerank(BaseNodePostprocessor):
     instead of mixing RRF-scale scores into the reranker-score contract.
     """
 
+    usage_provider: str = Field(default="custom")
     api_base: str = Field()
     api_key: str = Field()
     model: str = Field()
@@ -179,7 +176,11 @@ class RemoteAPIRerank(BaseNodePostprocessor):
             "top_n": min(self.top_n, len(documents)),
         }
         url = f"{self.api_base.rstrip('/')}/rerank"
-        try:
+        from app.usage import runtime
+        from app.usage.reranking import descriptor, observed
+        from app.usage.service import ModelBudgetExceededError
+
+        def send():
             with httpx.Client(timeout=self.timeout) as client:
                 resp = client.post(
                     url,
@@ -187,7 +188,22 @@ class RemoteAPIRerank(BaseNodePostprocessor):
                     headers={"Authorization": f"Bearer {self.api_key}"},
                 )
                 resp.raise_for_status()
-                body = resp.json()
+                return resp.json()
+
+        try:
+            body = runtime.invoke_sync(
+                send,
+                observed=lambda body: observed(body, len(documents)),
+                **descriptor(
+                    self.usage_provider,
+                    self.model,
+                    query_bundle.query_str,
+                    documents,
+                    destination=url,
+                ),
+            )
+        except ModelBudgetExceededError:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise RerankerUnavailableError(
                 f"remote rerank ({self.model}) failed: {exc}"
@@ -289,7 +305,9 @@ def build_reranker(top_n: int) -> Any:
             },
         )
         _warm_local_reranker(reranker)
-        return reranker
+        from app.usage.reranking import AccountLocalReranker
+
+        return AccountLocalReranker(reranker, cfg.model)
 
     if p.kind == "remote_openai_style":
         api_key = os.getenv(p.api_key_env, "").strip()
@@ -305,6 +323,7 @@ def build_reranker(top_n: int) -> Any:
             top_n,
         )
         return RemoteAPIRerank(
+            usage_provider=cfg.provider_id,
             api_base=p.api_base,
             api_key=api_key,
             model=cfg.model,

@@ -17,7 +17,7 @@ from app.schemas.interview_invitation import (
     ObjectReference,
     OpportunityMatchOption,
 )
-from app.services.chat.interaction_service import create_pending_interaction
+from app.conversation.application.interaction_service import create_pending_interaction
 
 from .interview_invitation_context import compile_invitation_confirmation_context
 from .interview_invitation_operations import (

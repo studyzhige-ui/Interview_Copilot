@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from app.models.knowledge import KnowledgeDocument
 from app.models.outbox_job import OutboxJob
 from app.rag.index.identity import current_index_identity
-from app.services.knowledge.index_jobs import JOB_MILVUS_UPSERT, enqueue_milvus_upsert
+from app.rag.application.library.index_jobs import JOB_MILVUS_UPSERT
+from app.rag.application.library.index_jobs import enqueue_milvus_upsert
 
 
 def enqueue_stale_documents(db: Session, *, limit: int = 100) -> int:

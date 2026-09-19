@@ -25,30 +25,28 @@ from app.schemas.job_opportunity import (
     ProcessEventAppend,
     ProcessEventCorrection,
 )
-from app.services.career_process_service import (
-    CareerIdempotencyConflictError,
-    CareerObjectNotFoundError,
-    NextActionTransitionError,
-    OpportunityArchivedError,
-    OpportunityDirectionConflictError,
-    OpportunityMergeConflictError,
-    ProcessEventConflictError,
-    append_confirmed_process_event,
-    close_next_action,
-    complete_next_action,
-    correct_process_event,
-    create_job_opportunity,
-    create_next_action,
-    list_job_opportunities,
-    list_opportunity_merges,
-    list_next_actions,
-    list_process_events,
-    plan_next_action,
-    merge_job_opportunities,
-    retract_job_opportunity_merge,
-    replace_job_opportunity_directions,
-    suggest_opportunity_merge_candidates,
-)
+from app.career.application.process import CareerIdempotencyConflictError
+from app.career.application.process import CareerObjectNotFoundError
+from app.career.application.process import NextActionTransitionError
+from app.career.application.process import OpportunityArchivedError
+from app.career.application.process import OpportunityDirectionConflictError
+from app.career.application.process import OpportunityMergeConflictError
+from app.career.application.process import ProcessEventConflictError
+from app.career.application.process import append_confirmed_process_event
+from app.career.application.process import close_next_action
+from app.career.application.process import complete_next_action
+from app.career.application.process import correct_process_event
+from app.career.application.process import create_job_opportunity
+from app.career.application.process import create_next_action
+from app.career.application.process import list_job_opportunities
+from app.career.application.process import list_opportunity_merges
+from app.career.application.process import list_next_actions
+from app.career.application.process import list_process_events
+from app.career.application.process import plan_next_action
+from app.career.application.process import merge_job_opportunities
+from app.career.application.process import retract_job_opportunity_merge
+from app.career.application.process import replace_job_opportunity_directions
+from app.career.application.process import suggest_opportunity_merge_candidates
 
 
 NOW = datetime(2026, 8, 13, 9, 0, tzinfo=UTC)

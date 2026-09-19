@@ -73,27 +73,9 @@ class LlamaParseParser:
         return ext in self._EXTS
 
     def parse(self, file_path: str) -> ParsedDocument:
-        import nest_asyncio
-        from llama_index.core import SimpleDirectoryReader
-        from llama_parse import LlamaParse
+        from app.rag.parsing.cloud import parse
 
-        nest_asyncio.apply()
-        parser = LlamaParse(
-            result_type="markdown",
-            language="ch_sim",
-            api_key=settings.LLAMA_CLOUD_API_KEY,
-            num_workers=2,
-        )
-        ext = os.path.splitext(file_path)[1].lower()
-        docs = SimpleDirectoryReader(
-            input_files=[file_path],
-            file_extractor={ext: parser},
-        ).load_data()
-        return ParsedDocument(
-            pages=_pages_from_documents(docs),
-            parser_id=self.id,
-            content_kind="markdown",
-        )
+        return parse(file_path)
 
 
 _docling_converter = None

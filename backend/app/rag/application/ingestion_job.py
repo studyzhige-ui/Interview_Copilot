@@ -1,0 +1,272 @@
+"""Canonical ingestion workflow, independent of Celery and HTTP entry points.
+
+The worker supplies dispatch metadata and its attachment-resume composition port;
+this owner supplies authorization, parsing, indexing and terminal-state rules.
+"""
+
+import logging
+
+from app.core.async_runtime import run_async
+from app.core.error_messages import humanize_error
+from app.models.knowledge import KnowledgeDocument
+
+logger = logging.getLogger(__name__)
+TRANSIENT_INGEST_ERRORS = (ConnectionError, TimeoutError, OSError)
+
+
+def execute_ingestion(
+    document_id: str,
+    *,
+    task_id,
+    retries: int,
+    max_retries: int,
+    session_factory,
+    wake_attachment_turns,
+):
+    """Download an uploaded document if needed and ingest it into Milvus.
+
+    Idempotency contract:
+      * status='ready' (already ingested) → skip.
+      * status='processing'/'failed' → fresh attempt. Re-ingest is safe:
+        ``_index_nodes`` replaces this document's prior chunks (write_chunks
+        deletes by document_id) and Milvus rows (delete-by-document_id before
+        insert), so a retry never accumulates duplicate chunks.
+    """
+    import os
+
+    from app.core.runtime_files import create_runtime_temp_file
+    from app.core.storage import download_file_from_s3
+    from app.rag.cleaning import EmptyContentError
+    from app.rag.embedding_registry import EmbeddingValidationError
+    from app.rag.ingest.pipeline import ingest_document, ingest_transcript
+    from app.rag.application.library.document_formats import UnsupportedDocumentFormat
+    from app.rag.application.library.document_formats import (
+        validate_knowledge_document_format,
+    )
+    from app.rag.application.library.knowledge_service import dump_json_list
+
+    db = session_factory()
+    document = None
+    local_file_path = None
+    is_temp_file = False
+    usage_token = None
+
+    try:
+        document = (
+            db.query(KnowledgeDocument)
+            .filter(KnowledgeDocument.id == document_id)
+            .first()
+        )
+        if document is None:
+            return {
+                "status": "failed",
+                "error": f"Knowledge document not found: {document_id}",
+            }
+        # document.user_id is the stable users.id (CLEANUP #2), as is the
+        # FileAsset's — compare directly + use it for the pk-namespaced
+        # object_key prefix below. The Milvus / document_chunks index now keys on
+        # the stable users.id (CLEANUP #2) — which is exactly document.user_id —
+        # so the pk goes straight to the ingest call (no pk->username bridge).
+        owner_pk = document.user_id
+        from app.usage.runtime import bind
+
+        usage_token = bind(owner_pk, f"ingest:{document_id}:{task_id}")
+        if not document.upload or document.upload.user_id != owner_pk:
+            raise ValueError("Knowledge upload owner does not match document owner")
+        upload_purpose = document.upload.purpose
+        if upload_purpose not in {"knowledge_document", "interview_audio"}:
+            raise ValueError("Attachment upload has invalid purpose")
+        if (
+            upload_purpose == "interview_audio"
+            and document.source_kind != "chat_attachment"
+        ):
+            raise ValueError("Audio transcription is only valid for chat attachments")
+        if document.status not in {"processing", "failed"}:
+            return {
+                "status": "skipped",
+                "document_id": document_id,
+                "current_status": document.status,
+                "resumed_turn_ids": wake_attachment_turns(document),
+            }
+
+        # Defensive format re-check (ingestion §4.1.2) — the API already
+        # gated this, but a stale dispatch or a direct DB insert must not
+        # reach the parser with an unsupported format. Raises
+        # UnsupportedDocumentFormat (a permanent error) handled below.
+        if upload_purpose == "knowledge_document":
+            validate_knowledge_document_format(
+                document.upload.original_filename,
+                document.upload.content_type,
+            )
+
+        if not document.storage_uri.startswith("s3://"):
+            raise ValueError("Knowledge ingestion only accepts owned S3 uploads")
+
+        expected_prefix = f"uploads/{owner_pk}/{document.file_asset_id}/"
+        if not document.object_key.startswith(expected_prefix):
+            raise ValueError("Knowledge upload object key does not match owner prefix")
+
+        logger.info("[Task %s] Downloading S3 document for RAG ingestion.", task_id)
+        _, ext = os.path.splitext(document.object_key)
+        local_file_path = create_runtime_temp_file(suffix=ext)
+
+        try:
+            download_file_from_s3(document.storage_uri, local_file_path)
+            is_temp_file = True
+            logger.info("[Task %s] Document downloaded to %s", task_id, local_file_path)
+        except Exception:
+            if os.path.exists(local_file_path):
+                os.unlink(local_file_path)
+            raise
+
+        if upload_purpose == "interview_audio":
+            from app.media.application.audio_transcription_service import (
+                transcribe_media,
+            )
+
+            logger.info(
+                "[Task %s] Transcribing Conversation audio attachment.",
+                task_id,
+            )
+            transcript = run_async(transcribe_media(local_file_path, language=None))
+            result = run_async(
+                ingest_transcript(
+                    transcript,
+                    document.source_kind,
+                    owner_pk,
+                    document_id=document.id,
+                    upload_id=document.file_asset_id,
+                )
+            )
+        else:
+            logger.info("[Task %s] Starting document ingestion.", task_id)
+            result = run_async(
+                ingest_document(
+                    local_file_path,
+                    document.source_kind,
+                    owner_pk,
+                    document_id=document.id,
+                    upload_id=document.file_asset_id,
+                    # Chat attachments remain conversation-scoped Postgres facts.
+                    # They are supplied through the shared Source Resolver and must
+                    # never compete in the user's global Milvus knowledge index.
+                    index_document=document.source_kind != "chat_attachment",
+                )
+            )
+
+        if result and result.get("success"):
+            document.chunk_count = int(result.get("chunk_count") or 0)
+            document.ref_doc_ids = dump_json_list(result.get("ref_doc_ids") or [])
+            document.content_text = result.get("content_text")
+            if result.get("indexed", True):
+                document.status = "ready"
+                document.error_message = None
+                db.add(document)
+                db.commit()
+                logger.info("[Task %s] Document ingestion completed.", task_id)
+                return {
+                    "status": "success",
+                    "document_id": document_id,
+                    "resumed_turn_ids": wake_attachment_turns(document),
+                }
+            # Facts are saved but the Milvus write was queued for outbox retry
+            # (Milvus was down). Stay 'processing' until the index lands — the
+            # milvus_upsert_document handler flips this to ready (or to failed if
+            # its retries exhaust), so the doc never stalls (plan §4.6.3 / C2).
+            document.status = "processing"
+            document.error_message = "向量索引暂时不可用，正在后台重试，稍后可用。"
+            db.add(document)
+            db.commit()
+            logger.warning(
+                "[Task %s] Facts saved; Milvus write queued for retry.", task_id
+            )
+            return {"status": "indexing_queued", "document_id": document_id}
+
+        document.status = "failed"
+        document.error_message = "Empty or unparseable document"
+        db.add(document)
+        db.commit()
+        logger.warning("[Task %s] Document was empty or unparseable.", task_id)
+        return {
+            "status": "failed",
+            "error": "Empty or unparseable document",
+            "resumed_turn_ids": wake_attachment_turns(document),
+        }
+
+    except (
+        UnsupportedDocumentFormat,
+        EmptyContentError,
+        EmbeddingValidationError,
+    ) as exc:
+        # Permanent content/format/embedding error (unsupported format, S0
+        # cleaning left no usable text, or a dimension/count mismatch that no
+        # retry can fix) — friendly Chinese message, NO retry. document is
+        # guaranteed bound here (raised after the None check above).
+        document.status = "failed"
+        document.error_message = str(exc)[:500]
+        db.add(document)
+        db.commit()
+        logger.warning("[Task %s] Permanent ingest rejection: %s", task_id, exc)
+        return {
+            "status": "failed",
+            "error": str(exc),
+            "document_id": document_id,
+            "resumed_turn_ids": wake_attachment_turns(document),
+        }
+
+    except Exception as exc:
+        # Distinguish mid-retry vs final-attempt the same way
+        # process_interview_analysis does. Mid-retry: a transient
+        # status='failed' would make the UI flash "failed" between
+        # retries; tag it as "retrying" instead so the user sees a
+        # consistent in-progress signal until we give up for good.
+        retries_left = max(0, (max_retries or 0) - retries)
+        will_retry = isinstance(exc, TRANSIENT_INGEST_ERRORS) and retries_left > 0
+        if document is not None:
+            try:
+                if not will_retry:
+                    document.status = "failed"
+                    # Humanize the terminal user-facing message (e.g. a 402
+                    # balance error during embedding); raw detail is logged.
+                    document.error_message = f"导入失败：{humanize_error(exc)}"[:500]
+                else:
+                    # Don't mark as terminal "failed" mid-retry — leave
+                    # status='processing' (the prior set_status from line
+                    # 144's gate) and surface the latest error message
+                    # for debug visibility.
+                    document.error_message = (
+                        f"Attempt {retries + 1} crashed; will retry. "
+                        f"{type(exc).__name__}: {exc}"
+                    )[:500]
+                db.add(document)
+                db.commit()
+                if not will_retry:
+                    wake_attachment_turns(document)
+            except Exception as recovery_exc:  # noqa: BLE001
+                logger.error(
+                    "Failed to update document %s status after task crash: %s",
+                    document.id,
+                    recovery_exc,
+                )
+        logger.error(
+            "[Task %s] RAG ingestion task failed (attempt %d/%d): %s",
+            task_id,
+            retries + 1,
+            max_retries + 1,
+            exc,
+        )
+        raise
+
+    finally:
+        if usage_token is not None:
+            from app.usage.runtime import reset
+
+            reset(usage_token)
+        if is_temp_file and os.path.exists(local_file_path):
+            os.unlink(local_file_path)
+            logger.info(
+                "[Task %s] Removed temporary document: %s",
+                task_id,
+                local_file_path,
+            )
+        db.close()

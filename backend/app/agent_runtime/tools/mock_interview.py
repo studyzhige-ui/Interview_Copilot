@@ -11,10 +11,8 @@ import asyncio
 from typing import Any
 
 from app.schemas.mock_preparation import MockPreparationRequest
-from app.services.interview.mock_sources import (
-    resolve_job_description,
-    MockJobDescriptionUnavailable,
-)
+from app.interviews.application.mock_sources import resolve_job_description
+from app.interviews.application.mock_sources import MockJobDescriptionUnavailable
 from sqlalchemy.exc import IntegrityError
 
 from app.agent_runtime.tool_policy import ToolEffect
@@ -31,20 +29,21 @@ from app.schemas.client_action import (
     MockPrefillPayload,
     MockReadinessPayload,
 )
-from app.services.chat.client_action_service import (
-    ClientActionConflictError,
+from app.conversation.application.client_action_service import ClientActionConflictError
+from app.conversation.application.client_action_service import (
     ClientActionUnavailableError,
-    action_resolution,
-    create_mock_client_action,
-    find_mock_client_action,
-    latest_handoff_client,
 )
-from app.services.interview import mock_flow, mock_runtime_service
-from app.services.interview.interview_record_service import (
-    STATUS_MOCK_IN_PROGRESS,
+from app.conversation.application.client_action_service import action_resolution
+from app.conversation.application.client_action_service import create_mock_client_action
+from app.conversation.application.client_action_service import find_mock_client_action
+from app.conversation.application.client_action_service import latest_handoff_client
+from app.interviews.application import mock_flow
+from app.interviews.application import mock_runtime_service
+from app.interviews.application.interview_record_service import STATUS_MOCK_IN_PROGRESS
+from app.interviews.application.interview_record_service import (
     InterviewOpportunityNotFoundError,
-    interview_record_service,
 )
+from app.interviews.application.interview_record_service import interview_record_service
 
 
 class StartMockInterviewArgs(MockPreparationRequest):

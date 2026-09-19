@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+
 from app.core.model_catalog import ModelProfile
 from app.core.model_provider_adapter import (
     ModelProviderAdapter,
@@ -14,6 +15,8 @@ from app.core.model_provider_adapter import (
     provider_image_block,
     provider_text_block,
 )
+
+pytestmark = pytest.mark.usefixtures("usage_scope")
 
 
 def _profile(provider: str) -> ModelProfile:

@@ -22,7 +22,7 @@ def _utcnow() -> datetime:
 
 
 def _claim_child(turn_id: str) -> int:
-    from app.services.chat.turn_executor import _claim
+    from app.conversation.application.turn_executor import _claim
 
     claimed = _claim(turn_id)
     print("CLAIMED" if claimed else "NOT_CLAIMED", flush=True)
@@ -35,7 +35,7 @@ def _claim_child(turn_id: str) -> int:
 def _run_concurrency(conversation_id: str, user_id: int) -> tuple[str, int]:
     from app.db.database import SessionLocal
     from app.models.chat import Conversation
-    from app.services.chat.turn_executor import create_turn
+    from app.conversation.application.turn_executor import create_turn
 
     def submit(index: int) -> tuple[str, str]:
         with SessionLocal() as db:
@@ -64,7 +64,7 @@ def _run_concurrency(conversation_id: str, user_id: int) -> tuple[str, int]:
 async def _run_network_outage() -> dict[str, bool]:
     import redis.asyncio as aioredis
 
-    from app.services.chat import turn_event_buffer as buffer_module
+    from app.conversation.application import turn_event_buffer as buffer_module
 
     name = f"interview-copilot-redis-drill-{uuid.uuid4().hex[:8]}"
     subprocess.run(
@@ -159,11 +159,9 @@ def run_drills(report_path: Path) -> dict:
     from app.models.chat import Conversation
     from app.models.conversation_turn import ConversationTurn
     from app.models.user import User
-    from app.services.chat.turn_executor import (
-        cancel_pending_turn,
-        create_turn,
-        fail_orphaned_turns,
-    )
+    from app.conversation.application.turn_executor import cancel_pending_turn
+    from app.conversation.application.turn_executor import create_turn
+    from app.conversation.application.turn_executor import fail_orphaned_turns
 
     cutoff = _utcnow() - timedelta(seconds=settings.TURN_STALE_SECONDS)
     with SessionLocal() as db:

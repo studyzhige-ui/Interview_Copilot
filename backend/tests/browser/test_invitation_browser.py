@@ -228,7 +228,9 @@ def test_real_browser_text_interview_refresh_requires_explicit_generation_retry(
     from playwright.sync_api import expect
     from app.models.chat import ConversationMessage
     from app.models.mock_interview_runtime import MockInterviewRuntime
-    from app.services.resume.resume_artifact_service import create_resume_artifact
+    from app.career.application.resumes.resume_artifact_service import (
+        create_resume_artifact,
+    )
 
     address, context, factory = browser_app
     with factory() as db:

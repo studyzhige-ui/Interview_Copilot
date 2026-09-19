@@ -22,7 +22,7 @@ from app.schemas.gmail_observation import (
     GmailObservationProposal,
     GmailObservationRetract,
 )
-from app.services import gmail_observation_service as service
+from app.integrations.gmail import observations as service
 
 
 NOW = datetime(2026, 8, 13, 8, 0, tzinfo=UTC)

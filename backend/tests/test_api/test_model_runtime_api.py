@@ -184,7 +184,7 @@ def test_update_runtime_translates_value_error_to_400(client, monkeypatch):
 
 def test_list_my_api_keys_delegates(client):
     with patch(
-        "app.services.auth.user_api_key_service.list_user_api_keys",
+        "app.identity.application.user_api_key_service.list_user_api_keys",
         return_value=[{"provider": "openai", "masked_key": "sk-***abcd"}],
     ):
         resp = client.get("/api/v1/models/api-keys")
@@ -199,7 +199,7 @@ def test_upsert_api_key_invalidates_caches(client, monkeypatch):
 
     with (
         patch(
-            "app.services.auth.user_api_key_service.set_user_api_key",
+            "app.identity.application.user_api_key_service.set_user_api_key",
             return_value={"provider": "openai"},
         ) as set_key,
         patch("app.core.cache.invalidate", side_effect=fake_invalidate),
@@ -220,7 +220,7 @@ def test_upsert_api_key_invalidates_caches(client, monkeypatch):
 
 def test_upsert_api_key_400_on_value_error(client):
     with patch(
-        "app.services.auth.user_api_key_service.set_user_api_key",
+        "app.identity.application.user_api_key_service.set_user_api_key",
         side_effect=ValueError("unknown provider"),
     ):
         resp = client.put(
@@ -236,7 +236,7 @@ def test_delete_api_key_reports_status(client):
 
     with (
         patch(
-            "app.services.auth.user_api_key_service.delete_user_api_key",
+            "app.identity.application.user_api_key_service.delete_user_api_key",
             return_value=True,
         ),
         patch("app.core.cache.invalidate", side_effect=fake_invalidate),
@@ -299,7 +299,7 @@ def test_upsert_key_schedules_provider_catalog_refresh(client, monkeypatch):
         lambda provider, username: scheduled.append((provider, username)),
     )
     monkeypatch.setattr(
-        "app.services.auth.user_api_key_service.set_user_api_key",
+        "app.identity.application.user_api_key_service.set_user_api_key",
         lambda user, provider, key, db=None: {"provider": provider, "masked": "sk-***"},
     )
     resp = client.put(

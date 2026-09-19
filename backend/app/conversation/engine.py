@@ -39,17 +39,17 @@ from app.rag.application.attachment_sources import (
     merge_retrieval_results,
 )
 from app.rag.domain.models import EMPTY_PLANNER_NO_RETRIEVAL
-from app.services.analytics.telemetry_service import log_interaction_metrics
-from app.services.chat.chat_history_service import transcript_service
-from app.services.chat.context_assembly_pipeline import context_pipeline
-from app.services.chat.shared_source_acquisition import (
-    SharedSourceBundle,
+from app.observability.telemetry_service import log_interaction_metrics
+from app.conversation.application.chat_history_service import transcript_service
+from app.conversation.application.context_assembly_pipeline import context_pipeline
+from app.conversation.application.shared_source_acquisition import SharedSourceBundle
+from app.conversation.application.shared_source_acquisition import (
     acquire_shared_read_only_sources,
 )
-from app.services.chat.source_requests import (
+from app.conversation.application.source_requests import (
     explicit_source_requests_from_object_references,
-    extract_explicit_urls,
 )
+from app.conversation.application.source_requests import extract_explicit_urls
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +73,10 @@ def check_turn_completion(
 
     from app.db.database import SessionLocal
     from app.models.agent_execution import AgentToolCall
-    from app.services.chat.agent_task_service import (
+    from app.conversation.application.agent_task_service import (
         agent_task_structure_complete,
-        get_agent_task,
     )
+    from app.conversation.application.agent_task_service import get_agent_task
 
     db = SessionLocal()
     try:
@@ -92,7 +92,7 @@ def check_turn_completion(
             if not ok:
                 return False, reason
         if attachment_requirements:
-            from app.services.chat.attachment_coverage import (
+            from app.conversation.application.attachment_coverage import (
                 attachment_requirement_block_reason,
             )
 
@@ -469,7 +469,7 @@ class ConversationEngine:
         shared_source_bundle = (
             await shared_source_task if shared_source_task else SharedSourceBundle()
         )
-        from app.services.chat.attachment_coverage import (
+        from app.conversation.application.attachment_coverage import (
             attachment_execution_requirements,
         )
 
@@ -543,7 +543,7 @@ class ConversationEngine:
             _window = None
             _output_tokens = None
         try:
-            from app.services.memory_recall import recall
+            from app.memory.recall import recall
 
             memory_block = await recall(
                 conversation_id=self.session_id,

@@ -90,7 +90,9 @@ def _load_user_provider_overrides(
         from app.db.database import SessionLocal
         from app.models.user import User
         from app.models.user_model_provider_settings import UserModelProviderSettings
-        from app.services.auth.user_provider_settings_service import parse_extra_headers
+        from app.identity.application.user_provider_settings_service import (
+            parse_extra_headers,
+        )
 
         with SessionLocal() as db:
             row = (
@@ -385,6 +387,18 @@ def _build_llm_instance(
     if overrides.extra_headers:
         client_kwargs["default_headers"] = dict(overrides.extra_headers)
 
+    if profile.provider == "anthropic":
+        from anthropic import Anthropic, AsyncAnthropic
+        from app.core.anthropic_completion import AnthropicCompletion
+
+        client_kwargs.pop("organization", None)
+        return AnthropicCompletion(
+            profile=profile,
+            sync_client=Anthropic(**client_kwargs),
+            async_client=AsyncAnthropic(**client_kwargs),
+            temperature=LLM_TEMPERATURE,
+        )
+
     sync_client = OpenAI(**client_kwargs)
     async_client = AsyncOpenAI(**client_kwargs)
     llm = OpenAILike(
@@ -461,23 +475,29 @@ def _legacy_request_overrides(profile: ModelProfile) -> dict[str, Any] | None:
 def get_llm_for_role(role: str, user_id: str | None = None):
     """Return an answer model selected for one user-facing role."""
     profile = user_model_selection.get_profile_for_role(role, user_id=user_id)
-    return _get_cached_llm(
+    from app.usage.runtime import MeteredLLM
+
+    inner = _get_cached_llm(
         cache_role=role,
         profile=profile,
         user_id=user_id,
         request_overrides=_legacy_request_overrides(profile),
     )
+    return MeteredLLM(inner, profile, "model_completion", username=user_id)
 
 
 def get_internal_llm(role: str):
     """Return a platform-owned model using deployment credentials only."""
     profile = get_internal_model_profile(role)
-    return _get_cached_llm(
+    from app.usage.runtime import MeteredLLM
+
+    inner = _get_cached_llm(
         cache_role=f"internal:{role}",
         profile=profile,
         user_id=None,
         request_overrides=_legacy_request_overrides(profile),
     )
+    return MeteredLLM(inner, profile, f"internal_{role}")
 
 
 def build_async_openai_client_for_role(

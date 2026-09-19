@@ -1,10 +1,8 @@
 import json
 
-from app.services.chat.interview_reference import (
-    InterviewQuestionReference,
-    InterviewReference,
-    render_interview_reference,
-)
+from app.conversation.application.interview_reference import InterviewQuestionReference
+from app.conversation.application.interview_reference import InterviewReference
+from app.conversation.application.interview_reference import render_interview_reference
 
 
 def _question(index: int) -> InterviewQuestionReference:

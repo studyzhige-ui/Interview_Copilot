@@ -89,7 +89,10 @@ def reindex_document(
         chunks,
         document_title=document.title if document is not None else None,
     )
-    batch = embed_passages(passages, embed_model=embed_model)
+    from app.usage.runtime import for_owner
+
+    with for_owner(int(chunks[0].user_id), operation=f"reindex:{document_id}"):
+        batch = embed_passages(passages, embed_model=embed_model)
     replace_document_rows(
         chunks,
         passages,

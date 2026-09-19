@@ -13,7 +13,7 @@ from app.agent_runtime.tool_registry import AgentToolContext, ToolDefinition, re
 from app.db.database import SessionLocal
 from app.models.persistent_task import PersistentTask, PersistentTaskTrigger
 from app.schemas.gmail_observation import GmailObservationProposal
-from app.services import gmail_observation_service
+from app.integrations.gmail import observations as gmail_observation_service
 
 
 class ReadGmailObservationsArgs(BaseModel):

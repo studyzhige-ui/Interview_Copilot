@@ -9,15 +9,11 @@ from datetime import UTC, datetime
 
 import pytest
 from app.models.chat import Conversation
-from app.services.interview import (
-    mock_flow,
-    mock_interview_service,
-    mock_runtime_service,
-)
-from app.services.interview.interview_record_service import (
-    STATUS_MOCK_IN_PROGRESS,
-    interview_record_service,
-)
+from app.interviews.application import mock_flow
+from app.interviews.application import mock_interview_service
+from app.interviews.application import mock_runtime_service
+from app.interviews.application.interview_record_service import STATUS_MOCK_IN_PROGRESS
+from app.interviews.application.interview_record_service import interview_record_service
 
 
 @pytest.fixture(autouse=True)
@@ -250,9 +246,9 @@ def test_review_pairing_reads_stage_and_audio(db_session, monkeypatch):
 
     # NB: the package __init__ re-exports the singleton under the module's
     # own name, so ``import ... as orch`` would bind the INSTANCE.
-    import app.services.interview.analysis_orchestrator  # noqa: F401
+    import app.interviews.application.analysis_orchestrator  # noqa: F401
 
-    orch = sys.modules["app.services.interview.analysis_orchestrator"]
+    orch = sys.modules["app.interviews.application.analysis_orchestrator"]
 
     class _NoClose:
         def __init__(self, inner):

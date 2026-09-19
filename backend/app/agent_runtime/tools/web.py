@@ -17,6 +17,8 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import httpx
+from app.usage.external import request as metered_request, stream as metered_stream
+from app.usage.service import ModelBudgetExceededError
 from pydantic import BaseModel, Field
 
 from app.agent_runtime.tool_registry import (
@@ -125,10 +127,15 @@ async def _search_duckduckgo(args: WebSearchArgs) -> dict[str, Any]:
             follow_redirects=False,
             trust_env=False,
         ) as client:
-            resp = await client.get(
-                "https://html.duckduckgo.com/html/",
-                params={"q": args.query},
-                headers=headers,
+            resp = await metered_request(
+                lambda: client.get(
+                    "https://html.duckduckgo.com/html/",
+                    params={"q": args.query},
+                    headers=headers,
+                ),
+                provider="duckduckgo",
+                operation="search",
+                content={"query": args.query},
             )
             if resp.status_code != 200:
                 return {
@@ -144,6 +151,8 @@ async def _search_duckduckgo(args: WebSearchArgs) -> dict[str, Any]:
             "provider": "duckduckgo",
             "query": args.query,
         }
+    except ModelBudgetExceededError:
+        raise
     except Exception as exc:
         logger.warning("DuckDuckGo request failed (%s)", type(exc).__name__)
         return {
@@ -176,6 +185,8 @@ async def _search_duckduckgo(args: WebSearchArgs) -> dict[str, Any]:
             )
             if len(results) >= args.limit:
                 break
+    except ModelBudgetExceededError:
+        raise
     except Exception as exc:
         logger.warning("DuckDuckGo response parse failed (%s)", type(exc).__name__)
         return {
@@ -205,15 +216,20 @@ async def _web_search_handler(
     timeout = httpx.Timeout(15.0)
     try:
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-            resp = await client.post(
-                "https://api.tavily.com/search",
-                json={
-                    "api_key": api_key,
-                    "query": args.query,
-                    "max_results": args.limit,
-                    "include_raw_content": False,
-                    "include_images": False,
-                },
+            resp = await metered_request(
+                lambda: client.post(
+                    "https://api.tavily.com/search",
+                    json={
+                        "api_key": api_key,
+                        "query": args.query,
+                        "max_results": args.limit,
+                        "include_raw_content": False,
+                        "include_images": False,
+                    },
+                ),
+                provider="tavily",
+                operation="search",
+                content={"query": args.query, "limit": args.limit},
             )
             if resp.status_code != 200:
                 result = await _search_duckduckgo(args)
@@ -224,6 +240,8 @@ async def _web_search_handler(
         result = await _search_duckduckgo(args)
         result["fallback_from"] = "tavily_timeout"
         return result
+    except ModelBudgetExceededError:
+        raise
     except Exception as exc:
         logger.warning("Tavily request failed (%s)", type(exc).__name__)
         result = await _search_duckduckgo(args)
@@ -311,11 +329,17 @@ async def _read_url_handler(
                     if resolved.sni_hostname
                     else None
                 )
-                async with client.stream(
-                    "GET",
-                    resolved.connect_url,
-                    headers=request_headers,
-                    extensions=extensions,
+                async with metered_stream(
+                    lambda: client.stream(
+                        "GET",
+                        resolved.connect_url,
+                        headers=request_headers,
+                        extensions=extensions,
+                    ),
+                    provider="public_web",
+                    operation="read",
+                    content={"url": current_url},
+                    max_bytes=_MAX_HTTP_BYTES,
                 ) as resp:
                     if resp.status_code in (301, 302, 303, 307, 308):
                         location = resp.headers.get("location", "")
@@ -376,6 +400,8 @@ async def _read_url_handler(
 
     except httpx.TimeoutException:
         return {"error": "Request timed out", "url": args.url}
+    except ModelBudgetExceededError:
+        raise
     except Exception as exc:
         logger.warning("read_url request failed (%s)", type(exc).__name__)
         return {"error": "Failed to fetch URL", "url": args.url}

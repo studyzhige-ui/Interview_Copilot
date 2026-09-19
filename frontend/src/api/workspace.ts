@@ -17,19 +17,6 @@ export async function getWorkspaceOverview(): Promise<WorkspaceOverview> {
 }
 
 
-export interface PrimaryModelUsage {
-  scope: 'primary_chat_agent';
-  unit: 'logical_tokens_not_currency';
-  window_date: string;
-  timezone: 'UTC';
-  call_limit: number;
-  token_limit: number;
-  calls_admitted: number;
-  tokens_used: number;
-  tokens_reserved: number;
-  excluded: string[];
-}
-
-export async function getPrimaryModelUsage(): Promise<PrimaryModelUsage> {
-  return (await apiClient.get('/workspace/model-usage')).data;
-}
+/** Compatibility export: /usage is the only current consumption projection. */
+export { getAccountUsage as getPrimaryModelUsage } from './usage';
+export type { AccountUsage as PrimaryModelUsage } from './usage';

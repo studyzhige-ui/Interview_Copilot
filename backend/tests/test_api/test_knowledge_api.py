@@ -155,7 +155,7 @@ def test_rag_query_500_on_retriever_error(client):
 def test_create_upload_url_creates_user_upload(client, db: Session):
     fake_url_info = {"upload_url": "https://upload", "storage_uri": "s3://b/k"}
     with patch(
-        "app.services.uploads.file_asset_service.generate_presigned_upload_url_for_key",
+        "app.files.application.file_asset_service.generate_presigned_upload_url_for_key",
         return_value=fake_url_info,
     ):
         resp = client.post(
@@ -594,7 +594,7 @@ def test_hard_delete_guard_uses_pk_namespaced_prefix(db: Session, monkeypatch):
     ``hard_delete``, so this is the only thing pinning the prefix logic — a stale
     ``resolve_user_pk(pk-as-username)`` would yield ``uploads/None/...`` and 500
     every real delete."""
-    from app.services.knowledge import knowledge_service as ks
+    from app.rag.application.library import knowledge_service as ks
 
     uid = _uid(db, "alice")
     monkeypatch.setattr(ks, "delete_document_vectors_and_chunks", lambda db, d: None)

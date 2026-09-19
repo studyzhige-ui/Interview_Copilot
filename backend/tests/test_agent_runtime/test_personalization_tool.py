@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 
 from app.agent_runtime.tool_policy import ToolEffect
-from app.agent_runtime.tool_registry import AgentToolContext, registry
+from app.agent_runtime.tool_registry import AgentToolContext
+from app.agent_runtime.builtin_tools import registry
 from app.models.chat import Conversation, ConversationMessage
 from app.models.conversation_turn import ConversationTurn
 from app.models.interview_record import InterviewRecord

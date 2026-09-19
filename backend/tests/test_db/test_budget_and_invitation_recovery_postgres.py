@@ -18,8 +18,8 @@ from alembic import command
 from app.models.model_budget import ModelBudgetReservation, ModelBudgetWindow
 from app.models.model_dispatch import AgentModelDispatch
 from app.models.user import User
-from app.services.chat import model_budget_service as budget
-from app.services.chat import model_dispatch_service as dispatch
+from app.usage import service as budget
+from app.conversation.application import model_dispatch_service as dispatch
 from tests.test_db.test_alembic_migrations import fresh_pg_db, _make_alembic_config  # noqa: F401
 from tests.test_services.chat.test_model_dispatch_service import _turn
 from tests.test_api.test_interview_invitations_api import _payload
@@ -168,7 +168,7 @@ def test_process_kill_preserves_exact_operation_recovery(
         FixtureInterviewInvitationInput,
         FactConfirmationResolution,
     )
-    from app.services.chat.interaction_service import resolve_interaction
+    from app.conversation.application.interaction_service import resolve_interaction
 
     url, _, factory = database
     payload = dict(url=url, mode=mode, phase=phase, key="exact-browser-request")

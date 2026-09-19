@@ -176,3 +176,7 @@ __all__ = [
 from app.models.model_budget import ModelBudgetReservation, ModelBudgetWindow  # noqa: F401
 
 from app.models.invitation_submission import InvitationSubmission  # noqa: F401
+
+from app.models.model_budget import UsageAccount as UsageAccount
+
+from app.models.model_budget import UsageAdjustment as UsageAdjustment

@@ -11,14 +11,14 @@ Anthropic-only fields.
 from __future__ import annotations
 
 import copy
-import inspect
-import logging
 import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
 from app.core.config import settings
+from app.core.provider_streams import close_provider_stream
+from app.core.provider_usage import counter
 from app.core.model_catalog import ModelProfile
 from app.core.context_budget import ContextCapacityError, RequestBudget, request_tokens
 
@@ -49,6 +49,8 @@ class ProviderUsage:
     completion_tokens: int = 0
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
+    input_known: bool = True
+    output_known: bool = True
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,9 @@ class ProviderRequest:
     tools: list[dict[str, Any]] = field(default_factory=list)
     max_tokens: int = 4_096
     temperature: float = 0.2
+    # Internal, never serialized into provider messages or accepted from a user.
+    usage_permit: str | None = None
+    usage_meter: str = "model_stream"
 
 
 def _value(value: Any, name: str, default: Any = None) -> Any:
@@ -101,7 +106,7 @@ def build_provider_request(
     """
 
     # Internal source/intent metadata never enters provider protocol messages.
-    from app.conversation.context_window import wire
+    from app.core.context_messages import wire
 
     messages = wire(messages)
     system_parts: list[str] = []
@@ -406,15 +411,17 @@ def normalize_openai_chunk(chunk: Any) -> ProviderStreamEvent:
     if usage is not None:
         details = _value(usage, "prompt_tokens_details")
         normalized_usage = ProviderUsage(
-            prompt_tokens=int(_value(usage, "prompt_tokens", 0) or 0),
-            completion_tokens=int(_value(usage, "completion_tokens", 0) or 0),
-            cache_read_tokens=int(
+            prompt_tokens=counter(_value(usage, "prompt_tokens")),
+            completion_tokens=counter(_value(usage, "completion_tokens")),
+            input_known=_value(usage, "prompt_tokens") is not None,
+            output_known=_value(usage, "completion_tokens") is not None,
+            cache_read_tokens=counter(
                 _value(details, "cached_tokens", 0)
                 or _value(usage, "cache_read_input_tokens", 0)
                 or _value(usage, "cache_read_tokens", 0)
                 or 0
             ),
-            cache_creation_tokens=int(
+            cache_creation_tokens=counter(
                 _value(usage, "cache_creation_input_tokens", 0)
                 or _value(usage, "cache_creation_tokens", 0)
                 or 0
@@ -447,25 +454,6 @@ def normalize_openai_chunk(chunk: Any) -> ProviderStreamEvent:
     )
 
 
-async def close_provider_stream(stream: Any) -> None:
-    """Close native HTTP response ownership even when a wrapper is cancelled.
-
-    Cleanup has its own short bound and never changes a settled paid outcome.
-    Error values/headers may contain secrets, so log only the exception type.
-    """
-    close = getattr(stream, "aclose", None) or getattr(stream, "close", None)
-    if not callable(close):
-        return
-    try:
-        result = close()
-        if inspect.isawaitable(result):
-            await asyncio.wait_for(result, timeout=5.0)
-    except Exception as exc:
-        logging.getLogger(__name__).warning(
-            "Provider stream close failed (%s)", type(exc).__name__
-        )
-
-
 async def _normalize_openai_stream(stream: Any) -> AsyncIterator[ProviderStreamEvent]:
     try:
         async for chunk in stream:
@@ -483,16 +471,18 @@ async def _normalize_anthropic_stream(
             if event_type == "message_start":
                 usage = _value(_value(event, "message"), "usage")
                 if usage is not None:
-                    cache_read = int(_value(usage, "cache_read_input_tokens", 0) or 0)
-                    cache_creation = int(
-                        _value(usage, "cache_creation_input_tokens", 0) or 0
+                    cache_read = counter(_value(usage, "cache_read_input_tokens"))
+                    cache_creation = counter(
+                        _value(usage, "cache_creation_input_tokens")
                     )
-                    uncached = int(_value(usage, "input_tokens", 0) or 0)
+                    uncached = counter(_value(usage, "input_tokens"))
                     yield ProviderStreamEvent(
                         usage=ProviderUsage(
                             prompt_tokens=uncached + cache_read + cache_creation,
                             cache_read_tokens=cache_read,
                             cache_creation_tokens=cache_creation,
+                            input_known=_value(usage, "input_tokens") is not None,
+                            output_known=False,
                         )
                     )
                 continue
@@ -543,11 +533,13 @@ async def _normalize_anthropic_stream(
 
             if event_type == "message_delta":
                 usage = _value(event, "usage")
-                output_tokens = int(_value(usage, "output_tokens", 0) or 0)
+                output_tokens = counter(_value(usage, "output_tokens"))
                 yield ProviderStreamEvent(
                     usage=(
-                        ProviderUsage(completion_tokens=output_tokens)
-                        if output_tokens
+                        ProviderUsage(
+                            completion_tokens=output_tokens, input_known=False
+                        )
+                        if _value(usage, "output_tokens") is not None
                         else None
                     ),
                     stop_reason=_value(_value(event, "delta"), "stop_reason"),
@@ -601,6 +593,36 @@ class ModelProviderAdapter:
             raise ContextCapacityError(
                 "模型请求超出上下文预算；历史已保留，请缩小输入或选择更大窗口的模型。"
             )
+        from app.usage import runtime as accounting
+
+        if request.usage_permit is not None:
+            # The primary dispatcher already reserved in its admission transaction.
+            # Atomically claim that one-use transport permit, never bill twice.
+            await asyncio.to_thread(accounting.claim_primary, request, self.profile)
+            return await self._open_stream(request)
+        units, allowance = accounting.llm_allowance(
+            {
+                "system": request.system,
+                "messages": request.messages,
+                "tools": request.tools,
+            },
+            request.max_tokens,
+        )
+        return await accounting.start_stream(
+            lambda: self._open_stream(request),
+            meter=request.usage_meter,
+            provider=self.profile.provider,
+            model=self.profile.model,
+            content={
+                "request": request,
+                "destination": str(getattr(self.client, "base_url", "")),
+            },
+            units=units,
+            token_allowance=allowance,
+        )
+
+    async def _open_stream(self, request: ProviderRequest):
+        """Native wire only; all callers go through metered start_stream."""
         if str(getattr(self.profile, "provider", "") or "") == "anthropic":
             payload = build_anthropic_payload(request)
             stream = await self.client.messages.create(

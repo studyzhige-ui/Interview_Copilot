@@ -11,7 +11,7 @@ from app.db.types import utc_now
 from app.models.mock_interview_runtime import MockInterviewRuntime
 from app.models.interview_record import InterviewRecord
 from app.models.user import User
-from app.services.interview import mock_runtime_service as runtime_service
+from app.interviews.application import mock_runtime_service as runtime_service
 from tests.test_db.test_budget_and_invitation_recovery_postgres import (
     database as database_fixture,
 )

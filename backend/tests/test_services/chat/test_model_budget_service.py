@@ -11,8 +11,8 @@ from app.core.config import settings
 from app.models.model_budget import ModelBudgetReservation
 from app.models.model_dispatch import AgentModelDispatch
 from app.models.user import User
-from app.services.chat import model_budget_service as budget
-from app.services.chat import model_dispatch_service as dispatch
+from app.usage import service as budget
+from app.conversation.application import model_dispatch_service as dispatch
 from tests.conftest import patch_session_locals
 from tests.test_services.chat.test_model_dispatch_service import _turn
 
@@ -55,7 +55,7 @@ def test_account_limit_spans_conversations_and_survives_new_session(
     view = budget.usage_view(db_session, user_id=user_id, now=NOW)
     assert view["calls_admitted"] == 2
     assert view["tokens_reserved"] == 60
-    assert view["scope"] == "primary_chat_agent"
+    assert view["scope"] == "account_consumption"
     # This ledger contains no FK to Turn/Conversation and no prompt content.
     assert not any(
         fk.target_fullname.startswith(("conversation_turns.", "conversations."))

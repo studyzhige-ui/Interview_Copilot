@@ -16,12 +16,11 @@ from app.models.memory_pipeline import (
 )
 from app.models.user import User
 from app.schemas.agent_memory import AgentMemoryStatusCommand, AgentMemoryUpdate
-from app.services import (
-    memory_pipeline as pipeline,
-    memory_recall as recall,
-    agent_memory_service as service,
-)
-from app.services.memory_prompts import EXTRACT, CONSOLIDATE
+from app.memory import consolidation as pipeline
+from app.memory import recall as recall
+from app.memory import lifecycle as service
+from app.memory.prompts import EXTRACT
+from app.memory.prompts import CONSOLIDATE
 from tests.conftest import NoCloseSession
 
 

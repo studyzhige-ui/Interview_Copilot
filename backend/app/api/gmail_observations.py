@@ -24,12 +24,10 @@ from app.schemas.gmail_observation import (
     GmailObservationSyncView,
     GmailObservationView,
 )
-from app.services import (
-    gmail_integration_service,
-    gmail_observation_service,
-    gmail_observation_sync_service,
-)
-from app.services.career_process_service import CareerProcessError
+from app.integrations.gmail import contract as gmail_integration_service
+from app.integrations.gmail import observations as gmail_observation_service
+from app.integrations.gmail import sync as gmail_observation_sync_service
+from app.career.application.process import CareerProcessError
 
 
 router = APIRouter(tags=["gmail-observations"])

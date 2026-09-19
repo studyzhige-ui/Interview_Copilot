@@ -17,15 +17,13 @@ from app.models.agent_execution import AgentToolCall
 from app.models.conversation_turn import ConversationTurn
 from app.models.user import User
 from app.schemas.agent_interaction import ToolInteractionRequest
-from app.services.chat.interaction_service import (
-    InteractionConflictError,
-    create_pending_interaction,
-    get_pending_interaction,
-)
-from app.services.chat.conversation_deletion_service import (
+from app.conversation.application.interaction_service import InteractionConflictError
+from app.conversation.application.interaction_service import create_pending_interaction
+from app.conversation.application.interaction_service import get_pending_interaction
+from app.conversation.application.conversation_deletion_service import (
     settle_deleted_conversation_receipt,
 )
-from app.services.chat.conversation_deletion_resource_service import (
+from app.conversation.application.conversation_deletion_resource_service import (
     has_unresolved_conversation_deletion_resource_conflict,
 )
 

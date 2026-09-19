@@ -7,12 +7,12 @@ from app.models.chat import Conversation
 from app.models.conversation_turn import ConversationTurn
 from app.models.model_dispatch import AgentModelDispatch
 from app.models.user import User
-from app.services.chat.model_dispatch_service import (
+from app.conversation.application.model_dispatch_service import (
     ModelDispatchConflictError,
-    durable_model_stream,
-    request_fingerprint,
-    start_model_dispatch,
 )
+from app.conversation.application.model_dispatch_service import durable_model_stream
+from app.conversation.application.model_dispatch_service import request_fingerprint
+from app.conversation.application.model_dispatch_service import start_model_dispatch
 
 from tests.conftest import patch_session_locals
 
@@ -93,7 +93,7 @@ def test_model_dispatch_fences_generation_and_identity(db_session):
 
 
 def test_durable_stream_persists_partial_and_terminal_usage(db_session, monkeypatch):
-    import app.services.chat.model_dispatch_service as service_module
+    import app.conversation.application.model_dispatch_service as service_module
 
     patch_session_locals(monkeypatch, db_session, service_module)
     user, turn = _turn(db_session)
