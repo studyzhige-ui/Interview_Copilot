@@ -177,15 +177,19 @@ def _executed_evidence(path: Path, bindings: list[str], *, frontend: bool) -> di
             if frontend:
                 match = name.endswith(binding) or file.endswith(binding)
             else:
-                dotted = (
-                    binding.removeprefix("backend/")
-                    .removesuffix(".py")
-                    .replace("/", ".")
-                )
+                # Pytest can report either repository-root modules
+                # (backend.tests.*) or backend-root modules (tests.*), depending
+                # on its import root. Match only these exact module boundaries;
+                # unrelated suffixes must not satisfy a required file binding.
+                dotted = binding.removesuffix(".py").replace("/", ".")
+                module_names = (dotted, dotted.removeprefix("backend."))
                 match = (
-                    name == dotted
-                    or name.startswith(dotted + ".")
-                    or file.endswith(binding)
+                    any(
+                        name == module or name.startswith(module + ".")
+                        for module in module_names
+                    )
+                    or file == binding
+                    or file.endswith("/" + binding)
                 )
             if match:
                 covered.add(binding)

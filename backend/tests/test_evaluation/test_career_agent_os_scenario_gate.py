@@ -93,12 +93,51 @@ def test_empty_skipped_missing_or_unrelated_junit_cannot_pass(tmp_path, content)
     ]
 
 
-def test_actual_bound_junit_is_required_and_hashed(tmp_path):
+@pytest.mark.parametrize(
+    "module",
+    [
+        "tests.test_one",
+        "backend.tests.test_one",
+        "tests.test_one.TestContract",
+        "backend.tests.test_one.TestContract",
+    ],
+)
+def test_actual_bound_junit_is_required_and_hashed(tmp_path, module):
+    from evaluation.career_agent_os_eval import _executed_evidence
+
+    path = tmp_path / "fresh.xml"
+    path.write_text(f'<testsuite><testcase classname="{module}" name="a"/></testsuite>')
+    result = _executed_evidence(path, ["backend/tests/test_one.py"], frontend=False)
+    assert result["passed"] and result["tests"] == 1 and len(result["sha256"]) == 64
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "unrelated.backend.tests.test_one",
+        "backend.tests.test_one_extra",
+        "tests.test_one_extra",
+    ],
+)
+def test_unrelated_module_suffix_cannot_satisfy_evidence(tmp_path, module):
+    from evaluation.career_agent_os_eval import _executed_evidence
+
+    path = tmp_path / "fresh.xml"
+    path.write_text(f'<testsuite><testcase classname="{module}" name="a"/></testsuite>')
+    result = _executed_evidence(path, ["backend/tests/test_one.py"], frontend=False)
+    assert not result["passed"]
+    assert result["missing_bindings"] == ["backend/tests/test_one.py"]
+
+
+@pytest.mark.parametrize("outcome", ["skipped", "failure", "error"])
+def test_repository_root_junit_failures_and_skips_still_block(tmp_path, outcome):
     from evaluation.career_agent_os_eval import _executed_evidence
 
     path = tmp_path / "fresh.xml"
     path.write_text(
-        '<testsuite><testcase classname="tests.test_one" name="a"/></testsuite>'
+        '<testsuite><testcase classname="backend.tests.test_one" name="a">'
+        f"<{outcome}/></testcase></testsuite>"
     )
     result = _executed_evidence(path, ["backend/tests/test_one.py"], frontend=False)
-    assert result["passed"] and result["tests"] == 1 and len(result["sha256"]) == 64
+    assert not result["passed"]
+    assert result["missing_bindings"] == []
