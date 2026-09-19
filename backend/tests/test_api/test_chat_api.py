@@ -1617,3 +1617,19 @@ def test_start_with_active_run_maps_to_409(client: TestClient, db: Session):
     )
     assert resp.status_code == 409
     assert "进行中" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize("generation", [2, 3, 99])
+def test_sse_discards_old_generation_done_frames(generation):
+    from app.api.chat.streaming import _event_matches_generation
+
+    assert not _event_matches_generation('{"type":"done"}', generation)
+    assert not _event_matches_generation(
+        json.dumps({"type": "done", "dispatch_generation": generation - 1}), generation
+    )
+    assert _event_matches_generation(
+        json.dumps({"type": "done", "dispatch_generation": generation}), generation
+    )
+    assert not _event_matches_generation("broken-json", generation)
+    assert not _event_matches_generation("[]", generation)
+    assert _event_matches_generation('{"type":"done"}', 1)  # legacy first pass

@@ -32,7 +32,7 @@ from .interview_invitation_operations import (
 )
 from .invitation_review_service import (
     create_waiting_review_turn,
-    pending_interaction_for_candidate,
+    review_interaction_for_candidate,
 )
 
 
@@ -82,8 +82,11 @@ def read_invitation_handoff(
     if candidate is None:
         return None
     pending = (
-        pending_interaction_for_candidate(
-            db, user_pk=observation.user_id, candidate_id=candidate.id
+        review_interaction_for_candidate(
+            db,
+            user_pk=observation.user_id,
+            candidate_id=candidate.id,
+            candidate_version=candidate.version,
         )
         if candidate.status in {"needs_clarification", "pending_confirmation"}
         else None
@@ -175,8 +178,11 @@ def route_gmail_invitation(
         candidate = db.get(InterviewInvitationCandidate, registered.candidate.id)
     if candidate is None:  # pragma: no cover
         raise RuntimeError("invitation candidate disappeared")
-    pending = pending_interaction_for_candidate(
-        db, user_pk=user_pk, candidate_id=candidate.id
+    pending = review_interaction_for_candidate(
+        db,
+        user_pk=user_pk,
+        candidate_id=candidate.id,
+        candidate_version=candidate.version,
     )
     if pending is not None:
         interaction, turn = pending

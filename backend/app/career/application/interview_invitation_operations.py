@@ -1307,7 +1307,7 @@ def reject_interview_invitation_candidate(
         raise InvitationVersionConflictError(
             f"candidate version is {candidate.version}"
         )
-    if candidate.status != "pending_confirmation":
+    if candidate.status not in {"pending_confirmation", "needs_clarification"}:
         raise InvitationStateConflictError(
             f"candidate cannot be rejected from {candidate.status}"
         )
@@ -1336,6 +1336,16 @@ def reject_interview_invitation_candidate(
         raise InvitationStateConflictError(
             "fact confirmation does not target this candidate"
         )
+
+    if interaction_request.get("expected_candidate_version") != candidate.version:
+        raise InvitationVersionConflictError(
+            "fact confirmation targets a stale candidate version"
+        )
+    saved_resolution = FactConfirmationResolution.model_validate(
+        interaction.resolution_json
+    )
+    if interaction.status != "rejected" or command.reason != saved_resolution.reason:
+        raise InvitationPolicyDeniedError("rejection differs from the user decision")
 
     canonical_counts_before = (
         db.query(JobOpportunity).filter(JobOpportunity.user_id == user_pk).count(),

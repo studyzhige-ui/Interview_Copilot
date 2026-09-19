@@ -143,6 +143,8 @@ class Settings(BaseSettings):
     ANTHROPIC_PROMPT_CACHE_ENABLED: bool = True
     ANTHROPIC_PROMPT_CACHE_TTL: str = "5m"
     TURN_HEARTBEAT_SECONDS: int = 10
+    TURN_RECOVERY_BATCH_SIZE: int = Field(default=100, ge=1, le=1000)
+    TURN_RECOVERY_MAX_ATTEMPTS: int = Field(default=3, ge=0, le=10)
     TURN_STALE_SECONDS: int = 60
     # Delay before the single automatic Memory producer rechecks that a
     # completed source Turn's Conversation is idle. Contribution remains

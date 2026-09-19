@@ -204,8 +204,15 @@ def _load_tool_resume_snapshot(
             None,
         )
         if interaction is None:
-            return None
-        waiting = waiting_by_id[str(interaction.tool_call_id)]
+            from app.services.chat.invitation_turn_recovery import (
+                is_local_recovery_call,
+            )
+
+            waiting = next((row for row in calls if is_local_recovery_call(row)), None)
+            if waiting is None:
+                return None
+        else:
+            waiting = waiting_by_id[str(interaction.tool_call_id)]
         return {
             "prior": [
                 {
@@ -224,9 +231,13 @@ def _load_tool_resume_snapshot(
                 "tool_name": waiting.tool_name,
                 "arguments": dict(waiting.arguments_json or {}),
             },
-            "resolution_status": interaction.status,
-            "interaction_kind": interaction.kind,
-            "resolution": dict(interaction.resolution_json or {}),
+            "resolution_status": interaction.status if interaction else "resolved",
+            "interaction_kind": interaction.kind
+            if interaction
+            else "local_operation_recovery",
+            "resolution": dict(interaction.resolution_json or {})
+            if interaction
+            else {},
             "suspended": [
                 {
                     "call_id": row.call_id,
@@ -640,7 +651,12 @@ class AgentLoopStrategy:
             waiting_call = dict(resume["waiting"])
             waiting_id = str(waiting_call["call_id"])
             suspended_calls = [dict(call) for call in resume.get("suspended") or []]
-            if resume["resolution_status"] == "rejected":
+            if (
+                resume["resolution_status"] == "rejected"
+                and resume.get("interaction_kind") != "fact_confirmation"
+            ):
+                # A fact rejection is itself a domain decision: run the original
+                # thin adapter so the candidate reaches its canonical rejected state.
                 rejected = await asyncio.to_thread(
                     reject_waiting_tool_call,
                     call_id=waiting_id,

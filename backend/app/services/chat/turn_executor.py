@@ -841,6 +841,7 @@ def _terminalize(
     user_id: int | None = None,
     owner_id: str | None = None,
     stale_before: datetime | None = None,
+    expected_generation: int | None = None,
 ) -> tuple[bool, str | None]:
     """Terminalize and claim at most one FIFO successor under one lock."""
     hint = db.get(ConversationTurn, turn_id)
@@ -862,12 +863,24 @@ def _terminalize(
         .populate_existing()
         .one_or_none()
     )
-    heartbeat = row.heartbeat_at or row.started_at or row.created_at if row else None
+    heartbeat = (
+        (
+            (row.dispatch_requested_at or row.created_at)
+            if row.status == "pending"
+            else (row.heartbeat_at or row.started_at or row.created_at)
+        )
+        if row
+        else None
+    )
     if (
         row is None
         or row.status not in allowed_statuses
         or (user_id is not None and row.user_id != user_id)
         or (owner_id is not None and row.owner_id != owner_id)
+        or (
+            expected_generation is not None
+            and row.dispatch_generation != expected_generation
+        )
         or (
             stale_before is not None
             and heartbeat is not None
@@ -1187,7 +1200,13 @@ def _claim(turn_id: str) -> TurnExecution | None:
         db.close()
 
 
-def _finish(turn_id: str, status: str, error: str | None = None) -> bool:
+def _finish(
+    turn_id: str,
+    status: str,
+    error: str | None = None,
+    *,
+    expected_generation: int | None = None,
+) -> bool:
     """Owner-fenced terminalization plus one atomic FIFO admission handoff."""
     db = SessionLocal()
     try:
@@ -1198,6 +1217,7 @@ def _finish(turn_id: str, status: str, error: str | None = None) -> bool:
             status=status,
             error=error,
             owner_id=_WORKER_ID,
+            expected_generation=expected_generation,
         )
         if changed:
             _dispatch_handoff(next_turn_id)
@@ -1243,7 +1263,9 @@ def _finish_automation(
     """Settle an unattended Turn through its PersistentTask ingress owner."""
 
     if turn.automation_task_id is None:
-        return _finish(turn.id, status, error)
+        return _finish(
+            turn.id, status, error, expected_generation=turn.dispatch_generation
+        )
     db = SessionLocal()
     try:
         from app.agent_runtime.turn_tool_catalog import (
@@ -1266,9 +1288,7 @@ def _finish_automation(
                     cloud_sustainable_automation_tool_names()
                 ),
                 owner_id=_WORKER_ID,
-                dispatch_generation=(
-                    None if status == "cancelled" else turn.dispatch_generation
-                ),
+                dispatch_generation=turn.dispatch_generation,
                 user_stopped=status == "cancelled",
             )
         except PersistentTaskTriggerConflictError:
@@ -1294,7 +1314,9 @@ def _finish_automation(
     return True
 
 
-def _wait(turn_id: str, reason: str = "interaction") -> bool:
+def _wait(
+    turn_id: str, reason: str = "interaction", *, expected_generation: int | None = None
+) -> bool:
     """Release the worker while retaining this Turn as Conversation owner."""
     db = SessionLocal()
     try:
@@ -1304,7 +1326,15 @@ def _wait(turn_id: str, reason: str = "interaction") -> bool:
             .with_for_update()
             .one_or_none()
         )
-        if row is None or row.status != "running" or row.owner_id != _WORKER_ID:
+        if (
+            row is None
+            or row.status != "running"
+            or row.owner_id != _WORKER_ID
+            or (
+                expected_generation is not None
+                and row.dispatch_generation != expected_generation
+            )
+        ):
             return False
         row.status = "waiting"
         row.waiting_reason = reason
@@ -1371,6 +1401,7 @@ def resume_waiting_turn(
     row.status = "pending"
     row.waiting_reason = None
     row.dispatch_generation = int(row.dispatch_generation or 1) + 1
+    row.dispatch_requested_at = utc_now()
     row.owner_id = None
     row.heartbeat_at = None
     row.error = None
@@ -1379,13 +1410,24 @@ def resume_waiting_turn(
     return int(row.dispatch_generation)
 
 
-def _heartbeat(turn_id: str) -> None:
+def _heartbeat(turn_id: str, expected_generation: int | None = None) -> bool:
+    # One conditional UPDATE closes the read/lease-takeover race.
     db = SessionLocal()
     try:
-        row = db.get(ConversationTurn, turn_id)
-        if row is not None and row.status == "running" and row.owner_id == _WORKER_ID:
-            row.heartbeat_at = utc_now()
-            db.commit()
+        query = db.query(ConversationTurn).filter(
+            ConversationTurn.id == turn_id,
+            ConversationTurn.status == "running",
+            ConversationTurn.owner_id == _WORKER_ID,
+        )
+        if expected_generation is not None:
+            query = query.filter(
+                ConversationTurn.dispatch_generation == expected_generation
+            )
+        changed = query.update(
+            {ConversationTurn.heartbeat_at: utc_now()}, synchronize_session=False
+        )
+        db.commit()
+        return changed == 1
     finally:
         db.close()
 
@@ -1413,6 +1455,13 @@ async def execute_turn(turn_id: str) -> None:
     waiting_reason = "interaction"
     owner_task = asyncio.current_task()
 
+    async def emit(event_json: str) -> None:
+        envelope = json.loads(event_json)
+        envelope["dispatch_generation"] = turn.dispatch_generation
+        await turn_event_buffer.append(
+            turn_id, json.dumps(envelope, ensure_ascii=False)
+        )
+
     async def watch_cancel() -> None:
         await turn_event_buffer.wait_cancel(turn_id)
         if owner_task is not None:
@@ -1426,7 +1475,12 @@ async def execute_turn(turn_id: str) -> None:
         while True:
             await asyncio.sleep(settings.TURN_HEARTBEAT_SECONDS)
             try:
-                await asyncio.to_thread(_heartbeat, turn_id)
+                owned = await asyncio.to_thread(
+                    _heartbeat, turn_id, turn.dispatch_generation
+                )
+                if not owned and owner_task is not None:
+                    owner_task.cancel()
+                    return
             except Exception:  # noqa: BLE001
                 logger.exception("turn heartbeat failed: %s", turn_id)
 
@@ -1484,7 +1538,7 @@ async def execute_turn(turn_id: str) -> None:
             strategy_extras=strategy_extras,
         )
         async for event in engine.submit_message():
-            await turn_event_buffer.append(turn_id, event.to_json())
+            await emit(event.to_json())
             saw_done = saw_done or event.type.value == "done"
             if event.type.value == "error":
                 # Error events are diagnostics, not an implicit Turn outcome.
@@ -1526,16 +1580,13 @@ async def execute_turn(turn_id: str) -> None:
             waiting = True
             outcome = "waiting"
             waiting_reason = "attachment_parsing"
-            await turn_event_buffer.append(
-                turn_id,
+            await emit(
                 HarnessEvent.status("附件仍在解析，完成后将自动继续本轮。").to_json(),
             )
         elif isinstance(exc, ProductObjectReferenceUnavailableError):
             failure = UNAVAILABLE_MESSAGE
             outcome = "failed"
-            await turn_event_buffer.append(
-                turn_id, HarnessEvent.error(failure).to_json()
-            )
+            await emit(HarnessEvent.error(failure).to_json())
             # The admitted user input is already exact History. Persist the
             # deterministic read failure too, so a refresh does not erase the
             # reason this Turn failed before ConversationEngine was created.
@@ -1543,15 +1594,14 @@ async def execute_turn(turn_id: str) -> None:
                 transcript_service.complete_background_turn,
                 turn_id=turn_id,
                 ai_msg=f"⚠️ {failure}",
+                expected_generation=turn.dispatch_generation,
                 ai_blocks=[{"type": "text", "text": f"⚠️ {failure}"}],
             )
         else:
             failure = humanize_error(exc)
             outcome = "failed"
             logger.exception("background turn %s failed", turn_id)
-            await turn_event_buffer.append(
-                turn_id, HarnessEvent.error(failure).to_json()
-            )
+            await emit(HarnessEvent.error(failure).to_json())
     finally:
         try:
             if engine is not None:
@@ -1573,8 +1623,7 @@ async def execute_turn(turn_id: str) -> None:
                     if waiting
                     else outcome
                 )
-                await turn_event_buffer.append(
-                    turn_id,
+                await emit(
                     HarnessEvent.done(
                         step=0,
                         elapsed_ms=0,
@@ -1586,7 +1635,12 @@ async def execute_turn(turn_id: str) -> None:
             heartbeat.cancel()
             await asyncio.gather(cancel_watcher, heartbeat, return_exceptions=True)
             if waiting and not cancelled and not failure:
-                await asyncio.to_thread(_wait, turn_id, waiting_reason)
+                await asyncio.to_thread(
+                    _wait,
+                    turn_id,
+                    waiting_reason,
+                    expected_generation=turn.dispatch_generation,
+                )
             else:
                 finish = (
                     _finish_automation
@@ -1606,6 +1660,11 @@ async def execute_turn(turn_id: str) -> None:
                         else "completed"
                     ),
                     failure,
+                    **(
+                        {"expected_generation": turn.dispatch_generation}
+                        if turn.automation_task_id is None
+                        else {}
+                    ),
                 )
 
 
@@ -1629,7 +1688,13 @@ async def fail_orphaned_turns() -> int:
                 .filter(
                     or_(
                         (ConversationTurn.status == "pending")
-                        & (ConversationTurn.created_at < cutoff),
+                        & (
+                            func.coalesce(
+                                ConversationTurn.dispatch_requested_at,
+                                ConversationTurn.created_at,
+                            )
+                            < cutoff
+                        ),
                         (ConversationTurn.status == "running")
                         & (
                             func.coalesce(
@@ -1641,11 +1706,24 @@ async def fail_orphaned_turns() -> int:
                         ),
                     )
                 )
+                .order_by(ConversationTurn.created_at, ConversationTurn.id)
+                .limit(settings.TURN_RECOVERY_BATCH_SIZE)
                 .all()
             )
         ]
         turn_ids: list[str] = []
         for turn_id in candidate_ids:
+            from app.services.chat.invitation_turn_recovery import (
+                recover_invitation_turn,
+            )
+
+            recovered = recover_invitation_turn(
+                db, turn_id=turn_id, stale_before=cutoff
+            )
+            if recovered is not None:
+                if recovered == "pending":
+                    handoffs.append(turn_id)
+                continue
             changed, next_turn_id = _terminalize(
                 db,
                 turn_id,
@@ -1662,7 +1740,10 @@ async def fail_orphaned_turns() -> int:
         db.close()
 
     for next_turn_id in handoffs:
-        _dispatch_handoff(next_turn_id)
+        try:
+            await asyncio.to_thread(schedule_turn, next_turn_id)
+        except Exception:
+            logger.exception("Recovered dispatch retained for repair: %s", next_turn_id)
 
     for turn_id in turn_ids:
         await asyncio.to_thread(

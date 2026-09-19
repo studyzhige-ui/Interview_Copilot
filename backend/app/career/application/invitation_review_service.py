@@ -11,30 +11,38 @@ from app.models.agent_execution import AgentToolCall
 from app.models.agent_interaction import AgentInteraction
 from app.models.chat import Conversation
 from app.models.conversation_turn import ConversationTurn
-from app.services.chat.interaction_service import list_pending_interactions
 from .invitation_interaction import create_invitation_fact_confirmation
 
 
-def pending_interaction_for_candidate(
+def review_interaction_for_candidate(
     db: Session,
     *,
     user_pk: int,
     candidate_id: str,
+    candidate_version: int,
 ) -> tuple[AgentInteraction, ConversationTurn] | None:
-    for interaction, turn in list_pending_interactions(
-        db,
-        user_id=user_pk,
-        kinds=("fact_confirmation",),
-    ):
-        request = (
-            interaction.request_json
-            if isinstance(interaction.request_json, dict)
-            else {}
+    """Reuse the exact review even after a decision but before its operation.
+
+    A source replay is not a new request for user approval. In particular,
+    queue failure or worker death after a saved decision must not create a
+    second Turn/Interaction. The original Turn owns recovery; terminal candidate
+    versions are projected by the caller and never reopened here.
+    """
+    return (
+        db.query(AgentInteraction, ConversationTurn)
+        .join(ConversationTurn, ConversationTurn.id == AgentInteraction.turn_id)
+        .filter(
+            ConversationTurn.user_id == user_pk,
+            AgentInteraction.kind == "fact_confirmation",
+            AgentInteraction.schema_version == 1,
+            AgentInteraction.request_json["candidate_reference"]["id"].as_string()
+            == candidate_id,
+            AgentInteraction.request_json["expected_candidate_version"].as_integer()
+            == candidate_version,
         )
-        reference = request.get("candidate_reference")
-        if isinstance(reference, dict) and reference.get("id") == candidate_id:
-            return interaction, turn
-    return None
+        .order_by(AgentInteraction.created_at.desc(), AgentInteraction.id)
+        .first()
+    )
 
 
 def create_waiting_review_turn(

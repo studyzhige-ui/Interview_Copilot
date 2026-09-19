@@ -129,7 +129,9 @@ async def test_execute_turn_marks_error_event_failed(monkeypatch):
     monkeypatch.setattr(
         turn_executor,
         "_finish",
-        lambda _turn_id, status, error=None: marks.append((status, error)) or True,
+        lambda _turn_id, status, error=None, **_fence: (
+            marks.append((status, error)) or True
+        ),
     )
 
     class FakeEngine:
@@ -172,7 +174,9 @@ async def test_execute_turn_preserves_authoritative_blocked_outcome(monkeypatch)
     monkeypatch.setattr(
         turn_executor,
         "_finish",
-        lambda _turn_id, status, error=None: marks.append((status, error)) or True,
+        lambda _turn_id, status, error=None, **_fence: (
+            marks.append((status, error)) or True
+        ),
     )
 
     class FakeEngine:
@@ -287,12 +291,14 @@ async def test_execute_turn_waits_for_attachment_without_failing(monkeypatch):
     monkeypatch.setattr(
         turn_executor,
         "_wait",
-        lambda turn_id, reason="interaction": waits.append((turn_id, reason)) or True,
+        lambda turn_id, reason="interaction", **_fence: (
+            waits.append((turn_id, reason)) or True
+        ),
     )
     monkeypatch.setattr(
         turn_executor,
         "_finish",
-        lambda _turn_id, status, error=None: finishes.append(status) or True,
+        lambda _turn_id, status, error=None, **_fence: finishes.append(status) or True,
     )
 
     class FakeEngine:

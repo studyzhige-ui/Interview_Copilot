@@ -496,7 +496,9 @@ async def test_execution_persists_unavailable_reference_failure(monkeypatch):
     monkeypatch.setattr(
         turn_executor,
         "_finish",
-        lambda _turn_id, status, error=None: finished.append((status, error)) or True,
+        lambda _turn_id, status, error=None, **_fence: (
+            finished.append((status, error)) or True
+        ),
     )
     events: list[dict] = []
 

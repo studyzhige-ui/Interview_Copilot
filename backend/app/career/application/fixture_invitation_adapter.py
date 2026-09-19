@@ -11,7 +11,7 @@ import json
 
 from sqlalchemy.orm import Session
 from .invitation_review_service import (
-    pending_interaction_for_candidate,
+    review_interaction_for_candidate,
     create_waiting_review_turn,
 )
 
@@ -102,10 +102,11 @@ def ingest_fixture_interview_invitation(
     candidate = get_interview_invitation_candidate(
         db, user_pk=user_pk, candidate_id=registered.candidate.id
     )
-    pending = pending_interaction_for_candidate(
+    pending = review_interaction_for_candidate(
         db,
         user_pk=user_pk,
         candidate_id=candidate.id,
+        candidate_version=candidate.version,
     )
     if pending is None and candidate.status in {
         "pending_confirmation",

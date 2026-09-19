@@ -214,6 +214,7 @@ def _fact_interaction(
     decision: str,
     corrected_facts=None,
     opportunity=None,
+    reason=None,
 ):
     candidate_row = db_session.get(InterviewInvitationCandidate, candidate.id)
     assert candidate_row is not None
@@ -275,6 +276,7 @@ def _fact_interaction(
             root={
                 "protocol": "interview_invitation.fact_confirmation.v1",
                 "decision": decision,
+                "reason": reason,
                 **(
                     {
                         "opportunity": (
@@ -537,6 +539,7 @@ def test_reject_candidate_has_zero_canonical_side_effects(db_session) -> None:
         user,
         candidate,
         decision="reject",
+        reason="This invitation belongs to another person",
     )
     result = reject_interview_invitation_candidate(
         db_session,

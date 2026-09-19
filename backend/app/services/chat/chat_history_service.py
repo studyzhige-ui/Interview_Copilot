@@ -140,20 +140,39 @@ class TranscriptService:
         ai_msg: str,
         rewritten_query: str | None = None,
         ai_blocks: list[dict] | None = None,
+        expected_generation: int | None = None,
     ) -> int:
-        """Idempotently append the assistant half of a reserved turn."""
+        """Idempotently append the assistant half of a generation-fenced turn."""
         db: Session = SessionLocal()
         try:
+            hint = db.get(ConversationTurn, turn_id)
+            if hint is None:
+                raise ValueError(f"Conversation turn {turn_id} does not exist")
+            # Same Conversation -> Turn order as admission, resume, and repair.
+            # Locking these in reverse order can deadlock a completion vs repair.
+            conversation = (
+                db.query(Conversation)
+                .filter_by(id=hint.conversation_id)
+                .with_for_update()
+                .populate_existing()
+                .one_or_none()
+            )
             turn = (
                 db.query(ConversationTurn)
                 .filter(
                     ConversationTurn.id == turn_id,
                 )
                 .with_for_update()
+                .populate_existing()
                 .one_or_none()
             )
             if turn is None:
                 raise ValueError(f"Conversation turn {turn_id} does not exist")
+            if expected_generation is not None and (
+                turn.dispatch_generation != expected_generation
+                or turn.status in {"failed", "cancelled"}
+            ):
+                raise ValueError("stale_turn_transcript_generation")
             if turn.assistant_message_seq is not None:
                 return turn.assistant_message_seq
 
@@ -187,7 +206,6 @@ class TranscriptService:
                     ),
                 )
             )
-            conversation = db.get(Conversation, turn.conversation_id)
             if conversation is not None:
                 conversation.turn_count = (conversation.turn_count or 0) + 1
                 conversation.updated_at = utc_now()

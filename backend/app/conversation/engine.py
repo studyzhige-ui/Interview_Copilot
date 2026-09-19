@@ -624,6 +624,7 @@ class ConversationEngine:
             assistant_seq = await asyncio.to_thread(
                 transcript_service.complete_background_turn,
                 turn_id=self.turn_id,
+                expected_generation=self.dispatch_generation,
                 ai_msg=self._result.final_answer,
                 rewritten_query=self._ctx.rewritten_query,
                 ai_blocks=ai_blocks,
@@ -654,6 +655,7 @@ class ConversationEngine:
         await asyncio.to_thread(
             transcript_service.complete_background_turn,
             turn_id=self.turn_id,
+            expected_generation=self.dispatch_generation,
             ai_msg=self._result.final_answer or warning["text"],
             rewritten_query=self._ctx.rewritten_query if self._ctx else None,
             ai_blocks=blocks,

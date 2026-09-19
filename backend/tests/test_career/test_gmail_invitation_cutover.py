@@ -288,3 +288,46 @@ def test_invitation_proposal_accepts_missing_business_match_without_invention():
             event_kind="assessment_invited",
             rationale="still needs a proper legacy event",
         )
+
+
+@pytest.mark.parametrize("decision", ["correct_and_confirm", "reject"])
+def test_source_replay_after_saved_decision_does_not_open_another_review(
+    db_session, decision
+):
+    from app.models.conversation_turn import ConversationTurn
+
+    user, observation, snapshot, result = _proposal(db_session)
+    first = result.invitation_handoff
+    interaction = db_session.get(AgentInteraction, first["interaction_id"])
+    resolve_interaction(
+        db_session,
+        interaction_id=interaction.id,
+        user_id=user.id,
+        expected_version=interaction.version,
+        status="rejected" if decision == "reject" else "resolved",
+        resolution=FactConfirmationResolution(
+            decision=decision,
+            corrected_facts=_facts() if decision != "reject" else None,
+            opportunity={"kind": "create_new"} if decision != "reject" else None,
+        ),
+        resolution_identity="retained-decision",
+    )
+    db_session.get(ConversationTurn, first["turn_id"]).status = "pending"
+    db_session.commit()
+    replay = adapter.route_gmail_invitation(
+        db_session,
+        user_pk=user.id,
+        observation=observation,
+        snapshot=snapshot,
+        facts=None,
+        confidence=None,
+    )
+    assert replay["interaction_id"] == first["interaction_id"]
+    assert replay["turn_id"] == first["turn_id"]
+    assert db_session.query(AgentInteraction).count() == 1
+    assert (
+        adapter.read_invitation_handoff(db_session, observation=observation)[
+            "interaction_id"
+        ]
+        == first["interaction_id"]
+    )

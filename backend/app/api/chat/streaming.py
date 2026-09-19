@@ -32,6 +32,7 @@ Wire format (Stage-G — unified across chat + agent paths):
 from __future__ import annotations
 
 import logging
+import json
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
@@ -388,8 +389,12 @@ async def resolve_turn_interaction(
         schedule_turn(turn_id)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Could not resume conversation turn %s", turn_id)
-        fail_pending_turn(db, turn_id, user_pk, "后台任务队列暂时不可用")
-        raise HTTPException(status_code=503, detail="无法恢复本轮执行") from exc
+        if interaction.kind != "fact_confirmation":
+            fail_pending_turn(db, turn_id, user_pk, "后台任务队列暂时不可用")
+        raise HTTPException(
+            status_code=503,
+            detail="决定已保存；队列暂不可用，系统将恢复同一请求，请勿重复确认",
+        ) from exc
     return ResolveInteractionResponse(
         interaction=AgentInteractionView.model_validate(interaction),
         turn_status="pending",
@@ -398,14 +403,36 @@ async def resolve_turn_interaction(
 
 
 def _turn_terminal_state(turn_id: str) -> tuple[str | None, str | None]:
+    status, error, _ = _turn_stream_state(turn_id)
+    return status, error
+
+
+def _turn_stream_state(turn_id: str) -> tuple[str | None, str | None, int | None]:
     from app.db.database import SessionLocal
 
     session = SessionLocal()
     try:
         row = session.get(ConversationTurn, turn_id)
-        return (row.status, row.error) if row else (None, None)
+        return (
+            (row.status, row.error, int(row.dispatch_generation or 1))
+            if row
+            else (None, None, None)
+        )
     finally:
         session.close()
+
+
+def _event_matches_generation(event_json: str, generation: int | None) -> bool:
+    # Legacy untagged frames are valid only for the first pass. A stale worker's
+    # terminal event must never close a newer generation's stream after recovery.
+    try:
+        envelope = json.loads(event_json)
+        return (
+            isinstance(envelope, dict)
+            and envelope.get("dispatch_generation", 1) == generation
+        )
+    except (TypeError, ValueError):
+        return False
 
 
 def _recovery_events(status: str, error: str | None) -> list[str]:
@@ -864,9 +891,22 @@ async def stream_chat_turn_events(
 
         cursor = after or last_event_id or "0-0"
         while True:
-            events = await turn_event_buffer.read(turn_id, cursor)
+            from redis.exceptions import RedisError
+
+            delivery_unavailable = False
+            try:
+                events = await turn_event_buffer.read(turn_id, cursor)
+            except (RedisError, TimeoutError, ConnectionError):
+                events = []
+                delivery_unavailable = True
+            # Re-read AFTER the blocking Redis read: the lease can change while
+            # waiting. PG is the authority; Redis contains only delivery hints.
+            status, error, generation = await asyncio.to_thread(
+                _turn_stream_state, turn_id
+            )
+            if status is None:
+                return
             if not events:
-                status, error = await asyncio.to_thread(_turn_terminal_state, turn_id)
                 if status == "waiting":
                     interaction_event = await asyncio.to_thread(
                         _interaction_event, turn_id
@@ -887,10 +927,21 @@ async def stream_chat_turn_events(
                     for event_json in _recovery_events(status, error):
                         yield f"data: {event_json}\n\n"
                     return
+                if delivery_unavailable:
+                    yield (
+                        "data: "
+                        + HarnessEvent.status(
+                            "事件连接暂不可用；已保存的任务未被取消，请重新连接读取状态。"
+                        ).to_json()
+                        + "\n\n"
+                    )
+                    return
                 yield ": keepalive\n\n"
                 continue
             for event_id, event_json in events:
                 cursor = event_id
+                if not _event_matches_generation(event_json, generation):
+                    continue
                 yield f"id: {event_id}\ndata: {event_json}\n\n"
                 if turn_event_buffer.is_done(event_json):
                     return
