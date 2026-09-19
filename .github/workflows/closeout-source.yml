@@ -16,7 +16,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/contract-codegen"
           cd "$RUNNER_TEMP/contract-codegen"
-          printf '%s\n' '{"name":"copilot-contract-codegen","version":"1.0.0","private":true,"type":"module","devDependencies":{"openapi-typescript":"7.13.0","typescript":"6.0.3"}}' > package.json
+          printf '%s\n' '{"name":"copilot-contract-codegen","version":"1.0.0","private":true,"type":"module","devDependencies":{"openapi-typescript":"7.13.0","typescript":"5.9.3"}}' > package.json
           npm install --ignore-scripts --no-audit --no-fund
           tar -czf "$RUNNER_TEMP/contract-codegen.tar.gz" package.json package-lock.json node_modules
       - uses: actions/upload-artifact@v4
