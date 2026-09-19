@@ -50,7 +50,6 @@ docker compose --profile full up -d --wait
 详细说明：
 
 - [完整启动指南](getting-started.md)
-- [Git + GitHub Desktop 初学者完整指南](git-github-desktop-guide.md)
 - [代码库结构与依赖方向](../architecture/codebase.md)
 - [模拟面试架构](../architecture/mock-interview.md)
 - [Career Agent OS 产品与架构蓝图](../architecture/career-agent-os-blueprint.md)
